@@ -68,12 +68,21 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	var (mutationEdges, recordEdges) = provenance.collectProvenanceParamEdges(callEdges, funcNames: funcNames)
 	let mutationEdgesByCallee = adjacencyOf(mutationEdges, base: callEdges, baseByCallee: edgesByCallee, funcCount: funcNames.functions.count() as CsrIndex)
 
-	let mutationSummary = buildParamMutationSummary(funcNames, edges: mutationEdges, byCallee: mutationEdgesByCallee, recordEdges: recordEdges, provenanceWrites: provenance.receiverWrites, unknownWrites: unknownFunctionValueWrites)
+	let recordEdgesByCallee = adjacencyOf(recordEdges, base: mutationEdges, baseByCallee: mutationEdgesByCallee, funcCount: funcNames.functions.count() as CsrIndex)
+	let mutationSummary = buildParamMutationSummary(project, signatures: signatures, funcNames: funcNames, edges: mutationEdges, byCallee: mutationEdgesByCallee, recordEdges: recordEdges, recordByCallee: recordEdgesByCallee, provenanceWrites: provenance.receiverWrites, unknownWrites: unknownFunctionValueWrites)
 	provenance.adoptParameterWrites(mutationSummary)
+
+	// Returns so that an E3186 hides every later semantic diagnostic.
+	if checkByReferenceOverlaps(project, module: module, mutationSummary: mutationSummary) 'anArgumentOverlapsAWrittenCell'
+		return
+	end 'anArgumentOverlapsAWrittenCell'
+
 	checkComparisonMethodsDoNotWrite(project, module: module, mutationSummary: mutationSummary, provenance: provenance)
-	checkConformersKeepTheirRequirements(project, signatures: signatures, funcNames: funcNames, provenance: provenance)
-	checkDeclaredResultsHold(project, funcNames: funcNames, provenance: provenance)
+
+	var capabilityFacts = inferCapabilities(project, module: module, signatures: signatures, funcNames: funcNames, provenance: provenance, provenanceWrites: provenance.receiverWrites, edges: recordEdges, byCallee: recordEdgesByCallee)
+	provenance.adoptCapabilityFacts(capabilityFacts)
 	try checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, mutationSummary: mutationSummary, provenance: provenance, calls: summaryIndex)
+	try checkCapabilityCalls(project, module: module, signatures: signatures, funcNames: funcNames, provenance: provenance, facts: capabilityFacts, edges: recordEdges)
 	try requireStillWanted(project)
 
 	provenance.endStorageDoors()
@@ -92,7 +101,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// `checkValueMergeSignatures`, for one reason: the shapes are compared RESOLVED, and resolution has not
 	// happened when that check drains. After `checkCalls` so a program with both a bad argument and a bad
 	// cast reports the argument first, in the order the reader meets them.
-	checkFunctionTypeDoors(project, provenance: provenance)
+	checkFunctionTypeDoors(project, facts: capabilityFacts)
 
 	// E3064: the sites the parser recorded that used none of a call's result (`PendingDiscardedResult`),
 	// judged against the whole-program effect summary built here. Beside the drain above.
@@ -109,9 +118,6 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// messages BLOCK ON a service, the second what a message RUNS. Their gates, their order and the single
 	// sweep they share are all in `checkServiceRules`.
 	checkServiceRules(project, module: module, signatures: signatures, funcNames: funcNames)
-	try requireStillWanted(project)
-
-	checkArgumentOverlaps(project, module: module, funcNames: funcNames)
 	try requireStillWanted(project)
 
 	try checkUnneededLetCasts(project, module: module, signatures: signatures)
@@ -539,13 +545,31 @@ export type ParamMutationSummary
 	// `IrFunction.writesThroughParamMask` plus every receiver write through a value that may be or lie within a
 	// parameter's record, and the relation holds the argument edges plus every argument that may lie within one.
 	export let recordWriteMasks as ParamPositionMaskArray
+	export let byRefWriteMasks as ParamPositionMaskArray
 
 	// Function NAME → its index in that column. A call site holds a name; every other consumer holds an index.
 	export let funcIndexByName as FuncIndexByName
+	module let instancesOfTemplate as TemplateInstanceMap
 
-	export static function create(masks ParamPositionMaskArray, recordWriteMasks ParamPositionMaskArray, funcIndexByName FuncIndexByName) returns ParamMutationSummary
-		return Self{masks: masks, recordWriteMasks: recordWriteMasks, funcIndexByName: funcIndexByName}
+	module static function create(masks ParamPositionMaskArray, recordWriteMasks ParamPositionMaskArray, byRefWriteMasks ParamPositionMaskArray, funcIndexByName FuncIndexByName, instancesOfTemplate TemplateInstanceMap) returns ParamMutationSummary
+		return Self{masks: masks, recordWriteMasks: recordWriteMasks, byRefWriteMasks: byRefWriteMasks, funcIndexByName: funcIndexByName, instancesOfTemplate: instancesOfTemplate}
 	end 'create'
+
+	export function writesByReference(callee ByteArray, position ParamCount) returns bool
+		if let index = try self.funcIndexByName.get(callee) 'aDeclaredBody'
+			return maskHasParam(self.maskAtIndex(self.byRefWriteMasks, index: index), param: position)
+		end 'aDeclaredBody'
+
+		let instances = try self.instancesOfTemplate.get(callee) otherwise return true
+
+		for index in instances 'eachInstance'
+			if maskHasParam(self.maskAtIndex(self.byRefWriteMasks, index: index), param: position) 'anInstanceWritesIt'
+				return true
+			end 'anInstanceWritesIt'
+		end 'eachInstance'
+
+		return false
+	end 'writesByReference'
 
 	// Which parameters a call to `callee` writes. `NoParamPositions` for a name the module does not declare —
 	// a compiler-internal runtime entry, or an undeclared callee `validateCall` has already reported as
@@ -667,10 +691,10 @@ end 'CallParamEdges'
 // `__maxon_global_cleanup` into this merged module (`Compiler.compileToCodeResult`) before the
 // summary is built, so a `stdlib/Builtins.maxon` declaration of either name is a duplicate the
 // backend's E4015 would refuse only after this pass had summarised one of the two bodies.
-function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamEdges, byCallee CsrGraph, recordEdges CallParamEdges, provenanceWrites ProvenanceReceiverWrites, unknownWrites ParamPositionMaskArray) returns ParamMutationSummary
+function buildParamMutationSummary(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, edges CallParamEdges, byCallee CsrGraph, recordEdges CallParamEdges, recordByCallee CsrGraph, provenanceWrites ProvenanceReceiverWrites, unknownWrites UnknownBodyWrites) returns ParamMutationSummary
 	let funcIndexByName = funcNames.byName
 
-	// ⭐⭐ **ONE CALL GRAPH, TWO COLUMNS.** The parser records the per-function seeds at the same doors
+	// ⭐⭐ **ONE CALL GRAPH, THREE COLUMNS.** The parser records the per-function seeds at the same doors
 	// (`Parser.noteReceiverWrite`, `Parser.emitCheckedSelfFieldStore`); the CLOSURE is one statement about one
 	// call graph — "a callee that does X to what it was handed makes its caller do X to what IT was handed" — so
 	// the walk that finds the edges runs ONCE, in `semanticCheck`, and each column here
@@ -683,6 +707,7 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamE
 	// edge pointing at the wrong function's mask.
 	var masks = ParamPositionMaskArray.create(0)
 	var recordWriteMasks = ParamPositionMaskArray.create(0)
+	var byRefWriteMasks = ParamPositionMaskArray.create(0)
 
 	// ⭐ A receiver written through a value that may BE a parameter's record writes that parameter
 	// (`ProvenanceTracer.stageParamEdges`), in every column that asks whether the record is written. One that
@@ -692,23 +717,143 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamE
 		let func = try funcNames.functions.get(i) otherwise panic("buildParamMutationSummary: functions.get OOB at {i} below its own count")
 		let writtenThroughAnAlias = try provenanceWrites.identity.get(i) otherwise panic("buildParamMutationSummary: identity seed OOB at {i} — the column is built over `funcNames.functions`")
 		let writtenWithinAnAlias = try provenanceWrites.within.get(i) otherwise panic("buildParamMutationSummary: within seed OOB at {i} — the column is built over `funcNames.functions`")
-		let writtenThroughAnUnknownBody = try unknownWrites.get(i) otherwise panic("buildParamMutationSummary: unknown-body seed OOB at {i} — the column is built over `funcNames.functions`")
-		let recordWrites = func.writesThroughParamMask or writtenThroughAnAlias or writtenThroughAnUnknownBody
+		let writtenThroughAnUnknownBody = unknownWrites.anyPositionAt(i)
+		let cellWrittenThroughAnUnknownBody = unknownWrites.byReferencePositionAt(i)
+		let writtenThrough = func.writesThroughParamMask or writtenThroughAnAlias
 		masks.push(func.writtenParamMask or writtenThroughAnAlias or writtenThroughAnUnknownBody)
-		recordWriteMasks.push(recordWrites or writtenWithinAnAlias)
+		recordWriteMasks.push(writtenThrough or writtenThroughAnUnknownBody or writtenWithinAnAlias)
+		byRefWriteMasks.push(cellWrittenParamMask(project, func: func, writtenThrough: writtenThrough, writtenThroughAnUnknownBody: cellWrittenThroughAnUnknownBody))
 	end 'seed'
 
 	propagateParamMasks(masks, edges: edges, byCallee: byCallee)
+	propagateParamMasks(byRefWriteMasks, edges: edges, byCallee: byCallee)
 
 	// ⭐ **THE RECORD COLUMN IS CLOSED OVER THE RECORD RELATION** — the argument edges plus every argument that may
 	// lie within a parameter's record, because its question is whether the GRAPH a call site handed over gets
 	// written: `nudge(t)` whose body is `t.inner.bump()` writes it (`ProvenanceTracer.collectProvenanceParamEdges`).
-	let funcCount = funcNames.functions.count()
-	let recordByCallee = adjacencyOf(recordEdges, base: edges, baseByCallee: byCallee, funcCount: funcCount as CsrIndex)
 	propagateParamMasks(recordWriteMasks, edges: recordEdges, byCallee: recordByCallee)
 
-	return ParamMutationSummary.create(masks, recordWriteMasks: recordWriteMasks, funcIndexByName: funcIndexByName)
+	return ParamMutationSummary.create(masks, recordWriteMasks: recordWriteMasks, byRefWriteMasks: byRefWriteMasks, funcIndexByName: funcIndexByName, instancesOfTemplate: instancesOfTemplates(signatures, funcNames: funcNames))
 end 'buildParamMutationSummary'
+
+function cellWrittenParamMask(project Project, func IrFunction, writtenThrough ParamPositionMask, writtenThroughAnUnknownBody ParamPositionMask) returns ParamPositionMask
+	// A body no summary can read is assumed to write every parameter: its cells are never waved through.
+	if bodyIsOpaqueToSummaries(func, libraryFacts: project.libraryFacts) 'aBodyNoSummaryCanSee'
+		return paramPositionsOf(func)
+	end 'aBodyNoSummaryCanSee'
+
+	let cellsRebound = func.storedParamMask or writtenThroughAnUnknownBody
+
+	if writtenThrough == NoParamPositions 'noWriteThroughAnyParameter'
+		return cellsRebound
+	end 'noWriteThroughAnyParameter'
+
+	return cellsRebound or (writtenThrough and cellRebindingParamMask(func))
+end 'cellWrittenParamMask'
+
+function paramPositionsOf(func IrFunction) returns ParamPositionMask
+	var positions = NoParamPositions
+
+	for position in 0 upto func.paramCount 'eachParam'
+		positions = maskWithParam(positions, param: position)
+	end 'eachParam'
+
+	return positions
+end 'paramPositionsOf'
+
+function cellRebindingParamMask(func IrFunction) returns ParamPositionMask
+	var rebinding = NoParamPositions
+
+	for position in 0 upto func.paramCount 'eachParam'
+		var rebinds = true
+
+		if let paramType = try func.maxonParamTypes.get(position) 'aDeclaredType'
+			rebinds = writeThroughMayRebindItsCell(maxonTypeTag(paramType))
+		end 'aDeclaredType'
+
+		if rebinds 'aCellAWriteMayRebind'
+			rebinding = maskWithParam(rebinding, param: position)
+		end 'aCellAWriteMayRebind'
+	end 'eachParam'
+
+	return rebinding
+end 'cellRebindingParamMask'
+
+// A record parameter is never rebound (E2013), so a field write or `modify` through one never replaces
+// the caller's cell; a write through any other type may.
+function writeThroughMayRebindItsCell(tag ValueTypeTag) returns bool
+	return match tag 'tag'
+		structRef or
+		genericInstance gives false
+		boolean or
+		integer or
+		named or
+		float or
+		exitCode or
+		unresolved or
+		void or
+		string or
+		function or
+		typeParameter or
+		character or
+		interfaceRef or
+		cstring gives true
+	end 'tag'
+end 'writeThroughMayRebindItsCell'
+
+// A template is written at a position if any instance writes it, which is exact only when every
+// registered instance was seen; a template missing one is dropped, and `writesByReference` answers
+// written for it.
+function instancesOfTemplates(signatures ProgramSignatures, funcNames FunctionNameIndex) returns TemplateInstanceMap
+	var instances = TemplateInstanceMap.create()
+
+	if not signatures.declaresGenericFunctions() 'noTemplateIsDeclared'
+		return instances
+	end 'noTemplateIsDeclared'
+
+	for i in 0 upto funcNames.functions.count() 'eachFunc'
+		let func = try funcNames.functions.get(i) otherwise panic("instancesOfTemplates: functions.get OOB at {i} below its own count")
+
+		match signatures.genericInstanceOriginOf(func.name) 'origin'
+			instanceOf(templateKey) then noteTemplateInstance(instances, templateKey: templateKey, index: i)
+			notAnInstance then break
+		end 'origin'
+	end 'eachFunc'
+
+	for templateKey in templatesMissingAnInstance(instances, signatures: signatures) 'eachIncompleteTemplate'
+		_ = instances.remove(templateKey)
+	end 'eachIncompleteTemplate'
+
+	return instances
+end 'instancesOfTemplates'
+
+function templatesMissingAnInstance(instances TemplateInstanceMap, signatures ProgramSignatures) returns NameRoster
+	var incomplete = NameRoster.create(0)
+
+	for (templateKey, seen) in instances 'eachTemplate'
+		if seen.count() < registeredInstanceCount(signatures, templateKey: templateKey) 'someInstanceWasNotSeen'
+			incomplete.push(templateKey)
+		end 'someInstanceWasNotSeen'
+	end 'eachTemplate'
+
+	return incomplete
+end 'templatesMissingAnInstance'
+
+function registeredInstanceCount(signatures ProgramSignatures, templateKey ByteArray) returns ElementIndex
+	var registered = 0 as ElementIndex
+
+	for template in signatures.genericTemplatesOf(templateKey) 'eachTemplate'
+		registered = registered + signatures.genericInstanceCountAt(template.siteKey())
+	end 'eachTemplate'
+
+	return registered
+end 'registeredInstanceCount'
+
+function noteTemplateInstance(instances TemplateInstanceMap, templateKey ByteArray, index ElementIndex)
+	var ofTemplate = try instances.get(templateKey) otherwise FuncIndexArray.create(0)
+	ofTemplate.push(index)
+	instances.upsert(templateKey, value: ofTemplate)
+end 'noteTemplateInstance'
 
 // The CSR over `edges`. A relation that gained no row over `base` IS `base` (`CallParamEdges.widenedBy`), so it
 // shares the adjacency already built rather than paying for a byte-identical second one.
@@ -728,9 +873,11 @@ end 'adjacencyOf'
 // below asks once per DISPATCH OP.
 module typealias ConformersByInterface = Map with (ByteArray, NameRoster)
 
+module typealias TemplateInstanceMap = Map with (ByteArray, FuncIndexArray)
+
 module typealias CapturedLoadMap = Map with (ValueId, ParamCount)
 
-function capturedLoadsOf(module MaxonModule, func IrFunction) returns CapturedLoadMap
+module function capturedLoadsOf(module MaxonModule, func IrFunction) returns CapturedLoadMap
 	if func.closureEnvFields.count() == 0 and not buildsAClosureRecord(module, func: func) 'nothingCaptured'
 		return CapturedLoadMap.create()
 	end 'nothingCaptured'
@@ -847,12 +994,43 @@ function addClosureEnvEdges(project Project, module MaxonModule, func IrFunction
 	edges.record(calleeIndex, callerIndex: callerIndex, callerParam: callerParam, calleeParam: capturedParamPosition((closure.paramCount - 1) as ParamCount, slot: slot))
 end 'addClosureEnvEdges'
 
-function collectCallParamEdges(project Project, signatures ProgramSignatures, module MaxonModule, funcIndexByName FuncIndexByName, calls CallSummaryIndex) returns (CallParamEdges, ParamPositionMaskArray)
+type UnknownBodyWrites
+	// A position handed to a call whose bodies are not all known feeds the capability and record columns
+	// whatever its kind; the by-reference column takes by-reference positions only.
+	var anyPosition as ParamPositionMaskArray
+	var byReferencePosition as ParamPositionMaskArray
+
+	static function create(funcCount ElementIndex) returns Self
+		var anyPosition = ParamPositionMaskArray.create(0)
+		anyPosition.refill(funcCount, value: NoParamPositions)
+		var byReferencePosition = ParamPositionMaskArray.create(0)
+		byReferencePosition.refill(funcCount, value: NoParamPositions)
+
+		return Self{anyPosition: anyPosition, byReferencePosition: byReferencePosition}
+	end 'create'
+
+	function note(callerIndex ElementIndex, callerParam ParamCount, byReference bool)
+		orIntoMask(self.anyPosition, index: callerIndex, bits: maskWithParam(NoParamPositions, param: callerParam))
+
+		if byReference 'aByReferencePosition'
+			orIntoMask(self.byReferencePosition, index: callerIndex, bits: maskWithParam(NoParamPositions, param: callerParam))
+		end 'aByReferencePosition'
+	end 'note'
+
+	function anyPositionAt(funcIndex ElementIndex) returns ParamPositionMask
+		return try self.anyPosition.get(funcIndex) otherwise panic("UnknownBodyWrites.anyPositionAt: the column is built over every function, and {funcIndex} is past it")
+	end 'anyPositionAt'
+
+	function byReferencePositionAt(funcIndex ElementIndex) returns ParamPositionMask
+		return try self.byReferencePosition.get(funcIndex) otherwise panic("UnknownBodyWrites.byReferencePositionAt: the column is built over every function, and {funcIndex} is past it")
+	end 'byReferencePositionAt'
+end 'UnknownBodyWrites'
+
+function collectCallParamEdges(project Project, signatures ProgramSignatures, module MaxonModule, funcIndexByName FuncIndexByName, calls CallSummaryIndex) returns (CallParamEdges, UnknownBodyWrites)
 	var edges = CallParamEdges.create()
 	var conformers = ConformersByInterface.create()
 	var witnessSlots = WitnessSlotsByDeclIndex.create()
-	var unknownWrites = ParamPositionMaskArray.create(0)
-	unknownWrites.refill(module.functions.count(), value: NoParamPositions)
+	var unknownWrites = UnknownBodyWrites.create(module.functions.count())
 
 	for i in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(i) otherwise panic("collectCallParamEdges: functions.get OOB at {i}")
@@ -880,17 +1058,17 @@ end 'collectCallParamEdges'
 // whose shape agrees with its type, a dispatch on its interface's conformers — and carries an edge to each.
 // Every variant is named, so a newly appended op fails to compile here rather than silently dropping out of
 // the call graph.
-function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, op MaxonOp, func IrFunction, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex, module MaxonModule, calls CallSummaryIndex, unknownWrites ParamPositionMaskArray, capturedLoads CapturedLoadMap)
+function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, op MaxonOp, func IrFunction, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex, module MaxonModule, calls CallSummaryIndex, unknownWrites UnknownBodyWrites, capturedLoads CapturedLoadMap)
 	match op 'op'
-		indirectCall then addFunctionValueParamEdges(op, calls: calls, func: func, callerIndex: callerIndex, edges: edges, unknownWrites: unknownWrites, capturedLoads: capturedLoads)
-		call(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
+		indirectCall then addFunctionValueParamEdges(project, op: op, calls: calls, func: func, callerIndex: callerIndex, edges: edges, unknownWrites: unknownWrites, capturedLoads: capturedLoads)
+		call(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, module: module, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
 
 		// ⚠ An `async` spawn carries the same edge a direct call does. A managed argument is legal and
 		// the spawn hands the coroutine a reference to it, so `async g(p)` where `g`
 		// writes its parameter writes the caller's own, before the await or after it. Without the edge,
 		// `relay(q)` spawning a writing `replace(q)` would read as writing nothing, and E3159 would admit
 		// a `let` handed to `relay`.
-		asyncCall(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
+		asyncCall(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, module: module, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
 		literal or
 		ret or
 		retVoid or
@@ -928,7 +1106,7 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 		existentialWitness or
 		holdValue or
 		holdEnd then break
-		tryCall(_, _, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
+		tryCall(_, _, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, module: module, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
 		storeIndirect(addr, offset, value, _) then addClosureEnvEdges(project, module: module, func: func, addr: addr, offset: offset, value: value, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
 		witnessDispatch(_, args, _, _, methodIndex, interfaceDeclIndex, _, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots, capturedLoads: capturedLoads)
 		witnessTryDispatch(_, _, args, _, _, methodIndex, interfaceDeclIndex, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots, capturedLoads: capturedLoads)
@@ -944,16 +1122,78 @@ end 'collectCallParamEdgesAt'
 // receiver writes the parser already recorded directly) or undeclared (E3004, reported by `checkCalls`).
 // A label naming no parameter fills no position and is skipped for the same reason — `slotCallArgs`
 // reports it.
-function addCallParamEdges(project Project, callee ByteArray, args ValueIdArray, argLabels NameRoster, func IrFunction, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, capturedLoads CapturedLoadMap)
+function callerParamMaskWithin(project Project, module MaxonModule, funcIndexByName FuncIndexByName, func IrFunction, capturedLoads CapturedLoadMap, argId ValueId, visited ValueIdArray) returns ParamPositionMask
+	if let direct = try callerParamOf(func, capturedLoads: capturedLoads, argId: argId) 'aParameter'
+		return maskWithParam(NoParamPositions, param: direct)
+	end 'aParameter'
+
+	if valueIdArrayContains(visited, value: argId) 'alreadyWalked'
+		return NoParamPositions
+	end 'alreadyWalked'
+
+	visited.push(argId)
+
+	for joined in func.capabilityNotes.joinedSources 'eachMixedJoin'
+		if joined.value == argId 'theJoin'
+			return joined.sources
+		end 'theJoin'
+	end 'eachMixedJoin'
+
+	if let opIdx = try resultOpDefining(module, func: func, value: argId) 'anUndecidedResult'
+		let op = try module.ops.get(opIdx) otherwise panic("callerParamMaskWithin: ops.get OOB at {opIdx}")
+
+		return callerParamMaskOfResult(project, module: module, funcIndexByName: funcIndexByName, func: func, capturedLoads: capturedLoads, op: op, visited: visited)
+	end 'anUndecidedResult'
+
+	return NoParamPositions
+end 'callerParamMaskWithin'
+
+function callerParamMaskOfResult(project Project, module MaxonModule, funcIndexByName FuncIndexByName, func IrFunction, capturedLoads CapturedLoadMap, op MaxonOp, visited ValueIdArray) returns ParamPositionMask
+	let parts = try directCallPartsOf(op) otherwise return NoParamPositions
+	let calleeIndex = try funcIndexByName.get(parts.0) otherwise return NoParamPositions
+	let callee = try module.functions.get(calleeIndex) otherwise panic("callerParamMaskOfResult: functions.get OOB at {calleeIndex}")
+	view sig = try project.funcSignatures.get(parts.0) otherwise return NoParamPositions
+	var mask = NoParamPositions
+
+	for i in 0 upto parts.1.count() 'eachSourceArg'
+		let label = try parts.2.get(i) otherwise continue
+		let slot = try argSlotPosition(sig.paramNames, argIndex: i as ParamCount, label: label) otherwise continue
+
+		if maskHasParam(callee.resultFromParamMask, param: slot) 'aSource'
+			mask = mask or callerParamMaskWithin(project, module: module, funcIndexByName: funcIndexByName, func: func, capturedLoads: capturedLoads, argId: try parts.1.get(i) otherwise panic("callerParamMaskOfResult: args.get OOB at {i}"), visited: visited)
+		end 'aSource'
+	end 'eachSourceArg'
+
+	return mask
+end 'callerParamMaskOfResult'
+
+module function callerParamMaskOfArgument(project Project, module MaxonModule, funcIndexByName FuncIndexByName, func IrFunction, capturedLoads CapturedLoadMap, argId ValueId) returns ParamPositionMask
+	if let direct = try callerParamOf(func, capturedLoads: capturedLoads, argId: argId) 'aParameterItself'
+		return maskWithParam(NoParamPositions, param: direct)
+	end 'aParameterItself'
+
+	var visited = ValueIdArray.create(0)
+	return callerParamMaskWithin(project, module: module, funcIndexByName: funcIndexByName, func: func, capturedLoads: capturedLoads, argId: argId, visited: visited)
+end 'callerParamMaskOfArgument'
+
+function addCallParamEdges(project Project, module MaxonModule, callee ByteArray, args ValueIdArray, argLabels NameRoster, func IrFunction, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, capturedLoads CapturedLoadMap)
 	let sig = try project.funcSignatures.get(callee) otherwise return
 	let calleeIndex = try funcIndexByName.get(callee) otherwise return
 
 	for i in 0 upto args.count() 'eachArg'
-		let callerParam = try callerParamOf(func, capturedLoads: capturedLoads, argId: try args.get(i) otherwise panic("addCallParamEdges: args.get OOB at {i}")) otherwise continue
 		let label = try argLabels.get(i) otherwise panic("addCallParamEdges: argLabels.get OOB at {i} — a call's argument columns are parallel by construction")
 		let pos = try argSlotPosition(sig.paramNames, argIndex: i as ParamCount, label: label) otherwise continue
+		let sources = callerParamMaskOfArgument(project, module: module, funcIndexByName: funcIndexByName, func: func, capturedLoads: capturedLoads, argId: try args.get(i) otherwise panic("addCallParamEdges: args.get OOB at {i}"))
 
-		edges.record(calleeIndex, callerIndex: callerIndex, callerParam: callerParam, calleeParam: pos)
+		if sources == NoParamPositions 'noParameterReachesIt'
+			continue
+		end 'noParameterReachesIt'
+
+		for callerParam in 0 upto MaxAbiArgs 'eachSource'
+			if maskHasParam(sources, param: callerParam) 'aSource'
+				edges.record(calleeIndex, callerIndex: callerIndex, callerParam: callerParam, calleeParam: pos)
+			end 'aSource'
+		end 'eachSource'
 	end 'eachArg'
 end 'addCallParamEdges'
 
@@ -1024,10 +1264,7 @@ function indirectCallByRefMask(project Project, func IrFunction, op MaxonOp) ret
 		default panic("indirectCallByRefMask: asked of an op that is not an indirect call")
 	end 'op'
 
-	return match declaredFunctionShapeOf(functionTypeRegistryOf(project), name: functionValueGoverningName(project, func: func, value: calleeValue)) 'shape'
-		declared(shape) gives shape.byRefParams
-		undeclared gives NoParamPositions
-	end 'shape'
+	return functionValueByReferencePositions(project, func: func, callee: calleeValue, whenUndeclared: NoParamPositions)
 end 'indirectCallByRefMask'
 
 function indirectCallArgsOf(op MaxonOp) returns ValueIdArray
@@ -1150,14 +1387,21 @@ function addLandingBodyEdges(args ValueIdArray, argCount ParamCount, calleeIndex
 	end 'eachArg'
 end 'addLandingBodyEdges'
 
-function addFunctionValueParamEdges(op MaxonOp, calls CallSummaryIndex, func IrFunction, callerIndex ElementIndex, edges CallParamEdges, unknownWrites ParamPositionMaskArray, capturedLoads CapturedLoadMap)
+function addFunctionValueParamEdges(project Project, op MaxonOp, calls CallSummaryIndex, func IrFunction, callerIndex ElementIndex, edges CallParamEdges, unknownWrites UnknownBodyWrites, capturedLoads CapturedLoadMap)
 	match op 'indirect'
-		indirectCall(_, callee, args, _) then addFunctionValueBodiesEdges(args, bodies: calls.functionValueBodiesCalledThrough(func, callee: callee), func: func, callerIndex: callerIndex, edges: edges, unknownWrites: unknownWrites, capturedLoads: capturedLoads)
+		indirectCall(_, callee, args, _) then addFunctionValueBodiesEdges(args, bodies: calls.functionValueBodiesCalledThrough(func, callee: callee), byReferencePositions: functionValueByReferencePositions(project, func: func, callee: callee, whenUndeclared: EveryParamPosition), func: func, callerIndex: callerIndex, edges: edges, unknownWrites: unknownWrites, capturedLoads: capturedLoads)
 		default panic("addFunctionValueParamEdges: handed an op that is not an indirect call")
 	end 'indirect'
 end 'addFunctionValueParamEdges'
 
-function addFunctionValueBodiesEdges(args ValueIdArray, bodies CallLandingBodies, func IrFunction, callerIndex ElementIndex, edges CallParamEdges, unknownWrites ParamPositionMaskArray, capturedLoads CapturedLoadMap)
+function functionValueByReferencePositions(project Project, func IrFunction, callee ValueId, whenUndeclared ParamPositionMask) returns ParamPositionMask
+	return match declaredFunctionShapeOf(functionTypeRegistryOf(project), name: functionValueGoverningName(project, func: func, value: callee)) 'shape'
+		declared(shape) gives shape.byRefParams
+		undeclared gives whenUndeclared
+	end 'shape'
+end 'functionValueByReferencePositions'
+
+function addFunctionValueBodiesEdges(args ValueIdArray, bodies CallLandingBodies, byReferencePositions ParamPositionMask, func IrFunction, callerIndex ElementIndex, edges CallParamEdges, unknownWrites UnknownBodyWrites, capturedLoads CapturedLoadMap)
 	let suppliedCount = userArityOfIndirectCall(args)
 
 	for impl in bodies.impls 'eachBody'
@@ -1168,21 +1412,17 @@ function addFunctionValueBodiesEdges(args ValueIdArray, bodies CallLandingBodies
 		return
 	end 'everyBodyIsKnown'
 
-	var written = try unknownWrites.get(callerIndex) otherwise panic("addFunctionValueBodiesEdges: unknownWrites.get OOB at {callerIndex}")
-
 	for i in 0 upto suppliedCount 'eachArg'
 		let callerParam = try callerParamOf(func, capturedLoads: capturedLoads, argId: try args.get(i) otherwise panic("addFunctionValueBodiesEdges: args.get OOB at {i} below its own count")) otherwise continue
-		written = maskWithParam(written, param: callerParam)
+		unknownWrites.note(callerIndex, callerParam: callerParam, byReference: maskHasParam(byReferencePositions, param: i))
 	end 'eachArg'
-
-	try unknownWrites.set(callerIndex, value: written) otherwise panic("addFunctionValueBodiesEdges: unknownWrites.set OOB at {callerIndex}")
 end 'addFunctionValueBodiesEdges'
 
 // The least-fixpoint sweep. Seeded with every function that already writes something, it pulls a callee off
 // the worklist, propagates its mask across its incoming edges, and re-enqueues a caller only when a bit
 // actually changed — which is what bounds the total work and makes a recursive or mutually recursive graph
 // terminate rather than spin. No hashing: the CSR is keyed by function index throughout.
-function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges, byCallee CsrGraph)
+module function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges, byCallee CsrGraph)
 	var worklist = FuncIndexArray.create(0)
 	var queued = BoolArray.create(0)
 
@@ -2708,13 +2948,10 @@ function valueComesFromARefusedDeclaration(project Project, module MaxonModule, 
 	return firstOperandComesFromARefusedDeclaration(project, module: module, func: func, signatures: signatures, operands: operands, readerFilePath: readerFilePath)
 end 'valueComesFromARefusedDeclaration'
 
-function opDefiningValue(module MaxonModule, func IrFunction, value ValueId) returns MaxonOp throws AbsentError
+module function opDefiningValue(module MaxonModule, func IrFunction, value ValueId) returns MaxonOp throws AbsentError
 	for opIdx in module.liveOpIndices(func) 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("opDefiningValue: live op index not in module.ops")
-		let defined = try maxonOpDefinedValue(op) otherwise continue
-
-		if defined == value 'theProducer'
-			return op
+		if opDefinesValue(module, opIdx: opIdx, value: value) 'theProducer'
+			return try module.ops.get(opIdx) otherwise panic("opDefiningValue: live op index not in module.ops")
 		end 'theProducer'
 	end 'eachOp'
 
@@ -3126,7 +3363,7 @@ function checkIndirectArgBrands(project Project, module MaxonModule, func IrFunc
 		end 'theLandedParameterAgrees'
 
 		var signatures = programSignaturesIn(project, asker: "checkIndirectArgBrands")
-		reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchSentence("{i + 1}", expected: signatures.aliasIdentityDisplay(landed.brand), got: signatures.aliasIdentityDisplay(argBrand), expectedNote: "", gotNote: "", crossesRange: false), line: callRange.line, column: callRange.column, filePath: filePath)
+		reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchSentence(argParamLabel(ArgumentParameter.unnamed, position: i as ParamCount), expected: signatures.aliasIdentityDisplay(landed.brand), got: signatures.aliasIdentityDisplay(argBrand), expectedNote: "", gotNote: "", crossesRange: false), line: callRange.line, column: callRange.column, filePath: filePath)
 	end 'eachArg'
 end 'checkIndirectArgBrands'
 
@@ -3167,7 +3404,7 @@ end 'checkImmutableArgsToCallbackSites'
 // `named` column entry, because `MaxonType.function(id)` carries exactly that (see MaxonType's `function`
 // arm); the parser reads the same fact through its file-local interner in `functionValueReturnType`. The id
 // becomes the name through `TypeResolution.functionTypeNameOf`, the one reader every pass shares.
-function functionValueGoverningName(project Project, func IrFunction, value ValueId) returns ByteArray
+module function functionValueGoverningName(project Project, func IrFunction, value ValueId) returns ByteArray
 	// A function value cast to an alias (`h as Callback`) wears that alias as its BRAND and keeps its own
 	// type — `Parser.rebrandValue` — so the brand is the name every door compares by.
 	let brand = valueBrandOf(project, func: func, value: value)
@@ -3192,7 +3429,7 @@ end 'functionValueOwnTypeName'
 // without any value flowing at all. The two shapes must agree, and until this drained, only the `function`
 // TAG was compared. `FunctionTypeDoor` is the roster and is deliberately not re-listed here; see
 // `PendingFunctionTypeDoor` and `Parser.recordFunctionTypeDoor`.
-function checkFunctionTypeDoors(project Project, provenance ProvenanceTracer)
+function checkFunctionTypeDoors(project Project, facts CapabilityFacts)
 	for doorIndex in 0 upto project.pendingFunctionTypeDoors.count() 'eachDoor'
 		view door = try project.pendingFunctionTypeDoors.get(doorIndex) otherwise panic("checkFunctionTypeDoors: doorIndex {doorIndex} is below project.pendingFunctionTypeDoors.count()")
 
@@ -3203,8 +3440,8 @@ function checkFunctionTypeDoors(project Project, provenance ProvenanceTracer)
 		let shapesAgree = doorShapesAgree(project, door: door)
 
 		// Capabilities are compared position by position, so only once the shapes agree; a shape mismatch is
-		// `checkOneFunctionTypeDoor`'s to report, and `checkValueKeepsTheBoundary` panics on one.
-		let brokeItsBoundary = shapesAgree and checkValueKeepsTheBoundary(project, provenance: provenance, declaredName: door.declaredName, gotName: door.gotName, line: door.handedLine, column: door.handedColumn, filePath: door.filePath)
+		// `checkOneFunctionTypeDoor`'s to report, and `checkDoorMeetsBoundary` reads one position per shape slot.
+		let brokeItsBoundary = shapesAgree and checkDoorMeetsBoundary(project, facts: facts, declaredName: door.declaredName, gotName: door.gotName, line: door.handedLine, column: door.handedColumn, filePath: door.filePath)
 
 		if not brokeItsBoundary 'withinItsBoundary'
 			checkOneFunctionTypeDoor(project, door: door, shapesAgree: shapesAgree)
@@ -3218,167 +3455,9 @@ function doorShapesAgree(project Project, door PendingFunctionTypeDoor) returns 
 	return functionShapesAgree(functionTypeRegistryOf(project), signatures: programSignaturesIn(project, asker: "doorShapesAgree"), declared: declared, got: got, readerFilePath: door.filePath)
 end 'doorShapesAgree'
 
-function checkValueKeepsTheBoundary(project Project, provenance ProvenanceTracer, declaredName ByteArray, gotName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns bool
-	var registry = functionTypeRegistryOf(project)
-
-	if not registry.aliasShapes.contains(declaredName) 'declaresNoBoundary'
-		return false
-	end 'declaresNoBoundary'
-
-	view declared = requireFunctionShapeOf(registry, name: declaredName, side: "declared")
-
-	if let index = try provenance.calls.resolution.functionIndexNamed(gotName) 'aFunctionOrClosure'
-		view func = provenance.functionAt(index)
-		let kept = provenance.keptParameters(index, paramCount: func.paramCount)
-		view sig = try project.funcSignatures.get(func.name) otherwise panic("checkValueKeepsTheBoundary: '{String.from(func.name)}' has no signature")
-
-		if let position = try firstKeptButUndeclared(kept, capabilities: declared.paramCapabilities, firstPosition: 0) 'keptUndeclared'
-			reportPositioned(project, code: ErrorCode.semanticCapabilityDeclarationBroken, message: keptUndeclaredMessage("function value for '{aliasDisplayOf(project, name: declaredName)}'", parameter: displayParamName(try sig.paramNames.get(position) otherwise panic("checkValueKeepsTheBoundary: paramNames.get OOB at {position}")), boundary: aliasDisplayOf(project, name: declaredName)), line: line, column: column, filePath: filePath)
-			return true
-		end 'keptUndeclared'
-
-		if reportPromiseOwnershipDisagreement(project, func: func, sig: sig, declaredName: declaredName, declared: declared, line: line, column: column, filePath: filePath) 'promiseOwnershipDisagrees'
-			return true
-		end 'promiseOwnershipDisagrees'
-
-		if not provenance.resultMeetsCapability(index, capability: declared.returnCapability) 'resultBreaksIt'
-			reportPositioned(project, code: ErrorCode.semanticCapabilityDeclarationBroken, message: resultBreaksBoundaryMessage("'{functionSourceName(project, func: func)}'", boundary: aliasDisplayOf(project, name: declaredName), capability: declared.returnCapability), line: line, column: column, filePath: filePath)
-			return true
-		end 'resultBreaksIt'
-
-		return false
-	end 'aFunctionOrClosure'
-
-	view got = requireFunctionShapeOf(registry, name: gotName, side: "arriving")
-
-	if got.paramTypes.count() != declared.paramTypes.count() 'shapesDiffer'
-		panic("checkValueKeepsTheBoundary: '{String.from(gotName)}' and '{String.from(declaredName)}' have different arities — the caller agreed the shapes first")
-	end 'shapesDiffer'
-
-	for position in 0 upto declared.paramTypes.count() 'eachAliasParameter'
-		let needed = got.paramCapabilityAt(position)
-
-		if paramStrength(needed) > paramStrength(declared.paramCapabilityAt(position)) 'declaredLessThanItNeeds'
-			let (verb, qualifier) = paramDemandWords(needed)
-			reportPositioned(project, code: ErrorCode.semanticCapabilityDeclarationBroken, message: parameterDemandMessage("function value of type '{aliasDisplayOf(project, name: gotName)}'", verb: verb, parameter: aliasParameterText(functionTypeAliasOf(project, name: gotName), position: position), boundary: aliasDisplayOf(project, name: declaredName), qualifier: qualifier), line: line, column: column, filePath: filePath)
-			return true
-		end 'declaredLessThanItNeeds'
-
-		if needed == ParamCapability.lent and declared.paramCapabilityAt(position) != ParamCapability.lent and shapeParameterIsAPromise(project, shape: got, position: position) 'declaresAPromiseTakenThatItLeaves'
-			reportPositioned(project, code: ErrorCode.semanticCapabilityDeclarationBroken, message: boundaryDisagreementMessage("function value of type '{aliasDisplayOf(project, name: gotName)}'", claim: "does not take its promise parameter '{aliasParameterText(functionTypeAliasOf(project, name: gotName), position: position)}'", boundary: aliasDisplayOf(project, name: declaredName), stance: "declares it `keep` or `sole`, so a call through the type hands the promise over and nothing would drop it"), line: line, column: column, filePath: filePath)
-			return true
-		end 'declaresAPromiseTakenThatItLeaves'
-	end 'eachAliasParameter'
-
-	if resultStrength(got.returnCapability) < resultStrength(declared.returnCapability) 'resultPromisesLess'
-		reportPositioned(project, code: ErrorCode.semanticCapabilityDeclarationBroken, message: boundaryDisagreementMessage("function value of type '{aliasDisplayOf(project, name: gotName)}'", claim: "does not declare `returns {resultQualifierWord(declared.returnCapability)}`", boundary: aliasDisplayOf(project, name: declaredName), stance: "does"), line: line, column: column, filePath: filePath)
-		return true
-	end 'resultPromisesLess'
-
-	return false
-end 'checkValueKeepsTheBoundary'
-
-function reportPromiseOwnershipDisagreement(project Project, func IrFunction, sig FuncSignature, declaredName ByteArray, declared FunctionShape, line LineNumber, column ColumnNumber, filePath FilePath) returns bool
-	var signatures = programSignaturesIn(project, asker: "reportPromiseOwnershipDisagreement")
-
-	for position in 0 upto sig.paramCount() 'eachParameter'
-		if not signatures.typeIsAGreenThreadHandle(try sig.paramTypes.get(position) otherwise panic("reportPromiseOwnershipDisagreement: paramTypes.get OOB at {position}"), from: project.typeNames) 'notAPromise'
-			continue
-		end 'notAPromise'
-
-		let takes = functionTakesPromiseAt(signatures, func: func, position: position)
-		let declaresTaken = declared.paramCapabilityAt(position) != ParamCapability.lent
-		let parameter = displayParamName(try sig.paramNames.get(position) otherwise panic("reportPromiseOwnershipDisagreement: paramNames.get OOB at {position}"))
-
-		if takes and not declaresTaken 'takenButUndeclared'
-			reportPositioned(project, code: ErrorCode.semanticCapabilityDeclarationBroken, message: keptUndeclaredMessage("function value for '{aliasDisplayOf(project, name: declaredName)}'", parameter: parameter, boundary: aliasDisplayOf(project, name: declaredName)), line: line, column: column, filePath: filePath)
-			return true
-		end 'takenButUndeclared'
-
-		if declaresTaken and not takes 'declaredButNotTaken'
-			reportPositioned(project, code: ErrorCode.semanticCapabilityDeclarationBroken, message: boundaryDisagreementMessage("'{functionSourceName(project, func: func)}'", claim: "only reads its promise parameter '{parameter}'", boundary: aliasDisplayOf(project, name: declaredName), stance: "declares it `keep` or `sole`, so a call through the type hands the promise over and nothing would drop it"), line: line, column: column, filePath: filePath)
-			return true
-		end 'declaredButNotTaken'
-	end 'eachParameter'
-
-	return false
-end 'reportPromiseOwnershipDisagreement'
-
-function functionTakesPromiseAt(signatures ProgramSignatures, func IrFunction, position ElementIndex) returns bool
-	return signatures.consumeOfDeclaration(func.declarationSite()).takesPromiseAt(position as ParamCount)
-end 'functionTakesPromiseAt'
-
-function shapeParameterIsAPromise(project Project, shape FunctionShape, position ElementIndex) returns bool
-	var signatures = programSignaturesIn(project, asker: "shapeParameterIsAPromise")
-	return signatures.typeIsAGreenThreadHandle(try shape.paramTypes.get(position) otherwise panic("shapeParameterIsAPromise: paramTypes.get OOB at {position}"), from: project.typeNames)
-end 'shapeParameterIsAPromise'
-
-function aliasDisplayOf(project Project, name ByteArray) returns String
+module function aliasDisplayOf(project Project, name ByteArray) returns String
 	return programSignaturesIn(project, asker: "aliasDisplayOf").aliasIdentityDisplay(name)
 end 'aliasDisplayOf'
-
-function functionTypeAliasOf(project Project, name ByteArray) returns FunctionTypeAlias
-	return try project.functionTypeAliases.get(name) otherwise panic("functionTypeAliasOf: '{String.from(name)}' is neither a function nor a function alias")
-end 'functionTypeAliasOf'
-
-function aliasParameterText(alias FunctionTypeAlias, position ElementIndex) returns String
-	let name = alias.paramNameAt(position)
-	return "{position + 1}" if name.isEmpty() else displayParamName(name)
-end 'aliasParameterText'
-
-function checkDeclaredResultsHold(project Project, funcNames FunctionNameIndex, provenance ProvenanceTracer)
-	for index in 0 upto funcNames.functions.count() 'eachFunction'
-		let func = try funcNames.functions.get(index) otherwise panic("checkDeclaredResultsHold: functions.get OOB at {index} below its own count")
-
-		if bodyIsUnreadable(func) 'nothingToJudge'
-			continue
-		end 'nothingToJudge'
-
-		view sig = try project.funcSignatures.get(func.name) otherwise continue
-
-		if provenance.resultMeetsCapability(index, capability: sig.returnCapability) 'theBodyKeepsIt'
-			continue
-		end 'theBodyKeepsIt'
-
-		let name = functionSourceName(project, func: func)
-		reportAtFunctionName(project, func: func, code: ErrorCode.semanticCapabilityDeclarationBroken, message: resultBreaksBoundaryMessage("'{name}'", boundary: name, capability: sig.returnCapability))
-	end 'eachFunction'
-end 'checkDeclaredResultsHold'
-
-function checkConformersKeepTheirRequirements(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, provenance ProvenanceTracer)
-	let index = signatures.declaredConformerIndex()
-
-	for (_, iface) in signatures.interfaceMap().entries 'eachInterface'
-		let conformers = index.conformersOf(iface.name)
-
-		for requirement in iface.methods 'eachRequirement'
-			for conformer in conformers 'eachConformer'
-				view implName = try project.witnessSlotImpls.get(witnessSlotImplKey(conformer, interfaceName: iface.name, methodName: requirement.name)) otherwise continue
-				let implIndex = try funcNames.byName.get(implName) otherwise continue
-				checkImplKeepsItsRequirement(project, impl: try funcNames.functions.get(implIndex) otherwise panic("checkConformersKeepTheirRequirements: functions.get OOB at {implIndex}"), implIndex: implIndex, iface: iface, requirement: requirement, provenance: provenance)
-			end 'eachConformer'
-		end 'eachRequirement'
-	end 'eachInterface'
-end 'checkConformersKeepTheirRequirements'
-
-function checkImplKeepsItsRequirement(project Project, impl IrFunction, implIndex ElementIndex, iface IrInterface, requirement InterfaceMethodSig, provenance ProvenanceTracer)
-	if bodyIsUnreadable(impl) 'nothingToJudge'
-		return
-	end 'nothingToJudge'
-
-	let kept = provenance.keptParameters(implIndex, paramCount: impl.paramCount)
-	view sig = try project.funcSignatures.get(impl.name) otherwise panic("checkImplKeepsItsRequirement: '{String.from(impl.name)}' has no signature")
-	let requirementName = "{String.from(iface.name)}.{String.from(requirement.name)}"
-
-	if let position = try firstKeptButUndeclared(kept, capabilities: requirement.paramCapabilities, firstPosition: requirementFirstPosition(requirement)) 'keptUndeclared'
-		reportAtFunctionName(project, func: impl, code: ErrorCode.semanticCapabilityDeclarationBroken, message: keptUndeclaredMessage("'{functionSourceName(project, func: impl)}'", parameter: displayParamName(try sig.paramNames.get(position) otherwise panic("checkImplKeepsItsRequirement: paramNames.get OOB at {position}")), boundary: requirementName))
-		return
-	end 'keptUndeclared'
-
-	if not provenance.resultMeetsCapability(implIndex, capability: requirement.returnCapability) 'resultBreaksIt'
-		reportAtFunctionName(project, func: impl, code: ErrorCode.semanticCapabilityDeclarationBroken, message: resultBreaksBoundaryMessage("'{functionSourceName(project, func: impl)}'", boundary: requirementName, capability: requirement.returnCapability))
-	end 'resultBreaksIt'
-end 'checkImplKeepsItsRequirement'
 
 // ⭐ **ONE FORM FOR BOTH SIDES OF A REFUSAL, decided once and handed to each side in turn.** The two names
 // print identically — that is what makes the message contentless without a note — so a note chosen
@@ -4173,6 +4252,10 @@ end 'CallGraphEdges'
 module function bodyIsUnreadable(func IrFunction) returns bool
 	return func.blockRefs.count() == 0 or func.bodyWasSkippedAsUnreached
 end 'bodyIsUnreadable'
+
+module function bodyIsOpaqueToSummaries(func IrFunction, libraryFacts LibraryFacts) returns bool
+	return bodyIsUnreadable(func) and not libraryFacts.bodyIsSwept(func.name) and not libraryFacts.runtimeTier.contains(func.name)
+end 'bodyIsOpaqueToSummaries'
 
 // Does this function promise a value at all? A `void` return is the language's way of saying the call is
 // worth making for something other than what it hands back.
@@ -5033,7 +5116,9 @@ function noteSharedArgsToKeepingParams(func IrFunction, result ValueId, callee B
 	let calleeIndex = try mutationSummary.funcIndexByName.get(callee) otherwise return NoParamPositions
 	let (fieldKeeps, payloadKeeps, elementKeeps, mutablyKept) = provenance.keepsAt(func, calleeIndex: calleeIndex, callee: callee, sig: sig, args: args, argLabels: argLabels, result: result)
 
-	if fieldKeeps == NoParamPositions and payloadKeeps == NoParamPositions and elementKeeps == NoParamPositions and mutablyKept == NoParamPositions 'keepsNothing'
+	let keptAnywhere = fieldKeeps or payloadKeeps or elementKeeps or mutablyKept
+
+	if keptAnywhere == NoParamPositions 'keepsNothing'
 		return NoParamPositions
 	end 'keepsNothing'
 
@@ -5045,6 +5130,11 @@ function noteSharedArgsToKeepingParams(func IrFunction, result ValueId, callee B
 		let argId = try args.get(i) otherwise panic("noteSharedArgsToKeepingParams: args.get OOB at {i} below its own count")
 		let label = try argLabels.get(i) otherwise panic("noteSharedArgsToKeepingParams: argLabels.get OOB at {i} — a call's argument columns are parallel by construction")
 		let pos = try argSlotPosition(sig.paramNames, argIndex: i as ParamCount, label: label) otherwise continue
+		view parameter = ArgumentParameter.named(try sig.paramNames.get(pos) otherwise panic("noteSharedArgsToKeepingParams: paramNames.get OOB at {pos} inside paramCount()"))
+
+		if maskHasParam(keptAnywhere, param: pos) 'aUniqueIsMoved'
+			provenance.moveUniqueArgument(func, value: argId, call: callRange, parameter: parameter, callee: callee)
+		end 'aUniqueIsMoved'
 
 		if synthesized.contains(pos) or argumentBlamedByAPermanentHolder(argImmutableNames, index: i as ParamCount) 'readOnlyOrDefaulted'
 			continue
@@ -5053,8 +5143,6 @@ function noteSharedArgsToKeepingParams(func IrFunction, result ValueId, callee B
 		if provenance.valueIsInertAtADoor(func, value: argId) 'keptWithoutAWriter'
 			continue
 		end 'keptWithoutAWriter'
-
-		view parameter = ArgumentParameter.named(try sig.paramNames.get(pos) otherwise panic("noteSharedArgsToKeepingParams: paramNames.get OOB at {pos} inside paramCount()"))
 
 		let refusal = KeptRefusal.wording(keptWordingOf(func, callee: callee, sig: sig, args: args, position: pos)) if maskHasParam(masks.mutable, param: pos) else KeptRefusal.none
 
@@ -5066,7 +5154,7 @@ function noteSharedArgsToKeepingParams(func IrFunction, result ValueId, callee B
 	return refused
 end 'noteSharedArgsToKeepingParams'
 
-function functionSourceName(project Project, func IrFunction) returns String
+module function functionSourceName(project Project, func IrFunction) returns String
 	return programSignaturesIn(project, asker: "functionSourceName").sourceNameOfFunction(func.name)
 end 'functionSourceName'
 
@@ -5739,7 +5827,7 @@ function functionShapeThroughCallInstance(project Project, func IrFunction, subj
 		return shape
 	end 'theInstanceFixesNothingHere'
 
-	return FunctionShape.create(substituted, returnType: returnType, paramAggregateNames: identities, paramDeclaredNames: shape.paramDeclaredNames, returnAggregateName: returnSlotIdentityThroughCallInstance(project, signatures: signatures, shape: shape, gid: gid), paramCapabilities: shape.paramCapabilities, returnCapability: shape.returnCapability, byRefParams: shape.byRefParams)
+	return FunctionShape.create(substituted, returnType: returnType, paramAggregateNames: identities, paramDeclaredNames: shape.paramDeclaredNames, returnAggregateName: returnSlotIdentityThroughCallInstance(project, signatures: signatures, shape: shape, gid: gid), paramCapabilities: shape.paramCapabilities, returnCapability: shape.returnCapability, byRefParams: shape.byRefParams, markedParams: shape.markedParams, mutableFunction: shape.mutableFunction)
 end 'functionShapeThroughCallInstance'
 
 // ⭐⭐ **THE IDENTITY OF A SLOT THE INSTANCE JUST FILLED IN — `Parser.erasedAggregateNameOf`'s RULE stated for
@@ -5826,7 +5914,7 @@ end 'returnTypeThroughCallInstance'
 // ⚠ **THROUGH `displayParamName`, WHICH IS WHAT MAKES THE RECEIVER PRINTABLE.** `__self` is the IR's name
 // for parameter 0 and appears nowhere in the author's program; `self` is the keyword they wrote. It is
 // the same mapping E3159 renders its receiver half through, asked here rather than restated.
-function argParamLabel(param ArgumentParameter, position ParamCount) returns String
+export function argParamLabel(param ArgumentParameter, position ParamCount) returns String
 	return match param 'param'
 		unnamed gives "{position + 1}"
 		named(name) gives quotedParamLabel(displayParamName(name))
@@ -6811,7 +6899,7 @@ function checkFunctionArgShape(project Project, func IrFunction, declaredShape F
 	if functionShapesAgree(functionTypeRegistryOf(project), signatures: signatures, declared: declaredShape, got: gotShape, readerFilePath: filePath) 'sameShape'
 		let handed = provenance.definingRangeOf(func, value: argId, fallback: handedAt)
 
-		if checkValueKeepsTheBoundary(project, provenance: provenance, declaredName: declaredBrand, gotName: gotBrand, line: handed.line, column: handed.column, filePath: filePath) 'brokeItsBoundary'
+		if checkDoorMeetsBoundary(project, facts: provenance.capabilityFacts(), declaredName: declaredBrand, gotName: gotBrand, line: handed.line, column: handed.column, filePath: filePath) 'brokeItsBoundary'
 			return true
 		end 'brokeItsBoundary'
 

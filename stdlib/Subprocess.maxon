@@ -931,6 +931,23 @@ end 'lastErrorMessage'
 // generation grows by one per spawn on a slot, so the range holds 2^57 spawns of one slot.
 typealias StreamingHandle = int(0 to u64.max)
 
+/// The stdout side of a `StreamingSubprocess`, taken out with `takeStdout`. It only reads lines: it has
+/// no `release` and no `wait`. `StreamingSubprocess.reclaimStdout` returns the stdout side to the child
+/// once the coroutine that held the reader has ended.
+public type StdoutReader
+	let handle as StreamingHandle
+
+	static function over(handle StreamingHandle) returns StdoutReader
+		return Self{handle: handle}
+	end 'over'
+
+	/// Read one line, without its terminator. Same contract as `StreamingSubprocess.readStdoutLine`.
+	public function readLine() returns String throws SubprocessError
+		let raw = __Builtins.subprocessReadStdoutLine(handle, defaultReadLineCap)
+		return try readLineResultToString(handle, raw: raw, stream: StdioStream.stdout)
+	end 'readLine'
+end 'StdoutReader'
+
 /// A child process whose stdin / stdout / stderr the caller drives by hand.
 ///
 /// Unlike `Subprocess.run(...)` (which fires the process, drains both output
@@ -960,6 +977,10 @@ public type StreamingSubprocess
 	// Latched once release() runs so subsequent release() calls are no-ops
 	// (matches the "treat like file close" contract documented above).
 	public var released as bool
+
+	// True while the child's stdout side is out with a `StdoutReader`; the child's own stdout reads refuse
+	// until `reclaimStdout`.
+	var stdoutTaken as bool
 
 	/// Spawn `executable arguments...` with stdin/stdout/stderr as pipes the
 	/// caller drives. Working directory defaults to the parent's cwd; pass
@@ -1004,7 +1025,7 @@ public type StreamingSubprocess
 
 		// rawHandle is the wide builtin return; -1 is excluded above, so the
 		// narrow StreamingHandle range is satisfied.
-		return StreamingSubprocess{handle: rawHandle as StreamingHandle, released: false}
+		return StreamingSubprocess{handle: rawHandle as StreamingHandle, released: false, stdoutTaken: false}
 	end 'spawnTraceable'
 
 	/// Write `line + "\n"` to the child's stdin, NUL bytes included. Throws on broken pipe.
@@ -1031,8 +1052,27 @@ public type StreamingSubprocess
 		return try Self.readStdoutLineCapped(self, maxBytes: defaultReadLineCap)
 	end 'readStdoutLine'
 
+	/// Take the child's stdout side out as a `StdoutReader`; the child's own stdout reads refuse until
+	/// `reclaimStdout`. The reader can run in a coroutine beside the child's owner because it shares no
+	/// data with the child.
+	public function takeStdout() returns StdoutReader throws SubprocessError
+		try requireStdoutHere()
+		self.stdoutTaken = true
+		return StdoutReader.over(self.handle)
+	end 'takeStdout'
+
+	/// Make the child's stdout side its own again, once the coroutine that held the `StdoutReader` has ended.
+	/// Refuses a child whose stdout is not out.
+	public function reclaimStdout() throws SubprocessError
+		if not self.stdoutTaken 'notOut'
+			throw SubprocessError.ioFailed("reclaimStdout: this child's stdout is not out")
+		end 'notOut'
+
+		self.stdoutTaken = false
+	end 'reclaimStdout'
+
 	public function readStdoutLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
-		try requireLive()
+		try requireStdoutHere()
 		let raw = __Builtins.subprocessReadStdoutLine(handle, maxBytes)
 		return try readLineResultToString(handle, raw: raw, stream: StdioStream.stdout)
 	end 'readStdoutLineCapped'
@@ -1052,7 +1092,7 @@ public type StreamingSubprocess
 	/// has no terminator to remove, so a CR or an LF inside the span is part of the
 	/// answer.
 	public function readStdoutBytes(count ByteLimit) returns String throws SubprocessError
-		try requireLive()
+		try requireStdoutHere()
 		let raw = __Builtins.subprocessReadStdoutBytes(handle, count)
 		return String.init(try finishRead(handle, raw: raw, wanted: count, stream: StdioStream.stdout))
 	end 'readStdoutBytes'
@@ -1164,10 +1204,13 @@ public type StreamingSubprocess
 	/// terminator is off: a caller that read emptiness as "nothing yet" drops every blank line the child
 	/// writes, and nothing downstream can tell that it did. `none` says nothing about whether the stream has
 	/// ENDED — a caller that needs that asks `pollExit`, because a child that has exited writes no more.
-	public function tryReadStdoutLine() returns LinePoll
+	/// Throws while the stdout side is out with a `StdoutReader`.
+	public function tryReadStdoutLine() returns LinePoll throws SubprocessError
 		if released 'gone'
 			return LinePoll.none
 		end 'gone'
+
+		try requireStdoutHere()
 
 		return bufferedLineIn(__Builtins.subprocessTryReadStdoutLine(handle, defaultReadLineCap))
 	end 'tryReadStdoutLine'
@@ -1191,14 +1234,27 @@ public type StreamingSubprocess
 		end 'gone'
 	end 'requireLive'
 
+	function requireStdoutHere() throws SubprocessError
+		try requireLive()
+
+		if stdoutTaken 'out'
+			throw SubprocessError.ioFailed("stdout is out with a StdoutReader")
+		end 'out'
+	end 'requireStdoutHere'
+
 	/// Release the OS handles this child owns — its process handle, its pipe
 	/// ends, and the job object naming its process tree where the platform
 	/// made one. Idempotent; safe to call at the end of a
 	/// using-block or from a guard path. Nothing reaches the runtime with a
 	/// released handle afterwards: the throwing methods refuse it through
 	/// `requireLive`, and `closeStdin` and `release` are idempotent no-ops
-	/// whose postcondition a released child already satisfies.
+	/// whose postcondition a released child already satisfies. Panics while a `StdoutReader` taken from
+	/// this child is still out: `reclaimStdout` first.
 	public function release()
+		if stdoutTaken 'readerStillOut'
+			panic("StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first")
+		end 'readerStillOut'
+
 		if not released 'notYet'
 			__Builtins.subprocessReleaseHandle(handle)
 			released = true

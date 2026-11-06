@@ -64,7 +64,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq
 	function current() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 type Upto implements Seq
@@ -116,7 +116,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq
 	function current() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 interface Counted extends Seq
@@ -177,7 +177,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq
 	function current() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 type Tagged uses T implements Seq
@@ -233,7 +233,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Lines
 	function current() returns String
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Lines'
 
 type Numbered implements Lines
@@ -287,7 +287,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq
 	function current() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 type Upto implements Seq
@@ -499,7 +499,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Base
 	function current() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Base'
 
 interface Derived extends Base
@@ -554,7 +554,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq
 	function current() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 type Upto implements Seq
@@ -639,7 +639,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq
 	function current() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 type Upto implements Seq
@@ -704,7 +704,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Lines
 	function current() returns String
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Lines'
 
 type Numbered implements Lines

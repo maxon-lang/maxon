@@ -250,8 +250,9 @@ function reader() returns Integer
 end 'reader'
 
 function dropInFlight() returns Integer
-	_ = async reader()
+	let p = async reader()
 	sleep(1)
+	p.cancel()
 	return 0
 end 'dropInFlight'
 

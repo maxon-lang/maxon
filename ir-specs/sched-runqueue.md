@@ -398,7 +398,7 @@ func @__sched_steal {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, sslottake
   sslotmachine:
-    x64.loadRegBaseDisp.word64 rax, [rax + 760]
+    x64.loadRegBaseDisp.word64 rax, [rax + 776]
     x64.andRegImm32 rax, rax, 1
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, sslottake
@@ -803,7 +803,7 @@ func @__sched_steal {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, sslottake
   sslotmachine:
-    x64.loadRegBaseDisp.word64 rax, [rax + 760]
+    x64.loadRegBaseDisp.word64 rax, [rax + 776]
     x64.andRegImm32 rax, rax, 1
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, sslottake
@@ -1193,7 +1193,7 @@ func @__sched_steal {
     arm64.cmp x0, 0
     arm64.b.eq sslottake
   sslotmachine:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 760]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 776]
     arm64.and x0, x0, 1
     arm64.cmp x0, 0
     arm64.b.ne sslottake
@@ -1586,7 +1586,7 @@ func @__sched_steal {
     arm64.cmp x0, 0
     arm64.b.eq sslottake
   sslotmachine:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 760]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 776]
     arm64.and x0, x0, 1
     arm64.cmp x0, 0
     arm64.b.ne sslottake

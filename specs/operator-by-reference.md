@@ -51,6 +51,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3187: <fragment>:11:11: 'Tagged.equals' writes its parameter 'other', but a method behind the comparison operators may not modify its operand — `==`, `!=`, `<`, `<=`, `>` and `>=` pass it by value
+error E3210: <fragment>:11:11: 'Tagged.equals' writes its parameter 'other', but 'Equatable.equals' does not declare it `mutable`
 ```
 
 <!-- test: operator-by-reference.error.an-enum-conformer-may-not-reassign-its-operand -->
@@ -134,6 +135,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3187: <fragment>:19:11: 'Tagged.equals' writes its parameter 'other', but a method behind the comparison operators may not modify its operand — `==`, `!=`, `<`, `<=`, `>` and `>=` pass it by value
+error E3210: <fragment>:19:11: 'Tagged.equals' writes its parameter 'other', but 'Equatable.equals' does not declare it `mutable`
 ```
 
 <!-- test: operator-by-reference.error.a-method-named-equals-is-judged-with-or-without-a-conformance -->
@@ -582,6 +584,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3210: <fragment>:15:11: 'Cell.reset' writes its receiver, but 'Resetter.reset' does not declare `mutable self`
 error E3187: <fragment>:27:11: 'Holder.equals' writes its receiver, but a method behind the comparison operators may not modify its receiver — `==`, `!=`, `<`, `<=`, `>` and `>=` pass it by value
 ```
 
@@ -628,6 +631,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3210: <fragment>:15:11: 'Cell.reset' writes its receiver, but 'Resetter.reset' does not declare `mutable self`
 error E3187: <fragment>:27:11: 'Holder.equals' writes its parameter 'other', but a method behind the comparison operators may not modify its operand — `==`, `!=`, `<`, `<=`, `>` and `>=` pass it by value
 ```
 

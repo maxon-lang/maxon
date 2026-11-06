@@ -294,7 +294,7 @@ release's version as its heading when the release is cut.
 - A `mutable` parameter takes a `var`, a field or an element that is writable: a literal, an expression or a
   `let` handed to it is E3159, where a literal or an expression was given a temporary. A function with a
   `mutable` parameter fits only a function type that spells `mutable` at that position (E3005), and a
-  message or factory parameter cannot be `mutable` (E2076).
+  message or factory parameter cannot be `mutable` (E2010).
   Fix: pass a `var`; write the marker in the function type, as in `typealias Step = function(mutable Count)`;
   return the new value from a message or a factory instead of writing a parameter.
 - Maxon has no overloading. A function name is declared once per directory, a method name once per type and
@@ -369,6 +369,84 @@ release's version as its heading when the release is cut.
   Fix: build the array with `create(n, zeroed: false)` and `push` each element, or with `growFilled(n, value:)`
   naming a case, or give the enum a case whose raw value is 0. In a generic body, hold the elements with `push`
   or `growFilled(n, value:)`, or instantiate the type only at elements that admit 0.
+- A promise held in a local is must-use. A promise that reaches the end of its scope, is overwritten, is
+  discarded with `_ =` (`_ = async work()`), or is left behind by an early `return`, a `throw` or a propagating
+  `try` before it is awaited is E3213, and so is a service reply bound to a local and never consumed. A
+  service reply discarded with `_ = try h.say("a")` is still accepted.
+  Fix: `await` the promise, call `.cancel()` on it, store it or return it on every path; `.cancel()` is how a
+  coroutine is abandoned.
+- An `async` call given the caller's mutable data (a record, an array, a variable at a `mutable` parameter)
+  makes a tied promise. It is held in a local and awaited or cancelled on every exit of the function, and
+  returning it, storing it in a field or a container (`walks.push(async walkTree(root))`) or passing it to a
+  function is E3212, as is an exit that leaves it neither awaited nor cancelled.
+  Fix: `await` it or call `.cancel()` on it before every `return`, `throw` and propagating `try`; pass a
+  `.clone()` of the argument to untie the call (`async walkTree(root.clone())`).
+- A variable handed to a `mutable` parameter of an `async` callee is lent to the coroutine, which writes the
+  caller's own variable, where the coroutine wrote storage of its own and nothing reached the caller. Until
+  the promise is awaited or cancelled, reading, writing or passing the variable is E3102, and naming it in the
+  statement that starts the coroutine is E3186. A module `var` or other non-local storage at a by-reference
+  position of an `async` call is E2015.
+  Fix: `await` or `.cancel()` the promise before the variable is used again, and pass a local `var` or a field
+  of one; copy a module `var` into a local first.
+- A variable passed at a `mutable` parameter must be declared at the parameter's own type, alias included: a
+  `Narrow` variable at a `mutable Wide` parameter, or a `Wide` one at a `mutable Narrow` parameter, is E3005 at
+  the call, in direct calls, method calls, calls through function values and interfaces, generic functions and
+  coroutines. The write used to be range-checked when the call returned.
+  Fix: declare the variable or field at the parameter's type, or pass a local of that type.
+- E3186 follows evaluation order and the callee's writes. A local read by an operand evaluated before a call
+  writes it through a `mutable` parameter is refused anywhere in the statement, judged per root binding: the
+  other argument or the receiver (`bump(h.n, h: h.copy())`, `self.item.bump(self.level)`), sibling fields of one
+  root, a field of `self` or a module `var` beside its own cell, `f(s, s)` through a function value or an
+  interface, a ternary condition wrapped around the call, a closure that captures the local, and a receiver
+  call whose by-reference write reaches a root an argument reads. A read that runs after the write, and a
+  `mutable` parameter the callee never writes, are accepted. The message names the other operand and the cure
+  where it said `overlaps argument`. A static `var` field path or a namespace-qualified `var` passed by
+  reference now reaches the callee's write, where it was lost.
+  Fix: copy the local into a `let` in an earlier statement and use the copy for the other operand; for a
+  by-reference operand, copy into a `var`, pass the copy and store it back after the call.
+- A function type and an interface requirement are read-only and neither wait nor yield. A function value,
+  closure or conformer that writes a parameter, its receiver or a capture the boundary does not declare, or
+  that may wait or yield, is E3210, and a `mutates captures` value called through frozen or read-only data is
+  E3211. The library's own boundaries are declared the same way: `Iterator.advance`,
+  `BidirectionalIterator.retreat` and `LogHandler.handle` are `mutable self`, `HttpHandler.handle` takes
+  `exchange mutable HttpExchange`, and `Array.SortComparator` and the other library function types do not
+  declare `mutates captures`.
+  Fix: declare what the callee does on the boundary: `mutable` on the parameter (`function(mutable Row)`),
+  `mutable self` on the requirement (`function grow(mutable self, by Tally)`), `mutates captures` after the
+  result of a function type whose closures write what they capture. Spell `mutable` on an `HttpHandler`
+  conformer's `exchange` parameter. A callee that waits on a reply or awaits a coroutine cannot stand behind a
+  function type or requirement: start the wait in the caller.
+- `keep`, `sole`, `returns sole` and `returns readonly` are removed, along with E2076 and E3189, and fail as
+  any stray word does. A message or factory parameter marked `mutable` is E2010, where it was E2076.
+  Fix: delete the qualifier. A function type whose callee writes a parameter says `mutable T`; whether a
+  function keeps a parameter is read from its body.
+- A type with a unique field is unique, `Promise` is declared `type Promise is unique`, and a unique value
+  is never cloned or aliased. `clone()` of a record, array or promise holding a promise is E3214, and so is
+  freezing one, or binding, returning, storing or handing to a keeping parameter a unique value read out of a
+  field or an element.
+  Fix: move the value out with `pop` or `remove`, or read it through a `view`; a holder of promises has no
+  `clone()`.
+- A `for` loop over an array whose elements move out as the loop runs, such as an array of promises, makes the
+  array read-only in the body: pushing to it, clearing it or passing it to a function that writes it is E3197 or
+  E3207.
+  Fix: collect what the body adds in another array and use it after the loop.
+- A program or file that uses `async`, `modify`, `freeze`, `swap`, `merge`, `isolated` or `immutable`, and the
+  standard library, is held to the capability checks: a write through frozen or read-only data (E3197), a
+  store that mixes capabilities (E3196), an argument a parameter's inferred use refuses (E3207), a parameter
+  the body needs both mutable and immutable (E3206), results whose source arguments disagree (E3208, E3209),
+  and a call that may wait or yield inside a `modify` block (E3205).
+  Fix: follow the message, which names the use that decided the class: pass a mutable argument, `freeze` a
+  `.clone()` where a frozen one is wanted, or move the write out of the data that is frozen.
+- `sendable` and `isolated` after `is` in a generic type's `where` clause are region bounds, so an interface
+  of either name is not a constraint there, and the same words in a function's or an extension's `where`
+  clause are E3215.
+  Fix: rename an interface called `sendable` or `isolated`; bound a generic function's parameter by an
+  interface.
+- `StreamingSubprocess.tryReadStdoutLine()` throws `SubprocessError.ioFailed` while the child's stdout is out
+  with a `StdoutReader` (`takeStdout()`), so it is a throwing call, and `release()` panics while the reader is
+  out.
+  Fix: call it with `try`, as in `match try child.tryReadStdoutLine() otherwise …`; call `reclaimStdout()`
+  before `release()` where `takeStdout()` was used.
 
 ## 0.5.0 — 2026-10-08
 

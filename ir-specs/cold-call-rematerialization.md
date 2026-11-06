@@ -22,9 +22,9 @@ saves nothing and the frame holds no slot.
 typealias Word = bits(64)
 typealias Planes = FixedArray with 4 Word
 
-typealias Stamper = function(Planes)
+typealias Stamper = function(mutable Planes)
 
-function stamp(planes Planes)
+function stamp(planes mutable Planes)
 	planes.set(1, value: 74565)
 	planes.set(2, value: 30)
 end 'stamp'

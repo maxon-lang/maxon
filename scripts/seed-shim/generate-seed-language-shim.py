@@ -137,6 +137,9 @@ HEADER = """# A form is withdrawn only against a seed that predates it: `--withd
 # The seed cannot parse a `mutable` marker before a parameter's type (`candidateCount mutable ElementIndex`,
 # `function(mutable Count)`), so each is withdrawn; the seed then infers by reference from the function's own
 # reassignment of the parameter, which is the one reassignment the marked parameter existed for.
+# The seed cannot parse a receiver capability (`function f(mutable self, ...)`, `function advance(mutable self)` in an
+# interface requirement), a `mutates captures` clause on a function type or a `type X is unique` clause, so each is withdrawn; the seed
+# then reads the receiver, the function type and the type as it always did.
 # The declarations, their ranges and every table stay, so `C1` knows every withdrawn form and compiles the unshimmed
 # tree into `C2`.
 # The tree also no longer has rules the seed enforces, so each site the seed refuses is written the way its older
@@ -210,6 +213,10 @@ MUTABLE_WORD = "mutable"
 FUNCTION_PARAMETER_LIST = re.compile(r"\bfunction(?:[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_]*))?[ \t]*\(")
 UNNAMED_MUTABLE_PARAMETER = re.compile(r"\s*(?P<marker>mutable[ \t]+)(?=[A-Za-z_(])")
 NAMED_MUTABLE_PARAMETER = re.compile(r"\s*[A-Za-z_][A-Za-z0-9_]*[ \t]+(?P<marker>mutable[ \t]+)(?=[A-Za-z_(])")
+RECEIVER_CAPABILITY = re.compile(r"[ \t]*(?P<word>mutable[ \t]+)self\b")
+MUTATES_CAPTURES_CLAUSE = re.compile(r"^[ \t]*(?:[a-z]+ )*typealias [A-Za-z0-9_]+ = function\(.*?(?P<clause>[ \t]+mutates[ \t]+captures)[ \t]*$")
+UNIQUE_TYPE_CLAUSE = re.compile(r"^(?:[a-z]+ )*(?:type|interface) [A-Za-z_][A-Za-z0-9_]*(?P<clause> is unique)\b")
+REGION_FORM_HINTS = ("mutable", " is unique", "mutates captures")
 CLONE_CALL = ".clone()"
 HELD_PREFIX = "seedHeld"
 FIELD = re.compile(r"^cannot assign a value of type '(?P<got>[A-Za-z0-9_]+)' to (?:field|variable) '(?P<field>[A-Za-z0-9_]+)'(?: of '[A-Za-z0-9_]+')?, which holds '(?P<expected>[A-Za-z0-9_]+)'")
@@ -557,6 +564,47 @@ class MutableMarkers(LineRewrite):
 
 def strip_mutable_markers(work):
 	return rewrite_code(work, lambda text: MUTABLE_WORD in text, lambda rel: MutableMarkers())
+
+
+class RegionForms(LineRewrite):
+	def edits(self, line, masked):
+		edits = []
+
+		for m in FUNCTION_PARAMETER_LIST.finditer(masked):
+			if m.group("name") is None:
+				continue
+
+			open_index = m.end() - 1
+			close = match_forward(masked, open_index)
+			parts = top_level_parts(masked, open_index + 1, close)
+			begin, end = parts[0]
+			receiver = RECEIVER_CAPABILITY.match(masked, begin, end)
+
+			if receiver is None:
+				continue
+
+			if len(parts) == 1:
+				edits.append((receiver.start("word"), end, ""))
+				continue
+
+			next_begin, next_end = parts[1]
+			edits.append((receiver.start("word"), next_begin + len(masked[next_begin:next_end]) - len(masked[next_begin:next_end].lstrip()), ""))
+
+		clause = MUTATES_CAPTURES_CLAUSE.match(masked)
+
+		if clause is not None:
+			edits.append((clause.start("clause"), clause.end("clause"), ""))
+
+		unique = UNIQUE_TYPE_CLAUSE.match(masked)
+
+		if unique is not None:
+			edits.append((unique.start("clause"), unique.end("clause"), ""))
+
+		return edits
+
+
+def strip_region_forms(work):
+	return rewrite_code(work, lambda text: any(hint in text for hint in REGION_FORM_HINTS), lambda rel: RegionForms())
 
 
 def strip_readonly_arguments(work):
@@ -2857,6 +2905,7 @@ def main():
 		os.makedirs(work, exist_ok=True)
 		stage_work(tree, work, seed, output)
 		print(f"withdrew {strip_mutable_markers(work)} `mutable` parameter markers", flush=True)
+		print(f"withdrew {strip_region_forms(work)} `mutable self` receivers, `mutates captures` clauses and `is unique` clauses", flush=True)
 
 		if args.older_seed and withdraw_older_seed_forms(work) != 0:
 			return 1

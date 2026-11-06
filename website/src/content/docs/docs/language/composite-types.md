@@ -316,10 +316,11 @@ end 'main'
 - A requirement may be `static function`; the conforming type provides it as a static method.
 - `interface Derived extends Base` inherits `Base`'s requirements; a type implementing `Derived` provides
   both, and satisfies parameters typed `Base`.
-- A requirement declares what a conformer may do with its values: `keep` or `sole` on a parameter it keeps,
-  `returns sole` or `returns readonly` on its result (see
-  [Capability Qualifiers](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly)). A conformer that does more is
-  **E3189**.
+- A requirement is read-only and never waits or yields unless it declares otherwise: `mutable self` where a
+  conformer writes the receiver, `mutable` or `immutable` on a parameter, `returns isolated` or
+  `returns immutable` on its result (see
+  [Capabilities at Function Types and Requirements](/docs/language/regions/#capabilities-at-function-types-and-requirements)). A
+  conformer that does more is **E3210**.
 
 **Interface-typed parameters, returns and fields.** An interface can be used as a type, as `describe`
 does above: a parameter typed `Shape` accepts any conforming type, `enum` and `union` conformers
@@ -655,9 +656,6 @@ function is itself visible like any function: a private one called from another 
 
 A generic function and a non-generic one of the same name in one directory are two declarations of one name
 (**E3006**); name each its own.
-
-A generic function's result may declare `returns sole T` or `returns readonly T` (see
-[Capability Qualifiers](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly)); a body that breaks it is **E3189**.
 
 A generic body is checked against the bound of `T` only, so it never reassigns a parameter declared `T`,
 marked `mutable` or not (**E2013**, `'item' is a generic parameter and cannot be reassigned; return the new

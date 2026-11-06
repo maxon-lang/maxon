@@ -137,7 +137,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -174,7 +174,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -216,7 +216,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -253,7 +253,7 @@ type Array uses Element implements BuiltinArrayLiteral, Cloneable
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -300,7 +300,7 @@ type Array uses Element implements BuiltinArrayLiteral, Cloneable
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -345,7 +345,7 @@ type Array uses Element implements BuiltinArrayLiteral, Cloneable
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -383,7 +383,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	export var managed as ElementMemory
 	export var frozen as bool
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed, frozen: false}
 	end 'init'
 end 'Array'
@@ -410,7 +410,7 @@ typealias Num = int(0 to 1000)
 type Array uses Element implements BuiltinArrayLiteral
 	export var managed as Num
 
-	static function init(value ByteArray) returns Self
+	static function init(value mutable ByteArray) returns Self
 		return Self{managed: 0}
 	end 'init'
 end 'Array'
@@ -441,7 +441,7 @@ type Bag uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -477,7 +477,7 @@ type Bag uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -516,7 +516,7 @@ type Bag uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -552,7 +552,7 @@ gets the sentence about the two names the compiler owns a record for.
 type Holder implements BuiltinArrayLiteral
 	export var managed as __ManagedMemory
 
-	static function init(managed __ManagedMemory) returns Self
+	static function init(managed mutable __ManagedMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 end 'Holder'
@@ -579,7 +579,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -618,7 +618,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -665,7 +665,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -712,7 +712,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -768,7 +768,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -832,7 +832,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -884,7 +884,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -928,7 +928,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -965,7 +965,7 @@ type Array uses Element implements BuiltinArrayLiteral, Cloneable
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1042,7 +1042,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1118,7 +1118,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1201,7 +1201,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1238,7 +1238,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1280,7 +1280,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1325,7 +1325,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1358,7 +1358,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1397,7 +1397,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1432,7 +1432,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1477,7 +1477,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1495,7 +1495,7 @@ type Bag uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1530,7 +1530,7 @@ type Bag uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1565,7 +1565,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1599,7 +1599,7 @@ and `resize(9)` to **9**. Not a refusal and not a diagnostic: the size that is p
 simply gone.
 
 ⇒ **A name the compiler serves a container under is not open to the marker.** The conformance REQUIRES a
-`static init(value __ManagedMemory) returns Self` (E3016 without one), and that body's identity is
+`static init(value mutable __ManagedMemory) returns Self` (E3016 without one), and that body's identity is
 precisely what cannot be honoured under such a name — so the declaration is refused where it constructs,
 with the container's own reason rather than the `String`/`Character` sentence a `Holder` gets.
 ```maxon
@@ -1608,7 +1608,7 @@ type FixedArray uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 end 'FixedArray'
@@ -1646,7 +1646,7 @@ type List uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 end 'List'
@@ -1697,7 +1697,7 @@ type FixedArray uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return FixedArray.init(managed)
 	end 'init'
 end 'FixedArray'
@@ -1741,7 +1741,7 @@ type FixedArray implements BuiltinStringLiteral
 	var managed as __ManagedMemory
 	var flag as bool
 
-	static function init(value __ManagedMemory) returns Self
+	static function init(value mutable __ManagedMemory) returns Self
 		return Self{managed: value, flag: false}
 	end 'init'
 end 'FixedArray'
@@ -1769,7 +1769,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1805,7 +1805,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1839,7 +1839,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1874,7 +1874,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1916,7 +1916,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1959,7 +1959,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -1997,7 +1997,7 @@ type Array uses Element implements BuiltinArrayLiteral
 
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -2046,7 +2046,7 @@ typealias Num = int(0 to 1000)
 type Array uses Element implements BuiltinArrayLiteral, Equatable, Hashable
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 	static function create() returns Self
@@ -2082,7 +2082,7 @@ A library `StringArray` is a working `Map` key in a program that declares its ow
 type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 	static function create() returns Self
@@ -2114,7 +2114,7 @@ the `hash` and `equals` a program's own `type Array` declares.
 type Array uses Element implements BuiltinArrayLiteral, Hashable, Equatable
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 	static function create() returns Self

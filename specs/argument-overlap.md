@@ -9,31 +9,42 @@ category: memory
 ## Documentation
 
 A parameter declared `mutable` (`function bump(n mutable Coord, h Holder)`) is passed by reference: it
-names the caller's storage, not a value of its own, and the function may reassign it. A call may not pass,
-as one argument, storage the callee takes as a `mutable` parameter and, as another, a view of that same
-storage. Two arguments overlap when one names the other's storage or storage inside it: the same variable,
-or a variable and a field reached through it. The check compares the arguments as written — a root
-binding, then its field steps — and does not see through a call result or a `match`, `try` or conditional
-merge, each of which is a fresh counted value. A receiver is never a `mutable` argument (a method cannot
-assign to `self`); it is still a view, and a receiver that overlaps an argument the method takes as
-`mutable` is refused like any other. A call is judged against the declaration of the function it names.
+names the caller's storage, not a value of its own. A local handed to a `mutable` parameter the callee
+writes is lent to the call as a by-reference cell, and the call overwrites it right after its own operands
+have run. E3186 refuses a statement in which another operand reads that local BEFORE the write: another
+argument of the call, an earlier operand, the receiver, a ternary condition that wraps the call, or a
+closure literal that captures it. A read that runs after the write sees the new value and is accepted.
 
-The refusal is E3186, reported at the argument the callee does NOT take as `mutable`:
+The refusal is judged per root binding. It counts reads of the local the cell is rooted in and of that
+local's field paths, so `bump(h.n, h: h)` and `bump(h, n: h.n)` are refused whichever order the two
+arguments are written in. The fields of `self` share one root, and a module `var` or a `static var` is one
+root. A receiver is never a `mutable` argument (a method cannot assign to `self`); it is still a read of
+its record, and a receiver beside an argument the method takes as `mutable` is refused like any other. A
+call result is a fresh counted value that reads nothing of the local, so `bump(h.n, h: Holder.create(7))`
+is accepted. Another name for the same record, such as a `view`, a `var` that took the record by move or a
+`let` alias of a parameter, is not that local, and the hold a read of it takes keeps the value alive across
+the write. A call is judged against the declaration of the function it names.
+
+The refusal is E3186, reported at the by-reference argument:
 
 ```text
-error E3186: argument 'h' overlaps argument 'h.n', which 'bump' reassigns (parameter 'n') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.clone()'
+error E3186: argument 'h.n' is read by another operand of this statement and passed by reference to 'bump' (parameter 'n') — a hold cannot protect a value its by-reference cell overwrites. Copy 'h' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
 ```
 
-A by-reference parameter points into the caller's storage without a count of its own, so reassigning
-it replaces what the caller's storage held while the other argument is still a view of it. The remedy
-is `.clone()`: a copy is storage of its own, so the reassignment cannot reach it.
+A hold cannot protect a value its own cell overwrites, so the other operand must not read the local. Copy
+it into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy; where the
+other operand is itself a by-reference cell, copy the local into a `var`, pass the copy for that operand
+and store it back after the call.
 
-A parameter the callee only WRITES — `clear`, `push`, a field store, a method that writes its
-receiver's fields — may overlap another argument. Each such argument is a counted value taken before
-the call, so a write through one parameter releases only the storage's own reference, and a value read
-out of the other still names what it read. Handing `x` twice to a `look` that only clears its second
-parameter, `readThenClear(r, log: r.ids)`, `assign(a, src: a)` and `a.absorb(a)` are legal, and the write
-is visible through both parameters because they name one record.
+Only a parameter the callee writes lends its cell. A callee writes a `mutable` parameter when its body
+does, or when it forwards the parameter to a `mutable` parameter that is written. A call through an
+interface requirement or a function value counts every `mutable` position as written. A `mutable`
+parameter the callee never writes reads like any other operand, and a parameter that is not `mutable` is a
+counted value taken before the call, so a write through one parameter releases only the storage's own
+reference and a value read out of the other still names what it read. Handing `x` twice to a `look` that
+clears its second parameter, `readThenClear(r, log: r.ids)`, `assign(a, src: a)`, `a.absorb(a)`,
+`s.append(s)` and `peek(h.n, h: h)` are legal, and a write is visible through both parameters because
+they name one record.
 
 ## Tests
 
@@ -252,7 +263,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3186: <fragment>:23:23: argument 'h' overlaps argument 'h.n', which 'bump' reassigns (parameter 'n') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.clone()'
+error E3186: <fragment>:23:15: argument 'h.n' is read by another operand of this statement and passed by reference to 'bump' (parameter 'n') — a hold cannot protect a value its by-reference cell overwrites. Copy 'h' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
 ```
 
 <!-- test: error.a-record-handed-first-and-a-field-of-it-to-a-mutable-parameter-second -->
@@ -280,7 +291,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3186: <fragment>:19:15: argument 'h' overlaps argument 'h.n', which 'bump' reassigns (parameter 'n') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.clone()'
+error E3186: <fragment>:19:21: argument 'h.n' is read by another operand of this statement and passed by reference to 'bump' (parameter 'n') — a hold cannot protect a value its by-reference cell overwrites. Copy 'h' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
 ```
 
 <!-- test: error.only-the-function-that-takes-the-parameter-mutable-refuses-the-overlap -->
@@ -314,7 +325,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3186: <fragment>:24:25: argument 'h' overlaps argument 'h.n', which 'settle' reassigns (parameter 'n') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.clone()'
+error E3186: <fragment>:24:17: argument 'h.n' is read by another operand of this statement and passed by reference to 'settle' (parameter 'n') — a hold cannot protect a value its by-reference cell overwrites. Copy 'h' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
 ```
 
 <!-- test: the-function-that-takes-the-parameter-by-value-accepts-the-overlap -->
@@ -373,12 +384,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3186: <fragment>:19:10: argument 'h' overlaps argument 'h.n', which 'settle' reassigns (parameter 'm') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'h.clone()'
+error E3186: <fragment>:19:19: argument 'h.n' is read by another operand of this statement and passed by reference to 'settle' (parameter 'm') — a hold cannot protect a value its by-reference cell overwrites. Copy 'h' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
 ```
 
 <!-- test: a-call-result-beside-a-mutable-parameter-is-a-fresh-counted-value -->
-`h.copy()` is a fresh record, not a view of `h.n`'s storage, so it may travel beside the `mutable` field, and the
-copy keeps the value it was built from.
+`Holder.create(7)` is a fresh record, not a view of `h.n`'s storage, so it may travel beside the `mutable` field.
 ```maxon
 typealias Coord = int(i64.min to i64.max)
 
@@ -388,10 +398,6 @@ type Holder
 	static function create(n Coord) returns Holder
 		return Holder{n: n}
 	end 'create'
-
-	function copy() returns Holder
-		return Holder.create(self.n)
-	end 'copy'
 end 'Holder'
 
 function bump(n mutable Coord, h Holder) returns Coord
@@ -401,7 +407,7 @@ end 'bump'
 
 function main() returns ExitCode
 	var h = Holder.create(5)
-	let seen = bump(h.n, h: h.copy())
+	let seen = bump(h.n, h: Holder.create(7))
 	print("{seen} {h.n}\n")
 	return 0
 end 'main'
@@ -410,5 +416,5 @@ end 'main'
 0
 ```
 ```stdout
-5 6
+7 6
 ```

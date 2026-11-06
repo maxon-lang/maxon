@@ -86,7 +86,7 @@ function everyParamPosition() returns ParamPositionMask
 end 'everyParamPosition'
 
 function releasesElementsOf(callee ByteArray) returns bool
-	return calleeReleasesOwnedElements(callee) or receiverWritingRuntimeCallee(callee)
+	return calleeReleasesOwnedElements(callee) or (receiverWritingRuntimeCallee(callee) and arrayMutationOf(callee) != ArrayMutation.movesLayout)
 end 'releasesElementsOf'
 
 function parameterOrigin(position ParamCount) returns ValueOriginCode
@@ -1073,11 +1073,81 @@ type EffectNodes
 		end 'aMethod'
 
 		if not self.returnsItsOwnInstance(declared, owner: owner) 'anotherInstanceOfTheType'
-			throw AbsentError.absent
+			return try self.instanceFromArguments(declared, args: args, func: func, owner: owner)
 		end 'anotherInstanceOfTheType'
 
 		return try self.resultInstance(result, func: func, owner: owner)
 	end 'calleeInstance'
+
+	function instanceFromArguments(declared IrFunction, args ValueIdArray, func IrFunction, owner ByteArray) returns GenericInstanceId throws AbsentError
+		let arity = self.signatures.structTypeParamsOf(owner).count()
+		var positions = ElementIndexArray.create(0)
+		var bound = MaxonTypeArray.create(0)
+
+		for index in 0 upto declared.maxonParamTypes.count() 'eachParameter'
+			let argument = try args.get(index) otherwise break
+			self.bindOwnerParameters(try declared.maxonParamTypes.get(index) otherwise panic("instanceFromArguments: maxonParamTypes.get OOB at {index} below its own count"), actual: argument, func: func, owner: owner, positions: positions, bound: bound)
+		end 'eachParameter'
+
+		var ordered = MaxonTypeArray.create(0)
+
+		for position in 0 upto arity 'eachOwnerParameter'
+			var found = false
+
+			for slot in 0 upto positions.count() 'eachBinding'
+				if (try positions.get(slot) otherwise panic("instanceFromArguments: positions.get OOB at {slot} below its own count")) == (position as ElementIndex) 'theBinding'
+					ordered.push(try bound.get(slot) otherwise panic("instanceFromArguments: bound.get OOB at {slot} — the two columns are parallel"))
+					found = true
+					break
+				end 'theBinding'
+			end 'eachBinding'
+
+			if not found 'unboundParameter'
+				throw AbsentError.absent
+			end 'unboundParameter'
+		end 'eachOwnerParameter'
+
+		let id = self.signatures.internGenericInstanceOf(owner, args: ordered)
+
+		if not self.signatures.instanceArgsAreFullyConcrete(id) 'stillOpaque'
+			throw AbsentError.absent
+		end 'stillOpaque'
+
+		return id
+	end 'instanceFromArguments'
+
+	function bindOwnerParameters(declared MaxonType, actual ValueId, func IrFunction, owner ByteArray, positions ElementIndexArray, bound MaxonTypeArray)
+		let actualTag = try func.valueTags.get(actual) otherwise return
+
+		if maxonTypeTag(declared) != ValueTypeTag.genericInstance or actualTag != ValueTypeTag.genericInstance 'notAnInstancePair'
+			return
+		end 'notAnInstancePair'
+
+		let actualName = try func.valueNameIds.get(actual) otherwise return
+		let declaredId = genericInstanceIdOf(declared)
+		let actualId = try self.resolvedThroughContext(actualName as GenericInstanceId) otherwise return
+
+		if not self.signatures.genericInstanceBaseName(declaredId).equals(self.signatures.genericInstanceBaseName(actualId)) 'anotherBase'
+			return
+		end 'anotherBase'
+
+		for position in 0 upto self.signatures.genericInstanceArgCount(declaredId) 'eachArgument'
+			let declaredArgument = self.signatures.substitutedInstanceArg(declaredId, position: position)
+
+			if maxonTypeTag(declaredArgument) != ValueTypeTag.typeParameter 'notAParameter'
+				continue
+			end 'notAParameter'
+
+			let declaring = try self.signatures.typeParamOwnerOf(typeNameIdOf(declaredArgument) as TypeParamId) otherwise continue
+
+			if not declaring.declaringTypeName.equals(owner) 'anotherTypesParameter'
+				continue
+			end 'anotherTypesParameter'
+
+			positions.push(declaring.position)
+			bound.push(self.signatures.substitutedInstanceArg(actualId, position: position))
+		end 'eachArgument'
+	end 'bindOwnerParameters'
 
 	// A static takes the instance its result names only when it is declared to return its own; one
 	// declared to return another instance of the type is read without the instance it was called on.

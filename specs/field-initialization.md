@@ -305,6 +305,58 @@ end 'main'
 error E3086: specs/field-initialization/missing-non-exported-errors.maxon:10:14: Field 'hidden' of type 'Q' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
 ```
 
+<!-- test: abandoned-factory-body-reports-only-its-own-error -->
+```maxon
+
+typealias EntryArray = Array with Entry
+
+type Label
+	export let text as ByteArray
+
+	static function create(text ByteArray) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Label'
+
+type Entry
+	export var flag as bool
+	export let name as ByteArray
+
+	static function make(name ByteArray) returns Self
+		return Self{name: name}
+	end 'make'
+
+	static function wrapped(name ByteArray) returns Self
+		return Self.make(name)
+	end 'wrapped'
+end 'Entry'
+
+type Registry
+	var entries as EntryArray
+
+	static function create() returns Self
+		return Self{entries: EntryArray.create(0)}
+	end 'create'
+
+	function declare(name ByteArray) returns Entry
+		var entry = Entry.wrapped(name)
+		self.entries.push(entry)
+		return entry
+	end 'declare'
+end 'Registry'
+
+function main() returns ExitCode
+	let label = Label.create(ByteArray.create(0))
+	var registry = Registry.create()
+	var entry = registry.declare(label.text)
+	entry.flag = true
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3086: specs/field-initialization/abandoned-factory-body-reports-only-its-own-error.maxon:18:14: Field 'flag' of type 'Entry' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
+```
+
 <!-- test: factory-self-assign-straight-line -->
 ```maxon
 

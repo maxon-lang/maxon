@@ -41,8 +41,8 @@ A handle at interface type sends a requirement that has no reply and awaits a re
 service's own handle would.
 ```maxon
 interface Tally
-	function add(by Integer)
-	function total() returns Integer
+	function add(mutable self, by Integer)
+	function total(mutable self) returns Integer
 end 'Tally'
 
 type Counter implements Tally
@@ -155,7 +155,7 @@ A requirement that returns a value may be sent and its reply discarded: the mess
 before the awaited read that follows it.
 ```maxon
 interface Bumper
-	function bump(by Integer) returns Integer
+	function bump(mutable self, by Integer) returns Integer
 	function read() returns Integer
 end 'Bumper'
 
@@ -194,7 +194,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: a-service-default-is-started-before-main-and-looked-up -->
 ```maxon
 interface Greeter
-	function greet() returns Integer
+	function greet(mutable self) returns Integer
 end 'Greeter'
 
 type Polite implements Greeter
@@ -248,8 +248,8 @@ Each worker's handler sends to the registered `Ledger` before it replies, so the
 both replies is queued behind both adds.
 ```maxon
 interface Ledger
-	function add(by Integer)
-	function total() returns Integer
+	function add(mutable self, by Integer)
+	function total(mutable self) returns Integer
 end 'Ledger'
 
 type Tally implements Ledger
@@ -305,7 +305,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: a-handler-may-register -->
 ```maxon
 interface Greeter
-	function greet() returns Integer
+	function greet(mutable self) returns Integer
 end 'Greeter'
 
 type Polite implements Greeter
@@ -365,7 +365,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: register-replaces-the-service-for-later-lookups -->
 ```maxon
 interface Greeter
-	function greet() returns Integer
+	function greet(mutable self) returns Integer
 end 'Greeter'
 
 type Polite implements Greeter
@@ -413,7 +413,7 @@ A lookup is a snapshot: the handle taken before the register still reaches the o
 running until its last holder drops it.
 ```maxon
 interface Greeter
-	function greet() returns Integer
+	function greet(mutable self) returns Integer
 end 'Greeter'
 
 type Polite implements Greeter
@@ -465,7 +465,7 @@ frame's drop of its reference and any thread's replace or release of the slot st
 <!-- MmTrace -->
 ```maxon
 interface Greeter
-	function greet() returns Integer
+	function greet(mutable self) returns Integer
 end 'Greeter'
 
 type Polite implements Greeter
@@ -617,7 +617,7 @@ typealias Integer = int(i64.min to i64.max)
 Nothing reaches `Greeter` or `Config`, so neither factory runs: no service is spawned and nothing prints.
 ```maxon
 interface Greeter
-	function greet() returns Integer
+	function greet(mutable self) returns Integer
 end 'Greeter'
 
 type Loud implements Greeter
@@ -663,7 +663,7 @@ typealias Integer = int(i64.min to i64.max)
 public typealias TonePitch = int(i64.min to i64.max)
 
 public interface Tone
-	function pitch() returns TonePitch
+	function pitch(mutable self) returns TonePitch
 end 'Tone'
 
 public type Soft implements Tone
@@ -709,7 +709,7 @@ end 'main'
 `main` sends and returns at once; the exit drain runs the registered service's queue out, in FIFO order.
 ```maxon
 interface Journal
-	function write(line Integer)
+	function write(mutable self, line Integer)
 end 'Journal'
 
 type Console implements Journal
@@ -762,8 +762,8 @@ function callIndirect(f Step, n Integer) returns Integer
 end 'callIndirect'
 
 interface Greeter
-	function greet() returns Integer
-	function note(n Integer)
+	function greet(mutable self) returns Integer
+	function note(mutable self, n Integer)
 end 'Greeter'
 
 type Polite implements Greeter
@@ -816,7 +816,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: a-value-default-may-hold-a-spawned-handle -->
 ```maxon
 interface Greeter
-	function greet() returns Integer
+	function greet(mutable self) returns Integer
 end 'Greeter'
 
 type Polite implements Greeter
@@ -1067,7 +1067,7 @@ registered service must still be reachable and must drain too. One worker sends 
 lines keep their order.
 ```maxon
 interface Sink
-	function put(n Integer)
+	function put(mutable self, n Integer)
 end 'Sink'
 
 type Collector implements Sink
@@ -1121,7 +1121,7 @@ put 3 (3)
 and `probeNumber` takes a plain number.
 ```maxon
 interface Tally
-	function total() returns Integer
+	function total(mutable self) returns Integer
 end 'Tally'
 
 type Counter implements Tally
@@ -1161,8 +1161,8 @@ Each implementer has its own send table: `Ledger` declares the requirements in t
 out different fields, and a `Tally.handle` holding it still reaches the right messages.
 ```maxon
 interface Tally
-	function add(by Integer)
-	function total() returns Integer
+	function add(mutable self, by Integer)
+	function total(mutable self) returns Integer
 end 'Tally'
 
 type Counter implements Tally
@@ -1219,10 +1219,11 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: error.an-await-cycle-through-a-second-implementer -->
 `Innocent`, the first implementer of `Echo`, awaits nothing. `Relay`, the second, awaits `Bouncer`, and
 `Bouncer` awaits through an `Echo.handle`, which may hold a `Relay`, so the two can wait on each other. The
-cycle is found through every implementer of the interface, not only the first.
+cycle is found through every implementer of the interface, not only the first. A requirement never waits, so
+`Relay.echo` is also refused at `Echo.echo`.
 ```maxon
 interface Echo
-	function echo() returns Integer
+	function echo(mutable self) returns Integer
 end 'Echo'
 
 type Innocent implements Echo
@@ -1276,6 +1277,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
+error E3210: <fragment>:26:18: 'Relay.echo' may wait (it awaits a reply from 'Bouncer' at line 28), but a requirement never waits or yields
 error E3139: <fragment>:41:14: service call cycle — these messages can deadlock waiting on each other:
     `Bouncer.back` (<fragment>:41:14) awaits a reply from `Relay`
     `Relay.echo` (<fragment>:28:14) awaits a reply from `Bouncer`
@@ -1421,7 +1423,7 @@ enum RightError implements Error
 end 'RightError'
 
 interface Worker
-	function work() returns Integer throws Error
+	function work(mutable self) returns Integer throws Error
 end 'Worker'
 
 type Left implements Worker
@@ -1479,10 +1481,11 @@ the function type declares.
 ```maxon
 interface Source
 	function value() returns Integer
+	function bump(mutable self, by Integer)
 end 'Source'
 
 type Fixed implements Source
-	let n as Integer
+	var n as Integer
 
 	static function create(n Integer) returns Self
 		return Self{n: n}
@@ -1491,28 +1494,36 @@ type Fixed implements Source
 	export function value() returns Integer
 		return self.n
 	end 'value'
+
+	export function bump(by Integer)
+		self.n = self.n + by
+	end 'bump'
 end 'Fixed'
 
-typealias SourceReader = function(Source.handle) returns Integer
+typealias SourceBumper = function(Source.handle)
 
-function readSource(source Source.handle) returns Integer
-	return try await source.value() otherwise 0
-end 'readSource'
+function bumpSource(source Source.handle)
+	try source.bump(5) otherwise panic("send bump")
+end 'bumpSource'
 
-function through(f SourceReader) returns Integer
-	return f(spawn Fixed.create(5))
+function through(f SourceBumper, source Source.handle)
+	f(source)
 end 'through'
 
 function main() returns ExitCode
-	let f = readSource
-	let direct = f(spawn Fixed.create(1))
-	let passed = through(readSource)
+	let f = bumpSource
+	let first = spawn Fixed.create(1)
+	f(first)
+	let second = spawn Fixed.create(5)
+	through(bumpSource, source: second)
+	let direct = try await first.value() otherwise 0
+	let passed = try await second.value() otherwise 0
 	return (direct * 10 + passed) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
-15
+70
 ```
 
 <!-- test: a-handle-converts-at-a-closure-literal-call -->
@@ -1550,7 +1561,7 @@ A requirement taking a `Tally.handle`, called through a value held at its interf
 `Counter.handle` argument like any other call.
 ```maxon
 interface Tally
-	function total() returns Integer
+	function total(mutable self) returns Integer
 end 'Tally'
 
 type Counter implements Tally
@@ -1567,7 +1578,7 @@ type Counter implements Tally
 end 'Counter'
 
 interface Probe
-	function read(t Tally.handle) returns Integer
+	function read(t Tally.handle)
 end 'Probe'
 
 type Doubling implements Probe
@@ -1577,8 +1588,10 @@ type Doubling implements Probe
 		return Self{factor: factor}
 	end 'create'
 
-	function read(t Tally.handle) returns Integer
-		return (try await t.total() otherwise 0) * self.factor
+	function read(t Tally.handle)
+		for _ in 0 upto self.factor 'sends'
+			_ = try t.total() otherwise panic("send total")
+		end 'sends'
 	end 'read'
 end 'Doubling'
 
@@ -1592,12 +1605,14 @@ end 'Holder'
 
 function main() returns ExitCode
 	let holder = Holder.create(Doubling.create(2))
-	return holder.probe.read(spawn Counter.create()) as ExitCode
+	let counter = spawn Counter.create()
+	holder.probe.read(counter)
+	return (try await counter.total() otherwise 0) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
-14
+9
 ```
 
 <!-- test: error.a-spawned-service-missing-an-interface-message-is-a-diagnostic -->
@@ -2018,7 +2033,7 @@ A service reached only through a `default` still withholds a private requirement
 typealias TonePitch = int(0 to 100)
 
 interface Tone
-	function pitch() returns TonePitch
+	function pitch(mutable self) returns TonePitch
 end 'Tone'
 
 type Loud implements Tone
@@ -2065,7 +2080,7 @@ The same program with the `default` declared before `main`.
 typealias TonePitch = int(0 to 100)
 
 interface Tone
-	function pitch() returns TonePitch
+	function pitch(mutable self) returns TonePitch
 end 'Tone'
 
 type Loud implements Tone
@@ -2220,7 +2235,7 @@ note: <fragment>:15:9: the other `default` for `Config`
 `Stranger` has a `greet` of the right shape, but it does not declare `implements Greeter`.
 ```maxon
 interface Greeter
-	function greet() returns Integer
+	function greet(mutable self) returns Integer
 end 'Greeter'
 
 type Stranger

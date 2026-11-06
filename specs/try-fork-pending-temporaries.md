@@ -448,6 +448,7 @@ function run(fail bool) returns Integer
 		return await p
 	end 'awaitTheFallback'
 
+	p.cancel()
 	return 2
 end 'run'
 
@@ -501,6 +502,7 @@ function run(fail bool) returns Integer
 		return await p
 	end 'awaitTheFallback'
 
+	p.cancel()
 	return 2
 end 'run'
 

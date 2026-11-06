@@ -1,0 +1,286 @@
+module let IsolatedCapabilityWord = b"isolated"
+
+module let ImmutableCapabilityWord = b"immutable"
+
+module let MutableMarkerWord = b"mutable"
+
+module let MutatesClauseWord = b"mutates"
+
+module let CapturesClauseWord = b"captures"
+
+module let ModifyBlockWord = b"modify"
+
+module let FreezeOperatorWord = b"freeze"
+
+module let SwapOperatorWord = b"swap"
+
+module let MergeOperatorWord = b"merge"
+
+module let UniqueDeclarationWord = b"unique"
+
+module let SendableBoundWord = b"sendable"
+
+module let IsolatedValueLabel = b"the isolated value"
+
+module let JoinedReadOnlyReason = ", as it joins immutable and mutable data"
+
+module let IsolatedJoinRefusal = "a join of an isolated value with data that is not isolated is refused: every arm must be isolated, or a fresh value"
+
+module function capabilityWord(capability ValueCapability) returns String
+	return match capability 'capability'
+		mutable or
+		temporary gives "mutable"
+		immutable gives "immutable"
+		paused gives "read-only"
+		isolated gives "isolated"
+	end 'capability'
+end 'capabilityWord'
+
+module function freezeAdvice(capability ValueCapability, phrase String) returns String
+	if capability == ValueCapability.paused 'readOnlyDataCannotBeFrozen'
+		return ""
+	end 'readOnlyDataCannotBeFrozen'
+
+	if capability == ValueCapability.temporary 'aFreshValue'
+		return "{phrase}: write `freeze` before the fresh expression (`freeze Box.create(1)`), or around a receiver (`(freeze Table.create()).submit(a)`)"
+	end 'aFreshValue'
+
+	return phrase
+end 'freezeAdvice'
+
+module function isolatedRecoveryRefusal(subject String, advice String) returns String
+	return "{subject} is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted{advice}"
+end 'isolatedRecoveryRefusal'
+
+module function spellsCapabilityWord(word ByteArray) returns bool
+	return word.equals(IsolatedCapabilityWord) or word.equals(ImmutableCapabilityWord) or word.equals(MutableMarkerWord)
+end 'spellsCapabilityWord'
+
+module function capabilityOfWord(word ByteArray) returns ParamCapability throws AbsentError
+	if word.equals(IsolatedCapabilityWord) 'isolated'
+		return ParamCapability.isolated
+	end 'isolated'
+
+	if word.equals(ImmutableCapabilityWord) 'immutable'
+		return ParamCapability.immutable
+	end 'immutable'
+
+	if word.equals(MutableMarkerWord) 'mutable'
+		return ParamCapability.mutable
+	end 'mutable'
+
+	throw AbsentError.absent
+end 'capabilityOfWord'
+
+module function declarationWordOf(capability ParamCapability) returns String
+	return match capability 'capability'
+		mutable gives String.from(MutableMarkerWord)
+		immutable gives String.from(ImmutableCapabilityWord)
+		isolated gives String.from(IsolatedCapabilityWord)
+		unmarked panic("declarationWordOf: an unmarked position declares no word")
+	end 'capability'
+end 'declarationWordOf'
+
+module function paramCapabilityOfResult(capability ResultCapability) returns ParamCapability
+	return match capability 'capability'
+		unmarked gives ParamCapability.unmarked
+		mutable gives ParamCapability.mutable
+		isolated gives ParamCapability.isolated
+		immutable gives ParamCapability.immutable
+	end 'capability'
+end 'paramCapabilityOfResult'
+
+module function resultCapabilityOf(capability ParamCapability) returns ResultCapability
+	return match capability 'capability'
+		unmarked gives ResultCapability.unmarked
+		mutable gives ResultCapability.mutable
+		isolated gives ResultCapability.isolated
+		immutable gives ResultCapability.immutable
+	end 'capability'
+end 'resultCapabilityOf'
+
+export enum StoreVerdict
+	fits
+	recovers
+	notRecoverable
+	mutableIntoImmutable
+	isolatedIntoMutable
+	immutableIntoMutable
+	pausedIntoMutable
+end 'StoreVerdict'
+
+function storeMismatchMessage(verdict StoreVerdict, fieldName String, valueType String, readOnlyReason String) returns String
+	return match verdict 'verdict'
+		mutableIntoImmutable gives "cannot store a mutable '{valueType}' into '{fieldName}', which holds an immutable '{valueType}'; freeze it, or store a copy"
+		isolatedIntoMutable gives "cannot store an isolated '{valueType}' into '{fieldName}', which holds a mutable '{valueType}'; `merge` it first"
+		immutableIntoMutable gives "cannot store an immutable '{valueType}' into '{fieldName}', which holds a mutable '{valueType}'; store a copy"
+		pausedIntoMutable gives "cannot store a read-only '{valueType}' into '{fieldName}'{readOnlyReason}; store a copy"
+		fits or
+		recovers or
+		notRecoverable panic("storeMismatchMessage: a {verdict.name} verdict is not a mismatch")
+	end 'verdict'
+end 'storeMismatchMessage'
+
+module function qualifierSlot(qualifier GenericArgQualifier) returns ParamCapability throws AbsentError
+	match qualifier 'qualifier'
+		plain then return ParamCapability.unmarked
+		frozen then return ParamCapability.immutable
+		readOnly then throw AbsentError.absent
+	end 'qualifier'
+end 'qualifierSlot'
+
+module function storeRefusalOf(verdict StoreVerdict, fieldName String, valueType String, readOnlyReason String, subject String) returns (ErrorCode, String) throws AbsentError
+	match verdict 'verdict'
+		fits or
+		recovers then throw AbsentError.absent
+		notRecoverable then return (ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, isolatedRecoveryRefusal(subject, advice: "; declare it `as isolated {valueType}`, or store a copy"))
+		mutableIntoImmutable or
+		isolatedIntoMutable or
+		immutableIntoMutable or
+		pausedIntoMutable then return (ErrorCode.semanticCapabilityMismatchAtStore, storeMismatchMessage(verdict, fieldName: fieldName, valueType: valueType, readOnlyReason: readOnlyReason))
+	end 'verdict'
+end 'storeRefusalOf'
+
+module function capabilityIsReadOnly(capability ValueCapability) returns bool
+	return capability == ValueCapability.immutable or capability == ValueCapability.paused
+end 'capabilityIsReadOnly'
+
+module function needsWritableRefusal(head String, subject String, capability ValueCapability) returns String
+	return "{head}; {subject} is {capabilityWord(capability)}"
+end 'needsWritableRefusal'
+
+module function frozenSubject(subject String, capability ValueCapability) returns String
+	return "a fresh value" if capability == ValueCapability.temporary else subject
+end 'frozenSubject'
+
+module function needsFrozenRefusal(head String, subject String, capability ValueCapability) returns String
+	return "{head}; {frozenSubject(subject, capability: capability)} is {capabilityWord(capability)}{freezeAdvice(capability, phrase: ". Freeze it first")}"
+end 'needsFrozenRefusal'
+
+module function slotCapabilityOf(slot ParamCapability) returns ValueCapability
+	return match slot 'slot'
+		unmarked or
+		mutable gives ValueCapability.mutable
+		isolated gives ValueCapability.isolated
+		immutable gives ValueCapability.immutable
+	end 'slot'
+end 'slotCapabilityOf'
+
+module function markedParamTakesAReference(capability ParamCapability, headTakesAReference bool) returns bool
+	return capability == ParamCapability.isolated or headTakesAReference
+end 'markedParamTakesAReference'
+
+module function assignmentVerdict(variable ValueCapability, value ValueCapability, isValueType bool, isSlotRead bool) returns StoreVerdict
+	if variable == ValueCapability.isolated 'anIsolatedVariable'
+		return storeVerdict(ParamCapability.isolated, value: value, isValueType: isValueType, isSlotRead: isSlotRead)
+	end 'anIsolatedVariable'
+
+	if not isValueType and joinMixesIsolatedWithData(variable, second: value) 'isolatedIntoData'
+		return StoreVerdict.isolatedIntoMutable
+	end 'isolatedIntoData'
+
+	return StoreVerdict.fits
+end 'assignmentVerdict'
+
+module function adaptedCapability(holder ValueCapability, slot ValueCapability) returns ValueCapability
+	if slot == ValueCapability.immutable or holder == ValueCapability.immutable 'frozenData'
+		return ValueCapability.immutable
+	end 'frozenData'
+
+	if holder == ValueCapability.paused 'readOnlyHolder'
+		return ValueCapability.isolated if slot == ValueCapability.isolated else ValueCapability.paused
+	end 'readOnlyHolder'
+
+	return slot
+end 'adaptedCapability'
+
+module function joinedCapability(first ValueCapability, second ValueCapability) returns ValueCapability
+	if first == second 'agree'
+		return first
+	end 'agree'
+
+	if first == ValueCapability.isolated or second == ValueCapability.isolated 'anIsolatedArm'
+		return ValueCapability.isolated
+	end 'anIsolatedArm'
+
+	if capabilityIsReadOnly(first) or capabilityIsReadOnly(second) 'aReadOnlyArm'
+		return ValueCapability.paused
+	end 'aReadOnlyArm'
+
+	return ValueCapability.mutable
+end 'joinedCapability'
+
+module function meetOfCaptureCapabilities(running ValueCapability, captured ValueCapability) returns ValueCapability
+	if running == ValueCapability.paused or captured == ValueCapability.paused 'readOnlyOuterData'
+		return ValueCapability.paused
+	end 'readOnlyOuterData'
+
+	if captured == ValueCapability.immutable 'frozenToo'
+		return running
+	end 'frozenToo'
+
+	return ValueCapability.mutable
+end 'meetOfCaptureCapabilities'
+
+module function refreshedCapability(current ValueCapability, holder ValueCapability, slot ParamCapability, joins bool) returns ValueCapability
+	let derived = holder if joins else adaptedCapability(holder, slot: slotCapabilityOf(slot))
+
+	if not capabilityIsReadOnly(derived) 'staysAsWritable'
+		return current
+	end 'staysAsWritable'
+
+	if current != ValueCapability.mutable and current != ValueCapability.temporary 'alreadyReadOnly'
+		return current
+	end 'alreadyReadOnly'
+
+	return joinedCapability(current, second: derived) if joins else derived
+end 'refreshedCapability'
+
+module function joinMixesIsolatedWithData(first ValueCapability, second ValueCapability) returns bool
+	if (first == ValueCapability.isolated) == (second == ValueCapability.isolated) 'bothOrNeither'
+		return false
+	end 'bothOrNeither'
+
+	let other = second if first == ValueCapability.isolated else first
+	return other != ValueCapability.temporary
+end 'joinMixesIsolatedWithData'
+
+module function isCleanInput(capability ValueCapability, isValueType bool, isSlotRead bool) returns bool
+	if isValueType 'aValue'
+		return true
+	end 'aValue'
+
+	if capability == ValueCapability.isolated 'movedIsolated'
+		return not isSlotRead
+	end 'movedIsolated'
+
+	return capability == ValueCapability.immutable or capability == ValueCapability.temporary
+end 'isCleanInput'
+
+module function storeVerdict(slot ParamCapability, value ValueCapability, isValueType bool, isSlotRead bool) returns StoreVerdict
+	if isValueType 'aValue'
+		return StoreVerdict.fits
+	end 'aValue'
+
+	if slot == ParamCapability.isolated 'anIsolatedSlot'
+		if value == ValueCapability.isolated and not isSlotRead 'aMovedIsolated'
+			return StoreVerdict.fits
+		end 'aMovedIsolated'
+
+		return StoreVerdict.recovers if value == ValueCapability.temporary else StoreVerdict.notRecoverable
+	end 'anIsolatedSlot'
+
+	if slot == ParamCapability.immutable 'aFrozenSlot'
+		return StoreVerdict.fits if value == ValueCapability.immutable else StoreVerdict.mutableIntoImmutable
+	end 'aFrozenSlot'
+
+	if value == ValueCapability.isolated 'isolatedData'
+		return StoreVerdict.isolatedIntoMutable
+	end 'isolatedData'
+
+	if value == ValueCapability.immutable 'frozenData'
+		return StoreVerdict.immutableIntoMutable
+	end 'frozenData'
+
+	return StoreVerdict.pausedIntoMutable if value == ValueCapability.paused else StoreVerdict.fits
+end 'storeVerdict'

@@ -4254,7 +4254,7 @@ func @main {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#41:
-    x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:500: "
+    x64.leaRegRdata rdx, [rip + __str_rec_12]  ; "panic at Array.maxon:500: "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
@@ -4334,7 +4334,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_WithIterIterator_ArrayIterator_Tally_Tally
   forjoin:
-    x64.leaRegRdata rax, [rip + __str_rec_7]  ; "sum="
+    x64.leaRegRdata rax, [rip + __str_rec_10]  ; "sum="
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.movRegImm32 rcx, 20
@@ -4345,7 +4345,7 @@ func @main {
     x64.movRegReg rdx, r14
     x64.callDirect __uint_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_8]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_11]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot4, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -4405,7 +4405,7 @@ func @main {
     x64.jcc notEqual, tryerr#53
     x64.jmp tryok#52
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 72
@@ -4533,7 +4533,7 @@ func @main {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#41:
-    x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:500: "
+    x64.leaRegRdata rdx, [rip + __str_rec_12]  ; "panic at Array.maxon:500: "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
@@ -4613,7 +4613,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_WithIterIterator_ArrayIterator_Tally_Tally
   forjoin:
-    x64.leaRegRdata rax, [rip + __str_rec_7]  ; "sum="
+    x64.leaRegRdata rax, [rip + __str_rec_10]  ; "sum="
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.movRegImm32 rcx, 20
@@ -4624,7 +4624,7 @@ func @main {
     x64.movRegReg rdx, r14
     x64.callDirect __uint_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_8]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_11]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot4, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -4684,7 +4684,7 @@ func @main {
     x64.jcc notEqual, tryerr#53
     x64.jmp tryok#52
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 72
@@ -4813,7 +4813,7 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
   __il_body#41:
-    arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:500: "
+    arm64.leaRdata x1, __str_rec_12  ; "panic at Array.maxon:500: "
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
@@ -4893,7 +4893,7 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __destruct_WithIterIterator_ArrayIterator_Tally_Tally
   forjoin:
-    arm64.leaRdata x0, __str_rec_7  ; "sum="
+    arm64.leaRdata x0, __str_rec_10  ; "sum="
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.movImm x0, 20
@@ -4904,7 +4904,7 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __uint_to_string
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_8  ; "\x0a"
+    arm64.leaRdata x0, __str_rec_11  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
     arm64.add x0, x22, x20
@@ -4963,7 +4963,7 @@ func @main {
     arm64.b.ne tryerr#53
     arm64.b tryok#52
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_38  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_44  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -5099,7 +5099,7 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
   __il_body#41:
-    arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:500: "
+    arm64.leaRdata x1, __str_rec_12  ; "panic at Array.maxon:500: "
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
@@ -5179,7 +5179,7 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __destruct_WithIterIterator_ArrayIterator_Tally_Tally
   forjoin:
-    arm64.leaRdata x0, __str_rec_7  ; "sum="
+    arm64.leaRdata x0, __str_rec_10  ; "sum="
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.movImm x0, 20
@@ -5190,7 +5190,7 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __uint_to_string
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_8  ; "\x0a"
+    arm64.leaRdata x0, __str_rec_11  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
     arm64.add x0, x22, x20
@@ -5249,7 +5249,7 @@ func @main {
     arm64.b.ne tryerr#53
     arm64.b tryok#52
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_38  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_44  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -5418,7 +5418,7 @@ func @xorKeyStream {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#56:
-    x64.leaRegRdata rdx, [rip + __str_rec_14]  ; "panic at Array.maxon:500: "
+    x64.leaRegRdata rdx, [rip + __str_rec_17]  ; "panic at Array.maxon:500: "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
@@ -5588,7 +5588,7 @@ func @xorKeyStream {
     x64.jcc notEqual, tryerr#68
     x64.jmp tryok#67
   __rc_panic#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_50]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 56
     x64.popReg r15
@@ -5599,7 +5599,7 @@ func @xorKeyStream {
     x64.popReg rbp
     x64.ret
   tryerr#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:12: data index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:12: data index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 56
     x64.popReg r15
@@ -5610,7 +5610,7 @@ func @xorKeyStream {
     x64.popReg rbp
     x64.ret
   __rc_panic#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_49]  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 56
     x64.popReg r15
@@ -5693,7 +5693,7 @@ func @main {
     x64.cmpRegReg rdx, rax
     x64.jcc below, eachOutput
   forexit:
-    x64.leaRegRdata rax, [rip + __str_rec_10]  ; "count="
+    x64.leaRegRdata rax, [rip + __str_rec_13]  ; "count="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot10, rcx
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -5706,7 +5706,7 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect __uint_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_11]  ; " sum="
+    x64.leaRegRdata rax, [rip + __str_rec_14]  ; " sum="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot8, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
@@ -5718,7 +5718,7 @@ func @main {
     x64.movRegReg rdx, r15
     x64.callDirect __uint_to_string
     x64.storeSlotReg slot7, r8
-    x64.leaRegRdata rax, [rip + __str_rec_12]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_15]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot6, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -5812,7 +5812,7 @@ func @main {
     x64.movRegReg rsi, r8
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_13]  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:28: output index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:28: output index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 152
@@ -5930,7 +5930,7 @@ func @xorKeyStream {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#56:
-    x64.leaRegRdata rdx, [rip + __str_rec_14]  ; "panic at Array.maxon:500: "
+    x64.leaRegRdata rdx, [rip + __str_rec_17]  ; "panic at Array.maxon:500: "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
@@ -6100,7 +6100,7 @@ func @xorKeyStream {
     x64.jcc notEqual, tryerr#68
     x64.jmp tryok#67
   __rc_panic#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_50]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 56
     x64.popReg r15
@@ -6111,7 +6111,7 @@ func @xorKeyStream {
     x64.popReg rbp
     x64.ret
   tryerr#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:12: data index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:12: data index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 56
     x64.popReg r15
@@ -6122,7 +6122,7 @@ func @xorKeyStream {
     x64.popReg rbp
     x64.ret
   __rc_panic#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_49]  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 56
     x64.popReg r15
@@ -6205,7 +6205,7 @@ func @main {
     x64.cmpRegReg rdx, rax
     x64.jcc below, eachOutput
   forexit:
-    x64.leaRegRdata rax, [rip + __str_rec_10]  ; "count="
+    x64.leaRegRdata rax, [rip + __str_rec_13]  ; "count="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot10, rcx
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -6218,7 +6218,7 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect __uint_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_11]  ; " sum="
+    x64.leaRegRdata rax, [rip + __str_rec_14]  ; " sum="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot8, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
@@ -6230,7 +6230,7 @@ func @main {
     x64.movRegReg rdx, r15
     x64.callDirect __uint_to_string
     x64.storeSlotReg slot7, r8
-    x64.leaRegRdata rax, [rip + __str_rec_12]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_15]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot6, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -6324,7 +6324,7 @@ func @main {
     x64.movRegReg rsi, r8
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_13]  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:28: output index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:28: output index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 152
@@ -6440,7 +6440,7 @@ func @xorKeyStream {
     arm64.movRegReg x23, x0
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
   __il_body#56:
-    arm64.leaRdata x1, __str_rec_14  ; "panic at Array.maxon:500: "
+    arm64.leaRdata x1, __str_rec_17  ; "panic at Array.maxon:500: "
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
@@ -6604,7 +6604,7 @@ func @xorKeyStream {
     arm64.b.ne tryerr#68
     arm64.b tryok#67
   __rc_panic#30:
-    arm64.leaRdata x0, __str_blob_44  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_50  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -6616,7 +6616,7 @@ func @xorKeyStream {
     arm64.epilogue 80
     arm64.ret
   tryerr#11:
-    arm64.leaRdata x0, __str_blob_9  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:12: data index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_12  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:12: data index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -6628,7 +6628,7 @@ func @xorKeyStream {
     arm64.epilogue 80
     arm64.ret
   __rc_panic#14:
-    arm64.leaRdata x0, __str_blob_43  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.leaRdata x0, __str_blob_49  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -6715,7 +6715,7 @@ func @main {
     arm64.cmp x1, x0
     arm64.b.lo eachOutput
   forexit:
-    arm64.leaRdata x0, __str_rec_10  ; "count="
+    arm64.leaRdata x0, __str_rec_13  ; "count="
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
@@ -6727,7 +6727,7 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __uint_to_string
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_11  ; " sum="
+    arm64.leaRdata x0, __str_rec_14  ; " sum="
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
     arm64.movImm x0, 20
@@ -6738,7 +6738,7 @@ func @main {
     arm64.movRegReg x1, x26
     arm64.bl __uint_to_string
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_12  ; "\x0a"
+    arm64.leaRdata x0, __str_rec_15  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.storeSlotReg slot5, x0
@@ -6832,7 +6832,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok
   tryerr:
-    arm64.leaRdata x0, __str_blob_13  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:28: output index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_16  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:28: output index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot9
@@ -6955,7 +6955,7 @@ func @xorKeyStream {
     arm64.movRegReg x23, x0
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
   __il_body#56:
-    arm64.leaRdata x1, __str_rec_14  ; "panic at Array.maxon:500: "
+    arm64.leaRdata x1, __str_rec_17  ; "panic at Array.maxon:500: "
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
@@ -7119,7 +7119,7 @@ func @xorKeyStream {
     arm64.b.ne tryerr#68
     arm64.b tryok#67
   __rc_panic#30:
-    arm64.leaRdata x0, __str_blob_44  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_50  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -7131,7 +7131,7 @@ func @xorKeyStream {
     arm64.epilogue 80
     arm64.ret
   tryerr#11:
-    arm64.leaRdata x0, __str_blob_9  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:12: data index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_12  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:12: data index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -7143,7 +7143,7 @@ func @xorKeyStream {
     arm64.epilogue 80
     arm64.ret
   __rc_panic#14:
-    arm64.leaRdata x0, __str_blob_43  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.leaRdata x0, __str_blob_49  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -7230,7 +7230,7 @@ func @main {
     arm64.cmp x1, x0
     arm64.b.lo eachOutput
   forexit:
-    arm64.leaRdata x0, __str_rec_10  ; "count="
+    arm64.leaRdata x0, __str_rec_13  ; "count="
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
@@ -7242,7 +7242,7 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __uint_to_string
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_11  ; " sum="
+    arm64.leaRdata x0, __str_rec_14  ; " sum="
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
     arm64.movImm x0, 20
@@ -7253,7 +7253,7 @@ func @main {
     arm64.movRegReg x1, x26
     arm64.bl __uint_to_string
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_12  ; "\x0a"
+    arm64.leaRdata x0, __str_rec_15  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.storeSlotReg slot5, x0
@@ -7347,7 +7347,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok
   tryerr:
-    arm64.leaRdata x0, __str_blob_13  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:28: output index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_16  ; "panic at a-with-iterator-loop-that-returns-early-allocates-nothing-per-element.test:28: output index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot9
@@ -7581,7 +7581,7 @@ func @xorKeyStream {
     x64.jcc notEqual, tryerr#36
     x64.jmp tryok#35
   __rc_panic#28:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_49]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 48
     x64.popReg r14
@@ -7591,7 +7591,7 @@ func @xorKeyStream {
     x64.popReg rbp
     x64.ret
   tryerr#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:12: data index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:12: data index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 48
     x64.popReg r14
@@ -7601,7 +7601,7 @@ func @xorKeyStream {
     x64.popReg rbp
     x64.ret
   __rc_panic#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_48]  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 48
     x64.popReg r14
@@ -7663,7 +7663,7 @@ func @main {
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
     x64.callDirect xorKeyStream
-    x64.leaRegRdata rax, [rip + __str_rec_10]  ; "count="
+    x64.leaRegRdata rax, [rip + __str_rec_13]  ; "count="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot11, rcx
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
@@ -7676,7 +7676,7 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect __uint_to_string
     x64.movRegReg r13, r8
-    x64.leaRegRdata rax, [rip + __str_rec_11]  ; " sum="
+    x64.leaRegRdata rax, [rip + __str_rec_14]  ; " sum="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot9, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
@@ -7747,7 +7747,7 @@ func @main {
     x64.movRegReg rdx, rbx
     x64.callDirect __uint_to_string
     x64.storeSlotReg slot7, r8
-    x64.leaRegRdata rax, [rip + __str_rec_12]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_15]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot6, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -7829,7 +7829,7 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp tryok#24
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_49]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -8032,7 +8032,7 @@ func @xorKeyStream {
     x64.jcc notEqual, tryerr#36
     x64.jmp tryok#35
   __rc_panic#28:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_49]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 48
     x64.popReg r14
@@ -8042,7 +8042,7 @@ func @xorKeyStream {
     x64.popReg rbp
     x64.ret
   tryerr#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:12: data index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:12: data index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 48
     x64.popReg r14
@@ -8052,7 +8052,7 @@ func @xorKeyStream {
     x64.popReg rbp
     x64.ret
   __rc_panic#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_48]  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 48
     x64.popReg r14
@@ -8114,7 +8114,7 @@ func @main {
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
     x64.callDirect xorKeyStream
-    x64.leaRegRdata rax, [rip + __str_rec_10]  ; "count="
+    x64.leaRegRdata rax, [rip + __str_rec_13]  ; "count="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot11, rcx
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
@@ -8127,7 +8127,7 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect __uint_to_string
     x64.movRegReg r13, r8
-    x64.leaRegRdata rax, [rip + __str_rec_11]  ; " sum="
+    x64.leaRegRdata rax, [rip + __str_rec_14]  ; " sum="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot9, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
@@ -8198,7 +8198,7 @@ func @main {
     x64.movRegReg rdx, rbx
     x64.callDirect __uint_to_string
     x64.storeSlotReg slot7, r8
-    x64.leaRegRdata rax, [rip + __str_rec_12]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_15]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot6, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -8280,7 +8280,7 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp tryok#24
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_49]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -8474,7 +8474,7 @@ func @xorKeyStream {
     arm64.b.ne tryerr#36
     arm64.b tryok#35
   __rc_panic#28:
-    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_49  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
@@ -8483,7 +8483,7 @@ func @xorKeyStream {
     arm64.epilogue 64
     arm64.ret
   tryerr#11:
-    arm64.leaRdata x0, __str_blob_9  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:12: data index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_12  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:12: data index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
@@ -8492,7 +8492,7 @@ func @xorKeyStream {
     arm64.epilogue 64
     arm64.ret
   __rc_panic#14:
-    arm64.leaRdata x0, __str_blob_42  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.leaRdata x0, __str_blob_48  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
@@ -8556,7 +8556,7 @@ func @main {
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x21
     arm64.bl xorKeyStream
-    arm64.leaRdata x0, __str_rec_10  ; "count="
+    arm64.leaRdata x0, __str_rec_13  ; "count="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
@@ -8568,7 +8568,7 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __uint_to_string
     arm64.movRegReg x22, x0
-    arm64.leaRdata x0, __str_rec_11  ; " sum="
+    arm64.leaRdata x0, __str_rec_14  ; " sum="
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
   __il_body#6:
@@ -8633,7 +8633,7 @@ func @main {
     arm64.movRegReg x1, x19
     arm64.bl __uint_to_string
     arm64.movRegReg x26, x0
-    arm64.leaRdata x0, __str_rec_12  ; "\x0a"
+    arm64.leaRdata x0, __str_rec_15  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.storeSlotReg slot5, x0
@@ -8717,7 +8717,7 @@ func @main {
     arm64.b.ne tryerr
     arm64.b tryok#24
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_49  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -8916,7 +8916,7 @@ func @xorKeyStream {
     arm64.b.ne tryerr#36
     arm64.b tryok#35
   __rc_panic#28:
-    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_49  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
@@ -8925,7 +8925,7 @@ func @xorKeyStream {
     arm64.epilogue 64
     arm64.ret
   tryerr#11:
-    arm64.leaRdata x0, __str_blob_9  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:12: data index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_12  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:12: data index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
@@ -8934,7 +8934,7 @@ func @xorKeyStream {
     arm64.epilogue 64
     arm64.ret
   __rc_panic#14:
-    arm64.leaRdata x0, __str_blob_42  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.leaRdata x0, __str_blob_48  ; "panic at a-with-iterator-loop-calling-the-shared-current-allocates-nothing-per-element.test:13: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
@@ -8998,7 +8998,7 @@ func @main {
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x21
     arm64.bl xorKeyStream
-    arm64.leaRdata x0, __str_rec_10  ; "count="
+    arm64.leaRdata x0, __str_rec_13  ; "count="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
@@ -9010,7 +9010,7 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __uint_to_string
     arm64.movRegReg x22, x0
-    arm64.leaRdata x0, __str_rec_11  ; " sum="
+    arm64.leaRdata x0, __str_rec_14  ; " sum="
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
   __il_body#6:
@@ -9075,7 +9075,7 @@ func @main {
     arm64.movRegReg x1, x19
     arm64.bl __uint_to_string
     arm64.movRegReg x26, x0
-    arm64.leaRdata x0, __str_rec_12  ; "\x0a"
+    arm64.leaRdata x0, __str_rec_15  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.storeSlotReg slot5, x0
@@ -9159,7 +9159,7 @@ func @main {
     arm64.b.ne tryerr
     arm64.b tryok#24
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_43  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_49  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6

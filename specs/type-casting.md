@@ -1870,3 +1870,37 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:5:12: Value -5 is outside the range of 'Small' (int(0 to 100))
 ```
+
+<!-- test: error.unneeded.let-cast-argument-of-a-method -->
+A method call's arguments are matched against the method's own parameters, receiver aside: each `let` cast names the alias of the parameter it is passed to, so both casts are unneeded.
+```maxon
+typealias Small = int(0 to 100)
+typealias Big = int(0 to 1000)
+
+type Holder
+	var total as Big
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	function take(first Small, second Big) returns Big
+		if first > 5 'large'
+			return second
+		end 'large'
+
+		return self.total
+	end 'take'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.create()
+	let a = 10 as Small
+	let b = 500 as Big
+	return holder.take(a, second: b) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:23:13: unneeded cast: the literal 10 already fits every use of 'a'
+error E3010: <fragment>:24:14: unneeded cast: the literal 500 already fits every use of 'b'
+```

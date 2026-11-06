@@ -45,6 +45,9 @@ withdraws the qualifier at every declaration, which leaves the container and uni
 A `mutable` marker before a parameter's type (`count mutable ElementIndex`, `function(mutable Count)`) is withdrawn
 at every declaration and function type, always and without a flag: the seed then infers by reference from the
 function's own write to the parameter, a reassignment or an in-place `String` write, which is what the marker states.
+A receiver capability (`mutable self`), a `mutates captures` clause on a function type and a `type X is unique`
+clause are withdrawn always, and without a flag: the seed then reads the receiver, the function type and the type as it
+always did.
 A `view` binding is written `let`, which the seed reads as a read-only binding of the same value, and a capability
 qualifier — `keep` or `sole` on a parameter of a function-type alias or an interface requirement, `returns sole`,
 `returns readonly` — is withdrawn. The script withdraws those two only with
@@ -164,6 +167,13 @@ each such site in `maxon-bin/` back as `create()`, which the seed reads as the s
 compiler logic: the parse of the form, and the diagnostic for a call with no capacity, stay, which is what lets
 `C1` compile the unshimmed tree into `C2`. It is written over the committed tree by comparing each file to its
 `HEAD` text, line by line, and is numbered `0008`, below the generated patch.
+
+⭐ **A CAPABILITY WORD A REQUIREMENT'S PARAMETER NEEDS IS THE THIRTEENTH CASE.** The tree's interface requirements
+(`BuiltinArrayLiteral.init`, `InitableFromArrayLiteral.init`, `TlsPeerAuthenticator.verifyChain`, `TlsMessageHandler.dispatch`)
+state a parameter's capability with `mutable`, or with none, where the seed requires `keep` on a parameter its implementers
+store. A requirement has no body from which the seed could infer the capability, and the generated patch withdraws every
+`mutable` marker, so the patch writes `keep` on those parameters. It is hand-written and numbered `0006`, below the
+generated patch, because the generator computes its hunks over every other patch here.
 
 ⛔ **The commit that pins a new seed deletes every patch.** A patch here is what makes CI freeze, prove and pin
 that seed (`docs/RELEASING.md`), and `scripts/pin-seed.sh` deletes them all in the pinning commit once the seed

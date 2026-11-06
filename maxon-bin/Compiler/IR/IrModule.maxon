@@ -832,7 +832,13 @@ export type IrModule uses Op
 		end 'eachBlock'
 
 		for srcFunc in source.functions 'eachFunc'
-			self.functions.push(IrFunction.relocateFunction(srcFunc, blockOffset: blockOffset))
+			var relocated = IrFunction.relocateFunction(srcFunc, blockOffset: blockOffset)
+
+			if not srcFunc.capabilityNotes.holdsNothing() 'opKeyedNotes'
+				relocated.capabilityNotes = srcFunc.capabilityNotes.shiftedBy(opOffset)
+			end 'opKeyedNotes'
+
+			self.functions.push(relocated)
 		end 'eachFunc'
 	end 'merge'
 

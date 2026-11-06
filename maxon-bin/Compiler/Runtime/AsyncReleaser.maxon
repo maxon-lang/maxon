@@ -376,10 +376,13 @@ function asyncReleasePlanFor(target AsyncSpawnTarget, funcSignatures FuncSignatu
 		let aggregateName = try sig.paramAggregateNames.get(i) otherwise panic("asyncReleasePlanFor: paramAggregateNames.get OOB at {i} — a signature's param columns are built in lockstep")
 		let offset = placement.offsetAt(i)
 
-		if parameterRidesACellIntoASpawn(target.byReference, param: i, paramType: paramType) 'theCoroutinesOwnCell'
-			cellSlots.push(AsyncCellSlot.create(offset, content: asyncCellContentOf(signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName)))
+		if parameterRidesACellIntoASpawn(target.byReference, param: i, paramType: paramType) 'aCellRidesTheSpawn'
+			if target.startsService 'theStartRecordsOwnCell'
+				cellSlots.push(AsyncCellSlot.create(offset, content: asyncCellContentOf(signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName)))
+			end 'theStartRecordsOwnCell'
+
 			continue
-		end 'theCoroutinesOwnCell'
+		end 'aCellRidesTheSpawn'
 
 		// Ahead of `asyncSlotsAt`, whose `typeIsManaged` answers no for a promise: a coroutine dropped before it
 		// runs would otherwise leave the thread it was handed for nobody to reclaim.

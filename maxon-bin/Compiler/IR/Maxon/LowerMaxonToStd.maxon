@@ -1584,6 +1584,7 @@ type MaxonToStdLowering
 	// The name of the function CURRENTLY being lowered — re-pointed per function, for the diagnostics the
 	// dictionary-passing invariant checks raise (`forwardCallerWitness` / `forwardCallerLayout`).
 	var currentFunction as LoweredFunction
+	var parameterCellsLowered as bool
 	var currentSourceFilePath as FilePath
 
 	// Where each file's coverage points begin in `Project.covPoints`. EMPTY for every build `--coverage` is
@@ -1674,6 +1675,7 @@ type MaxonToStdLowering
 	var nextValueId as ValueId
 
 	var holdAliases as ValueIdArray
+	var tiedPromiseCarriers as TiedCarrierMap
 
 	static function create(maxonModule MaxonModule, project Project, funcNames FunctionNameIndex) returns MaxonToStdLowering
 		// ⭐⭐ **THE TWO LOWERING-WRITTEN PROJECT TABLES THAT NOTHING ELSE RESETS, AND THEY ARE THE ODD ONES
@@ -1698,7 +1700,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		var signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), compileTarget: project.target, funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutCarrierClosures: LayoutNeedingFuncSet.create(), layoutParametersReserved: false, layoutCarriersSettled: false, layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(0), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(0), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, provenFixedArrayAccesses: project.provenFixedArrayAccesses, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(0), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(0), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(0), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create(0)}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), compileTarget: project.target, funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutCarrierClosures: LayoutNeedingFuncSet.create(), layoutParametersReserved: false, layoutCarriersSettled: false, layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(0), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(0), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, provenFixedArrayAccesses: project.provenFixedArrayAccesses, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(0), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(0), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(0), currentFunction: LoweredFunction.none, parameterCellsLowered: false, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create(0), tiedPromiseCarriers: TiedCarrierMap.create()}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1880,6 +1882,7 @@ type MaxonToStdLowering
 			// receiver's `GenericInstanceId` out of it.
 			self.valueNameIds = srcFunc.valueNameIds
 			self.currentFunction = LoweredFunction.named(srcFunc.name)
+			self.parameterCellsLowered = false
 			self.currentSourceFilePath = srcFunc.sourceFilePath
 			self.functionValueTargets = FunctionValueTargets.none
 			self.bindCovPointBase(srcFunc)
@@ -1898,6 +1901,7 @@ type MaxonToStdLowering
 
 			// The next free ValueId is the count of the dense per-value column the parser handed over.
 			self.nextValueId = srcFunc.valueTags.count() as ValueId
+			self.tiedPromiseCarriers = tiedCarrierOwnersOf(self.maxonModule, func: srcFunc)
 
 			// Point the range-check site walk at THIS function, so the block walk below can hand each of its
 			// sites the Std position the parser's Maxon ordinal became. See `RangeSiteWalk`.
@@ -1978,6 +1982,7 @@ type MaxonToStdLowering
 				end 'noTermOp'
 			end 'eachBlock'
 
+			srcFunc.allocatesParameterCells = self.parameterCellsLowered
 			self.substituteHoldAliases(srcFunc)
 
 			// The cursor belongs to THIS function's walk. `installParametricWitnessChecks` and
@@ -5267,6 +5272,10 @@ type MaxonToStdLowering
 	// A box whose destructor releases nothing: whoever frees a parameter cell, an argument image or a
 	// start record has already released what it holds.
 	function appendTrivialAlloc(result ValueId, bytes FullRangeInt, tag MmTag, dstBlock IrBlock)
+		if tag == MmTag.ParameterCell 'aParameterCell'
+			self.parameterCellsLowered = true
+		end 'aParameterCell'
+
 		let size = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(size, value: bytes, valueType: StdType.i64))
 		let destructor = self.mintStdValueId()
@@ -5470,6 +5479,11 @@ type MaxonToStdLowering
 	function lowerRuntimeCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, dstBlock IrBlock)
 		requireRuntimeCallPositional(callee, argLabels: argLabels)
 
+		if self.dropCancelsATiedPromise(callee, args: args) 'aTiedCancel'
+			self.lowerRuntimeCall(result, callee: GtPromiseCancelWaitName, args: args, argLabels: argLabels, dstBlock: dstBlock)
+			return
+		end 'aTiedCancel'
+
 		// ⭐ **THE TOTAL REMAINDER IS EXPANDED HERE — the non-throwing twin of `lowerTryCall`'s checked-division
 		// arm, and for the identical reason: there is no `__guarded_mod` function to call.** It is the only
 		// division kind that can reach a plain `call`, because it is the only one that does not throw; the two
@@ -5495,7 +5509,19 @@ type MaxonToStdLowering
 	// callees this tier has to finish building, because the parser could not: an argument only a
 	// whole-program view can supply (a layout descriptor, an allocation tag), or a marker that folds to a
 	// constant rather than being called at all.
+	function dropCancelsATiedPromise(callee ByteArray, args ValueIdArray) returns bool
+		if not callee.equals(GtPromiseDropName) or self.tiedPromiseCarriers.count() == 0 'nothingTied'
+			return false
+		end 'nothingTied'
+
+		return self.tiedPromiseCarriers.contains(try args.get(0) otherwise panic("dropCancelsATiedPromise: `__gt_promise_drop` was emitted with no argument"))
+	end 'dropCancelsATiedPromise'
+
 	function appendRuntimeCall(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+		if strandGuardCallIsElided(targetParksOnIo(self.compileTarget), callee: callee) 'targetHasNoStrands'
+			return
+		end 'targetHasNoStrands'
+
 		// An OPAQUE-`T` container create arrives SHORT ONE ARGUMENT — a `__managed_create`
 		// with only element_size, a `__list_create` with none at all; its element destructor is not
 		// known statically, so it is READ from the enclosing instance's threaded layout descriptor
@@ -6218,7 +6244,7 @@ type MaxonToStdLowering
 		let slots = AsyncArgumentSlots.of(sig.paramTypes, byReference: target.byReference, capacity: asyncRegisterCapacityOf(self.compileTarget))
 		let crossed = self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, byReference: ByReferenceParamSource.directCallee(callee), dstBlock: dstBlock)
 		var values = ValueIdArray.create(0)
-		values.append(self.asyncArgumentsHanded(crossed, sig: sig, callee: callee, byReference: target.byReference, dstBlock: dstBlock))
+		values.append(self.asyncArgumentsHanded(crossed, sig: sig, target: target, dstBlock: dstBlock))
 		self.appendExistentialWitnessArgs(values, argIds: argIds, sig: sig, callee: callee, byReference: target.byReference, dstBlock: dstBlock)
 
 		// funcPtr = &callee ; result = __gt_spawn(funcPtr) — the Promise handle (the GT struct pointer).
@@ -6294,8 +6320,8 @@ type MaxonToStdLowering
 	// of the two directions leaks silently.
 	// A position the callee takes by reference reads a cell ADDRESS, and a spawn's argument is moved
 	// into the green thread, so each such argument is handed a fresh parameter cell of its own.
-	function asyncArgumentsHanded(argIds ValueIdArray, sig FuncSignature, callee ByteArray, byReference ParamPositionMask, dstBlock IrBlock) returns ValueIdArray
-		if byReference == NoParamPositions 'everyArgumentByValue'
+	function asyncArgumentsHanded(argIds ValueIdArray, sig FuncSignature, target AsyncSpawnTarget, dstBlock IrBlock) returns ValueIdArray
+		if target.byReference == NoParamPositions 'everyArgumentByValue'
 			return argIds
 		end 'everyArgumentByValue'
 
@@ -6303,9 +6329,9 @@ type MaxonToStdLowering
 
 		for (position, argId) in argIds.withIterator() 'eachArg'
 			let param = position.index() as ParamCount
-			let paramType = try sig.paramTypes.get(param) otherwise panic("asyncArgumentsHanded: paramTypes.get OOB at {param} for '{String.from(callee)}'")
+			let paramType = try sig.paramTypes.get(param) otherwise panic("asyncArgumentsHanded: paramTypes.get OOB at {param} for '{String.from(target.callee)}'")
 
-			if not parameterRidesACellIntoASpawn(byReference, param: param, paramType: paramType) 'byValue'
+			if not target.startsService or not parameterRidesACellIntoASpawn(target.byReference, param: param, paramType: paramType) 'byValue'
 				handed.push(argId)
 				continue
 			end 'byValue'
@@ -6316,7 +6342,7 @@ type MaxonToStdLowering
 			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(cell, offset: ParameterCellValueOffset, valueId: occupant, valueType: self.stdTypeOf(argId) if occupant == argId else maxonTypeToStdType(paramType)))
 
 			if parameterCellHoldsAWitness(paramType) 'andItsWitness'
-				self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(cell, offset: ParameterCellWitnessOffset, valueId: self.witnessForExistentialValue(argId, interfaceName: interfaceNameOfType(paramType, typeNames: self.typeNames), site: callee, dstBlock: dstBlock), valueType: StdType.i64))
+				self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(cell, offset: ParameterCellWitnessOffset, valueId: self.witnessForExistentialValue(argId, interfaceName: interfaceNameOfType(paramType, typeNames: self.typeNames), site: target.callee, dstBlock: dstBlock), valueType: StdType.i64))
 			end 'andItsWitness'
 
 			handed.push(cell)
@@ -6371,7 +6397,7 @@ type MaxonToStdLowering
 		let target = serviceStartTargetOf(callee, funcNames: self.funcNames, target: self.compileTarget)
 		let crossed = self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, byReference: ByReferenceParamSource.directCallee(callee), dstBlock: dstBlock)
 		var words = ValueIdArray.create(0)
-		words.append(self.asyncArgumentsHanded(crossed, sig: sig, callee: callee, byReference: target.byReference, dstBlock: dstBlock))
+		words.append(self.asyncArgumentsHanded(crossed, sig: sig, target: target, dstBlock: dstBlock))
 		self.appendExistentialWitnessArgs(words, argIds: argIds, sig: sig, callee: callee, byReference: target.byReference, dstBlock: dstBlock)
 		self.appendHiddenCallArgs(words, argIds: argIds, sig: sig, callee: callee, result: state, dstBlock: dstBlock)
 

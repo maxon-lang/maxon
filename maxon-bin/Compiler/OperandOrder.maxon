@@ -1,0 +1,283 @@
+typealias LendNumberArray = Array with ElementIndex
+
+typealias CallNumberArray = Array with ElementIndex
+
+typealias FrameBaseArray = Array with ElementIndex
+
+typealias StashedOperandsArray = Array with OperandEventArray
+
+module type ByRefLend
+	module var binding as VarInfo
+	module let argumentStart as ElementIndex
+	module let write as LendWrite
+	module let heldUntilStatementEnd as bool
+	module let call as ElementIndex
+	module var settled as bool
+
+	static function create(binding VarInfo, argumentStart ElementIndex, write LendWrite, heldUntilStatementEnd bool, call ElementIndex) returns ByRefLend
+		return Self{binding: binding, argumentStart: argumentStart, write: write, heldUntilStatementEnd: heldUntilStatementEnd, call: call, settled: false}
+	end 'create'
+end 'ByRefLend'
+
+typealias ByRefLendArray = Array with ByRefLend
+
+let noCompanionLend = CompanionLend.none
+
+module type OverlapCandidate
+	module let reported as ElementIndex
+	module let operandAt as ElementIndex
+	module let operand as ConflictingOperand
+	module let write as LendWrite
+	module let companion as CompanionLend
+
+	static function create(reported ElementIndex, operandAt ElementIndex, operand ConflictingOperand, write LendWrite, companion CompanionLend) returns OverlapCandidate
+		return Self{reported: reported, operandAt: operandAt, operand: operand, write: write, companion: companion}
+	end 'create'
+end 'OverlapCandidate'
+
+module typealias OverlapCandidateArray = Array with OverlapCandidate
+
+union LendSelection
+	ownedByCall(call ElementIndex)
+	movedBy(written LendNumberArray)
+end 'LendSelection'
+
+function copyEventsInto(target OperandEventArray, source OperandEventArray, first ElementIndex)
+	for position in first upto source.count() 'eachEvent'
+		target.push(try source.get(position) otherwise panic("copyEventsInto: source.get OOB at {position}"))
+	end 'eachEvent'
+end 'copyEventsInto'
+
+export type OperandOrder
+	var events as OperandEventArray
+	var lends as ByRefLendArray
+	var stashed as StashedOperandsArray
+	var openCalls as CallNumberArray
+	var callsBegun as ElementIndex
+	var eventBase as ElementIndex
+	var lendBase as ElementIndex
+	var eventFrames as FrameBaseArray
+	var lendFrames as FrameBaseArray
+	module var found as OverlapCandidateArray
+
+	export static function create() returns OperandOrder
+		return Self{events: OperandEventArray.create(0), lends: ByRefLendArray.create(0), stashed: StashedOperandsArray.create(0), openCalls: CallNumberArray.create(0), callsBegun: 0, eventBase: 0, lendBase: 0, eventFrames: FrameBaseArray.create(0), lendFrames: FrameBaseArray.create(0), found: OverlapCandidateArray.create(0)}
+	end 'create'
+
+	module function enterStatement()
+		self.eventFrames.push(self.eventBase)
+		self.lendFrames.push(self.lendBase)
+		self.eventBase = self.events.count()
+		self.lendBase = self.lends.count()
+	end 'enterStatement'
+
+	module function leaveStatement()
+		self.restart()
+		self.eventBase = try self.eventFrames.pop() otherwise panic("leaveStatement: no statement was entered")
+		self.lendBase = try self.lendFrames.pop() otherwise panic("leaveStatement: no statement was entered")
+	end 'leaveStatement'
+
+	module function restart()
+		self.events.truncate(self.eventBase)
+		self.lends.truncate(self.lendBase)
+	end 'restart'
+
+	module function eventCount() returns ElementIndex
+		return self.events.count()
+	end 'eventCount'
+
+	module function lendCount() returns ElementIndex
+		return self.lends.count()
+	end 'lendCount'
+
+	module function lendAt(index ElementIndex) returns ByRefLend
+		return try self.lends.get(index) otherwise panic("lendAt: no by-reference cell is numbered {index}")
+	end 'lendAt'
+
+	module function beginCall() returns ElementIndex
+		let call = self.callsBegun
+		self.callsBegun = self.callsBegun + 1
+		self.openCalls.push(call)
+
+		return call
+	end 'beginCall'
+
+	module function noteRead(binding VarInfo, at ElementIndex)
+		self.events.push(OperandEvent.create(binding, at: at, kind: plainOperandRead))
+
+		for index in self.lendBase upto self.lends.count() 'eachLend'
+			view lend = try self.lends.get(index) otherwise panic("noteRead: lends.get OOB at {index}")
+
+			if lend.heldUntilStatementEnd and lend.binding is binding 'aHeldCellIsRead'
+				self.found.push(OverlapCandidate.create(index, operandAt: at, operand: ConflictingOperand.plainRead, write: lend.write, companion: noCompanionLend))
+			end 'aHeldCellIsRead'
+		end 'eachLend'
+	end 'noteRead'
+
+	module function clearFound()
+		self.found.clear()
+	end 'clearFound'
+
+	module function lendCell(binding VarInfo, argumentStart ElementIndex, write LendWrite, heldUntilStatementEnd bool)
+		let index = self.lends.count()
+		let call = try self.openCalls.last() otherwise panic("lendCell: a by-reference argument is parsed inside its call")
+		self.lends.push(ByRefLend.create(binding, argumentStart: argumentStart, write: write, heldUntilStatementEnd: heldUntilStatementEnd, call: call))
+		var position = self.events.count()
+
+		while position > self.eventBase 'walkBack'
+			position = position - 1
+			view event = try self.events.get(position) otherwise panic("lendCell: events.get OOB at {position}")
+
+			if event.at < argumentStart 'beforeTheArgument'
+				break
+			end 'beforeTheArgument'
+
+			if event.isPlainReadOf(binding) 'theArgumentsOwnRead'
+				try self.events.set(position, value: OperandEvent.create(binding, at: event.at, kind: OperandEventKind.cellRead(index))) otherwise panic("lendCell: events.set OOB at {position}")
+			end 'theArgumentsOwnRead'
+		end 'walkBack'
+	end 'lendCell'
+
+	module function settleLends(firstLend ElementIndex, at ElementIndex)
+		let call = try self.openCalls.pop() otherwise panic("settleLends: the call being settled was never begun")
+
+		for index in firstLend upto self.lends.count() 'eachOwnLend'
+			var lend = try self.lends.get(index) otherwise panic("settleLends: lends.get OOB at {index}")
+
+			if lend.settled 'alreadySettled'
+				continue
+			end 'alreadySettled'
+
+			lend.settled = true
+
+			if not lend.heldUntilStatementEnd 'theCallRunsNow'
+				self.events.push(OperandEvent.create(lend.binding, at: at, kind: OperandEventKind.write(index)))
+			end 'theCallRunsNow'
+		end 'eachOwnLend'
+
+		self.collectOverlapsFrom(firstLend, selection: LendSelection.ownedByCall(call))
+	end 'settleLends'
+
+	// Arguments are evaluated before the receiver (`specs/regions-receiver-order.md`), so a by-reference
+	// write the receiver makes is refused when an argument read the root it writes.
+	module function receiverWrittenAfterArguments(receiverStart ElementIndex, argumentsStart ElementIndex)
+		for position in receiverStart upto argumentsStart 'eachReceiverEvent'
+			view written = try self.events.get(position) otherwise panic("receiverWrittenAfterArguments: events.get OOB at {position}")
+			let lend = try written.kind.writtenLend() otherwise continue
+
+			for later in argumentsStart upto self.events.count() 'eachArgumentEvent'
+				view event = try self.events.get(later) otherwise panic("receiverWrittenAfterArguments: events.get OOB at {later}")
+
+				if event.binding is written.binding and event.kind.readsStorage() 'theArgumentReadsTheWrittenRoot'
+					self.found.push(OverlapCandidate.create(lend, operandAt: event.at, operand: event.kind.conflictingOperand(), write: self.writeOf(lend), companion: noCompanionLend))
+				end 'theArgumentReadsTheWrittenRoot'
+			end 'eachArgumentEvent'
+		end 'eachReceiverEvent'
+	end 'receiverWrittenAfterArguments'
+
+	module function stashSince(mark ElementIndex)
+		var tail = OperandEventArray.create(0)
+		copyEventsInto(tail, source: self.events, first: mark)
+		self.events.truncate(mark)
+		self.stashed.push(tail)
+	end 'stashSince'
+
+	module function restoreStashed()
+		let first = self.events.count()
+		let tail = try self.stashed.pop() otherwise panic("restoreStashed: nothing was stashed")
+		copyEventsInto(self.events, source: tail, first: 0)
+
+		self.collectOverlapsFrom(self.lendBase, selection: LendSelection.movedBy(self.lendsWrittenIn(first, limit: self.events.count())))
+	end 'restoreStashed'
+
+	function collectOverlapsFrom(first ElementIndex, selection LendSelection)
+		for index in first upto self.lends.count() 'eachLend'
+			view lend = try self.lends.get(index) otherwise panic("collectOverlapsFrom: lends.get OOB at {index}")
+
+			if self.selects(selection, lend: lend, index: index) 'selected'
+				self.collectOverlapsOf(index)
+			end 'selected'
+		end 'eachLend'
+	end 'collectOverlapsFrom'
+
+	function selects(selection LendSelection, lend ByRefLend, index ElementIndex) returns bool
+		return match selection 'selection'
+			ownedByCall(call) gives lend.call == call
+			movedBy(written) gives lend.settled and (lend.heldUntilStatementEnd or written.contains(index))
+		end 'selection'
+	end 'selects'
+
+	function writePositionFrom(lend ElementIndex, first ElementIndex) returns ElementIndex throws AbsentError
+		for position in first upto self.events.count() 'eachEvent'
+			view event = try self.events.get(position) otherwise panic("writePositionFrom: events.get OOB at {position}")
+			let owner = try event.kind.writtenLend() otherwise continue
+
+			if owner == lend 'itsWrite'
+				return position
+			end 'itsWrite'
+		end 'eachEvent'
+
+		throw AbsentError.absent
+	end 'writePositionFrom'
+
+	function lendsWrittenIn(first ElementIndex, limit ElementIndex) returns LendNumberArray
+		var written = LendNumberArray.create(0)
+
+		for position in first upto limit 'eachEvent'
+			view event = try self.events.get(position) otherwise panic("lendsWrittenIn: events.get OOB at {position}")
+			written.push(try event.kind.writtenLend() otherwise continue)
+		end 'eachEvent'
+
+		return written
+	end 'lendsWrittenIn'
+
+	function collectOverlapsOf(index ElementIndex)
+		view lend = try self.lends.get(index) otherwise panic("collectOverlapsOf: lends.get OOB at {index}")
+		var limit = self.eventCount()
+
+		if not lend.heldUntilStatementEnd 'theCallRunsNow'
+			limit = try self.writePositionFrom(index, first: self.eventBase) otherwise panic("collectOverlapsOf: by-reference cell {index} was settled to run now and left no write")
+		end 'theCallRunsNow'
+
+		let writtenBefore = self.lendsWrittenIn(self.eventBase, limit: limit)
+
+		for position in self.eventBase upto limit 'eachEvent'
+			view event = try self.events.get(position) otherwise panic("collectOverlapsOf: events.get OOB at {position}")
+
+			if event.binding is lend.binding 'theLendsRoot'
+				self.collectOverlapOf(event, lend: index, writtenBefore: writtenBefore)
+			end 'theLendsRoot'
+		end 'eachEvent'
+	end 'collectOverlapsOf'
+
+	function collectOverlapOf(event OperandEvent, lend ElementIndex, writtenBefore LendNumberArray)
+		match event.kind 'kind'
+			read then self.found.push(OverlapCandidate.create(lend, operandAt: event.at, operand: ConflictingOperand.plainRead, write: self.writeOf(lend), companion: noCompanionLend))
+			cellRead(other) then self.collectCellReadOverlap(event, lend: lend, other: other, writtenBefore: writtenBefore)
+			write then break
+		end 'kind'
+	end 'collectOverlapOf'
+
+	function collectCellReadOverlap(event OperandEvent, lend ElementIndex, other ElementIndex, writtenBefore LendNumberArray)
+		if other == lend 'itsOwnArgument'
+			return
+		end 'itsOwnArgument'
+
+		let write = self.writeOf(lend)
+		let otherWrite = self.writeOf(other)
+		self.found.push(OverlapCandidate.create(lend, operandAt: event.at, operand: ConflictingOperand.plainRead, write: write, companion: CompanionLend.notWritten(otherWrite)))
+
+		if not writtenBefore.contains(other) 'theOtherCellIsStillLent'
+			self.found.push(OverlapCandidate.create(other, operandAt: self.operandAtStartOf(lend), operand: ConflictingOperand.byReferenceCell, write: write, companion: CompanionLend.alsoWritten(otherWrite)))
+		end 'theOtherCellIsStillLent'
+	end 'collectCellReadOverlap'
+
+	function writeOf(lend ElementIndex) returns LendWrite
+		return (try self.lends.get(lend) otherwise panic("writeOf: lends.get OOB at {lend}")).write
+	end 'writeOf'
+
+	function operandAtStartOf(lend ElementIndex) returns ElementIndex
+		view writing = try self.lends.get(lend) otherwise panic("operandAtStartOf: lends.get OOB at {lend}")
+		return writing.argumentStart + 1
+	end 'operandAtStartOf'
+end 'OperandOrder'

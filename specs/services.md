@@ -357,7 +357,7 @@ export type Polite implements Greeter
 end 'Polite'
 // --- file: main.maxon
 export interface Greeter
-	function greet() returns Integer
+	function greet(mutable self) returns Integer
 end 'Greeter'
 
 default Greeter = spawn sub.Polite.create()
@@ -522,7 +522,7 @@ export type Calc implements Greeter
 end 'Calc'
 // --- file: main.maxon
 export interface Greeter
-	function greet() returns Integer
+	function greet(mutable self) returns Integer
 end 'Greeter'
 
 let sub = "a value"
@@ -3543,6 +3543,7 @@ function main() returns ExitCode
 		let waiting = async begForRoom(h.clone(), gaveUp: gaveUp.clone())
 		Scheduler.yield()
 		print("waiting: {not waiting.isComplete()}\n")
+		waiting.cancel()
 	end 'scope'
 
 	print("dropped\n")
@@ -3632,6 +3633,7 @@ function main() returns ExitCode
 		let napping = async napThenBeg(h.clone(), gaveUp: gaveUp.clone())
 		Scheduler.yield()
 		print("napping: {not napping.isComplete()}\n")
+		napping.cancel()
 	end 'scope'
 
 	print("dropped\n")
@@ -3905,6 +3907,7 @@ function main() returns ExitCode
 			serviceStopped(s) then print("stopped {s}\n")
 		end 'why'
 
+		releaser.cancel()
 		return 1
 	end 'refused'
 
@@ -9961,6 +9964,7 @@ function main() returns ExitCode
 	let h = spawn Echo.create()
 	var p = try h.count() otherwise panic("a running service with room takes the send")
 	let n = try await h.count() otherwise 0
+	p.cancel()
 	p = try h.count() otherwise panic("a running service with room takes the send")
 	let m = await p
 	return (n + m) as ExitCode
@@ -10273,8 +10277,8 @@ error E3139: <fragment>:10:15: service call cycle — these messages can deadloc
 <!-- procs: 4 -->
 ⛔⛔ **THE HALF OF THE DEADLOCK RULE THAT IS A RUNTIME PROPERTY, BECAUSE E3139 CANNOT REACH IT.**
 `ServiceCallCycleCheck` walks a graph of NAMED callees, so every case above it can be refused at compile
-time. This program's `A → B` edge goes through a **closure value** — `callIndirect` calls whatever
-function it was handed, and what it was handed is decided at the call site rather than at the callee's
+time. This program's `A → B` edge goes through a **closure value** — `kick` calls a local function value, whose
+body the roster does not follow, and what it holds is decided at the call site rather than at the callee's
 name — so the roster records `B → A` alone, which is not a ring, and the program **compiles clean**. The
 ring is real all the same: `main` awaits `A.kick`, `A.kick` awaits `B.work` through the closure, and
 `B.work` awaits `A.ack` — which `A` cannot serve, because `A` is inside `kick`.
@@ -10295,13 +10299,6 @@ that decision on the fourth idle machine rather than the only one.
 frame owns and the send moves it; the subject of this case is the deadlock, not how the handle crosses.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias WorkFn = function(B.handle, A.handle) returns Integer
-
-// The indirection. It calls the function it was HANDED, so no roster keyed on a callee's name can say
-// which body runs here — which is what keeps `A.ping`'s edge to `B` out of the cycle graph.
-function callIndirect(f WorkFn, peer B.handle, mine A.handle) returns Integer
-	return f(peer, mine)
-end 'callIndirect'
 
 type A
 	var n as Integer
@@ -10311,7 +10308,8 @@ type A
 	end 'create'
 
 	export function kick(peer B.handle, mine A.handle) returns Integer
-		return callIndirect(function(p B.handle, m A.handle) gives (try await p.work(m.clone()) otherwise 0), peer: peer, mine: mine)
+		let through = function(p B.handle, m A.handle) gives (try await p.work(m.clone()) otherwise 0)
+		return through(peer, mine)
 	end 'kick'
 
 	export function ack() returns Integer
@@ -11836,38 +11834,31 @@ the process still terminates cleanly — no 101, no 75, no hang.
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
+typealias StartedCell = SharedValue with bool
 
 // The shutdown's drop cancels the timer, so nothing ever waits it out.
 let WorkSleepMs = ForeverMs
 
-type Probe
-	export var started as bool
-
-	static function create() returns Self
-		return Self{started: false}
-	end 'create'
-end 'Probe'
-
-function slowWork(n Integer, probe Probe) returns Integer
-	probe.started = true
+function slowWork(n Integer, started StartedCell) returns Integer
+	started.publish(true)
 	sleep(WorkSleepMs)
 	return n * 2
 end 'slowWork'
 
 type Worker
 	var pending as IntPromiseArray
-	var probe as Probe
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create(0), probe: Probe.create()}
+		return Self{pending: IntPromiseArray.create(0)}
 	end 'create'
 
 	// The yield hands the strand to the coroutine, which runs until its sleep parks it. The promise then lives
 	// in the service's state, so the shutdown's state drop is the one thing that can reach it.
 	export function fire(v Integer) returns Integer
-		let p = async slowWork(v, probe: self.probe)
+		let started = StartedCell.create(false)
+		let p = async slowWork(v, started: started.clone())
 		Scheduler.yield()
-		let parked = self.probe.started and not p.isComplete()
+		let parked = started.current() and not p.isComplete()
 		self.pending.push(p)
 		return 1 if parked else 0
 	end 'fire'
@@ -11906,39 +11897,35 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
-type Probe
-	export var parkedFrom as SchedulerEventCount
+typealias ParkedFrom = SharedValue with SchedulerEventCount
 
-	static function create() returns Self
-		return Self{parkedFrom: 0}
-	end 'create'
-end 'Probe'
-
-function waitOnChild(probe Probe) returns Integer
-	probe.parkedFrom = Scheduler.counters().netpollBlocks + 1
+function waitOnChild(parkedFrom ParkedFrom) returns Integer
+	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 	return try __Builtins.runProcess("cmd /c ping -n 3 127.0.0.1 >nul") otherwise 99
 end 'waitOnChild'
 
-function parkedOnChild(probe Probe) returns bool
-	if probe.parkedFrom == 0 'notYet'
+function parkedOnChild(parkedFrom ParkedFrom) returns bool
+	let recorded = parkedFrom.current()
+
+	if recorded == 0 'notYet'
 		return false
 	end 'notYet'
 
-	return Scheduler.counters().netpollBlocks >= probe.parkedFrom
+	return Scheduler.counters().netpollBlocks >= recorded
 end 'parkedOnChild'
 
 type Worker
 	var pending as IntPromiseArray
-	var probe as Probe
+	let parkedFrom as ParkedFrom
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create(0), probe: Probe.create()}
+		return Self{pending: IntPromiseArray.create(0), parkedFrom: ParkedFrom.create(0 as SchedulerEventCount)}
 	end 'create'
 
 	export function fire() returns Integer
-		let p = async waitOnChild(self.probe)
+		let p = async waitOnChild(self.parkedFrom.clone())
 
-		while not parkedOnChild(self.probe) 'untilParked'
+		while not parkedOnChild(self.parkedFrom) 'untilParked'
 			Scheduler.yield()
 		end 'untilParked'
 
@@ -11977,45 +11964,41 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
-type Probe
-	export var parkedFrom as SchedulerEventCount
+typealias ParkedFrom = SharedValue with SchedulerEventCount
 
-	static function create() returns Self
-		return Self{parkedFrom: 0}
-	end 'create'
-end 'Probe'
-
-function stall(port NetworkPort, probe Probe) returns Integer
+function stall(port NetworkPort, parkedFrom ParkedFrom) returns Integer
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return 1
 
-	probe.parkedFrom = Scheduler.counters().netpollBlocks + 1
+	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 	_ = try client.recv(1024) otherwise return 2
 
 	return 0
 end 'stall'
 
-function parkedInRecv(probe Probe) returns bool
-	if probe.parkedFrom == 0 'notYet'
+function parkedInRecv(parkedFrom ParkedFrom) returns bool
+	let recorded = parkedFrom.current()
+
+	if recorded == 0 'notYet'
 		return false
 	end 'notYet'
 
-	return Scheduler.counters().netpollBlocks >= probe.parkedFrom
+	return Scheduler.counters().netpollBlocks >= recorded
 end 'parkedInRecv'
 
 type Worker
 	var pending as IntPromiseArray
-	var probe as Probe
+	let parkedFrom as ParkedFrom
 	var listener as TcpListener
 
 	static function create() returns Self
 		let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise panic("a loopback bind on an ephemeral port succeeds")
-		return Self{pending: IntPromiseArray.create(0), probe: Probe.create(), listener: listener}
+		return Self{pending: IntPromiseArray.create(0), parkedFrom: ParkedFrom.create(0 as SchedulerEventCount), listener: listener}
 	end 'create'
 
 	export function fire() returns Integer
-		let p = async stall(self.listener.port(), probe: self.probe)
+		let p = async stall(self.listener.port(), parkedFrom: self.parkedFrom.clone())
 
-		while not parkedInRecv(self.probe) 'untilParked'
+		while not parkedInRecv(self.parkedFrom) 'untilParked'
 			Scheduler.yield()
 		end 'untilParked'
 
@@ -12145,7 +12128,7 @@ parked readies it. When the strand is free that ready may claim the strand and p
 when the strand is held, as here, the claim fails and the send takes the locked road, which pushes the
 service onto the front of its strand queue under the strand's own lock. This case is the second shape.
 
-`start` leaves `async work(self.probe)` in the service's state and replies, so the service parks on its
+`start` leaves `async work(self.arrived.clone())` in the service's state and replies, so the service parks on its
 empty mailbox and its strand runs `work` next. `work` yields until `finish` has run, and a yielding strand
 keeps its holder: the strand goes to the global queue's tail with `work` in it, and it is never given up.
 So whenever `main`'s `finish` arrives, the service is parked on its mailbox and the strand is held by `work`
@@ -12168,16 +12151,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
-type Probe
-	export var arrived as bool
+typealias ArrivedCell = SharedValue with bool
 
-	static function create() returns Self
-		return Self{arrived: false}
-	end 'create'
-end 'Probe'
-
-function work(probe Probe) returns Integer
-	while not probe.arrived 'spin'
+function work(arrived ArrivedCell) returns Integer
+	while not arrived.current() 'spin'
 		Scheduler.yield()
 	end 'spin'
 
@@ -12186,19 +12163,19 @@ end 'work'
 
 type Svc
 	var pending as IntPromiseArray
-	var probe as Probe
+	let arrived as ArrivedCell
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create(0), probe: Probe.create()}
+		return Self{pending: IntPromiseArray.create(0), arrived: ArrivedCell.create(false)}
 	end 'create'
 
 	export function start() returns Integer
-		self.pending.push(async work(self.probe))
+		self.pending.push(async work(self.arrived.clone()))
 		return 1
 	end 'start'
 
 	export function finish() returns Integer
-		self.probe.arrived = true
+		self.arrived.publish(true)
 		let p = try self.pending.pop() otherwise return 0
 		return await p
 	end 'finish'
@@ -12227,16 +12204,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
-type Probe
-	export var arrived as bool
+typealias ArrivedCell = SharedValue with bool
 
-	static function create() returns Self
-		return Self{arrived: false}
-	end 'create'
-end 'Probe'
-
-function work(probe Probe) returns Integer
-	while not probe.arrived 'spin'
+function work(arrived ArrivedCell) returns Integer
+	while not arrived.current() 'spin'
 		Scheduler.yield()
 	end 'spin'
 
@@ -12245,19 +12216,19 @@ end 'work'
 
 type Svc
 	var pending as IntPromiseArray
-	var probe as Probe
+	let arrived as ArrivedCell
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create(0), probe: Probe.create()}
+		return Self{pending: IntPromiseArray.create(0), arrived: ArrivedCell.create(false)}
 	end 'create'
 
 	export function start() returns Integer
-		self.pending.push(async work(self.probe))
+		self.pending.push(async work(self.arrived.clone()))
 		return 1
 	end 'start'
 
 	export function finish() returns Integer
-		self.probe.arrived = true
+		self.arrived.publish(true)
 		let p = try self.pending.pop() otherwise return 0
 		return await p
 	end 'finish'
@@ -14349,7 +14320,7 @@ A handler may write an interface-typed parameter through its witness: the send m
 typealias Tally = int(0 to u64.max)
 
 interface Counter
-	function bump()
+	function bump(mutable self)
 	function value() returns Tally
 end 'Counter'
 
@@ -16926,9 +16897,15 @@ function main() returns ExitCode
 	let echo = spawn Echo.create(accepted)
 	let reply = try echo.serve() otherwise return 4
 
-	_ = try out.send("hello") otherwise return 5
+	_ = try out.send("hello") otherwise 'refused5x26'
+		reply.cancel()
+		return 5
+	end 'refused5x26'
 
-	let heard = try out.recv(64) otherwise return 6
+	let heard = try out.recv(64) otherwise 'refused6x28'
+		reply.cancel()
+		return 6
+	end 'refused6x28'
 	let served = await reply
 
 	print("{heard} {served}\n")
@@ -16981,9 +16958,15 @@ function main() returns ExitCode
 	let reply = try echo.serve() otherwise return 4
 
 	for word in ["one", "three", "seven"] 'eachWord'
-		_ = try out.send(word) otherwise return 5
+		_ = try out.send(word) otherwise 'refused5x33'
+			reply.cancel()
+			return 5
+		end 'refused5x33'
 
-		let heard = try out.recv(64) otherwise return 6
+		let heard = try out.recv(64) otherwise 'refused6x35'
+			reply.cancel()
+			return 6
+		end 'refused6x35'
 
 		print("{heard}\n")
 	end 'eachWord'
@@ -17151,9 +17134,15 @@ function main() returns ExitCode
 	let stage = spawn Stage.create()
 	let reply = try stage.perform(speakerFor(listener)) otherwise return 4
 
-	_ = try out.send("interface") otherwise return 5
+	_ = try out.send("interface") otherwise 'refused5x49'
+		reply.cancel()
+		return 5
+	end 'refused5x49'
 
-	let heard = try out.recv(64) otherwise return 6
+	let heard = try out.recv(64) otherwise 'refused6x51'
+		reply.cancel()
+		return 6
+	end 'refused6x51'
 	let performed = await reply
 
 	print("{heard} {performed}\n")
@@ -17196,7 +17185,10 @@ function main() returns ExitCode
 	let port = listener.port()
 	let acceptor = spawn Acceptor.create(listener)
 	let pending = try acceptor.next() otherwise return 2
-	var out = try TcpClient.connect("127.0.0.1", port: port) otherwise return 3
+	var out = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused3x23'
+		pending.cancel()
+		return 3
+	end 'refused3x23'
 	var served = try await pending otherwise return 4
 
 	_ = try out.send("accepted") otherwise return 5
@@ -17241,7 +17233,10 @@ function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let dialer = spawn Dialer.create(listener.port())
 	let pending = try dialer.next() otherwise return 2
-	var peer = try listener.accept() otherwise return 3
+	var peer = try listener.accept() otherwise 'refused3x22'
+		pending.cancel()
+		return 3
+	end 'refused3x22'
 	var dialled = try await pending otherwise return 4
 
 	_ = try peer.send("dialled") otherwise return 5

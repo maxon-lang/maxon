@@ -2,7 +2,7 @@
 title: Patterns & Common Errors
 description: Common code patterns, compile-time and runtime error examples, and best practices for writing Maxon.
 sidebar:
-  order: 16
+  order: 17
 ---
 
 ## Common Patterns
@@ -229,10 +229,10 @@ let a = Point.create(1)
 var c = a                     // E3078: cannot assign the read-only 'a' to mutable binding 'c'; use 'let' instead of 'var', or use clone()
 ```
 
-**Handing a `mutable` parameter storage another argument reaches**
+**Reading a local in the statement that hands it to a `mutable` parameter the callee writes**
 
 ```maxon
-bump(h.n, h: h)   // E3186: argument 'h' overlaps argument 'h.n', which 'bump' reassigns (parameter 'n') — …
+bump(h.n, h: h)   // E3186: argument 'h.n' is read by another operand of this statement and passed by reference to 'bump' (parameter 'n') — a hold cannot protect a value its by-reference cell overwrites. Copy 'h' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
 ```
 
 **Reaching raw memory from a program**

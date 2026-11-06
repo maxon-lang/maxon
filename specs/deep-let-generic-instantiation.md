@@ -518,7 +518,7 @@ runs.
 typealias StringPair = Pair with String
 
 interface Mirrored
-	function mirror()
+	function mirror(mutable self)
 	function agrees() returns bool
 end 'Mirrored'
 
@@ -591,7 +591,7 @@ type Counter
 end 'Counter'
 
 interface Mirrored
-	function mirror()
+	function mirror(mutable self)
 end 'Mirrored'
 
 type Pair uses Item implements Mirrored
@@ -648,7 +648,7 @@ type Counter
 end 'Counter'
 
 interface Mirrored
-	function mirror()
+	function mirror(mutable self)
 end 'Mirrored'
 
 type Pair uses Item implements Mirrored
@@ -697,7 +697,7 @@ type Counter
 end 'Counter'
 
 interface Mirrored
-	function mirror()
+	function mirror(mutable self)
 end 'Mirrored'
 
 type Pair uses Item implements Mirrored

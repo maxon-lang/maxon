@@ -2,7 +2,7 @@
 title: Scaling
 description: The rule that compilation stays linear in program size, the hazards that break it, and how scale-test measures it.
 sidebar:
-  order: 7
+  order: 8
 ---
 
 **Compilation must stay linear in program size.** A cost that grows faster than the program is a defect,

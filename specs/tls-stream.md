@@ -2428,9 +2428,18 @@ function main() returns ExitCode
 
 	clientOptions.setIdentity(identityOf(clientLeafHex, keyHex: clientKeyHex))
 
-	var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: clientOptions) otherwise return 3
-	let chain = try stream.peerCertificates() otherwise return 4
-	let first = try chain.first() otherwise return 6
+	var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: clientOptions) otherwise 'refused3x225'
+		peer.cancel()
+		return 3
+	end 'refused3x225'
+	let chain = try stream.peerCertificates() otherwise 'refused4x226'
+		peer.cancel()
+		return 4
+	end 'refused4x226'
+	let first = try chain.first() otherwise 'refused6x227'
+		peer.cancel()
+		return 6
+	end 'refused6x227'
 
 	print("client saw {chain.count()} server certificate(s), first is the server leaf: {first.equals(fromHex(leafP256Hex))}\n")
 	print("{await peer}\n")
@@ -2439,7 +2448,10 @@ function main() returns ExitCode
 
 	var anonymous = trustedClient(rootHex)
 	let second = async serveOnce(listener)
-	var unauthenticated = try TlsClient.connect("127.0.0.1", port: listener.port(), options: anonymous) otherwise return 5
+	var unauthenticated = try TlsClient.connect("127.0.0.1", port: listener.port(), options: anonymous) otherwise 'refused5x236'
+		second.cancel()
+		return 5
+	end 'refused5x236'
 
 	print("{await second}\n")
 	unauthenticated.close()
@@ -2772,14 +2784,27 @@ function main() returns ExitCode
 		try options.setProtocols(TlsProtocolArray from [protocol]) otherwise return 2
 
 		let server = async answerAfterEnd(listener)
-		var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: options) otherwise return 3
+		var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: options) otherwise 'refused3x132'
+			server.cancel()
+			return 3
+		end 'refused3x132'
 
-		_ = try stream.send("request") otherwise return 4
-		try stream.shutdownWrite() otherwise return 5
+		_ = try stream.send("request") otherwise 'refused4x134'
+			server.cancel()
+			return 4
+		end 'refused4x134'
+		try stream.shutdownWrite() otherwise 'refused5x135'
+			server.cancel()
+			return 5
+		end 'refused5x135'
 
-		let answer = try stream.recv(1024) otherwise return 6
+		let answer = try stream.recv(1024) otherwise 'refused6x137'
+			server.cancel()
+			return 6
+		end 'refused6x137'
+		let served = await server
 		let after = try stream.recv(1024) otherwise (error) 'ended'
-			print("{protocol.name} client heard [{answer}] then {describe(error)}; server {await server}\n")
+			print("{protocol.name} client heard [{answer}] then {describe(error)}; server {served}\n")
 			listener.close()
 			continue
 		end 'ended'
@@ -3583,17 +3608,29 @@ function main() returns ExitCode
 
 		var wrongRoot = trustedClient(otherRootHex)
 
-		try wrongRoot.setProtocols(TlsProtocolArray from [protocol]) otherwise return 2
+		try wrongRoot.setProtocols(TlsProtocolArray from [protocol]) otherwise 'refused2x140'
+			peer.cancel()
+			return 2
+		end 'refused2x140'
 
 		print("{protocol.name} first: {describe(failure(wrongRoot, port: listener.port()))}\n")
 
 		var good = trustedClient(rootHex)
 
-		try good.setProtocols(TlsProtocolArray from [protocol]) otherwise return 3
+		try good.setProtocols(TlsProtocolArray from [protocol]) otherwise 'refused3x146'
+			peer.cancel()
+			return 3
+		end 'refused3x146'
 
-		var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: good) otherwise return 4
+		var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: good) otherwise 'refused4x148'
+			peer.cancel()
+			return 4
+		end 'refused4x148'
 
-		_ = try stream.send("second client") otherwise return 5
+		_ = try stream.send("second client") otherwise 'refused5x150'
+			peer.cancel()
+			return 5
+		end 'refused5x150'
 		stream.close()
 
 		print("{protocol.name} server: {await peer}\n")
@@ -4994,7 +5031,10 @@ function main() returns ExitCode
 
 	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: options) otherwise return 2
 	let waiting = async acceptOnce(listener)
-	let mute = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 3
+	let mute = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise 'refused3x236'
+		waiting.cancel()
+		return 3
+	end 'refused3x236'
 
 	print("server: {await waiting}\n")
 	mute.close()
@@ -5499,9 +5539,15 @@ end 'serveAndClose'
 function main() returns ExitCode
 	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
 	let peer = async serveAndClose(listener)
-	var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: trustedClient(rootHex)) otherwise return 2
+	var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: trustedClient(rootHex)) otherwise 'refused2x243'
+		peer.cancel()
+		return 2
+	end 'refused2x243'
 
-	_ = try stream.send("last words") otherwise return 3
+	_ = try stream.send("last words") otherwise 'refused3x245'
+		peer.cancel()
+		return 3
+	end 'refused3x245'
 	stream.close()
 	stream.close()
 
@@ -5815,7 +5861,10 @@ function main() returns ExitCode
 	try listener.setAcceptDeadline(0) otherwise return 3
 
 	let waiting = async acceptOnce(listener)
-	let mute = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 4
+	let mute = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise 'refused4x284'
+		waiting.cancel()
+		return 4
+	end 'refused4x284'
 
 	print("a client that says nothing: {await waiting}\n")
 	mute.close()
@@ -6395,7 +6444,10 @@ end 'drain'
 function main() returns ExitCode
 	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
 	let accepted = async acceptOne(listener)
-	var client = try TlsClient.connect("127.0.0.1", port: listener.port(), options: trustedClient(rootHex)) otherwise return 2
+	var client = try TlsClient.connect("127.0.0.1", port: listener.port(), options: trustedClient(rootHex)) otherwise 'refused2x247'
+		accepted.cancel()
+		return 2
+	end 'refused2x247'
 	var server = try await accepted otherwise return 3
 
 	try client.setWriteDeadline(StalledWriteMs) otherwise return 4
@@ -6674,7 +6726,10 @@ function main() returns ExitCode
 
 	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: server) otherwise return 3
 	let peer = async serveEcho(listener)
-	var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: options) otherwise return 4
+	var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: options) otherwise 'refused4x243'
+		peer.cancel()
+		return 4
+	end 'refused4x243'
 
 	print("the refusing read: {recvOutcome(stream)}\n")
 	print("recv: {recvOutcome(stream)}\n")
@@ -7260,6 +7315,7 @@ function acceptTwo(listener TlsListener) returns String
 	let firstTask = async echoOne(first)
 
 	var second = try listener.accept() otherwise (error) 'secondRefused'
+		firstTask.cancel()
 		return "accept 2: {describe(error)}"
 	end 'secondRefused'
 
@@ -7291,7 +7347,10 @@ end 'dial'
 function main() returns ExitCode
 	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: patientServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
 	let server = async acceptTwo(listener)
-	let silent = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let silent = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise 'refused2x141'
+		server.cancel()
+		return 2
+	end 'refused2x141'
 
 	print("echo client: {dial(trustedClient(rootHex), port: listener.port())}\n")
 

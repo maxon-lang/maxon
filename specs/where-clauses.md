@@ -1071,12 +1071,11 @@ error E3005: <fragment>:25:17: Operator '<' requires type parameter 'T' to be co
 ```
 
 <!-- test: witness-mutation-of-let-argument-refused -->
-⭐⭐ **E3159 REACHES THE GENERIC ROUTE, AND THAT IS A WHOLE-PROGRAM CLAIM RATHER THAN A LOCAL ONE.**
+⭐⭐ **E3159 REACHES THE GENERIC ROUTE THROUGH THE REQUIREMENT'S DECLARATION.**
 `Box.run(dest)` forwards `dest` into `self.item.grow(dest)`, which names no callee — the body is compiled ONCE
 against the opaque `T` and the jump goes through a witness table. What it DOES name is a REQUIREMENT, and
-which bodies fill that slot is fixed whole-program by the conformance check, so the mutation summary closes
-over the union of `Grower`'s conformers (`SemanticCheck.addWitnessParamEdges`). `Pusher.grow` writes its
-`dest`, therefore `Box.run` writes its `dest`, therefore `b.run(a)` over a `let`-bound array is refused.
+`Grower.grow` declares its `dest` `mutable` (every conformer spells it the same), so `Box.run` writes its
+`dest`, therefore `b.run(a)` over a `let`-bound array is refused.
 
 ⚠ **THE TWO NON-GENERIC SPELLINGS OF THE SAME PUSH ARE REFUSED TOO** —
 a free `grow(a)` and an interface-method `p.grow(a)` both answer this diagnostic. This case is the third
@@ -1086,7 +1085,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 interface Grower
-	function grow(dest IntArray)
+	function grow(dest mutable IntArray)
 end 'Grower'
 
 type Pusher implements Grower
@@ -1094,7 +1093,7 @@ type Pusher implements Grower
 	static function create(n Integer) returns Self
 		return Self{ n: n }
 	end 'create'
-	function grow(dest IntArray)
+	function grow(dest mutable IntArray)
 		dest.push(9)
 	end 'grow'
 end 'Pusher'
@@ -1132,7 +1131,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 interface Grower
-	function grow(dest IntArray)
+	function grow(dest mutable IntArray)
 end 'Grower'
 
 type Pusher implements Grower
@@ -1140,7 +1139,7 @@ type Pusher implements Grower
 	static function create(n Integer) returns Self
 		return Self{ n: n }
 	end 'create'
-	function grow(dest IntArray)
+	function grow(dest mutable IntArray)
 		dest.push(9)
 	end 'grow'
 end 'Pusher'

@@ -101,10 +101,22 @@ function main() returns ExitCode
 	let port = listener.port()
 	let server = async echoOnce(listener)
 
-	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return 2
-	try client.setReadDeadline(5000) otherwise return 3
-	_ = try client.send("ping") otherwise return 4
-	let reply = try client.recv(1024) otherwise return 5
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused'
+		server.cancel()
+		return 2
+	end 'refused'
+	try client.setReadDeadline(5000) otherwise 'noDeadline'
+		server.cancel()
+		return 3
+	end 'noDeadline'
+	_ = try client.send("ping") otherwise 'unsent'
+		server.cancel()
+		return 4
+	end 'unsent'
+	let reply = try client.recv(1024) otherwise 'unanswered'
+		server.cancel()
+		return 5
+	end 'unanswered'
 	client.close()
 
 	_ = try await server otherwise 9
@@ -529,6 +541,7 @@ function main() returns ExitCode
 
 	let response = try HttpClient.get("http://127.0.0.1:{port}/hello") otherwise (e) 'failed'
 		print("request failed: {e}\n")
+		server.cancel()
 		return 1
 	end 'failed'
 
@@ -629,7 +642,7 @@ type CountingHandler implements HttpHandler
 		return CountingHandler{visits: visits}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		let seen = try await visits.record() otherwise throw HttpServerError.sendFailed
 
 		try exchange.respondWith(StatusCode.ok, body: "visit {seen}", contentType: "text/plain")
@@ -688,7 +701,7 @@ type HelloHandler implements HttpHandler
 		return HelloHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		let greeting = match exchange.security() 'security'
 			plaintext gives "hello over plain HTTP\n"
 			tls(protocol, _, _, _) gives "hello over {protocol.name}\n"
@@ -771,7 +784,7 @@ The interface `serve` calls for each exchange.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `handle(exchange HttpExchange)` | — | `HttpServerError` | Answer one exchange. |
+| `handle(exchange mutable HttpExchange)` | — | `HttpServerError` | Answer one exchange. A conformer spells `mutable` on the parameter too. |
 | `faulted(fault HttpHandlerFault)` | — | — | Told of each exchange `serve` answered in the handler's place, and of each interrupted accept. |
 
 `HttpHandlerFault` says what happened. Every case but the last carries the `request`, and the `threw`
@@ -835,7 +848,7 @@ type HelloHandler implements HttpHandler
 		return HelloHandler{greeting: greeting}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		try exchange.respondWith(StatusCode.ok, body: greeting, contentType: "text/plain")
 	end 'handle'
 

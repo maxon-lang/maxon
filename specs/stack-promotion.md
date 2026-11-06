@@ -163,3 +163,98 @@ end 'main'
 ```exitcode
 5
 ```
+
+<!-- test: a-var-handed-to-a-mutable-value-parameter-costs-no-allocation -->
+<!-- unsupported-targets: wasm32-wasi -->
+`bump` reassigns its parameter, so `count` lives in a parameter cell. The cell never outlives the call and nothing captures it, so it is frame storage: the thread makes no allocation at all.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+function bump(count mutable Count) returns Count
+	count = count + 1
+
+	return count
+end 'bump'
+
+function main() returns ExitCode
+	let allocsBefore = HeapStats.threadAllocations()
+	let freesBefore = HeapStats.threadFrees()
+	var count = 1 as Count
+	let first = bump(count)
+	let second = bump(count)
+	let allocs = HeapStats.threadAllocations() - allocsBefore
+	let frees = HeapStats.threadFrees() - freesBefore
+
+	print("{first} {second} {count} {allocs} {frees}\n")
+	return 0
+end 'main'
+```
+```stdout
+2 3 3 0 0
+```
+```exitcode
+0
+```
+
+<!-- test: a-var-captured-by-a-closure-and-handed-by-reference-keeps-its-heap-cell -->
+The closure holds the cell's address after `bump` returns, so the cell is heap storage: it is allocated and freed, and the counts balance.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+function bump(count mutable Count) returns Count
+	count = count + 1
+
+	return count
+end 'bump'
+
+function main() returns ExitCode
+	let liveBefore = HeapStats.allocationsLive()
+	var count = 1 as Count
+	let first = bump(count)
+	let read = function() gives count
+	let second = read()
+	let live = HeapStats.allocationsLive() - liveBefore
+
+	print("{first} {second} {live > 0}\n")
+	return 0
+end 'main'
+```
+```stdout
+2 2 true
+```
+```exitcode
+0
+```
+
+<!-- test: a-cell-lent-to-a-coroutine-stays-on-the-heap-until-it-is-drained -->
+`async` hands the coroutine the caller's own cell for a `mutable` parameter and runs on frames that grow by relocation, so a program with a coroutine keeps every parameter cell on the heap: the one live allocation after the await is the caller's `count`, which holds the coroutine's write.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+function bump(count mutable Count) returns Count
+	Scheduler.yield()
+	count = count + 1
+
+	return count
+end 'bump'
+
+function main() returns ExitCode
+	let liveBefore = HeapStats.allocationsLive()
+	var count = 1 as Count
+	let pending = async bump(count)
+	let result = await pending
+	let live = HeapStats.allocationsLive() - liveBefore
+
+	print("{result} {count} {live}\n")
+	return 0
+end 'main'
+```
+```stdout
+2 2 1
+```
+```exitcode
+0
+```

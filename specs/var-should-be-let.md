@@ -1165,7 +1165,7 @@ be `a`'s record is written through when a conformer's implementation writes its 
 typealias Integer = int(i64.min to i64.max)
 
 interface Bumpable
-	function bump()
+	function bump(mutable self)
 end 'Bumpable'
 
 type Point implements Bumpable

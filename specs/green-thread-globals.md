@@ -852,7 +852,7 @@ function callIndirect(f Step, n Integer) returns Integer
 end 'callIndirect'
 
 interface Greeter
-	function greet() returns String
+	function greet(mutable self) returns String
 end 'Greeter'
 
 type Polite implements Greeter
@@ -960,7 +960,7 @@ names the member the dispatch could land on, as for every other road to the `var
 var greetings = 0 as Integer
 
 interface Greeter
-	function greet() returns String
+	function greet(mutable self) returns String
 end 'Greeter'
 
 type Loud implements Greeter
@@ -1160,7 +1160,7 @@ program has a service. `lookups` is touched by `main` alone, so it is legal.
 var lookups = 0 as Integer
 
 interface Greeter
-	function greet() returns Integer
+	function greet(mutable self) returns Integer
 end 'Greeter'
 
 type Polite implements Greeter
@@ -1318,7 +1318,7 @@ touches is shared by two threads. The note points at the `spawn` inside the `def
 var lookups = 0 as Integer
 
 interface Greeter
-	function greet() returns Integer
+	function greet(mutable self) returns Integer
 end 'Greeter'
 
 type Polite implements Greeter

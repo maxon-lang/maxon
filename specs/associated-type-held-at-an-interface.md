@@ -53,7 +53,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Cursor uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Cursor'
 
 interface Bag uses Element, Iter
@@ -130,7 +130,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Cursor uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Cursor'
 
 interface Bag uses Element, Iter
@@ -259,7 +259,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Lines
 	function current() returns String
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Lines'
 
 interface Doc uses Walk
@@ -375,7 +375,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Cursor
 	function current() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Cursor'
 
 interface Sink uses Item
@@ -434,7 +434,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Cursor
 	function current() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Cursor'
 
 interface Bag uses Iter
@@ -497,7 +497,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Cursor
 	function current() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Cursor'
 
 interface Bag uses Iter
@@ -619,7 +619,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Cursor uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Cursor'
 
 interface Bag uses Element, Iter
@@ -676,7 +676,7 @@ typealias Integer = int(i64.min to i64.max)
 interface Cursor uses Element
 	function current() returns Element
 	function tag() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Cursor'
 
 type UpCursor implements Cursor with Integer
@@ -752,7 +752,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Cursor
 	function current() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Cursor'
 
 interface Bag uses Iter
@@ -833,7 +833,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Cursor uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Cursor'
 
 interface BiCursor extends Cursor
@@ -918,7 +918,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Cursor
 	function current() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Cursor'
 
 interface BiCursor extends Cursor
@@ -1001,7 +1001,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Cursor
 	function current() returns Integer
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Cursor'
 
 interface Bag uses Iter

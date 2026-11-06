@@ -57,7 +57,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface HasItems uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'HasItems'
 
 extension HasItems where Element is Equatable
@@ -220,7 +220,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Bucket uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Bucket'
 
 extension Bucket where Element is Equatable and Hashable
@@ -296,7 +296,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 extension Seq

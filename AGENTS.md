@@ -35,6 +35,11 @@ entry under `## Unreleased` in `RELEASE_NOTES.md` — the change and its `Fix:` 
 (`docs/RELEASING.md`, "The release notes"). A change to a command, flag, tool output or event stream is
 not such an entry; it updates its `docs/` source.
 
+**A syntax error gets the parser's generic error, never a dedicated diagnostic.** A word the grammar does
+not accept in a position — a removed spelling, a capability word where none is allowed, a keyword out of
+place — fails exactly as any stray word there would. Dedicated diagnostics are for rules about a program
+the grammar accepts.
+
 ## Where the rules live
 
 This file holds what binds EVERY tree in the repository. The compiler is a project inside it, with its

@@ -1,0 +1,62 @@
+module enum ConflictingOperand
+	plainRead
+	byReferenceCell
+end 'ConflictingOperand'
+
+module union OperandEventKind
+	read
+	cellRead(lend ElementIndex)
+	write(lend ElementIndex)
+
+	function isPlainRead() returns bool
+		return match self 'kind'
+			read gives true
+			cellRead or
+			write gives false
+		end 'kind'
+	end 'isPlainRead'
+
+	module function readsStorage() returns bool
+		return match self 'kind'
+			read or
+			cellRead gives true
+			write gives false
+		end 'kind'
+	end 'readsStorage'
+
+	module function conflictingOperand() returns ConflictingOperand
+		return match self 'kind'
+			read gives ConflictingOperand.plainRead
+			cellRead gives ConflictingOperand.byReferenceCell
+			write panic("conflictingOperand: a write is never an operand that overlaps")
+		end 'kind'
+	end 'conflictingOperand'
+
+	module function writtenLend() returns ElementIndex throws AbsentError
+		match self 'kind'
+			write(owner) then return owner
+			read or
+			cellRead then throw AbsentError.absent
+		end 'kind'
+	end 'writtenLend'
+end 'OperandEventKind'
+
+module let plainOperandRead = OperandEventKind.read
+
+module type OperandEvent
+	// Overlaps compare bindings with `is`, so an event shares its binding and is never cloned. The field
+	// is `var` because a `let` field refuses an aliased `VarInfo` (E3078).
+	module var binding as VarInfo
+	module let at as ElementIndex
+	module let kind as OperandEventKind
+
+	module static function create(binding VarInfo, at ElementIndex, kind OperandEventKind) returns OperandEvent
+		return Self{binding: binding, at: at, kind: kind}
+	end 'create'
+
+	module function isPlainReadOf(root VarInfo) returns bool
+		return self.binding is root and self.kind.isPlainRead()
+	end 'isPlainReadOf'
+end 'OperandEvent'
+
+module typealias OperandEventArray = Array with OperandEvent

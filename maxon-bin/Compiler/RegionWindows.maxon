@@ -1,0 +1,842 @@
+export enum RegionSurface
+	unknown
+	absent
+	present
+end 'RegionSurface'
+
+export enum WindowKind
+	modify
+	oneStatement
+end 'WindowKind'
+
+export type OpenWindow
+	module let label as ByteArray
+	module let rootText as ByteArray
+	module let rootName as ByteArray
+	module let kind as WindowKind
+	module let floor as ValueId
+	module let openedValue as ValueId
+	module let holderValue as ValueId
+	module let holderField as FieldIndex
+	module let opensAField as bool
+	module let ownerStatement as ElementIndex
+
+	export static function create(label ByteArray, rootText ByteArray, rootName ByteArray, kind WindowKind, floor ValueId, openedValue ValueId, holderValue ValueId, holderField FieldIndex, opensAField bool, ownerStatement ElementIndex) returns OpenWindow
+		return Self{label: label, rootText: rootText, rootName: rootName, kind: kind, floor: floor, openedValue: openedValue, holderValue: holderValue, holderField: holderField, opensAField: opensAField, ownerStatement: ownerStatement}
+	end 'create'
+end 'OpenWindow'
+
+export typealias WindowStack = Array with OpenWindow
+
+export type FieldOrigin
+	module let holder as ValueId
+	module let layoutName as ByteArray
+	module let field as FieldIndex
+	module let slot as ParamCapability
+
+	export static function create(holder ValueId, layoutName ByteArray, field FieldIndex, slot ParamCapability) returns FieldOrigin
+		return Self{holder: holder, layoutName: layoutName, field: field, slot: slot}
+	end 'create'
+end 'FieldOrigin'
+
+export typealias FieldOriginMap = Map with (ValueId, FieldOrigin)
+
+export type CarriedDerivation
+	module let derived as ValueId
+	module let source as ValueId
+	module let slot as ParamCapability
+	module let joins as bool
+
+	export static function create(derived ValueId, source ValueId, slot ParamCapability, joins bool) returns CarriedDerivation
+		return Self{derived: derived, source: source, slot: slot, joins: joins}
+	end 'create'
+end 'CarriedDerivation'
+
+export typealias CarriedDerivationArray = Array with CarriedDerivation
+
+export union StoreHolder
+	unheld
+	held(box ValueId, assumed ValueCapability, placeText String, line LineNumber, column ColumnNumber)
+end 'StoreHolder'
+
+export type CarriedStore
+	module let holder as StoreHolder
+	module let value as ValueId
+	module let slot as ParamCapability
+	module let assumedValue as ValueCapability
+	module let windows as WindowStack
+	module let fieldName as String
+	module let valueStart as ElementIndex
+	module let valueEnd as ElementIndex
+	module let line as LineNumber
+
+	export static function create(holder StoreHolder, value ValueId, slot ParamCapability, assumedValue ValueCapability, windows WindowStack, fieldName String, valueStart ElementIndex, valueEnd ElementIndex, line LineNumber) returns CarriedStore
+		return Self{holder: holder, value: value, slot: slot, assumedValue: assumedValue, windows: windows, fieldName: fieldName, valueStart: valueStart, valueEnd: valueEnd, line: line}
+	end 'create'
+end 'CarriedStore'
+
+export type CarriedStoredSlot
+	module let noteIndex as ElementIndex
+	module let value as ValueId
+	module let windows as WindowStack
+
+	export static function create(noteIndex ElementIndex, value ValueId, windows WindowStack) returns CarriedStoredSlot
+		return Self{noteIndex: noteIndex, value: value, windows: windows}
+	end 'create'
+end 'CarriedStoredSlot'
+
+export typealias CarriedStoredSlotArray = Array with CarriedStoredSlot
+
+export typealias CarriedStoreArray = Array with CarriedStore
+
+export type CarriedHolder
+	module let holder as ValueId
+	module let assumed as ValueCapability
+	module let pathText as String
+	module let action as String
+	module let line as LineNumber
+	module let column as ColumnNumber
+
+	export static function create(holder ValueId, assumed ValueCapability, pathText String, action String, line LineNumber, column ColumnNumber) returns CarriedHolder
+		return Self{holder: holder, assumed: assumed, pathText: pathText, action: action, line: line, column: column}
+	end 'create'
+end 'CarriedHolder'
+
+export typealias CarriedHolderArray = Array with CarriedHolder
+
+export type LentLocal
+	module var binding as VarInfo
+	module let promise as ValueId
+	module let line as LineNumber
+	module let column as ColumnNumber
+
+	export static function create(binding VarInfo, promise ValueId, line LineNumber, column ColumnNumber) returns LentLocal
+		return Self{binding: binding, promise: promise, line: line, column: column}
+	end 'create'
+end 'LentLocal'
+
+export typealias LentLocalArray = Array with LentLocal
+
+export typealias UseLineMap = Map with (ValueId, LineNumber)
+
+export typealias PhiParamSourceMap = Map with (ValueId, ParamPositionMask)
+
+export typealias PausedOperandMaskArray = Array with ParamPositionMask
+
+// @generated library-cache begin
+function cacheWritePausedOperandMaskArray(writer LibraryCacheWriter, value PausedOperandMaskArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWritePausedOperandMaskArray'
+
+function cacheReadPausedOperandMaskArray(reader LibraryCacheReader) returns PausedOperandMaskArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = PausedOperandMaskArray.create(0)
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ParamPositionMask
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadPausedOperandMaskArray'
+
+// @generated library-cache end
+
+export type CaptureSite
+	export let closureName as ByteArray
+	export let position as ParamCount
+	export let value as ValueId
+	export let name as ByteArray
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let pausedWhenCaptured as bool
+
+	export static function create(closureName ByteArray, position ParamCount, value ValueId, name ByteArray, line LineNumber, column ColumnNumber, pausedWhenCaptured bool) returns CaptureSite
+		return Self{closureName: closureName, position: position, value: value, name: name, line: line, column: column, pausedWhenCaptured: pausedWhenCaptured}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.closureName)
+		writer.unsigned(self.position as CacheUnsigned)
+		writer.unsigned(self.value as CacheUnsigned)
+		writer.bytes(self.name)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+		writer.flag(self.pausedWhenCaptured)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns CaptureSite throws LibraryCacheDamage
+		let f_closureName = try reader.bytes()
+		let f_position = (try reader.unsigned()) as ParamCount
+		let f_value = (try reader.unsigned()) as ValueId
+		let f_name = try reader.bytes()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+		let f_pausedWhenCaptured = try reader.flag()
+
+		return Self{closureName: f_closureName, position: f_position, value: f_value, name: f_name, line: f_line, column: f_column, pausedWhenCaptured: f_pausedWhenCaptured}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize56
+		return sizeof(CaptureSite) as CacheSize56
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'CaptureSite'
+
+export typealias CaptureSiteArray = Array with CaptureSite
+
+// @generated library-cache begin
+function cacheWriteCaptureSiteArray(writer LibraryCacheWriter, value CaptureSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteCaptureSiteArray'
+
+function cacheReadCaptureSiteArray(reader LibraryCacheReader) returns CaptureSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = CaptureSiteArray.create(0)
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try CaptureSite.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadCaptureSiteArray'
+
+// @generated library-cache end
+
+export type JoinedParamSource
+	export let value as ValueId
+	export let sources as ParamPositionMask
+
+	export static function create(value ValueId, sources ParamPositionMask) returns JoinedParamSource
+		return Self{value: value, sources: sources}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.value as CacheUnsigned)
+		writer.unsigned(self.sources as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns JoinedParamSource throws LibraryCacheDamage
+		let f_value = (try reader.unsigned()) as ValueId
+		let f_sources = (try reader.unsigned()) as ParamPositionMask
+
+		return Self{value: f_value, sources: f_sources}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(JoinedParamSource) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'JoinedParamSource'
+
+export typealias JoinedParamSourceArray = Array with JoinedParamSource
+
+// @generated library-cache begin
+function cacheWriteJoinedParamSourceArray(writer LibraryCacheWriter, value JoinedParamSourceArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteJoinedParamSourceArray'
+
+function cacheReadJoinedParamSourceArray(reader LibraryCacheReader) returns JoinedParamSourceArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = JoinedParamSourceArray.create(0)
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try JoinedParamSource.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadJoinedParamSourceArray'
+
+// @generated library-cache end
+
+export type ResultUse
+	export let op as ElementIndex
+	export let slot as ParamCapability
+	export let sends as bool
+	export let judged as bool
+	export let place as String
+	export let valueType as String
+	export let readOnlyReason as String
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	export static function create(op ElementIndex, slot ParamCapability, sends bool, judged bool, place String, valueType String, readOnlyReason String, line LineNumber, column ColumnNumber) returns ResultUse
+		return Self{op: op, slot: slot, sends: sends, judged: judged, place: place, valueType: valueType, readOnlyReason: readOnlyReason, line: line, column: column}
+	end 'create'
+
+	export function atOp(opIndex ElementIndex) returns ResultUse
+		return ResultUse.create(opIndex, slot: self.slot, sends: self.sends, judged: self.judged, place: self.place, valueType: self.valueType, readOnlyReason: self.readOnlyReason, line: self.line, column: self.column)
+	end 'atOp'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.op as CacheUnsigned)
+		writer.unsigned(self.slot.ordinal as CacheUnsigned)
+		writer.flag(self.sends)
+		writer.flag(self.judged)
+		writer.text(self.place)
+		writer.text(self.valueType)
+		writer.text(self.readOnlyReason)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ResultUse throws LibraryCacheDamage
+		let f_op = (try reader.unsigned()) as ElementIndex
+		let f_slot = try cacheReadParamCapability(reader)
+		let f_sends = try reader.flag()
+		let f_judged = try reader.flag()
+		let f_place = try reader.text()
+		let f_valueType = try reader.text()
+		let f_readOnlyReason = try reader.text()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+
+		return Self{op: f_op, slot: f_slot, sends: f_sends, judged: f_judged, place: f_place, valueType: f_valueType, readOnlyReason: f_readOnlyReason, line: f_line, column: f_column}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize72
+		return sizeof(ResultUse) as CacheSize72
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'ResultUse'
+
+export typealias ResultUseArray = Array with ResultUse
+
+// @generated library-cache begin
+function cacheWriteResultUseArray(writer LibraryCacheWriter, value ResultUseArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteResultUseArray'
+
+function cacheReadResultUseArray(reader LibraryCacheReader) returns ResultUseArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ResultUseArray.create(0)
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try ResultUse.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadResultUseArray'
+
+// @generated library-cache end
+
+export type StoredSlotArg
+	export let op as ElementIndex
+	export let argIndex as ParamCount
+	export let slot as ParamCapability
+	export let argValue as ValueId
+	export let sources as ParamPositionMask
+	export let capability as ValueCapability
+	export let undecided as bool
+	export let valueType as String
+	export let readOnlyReason as String
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	export static function create(op ElementIndex, argIndex ParamCount, slot ParamCapability, argValue ValueId, sources ParamPositionMask, capability ValueCapability, undecided bool, valueType String, readOnlyReason String, line LineNumber, column ColumnNumber) returns StoredSlotArg
+		return Self{op: op, argIndex: argIndex, slot: slot, argValue: argValue, sources: sources, capability: capability, undecided: undecided, valueType: valueType, readOnlyReason: readOnlyReason, line: line, column: column}
+	end 'create'
+
+	export function atOp(opIndex ElementIndex) returns StoredSlotArg
+		return self.rebuilt(opIndex, reached: self.sources, given: self.capability, stillUndecided: self.undecided)
+	end 'atOp'
+
+	export function judgedAs(reached ParamPositionMask, given ValueCapability, parameterUndecided bool) returns StoredSlotArg
+		return self.rebuilt(self.op, reached: reached, given: given, stillUndecided: parameterUndecided)
+	end 'judgedAs'
+
+	function rebuilt(opIndex ElementIndex, reached ParamPositionMask, given ValueCapability, stillUndecided bool) returns StoredSlotArg
+		return StoredSlotArg.create(opIndex, argIndex: self.argIndex, slot: self.slot, argValue: self.argValue, sources: reached, capability: given, undecided: stillUndecided, valueType: self.valueType, readOnlyReason: self.readOnlyReason, line: self.line, column: self.column)
+	end 'rebuilt'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.op as CacheUnsigned)
+		writer.unsigned(self.argIndex as CacheUnsigned)
+		writer.unsigned(self.slot.ordinal as CacheUnsigned)
+		writer.unsigned(self.argValue as CacheUnsigned)
+		writer.unsigned(self.sources as CacheUnsigned)
+		writer.unsigned(self.capability.ordinal as CacheUnsigned)
+		writer.flag(self.undecided)
+		writer.text(self.valueType)
+		writer.text(self.readOnlyReason)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns StoredSlotArg throws LibraryCacheDamage
+		let f_op = (try reader.unsigned()) as ElementIndex
+		let f_argIndex = (try reader.unsigned()) as ParamCount
+		let f_slot = try cacheReadParamCapability(reader)
+		let f_argValue = (try reader.unsigned()) as ValueId
+		let f_sources = (try reader.unsigned()) as ParamPositionMask
+		let f_capability = try cacheReadValueCapability(reader)
+		let f_undecided = try reader.flag()
+		let f_valueType = try reader.text()
+		let f_readOnlyReason = try reader.text()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+
+		return Self{op: f_op, argIndex: f_argIndex, slot: f_slot, argValue: f_argValue, sources: f_sources, capability: f_capability, undecided: f_undecided, valueType: f_valueType, readOnlyReason: f_readOnlyReason, line: f_line, column: f_column}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize88
+		return sizeof(StoredSlotArg) as CacheSize88
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'StoredSlotArg'
+
+export typealias StoredSlotArgArray = Array with StoredSlotArg
+
+// @generated library-cache begin
+function cacheWriteStoredSlotArgArray(writer LibraryCacheWriter, value StoredSlotArgArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteStoredSlotArgArray'
+
+function cacheReadStoredSlotArgArray(reader LibraryCacheReader) returns StoredSlotArgArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = StoredSlotArgArray.create(0)
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try StoredSlotArg.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadStoredSlotArgArray'
+
+// @generated library-cache end
+
+export type CapabilityNotes
+	export var windowCallOps as FuncIndexArray
+	export var windowCallLabels as NameRoster
+	export var windowCallPausedOperands as PausedOperandMaskArray
+	export var useSiteParams as ParamCountArray
+	export var useSiteMutable as BoolArray
+	export var useSiteLines as LineNumberArray
+	export var useSitePhrases as NameRoster
+	export var argNameOps as FuncIndexArray
+	export var argNamePositions as ParamCountArray
+	export var argNames as NameRoster
+	export var captureSites as CaptureSiteArray
+	export var storedSlotArgs as StoredSlotArgArray
+	export var tiedAsyncOps as FuncIndexArray
+	export var droppedPromiseOps as FuncIndexArray
+	export var droppedPromiseNames as NameRoster
+	export var undecidedResultOps as FuncIndexArray
+	export var resultWriteOps as FuncIndexArray
+	export var resultWriteLines as LineNumberArray
+	export var resultWriteColumns as ColumnNumberArray
+	export var resultWriteFields as NameRoster
+	export var resultWritePlaces as NameRoster
+	export var joinedSources as JoinedParamSourceArray
+	export var resultUses as ResultUseArray
+
+	export static function create() returns CapabilityNotes
+		return Self{windowCallOps: FuncIndexArray.create(0), windowCallLabels: NameRoster.create(0), windowCallPausedOperands: PausedOperandMaskArray.create(0), useSiteParams: ParamCountArray.create(0), useSiteMutable: BoolArray.create(0), useSiteLines: LineNumberArray.create(0), useSitePhrases: NameRoster.create(0), argNameOps: FuncIndexArray.create(0), argNamePositions: ParamCountArray.create(0), argNames: NameRoster.create(0), captureSites: CaptureSiteArray.create(0), storedSlotArgs: StoredSlotArgArray.create(0), tiedAsyncOps: FuncIndexArray.create(0), droppedPromiseOps: FuncIndexArray.create(0), droppedPromiseNames: NameRoster.create(0), undecidedResultOps: FuncIndexArray.create(0), resultWriteOps: FuncIndexArray.create(0), resultWriteLines: LineNumberArray.create(0), resultWriteColumns: ColumnNumberArray.create(0), resultWriteFields: NameRoster.create(0), resultWritePlaces: NameRoster.create(0), joinedSources: JoinedParamSourceArray.create(0), resultUses: ResultUseArray.create(0)}
+	end 'create'
+
+	export function holdsNothing() returns bool
+		return self.windowCallOps.isEmpty() and self.useSiteParams.isEmpty() and self.argNameOps.isEmpty() and self.captureSites.isEmpty() and self.storedSlotArgs.isEmpty() and self.tiedAsyncOps.isEmpty() and self.droppedPromiseOps.isEmpty() and self.droppedPromiseNames.isEmpty() and self.undecidedResultOps.isEmpty() and self.resultWriteOps.isEmpty() and self.joinedSources.isEmpty() and self.resultUses.isEmpty()
+	end 'holdsNothing'
+
+	export function shiftedBy(opOffset ElementIndex) returns CapabilityNotes
+		var shifted = CapabilityNotes.create()
+
+		for op in self.windowCallOps 'eachWindowCall'
+			shifted.windowCallOps.push(op + opOffset)
+		end 'eachWindowCall'
+
+		for op in self.argNameOps 'eachNamedCall'
+			shifted.argNameOps.push(op + opOffset)
+		end 'eachNamedCall'
+
+		for op in self.tiedAsyncOps 'eachTiedAsync'
+			shifted.tiedAsyncOps.push(op + opOffset)
+		end 'eachTiedAsync'
+
+		for op in self.droppedPromiseOps 'eachDroppedPromise'
+			shifted.droppedPromiseOps.push(op + opOffset)
+		end 'eachDroppedPromise'
+
+		for op in self.undecidedResultOps 'eachUndecidedResult'
+			shifted.undecidedResultOps.push(op + opOffset)
+		end 'eachUndecidedResult'
+
+		for op in self.resultWriteOps 'eachResultWrite'
+			shifted.resultWriteOps.push(op + opOffset)
+		end 'eachResultWrite'
+
+		shifted.resultWriteLines = self.resultWriteLines.clone()
+		shifted.resultWriteColumns = self.resultWriteColumns.clone()
+		shifted.resultWriteFields = self.resultWriteFields.clone()
+		shifted.resultWritePlaces = self.resultWritePlaces.clone()
+
+		shifted.droppedPromiseNames = self.droppedPromiseNames.clone()
+		shifted.windowCallLabels = self.windowCallLabels.clone()
+		shifted.windowCallPausedOperands = self.windowCallPausedOperands.clone()
+		shifted.useSiteParams = self.useSiteParams.clone()
+		shifted.useSiteMutable = self.useSiteMutable.clone()
+		shifted.useSiteLines = self.useSiteLines.clone()
+		shifted.useSitePhrases = self.useSitePhrases.clone()
+		shifted.argNamePositions = self.argNamePositions.clone()
+		shifted.argNames = self.argNames.clone()
+		shifted.captureSites = self.captureSites.clone()
+		shifted.joinedSources = self.joinedSources.clone()
+
+		for use in self.resultUses 'eachResultUse'
+			shifted.resultUses.push(use.atOp(use.op + opOffset))
+		end 'eachResultUse'
+
+		for stored in self.storedSlotArgs 'eachStoredSlotArg'
+			shifted.storedSlotArgs.push(stored.atOp(stored.op + opOffset))
+		end 'eachStoredSlotArg'
+
+		return shifted
+	end 'shiftedBy'
+
+	export function useSiteIndex(param ParamCount, mutable bool) returns ElementIndex throws AbsentError
+		for position in 0 upto self.useSiteParams.count() 'eachSite'
+			if (try self.useSiteParams.get(position) otherwise panic("useSiteIndex: useSiteParams.get OOB at {position}")) == param and (try self.useSiteMutable.get(position) otherwise panic("useSiteIndex: useSiteMutable.get OOB at {position}")) == mutable 'theSite'
+				return position
+			end 'theSite'
+		end 'eachSite'
+
+		throw AbsentError.absent
+	end 'useSiteIndex'
+
+	export function hasUseSite(param ParamCount, mutable bool) returns bool
+		let _ = try self.useSiteIndex(param, mutable: mutable) otherwise return false
+		return true
+	end 'hasUseSite'
+
+	export function useSiteLine(param ParamCount, mutable bool) returns LineNumber throws AbsentError
+		return try self.useSiteLines.get(try self.useSiteIndex(param, mutable: mutable)) otherwise throw AbsentError.absent
+	end 'useSiteLine'
+
+	export function useSitePhrase(param ParamCount, mutable bool) returns ByteArray throws AbsentError
+		return try self.useSitePhrases.get(try self.useSiteIndex(param, mutable: mutable)) otherwise throw AbsentError.absent
+	end 'useSitePhrase'
+
+	export function argumentNameAt(callOp ElementIndex, position ParamCount) returns ByteArray throws AbsentError
+		for slot in 0 upto self.argNameOps.count() 'eachNamedArgument'
+			if (try self.argNameOps.get(slot) otherwise panic("argumentNameAt: argNameOps.get OOB at {slot}")) == callOp and (try self.argNamePositions.get(slot) otherwise panic("argumentNameAt: argNamePositions.get OOB at {slot}")) == position 'theArgument'
+				return try self.argNames.get(slot) otherwise throw AbsentError.absent
+			end 'theArgument'
+		end 'eachNamedArgument'
+
+		throw AbsentError.absent
+	end 'argumentNameAt'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteFuncIndexArray(writer, value: self.windowCallOps)
+		cacheWriteNameRoster(writer, value: self.windowCallLabels)
+		cacheWritePausedOperandMaskArray(writer, value: self.windowCallPausedOperands)
+		cacheWriteParamCountArray(writer, value: self.useSiteParams)
+		cacheWriteBoolArray(writer, value: self.useSiteMutable)
+		cacheWriteLineNumberArray(writer, value: self.useSiteLines)
+		cacheWriteNameRoster(writer, value: self.useSitePhrases)
+		cacheWriteFuncIndexArray(writer, value: self.argNameOps)
+		cacheWriteParamCountArray(writer, value: self.argNamePositions)
+		cacheWriteNameRoster(writer, value: self.argNames)
+		cacheWriteCaptureSiteArray(writer, value: self.captureSites)
+		cacheWriteStoredSlotArgArray(writer, value: self.storedSlotArgs)
+		cacheWriteFuncIndexArray(writer, value: self.tiedAsyncOps)
+		cacheWriteFuncIndexArray(writer, value: self.droppedPromiseOps)
+		cacheWriteNameRoster(writer, value: self.droppedPromiseNames)
+		cacheWriteFuncIndexArray(writer, value: self.undecidedResultOps)
+		cacheWriteFuncIndexArray(writer, value: self.resultWriteOps)
+		cacheWriteLineNumberArray(writer, value: self.resultWriteLines)
+		cacheWriteColumnNumberArray(writer, value: self.resultWriteColumns)
+		cacheWriteNameRoster(writer, value: self.resultWriteFields)
+		cacheWriteNameRoster(writer, value: self.resultWritePlaces)
+		cacheWriteJoinedParamSourceArray(writer, value: self.joinedSources)
+		cacheWriteResultUseArray(writer, value: self.resultUses)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns CapabilityNotes throws LibraryCacheDamage
+		let f_windowCallOps = try cacheReadFuncIndexArray(reader)
+		let f_windowCallLabels = try cacheReadNameRoster(reader)
+		let f_windowCallPausedOperands = try cacheReadPausedOperandMaskArray(reader)
+		let f_useSiteParams = try cacheReadParamCountArray(reader)
+		let f_useSiteMutable = try cacheReadBoolArray(reader)
+		let f_useSiteLines = try cacheReadLineNumberArray(reader)
+		let f_useSitePhrases = try cacheReadNameRoster(reader)
+		let f_argNameOps = try cacheReadFuncIndexArray(reader)
+		let f_argNamePositions = try cacheReadParamCountArray(reader)
+		let f_argNames = try cacheReadNameRoster(reader)
+		let f_captureSites = try cacheReadCaptureSiteArray(reader)
+		let f_storedSlotArgs = try cacheReadStoredSlotArgArray(reader)
+		let f_tiedAsyncOps = try cacheReadFuncIndexArray(reader)
+		let f_droppedPromiseOps = try cacheReadFuncIndexArray(reader)
+		let f_droppedPromiseNames = try cacheReadNameRoster(reader)
+		let f_undecidedResultOps = try cacheReadFuncIndexArray(reader)
+		let f_resultWriteOps = try cacheReadFuncIndexArray(reader)
+		let f_resultWriteLines = try cacheReadLineNumberArray(reader)
+		let f_resultWriteColumns = try cacheReadColumnNumberArray(reader)
+		let f_resultWriteFields = try cacheReadNameRoster(reader)
+		let f_resultWritePlaces = try cacheReadNameRoster(reader)
+		let f_joinedSources = try cacheReadJoinedParamSourceArray(reader)
+		let f_resultUses = try cacheReadResultUseArray(reader)
+
+		return Self{windowCallOps: f_windowCallOps, windowCallLabels: f_windowCallLabels, windowCallPausedOperands: f_windowCallPausedOperands, useSiteParams: f_useSiteParams, useSiteMutable: f_useSiteMutable, useSiteLines: f_useSiteLines, useSitePhrases: f_useSitePhrases, argNameOps: f_argNameOps, argNamePositions: f_argNamePositions, argNames: f_argNames, captureSites: f_captureSites, storedSlotArgs: f_storedSlotArgs, tiedAsyncOps: f_tiedAsyncOps, droppedPromiseOps: f_droppedPromiseOps, droppedPromiseNames: f_droppedPromiseNames, undecidedResultOps: f_undecidedResultOps, resultWriteOps: f_resultWriteOps, resultWriteLines: f_resultWriteLines, resultWriteColumns: f_resultWriteColumns, resultWriteFields: f_resultWriteFields, resultWritePlaces: f_resultWritePlaces, joinedSources: f_joinedSources, resultUses: f_resultUses}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize184
+		return sizeof(CapabilityNotes) as CacheSize184
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'CapabilityNotes'
+
+export union DeferredRefusal
+	none
+	at(line LineNumber, column ColumnNumber, code ErrorCode, message String)
+end 'DeferredRefusal'
+
+export type RegionFactTable
+	module var windows as WindowStack
+	module var fieldOrigins as FieldOriginMap
+	module var mutableUseLines as UseLineMap
+	module var phiParamSources as PhiParamSourceMap
+	module var callOpens as WindowStack
+	module var callGuards as ElementIndex
+	module var deferredRefusal as DeferredRefusal
+	module var carriedRoots as ValueMarkSet
+	module var carriedDerivations as CarriedDerivationArray
+	module var carriedStores as CarriedStoreArray
+	module var carriedStoredSlots as CarriedStoredSlotArray
+	module var carriedHolders as CarriedHolderArray
+	module var joinedParamArms as PhiParamSourceMap
+	module var joinedDataArms as ValueMarkSet
+	module var joinedOtherArms as ValueMarkSet
+	module var lentUniques as ValueMarkSet
+	module var cleanFunctionValues as ValueMarkSet
+	module var lentLocals as LentLocalArray
+
+	export static function create() returns RegionFactTable
+		return Self{windows: WindowStack.create(0), fieldOrigins: FieldOriginMap.create(), mutableUseLines: UseLineMap.create(), phiParamSources: PhiParamSourceMap.create(), callOpens: WindowStack.create(0), callGuards: 0, deferredRefusal: DeferredRefusal.none, carriedRoots: ValueMarkSet.create(), carriedDerivations: CarriedDerivationArray.create(0), carriedStores: CarriedStoreArray.create(0), carriedStoredSlots: CarriedStoredSlotArray.create(0), carriedHolders: CarriedHolderArray.create(0), joinedParamArms: PhiParamSourceMap.create(), joinedDataArms: ValueMarkSet.create(), joinedOtherArms: ValueMarkSet.create(), lentUniques: ValueMarkSet.create(), cleanFunctionValues: ValueMarkSet.create(), lentLocals: LentLocalArray.create(0)}
+	end 'create'
+
+	module function clearCarried()
+		self.carriedRoots = ValueMarkSet.create()
+		self.carriedDerivations = CarriedDerivationArray.create(0)
+		self.carriedStores = CarriedStoreArray.create(0)
+		self.carriedStoredSlots = CarriedStoredSlotArray.create(0)
+		self.carriedHolders = CarriedHolderArray.create(0)
+	end 'clearCarried'
+end 'RegionFactTable'
+
+export union RegionFacts
+	unwritten
+	entries(table RegionFactTable)
+end 'RegionFacts'
+
+module let noRegionFacts = RegionFacts.unwritten
+
+module function windowIsOpen(windows WindowStack) returns bool
+	return not windows.isEmpty()
+end 'windowIsOpen'
+
+module function innermostWindowOf(windows WindowStack) returns OpenWindow
+	return try windows.last() otherwise panic("innermostWindowOf: asked with no window open — every caller checks `windowIsOpen` first")
+end 'innermostWindowOf'
+
+module function capabilityWithinWindows(windows WindowStack, value ValueId, intrinsic ValueCapability) returns ValueCapability
+	if windows.isEmpty() 'noWindow'
+		return intrinsic
+	end 'noWindow'
+
+	return capabilityWithinWindowAt(windows, position: windows.count() - 1, value: value, intrinsic: intrinsic)
+end 'capabilityWithinWindows'
+
+module function capabilityWithinExplicitWindows(windows WindowStack, value ValueId, intrinsic ValueCapability) returns ValueCapability
+	var position = windows.count()
+
+	while position > 0 'outwardFromTheInnermost'
+		position = position - 1
+		let window = try windows.get(position) otherwise panic("capabilityWithinExplicitWindows: windows.get OOB at {position} below the count just read")
+
+		if window.kind == WindowKind.modify 'anExplicitWindow'
+			return capabilityWithinWindowAt(windows, position: position, value: value, intrinsic: intrinsic)
+		end 'anExplicitWindow'
+	end 'outwardFromTheInnermost'
+
+	return intrinsic
+end 'capabilityWithinExplicitWindows'
+
+function capabilityWithinWindowAt(windows WindowStack, position ElementIndex, value ValueId, intrinsic ValueCapability) returns ValueCapability
+	let window = try windows.get(position) otherwise panic("capabilityWithinWindowAt: windows.get OOB at {position}")
+
+	if not window.opensAField and value == window.openedValue 'theOpenedRoot'
+		return ValueCapability.mutable
+	end 'theOpenedRoot'
+
+	if valueIsAnEnclosingWindowsRoot(windows, value: value, below: position) 'outsideTheInnerBlock'
+		return ValueCapability.paused
+	end 'outsideTheInnerBlock'
+
+	if value >= window.floor 'insideTheWindow'
+		return intrinsic
+	end 'insideTheWindow'
+
+	if intrinsic == ValueCapability.mutable or intrinsic == ValueCapability.temporary 'outerWritableData'
+		return ValueCapability.paused
+	end 'outerWritableData'
+
+	return intrinsic
+end 'capabilityWithinWindowAt'
+
+function valueIsAnEnclosingWindowsRoot(windows WindowStack, value ValueId, below ElementIndex) returns bool
+	for position in 0 upto below 'eachEnclosingWindow'
+		let enclosing = try windows.get(position) otherwise panic("valueIsAnEnclosingWindowsRoot: windows.get OOB at {position} below the window asked about")
+
+		if not enclosing.opensAField and value == enclosing.openedValue 'anEnclosingRoot'
+			return true
+		end 'anEnclosingRoot'
+	end 'eachEnclosingWindow'
+
+	return false
+end 'valueIsAnEnclosingWindowsRoot'
+
+module enum FieldWindowState
+	notOpen
+	open
+	paused
+end 'FieldWindowState'
+
+module function windowOpenedOnRoot(windows WindowStack, rootName ByteArray) returns OpenWindow throws AbsentError
+	var position = windows.count()
+
+	while position > 0 'outwardFromTheInnermost'
+		position = position - 1
+		let window = try windows.get(position) otherwise panic("windowOpenedOnRoot: windows.get OOB at {position} below the count just read")
+
+		if not window.rootName.isEmpty() and window.rootName.equals(rootName) 'theOpenedRoot'
+			return window
+		end 'theOpenedRoot'
+	end 'outwardFromTheInnermost'
+
+	throw AbsentError.absent
+end 'windowOpenedOnRoot'
+
+module function windowOpensValue(windows WindowStack, value ValueId) returns bool
+	for window in windows 'eachWindow'
+		if not window.opensAField and window.openedValue == value 'theOpenedValue'
+			return true
+		end 'theOpenedValue'
+	end 'eachWindow'
+
+	return false
+end 'windowOpensValue'
+
+module function modifyWindowCount(windows WindowStack) returns ElementIndex
+	var count = 0 as ElementIndex
+
+	for window in windows 'eachWindow'
+		if window.kind == WindowKind.modify 'aModifyBlock'
+			count = count + 1
+		end 'aModifyBlock'
+	end 'eachWindow'
+
+	return count
+end 'modifyWindowCount'
+
+module function statementWindowIsOpen(windows WindowStack) returns bool
+	for window in windows 'eachWindow'
+		if window.kind == WindowKind.oneStatement 'aStatementOpen'
+			return true
+		end 'aStatementOpen'
+	end 'eachWindow'
+
+	return false
+end 'statementWindowIsOpen'
+
+function wordIsARegionOperator(word ByteArray) returns bool
+	return word.equals(FreezeOperatorWord) or word.equals(SwapOperatorWord) or word.equals(MergeOperatorWord)
+end 'wordIsARegionOperator'
+
+module function regionOperatorAt(tokens TokenArray, index ElementIndex) returns bool
+	let tok = try tokens.get(index) otherwise return false
+
+	if tok.kind != TokenKind.identifier or not wordIsARegionOperator(tok.value) 'notTheWord'
+		return false
+	end 'notTheWord'
+
+	if index > 0 and tokenKindAt(tokens, index: (index - 1) as ElementIndex) == TokenKind.dot 'aMemberName'
+		return false
+	end 'aMemberName'
+
+	let next = tokenKindAt(tokens, index: index + 1)
+
+	if next == TokenKind.identifier or next == TokenKind.self or next == TokenKind.selfType or next == TokenKind.try 'anOperand'
+		return true
+	end 'anOperand'
+
+	if next != TokenKind.leftParen 'notAParenthesizedOperand'
+		return false
+	end 'notAParenthesizedOperand'
+
+	let paren = try tokens.get(index + 1) otherwise return false
+	return paren.line != tok.line or paren.column != tok.column + (tok.value.count() as ColumnNumber)
+end 'regionOperatorAt'
+
+module function tokensSpellRegionSurface(tokens TokenArray) returns bool
+	for index in 0 upto tokens.count() 'eachToken'
+		if tokenSpellsRegionSurface(tokens, index: index) 'aRegionWord'
+			return true
+		end 'aRegionWord'
+	end 'eachToken'
+
+	return false
+end 'tokensSpellRegionSurface'
+
+function tokenSpellsRegionSurface(tokens TokenArray, index ElementIndex) returns bool
+	let tok = try tokens.get(index) otherwise return false
+
+	if tok.kind == TokenKind.modify or tok.kind == TokenKind.async 'aModifyBlockOrAnAsyncCall'
+		return true
+	end 'aModifyBlockOrAnAsyncCall'
+
+	if tok.kind == TokenKind.leftParen and (tok.value.equals(IsolatedCapabilityWord) or tok.value.equals(ImmutableCapabilityWord)) 'aFoldedReceiverWord'
+		return true
+	end 'aFoldedReceiverWord'
+
+	return tok.kind == TokenKind.identifier and (tok.value.equals(IsolatedCapabilityWord) or tok.value.equals(ImmutableCapabilityWord) or regionOperatorAt(tokens, index: index))
+end 'tokenSpellsRegionSurface'

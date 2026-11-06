@@ -282,6 +282,7 @@ function main() returns ExitCode
 
 	let response = try HttpClient.get("http://[::1]:{port}/x") otherwise (e) 'failed'
 		print("failed {e.name}\n")
+		peer.cancel()
 		return 2
 	end 'failed'
 
@@ -506,7 +507,10 @@ end 'clientOutcome'
 
 function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async staySilent(listener)
-	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise return 2
+	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise 'cancelled23'
+		peer.cancel()
+		return 2
+	end 'cancelled23'
 	var limits = HttpClientLimits.create()
 	limits.timeoutMs = ClientLimitMs
 
@@ -553,7 +557,10 @@ end 'answer'
 
 function exchange(listener TcpListener, reply String, limits HttpClientLimits) returns String
 	let peer = async answer(listener, reply: reply)
-	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise return "bad-url"
+	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise 'cancelled14'
+		peer.cancel()
+		return "bad-url"
+	end 'cancelled14'
 
 	let response = try HttpClient.send(request, limits: limits) otherwise (e) 'failed'
 		return "{e.name} peer={await peer}"
@@ -750,7 +757,10 @@ end 'switchAndHold'
 function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async switchAndHold(listener)
 
-	var request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise return 2
+	var request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise 'cancelled16'
+		peer.cancel()
+		return 2
+	end 'cancelled16'
 	request.setHeader("Connection", value: "Upgrade")
 	request.setHeader("Upgrade", value: "websocket")
 

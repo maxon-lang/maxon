@@ -630,6 +630,14 @@ export function calleeNeedsFacilityTargetLacks(target Target, callee ByteArray) 
 	end 'f'
 end 'calleeNeedsFacilityTargetLacks'
 
+module function targetParksOnIo(target Target) returns bool
+	return targetProvidesFacility(target, facility: HostFacility.greenThreads)
+end 'targetParksOnIo'
+
+module function strandGuardCallIsElided(parksOnIo bool, callee ByteArray) returns bool
+	return isStrandGuardCallee(callee) and not parksOnIo
+end 'strandGuardCallIsElided'
+
 export function calleeHasHostFacility(callee ByteArray) returns bool
 	return match calleeHostFacility(callee) 'f'
 		needs gives true

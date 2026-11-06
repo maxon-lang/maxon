@@ -394,8 +394,8 @@ type Holder uses T where T is Bumper
 		return Self{item: item, level: 3}
 	end 'create'
 
-	function run()
-		self.item.bump(self.level)
+	function run(helper T)
+		helper.bump(self.level)
 		print("{self.level}\n")
 	end 'run'
 end 'Holder'
@@ -404,7 +404,7 @@ typealias DoublerHolder = Holder with Doubler
 
 function main() returns ExitCode
 	var h = DoublerHolder.create(Doubler.create(1))
-	h.run()
+	h.run(Doubler.create(2))
 	return 0
 end 'main'
 ```
@@ -415,9 +415,8 @@ end 'main'
 0
 ```
 
-<!-- test: witness-by-reference.a-narrow-var-written-wider-through-a-witness-is-caught-at-the-call -->
-The declared alias of the requirement's position is `Wide`; the variable is `Narrow`, so the value it holds
-when the call returns is range-checked.
+<!-- test: witness-by-reference.error.a-narrow-var-at-a-wider-requirement-formal-is-refused-at-the-call -->
+The declared alias of the requirement's position is `Wide`; the variable is `Narrow`, and a conformer may write any `Wide` through the position, so the call is refused.
 ```maxon
 typealias Wide = int(0 to 100)
 typealias Narrow = int(0 to 10) implements Wide
@@ -460,15 +459,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-1
-```
-```stderr
-panic at witness-by-reference.a-narrow-var-written-wider-through-a-witness-is-caught-at-the-call.test:30: Range check failed: value outside typealias 'Narrow'
-Stack trace:
-  in Holder.run
-  in main
-  in mrt_start
+```maxoncstderr
+error E3005: <fragment>:30:18: argument type mismatch for 'n': expected 'Wide', got 'Narrow': the callee may write any 'Wide' through a by-reference parameter, which a 'Narrow' variable cannot hold. Declare the variable or field it names as Wide, or pass a Wide local
 ```
 
 <!-- test: witness-by-reference.a-narrow-var-written-within-its-range-needs-no-adapter-check -->
@@ -878,8 +870,8 @@ error E3159: <fragment>:41:13: 'Doubler.bump' writes its parameter 'n', but 'bum
 error E3159: <fragment>:41:13: 'Tripler.bump' writes its parameter 'amount', but 'bump' passes it the immutable 'x'
 ```
 
-<!-- test: witness-by-reference.a-narrow-var-written-wider-through-an-associated-type-formal-is-caught-at-the-call -->
-A requirement formal that names an associated type declares no alias of its own, so it may be wider than the variable handed to it and the variable is range-checked when the call returns.
+<!-- test: witness-by-reference.error.a-narrow-var-at-an-associated-type-formal-is-refused-at-the-call -->
+A requirement formal that names an associated type declares no alias of its own, so each conformer binds it and may write any value of the type it binds, which a variable naming a ranged alias cannot be shown to hold.
 ```maxon
 typealias Wide = int(0 to 10000)
 typealias Narrow = int(0 to 10) implements Wide
@@ -922,15 +914,111 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-1
+```maxoncstderr
+error E3005: <fragment>:30:17: argument type mismatch for 'n': expected 'Item', got 'Narrow': the callee may write any 'Item' through a by-reference parameter, which a 'Narrow' variable cannot hold. Each conformer binds 'Item' itself, so hand the call a variable whose type is 'Item', such as one read back through the interface
 ```
-```stderr
-panic at witness-by-reference.a-narrow-var-written-wider-through-an-associated-type-formal-is-caught-at-the-call.test:30: Range check failed: value outside typealias 'Narrow'
-Stack trace:
-  in Holder.run
-  in main
-  in mrt_start
+
+<!-- test: witness-by-reference.a-var-read-back-through-the-interface-is-written-at-an-associated-type-formal -->
+A variable whose type is the associated type itself, read back through the interface, is the type the conformer binds, so the formal takes it.
+```maxon
+typealias Wide = int(0 to 10000)
+
+interface Sink uses Item
+	function get() returns Item
+	function put(n mutable Item)
+end 'Sink'
+
+type WideSink implements Sink with Wide
+	export var last as Wide
+
+	static function create(last Wide) returns Self
+		return Self{last: last}
+	end 'create'
+
+	function get() returns Wide
+		return self.last
+	end 'get'
+
+	function put(n mutable Wide)
+		n = 5000
+	end 'put'
+end 'WideSink'
+
+type Holder uses T where T is Sink
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function run()
+		var x = self.item.get()
+		self.item.put(x)
+		print("done\n")
+	end 'run'
+end 'Holder'
+
+typealias SinkHolder = Holder with WideSink
+
+function main() returns ExitCode
+	let h = SinkHolder.create(WideSink.create(1))
+	h.run()
+	return 0
+end 'main'
+```
+```stdout
+done
+```
+```exitcode
+0
+```
+
+<!-- test: witness-by-reference.a-string-var-at-an-associated-type-formal-is-written-in-the-caller -->
+A variable that names no ranged alias has no range for a conformer's write to leave, so an associated-type formal takes it.
+```maxon
+interface Sink uses Item
+	function put(n mutable Item)
+end 'Sink'
+
+type NameSink implements Sink with String
+	export var last as String
+
+	static function create(last String) returns Self
+		return Self{last: last}
+	end 'create'
+
+	function put(n mutable String)
+		n = "put"
+	end 'put'
+end 'NameSink'
+
+type Holder uses T where T is Sink
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function run()
+		var s = "start"
+		self.item.put(s)
+		print("{s}\n")
+	end 'run'
+end 'Holder'
+
+typealias SinkHolder = Holder with NameSink
+
+function main() returns ExitCode
+	let h = SinkHolder.create(NameSink.create("a"))
+	h.run()
+	return 0
+end 'main'
+```
+```stdout
+put
+```
+```exitcode
+0
 ```
 
 <!-- test: witness-by-reference.error.an-impl-taking-a-wider-alias-than-its-requirement-is-refused -->

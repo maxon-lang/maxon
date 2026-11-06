@@ -424,6 +424,7 @@ export type SynthesizedFunction
 	var valueTags as ValueTypeTagArray
 	var valueNameIds as TypeNameIdArray
 	var valueBrandIds as TypeNameIdArray
+	var valueCapabilities as ValueCapabilityArray
 	var valueMintedSole as BoolArray
 
 	// Create the function, register it and its single `entry` block on `module`, and seed the value
@@ -433,12 +434,14 @@ export type SynthesizedFunction
 		var valueTags = ValueTypeTagArray.create(0)
 		var valueNameIds = TypeNameIdArray.create(0)
 		var valueBrandIds = TypeNameIdArray.create(0)
+		var valueCapabilities = ValueCapabilityArray.create(0)
 		var valueMintedSole = BoolArray.create(0)
 
 		for paramType in paramTypes 'eachParam'
 			valueTags.push(maxonTypeTag(paramType))
 			valueNameIds.push(typeNameIdOf(paramType))
 			valueBrandIds.push(UnnamedTypeId)
+			valueCapabilities.push(ValueCapability.mutable)
 			valueMintedSole.push(false)
 		end 'eachParam'
 
@@ -448,11 +451,11 @@ export type SynthesizedFunction
 		// `DeadFunctionElimination.markCompilerOwnedRoot` (E4015 again, for a program that installs neither and
 		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`. Both functions run on `main`'s green
 		// thread in a program with green threads, so both carry its stack guard (`IrFunction.needsGreenThreadStackGuard`).
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count() as ParamCount, maxonParamTypes: paramTypes, typeSites: project.readerAnchors.functions.noTypeSites, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole, valueWitnessIds: ValueIdArray.create(0), declaredAt: SourcePosition.synthesized(), placeholders: project.readerAnchors.functions, needsGreenThreadStackGuard: true)
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count() as ParamCount, maxonParamTypes: paramTypes, typeSites: project.readerAnchors.functions.noTypeSites, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueCapabilities: valueCapabilities, valueMintedSole: valueMintedSole, valueWitnessIds: ValueIdArray.create(0), declaredAt: SourcePosition.synthesized(), placeholders: project.readerAnchors.functions, needsGreenThreadStackGuard: true)
 		let funcIndex = module.funcCount()
 		module.pushFunc(func)
 
-		return Self{module: module, project: project, funcIndex: funcIndex, func: func, block: module.addBlock(func, label: b"entry", heat: BlockHeat.normal), valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole}
+		return Self{module: module, project: project, funcIndex: funcIndex, func: func, block: module.addBlock(func, label: b"entry", heat: BlockHeat.normal), valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueCapabilities: valueCapabilities, valueMintedSole: valueMintedSole}
 	end 'open'
 
 	// Allocate a fresh ValueId AND record its type, in lockstep — `Parser.mintValue`'s twin over the
@@ -467,6 +470,7 @@ export type SynthesizedFunction
 		self.valueTags.push(tag)
 		self.valueNameIds.push(self.projectScopedNameId(tag, nameId: nameId))
 		self.valueBrandIds.push(UnnamedTypeId)
+		self.valueCapabilities.push(ValueCapability.mutable)
 		self.valueMintedSole.push(false)
 		return id
 	end 'mint'

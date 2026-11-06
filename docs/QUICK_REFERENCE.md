@@ -191,13 +191,13 @@ All variables must be used (E3012). The exact name `_` is a discard identifier -
 
 **What a `let` binds:** a fresh record, a read-only value, or a part of a parameter (as immutable as the caller's argument). A `let` of state something may still write — a field of a writable `self`, an element of a `var` container, a getter's result on a `var` — is E3188: use `view` to read it, `var` to write it, or `let` a `clone()`.
 
-**`view x = e`:** read-only through `x`, while other names may still write it. Writing through it is E3159; storing, keeping, returning or capturing it is E3078; sending it is E3138. Once a view of a `var`'s record exists, that record cannot be sent (E3138), published (E3174) or handed to a `sole` parameter (E3078) for the rest of the function, unless every field of its type is a `let`. `view` is contextual: it begins a binding only at a statement's start, or after `if` or `then`, followed by a name.
+**`view x = e`:** read-only through `x`, while other names may still write it. Writing through it is E3159; storing, keeping, returning or capturing it is E3078; sending it is E3138. Once a view of a `var`'s record exists, that record cannot be sent (E3138), published (E3174) or handed to a parameter the callee keeps (E3078) for the rest of the function, unless every field of its type is a `let`. `view` is contextual: it begins a binding only at a statement's start, or after `if` or `then`, followed by a name.
 
 **Auto-conformance:** The compiler auto-generates `Cloneable` and `Equatable` conformance for structs whose fields are all Cloneable/Equatable. Primitives, `String`, and `Array` are built-in Cloneable and Equatable types. Use `.clone()` to create independent copies.
 
 **Scope cleanup:** Struct variables are automatically freed when they go out of scope (reference-counted). Returned structs are not freed at scope exit — the caller takes responsibility for their lifetime. Structs with all-primitive fields that don't escape scope are automatically stack-promoted (no heap allocation or refcounting). Use `@heap var p = Point.create(...)` to force heap allocation.
 
-**Counted reads:** A value read out of a collection or a field takes its own reference whenever something before its last use could release it, and a `for` loop or cursor holds its source, so mutating a collection while an element read from it is in use is safe. A `for` over an `Array` or a `String` re-reads the live count each step. Passing storage to a parameter the callee reassigns while another argument of the same call reaches it is E3186.
+**Counted reads:** A value read out of a collection or a field takes its own reference whenever something before its last use could release it, and a `for` loop or cursor holds its source, so mutating a collection while an element read from it is in use is safe. A `for` over an `Array` or a `String` re-reads the live count each step. A local read by one operand of a statement and handed to a `mutable` parameter the callee writes, with the read running before the write, is E3186: `two(label, k: put(label))` is refused and `two2(put(label), text: label)` is accepted.
 
 **Self-field shadowing:** Inside an instance method, a local (`let`/`var`, parameter, match binding, tuple destructure, for-in variable, try/otherwise error binding) cannot have the same name as one of the type's fields. Such a shadow is rejected with E3006.
 
@@ -277,7 +277,7 @@ end 'check'
 greet("Smith", title: "Dr.")
 ```
 
-**Parameter passing:** A parameter is a `let` passed by value; reassigning it is E2013. A value-type parameter (a number, `bool`, an enum or `String`) the function reassigns is marked `mutable` before its type and is passed by reference -- the write propagates back to the caller's storage: a local `var`, a module-level `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a read-only value, a literal or an expression to a `mutable` parameter is a compile error (E3159). A record parameter is never rebound; copy it into a local `var`.
+**Parameter passing:** A parameter is a `let` passed by value; reassigning it is E2013. A value-type parameter (a number, `bool`, an enum or `String`) the function reassigns is marked `mutable` before its type and is passed by reference -- the write propagates back to the caller's storage: a local `var`, a module-level `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a read-only value, a literal or an expression to a `mutable` parameter is a compile error (E3159), and the variable's declared type must be the parameter's type, alias included (E3005). A record parameter is never rebound; copy it into a local `var`. `mutable` before a message or factory parameter's type is a parse error (E2010).
 
 **Purity and discarded results:** The compiler infers function purity (no side effects). Pure function results must always be used (E3064). Impure function results require `_ =` to explicitly discard (E3065). Chainable methods (returning own type via `self`) can be freely discarded.
 
@@ -345,19 +345,19 @@ Function-typed values can also live in collections — e.g.
 `typealias HandlerMap = Map with (String, UnaryOp)` lets the caller dispatch by
 key.
 
-**Capability qualifiers** state what a body the caller cannot see does with its values. They are written only
-on a function-type alias, an interface requirement, or a generic function's result (elsewhere E2076):
+**Capabilities at a function type or requirement** state what a body the caller cannot see does. Unmarked,
+a function type and a requirement are read-only and never wait or yield:
 
 ```maxon
-typealias Sink = function(b keep Box)        // keeps its argument where something may write it
-typealias Take = function(b sole Box)        // consumes its argument: pass a fresh value or a name at its last use
-typealias Make = function() returns sole Box // the result is fresh
-interface Source
-	function current() returns readonly Box  // the result is read-only
-end 'Source'
+typealias Step = function(mutable Counter) returns Tally   // the callee writes the Counter it is handed
+typealias Tallier = function(Tally) returns Tally mutates captures   // the closure writes what it captured
+interface Grows
+	function grow(mutable self, by Tally)                  // a conformer may write the receiver
+end 'Grows'
 ```
 
-A function value, conformer or generic body that does more than its boundary declares is E3189.
+A function value or conformer that writes, waits or yields beyond what its boundary declares is E3210; a
+`mutates captures` value called through frozen or read-only data is E3211.
 
 ## Visibility
 
@@ -951,6 +951,43 @@ panic("invariant violated")
 panic("expected {a}, got {b}")      // interpolated strings supported
 ```
 
+## Regions and Capabilities
+
+```maxon
+// isolated: a region of its own, one entry, written only inside `modify` or a one-call open
+var builder = IndexBuilder.create() as isolated IndexBuilder
+modify builder 'fill'
+	builder.add(declaration.clone())      // `builder` is writable here; outer data is read-only
+end 'fill'
+let index = freeze builder                // immutable: shared freely; reading `builder` afterwards is E3102
+typealias SettledIndex = immutable IndexBuilder
+
+// An isolated field: `swap` takes the region out and leaves another in the slot
+type Indexer
+	var index as isolated WordIndex
+	function takeIndex() returns isolated WordIndex
+		return swap self.index with WordIndex.create()
+	end 'takeIndex'
+end 'Indexer'
+
+function stash(b isolated Box)
+	kept.push(merge b)                    // an isolated region becomes ordinary mutable data of this region
+end 'stash'
+
+type Ticket is unique                     // never cloned or aliased: `let b = a` moves, `clone()` is E3214
+type Pool uses T where T is sendable      // an instantiation with a plain record is E3215
+
+function describe(table Table) returns String   // only reads: takes a mutable or a frozen argument
+function stamp(table Table)                     // writes: takes a mutable argument; stamp(frozen) is E3207
+function reported(immutable self) returns Tally // runs on a frozen receiver only
+```
+
+- Parameter capabilities and the may-wait and may-yield bits are inferred; the markers are `immutable`, `isolated`, `mutable` and the receiver forms `immutable self` and `mutable self`
+- A write through frozen data is E3197; a store that mixes capabilities is E3196; an argument a parameter refuses is E3207; a body that needs both is E3206
+- `modify x 'label'` opens an `isolated` value: a mutable value cannot leave it (E3202), its slot cannot be reassigned there (E3203), and no `await` or call that may wait or yield is allowed inside (E3205)
+- An `isolated` value is read outside a block only through `swap` (E3198); mutable data where an `isolated` value is wanted is E3200; one statement reaching two isolated regions is E3201
+- Region bounds `where T is sendable` and `where T is isolated` belong to a generic type's own `where` clause (E3215)
+
 ## Async/Await
 
 ```maxon
@@ -1000,8 +1037,9 @@ end 'each'
 - Growable stacks, `main` included: a thread starts on 2 KiB, or 8 KiB on x64-Windows, whose fault frames land on the faulting stack. Each time at least 64 more threads have finished, the starting size becomes the smallest power of two from that floor up to 64 KiB that holds the average stack those threads needed. A stack doubles until the frame fits, up to 1 GiB
 - Throwing async functions require `try await` (not plain `await`), except inside a `try` block or a `test` body
 - `async` target must yield (contain I/O or `await` points)
-- `async` arguments are SHARED with the coroutine, as with an ordinary call: the coroutine runs on the caller's green thread, so a local `let` or `var` passed to `async` stays readable by the caller, and a `mutable` parameter the coroutine reassigns gets storage the coroutine owns. A service send is the call that moves a mutable value
-- An unawaited promise is DROPPED at scope exit — an unstarted coroutine never runs and a parked one's wait is cancelled
+- `async` arguments are SHARED with the coroutine, as with an ordinary call: the coroutine runs on the caller's green thread, so a local `let` or `var` passed to `async` stays readable by the caller. A variable handed to a `mutable` parameter is LENT to the coroutine: the coroutine writes the caller's own variable, and until the promise is awaited or cancelled the caller's read, write or pass of it is E3102. A service send is the call that moves a mutable value
+- Every promise held in a local is must-use: awaited, cancelled, stored, returned or passed on along every path out of its scope. Dropping it, overwriting it, `_ = async f()` or an early exit before the `await` is E3213 (a service reply discarded with `_ = try h.m(x)` is accepted)
+- An `async` call given the caller's mutable data makes a TIED promise: held in a local, awaited or `.cancel()`led on EVERY exit (`return`, `throw`, propagating `try`) and never returned, stored in a field or container, or passed to a function (E3212). `.cancel()` on a tied promise waits for the coroutine. `.clone()` the argument to untie the call. A cancelled or dropped coroutine that has not started never runs and a parked one's wait is cancelled
 
 ## Arrays
 
@@ -1156,8 +1194,8 @@ ceil(x)    // up
 | `Cloneable` | `clone() -> Self` |
 | `Stringable` | `toString() -> String` |
 | `FormattedStringable` | `toString(format) -> String` |
-| `Iterator uses E` | `current() -> E`, `advance() throws IterationError` |
-| `BidirectionalIterator uses E` | adds `retreat() throws IterationError` |
+| `Iterator uses E` | `current() -> E`, `advance(mutable self) throws IterationError` |
+| `BidirectionalIterator uses E` | adds `retreat(mutable self) throws IterationError` |
 | `Iterable uses E, Iter` | `createIterator() -> Iter` |
 | `Error` | (marker for throwable enums) |
 

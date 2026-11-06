@@ -92,7 +92,7 @@ func @indexedSum {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#20:
-    x64.leaRegRdata rdx, [rip + __str_rec_6]  ; "panic at Array.maxon:500: "
+    x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:500: "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
@@ -186,7 +186,7 @@ func @indexedSum {
     x64.jcc notEqual, tryerr
     x64.jmp tryok#31
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -219,7 +219,7 @@ func @weightedSum {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#20:
-    x64.leaRegRdata rdx, [rip + __str_rec_6]  ; "panic at Array.maxon:500: "
+    x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:500: "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
@@ -313,7 +313,7 @@ func @weightedSum {
     x64.jcc notEqual, tryerr
     x64.jmp tryok#31
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -389,7 +389,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_35]  ; "panic at a-with-iterator-loop-over-an-array-calls-no-witness.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_41]  ; "panic at a-with-iterator-loop-over-an-array-calls-no-witness.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -432,7 +432,7 @@ func @indexedSum {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#20:
-    x64.leaRegRdata rdx, [rip + __str_rec_6]  ; "panic at Array.maxon:500: "
+    x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:500: "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
@@ -526,7 +526,7 @@ func @indexedSum {
     x64.jcc notEqual, tryerr
     x64.jmp tryok#31
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -559,7 +559,7 @@ func @weightedSum {
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#20:
-    x64.leaRegRdata rdx, [rip + __str_rec_6]  ; "panic at Array.maxon:500: "
+    x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "panic at Array.maxon:500: "
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
@@ -653,7 +653,7 @@ func @weightedSum {
     x64.jcc notEqual, tryerr
     x64.jmp tryok#31
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -728,7 +728,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_35]  ; "panic at a-with-iterator-loop-over-an-array-calls-no-witness.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_41]  ; "panic at a-with-iterator-loop-over-an-array-calls-no-witness.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -767,7 +767,7 @@ func @indexedSum {
     arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
   __il_body#20:
-    arm64.leaRdata x1, __str_rec_6  ; "panic at Array.maxon:500: "
+    arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:500: "
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
@@ -860,7 +860,7 @@ func @indexedSum {
     arm64.b.ne tryerr
     arm64.b tryok#31
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_36  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_42  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -890,7 +890,7 @@ func @weightedSum {
     arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
   __il_body#20:
-    arm64.leaRdata x1, __str_rec_6  ; "panic at Array.maxon:500: "
+    arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:500: "
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
@@ -983,7 +983,7 @@ func @weightedSum {
     arm64.b.ne tryerr
     arm64.b tryok#31
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_36  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_42  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1054,7 +1054,7 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_35  ; "panic at a-with-iterator-loop-over-an-array-calls-no-witness.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_41  ; "panic at a-with-iterator-loop-over-an-array-calls-no-witness.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1095,7 +1095,7 @@ func @indexedSum {
     arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
   __il_body#20:
-    arm64.leaRdata x1, __str_rec_6  ; "panic at Array.maxon:500: "
+    arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:500: "
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
@@ -1188,7 +1188,7 @@ func @indexedSum {
     arm64.b.ne tryerr
     arm64.b tryok#31
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_36  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_42  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1218,7 +1218,7 @@ func @weightedSum {
     arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
   __il_body#20:
-    arm64.leaRdata x1, __str_rec_6  ; "panic at Array.maxon:500: "
+    arm64.leaRdata x1, __str_rec_9  ; "panic at Array.maxon:500: "
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
@@ -1311,7 +1311,7 @@ func @weightedSum {
     arm64.b.ne tryerr
     arm64.b tryok#31
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_36  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_42  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1382,7 +1382,7 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_35  ; "panic at a-with-iterator-loop-over-an-array-calls-no-witness.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_41  ; "panic at a-with-iterator-loop-over-an-array-calls-no-witness.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

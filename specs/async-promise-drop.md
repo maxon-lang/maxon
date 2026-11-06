@@ -78,7 +78,8 @@ function trivial() returns Integer
 end 'trivial'
 
 function main() returns ExitCode
-	_ = async trivial()
+	let p = async trivial()
+	p.cancel()
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -114,6 +115,7 @@ function main() returns ExitCode
 	let b = async twenty()
 	let r = await b
 	let done = 1 if a.isComplete() else 0
+	a.cancel()
 	return (r + done) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -136,7 +138,8 @@ function incFlag() returns Integer
 end 'incFlag'
 
 function main() returns ExitCode
-	_ = async incFlag()
+	let p = async incFlag()
+	p.cancel()
 	return flag as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -162,7 +165,8 @@ end 'trivial'
 function main() returns ExitCode
 	var i = 0 as Integer
 	while i < 1000 'loop'
-		_ = async trivial()
+		let p = async trivial()
+		p.cancel()
 		i = i + 1
 	end 'loop'
 	return 0
@@ -203,6 +207,7 @@ function main() returns ExitCode
 	let q = async fast()
 	let r = await q
 	let done = 1 if s.isComplete() else 0
+	s.cancel()
 	return (r + done) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -234,6 +239,7 @@ function main() returns ExitCode
 	var p = async sleeper()
 	let q = async fast()
 	let r = await q
+	p.cancel()
 	p = async fast()
 	let s = await p
 	return (r + s - 42) as ExitCode
@@ -263,6 +269,7 @@ function pick(x Integer) returns Integer
 	if x > 0 'branch'
 		return (await p)
 	end 'branch'
+	p.cancel()
 	return 0
 end 'pick'
 
@@ -326,6 +333,7 @@ function parkAndDrop() returns Integer
 	let q = async fast()
 	let r = await q
 	let done = 1 if s.isComplete() else 0
+	s.cancel()
 	return r + done
 end 'parkAndDrop'
 
@@ -435,6 +443,7 @@ function parkAndDrop() returns Integer
 	let q = async fast()
 	let r = await q
 	let done = 1 if p.isComplete() else 0
+	p.cancel()
 	return r + done
 end 'parkAndDrop'
 
@@ -660,7 +669,9 @@ end 'reader'
 function dropWhileParked(h FullRangeInt) returns Integer
 	let p = async reader(h, tag: 1)
 	sleep(200)
-	return 1 if p.isComplete() else 0
+	let done = 1 if p.isComplete() else 0
+	p.cancel()
+	return done
 end 'dropWhileParked'
 
 function main() returns ExitCode
@@ -711,6 +722,7 @@ function dropper() returns Integer
 	let p = async victim(1)
 	sleep(200)
 	let done = 1 if p.isComplete() else 0
+	p.cancel()
 	return 7 + done
 end 'dropper'
 
@@ -741,9 +753,11 @@ function main() returns ExitCode
 	var p = async trivial()
 	var i = 0 as Integer
 	while i < 8 'loop'
+		p.cancel()
 		p = async trivial()
 		i = i + 1
 	end 'loop'
+	p.cancel()
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -769,8 +783,10 @@ end 'positive'
 function main() returns ExitCode
 	var p = async trivial()
 	if positive() 'b'
+		p.cancel()
 		p = async trivial()
 	end 'b'
+	p.cancel()
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -797,6 +813,7 @@ end 'positive'
 function main() returns ExitCode
 	var p = async seven()
 	if positive() 'b'
+		p.cancel()
 		p = async seven()
 	end 'b'
 	let r = await p
@@ -824,6 +841,7 @@ function main() returns ExitCode
 	var p = async five()
 	var i = 0 as Integer
 	while i < 3 'loop'
+		p.cancel()
 		p = async five()
 		i = i + 1
 	end 'loop'
@@ -1064,6 +1082,7 @@ function main() returns ExitCode
 		s.push(async plain())
 		let p = try s.pop() otherwise panic("just pushed one")
 		print("popped a thread complete={p.isComplete()}, array now {s.count()}")
+		p.cancel()
 		return 0
 end 'main'
 ```
@@ -2316,6 +2335,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function finish(p IntPromise) returns Integer
+	p.cancel()
 	let p = async work(5)
 	return await p
 end 'finish'
@@ -3377,6 +3397,7 @@ function run(awaitIt bool) returns Integer
 		return await p
 	end 'wait'
 
+	p.cancel()
 	return 2
 end 'run'
 
@@ -3549,6 +3570,7 @@ function main() returns ExitCode
 	let p = async work(1)
 	let q = async work(10)
 	print("{finish(p, q: q)}\n")
+	p.cancel()
 	return 0
 end 'main'
 ```
@@ -3722,7 +3744,8 @@ end 'finish'
 
 function main() returns ExitCode
 	let p = async work(1)
-	_ = async finish(p)
+	let f = async finish(p)
+	f.cancel()
 	return 0
 end 'main'
 ```
@@ -4441,7 +4464,9 @@ function run(x Integer)
 	if decide(x) 'taken'
 		let r = peekBack(p, v: x)
 		print("taken {await r}\n")
-	end 'taken'
+	end 'taken' else 'kept'
+		p.cancel()
+	end 'kept'
 end 'run'
 
 function borrow(x Integer)
@@ -4499,6 +4524,7 @@ function joinReassignedAndHandedOver(x Integer) returns Integer
 	var p = async work(x)
 
 	if decide(x) 'rearm'
+		p.cancel()
 		p = async work(x * 10)
 	end 'rearm' else 'read'
 		print("read {peekText(p, v: "ab")}\n")
@@ -4550,8 +4576,9 @@ end 'main'
 error E3102: <fragment>:20:16: use of moved value 'p': it was moved in an earlier iteration of this loop
 ```
 
-<!-- test: async-promise-drop.a-promise-given-away-inside-a-loop-that-then-breaks-is-moved-once -->
-A promise declared outside a loop and handed to a callee that takes it, followed by `break`, is moved exactly once.
+<!-- test: async-promise-drop.error.a-promise-given-away-inside-a-loop-that-may-not-run-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+A promise declared outside a loop and handed to a callee that takes it inside the loop is still held on the path where the loop does not run, so the loop is refused.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -4579,9 +4606,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```stdout
-0
-2
+```maxoncstderr
+error E3213: <fragment>:19:2: this drops a promise that was never awaited, cancelled, stored or returned: `await` it, call `.cancel()` on it, store it or return it
 ```
 
 <!-- test: async-promise-drop.error.an-alias-of-a-promise-given-away-cannot-be-awaited -->

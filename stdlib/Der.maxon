@@ -190,7 +190,7 @@ public type DerReader
 
 	/// A reader over every element of `bytes`.
 	public static function create(bytes ByteArray) returns DerReader
-		return DerReader{bytes: bytes, position: 0, limit: bytes.count()}
+		return DerReader{bytes: bytes.clone(), position: 0, limit: bytes.count()}
 	end 'create'
 
 	module static function wholeSequence(bytes ByteArray) returns DerReader throws DerError
@@ -205,7 +205,7 @@ public type DerReader
 			throw DerError.trailingData
 		end 'trailing'
 
-		return DerReader.over(bytes, start: header.contentStart, limit: header.contentEnd())
+		return DerReader.over(outer.bytes, start: header.contentStart, limit: header.contentEnd())
 	end 'wholeSequence'
 
 	static function over(bytes ByteArray, start ElementIndex, limit ElementIndex) returns DerReader

@@ -445,7 +445,10 @@ type RsaMontgomery
 	end 'halveFactor'
 end 'RsaMontgomery'
 
-typealias RsaBlockCheck = function(ByteArray, Count) returns bool
+union RsaRecoveredBlock
+	outOfRange
+	block(let bytes ByteArray, let modulusBits Count)
+end 'RsaRecoveredBlock'
 
 function rsaIntegerAt(integers RsaIntegers, index ElementIndex) returns ByteArray
 	return try integers.get(index) otherwise panic("a key's INTEGER count was checked when it was read")
@@ -740,7 +743,7 @@ type RsaPublicKey
 		return montgomery.product(left, right: right)
 	end 'product'
 
-	function verify(signature ByteArray, check RsaBlockCheck) returns bool throws RsaError
+	function recover(signature ByteArray) returns RsaRecoveredBlock throws RsaError
 		if signature.count() != modulusBytes() 'wrongLength'
 			throw RsaError.invalidSignatureLength
 		end 'wrongLength'
@@ -748,11 +751,11 @@ type RsaPublicKey
 		let value = rsaLimbsFromBytes(signature, count: modulus.count())
 
 		if not rsaIsBelow(value, right: modulus) 'outOfRange'
-			return false
+			return RsaRecoveredBlock.outOfRange
 		end 'outOfRange'
 
-		return check(rsaBytesFromLimbs(raise(value), count: modulusBytes()), modulusBits)
-	end 'verify'
+		return RsaRecoveredBlock.block(rsaBytesFromLimbs(raise(value), count: modulusBytes()), modulusBits: modulusBits)
+	end 'recover'
 
 	function blinding() returns (RsaLimbs, RsaLimbs)
 		while true 'eachDraw'
@@ -855,7 +858,10 @@ public type Rsa
 	public static function verifyPkcs1v15(publicKey ByteArray, hash HashAlgorithm, message ByteArray, signature ByteArray) returns bool throws RsaError
 		let key = try RsaPublicKey.parse(publicKey)
 
-		return try key.verify(signature, check: function(block ByteArray, _ Count) gives constantTimeEqual(block, b: rsaPkcs1Block(hash, message: message, length: block.count())))
+		match try key.recover(signature) 'recovered'
+			outOfRange then return false
+			block(bytes, _) then return constantTimeEqual(bytes, b: rsaPkcs1Block(hash, message: message, length: bytes.count()))
+		end 'recovered'
 	end 'verifyPkcs1v15'
 
 	/// Whether `signature` is the RSASSA-PSS signature of `message` under `publicKey`, a DER
@@ -863,7 +869,10 @@ public type Rsa
 	public static function verifyPss(publicKey ByteArray, hash HashAlgorithm, message ByteArray, signature ByteArray) returns bool throws RsaError
 		let key = try RsaPublicKey.parse(publicKey)
 
-		return try key.verify(signature, check: function(block ByteArray, modulusBits Count) gives rsaPssMatches(block, hash: hash, message: message, modulusBits: modulusBits))
+		match try key.recover(signature) 'recovered'
+			outOfRange then return false
+			block(bytes, modulusBits) then return rsaPssMatches(bytes, hash: hash, message: message, modulusBits: modulusBits)
+		end 'recovered'
 	end 'verifyPss'
 
 	/// The RSASSA-PKCS1-v1_5 signature of `message` under `privateKey`, a DER PKCS #8 two-prime RSA

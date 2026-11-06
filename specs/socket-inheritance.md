@@ -50,11 +50,17 @@ function main() returns ExitCode
 	let me = try Process.executablePath() otherwise return 2
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 3
 	let reader = async readsItsEnd(listener.port())
-	let conn = try listener.accept() otherwise return 4
+	let conn = try listener.accept() otherwise 'refused4x27'
+		reader.cancel()
+		return 4
+	end 'refused4x27'
 
 	var argv = StringArray.create(0)
 	argv.push("child")
-	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise return 5
+	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise 'refused5x31'
+		reader.cancel()
+		return 5
+	end 'refused5x31'
 	conn.close()
 
 	let ended = await reader
@@ -115,12 +121,21 @@ function main() returns ExitCode
 	let me = try Process.executablePath() otherwise return 2
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 3
 	let closer = async closesOnSignal(listener.port())
-	let conn = try listener.accept() otherwise return 4
+	let conn = try listener.accept() otherwise 'refused4x34'
+		closer.cancel()
+		return 4
+	end 'refused4x34'
 
 	var argv = StringArray.create(0)
 	argv.push("child")
-	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise return 5
-	_ = try conn.send("!") otherwise return 6
+	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise 'refused5x38'
+		closer.cancel()
+		return 5
+	end 'refused5x38'
+	_ = try conn.send("!") otherwise 'refused6x39'
+		closer.cancel()
+		return 6
+	end 'refused6x39'
 
 	let ended = readsItsEnd(conn)
 	let signalled = await closer

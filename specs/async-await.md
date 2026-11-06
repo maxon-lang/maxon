@@ -1077,7 +1077,9 @@ function park(p IntPromise, keep bool) returns Integer
 
 	if keep 'store'
 		pending.push(p)
-	end 'store'
+	end 'store' else 'kept'
+		p.cancel()
+	end 'kept'
 
 	return pending.count() as Integer
 end 'park'
@@ -1336,8 +1338,8 @@ end 'main'
 7
 ```
 
-<!-- test: async-await.a-function-type-qualifier-says-a-promise-parameter-is-taken -->
-A function-type alias declares a promise parameter `keep` or `sole` when the callee takes it. A call through a parameter of that type hands the promise over, and a function that takes its promise converts to it.
+<!-- test: async-await.a-function-type-takes-a-promise-parameter -->
+A call through a parameter of a function-type alias hands the promise over, and a function that takes its promise converts to it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -1348,9 +1350,9 @@ function work() returns Integer
 	return 7
 end 'work'
 
-typealias Sink = function(pending IntPromiseArray, p keep IntPromise)
+typealias Sink = function(pending mutable IntPromiseArray, p IntPromise)
 
-function keep(pending IntPromiseArray, p IntPromise)
+function keep(pending mutable IntPromiseArray, p IntPromise)
 	pending.push(p)
 end 'keep'
 
@@ -1377,74 +1379,6 @@ end 'main'
 ```
 ```stdout
 7
-```
-
-<!-- test: async-await.error.a-function-that-takes-a-promise-does-not-convert-to-a-type-that-does-not-say-so -->
-A function that takes a promise parameter breaks a function type that leaves the parameter unqualified, because a call through the type would not hand the promise over.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-typealias Sink = function(pending IntPromiseArray, p IntPromise)
-
-function keep(pending IntPromiseArray, p IntPromise)
-	pending.push(p)
-end 'keep'
-
-function drive(sink Sink, pending IntPromiseArray)
-	sink(pending, async work())
-end 'drive'
-
-function main() returns ExitCode
-	var pending = IntPromiseArray.create(0)
-	drive(keep, pending: pending)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3189: <fragment>:23:8: function value for 'Sink' keeps its parameter 'p', but 'Sink' does not declare it `keep`
-```
-
-<!-- test: async-await.error.a-function-that-only-reads-a-promise-does-not-convert-to-a-type-that-takes-it -->
-A function type that declares a promise parameter `keep` hands the promise over at every call, so a function that only reads it would leave nobody to drop it.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-typealias Sink = function(pending IntPromiseArray, p keep IntPromise) returns Count
-
-function look(pending IntPromiseArray, p IntPromise) returns Count
-	if p.isComplete() 'done'
-		return pending.count()
-	end 'done'
-
-	return 0
-end 'look'
-
-function drive(sink Sink, pending IntPromiseArray) returns Count
-	return sink(pending, async work())
-end 'drive'
-
-function main() returns ExitCode
-	var pending = IntPromiseArray.create(0)
-	print("{drive(look, pending: pending)}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3189: <fragment>:27:16: 'look' only reads its promise parameter 'p', but 'Sink' declares it `keep` or `sole`, so a call through the type hands the promise over and nothing would drop it
 ```
 
 <!-- test: async-await.a-promise-parameter-forwarded-to-a-callee-that-stores-it-is-handed-on -->
@@ -1858,40 +1792,6 @@ end 'main'
 error E3098: <fragment>:20:6: a promise of 'Integer' throwing 'TaskError' cannot be stored in 'IntPromise', which holds 'Integer'
 ```
 
-<!-- test: async-await.error.an-alias-value-converted-to-an-alias-that-takes-the-promise-is-refused -->
-A function type that leaves a promise parameter unqualified hands nothing over, so a value of that type does not convert to one that declares it `keep`: the callee through the second type would borrow a promise nobody drops.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-function work() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 7
-end 'work'
-
-typealias Plain = function(p IntPromise)
-typealias Taking = function(p keep IntPromise)
-
-function promote(plain Plain) returns Taking
-	return plain
-end 'promote'
-
-function look(p IntPromise)
-	if p.isComplete() 'done'
-		print("done\n")
-	end 'done'
-end 'look'
-
-function main() returns ExitCode
-	let sink = promote(look)
-	sink(async work())
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3189: <fragment>:14:9: function value of type 'Plain' does not take its promise parameter 'p', but 'Taking' declares it `keep` or `sole`, so a call through the type hands the promise over and nothing would drop it
-```
-
 <!-- test: async-await.error.a-promise-named-twice-in-a-call-through-a-function-type-is-refused -->
 A promise has one owner, so a call through a function type may not name it at two positions when one of them hands it over.
 ```maxon
@@ -1904,9 +1804,9 @@ function work() returns Integer
 	return 7
 end 'work'
 
-typealias Sink = function(pending IntPromiseArray, a IntPromise, b keep IntPromise)
+typealias Sink = function(pending mutable IntPromiseArray, a IntPromise, b IntPromise)
 
-function park(pending IntPromiseArray, a IntPromise, b IntPromise)
+function park(pending mutable IntPromiseArray, a IntPromise, b IntPromise)
 	pending.push(b)
 	print("{a.isComplete()}\n")
 end 'park'
@@ -1959,7 +1859,7 @@ function describe(name String) returns String
 end 'describe'
 ```
 ```maxoncstderr
-error E3189: <fragment>:22:16: function value for 'Plain' keeps its parameter 'p', but 'Plain' does not declare it `keep`
+error E3210: <fragment>:22:16: function value for 'Plain' may yield (it awaits a coroutine at line 12), but a function type never waits or yields
 ```
 
 <!-- test: async-await.a-promise-parameter-handed-through-self-to-a-storing-method-is-handed-on -->
@@ -2082,8 +1982,8 @@ end 'main'
 true
 ```
 
-<!-- test: async-await.a-promise-parameter-handed-to-a-function-typed-parameter-that-keeps-it-is-handed-on -->
-A function-typed parameter that declares the promise `keep` takes it, so a function that forwards its own parameter to it takes it too.
+<!-- test: async-await.a-promise-parameter-handed-to-a-function-typed-parameter-is-handed-on -->
+A function-typed parameter takes the promise it is handed, so a function that forwards its own parameter to it takes it too.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -2094,9 +1994,9 @@ function work() returns Integer
 	return 7
 end 'work'
 
-typealias Sink = function(pending IntPromiseArray, p keep IntPromise)
+typealias Sink = function(pending mutable IntPromiseArray, p IntPromise)
 
-function keep(pending IntPromiseArray, p IntPromise)
+function keep(pending mutable IntPromiseArray, p IntPromise)
 	pending.push(p)
 end 'keep'
 
@@ -2905,7 +2805,7 @@ function main() returns ExitCode
 				var argv = StringArray.create(0)
 				argv.push("arg{i}.a")
 				argv.push("arg{i}.b")
-				promises.push(async joinArgs("L{i}", args: argv))
+				promises.push(async joinArgs("L{i}", args: argv.clone()))
 		end 'spawn'
 		var total = 0 as ExitCode
 		for p in promises 'await'
@@ -3186,6 +3086,7 @@ function main() returns ExitCode
 		end 'tryRound'
 
 		print("plain={plain} thrown={thrown} held={not holder.isComplete()}\n")
+		holder.cancel()
 		return 0
 end 'main'
 ```
@@ -5021,7 +4922,8 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	_ = async Holder.create("hello {3}")
+	let p = async Holder.create("hello {3}")
+	p.cancel()
 	return 0
 end 'main'
 ```
@@ -5054,6 +4956,7 @@ function main() returns ExitCode
 	let b = async ten()
 	let n = await b
 	print("{n} {a.isComplete()}\n")
+	a.cancel()
 	return 0
 end 'main'
 ```
@@ -5089,5 +4992,131 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3186: <fragment>:17:22: argument 'word' overlaps argument 'word' of 'fill', which 'fill' reassigns (parameter 'dest') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'word.clone()'
+error E3186: <fragment>:17:36: argument 'word' is read by another operand of this statement and passed by reference to 'fill' (parameter 'dest') — a hold cannot protect a value its by-reference cell overwrites. Copy 'word' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
+```
+
+<!-- test: async-await.storage.a-record-result-with-a-thrown-error-releases-both -->
+A promise stored as `Promise with (Box, WorkError)` carries a record result and an error whose payload is a heap String. The success path hands the record to the awaiter and the failure path hands it the error; neither leaks.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union WorkError implements Error
+		failed(reason String)
+		refused(code Integer)
+end 'WorkError'
+
+typealias BoxPromise = Promise with (Box, WorkError)
+typealias BoxPromiseArray = Array with BoxPromise
+
+function work(n Integer) returns Box throws WorkError
+		_ = File.exists(FilePath from "noyield.txt")
+		if n < 0 'neg'
+				throw WorkError.failed("negative input")
+		end 'neg'
+		return Box.create(n)
+end 'work'
+
+function main() returns ExitCode
+		var arr = BoxPromiseArray.create(0)
+		arr.push(async work(7))
+		arr.push(async work(-1))
+
+		let first = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
+		var box = try await first otherwise (e) 'firstFailed'
+				return 1
+		end 'firstFailed'
+		print("got {box.n}\n")
+
+		let second = try arr.get(1) otherwise panic("index 1 is in bounds by construction")
+		var none = try await second otherwise (e) 'failed'
+				match e 'which'
+						failed(reason) then print("caught: {reason}\n")
+						refused(code) then print("refused {code}\n")
+				end 'which'
+				return 0
+		end 'failed'
+
+		print("unexpected {none.n}\n")
+		return 3
+end 'main'
+```
+```stdout
+got 7
+caught: negative input
+```
+```exitcode
+0
+```
+
+<!-- test: async-await.storage.a-record-holding-an-array-with-a-thrown-error-releases-both -->
+The result record holds a heap array next to the awaited error whose payload is a heap String. Both the success value and the error are released exactly once, which a leak check at exit would otherwise turn into exit 101.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Lines = Array with String
+
+type Batch
+	export var lines as Lines
+	export var tally as Integer
+
+	static function create(lines Lines, tally Integer) returns Self
+		return Self{lines: lines, tally: tally}
+	end 'create'
+end 'Batch'
+
+union WorkError implements Error
+		failed(reason String)
+		refused(code Integer)
+end 'WorkError'
+
+typealias BatchPromise = Promise with (Batch, WorkError)
+typealias BatchPromiseArray = Array with BatchPromise
+
+function work(n Integer) returns Batch throws WorkError
+		_ = File.exists(FilePath from "noyield.txt")
+		if n < 0 'neg'
+				throw WorkError.failed("negative input")
+		end 'neg'
+		var lines = Lines.create(0)
+		lines.push("line {n}")
+		return Batch.create(lines, tally: n)
+end 'work'
+
+function main() returns ExitCode
+		var arr = BatchPromiseArray.create(0)
+		arr.push(async work(7))
+		arr.push(async work(-1))
+
+		let first = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
+		var batch = try await first otherwise (e) 'firstFailed'
+				return 1
+		end 'firstFailed'
+		print("got {batch.lines.count()} {batch.tally}\n")
+
+		let second = try arr.get(1) otherwise panic("index 1 is in bounds by construction")
+		var other = try await second otherwise (e) 'failed'
+				match e 'which'
+						failed(reason) then print("caught: {reason}\n")
+						refused(code) then print("refused {code}\n")
+				end 'which'
+				return 0
+		end 'failed'
+
+		print("unexpected {other.tally}\n")
+		return 3
+end 'main'
+```
+```stdout
+got 1 7
+caught: negative input
+```
+```exitcode
+0
 ```

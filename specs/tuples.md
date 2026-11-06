@@ -621,21 +621,30 @@ mm_alloc ArrayRecord #12 size=48
 mm_decref ArrayRecord #4 rc=0
 mm_free ArrayRecord #4
 mm_alloc ElementBuffer #13 size=64
-mm_incref ArrayRecord #6 rc=2
-mm_incref ArrayRecord #8 rc=2
+mm_alloc CursorRecord #14 size=16
 mm_incref ArrayRecord #10 rc=2
-mm_alloc MapIterator #14 size=40
+mm_incref ArrayRecord #6 rc=2
+mm_alloc CursorRecord #15 size=16
 mm_incref ArrayRecord #6 rc=3
+mm_incref ArrayRecord #8 rc=2
+mm_alloc CursorRecord #16 size=16
 mm_incref ArrayRecord #8 rc=3
-mm_incref ArrayRecord #10 rc=3
-mm_decref ArrayRecord #10 rc=2
+mm_alloc MapIterator #17 size=32
+mm_incref CursorRecord #14 rc=2
 mm_decref ArrayRecord #8 rc=2
 mm_decref ArrayRecord #6 rc=2
-mm_decref MapIterator #14 rc=0
+mm_decref CursorRecord #14 rc=1
+mm_decref MapIterator #17 rc=0
+mm_decref CursorRecord #15 rc=0
 mm_decref ArrayRecord #6 rc=1
+mm_free CursorRecord #15
+mm_decref CursorRecord #16 rc=0
 mm_decref ArrayRecord #8 rc=1
+mm_free CursorRecord #16
+mm_decref CursorRecord #14 rc=0
 mm_decref ArrayRecord #10 rc=1
-mm_free MapIterator #14
+mm_free CursorRecord #14
+mm_free MapIterator #17
 mm_decref Map #5 rc=0
 mm_decref ArrayRecord #6 rc=0
 mm_decref ElementBuffer #7 rc=0

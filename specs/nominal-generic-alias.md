@@ -1935,7 +1935,7 @@ export typealias Integer = int(i64.min to i64.max)
 
 export interface Seq uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 export typealias IntegerSeq = Seq with Integer

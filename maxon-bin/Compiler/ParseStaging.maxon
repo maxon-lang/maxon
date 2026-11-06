@@ -324,7 +324,6 @@ function consequenceNamedBy(error SourceParseError) returns ConsequenceOf
 		useAfterMoveInto or
 		useAfterMoveInAnEarlierIteration or
 		useAfterMovePassedTwice or
-		staleCellOccupantRead or
 		promiseCannotBeBorrowed or
 		promiseAlreadyConsumed or
 		deepLet or
@@ -623,12 +622,15 @@ export type FuncReturnTypeEntry
 	export let nameLine as LineNumber
 	export let nameColumn as ColumnNumber
 	export let enclosingTypeName as ByteArray
+	export let selfCapability as ParamCapability
+	export let paramCapabilities as ParamCapabilityArray
+	export let returnCapability as ResultCapability
 
 	// ⚠ **THE THREE EMPTY DEFAULTS ARE FRESH, NOT SHARED ANCHORS.** A default naming a module-level `let`
 	// makes that anchor an export nothing calls, which `checkUnusedExports` reports as E3092. An empty
 	// container costs a record; the anchor costs a build.
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames NameRoster = NameRoster.create(0), paramTypes MaxonTypeArray = MaxonTypeArray.create(0), paramSpellings NameRoster = NameRoster.create(0), paramDefaults ParamPositionMask = NoParamPositions, returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, enclosingTypeName ByteArray = EmptySourceText) returns FuncReturnTypeEntry
-		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, paramSpellings: paramSpellings, paramDefaults: paramDefaults, returnAliasName: returnAliasName, nameLine: nameLine, nameColumn: nameColumn, enclosingTypeName: enclosingTypeName}
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames NameRoster = NameRoster.create(0), paramTypes MaxonTypeArray = MaxonTypeArray.create(0), paramSpellings NameRoster = NameRoster.create(0), paramDefaults ParamPositionMask = NoParamPositions, returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, enclosingTypeName ByteArray = EmptySourceText, selfCapability ParamCapability = ParamCapability.unmarked, paramCapabilities ParamCapabilityArray = ParamCapabilityArray.create(0), returnCapability ResultCapability = ResultCapability.unmarked) returns FuncReturnTypeEntry
+		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, paramSpellings: paramSpellings, paramDefaults: paramDefaults, returnAliasName: returnAliasName, nameLine: nameLine, nameColumn: nameColumn, enclosingTypeName: enclosingTypeName, selfCapability: selfCapability, paramCapabilities: paramCapabilities, returnCapability: returnCapability}
 	end 'create'
 end 'FuncReturnTypeEntry'
 
@@ -1389,11 +1391,9 @@ export type FileParseArtifact
 	end 'recordInterface'
 
 	export function recordGenericInstanceRequest(instance GenericFunctionInstance)
-		for requested in self.genericInstanceRequests 'eachRequested'
-			if requested.instanceName.equals(instance.instanceName) 'requestedAlready'
-				return
-			end 'requestedAlready'
-		end 'eachRequested'
+		if self.requestsGenericInstance(instance.instanceName) 'requestedAlready'
+			return
+		end 'requestedAlready'
 
 		self.genericInstanceRequests.push(instance)
 	end 'recordGenericInstanceRequest'
@@ -1407,6 +1407,16 @@ export type FileParseArtifact
 
 		throw AbsentError.absent
 	end 'requestedGenericInstanceSiteKey'
+
+	export function requestsGenericInstance(instanceName ByteArray) returns bool
+		for requested in self.genericInstanceRequests 'eachRequested'
+			if requested.instanceName.equals(instanceName) 'thisInstance'
+				return true
+			end 'thisInstance'
+		end 'eachRequested'
+
+		return false
+	end 'requestsGenericInstance'
 
 	// Record a `type X implements …` conformance as this file's contribution to `project.conformances`.
 	// The type-name position travels with it so `checkConformance` anchors on the name.
@@ -2318,10 +2328,7 @@ function renderInstantiation(signatures ProgramSignatures, gid GenericInstanceId
 			rendered.append(", ")
 		end 'afterFirst'
 
-		if signatures.genericInstanceArgIsReadOnly(gid, position: position) 'readOnlyArgument'
-			rendered.append("{String.from(ReadonlyModifierWord)} ")
-		end 'readOnlyArgument'
-
+		rendered.append(signatures.genericInstanceArgWrittenMarker(gid, position: position))
 		rendered.append(String.from(signatures.instanceArgCompiledName(gid, position: position)))
 	end 'eachArgument'
 

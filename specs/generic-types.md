@@ -266,7 +266,7 @@ error E2056: <fragment>:7:17: generic type 'Pair' expects 2 type argument(s), bu
 ```
 
 <!-- test: error.an-instance-with-more-than-sixty-four-type-arguments-is-refused -->
-An instance records which of its arguments are read-only in a 64-bit mask, so a type-argument list past 64 is refused
+An instance records which of its arguments are `readonly` or `immutable` in 64-bit masks, so a type-argument list past 64 is refused
 where its sixty-fifth argument is written.
 
 ```maxon
@@ -283,7 +283,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:610: Unsupported: a type-argument list with more than 64 arguments — the arguments spelled `readonly` are recorded as one bit per position of a 64-bit mask, so an instance has no position to record a later argument at
+error E2015: <fragment>:8:610: Unsupported: a type-argument list with more than 64 arguments — the arguments spelled `readonly` or `immutable` are recorded as one bit per position of a 64-bit mask, so an instance has no position to record a later argument at
 ```
 
 <!-- test: managed-string-arg -->

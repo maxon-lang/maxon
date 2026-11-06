@@ -192,7 +192,7 @@ function main() returns ExitCode
 	var seen = ""
 	var released = false
 	while seen.isEmpty() 'spin'
-		match child.tryReadStdoutLine() 'polled'
+		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
 			line(text) then seen = text
 			none then nones = nones + 1
 		end 'polled'
@@ -260,14 +260,14 @@ function main() returns ExitCode
 
 	_ = try child.readStderrLine() otherwise return 5
 
-	let taken = describePoll(child.tryReadStdoutLine())
-	let buffered = describePoll(child.tryReadStdoutLine())
+	let taken = describePoll(try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader"))
+	let buffered = describePoll(try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader"))
 
 	try child.writeStdinLine("go") otherwise return 6
 
 	var seen = ""
 	while seen.isEmpty() 'spin'
-		match child.tryReadStdoutLine() 'polled'
+		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
 			line(text) then seen = text
 			none then break
 		end 'polled'
@@ -320,7 +320,7 @@ end 'bothStreamsArguments'
 
 function spinForLine(child StreamingSubprocess, fromStderr bool) returns String
 	while true 'spin'
-		let poll = child.tryReadStderrLine() if fromStderr else child.tryReadStdoutLine()
+		let poll = child.tryReadStderrLine() if fromStderr else try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader")
 		match poll 'polled'
 			line(text) then return text
 			none then break
@@ -335,7 +335,7 @@ function main() returns ExitCode
 
 	let outLine = spinForLine(child, fromStderr: false)
 	let errLine = spinForLine(child, fromStderr: true)
-	let extra = describePoll(child.tryReadStdoutLine())
+	let extra = describePoll(try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader"))
 	let code = try child.wait() otherwise return 4
 	child.release()
 
@@ -392,7 +392,7 @@ function main() returns ExitCode
 	child.release()
 
 	let afterPoll = describeExit(child.pollExit())
-	let afterOut = describeLine(child.tryReadStdoutLine())
+	let afterOut = describeLine(try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader"))
 	let afterErr = describeLine(child.tryReadStderrLine())
 
 	print("line={line} code={code} afterPoll={afterPoll} afterOut={afterOut} afterErr={afterErr}\n")
@@ -446,7 +446,7 @@ function nextLine(child StreamingSubprocess) returns String
 	while true 'spin'
 		let gone = hasExited(child.pollExit())
 
-		match child.tryReadStdoutLine() 'polled'
+		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
 			line(text) then return "line[{text}]"
 			none then break
 		end 'polled'

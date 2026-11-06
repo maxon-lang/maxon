@@ -239,7 +239,7 @@ end 'idle'
 
 function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
 	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
-		match child.tryReadStdoutLine() 'polled'
+		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
 			line(text) then return text
 			none then try idle(child)
 		end 'polled'
@@ -624,7 +624,7 @@ end 'idle'
 
 function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
 	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
-		match child.tryReadStdoutLine() 'polled'
+		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
 			line(text) then return text
 			none then try idle(child)
 		end 'polled'
@@ -1024,7 +1024,7 @@ end 'idle'
 
 function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
 	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
-		match child.tryReadStdoutLine() 'polled'
+		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
 			line(text) then return text
 			none then try idle(child)
 		end 'polled'
@@ -1409,7 +1409,7 @@ end 'idle'
 
 function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
 	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
-		match child.tryReadStdoutLine() 'polled'
+		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
 			line(text) then return text
 			none then try idle(child)
 		end 'polled'
@@ -2827,7 +2827,7 @@ end 'idle'
 
 function waitForLine(child StreamingSubprocess, start InstantMs) returns String throws InteropError
 	while Clock.elapsedMs(start) < probeTimeoutMs 'polling'
-		match child.tryReadStdoutLine() 'polled'
+		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polled'
 			line(text) then return text
 			none then try idle(child)
 		end 'polled'
@@ -3232,7 +3232,7 @@ type InteropHandler implements HttpHandler
 		return InteropHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let connection = match exchange.security() 'security'

@@ -2473,7 +2473,7 @@ error E3078: <fragment>:57:2: cannot pass 'a', which is read-only (a `let` bindi
 ```
 
 <!-- test: let-escape.error.a-record-stored-by-a-callback-is-written -->
-The function value keeps its parameter `x` in the holder's container, but `Taker` does not declare that parameter `keep`, so converting the function value to `Taker` is refused.
+The function value writes its parameter `r` by pushing the record into it, but `Taker` does not declare that parameter `mutable`, so converting the function value to `Taker` is refused.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2541,11 +2541,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3189: <fragment>:60:18: function value for 'Taker' keeps its parameter 'x', but 'Taker' does not declare it `keep`
+error E3210: <fragment>:60:18: function value for 'Taker' writes its parameter 'r', but 'Taker' does not declare it `mutable`
 ```
 
 <!-- test: let-escape.error.a-record-stored-through-a-witness-method-is-written -->
-`ListSink.take` keeps its parameter in the sink's container, but the requirement `Sink.take` does not declare it `keep`, so the conformer is refused.
+`ListSink.take` writes its receiver by pushing the record into the sink's container, but the requirement `Sink.take` does not declare `mutable self`, so the conformer is refused.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2622,7 +2622,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3189: <fragment>:52:11: 'ListSink.take' keeps its parameter 'b', but 'Sink.take' does not declare it `keep`
+error E3210: <fragment>:52:11: 'ListSink.take' writes its receiver, but 'Sink.take' does not declare `mutable self`
 ```
 
 <!-- test: let-escape.error.a-record-stored-in-a-sibling-record-is-written-by-the-siblings-method -->

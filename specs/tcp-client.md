@@ -173,11 +173,18 @@ function reach(spelling String, port NetworkPort, listener TcpListener) returns 
 	let peer = async echoOnce(listener)
 
 	let client = try TcpClient.connect(spelling, port: port) otherwise (e) 'refused'
+		peer.cancel()
 		return "refused {e.name}"
 	end 'refused'
 
-	_ = try client.send("ping") otherwise return "send-failed"
-	let answer = try client.recv(RequestBytes) otherwise return "recv-failed"
+	_ = try client.send("ping") otherwise 'cancelled17'
+		peer.cancel()
+		return "send-failed"
+	end 'cancelled17'
+	let answer = try client.recv(RequestBytes) otherwise 'cancelled18'
+		peer.cancel()
+		return "recv-failed"
+	end 'cancelled18'
 	let heard = await peer
 
 	return "{answer}/{heard}"

@@ -939,22 +939,13 @@ function requireNoUnresolvedTagsSurvivedTheMaxonTier(module MaxonModule)
 end 'requireNoUnresolvedTagsSurvivedTheMaxonTier'
 
 function unresolvedValueOrigin(module MaxonModule, func IrFunction, value ValueId) returns String
-	for opIdx in module.liveOpIndices(func) 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("unresolvedValueOrigin: opIdx {opIdx} from liveOpIndices is not in module.ops")
-		let defined = try maxonOpDefinedValue(op) otherwise continue
+	let producer = try opDefiningValue(module, func: func, value: value) otherwise return "a value no op defines"
 
-		if defined != value 'anotherValue'
-			continue
-		end 'anotherValue'
+	if maxonOpCalleeKind(producer) == MaxonCalleeKind.direct 'aCall'
+		return "the result of a call to '{String.from(maxonOpCalleeName(producer))}'"
+	end 'aCall'
 
-		if maxonOpCalleeKind(op) == MaxonCalleeKind.direct 'aCall'
-			return "the result of a call to '{String.from(maxonOpCalleeName(op))}'"
-		end 'aCall'
-
-		return "the result of an op that names no callee"
-	end 'eachOp'
-
-	return "a value no op defines"
+	return "the result of an op that names no callee"
 end 'unresolvedValueOrigin'
 
 // An unreadable type universe (a cyclic alias, E3184, a library file that failed) stops after the
@@ -972,6 +963,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// module below.
 	project.diagnostics.clear()
 	project.targetRefusalDiagnostics.clear()
+	project.droppedPromiseDiagnostics.clear()
 	project.poison = DeclarationPoison.create()
 
 	// Fresh per compile, because a warm project lowers again. Sound only while nothing in the front end,
@@ -1267,7 +1259,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// asked here so that `RuntimeUsage.parksOnIo` (which decides whether the scheduler is installed) and
 	// `IrModule.parksOnIo` (which decides whether the park is emitted) cannot answer it differently. Both
 	// fields carry what a disagreement produces.
-	let parksOnIo = targetProvidesFacility(project.target, facility: HostFacility.greenThreads)
+	let parksOnIo = targetParksOnIo(project.target)
 	var usage = scanRuntimeUsage(module, libraryFacts: project.libraryFacts, funcSignatures: project.funcSignatures, parksOnIo: parksOnIo)
 
 	// The managed-memory runtime's empty-slot panic renders the cursor's position through `__int_to_string`
@@ -2020,6 +2012,10 @@ function reportBindingHygieneDiagnostics(project Project) throws CompileError
 	if reportDeferredUnlessErrors(project, deferred: project.bindingHygieneDiagnostics) 'reported'
 		try refuseCompile(project)
 	end 'reported'
+
+	if reportDeferredUnlessErrors(project, deferred: project.droppedPromiseDiagnostics) 'droppedAPromise'
+		try refuseCompile(project)
+	end 'droppedAPromise'
 end 'reportBindingHygieneDiagnostics'
 
 // --- Source loading ---
@@ -2521,13 +2517,7 @@ export function isTestSourceName(name String) returns bool
 	return name.endsWith(TestSourceExtension)
 end 'isTestSourceName'
 
-let LegacyTestSourceSuffix = ".test.maxon"
-
 export function testSourceNameFor(name String) returns String
-	if name.endsWith(LegacyTestSourceSuffix) 'theOldTestSuffix'
-		return "{nameWithoutSuffix(name, suffix: LegacyTestSourceSuffix)}{TestSourceExtension}"
-	end 'theOldTestSuffix'
-
 	if name.endsWith(MaxonSourceExtension) 'aSourceExtension'
 		return "{nameWithoutSuffix(name, suffix: MaxonSourceExtension)}{TestSourceExtension}"
 	end 'aSourceExtension'

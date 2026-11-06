@@ -357,7 +357,10 @@ again"* does. A lost read therefore shows up as `heard=` with one timeout counte
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let dialing = async TcpClient.connect("127.0.0.1", port: listener.port())
-	let peer = try listener.accept() otherwise return 1
+	let peer = try listener.accept() otherwise 'cancelled3'
+		dialing.cancel()
+		return 1
+	end 'cancelled3'
 	let client = try await dialing otherwise return 1
 
 	_ = try peer.send("abc") otherwise return 1
@@ -414,7 +417,10 @@ end 'oneChunk'
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let dialing = async TcpClient.connect("127.0.0.1", port: listener.port())
-	let peer = try listener.accept() otherwise return 1
+	let peer = try listener.accept() otherwise 'cancelled17'
+		dialing.cancel()
+		return 1
+	end 'cancelled17'
 	let client = try await dialing otherwise return 1
 	try client.setWriteDeadline(WriteDeadlineMs) otherwise return 1
 
@@ -579,6 +585,7 @@ function main() returns ExitCode
 	let stillWaiting = not reader.isComplete()
 
 	print("dropped={stillWaiting}\n")
+	reader.cancel()
 	return 0
 end 'main'
 ```
@@ -640,6 +647,7 @@ function main() returns ExitCode
 	let stillWaiting = not reader.isComplete()
 
 	print("dropped={stillWaiting}\n")
+	reader.cancel()
 	return 0
 end 'main'
 ```
@@ -1312,6 +1320,7 @@ function exchangeOver(listener TcpListener) returns ExitCode
 	let stillBound = listener.port() == port
 
 	print("dropped={stillWaiting} bound={stillBound}\n")
+	acceptor.cancel()
 	return cleanExit as ExitCode
 end 'exchangeOver'
 
@@ -1439,6 +1448,7 @@ function exchangeOver(listener TcpListener) returns ExitCode
 	let stillBound = listener.port() == port
 
 	print("dropped={stillWaiting} bound={stillBound}\n")
+	acceptor.cancel()
 	return cleanExit as ExitCode
 end 'exchangeOver'
 
@@ -1596,7 +1606,10 @@ function main() returns ExitCode
 
 	try listener.setAcceptDeadline(0) otherwise return 3
 	let peer = async connectOnce(listener.port())
-	let accepted = try listener.accept() otherwise return 4
+	let accepted = try listener.accept() otherwise 'cancelled28'
+		peer.cancel()
+		return 4
+	end 'cancelled28'
 	accepted.close()
 	let connected = await peer
 
@@ -1654,11 +1667,17 @@ end 'nextRead'
 function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async halfClosed(listener)
 
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise 'cancelled36'
+		peer.cancel()
+		return 2
+	end 'cancelled36'
 	let first = nextRead(client)
 	let ended = nextRead(client)
 
-	_ = try client.send("after") otherwise return 4
+	_ = try client.send("after") otherwise 'cancelled40'
+		peer.cancel()
+		return 4
+	end 'cancelled40'
 	let served = await peer
 	client.close()
 

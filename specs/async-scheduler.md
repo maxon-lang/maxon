@@ -866,7 +866,8 @@ function compute() returns Integer
 end 'compute'
 
 function main() returns ExitCode
-	_ = async compute()
+	let p = async compute()
+	p.cancel()
 	return 7
 end 'main'
 typealias Integer = int(i64.min to i64.max)

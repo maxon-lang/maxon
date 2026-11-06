@@ -19,11 +19,11 @@ of them. A `view` of a number or another value with no capability is copied wher
 it.
 
 A `view` holds its own reference to the record its value names. A record something may write is refused where it is
-sent to a service (`E3138`), published (`E3174`) or handed to a `sole` parameter (`E3078`) when it may be reached from
+sent to a service (`E3138`) or published (`E3174`) when it may be reached from
 the value of any `view` declared earlier in the function, whether or not the view is read again and whatever the
 view's initializer is: a name, a field or element of it, a ternary, an `otherwise`, a `match` or a call that may hand
-the record back. Reassigning the `var` a fresh record makes it sole again. A record nothing can write (every field a
-`let`) is shared instead: it is sent, published or handed to a `sole` parameter as it is, and the view stays valid. Returning the `var` is unaffected, since every view of it ends with the function.
+the record back. Reassigning the `var` a fresh record makes it unreached again. A record nothing can write (every field a
+`let`) is shared instead: it is sent or published as it is, and the view stays valid. Returning the `var` is unaffected, since every view of it ends with the function.
 
 `view` is a contextual word: it begins a binding only where a name follows it, so it stays usable as an ordinary
 variable or parameter name.

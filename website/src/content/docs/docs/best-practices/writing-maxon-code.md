@@ -568,6 +568,12 @@ function render(item Describable) returns String
 end 'render'
 ```
 
+A requirement is read-only: a conformer whose method writes the receiver needs the requirement written
+`function grow(mutable self, by Tally)` (**E3210** otherwise); the conformer's own method needs no marker on
+its receiver. The standard library's `Iterator.advance`, `BidirectionalIterator.retreat` and
+`LogHandler.handle` are written that way. `HttpHandler.handle` takes `exchange mutable HttpExchange`, and a
+conformer spells the same marker on its parameter.
+
 ### Extensions
 
 ```maxon
@@ -1050,6 +1056,12 @@ A function value is a bare free-function name or a closure literal. A method in 
 or instance, `apply(Ops.twice, x: 3)`, is **E2078**; pass a closure that calls it —
 `apply(function(n) gives Ops.twice(n), x: 3)` — or a free function that does.
 
+A function type and an interface requirement are read-only and never wait or yield. Mark what the callee
+does: `function(mutable Counter)` for a parameter it writes, `mutable self` on a requirement whose conformers
+write the receiver, and a trailing `mutates captures` for a closure that writes what it captured
+(`typealias Tallier = function(Tally) returns Tally mutates captures`). A function value or conformer that
+does more is **E3210**.
+
 ### Tuples
 
 Tuples are fixed-size, ordered collections of values with potentially different types.
@@ -1126,6 +1138,13 @@ var r = try await p otherwise 0    // throwing async
 p.cancel()                         // cancellation
 ```
 
+Every promise held in a local is awaited, cancelled, stored or returned on every path out of its scope; a
+dropped, overwritten or `_ =`-discarded one is **E3213**. An `async` call given your mutable data (a record, an
+array, a variable at a `mutable` parameter) makes a tied promise: await it or `.cancel()` it before every
+`return`, `throw` and propagating `try`, and never return, store or pass it on (**E3212**); pass a `.clone()`
+to untie the call. A variable handed to a `mutable` parameter of an `async` callee is lent to the coroutine
+until the promise is awaited or cancelled, and reading it before then is **E3102**.
+
 ### Visibility
 
 All declarations are file-private by default. Four tiers exist:
@@ -1195,16 +1214,59 @@ Operators: `and`, `or`, `not`, plus parentheses for grouping.
   is **E3188**: write `view x = …` to read it, `var` to write it, or `let` a `.clone()`.
 - `view x = …` is read-only through `x` while other names may still write it. It lives only inside its
   function: storing, keeping, returning or capturing it is **E3078**, sending it **E3138**. Once a `var`'s
-  record has been viewed, sending, publishing or passing it to a `sole` parameter is refused for the rest of the
-  function, unless every field of its type is a `let`; reassign the `var` a fresh record or send a `.clone()`.
-- `keep` and `sole` on a parameter, and `returns sole` / `returns readonly` on a result, are written only on a
-  function-type alias, an interface requirement or a generic function's result (**E2076** elsewhere); a body
-  that does more than they declare is **E3189**.
+  record has been viewed, sending, publishing or passing it to a parameter the callee keeps is refused for the
+  rest of the function, unless every field of its type is a `let`; reassign the `var` a fresh record or send a
+  `.clone()`.
 - `var b = a` and `let b = a` from a `var` `a` **move** it: reading `a` afterwards is **E3102**. `var b = a`
   from a `let` `a` is **E3078**; use `.clone()` for a mutable copy.
 - A parameter is a `let`: reassigning it is **E2013**. A value-type parameter the function reassigns is marked
   `mutable` and is passed by reference; passing a read-only value, a literal or an expression to it is
-  **E3159**. Passing storage to a `mutable` parameter while another argument reaches it is **E3186**.
+  **E3159**, and the variable's declared type must be the parameter's type, alias included (**E3005**).
+  Reading a local in a statement that also hands it to a `mutable` parameter the callee writes, with the read
+  running before the write, is **E3186**: copy it into a `let` in an earlier statement. `mutable` before a
+  message or factory parameter's type is a parse error (**E2010**).
+
+### Regions and capabilities
+
+Ordinary records need no marker: they belong to the current region and alias freely inside it. Write a
+capability word only where a value must change owners or be shared without a writer:
+
+- **Build, then freeze.** Fill a structure inside `modify`, then `freeze` it, and read the frozen result
+  from anywhere. `var b = Index.create() as isolated Index`, `modify b 'fill' … end 'fill'`,
+  `return freeze b` with `returns immutable Index` (or a typealias of it).
+- **A field that owns a region** is `var index as isolated WordIndex`. Fill it in `modify self.index 'fill'`;
+  take it out whole with `swap self.index with WordIndex.create()`; `Self{index: WordIndex.create()}` builds it.
+- **Frozen data** is declared `immutable T`. A parameter needs no marker to accept it: an unmarked parameter
+  that only reads takes a mutable or a frozen argument, and one that writes takes a mutable argument.
+- `merge x` turns an `isolated` value back into ordinary mutable data (`return merge box`).
+- `type T is unique` for a value that must never be copied or aliased; `let b = a` moves it.
+- `where T is sendable` or `where T is isolated` on a generic **type** bounds its argument.
+- On an interface requirement or function type, write `mutable self`, `mutable T` or `mutates captures`
+  where the callee writes; unmarked ones are read-only and never wait or yield.
+
+Common refusals and their fixes:
+
+| Refusal | Fix |
+|---------|-----|
+| **E3207** `'f' writes 'x'; 'frozen' is immutable` | pass a mutable value (`frozen.clone()`), or do not freeze it |
+| **E3207** `'f' needs 'x' frozen; 'live' is mutable. Freeze it first` | `freeze` it first (`freeze live.clone()` keeps `live`) |
+| **E3206** parameter used as mutable and as immutable | make one of the two uses work on a `.clone()` |
+| **E3197** write through frozen or read-only data | write to a `.clone()`, or keep the data mutable |
+| **E3196** mutable value stored into an `immutable` slot, or the reverse | `freeze` it, or store a `.clone()` |
+| **E3198** `'x' is not isolated; 'modify' opens an isolated value` | declare it `as isolated T` |
+| **E3200** `'x' is not isolated: only a clean call, a swap or an isolated local …` | declare it `as isolated T`, or store a `.clone()` |
+| **E3201** one statement reaches two isolated values, or mutable data beside one | open one with `modify`, or split the statement |
+| **E3202** a mutable value leaves a `modify` block | let a value, `immutable` data or a fresh `isolated` value leave instead |
+| **E3205** `await` or a may-wait or may-yield call inside `modify` | await before the block and pass the result in |
+| **E3210** a function value or conformer writes, waits or yields beyond its boundary | declare `mutable self`, `mutable T` or `mutates captures` on the boundary, or change the body |
+| **E3212** a tied promise left unconsumed on an exit, returned, stored or passed on | `await p` or `p.cancel()` before every exit; `.clone()` the arguments to untie the call |
+| **E3213** a promise dropped, overwritten or discarded | await it, cancel it, store it or return it; `_ = try h.m(x)` discards a service reply |
+| **E3214** a unique value cloned, frozen, or bound from a field or element | move it with `pop` or `remove`, or read it through a `view` |
+| **E3215** a type argument breaks a `where T is sendable` or `is isolated` bound | `immutable Job` or a value for `sendable`; a value or unique type for `isolated` |
+| **E3186** a local read before a by-reference call writes it | copy it into a `let` in an earlier statement and read the copy |
+| **E3005** a `Narrow` variable at a `mutable Wide` parameter | declare the variable at the parameter's type |
+
+The full rules are in [Regions and Capabilities](/docs/language/regions/).
 
 ### Purity and discarded results
 

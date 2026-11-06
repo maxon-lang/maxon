@@ -1143,13 +1143,13 @@ end 'main'
 first padded out long enough to heap allocate 1 0
 ```
 
-<!-- test: moves.error.a-var-handed-in-parentheses-to-a-sole-parameter-is-moved -->
+<!-- test: moves.error.a-var-handed-in-parentheses-to-an-isolated-parameter-is-moved -->
 Parentheses around the argument change nothing: `sink((b))` consumes `b` exactly as `sink(b)` does, so reading `b` afterwards is a use of a moved value.
 
 ```maxon
 typealias Count = int(0 to 1000)
 typealias Boxes = Array with Box
-typealias Sink = function(b sole Box)
+typealias Sink = function(b isolated Box)
 
 type Box
 	export var n as Count
@@ -1161,12 +1161,12 @@ end 'Box'
 
 var kept = Boxes.create(0)
 
-function stash(b Box)
-	kept.push(b)
+function stash(b isolated Box)
+	kept.push(merge b)
 end 'stash'
 
 function feed(sink Sink) returns Count
-	var b = Box.create(1)
+	var b = Box.create(1) as isolated Box
 	sink((b))
 	return b.n
 end 'feed'
@@ -1182,12 +1182,12 @@ error E3102: <fragment>:23:9: use of moved value 'b': its ownership moved to ano
 ```
 
 <!-- test: moves.error.a-door-read-on-one-branch-is-reported-at-that-read-once -->
-A `var` handed to a `sole` parameter is read first inside one branch only. The report points at that read, the read after the join is a second use of the same moved name and adds no report of its own, and the arm that never read the name does not hide the door from the join.
+A `var` handed to an `isolated` parameter is read first inside one branch only. The report points at that read, the read after the join is a second use of the same moved name and adds no report of its own, and the arm that never read the name does not hide the door from the join.
 
 ```maxon
 typealias Count = int(0 to 1000)
 typealias Boxes = Array with Box
-typealias Sink = function(b sole Box)
+typealias Sink = function(b isolated Box)
 
 type Box
 	export var n as Count
@@ -1199,12 +1199,12 @@ end 'Box'
 
 var kept = Boxes.create(0)
 
-function stash(b Box)
-	kept.push(b)
+function stash(b isolated Box)
+	kept.push(merge b)
 end 'stash'
 
 function feed(sink Sink, branch Count) returns Count
-	var b = Box.create(1)
+	var b = Box.create(1) as isolated Box
 	sink((b))
 
 	if branch == 0 'readHere'
@@ -1230,7 +1230,7 @@ The door sits in one arm of an `if` and the other arm never touches the name, so
 ```maxon
 typealias Count = int(0 to 1000)
 typealias Boxes = Array with Box
-typealias Sink = function(b sole Box)
+typealias Sink = function(b isolated Box)
 
 type Box
 	export var n as Count
@@ -1242,12 +1242,12 @@ end 'Box'
 
 var kept = Boxes.create(0)
 
-function stash(b Box)
-	kept.push(b)
+function stash(b isolated Box)
+	kept.push(merge b)
 end 'stash'
 
 function feed(sink Sink, branch Count) returns Count
-	var b = Box.create(1)
+	var b = Box.create(1) as isolated Box
 
 	if branch == 0 'handOver'
 		sink((b))

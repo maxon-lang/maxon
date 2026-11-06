@@ -364,6 +364,7 @@ function main() returns ExitCode
 	let sibling = async fast()
 	let answer = await sibling
 	let finished = 1 if waiter.isComplete() else 0
+	waiter.cancel()
 	return (answer + finished) as ExitCode
 end 'main'
 ```
@@ -397,6 +398,7 @@ function startAndDrop() returns Integer
 	let q = async fast()
 	let answer = await q
 	let finished = 1 if s.isComplete() else 0
+	s.cancel()
 	return answer + finished
 end 'startAndDrop'
 

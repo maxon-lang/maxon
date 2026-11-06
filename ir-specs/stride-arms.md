@@ -18,13 +18,13 @@ An `Array with Half` has stride 2, so a checked `get` and a checked `set` are on
 typealias Half = int(0 to 65535)
 typealias Cells = Array with Half
 typealias Reader = function(Cells, ElementIndex) returns Half
-typealias Writer = function(Cells, ElementIndex, Half)
+typealias Writer = function(mutable Cells, ElementIndex, Half)
 
 function read(cells Cells, at ElementIndex) returns Half
 	return try cells.get(at) otherwise panic("read: index out of range")
 end 'read'
 
-function write(cells Cells, at ElementIndex, value Half)
+function write(cells mutable Cells, at ElementIndex, value Half)
 	try cells.set(at, value: value) otherwise panic("write: index out of range")
 end 'write'
 
@@ -755,13 +755,13 @@ An `Array with Wide` has stride 4, so a checked `get` and a checked `set` are on
 typealias Wide = int(0 to u32.max)
 typealias Cells = Array with Wide
 typealias Reader = function(Cells, ElementIndex) returns Wide
-typealias Writer = function(Cells, ElementIndex, Wide)
+typealias Writer = function(mutable Cells, ElementIndex, Wide)
 
 function read(cells Cells, at ElementIndex) returns Wide
 	return try cells.get(at) otherwise panic("read: index out of range")
 end 'read'
 
-function write(cells Cells, at ElementIndex, value Wide)
+function write(cells mutable Cells, at ElementIndex, value Wide)
 	try cells.set(at, value: value) otherwise panic("write: index out of range")
 end 'write'
 
@@ -1496,13 +1496,13 @@ An `Array with bool` packs one bit per element, so a checked `get` is one byte l
 
 typealias Cells = Array with bool
 typealias Reader = function(Cells, ElementIndex) returns bool
-typealias Writer = function(Cells, ElementIndex, bool)
+typealias Writer = function(mutable Cells, ElementIndex, bool)
 
 function read(cells Cells, at ElementIndex) returns bool
 	return try cells.get(at) otherwise panic("read: index out of range")
 end 'read'
 
-function write(cells Cells, at ElementIndex, value bool)
+function write(cells mutable Cells, at ElementIndex, value bool)
 	try cells.set(at, value: value) otherwise panic("write: index out of range")
 end 'write'
 
@@ -2261,13 +2261,13 @@ An `Array with Crumb` packs two bits per element; the arm is the one-bit arm at 
 typealias Crumb = int(0 to 3)
 typealias Cells = Array with Crumb
 typealias Reader = function(Cells, ElementIndex) returns Crumb
-typealias Writer = function(Cells, ElementIndex, Crumb)
+typealias Writer = function(mutable Cells, ElementIndex, Crumb)
 
 function read(cells Cells, at ElementIndex) returns Crumb
 	return try cells.get(at) otherwise panic("read: index out of range")
 end 'read'
 
-function write(cells Cells, at ElementIndex, value Crumb)
+function write(cells mutable Cells, at ElementIndex, value Crumb)
 	try cells.set(at, value: value) otherwise panic("write: index out of range")
 end 'write'
 
@@ -3080,13 +3080,13 @@ An `Array with Nibble` packs four bits per element; the arm is the one-bit arm a
 typealias Nibble = int(0 to 15)
 typealias Cells = Array with Nibble
 typealias Reader = function(Cells, ElementIndex) returns Nibble
-typealias Writer = function(Cells, ElementIndex, Nibble)
+typealias Writer = function(mutable Cells, ElementIndex, Nibble)
 
 function read(cells Cells, at ElementIndex) returns Nibble
 	return try cells.get(at) otherwise panic("read: index out of range")
 end 'read'
 
-function write(cells Cells, at ElementIndex, value Nibble)
+function write(cells mutable Cells, at ElementIndex, value Nibble)
 	try cells.set(at, value: value) otherwise panic("write: index out of range")
 end 'write'
 

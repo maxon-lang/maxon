@@ -45,7 +45,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 type Upto implements Seq with Integer
@@ -100,7 +100,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 type Upto implements Seq with Integer
@@ -194,7 +194,7 @@ typealias Integer = int(i64.min to i64.max)
 interface Lines uses Tag
 	function tag() returns Tag
 	function current() returns String
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Lines'
 
 type Numbered implements Lines with Integer
@@ -259,7 +259,7 @@ typealias Integer = int(i64.min to i64.max)
 interface Lines uses Tag
 	function tag() returns Tag
 	function current() returns String
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Lines'
 
 type Numbered implements Lines with Integer
@@ -337,7 +337,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 type Upto implements Seq with Integer
@@ -427,7 +427,7 @@ typealias Text = int(0 to 255)
 
 interface Seq uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 type Upto implements Seq with Integer
@@ -477,7 +477,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Cursor uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Cursor'
 
 interface Bag uses Element, Iter
@@ -555,7 +555,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 type Upto implements Seq with Integer

@@ -209,8 +209,14 @@ else:
 | `spawn` | followed by a type's static factory call, optionally after `(capacity: n)` (see [Services](#services--spawn)) |
 | `bits` | followed by `(` on the right-hand side of a typealias |
 | `view` | at the start of a statement, or after `if` or `then`, followed by a name, or by a `( … )` list and `=` (see [Views](#views-view)) |
-| `readonly` | before an element or value type argument of a container (see [Read-Only Values](#read-only-values)), and after `returns` at a boundary with no body (see [Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly)) |
-| `keep`, `sole` | before a parameter's type, and `sole` after `returns`, at a boundary with no body (see [Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly)) |
+| `readonly` | before an element or value type argument of a container (see [Read-Only Values](#read-only-values)) |
+| `mutable` | before a parameter's type, or a function-type parameter's, and as `mutable self` (see [Parameter Passing](#parameter-passing)) |
+| `isolated`, `immutable` | before a type, and before `self` as a receiver capability; `isolated` also after `is` in a `where` constraint (see [Regions and Capabilities](#regions-and-capabilities)) |
+| `modify` | at the start of a statement, followed by a name or `self` and ending its line with a label (see [`modify` Blocks](#modify-blocks)) |
+| `freeze`, `swap`, `merge` | before an operand: a name, `self`, `Self`, `try`, or a parenthesis set apart by a space; `swap path with value` (see [Regions and Capabilities](#regions-and-capabilities)) |
+| `unique` | after `is` in a `type` or `interface` header (see [Unique Types](#unique-types)) |
+| `sendable` | after `is` in a `where` constraint of a generic type (see [Region Bounds](#region-bounds)) |
+| `mutates`, `captures` | the clause `mutates captures` ending a function type (see [Capabilities at Function Types and Requirements](#capabilities-at-function-types-and-requirements)) |
 
 `__line__` and `__file__` are valid only as parameter defaults (see
 [Caller-Location Defaults](#caller-location-defaults-__line__-__file__)).
@@ -1449,10 +1455,11 @@ end 'main'
 - A requirement may be `static function`; the conforming type provides it as a static method.
 - `interface Derived extends Base` inherits `Base`'s requirements; a type implementing `Derived` provides
   both, and satisfies parameters typed `Base`.
-- A requirement declares what a conformer may do with its values: `keep` or `sole` on a parameter it keeps,
-  `returns sole` or `returns readonly` on its result (see
-  [Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly)). A conformer that does more is
-  **E3189**.
+- A requirement is read-only and never waits or yields unless it declares otherwise: `mutable self` where a
+  conformer writes the receiver, `mutable` or `immutable` on a parameter, `returns isolated` or
+  `returns immutable` on its result (see
+  [Capabilities at Function Types and Requirements](#capabilities-at-function-types-and-requirements)). A
+  conformer that does more is **E3210**.
 
 **Interface-typed parameters, returns and fields.** An interface can be used as a type, as `describe`
 does above: a parameter typed `Shape` accepts any conforming type, `enum` and `union` conformers
@@ -1788,9 +1795,6 @@ function is itself visible like any function: a private one called from another 
 
 A generic function and a non-generic one of the same name in one directory are two declarations of one name
 (**E3006**); name each its own.
-
-A generic function's result may declare `returns sole T` or `returns readonly T` (see
-[Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly)); a body that breaks it is **E3189**.
 
 A generic body is checked against the bound of `T` only, so it never reassigns a parameter declared `T`,
 marked `mutable` or not (**E2013**, `'item' is a generic parameter and cannot be reassigned; return the new
@@ -2874,11 +2878,11 @@ end 'main'
 - A view holds its own reference to the record it names. Once a view of a `var` is declared — of the `var`
   itself, a field or an element of it, or any expression that may hand its record back (a ternary, an
   `otherwise`, a `match`, a call) — the view co-owns that record for the rest of the function, read again or
-  not: sending it (**E3138**), publishing it (**E3174**) or handing it to a `sole`
-  parameter (**E3078**) is refused. The rule follows source order, so inside a loop a view declared earlier in the
+  not: sending it (**E3138**), publishing it (**E3174**) or handing it to a parameter the callee keeps
+  (**E3078**) is refused. The rule follows source order, so inside a loop a view declared earlier in the
   body counts. Reassigning the `var` a fresh record makes it sole again, and returning the `var` is unaffected.
 - A record nothing can write — a heap type whose fields are all `let` — is shared instead: it is sent, published
-  or handed to a `sole` parameter as it is, and the view stays valid. An inline packed record is copied.
+  or handed to a parameter the callee keeps as it is, and the view stays valid. An inline packed record is copied.
 - `view` is a [contextual keyword](#keywords). It declares a local binding only: a `view` field, a module-level
   `view`, a `view` in an extension body or an `@heap view` is **E2077**.
 
@@ -3239,9 +3243,9 @@ end 'main'
   (`p.x = 99`) or a mutating call on a field (`p.items.push(x)`) — is not a reassignment and reaches the
   caller's record. A generic body is checked against the bound of its type parameter only, so a parameter
   whose type is a type parameter is never reassigned either: the function returns the new value.
-- A message parameter and a factory parameter cannot be marked `mutable` (**E2076**): a message hands its
-  arguments to another green thread and a `spawn` hands the factory's arguments to the service, which owns
-  them and writes nothing back.
+- A message parameter and a factory parameter take no marker: a message hands its arguments to another
+  green thread and a `spawn` hands the factory's arguments to the service, which owns them, so `mutable`
+  there is a parse error (**E2010**, `Expected 'a type' but got 'mutable'`).
 - Passing a `var` lets the callee's writes propagate. Any storage you could assign to at that point may be
   passed and is written in place: a local `var`, a module-level `var`, a field of a binding (`p.x`), a field
   of the receiver (`count` or `self.count`), and a chain of them (`p.a.b`). The rule is exactly the
@@ -3257,15 +3261,24 @@ end 'main'
 - A function type spells the marker: `typealias Step = function(mutable Tally)`. A function, closure or
   interface conformer fits a function type or requirement only when every parameter's marker is the same as
   the type's, so a function that reassigns its parameter does not convert to `function(Tally)` (**E3005**),
-  and one that declares `mutable` but only reads does not either. A call through a function value or an
+  and one that declares `mutable` but only reads does not either (**E3005**). A function that writes a
+  record parameter its function type leaves unmarked is **E3210** (see
+  [Capabilities at Function Types and Requirements](#capabilities-at-function-types-and-requirements)). A
+  call through a function value or an
   interface passes the argument's storage at each `mutable` position, and a read-only value handed to such
   a position is **E3159**, as at a direct call; a literal or another expression is **E3159** too. Through
   a function value or an interface requirement the message names the position (`to a function that writes
   argument 1`).
-- A variable passed by reference to a parameter whose alias is wider than its own, or that names no alias,
-  is range-checked when the call returns.
-- Passing storage to a parameter the callee **reassigns**, while another argument of the same call reaches
-  that storage, is **E3186** (see [Aliasing Between Arguments](#aliasing-between-arguments)).
+- A variable passed by reference is a flow in both directions: the callee reads the variable and may write
+  any value of the parameter's type back. The variable's declared type must therefore be the parameter's
+  type, alias identity included. A `Narrow` variable at a `mutable Wide` parameter is **E3005**
+  (``expected 'Wide', got 'Narrow': the callee may write any 'Wide' through a by-reference parameter, which a
+  'Narrow' variable cannot hold``), and so is a `Wide` variable at a `mutable Narrow` parameter. Declare the
+  variable at the parameter's type. The rule holds for direct calls, method calls, calls through function
+  values and interfaces, generic functions and coroutines alike (`specs/regions-byref-types.md`).
+- Passing storage to a `mutable` parameter the callee writes, while another operand of the same statement
+  reads that storage before the call writes it, is **E3186** (see
+  [Aliasing Between Arguments](#aliasing-between-arguments)).
 
 ### Function Types and Function Values
 
@@ -3309,59 +3322,11 @@ Omit `returns` for a function type that returns nothing: `typealias Callback = f
 throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error.
 `Type.method` written without its call — a static method, an instance method read through its type, or a
 static the compiler provides such as `int.fromString` — is **E2078**, and assigning to one (`Ops.twice = f`)
-is **E2013**; pass a closure that calls it, `apply(function(n) gives Ops.twice(n), x: 4)`. A function type says
-which promise parameters its callee takes: see [Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly).
+is **E2013**; pass a closure that calls it, `apply(function(n) gives Ops.twice(n), x: 4)`. A call through a
+function value hands a promise argument over to the callee. A function type is read-only and neither waits
+nor yields unless it declares otherwise (`function(mutable Row)`, `… mutates captures`): see
+[Capabilities at Function Types and Requirements](#capabilities-at-function-types-and-requirements).
 Function-type aliases are [brands](#generic-instance-and-function-type-aliases-are-brands).
-
-### Capability Qualifiers (`keep`, `sole`, `returns readonly`)
-
-A call through a function value or an interface method has no body the compiler can read, so the boundary
-declares what the callee does with its values. The qualifier is written before the type:
-
-| Qualifier | Meaning |
-|-----------|---------|
-| `keep` on a parameter | the callee keeps the argument where something may write it |
-| `sole` on a parameter | the callee consumes the argument and owns it, so it may keep it anywhere |
-| `returns sole T` | the result is fresh, reached by no other name |
-| `returns readonly T` | the result is read-only |
-
-```maxon
-typealias Count = int(0 to 1000)
-typealias Sink = function(b keep Box)
-typealias Maker = function() returns sole Box
-
-type Box
-	export var n as Count
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-interface Source
-	function current() returns readonly Box
-end 'Source'
-```
-
-- They are written only on a parameter or result of a function-type alias or an
-  [interface](#interfaces) requirement, and on the result of a [generic function](#generic-functions). Anywhere
-  else — a parameter of a function with a body, a cast, a binding — a qualifier is **E2076**.
-- A caller trusts the declaration. An argument to a `keep` parameter follows the rule for a function that keeps
-  it, so a `let` read again afterwards is **E3078**. A `sole` parameter consumes its argument: pass a fresh value,
-  or a `let` or `var` at its last use (a later use is **E3102**); a read-only value, a parameter, a field of a
-  record that stays reachable, or a `var` a [view](#views-view) has seen is **E3078**. The `let` of a
-  `returns sole` result is fresh, and a `let` of a `returns readonly` result is read-only.
-- A promise parameter of a function type is taken by the callee when it is written `keep` or `sole`, and only
-  then: a call through the type moves the promise into the callee, which stores, awaits, cancels or returns it,
-  and an unqualified promise parameter stays with the caller, who still owns it after the call. A named
-  function used as a value has its own type, so the call honours what the function does. A function value
-  converted to an alias whose qualifier disagrees with the function — it takes a promise the alias leaves
-  unqualified, or the alias declares `keep` or `sole` on a promise the function only reads — is **E3189**.
-- A function value converted to the alias, a conformer's method, or a generic function's body that does more
-  than its boundary declares — keeps a parameter not declared `keep` or `sole`, or returns state something may
-  write where `returns sole` or `returns readonly` is declared — is **E3189**. A function value typed by one
-  alias converts to another, by a `return`, a store or an argument, only when it keeps no parameter the target
-  does not declare and declares at least the result capability the target declares.
 
 ### Closures
 
@@ -5135,15 +5100,25 @@ not 80.
   one strand of one green thread, so the coroutine takes a plain count of its own on each managed argument
   and the caller's binding stays usable: a `var` handed to `async` is read and written after the call, a
   `let` is shared read-only, and one binding other than a promise may be handed twice in one call. A scalar
-  is copied. Passing a handle is how a socket or a server is shared with a coroutine.
+  is copied. Passing a handle is how a socket or a server is shared with a coroutine. A call that hands
+  the coroutine the caller's mutable data makes its promise a [tied promise](#tied-and-must-use-promises).
 - **A promise argument moves.** A coroutine can still be running after the frame that started it has ended,
   so an `async` call hands a promise, or a value whose type holds one, only to a parameter the callee takes
   — one it awaits, cancels, stores or returns. The coroutine then owns the thread, and the caller's binding is spent. A parameter that only reads it is **E3141**: pass the
   promise to one that takes it, or await it and pass the result. One promise at two arguments of one call is
   **E3102**.
-- A `mutable` parameter the callee reassigns gets storage the coroutine owns, and nothing is written back to the
-  caller. A coroutine that writes a parameter is refused a [read-only](#read-only-values) argument
-  (**E3159**), as an ordinary call is.
+- **A variable handed to a `mutable` parameter is lent to the coroutine.** The coroutine receives the
+  caller's own cell, and its write is visible once the promise is awaited or cancelled. Until then the
+  variable is lent like a move that ends at the drain: reading it, writing it or passing it is **E3102**
+  (`use of moved value 'n': it is lent to the coroutine of the `async` call at 13:22 until that promise is
+  awaited or cancelled`), a sibling field of a lent local too, and naming it in the statement that starts the
+  coroutine is **E3186**. A `var`, or a field of a local, may be lent; a module `var` or any other storage at a
+  by-reference position is **E2015** (`an `async` call takes only a local variable by reference`), a literal
+  is **E3159**, and the variable's declared type must be the parameter's type (**E3005**, see
+  [Parameter Passing](#parameter-passing)). A coroutine that writes a parameter is refused a
+  [read-only](#read-only-values) argument (**E3159**), as an ordinary call is. `specs/regions-async-lend.md`
+  pins each case; `the-coroutine-writes-the-callers-variable-and-the-await-shows-it` runs one.
+- A call passes an `isolated` value to `async` only in an `isolated` parameter, which moves it (**E3207**).
 - A closure that captured a binding owns it, so handing that binding to `async` afterwards is **E3102**.
 - The callee must be able to wait — call `sleep`, `await`, `Scheduler.yield()`, send a service message with a
   `sendTimeout:`, or perform file, socket or process I/O, directly or through its callees. A function that never yields is **E3073** (`function never
@@ -5212,8 +5187,7 @@ The store moves the promise: the container or field now owns the thread, and the
 is spent (**E3102**). The one condition is that the types agree, and **E3098** names what differs when they
 do not: a result type other than the slot's, or an error type the slot drops, changes or adds. A promise
 handed to a parameter, or to a container's method such as `Map.upsert`, is held to the same rule. A call
-through a function value hands a promise over exactly where the function type says the callee takes it (see
-[Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly)).
+through a function value hands the promise over to the callee.
 
 A `mutable` promise parameter the callee reassigns (`q = async work()`) writes into the caller's own variable: the
 callee drops the thread the variable held, the variable takes the new one, and the caller awaits it as any
@@ -5302,10 +5276,65 @@ holding, exactly once. Three refusals follow:
 a promise no frame owns is **E3141**: one read out of a container that still holds it, a merge of two
 promises (`p if c else q`), or a second name for a parameter.
 
+### Tied and Must-Use Promises
+
+**Every promise held in a local is must-use.** On every path out of its scope it is awaited, cancelled with
+`.cancel()`, stored, returned, or passed to a parameter that takes it. Dropping it at the end of its scope,
+overwriting it, discarding it with `_ =`, or leaving the function on a path that does none of these is
+**E3213**:
+
+```text
+error E3213: this drops 'later', which was never awaited, cancelled, stored or returned: `await later`, call `later.cancel()`, store it or return it
+error E3213: this drops a promise that was never awaited, cancelled, stored or returned: `await` it, call `.cancel()` on it, store it or return it
+```
+
+`_ = async slow()` is E3213, as is a `var` re-armed before its promise is consumed, a promise awaited on one
+path only, an early `return` before the `await`, and a service reply bound to a local and never consumed
+(`let reply = try h.say("a")`). A service message's reply discarded with `_ =` is an explicit
+fire-and-forget, and the message is still delivered: `_ = try h.say("a") otherwise …`. A promise inside a
+container or a field is cancelled with its holder. `specs/promise-must-use.md` pins each case.
+
+**An `async` call given the caller's mutable data produces a tied promise.** The coroutine holds that data
+until it ends, so the promise is awaited or cancelled and nothing else. It lives in a local and is awaited by
+a consuming `await` that every path reaches before the function returns:
+
+```maxon
+function main() returns ExitCode
+	var row = Row.create(1)
+	let later = async bump(row)
+	let n = await later
+	print("{n}\n")
+	return 0
+end 'main'
+```
+
+Every way out of the function, an early `return`, a `throw` and a propagating `try` included, first awaits or
+cancels each tied promise still live there. A path that does neither is **E3212**:
+
+```text
+error E3212: this exit leaves 'later' neither awaited nor cancelled, and the coroutine of the `async` call at 19:20 still holds the data it was given: `await later` or call `later.cancel()` before this exit
+```
+
+An `await` inside one `if` branch, one `match` arm or one ternary arm does not drain the promise. A tied
+promise cannot be returned, held in a field or container, or passed to a parameter, because the callee would
+keep it: each is **E3212** (``the promise of this `async` call is tied to the mutable data it was given: it
+is awaited or cancelled and nothing else, never returned, stored, captured, sent or passed on, because the
+coroutine still holds the caller's data``), and a closure that captures one is **E3141**. `.cancel()` on a
+tied promise stops the coroutine from beginning another wait on a far end and then waits for it to finish, so
+the data is written, or left untouched, before the function goes on. That wait is why a `modify` block cannot
+call a function that cancels one ([Waiting and Yielding](#waiting-and-yielding)).
+
+An `async` call is untied when none of its arguments carries the caller's mutable data, as with plain values
+and a second holder of a `SharedValue` (`wakes.push(async drain(cell.clone()))`). Such a promise may be
+stored, and the must-use rule alone governs it. To untie a call, pass a `.clone()` of the argument. `specs/regions-tied.md` pins the cases; `an-early-return-cancels-the-tied-coroutine-and-waits-for-it`
+and `a-throw-exit-cancels-the-tied-coroutine-and-waits-for-it` run the cancel paths.
+
 ### Cancellation and Dropped Promises
 
-`promise.cancel()` consumes a promise without waiting for it. A promise that is never awaited is dropped
-when it goes out of scope (or is overwritten), which has the same effect.
+`promise.cancel()` consumes a promise. On a [tied promise](#tied-and-must-use-promises) it waits for the
+coroutine to finish; on any other it returns at once. A promise held in an array or a field is dropped with
+its container, and a promise held in a local is [must-use](#tied-and-must-use-promises). A cancelled or
+dropped promise has the effects below.
 
 - A coroutine that has **not started** never runs.
 - A coroutine that has **already started** is not interrupted where it stands: it resumes and runs on, and
@@ -5316,7 +5345,6 @@ when it goes out of scope (or is overwritten), which has the same effect.
   numeric address. A service send it makes to a full mailbox fails `mailboxFull` at once, with or without a
   `sendTimeout:`, and a send already waiting for room fails `mailboxFull` when the promise is dropped (see
   [Mailboxes and failed sends](#mailboxes-and-failed-sends)).
-- A promise held in an array or a field is dropped with its container.
 
 ### Yielding
 
@@ -5978,6 +6006,384 @@ own. Every task is an entry point, exempt from **E3092** like a target.
 
 ---
 
+## Regions and Capabilities
+
+A **region** is a group of objects reached through one entry, with nothing outside the group pointing in.
+Code running in one function and its callees works in the **current region**: every ordinary record it makes
+belongs to it, and records alias freely inside it (see [Reference-by-Default Assignment](#reference-by-default-assignment)).
+Two further kinds of data sit outside the current region:
+
+```text
+ current region                     separate region                  frozen data
+ ┌────────────────────────┐         ┌──────────────────┐            ┌──────────────────┐
+ │ a ─▶ Table ─▶ rows     │         │ index ─▶ counts  │            │ pinned ─▶ Table  │
+ │ b ───────┘             │  entry  │   (isolated)     │            │  (immutable)     │
+ │ holder ─ index ────────┼────────▶│                  │            │ read by anyone   │
+ └────────────────────────┘         └──────────────────┘            └──────────────────┘
+   writable here                      one entry, writable only        read-only for good
+                                      inside a `modify` block
+```
+
+- **`isolated`** data is a region of its own. One name enters it, and nothing inside points out to the
+  current region or to another region. It is written only through a [`modify` block](#modify-blocks) or a
+  [one-call open](#one-call-and-one-statement-opens), and it moves between owners as a unit.
+- **`immutable`** data is frozen: shared by any number of holders and threads, and read-only for the rest of
+  its life. A `freeze` walk marks every object in the region it freezes as shared, so the result is read with
+  atomic counts from any thread.
+
+A capability is a prefix word on a type, read like an adjective. The words are contextual: they are
+recognised only where the grammar expects a type or an operand, so a local named `mutates` or `captures`
+keeps its meaning, and `swap(1, right: 2)`, with the parenthesis against the name, calls a function named
+`swap`, where `freeze (Box.create(7))` with a space is the operator over a parenthesized operand
+(`specs/regions-syntax.md`).
+
+| Spelling | Meaning |
+|----------|---------|
+| `isolated T` | a region of its own; a field, parameter, result or `as` target |
+| `immutable T` | frozen data; the same positions, and a type argument (`Array with immutable Box`) |
+| `mutable T` | on a parameter or function-type parameter, write access to what the caller passed (see [Parameter Passing](#parameter-passing)) |
+| `function f(immutable self)`, `function f(mutable self)` | the receiver's capability, written as the first parameter |
+| `let x = e as isolated T` | a local that is a region of its own |
+| `type T is unique` | values that move and are never copied or aliased (see [Unique Types](#unique-types)) |
+| `where T is isolated`, `where T is sendable` | bounds on a generic type's parameter (see [Region Bounds](#region-bounds)) |
+| `modify x 'label' … end 'label'` | opens an `isolated` value for several statements |
+| `freeze x`, `swap path with value`, `merge x` | turn a region into frozen data, take a region out of a slot, bring a region into the current one |
+
+A capability word written directly on a number, `bool`, an enum or a `String` is not a type there: those
+values belong to no region. `mutable` on a parameter or function-type parameter of such a type is the one
+place it is accepted, and it makes the parameter by reference. The same words in other positions fail as any
+stray word does: the cases are in `specs/regions-syntax.md`.
+
+A method may declare its receiver as its first parameter, `function reported(immutable self)`, where
+inference cannot express what the method needs. `self` is not written at the call. A receiver capability on a
+`static` or free function, or `self` after another parameter, is a parse error (`specs/regions-syntax.md`).
+
+The capability checks run on the standard library, on every file of a program that declares a field,
+parameter, receiver, result or function-type position `isolated` or `immutable`, and on any file that spells
+`modify`, `async`, `freeze`, `swap`, `merge`, `isolated` or `immutable`. Other code is held to the
+read-only rules of [Read-Only Values](#read-only-values) alone, and those rules apply everywhere.
+
+### Frozen Data: `freeze` and `immutable`
+
+`freeze x` turns a region into frozen data. The result is `immutable` and is shared freely. `freeze`
+consumes a local, so reading the local afterwards is **E3102**. An expression whose inputs are all
+values, `immutable` data or moved `isolated` data cannot point back into the current region, so
+`freeze Point.create(2, y: 3)` needs no `isolated` declaration. A local written as ordinary mutable data is
+part of its region and cannot be frozen: `freeze cursor.clone()` freezes a copy, and freezing the local
+itself is **E3200**, whose message names the fix (``'cursor' is used as mutable at line 15; freeze a copy: `freeze cursor.clone()` ``).
+`specs/regions-freeze.md` pins these.
+
+`immutable T` is a type, usable on a typealias, a field, a parameter, a result and a type argument:
+
+```maxon
+typealias SettledIndex = immutable IndexBuilder
+```
+
+A write through frozen data is **E3197** (`cannot write 'numeric' through 'pinned', which is immutable`), and
+storing a mutable value where frozen data is held, or the reverse, is **E3196** (`cannot store a mutable
+'Row' into 'pinned', which holds an immutable 'Row'; freeze it, or store a copy`). A value that joins frozen
+and mutable data, through a ternary, a `match` arm, a `try … otherwise` or a `var` assigned both, is
+read-only (**E3197**: `which is read-only, as it joins immutable and mutable data`). The cases are in
+`specs/regions-modify.md` and `specs/regions-inferred.md`.
+
+A generic type argument carries a capability. `List with Box` holds mutable `Box` values of the current
+region and `List with immutable Box` holds frozen ones; a value that flows into either position is compared
+against it as a store into a slot, so a frozen value into the mutable position and a mutable one into the
+`immutable` position are both refused (**E3196** at a store, **E3207** at a call argument that the callee
+stores). `Array with immutable Box` and `Array with readonly Box` are
+different types (`specs/regions-generic-flows.md`).
+
+### Parameter Capabilities Are Inferred
+
+An unmarked parameter, and an omitted receiver, takes one of three classes from how the body uses it:
+
+| Class | The body | Accepts |
+|-------|----------|---------|
+| any capability | only reads it | a mutable, read-only or frozen argument |
+| mutable only | writes through it, stores it, captures it, or passes it where a callee needs it mutable | a mutable argument |
+| immutable only | sends it, or passes it to an `immutable` parameter or an `immutable self` call | a frozen argument |
+
+A body that needs both is **E3206** (`parameter 't' is used as mutable (it calls 'add', which writes its
+receiver) and as immutable at line 27; a parameter cannot be both`). An argument the class refuses is
+**E3207**, and the message names the use that decided it:
+
+```maxon
+function describe(table Table) returns String
+	return "{table.count()} rows"
+end 'describe'
+
+function stamp(table Table)
+	table.add(9)
+end 'stamp'
+
+function main() returns ExitCode
+	var live = Table.create()
+	let frozen = freeze Table.create()
+	print("{describe(live)} {describe(frozen)}\n")    // describe takes either
+	stamp(live)                                        // stamp takes the mutable one
+	return 0
+end 'main'
+```
+
+`stamp(frozen)` is **E3207**: `'stamp' writes 'table' (it calls 'add', which writes its receiver); 'frozen' is
+immutable`. `specs/regions-inferred.md` (`read-only-param-takes-mutable-and-frozen`,
+`transitive-writer-refused`) pins the example and the refusal. A parameter declared `immutable T` takes a
+frozen argument only (**E3207**: ``'create' takes `immutable` 'settings'; 's' is mutable. Freeze it first``),
+and a method declared `immutable self` runs on a frozen receiver only.
+
+The classes are computed together over the call graph, so they do not depend on declaration order.
+
+**A result's capability comes from the arguments at the parameters some return path comes from**, and from
+no other argument. Every such argument mutable gives a mutable result. Every such argument frozen gives a
+frozen result when each return path returns a parameter, and a read-only one when some path returns a fresh
+or local value. Any read-only source gives a read-only result. An argument at a parameter no path returns
+plays no part (`specs/regions-results.md`). A call whose return paths return parameters of different
+capabilities is **E3208** (`'pick' returns 'a' or 'b'; they must both be mutable or both immutable here`).
+A function that declares `returns immutable T` and returns a mutable value, or declares a plain result and
+returns an `isolated` one, is **E3209** (`a return does not fit the declared result: 'fresh' is mutable, the
+result is immutable; freeze it`).
+
+A value joined from a parameter's data and fresh or local mutable data is judged by the same rule against
+the parameter's final class, and a write through it makes the parameter mutable only. A join with frozen data
+is read-only (`specs/regions-soundness.md`).
+
+### Separate Regions: `isolated`
+
+A field, parameter, result or local is declared `isolated`. A local takes the word after its initializer:
+
+```maxon
+var builder = IndexBuilder.create() as isolated IndexBuilder
+```
+
+An expression whose inputs are all values, `immutable` data or moved `isolated` data is a fresh region where
+an `isolated` position asks for one, so `Self{index: WordIndex.create()}` fills an `isolated` field. A
+variable of ordinary mutable data does not become `isolated` by being stored: it is **E3200** (``'spare' is
+not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted;
+declare it `as isolated Bag`, or store a copy``).
+
+`isolated` values are linear. Every use of an `isolated` local or parameter moves it except opening it, so
+`let b = a` moves `a` and a later read of `a` is **E3102**. An `isolated` parameter owns the region it is
+handed; `mutable isolated` is by reference, and the callee may open, swap or replace it but never move it out,
+alias it, store it or pass it on (**E3202**). Reading an `isolated` value without opening it, such as
+`self.part` outside a block, is **E3198** (``'self.part' is isolated and cannot be read outside a block; open
+it with `modify`, or take it out with `swap` ``).
+
+#### `modify` Blocks
+
+`modify x 'label' … end 'label'` opens an `isolated` local, parameter or field for several statements. Inside,
+`x` keeps its name and is writable; everything outside is read-only except block locals, objects made inside
+the block and outer `var`s that hold values:
+
+```maxon
+function buildIndex(declarations DeclarationArray) returns SettledIndex
+	var builder = IndexBuilder.create() as isolated IndexBuilder
+
+	modify builder 'fill'
+		for declaration in declarations 'eachDeclaration'
+			builder.add(declaration.clone())
+		end 'eachDeclaration'
+	end 'fill'
+
+	return freeze builder
+end 'buildIndex'
+```
+
+The index is filled in a region of its own and frozen on return; `specs/regions-modify.md`
+(`build-then-freeze-runs`) runs the whole program. `modify` on a name that is not `isolated` is **E3198**
+(``'counter' is not isolated; 'modify' opens an isolated value. Declare it `as isolated Counter` ``). Opening,
+swapping, sending or freezing a region needs a writable holder, so one reached through read-only data is
+**E3199**.
+
+Inside a block:
+
+- Only the region's contents are writable. The slot holding `x` cannot be reassigned or passed by reference
+  in its own block (**E3203**), and an outer `var` that holds a record cannot be reassigned (**E3204**).
+- A mutable value cannot leave the block by `return` or by an outer variable (**E3202**): what leaves is a
+  value, `immutable` data or a fresh `isolated` region.
+- A nested `modify` leaves the root of every enclosing block read-only.
+- Waiting on another party and running a coroutine are refused: `await` and a call that may wait or may
+  yield are **E3205** ([Waiting and Yielding](#waiting-and-yielding)). A statement that needs a writable
+  argument or receiver of outer data is **E3207** (`'noteFile' needs a writable receiver; 'self' is
+  read-only while 'fill' is open`).
+- A `for` over an array the loop drains makes the array read-only in the body (**E3197**).
+
+#### One-Call and One-Statement Opens
+
+A call that passes an `isolated` value in an unmarked position, as receiver or argument, opens it for that
+call. A statement that reads or writes through an un-opened `isolated` value (`lines.count()`,
+`job.number = 4`, `holder.page.lines.push("a")`) opens it for that statement. The same rules apply as in a
+block: one `isolated` root per statement, every other operand a value, `immutable` data or a moved `isolated`
+value, and only values, `immutable` data and fresh `isolated` data leave. Two roots in one statement are
+**E3201** (``one statement reaches through two isolated values, 'left' and 'right'; a statement opens one
+isolated value, so open one with `modify` or split the statement``), as is mutable outer data beside the opened
+region (`'spare' is mutable outside 'index'; a call into an isolated region takes values, immutable or
+isolated`). For an `if` or `while` the open covers the condition alone; a `for` or `match` over the value
+opens it for the whole statement.
+
+#### `swap` and `merge`
+
+`swap path with value` takes the region out of an `isolated` field or element and leaves `value` in the slot:
+
+```maxon
+function takeIndex() returns isolated WordIndex
+	return swap self.index with WordIndex.create()
+end 'takeIndex'
+```
+
+`merge x` moves an `isolated` region into the current one, and the result is ordinary mutable data:
+`return merge box` returns an `isolated` parameter as a plain result. `swap` on a path that is not an
+`isolated` field is **E3198**; `merge` of a value that is not `isolated`, and `freeze` of a value type, are
+**E3200**. The cases are in `specs/regions-modify.md` and `specs/regions-freeze.md`.
+
+An `isolated` field filled in `modify`, written by a one-call open and taken out whole with `swap` is run in
+`specs/regions-modify.md` (`isolated-field-modify-one-call-swap-runs`).
+
+### Unique Types
+
+`type Ticket is unique` declares values that are never cloned and never aliased. `let b = a` moves `a`
+(**E3102** on a later read of `a`); storing a unique value moves it; an argument is lent for the call, and a
+callee that keeps its parameter takes the caller's variable. `clone()` is **E3214** (`'Ticket' is unique and
+cannot be cloned`):
+
+```maxon
+type Ticket is unique
+	export var serial as Serial
+
+	static function create(serial Serial) returns Self
+		return Self{serial: serial}
+	end 'create'
+end 'Ticket'
+```
+
+A type with a unique field is unique too, with no declaration and no generated `clone()` (**E3214**:
+``'Wallet' is unique (its field 'ticket' holds a unique 'Ticket') and cannot be cloned``); so is a type that
+holds an array of unique values. A unique value cannot be frozen, and reading one out of a field or an element
+to bind, return or store it is **E3214**: move it out with `pop` or `remove`, read it through a `view`, or
+`swap` it out of an `isolated` field. Handing a unique value to a parameter the callee only reads leaves it
+readable. The standard library's `Promise` is unique. The cases are in `specs/regions-unique.md`.
+
+### Region Bounds
+
+A generic type may bound a type parameter in its own `where` clause:
+
+```maxon
+type Pool uses T where T is sendable
+	export var item as T
+	...
+end 'Pool'
+```
+
+`T is sendable` takes a value, a service handle or an `immutable` record: a plain record, which the caller
+keeps sharing, and a `unique` type, whose values move, are refused. `T is isolated` takes a value, a service
+handle or a `unique` type. Every instantiation is checked against the bound, including an instance made
+through a type parameter, and a refusal is **E3215** (``'Job' is not sendable, so it cannot be 'T' of 'Pool',
+which declares `where T is sendable`: a plain record is shared with the caller; use `immutable Job`, or a value
+or a service handle``). A function's or an extension's `where` clause cannot spell either bound (**E3215**).
+A generic type accepts an `isolated` type argument only when it declares `where T is isolated`
+(`Wrapper with isolated Box` over an unbounded `Wrapper` is a parse error). `specs/regions-bounds.md` pins
+these.
+
+### Capabilities at Function Types and Requirements
+
+A function type and an interface requirement have no body for the checker to read, so they declare what the
+callee does. Unmarked, they are read-only and neither wait nor yield:
+
+| Spelling | Meaning |
+|----------|---------|
+| `function(mutable T)`, `function f(mutable self)` | the callee writes that parameter, or the receiver |
+| `function(immutable T)`, `returns immutable T` | the callee reads frozen data, or hands frozen data back |
+| `returns isolated T` | the result is a region of its own |
+| `function(…) returns R mutates captures` | the closure may write what it captured |
+
+```maxon
+interface Grows
+	function grow(mutable self, by Tally)
+end 'Grows'
+
+typealias Step = function(mutable Counter) returns Tally
+```
+
+A closure, function value or conformer converts to one only if each unmarked parameter, its receiver and
+each capture is read and not written, and it neither waits nor yields. Anything else is **E3210**:
+
+```text
+error E3210: 'Bag.grow' writes its receiver, but 'Grows.grow' does not declare `mutable self`
+error E3210: function value for 'Look' writes its parameter 'counter', but 'Look' does not declare it `mutable`
+error E3210: function value for 'Array.SortComparator' writes data it captured, but 'Array.SortComparator' does not declare `mutates captures`
+error E3210: function value for 'Step' may yield (it awaits a coroutine at line 12), but a function type never waits or yields
+error E3210: 'Relay.echo' may wait (it awaits a reply from 'Bouncer' at line 28), but a requirement never waits or yields
+```
+
+A conformer or function value whose declaration marks a position the boundary leaves unmarked, or the
+reverse, is refused too. A value of a `mutates captures` type called through frozen or read-only
+data is **E3211** (``'Tallier' mutates captures and cannot be called through immutable data``).
+
+A caller trusts the declaration: an argument at a `mutable` position is writable, and one at an `immutable`
+position is frozen (**E3207**). A result read through an interface or function value is read-only, so a
+requirement that wants to hand back data to store declares `returns isolated T` or `returns immutable T`.
+`specs/capability-qualifiers.md` and `specs/regions-convert.md` pin these.
+
+### Waiting and Yielding
+
+Two facts are inferred for every function, with no marker. A function **may wait** when it waits on another
+party: a service reply, a send with a timeout, a spawn of a factory that does either, or a call to a function
+that may. A function **may yield** when it awaits a coroutine, or calls one that may yield or may wait. File,
+socket and process I/O are neither: they park the green thread, and while a `modify` block is open the
+runtime does not switch to a sibling coroutine of the same green thread, so the thread waits for the block
+(`specs/regions-runtime.md`, `break-leaves-window-lets-sibling-run`).
+
+Inside a `modify` block or a one-call open, a coroutine `await`, a call that may wait or yield, the start of
+a coroutine that may wait and a `spawn` of a factory that may wait or yield are **E3205**, and the message
+names why:
+
+```text
+error E3205: cannot call 'settle' inside 'fill'; it may yield (it awaits a coroutine at line 12). Call it before or after the block
+error E3205: cannot call 'ask' inside 'fill'; it may wait (it awaits a reply from 'Oracle' at line 16). Call it before or after the block
+```
+
+A call through a function value that can be anything feeds the caller's may-yield bit, and a call whose body
+cannot be read counts as may-wait. Await before the block and pass the result in.
+
+### Coroutines and Regions
+
+An `async` call that takes the caller's mutable data produces a **tied promise**, and every promise held in a
+local is **must-use**. [Tied and Must-Use Promises](#tied-and-must-use-promises) states both rules. A variable
+handed to a `mutable` parameter of an `async` callee is lent to the coroutine until the promise is awaited or
+cancelled ([Starting a Coroutine](#starting-a-coroutine)).
+
+### Pending Operands
+
+A value already read for one operand survives the operands after it. A field read used as a constructor,
+union-literal, send, `spawn` or `async` argument is held across every later operand that may run user code,
+and a `match` subject is held across the arms that write back (`specs/regions-holds.md`). A by-reference
+write is the exception a hold cannot cover, and E3186 refuses it at compile time
+([Aliasing Between Arguments](#aliasing-between-arguments)).
+
+### Capability Errors
+
+| Code | Refuses |
+|------|---------|
+| [E3196](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3196) | storing a value of one capability where another is held |
+| [E3197](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3197) | a write through frozen or read-only data |
+| [E3198](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3198) | an `isolated` value read outside a block, `modify` or `swap` of a value that is not `isolated` |
+| [E3199](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3199) | opening, swapping, sending or freezing a region held by read-only data |
+| [E3200](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3200) | ordinary mutable data where an `isolated` value is wanted, and `freeze` or `merge` of what they do not apply to |
+| [E3201](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3201) | one statement reaching two isolated regions, or mutable outer data beside one |
+| [E3202](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3202) | a mutable value leaving a `modify` block, a `mutable isolated` parameter moved out |
+| [E3203](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3203) | the slot of an open value reassigned in its own block |
+| [E3204](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3204) | an outer `var` holding a record reassigned in a block |
+| [E3205](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3205) | waiting or yielding inside a block |
+| [E3206](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3206) | a parameter the body needs both mutable and immutable |
+| [E3207](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3207) | an argument whose capability the parameter refuses |
+| [E3208](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3208) | a result whose source arguments disagree |
+| [E3209](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3209) | a return that does not fit the declared result |
+| [E3210](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3210) | a function value or conformer that does more than its function type or requirement declares |
+| [E3211](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3211) | a `mutates captures` value called through frozen or read-only data |
+| [E3212](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3212) | a tied promise returned, stored, captured, sent, passed on, or left unconsumed on an exit |
+| [E3213](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3213) | a promise dropped, overwritten or discarded |
+| [E3214](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3214) | a unique value cloned, aliased, frozen or moved out of a slot it was only read from |
+| [E3215](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3215) | a type argument that breaks a `where T is sendable` or `where T is isolated` bound |
+
 ## Memory Model
 
 Maxon manages memory with **reference counting**. There is no garbage collector and no manual `free`: a
@@ -6143,8 +6549,7 @@ The rules:
   - the container itself stays mutable: elements can still be pushed, replaced and removed.
 
   As a type argument, `readonly` appears only on a container's element or value type; bindings and fields use
-  `let`. `returns readonly` on a boundary with no body is a
-  [capability qualifier](#capability-qualifiers-keep-sole-returns-readonly).
+  `let`.
 - **Value types are exempt.** Scalars, `String`, `Character` and records whose fields are all `let` cannot give a
   stored value a second writer, so none of these rules apply to them. A `String` or `Character` a name does not
   own is copied when it is bound to a `var` or stored.
@@ -6194,8 +6599,8 @@ end 'main'
 | an ordinary call argument | shared with the callee for the call, counted where needed; a `mutable` parameter is the caller's own storage, so the callee's writes reach it |
 | an argument the callee keeps where something may write it | a fresh `let` at its last use moves; any other read-only value is **E3078** |
 | an argument the callee keeps in a `let` field | must be read-only, a value type, or moved (a `var` at its last use) |
-| an argument to a [`sole`](#capability-qualifiers-keep-sole-returns-readonly) parameter | moves: a fresh value, or a `let` or `var` at its last use |
-| an [`async`](#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a `mutable` parameter the coroutine reassigns gets storage the coroutine owns; a promise moves to the coroutine |
+| an argument to an [`isolated`](#separate-regions-isolated) parameter | moves: a fresh region, or an `isolated` local; reading it afterwards is **E3102** |
+| an [`async`](#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread, and its promise is [tied](#tied-and-must-use-promises) when the argument is the caller's mutable data; a variable at a `mutable` parameter is lent to the coroutine until its promise is awaited or cancelled; a promise moves to the coroutine |
 | a [closure](#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
 | a [service](#services--spawn) message | a mutable value moves to the service; a read-only value the sender does not own is shared; a tuple of heap-free elements the sender does not solely own is copied; a view, or a record a view declared earlier may reach, is **E3138** |
 | a `spawn` factory argument | moves to the service's green thread; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
@@ -6204,10 +6609,53 @@ end 'main'
 ### Aliasing Between Arguments
 
 Reads are counted, so two arguments that reach the same storage are safe in most calls: `s.append(s)` is
-legal. The one refused overlap is a **by-reference parameter** whose storage another argument of the same call
-also reaches. A by-reference parameter is one marked `mutable`. The refusal is **E3186**; pass a `clone()` as
-one of the two. A promise, or a value of an opaque type parameter, passed at two arguments whose parameters
-take it moves at the first, so the second is **E3102**.
+legal. The refused shape is a **by-reference cell**: a local handed to a `mutable` parameter the callee writes
+is overwritten right after the call's own operands run, so a value an earlier operand already read from that
+local would be stale, and a hold cannot protect a value its own cell overwrites. **E3186** refuses a read of
+that local by an operand evaluated **before** the write, anywhere in the same statement:
+
+- an earlier operand, an argument of the call itself, or the receiver;
+- a ternary condition that wraps the call, at any group depth, because the condition runs first, and the
+  arms of a ternary in the order they run;
+- a closure literal that captures the local.
+
+```maxon
+var label = "original"
+let k = two(label, k: put(label))      // E3186: `label` is read by `two`'s first operand, before `put` writes it
+let j = two2(put(label), text: label)  // accepted: the read runs after the write and sees "replaced"
+```
+
+`specs/regions-byref-order.md` pins the two orders (`call-argument-before`, `call-argument-after`) and the
+operand kinds: constructor, union-literal, tuple-literal, call, method, `async`, `match` subject and ternary
+operands, `return` and `if` conditions. An operand that does not read the local is accepted beside the cell
+(`bump(h.n, h: Holder.create(7))`), and `bump(h.n, h: h.copy())` is refused because `h.copy()` reads `h`.
+
+The message names the other operand and the cure for the kind of cell:
+
+```text
+error E3186: argument 'label' is read by another operand of this statement and passed by reference to 'put' (parameter 'text') — a hold cannot protect a value its by-reference cell overwrites. Copy 'label' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
+```
+
+Where the by-reference cell itself is the operand to move, the cure copies the local into a `var` in an earlier
+statement, passes the copy at that position and stores it back after the call (a `let` there is **E3159**).
+
+The refusal is judged per **root binding**. It counts reads of the cell's own root variable and of that
+variable's field paths, and all the fields of `self` share one root, as a module `var` or a `static var` is
+one root. Another name for the same record, such as a `view`, a `var` that took the record by move or a `let`
+alias of a parameter, is a pending operand of its own, and the runtime hold a read of it takes keeps the value
+alive across the write.
+
+**Only a parameter the callee writes lends its cell.** A callee writes a `mutable` parameter when its body
+does, or when it forwards the parameter to a `mutable` parameter that is written (one fact per parameter,
+computed over the call graph). `look(s, b: s)` is accepted when `look`'s `a mutable String` is never written.
+A call through an interface requirement or a function value counts every `mutable` position as written, and a
+generic function writes a parameter if any instance does. Another call's cell counts only while it is lent,
+from its argument to its call: two sibling calls that rewrite one local do not overlap, and a nested call does
+while the call around it holds the cell. A `mutable` parameter of a value type that the callee never writes
+takes a sibling read of the same local.
+
+A promise, or a value of an opaque type parameter, passed at two arguments whose parameters take it moves at
+the first, so the second is **E3102**.
 
 ### Explicit Cloning
 
@@ -6439,7 +6887,8 @@ awaited or dropped exits with **75** instead (see [Concurrency](#exit-codes)).
 | [E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171) | a shared value whose graph holds an OS handle, a function value or a promise |
 | [E3174](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3174) | a published value that is not solely owned |
 | [E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) | raw memory or a raw handle used outside the library tier |
-| [E3186](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3186) | a `mutable` parameter that overlaps another argument |
+| [E3186](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3186) | a local read by an operand evaluated before a call writes it through a `mutable` parameter |
+| [E3196](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3196)–[E3215](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3215) | the capability, window, tied-promise and unique checks (see [Capability Errors](#capability-errors)) |
 | [E5004](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e5004) | a chain of unchecked runtime functions that can exceed the stack margin |
 | exit 96 | a mutable value sent to another thread while not solely owned |
 | exit 101 | memory still allocated when `main` returns |
@@ -6705,10 +7154,10 @@ let a = Point.create(1)
 var c = a                     // E3078: cannot assign the read-only 'a' to mutable binding 'c'; use 'let' instead of 'var', or use clone()
 ```
 
-**Handing a `mutable` parameter storage another argument reaches**
+**Reading a local in the statement that hands it to a `mutable` parameter the callee writes**
 
 ```maxon
-bump(h.n, h: h)   // E3186: argument 'h' overlaps argument 'h.n', which 'bump' reassigns (parameter 'n') — …
+bump(h.n, h: h)   // E3186: argument 'h.n' is read by another operand of this statement and passed by reference to 'bump' (parameter 'n') — a hold cannot protect a value its by-reference cell overwrites. Copy 'h' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
 ```
 
 **Reaching raw memory from a program**

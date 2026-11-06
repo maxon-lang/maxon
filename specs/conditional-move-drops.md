@@ -695,6 +695,7 @@ end 'keep'
 
 function rearmedPromiseEachTrip(count Integer) returns Integer
 	var p = async work(0)
+	p.cancel()
 	var total = 0 as Integer
 
 	for i in 0 upto count 'trips'

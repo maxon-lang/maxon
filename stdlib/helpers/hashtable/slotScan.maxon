@@ -27,6 +27,7 @@ public enum SlotState
 end 'SlotState'
 
 public typealias SlotStateArray = Array with SlotState
+public typealias SlotStateCursor = __ManagedMemoryCursor with SlotState
 
 /// A slot's position in the table, and the table's total slot count. Both are non-negative, and they are
 /// the parameter types of the scan below, so they belong with it.
@@ -58,12 +59,19 @@ public typealias TableCapacity = int(0 to 9223372036854775808) implements Count
 ///
 /// It is what a `MapIterator` and a `SetIterator` each advance through, and it is the ONE `match` over
 /// `SlotState` that a fourth state would break in a file that has to be edited anyway.
-public function findNextOccupied(states SlotStateArray, capacity TableCapacity, from TableSlotIndex) returns TableSlotIndex throws IterationError
-	var i = from
+public function findNextOccupied(states SlotStateCursor, capacity TableCapacity, from TableSlotIndex) returns TableSlotIndex throws IterationError
+	let limit = capacity as TableSlotIndex
 
-	while i < (capacity as TableSlotIndex) 'scan'
-		let state = try states.get((i as ElementIndex)) otherwise panic("findNextOccupied: states.get OOB — i is below capacity")
-		let isOccupied = match state 'so'
+	if from >= limit 'pastTheLastSlot'
+		throw IterationError.exhausted
+	end 'pastTheLastSlot'
+
+	let origin = states.index() as ElementIndex
+	var i = from
+	try states.seek(i as ElementIndex) otherwise panic("findNextOccupied: states.seek OOB — from is below capacity")
+
+	while i < limit 'scan'
+		let isOccupied = match states.current() 'so'
 			Occupied gives true
 			Empty gives false
 			Deleted gives false
@@ -74,7 +82,28 @@ public function findNextOccupied(states SlotStateArray, capacity TableCapacity, 
 		end 'found'
 
 		i = i + 1
+
+		if i < limit 'moreSlots'
+			try states.advance() otherwise panic("findNextOccupied: states.advance OOB — i is below capacity")
+		end 'moreSlots'
 	end 'scan'
 
+	try states.seek(origin) otherwise panic("findNextOccupied: states.seek OOB — the origin is a slot the cursor held")
 	throw IterationError.exhausted
 end 'findNextOccupied'
+
+public type SlotCursor uses Element
+	public typealias Column = __ManagedMemory with Element
+	public typealias Cursor = __ManagedMemoryCursor with Element
+
+	public static function over(column Column, at TableSlotIndex) returns Cursor
+		var cursor = try column.createCursor() otherwise panic("SlotCursor.over: a column is as long as the state column it mirrors")
+		try cursor.seek(at as ElementIndex) otherwise panic("SlotCursor.over: the column holds the slot the state column named")
+
+		return cursor
+	end 'over'
+
+	public static function move(cursor Cursor, to TableSlotIndex)
+		try cursor.seek(to as ElementIndex) otherwise panic("SlotCursor.move: the column holds the slot the state column named")
+	end 'move'
+end 'SlotCursor'

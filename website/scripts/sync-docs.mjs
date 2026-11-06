@@ -67,6 +67,7 @@ const SOURCES = [
       { page: 'language/namespaces.md', sections: ['Namespaces'] },
       { page: 'language/async.md', sections: ['Concurrency'] },
       { page: 'language/build-system.md', sections: ['Build System'] },
+      { page: 'language/regions.md', sections: ['Regions and Capabilities'] },
       { page: 'language/memory-model.md', sections: ['Memory Model', 'Code Generation'] },
       {
         page: 'language/patterns-and-errors.md',

@@ -1,0 +1,34 @@
+module function checkByReferenceOverlaps(project Project, module MaxonModule, mutationSummary ParamMutationSummary) returns bool
+	var refused = false
+
+	for func in module.functions 'eachFunc'
+		if func.pendingOverlaps.isEmpty() or project.libraryFacts.bodyIsSwept(func.name) 'nothingToJudge'
+			continue
+		end 'nothingToJudge'
+
+		for overlap in func.pendingOverlaps 'eachOverlap'
+			if lendIsWritten(overlap.lend, mutationSummary: mutationSummary) and companionAllows(overlap.companion, mutationSummary: mutationSummary) 'theCalleeWritesIt'
+				reportPositioned(project, code: ErrorCode.argumentOverlapsWrittenParameter, message: overlap.message, line: overlap.line, column: overlap.column, filePath: func.sourceFilePath)
+				refused = true
+				break
+			end 'theCalleeWritesIt'
+		end 'eachOverlap'
+	end 'eachFunc'
+
+	return refused
+end 'checkByReferenceOverlaps'
+
+function lendIsWritten(lend LendWrite, mutationSummary ParamMutationSummary) returns bool
+	return match lend 'lend'
+		unknown gives true
+		byParameter(callee, _, position) gives mutationSummary.writesByReference(callee, position: position)
+	end 'lend'
+end 'lendIsWritten'
+
+function companionAllows(companion CompanionLend, mutationSummary ParamMutationSummary) returns bool
+	return match companion 'companion'
+		none gives true
+		alsoWritten(lend) gives lendIsWritten(lend, mutationSummary: mutationSummary)
+		notWritten(lend) gives not lendIsWritten(lend, mutationSummary: mutationSummary)
+	end 'companion'
+end 'companionAllows'

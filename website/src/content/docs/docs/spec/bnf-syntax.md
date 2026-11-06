@@ -61,8 +61,14 @@ before a declaration), `test` (a top-level declaration followed by a `TEST_NAME`
 type's factory call, optionally after a `(capacity: n)` group), `bits` (followed by `(` on a typealias right-hand side), `readonly` (before a type
 argument after `with`, `(` or `,`, and as a `result_capability`), `view` (a `view_decl`: at the start of a
 statement or after `if` or `then`, followed by an IDENTIFIER, or by a parenthesized list whose `)` is followed by
-`=`; and before a name in a `tuple_assign_stmt` target), `keep` and `sole` (a `param_capability` or
-`result_capability`), and `mutable` (a parameter marker, directly before the parameter's type). `__line__` and `__file__`
+`=`; and before a name in a `tuple_assign_stmt` target), `mutable` (a parameter marker, directly before the
+parameter's type, or a receiver capability before `self`), `isolated` and `immutable` (a `capability` before a
+type or `self`, and `isolated` after `is` in a `constraint`), `unique` (after `is` in a `type_decl` header: `type Ticket is unique`),
+`sendable` (after `is` in a `constraint`), `mutates` and `captures` (the `mutates_clause` ending a
+`function_type`), `modify` (a `modify_stmt`: at the start of a statement, followed by an IDENTIFIER or `self`,
+on a line ending in a LABEL), and `freeze`, `swap` and `merge` (a `region_expr`: not after `.`, followed by an
+IDENTIFIER, `self`, `Self`, `try`, or a `(` set apart from the word by a space; `swap(` with the parenthesis
+adjacent is a call). `__line__` and `__file__`
 are identifiers in the reserved `__` space, legal only as a parameter default (§3.1).
 
 ### 1.4 Literals
@@ -252,15 +258,23 @@ needs no `try`: the test handles the error.
 
 ```
 function_decl = visibility_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
-                [ 'returns' [ result_capability ] type_ref ] [ throws_clause ] NEWLINE
-                (* a result_capability only on a generic function; E2076 otherwise *)
+                [ 'returns' [ capability ] type_ref ] [ throws_clause ] NEWLINE
                 body
                 'end' LABEL
 
+receiver_param
+              = ( capability | 'mutable' ) 'self'            (* first parameter of a method or requirement only; a static or free
+                                                                function, or `self` after another parameter, is a parse error *)
+
+capability    = 'isolated' | 'immutable'                     (* contextual; a prefix word on a type_ref *)
+
 param_list    = param { ',' param }
-param         = IDENTIFIER [ 'mutable' ] type_ref [ '=' default_value ]
+param         = IDENTIFIER [ 'mutable' ] [ capability ] type_ref [ '=' default_value ]
                                                              (* IDENTIFIER '_' discards the parameter; a parameter is a `let`
-                                                                unless `mutable`, which makes a value-type parameter by reference *)
+                                                                unless `mutable`, which makes a value-type, `isolated` or
+                                                                `unique` parameter by reference and a record parameter
+                                                                write-through; a message or factory parameter takes no
+                                                                `mutable` *)
 
 default_value = expression                                   (* evaluated at each call that omits the argument *)
               | caller_location                              (* caller-location default, see below *)
@@ -280,7 +294,7 @@ throws_clause = 'throws' IDENTIFIER { '.' IDENTIFIER }
 ### 3.2 Type (Struct) Declaration
 
 ```
-type_decl     = visibility_prefix 'type' IDENTIFIER [ uses_clause ]
+type_decl     = visibility_prefix 'type' IDENTIFIER [ 'is' 'unique' ] [ uses_clause ]
                 [ conformance_clause ] [ where_clause ] NEWLINE
                 { type_member }
                 'end' LABEL
@@ -292,7 +306,7 @@ type_member   = field_decl
               | typealias_decl
 
 field_decl    = visibility_prefix ('var' | 'let') IDENTIFIER
-                ( 'as' type_ref
+                ( 'as' [ capability ] type_ref
                 | '=' field_default )
                 NEWLINE
 
@@ -309,8 +323,8 @@ field_default = 'true' | 'false'
 
 cast_default  = expression 'as' type_ref
 
-method_decl   = visibility_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
-                [ 'returns' type_ref ] [ throws_clause ] NEWLINE
+method_decl   = visibility_prefix 'function' IDENTIFIER '(' [ receiver_param ',' ] [ param_list ] ')'
+                [ 'returns' [ capability ] type_ref ] [ throws_clause ] NEWLINE
                 body
                 'end' LABEL
 
@@ -390,14 +404,12 @@ extends_clause
 
 interface_method
               = [ 'static' ] 'function' IDENTIFIER
-                '(' [ req_param { ',' req_param } ] ')' [ 'returns' [ result_capability ] type_ref ]
-                [ throws_clause ]
-req_param     = IDENTIFIER [ param_capability | 'mutable' ] type_ref [ '=' default_value ]
+                '(' [ receiver_param ',' ] [ req_param { ',' req_param } ] ')'
+                [ 'returns' [ capability ] type_ref ] [ throws_clause ]
+req_param     = IDENTIFIER [ 'mutable' ] [ capability ] type_ref [ '=' default_value ]
 
-param_capability
-              = 'keep' | 'sole'                              (* contextual; E2076 outside a function type or requirement *)
-result_capability
-              = 'sole' | 'readonly'                          (* contextual; also on a generic function's result *)
+                (* a requirement is read-only and never waits or yields unless it declares otherwise:
+                   `mutable self`, `mutable` and `immutable` parameters, `returns isolated|immutable` *)
 ```
 
 ### 3.6 Extension Block
@@ -464,10 +476,14 @@ alias_type_args
               = type_arg { ',' type_arg }                    (* a bare list: typealias right-hand side only *)
               | '(' type_arg { ',' type_arg } ')'
 
-type_arg      = [ 'readonly' ] generic_base 'with' [ INTEGER ] type_args    (* nested instance: parenthesize several arguments *)
-              | [ 'readonly' ] type_ref
+type_arg      = [ 'readonly' | capability ] generic_base 'with' [ INTEGER ] type_args    (* nested instance: parenthesize several arguments *)
+              | [ 'readonly' | capability ] type_ref
 
                 (* 'readonly' only on an Array or List element and a Map value: `Map with Key, readonly Value` (E2075) *)
+
+                (* a capability on a type argument: `Array with immutable Job`, `Map with (String, isolated Job)`;
+                   `isolated` only where the generic type declares `where T is isolated`, and never on a Map key
+                   or on a number, `bool`, enum or `String` argument (E2010) *)
 
                 (* the optional INTEGER is a fixed element count: `FixedArray with 3 Coord`; an absent INTEGER is the
                    runtime-sized form, whose length each value carries: `FixedArray with Coord` *)
@@ -510,7 +526,14 @@ type_args     = type_ref
 
 where_clause  = 'where' constraint { ',' constraint }
 
-constraint    = IDENTIFIER 'is' constraint_iface { 'and' constraint_iface }
+constraint    = IDENTIFIER 'is' constraint_bound { 'and' constraint_bound }
+
+constraint_bound
+              = constraint_iface
+              | region_bound
+
+region_bound  = 'sendable' | 'isolated'                  (* contextual; legal only in a generic `type`'s own
+                                                            `where` clause: in a function's or an extension's it is E3215 *)
 
 constraint_iface
               = IDENTIFIER { '.' IDENTIFIER } [ 'with' type_args ]
@@ -525,8 +548,10 @@ type_ref      = 'bool'
               | 'int' | 'float'              (* bare only on a typealias right-hand side and in sizeof; E3005 elsewhere *)
 
 function_type = 'function' '(' [ fn_type_param { ',' fn_type_param } ] ')'
-                [ 'returns' [ result_capability ] type_ref ]
-fn_type_param = [ IDENTIFIER ] [ param_capability | 'mutable' ] type_ref
+                [ 'returns' [ capability ] type_ref ] [ mutates_clause ]
+mutates_clause
+              = 'mutates' 'captures'                     (* the closures of this type may write what they captured *)
+fn_type_param = [ IDENTIFIER ] [ 'mutable' ] [ capability ] type_ref
               (* `returns` is optional; without it, the function type
                  returns void. A function type cannot declare `throws`.
                  `function(...)` is legal only as a `typealias` right-hand
@@ -546,6 +571,7 @@ statement     = return_stmt
               | let_decl
               | view_decl
               | discard_stmt
+              | modify_stmt
               | if_stmt
               | while_stmt
               | for_stmt
@@ -576,16 +602,27 @@ expression_stmt
 annotated_decl
               = '@heap' ( var_decl | let_decl )
 
-var_decl      = 'var' IDENTIFIER '=' expression
+var_decl      = 'var' IDENTIFIER '=' ( expression | isolated_init )
               | 'var' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
 
-let_decl      = 'let' IDENTIFIER '=' expression
+let_decl      = 'let' IDENTIFIER '=' ( expression | isolated_init )
               | 'let' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
 
 view_decl     = 'view' IDENTIFIER '=' expression               (* contextual; a local binding only, E2077 elsewhere *)
               | 'view' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
 
 discard_stmt  = '_' '=' expression
+
+isolated_init = expression 'as' 'isolated' type_ref            (* the whole initializer of a `var_decl` or `let_decl`:
+                                                                  the local is a region of its own; as a call argument
+                                                                  or on a value type it is a parse error *)
+
+modify_stmt   = 'modify' modify_target LABEL NEWLINE           (* contextual; opens an `isolated` local, parameter or
+                body                                              field for the block; `await` and any call that may
+                'end' LABEL                                       wait or yield inside it is E3205 *)
+
+modify_target = IDENTIFIER { '.' IDENTIFIER }
+              | 'self' { '.' IDENTIFIER }
 ```
 
 Constraints:
@@ -843,10 +880,20 @@ cast_expr     = unary_expr [ 'as' type_ref ]                (* an operand that i
 
 unary_expr    = '-' postfix_expr                            (* '--x' is a parse error; write '-(-x)' *)
               | 'not' unary_expr
+              | region_expr
               | async_expr
               | await_expr
               | spawn_expr
               | postfix_expr
+
+region_expr   = 'freeze' unary_expr                         (* contextual; turns a region into frozen data *)
+              | 'merge' unary_expr                          (* contextual; moves an `isolated` region into the current one *)
+              | 'swap' postfix_expr 'with' expression             (* contextual; takes the region out of an `isolated` field
+                                                               and leaves the expression's value in the slot *)
+
+                (* `freeze`, `merge` and `swap` are the operators only where the next token is an IDENTIFIER,
+                   `self`, `Self`, `try`, or a `(` set apart from the word by a space, and the word does not
+                   follow a `.`; `swap(1, right: 2)` with the parenthesis against the name is a call *)
 
 postfix_expr  = primary { postfix_op }
 
@@ -1042,6 +1089,7 @@ if <cond> 'label'  ...  end 'label'
 while <cond> 'label'  ...  end 'label'
 for <var> in <iter> 'label'  ...  end 'label'
 match <expr> 'label'  ...  end 'label'
+modify <path> 'label'  ...  end 'label'
 try <expr> otherwise 'label'  ...  end 'label'
 else 'label'  ...  end 'label'
 ```

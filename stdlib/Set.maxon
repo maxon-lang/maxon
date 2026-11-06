@@ -405,22 +405,26 @@ end 'Set'
 public type SetIterator uses Element implements Iterator with Element where Element is Hashable and Equatable
 	public typealias IterElementArray = Array with Element
 	public typealias IterStateArray = Array with SlotState
+	typealias ElementSlots = SlotCursor with Element
+	typealias ElementCursor = __ManagedMemoryCursor with Element
 
-	var elements as IterElementArray
-	var states as IterStateArray
+	var elements as ElementCursor
+	var states as SlotStateCursor
 	var capacity as TableCapacity
-	var iterIndex as TableSlotIndex
 
 	public static function create(elements IterElementArray, states IterStateArray, capacity TableCapacity) returns Self throws IterationError
-		let first = try findNextOccupied(states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
-		return Self{elements: elements, states: states, capacity: capacity, iterIndex: first}
+		var stateCursor = try states.managed.createCursor() otherwise throw IterationError.exhausted
+		let first = try findNextOccupied(stateCursor, capacity: capacity, from: 0)
+		let elementCursor = ElementSlots.over(elements.managed, at: first)
+		return Self{elements: elementCursor, states: stateCursor, capacity: capacity}
 	end 'create'
 
 	public function current() returns Element
-		return try elements.get(iterIndex as ElementIndex) otherwise panic("SetIterator.current: invariant violated — slot not populated")
+		return elements.current()
 	end 'current'
 
 	public function advance() throws IterationError
-		iterIndex = try findNextOccupied(states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
+		let next = try findNextOccupied(states, capacity: capacity, from: (states.index() as TableSlotIndex) + 1)
+		ElementSlots.move(elements, to: next)
 	end 'advance'
 end 'SetIterator'

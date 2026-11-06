@@ -1187,13 +1187,15 @@ type CompareTally
 	end 'create'
 end 'CompareTally'
 
-function counted(x Integer, y Integer, tally CompareTally) returns Ordering
+var tally = CompareTally.create()
+
+function counted(x Integer, y Integer) returns Ordering
 	tally.calls = tally.calls + 1
 	return x.compare(y)
 end 'counted'
 
-function sortCounting(a IntArray, tally CompareTally)
-	a.sortBy(function(x Integer, y Integer) gives counted(x, y: y, tally: tally))
+function sortCounting(a IntArray)
+	a.sortBy(function(x Integer, y Integer) gives counted(x, y: y))
 end 'sortCounting'
 
 function main() returns ExitCode
@@ -1205,8 +1207,7 @@ function main() returns ExitCode
 		a.push(r and 0xFFFFF)
 	end 'fill'
 
-	var tally = CompareTally.create()
-	sortCounting(a, tally: tally)
+	sortCounting(a)
 
 	var ordered = true
 
@@ -1297,12 +1298,14 @@ type Adversary
 	end 'compare'
 end 'Adversary'
 
-function adversarial(x Integer, y Integer, adversary Adversary) returns Ordering
+var adversary = Adversary.create(Items)
+
+function adversarial(x Integer, y Integer) returns Ordering
 	return adversary.compare(x, y: y)
 end 'adversarial'
 
-function sortAgainst(items IntArray, adversary Adversary)
-	items.sortBy(function(x Integer, y Integer) gives adversarial(x, y: y, adversary: adversary))
+function sortAgainst(items IntArray)
+	items.sortBy(function(x Integer, y Integer) gives adversarial(x, y: y))
 end 'sortAgainst'
 
 function main() returns ExitCode
@@ -1312,8 +1315,7 @@ function main() returns ExitCode
 		items.push(i)
 	end 'fill'
 
-	var adversary = Adversary.create(Items)
-	sortAgainst(items, adversary: adversary)
+	sortAgainst(items)
 
 	var ordered = true
 
@@ -1346,7 +1348,7 @@ sorted within the bound
 ## Duplicate-heavy inputs
 
 <!-- test: error.a-let-adversary-a-comparator-closure-writes-is-refused -->
-The same program with the adversary bound by `let`: the comparator closure writes the adversary it captured, so handing it over is refused.
+The adversary is a `let` handed to `sortAgainst`, whose comparator closure writes the adversary it captured: `SortComparator` does not declare `mutates captures`, so the closure is refused, and so is passing the read-only `adversary` to a function that writes it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -1447,6 +1449,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3210: <fragment>:67:15: function value for 'Array.SortComparator' writes data it captured, but 'Array.SortComparator' does not declare `mutates captures`
 error E3159: <fragment>:78:2: cannot pass 'adversary', which is read-only (a `let` binding), to a function that writes parameter 'adversary' (in main); pass a clone()
 ```
 

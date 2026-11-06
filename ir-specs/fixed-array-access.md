@@ -1262,9 +1262,9 @@ typealias Word = bits(64)
 typealias Planes = FixedArray with 8 Word
 typealias PlaneIndex = int(0 to 7) implements ElementIndex
 
-typealias PlaneWriter = function(Planes, PlaneIndex, Word)
+typealias PlaneWriter = function(mutable Planes, PlaneIndex, Word)
 
-function writeAt(planes Planes, at PlaneIndex, value Word)
+function writeAt(planes mutable Planes, at PlaneIndex, value Word)
 	planes.set(at, value: value)
 end 'writeAt'
 

@@ -981,7 +981,62 @@ function checkStructInstantiationConstraints(project Project, signatures Program
 
 		reportUnsatisfiedConstraint(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
 	end 'eachConstraint'
+
+	var visited = NameRoster.create(0)
+	checkRegionBoundsOfInstanceAndItsFields(project, signatures: signatures, site: site, instance: site.gid, visited: visited)
 end 'checkStructInstantiationConstraints'
+
+function checkRegionBoundsOfInstanceAndItsFields(project Project, signatures ProgramSignatures, site GenericInstantiationSite, instance GenericInstanceId, visited NameRoster)
+	let key = signatures.mangleGenericInstance(instance)
+
+	if visited.contains(key) 'alreadyChecked'
+		return
+	end 'alreadyChecked'
+
+	visited.push(key)
+	let instanceBase = signatures.genericInstanceBaseName(instance)
+
+	for bound in signatures.structRegionBounds(instanceBase) 'eachRegionBound'
+		if signatures.instanceArgMeetsRegionBound(instance, position: bound.typeParamIndex, kind: bound.kind) 'meetsTheBound'
+			continue
+		end 'meetsTheBound'
+
+		reportRegionBoundViolated(project, signatures: signatures, site: site, instance: instance, bound: bound, baseName: instanceBase)
+	end 'eachRegionBound'
+
+	if not signatures.genericInstanceHasBaseLayout(instance) 'noDeclaredFields'
+		return
+	end 'noDeclaredFields'
+
+	view layout = signatures.baseLayoutOf(instance)
+
+	if signatures.genericInstanceArgCount(instance) != layout.typeParamCount() as ElementIndex 'arityIsRefusedElsewhere'
+		return
+	end 'arityIsRefusedElsewhere'
+
+	for index in 0 upto layout.fieldTypes.count() 'eachField'
+		let fieldType = signatures.substituteInstanceFieldType(instance, index: index as FieldIndex)
+
+		if maxonTypeTag(fieldType) == ValueTypeTag.genericInstance 'aHeldInstance'
+			checkRegionBoundsOfInstanceAndItsFields(project, signatures: signatures, site: site, instance: genericInstanceIdOf(fieldType), visited: visited)
+		end 'aHeldInstance'
+	end 'eachField'
+end 'checkRegionBoundsOfInstanceAndItsFields'
+
+function reportRegionBoundViolated(project Project, signatures ProgramSignatures, site GenericInstantiationSite, instance GenericInstanceId, bound RegionBound, baseName ByteArray)
+	view argument = signatures.instanceArgDisplayName(instance, position: bound.typeParamIndex)
+	let shown = signatures.aliasIdentityDisplay(argument)
+	let parameter = String.from(constrainedTypeParamName(signatures, baseName: baseName, position: bound.typeParamIndex as FieldIndex))
+
+	let aUniqueType = signatures.instanceArgIsUnique(instance, position: bound.typeParamIndex)
+
+	let message = match bound.kind 'kind'
+		sendable gives "'{shown}' is `unique`, so it cannot be '{parameter}' of '{String.from(baseName)}', which declares `where {parameter} is sendable`: a unique value moves between owners instead of being shared; bound '{parameter}' with `isolated` instead" if aUniqueType else "'{shown}' is not sendable, so it cannot be '{parameter}' of '{String.from(baseName)}', which declares `where {parameter} is sendable`: a plain record is shared with the caller; use `immutable {shown}`, or a value or a service handle"
+		isolated gives "'{shown}' is not isolated, so it cannot be '{parameter}' of '{String.from(baseName)}', which declares `where {parameter} is isolated`: the bound takes a value, a service handle or a `unique` type"
+	end 'kind'
+
+	reportPositioned(project, code: ErrorCode.semanticRegionBoundRefused, message: message, line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+end 'reportRegionBoundViolated'
 
 // ⭐⭐ **A `where` CONSTRAINT'S BINDING IS A CLAIM ABOUT THE TYPE ARGUMENT, AND THIS IS WHERE IT IS CHECKED
 // (E3131).** `where Source is Iterator with Element` states that the conformance behind `Source` binds
@@ -1875,7 +1930,7 @@ function substituteAssociatedTypes(method InterfaceMethodSig, under RequirementS
 
 	let (returnRequirement, returnShown) = boundRequirement(method.returnType, display: method.returnTypeName, under: under)
 
-	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, paramTypes: paramTypes, returnTypeName: returnShown, returnType: returnRequirement, isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, under: under), paramIsBuffer: method.paramIsBuffer, paramCapabilities: method.paramCapabilities, returnCapability: method.returnCapability, byRefParams: method.byRefParams, nameLine: method.nameLine, nameColumn: method.nameColumn, written: method.written)
+	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, paramTypes: paramTypes, returnTypeName: returnShown, returnType: returnRequirement, isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, under: under), paramIsBuffer: method.paramIsBuffer, paramCapabilities: method.paramCapabilities, returnCapability: method.returnCapability, byRefParams: method.byRefParams, nameLine: method.nameLine, nameColumn: method.nameColumn, written: method.written, selfCapability: method.selfCapability)
 end 'substituteAssociatedTypes'
 
 function boundRequirement(requirement RequirementType, display ByteArray, under RequirementSubstitution) returns (RequirementType, ByteArray)
@@ -2358,7 +2413,7 @@ function signatureMatches(project Project, method InterfaceMethodSig, expansion 
 	for i in 0 upto method.paramNames.count() 'eachParam'
 		let implType = try implFunc.maxonParamTypes.get(i + selfOffset) otherwise panic("signatureMatches: maxonParamTypes.get OOB at {i + selfOffset}")
 
-		if maskHasParam(method.byRefParams, param: i as ParamCount) != maskHasParam(implSig.byRefParams, param: (i + selfOffset) as ParamCount) 'markersDiffer'
+		if maskHasParam(method.byRefParams, param: i as ParamCount) != maskHasParam(implSig.writtenParams, param: (i + selfOffset) as ParamCount) 'markersDiffer'
 			return false
 		end 'markersDiffer'
 
@@ -2387,6 +2442,10 @@ function signatureMatches(project Project, method InterfaceMethodSig, expansion 
 		end 'requirementTakesAnyBuffer'
 
 		let requirement = try method.paramTypes.get(i) otherwise panic("signatureMatches: paramTypes.get OOB at {i} — an InterfaceMethodSig's type columns are parallel")
+
+		if maskHasParam(method.byRefParams, param: i as ParamCount) and requirement.resolvesAtTheConformer() and not maskHasParam(implFunc.reassignedParamMask, param: (i + selfOffset) as ParamCount) 'theConformersConventionDiffers'
+			return false
+		end 'theConformersConventionDiffers'
 
 		if not requirementMeetsType(project, requirement: requirement, expansion: expansion, conformingType: conformingType, implType: implType, implSpelling: implParamSpelling(implSig, position: (i + selfOffset) as ParamCount), implFilePath: implFunc.sourceFilePath, typeParamNames: typeParamNames, signatures: signatures) 'aParamTheImplDoesNotTake'
 			return false
@@ -2426,9 +2485,9 @@ function expansionMeetsInstance(alias GenericInstanceId, expansion AliasExpansio
 	end 'differentShapes'
 
 	for position in 0 upto signatures.genericInstanceArgCount(alias) 'eachArg'
-		if signatures.genericInstanceArgIsReadOnly(alias, position: position) != signatures.genericInstanceArgIsReadOnly(implInstance, position: position) 'differentReadOnlyness'
+		if signatures.genericInstanceArgQualifier(alias, position: position) != signatures.genericInstanceArgQualifier(implInstance, position: position) 'differentQualifiers'
 			return false
-		end 'differentReadOnlyness'
+		end 'differentQualifiers'
 
 		if not expansionArgMeetsInstanceArg(signatures.substitutedInstanceArg(alias, position: position), expansion: expansion, implInstance: implInstance, position: position, signatures: signatures) 'differentArgs'
 			return false
@@ -2511,7 +2570,7 @@ function formatActualSignature(project Project, methodName ByteArray, conforming
 
 	for i in selfOffset upto implFunc.maxonParamTypes.count() 'eachParam'
 		paramNames.push(try implSig.paramNames.get(i) otherwise panic("formatActualSignature: paramNames.get OOB at {i}"))
-		paramTypes.push(markedTypeDisplay(implParamDisplay(project, implFunc: implFunc, implSig: implSig, position: i as ParamCount, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures), marked: maskHasParam(implSig.byRefParams, param: i as ParamCount)))
+		paramTypes.push(markedTypeDisplay(implParamDisplay(project, implFunc: implFunc, implSig: implSig, position: i as ParamCount, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures), marked: maskHasParam(implSig.writtenParams, param: i as ParamCount)))
 	end 'eachParam'
 
 	return assembleMethodSignature(methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: implReturnDisplay(project, implFunc: implFunc, implSig: implSig, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures), isStatic: implIsStatic, signatures: signatures)

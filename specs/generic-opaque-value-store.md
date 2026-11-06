@@ -566,7 +566,7 @@ type Held uses Value
 	end 'get'
 end 'Held'
 
-typealias Action = function() returns bool
+typealias Action = function() returns bool mutates captures
 
 function perform(action Action) returns bool
 	return action()

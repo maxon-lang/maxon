@@ -1454,3 +1454,34 @@ end 'main'
 ```exitcode
 18
 ```
+
+<!-- test: error.a-generic-instance-method-called-bare-in-a-static-function-needs-a-receiver -->
+`describe` is a generic instance method, so the bare call in a static function binds an instance of it, and is refused as an instance method without a receiver.
+
+```maxon
+typealias Score = int(0 to 100)
+
+type Tally
+	var total as Score
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	function describe(v T) uses T returns String
+		return "{self.total}:{v}"
+	end 'describe'
+
+	static function run() returns String
+		return describe(7)
+	end 'run'
+end 'Tally'
+
+function main() returns ExitCode
+	print("{Tally.run()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3193: <fragment>:16:10: 'describe' is an instance method of 'Tally' and needs a receiver: call it on a value, such as 'value.describe(...)', or make it `static`
+```

@@ -168,7 +168,7 @@ type EchoHandler implements HttpHandler
 		return EchoHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
@@ -366,7 +366,7 @@ type EchoHandler implements HttpHandler
 		return EchoHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
@@ -573,7 +573,7 @@ type BodyEchoHandler implements HttpHandler
 		return BodyEchoHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		try exchange.respondWith(StatusCode.ok, body: exchange.request().body(), contentType: "application/octet-stream")
 	end 'handle'
 
@@ -600,7 +600,10 @@ function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async serveEcho(server)
 	let sent = payload()
 
-	var request = try HttpRequest.create(HttpMethod.post, url: "https://localhost:{server.port()}/echo") otherwise return 2
+	var request = try HttpRequest.create(HttpMethod.post, url: "https://localhost:{server.port()}/echo") otherwise 'refused2x158'
+		peer.cancel()
+		return 2
+	end 'refused2x158'
 
 	request.setBody(sent)
 
@@ -611,6 +614,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 	let response = try HttpClient.send(request, limits: limits, tls: clientOptions()) otherwise (error) 'failed'
 		print("error {describeHttp(error)}\n")
 		server.close()
+		peer.cancel()
 
 		return 3
 	end 'failed'
@@ -776,7 +780,7 @@ type EchoHandler implements HttpHandler
 		return EchoHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
@@ -976,7 +980,7 @@ type EchoHandler implements HttpHandler
 		return EchoHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
@@ -1021,7 +1025,7 @@ type ChainHandler implements HttpHandler
 		return ChainHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		let body = match exchange.security() 'security'
 			plaintext gives "plaintext"
 			tls(_, _, _, chain) gives chainSummary(chain)
@@ -1225,7 +1229,7 @@ type EchoHandler implements HttpHandler
 		return EchoHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
@@ -1322,7 +1326,10 @@ function nameFromTheUrl() returns ExitCode
 
 	var named = exampleClient()
 
-	try named.setServerName("example.com") otherwise return 3
+	try named.setServerName("example.com") otherwise 'refused3x226'
+		peer.cancel()
+		return 3
+	end 'refused3x226'
 
 	print("named in the options: {fetch(HttpMethod.get, url: "https://127.0.0.1:{port}/", body: "", options: named)}\n")
 
@@ -1493,7 +1500,7 @@ type EchoHandler implements HttpHandler
 		return EchoHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
@@ -1587,6 +1594,8 @@ function plainClientOnTheTlsPort() returns ExitCode
 	print("a plain client was answered {plain.statusCode().number()}\n")
 	server.close()
 
+	_ = await peer
+
 	return 4
 end 'plainClientOnTheTlsPort'
 
@@ -1602,7 +1611,10 @@ function tlsClientOnThePlainPort() returns ExitCode
 
 	print("HttpClient over https to a plain server: {fetch(HttpMethod.get, url: "https://127.0.0.1:{port}/", body: "", options: clientOptions())}\n")
 
-	let plain = try HttpClient.get("http://127.0.0.1:{port}/still") otherwise return 2
+	let plain = try HttpClient.get("http://127.0.0.1:{port}/still") otherwise 'refused2x240'
+		peer.cancel()
+		return 2
+	end 'refused2x240'
 
 	print("then over http: {plain.statusCode().number()} [{plain.body()}]\n")
 	server.close()
@@ -1770,7 +1782,7 @@ type EchoHandler implements HttpHandler
 		return EchoHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
@@ -1809,7 +1821,7 @@ type RedirectHandler implements HttpHandler
 		return RedirectHandler{location: location}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		var headers = HttpHeaders.create()
 
 		headers.set("location", value: self.location)
@@ -1833,7 +1845,11 @@ function main() returns ExitCode
 	let location = "https://localhost:{secure.port()}/moved"
 	let plainPeer = async redirecting(plain, location: location)
 
-	let redirect = try HttpClient.get("http://127.0.0.1:{plain.port()}/") otherwise return 3
+	let redirect = try HttpClient.get("http://127.0.0.1:{plain.port()}/") otherwise 'refused3x192'
+		plainPeer.cancel()
+		securePeer.cancel()
+		return 3
+	end 'refused3x192'
 	let target = try redirect.header("location") otherwise "absent"
 
 	print("plain server: {redirect.statusCode().number()} location matches={target == location} body={redirect.body().byteLength()} bytes\n")
@@ -1992,7 +2008,7 @@ type EchoHandler implements HttpHandler
 		return EchoHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
@@ -2041,7 +2057,10 @@ end 'holdOpen'
 function stalledServer() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let peer = async holdOpen(listener)
-	let request = try HttpRequest.create(HttpMethod.get, url: "https://127.0.0.1:{listener.port()}/") otherwise return 2
+	let request = try HttpRequest.create(HttpMethod.get, url: "https://127.0.0.1:{listener.port()}/") otherwise 'refused2x178'
+		peer.cancel()
+		return 2
+	end 'refused2x178'
 	var limits = HttpClientLimits.create()
 
 	limits.timeoutMs = ClientBudgetMs
@@ -2058,6 +2077,8 @@ function stalledServer() returns ExitCode
 
 	print("a stalled server was answered {response.statusCode().number()}\n")
 
+	_ = await peer
+
 	return 3
 end 'stalledServer'
 
@@ -2073,7 +2094,10 @@ function stalledClient() returns ExitCode
 	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: patientServerOptions()) otherwise return 4
 	let peer = async serving(server)
 	let port = server.port()
-	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise return 5
+	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused5x212'
+		peer.cancel()
+		return 5
+	end 'refused5x212'
 
 	print("after a client that sends nothing: {fetch(HttpMethod.get, url: "https://localhost:{port}/after", body: "", options: clientOptions())}\n")
 	silent.close()
@@ -2090,11 +2114,17 @@ function acceptDeadline() returns ExitCode
 	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: patientServerOptions()) otherwise return 6
 	let peer = async serving(server)
 	let port = server.port()
-	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise return 8
+	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused8x229'
+		peer.cancel()
+		return 8
+	end 'refused8x229'
 
 	print("a stalled handshake, then a request: {fetch(HttpMethod.get, url: "https://localhost:{port}/after", body: "", options: clientOptions())}\n")
 
-	try server.setAcceptDeadline(AcceptWindowMs) otherwise return 7
+	try server.setAcceptDeadline(AcceptWindowMs) otherwise 'refused7x233'
+		peer.cancel()
+		return 7
+	end 'refused7x233'
 	silent.close()
 
 	let ended = await peer
@@ -2265,7 +2295,7 @@ type EchoHandler implements HttpHandler
 		return EchoHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		view request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
@@ -2451,7 +2481,7 @@ type EchoHandler implements HttpHandler
 		return EchoHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		view url = exchange.request().url()
 		let host = try url.host() otherwise "-"
 		let authorityHost = try url.authorityHost() otherwise "-"
@@ -2813,7 +2843,7 @@ type AnswerHandler implements HttpHandler
 		return AnswerHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		try exchange.respondWith(StatusCode.ok, body: "answered", contentType: "text/plain")
 	end 'handle'
 
@@ -2844,7 +2874,10 @@ function main() returns ExitCode
 	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: options) otherwise return 1
 	let peer = async serveAnswers(server)
 	let port = server.port()
-	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise return 2
+	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused2x160'
+		peer.cancel()
+		return 2
+	end 'refused2x160'
 
 	print("a request beside a silent client: {fetchOnce("https://localhost:{port}/after", options: clientOptions())}\n")
 

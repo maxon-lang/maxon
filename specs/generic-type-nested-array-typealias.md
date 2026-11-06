@@ -2590,7 +2590,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Appendable uses Func
 	function opsCount() returns Count
-	function absorb(other Func)
+	function absorb(mutable self, other Func)
 end 'Appendable'
 
 extension Appendable

@@ -827,7 +827,7 @@ type Array uses Element implements BuiltinArrayLiteral
   typealias Idx = int(0 to 9)
   export var managed as ElementMemory
 
-  static function init(managed ElementMemory) returns Self
+  static function init(managed mutable ElementMemory) returns Self
     return Self{managed: managed}
   end 'init'
 

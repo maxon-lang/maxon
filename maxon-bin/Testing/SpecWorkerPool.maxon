@@ -1104,6 +1104,8 @@ typealias DrainPromiseArray = Array with DrainPromise
 // 161-test spec is dispatched once and speaks 161 times. Reporting both is what separates "this worker
 // has been busy for four minutes" from "this worker has said nothing for four minutes".
 typealias SlotInstantArray = Array with InstantMs
+typealias SpokeCell = SharedValue with InstantMs
+typealias SpokeCellArray = Array with SpokeCell
 
 // Read everything `child` says for one job, up to and INCLUDING its next WORKER_READY — or up to EOF,
 // which is what a worker that DIED mid-job leaves behind.
@@ -1145,11 +1147,11 @@ typealias SlotInstantArray = Array with InstantMs
 // dispatcher to remember the previous count AND when it changed — two more per-slot arrays and a second
 // place that decides what progress is. The instant IS the answer, written by the one party that knows
 // it. The cost is one clock read per line, against ~2 lines per test.
-function drainResultsThunk(child StreamingSubprocess, spokeAt SlotInstantArray, slot WorkerId) returns StringArray throws SubprocessError
+function drainResultsThunk(reader StdoutReader, spoke SpokeCell) returns StringArray throws SubprocessError
 	var lines = StringArray.create(0)
 
 	while true 'lineLoop'
-		let line = try child.readStdoutLine() otherwise (e) 'unread'
+		let line = try reader.readLine() otherwise (e) 'unread'
 			if not e.endedTheStream() 'aReadFailure'
 				throw e
 			end 'aReadFailure'
@@ -1157,11 +1159,11 @@ function drainResultsThunk(child StreamingSubprocess, spokeAt SlotInstantArray, 
 			// End of stream is evidence from the worker too. Unstamped, a dead worker's last stamp goes
 			// stale until the dispatcher serves this drain, and the sweep terminates a worker that is
 			// already gone and accuses it of silence.
-			stampWorkerSpoke(spokeAt, slot: slot)
+			spoke.publish(Clock.nowMs())
 			return lines
 		end 'unread'
 
-		stampWorkerSpoke(spokeAt, slot: slot)
+		spoke.publish(Clock.nowMs())
 		lines.push(line)
 
 		if line.trim() == WorkerReadyMarker 'jobDone'
@@ -1171,10 +1173,6 @@ function drainResultsThunk(child StreamingSubprocess, spokeAt SlotInstantArray, 
 
 	panic("drainResultsThunk: the loop above is only left by `return` or `throw`")
 end 'drainResultsThunk'
-
-function stampWorkerSpoke(spokeAt SlotInstantArray, slot WorkerId)
-	try spokeAt.set(slot, value: Clock.nowMs()) otherwise panic("drainResultsThunk: spokeAt.set({slot}) is in bounds — the dispatcher sizes it to the pool before any drain is spawned")
-end 'stampWorkerSpoke'
 
 // Did this drain end the way a FINISHED job ends? See `drainResultsThunk`: the terminator rides in the
 // lines, so its presence is the whole question and an empty drain (a worker that died before saying
@@ -1820,7 +1818,7 @@ end 'formatSeconds'
 // `idleFor` is the interval actually MEASURED, not the threshold that was crossed. The two differ by
 // at most one poll on a real wedge and by an unbounded amount on a suspended machine, which is the
 // case the header exists to let an operator tell apart: a run idle for 4000 s did not wedge, it slept.
-function abortOnWedgedPool(busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt SlotInstantArray, spokeAt SlotInstantArray, expired BoolArray, idleFor DurationMs, queued JobTally, dispatched JobTally, completed JobTally)
+function abortOnWedgedPool(busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt SlotInstantArray, spokeAt SpokeCellArray, expired BoolArray, idleFor DurationMs, queued JobTally, dispatched JobTally, completed JobTally)
 	var report = TextJoiner.create()
 	report.push("\n=== spec worker pool WEDGED: nothing dispatched or collected for {formatSeconds(idleFor)} (limit {formatSeconds(WedgeWatchdogMs)}) ===")
 	report.push("{dispatched} job(s) dispatched, {completed} collected, {queued} still queued")
@@ -1835,7 +1833,7 @@ function abortOnWedgedPool(busy BoolArray, inFlight SpecJobArray, drains DrainPr
 
 		let job = try inFlight.get(slot) otherwise panic("abortOnWedgedPool: inFlight.get({slot}) is in bounds by construction")
 		let since = try dispatchedAt.get(slot) otherwise panic("abortOnWedgedPool: dispatchedAt.get({slot}) is in bounds by construction")
-		let spoke = try spokeAt.get(slot) otherwise panic("abortOnWedgedPool: spokeAt.get({slot}) is in bounds by construction")
+		let spoke = (try spokeAt.get(slot) otherwise panic("abortOnWedgedPool: spokeAt.get({slot}) is in bounds by construction")).current()
 		let drain = try drains.get(slot) otherwise panic("abortOnWedgedPool: a busy slot always has a drain promise, and slot {slot} is busy")
 		let answered = "yes" if drain.isComplete() else "no"
 		let deadlineFired = try expired.get(slot) otherwise panic("abortOnWedgedPool: expired.get({slot}) is in bounds by construction")
@@ -1997,7 +1995,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	var inFlight = SpecJobArray.create(0)
 	var drains = DrainPromiseArray.create(0)
 	var dispatchedAt = SlotInstantArray.create(0)
-	var spokeAt = SlotInstantArray.create(0)
+	var spokeAt = SpokeCellArray.create(0)
 
 	// Whether this slot's progress bound has already fired and the worker been terminated for it. A
 	// LATCH, not a re-derivable predicate: once a worker has been given up on it stays given up on, and
@@ -2017,7 +2015,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		busy.push(false)
 		inFlight.push(idleJob)
 		dispatchedAt.push(idleInstant)
-		spokeAt.push(idleInstant)
+		spokeAt.push(SpokeCell.create(idleInstant))
 		expired.push(false)
 	end 'initSlots'
 
@@ -2105,6 +2103,8 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 			var lines = try await drain otherwise (e) 'stdoutUnreadable'
 				abortOnDeadWorker(handle, job: job, reason: "the parent could not read its stdout: {e.displayReason()}")
 			end 'stdoutUnreadable'
+
+			try handle.child.reclaimStdout() otherwise panic("runSpecPool: the stdout of slot {readySlot}'s worker was not out after its drain ended")
 
 			let plan = try plans.get(job.planIndex) otherwise panic("runSpecPool: plans.get({job.planIndex}) is in bounds by construction")
 
@@ -2353,7 +2353,7 @@ end 'silenceMs'
 // on every poll while the EOF propagates. Re-stamping its instant would suppress the re-kill too, but it
 // would also push a dead slot's bound forward for ever — and the wedge watchdog, whose clock this
 // function resets, would then never run either.
-function enforceProgressDeadlines(workers PersistentWorkerHandleArray, busy BoolArray, inFlight SpecJobArray, spokeAt SlotInstantArray, expired BoolArray, plans SpecPlanArray, strategy RunStrategy, now InstantMs) returns bool
+function enforceProgressDeadlines(workers PersistentWorkerHandleArray, busy BoolArray, inFlight SpecJobArray, spokeAt SpokeCellArray, expired BoolArray, plans SpecPlanArray, strategy RunStrategy, now InstantMs) returns bool
 	var anyWithinDeadline = false
 
 	for slot in 0 upto busy.count() 'eachSlot'
@@ -2372,7 +2372,7 @@ function enforceProgressDeadlines(workers PersistentWorkerHandleArray, busy Bool
 		let job = try inFlight.get(slot) otherwise panic("enforceProgressDeadlines: inFlight.get({slot}) is in bounds by construction")
 		let plan = try plans.get(job.planIndex) otherwise panic("enforceProgressDeadlines: plans.get({job.planIndex}) is in bounds by construction")
 		let deadline = progressDeadlineMs(plan.testNames.count() as TestTally, strategy: strategy)
-		let since = try spokeAt.get(slot) otherwise panic("enforceProgressDeadlines: spokeAt.get({slot}) is in bounds by construction")
+		let since = (try spokeAt.get(slot) otherwise panic("enforceProgressDeadlines: spokeAt.get({slot}) is in bounds by construction")).current()
 
 		let silent = silenceMs(now, since: since)
 
@@ -2427,7 +2427,7 @@ end 'enforceProgressDeadlines'
 // so with nothing seeded the sweep would read a slot's silence as stretching back to whenever that
 // worker last spoke on its PREVIOUS job — and terminate a healthy worker part-way into its first
 // compile. Dispatch is the moment the interval starts, so dispatch is what starts it.
-function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job SpecJob, busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt SlotInstantArray, spokeAt SlotInstantArray, expired BoolArray)
+function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job SpecJob, busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt SlotInstantArray, spokeAt SpokeCellArray, expired BoolArray)
 	var handle = try workers.get(slot) otherwise panic("sendAndDrain: workers.get({slot}) is in bounds by construction")
 
 	try handle.sendJob(job.toJobLine()) otherwise (e) 'sendFailed'
@@ -2438,14 +2438,16 @@ function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job Sp
 
 	let dispatchInstant = Clock.nowMs()
 	try dispatchedAt.set(slot, value: dispatchInstant) otherwise panic("sendAndDrain: dispatchedAt.set({slot}) is in bounds by construction")
-	try spokeAt.set(slot, value: dispatchInstant) otherwise panic("sendAndDrain: spokeAt.set({slot}) is in bounds by construction")
+	let seeded = try spokeAt.get(slot) otherwise panic("sendAndDrain: spokeAt.get({slot}) is in bounds by construction")
+	seeded.publish(dispatchInstant)
 	try inFlight.set(slot, value: job) otherwise panic("sendAndDrain: inFlight.set({slot}) is in bounds by construction")
 	try expired.set(slot, value: false) otherwise panic("sendAndDrain: expired.set({slot}) is in bounds by construction")
 
 	// The spawn hands the green thread its OWN REFERENCE to `spokeAt` (see `drainResultsThunk`), so the
 	// stamps it writes land in the array this loop reads. It is the parent's array throughout: the drain
 	// only ever writes its own slot, and only the dispatcher ever reads one.
-	let drain = async drainResultsThunk(handle.child, spokeAt: spokeAt, slot: slot)
+	let reader = try handle.child.takeStdout() otherwise panic("sendAndDrain: the stdout of slot {slot}'s worker is already out")
+	let drain = async drainResultsThunk(reader, spoke: (try spokeAt.get(slot) otherwise panic("sendAndDrain: spokeAt.get({slot}) is in bounds by construction")).clone())
 
 	if slot == drains.count() as WorkerId 'firstDispatchToThisSlot'
 		drains.push(drain)

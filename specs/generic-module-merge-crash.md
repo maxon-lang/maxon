@@ -19,9 +19,9 @@ typealias Integer = int(i64.min to i64.max)
 interface Mergeable uses Func
 	function itemCount() returns Count
 	function getItem(index Count) returns Func
-	function pushItem(item keep Func)
+	function pushItem(mutable self, item Func)
 	function opsCount() returns Count
-	function appendOps(source keep Self)
+	function appendOps(mutable self, source Self)
 	function cloneItem(src Func) returns Func
 end 'Mergeable'
 

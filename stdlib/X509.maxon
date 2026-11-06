@@ -667,7 +667,7 @@ type X509Reader
 	module var der as DerReader
 
 	static function over(bytes ByteArray) returns X509Reader
-		return X509Reader{der: DerReader.create(bytes.clone())}
+		return X509Reader{der: DerReader.create(bytes)}
 	end 'over'
 
 	static function whole(bytes ByteArray) returns X509Reader throws X509Error
@@ -807,7 +807,7 @@ module type X509Candidate
 	module var isRoot as bool
 
 	static function create(certificate Certificate, der ByteArray, isRoot bool) returns X509Candidate
-		return X509Candidate{certificate: certificate, der: der, isRoot: isRoot}
+		return X509Candidate{certificate: certificate, der: der.clone(), isRoot: isRoot}
 	end 'create'
 end 'X509Candidate'
 
@@ -1055,7 +1055,7 @@ public type X509
 		end 'otherHost'
 
 		if anchors.der().contains(leaf) 'trustedLeaf'
-			return ByteArrays from [leaf]
+			return ByteArrays from [leaf.clone()]
 		end 'trustedLeaf'
 
 		let candidates = x509Pool(intermediates, isRoot: false, excluded: anchors.der())

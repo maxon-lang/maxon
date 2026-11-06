@@ -2750,7 +2750,7 @@ Prints `3 3`.
 ```maxon
 typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
-typealias Step = function(TallyArray) returns TallyArray
+typealias Step = function(mutable TallyArray) returns TallyArray
 
 function fill(cells TallyArray, count Tally)
 	for i in 0 upto count 'each'
@@ -2758,7 +2758,7 @@ function fill(cells TallyArray, count Tally)
 	end 'each'
 end 'fill'
 
-function step(cells TallyArray) returns TallyArray
+function step(cells mutable TallyArray) returns TallyArray
 	fill(cells, count: 1)
 
 	return cells

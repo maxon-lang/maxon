@@ -205,6 +205,14 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
    `test`, `run_scale_test`), which return when finished; it never backgrounds a run, never Monitors,
    never ends a turn to wait. Multi-hour sweeps stay with the coordinator.
 
+**Check in on every running agent every 20 minutes** (a recurring CronCreate job made when the first
+agent is dispatched). Track its WORK: a signature of its build directories, logs and working-diff size,
+kept between checks, and the CPU of the processes it owns. Read its transcript's size and mtime too, never
+its contents, because a growing transcript alone can be a loop. Flag an agent whose artifacts have not
+changed for 60 minutes while its transcript grows, whose transcript has not grown for 20 minutes, or whose
+process has had flat CPU for 20 minutes. Send it a SendMessage asking what it is doing and what it expects
+next. A stuck or dead one is reported to the user. Cancel the job once no agent is running.
+
 **When an agent reports done, kill any shell it left running before the next step:** a leftover loop can
 kill another build or swap the compiler in the slot.
 
@@ -508,6 +516,12 @@ situation:
   CI files, not only the compiler. Name the directories in the brief; a reviewer left to choose reads
   the compiler and skips the rest.
 
+**A change to a soundness checker gets a second, separate reviewer** when it implements an approved design
+(a plan with an executable model): a `general-purpose` agent briefed with ONLY the plan's rulings and the
+diff — not the implementer's reports, not your summary — whose one job is to find a program the changed
+checker accepts that a ruling refuses. Each finding becomes a case in the set; an accepted program the
+ruling refuses is fixed, never argued away.
+
 ⛔ **§6 runs only on REVIEWED code.** Any code written after the review — its fixes, a follow-up
 implementer round, a defect found while gating — is reviewed again, on that delta, before §6. Loop
 until a review round comes back with nothing to fix. **The documenter is not a reviewer:** it reports
@@ -763,6 +777,12 @@ Everything above runs unattended. Stop and report, without landing, when:
   is the failure mode this whole process exists to prevent; the second has a blast radius beyond your
   change and belongs to whoever owns that behaviour.
 - **A finding or ledger entry repeats a fix already landed, at another consumer of the same fact** (§10).
+- **A change would make the compiler accept a program an approved design refuses** — a checker rule
+  relaxed, a pin dropped, a refusal narrowed, against a ruling or sample of the plan the change implements.
+  That is an amendment of a model-checked design, never an implementation choice. The agent stops and
+  reports; the coordinator puts the amended rule to the user, and the amended rule passes the design's
+  executable model (campaigns and a fresh red team, 0 counterexamples) before it lands. Every brief for
+  such a change quotes the rulings it implements and says this.
 
 **Each of those is a QUESTION, answered in place — never a reroute.** You stop, report, and wait; you do
 not open a worktree, or hand the work to another process. When the answer comes you carry

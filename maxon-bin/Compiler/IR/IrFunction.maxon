@@ -1727,6 +1727,9 @@ export enum MoveDestinationKind
 	readOnlyElement
 	readOnlyElementValue
 	keptArgument
+	uniqueArgument
+	uniqueSubject
+	uniqueSlot
 	serviceReply
 	sharedSend
 	sentMessage
@@ -1736,7 +1739,7 @@ export enum MoveDestinationKind
 end 'MoveDestinationKind'
 
 // @generated library-cache begin
-let CacheCasesMoveDestinationKind = [MoveDestinationKind.mutableName, MoveDestinationKind.letField, MoveDestinationKind.letFieldValue, MoveDestinationKind.letPayload, MoveDestinationKind.letPayloadValue, MoveDestinationKind.readOnlyElement, MoveDestinationKind.readOnlyElementValue, MoveDestinationKind.keptArgument, MoveDestinationKind.serviceReply, MoveDestinationKind.sharedSend, MoveDestinationKind.sentMessage, MoveDestinationKind.publishedValue, MoveDestinationKind.mutablePlace, MoveDestinationKind.returnedValue]
+let CacheCasesMoveDestinationKind = [MoveDestinationKind.mutableName, MoveDestinationKind.letField, MoveDestinationKind.letFieldValue, MoveDestinationKind.letPayload, MoveDestinationKind.letPayloadValue, MoveDestinationKind.readOnlyElement, MoveDestinationKind.readOnlyElementValue, MoveDestinationKind.keptArgument, MoveDestinationKind.uniqueArgument, MoveDestinationKind.uniqueSubject, MoveDestinationKind.uniqueSlot, MoveDestinationKind.serviceReply, MoveDestinationKind.sharedSend, MoveDestinationKind.sentMessage, MoveDestinationKind.publishedValue, MoveDestinationKind.mutablePlace, MoveDestinationKind.returnedValue]
 
 function cacheReadMoveDestinationKind(reader LibraryCacheReader) returns MoveDestinationKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -1792,6 +1795,7 @@ export type MoveSite
 	export var readColumn = 0 as ColumnNumber
 	export var refused = false
 	export var refusal as ByteArray
+	export var lender = UniqueLender.none
 
 	export static function create(value ValueId, source ByteArray, sourceValue ValueId, sourceIsMutable bool, destination ByteArray, line LineNumber, column ColumnNumber, token ElementIndex) returns MoveSite
 		return Self{value: value, source: source, sourceValue: sourceValue, sourceIsMutable: sourceIsMutable, destination: destination, line: line, column: column, token: token, refusal: ByteArray.create(0)}
@@ -1835,6 +1839,7 @@ export type MoveSite
 		writer.unsigned(self.readColumn as CacheUnsigned)
 		writer.flag(self.refused)
 		writer.bytes(self.refusal)
+		writer.unsigned(self.lender.ordinal as CacheUnsigned)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns MoveSite throws LibraryCacheDamage
@@ -1854,12 +1859,13 @@ export type MoveSite
 		let f_readColumn = (try reader.unsigned()) as ColumnNumber
 		let f_refused = try reader.flag()
 		let f_refusal = try reader.bytes()
+		let f_lender = try cacheReadUniqueLender(reader)
 
-		return Self{value: f_value, source: f_source, sourceValue: f_sourceValue, sourceIsMutable: f_sourceIsMutable, destination: f_destination, line: f_line, column: f_column, token: f_token, destinationKind: f_destinationKind, readAfter: f_readAfter, readInALaterIteration: f_readInALaterIteration, freshAtTheTop: f_freshAtTheTop, readLine: f_readLine, readColumn: f_readColumn, refused: f_refused, refusal: f_refusal}
+		return Self{value: f_value, source: f_source, sourceValue: f_sourceValue, sourceIsMutable: f_sourceIsMutable, destination: f_destination, line: f_line, column: f_column, token: f_token, destinationKind: f_destinationKind, readAfter: f_readAfter, readInALaterIteration: f_readInALaterIteration, freshAtTheTop: f_freshAtTheTop, readLine: f_readLine, readColumn: f_readColumn, refused: f_refused, refusal: f_refusal, lender: f_lender}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize128
-		return sizeof(MoveSite) as CacheSize128
+	static function cacheLayoutBytes() returns CacheSize136
+		return sizeof(MoveSite) as CacheSize136
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -2908,17 +2914,19 @@ export type FunctionPlaceholders
 	// post-parse writer replaces before it writes (`IrFunction.makePrivate`).
 	export var mintedSole as BoolArray
 
-	export var noArgumentOverlaps as ArgumentOverlapSiteArray
+	export var noCapabilityNotes as CapabilityNotes
 
 	export var noLiteralCastArguments as LiteralCastMap
 
 	export var noLetCastReads as LetCastReadArray
 
+	export var noPendingOverlaps as PendingOverlapArray
+
 	export var noTypeSites as DeclaredTypeSites
 
 	export static function create() returns FunctionPlaceholders
 		var provenance = ProvenanceColumns.create()
-		return Self{provenance: provenance, noSites: ProvenanceSites.create(provenance), noFiledProvenance: FiledProvenance.none, paramGuards: RangeCheckParamGuardArray.create(0), inlineSites: InlineSiteArray.create(0), mintedSole: BoolArray.create(0), noArgumentOverlaps: ArgumentOverlapSiteArray.create(0), noLiteralCastArguments: LiteralCastMap.create(), noLetCastReads: LetCastReadArray.create(0), noTypeSites: DeclaredTypeSites.create()}
+		return Self{provenance: provenance, noSites: ProvenanceSites.create(provenance), noFiledProvenance: FiledProvenance.none, paramGuards: RangeCheckParamGuardArray.create(0), inlineSites: InlineSiteArray.create(0), mintedSole: BoolArray.create(0), noCapabilityNotes: CapabilityNotes.create(), noLiteralCastArguments: LiteralCastMap.create(), noLetCastReads: LetCastReadArray.create(0), noPendingOverlaps: PendingOverlapArray.create(0), noTypeSites: DeclaredTypeSites.create()}
 	end 'create'
 end 'FunctionPlaceholders'
 
@@ -2968,6 +2976,181 @@ end 'maskWithoutParam'
 export function maskWithout(mask ParamPositionMask, removed ParamPositionMask) returns ParamPositionMask
 	return mask xor (mask and removed)
 end 'maskWithout'
+
+// `unknown` is a lend whose callee names no one declared parameter (a function value, an interface
+// requirement, several candidate templates); E3186 counts it as written.
+export union LendWrite
+	unknown(let callee ByteArray)
+	byParameter(let callee ByteArray, let name ByteArray, position ParamCount)
+
+	export function calleeName() returns ByteArray
+		return match self 'write'
+			unknown(callee) gives callee
+			byParameter(callee, _, _) gives callee
+		end 'write'
+	end 'calleeName'
+end 'LendWrite'
+
+// @generated library-cache begin
+function cacheWriteLendWrite(writer LibraryCacheWriter, value LendWrite)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unknown(a0) then cacheWriteLendWriteUnknown(writer, a0: a0)
+		byParameter(a0, a1, a2) then cacheWriteLendWriteByParameter(writer, a0: a0, a1: a1, a2: a2)
+	end 'payload'
+end 'cacheWriteLendWrite'
+
+function cacheWriteLendWriteUnknown(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteLendWriteUnknown'
+
+function cacheWriteLendWriteByParameter(writer LibraryCacheWriter, a0 ByteArray, a1 ByteArray, a2 ParamCount)
+	writer.bytes(a0)
+	writer.bytes(a1)
+	writer.unsigned(a2 as CacheUnsigned)
+end 'cacheWriteLendWriteByParameter'
+
+function cacheReadLendWrite(reader LibraryCacheReader) returns LendWrite throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadLendWriteUnknown(reader)
+		1 gives try cacheReadLendWriteByParameter(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadLendWrite'
+
+function cacheReadLendWriteUnknown(reader LibraryCacheReader) returns LendWrite throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return LendWrite.unknown(a0)
+end 'cacheReadLendWriteUnknown'
+
+function cacheReadLendWriteByParameter(reader LibraryCacheReader) returns LendWrite throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+	let a1 = try reader.bytes()
+	let a2 = (try reader.unsigned()) as ParamCount
+
+	return LendWrite.byParameter(a0, name: a1, position: a2)
+end 'cacheReadLendWriteByParameter'
+
+// @generated library-cache end
+
+// The other by-reference cell an overlap is judged beside. `notWritten` is a `mutable` position the
+// callee never writes, which reads the local like any plain operand.
+export union CompanionLend
+	none
+	alsoWritten(lend LendWrite)
+	notWritten(lend LendWrite)
+end 'CompanionLend'
+
+// @generated library-cache begin
+function cacheWriteCompanionLend(writer LibraryCacheWriter, value CompanionLend)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		none then break
+		alsoWritten(a0) then cacheWriteCompanionLendAlsoWritten(writer, a0: a0)
+		notWritten(a0) then cacheWriteCompanionLendNotWritten(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteCompanionLend'
+
+function cacheWriteCompanionLendAlsoWritten(writer LibraryCacheWriter, a0 LendWrite)
+	cacheWriteLendWrite(writer, value: a0)
+end 'cacheWriteCompanionLendAlsoWritten'
+
+function cacheWriteCompanionLendNotWritten(writer LibraryCacheWriter, a0 LendWrite)
+	cacheWriteLendWrite(writer, value: a0)
+end 'cacheWriteCompanionLendNotWritten'
+
+function cacheReadCompanionLend(reader LibraryCacheReader) returns CompanionLend throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives CompanionLend.none
+		1 gives try cacheReadCompanionLendAlsoWritten(reader)
+		2 gives try cacheReadCompanionLendNotWritten(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadCompanionLend'
+
+function cacheReadCompanionLendAlsoWritten(reader LibraryCacheReader) returns CompanionLend throws LibraryCacheDamage
+	let a0 = try cacheReadLendWrite(reader)
+
+	return CompanionLend.alsoWritten(a0)
+end 'cacheReadCompanionLendAlsoWritten'
+
+function cacheReadCompanionLendNotWritten(reader LibraryCacheReader) returns CompanionLend throws LibraryCacheDamage
+	let a0 = try cacheReadLendWrite(reader)
+
+	return CompanionLend.notWritten(a0)
+end 'cacheReadCompanionLendNotWritten'
+
+// @generated library-cache end
+
+export type PendingOverlap
+	export let message as String
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let lend as LendWrite
+	export let companion as CompanionLend
+
+	export static function create(message String, line LineNumber, column ColumnNumber, lend LendWrite, companion CompanionLend) returns Self
+		return Self{message: message, line: line, column: column, lend: lend, companion: companion}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.text(self.message)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+		cacheWriteLendWrite(writer, value: self.lend)
+		cacheWriteCompanionLend(writer, value: self.companion)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns PendingOverlap throws LibraryCacheDamage
+		let f_message = try reader.text()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+		let f_lend = try cacheReadLendWrite(reader)
+		let f_companion = try cacheReadCompanionLend(reader)
+
+		return Self{message: f_message, line: f_line, column: f_column, lend: f_lend, companion: f_companion}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(PendingOverlap) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'PendingOverlap'
+
+export typealias PendingOverlapArray = Array with PendingOverlap
+
+// @generated library-cache begin
+function cacheWritePendingOverlapArray(writer LibraryCacheWriter, value PendingOverlapArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWritePendingOverlapArray'
+
+function cacheReadPendingOverlapArray(reader LibraryCacheReader) returns PendingOverlapArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = PendingOverlapArray.create(0)
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try PendingOverlap.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadPendingOverlapArray'
+
+// @generated library-cache end
 
 export union ClosureCaptureSource
 	none
@@ -3160,6 +3343,10 @@ export type IrFunction
 	// ids, remapped at merge exactly as `valueNameIds` is.
 	export var valueBrandIds as TypeNameIdArray
 
+	export var valueCapabilities as ValueCapabilityArray
+
+	export var capabilityNotes as CapabilityNotes
+
 	// ⭐ **WHETHER THE OP DEFINING A VALUE MINTED ITS RECORD (`Parser.valueMintedSole`), DENSE in the same
 	// lockstep** — the ownership model's own `sole` claim as its emitter made it, and `StorageProvenance`'s
 	// answer to "is this value fresh, or an alias of its operands?". False is the default every emitter gets
@@ -3280,6 +3467,13 @@ export type IrFunction
 	// `SemanticCheck.buildParamMutationSummary`. Zero for a Std-phase function.
 	export var writesThroughParamMask as ParamPositionMask
 
+	export var needsMutableParamMask as ParamPositionMask
+	export var needsFrozenParamMask as ParamPositionMask
+	export var resultFromParamMask as ParamPositionMask
+	export var resultHasOtherPath as bool
+	export var mayWaitSeed as bool
+	export var mayYieldSeed as bool
+
 	export var brandOriginValues as ValueIdArray
 	export var brandOriginKeys as NameRoster
 
@@ -3322,6 +3516,7 @@ export type IrFunction
 	// `funcSignatureResultValTypes`, whose functype must declare the second result the body writes or the
 	// module does not validate.
 	export var usesValueTupleReturn as bool
+	export var allocatesParameterCells as bool
 
 	// ⭐⭐ **THE PARAMETERS THIS FUNCTION TAKES BY REFERENCE — an ABI fact.**
 	//
@@ -3347,12 +3542,13 @@ export type IrFunction
 	// Zero for a Std-phase function and for the overwhelming majority of Maxon ones — on a program that
 	// reassigns no parameter it is zero everywhere, which is what makes the feature free.
 	export var reassignedParamMask as ParamPositionMask
-
-	// The parser's shared `FunctionPlaceholders.noArgumentOverlaps` until this function files its
-	// first E3186 site; a push into the placeholder would file that site on every function sharing it.
-	export var argumentOverlaps as ArgumentOverlapSiteArray
+	export var storedParamMask as ParamPositionMask
 
 	export var letCastReads as LetCastReadArray
+
+	// The parser's shared `FunctionPlaceholders.noPendingOverlaps` until this function files its first
+	// E3186 site; a push into the placeholder would file that site on every function sharing it.
+	export var pendingOverlaps as PendingOverlapArray
 
 	// ⭐⭐ **THE ENTRY CASCADES `InsertRangeChecks` EMITTED FOR THIS FUNCTION'S NARROWED PARAMETERS** —
 	// see `RangeCheckParamGuard`. EMPTY until that pass runs, and empty afterwards for every function with no
@@ -3421,7 +3617,7 @@ export type IrFunction
 	//
 	// The name and the signature types are the function's own copies: a function rides its file's artifact, and both
 	// are often records the signature index holds (`ParseStaging.artifactOwnedOp`).
-	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, typeSites DeclaredTypeSites, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueBrandIds TypeNameIdArray, valueMintedSole BoolArray, valueWitnessIds ValueIdArray, declaredAt SourcePosition, placeholders FunctionPlaceholders, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, typeSites DeclaredTypeSites, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueBrandIds TypeNameIdArray, valueCapabilities ValueCapabilityArray, valueMintedSole BoolArray, valueWitnessIds ValueIdArray, declaredAt SourcePosition, placeholders FunctionPlaceholders, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
 		return Self{
 			name: name.clone(),
 			visibility: Visibility.file,
@@ -3449,6 +3645,8 @@ export type IrFunction
 			valueTags: valueTags,
 			valueNameIds: valueNameIds,
 			valueBrandIds: valueBrandIds,
+			valueCapabilities: valueCapabilities,
+			capabilityNotes: placeholders.noCapabilityNotes,
 			valueMintedSole: valueMintedSole,
 			filedProvenance: placeholders.noFiledProvenance,
 			valueWitnessIds: valueWitnessIds,
@@ -3467,15 +3665,23 @@ export type IrFunction
 			closureSubCounter: 0,
 			writtenParamMask: 0,
 			reassignedParamMask: 0,
+			storedParamMask: 0,
 			writesThroughParamMask: 0,
+			needsMutableParamMask: 0,
+			needsFrozenParamMask: 0,
+			resultFromParamMask: 0,
+			resultHasOtherPath: false,
+			mayWaitSeed: false,
+			mayYieldSeed: false,
 			brandOriginValues: ValueIdArray.create(0),
 			brandOriginKeys: NameRoster.create(0),
 			writesModuleStorage: false,
 			bodyWasSkippedAsUnreached: false,
 			bodySplicedAway: false,
 			usesValueTupleReturn: false,
-			argumentOverlaps: placeholders.noArgumentOverlaps,
+			allocatesParameterCells: false,
 			letCastReads: placeholders.noLetCastReads,
+			pendingOverlaps: placeholders.noPendingOverlaps,
 			ownership: ColumnOwnership.nothing(),
 			paramGuards: placeholders.paramGuards,
 			inlineSites: placeholders.inlineSites,
@@ -3536,6 +3742,8 @@ export type IrFunction
 			valueTags: ValueTypeTagArray.create(0),
 			valueNameIds: TypeNameIdArray.create(0),
 			valueBrandIds: TypeNameIdArray.create(0),
+			valueCapabilities: ValueCapabilityArray.create(0),
+			capabilityNotes: CapabilityNotes.create(),
 			valueMintedSole: BoolArray.create(0),
 			filedProvenance: FiledProvenance.none,
 			valueWitnessIds: ValueIdArray.create(0),
@@ -3554,15 +3762,23 @@ export type IrFunction
 			closureSubCounter: 0,
 			writtenParamMask: 0,
 			reassignedParamMask: 0,
+			storedParamMask: 0,
 			writesThroughParamMask: 0,
+			needsMutableParamMask: 0,
+			needsFrozenParamMask: 0,
+			resultFromParamMask: 0,
+			resultHasOtherPath: false,
+			mayWaitSeed: false,
+			mayYieldSeed: false,
 			brandOriginValues: ValueIdArray.create(0),
 			brandOriginKeys: NameRoster.create(0),
 			writesModuleStorage: false,
 			bodyWasSkippedAsUnreached: false,
 			bodySplicedAway: false,
 			usesValueTupleReturn: false,
-			argumentOverlaps: ArgumentOverlapSiteArray.create(0),
+			allocatesParameterCells: false,
 			letCastReads: LetCastReadArray.create(0),
+			pendingOverlaps: PendingOverlapArray.create(0),
 			paramGuards: RangeCheckParamGuardArray.create(0),
 			inlineSites: InlineSiteArray.create(0),
 			debugLocals: DebugLocalDeclArray.create(0),
@@ -3614,6 +3830,8 @@ export type IrFunction
 			debugLocalSpans: src.debugLocalSpans,
 			valueNameIds: src.valueNameIds,
 			valueBrandIds: src.valueBrandIds,
+			valueCapabilities: src.valueCapabilities,
+			capabilityNotes: src.capabilityNotes,
 			valueMintedSole: src.valueMintedSole,
 			filedProvenance: src.filedProvenance,
 			valueWitnessIds: src.valueWitnessIds,
@@ -3632,15 +3850,23 @@ export type IrFunction
 			closureSubCounter: src.closureSubCounter,
 			writtenParamMask: src.writtenParamMask,
 			reassignedParamMask: src.reassignedParamMask,
+			storedParamMask: src.storedParamMask,
 			writesThroughParamMask: src.writesThroughParamMask,
+			needsMutableParamMask: src.needsMutableParamMask,
+			needsFrozenParamMask: src.needsFrozenParamMask,
+			resultFromParamMask: src.resultFromParamMask,
+			resultHasOtherPath: src.resultHasOtherPath,
+			mayWaitSeed: src.mayWaitSeed,
+			mayYieldSeed: src.mayYieldSeed,
 			brandOriginValues: src.brandOriginValues,
 			brandOriginKeys: src.brandOriginKeys,
 			writesModuleStorage: src.writesModuleStorage,
 			bodyWasSkippedAsUnreached: src.bodyWasSkippedAsUnreached,
 			bodySplicedAway: src.bodySplicedAway,
 			usesValueTupleReturn: src.usesValueTupleReturn,
-			argumentOverlaps: src.argumentOverlaps,
+			allocatesParameterCells: src.allocatesParameterCells,
 			letCastReads: src.letCastReads,
+			pendingOverlaps: src.pendingOverlaps,
 			ownership: ColumnOwnership.nothing(),
 			// NOT carried, and it cannot need to be: every copy of a function is made at or before the
 			// lowering (`relocateFunction` is `IrModule.merge`'s), and this column is filled by
@@ -3692,6 +3918,7 @@ export type IrFunction
 		self.valueTags = self.valueTags.clone()
 		self.valueNameIds = self.valueNameIds.clone()
 		self.valueBrandIds = self.valueBrandIds.clone()
+		self.valueCapabilities = self.valueCapabilities.clone()
 		self.valueMintedSole = self.valueMintedSole.clone()
 	end 'cloneValueColumns'
 
@@ -3922,12 +4149,15 @@ export type IrFunction
 		self.valueTags = ValueTypeTagArray.create(0)
 		self.valueNameIds = TypeNameIdArray.create(0)
 		self.valueBrandIds = TypeNameIdArray.create(0)
+		self.valueCapabilities = ValueCapabilityArray.create(0)
+		self.capabilityNotes = CapabilityNotes.create()
 		self.valueMintedSole = BoolArray.create(0)
 		self.valueWitnessIds = ValueIdArray.create(0)
 		self.valueExistentialInstances = ValueExistentialInstanceMap.create()
 		self.valueCallInstances = ValueCallInstanceMap.create()
 		self.literalCastArguments = LiteralCastMap.create()
 		self.letCastReads = LetCastReadArray.create(0)
+		self.pendingOverlaps = PendingOverlapArray.create(0)
 		self.deferredArgumentBindings = DeferredArgumentBindingArray.create(0)
 		self.existentialFieldStores = ExistentialFieldStoreArray.create(0)
 		self.filedProvenance = FiledProvenance.none
@@ -3970,6 +4200,8 @@ export type IrFunction
 		cacheWriteValueTypeTagArray(writer, value: self.valueTags)
 		cacheWriteTypeNameIdArray(writer, value: self.valueNameIds)
 		cacheWriteTypeNameIdArray(writer, value: self.valueBrandIds)
+		cacheWriteValueCapabilityArray(writer, value: self.valueCapabilities)
+		self.capabilityNotes.cacheWrite(writer)
 		cacheWriteBoolArray(writer, value: self.valueMintedSole)
 		cacheWriteFiledProvenance(writer, value: self.filedProvenance)
 		cacheWriteValueIdArray(writer, value: self.valueWitnessIds)
@@ -3988,15 +4220,23 @@ export type IrFunction
 		writer.unsigned(self.closureSubCounter as CacheUnsigned)
 		writer.unsigned(self.writtenParamMask as CacheUnsigned)
 		writer.unsigned(self.writesThroughParamMask as CacheUnsigned)
+		writer.unsigned(self.needsMutableParamMask as CacheUnsigned)
+		writer.unsigned(self.needsFrozenParamMask as CacheUnsigned)
+		writer.unsigned(self.resultFromParamMask as CacheUnsigned)
+		writer.flag(self.resultHasOtherPath)
+		writer.flag(self.mayWaitSeed)
+		writer.flag(self.mayYieldSeed)
 		cacheWriteValueIdArray(writer, value: self.brandOriginValues)
 		cacheWriteNameRoster(writer, value: self.brandOriginKeys)
 		writer.flag(self.writesModuleStorage)
 		writer.flag(self.bodyWasSkippedAsUnreached)
 		writer.flag(self.bodySplicedAway)
 		writer.flag(self.usesValueTupleReturn)
+		writer.flag(self.allocatesParameterCells)
 		writer.unsigned(self.reassignedParamMask as CacheUnsigned)
-		cacheWriteArgumentOverlapSiteArray(writer, value: self.argumentOverlaps)
+		writer.unsigned(self.storedParamMask as CacheUnsigned)
 		cacheWriteLetCastReadArray(writer, value: self.letCastReads)
+		cacheWritePendingOverlapArray(writer, value: self.pendingOverlaps)
 		cacheWriteRangeCheckParamGuardArray(writer, value: self.paramGuards)
 		cacheWriteInlineSiteArray(writer, value: self.inlineSites)
 		cacheWriteDebugLocalDeclArray(writer, value: self.debugLocals)
@@ -4032,6 +4272,8 @@ export type IrFunction
 		let f_valueTags = try cacheReadValueTypeTagArray(reader)
 		let f_valueNameIds = try cacheReadTypeNameIdArray(reader)
 		let f_valueBrandIds = try cacheReadTypeNameIdArray(reader)
+		let f_valueCapabilities = try cacheReadValueCapabilityArray(reader)
+		let f_capabilityNotes = try CapabilityNotes.cacheRead(reader)
 		let f_valueMintedSole = try cacheReadBoolArray(reader)
 		let f_filedProvenance = try cacheReadFiledProvenance(reader)
 		let f_valueWitnessIds = try cacheReadValueIdArray(reader)
@@ -4050,15 +4292,23 @@ export type IrFunction
 		let f_closureSubCounter = (try reader.unsigned()) as ClosureSubIndex
 		let f_writtenParamMask = (try reader.unsigned()) as ParamPositionMask
 		let f_writesThroughParamMask = (try reader.unsigned()) as ParamPositionMask
+		let f_needsMutableParamMask = (try reader.unsigned()) as ParamPositionMask
+		let f_needsFrozenParamMask = (try reader.unsigned()) as ParamPositionMask
+		let f_resultFromParamMask = (try reader.unsigned()) as ParamPositionMask
+		let f_resultHasOtherPath = try reader.flag()
+		let f_mayWaitSeed = try reader.flag()
+		let f_mayYieldSeed = try reader.flag()
 		let f_brandOriginValues = try cacheReadValueIdArray(reader)
 		let f_brandOriginKeys = try cacheReadNameRoster(reader)
 		let f_writesModuleStorage = try reader.flag()
 		let f_bodyWasSkippedAsUnreached = try reader.flag()
 		let f_bodySplicedAway = try reader.flag()
 		let f_usesValueTupleReturn = try reader.flag()
+		let f_allocatesParameterCells = try reader.flag()
 		let f_reassignedParamMask = (try reader.unsigned()) as ParamPositionMask
-		let f_argumentOverlaps = try cacheReadArgumentOverlapSiteArray(reader)
+		let f_storedParamMask = (try reader.unsigned()) as ParamPositionMask
 		let f_letCastReads = try cacheReadLetCastReadArray(reader)
+		let f_pendingOverlaps = try cacheReadPendingOverlapArray(reader)
 		let f_paramGuards = try cacheReadRangeCheckParamGuardArray(reader)
 		let f_inlineSites = try cacheReadInlineSiteArray(reader)
 		let f_debugLocals = try cacheReadDebugLocalDeclArray(reader)
@@ -4066,11 +4316,11 @@ export type IrFunction
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
 		let f_debugLocalSpans = try DebugSpanRows.cacheRead(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges, debugLocalSpans: f_debugLocalSpans}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueCapabilities: f_valueCapabilities, capabilityNotes: f_capabilityNotes, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, needsMutableParamMask: f_needsMutableParamMask, needsFrozenParamMask: f_needsFrozenParamMask, resultFromParamMask: f_resultFromParamMask, resultHasOtherPath: f_resultHasOtherPath, mayWaitSeed: f_mayWaitSeed, mayYieldSeed: f_mayYieldSeed, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, allocatesParameterCells: f_allocatesParameterCells, reassignedParamMask: f_reassignedParamMask, storedParamMask: f_storedParamMask, letCastReads: f_letCastReads, pendingOverlaps: f_pendingOverlaps, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges, debugLocalSpans: f_debugLocalSpans}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize480
-		return sizeof(IrFunction) as CacheSize480
+	static function cacheLayoutBytes() returns CacheSize560
+		return sizeof(IrFunction) as CacheSize560
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

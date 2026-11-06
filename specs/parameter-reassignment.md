@@ -417,7 +417,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2076: <fragment>:11:22: 'amount' is a message parameter and cannot be marked mutable; return the new value instead
+error E2010: <fragment>:11:29: Expected 'a type' but got 'mutable'
 ```
 
 <!-- test: error.a-factory-parameter-may-not-be-marked-mutable -->
@@ -445,5 +445,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2076: <fragment>:7:25: 'start' is a factory parameter and cannot be marked mutable; return the new value instead
+error E2010: <fragment>:7:31: Expected 'a type' but got 'mutable'
 ```

@@ -221,6 +221,7 @@ export enum TokenKind
 	returns = "returns"
 	var = "var"
 	view = "view"
+	modify = "modify"
 	type = "type"
 	union = "union"
 	enum = "enum"
@@ -348,7 +349,7 @@ export enum TokenKind
 end 'TokenKind'
 
 // @generated library-cache begin
-let CacheCasesTokenKind = [TokenKind.function, TokenKind.let, TokenKind.typealias, TokenKind.export, TokenKind.public, TokenKind.if, TokenKind.else, TokenKind.while, TokenKind.for, TokenKind.in, TokenKind.break, TokenKind.continue, TokenKind.return, TokenKind.panic, TokenKind.end, TokenKind.match, TokenKind.then, TokenKind.fallthrough, TokenKind.default, TokenKind.upto, TokenKind.gives, TokenKind.try, TokenKind.otherwise, TokenKind.throw, TokenKind.ignore, TokenKind.async, TokenKind.await, TokenKind.returns, TokenKind.var, TokenKind.view, TokenKind.type, TokenKind.union, TokenKind.enum, TokenKind.static, TokenKind.interface, TokenKind.extension, TokenKind.extends, TokenKind.implements, TokenKind.uses, TokenKind.with, TokenKind.where, TokenKind.self, TokenKind.selfType, TokenKind.throws, TokenKind.from, TokenKind.to, TokenKind.mod, TokenKind.and, TokenKind.or, TokenKind.not, TokenKind.xor, TokenKind.shl, TokenKind.shr, TokenKind.as, TokenKind.is, TokenKind.sizeof, TokenKind.countof, TokenKind.true, TokenKind.false, TokenKind.int, TokenKind.float, TokenKind.bool, TokenKind.cstring, TokenKind.intLiteral, TokenKind.floatLiteral, TokenKind.charLiteral, TokenKind.stringLiteral, TokenKind.byteStringLiteral, TokenKind.stringInterpStart, TokenKind.stringInterpEnd, TokenKind.stringFormatSpec, TokenKind.identifier, TokenKind.leftParen, TokenKind.rightParen, TokenKind.leftBrace, TokenKind.rightBrace, TokenKind.leftBracket, TokenKind.rightBracket, TokenKind.equals, TokenKind.equalsEquals, TokenKind.bangEquals, TokenKind.lessThan, TokenKind.lessEquals, TokenKind.greaterThan, TokenKind.greaterEquals, TokenKind.plus, TokenKind.minus, TokenKind.star, TokenKind.slash, TokenKind.dot, TokenKind.colon, TokenKind.comma, TokenKind.at, TokenKind.hashIf, TokenKind.hashElse, TokenKind.hashEndif, TokenKind.docComment, TokenKind.newline, TokenKind.eof]
+let CacheCasesTokenKind = [TokenKind.function, TokenKind.let, TokenKind.typealias, TokenKind.export, TokenKind.public, TokenKind.if, TokenKind.else, TokenKind.while, TokenKind.for, TokenKind.in, TokenKind.break, TokenKind.continue, TokenKind.return, TokenKind.panic, TokenKind.end, TokenKind.match, TokenKind.then, TokenKind.fallthrough, TokenKind.default, TokenKind.upto, TokenKind.gives, TokenKind.try, TokenKind.otherwise, TokenKind.throw, TokenKind.ignore, TokenKind.async, TokenKind.await, TokenKind.returns, TokenKind.var, TokenKind.view, TokenKind.modify, TokenKind.type, TokenKind.union, TokenKind.enum, TokenKind.static, TokenKind.interface, TokenKind.extension, TokenKind.extends, TokenKind.implements, TokenKind.uses, TokenKind.with, TokenKind.where, TokenKind.self, TokenKind.selfType, TokenKind.throws, TokenKind.from, TokenKind.to, TokenKind.mod, TokenKind.and, TokenKind.or, TokenKind.not, TokenKind.xor, TokenKind.shl, TokenKind.shr, TokenKind.as, TokenKind.is, TokenKind.sizeof, TokenKind.countof, TokenKind.true, TokenKind.false, TokenKind.int, TokenKind.float, TokenKind.bool, TokenKind.cstring, TokenKind.intLiteral, TokenKind.floatLiteral, TokenKind.charLiteral, TokenKind.stringLiteral, TokenKind.byteStringLiteral, TokenKind.stringInterpStart, TokenKind.stringInterpEnd, TokenKind.stringFormatSpec, TokenKind.identifier, TokenKind.leftParen, TokenKind.rightParen, TokenKind.leftBrace, TokenKind.rightBrace, TokenKind.leftBracket, TokenKind.rightBracket, TokenKind.equals, TokenKind.equalsEquals, TokenKind.bangEquals, TokenKind.lessThan, TokenKind.lessEquals, TokenKind.greaterThan, TokenKind.greaterEquals, TokenKind.plus, TokenKind.minus, TokenKind.star, TokenKind.slash, TokenKind.dot, TokenKind.colon, TokenKind.comma, TokenKind.at, TokenKind.hashIf, TokenKind.hashElse, TokenKind.hashEndif, TokenKind.docComment, TokenKind.newline, TokenKind.eof]
 
 module function cacheReadTokenKind(reader LibraryCacheReader) returns TokenKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -721,24 +722,61 @@ module function tupleAssignEqualsIn(tokens TokenArray, open ElementIndex) return
 	return open
 end 'tupleAssignEqualsIn'
 
-function retagAsView(tokens TokenArray, index ElementIndex)
-	let word = try tokens.get(index) otherwise panic("retagAsView: tokens.get({index}) failed at an index the scan just read")
-	try tokens.set(index, value: Token.create(TokenKind.view, line: word.line, column: word.column, value: word.value, startByte: word.startByte, endByte: word.endByte)) otherwise panic("retagAsView: tokens.set({index}) failed at an index the scan just read")
-end 'retagAsView'
+function retagAs(tokens TokenArray, index ElementIndex, kind TokenKind)
+	let word = try tokens.get(index) otherwise panic("retagAs: tokens.get({index}) failed at an index the scan just read")
+	try tokens.set(index, value: Token.create(kind, line: word.line, column: word.column, value: word.value, startByte: word.startByte, endByte: word.endByte)) otherwise panic("retagAs: tokens.set({index}) failed at an index the scan just read")
+end 'retagAs'
 
 function retagViewTargets(tokens TokenArray, open ElementIndex, equalsAt ElementIndex)
 	var at = open + 1
 
 	while at < equalsAt 'eachToken'
 		if tokenSpellsView(tokens, index: at) and tokenKindAt(tokens, index: at + 1) == TokenKind.identifier 'aViewTarget'
-			retagAsView(tokens, index: at)
+			retagAs(tokens, index: at, kind: TokenKind.view)
 		end 'aViewTarget'
 
 		at = at + 1
 	end 'eachToken'
 end 'retagViewTargets'
 
-function markViewBindings(tokens TokenArray)
+function modifyOpensABlockAt(tokens TokenArray, index ElementIndex) returns bool
+	let word = try tokens.get(index) otherwise return false
+
+	if word.kind != TokenKind.identifier or not word.value.equals(ModifyBlockWord) or kindBefore(tokens, index: index) != TokenKind.newline 'notABlockHead'
+		return false
+	end 'notABlockHead'
+
+	let next = tokenKindAt(tokens, index: index + 1)
+
+	if next != TokenKind.identifier and next != TokenKind.self 'noTarget'
+		return false
+	end 'noTarget'
+
+	var depth = 0 as NestingDepth
+	var at = index + 1
+
+	while true 'toTheLineEnd'
+		let kind = tokenKindAt(tokens, index: at)
+
+		if kind == TokenKind.eof 'endOfFile'
+			return false
+		end 'endOfFile'
+
+		if tokenKindOpensABracket(kind) 'opens'
+			depth = depth + 1
+		end 'opens' else if tokenKindClosesABracket(kind) 'closes'
+			depth = depth - 1
+		end 'closes' else if kind == TokenKind.newline and depth == 0 'lineEnds'
+			return tokenKindAt(tokens, index: (at - 1) as ElementIndex) == TokenKind.charLiteral
+		end 'lineEnds'
+
+		at = at + 1
+	end 'toTheLineEnd'
+
+	panic("modifyOpensABlockAt: the scan to the end of the line only exits by returning at the newline or EOF")
+end 'modifyOpensABlockAt'
+
+function markContextualHeads(tokens TokenArray)
 	var groups = ParenGroups.create()
 	var index = 0 as ElementIndex
 
@@ -746,8 +784,10 @@ function markViewBindings(tokens TokenArray)
 		let kind = tokenKindAt(tokens, index: index)
 
 		if kind == TokenKind.identifier and viewOpensABindingAt(tokens, groups: groups, index: index) 'aBindingHead'
-			retagAsView(tokens, index: index)
-		end 'aBindingHead' else if kind == TokenKind.leftParen and tupleAssignMayFollow(kindBefore(tokens, index: index)) 'aTargetList'
+			retagAs(tokens, index: index, kind: TokenKind.view)
+		end 'aBindingHead' else if kind == TokenKind.identifier and modifyOpensABlockAt(tokens, index: index) 'aModifyBlock'
+			retagAs(tokens, index: index, kind: TokenKind.modify)
+		end 'aModifyBlock' else if kind == TokenKind.leftParen and tupleAssignMayFollow(kindBefore(tokens, index: index)) 'aTargetList'
 			let equalsAt = tupleAssignEqualsIn(tokens, open: index)
 
 			if equalsAt != index 'aTupleAssignment'
@@ -757,7 +797,67 @@ function markViewBindings(tokens TokenArray)
 
 		index = index + 1
 	end 'eachToken'
-end 'markViewBindings'
+end 'markContextualHeads'
+
+function receiverCapabilityHeadAt(tokens TokenArray, index ElementIndex) returns bool
+	if tokenKindAt(tokens, index: index) != TokenKind.function or tokenKindAt(tokens, index: index + 1) != TokenKind.identifier or tokenKindAt(tokens, index: index + 2) != TokenKind.leftParen or tokenKindAt(tokens, index: index + 4) != TokenKind.self 'notAReceiverHead'
+		return false
+	end 'notAReceiverHead'
+
+	let word = try tokens.get(index + 3) otherwise return false
+
+	if word.kind != TokenKind.identifier or not spellsCapabilityWord(word.value) 'notACapability'
+		return false
+	end 'notACapability'
+
+	let after = tokenKindAt(tokens, index: index + 5)
+	return after == TokenKind.comma or after == TokenKind.rightParen
+end 'receiverCapabilityHeadAt'
+
+function foldReceiverCapabilities(tokens TokenArray) returns TokenArray
+	var heads = TokenIndexArray.create(0)
+	var scan = 0 as ElementIndex
+
+	while scan < tokens.count() 'findHeads'
+		if receiverCapabilityHeadAt(tokens, index: scan) 'aHead'
+			heads.push(scan)
+		end 'aHead'
+
+		scan = scan + 1
+	end 'findHeads'
+
+	if heads.isEmpty() 'nothingToFold'
+		return tokens
+	end 'nothingToFold'
+
+	var kept = TokenArray.create(0)
+	kept.reserve(tokens.count())
+	var next = 0 as ElementIndex
+
+	for head in heads 'eachHead'
+		while next < head + 2 'copyThroughTheName'
+			kept.push(try tokens.get(next) otherwise panic("foldReceiverCapabilities: tokens.get OOB below an index a head scan just read"))
+			next = next + 1
+		end 'copyThroughTheName'
+
+		let paren = try tokens.get(head + 2) otherwise panic("foldReceiverCapabilities: the `(` of a head the scan just read is missing")
+		let word = try tokens.get(head + 3) otherwise panic("foldReceiverCapabilities: the capability word of a head the scan just read is missing")
+		let receiver = try tokens.get(head + 4) otherwise panic("foldReceiverCapabilities: the receiver of a head the scan just read is missing")
+		kept.push(Token.create(TokenKind.leftParen, line: word.line, column: word.column, value: word.value, startByte: paren.startByte, endByte: receiver.endByte))
+		next = head + 5
+
+		if tokenKindAt(tokens, index: next) == TokenKind.comma 'aSeparator'
+			next = next + 1
+		end 'aSeparator'
+	end 'eachHead'
+
+	while next < tokens.count() 'copyTheRest'
+		kept.push(try tokens.get(next) otherwise panic("foldReceiverCapabilities: tokens.get OOB below the count just read"))
+		next = next + 1
+	end 'copyTheRest'
+
+	return kept
+end 'foldReceiverCapabilities'
 
 export type Token
 	export let kind as TokenKind
@@ -2446,7 +2546,7 @@ type Lexer
 		// consumed. Position points one column past the last lexed character on
 		// the same line.
 		self.tokens.push(Token.create(TokenKind.eof, line: line, column: column))
-		markViewBindings(self.tokens)
+		markContextualHeads(self.tokens)
 
 		var finished = self.tokens
 		self.tokens = TokenArray.create(0)
@@ -2490,7 +2590,7 @@ export function tokenize(source String, keywords KeywordTable) returns TokenArra
 
 	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, recording: false)
 
-	return dropBracketedLayout(try lexer.run())
+	return foldReceiverCapabilities(dropBracketedLayout(try lexer.run()))
 end 'tokenize'
 
 enum LayoutFrame
@@ -2598,7 +2698,7 @@ function opensAKeptBlock(tokens TokenArray, groups ParenGroups, index ElementInd
 		return false
 	end 'insideAnExpression'
 
-	if kind == TokenKind.while or kind == TokenKind.for 'aLoop'
+	if kind == TokenKind.while or kind == TokenKind.for or kind == TokenKind.modify 'aLoop'
 		return true
 	end 'aLoop'
 

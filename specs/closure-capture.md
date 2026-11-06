@@ -839,7 +839,7 @@ A bare field name inside a closure is `self.field`: the closure writes the `var`
 
 ```maxon
 typealias NameArray = Array with String
-typealias Action = function() returns bool
+typealias Action = function() returns bool mutates captures
 
 type Held
 	export var names as NameArray
@@ -2075,7 +2075,7 @@ The call holds a reference to the closure it reads out of a field for as long as
 replaces the field's closure still reads its own captures.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Step = function(Holder) returns Integer
+typealias Step = function(mutable Holder) returns Integer
 
 type Holder
 	export var step as Step
@@ -2085,7 +2085,7 @@ type Holder
 	end 'create'
 
 	export function swap()
-		self.step = function(_ Holder) gives 0
+		self.step = function(_ mutable Holder) gives 0
 	end 'swap'
 end 'Holder'
 
@@ -2096,7 +2096,7 @@ end 'swapThenMeasure'
 
 function main() returns ExitCode
 	let word = "a word padded long enough to heap allocate {1}"
-	var h = Holder.create(function(other Holder) gives swapThenMeasure(other, text: word))
+	var h = Holder.create(function(other mutable Holder) gives swapThenMeasure(other, text: word))
 	print("{h.step(h)} {h.step(h)}\n")
 	return 0
 end 'main'
@@ -3856,7 +3856,7 @@ error E3159: <fragment>:24:10: cannot pass 'a', which is read-only (a `let` bind
 The write happens wherever the closure is called, so a closure handed to a callee that calls it, and a closure written inside another closure, write the captured parameter alike.
 ```maxon
 typealias Count = int(0 to 1000)
-typealias Thunk = function() returns Count
+typealias Thunk = function() returns Count mutates captures
 
 type Box
 	export var n as Count
@@ -4003,7 +4003,7 @@ function zero(i Inner) returns Count
 	return 0
 end 'zero'
 
-typealias Thunk = function() returns Count
+typealias Thunk = function() returns Count mutates captures
 
 let G = Outer.create(2)
 
@@ -4074,7 +4074,7 @@ error E3159: <fragment>:26:27: cannot pass a `let` field of 'o', which is read-o
 
 ```maxon
 typealias Count = int(0 to 1000)
-typealias Bump = function() returns Count
+typealias Bump = function() returns Count mutates captures
 
 type Box
 	export var n as Count
@@ -4371,7 +4371,7 @@ The returned literal carries a closure that writes `b`, so handing `arm` the `le
 
 ```maxon
 typealias Count = int(0 to 1000)
-typealias Bump = function() returns Count
+typealias Bump = function() returns Count mutates captures
 typealias Bumps = Array with Bump
 
 type Box

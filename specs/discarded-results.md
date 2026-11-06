@@ -1609,7 +1609,7 @@ probe 2
 A predicate that writes the receiver it captured writes state the caller can see.
 ```maxon
 typealias Position = int(0 to 1000)
-typealias PositionTest = function(Position) returns bool
+typealias PositionTest = function(Position) returns bool mutates captures
 typealias PositionArray = Array with Position
 
 enum SearchError implements Error
@@ -1666,7 +1666,7 @@ end 'main'
 The same program with the recorder bound by `let`: the closure writes the receiver it captured, so the call is refused.
 ```maxon
 typealias Position = int(0 to 1000)
-typealias PositionTest = function(Position) returns bool
+typealias PositionTest = function(Position) returns bool mutates captures
 typealias PositionArray = Array with Position
 
 enum SearchError implements Error
@@ -2896,7 +2896,7 @@ The same, reached from a closure that captured the record.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
-typealias Action = function() returns Integer
+typealias Action = function() returns Integer mutates captures
 
 type Child
 	export var data as IntArray
@@ -3121,7 +3121,7 @@ A record handed an argument by a function the caller passed in holds that argume
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
-typealias Adopt = function(Holder, keep IntArray)
+typealias Adopt = function(mutable Holder, mutable IntArray)
 
 type Holder
 	var items as IntArray
@@ -3139,7 +3139,7 @@ type Holder
 	end 'grow'
 end 'Holder'
 
-function adoptInto(holder Holder, items IntArray)
+function adoptInto(holder mutable Holder, items mutable IntArray)
 	holder.adopt(items)
 end 'adoptInto'
 
@@ -3173,7 +3173,7 @@ end 'main'
 The same shape over records instead of arrays.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Adopt = function(Holder, keep Box)
+typealias Adopt = function(mutable Holder, mutable Box)
 
 type Box
 	export var number as Integer
@@ -3195,7 +3195,7 @@ type Holder
 	end 'bump'
 end 'Holder'
 
-function adoptInto(holder Holder, box Box)
+function adoptInto(holder mutable Holder, box mutable Box)
 	holder.box = box
 end 'adoptInto'
 
@@ -3768,4 +3768,158 @@ end 'main'
 ```
 ```maxoncstderr
 error E3065: <fragment>:20:3: result of 'relay' is not used (use '_ = expr' to discard)
+```
+
+<!-- test: error.a-function-that-advances-its-own-local-through-a-by-reference-argument-is-pure -->
+`firstWordEnd` hands its own local `var at` to a `mutable` parameter and writes nothing it was given, so it is pure and dropping its result is E3064.
+```maxon
+typealias BytePosition = int(0 to 1000)
+
+function skipSpaces(bytes ByteArray, position mutable BytePosition)
+	while position < bytes.count() as BytePosition 'scan'
+		let byte = try bytes.get(position as ElementIndex) otherwise return
+
+		if byte != 32 'notASpace'
+			return
+		end 'notASpace'
+
+		position = position + 1
+	end 'scan'
+end 'skipSpaces'
+
+function firstWordEnd(bytes ByteArray) returns BytePosition
+	var at = 0 as BytePosition
+	skipSpaces(bytes, position: at)
+	return at
+end 'firstWordEnd'
+
+function main() returns ExitCode
+	var text = ByteArray.create(0)
+	text.push(32)
+	firstWordEnd(text)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: <fragment>:25:2: result of pure function 'firstWordEnd' must be used
+```
+
+<!-- test: error.a-static-of-a-generic-type-that-moves-a-local-cursor-is-pure -->
+<!-- tier: stdlib -->
+`Probe.move` is a static of a generic type that seeks the cursor it is handed, and `head` hands it a cursor it created itself, so `head` is pure and dropping its result is E3064.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+type Probe uses Element
+	typealias Cursor = __ManagedMemoryCursor with Element
+
+	static function move(cursor Cursor, to ElementIndex)
+		try cursor.seek(to) otherwise panic("seek")
+	end 'move'
+end 'Probe'
+
+typealias CountProbe = Probe with Count
+
+function head(counts Counts) returns Count
+	var cursor = try counts.managed.createCursor() otherwise panic("empty")
+	CountProbe.move(cursor, to: 0)
+	return cursor.current()
+end 'head'
+
+function main() returns ExitCode
+	var counts = Counts.create(0)
+	counts.push(3)
+	head(counts)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: <fragment>:24:2: result of pure function 'head' must be used
+```
+
+<!-- test: error.a-generic-holder-that-moves-its-own-cursor-through-a-static-is-pure -->
+<!-- tier: stdlib -->
+`Walker.rewind` moves the cursor it holds through a static of a generic type, and `first` builds its own `Walker`, so `first` is pure and dropping its result is E3064.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+type Probe uses Element
+	typealias Cursor = __ManagedMemoryCursor with Element
+
+	static function move(cursor Cursor, to ElementIndex)
+		try cursor.seek(to) otherwise panic("seek")
+	end 'move'
+end 'Probe'
+
+type Walker uses Element
+	typealias Mover = Probe with Element
+	typealias Memory = __ManagedMemory with Element
+	typealias Cursor = __ManagedMemoryCursor with Element
+
+	var cursor as Cursor
+
+	static function over(column Memory) returns Self
+		return Self{cursor: try column.createCursor() otherwise panic("empty")}
+	end 'over'
+
+	function rewind()
+		Mover.move(cursor, to: 0)
+	end 'rewind'
+
+	function head() returns Element
+		return cursor.current()
+	end 'head'
+end 'Walker'
+
+typealias CountWalker = Walker with Count
+
+function first(counts Counts) returns Count
+	var walker = CountWalker.over(counts.managed)
+	walker.rewind()
+	return walker.head()
+end 'first'
+
+function main() returns ExitCode
+	var counts = Counts.create(0)
+	counts.push(3)
+	first(counts)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: <fragment>:44:2: result of pure function 'first' must be used
+```
+
+<!-- test: error.a-static-of-a-generic-type-that-clears-a-local-array-is-pure -->
+`Probe.empty` clears the array it is handed, and `head` hands it an array it built itself, so `head` is pure and dropping its result is E3064 although `Probe` is generic and `empty` does not return its own instance.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+type Probe uses Element
+	typealias Items = Array with Element
+
+	static function empty(items Items)
+		items.clear()
+	end 'empty'
+end 'Probe'
+
+typealias CountProbe = Probe with Count
+
+function head() returns Count
+	var items = Counts.create(0)
+	items.push(3)
+	CountProbe.empty(items)
+	return items.count() as Count
+end 'head'
+
+function main() returns ExitCode
+	head()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: <fragment>:23:2: result of pure function 'head' must be used
 ```

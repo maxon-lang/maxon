@@ -323,24 +323,33 @@ union KeepDestination
 	within(record ValueId)
 end 'KeepDestination'
 
-function moveKindHandsTheVarOver(kind MoveDestinationKind) returns bool
+enum MoveDoor
+	handsTheVarOver
+	argument
+	elsewhere
+end 'MoveDoor'
+
+function moveDoorOf(kind MoveDestinationKind) returns MoveDoor
 	return match kind 'kind'
 		letField or
 		letPayload or
-		readOnlyElement gives true
+		readOnlyElement gives MoveDoor.handsTheVarOver
+		keptArgument or
+		uniqueArgument or
+		uniqueSubject or
+		uniqueSlot gives MoveDoor.argument
 		mutableName or
 		letFieldValue or
 		letPayloadValue or
 		readOnlyElementValue or
-		keptArgument or
 		serviceReply or
 		sharedSend or
 		sentMessage or
 		publishedValue or
 		mutablePlace or
-		returnedValue gives false
+		returnedValue gives MoveDoor.elsewhere
 	end 'kind'
-end 'moveKindHandsTheVarOver'
+end 'moveDoorOf'
 
 let StoreSlotValueShift = 32 as StoreSlotKey
 let StoreSlotOffsetMask = u32.max as StoreSlotKey
@@ -375,6 +384,8 @@ let ResultLiesWithinALetPayload = 64 as ParamPositionMask
 let ResultHoldsALetPayload = 128 as ParamPositionMask
 let ResultLiesWithinAReadOnlyElement = 256 as ParamPositionMask
 let ResultHoldsAReadOnlyElement = 512 as ParamPositionMask
+let ResultLiesWithinAFrozenElement = 1024 as ParamPositionMask
+let ResultHoldsAFrozenElement = 2048 as ParamPositionMask
 
 let AliasLivenessColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside]
 let ViewReachColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside, ProvenanceColumn.holds, ProvenanceColumn.deepHolds]
@@ -383,15 +394,15 @@ let LetReachColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside, Prove
 let StoredContentsColumns = [ProvenanceColumn.holds, ProvenanceColumn.storedHolds, ProvenanceColumn.deepHolds, ProvenanceColumn.holdsWithin]
 let ModuleVariableSubject = "a module variable"
 let MaxFreshRounds = 16
-let ReadOnlySlotKindCount = 3
-let ResultProvenViewBitCount = 10
+let ReadOnlySlotKindCount = 4
+let ResultProvenViewBitCount = 12
 let ResultTupleKindFirstBit = ResultProvenViewBitCount
 let ResultMayBeKindFirstBit = ResultTupleKindFirstBit + ReadOnlySlotKindCount
 let TupleColumnSummaryFirstBit = ResultMayBeKindFirstBit + ReadOnlySlotKindCount
 let TupleColumnMarkCount = RootBitIndexMask + 1 - TupleColumnSummaryFirstBit
 let TupleMarkRankCount = ReadOnlySlotKindCount + TupleColumnMarkCount
 let HiddenViewRankCount = ReadOnlySlotKindCount + ReadOnlySlotKindCount + TupleMarkRankCount
-let EveryParamPosition = 0xFFFFFFFFFFFFFFFF as ParamPositionMask
+module let EveryParamPosition = 0xFFFFFFFFFFFFFFFF as ParamPositionMask
 let LetFieldSlotNameShift = 24 as StoreSlotKey
 let SlotAccessFunctionShift = 32 as StoreSlotKey
 let SlotAccessOpMask = 0xFFFFFFFF as StoreSlotKey
@@ -478,6 +489,7 @@ enum PermanentView
 	letField
 	letPayload
 	readOnlyElement
+	frozenElement
 end 'PermanentView'
 
 module enum ArgumentKeep
@@ -1380,6 +1392,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	var letCheckedIndex as ElementIndex
 	var opaqueBoundBodies as BoolArray
 	var returnedModuleLets as ParamPositionMask
+	var capabilities as CapabilityKnowledge
 
 	// Whether a call of the walk being traced handed back a value that may reach a module-level `let`'s record.
 	var moduleLetStorageReached as bool
@@ -1539,7 +1552,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	static function create(project Project, module MaxonModule, signatures ProgramSignatures, calls CallSiteCursor, funcCount ElementIndex) returns ProvenanceTracer
 		var noSites = ProvenanceSites.create(ProvenanceColumns.create())
-		return Self{project: project, module: module, signatures: signatures, calls: calls, stagedEdges: StagedParamEdges.create(funcCount), summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count(), setsPerColumn: 0, storeSlots: StoreSlotTable.create(), deepSlots: StoreSlotTable.create(), loadOrigins: StoreSlotKeyArray.create(0), hasLoadOrigin: BoolArray.create(0), tracked: BoolArray.create(0), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), unboxedWords: UnboxedWordMemo.create(), kindWritability: RecordKindWritability.of(signatures), rootValues: ValueIdArray.create(0), rootNames: NameRoster.create(0), rootRecordKinds: HeldRecordKindsArray.create(0), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: OptionalElementIndexColumn.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(0), isImmutableBindingValue: BoolArray.create(0), rootIsModuleLet: BoolArray.create(0), rootAliasLastUse: TokenIndexArray.create(0), rootAliased: BoolArray.create(0), rootInfos: VarInfoArray.create(0), rootDeclTokens: TokenIndexArray.create(0), rootLiveUntil: TokenIndexArray.create(0), rootSoleBase: BoolArray.create(0), rootMovedAt: TokenIndexArray.create(0), rootCaptured: BoolArray.create(0), writableRankOfValue: OptionalElementIndexColumn.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(0), callWrittenPlaceWords: ParamPositionMaskArray.create(0), parameterRankWords: ParamPositionMaskArray.create(0), doorToken: NoDoorToken, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: moduleLetKindsOf(project, signatures: signatures), escapedSet: 0, operands: ValueIdArray.create(0), refusals: PendingRefusalArray.create(0), argIdentityReach: ParamPositionMaskArray.create(0), argWithinReach: ParamPositionMaskArray.create(0), changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedLetKeeps: NoParamPositions, returnedPayloadKeeps: NoParamPositions, returnedElementKeeps: NoParamPositions, returnedKeeps: NoParamPositions, returnedOtherKeeps: NoParamPositions, returnedRecordKeeps: NoParamPositions, writtenMasks: ParamPositionMaskArray.create(0), recordWrittenMasks: ParamPositionMaskArray.create(0), letRefused: BoolArray.create(0), keptRefusedValues: ValueIdArray.create(0), keptRefusedAt: PositionKeyArray.create(0), keptSiteHeads: KeptSiteHeadsByCall.create(), keptSiteNext: OptionalElementIndexColumn.create(), keptSitesValid: false, keptSitesIndex: 0, landingKeeps: LandingKeeps.fromBodies, callStartIndex: StartByPosition.create(), letCheckedValid: false, letCheckedIndex: 0, opaqueBoundBodies: BoolArray.create(0), returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(0), storedRow: ParamPositionMaskArray.create(0), storedDeepRow: ParamPositionMaskArray.create(0), capturedPositions: CapturedLoadMap.create(), rankCount: 0, enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(0), writtenArgValues: ValueIdArray.create(0), writtenArgCalls: SourceRangeArray.create(0), writtenArgParams: ArgumentParameterArray.create(0), writtenArgJudged: BoolArray.create(0), writtenArgsHere: EntryIndexArray.create(0), landingNotedPositions: ParamCountArray.create(0), landingNotedRows: EntryIndexArray.create(0), keptArgFuncs: FuncIndexArray.create(0), keptArgValues: ValueIdArray.create(0), keptArgCalls: SourceRangeArray.create(0), keptArgParams: ArgumentParameterArray.create(0), keptArgCallees: NameRoster.create(0), keptArgCursor: 0, refusedDoorRanks: 0, refusedBodies: BoolArray.create(0), pendingKeeps: PendingKeepArray.create(0), returnedValues: ValueIdArray.create(0), keptEscapes: BoolArray.create(0), keptReturned: BoolArray.create(0), functionHoldings: FunctionHoldingAnswers.create(), keptEverythingEscapes: false, varMovedAt: TokenIndexArray.create(0), varDeadFrom: TokenIndexArray.create(0), keptRefusedRanks: 0, rootReadStarts: EntryIndexArray.create(0), rootReads: TokenIndexArray.create(0), tracedSites: noSites, noSites: noSites, refusedDoorValues: BoolArray.create(0), indexedDefinitionsOf: IndexedFunctionBody.none, definingOps: OptionalElementIndexColumn.create(), mergingBlocks: MergingBlockColumn.create(), hopKinds: AccessHopKindArray.create(0), hopBases: ValueIdArray.create(0), hopSteps: AccessStepColumn.create(), soleIncomings: ValueIdArray.create(0), soleIncomingSeen: BoolArray.create(0), incomingStart: EntryIndexArray.create(0), incomingLength: EntryIndexArray.create(0), incomingComplete: BoolArray.create(0), incomingValues: ValueIdArray.create(0), pairMerge: ValueIdArray.create(0), pairIncoming: ValueIdArray.create(0), pairHanded: BoolArray.create(0), blockPairStart: EntryIndexArray.create(0), useCounts: EntryIndexArray.create(0), pathSteps: PathStepArray.create(0), rootReadFill: EntryIndexArray.create(0), reachWorklist: BlockIdArray.create(0), reachVisited: BoolArray.create(0), writtenArgCursor: 0, writtenRanks: 0, writtenWithinRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: OptionalElementIndexColumn.create(), hygieneWithdrawn: BoolArray.create(0), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), freshReturns: BoolArray.create(0), freshMember: BoolArray.create(0), freshRequired: BoolArray.create(0), freshChecked: BoolArray.create(0), freshChanged: false, freshNeeds: FuncIndexArray.create(0), letFieldSlots: LetFieldSlotMemo.create(), letPayloadKinds: LetPayloadKindsMemo.create(), keptArgKinds: ArgumentKeepArray.create(0), viewSinks: ViewSinkMap.create(), permanentReturns: BoolArray.create(0), permanentOrFreshReturns: BoolArray.create(0), permanentNeeds: FuncIndexArray.create(0), permanentSettling: PermanenceSettling.none, permanentGivenReturns: BoolArray.create(0), permanentOrFreshGivenReturns: BoolArray.create(0), permanentGivenParams: ParamPositionMaskArray.create(0), permanentOrFreshGivenParams: ParamPositionMaskArray.create(0), permanentParamsNeeded: NoParamPositions, permanentUsedGiven: false, slotExclusivity: SlotExclusivityMemo.create(), slotAccessHeads: SlotAccessHeadMap.create(), slotAccessPacked: StoreSlotKeyArray.create(0), slotAccessNext: StoreSlotKeyArray.create(0), slotAccessesIndexed: false, slotAccessedThroughAnUnkeyedAddress: false, moduleVarKinds: signatures.recordKindsOfTypes(moduleGlobalTypesOf(project.managedGlobals, vars: true)), swapOperands: ValueIdArray.create(0), aliasesGrew: false, swappedOutReturns: SwappedOutReturnMemo.create(), valueHandedOut: BoolArray.create(0), handedOutComputed: false, readOnlyKeptBases: ValueIdArray.create(0), readOnlyKeptAt: PositionKeyArray.create(0), doorAcceptsParameters: false}
+		return Self{project: project, module: module, signatures: signatures, calls: calls, stagedEdges: StagedParamEdges.create(funcCount), summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count(), setsPerColumn: 0, storeSlots: StoreSlotTable.create(), deepSlots: StoreSlotTable.create(), loadOrigins: StoreSlotKeyArray.create(0), hasLoadOrigin: BoolArray.create(0), tracked: BoolArray.create(0), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), unboxedWords: UnboxedWordMemo.create(), kindWritability: RecordKindWritability.of(signatures), rootValues: ValueIdArray.create(0), rootNames: NameRoster.create(0), rootRecordKinds: HeldRecordKindsArray.create(0), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: OptionalElementIndexColumn.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(0), isImmutableBindingValue: BoolArray.create(0), rootIsModuleLet: BoolArray.create(0), rootAliasLastUse: TokenIndexArray.create(0), rootAliased: BoolArray.create(0), rootInfos: VarInfoArray.create(0), rootDeclTokens: TokenIndexArray.create(0), rootLiveUntil: TokenIndexArray.create(0), rootSoleBase: BoolArray.create(0), rootMovedAt: TokenIndexArray.create(0), rootCaptured: BoolArray.create(0), writableRankOfValue: OptionalElementIndexColumn.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(0), callWrittenPlaceWords: ParamPositionMaskArray.create(0), parameterRankWords: ParamPositionMaskArray.create(0), doorToken: NoDoorToken, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: moduleLetKindsOf(project, signatures: signatures), escapedSet: 0, operands: ValueIdArray.create(0), refusals: PendingRefusalArray.create(0), argIdentityReach: ParamPositionMaskArray.create(0), argWithinReach: ParamPositionMaskArray.create(0), changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedLetKeeps: NoParamPositions, returnedPayloadKeeps: NoParamPositions, returnedElementKeeps: NoParamPositions, returnedKeeps: NoParamPositions, returnedOtherKeeps: NoParamPositions, returnedRecordKeeps: NoParamPositions, writtenMasks: ParamPositionMaskArray.create(0), recordWrittenMasks: ParamPositionMaskArray.create(0), letRefused: BoolArray.create(0), keptRefusedValues: ValueIdArray.create(0), keptRefusedAt: PositionKeyArray.create(0), keptSiteHeads: KeptSiteHeadsByCall.create(), keptSiteNext: OptionalElementIndexColumn.create(), keptSitesValid: false, keptSitesIndex: 0, landingKeeps: LandingKeeps.fromBodies, callStartIndex: StartByPosition.create(), letCheckedValid: false, letCheckedIndex: 0, opaqueBoundBodies: BoolArray.create(0), returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(0), storedRow: ParamPositionMaskArray.create(0), storedDeepRow: ParamPositionMaskArray.create(0), capturedPositions: CapturedLoadMap.create(), rankCount: 0, enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(0), writtenArgValues: ValueIdArray.create(0), writtenArgCalls: SourceRangeArray.create(0), writtenArgParams: ArgumentParameterArray.create(0), writtenArgJudged: BoolArray.create(0), writtenArgsHere: EntryIndexArray.create(0), landingNotedPositions: ParamCountArray.create(0), landingNotedRows: EntryIndexArray.create(0), keptArgFuncs: FuncIndexArray.create(0), keptArgValues: ValueIdArray.create(0), keptArgCalls: SourceRangeArray.create(0), keptArgParams: ArgumentParameterArray.create(0), keptArgCallees: NameRoster.create(0), keptArgCursor: 0, refusedDoorRanks: 0, refusedBodies: BoolArray.create(0), pendingKeeps: PendingKeepArray.create(0), returnedValues: ValueIdArray.create(0), keptEscapes: BoolArray.create(0), keptReturned: BoolArray.create(0), functionHoldings: FunctionHoldingAnswers.create(), keptEverythingEscapes: false, varMovedAt: TokenIndexArray.create(0), varDeadFrom: TokenIndexArray.create(0), keptRefusedRanks: 0, rootReadStarts: EntryIndexArray.create(0), rootReads: TokenIndexArray.create(0), tracedSites: noSites, noSites: noSites, refusedDoorValues: BoolArray.create(0), indexedDefinitionsOf: IndexedFunctionBody.none, definingOps: OptionalElementIndexColumn.create(), mergingBlocks: MergingBlockColumn.create(), hopKinds: AccessHopKindArray.create(0), hopBases: ValueIdArray.create(0), hopSteps: AccessStepColumn.create(), soleIncomings: ValueIdArray.create(0), soleIncomingSeen: BoolArray.create(0), incomingStart: EntryIndexArray.create(0), incomingLength: EntryIndexArray.create(0), incomingComplete: BoolArray.create(0), incomingValues: ValueIdArray.create(0), pairMerge: ValueIdArray.create(0), pairIncoming: ValueIdArray.create(0), pairHanded: BoolArray.create(0), blockPairStart: EntryIndexArray.create(0), useCounts: EntryIndexArray.create(0), pathSteps: PathStepArray.create(0), rootReadFill: EntryIndexArray.create(0), reachWorklist: BlockIdArray.create(0), reachVisited: BoolArray.create(0), writtenArgCursor: 0, writtenRanks: 0, writtenWithinRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: OptionalElementIndexColumn.create(), hygieneWithdrawn: BoolArray.create(0), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), freshReturns: BoolArray.create(0), freshMember: BoolArray.create(0), freshRequired: BoolArray.create(0), freshChecked: BoolArray.create(0), freshChanged: false, freshNeeds: FuncIndexArray.create(0), letFieldSlots: LetFieldSlotMemo.create(), letPayloadKinds: LetPayloadKindsMemo.create(), keptArgKinds: ArgumentKeepArray.create(0), viewSinks: ViewSinkMap.create(), permanentReturns: BoolArray.create(0), permanentOrFreshReturns: BoolArray.create(0), permanentNeeds: FuncIndexArray.create(0), permanentSettling: PermanenceSettling.none, permanentGivenReturns: BoolArray.create(0), permanentOrFreshGivenReturns: BoolArray.create(0), permanentGivenParams: ParamPositionMaskArray.create(0), permanentOrFreshGivenParams: ParamPositionMaskArray.create(0), permanentParamsNeeded: NoParamPositions, permanentUsedGiven: false, slotExclusivity: SlotExclusivityMemo.create(), slotAccessHeads: SlotAccessHeadMap.create(), slotAccessPacked: StoreSlotKeyArray.create(0), slotAccessNext: StoreSlotKeyArray.create(0), slotAccessesIndexed: false, slotAccessedThroughAnUnkeyedAddress: false, moduleVarKinds: signatures.recordKindsOfTypes(moduleGlobalTypesOf(project.managedGlobals, vars: true)), swapOperands: ValueIdArray.create(0), aliasesGrew: false, swappedOutReturns: SwappedOutReturnMemo.create(), valueHandedOut: BoolArray.create(0), handedOutComputed: false, readOnlyKeptBases: ValueIdArray.create(0), readOnlyKeptAt: PositionKeyArray.create(0), doorAcceptsParameters: false, capabilities: CapabilityKnowledge.notYet}
 	end 'create'
 
 	function tracesFirst(index ElementIndex) returns bool
@@ -1573,15 +1586,14 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'tracksValue'
 
 	function applyCalleeSummary(func IrFunction, calleeIndex ElementIndex, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, argRanges SourceRangeArray)
-		let declaredResult = self.landingKeeps.declaredResult()
 		let inElements = self.readOnlyElementParametersOfCall(func, calleeIndex: calleeIndex, args: args)
 		self.storeThroughSummary(func, calleeIndex: calleeIndex, args: args, result: result, except: inElements)
 		self.bindThroughSummary(calleeIndex, args: args, except: inElements)
 		self.keepThroughSummary(func, calleeIndex: calleeIndex, args: args, inElements: inElements)
 
-		if declaredResult != ResultCapability.unqualified 'theBoundaryDeclaresTheResult'
+		if self.landingKeeps.declaresTheResultsProvenance() 'theBoundaryDeclaresTheResult'
 			if self.definesAnAlias(func, value: result) 'aRecordResult'
-				self.flowDeclaredResult(result, capability: declaredResult)
+				self.flowDeclaredResult(result, capability: self.landingKeeps.declaredResult())
 			end 'aRecordResult'
 
 			return
@@ -1616,7 +1628,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'aSinkToJudge'
 
 		if not self.tracingImmutableBindings and not sharesItsElements and self.isTracked(stored) and self.elementsAreReadOnlyIn(func, container: receiver) 'keptInAReadOnlyElement'
-			self.returnedElementKeeps = self.returnedElementKeeps or self.parametersAValueMayBe(func, value: stored)
+			if not self.elementsAreFrozenIn(func, container: receiver) 'aValueTheElementTypeDoesNotFreeze'
+				self.returnedElementKeeps = self.returnedElementKeeps or self.parametersAValueMayBe(func, value: stored)
+			end 'aValueTheElementTypeDoesNotFreeze'
+
 			return
 		end 'keptInAReadOnlyElement'
 
@@ -1632,13 +1647,19 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return valueTagOf(func, value: container) == ValueTypeTag.genericInstance and self.signatures.containerElementIsReadOnly(self.instanceIdOf(func, value: container))
 	end 'elementsAreReadOnlyIn'
 
+	function elementsAreFrozenIn(func IrFunction, container ValueId) returns bool
+		return valueTagOf(func, value: container) == ValueTypeTag.genericInstance and self.signatures.containerElementIsFrozen(self.instanceIdOf(func, value: container))
+	end 'elementsAreFrozenIn'
+
 	function seedReadOnlyElementRead(func IrFunction, result ValueId, callee ByteArray, args ValueIdArray)
 		if args.isEmpty() or not self.isTracked(result) 'readsNoElement'
 			return
 		end 'readsNoElement'
 
-		if self.callReadsAReadOnlyInstanceElement(func, callee: callee, receiver: try args.get(0) otherwise panic("ProvenanceTracer.seedReadOnlyElementRead: args.get(0) on a non-empty list")) 'aReadOnlyElement'
-			self.seedBit(ProvenanceColumn.identity, value: result, rank: self.readOnlyElementRank())
+		let receiver = try args.get(0) otherwise panic("ProvenanceTracer.seedReadOnlyElementRead: args.get(0) on a non-empty list")
+
+		if self.callReadsAReadOnlyInstanceElement(func, callee: callee, receiver: receiver) 'aReadOnlyElement'
+			self.seedBit(ProvenanceColumn.identity, value: result, rank: self.frozenElementRank() if self.elementsAreFrozenIn(func, container: receiver) else self.readOnlyElementRank())
 			self.moduleLetStorageReached = true
 		end 'aReadOnlyElement'
 	end 'seedReadOnlyElementRead'
@@ -1654,7 +1675,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'readOnlyElementParametersOfCall'
 
 	function resultFromOperands(func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId)
-		if self.landingKeeps.declaredResult() != ResultCapability.unqualified 'theBoundaryDeclaresTheResult'
+		if self.landingKeeps.declaresTheResultsProvenance() 'theBoundaryDeclaresTheResult'
 			self.flowDeclaredResult(result, capability: self.landingKeeps.declaredResult())
 			return
 		end 'theBoundaryDeclaresTheResult'
@@ -1664,9 +1685,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function flowDeclaredResult(result ValueId, capability ResultCapability)
 		match capability 'capability'
-			unqualified then panic("ProvenanceTracer.flowDeclaredResult: an unqualified result declares nothing to honour")
-			sole then break
-			readonly then self.seedBit(ProvenanceColumn.identity, value: result, rank: self.readOnlyElementRank())
+			unmarked or
+			mutable then panic("ProvenanceTracer.flowDeclaredResult: only `isolated` and `immutable` results declare a provenance to honour")
+			isolated then break
+			immutable then self.seedBit(ProvenanceColumn.identity, value: result, rank: self.frozenElementRank())
 		end 'capability'
 	end 'flowDeclaredResult'
 
@@ -1844,7 +1866,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.varDeadFrom.refill(self.writableRank + 1, value: NeverMovedToken)
 
 		for site in sites.moveSites 'eachSite'
-			if not site.sourceIsMutable or site.readAfter or site.readInALaterIteration or not moveKindHandsTheVarOver(site.destinationKind) 'notAMove'
+			if not site.sourceIsMutable or site.readAfter or site.readInALaterIteration or moveDoorOf(site.destinationKind) != MoveDoor.handsTheVarOver 'notAMove'
 				continue
 			end 'notAMove'
 
@@ -2384,12 +2406,13 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return NoParamPositions
 		end 'keepsNothingWhereItIsWritten'
 
-		return kept and self.readOnlyElementParameters(func, callee: callee, sig: sig, args: args)
+		return kept and self.readOnlyElementParameters(func, callee: callee, sig: sig, args: args, frozen: false)
 	end 'elementKeptParameters'
 
 	module function keepsAt(func IrFunction, calleeIndex ElementIndex, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels NameRoster, result ValueId) returns (ParamPositionMask, ParamPositionMask, ParamPositionMask, ParamPositionMask)
 		let inElements = self.elementKeptParameters(func, calleeIndex: calleeIndex, callee: callee, sig: sig, args: args)
-		var mutablyKept = self.keptParameters(calleeIndex, paramCount: sig.paramCount()) xor inElements
+		let kept = self.keptParameters(calleeIndex, paramCount: sig.paramCount())
+		var mutablyKept = maskWithout(kept xor inElements, removed: kept and self.readOnlyElementParameters(func, callee: callee, sig: sig, args: args, frozen: true))
 		mutablyKept = maskWithout(mutablyKept, removed: self.valueTypedContentParameters(func, calleeIndex: calleeIndex, sig: sig, args: args, argLabels: argLabels))
 		let heldByTheResult = self.summary.keepsAt(calleeIndex) and mutablyKept and not self.summary.otherKeepsAt(calleeIndex)
 
@@ -2423,7 +2446,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function contentIsAValueType(func IrFunction, value ValueId, declared MaxonType) returns bool
 		if maxonTypeTag(declared) == ValueTypeTag.typeParameter 'theValueItself'
-			return self.valueGivesAStoreNoWriter(func, value: value)
+			return self.valueGivesAStoreNoWriter(func, value: value) and not self.signatures.valueHoldsAUnique(valueTagOf(func, value: value), nameId: self.nameIdOf(func, value: value), from: self.project.typeNames)
 		end 'theValueItself'
 
 		return not self.valueMayHoldACapabilityRecord(func, value: value)
@@ -2443,7 +2466,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return (tag == ValueTypeTag.named or tagNamesADeclaredType(tag)) and self.valueTagCarriesProvenance(func, value: value)
 	end 'valueMayHoldACapabilityRecord'
 
-	function readOnlyElementParameters(func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray) returns ParamPositionMask
+	function readOnlyElementParameters(func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray, frozen bool) returns ParamPositionMask
 		if args.isEmpty() 'noReceiver'
 			return NoParamPositions
 		end 'noReceiver'
@@ -2465,7 +2488,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		for position in 0 upto sig.paramCount() 'eachParameter'
 			let declared = try sig.paramTypes.get(position) otherwise panic("ProvenanceTracer.readOnlyElementParameters: paramTypes.get OOB at {position} below paramCount")
 
-			if self.signatures.typeParameterIsReadOnlyIn(instance, declared: declared) 'storedReadOnly'
+			if self.signatures.typeParameterIsReadOnlyIn(instance, declared: declared) and self.signatures.typeParameterIsFrozenIn(instance, declared: declared) == frozen 'storedReadOnly'
 				stored = maskWithParam(stored, param: position)
 			end 'storedReadOnly'
 		end 'eachParameter'
@@ -2481,6 +2504,17 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.writtenMasks = writes.masks.clone()
 		self.recordWrittenMasks = writes.recordWriteMasks.clone()
 	end 'adoptParameterWrites'
+
+	module function adoptCapabilityFacts(facts CapabilityFacts)
+		self.capabilities = CapabilityKnowledge.known(facts)
+	end 'adoptCapabilityFacts'
+
+	module function capabilityFacts() returns CapabilityFacts
+		return match self.capabilities 'knowledge'
+			known(facts) gives facts
+			notYet panic("ProvenanceTracer.capabilityFacts: asked before `semanticCheck` inferred the capabilities, which it does ahead of every call check")
+		end 'knowledge'
+	end 'capabilityFacts'
 
 	function parametersWrittenByCalls(index ElementIndex) returns ParamPositionMask
 		return (try self.writtenMasks.get(index) otherwise panic("ProvenanceTracer.parametersWrittenByCalls: writtenMasks.get OOB at {index}")) or (try self.recordWrittenMasks.get(index) otherwise panic("ProvenanceTracer.parametersWrittenByCalls: recordWrittenMasks.get OOB at {index}"))
@@ -2527,7 +2561,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return ownedElsewhere
 		end 'nothingAsks'
 
-		let written = mutationSummary.writtenMaskAtAnyOf(bodies.impls)
+		let written = mutationSummary.writtenMaskAtAnyOf(bodies.impls) or keeps.declaredWritten()
 		var judged = ownedElsewhere
 
 		for i in 0 upto argCount 'eachArg'
@@ -2587,12 +2621,16 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		for i in 0 upto argCount 'eachArg'
 			let value = try args.get(i) otherwise panic("ProvenanceTracer.noteLandingArgumentsKept: args.get OOB at {i}")
+			view parameter = keeps.declaredParameterAt(i) if declaredByBoundary else firstArgumentParameter(self.landingParamNames(bodies, position: i, mutationSummary: mutationSummary))
+
+			if masks.keepsAt(i) 'aUniqueIsMoved'
+				self.moveUniqueArgument(func, value: value, call: call, parameter: parameter, callee: noteCallee)
+			end 'aUniqueIsMoved'
 
 			if self.valueIsInertAtADoor(func, value: value) 'keptWithoutAWriter'
 				continue
 			end 'keptWithoutAWriter'
 
-			view parameter = keeps.declaredParameterAt(i) if declaredByBoundary else firstArgumentParameter(self.landingParamNames(bodies, position: i, mutationSummary: mutationSummary))
 			let refusal = KeptRefusal.wording(declaredKeptWording(keeps, position: i, callee: calleeText)) if declaredByBoundary else KeptRefusal.none
 			let refused = self.noteArgumentKept(func, value: value, call: call, parameter: parameter, callee: noteCallee, position: i, masks: masks, refusal: refusal)
 
@@ -2674,18 +2712,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		let typeName = try self.project.typeNames.nameOf(self.nameIdOf(func, value: record)) otherwise throw AbsentError.absent
 		return try self.signatures.fieldNameAtOffset(typeName, offset: offset)
 	end 'fieldNameAt'
-
-	module function resultMeetsCapability(index ElementIndex, capability ResultCapability) returns bool
-		if not self.resultMayHandBackAModuleLetsRecord(self.functionAt(index)) 'carriesNoRecord'
-			return true
-		end 'carriesNoRecord'
-
-		return match capability 'capability'
-			unqualified gives true
-			sole gives try self.freshReturns.get(index) otherwise panic("ProvenanceTracer.resultMeetsCapability: freshReturns.get OOB at {index}")
-			readonly gives self.permanentWhateverItIsHanded(index, allowFresh: true)
-		end 'capability'
-	end 'resultMeetsCapability'
 
 	function refuseAnImmutableWrittenArgument(func IrFunction, value ValueId, call SourceRange, parameters ArgumentParameterArray) returns bool
 		view blamed = self.immutableRootWrittenThrough(func, value: value, call: call)
@@ -3086,6 +3112,14 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			self.seedBit(ProvenanceColumn.holds, value: result, rank: self.readOnlyElementRank())
 		end 'holdsAReadOnlyElement'
 
+		if (reach and ResultLiesWithinAFrozenElement) != NoParamPositions 'liesWithinAFrozenElement'
+			self.seedBit(ProvenanceColumn.identity, value: result, rank: self.frozenElementRank())
+		end 'liesWithinAFrozenElement'
+
+		if (reach and ResultHoldsAFrozenElement) != NoParamPositions 'holdsAFrozenElement'
+			self.seedBit(ProvenanceColumn.holds, value: result, rank: self.frozenElementRank())
+		end 'holdsAFrozenElement'
+
 		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
 			if maskHasParam(reach, param: ResultTupleKindFirstBit + kind as ParamCount) 'aTupleWithAKind'
 				self.seedBit(ProvenanceColumn.identity, value: result, rank: self.tupleLetFieldRank() + kind)
@@ -3142,6 +3176,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	function readOnlyElementRank() returns ElementIndex
 		return self.letFieldRank() + 2
 	end 'readOnlyElementRank'
+
+	function frozenElementRank() returns ElementIndex
+		return self.letFieldRank() + 3
+	end 'frozenElementRank'
 
 	function maybeLetFieldRank() returns ElementIndex
 		return self.letFieldRank() + ReadOnlySlotKindCount
@@ -3299,7 +3337,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		match self.landingKeeps 'keeps'
 			fromBodies then break
-			declared(mask, _, _, _, _) then self.noteDeclaredKeeps(func, args: args, mask: mask)
+			declared(_, consumed, _, _, _) then self.noteDeclaredKeeps(func, args: args, mask: consumed)
 		end 'keeps'
 
 		self.landingKeeps = LandingKeeps.fromBodies
@@ -3318,7 +3356,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		let environment = try args.get(args.count() - 1) otherwise panic("ProvenanceTracer.traceFunctionValueCall: a call through a function value passes its environment last, so it has an argument")
 
-		if self.calls.resolution.landingKeepsOf(func, op: op).declaredResult() == ResultCapability.unqualified and self.definesAnAlias(func, value: result) 'mayHandACaptureBack'
+		if not self.calls.resolution.landingKeepsOf(func, op: op).declaresTheResultsProvenance() and self.definesAnAlias(func, value: result) 'mayHandACaptureBack'
 			self.flowFromWithin(result, from: environment)
 			self.flowFromWithin(result, from: callee)
 		end 'mayHandACaptureBack'
@@ -3868,8 +3906,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'keepWhereverItLands'
 
 	function addKept(func IrFunction, value ValueId, holders ParamPositionMask, elsewhere bool, content KeptContent)
-		// A value nothing can write gives a holder nothing to write, so it is no keep — the rule
-		// `callersOwnNoWriterOrDeferred` applies at the caller — and E3189 never sees it either.
+		// A value nothing can write gives a holder nothing to write, so it is no keep.
 		if self.permanentViewOf(value) != PermanentView.none or self.valueGivesAStoreNoWriter(func, value: value) 'storedWhereItIsRefusedAnyway'
 			return
 		end 'storedWhereItIsRefusedAnyway'
@@ -4436,6 +4473,14 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			self.returnedModuleLets = self.returnedModuleLets or ResultHoldsAReadOnlyElement
 		end 'holdsAReadOnlyElement'
 
+		if self.valueIsOrLiesWithin(value, rank: self.frozenElementRank()) 'withinAFrozenElement'
+			self.returnedModuleLets = self.returnedModuleLets or ResultLiesWithinAFrozenElement
+		end 'withinAFrozenElement'
+
+		if self.valueHoldsRank(value, rank: self.frozenElementRank()) 'holdsAFrozenElement'
+			self.returnedModuleLets = self.returnedModuleLets or ResultHoldsAFrozenElement
+		end 'holdsAFrozenElement'
+
 		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
 			if self.setHasRank(ProvenanceColumn.identity, value: value, rank: self.tupleLetFieldRank() + kind) 'aTupleWithAKind'
 				self.returnedModuleLets = maskWithParam(self.returnedModuleLets, param: ResultTupleKindFirstBit + kind as ParamCount)
@@ -4853,7 +4898,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 				mutablePlace then self.decideMutablePlaceStore(func, index: index, site: site)
 				returnedValue then self.decideReturnedValue(func, index: index, site: site)
 				mutableName or
-				keptArgument then break
+				keptArgument or
+				uniqueArgument or
+				uniqueSubject or
+				uniqueSlot then break
 			end 'kind'
 		end 'eachSite'
 	end 'decideLetFieldMoves'
@@ -5337,8 +5385,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		let takesALetFieldsRecord = not takesAViewsRecord and self.valueReachesRank(value, rank: self.letFieldRank())
 		let takesALetPayloadsRecord = not takesAViewsRecord and not takesALetFieldsRecord and self.valueReachesRank(value, rank: self.letPayloadRank())
 		let takesAReadOnlyElementsRecord = not takesAViewsRecord and not takesALetFieldsRecord and not takesALetPayloadsRecord and self.valueReachesRank(value, rank: self.readOnlyElementRank())
+		let takesAFrozenElementsRecord = not takesAViewsRecord and not takesALetFieldsRecord and not takesALetPayloadsRecord and not takesAReadOnlyElementsRecord and self.valueReachesRank(value, rank: self.frozenElementRank())
 
-		if not takesAViewsRecord and not takesALetFieldsRecord and not takesALetPayloadsRecord and not takesAReadOnlyElementsRecord and not self.valueReachesRank(value, rank: self.moduleLetRank()) 'takesNoSharedRecord'
+		if not takesAViewsRecord and not takesALetFieldsRecord and not takesALetPayloadsRecord and not takesAReadOnlyElementsRecord and not takesAFrozenElementsRecord and not self.valueReachesRank(value, rank: self.moduleLetRank()) 'takesNoSharedRecord'
 			return
 		end 'takesNoSharedRecord'
 
@@ -5365,7 +5414,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			callee = String.from(called)
 		end 'aCall'
 
-		let message = varInitializerTakesAViewsRecordMessage(varName, callee: callee) if takesAViewsRecord else varInitializerTakesALetFieldRecordMessage(varName, callee: callee) if takesALetFieldsRecord else varInitializerTakesALetPayloadRecordMessage(varName, callee: callee) if takesALetPayloadsRecord else varInitializerTakesAReadOnlyElementRecordMessage(varName, callee: callee) if takesAReadOnlyElementsRecord else varInitializerTakesALetRecordMessage(varName, callee: callee)
+		let message = varInitializerTakesAViewsRecordMessage(varName, callee: callee) if takesAViewsRecord else varInitializerTakesALetFieldRecordMessage(varName, callee: callee) if takesALetFieldsRecord else varInitializerTakesALetPayloadRecordMessage(varName, callee: callee) if takesALetPayloadsRecord else varInitializerTakesAnElementRecordMessage(varName, callee: callee, root: ReadOnlyRootKind.readOnlyElement) if takesAReadOnlyElementsRecord else varInitializerTakesAnElementRecordMessage(varName, callee: callee, root: ReadOnlyRootKind.frozenElement) if takesAFrozenElementsRecord else varInitializerTakesALetRecordMessage(varName, callee: callee)
 		reportPositioned(self.project, code: ErrorCode.semanticVarFromImmutable, message: message, line: global.nameLine, column: global.nameColumn, filePath: global.declFilePath)
 	end 'refuseAVarTakingASharedRecord'
 
@@ -7263,7 +7312,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		for k in 0 upto sites.moveSites.count() 'eachDoor'
 			view site = try sites.moveSites.get(k) otherwise panic("ProvenanceTracer.varIsNeededMutable: moveSites.get OOB at {k}")
 
-			if not site.sourceIsMutable or site.destinationKind == MoveDestinationKind.keptArgument or site.sourceValue != value or not site.source.equals(name) 'anotherDoor'
+			if not site.sourceIsMutable or moveDoorOf(site.destinationKind) == MoveDoor.argument or site.sourceValue != value or not site.source.equals(name) 'anotherDoor'
 				continue
 			end 'anotherDoor'
 
@@ -9997,14 +10046,16 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return try self.freshReturns.get(index) otherwise panic("ProvenanceTracer.calleeReturnsFresh: freshReturns.get OOB at {index} — it is filled over every function")
 	end 'calleeReturnsFresh'
 
-	function keptArgumentSiteOf(func IrFunction, value ValueId, call SourceRange) returns ElementIndex throws AbsentError
+	function keptArgumentSiteOf(func IrFunction, value ValueId, call SourceRange, kind MoveDestinationKind) returns ElementIndex throws AbsentError
 		self.indexKeptArgumentSites(func)
 		let wanted = self.sameRecordBase(func, ir: self.module, value: value)
 		view sites = func.provenanceSites(self.noSites).moveSites
 		var next = try self.keptSiteHeads.get(positionKey(call.line, column: call.column)) otherwise throw AbsentError.absent
 
 		while true 'eachSiteOfTheCall'
-			if self.sameRecordBase(func, ir: self.module, value: (try sites.get(next) otherwise panic("ProvenanceTracer.keptArgumentSiteOf: moveSites.get OOB at {next}")).value) == wanted 'itsSite'
+			view site = try sites.get(next) otherwise panic("ProvenanceTracer.keptArgumentSiteOf: moveSites.get OOB at {next}")
+
+			if site.destinationKind == kind and self.sameRecordBase(func, ir: self.module, value: site.value) == wanted 'itsSite'
 				return next
 			end 'itsSite'
 
@@ -10027,7 +10078,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			let index = sites.count() - 1 - offset
 			view site = try sites.get(index) otherwise panic("ProvenanceTracer.indexKeptArgumentSites: moveSites.get OOB at {index}")
 
-			if site.destinationKind != MoveDestinationKind.keptArgument 'notAnArgument'
+			if moveDoorOf(site.destinationKind) != MoveDoor.argument 'notAnArgument'
 				continue
 			end 'notAnArgument'
 
@@ -10043,6 +10094,65 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.keptSitesValid = true
 		self.keptSitesIndex = self.enteredIndex
 	end 'indexKeptArgumentSites'
+
+	function uniqueSiteIndicesOf(func IrFunction, value ValueId, call SourceRange) returns MoveSiteIndexArray
+		self.indexKeptArgumentSites(func)
+		var found = MoveSiteIndexArray.create(0)
+		let wanted = self.sameRecordBase(func, ir: self.module, value: value)
+		view sites = func.provenanceSites(self.noSites).moveSites
+		var next = try self.keptSiteHeads.get(positionKey(call.line, column: call.column)) otherwise return found
+
+		while true 'eachSiteOfTheCall'
+			view site = try sites.get(next) otherwise panic("ProvenanceTracer.uniqueSiteIndicesOf: moveSites.get OOB at {next}")
+
+			if site.destinationKind != MoveDestinationKind.keptArgument and self.sameRecordBase(func, ir: self.module, value: site.value) == wanted 'aUniqueDoor'
+				found.push(next)
+			end 'aUniqueDoor'
+
+			next = try self.keptSiteNext.get(next) otherwise break
+		end 'eachSiteOfTheCall'
+
+		return found
+	end 'uniqueSiteIndicesOf'
+
+	module function argumentHoldsAUnique(func IrFunction, value ValueId, call SourceRange) returns bool
+		return self.uniqueSiteIndicesOf(func, value: value, call: call).count() > 0
+	end 'argumentHoldsAUnique'
+
+	module function moveUniqueArgument(func IrFunction, value ValueId, call SourceRange, parameter ArgumentParameter, callee ByteArray)
+		for siteIndex in self.uniqueSiteIndicesOf(func, value: value, call: call) 'eachDoor'
+			view site = try func.provenanceSites(self.noSites).moveSites.get(siteIndex) otherwise panic("ProvenanceTracer.moveUniqueArgument: moveSites.get OOB at {siteIndex}")
+
+			match site.destinationKind 'kind'
+				uniqueSlot then self.refuseUniqueSlot(site, parameter: parameter, callee: callee)
+				uniqueArgument then self.moveUniqueName(func, site: site, parameter: parameter, callee: callee)
+				uniqueSubject then self.reportUniqueRead(site, parameter: parameter, callee: callee)
+				default panic("ProvenanceTracer.moveUniqueArgument: a '{site.destinationKind.name}' door is no unique argument's")
+			end 'kind'
+		end 'eachDoor'
+	end 'moveUniqueArgument'
+
+	function refuseUniqueSlot(site MoveSite, parameter ArgumentParameter, callee ByteArray)
+		let message = uniqueSlotMovedMessage(String.from(site.source), paramName: parameter.displayName(), functionName: String.from(callee)) if site.lender == UniqueLender.none else uniqueLentMovedMessage(String.from(site.source), lender: uniqueLenderPhrase(site.lender), paramName: parameter.displayName(), functionName: String.from(callee))
+		self.refuse(site.line, column: site.column, code: ErrorCode.semanticUniqueValueRefused, message: message)
+	end 'refuseUniqueSlot'
+
+	function moveUniqueName(func IrFunction, site MoveSite, parameter ArgumentParameter, callee ByteArray)
+		if not site.sourceIsMutable and site.sourceValue >= valueIdAtParamPosition(func.paramCount) 'notTheCallersMutableData'
+			self.refuse(site.line, column: site.column, code: ErrorCode.semanticVarFromImmutable, message: uniqueArgumentNeedsAVarMessage(String.from(site.source), paramName: parameter.displayName(), functionName: String.from(callee)))
+			return
+		end 'notTheCallersMutableData'
+
+		self.reportUniqueRead(site, parameter: parameter, callee: callee)
+	end 'moveUniqueName'
+
+	function reportUniqueRead(site MoveSite, parameter ArgumentParameter, callee ByteArray)
+		if not site.readAfter 'neverReadAgain'
+			return
+		end 'neverReadAgain'
+
+		self.refuse(site.readLine, column: site.readColumn, code: ErrorCode.useAfterMove, message: movedUniqueReadMessage(site, parameter: parameter.displayName(), callee: String.from(callee)))
+	end 'reportUniqueRead'
 
 	function keptArgumentParameterName(note ElementIndex) returns String
 		return (try self.keptArgParams.get(note) otherwise panic("ProvenanceTracer.keptArgumentParameterName: keptArgParams.get OOB at {note}")).displayName()
@@ -10073,7 +10183,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		let call = try self.keptArgCalls.get(note) otherwise panic("ProvenanceTracer.judgeConsumedArgument: keptArgCalls.get OOB at {note}")
 		var parserRefused = false
 
-		if let siteIndex = try self.keptArgumentSiteOf(func, value: value, call: call) 'aNamedVar'
+		if let siteIndex = try self.keptArgumentSiteOf(func, value: value, call: call, kind: MoveDestinationKind.keptArgument) 'aNamedVar'
 			view site = try func.provenanceSites(self.noSites).moveSites.get(siteIndex) otherwise panic("ProvenanceTracer.keptArgumentSiteOf: moveSites.get OOB at {siteIndex}")
 
 			if site.readAfter 'readOnceMoved'
@@ -10126,7 +10236,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return
 		end 'alsoHandedOut'
 
-		if let siteIndex = try self.keptArgumentSiteOf(func, value: value, call: call) 'aNamedVar'
+		if let siteIndex = try self.keptArgumentSiteOf(func, value: value, call: call, kind: MoveDestinationKind.keptArgument) 'aNamedVar'
 			view site = try func.provenanceSites(self.noSites).moveSites.get(siteIndex) otherwise panic("ProvenanceTracer.keptArgumentSiteOf: moveSites.get OOB at {siteIndex}")
 
 			if site.readAfter or site.readInALaterIteration 'readAgain'
@@ -11016,6 +11126,10 @@ export type KeptMasks
 	export static function create(letField ParamPositionMask, letPayload ParamPositionMask, readOnlyElement ParamPositionMask, mutable ParamPositionMask, anyPosition bool) returns KeptMasks
 		return Self{letField: letField, letPayload: letPayload, readOnlyElement: readOnlyElement, mutable: mutable, anyPosition: anyPosition}
 	end 'create'
+
+	export function keepsAt(position ParamCount) returns bool
+		return maskHasParam(self.letField or self.letPayload or self.readOnlyElement or self.mutable, param: position)
+	end 'keepsAt'
 end 'KeptMasks'
 
 function declaredKeptWording(keeps LandingKeeps, position ParamCount, callee String) returns KeptWording
@@ -11096,6 +11210,7 @@ function readOnlySlotViewOfKind(kind ElementIndex) returns PermanentView
 		0 gives PermanentView.letField
 		1 gives PermanentView.letPayload
 		2 gives PermanentView.readOnlyElement
+		3 gives PermanentView.frozenElement
 		default panic("readOnlySlotViewOfKind: {kind} is not one of the {ReadOnlySlotKindCount} read-only slot kinds")
 	end 'kind'
 end 'readOnlySlotViewOfKind'
@@ -11107,6 +11222,7 @@ function viewRootKind(view PermanentView) returns ReadOnlyRootKind
 		letField gives ReadOnlyRootKind.letField
 		letPayload gives ReadOnlyRootKind.letPayload
 		readOnlyElement gives ReadOnlyRootKind.readOnlyElement
+		frozenElement gives ReadOnlyRootKind.frozenElement
 	end 'view'
 end 'viewRootKind'
 
@@ -11117,6 +11233,7 @@ function writeThroughViewMessage(view PermanentView, place String) returns Strin
 		letField gives "cannot write through '{place}', which may be a record read out of a `let` field that a call or a merge handed back; nothing reachable through a `let` field may be written; use clone()"
 		letPayload gives "cannot write through '{place}', which may be a record read out of a `let` payload that a call or a merge handed back; nothing reachable through a `let` payload may be written; use clone()"
 		readOnlyElement gives "cannot write through '{place}', which may be a record read out of a `readonly` element that a call or a merge handed back; nothing reachable through a `readonly` element may be written; use clone()"
+		frozenElement gives "cannot write through '{place}', which may be a record read out of an `immutable` element that a call or a merge handed back; nothing reachable through an `immutable` element may be written; use clone()"
 	end 'view'
 end 'writeThroughViewMessage'
 
@@ -11140,9 +11257,10 @@ function varInitializerTakesALetPayloadRecordMessage(varName String, callee Stri
 	return "the initializer of the module-level `var` `{varName}` may hand it a record a `let` payload holds, through `{callee}` — nothing reachable through a `let` payload may be written and a `var` may write what it holds, so the two may not share a record. Build the value from a clone() of the read, or make `{varName}` a `let`"
 end 'varInitializerTakesALetPayloadRecordMessage'
 
-function varInitializerTakesAReadOnlyElementRecordMessage(varName String, callee String) returns String
-	return "the initializer of the module-level `var` `{varName}` may hand it a record a `readonly` element holds, through `{callee}` — nothing reachable through a `readonly` element may be written and a `var` may write what it holds, so the two may not share a record. Build the value from a clone() of the read, or make `{varName}` a `let`"
-end 'varInitializerTakesAReadOnlyElementRecordMessage'
+function varInitializerTakesAnElementRecordMessage(varName String, callee String, root ReadOnlyRootKind) returns String
+	let element = readOnlyRootDescription(root)
+	return "the initializer of the module-level `var` `{varName}` may hand it a record {element} holds, through `{callee}` — nothing reachable through {element} may be written and a `var` may write what it holds, so the two may not share a record. Build the value from a clone() of the read, or make `{varName}` a `let`"
+end 'varInitializerTakesAnElementRecordMessage'
 
 function varInitializerTakesALetRecordMessage(varName String, callee String) returns String
 	return "the initializer of the module-level `var` `{varName}` may hand it a record a module-level `let` holds, through `{callee}` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `{varName}` a `let`"
@@ -11274,7 +11392,7 @@ function tagCarriesProvenance(tag ValueTypeTag) returns bool
 	return tagIsByteRecord(tag) or tagNamesADeclaredType(tag) or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.function
 end 'tagCarriesProvenance'
 
-module typealias ReturnedValueTest = function(ValueId) returns bool
+module typealias ReturnedValueTest = function(ValueId) returns bool mutates captures
 
 module function anyReturnedValue(func IrFunction, ir MaxonModule, test ReturnedValueTest) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
@@ -11624,6 +11742,14 @@ function movedValueReadMessage(site MoveSite) returns String
 
 	return useOfMovedValueMessage(String.from(site.source))
 end 'movedValueReadMessage'
+
+function movedUniqueReadMessage(site MoveSite, parameter String, callee String) returns String
+	if site.readInALaterIteration 'inALaterIteration'
+		return movedInAnEarlierIterationMessage(String.from(site.source))
+	end 'inALaterIteration'
+
+	return useOfValueMovedIntoMessage(String.from(site.source), into: "the parameter '{parameter}' of '{callee}', which keeps it")
+end 'movedUniqueReadMessage'
 
 function filesVarCandidates(sites ProvenanceSites) returns bool
 	return match sites.varCandidates 'candidates'

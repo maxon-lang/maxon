@@ -345,26 +345,24 @@ end 'main'
 ```
 
 <!-- test: error.an-enum-conformer-writing-a-let-argument-is-refused -->
-⭐⭐ **THE MUTATION SUMMARY CLOSES OVER THE ENUM CONFORMER TOO.** `through(g Grower, dest IntArray)`
-names no callee — the jump goes through the witness table — so what says it writes `dest` is the union
-over `Grower`'s conformers (`SemanticCheck.witnessDispatchImpls`). `Step.grow` pushes into its `dest`,
+⭐⭐ **THE REQUIREMENT'S DECLARATION REACHES THE ENUM CONFORMER TOO.** `through(g Grower, dest IntArray)`
+names no callee — the jump goes through the witness table — so what says it writes `dest` is the requirement,
+which declares its `dest` `mutable`. `Step.grow` spells it the same and pushes into it,
 therefore `through` writes its `dest`, therefore passing a `let`-bound array is **E3159**. The same
-program with a `type` conformer is `where-clauses.md`'s `witness-mutation-of-let-argument-refused`; a
-conformer roster that walked declared types only left this one compiling clean and silently pushing
-into an immutable array.
+program with a `type` conformer is `where-clauses.md`'s `witness-mutation-of-let-argument-refused`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 interface Grower
-	function grow(dest IntArray)
+	function grow(dest mutable IntArray)
 end 'Grower'
 
 enum Step implements Grower
 	one
 	two
 
-	function grow(dest IntArray)
+	function grow(dest mutable IntArray)
 		dest.push(9)
 	end 'grow'
 end 'Step'
@@ -393,14 +391,14 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 interface Grower
-	function grow(dest IntArray)
+	function grow(dest mutable IntArray)
 end 'Grower'
 
 enum Step implements Grower
 	one
 	two
 
-	function grow(dest IntArray)
+	function grow(dest mutable IntArray)
 		dest.push(9)
 	end 'grow'
 end 'Step'

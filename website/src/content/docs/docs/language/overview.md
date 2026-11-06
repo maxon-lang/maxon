@@ -212,8 +212,14 @@ else:
 | `spawn` | followed by a type's static factory call, optionally after `(capacity: n)` (see [Services](/docs/language/async/#services--spawn)) |
 | `bits` | followed by `(` on the right-hand side of a typealias |
 | `view` | at the start of a statement, or after `if` or `then`, followed by a name, or by a `( … )` list and `=` (see [Views](/docs/language/variables/#views-view)) |
-| `readonly` | before an element or value type argument of a container (see [Read-Only Values](/docs/language/memory-model/#read-only-values)), and after `returns` at a boundary with no body (see [Capability Qualifiers](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly)) |
-| `keep`, `sole` | before a parameter's type, and `sole` after `returns`, at a boundary with no body (see [Capability Qualifiers](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly)) |
+| `readonly` | before an element or value type argument of a container (see [Read-Only Values](/docs/language/memory-model/#read-only-values)) |
+| `mutable` | before a parameter's type, or a function-type parameter's, and as `mutable self` (see [Parameter Passing](/docs/language/functions/#parameter-passing)) |
+| `isolated`, `immutable` | before a type, and before `self` as a receiver capability; `isolated` also after `is` in a `where` constraint (see [Regions and Capabilities](/docs/language/regions/)) |
+| `modify` | at the start of a statement, followed by a name or `self` and ending its line with a label (see [`modify` Blocks](/docs/language/regions/#modify-blocks)) |
+| `freeze`, `swap`, `merge` | before an operand: a name, `self`, `Self`, `try`, or a parenthesis set apart by a space; `swap path with value` (see [Regions and Capabilities](/docs/language/regions/)) |
+| `unique` | after `is` in a `type` or `interface` header (see [Unique Types](/docs/language/regions/#unique-types)) |
+| `sendable` | after `is` in a `where` constraint of a generic type (see [Region Bounds](/docs/language/regions/#region-bounds)) |
+| `mutates`, `captures` | the clause `mutates captures` ending a function type (see [Capabilities at Function Types and Requirements](/docs/language/regions/#capabilities-at-function-types-and-requirements)) |
 
 `__line__` and `__file__` are valid only as parameter defaults (see
 [Caller-Location Defaults](/docs/language/functions/#caller-location-defaults-__line__-__file__)).

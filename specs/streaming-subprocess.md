@@ -523,8 +523,9 @@ function reader(h FullRangeInt) returns Integer
 end 'reader'
 
 function dropIt(h FullRangeInt) returns Integer
-	_ = async reader(h)
+	let p = async reader(h)
 	sleep(200)
+	p.cancel()
 	return 0
 end 'dropIt'
 

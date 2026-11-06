@@ -628,9 +628,9 @@ function work() returns Integer
 	return 7
 end 'work'
 
-typealias Sink = function(pending IntPromiseArray, p keep IntPromise)
+typealias Sink = function(pending mutable IntPromiseArray, p IntPromise)
 
-function keep(pending IntPromiseArray, p IntPromise)
+function keep(pending mutable IntPromiseArray, p IntPromise)
 	pending.push(p)
 end 'keep'
 
@@ -683,7 +683,7 @@ type Record
 end 'Record'
 
 interface Taker
-	function take(item keep Record)
+	function take(mutable self, item isolated Record)
 end 'Taker'
 
 type Keeper implements Taker
@@ -693,8 +693,8 @@ type Keeper implements Taker
 		return Self{held: Record.create(0)}
 	end 'create'
 
-	function take(item Record)
-		self.held = item
+	function take(item isolated Record)
+		self.held = merge item
 	end 'take'
 end 'Keeper'
 
@@ -705,7 +705,7 @@ type Dropper implements Taker
 		return Self{count: 0}
 	end 'create'
 
-	function take(_ Record)
+	function take(_ isolated Record)
 		self.count = self.count + 1
 	end 'take'
 end 'Dropper'

@@ -499,7 +499,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Shape
 	function area() returns Integer
-	function grow()
+	function grow(mutable self)
 end 'Shape'
 
 type Square implements Shape
@@ -551,7 +551,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Shape
 	function area() returns Integer
-	function grow()
+	function grow(mutable self)
 end 'Shape'
 
 type Square implements Shape
@@ -724,7 +724,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Shape
 	function area() returns Integer
-	function grow()
+	function grow(mutable self)
 end 'Shape'
 
 type Square implements Shape
@@ -785,7 +785,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Shape
 	function area() returns Integer
-	function grow()
+	function grow(mutable self)
 end 'Shape'
 
 type Dot implements Shape

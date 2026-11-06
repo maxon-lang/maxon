@@ -238,6 +238,24 @@ end 'RecordPromotion'
 
 typealias RecordPromotionArray = Array with RecordPromotion
 
+type FrameAllocSite
+	export let opIndex as ElementIndex
+	export let resultId as ValueId
+	export let sizeBytes as ByteOffset
+
+	static function create(opIndex ElementIndex, resultId ValueId, sizeBytes ByteOffset) returns FrameAllocSite
+		return Self{opIndex: opIndex, resultId: resultId, sizeBytes: sizeBytes}
+	end 'create'
+end 'FrameAllocSite'
+
+typealias FrameAllocSiteArray = Array with FrameAllocSite
+typealias FrameAllocTable = Array with FrameAllocSiteArray
+
+union FrameAllocVerdict
+	notAFrameAlloc
+	frameAlloc(sizeBytes ByteOffset)
+end 'FrameAllocVerdict'
+
 typealias PlanIndexByOpIndex = Map with (ElementIndex, ElementIndex)
 
 // A callee this module defines, or one it does not — every compiler runtime entry, whose body is installed
@@ -303,15 +321,23 @@ function promoteWithNameIndex(module StdModule, byName FunctionNameIndex)
 	// parameter-escape summary — one scan and five columns per function that HAS parameters — is then pure
 	// dead work. Most programs in the corpus are exactly that module.
 	var constructors = buildRecordConstructors(module)
+	var frameAllocs = FrameAllocTable.create(0)
+	var anyFrameAlloc = false
 
-	if not anyConstructor(constructors) 'nothingIsEverBuilt'
+	for funcIndex in 0 upto module.funcCount() 'eachFuncAllocating'
+		let sites = frameAllocSitesIn(module, func: module.getFunc(funcIndex), liveOps: module.liveOpIndices(module.getFunc(funcIndex)))
+		anyFrameAlloc = anyFrameAlloc or not sites.isEmpty()
+		frameAllocs.push(sites)
+	end 'eachFuncAllocating'
+
+	if not anyConstructor(constructors) and not anyFrameAlloc 'nothingIsEverBuilt'
 		return
 	end 'nothingIsEverBuilt'
 
 	let escapingParams = buildParamEscapeMasks(module, byName: byName)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		promoteInFunction(module, func: module.getFunc(funcIndex), byName: byName, constructors: constructors, escapingParams: escapingParams)
+		promoteInFunction(module, func: module.getFunc(funcIndex), byName: byName, constructors: constructors, escapingParams: escapingParams, frameAllocs: try frameAllocs.get(funcIndex) otherwise panic("promoteWithNameIndex: frameAllocs.get OOB at {funcIndex} — one row per module function"))
 	end 'eachFunc'
 end 'promoteWithNameIndex'
 
@@ -1245,18 +1271,22 @@ end 'forwardCallArguments'
 // the candidate column, to size the retention column, and to seed the minter. Asked per CANDIDATE, which is
 // what a `growFilled` inside the collect loop would be, it becomes a whole-function walk per constructor
 // call: Θ(ops × constructions) in a function that builds many records.
-function promoteInFunction(module StdModule, func IrFunction, byName FunctionNameIndex, constructors RecordConstructorArray, escapingParams ParamPositionMaskArray)
+function promoteInFunction(module StdModule, func IrFunction, byName FunctionNameIndex, constructors RecordConstructorArray, escapingParams ParamPositionMaskArray, frameAllocs FrameAllocSiteArray)
 	let liveOps = module.liveOpIndices(func)
 
-	if not functionBuildsARecord(module, liveOps: liveOps, byName: byName, constructors: constructors) 'noConstructorCall'
+	if frameAllocs.isEmpty() and not functionBuildsARecord(module, liveOps: liveOps, byName: byName, constructors: constructors) 'nothingToPromote'
 		return
-	end 'noConstructorCall'
+	end 'nothingToPromote'
 
 	let valueBound = nextFreeValueId(module, func: func)
-	let candidates = collectConstructorResults(module, liveOps: liveOps, valueBound: valueBound, byName: byName, constructors: constructors)
+	var candidates = collectConstructorResults(module, liveOps: liveOps, valueBound: valueBound, byName: byName, constructors: constructors)
+
+	for site in frameAllocs 'eachFrameAlloc'
+		try candidates.set(site.resultId, value: true) otherwise panic("promoteInFunction: candidates.set OOB at {site.resultId} — the column is sized to the function's value space")
+	end 'eachFrameAlloc'
 
 	let scan = scanPointerUses(module, func: func, liveOps: liveOps, tracked: candidates, byName: byName)
-	var plans = planPromotions(module, func: func, valueBound: valueBound, scan: scan, byName: byName, constructors: constructors, escapingParams: escapingParams)
+	var plans = planPromotions(module, func: func, valueBound: valueBound, scan: scan, byName: byName, constructors: constructors, escapingParams: escapingParams, frameAllocs: frameAllocs)
 
 	if plans.count() == 0 'nothingProvable'
 		return
@@ -1453,7 +1483,7 @@ end 'constructorCallIn'
 
 // Decide which of this function's constructed records may be promoted. Laying out the frame region they
 // occupy is `assignFrameSlots`', below.
-function planPromotions(module StdModule, func IrFunction, valueBound ValueId, scan PointerScan, byName FunctionNameIndex, constructors RecordConstructorArray, escapingParams ParamPositionMaskArray) returns RecordPromotionArray
+function planPromotions(module StdModule, func IrFunction, valueBound ValueId, scan PointerScan, byName FunctionNameIndex, constructors RecordConstructorArray, escapingParams ParamPositionMaskArray, frameAllocs FrameAllocSiteArray) returns RecordPromotionArray
 	// ⚠ ONE PASS OVER THE FORWARDING EDGES, NOT ONE PER CANDIDATE. Asked per record — a scan of the edge
 	// list inside the decision — this is Θ(constructions × call arguments) in a function that both builds
 	// many records and makes many calls. Resolved into a column first, the decision below is a subscript.
@@ -1466,11 +1496,23 @@ function planPromotions(module StdModule, func IrFunction, valueBound ValueId, s
 	// `__mm_decref` was deleted, which is a leak or a double free rather than a missed optimization. Walking
 	// the very set that will be rewritten makes that unreachable by construction rather than by that panic.
 	var plans = RecordPromotionArray.create(0)
+	var allocAtOp = PlanIndexByOpIndex.create()
+
+	for siteIndex in 0 upto frameAllocs.count() 'eachFrameAlloc'
+		let site = try frameAllocs.get(siteIndex) otherwise panic("planPromotions: frameAllocs.get OOB at {siteIndex}")
+		allocAtOp.upsert(site.opIndex, value: siteIndex as ElementIndex)
+	end 'eachFrameAlloc'
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("planPromotions: blockRef from func.blockRefs not in module.blocks")
 
 		for opIdx in block.bodyOps() 'eachOp'
+			if let siteIndex = try allocAtOp.get(opIdx) 'aFrameAlloc'
+				let site = try frameAllocs.get(siteIndex) otherwise panic("planPromotions: frameAllocs.get OOB at {siteIndex} — the index came from the map built from this very array")
+				planOnePromotion(opIdx, resultId: site.resultId, sizeBytes: site.sizeBytes, fields: zeroedRecordFields(site.sizeBytes), args: ValueIdArray.create(0), scan: scan, retained: retained, plans: plans)
+				continue
+			end 'aFrameAlloc'
+
 			match constructorCallAt(module, opIdx: opIdx, byName: byName, constructors: constructors) 'site'
 				notAConstructorCall then break
 				builds(resultId, sizeBytes, fields, args) then planOnePromotion(opIdx, resultId: resultId, sizeBytes: sizeBytes, fields: fields, args: args, scan: scan, retained: retained, plans: plans)
@@ -1480,6 +1522,69 @@ function planPromotions(module StdModule, func IrFunction, valueBound ValueId, s
 
 	return plans
 end 'planPromotions'
+
+function frameAllocSitesIn(module StdModule, func IrFunction, liveOps OpIndexArray) returns FrameAllocSiteArray
+	var sites = FrameAllocSiteArray.create(0)
+
+	if not func.allocatesParameterCells 'noParameterCell'
+		return sites
+	end 'noParameterCell'
+
+	let consts = constantsFeedingAllocations(module, liveOps: liveOps)
+
+	if consts.isEmpty() 'allocatesNothing'
+		return sites
+	end 'allocatesNothing'
+
+	var call = StdCallOperands.create()
+
+	for opIdx in liveOps 'eachOp'
+		classifyCallOperands(try module.ops.get(opIdx) otherwise panic("frameAllocSitesIn: live op index {opIdx} not in module.ops"), call: call)
+
+		if not call.namesACallee() or call.throwsToAFlag() 'notAnAllocationCall'
+			continue
+		end 'notAnAllocationCall'
+
+		match frameAllocVerdictOf(call, consts: consts) 'verdict'
+			notAFrameAlloc then break
+			frameAlloc(sizeBytes) then sites.push(FrameAllocSite.create(opIdx, resultId: call.resultId, sizeBytes: sizeBytes))
+		end 'verdict'
+	end 'eachOp'
+
+	return sites
+end 'frameAllocSitesIn'
+
+function frameAllocVerdictOf(call StdCallOperands, consts ConstValueMap) returns FrameAllocVerdict
+	if not call.callee.equals(MmAllocName) or call.argCount < MmAllocBaseArgCount 'notAnAllocation'
+		return FrameAllocVerdict.notAFrameAlloc
+	end 'notAnAllocation'
+
+	if not consts.contains(call.firstArg) or not consts.contains(call.secondArg) 'notConstantlySized'
+		return FrameAllocVerdict.notAFrameAlloc
+	end 'notConstantlySized'
+
+	let size = consts.constantOf(call.firstArg)
+
+	if consts.constantOf(call.secondArg) != TrivialDestructor 'hasADestructorCascade'
+		return FrameAllocVerdict.notAFrameAlloc
+	end 'hasADestructorCascade'
+
+	if size != ParameterCellBytes 'notAParameterCell'
+		return FrameAllocVerdict.notAFrameAlloc
+	end 'notAParameterCell'
+
+	return FrameAllocVerdict.frameAlloc(size as ByteOffset)
+end 'frameAllocVerdictOf'
+
+function zeroedRecordFields(sizeBytes ByteOffset) returns RecordFieldArray
+	var fields = RecordFieldArray.create(0)
+
+	for slot in 0 upto ((sizeBytes as StackSize) / SpillSlotBytes) 'eachSlot'
+		fields.push(RecordField.create((slot * SpillSlotBytes) as ByteOffset, storeType: StdType.i64, source: RecordFieldSource.fromConstant(0, constType: StdType.i64)))
+	end 'eachSlot'
+
+	return fields
+end 'zeroedRecordFields'
 
 // Which tracked pointers were handed to a callee that RETAINS the position they filled.
 function retainedByACallee(valueBound ValueId, scan PointerScan, escapingParams ParamPositionMaskArray) returns BoolArray

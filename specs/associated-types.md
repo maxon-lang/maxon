@@ -3864,7 +3864,7 @@ interface Cursor uses Element
 end 'Cursor'
 
 interface BiCursor extends Cursor
-	function retreat()
+	function retreat(mutable self)
 end 'BiCursor'
 
 typealias Pos = int(0 to 100)
@@ -3912,7 +3912,7 @@ interface Cursor uses Element
 end 'Cursor'
 
 interface BiCursor extends Cursor
-	function retreat()
+	function retreat(mutable self)
 end 'BiCursor'
 
 typealias Pos = int(0 to 100)
@@ -3962,7 +3962,7 @@ interface Cursor uses Element
 end 'Cursor'
 
 interface BiCursor extends Cursor
-	function retreat()
+	function retreat(mutable self)
 end 'BiCursor'
 
 typealias Pos = int(0 to 100)
@@ -4013,7 +4013,7 @@ interface Cursor uses Element
 end 'Cursor'
 
 interface BiCursor extends Cursor
-	function retreat()
+	function retreat(mutable self)
 end 'BiCursor'
 
 typealias Pos = int(0 to 100)
@@ -4069,7 +4069,7 @@ interface Cursor uses Element
 end 'Cursor'
 
 interface BiCursor extends Cursor
-	function retreat()
+	function retreat(mutable self)
 end 'BiCursor'
 
 typealias Pos = int(0 to 100)
@@ -4116,7 +4116,7 @@ interface Parent uses Element
 end 'Parent'
 
 interface Child extends Parent uses Element
-	function retreat()
+	function retreat(mutable self)
 end 'Child'
 
 typealias Whole = int(0 to 100)
@@ -4179,7 +4179,7 @@ typealias Num = int(0 to 1000)
 
 interface Holder uses Element
 	export typealias ElementArray = Array with Element
-	function absorb(value ElementArray)
+	function absorb(mutable self, value ElementArray)
 end 'Holder'
 
 interface Maker
@@ -4226,7 +4226,7 @@ typealias Num = int(0 to 1000)
 
 interface Holder uses Element
 	typealias ElementArray = Array with Element
-	function absorb(value ElementArray)
+	function absorb(mutable self, value ElementArray)
 end 'Holder'
 
 typealias NumStore = Array with Num
@@ -4279,7 +4279,7 @@ typealias Byte = int(0 to 255)
 
 interface Sink
 	export typealias Bytes = Array with Byte
-	function write(data Bytes)
+	function write(mutable self, data Bytes)
 end 'Sink'
 
 type Log implements Sink
@@ -4332,7 +4332,7 @@ typealias Num = int(0 to 1000)
 
 interface Holder uses Element
 	typealias Nested = Array with (Array with Element)
-	function absorb(value Nested)
+	function absorb(mutable self, value Nested)
 end 'Holder'
 
 typealias NumStore = Array with Num
@@ -4388,7 +4388,7 @@ typealias Num = int(0 to 1000)
 interface Holder uses Element
 	typealias ElementArray = Array with Element
 	typealias Nested = Array with ElementArray
-	function absorb(value Nested)
+	function absorb(mutable self, value Nested)
 end 'Holder'
 
 type Crate implements Holder with Num
@@ -4425,7 +4425,7 @@ typealias Other = int(0 to 7)
 
 interface Holder uses Element
 	typealias ElementArray = Array with Element
-	function absorb(value ElementArray)
+	function absorb(mutable self, value ElementArray)
 end 'Holder'
 
 typealias OtherStore = Array with Other

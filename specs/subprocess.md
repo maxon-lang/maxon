@@ -1412,7 +1412,7 @@ function main() returns ExitCode
 		argv.push("echo")
 		#endif
 		argv.push("child-{i}")
-		promises.push(async Subprocess.run(exe.clone(), arguments: argv))
+		promises.push(async Subprocess.run(exe.clone(), arguments: argv.clone()))
 		i = i + 1
 	end 'spawn'
 
@@ -2357,4 +2357,215 @@ end 'main'
 ```
 ```stdout
 pings=30 collects=30 answered=30 slow=0
+```
+<!-- test: subprocess-take-stdout-moves-the-stdout-side-out-of-the-child -->
+<!-- unsupported-targets: wasm32-wasi -->
+`takeStdout` hands the child's stdout side to a `StdoutReader` that reads while the child keeps its stdin and its lifetime. While the reader is out the child's own stdout reads refuse, and `reclaimStdout` makes the side the child's again.
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.path(try FilePath.from("C:/Windows/System32/cmd.exe") otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("/c")
+	argv.push("findstr")
+	argv.push("x*")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
+	var argv = StringArray.create(0)
+	#endif
+
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	let reader = try child.takeStdout() otherwise return 4
+
+	try child.writeStdinLine("alpha") otherwise return 5
+	try child.writeStdinLine("beta") otherwise return 5
+	child.closeStdin()
+	let first = try reader.readLine() otherwise return 6
+	let attempt = try child.readStdoutLine() otherwise "refused"
+
+	if attempt != "refused" 'stillReadable'
+		child.release()
+		return 7
+	end 'stillReadable'
+
+	try child.reclaimStdout() otherwise return 8
+	let second = try child.readStdoutLine() otherwise return 10
+	child.release()
+	print("{first} {second}\n")
+	return 0
+end 'main'
+```
+```stdout
+alpha beta
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-release-while-the-stdout-reader-is-out-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+Releasing the child closes the handle the reader reads, so `release` refuses while the reader is out instead of leaving a read of a closed handle.
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.path(try FilePath.from("C:/Windows/System32/cmd.exe") otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("/c")
+	argv.push("findstr")
+	argv.push("x*")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
+	var argv = StringArray.create(0)
+	#endif
+
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	let reader = try child.takeStdout() otherwise return 4
+	_ = reader
+	child.release()
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+```
+```stderr
+panic at Subprocess.maxon:1255: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
+Stack trace:
+  in StreamingSubprocess.release
+  in main
+  in mrt_start
+```
+
+<!-- test: subprocess-a-reader-whose-drain-ends-is-reclaimed-before-the-child-is-released -->
+<!-- unsupported-targets: wasm32-wasi -->
+A coroutine drains a taken reader to the end of the stream; once it has ended, the error path and the plain path both reclaim the stdout side before `release`, so the child is released with its reader back.
+```maxon
+typealias Lines = int(0 to 1000)
+
+function drainOf(reader StdoutReader) returns Lines throws SubprocessError
+	var count = 0 as Lines
+
+	while true 'lineLoop'
+		let line = try reader.readLine() otherwise (e) 'unread'
+			if not e.endedTheStream() 'aReadFailure'
+				throw e
+			end 'aReadFailure'
+
+			return count
+		end 'unread'
+
+		_ = line
+		count = count + 1
+	end 'lineLoop'
+
+	panic("drainOf: the loop above is only left by `return` or `throw`")
+end 'drainOf'
+
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.path(try FilePath.from("C:/Windows/System32/cmd.exe") otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("/c")
+	argv.push("findstr")
+	argv.push("x*")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
+	var argv = StringArray.create(0)
+	#endif
+
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	let reader = try child.takeStdout() otherwise return 4
+	let drain = async drainOf(reader)
+	try child.writeStdinLine("one") otherwise panic("a live child takes a line on its stdin")
+	try child.writeStdinLine("two") otherwise panic("a live child takes a line on its stdin")
+	child.closeStdin()
+
+	let lines = try await drain otherwise (e) 'drainFailed'
+		try child.reclaimStdout() otherwise return 8
+		child.release()
+		print("{e.displayReason()}\n")
+		return 9
+	end 'drainFailed'
+
+	try child.reclaimStdout() otherwise return 8
+	child.release()
+	print("{lines}\n")
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-taken-reader-handed-to-a-coroutine-leaves-its-promise-storable -->
+<!-- unsupported-targets: wasm32-wasi -->
+A taken reader is a clean input to `async`, so the promise of the coroutine that drains it may be stored and awaited later.
+```maxon
+typealias Lines = int(0 to 1000)
+typealias LinePromise = Promise with (Lines, SubprocessError)
+typealias LinePromises = Array with LinePromise
+
+function drainOf(reader StdoutReader) returns Lines throws SubprocessError
+	var count = 0 as Lines
+
+	while true 'lineLoop'
+		let line = try reader.readLine() otherwise (e) 'unread'
+			if not e.endedTheStream() 'aReadFailure'
+				throw e
+			end 'aReadFailure'
+
+			return count
+		end 'unread'
+
+		_ = line
+		count = count + 1
+	end 'lineLoop'
+
+	panic("drainOf: the loop above is only left by `return` or `throw`")
+end 'drainOf'
+
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.path(try FilePath.from("C:/Windows/System32/cmd.exe") otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("/c")
+	argv.push("findstr")
+	argv.push("x*")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
+	var argv = StringArray.create(0)
+	#endif
+
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	let reader = try child.takeStdout() otherwise return 4
+	var drains = LinePromises.create(0)
+	drains.push(async drainOf(reader))
+	try child.writeStdinLine("one") otherwise panic("a live child takes a line on its stdin")
+	try child.writeStdinLine("two") otherwise panic("a live child takes a line on its stdin")
+	child.closeStdin()
+
+	let drain = try drains.pop() otherwise panic("one drain was pushed")
+	let lines = try await drain otherwise (e) 'drainFailed'
+		try child.reclaimStdout() otherwise return 8
+		child.release()
+		print("{e.displayReason()}\n")
+		return 9
+	end 'drainFailed'
+
+	try child.reclaimStdout() otherwise return 8
+	child.release()
+	print("{lines}\n")
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
 ```

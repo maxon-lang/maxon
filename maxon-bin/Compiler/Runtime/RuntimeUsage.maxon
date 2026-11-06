@@ -752,7 +752,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesSchedulerlessNowNs = true
 	end 'schedulerlessNowNs' else if not usage.parksOnIo and callee.equals(GtSleepName) 'schedulerlessSleep'
 		usage.usesSchedulerlessSleep = true
-	end 'schedulerlessSleep' else if isGtRuntimeCallee(callee) 'gt'
+	end 'schedulerlessSleep' else if isGtRuntimeCallee(callee) and not strandGuardCallIsElided(usage.parksOnIo, callee: callee) 'gt'
 		recordGtUsage(usage)
 	end 'gt'
 

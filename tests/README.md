@@ -394,7 +394,6 @@ tests/
     build-directory-without-output-names-the-directory.maxtest      `build <dir>` with no `--output=` writes `<dir>/<dirname><ext>`, staged outside the checkout
     build-compiles-an-old-project-maxon-as-ordinary-source.maxtest   a `project.maxon` and a `tasks.maxon` are compiled as ordinary sources
     build-leaves-a-maxtest-out-of-the-program.maxtest       a directory build compiles its `.maxon` sources and leaves a `.maxtest` beside them out
-    a-test-in-an-old-test-suffix-file-is-refused.maxtest    a `test` in a `*.test.maxon` is E2058, under a build and under `maxon test`
     init-writes-a-maxproj-named-for-the-directory.maxtest   `init` writes `<dirname>.maxproj` and a `main.maxon` that a bare `build` builds
     init-never-overwrites-what-is-already-there.maxtest     `init` writes nothing at all when either file is already there
     init-inside-a-project-is-refused.maxtest                `init` below a directory holding a `.maxproj` is refused and writes nothing

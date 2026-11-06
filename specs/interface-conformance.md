@@ -85,7 +85,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Counter
 	function get() returns Integer
-	function increment()
+	function increment(mutable self)
 end 'Counter'
 
 type SimpleCounter implements Counter
@@ -125,7 +125,7 @@ interface Readable
 end 'Readable'
 
 interface Writable
-	function write(value Integer)
+	function write(mutable self, value Integer)
 end 'Writable'
 
 type Buffer implements Readable, Writable
@@ -541,7 +541,7 @@ type MyCollection uses Element implements BuiltinArrayLiteral
 
 	var managed as Buf
 
-	static function init(managed Buf) returns Self
+	static function init(managed mutable Buf) returns Self
 		return Self{managed: managed}
 	end 'init'
 end 'MyCollection'
@@ -570,7 +570,7 @@ program whose fault is a FIELD.
 type MyCollection uses Element implements BuiltinArrayLiteral
 	var managed as __ManagedMemory
 
-	static function init(managed __ManagedMemory) returns Self
+	static function init(managed mutable __ManagedMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 end 'MyCollection'
@@ -1438,7 +1438,7 @@ type Wrapped implements BuiltinStringLiteral
 	var flag as bool
 	var label = "tag"
 
-	static function init(value __ManagedMemory) returns Self
+	static function init(value mutable __ManagedMemory) returns Self
 		return Self{managed: value, flag: false}
 	end 'init'
 end 'Wrapped'
@@ -1467,7 +1467,7 @@ type Wrapped implements BuiltinStringLiteral
 	var flag as bool
 	var label = "tag"
 
-	static function init(value __ManagedMemory) returns Self
+	static function init(value mutable __ManagedMemory) returns Self
 		return Self{managed: value, flag: false}
 	end 'init'
 end 'Wrapped'
@@ -1511,7 +1511,7 @@ type Wrapped implements BuiltinStringLiteral
 	var managed as __ManagedMemory
 	var flag as bool
 
-	static function init(value __ManagedMemory) returns Self
+	static function init(value mutable __ManagedMemory) returns Self
 		return Self{managed: value, flag: false}
 	end 'init'
 
@@ -1542,7 +1542,7 @@ refusal rather than one each — the record is the same 48 bytes and the defect 
 type Glyph implements BuiltinCharLiteral
 	var managed as __ManagedMemory
 
-	static function init(value __ManagedMemory) returns Self
+	static function init(value mutable __ManagedMemory) returns Self
 		return Self{managed: value}
 	end 'init'
 end 'Glyph'

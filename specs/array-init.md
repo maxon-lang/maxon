@@ -12,7 +12,7 @@ category: memory-safety
 `stdlib/Array.maxon:115-115` declares the static every `Array` has:
 
 ```
-export static function init(managed ElementMemory) returns Self
+export static function init(managed mutable ElementMemory) returns Self
 	return Self{managed: managed}
 end 'init'
 ```

@@ -59,7 +59,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	export typealias Cmp = function(Element, Element) returns Ordering
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
@@ -217,7 +217,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	export typealias Cmp = function(Element, Element) returns Ordering
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 

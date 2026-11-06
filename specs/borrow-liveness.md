@@ -3177,6 +3177,7 @@ function main() returns ExitCode
 
 	if inner.label.byteLength() > 0 'nested'
 		let peek = function() gives inner.label.byteLength() as Integer
+		p.cancel()
 		p = async later(peek)
 	end 'nested'
 
@@ -4037,7 +4038,7 @@ false
 `x.label` is the last argument, so no later argument frees it; the callee does, by resetting
 `h.label` before it reads `s`. The argument holds its own reference, so `s` is still the original label.
 ```maxon
-typealias Reader = function(Holder, String) returns String
+typealias Reader = function(mutable Holder, String) returns String
 
 type Holder
 	export var label as String
@@ -4051,7 +4052,7 @@ type Holder
 	end 'reset'
 end 'Holder'
 
-function clobberThenRead(h Holder, s String) returns String
+function clobberThenRead(h mutable Holder, s String) returns String
 	h.reset()
 	let filler = "filler {1} padded out long enough for the heap"
 	return "[{s}] [{filler}]"
@@ -6774,8 +6775,8 @@ error E3078: <fragment>:25:6: cannot assign a value, which may share storage wit
 ```
 
 <!-- test: an-array-extension-element-of-read-only-elements-into-a-var-then-written-is-refused -->
-`head` hands back the array's stored element, and the array's elements are read-only, so the `var` that
-takes it may not write through it, whoever declared the member.
+`head` hands back the array's stored element, and the array's elements are read-only, so a `var` may
+not take it, whoever declared the member.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -6805,7 +6806,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:24:2: cannot write through 'q', which may be a record read out of a `readonly` element that a call or a merge handed back; nothing reachable through a `readonly` element may be written; use clone()
+error E3078: <fragment>:23:6: cannot assign a value, which may share storage with a `readonly` element, to mutable binding 'q'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: a-clone-of-a-module-let-array-is-pushed-and-runs -->
@@ -6882,8 +6883,7 @@ error E3078: <fragment>:34:6: cannot assign the result of 'pick', which may shar
 ```
 
 <!-- test: an-array-extension-forwarding-a-stored-element-of-read-only-elements-is-not-written-through -->
-`front` returns what `head` returns, an element of the array whose elements are read-only, so nothing may be
-written through the `var` that takes it.
+`front` returns what `head` returns, an element of the array whose elements are read-only, so no `var` may take it.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -6917,7 +6917,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:28:2: cannot write through 'q', which may be a record read out of a `readonly` element that a call or a merge handed back; nothing reachable through a `readonly` element may be written; use clone()
+error E3078: <fragment>:27:6: cannot assign a value, which may share storage with a `readonly` element, to mutable binding 'q'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: a-user-member-merging-a-stored-element-with-its-argument-on-a-module-let-into-a-var-is-refused -->

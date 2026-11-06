@@ -472,8 +472,8 @@ The protocols the library and the language are built on.
 | `Cloneable` | `function clone() returns Self` | `clone()` |
 | `Stringable` | `function toString() returns String` | `"{value}"` |
 | `FormattedStringable` | `function toString(format String) returns String` | `"{value:format}"` — the text after the colon is passed as `format` |
-| `Iterator with Element` | `current() returns Element`, `advance() throws IterationError` | iterators |
-| `BidirectionalIterator` | extends `Iterator`; `retreat() throws IterationError` | reversible iterators |
+| `Iterator with Element` | `current() returns Element`, `advance(mutable self) throws IterationError` | iterators |
+| `BidirectionalIterator` | extends `Iterator`; `retreat(mutable self) throws IterationError` | reversible iterators |
 | `Iterable with (Element, Iter)` | `createIterator() returns Iter throws IterationError` | `for`-`in` |
 | `Parsable` | `static fromString(input String) returns Self throws Error` | `int.fromString` and friends |
 

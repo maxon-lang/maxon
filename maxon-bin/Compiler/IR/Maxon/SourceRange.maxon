@@ -100,10 +100,35 @@ end 'writtenTypeSiteOf'
 export type DeclaredTypeSites
 	var returnSite as PositionKey
 	var sites as PositionKeyArray
+	var capabilities as ParamCapabilityArray
 
 	export static function create() returns DeclaredTypeSites
-		return Self{returnSite: PositionlessSite, sites: PositionKeyArray.create(0)}
+		return Self{returnSite: PositionlessSite, sites: PositionKeyArray.create(0), capabilities: ParamCapabilityArray.create(0)}
 	end 'create'
+
+	export function noteCapabilityOfLatest(capability ParamCapability)
+		if capability == ParamCapability.unmarked and self.capabilities.isEmpty() 'nothingMarkedYet'
+			return
+		end 'nothingMarkedYet'
+
+		while self.capabilities.count() + 1 < self.sites.count() 'padToTheLatest'
+			self.capabilities.push(ParamCapability.unmarked)
+		end 'padToTheLatest'
+
+		self.capabilities.push(capability)
+	end 'noteCapabilityOfLatest'
+
+	export function capabilityAt(index ElementIndex) returns ParamCapability
+		if index >= self.sites.count() 'noSuchPosition'
+			panic("DeclaredTypeSites.capabilityAt: position {index} names no declared type, and {self.sites.count()} are recorded")
+		end 'noSuchPosition'
+
+		if index >= self.capabilities.count() 'beyondTheMarkedColumn'
+			return ParamCapability.unmarked
+		end 'beyondTheMarkedColumn'
+
+		return try self.capabilities.get(index) otherwise panic("DeclaredTypeSites.capabilityAt: capabilities.get OOB at {index} below the count just read")
+	end 'capabilityAt'
 
 	export function noteWrittenType(typeStart Token)
 		self.sites.push(writtenTypeSiteOf(typeStart))
@@ -131,17 +156,19 @@ export type DeclaredTypeSites
 	export function cacheWrite(writer LibraryCacheWriter)
 		writer.unsigned(self.returnSite as CacheUnsigned)
 		cacheWritePositionKeyArray(writer, value: self.sites)
+		cacheWriteParamCapabilityArray(writer, value: self.capabilities)
 	end 'cacheWrite'
 
 	export static function cacheRead(reader LibraryCacheReader) returns DeclaredTypeSites throws LibraryCacheDamage
 		let f_returnSite = (try reader.unsigned()) as PositionKey
 		let f_sites = try cacheReadPositionKeyArray(reader)
+		let f_capabilities = try cacheReadParamCapabilityArray(reader)
 
-		return Self{returnSite: f_returnSite, sites: f_sites}
+		return Self{returnSite: f_returnSite, sites: f_sites, capabilities: f_capabilities}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize16
-		return sizeof(DeclaredTypeSites) as CacheSize16
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(DeclaredTypeSites) as CacheSize24
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

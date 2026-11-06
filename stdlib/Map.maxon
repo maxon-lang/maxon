@@ -434,25 +434,29 @@ public type MapIterator uses Key, Value implements Iterator with Entry where Key
 	public typealias IterKeyArray = Array with Key
 	public typealias IterValueArray = Array with Value
 	public typealias IterStateArray = Array with SlotState
+	typealias KeySlots = SlotCursor with Key
+	typealias ValueSlots = SlotCursor with Value
+	typealias KeyCursor = __ManagedMemoryCursor with Key
+	typealias ValueCursor = __ManagedMemoryCursor with Value
 
-	var keys as IterKeyArray
-	var values as IterValueArray
-	var states as IterStateArray
+	var keys as KeyCursor
+	var values as ValueCursor
+	var states as SlotStateCursor
 	var capacity as TableCapacity
-	var iterIndex as TableSlotIndex
 
 	public static function create(keys IterKeyArray, values IterValueArray, states IterStateArray, capacity TableCapacity) returns Self throws IterationError
-		let first = try findNextOccupied(states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
-		return Self{keys: keys, values: values, states: states, capacity: capacity, iterIndex: first}
+		var stateCursor = try states.managed.createCursor() otherwise throw IterationError.exhausted
+		let first = try findNextOccupied(stateCursor, capacity: capacity, from: 0)
+		return Self{keys: KeySlots.over(keys.managed, at: first), values: ValueSlots.over(values.managed, at: first), states: stateCursor, capacity: capacity}
 	end 'create'
 
 	public function current() returns Entry
-		let k = try keys.get(iterIndex as ElementIndex) otherwise panic("MapIterator.current: invariant violated — slot not populated")
-		let v = try values.get(iterIndex as ElementIndex) otherwise panic("MapIterator.current: invariant violated — slot not populated")
-		return (k, v)
+		return (keys.current(), values.current())
 	end 'current'
 
 	public function advance() throws IterationError
-		iterIndex = try findNextOccupied(states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
+		let next = try findNextOccupied(states, capacity: capacity, from: (states.index() as TableSlotIndex) + 1)
+		KeySlots.move(keys, to: next)
+		ValueSlots.move(values, to: next)
 	end 'advance'
 end 'MapIterator'

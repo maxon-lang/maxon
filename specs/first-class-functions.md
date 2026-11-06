@@ -4679,7 +4679,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias UnaryOp = function(Integer) returns Integer
 
 interface Stasher
-	function stash(fn keep UnaryOp) returns Integer
+	function stash(mutable self, fn UnaryOp) returns Integer
 end 'Stasher'
 
 type Slot implements Stasher

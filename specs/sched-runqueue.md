@@ -487,7 +487,8 @@ end 'ok'
 
 function main() returns ExitCode
 	let p1 = async ok(3)
-	_ = async marker()
+	let m = async marker()
+	m.cancel()
 	let p2 = async ok(4)
 	let a = await p1
 	let b = await p2
@@ -526,7 +527,8 @@ end 'neverRuns'
 function main() returns ExitCode
 	var i = 0 as Integer
 	while i < 5000 'loop'
-		_ = async neverRuns()
+		let p = async neverRuns()
+		p.cancel()
 		i = i + 1
 	end 'loop'
 
@@ -573,6 +575,7 @@ function main() returns ExitCode
 		let q = async done()
 		total = total + await q
 		finished = finished + (1 if p.isComplete() else 0)
+		p.cancel()
 		i = i + 1
 	end 'warm'
 
@@ -584,6 +587,7 @@ function main() returns ExitCode
 		let q = async done()
 		total = total + await q
 		finished = finished + (1 if p.isComplete() else 0)
+		p.cancel()
 		j = j + 1
 	end 'completedThenDropped'
 
@@ -655,6 +659,7 @@ function main() returns ExitCode
 		let f = async done()
 		total = total + await f
 		stillParked = stillParked + (0 if s.isComplete() else 1)
+		s.cancel()
 		i = i + 1
 	end 'warm'
 
@@ -670,6 +675,7 @@ function main() returns ExitCode
 		let f = async done()
 		total = total + await f
 		stillParked = stillParked + (0 if s.isComplete() else 1)
+		s.cancel()
 		j = j + 1
 	end 'parkedThenDropped'
 
@@ -736,6 +742,7 @@ function main() returns ExitCode
 		let f = async done()
 		total = total + await f
 		stillParked = stillParked + (0 if s.isComplete() else 1)
+		s.cancel()
 		i = i + 1
 	end 'parkedThenDropped'
 

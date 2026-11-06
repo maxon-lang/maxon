@@ -22,9 +22,9 @@ second consumer for its value, and no block holds a `__managed_set_unchecked` ca
 typealias Word = bits(64)
 typealias Planes = FixedArray with 4 Word
 
-typealias PlaneMixer = function(Planes)
+typealias PlaneMixer = function(mutable Planes)
 
-function mix(planes Planes)
+function mix(planes mutable Planes)
 	let a = planes.get(0)
 	let b = planes.get(1)
 
@@ -948,9 +948,9 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 typealias Slot = int(0 to u64.max) implements ElementIndex
 
-typealias Putter = function(WordArray, Slot, Slot) returns bool
+typealias Putter = function(mutable WordArray, Slot, Slot) returns bool
 
-function put(words WordArray, first Slot, second Slot) returns bool
+function put(words mutable WordArray, first Slot, second Slot) returns bool
 	try words.set(first, value: 7) otherwise return false
 	try words.set(second, value: 9) otherwise return false
 

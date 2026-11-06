@@ -756,6 +756,10 @@ module function cacheEnumTablesAgreeInCompilerProject() returns bool
 		return false
 	end 'disagreesCacheTableAgreesVisibility'
 
+	if not cacheTableAgreesRegionBoundKind() 'disagreesCacheTableAgreesRegionBoundKind'
+		return false
+	end 'disagreesCacheTableAgreesRegionBoundKind'
+
 	if not cacheTableAgreesEnumBacking() 'disagreesCacheTableAgreesEnumBacking'
 		return false
 	end 'disagreesCacheTableAgreesEnumBacking'
@@ -5903,9 +5907,10 @@ export type FunctionValueShape
 	export let scopeFilePath as FilePath
 	export let promisesTaken as BoolArray
 	export let byRefParams as ParamPositionMask
+	export let isolatedParams as ParamPositionMask
 
-	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, scopeFilePath FilePath, promisesTaken BoolArray, byRefParams ParamPositionMask) returns FunctionValueShape
-		return Self{paramTypes: paramTypes, returnType: returnType, scopeFilePath: scopeFilePath, promisesTaken: promisesTaken, byRefParams: byRefParams}
+	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, scopeFilePath FilePath, promisesTaken BoolArray, byRefParams ParamPositionMask, isolatedParams ParamPositionMask) returns FunctionValueShape
+		return Self{paramTypes: paramTypes, returnType: returnType, scopeFilePath: scopeFilePath, promisesTaken: promisesTaken, byRefParams: byRefParams, isolatedParams: isolatedParams}
 	end 'create'
 
 	export function takesPromiseAt(position ElementIndex) returns bool
@@ -5991,9 +5996,10 @@ export type FunctionTypeAlias
 	export let visibility as Visibility
 	export let written as WrittenTypeNames
 	export let typeSites as DeclaredTypeSites
+	export let mutableFunction as bool
 
-	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnIdentity AliasSlotIdentity, returnAggregateName ByteArray, returnCapability ResultCapability, paramTypes FunctionAliasParamArray, paramSpelling HashDigest, declFilePath FilePath, visibility Visibility, written WrittenTypeNames, typeSites DeclaredTypeSites) returns FunctionTypeAlias
-		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnIdentity: returnIdentity, returnAggregateName: returnAggregateName, returnCapability: returnCapability, paramTypes: paramTypes, paramSpelling: paramSpelling, declFilePath: declFilePath, visibility: visibility, written: written, typeSites: typeSites}
+	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnIdentity AliasSlotIdentity, returnAggregateName ByteArray, returnCapability ResultCapability, paramTypes FunctionAliasParamArray, paramSpelling HashDigest, declFilePath FilePath, visibility Visibility, written WrittenTypeNames, typeSites DeclaredTypeSites, mutableFunction bool = false) returns FunctionTypeAlias
+		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnIdentity: returnIdentity, returnAggregateName: returnAggregateName, returnCapability: returnCapability, paramTypes: paramTypes, paramSpelling: paramSpelling, declFilePath: declFilePath, visibility: visibility, written: written, typeSites: typeSites, mutableFunction: mutableFunction}
 	end 'create'
 
 	// ⭐⭐ **THE SAME DECLARATION UNDER A SECOND KEY.** Two callers mint one, and they are two SCOPES
@@ -6008,28 +6014,28 @@ export type FunctionTypeAlias
 	// between the two copies of ONE fold. A rebuild through `create` with anything defaulted would make the
 	// qualified copy answer a different shape from the bare one for the same written declaration.
 	export function underName(qualifiedName ByteArray) returns FunctionTypeAlias
-		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: self.returnIdentity.clone(), returnAggregateName: self.returnAggregateName, returnCapability: self.returnCapability, paramTypes: self.paramTypes, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility, written: self.written, typeSites: self.typeSites}
+		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: self.returnIdentity.clone(), returnAggregateName: self.returnAggregateName, returnCapability: self.returnCapability, paramTypes: self.paramTypes, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility, written: self.written, typeSites: self.typeSites, mutableFunction: self.mutableFunction}
 	end 'underName'
 
 	export function paramCapabilityAt(position ElementIndex) returns ParamCapability
 		return (try self.paramTypes.get(position) otherwise panic("FunctionTypeAlias.paramCapabilityAt: position {position} is past the {self.paramTypes.count()} parameters of '{String.from(self.name)}'")).capability
 	end 'paramCapabilityAt'
 
-	export function paramByReferenceAt(position ElementIndex) returns bool
-		return (try self.paramTypes.get(position) otherwise panic("FunctionTypeAlias.paramByReferenceAt: position {position} is past the {self.paramTypes.count()} parameters of '{String.from(self.name)}'")).byReference
-	end 'paramByReferenceAt'
+	export function paramMarkedAt(position ElementIndex) returns bool
+		return (try self.paramTypes.get(position) otherwise panic("FunctionTypeAlias.paramMarkedAt: position {position} is past the {self.paramTypes.count()} parameters of '{String.from(self.name)}'")).marked
+	end 'paramMarkedAt'
 
-	export function byRefParamMask() returns ParamPositionMask
+	export function markedParamMask() returns ParamPositionMask
 		var mask = NoParamPositions
 
 		for position in 0 upto self.paramTypes.count() 'eachParam'
-			if self.paramByReferenceAt(position) 'aMutableParameter'
+			if self.paramMarkedAt(position) 'aMutableParameter'
 				mask = maskWithParam(mask, param: position as ParamCount)
 			end 'aMutableParameter'
 		end 'eachParam'
 
 		return mask
-	end 'byRefParamMask'
+	end 'markedParamMask'
 
 	export function paramNameAt(position ElementIndex) returns ByteArray
 		return (try self.paramTypes.get(position) otherwise panic("FunctionTypeAlias.paramNameAt: position {position} is past the {self.paramTypes.count()} parameters of '{String.from(self.name)}'")).name
@@ -6040,10 +6046,10 @@ export type FunctionTypeAlias
 		var params = FunctionAliasParamArray.create(0)
 
 		for param in self.paramTypes 'eachParam'
-			params.push(FunctionAliasParam.create(param.tag, name: param.name, typeName: param.typeName, identity: remappedAliasSlotIdentity(param.identity, remap: remap), aggregateName: param.aggregateName, capability: param.capability, byReference: param.byReference))
+			params.push(FunctionAliasParam.create(param.tag, name: param.name, typeName: param.typeName, identity: remappedAliasSlotIdentity(param.identity, remap: remap), aggregateName: param.aggregateName, capability: param.capability, marked: param.marked))
 		end 'eachParam'
 
-		return Self{name: self.name, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: remappedAliasSlotIdentity(self.returnIdentity, remap: remap), returnAggregateName: self.returnAggregateName, returnCapability: self.returnCapability, paramTypes: params, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility, written: self.written, typeSites: self.typeSites}
+		return Self{name: self.name, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: remappedAliasSlotIdentity(self.returnIdentity, remap: remap), returnAggregateName: self.returnAggregateName, returnCapability: self.returnCapability, paramTypes: params, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility, written: self.written, typeSites: self.typeSites, mutableFunction: self.mutableFunction}
 	end 'withInstancesRenumbered'
 
 	// @generated library-cache begin
@@ -6060,6 +6066,7 @@ export type FunctionTypeAlias
 		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
 		self.written.cacheWrite(writer)
 		self.typeSites.cacheWrite(writer)
+		writer.flag(self.mutableFunction)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns FunctionTypeAlias throws LibraryCacheDamage
@@ -6075,12 +6082,13 @@ export type FunctionTypeAlias
 		let f_visibility = try cacheReadVisibility(reader)
 		let f_written = try WrittenTypeNames.cacheRead(reader)
 		let f_typeSites = try DeclaredTypeSites.cacheRead(reader)
+		let f_mutableFunction = try reader.flag()
 
-		return Self{name: f_name, returnTag: f_returnTag, returnTypeName: f_returnTypeName, returnIdentity: f_returnIdentity, returnAggregateName: f_returnAggregateName, returnCapability: f_returnCapability, paramTypes: f_paramTypes, paramSpelling: f_paramSpelling, declFilePath: f_declFilePath, visibility: f_visibility, written: f_written, typeSites: f_typeSites}
+		return Self{name: f_name, returnTag: f_returnTag, returnTypeName: f_returnTypeName, returnIdentity: f_returnIdentity, returnAggregateName: f_returnAggregateName, returnCapability: f_returnCapability, paramTypes: f_paramTypes, paramSpelling: f_paramSpelling, declFilePath: f_declFilePath, visibility: f_visibility, written: f_written, typeSites: f_typeSites, mutableFunction: f_mutableFunction}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize96
-		return sizeof(FunctionTypeAlias) as CacheSize96
+	static function cacheLayoutBytes() returns CacheSize104
+		return sizeof(FunctionTypeAlias) as CacheSize104
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -6125,10 +6133,10 @@ export type FunctionAliasParam
 	export let identity as AliasSlotIdentity
 
 	export let capability as ParamCapability
-	export let byReference as bool
+	export let marked as bool
 
-	export static function create(tag ValueTypeTag, name ByteArray, typeName ByteArray, identity AliasSlotIdentity, aggregateName ByteArray, capability ParamCapability, byReference bool) returns FunctionAliasParam
-		return Self{tag: tag, name: name, typeName: typeName, identity: identity, aggregateName: aggregateName, capability: capability, byReference: byReference}
+	export static function create(tag ValueTypeTag, name ByteArray, typeName ByteArray, identity AliasSlotIdentity, aggregateName ByteArray, capability ParamCapability, marked bool) returns FunctionAliasParam
+		return Self{tag: tag, name: name, typeName: typeName, identity: identity, aggregateName: aggregateName, capability: capability, marked: marked}
 	end 'create'
 
 	// @generated library-cache begin
@@ -6139,7 +6147,7 @@ export type FunctionAliasParam
 		writer.bytes(self.aggregateName)
 		cacheWriteAliasSlotIdentity(writer, value: self.identity)
 		writer.unsigned(self.capability.ordinal as CacheUnsigned)
-		writer.flag(self.byReference)
+		writer.flag(self.marked)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns FunctionAliasParam throws LibraryCacheDamage
@@ -6149,9 +6157,9 @@ export type FunctionAliasParam
 		let f_aggregateName = try reader.bytes()
 		let f_identity = try cacheReadAliasSlotIdentity(reader)
 		let f_capability = try cacheReadParamCapability(reader)
-		let f_byReference = try reader.flag()
+		let f_marked = try reader.flag()
 
-		return Self{tag: f_tag, name: f_name, typeName: f_typeName, aggregateName: f_aggregateName, identity: f_identity, capability: f_capability, byReference: f_byReference}
+		return Self{tag: f_tag, name: f_name, typeName: f_typeName, aggregateName: f_aggregateName, identity: f_identity, capability: f_capability, marked: f_marked}
 	end 'cacheRead'
 
 	static function cacheLayoutBytes() returns CacheSize56
@@ -6646,9 +6654,11 @@ export type FunctionShape
 	export let paramCapabilities as ParamCapabilityArray
 	export let returnCapability as ResultCapability
 	export let byRefParams as ParamPositionMask
+	export let markedParams as ParamPositionMask
+	export let mutableFunction as bool
 
-	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, paramCapabilities ParamCapabilityArray, returnCapability ResultCapability, byRefParams ParamPositionMask) returns FunctionShape
-		return Self{paramTypes: paramTypes, returnType: returnType, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramCapabilities: paramCapabilities, returnCapability: returnCapability, byRefParams: byRefParams}
+	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, paramCapabilities ParamCapabilityArray, returnCapability ResultCapability, byRefParams ParamPositionMask, markedParams ParamPositionMask, mutableFunction bool = false) returns FunctionShape
+		return Self{paramTypes: paramTypes, returnType: returnType, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramCapabilities: paramCapabilities, returnCapability: returnCapability, byRefParams: byRefParams, markedParams: markedParams, mutableFunction: mutableFunction}
 	end 'create'
 
 	export function paramCapabilityAt(position ElementIndex) returns ParamCapability
@@ -7037,6 +7047,95 @@ end 'cacheReadWhereConstraintArray'
 
 // @generated library-cache end
 
+export enum RegionBoundKind
+	sendable
+	isolated
+end 'RegionBoundKind'
+
+// @generated library-cache begin
+let CacheCasesRegionBoundKind = [RegionBoundKind.sendable, RegionBoundKind.isolated]
+
+function cacheReadRegionBoundKind(reader LibraryCacheReader) returns RegionBoundKind throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesRegionBoundKind.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadRegionBoundKind'
+
+function cacheTableAgreesRegionBoundKind() returns bool
+	let declared = RegionBoundKind.allCases
+
+	if CacheCasesRegionBoundKind.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesRegionBoundKind.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesRegionBoundKind'
+
+// @generated library-cache end
+
+export type RegionBound
+	export let typeParamIndex as ElementIndex
+	export let kind as RegionBoundKind
+
+	export static function create(typeParamIndex ElementIndex, kind RegionBoundKind) returns RegionBound
+		return Self{typeParamIndex: typeParamIndex, kind: kind}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.typeParamIndex as CacheUnsigned)
+		writer.unsigned(self.kind.ordinal as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns RegionBound throws LibraryCacheDamage
+		let f_typeParamIndex = (try reader.unsigned()) as ElementIndex
+		let f_kind = try cacheReadRegionBoundKind(reader)
+
+		return Self{typeParamIndex: f_typeParamIndex, kind: f_kind}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(RegionBound) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'RegionBound'
+
+export typealias RegionBoundArray = Array with RegionBound
+
+// @generated library-cache begin
+function cacheWriteRegionBoundArray(writer LibraryCacheWriter, value RegionBoundArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteRegionBoundArray'
+
+function cacheReadRegionBoundArray(reader LibraryCacheReader) returns RegionBoundArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RegionBoundArray.create(0)
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try RegionBound.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadRegionBoundArray'
+
+// @generated library-cache end
+
 export function whereConstraintsBindAnything(constraints WhereConstraintArray) returns bool
 	for constraint in constraints 'eachConstraint'
 		if not constraint.associatedBindingTypes.isEmpty() 'bindsAnAssociatedType'
@@ -7251,6 +7350,7 @@ export type StructLayout
 	// record where a value belongs — `ProgramSignatures.layoutPacksInlineIntoAWord` is the door that
 	// refuses to be asked that early.
 	export var packsInlineIntoAWord = false
+	export var isUnique = false
 	export var fieldBitWidths as BitWidthArray
 	export var fieldBitOffsets as BitWidthArray
 
@@ -7278,6 +7378,7 @@ export type StructLayout
 	// pointer per entry here, index-aligned. It rides the layout (which travels whole-program) for
 	// `typeParamNames`' reason — the E3017 instantiation check reads it straight off `structOf`.
 	export var whereConstraints as WhereConstraintArray
+	export var regionBounds = RegionBoundArray.create(0)
 
 	// ⭐ **THE INTERFACE NAMES THIS TYPE'S `implements` CLAUSE WRITES, IN SOURCE ORDER** — the twin of
 	// `EnumLayout.conformsTo`, and the fact an INTERFACE EXTENSION is expanded against: `extension Countable`
@@ -7376,6 +7477,10 @@ export type StructLayout
 	export function recordWhereConstraints(constraints WhereConstraintArray)
 		self.whereConstraints = constraints
 	end 'recordWhereConstraints'
+
+	export function recordRegionBounds(bounds RegionBoundArray)
+		self.regionBounds = bounds
+	end 'recordRegionBounds'
 
 	// Record the interface names the type's `implements` clause writes, and the `with` arguments each of them
 	// binds. Replaces both columns wholesale for `recordTypeParams`' reason — the clause is read as a unit, by
@@ -7791,11 +7896,13 @@ export type StructLayout
 		self.fieldTypeSites.cacheWrite(writer)
 		cacheWriteByteOffsetArray(writer, value: self.fieldOffsets)
 		writer.flag(self.packsInlineIntoAWord)
+		writer.flag(self.isUnique)
 		cacheWriteBitWidthArray(writer, value: self.fieldBitWidths)
 		cacheWriteBitWidthArray(writer, value: self.fieldBitOffsets)
 		writer.unsigned(self.slotBytes as CacheUnsigned)
 		cacheWriteNameRoster(writer, value: self.typeParamNames)
 		cacheWriteWhereConstraintArray(writer, value: self.whereConstraints)
+		cacheWriteRegionBoundArray(writer, value: self.regionBounds)
 		cacheWriteNameRoster(writer, value: self.conformsTo)
 		cacheWriteConformanceBindingArray(writer, value: self.conformanceBindings)
 		cacheWriteNameRoster(writer, value: self.messageMethodNames)
@@ -7818,11 +7925,13 @@ export type StructLayout
 		let f_fieldTypeSites = try DeclaredTypeSites.cacheRead(reader)
 		let f_fieldOffsets = try cacheReadByteOffsetArray(reader)
 		let f_packsInlineIntoAWord = try reader.flag()
+		let f_isUnique = try reader.flag()
 		let f_fieldBitWidths = try cacheReadBitWidthArray(reader)
 		let f_fieldBitOffsets = try cacheReadBitWidthArray(reader)
 		let f_slotBytes = (try reader.unsigned()) as ByteOffset
 		let f_typeParamNames = try cacheReadNameRoster(reader)
 		let f_whereConstraints = try cacheReadWhereConstraintArray(reader)
+		let f_regionBounds = try cacheReadRegionBoundArray(reader)
 		let f_conformsTo = try cacheReadNameRoster(reader)
 		let f_conformanceBindings = try cacheReadConformanceBindingArray(reader)
 		let f_messageMethodNames = try cacheReadNameRoster(reader)
@@ -7831,11 +7940,11 @@ export type StructLayout
 		let f_declLine = (try reader.unsigned()) as LineNumber
 		let f_declColumn = (try reader.unsigned()) as ColumnNumber
 
-		return Self{name: f_name, fieldNames: f_fieldNames, fieldTypes: f_fieldTypes, fieldMutable: f_fieldMutable, fieldVisibility: f_fieldVisibility, fieldDefaults: f_fieldDefaults, fieldDeclaredSurfaces: f_fieldDeclaredSurfaces, fieldDeclaredBrands: f_fieldDeclaredBrands, fieldSpelledNames: f_fieldSpelledNames, fieldTypeSites: f_fieldTypeSites, fieldOffsets: f_fieldOffsets, packsInlineIntoAWord: f_packsInlineIntoAWord, fieldBitWidths: f_fieldBitWidths, fieldBitOffsets: f_fieldBitOffsets, slotBytes: f_slotBytes, typeParamNames: f_typeParamNames, whereConstraints: f_whereConstraints, conformsTo: f_conformsTo, conformanceBindings: f_conformanceBindings, messageMethodNames: f_messageMethodNames, visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn}
+		return Self{name: f_name, fieldNames: f_fieldNames, fieldTypes: f_fieldTypes, fieldMutable: f_fieldMutable, fieldVisibility: f_fieldVisibility, fieldDefaults: f_fieldDefaults, fieldDeclaredSurfaces: f_fieldDeclaredSurfaces, fieldDeclaredBrands: f_fieldDeclaredBrands, fieldSpelledNames: f_fieldSpelledNames, fieldTypeSites: f_fieldTypeSites, fieldOffsets: f_fieldOffsets, packsInlineIntoAWord: f_packsInlineIntoAWord, isUnique: f_isUnique, fieldBitWidths: f_fieldBitWidths, fieldBitOffsets: f_fieldBitOffsets, slotBytes: f_slotBytes, typeParamNames: f_typeParamNames, whereConstraints: f_whereConstraints, regionBounds: f_regionBounds, conformsTo: f_conformsTo, conformanceBindings: f_conformanceBindings, messageMethodNames: f_messageMethodNames, visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize192
-		return sizeof(StructLayout) as CacheSize192
+	static function cacheLayoutBytes() returns CacheSize208
+		return sizeof(StructLayout) as CacheSize208
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -10451,10 +10560,15 @@ export type FuncSignature
 	export let selfSpelledParams as ParamPositionMask
 	export let byRefParams as ParamPositionMask
 	export let returnCapability as ResultCapability
+	export var paramCapabilities as ParamCapabilityArray
+	export var selfCapability as ParamCapability
+	export var writtenParams as ParamPositionMask
 	export let offeredResultAlias as ByteArray
 
-	export static function create(paramNames NameRoster, paramTypes MaxonTypeArray, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, returnBrand ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray, writtenTypeNames WrittenTypeNames, selfSpelledParams ParamPositionMask, offeredResultAlias ByteArray, byRefParams ParamPositionMask, returnCapability ResultCapability = ResultCapability.unqualified) returns FuncSignature
-		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, returnBrand: returnBrand, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints, writtenTypeNames: writtenTypeNames, selfSpelledParams: selfSpelledParams, byRefParams: byRefParams, offeredResultAlias: offeredResultAlias, returnCapability: returnCapability}
+	export static function create(paramNames NameRoster, paramTypes MaxonTypeArray, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, returnBrand ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray, writtenTypeNames WrittenTypeNames, selfSpelledParams ParamPositionMask, offeredResultAlias ByteArray, byRefParams ParamPositionMask, returnCapability ResultCapability = ResultCapability.unmarked, paramCapabilities ParamCapabilityArray = ParamCapabilityArray.create(0), selfCapability ParamCapability = ParamCapability.unmarked, writtenParams ParamPositionMask = 0) returns FuncSignature
+		var created = Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, returnBrand: returnBrand, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints, writtenTypeNames: writtenTypeNames, selfSpelledParams: selfSpelledParams, byRefParams: byRefParams, offeredResultAlias: offeredResultAlias, returnCapability: returnCapability, paramCapabilities: ParamCapabilityArray.create(0), selfCapability: selfCapability, writtenParams: writtenParams}
+		created.paramCapabilities = created.declaredOrUnmarked(paramCapabilities)
+		return created
 	end 'create'
 
 	// The declared parameter count — the arity a call must match.
@@ -10470,6 +10584,30 @@ export type FuncSignature
 	export function takesReceiver() returns bool
 		return self.paramNames.count() > 0 and (try self.paramNames.get(ReceiverParamPosition) otherwise panic("FuncSignature.takesReceiver: paramNames.count() > 0 but get(0) failed")).equals(SelfParamName)
 	end 'takesReceiver'
+
+	function declaredOrUnmarked(declared ParamCapabilityArray) returns ParamCapabilityArray
+		if not declared.isEmpty() 'someDeclared'
+			return declared.clone()
+		end 'someDeclared'
+
+		let firstExplicit = 1 if self.takesReceiver() else 0
+
+		return unmarkedParams((self.paramNames.count() - firstExplicit) as ParamCount)
+	end 'declaredOrUnmarked'
+
+	export function shapeParamCapabilities() returns ParamCapabilityArray
+		var capabilities = ParamCapabilityArray.create(0)
+
+		if self.takesReceiver() 'aReceiver'
+			capabilities.push(self.selfCapability)
+		end 'aReceiver'
+
+		for capability in self.paramCapabilities 'eachExplicit'
+			capabilities.push(capability)
+		end 'eachExplicit'
+
+		return capabilities
+	end 'shapeParamCapabilities'
 
 	// Does any parameter declare a bare type parameter (`create(v T)`) — i.e. is this the SHARED body of a
 	// generic type's method, whose signature cannot say what its arguments must be? The
@@ -10524,6 +10662,9 @@ export type FuncSignature
 		writer.unsigned(self.selfSpelledParams as CacheUnsigned)
 		writer.unsigned(self.byRefParams as CacheUnsigned)
 		writer.unsigned(self.returnCapability.ordinal as CacheUnsigned)
+		cacheWriteParamCapabilityArray(writer, value: self.paramCapabilities)
+		writer.unsigned(self.selfCapability.ordinal as CacheUnsigned)
+		writer.unsigned(self.writtenParams as CacheUnsigned)
 		writer.bytes(self.offeredResultAlias)
 	end 'cacheWrite'
 
@@ -10541,13 +10682,16 @@ export type FuncSignature
 		let f_selfSpelledParams = (try reader.unsigned()) as ParamPositionMask
 		let f_byRefParams = (try reader.unsigned()) as ParamPositionMask
 		let f_returnCapability = try cacheReadResultCapability(reader)
+		let f_paramCapabilities = try cacheReadParamCapabilityArray(reader)
+		let f_selfCapability = try cacheReadParamCapability(reader)
+		let f_writtenParams = (try reader.unsigned()) as ParamPositionMask
 		let f_offeredResultAlias = try reader.bytes()
 
-		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramAggregateNames: f_paramAggregateNames, paramDeclaredNames: f_paramDeclaredNames, returnAggregateName: f_returnAggregateName, returnBrand: f_returnBrand, paramExistentialSites: f_paramExistentialSites, returnExistentialSites: f_returnExistentialSites, extensionConstraints: f_extensionConstraints, writtenTypeNames: f_writtenTypeNames, selfSpelledParams: f_selfSpelledParams, byRefParams: f_byRefParams, returnCapability: f_returnCapability, offeredResultAlias: f_offeredResultAlias}
+		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramAggregateNames: f_paramAggregateNames, paramDeclaredNames: f_paramDeclaredNames, returnAggregateName: f_returnAggregateName, returnBrand: f_returnBrand, paramExistentialSites: f_paramExistentialSites, returnExistentialSites: f_returnExistentialSites, extensionConstraints: f_extensionConstraints, writtenTypeNames: f_writtenTypeNames, selfSpelledParams: f_selfSpelledParams, byRefParams: f_byRefParams, returnCapability: f_returnCapability, paramCapabilities: f_paramCapabilities, selfCapability: f_selfCapability, writtenParams: f_writtenParams, offeredResultAlias: f_offeredResultAlias}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize112
-		return sizeof(FuncSignature) as CacheSize112
+	static function cacheLayoutBytes() returns CacheSize136
+		return sizeof(FuncSignature) as CacheSize136
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -11185,7 +11329,7 @@ export type PendingFunctionTypeDoor
 	export let line as LineNumber
 	export let column as ColumnNumber
 
-	// Where the value was handed over, the anchor of a broken capability boundary (E3189); `line` and
+	// Where the value was handed over, the anchor of a capability conversion refusal (E3210); `line` and
 	// `column` anchor the shape refusal at the door.
 	export let handedLine as LineNumber
 	export let handedColumn as ColumnNumber
@@ -12077,6 +12221,8 @@ export type Project
 
 	export var targetRefusalDiagnostics as DiagnosticArray
 
+	export var droppedPromiseDiagnostics as DiagnosticArray
+
 	// ⭐ Every declaration a type-name COLLISION was reported for (E3061/E3006,
 	// `reportTypeNameCollision`) — the suppression set the unused-typealias drain reads, so one mistake
 	// earns one diagnostic. Keyed by `fileScopedDeclKey`, per DECLARING FILE: a bare name would let one
@@ -12561,6 +12707,7 @@ export type Project
 			genericAliasNamesWrittenByAFile: UsedTypeNameSet.create(),
 			bindingHygieneDiagnostics: DiagnosticArray.create(0),
 			targetRefusalDiagnostics: DiagnosticArray.create(0),
+			droppedPromiseDiagnostics: DiagnosticArray.create(0),
 			collidedTypeNames: CollidedTypeNameSet.create(),
 			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(0),
 			pendingBrandRecords: PendingBrandRecordArray.create(0),

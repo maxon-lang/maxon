@@ -479,7 +479,15 @@ export let GtOffHold = GtOffStrandResume + PointerFieldBytes
 export let GtHoldReleased = 0 as FullRangeInt
 export let GtHoldRequested = 1 as FullRangeInt
 
-let GtOffPinnedM = GtOffHold + PointerFieldBytes
+let StrandGuardDepthStep = 1
+let NoStrandGuardDepth = 0
+let NoStrandGuardHolder = 0
+let NoStrandResume = 0
+
+let GtOffStrandGuardHolder = GtOffHold + PointerFieldBytes
+let GtOffStrandGuardDepth = GtOffStrandGuardHolder + PointerFieldBytes
+
+let GtOffPinnedM = GtOffStrandGuardDepth + PointerFieldBytes
 
 let GtOffPinDepth = GtOffPinnedM + PointerFieldBytes
 
@@ -1304,6 +1312,12 @@ let GtCoroEnqueueName = b"__gt_coro_enqueue"
 let GtCoroDequeueName = b"__gt_coro_dequeue"
 let GtStrandNextName = b"__gt_strand_next"
 let GtCoroSweepDroppedName = b"__gt_coro_sweep_dropped"
+export let GtStrandGuardEnterName = b"__gt_strand_guard_enter"
+export let GtStrandGuardExitName = b"__gt_strand_guard_exit"
+
+export function isStrandGuardCallee(callee ByteArray) returns bool
+	return callee.equals(GtStrandGuardEnterName) or callee.equals(GtStrandGuardExitName)
+end 'isStrandGuardCallee'
 
 // ⭐⭐⭐ **`__gt_run_strand(m, owner)` — RUN A STRAND ON THIS MACHINE UNTIL IT HAS NOTHING RUNNABLE, OR HANDS
 // ITSELF TO THE GLOBAL QUEUE.** Go's `execute` plus `park_m`/`goexit0`/`goyield_m`, looped over the strand
@@ -1322,6 +1336,8 @@ export let GtTryAwaitName = b"__gt_try_await"
 // that neither `await`s nor re-arms it. Named in the `__gt_` band so `isGtRuntimeCallee` catches it and
 // `TargetPrinter.isRuntimeFunction` keeps it out of the rendered Target IR.
 export let GtPromiseDropName = b"__gt_promise_drop"
+let GtPromiseRenounceName = b"__gt_promise_renounce"
+export let GtPromiseCancelWaitName = b"__gt_promise_cancel_wait"
 
 // `__gt_promise_release(held)` — drop the thread a promise FIELD or cell held before a store replaced it.
 // NULL-GUARDED because `__gt_promise_drop` is not: a slot a previous consume emptied held 0, which is the
@@ -2554,6 +2570,8 @@ function gtFieldRoster() returns GtFieldArray
 	fields.push(GtField.create("GtOffStackHighWater", offset: GtOffStackHighWater, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
 	fields.push(GtField.create("GtOffStrandResume", offset: GtOffStrandResume, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
 	fields.push(GtField.create("GtOffHold", offset: GtOffHold, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffStrandGuardHolder", offset: GtOffStrandGuardHolder, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawnOfStrandOwners))
+	fields.push(GtField.create("GtOffStrandGuardDepth", offset: GtOffStrandGuardDepth, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawnOfStrandOwners))
 	fields.push(GtField.create("GtOffPinnedM", offset: GtOffPinnedM, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
 	fields.push(GtField.create("GtOffPinDepth", offset: GtOffPinDepth, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
 	fields.push(GtField.create("GtOffLastError", offset: GtOffLastError, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
@@ -2679,6 +2697,8 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtPinDepth(module)
 	buildGtPinHandle(module)
 	buildGtCurrentMachine(module)
+	buildGtStrandGuardEnter(module)
+	buildGtStrandGuardExit(module)
 
 	// ⭐ ALL THREE spawn doors, from one body. Whether a program can REACH one is `DeadFunctionElimination`'s
 	// question, and answering it here would be a second reachability analysis that could disagree with it.
@@ -2727,7 +2747,9 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtAwait(module, name: GtTryAwaitName, throwing: true, arrival: GtAwaitArrival.inTheAwait, tracing: tracing)
 	buildGtAwait(module, name: GtTryAwaitHoldingName, throwing: true, arrival: GtAwaitArrival.inReplyWitness, tracing: tracing)
 	buildGtReplyWitness(module)
+	buildGtPromiseRenounce(module)
 	buildGtPromiseDrop(module)
+	buildGtPromiseCancelWait(module)
 	buildGtPromiseRelease(module)
 	buildGtPromiseFieldVacate(module)
 
@@ -3156,6 +3178,9 @@ function buildGtReadyDoor(module StdModule, gate GtReadyGate, hold SchedLockHold
 	var ownerArm = module.addBlock(func, label: b"readyowner", heat: BlockHeat.normal)
 	var ownerWon = module.addBlock(func, label: b"readyownerwon", heat: BlockHeat.normal)
 	var ownerQueue = module.addBlock(func, label: b"readyownerqueue", heat: BlockHeat.normal)
+	var ownerOrHolder = module.addBlock(func, label: b"readyownerorholder", heat: BlockHeat.normal)
+	var ownerFront = module.addBlock(func, label: b"readyownerfront", heat: BlockHeat.normal)
+	var ownerBehindHolder = module.addBlock(func, label: b"readyownerbehindholder", heat: BlockHeat.normal)
 	var coroArm = module.addBlock(func, label: b"readycoro", heat: BlockHeat.normal)
 	var claim = module.addBlock(func, label: b"readyclaim", heat: BlockHeat.normal)
 	var alreadyHeld = module.addBlock(func, label: b"readyheld", heat: BlockHeat.normal)
@@ -3176,8 +3201,16 @@ function buildGtReadyDoor(module StdModule, gate GtReadyGate, hold SchedLockHold
 	emitConstReturn(module, block: ownerWon, value: WakeDebtOwed, ids: ids)
 
 	emitGtRecordLockEnter(module, block: ownerQueue, record: owner, ids: ids)
-	var ownerQueued = emitGtFifoPushFront(module, func: func, cur: ownerQueue, ends: GtQueueEnds.ownerFields(owner), g: gt, ids: ids)
+	let guardHolder = emitLoadField(module, block: ownerQueue, record: owner, offset: GtOffStrandGuardHolder, ids: ids)
+	emitBranchOnCompare(module, block: ownerQueue, value: guardHolder, pred: StdCmpPred.eq, against: NoStrandGuardHolder, whenTrue: ownerFront, whenFalse: ownerOrHolder, ids: ids)
+
+	emitBranchOnCompareValues(module, block: ownerOrHolder, a: guardHolder, pred: StdCmpPred.eq, b: gt, whenTrue: ownerFront, whenFalse: ownerBehindHolder, ids: ids)
+
+	var ownerQueued = emitGtFifoPushFront(module, func: func, cur: ownerFront, ends: GtQueueEnds.ownerFields(owner), g: gt, ids: ids)
 	module.setTerminator(ownerQueued, op: StdOp.branch(claim.id))
+
+	module.appendOp(ownerBehindHolder, op: StdOp.call(ids.mint(), callee: GtCoroEnqueueName, args: argsOf(gt)))
+	module.setTerminator(ownerBehindHolder, op: StdOp.branch(claim.id))
 
 	emitGtRecordLockEnter(module, block: coroArm, record: owner, ids: ids)
 	module.appendOp(coroArm, op: StdOp.call(ids.mint(), callee: GtCoroEnqueueName, args: argsOf(gt)))
@@ -3638,6 +3671,13 @@ export let GtPinDepthName = b"__gt_pin_depth"
 
 export let GtCurrentMachineName = b"__gt_current_m"
 
+function emitLoadRunningGtOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, haveThread IrBlock, bail IrBlock, ids ValueMinter) returns (ValueId, ValueId)
+	let m = emitLoadCurrentMOrBail(module, cur: cur, haveOffset: haveOffset, haveMachine: haveMachine, bail: bail, bailValues: FullRangeIntArray.create(0), ids: ids)
+	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
+	emitBranchOnCompare(module, block: haveMachine, value: running, pred: StdCmpPred.eq, against: 0, whenTrue: bail, whenFalse: haveThread, ids: ids)
+	return (m, running)
+end 'emitLoadRunningGtOrBail'
+
 function buildGtCurrentMachine(module StdModule)
 	var func = IrFunction.createFromStd(GtCurrentMachineName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
@@ -3676,9 +3716,7 @@ function buildGtPinMachine(module StdModule)
 	var haveThread = module.addBlock(func, label: b"pinthread", heat: BlockHeat.normal)
 	var refused = module.addBlock(func, label: b"pinrefused", heat: BlockHeat.normal)
 
-	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: refused, bailValues: FullRangeIntArray.create(0), ids: ids)
-	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
-	emitBranchOnCompare(module, block: haveMachine, value: running, pred: StdCmpPred.eq, against: 0, whenTrue: refused, whenFalse: haveThread, ids: ids)
+	let (m, running) = emitLoadRunningGtOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveThread: haveThread, bail: refused, ids: ids)
 
 	var armRestraint = module.addBlock(func, label: b"pinarm", heat: BlockHeat.normal)
 	var pinTaken = module.addBlock(func, label: b"pintaken", heat: BlockHeat.normal)
@@ -3710,9 +3748,7 @@ function buildGtUnpinMachine(module StdModule)
 	var haveThread = module.addBlock(func, label: b"unpinthread", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"unpindone", heat: BlockHeat.normal)
 
-	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: doneBlock, bailValues: FullRangeIntArray.create(0), ids: ids)
-	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
-	emitBranchOnCompare(module, block: haveMachine, value: running, pred: StdCmpPred.eq, against: 0, whenTrue: doneBlock, whenFalse: haveThread, ids: ids)
+	let (_, running) = emitLoadRunningGtOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveThread: haveThread, bail: doneBlock, ids: ids)
 
 	let gt = emitLoadField(module, block: haveThread, record: running, offset: GtOffOwner, ids: ids)
 	module.appendOp(haveThread, op: StdOp.call(ids.mint(), callee: GtUnpinOwnerName, args: argsOf(gt)))
@@ -3743,9 +3779,7 @@ function buildGtUnpinOwner(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let gt = 0
 
-	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(0), ids: ids)
-	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
-	emitBranchOnCompare(module, block: haveMachine, value: running, pred: StdCmpPred.eq, against: 0, whenTrue: noMachine, whenFalse: haveThread, ids: ids)
+	let (m, running) = emitLoadRunningGtOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveThread: haveThread, bail: noMachine, ids: ids)
 
 	let runningOwner = emitLoadField(module, block: haveThread, record: running, offset: GtOffOwner, ids: ids)
 	emitBranchOnCompareValues(module, block: haveThread, a: runningOwner, pred: StdCmpPred.eq, b: gt, whenTrue: ownThread, whenFalse: wrongThread, ids: ids)
@@ -3780,9 +3814,7 @@ function buildGtPinDepth(module StdModule)
 	var haveThread = module.addBlock(func, label: b"depththread", heat: BlockHeat.normal)
 	var noThread = module.addBlock(func, label: b"depthnone", heat: BlockHeat.normal)
 
-	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noThread, bailValues: FullRangeIntArray.create(0), ids: ids)
-	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
-	emitBranchOnCompare(module, block: haveMachine, value: running, pred: StdCmpPred.eq, against: 0, whenTrue: noThread, whenFalse: haveThread, ids: ids)
+	let (_, running) = emitLoadRunningGtOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveThread: haveThread, bail: noThread, ids: ids)
 
 	let gt = emitLoadField(module, block: haveThread, record: running, offset: GtOffOwner, ids: ids)
 	let depth = emitLoadField(module, block: haveThread, record: gt, offset: GtOffPinDepth, ids: ids)
@@ -3792,6 +3824,63 @@ function buildGtPinDepth(module StdModule)
 
 	module.functions.push(func)
 end 'buildGtPinDepth'
+
+function buildGtStrandGuardEnter(module StdModule)
+	var func = IrFunction.createFromStd(GtStrandGuardEnterName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var haveOffset = module.addBlock(func, label: b"guardenteroffset", heat: BlockHeat.normal)
+	var haveMachine = module.addBlock(func, label: b"guardentermachine", heat: BlockHeat.normal)
+	var haveMember = module.addBlock(func, label: b"guardentermember", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"guardenterdone", heat: BlockHeat.normal)
+
+	let (_, running) = emitLoadRunningGtOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveThread: haveMember, bail: doneBlock, ids: ids)
+
+	let owner = emitLoadField(module, block: haveMember, record: running, offset: GtOffOwner, ids: ids)
+	let depth = emitLoadField(module, block: haveMember, record: owner, offset: GtOffStrandGuardDepth, ids: ids)
+	emitStoreField(module, block: haveMember, record: owner, offset: GtOffStrandGuardDepth, value: emitBin(module, block: haveMember, a: depth, b: emitConst(module, block: haveMember, value: StrandGuardDepthStep, ids: ids), opcode: StdBinOpcode.add, ids: ids))
+	emitStoreField(module, block: haveMember, record: owner, offset: GtOffStrandGuardHolder, value: running)
+	module.setTerminator(haveMember, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtStrandGuardEnter'
+
+function buildGtStrandGuardExit(module StdModule)
+	var func = IrFunction.createFromStd(GtStrandGuardExitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var haveOffset = module.addBlock(func, label: b"guardexitoffset", heat: BlockHeat.normal)
+	var haveMachine = module.addBlock(func, label: b"guardexitmachine", heat: BlockHeat.normal)
+	var haveMember = module.addBlock(func, label: b"guardexitmember", heat: BlockHeat.normal)
+	var holdsIt = module.addBlock(func, label: b"guardexitholds", heat: BlockHeat.normal)
+	var notHeld = module.addBlock(func, label: b"guardexitnotheld", heat: BlockHeat.cold)
+	var outermost = module.addBlock(func, label: b"guardexitoutermost", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"guardexitdone", heat: BlockHeat.normal)
+
+	let (_, running) = emitLoadRunningGtOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveThread: haveMember, bail: doneBlock, ids: ids)
+
+	let owner = emitLoadField(module, block: haveMember, record: running, offset: GtOffOwner, ids: ids)
+	let holder = emitLoadField(module, block: haveMember, record: owner, offset: GtOffStrandGuardHolder, ids: ids)
+	emitBranchOnCompareValues(module, block: haveMember, a: holder, pred: StdCmpPred.eq, b: running, whenTrue: holdsIt, whenFalse: notHeld, ids: ids)
+
+	emitRuntimeFatal(module, func: func, block: notHeld, fatal: RuntimeFatal.strandGuardReleasedWithoutHolding, ids: ids)
+
+	let depth = emitLoadField(module, block: holdsIt, record: owner, offset: GtOffStrandGuardDepth, ids: ids)
+	let remaining = emitBin(module, block: holdsIt, a: depth, b: emitConst(module, block: holdsIt, value: StrandGuardDepthStep, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: holdsIt, record: owner, offset: GtOffStrandGuardDepth, value: remaining)
+	emitBranchOnCompare(module, block: holdsIt, value: remaining, pred: StdCmpPred.eq, against: NoStrandGuardDepth, whenTrue: outermost, whenFalse: doneBlock, ids: ids)
+
+	emitStoreField(module, block: outermost, record: owner, offset: GtOffStrandGuardHolder, value: emitConst(module, block: outermost, value: NoStrandGuardHolder, ids: ids))
+	module.setTerminator(outermost, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtStrandGuardExit'
 
 export let GtPinAcquireName = b"__gt_pin_acquire"
 
@@ -3978,6 +4067,8 @@ function buildGtCoroEnqueue(module StdModule)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var frontBlock = module.addBlock(func, label: b"front", heat: BlockHeat.normal)
+	var tailBlock = module.addBlock(func, label: b"tail", heat: BlockHeat.normal)
 	var appendBlock = module.addBlock(func, label: b"append", heat: BlockHeat.normal)
 	var emptyBlock = module.addBlock(func, label: b"empty", heat: BlockHeat.normal)
 
@@ -3986,7 +4077,13 @@ function buildGtCoroEnqueue(module StdModule)
 
 	// `entry` dominates both arms, so the owner is read once here and the ends name it throughout.
 	let owner = emitLoadField(module, block: entry, record: g, offset: GtOffOwner, ids: ids)
-	emitGtFifoAppend(module, entry: entry, appendBlock: appendBlock, emptyBlock: emptyBlock, ends: GtQueueEnds.ownerFields(owner), g: g, ids: ids)
+	let guardHolder = emitLoadField(module, block: entry, record: owner, offset: GtOffStrandGuardHolder, ids: ids)
+	emitBranchOnCompareValues(module, block: entry, a: guardHolder, pred: StdCmpPred.eq, b: g, whenTrue: frontBlock, whenFalse: tailBlock, ids: ids)
+
+	var pushedFront = emitGtFifoPushFront(module, func: func, cur: frontBlock, ends: GtQueueEnds.ownerFields(owner), g: g, ids: ids)
+	module.setTerminator(pushedFront, op: StdOp.retVoid)
+
+	emitGtFifoAppend(module, entry: tailBlock, appendBlock: appendBlock, emptyBlock: emptyBlock, ends: GtQueueEnds.ownerFields(owner), g: g, ids: ids)
 
 	module.functions.push(func)
 end 'buildGtCoroEnqueue'
@@ -4033,6 +4130,8 @@ function buildGtStrandNext(module StdModule)
 	var registerPark = module.addBlock(func, label: b"snregister", heat: BlockHeat.normal)
 	var pop = module.addBlock(func, label: b"snpop", heat: BlockHeat.normal)
 	var take = module.addBlock(func, label: b"sntake", heat: BlockHeat.normal)
+	var resumeJudged = module.addBlock(func, label: b"snresumejudged", heat: BlockHeat.normal)
+	var resumeDeferred = module.addBlock(func, label: b"snresumedeferred", heat: BlockHeat.normal)
 	var resume = module.addBlock(func, label: b"snresume", heat: BlockHeat.normal)
 	var peek = module.addBlock(func, label: b"snpeek", heat: BlockHeat.normal)
 	var dequeue = module.addBlock(func, label: b"sndequeue", heat: BlockHeat.normal)
@@ -4066,15 +4165,28 @@ function buildGtStrandNext(module StdModule)
 
 	emitBranchCarrying(module, from: pop, to: take, values: argsOf(emitConst(module, block: pop, value: WakeDebtNone, ids: ids)))
 
+	let guardHolder = emitLoadField(module, block: take, record: owner, offset: GtOffStrandGuardHolder, ids: ids)
 	let resumed = emitLoadField(module, block: take, record: owner, offset: GtOffStrandResume, ids: ids)
-	emitBranchOnCompare(module, block: take, value: resumed, pred: StdCmpPred.eq, against: 0, whenTrue: peek, whenFalse: resume, ids: ids)
+	emitBranchOnCompare(module, block: take, value: resumed, pred: StdCmpPred.eq, against: 0, whenTrue: peek, whenFalse: resumeJudged, ids: ids)
 
-	emitStoreField(module, block: resume, record: owner, offset: GtOffStrandResume, value: emitConst(module, block: resume, value: 0, ids: ids))
+	let unguarded = emitCompareWithConstant(module, block: resumeJudged, value: guardHolder, pred: StdCmpPred.eq, against: NoStrandGuardHolder, ids: ids)
+	let resumedHolds = emitCmp(module, block: resumeJudged, a: resumed, b: guardHolder, pred: StdCmpPred.eq, ids: ids)
+	let resumable = emitBin(module, block: resumeJudged, a: unguarded, b: resumedHolds, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(resumeJudged, op: StdOp.condBranch(resumable, thenBlockId: resume.id, elseBlockId: resumeDeferred.id))
+
+	emitGtRecordLockEnter(module, block: resumeDeferred, record: owner, ids: ids)
+	emitStoreField(module, block: resumeDeferred, record: owner, offset: GtOffStrandResume, value: emitConst(module, block: resumeDeferred, value: NoStrandResume, ids: ids))
+	module.appendOp(resumeDeferred, op: StdOp.call(ids.mint(), callee: GtCoroEnqueueName, args: argsOf(resumed)))
+	emitGtRecordLockLeave(module, block: resumeDeferred, record: owner, ids: ids)
+	module.setTerminator(resumeDeferred, op: StdOp.branch(peek.id))
+
+	emitStoreField(module, block: resume, record: owner, offset: GtOffStrandResume, value: emitConst(module, block: resume, value: NoStrandResume, ids: ids))
 	var resumePaid = emitGtPayDebtAfterRelease(module, func: func, cur: resume, owed: owed, label: b"snresume", ids: ids)
 	emitBranchCarrying(module, from: resumePaid, to: candidate, values: argsOf(resumed))
 
 	let queued = emitLoadAcquireField(module, block: peek, record: owner, offset: GtOffCoroHead, ids: ids)
-	emitBranchOnCompare(module, block: peek, value: queued, pred: StdCmpPred.eq, against: 0, whenTrue: release, whenFalse: dequeue, ids: ids)
+	let queuedRuns = emitStrandHeadRuns(module, block: peek, head: queued, guardHolder: guardHolder, ids: ids)
+	module.setTerminator(peek, op: StdOp.condBranch(queuedRuns, thenBlockId: dequeue.id, elseBlockId: release.id))
 
 	emitGtRecordLockEnter(module, block: dequeue, record: owner, ids: ids)
 	let popped = ids.mint()
@@ -4085,7 +4197,8 @@ function buildGtStrandNext(module StdModule)
 
 	_ = emitFieldAccumulate(module, block: release, record: owner, offset: GtOffStrandHolder, delta: emitConst(module, block: release, value: OneFewer, ids: ids), multiM: true, ids: ids)
 	let requeued = emitLoadAcquireField(module, block: release, record: owner, offset: GtOffCoroHead, ids: ids)
-	emitBranchOnCompare(module, block: release, value: requeued, pred: StdCmpPred.eq, against: 0, whenTrue: gaveUp, whenFalse: recheck, ids: ids)
+	let requeuedRuns = emitStrandHeadRuns(module, block: release, head: requeued, guardHolder: guardHolder, ids: ids)
+	module.setTerminator(release, op: StdOp.condBranch(requeuedRuns, thenBlockId: recheck.id, elseBlockId: gaveUp.id))
 
 	let reclaimLost = emitGtStrandClaimLost(module, block: recheck, owner: owner, ids: ids)
 	module.setTerminator(recheck, op: StdOp.condBranch(reclaimLost, thenBlockId: gaveUp.id, elseBlockId: reclaim.id))
@@ -4102,6 +4215,15 @@ function buildGtStrandNext(module StdModule)
 
 	module.functions.push(func)
 end 'buildGtStrandNext'
+
+function emitStrandHeadRuns(module StdModule, block IrBlock, head ValueId, guardHolder ValueId, ids ValueMinter) returns ValueId
+	let queued = emitCompareWithConstant(module, block: block, value: head, pred: StdCmpPred.ne, against: 0, ids: ids)
+	let unguarded = emitCompareWithConstant(module, block: block, value: guardHolder, pred: StdCmpPred.eq, against: NoStrandGuardHolder, ids: ids)
+	let headHolds = emitCmp(module, block: block, a: head, b: guardHolder, pred: StdCmpPred.eq, ids: ids)
+	let runnable = emitBin(module, block: block, a: unguarded, b: headHolds, opcode: StdBinOpcode.bitOr, ids: ids)
+
+	return emitBin(module, block: block, a: queued, b: runnable, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitStrandHeadRuns'
 
 function emitGtPayDebtAfterRelease(module StdModule, func IrFunction, cur IrBlock, owed ValueId, label ByteArray, ids ValueMinter) returns IrBlock
 	var payWake = module.addBlock(func, label: bytesWithSuffix(b"wake", suffix: label), heat: BlockHeat.normal)
@@ -6051,8 +6173,8 @@ end 'buildGtCellComplete'
 // it names), and every waker of a sender claims `GtOffSendOutcome` by CAS, which an abandon that
 // arrives second loses. The mailbox record outlives the abandon because the parked sender's frame
 // holds the handle share it sends through, and the frame cannot unwind until this strand is given up.
-function buildGtPromiseDrop(module StdModule)
-	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+function buildGtPromiseRenounce(module StdModule)
+	var func = IrFunction.createFromStd(GtPromiseRenounceName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -6076,9 +6198,6 @@ function buildGtPromiseDrop(module StdModule)
 	var quiesceOwned = module.addBlock(func, label: b"droppedquiesceowned", heat: BlockHeat.normal)
 	var unknownPark = module.addBlock(func, label: b"droppedunknownpark", heat: BlockHeat.cold)
 	var queuedArm = module.addBlock(func, label: b"queuedarm", heat: BlockHeat.normal)
-	var sweepGreen = module.addBlock(func, label: b"sweepgreen", heat: BlockHeat.normal)
-	var sweepCoro = module.addBlock(func, label: b"sweepcoro", heat: BlockHeat.normal)
-	var dropDone = module.addBlock(func, label: b"dropdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0
@@ -6209,10 +6328,20 @@ function buildGtPromiseDrop(module StdModule)
 	// ⚠ **BOTH READS HAPPEN BEFORE `__gt_owner_done`, WHICH MAY FREE THE STRUCT.** That call is the consumer's
 	// arrival at the rendezvous, and if the runner was already there it reclaims — so `gt` is not readable
 	// after it returns.
-	let dropIsGreen = emitGtIsGreenThread(module, block: queuedArm, gt: gt, ids: ids)
-	let dropOwner = emitLoadField(module, block: queuedArm, record: gt, offset: GtOffOwner, ids: ids)
-	module.appendOp(queuedArm, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(gt)))
-	module.setTerminator(queuedArm, op: StdOp.condBranch(dropIsGreen, thenBlockId: sweepGreen.id, elseBlockId: sweepCoro.id))
+	module.setTerminator(queuedArm, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtPromiseRenounce'
+
+function emitGtPromiseDropTail(module StdModule, func IrFunction, start IrBlock, gt ValueId, ids ValueMinter)
+	var sweepGreen = module.addBlock(func, label: b"sweepgreen", heat: BlockHeat.normal)
+	var sweepCoro = module.addBlock(func, label: b"sweepcoro", heat: BlockHeat.normal)
+	var dropDone = module.addBlock(func, label: b"dropdone", heat: BlockHeat.normal)
+
+	let dropIsGreen = emitGtIsGreenThread(module, block: start, gt: gt, ids: ids)
+	let dropOwner = emitLoadField(module, block: start, record: gt, offset: GtOffOwner, ids: ids)
+	module.appendOp(start, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(gt)))
+	module.setTerminator(start, op: StdOp.condBranch(dropIsGreen, thenBlockId: sweepGreen.id, elseBlockId: sweepCoro.id))
 
 	module.appendOp(sweepGreen, op: StdOp.call(ids.mint(), callee: SchedSweepDroppedName, args: ValueIdArray.create(0)))
 	module.setTerminator(sweepGreen, op: StdOp.branch(dropDone.id))
@@ -6221,9 +6350,49 @@ function buildGtPromiseDrop(module StdModule)
 	module.setTerminator(sweepCoro, op: StdOp.branch(dropDone.id))
 
 	module.setTerminator(dropDone, op: StdOp.retVoid)
+end 'emitGtPromiseDropTail'
+
+function buildGtPromiseDrop(module StdModule)
+	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let gt = 0
+
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtPromiseRenounceName, args: argsOf(gt)))
+	emitGtPromiseDropTail(module, func: func, start: entry, gt: gt, ids: ids)
 
 	module.functions.push(func)
 end 'buildGtPromiseDrop'
+
+function buildGtPromiseCancelWait(module StdModule)
+	var func = IrFunction.createFromStd(GtPromiseCancelWaitName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var check = module.addBlock(func, label: b"cancelcheck", heat: BlockHeat.normal)
+	var wait = module.addBlock(func, label: b"cancelpark", heat: BlockHeat.normal)
+	var finished = module.addBlock(func, label: b"cancelfinished", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let gt = 0
+
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtPromiseRenounceName, args: argsOf(gt)))
+	let waiter = emitLoadField(module, block: entry, record: gt, offset: GtOffWaiter, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: waiter, pred: StdCmpPred.ne, against: 0, whenTrue: check, whenFalse: finished, ids: ids)
+
+	let status = emitGtLoadPublishedStatus(module, block: check, gt: gt, ids: ids)
+	let isDone = emitGtStatusEquals(module, block: check, status: status, want: GtStatus.completed, ids: ids)
+	module.setTerminator(check, op: StdOp.condBranch(isDone, thenBlockId: finished.id, elseBlockId: wait.id))
+
+	emitGtPark(module, ids: ids, cur: wait, kind: GtParkKind.awaitPromise.rawValue, arg: gt, cont: check)
+
+	emitGtPromiseDropTail(module, func: func, start: finished, gt: gt, ids: ids)
+
+	module.functions.push(func)
+end 'buildGtPromiseCancelWait'
 
 // ⭐⭐ **THE HALF EVERY EXPIRED PARK SHARES: READY THE THREAD AND PAY THE WAKE.** The caller holds
 // `__sched_lock` and its own withdrawal found the registration, so no other party will ready this
@@ -6959,6 +7128,8 @@ function buildGtRunStrand(module StdModule, target Target)
 	var next = module.addBlock(func, label: b"strandnext", heat: BlockHeat.normal)
 	var run = module.addBlock(func, label: b"strandrun", heat: BlockHeat.normal)
 	var finished = module.addBlock(func, label: b"strandcompleted", heat: BlockHeat.normal)
+	var guardLeaked = module.addBlock(func, label: b"strandguardleaked", heat: BlockHeat.cold)
+	var finishedClean = module.addBlock(func, label: b"strandcompletedclean", heat: BlockHeat.normal)
 	var dropPin = module.addBlock(func, label: b"stranddroppin", heat: BlockHeat.cold)
 	var reapMember = module.addBlock(func, label: b"strandreap", heat: BlockHeat.normal)
 	var parked = module.addBlock(func, label: b"strandparked", heat: BlockHeat.normal)
@@ -6971,6 +7142,7 @@ function buildGtRunStrand(module StdModule, target Target)
 	var mailboxCommit = module.addBlock(func, label: b"strandmailboxcommit", heat: BlockHeat.normal)
 	var notMailbox = module.addBlock(func, label: b"strandnotmailbox", heat: BlockHeat.normal)
 	var mailboxSendCommit = module.addBlock(func, label: b"strandmailboxsendcommit", heat: BlockHeat.normal)
+	var yieldJudged = module.addBlock(func, label: b"strandyieldjudged", heat: BlockHeat.normal)
 	var yielded = module.addBlock(func, label: b"strandyield", heat: BlockHeat.normal)
 	var preempted = module.addBlock(func, label: b"strandpreempted", heat: BlockHeat.normal)
 	var pollStores = module.addBlock(func, label: b"strandpoll", heat: BlockHeat.normal)
@@ -7010,8 +7182,13 @@ function buildGtRunStrand(module StdModule, target Target)
 	let completed = emitGtStatusEquals(module, block: run, status: status, want: GtStatus.completed, ids: ids)
 	module.setTerminator(run, op: StdOp.condBranch(completed, thenBlockId: finished.id, elseBlockId: parked.id))
 
-	let lockedHere = emitLoadField(module, block: finished, record: m, offset: MOffLockedGt, ids: ids)
-	emitBranchOnCompareValues(module, block: finished, a: lockedHere, pred: StdCmpPred.eq, b: member, whenTrue: dropPin, whenFalse: reapMember, ids: ids)
+	let guardHolderAtCompletion = emitLoadField(module, block: finished, record: owner, offset: GtOffStrandGuardHolder, ids: ids)
+	emitBranchOnCompareValues(module, block: finished, a: guardHolderAtCompletion, pred: StdCmpPred.eq, b: member, whenTrue: guardLeaked, whenFalse: finishedClean, ids: ids)
+
+	emitRuntimeFatal(module, func: func, block: guardLeaked, fatal: RuntimeFatal.strandGuardHeldAtCompletion, ids: ids)
+
+	let lockedHere = emitLoadField(module, block: finishedClean, record: m, offset: MOffLockedGt, ids: ids)
+	emitBranchOnCompareValues(module, block: finishedClean, a: lockedHere, pred: StdCmpPred.eq, b: member, whenTrue: dropPin, whenFalse: reapMember, ids: ids)
 
 	emitGtReleasePin(module, block: dropPin, gt: member, m: m, ids: ids)
 	module.setTerminator(dropPin, op: StdOp.branch(reapMember.id))
@@ -7044,7 +7221,9 @@ function buildGtRunStrand(module StdModule, target Target)
 	module.setTerminator(shrink, op: StdOp.branch(dispatch.id))
 
 	let kind = emitLoadField(module, block: dispatch, record: member, offset: GtOffParkKind, ids: ids)
-	emitBranchOnCompare(module, block: dispatch, value: kind, pred: StdCmpPred.eq, against: GtParkKind.yielded.rawValue, whenTrue: yielded, whenFalse: notYield, ids: ids)
+	emitBranchOnCompare(module, block: dispatch, value: kind, pred: StdCmpPred.eq, against: GtParkKind.yielded.rawValue, whenTrue: yieldJudged, whenFalse: notYield, ids: ids)
+
+	emitBranchOnCompare(module, block: yieldJudged, value: emitLoadField(module, block: yieldJudged, record: owner, offset: GtOffStrandGuardHolder, ids: ids), pred: StdCmpPred.eq, against: NoStrandGuardHolder, whenTrue: yielded, whenFalse: preempted, ids: ids)
 
 	emitBranchOnCompare(module, block: notYield, value: kind, pred: StdCmpPred.eq, against: GtParkKind.preempt.rawValue, whenTrue: preempted, whenFalse: notPreempt, ids: ids)
 

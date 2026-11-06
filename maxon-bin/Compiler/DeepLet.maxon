@@ -1,6 +1,6 @@
 // The kinds of read-only root a deep `let` write is blamed on, and the wording of every refusal through
-// one (E3078, E3159), of a `view` that escapes or is handed off (E3078, E3138, E3174), of a broken
-// capability boundary (E3189) and of a `let` bound to writable state (E3188), for the parser,
+// one (E3078, E3159), of a `view` that escapes or is handed off (E3078, E3138, E3174) and of a `let`
+// bound to writable state (E3188), for the parser,
 // `SemanticCheck` and `StorageProvenance`; spec `maxoncstderr` blocks pin that wording byte for
 // byte.
 export enum ReadOnlyRootKind
@@ -12,6 +12,7 @@ export enum ReadOnlyRootKind
 	letField
 	letPayload
 	readOnlyElement
+	frozenElement
 	storedMapKey
 	storedSetElement
 	moduleLet
@@ -22,7 +23,7 @@ export enum ReadOnlyRootKind
 end 'ReadOnlyRootKind'
 
 // @generated library-cache begin
-let CacheCasesReadOnlyRootKind = [ReadOnlyRootKind.letBinding, ReadOnlyRootKind.forElement, ReadOnlyRootKind.loopVariable, ReadOnlyRootKind.ifLetBinding, ReadOnlyRootKind.matchBinding, ReadOnlyRootKind.letField, ReadOnlyRootKind.letPayload, ReadOnlyRootKind.readOnlyElement, ReadOnlyRootKind.storedMapKey, ReadOnlyRootKind.storedSetElement, ReadOnlyRootKind.moduleLet, ReadOnlyRootKind.sharedView, ReadOnlyRootKind.view, ReadOnlyRootKind.destructuredTuple, ReadOnlyRootKind.heldPromise]
+let CacheCasesReadOnlyRootKind = [ReadOnlyRootKind.letBinding, ReadOnlyRootKind.forElement, ReadOnlyRootKind.loopVariable, ReadOnlyRootKind.ifLetBinding, ReadOnlyRootKind.matchBinding, ReadOnlyRootKind.letField, ReadOnlyRootKind.letPayload, ReadOnlyRootKind.readOnlyElement, ReadOnlyRootKind.frozenElement, ReadOnlyRootKind.storedMapKey, ReadOnlyRootKind.storedSetElement, ReadOnlyRootKind.moduleLet, ReadOnlyRootKind.sharedView, ReadOnlyRootKind.view, ReadOnlyRootKind.destructuredTuple, ReadOnlyRootKind.heldPromise]
 
 module function cacheReadReadOnlyRootKind(reader LibraryCacheReader) returns ReadOnlyRootKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -49,14 +50,6 @@ function cacheTableAgreesReadOnlyRootKind() returns bool
 	return true
 end 'cacheTableAgreesReadOnlyRootKind'
 
-module function cacheEnumTablesAgreeInCompilerDeepLet() returns bool
-	if not cacheTableAgreesReadOnlyRootKind() 'disagreesCacheTableAgreesReadOnlyRootKind'
-		return false
-	end 'disagreesCacheTableAgreesReadOnlyRootKind'
-
-	return true
-end 'cacheEnumTablesAgreeInCompilerDeepLet'
-
 // @generated library-cache end
 
 export function readOnlyRootDescription(root ReadOnlyRootKind) returns String
@@ -69,6 +62,7 @@ export function readOnlyRootDescription(root ReadOnlyRootKind) returns String
 		letField gives "a `let` field"
 		letPayload gives "a `let` payload"
 		readOnlyElement gives "a `readonly` element"
+		frozenElement gives "an `immutable` element"
 		storedMapKey gives "a stored Map key"
 		storedSetElement gives "a stored Set element"
 		moduleLet gives "a module-level `let`"
@@ -195,6 +189,7 @@ export function deepLetStoredRootSubject(name String, kind ReadOnlyRootKind) ret
 		letField or
 		letPayload or
 		readOnlyElement or
+		frozenElement or
 		storedMapKey or
 		storedSetElement or
 		destructuredTuple or
@@ -219,39 +214,6 @@ export function viewCapturedMessage(name String) returns String
 	return "cannot capture view '{name}' in a closure; capture a clone()"
 end 'viewCapturedMessage'
 
-export function boundaryDisagreementMessage(subject String, claim String, boundary String, stance String) returns String
-	return "{subject} {claim}, but '{boundary}' {stance}"
-end 'boundaryDisagreementMessage'
-
-export function parameterDemandMessage(subject String, verb String, parameter String, boundary String, qualifier String) returns String
-	return boundaryDisagreementMessage(subject, claim: "{verb} its parameter '{parameter}'", boundary: boundary, stance: "does not declare it `{qualifier}`")
-end 'parameterDemandMessage'
-
-export function resultBreaksBoundaryMessage(subject String, boundary String, capability ResultCapability) returns String
-	return boundaryDisagreementMessage(subject, claim: "returns a value something may still write", boundary: boundary, stance: "declares `returns {resultQualifierWord(capability)}`")
-end 'resultBreaksBoundaryMessage'
-
-export function keptUndeclaredMessage(subject String, parameter String, boundary String) returns String
-	let (verb, qualifier) = paramDemandWords(ParamCapability.keep)
-	return parameterDemandMessage(subject, verb: verb, parameter: parameter, boundary: boundary, qualifier: qualifier)
-end 'keptUndeclaredMessage'
-
-module function paramDemandWords(capability ParamCapability) returns (String, String)
-	return match capability 'capability'
-		lent panic("paramDemandWords: a lent parameter demands nothing of its boundary")
-		keep gives ("keeps", String.from(KeepQualifierWord))
-		sole gives ("consumes", String.from(SoleQualifierWord))
-	end 'capability'
-end 'paramDemandWords'
-
-module function resultQualifierWord(capability ResultCapability) returns String
-	return match capability 'capability'
-		unqualified panic("resultQualifierWord: an unqualified result declares nothing a function could break")
-		sole gives String.from(SoleQualifierWord)
-		readonly gives String.from(ReadonlyModifierWord)
-	end 'capability'
-end 'resultQualifierWord'
-
 module function handOffRefusalCode(kind MoveDestinationKind) returns ErrorCode
 	return match kind 'kind'
 		sentMessage gives ErrorCode.semanticServiceArgumentNotUnique
@@ -264,6 +226,9 @@ module function handOffRefusalCode(kind MoveDestinationKind) returns ErrorCode
 		readOnlyElement or
 		readOnlyElementValue or
 		keptArgument or
+		uniqueArgument or
+		uniqueSubject or
+		uniqueSlot or
 		serviceReply or
 		sharedSend or
 		mutablePlace or
@@ -329,6 +294,7 @@ export function rootKindOfHolder(holder WriteBlameHolder) returns ReadOnlyRootKi
 		letField gives ReadOnlyRootKind.letField
 		letPayload gives ReadOnlyRootKind.letPayload
 		readOnlyElement gives ReadOnlyRootKind.readOnlyElement
+		frozenElement gives ReadOnlyRootKind.frozenElement
 		storedMapKey gives ReadOnlyRootKind.storedMapKey
 		storedSetElement gives ReadOnlyRootKind.storedSetElement
 		moduleLet gives ReadOnlyRootKind.moduleLet
@@ -348,6 +314,7 @@ export function holderOfRootKind(kind ReadOnlyRootKind) returns WriteBlameHolder
 		letField gives WriteBlameHolder.letField
 		letPayload gives WriteBlameHolder.letPayload
 		readOnlyElement gives WriteBlameHolder.readOnlyElement
+		frozenElement gives WriteBlameHolder.frozenElement
 		storedMapKey gives WriteBlameHolder.storedMapKey
 		storedSetElement gives WriteBlameHolder.storedSetElement
 		moduleLet gives WriteBlameHolder.moduleLet
@@ -368,6 +335,7 @@ export function moveDestinationOfLetSlot(slot ReadOnlyRootKind, movesAVar bool) 
 		loopVariable or
 		ifLetBinding or
 		matchBinding or
+		frozenElement or
 		storedMapKey or
 		storedSetElement or
 		moduleLet or
@@ -390,6 +358,7 @@ export function holderIsPermanent(holder WriteBlameHolder) returns bool
 		letField or
 		letPayload or
 		readOnlyElement or
+		frozenElement or
 		storedMapKey or
 		storedSetElement or
 		moduleLet or
@@ -402,6 +371,82 @@ export enum ArgumentFate
 	keptWhereWritable
 	consumed
 end 'ArgumentFate'
+
+export enum UniqueLender
+	none
+	loop
+	view
+	slot
+	tuple
+end 'UniqueLender'
+
+// @generated library-cache begin
+let CacheCasesUniqueLender = [UniqueLender.none, UniqueLender.loop, UniqueLender.view, UniqueLender.slot, UniqueLender.tuple]
+
+module function cacheReadUniqueLender(reader LibraryCacheReader) returns UniqueLender throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesUniqueLender.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadUniqueLender'
+
+function cacheTableAgreesUniqueLender() returns bool
+	let declared = UniqueLender.allCases
+
+	if CacheCasesUniqueLender.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesUniqueLender.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesUniqueLender'
+
+module function cacheEnumTablesAgreeInCompilerDeepLet() returns bool
+	if not cacheTableAgreesReadOnlyRootKind() 'disagreesCacheTableAgreesReadOnlyRootKind'
+		return false
+	end 'disagreesCacheTableAgreesReadOnlyRootKind'
+
+	if not cacheTableAgreesUniqueLender() 'disagreesCacheTableAgreesUniqueLender'
+		return false
+	end 'disagreesCacheTableAgreesUniqueLender'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerDeepLet'
+
+// @generated library-cache end
+
+export function uniqueLenderPhrase(lender UniqueLender) returns String
+	return match lender 'lender'
+		loop gives "the loop"
+		view gives "a `view`"
+		slot gives "the field or element it was read out of"
+		tuple gives "the tuple it was destructured from"
+		none panic("uniqueLenderPhrase: a name nothing lends has no lender")
+	end 'lender'
+end 'uniqueLenderPhrase'
+
+export function uniqueAliasMessage(action String) returns String
+	return "cannot {action} a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read it through a `view`, or move it out with `pop` or `remove`"
+end 'uniqueAliasMessage'
+
+export function uniqueLentMovedMessage(name String, lender String, paramName String, functionName String) returns String
+	return "cannot pass '{name}' to parameter '{paramName}' of '{functionName}': it keeps a unique value, and '{name}' is only lent by {lender}; move it out with `pop` or `remove`"
+end 'uniqueLentMovedMessage'
+
+export function uniqueSlotMovedMessage(source String, paramName String, functionName String) returns String
+	return "cannot pass '{source}' to parameter '{paramName}' of '{functionName}': it keeps a unique value, and a unique value cannot be moved out of a field or an element it was only read from; move it out with `pop` or `remove`, or `swap` it out of an isolated field"
+end 'uniqueSlotMovedMessage'
+
+export function uniqueArgumentNeedsAVarMessage(name String, paramName String, functionName String) returns String
+	return "cannot pass '{name}' to parameter '{paramName}' of '{functionName}': it keeps a unique value, which moves out of the caller's mutable data, and '{name}' is not a `var`"
+end 'uniqueArgumentNeedsAVarMessage'
 
 export function deepLetPassedMessage(subject String, paramName String, functionName String, fate ArgumentFate) returns String
 	let outcome = match fate 'fate'

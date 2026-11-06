@@ -161,7 +161,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 
-	static function init(managed ElementMemory) returns Self
+	static function init(managed mutable ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 

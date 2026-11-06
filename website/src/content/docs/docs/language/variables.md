@@ -127,11 +127,11 @@ end 'main'
 - A view holds its own reference to the record it names. Once a view of a `var` is declared — of the `var`
   itself, a field or an element of it, or any expression that may hand its record back (a ternary, an
   `otherwise`, a `match`, a call) — the view co-owns that record for the rest of the function, read again or
-  not: sending it (**E3138**), publishing it (**E3174**) or handing it to a `sole`
-  parameter (**E3078**) is refused. The rule follows source order, so inside a loop a view declared earlier in the
+  not: sending it (**E3138**), publishing it (**E3174**) or handing it to a parameter the callee keeps
+  (**E3078**) is refused. The rule follows source order, so inside a loop a view declared earlier in the
   body counts. Reassigning the `var` a fresh record makes it sole again, and returning the `var` is unaffected.
 - A record nothing can write — a heap type whose fields are all `let` — is shared instead: it is sent, published
-  or handed to a `sole` parameter as it is, and the view stays valid. An inline packed record is copied.
+  or handed to a parameter the callee keeps as it is, and the view stays valid. An inline packed record is copied.
 - `view` is a [contextual keyword](/docs/language/overview/#keywords). It declares a local binding only: a `view` field, a module-level
   `view`, a `view` in an extension body or an `@heap view` is **E2077**.
 

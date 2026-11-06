@@ -785,3 +785,89 @@ end 'main'
 ```maxoncstderr
 error E3078: <fragment>:21:11: cannot pass the `var` 'scratch', which is read again, to parameter 'grid' of 'wrapOp', which stores it into a `let` payload: a `let` payload has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
 ```
+
+<!-- test: error.a-let-payload-passed-to-a-constructor-that-stores-it-is-refused -->
+`Shape.create` stores its parameter into a `var` field, which something may write, so the read-only record bound out of the `let` payload is refused for it.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Cell
+	export var level as Integer
+
+	static function create() returns Self
+		return Self{level: 0}
+	end 'create'
+end 'Cell'
+
+union Holder
+	held(let cell Cell)
+	empty
+end 'Holder'
+
+type Shape
+	export var cell as Cell
+
+	static function create(cell Cell) returns Self
+		return Self{cell: cell}
+	end 'create'
+end 'Shape'
+
+function shapeOf(holder Holder) returns Shape
+	match holder 'which'
+		held(cell) then return Shape.create(cell)
+		empty then return Shape.create(Cell.create())
+	end 'which'
+end 'shapeOf'
+
+function main() returns ExitCode
+	let holder = Holder.held(Cell.create())
+	let shape = shapeOf(holder)
+
+	return shape.cell.level as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:27:32: cannot pass 'cell', which is read-only (a `let` payload), to parameter 'cell' of 'Shape.create', which keeps it where something may write it; pass a clone()
+```
+
+<!-- test: a-let-payload-projected-into-a-tuple-is-read-by-the-caller -->
+A tuple lends its items: the projection returns the payload's read-only record and the caller reads it, where a record built over the payload is refused.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Cell
+	export var level as Integer
+
+	static function create() returns Self
+		return Self{level: 4}
+	end 'create'
+end 'Cell'
+
+union Holder
+	held(let cell Cell, let tag Integer)
+	empty
+end 'Holder'
+
+function partsOf(holder Holder) returns (Cell, Integer)
+	match holder 'which'
+		held(cell, tag) then return (cell, tag)
+		empty then return (Cell.create(), 0)
+	end 'which'
+end 'partsOf'
+
+function main() returns ExitCode
+	let holder = Holder.held(Cell.create(), tag: 3)
+	let parts = partsOf(holder)
+
+	print("{parts.0.level} {parts.1}\n")
+	return 0
+end 'main'
+```
+```stdout
+4 3
+```
+```exitcode
+0
+```

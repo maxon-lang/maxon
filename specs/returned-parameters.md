@@ -162,9 +162,9 @@ counted reference. Calling it directly and through the value must both leave one
 ```maxon
 typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
-typealias Step = function(TallyArray) returns TallyArray
+typealias Step = function(mutable TallyArray) returns TallyArray
 
-function touch(cells TallyArray) returns TallyArray
+function touch(cells mutable TallyArray) returns TallyArray
 	cells.push(1)
 
 	return cells
@@ -201,7 +201,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 interface Advances
-	function advance(cells TallyArray) returns TallyArray
+	function advance(cells mutable TallyArray) returns TallyArray
 end 'Advances'
 
 type Stepper implements Advances
@@ -211,7 +211,7 @@ type Stepper implements Advances
 		return Self{bump: 1}
 	end 'create'
 
-	function advance(cells TallyArray) returns TallyArray
+	function advance(cells mutable TallyArray) returns TallyArray
 		cells.push(self.bump)
 
 		return cells
@@ -594,9 +594,9 @@ inside a lifted body and a call through a pointer reach the function.
 ```maxon
 typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
-typealias Step = function(TallyArray) returns TallyArray
+typealias Step = function(mutable TallyArray) returns TallyArray
 
-function touch(cells TallyArray) returns TallyArray
+function touch(cells mutable TallyArray) returns TallyArray
 	cells.push(1)
 
 	return cells

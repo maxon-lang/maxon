@@ -540,7 +540,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	function folded(parents ParentComponentRule) returns FilePath
 		if path.isEmpty() 'emptyPath'
-			return self
+			return FilePath{path: path}
 		end 'emptyPath'
 
 		let cancelsParents = match parents 'rule'
@@ -668,7 +668,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	function joinedOnto(base FilePath) returns FilePath
 		if isAbsolute() 'alreadyAbsolute'
-			return self
+			return FilePath{path: path}
 		end 'alreadyAbsolute'
 
 		#if os(Windows)
@@ -737,7 +737,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	#if os(Windows)
 		function joinedOntoItsDrive(base FilePath) returns FilePath
 			if not base.hasDriveRoot() or canonicalForCompare(drivePrefix()) != canonicalForCompare(base.drivePrefix()) 'anotherDrivesDirectory'
-				return self
+				return FilePath{path: path}
 			end 'anotherDrivesDirectory'
 
 			let rest = try path.addressableBytes().slice(DrivePrefixLength, path.byteLength()) otherwise panic("FilePath.joinedOntoItsDrive: a drive prefix is the path's first two bytes")
@@ -772,7 +772,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		// in `self`, not as the last byte of `prefix`).
 		let basePath = base.path
 		let baseLen = basePath.byteLength()
-		var trimmedBase = base
+		var trimmedBase = FilePath{path: basePath}
 
 		if baseLen > 0 'maybeTrim'
 			let baseBytes = basePath.addressableBytes()

@@ -11,35 +11,35 @@ typealias FunctionRefNamesByFunc = Map with (ElementIndex, FunctionRefNameMap)
 
 let WitnessSlotKeyShift = 16 as WitnessSlotKey
 
-module typealias CapabilityStrength = int(0 to 2)
+typealias CapabilityStrength = int(0 to 2)
 
-module function paramStrength(capability ParamCapability) returns CapabilityStrength
+function paramStrength(capability ParamCapability) returns CapabilityStrength
 	return match capability 'capability'
-		lent gives 0
-		keep gives 1
-		sole gives 2
+		unmarked or
+		immutable gives 0
+		mutable gives 1
+		isolated gives 2
 	end 'capability'
 end 'paramStrength'
 
-module function resultStrength(capability ResultCapability) returns CapabilityStrength
-	return match capability 'capability'
-		unqualified gives 0
-		readonly gives 1
-		sole gives 2
-	end 'capability'
-end 'resultStrength'
-
-function declaredPositionsOf(capabilities ParamCapabilityArray, firstPosition ParamCount, atLeast ParamCapability) returns ParamPositionMask
+function declaredPositionsOf(capabilities ParamCapabilityArray, marked ParamPositionMask, firstPosition ParamCount, atLeast ParamCapability) returns ParamPositionMask
 	var declared = NoParamPositions
 
 	for (iter, capability) in capabilities.withIterator() 'eachParameter'
-		if paramStrength(capability) >= paramStrength(atLeast) 'declaresIt'
+		let borrowed = capability == ParamCapability.isolated and maskHasParam(marked, param: iter.index() as ParamCount)
+		let owned = ParamCapability.mutable if borrowed else capability
+
+		if paramStrength(owned) >= paramStrength(atLeast) 'declaresIt'
 			declared = maskWithParam(declared, param: firstPosition + (iter.index() as ParamCount))
 		end 'declaresIt'
 	end 'eachParameter'
 
 	return declared
 end 'declaredPositionsOf'
+
+function declaredWrittenPositionsOf(capabilities ParamCapabilityArray, marked ParamPositionMask, firstPosition ParamCount) returns ParamPositionMask
+	return maskWithout(declaredPositionsOf(capabilities, marked: marked, firstPosition: firstPosition, atLeast: ParamCapability.mutable), removed: declaredPositionsOf(capabilities, marked: marked, firstPosition: firstPosition, atLeast: ParamCapability.isolated))
+end 'declaredWrittenPositionsOf'
 
 // How the walks judge a call's callee. `refused` is a declaration poisoned by a parse error that no
 // summary describes: that error is already the program's diagnostic, so the call is judged to read,
@@ -70,18 +70,6 @@ end 'landingTargetOf'
 module function requirementFirstPosition(method InterfaceMethodSig) returns ParamCount
 	return 0 as ParamCount if method.isStatic else WitnessReceiverArgCount
 end 'requirementFirstPosition'
-
-module function firstKeptButUndeclared(kept ParamPositionMask, capabilities ParamCapabilityArray, firstPosition ParamCount) returns ParamCount throws AbsentError
-	let declared = declaredPositionsOf(capabilities, firstPosition: firstPosition, atLeast: ParamCapability.keep)
-
-	for position in firstPosition upto (capabilities.count() as ParamCount) + firstPosition 'eachParameter'
-		if maskHasParam(kept, param: position) and not maskHasParam(declared, param: position) 'keptUndeclared'
-			return position
-		end 'keptUndeclared'
-	end 'eachParameter'
-
-	throw AbsentError.absent
-end 'firstKeptButUndeclared'
 
 module function witnessSlotKeyOf(interfaceDeclIndex ElementIndex, methodIndex WitnessMethodIndex) returns WitnessSlotKey
 	return ((interfaceDeclIndex as WitnessSlotKey) shl WitnessSlotKeyShift) or (methodIndex as WitnessSlotKey)
@@ -139,15 +127,15 @@ end 'callSiteWalkOrder'
 module interface SummaryCallWalker
 	function callSiteCursor() returns CallSiteCursor
 	function tracksValue(value ValueId) returns bool
-	function applyCalleeSummary(func IrFunction, calleeIndex ElementIndex, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, argRanges SourceRangeArray)
-	function storeHandedValue(func IrFunction, receiver ValueId, stored ValueId, sharesItsElements bool, opIdx ElementIndex)
-	function resultFromOperands(func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId)
-	function resultOfRuntimeCall(func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, site ElementIndex)
+	function applyCalleeSummary(mutable self, func IrFunction, calleeIndex ElementIndex, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, argRanges SourceRangeArray)
+	function storeHandedValue(mutable self, func IrFunction, receiver ValueId, stored ValueId, sharesItsElements bool, opIdx ElementIndex)
+	function resultFromOperands(mutable self, func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId)
+	function resultOfRuntimeCall(mutable self, func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, site ElementIndex)
 end 'SummaryCallWalker'
 
 module interface SummarizedBodies
-	function tracesFirst(index ElementIndex) returns bool
-	function traceAndWiden(index ElementIndex) returns bool
+	function tracesFirst(mutable self, index ElementIndex) returns bool
+	function traceAndWiden(mutable self, index ElementIndex) returns bool
 end 'SummarizedBodies'
 
 module function dispatchNamedCall(walker SummaryCallWalker, func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray)
@@ -367,7 +355,7 @@ end 'CallDependencies'
 
 module union LandingKeeps
 	fromBodies
-	declared(kept ParamPositionMask, consumed ParamPositionMask, let paramNames NameRoster, firstPosition ParamCount, result ResultCapability)
+	declared(written ParamPositionMask, consumed ParamPositionMask, let paramNames NameRoster, firstPosition ParamCount, result ResultCapability)
 
 	module function isDeclared() returns bool
 		return match self 'keeps'
@@ -378,17 +366,33 @@ module union LandingKeeps
 
 	module function declaredResult() returns ResultCapability
 		return match self 'keeps'
-			fromBodies gives ResultCapability.unqualified
+			fromBodies gives ResultCapability.unmarked
 			declared(_, _, _, _, result) gives result
 		end 'keeps'
 	end 'declaredResult'
 
+	module function declaresTheResultsProvenance() returns bool
+		return match self.declaredResult() 'result'
+			isolated or
+			immutable gives true
+			unmarked or
+			mutable gives false
+		end 'result'
+	end 'declaresTheResultsProvenance'
+
 	module function keptOr(fromBodies ParamPositionMask) returns ParamPositionMask
 		return match self 'keeps'
 			fromBodies gives fromBodies
-			declared(kept, _, _, _, _) gives kept
+			declared(_, consumed, _, _, _) gives consumed
 		end 'keeps'
 	end 'keptOr'
+
+	module function declaredWritten() returns ParamPositionMask
+		return match self 'keeps'
+			fromBodies gives NoParamPositions
+			declared(written, _, _, _, _) gives written
+		end 'keeps'
+	end 'declaredWritten'
 
 	module function declaredParameterAt(position ParamCount) returns ArgumentParameter
 		return match self 'keeps'
@@ -443,9 +447,15 @@ module type CallSummaryIndex
 
 	module function classifyCallee(func IrFunction, callee ByteArray) returns CalleeClass
 		if let index = try self.funcIndexByName.get(callee) 'declared'
-			if self.project.funcSignatures.contains(callee) and self.implHasSummary(index) 'aSummaryDescribesIt'
-				return CalleeClass.summarized(index)
-			end 'aSummaryDescribesIt'
+			if self.project.funcSignatures.contains(callee) 'aDeclaredFunction'
+				if self.implHasSummary(index) 'aSummaryDescribesIt'
+					return CalleeClass.summarized(index)
+				end 'aSummaryDescribesIt'
+
+				if self.implWasSkippedAsUnreached(index) 'anAbandonedBody'
+					return CalleeClass.refused
+				end 'anAbandonedBody'
+			end 'aDeclaredFunction'
 		end 'declared'
 
 		if self.project.poison.refusesACalleeFrom(callee, reader: func.sourceFilePath, signatures: self.signatures) 'aDeclarationIsRefused'
@@ -505,7 +515,7 @@ module type CallSummaryIndex
 				names.push(param.name)
 			end 'eachParameter'
 
-			return LandingKeeps.declared(declaredPositionsOf(aliasShape.paramCapabilities, firstPosition: 0, atLeast: ParamCapability.keep), consumed: declaredPositionsOf(aliasShape.paramCapabilities, firstPosition: 0, atLeast: ParamCapability.sole), paramNames: names, firstPosition: 0, result: aliasShape.returnCapability)
+			return LandingKeeps.declared(declaredWrittenPositionsOf(aliasShape.paramCapabilities, marked: alias.markedParamMask(), firstPosition: 0), consumed: declaredPositionsOf(aliasShape.paramCapabilities, marked: alias.markedParamMask(), firstPosition: 0, atLeast: ParamCapability.isolated), paramNames: names, firstPosition: 0, result: aliasShape.returnCapability)
 		end 'aDeclaredBoundary'
 
 		return LandingKeeps.fromBodies
@@ -514,7 +524,7 @@ module type CallSummaryIndex
 	function requirementKeeps(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns LandingKeeps
 		let method = self.witnessSlotOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex).method
 		let firstPosition = requirementFirstPosition(method)
-		return LandingKeeps.declared(declaredPositionsOf(method.paramCapabilities, firstPosition: firstPosition, atLeast: ParamCapability.keep), consumed: declaredPositionsOf(method.paramCapabilities, firstPosition: firstPosition, atLeast: ParamCapability.sole), paramNames: method.paramNames, firstPosition: firstPosition, result: method.returnCapability)
+		return LandingKeeps.declared(declaredWrittenPositionsOf(method.paramCapabilities, marked: method.byRefParams, firstPosition: firstPosition), consumed: declaredPositionsOf(method.paramCapabilities, marked: method.byRefParams, firstPosition: firstPosition, atLeast: ParamCapability.isolated), paramNames: method.paramNames, firstPosition: firstPosition, result: method.returnCapability)
 	end 'requirementKeeps'
 
 	module function witnessMethodName(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns String

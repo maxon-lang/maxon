@@ -1129,9 +1129,9 @@ may flow into `Grower` does, and `grow` does.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
-typealias Grower = function(IntArray)
+typealias Grower = function(mutable IntArray)
 
-function grow(d IntArray)
+function grow(d mutable IntArray)
 	d.push(9)
 end 'grow'
 
@@ -1401,9 +1401,9 @@ error E3159: <fragment>:13:10: cannot pass 'a', which is read-only (a `let` bind
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
-typealias Mutator = function(IntArray)
+typealias Mutator = function(mutable IntArray)
 
-function grow(d IntArray)
+function grow(d mutable IntArray)
 	d.push(9)
 end 'grow'
 
@@ -1455,9 +1455,9 @@ The write is carried through a second forwarding function.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
-typealias Mutator = function(IntArray)
+typealias Mutator = function(mutable IntArray)
 
-function grow(d IntArray)
+function grow(d mutable IntArray)
 	d.push(9)
 end 'grow'
 

@@ -65,15 +65,25 @@ not 80.
   one strand of one green thread, so the coroutine takes a plain count of its own on each managed argument
   and the caller's binding stays usable: a `var` handed to `async` is read and written after the call, a
   `let` is shared read-only, and one binding other than a promise may be handed twice in one call. A scalar
-  is copied. Passing a handle is how a socket or a server is shared with a coroutine.
+  is copied. Passing a handle is how a socket or a server is shared with a coroutine. A call that hands
+  the coroutine the caller's mutable data makes its promise a [tied promise](#tied-and-must-use-promises).
 - **A promise argument moves.** A coroutine can still be running after the frame that started it has ended,
   so an `async` call hands a promise, or a value whose type holds one, only to a parameter the callee takes
   — one it awaits, cancels, stores or returns. The coroutine then owns the thread, and the caller's binding is spent. A parameter that only reads it is **E3141**: pass the
   promise to one that takes it, or await it and pass the result. One promise at two arguments of one call is
   **E3102**.
-- A `mutable` parameter the callee reassigns gets storage the coroutine owns, and nothing is written back to the
-  caller. A coroutine that writes a parameter is refused a [read-only](/docs/language/memory-model/#read-only-values) argument
-  (**E3159**), as an ordinary call is.
+- **A variable handed to a `mutable` parameter is lent to the coroutine.** The coroutine receives the
+  caller's own cell, and its write is visible once the promise is awaited or cancelled. Until then the
+  variable is lent like a move that ends at the drain: reading it, writing it or passing it is **E3102**
+  (`use of moved value 'n': it is lent to the coroutine of the `async` call at 13:22 until that promise is
+  awaited or cancelled`), a sibling field of a lent local too, and naming it in the statement that starts the
+  coroutine is **E3186**. A `var`, or a field of a local, may be lent; a module `var` or any other storage at a
+  by-reference position is **E2015** (`an `async` call takes only a local variable by reference`), a literal
+  is **E3159**, and the variable's declared type must be the parameter's type (**E3005**, see
+  [Parameter Passing](/docs/language/functions/#parameter-passing)). A coroutine that writes a parameter is refused a
+  [read-only](/docs/language/memory-model/#read-only-values) argument (**E3159**), as an ordinary call is. `specs/regions-async-lend.md`
+  pins each case; `the-coroutine-writes-the-callers-variable-and-the-await-shows-it` runs one.
+- A call passes an `isolated` value to `async` only in an `isolated` parameter, which moves it (**E3207**).
 - A closure that captured a binding owns it, so handing that binding to `async` afterwards is **E3102**.
 - The callee must be able to wait — call `sleep`, `await`, `Scheduler.yield()`, send a service message with a
   `sendTimeout:`, or perform file, socket or process I/O, directly or through its callees. A function that never yields is **E3073** (`function never
@@ -142,8 +152,7 @@ The store moves the promise: the container or field now owns the thread, and the
 is spent (**E3102**). The one condition is that the types agree, and **E3098** names what differs when they
 do not: a result type other than the slot's, or an error type the slot drops, changes or adds. A promise
 handed to a parameter, or to a container's method such as `Map.upsert`, is held to the same rule. A call
-through a function value hands a promise over exactly where the function type says the callee takes it (see
-[Capability Qualifiers](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly)).
+through a function value hands the promise over to the callee.
 
 A `mutable` promise parameter the callee reassigns (`q = async work()`) writes into the caller's own variable: the
 callee drops the thread the variable held, the variable takes the new one, and the caller awaits it as any
@@ -232,10 +241,65 @@ holding, exactly once. Three refusals follow:
 a promise no frame owns is **E3141**: one read out of a container that still holds it, a merge of two
 promises (`p if c else q`), or a second name for a parameter.
 
+## Tied and Must-Use Promises
+
+**Every promise held in a local is must-use.** On every path out of its scope it is awaited, cancelled with
+`.cancel()`, stored, returned, or passed to a parameter that takes it. Dropping it at the end of its scope,
+overwriting it, discarding it with `_ =`, or leaving the function on a path that does none of these is
+**E3213**:
+
+```text
+error E3213: this drops 'later', which was never awaited, cancelled, stored or returned: `await later`, call `later.cancel()`, store it or return it
+error E3213: this drops a promise that was never awaited, cancelled, stored or returned: `await` it, call `.cancel()` on it, store it or return it
+```
+
+`_ = async slow()` is E3213, as is a `var` re-armed before its promise is consumed, a promise awaited on one
+path only, an early `return` before the `await`, and a service reply bound to a local and never consumed
+(`let reply = try h.say("a")`). A service message's reply discarded with `_ =` is an explicit
+fire-and-forget, and the message is still delivered: `_ = try h.say("a") otherwise …`. A promise inside a
+container or a field is cancelled with its holder. `specs/promise-must-use.md` pins each case.
+
+**An `async` call given the caller's mutable data produces a tied promise.** The coroutine holds that data
+until it ends, so the promise is awaited or cancelled and nothing else. It lives in a local and is awaited by
+a consuming `await` that every path reaches before the function returns:
+
+```maxon
+function main() returns ExitCode
+	var row = Row.create(1)
+	let later = async bump(row)
+	let n = await later
+	print("{n}\n")
+	return 0
+end 'main'
+```
+
+Every way out of the function, an early `return`, a `throw` and a propagating `try` included, first awaits or
+cancels each tied promise still live there. A path that does neither is **E3212**:
+
+```text
+error E3212: this exit leaves 'later' neither awaited nor cancelled, and the coroutine of the `async` call at 19:20 still holds the data it was given: `await later` or call `later.cancel()` before this exit
+```
+
+An `await` inside one `if` branch, one `match` arm or one ternary arm does not drain the promise. A tied
+promise cannot be returned, held in a field or container, or passed to a parameter, because the callee would
+keep it: each is **E3212** (``the promise of this `async` call is tied to the mutable data it was given: it
+is awaited or cancelled and nothing else, never returned, stored, captured, sent or passed on, because the
+coroutine still holds the caller's data``), and a closure that captures one is **E3141**. `.cancel()` on a
+tied promise stops the coroutine from beginning another wait on a far end and then waits for it to finish, so
+the data is written, or left untouched, before the function goes on. That wait is why a `modify` block cannot
+call a function that cancels one ([Waiting and Yielding](/docs/language/regions/#waiting-and-yielding)).
+
+An `async` call is untied when none of its arguments carries the caller's mutable data, as with plain values
+and a second holder of a `SharedValue` (`wakes.push(async drain(cell.clone()))`). Such a promise may be
+stored, and the must-use rule alone governs it. To untie a call, pass a `.clone()` of the argument. `specs/regions-tied.md` pins the cases; `an-early-return-cancels-the-tied-coroutine-and-waits-for-it`
+and `a-throw-exit-cancels-the-tied-coroutine-and-waits-for-it` run the cancel paths.
+
 ## Cancellation and Dropped Promises
 
-`promise.cancel()` consumes a promise without waiting for it. A promise that is never awaited is dropped
-when it goes out of scope (or is overwritten), which has the same effect.
+`promise.cancel()` consumes a promise. On a [tied promise](#tied-and-must-use-promises) it waits for the
+coroutine to finish; on any other it returns at once. A promise held in an array or a field is dropped with
+its container, and a promise held in a local is [must-use](#tied-and-must-use-promises). A cancelled or
+dropped promise has the effects below.
 
 - A coroutine that has **not started** never runs.
 - A coroutine that has **already started** is not interrupted where it stands: it resumes and runs on, and
@@ -246,7 +310,6 @@ when it goes out of scope (or is overwritten), which has the same effect.
   numeric address. A service send it makes to a full mailbox fails `mailboxFull` at once, with or without a
   `sendTimeout:`, and a send already waiting for room fails `mailboxFull` when the promise is dropped (see
   [Mailboxes and failed sends](#mailboxes-and-failed-sends)).
-- A promise held in an array or a field is dropped with its container.
 
 ## Yielding
 

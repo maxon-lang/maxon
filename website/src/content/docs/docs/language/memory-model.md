@@ -2,7 +2,7 @@
 title: Memory Model
 description: "Reference counting, read-only values, moves and sharing, threads, raw memory, stacks, cloning, heap statistics, and code generation."
 sidebar:
-  order: 15
+  order: 16
 ---
 
 ## Memory Model
@@ -170,8 +170,7 @@ The rules:
   - the container itself stays mutable: elements can still be pushed, replaced and removed.
 
   As a type argument, `readonly` appears only on a container's element or value type; bindings and fields use
-  `let`. `returns readonly` on a boundary with no body is a
-  [capability qualifier](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly).
+  `let`.
 - **Value types are exempt.** Scalars, `String`, `Character` and records whose fields are all `let` cannot give a
   stored value a second writer, so none of these rules apply to them. A `String` or `Character` a name does not
   own is copied when it is bound to a `var` or stored.
@@ -221,8 +220,8 @@ end 'main'
 | an ordinary call argument | shared with the callee for the call, counted where needed; a `mutable` parameter is the caller's own storage, so the callee's writes reach it |
 | an argument the callee keeps where something may write it | a fresh `let` at its last use moves; any other read-only value is **E3078** |
 | an argument the callee keeps in a `let` field | must be read-only, a value type, or moved (a `var` at its last use) |
-| an argument to a [`sole`](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly) parameter | moves: a fresh value, or a `let` or `var` at its last use |
-| an [`async`](/docs/language/async/#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a `mutable` parameter the coroutine reassigns gets storage the coroutine owns; a promise moves to the coroutine |
+| an argument to an [`isolated`](/docs/language/regions/#separate-regions-isolated) parameter | moves: a fresh region, or an `isolated` local; reading it afterwards is **E3102** |
+| an [`async`](/docs/language/async/#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread, and its promise is [tied](/docs/language/async/#tied-and-must-use-promises) when the argument is the caller's mutable data; a variable at a `mutable` parameter is lent to the coroutine until its promise is awaited or cancelled; a promise moves to the coroutine |
 | a [closure](/docs/language/functions/#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
 | a [service](/docs/language/async/#services--spawn) message | a mutable value moves to the service; a read-only value the sender does not own is shared; a tuple of heap-free elements the sender does not solely own is copied; a view, or a record a view declared earlier may reach, is **E3138** |
 | a `spawn` factory argument | moves to the service's green thread; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
@@ -231,10 +230,53 @@ end 'main'
 ### Aliasing Between Arguments
 
 Reads are counted, so two arguments that reach the same storage are safe in most calls: `s.append(s)` is
-legal. The one refused overlap is a **by-reference parameter** whose storage another argument of the same call
-also reaches. A by-reference parameter is one marked `mutable`. The refusal is **E3186**; pass a `clone()` as
-one of the two. A promise, or a value of an opaque type parameter, passed at two arguments whose parameters
-take it moves at the first, so the second is **E3102**.
+legal. The refused shape is a **by-reference cell**: a local handed to a `mutable` parameter the callee writes
+is overwritten right after the call's own operands run, so a value an earlier operand already read from that
+local would be stale, and a hold cannot protect a value its own cell overwrites. **E3186** refuses a read of
+that local by an operand evaluated **before** the write, anywhere in the same statement:
+
+- an earlier operand, an argument of the call itself, or the receiver;
+- a ternary condition that wraps the call, at any group depth, because the condition runs first, and the
+  arms of a ternary in the order they run;
+- a closure literal that captures the local.
+
+```maxon
+var label = "original"
+let k = two(label, k: put(label))      // E3186: `label` is read by `two`'s first operand, before `put` writes it
+let j = two2(put(label), text: label)  // accepted: the read runs after the write and sees "replaced"
+```
+
+`specs/regions-byref-order.md` pins the two orders (`call-argument-before`, `call-argument-after`) and the
+operand kinds: constructor, union-literal, tuple-literal, call, method, `async`, `match` subject and ternary
+operands, `return` and `if` conditions. An operand that does not read the local is accepted beside the cell
+(`bump(h.n, h: Holder.create(7))`), and `bump(h.n, h: h.copy())` is refused because `h.copy()` reads `h`.
+
+The message names the other operand and the cure for the kind of cell:
+
+```text
+error E3186: argument 'label' is read by another operand of this statement and passed by reference to 'put' (parameter 'text') — a hold cannot protect a value its by-reference cell overwrites. Copy 'label' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
+```
+
+Where the by-reference cell itself is the operand to move, the cure copies the local into a `var` in an earlier
+statement, passes the copy at that position and stores it back after the call (a `let` there is **E3159**).
+
+The refusal is judged per **root binding**. It counts reads of the cell's own root variable and of that
+variable's field paths, and all the fields of `self` share one root, as a module `var` or a `static var` is
+one root. Another name for the same record, such as a `view`, a `var` that took the record by move or a `let`
+alias of a parameter, is a pending operand of its own, and the runtime hold a read of it takes keeps the value
+alive across the write.
+
+**Only a parameter the callee writes lends its cell.** A callee writes a `mutable` parameter when its body
+does, or when it forwards the parameter to a `mutable` parameter that is written (one fact per parameter,
+computed over the call graph). `look(s, b: s)` is accepted when `look`'s `a mutable String` is never written.
+A call through an interface requirement or a function value counts every `mutable` position as written, and a
+generic function writes a parameter if any instance does. Another call's cell counts only while it is lent,
+from its argument to its call: two sibling calls that rewrite one local do not overlap, and a nested call does
+while the call around it holds the cell. A `mutable` parameter of a value type that the callee never writes
+takes a sibling read of the same local.
+
+A promise, or a value of an opaque type parameter, passed at two arguments whose parameters take it moves at
+the first, so the second is **E3102**.
 
 ### Explicit Cloning
 
@@ -466,7 +508,8 @@ awaited or dropped exits with **75** instead (see [Concurrency](/docs/language/a
 | [E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) | a shared value whose graph holds an OS handle, a function value or a promise |
 | [E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned) | a published value that is not solely owned |
 | [E3185](/docs/cli/error-codes/#e3185--rawsurfaceoutsidelibrarytier) | raw memory or a raw handle used outside the library tier |
-| [E3186](/docs/cli/error-codes/#e3186--argumentoverlapswrittenparameter) | a `mutable` parameter that overlaps another argument |
+| [E3186](/docs/cli/error-codes/#e3186--argumentoverlapswrittenparameter) | a local read by an operand evaluated before a call writes it through a `mutable` parameter |
+| [E3196](/docs/cli/error-codes/#e3196--semanticcapabilitymismatchatstore)–[E3215](/docs/cli/error-codes/#e3215--semanticregionboundrefused) | the capability, window, tied-promise and unique checks (see [Capability Errors](/docs/language/regions/#capability-errors)) |
 | [E5004](/docs/cli/error-codes/#e5004--unguardedstackchain) | a chain of unchecked runtime functions that can exceed the stack margin |
 | exit 96 | a mutable value sent to another thread while not solely owned |
 | exit 101 | memory still allocated when `main` returns |

@@ -212,9 +212,9 @@ end 'main'
   (`p.x = 99`) or a mutating call on a field (`p.items.push(x)`) — is not a reassignment and reaches the
   caller's record. A generic body is checked against the bound of its type parameter only, so a parameter
   whose type is a type parameter is never reassigned either: the function returns the new value.
-- A message parameter and a factory parameter cannot be marked `mutable` (**E2076**): a message hands its
-  arguments to another green thread and a `spawn` hands the factory's arguments to the service, which owns
-  them and writes nothing back.
+- A message parameter and a factory parameter take no marker: a message hands its arguments to another
+  green thread and a `spawn` hands the factory's arguments to the service, which owns them, so `mutable`
+  there is a parse error (**E2010**, `Expected 'a type' but got 'mutable'`).
 - Passing a `var` lets the callee's writes propagate. Any storage you could assign to at that point may be
   passed and is written in place: a local `var`, a module-level `var`, a field of a binding (`p.x`), a field
   of the receiver (`count` or `self.count`), and a chain of them (`p.a.b`). The rule is exactly the
@@ -230,15 +230,24 @@ end 'main'
 - A function type spells the marker: `typealias Step = function(mutable Tally)`. A function, closure or
   interface conformer fits a function type or requirement only when every parameter's marker is the same as
   the type's, so a function that reassigns its parameter does not convert to `function(Tally)` (**E3005**),
-  and one that declares `mutable` but only reads does not either. A call through a function value or an
+  and one that declares `mutable` but only reads does not either (**E3005**). A function that writes a
+  record parameter its function type leaves unmarked is **E3210** (see
+  [Capabilities at Function Types and Requirements](/docs/language/regions/#capabilities-at-function-types-and-requirements)). A
+  call through a function value or an
   interface passes the argument's storage at each `mutable` position, and a read-only value handed to such
   a position is **E3159**, as at a direct call; a literal or another expression is **E3159** too. Through
   a function value or an interface requirement the message names the position (`to a function that writes
   argument 1`).
-- A variable passed by reference to a parameter whose alias is wider than its own, or that names no alias,
-  is range-checked when the call returns.
-- Passing storage to a parameter the callee **reassigns**, while another argument of the same call reaches
-  that storage, is **E3186** (see [Aliasing Between Arguments](/docs/language/memory-model/#aliasing-between-arguments)).
+- A variable passed by reference is a flow in both directions: the callee reads the variable and may write
+  any value of the parameter's type back. The variable's declared type must therefore be the parameter's
+  type, alias identity included. A `Narrow` variable at a `mutable Wide` parameter is **E3005**
+  (``expected 'Wide', got 'Narrow': the callee may write any 'Wide' through a by-reference parameter, which a
+  'Narrow' variable cannot hold``), and so is a `Wide` variable at a `mutable Narrow` parameter. Declare the
+  variable at the parameter's type. The rule holds for direct calls, method calls, calls through function
+  values and interfaces, generic functions and coroutines alike (`specs/regions-byref-types.md`).
+- Passing storage to a `mutable` parameter the callee writes, while another operand of the same statement
+  reads that storage before the call writes it, is **E3186** (see
+  [Aliasing Between Arguments](/docs/language/memory-model/#aliasing-between-arguments)).
 
 ## Function Types and Function Values
 
@@ -282,59 +291,11 @@ Omit `returns` for a function type that returns nothing: `typealias Callback = f
 throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error.
 `Type.method` written without its call — a static method, an instance method read through its type, or a
 static the compiler provides such as `int.fromString` — is **E2078**, and assigning to one (`Ops.twice = f`)
-is **E2013**; pass a closure that calls it, `apply(function(n) gives Ops.twice(n), x: 4)`. A function type says
-which promise parameters its callee takes: see [Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly).
+is **E2013**; pass a closure that calls it, `apply(function(n) gives Ops.twice(n), x: 4)`. A call through a
+function value hands a promise argument over to the callee. A function type is read-only and neither waits
+nor yields unless it declares otherwise (`function(mutable Row)`, `… mutates captures`): see
+[Capabilities at Function Types and Requirements](/docs/language/regions/#capabilities-at-function-types-and-requirements).
 Function-type aliases are [brands](/docs/language/ranged-typealiases/#generic-instance-and-function-type-aliases-are-brands).
-
-## Capability Qualifiers (`keep`, `sole`, `returns readonly`)
-
-A call through a function value or an interface method has no body the compiler can read, so the boundary
-declares what the callee does with its values. The qualifier is written before the type:
-
-| Qualifier | Meaning |
-|-----------|---------|
-| `keep` on a parameter | the callee keeps the argument where something may write it |
-| `sole` on a parameter | the callee consumes the argument and owns it, so it may keep it anywhere |
-| `returns sole T` | the result is fresh, reached by no other name |
-| `returns readonly T` | the result is read-only |
-
-```maxon
-typealias Count = int(0 to 1000)
-typealias Sink = function(b keep Box)
-typealias Maker = function() returns sole Box
-
-type Box
-	export var n as Count
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-interface Source
-	function current() returns readonly Box
-end 'Source'
-```
-
-- They are written only on a parameter or result of a function-type alias or an
-  [interface](/docs/language/composite-types/#interfaces) requirement, and on the result of a [generic function](/docs/language/composite-types/#generic-functions). Anywhere
-  else — a parameter of a function with a body, a cast, a binding — a qualifier is **E2076**.
-- A caller trusts the declaration. An argument to a `keep` parameter follows the rule for a function that keeps
-  it, so a `let` read again afterwards is **E3078**. A `sole` parameter consumes its argument: pass a fresh value,
-  or a `let` or `var` at its last use (a later use is **E3102**); a read-only value, a parameter, a field of a
-  record that stays reachable, or a `var` a [view](/docs/language/variables/#views-view) has seen is **E3078**. The `let` of a
-  `returns sole` result is fresh, and a `let` of a `returns readonly` result is read-only.
-- A promise parameter of a function type is taken by the callee when it is written `keep` or `sole`, and only
-  then: a call through the type moves the promise into the callee, which stores, awaits, cancels or returns it,
-  and an unqualified promise parameter stays with the caller, who still owns it after the call. A named
-  function used as a value has its own type, so the call honours what the function does. A function value
-  converted to an alias whose qualifier disagrees with the function — it takes a promise the alias leaves
-  unqualified, or the alias declares `keep` or `sole` on a promise the function only reads — is **E3189**.
-- A function value converted to the alias, a conformer's method, or a generic function's body that does more
-  than its boundary declares — keeps a parameter not declared `keep` or `sole`, or returns state something may
-  write where `returns sole` or `returns readonly` is declared — is **E3189**. A function value typed by one
-  alias converts to another, by a `return`, a store or an argument, only when it keeps no parameter the target
-  does not declare and declares at least the result capability the target declares.
 
 ## Closures
 

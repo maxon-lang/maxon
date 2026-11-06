@@ -1735,9 +1735,9 @@ error E2001: a/<fragment>:12:10: Expected function declaration, got '='
 error E2001: a/<fragment>:14:1: Expected function declaration, got 'end'
 ```
 
-<!-- test: error.a-failed-file-leaves-a-healthy-callers-sole-argument-unjudged -->
+<!-- test: error.a-failed-file-leaves-a-healthy-callers-function-argument-unjudged -->
 A healthy file passes the result of a refused declaration, called with a record it still writes, to a
-`sole` parameter. What a refused declaration returns is unknown, so the pass is not judged: only the parse
+function-typed parameter. What a refused declaration returns is unknown, so the pass is not judged: only the parse
 errors are reported.
 ```maxon
 // --- file: a/broken.maxon
@@ -1755,7 +1755,7 @@ export function pick(box Box) returns Box
 end 'pick'
 
 // --- file: b/main.maxon
-typealias TakesBox = function(sole Box) returns ExitCode
+typealias TakesBox = function(Box) returns ExitCode
 
 function main() returns ExitCode
 	var box = Box.create()

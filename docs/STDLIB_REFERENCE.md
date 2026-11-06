@@ -1083,8 +1083,8 @@ The protocols the library and the language are built on.
 | `Cloneable` | `function clone() returns Self` | `clone()` |
 | `Stringable` | `function toString() returns String` | `"{value}"` |
 | `FormattedStringable` | `function toString(format String) returns String` | `"{value:format}"` — the text after the colon is passed as `format` |
-| `Iterator with Element` | `current() returns Element`, `advance() throws IterationError` | iterators |
-| `BidirectionalIterator` | extends `Iterator`; `retreat() throws IterationError` | reversible iterators |
+| `Iterator with Element` | `current() returns Element`, `advance(mutable self) throws IterationError` | iterators |
+| `BidirectionalIterator` | extends `Iterator`; `retreat(mutable self) throws IterationError` | reversible iterators |
 | `Iterable with (Element, Iter)` | `createIterator() returns Iter throws IterationError` | `for`-`in` |
 | `Parsable` | `static fromString(input String) returns Self throws Error` | `int.fromString` and friends |
 
@@ -1590,7 +1590,7 @@ override for `db.pool`, else the one for `db`, else the minimum. `Log`'s own wri
 
 ### Handlers and sinks
 
-A `LogHandler` is a service interface with one requirement, `handle(record LogRecord) returns bool`. A sink
+A `LogHandler` is a service interface with one requirement, `handle(mutable self, record LogRecord) returns bool`. A sink
 pairs a handler with its levels:
 
 | Member | Returns | Description |
@@ -1965,19 +1965,21 @@ request after request. A read or a wait parks the calling green thread, so its s
 | `StreamingSubprocess.spawnTraceable(executable, arguments:, workingDirectory:, environment Environment, traced bool)` | `StreamingSubprocess` | `SubprocessError` | As `spawnWithEnvironment`; with `traced`, the child is created for a debugger: on Windows and Linux this process becomes its debugger, and on macOS the child is created suspended, for a debugger to attach to by its `processId()`. |
 | `processId()` | `Pid` | `SubprocessError` | The child's operating-system process id. Throws once the handle is released. |
 | `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline, NUL bytes included. Throws on a broken pipe. |
+| `takeStdout()` | `StdoutReader` | `SubprocessError` | Take the child's stdout side out as a `StdoutReader`, which a coroutine can drain beside the child's owner. While the reader is out, the child's own stdout reads (`readStdoutLine`, `readStdoutLineCapped`, `readStdoutBytes`, `tryReadStdoutLine`) throw `ioFailed`. Throws `ioFailed` when the stdout side is already out, and once the handle is released. |
+| `reclaimStdout()` | — | `SubprocessError` | Make the stdout side the child's again, once the coroutine that held the `StdoutReader` has ended. Throws `ioFailed` when the stdout side is not out. |
 | `readStdoutLine()` | `String` | `SubprocessError` | The next line without its terminator (CRLF or LF); `""` is a blank line. Throws `endOfStream` when the stream has ended. Lines over 1 MiB arrive in pieces. |
 | `readStdoutLineCapped(maxBytes)` | `String` | `SubprocessError` | With an explicit per-call cap. |
 | `readStdoutBytes(count)` | `String` | `SubprocessError` | Exactly `count` bytes, fewer only at end of stream; nothing is stripped. For length-framed protocols. Shares a buffer with the line readers. |
 | `readStderrLine()` | `String` | `SubprocessError` | As `readStdoutLine`, for stderr. |
 | `readStderrLineCapped(maxBytes)` | `String` | `SubprocessError` | With a cap. |
-| `tryReadStdoutLine()` | `LinePoll` | — | A line if one is already buffered; never blocks. |
+| `tryReadStdoutLine()` | `LinePoll` | `SubprocessError` | A line if one is already buffered; never blocks. Throws `ioFailed` while the stdout side is out with a `StdoutReader`. |
 | `tryReadStderrLine()` | `LinePoll` | — | As above, for stderr. |
 | `pollExit()` | `ExitPoll` | — | Whether the child has exited, without blocking or killing it. A released handle answers `running`. On Linux and macOS a child a signal killed reports `exited(128 + signal)`. |
 | `pollTermination()` | `TerminationPoll` | — | As `pollExit()`, answering how the child ended: `signalled(signal)` for a child a signal killed on Linux and macOS, `exited(code)` otherwise. |
 | `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
 | `wait()` | exit code | `SubprocessError` | Park the calling green thread until the child exits. |
 | `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree when the deadline passes; `0` waits forever. The thrown `timeout` carries empty output fields — a streaming child's bytes belong to the caller draining the streams. |
-| `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. |
+| `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. Panics while the stdout side is out with a `StdoutReader`: `reclaimStdout()` first. |
 | `handle`, `released` | fields | — | The raw handle and whether it has been released. |
 
 ```maxon
@@ -1999,6 +2001,22 @@ end 'TerminationPoll'
 
 `LinePoll` exists because a blank line from the child and "nothing buffered" are both `""` once the
 terminator is removed. `none` says nothing about whether the stream has ended; ask `pollExit()`.
+
+### StdoutReader
+
+The stdout side of a `StreamingSubprocess`, taken out with `takeStdout()`. It reads lines and owns nothing
+else: no release and no wait. It is a clean input to `async`, so a coroutine can drain it while the child's
+owner keeps writing stdin and waiting, and the promise of that coroutine may be stored and awaited later.
+Once the coroutine has ended, `reclaimStdout()` makes the stdout side the child's again, and `release()` of
+the child follows.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `readLine()` | `String` | `SubprocessError` | The next line without its terminator; the contract of `StreamingSubprocess.readStdoutLine`, including `endOfStream` when the stream has ended. |
+
+`specs/subprocess.md` pins the flow: `subprocess-take-stdout-moves-the-stdout-side-out-of-the-child`,
+`subprocess-release-while-the-stdout-reader-is-out-is-refused` and
+`subprocess-a-reader-whose-drain-ends-is-reclaimed-before-the-child-is-released`.
 
 ```maxon
 function main() returns ExitCode
@@ -2401,10 +2419,22 @@ function main() returns ExitCode
 	let port = listener.port()
 	let server = async echoOnce(listener)
 
-	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return 2
-	try client.setReadDeadline(5000) otherwise return 3
-	_ = try client.send("ping") otherwise return 4
-	let reply = try client.recv(1024) otherwise return 5
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused'
+		server.cancel()
+		return 2
+	end 'refused'
+	try client.setReadDeadline(5000) otherwise 'noDeadline'
+		server.cancel()
+		return 3
+	end 'noDeadline'
+	_ = try client.send("ping") otherwise 'unsent'
+		server.cancel()
+		return 4
+	end 'unsent'
+	let reply = try client.recv(1024) otherwise 'unanswered'
+		server.cancel()
+		return 5
+	end 'unanswered'
 	client.close()
 
 	_ = try await server otherwise 9
@@ -2829,6 +2859,7 @@ function main() returns ExitCode
 
 	let response = try HttpClient.get("http://127.0.0.1:{port}/hello") otherwise (e) 'failed'
 		print("request failed: {e}\n")
+		server.cancel()
 		return 1
 	end 'failed'
 
@@ -2929,7 +2960,7 @@ type CountingHandler implements HttpHandler
 		return CountingHandler{visits: visits}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		let seen = try await visits.record() otherwise throw HttpServerError.sendFailed
 
 		try exchange.respondWith(StatusCode.ok, body: "visit {seen}", contentType: "text/plain")
@@ -2988,7 +3019,7 @@ type HelloHandler implements HttpHandler
 		return HelloHandler{}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		let greeting = match exchange.security() 'security'
 			plaintext gives "hello over plain HTTP\n"
 			tls(protocol, _, _, _) gives "hello over {protocol.name}\n"
@@ -3071,7 +3102,7 @@ The interface `serve` calls for each exchange.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `handle(exchange HttpExchange)` | — | `HttpServerError` | Answer one exchange. |
+| `handle(exchange mutable HttpExchange)` | — | `HttpServerError` | Answer one exchange. A conformer spells `mutable` on the parameter too. |
 | `faulted(fault HttpHandlerFault)` | — | — | Told of each exchange `serve` answered in the handler's place, and of each interrupted accept. |
 
 `HttpHandlerFault` says what happened. Every case but the last carries the `request`, and the `threw`
@@ -3135,7 +3166,7 @@ type HelloHandler implements HttpHandler
 		return HelloHandler{greeting: greeting}
 	end 'create'
 
-	function handle(exchange HttpExchange) throws HttpServerError
+	function handle(exchange mutable HttpExchange) throws HttpServerError
 		try exchange.respondWith(StatusCode.ok, body: greeting, contentType: "text/plain")
 	end 'handle'
 

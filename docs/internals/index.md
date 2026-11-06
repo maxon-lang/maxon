@@ -40,6 +40,8 @@ value is a wasm local.
   representation
 - [Register Allocation](register-allocation.md) — splitting, colouring and SSA destruction on x64 and arm64
 - [Memory Allocator](memory-allocator.md) — the runtime heap, its zeroing contract and the fill ladders
+- [Regions and Capabilities](regions.md) — where the capability checker runs, the inferred facts and the
+  window, tied-promise and by-reference checks
 - [Debug Stream](debug-stream.md) — the shared-memory event ring behind `--debugstream` and `maxon monitor`
 - [Debugger](debugger.md) — the parts of `maxon debug`
 - [Scaling](scaling.md) — keeping compilation linear in program size, and measuring it

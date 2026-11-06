@@ -681,6 +681,7 @@ mm_free Cells #8
 ```
 
 <!-- test: a-sized-memory-is-one-allocation -->
+<!-- unsupported-targets: wasm32-wasi -->
 <!-- tier: stdlib -->
 `__ManagedMemory.create(capacity, elementSize)` is the sized creation the standard library's own buffers use.
 ```maxon
