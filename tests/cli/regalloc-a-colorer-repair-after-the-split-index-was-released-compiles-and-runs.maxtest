@@ -1,0 +1,32 @@
+let RegallocAColorerRepairAfterTheSplitIndexWasReleasedCompilesAndRunsCaseDirName = "regalloc-repair-after-release"
+let RegallocAColorerRepairAfterTheSplitIndexWasReleasedCompilesAndRunsFixtureDirName = "tests/cli/fixtures/regalloc-repair-after-release"
+let SlotsTheFixtureWrites = "40"
+
+test 'a value the colorer repairs after the splitter released its index compiles and runs'
+	requireHeldOutsideCheckout(RegallocAColorerRepairAfterTheSplitIndexWasReleasedCompilesAndRunsCaseDirName, check: RepairAfterRelease.create())
+end 'a value the colorer repairs after the splitter released its index compiles and runs'
+
+type RepairAfterRelease implements OutsideCheckoutCase
+	static function create() returns RepairAfterRelease
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagingDir(dir.join(AppDirName).toString())
+		stageStoredTree(fixtureDir(RegallocAColorerRepairAfterTheSplitIndexWasReleasedCompilesAndRunsFixtureDirName), into: app)
+
+		let built = spawnCompiler([BuildCommandWord, AppDirName, LogFlag], staged: dir)
+		try Expect.equal(built.exitCode(), expected: 0, message: "a function the splitter relieved and the colorer then had to repair did not build. It wrote to stderr: {built.stderr}")
+
+		let split = codegenLogCount(built.stderr, field: ValuesSplitField)
+		let widened = codegenLogCount(built.stderr, field: WideningRepairsField)
+
+		if split < 1 or widened < 1 'repairNotReached'
+			panic("regalloc-repair-after-release: the gate could not run - the build split {split} values and repaired {widened} by widening, so no colorer repair followed a split. The fixture no longer reaches the path this case exists to hold.")
+		end 'repairNotReached'
+
+		let ran = spawnCompiler(StringArray.create(), binary: app.join("{AppDirName}{executableSuffix()}"), staged: dir)
+		try Expect.equal(ran.exitCode(), expected: 0, message: "the program built after a repair exited {ran.exitCode()}. It wrote to stderr: {ran.stderr}")
+		try Expect.equal(ran.stdout.trim(), expected: SlotsTheFixtureWrites, message: "the program built after a repair computed the wrong answer.")
+	end 'requireHeldIn'
+end 'RepairAfterRelease'

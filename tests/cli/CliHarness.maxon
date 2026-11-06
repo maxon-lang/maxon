@@ -603,6 +603,12 @@ export function reportedTally(report String) returns ReportedTally throws Report
 	return value
 end 'reportedTally'
 
+export function codegenLogCount(stderr String, field String) returns ReportedTally
+	let parts = stderr.split(field)
+	let tail = try parts.get(1) otherwise panic("CliHarness: the gate could not run - the `{LogFlag}` report carries no `{field}` field, so nothing was counted. It wrote to stderr: {stderr}")
+	return try reportedTally(tail) otherwise panic("CliHarness: the gate could not run - `{field}` states no count. It wrote to stderr: {stderr}")
+end 'codegenLogCount'
+
 // ⭐ **WHAT A REPORT SAYS ABOUT ONE DIRECTORY: the text after that directory's path, on the line naming
 // it.** A report with a line per root states several counts, and a case reading the whole of it would read
 // a neighbour's; a path of its own may hold digits, and reading from after it cannot pick one up.
@@ -1909,6 +1915,8 @@ module let AllocationsByTagFlag = "--allocations-by-tag"
 module let PanicMarker = "panic"
 module let EmitIrFlag = "--emit-ir"
 module let LogFlag = "--log=codegen:debug"
+module let ValuesSplitField = "valuesSplit="
+module let WideningRepairsField = "colorer repairs by widening="
 module let CensusByTagFlag = "--census-by-tag"
 module let OldManifestFileName = "project.maxon"
 module let OldTaskFileName = "tasks.maxon"

@@ -1,0 +1,155 @@
+typealias ByteOffset = int(0 to u32.max)
+typealias ByteOffsetArray = Array with ByteOffset
+typealias Bits = bits(64)
+
+let PageSize = 0x4000
+let NextShift = 51
+let NextStride = 4
+let TargetBits = 36
+let TargetMask = (1 shl TargetBits) - 1
+
+type AbsReloc
+	export let slot as ByteOffset
+	export let target as ByteOffset
+
+	static function create(slot ByteOffset, target ByteOffset) returns AbsReloc
+		return Self{slot: slot, target: target}
+	end 'create'
+end 'AbsReloc'
+
+typealias AbsRelocArray = Array with AbsReloc
+
+type FuncReloc
+	export let slot as ByteOffset
+	export let name as String
+
+	static function create(slot ByteOffset, name String) returns FuncReloc
+		return Self{slot: slot, name: name}
+	end 'create'
+end 'FuncReloc'
+
+typealias FuncRelocArray = Array with FuncReloc
+
+function patchDword(buf ByteArray, offset ByteOffset, value Bits)
+	try 'writeBytes'
+		buf.set(offset as ElementIndex, value: (value and 0xFF) as Byte)
+		buf.set((offset + 1) as ElementIndex, value: ((value shr 8) and 0xFF) as Byte)
+		buf.set((offset + 2) as ElementIndex, value: ((value shr 16) and 0xFF) as Byte)
+		buf.set((offset + 3) as ElementIndex, value: ((value shr 24) and 0xFF) as Byte)
+	end 'writeBytes' otherwise (e) 'badWrite'
+		match e 'kind'
+			indexOutOfBounds then panic("patchDword: offset={offset}, buf.count={buf.count()}")
+			emptySlot then panic("patchDword: byte slot empty")
+		end 'kind'
+	end 'badWrite'
+end 'patchDword'
+
+function patchQword(buf ByteArray, offset ByteOffset, value Bits)
+	patchDword(buf, offset: offset, value: value and 0xFFFFFFFF)
+	patchDword(buf, offset: offset + 4, value: (value shr 32) and 0xFFFFFFFF)
+end 'patchQword'
+
+
+function funcOffsetOf(names StringArray, offsets ByteOffsetArray, name String) returns ByteOffset throws ArrayError
+	for (iter, candidate) in names.withIterator() 'eachName'
+		if candidate == name 'found'
+			return try offsets.get(iter.index())
+		end 'found'
+	end 'eachName'
+
+	throw ArrayError.indexOutOfBounds
+end 'funcOffsetOf'
+
+function writeRebases(rdata ByteArray, absRelocs AbsRelocArray, funcRelocs FuncRelocArray, names StringArray, funcTable ByteOffsetArray, constImageOffset Bits, textImageOffset Bits) returns ByteOffsetArray
+	var offsets = ByteOffsetArray.create()
+	var targets = ByteOffsetArray.create()
+
+	for reloc in absRelocs 'collectDataSlots'
+		offsets.push(reloc.slot)
+		targets.push((constImageOffset + (reloc.target as Bits)) as ByteOffset)
+	end 'collectDataSlots'
+
+	for reloc in funcRelocs 'collectFuncSlots'
+		let funcOffset = try funcOffsetOf(names, offsets: funcTable, name: reloc.name) otherwise panic("writeRebases: slot '{reloc.name}'+{reloc.slot} references a function in no symbol — the slot's owner was built but its target was not")
+		offsets.push(reloc.slot)
+		targets.push((textImageOffset + (funcOffset as Bits)) as ByteOffset)
+	end 'collectFuncSlots'
+
+	var slots = ByteOffsetArray.create()
+	var slotTargets = ByteOffsetArray.create()
+
+	for (iter, slotOffset) in offsets.withIterator() 'dedup'
+		let target = try targets.get(iter.index()) otherwise panic("writeRebases: offsets/targets fell out of lockstep at {iter.index()}")
+		var isDuplicate = false
+
+		if slots.count() > 0 'checkPrev'
+			let prev = try slots.get(slots.count() - 1) otherwise panic("writeRebases: slots.get(last) failed with count {slots.count()}")
+			isDuplicate = prev == slotOffset
+		end 'checkPrev'
+
+		if isDuplicate 'sameSlot'
+			let keptTarget = try slotTargets.get(slotTargets.count() - 1) otherwise panic("writeRebases: slotTargets.get(last) failed with count {slotTargets.count()}")
+
+			if keptTarget != target 'conflict'
+				panic("writeRebases: slot {slotOffset} is claimed by two rebases with different targets ({keptTarget} and {target})")
+			end 'conflict'
+		end 'sameSlot' else 'fresh'
+			slots.push(slotOffset)
+			slotTargets.push(target)
+		end 'fresh'
+	end 'dedup'
+
+	let count = slots.count()
+
+	for i in 0 upto count 'write'
+		let slotOffset = try slots.get(i) otherwise panic("writeRebases: slots.get({i}) failed")
+		let target = try slotTargets.get(i) otherwise panic("writeRebases: slotTargets.get({i}) failed")
+
+		if slotOffset mod NextStride != 0 'misaligned'
+			panic("writeRebases: slot at offset {slotOffset} is not {NextStride}-byte aligned")
+		end 'misaligned'
+
+		if target > TargetMask 'targetTooLarge'
+			panic("writeRebases: target offset {target} does not fit in {TargetBits} bits")
+		end 'targetTooLarge'
+
+		var nextField = 0 as ByteOffset
+
+		if i + 1 < count 'hasNext'
+			let followingOffset = try slots.get(i + 1) otherwise panic("writeRebases: slots.get({i + 1}) failed")
+
+			if followingOffset / PageSize == slotOffset / PageSize 'samePage'
+				nextField = (followingOffset - slotOffset) / NextStride
+			end 'samePage'
+		end 'hasNext'
+
+		let entry = ((nextField shl NextShift) or (target and TargetMask)) as Bits
+		patchQword(rdata, offset: slotOffset, value: entry)
+	end 'write'
+
+	return slots
+end 'writeRebases'
+
+function main() returns ExitCode
+	var rdata = ByteArray.create()
+
+	for _ in 0 upto 4096 'fill'
+		rdata.push(0 as Byte)
+	end 'fill'
+
+	var absRelocs = AbsRelocArray.create()
+	var funcRelocs = FuncRelocArray.create()
+	var names = StringArray.create()
+	var funcTable = ByteOffsetArray.create()
+
+	for k in 0 upto 20 'make'
+		absRelocs.push(AbsReloc.create((k * 16) as ByteOffset, target: (k * 7) as ByteOffset))
+		funcRelocs.push(FuncReloc.create((512 + k * 8) as ByteOffset, name: "f{k}"))
+		names.push("f{k}")
+		funcTable.push((k * 32) as ByteOffset)
+	end 'make'
+
+	let slots = writeRebases(rdata, absRelocs: absRelocs, funcRelocs: funcRelocs, names: names, funcTable: funcTable, constImageOffset: 4096, textImageOffset: 8192)
+	print("{slots.count()}")
+	return 0
+end 'main'
