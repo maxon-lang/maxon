@@ -16,10 +16,10 @@ String interpolation allows embedding expressions directly within string literal
 Use curly braces `{expr}` to embed any expression in a string:
 
 ```maxon
-var name = "World"
+let name = "World"
 print("Hello, {name}!")  // "Hello, World!"
 
-var x = 42
+let x = 42
 print("The answer is {x}\n")  // "The answer is 42"
 ```
 
@@ -28,8 +28,8 @@ print("The answer is {x}\n")  // "The answer is 42"
 Any valid expression can be embedded:
 
 ```maxon
-var a = 5
-var b = 3
+let a = 5
+let b = 3
 print("{a} + {b} = {a + b}\n")  // "5 + 3 = 8"
 
 print("Double: {a * 2}\n")  // "Double: 10"
@@ -79,7 +79,7 @@ enum Color
 	blue = 3
 end 'Color'
 
-var c = Color.green
+let c = Color.green
 print("Color value: {c}\n")  // "Color value: 2"
 
 // String-backed enum (type inferred from values)
@@ -88,7 +88,7 @@ enum Status
 	inactive = "Inactive"
 end 'Status'
 
-var s = Status.active
+let s = Status.active
 print("Status: {s}\n")  // "Status: Active"
 ```
 
@@ -112,7 +112,7 @@ type Point implements Stringable
 	end 'create'
 end 'Point'
 
-var p = Point.create(1, y: 2)
+let p = Point.create(1, y: 2)
 print("Location: {p}\n")  // "Location: (1, 2)"
 ```
 
@@ -125,7 +125,7 @@ String concatenation with `+` is not supported. Use interpolation instead:
 // var msg = "Hello, " + name + "!"
 
 // After (use interpolation):
-var msg = "Hello, {name}!"
+let msg = "Hello, {name}!"
 ```
 
 ## Tests

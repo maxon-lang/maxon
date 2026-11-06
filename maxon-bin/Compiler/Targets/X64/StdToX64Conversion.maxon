@@ -711,8 +711,9 @@ end 'indirectResultRegister'
 // says without a sentinel.
 //
 // ⛔ **TWO PARALLEL ARRAYS SEARCHED LINEARLY, NOT A `Map`.** A `Map` hashes its key through a witness
-// slot, and this isel runs on a pool worker, where a dispatch the compiler cannot name is refused
-// outright (E3143). A function splits a handful of float-equality branches at most, and usually none.
+// slot, and this isel runs on a pool worker, where a dispatch the compiler cannot name makes every
+// address-taken function message-reachable. A function splits a handful of float-equality branches at
+// most, and usually none.
 type OrderedBlockRoster
 	var refs as BlockRefArray
 	var ids as BlockIdArray
@@ -727,7 +728,7 @@ type OrderedBlockRoster
 	end 'record'
 
 	// An index loop rather than `withIterator`: an iterator's methods dispatch through a witness slot,
-	// which this isel may not reach (E3143).
+	// which this isel may not reach: it runs on a pool worker.
 	function idOf(blockRef ElementIndex) returns BlockId throws OrderedBlockLookup
 		for k in 0 upto self.refs.count() 'eachSplit'
 			let ref = try self.refs.get(k) otherwise panic("OrderedBlockRoster.idOf: refs.get OOB at {k} below {self.refs.count()}")
@@ -998,7 +999,7 @@ let Win32IntBits = 32 as ShiftCount
 // one only to re-run a function whose allocation was refused (`refuseForRegisterPressure`). Its analyses
 // are scratches reused across every unit; what is per unit is set by `lowerUnit` and given up by it.
 //
-// ⛔ **IT REACHES NO MODULE `var` AND NO `Project`** — a worker is refused both (E3143) — so the `.rdata`
+// ⛔ **IT REACHES NO `Project`**, which no worker holds, so the `.rdata`
 // registrations it needs go into a request log the driver performs on the main thread (`RdataRequestLog`).
 export type StdToX64Lowering
 	// The unit being lowered — `lowerUnit`'s argument, held here because the per-function walk reads it

@@ -332,15 +332,14 @@ carry — and its `retVoid` becomes a bare branch.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var total = 0 as Integer
-
-function bump(n Integer)
+function bump(n Integer, total mutable Integer)
 	total = total + n
 end 'bump'
 
 function main() returns ExitCode
-	bump(40)
-	bump(2)
+	var total = 0 as Integer
+	bump(40, total: total)
+	bump(2, total: total)
 	return total as ExitCode
 end 'main'
 ```

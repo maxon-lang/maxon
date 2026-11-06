@@ -35,6 +35,21 @@ public type __TestReport
 	end 'threw'
 end '__TestReport'
 
+public typealias CownTortureSize = int(1 to u32.max)
+
+public typealias CownTortureViolations = int(0 to u64.max)
+
+public type CownTorture
+	/// Stress-tests the multi-cown acquire: `workers` green threads each run `rounds` rounds, and a
+	/// round acquires two cowns drawn from `cownCount` (a draw may repeat one cown) and holds them
+	/// across a yield. Answers how many times a held cown was entered again, plus one when the
+	/// per-cown entry counts do not add up to the acquisitions made; 0 means mutual exclusion held.
+	/// `cownCount` must be a power of two, and any other value aborts the process.
+	public static function violations(cownCount CownTortureSize, workers CownTortureSize, rounds CownTortureSize) returns CownTortureViolations
+		return __Builtins.cownTestMulti(cownCount, workers, rounds) as CownTortureViolations
+	end 'violations'
+end 'CownTorture'
+
 // ─── Expect ─────────────────────────────────────────────────────────────────────
 // The assertion vocabulary a test AUTHOR writes, as opposed to the machinery above,
 // which only the compiler and the runner ever touch.

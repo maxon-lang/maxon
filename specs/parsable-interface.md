@@ -18,10 +18,10 @@ The `Parsable` interface provides a standardized way for types to be constructed
 Builtin types (`int`, `float`, `bool`, `byte`) support `fromString` as static methods. These throw `ParseError.invalidFormat` on invalid input.
 
 ```maxon
-var n = try int.fromString("42") otherwise 0
-var f = try float.fromString("3.14") otherwise 0.0
-var b = try bool.fromString("true") otherwise false
-var y = try byte.fromString("255") otherwise 0
+let n = try int.fromString("42") otherwise 0
+let f = try float.fromString("3.14") otherwise 0.0
+let b = try bool.fromString("true") otherwise false
+let y = try byte.fromString("255") otherwise 0
 ```
 
 ### Implementing Parsable
@@ -61,7 +61,7 @@ end 'Money'
 Use `otherwise` to handle parsing errors:
 
 ```maxon
-var price = try Money.fromString("4299") otherwise (e) 'err'
+let price = try Money.fromString("4299") otherwise (e) 'err'
 	print("Failed to parse\n")
 	return  // must return or assign to price
 end 'err'

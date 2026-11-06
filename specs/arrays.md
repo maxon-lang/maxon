@@ -25,7 +25,7 @@ Create an immutable array using `let` with square brackets:
 
 ```text
 let constants = [10, 20, 30]
-var x = try constants.get(1) otherwise 0  // Can read elements
+let x = try constants.get(1) otherwise 0  // Can read elements
 ```
 
 ## Preallocated Arrays
@@ -58,10 +58,10 @@ Access array elements using the `.get()` method with a zero-based index.
 The method returns an optional value (throws on out of bounds), so use `try ... otherwise default`:
 
 ```text
-var arr = [10, 20, 30]
-var first = try arr.get(0) otherwise 0   // 10
-var second = try arr.get(1) otherwise 0  // 20
-var third = try arr.get(2) otherwise 0   // 30
+let arr = [10, 20, 30]
+let first = try arr.get(0) otherwise 0   // 10
+let second = try arr.get(1) otherwise 0  // 20
+let third = try arr.get(2) otherwise 0   // 30
 ```
 
 ## Element Assignment
@@ -612,7 +612,7 @@ end 'main'
 
 <!-- test: string-array-literal-top-level -->
 ```maxon
-var names = ["alice", "bob"]
+let names = ["alice", "bob"]
 
 function main() returns ExitCode
 	var count = 0 as Count
@@ -628,7 +628,7 @@ end 'main'
 
 <!-- test: string-array-literal-top-level-pass-to-function -->
 ```maxon
-var items = ["hello"]
+let items = ["hello"]
 
 function useString(s String) returns ExitCode
 	if s == "hello" 'check'
@@ -2017,9 +2017,9 @@ end 'main'
 3
 ```
 
-<!-- test: multi-line-literal-top-level-var -->
+<!-- test: multi-line-literal-top-level-let -->
 ```maxon
-var xs = FullRangeIntArray from [10,
+let xs = FullRangeIntArray from [10,
 	20]
 
 function main() returns ExitCode

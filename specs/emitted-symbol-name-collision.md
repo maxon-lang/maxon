@@ -90,10 +90,17 @@ function mrt_runtime_init() returns Integer
 	return 7
 end 'mrt_runtime_init'
 
-var emitted = mrt_runtime_init as Hook
+type Hooks
+	export let emitted as Hook
+
+	static function create() returns Self
+		return Self{emitted: mrt_runtime_init as Hook}
+	end 'create'
+end 'Hooks'
 
 function main() returns ExitCode
-	return emitted() as ExitCode
+	let hooks = Hooks.create()
+	return hooks.emitted() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -121,10 +128,17 @@ function mrt_start() returns Integer
 	return 7
 end 'mrt_start'
 
-var emitted = mrt_start as Hook
+type Hooks
+	export let emitted as Hook
+
+	static function create() returns Self
+		return Self{emitted: mrt_start as Hook}
+	end 'create'
+end 'Hooks'
 
 function main() returns ExitCode
-	return emitted() as ExitCode
+	let hooks = Hooks.create()
+	return hooks.emitted() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -155,12 +169,19 @@ function mrt_start() returns Integer
 	return 7
 end 'mrt_start'
 
-var emitted = mrt_start as Hook
+type Hooks
+	export let emitted as Hook
+
+	static function create() returns Self
+		return Self{emitted: mrt_start as Hook}
+	end 'create'
+end 'Hooks'
 
 function main() returns ExitCode
+	let hooks = Hooks.create()
 	let h = spawn Calc.create()
 	let t = try await h.total() otherwise 0
-	return (emitted() + t) as ExitCode
+	return (hooks.emitted() + t) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -229,12 +250,19 @@ function mrt_preempt_handler() returns Integer
 	return 7
 end 'mrt_preempt_handler'
 
-var emitted = mrt_preempt_handler as Hook
+type Hooks
+	export let emitted as Hook
+
+	static function create() returns Self
+		return Self{emitted: mrt_preempt_handler as Hook}
+	end 'create'
+end 'Hooks'
 
 function main() returns ExitCode
+	let hooks = Hooks.create()
 	let h = spawn Calc.create()
 	let t = try await h.total() otherwise 0
-	return (emitted() + t) as ExitCode
+	return (hooks.emitted() + t) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -265,12 +293,19 @@ function mrt_preempt_handler() returns Integer
 	return 7
 end 'mrt_preempt_handler'
 
-var emitted = mrt_preempt_handler as Hook
+type Hooks
+	export let emitted as Hook
+
+	static function create() returns Self
+		return Self{emitted: mrt_preempt_handler as Hook}
+	end 'create'
+end 'Hooks'
 
 function main() returns ExitCode
+	let hooks = Hooks.create()
 	let h = spawn Calc.create()
 	let t = try await h.total() otherwise 0
-	return (emitted() + t) as ExitCode
+	return (hooks.emitted() + t) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -301,12 +336,19 @@ function mrt_fault_handler() returns Integer
 	return 7
 end 'mrt_fault_handler'
 
-var emitted = mrt_fault_handler as Hook
+type Hooks
+	export let emitted as Hook
+
+	static function create() returns Self
+		return Self{emitted: mrt_fault_handler as Hook}
+	end 'create'
+end 'Hooks'
 
 function main() returns ExitCode
+	let hooks = Hooks.create()
 	let h = spawn Calc.create()
 	let t = try await h.total() otherwise 0
-	return (emitted() + t) as ExitCode
+	return (hooks.emitted() + t) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -337,12 +379,19 @@ function mrt_fault_handler() returns Integer
 	return 7
 end 'mrt_fault_handler'
 
-var emitted = mrt_fault_handler as Hook
+type Hooks
+	export let emitted as Hook
+
+	static function create() returns Self
+		return Self{emitted: mrt_fault_handler as Hook}
+	end 'create'
+end 'Hooks'
 
 function main() returns ExitCode
+	let hooks = Hooks.create()
 	let h = spawn Calc.create()
 	let t = try await h.total() otherwise 0
-	return (emitted() + t) as ExitCode
+	return (hooks.emitted() + t) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -373,12 +422,19 @@ function mrt_fault_thunk() returns Integer
 	return 7
 end 'mrt_fault_thunk'
 
-var emitted = mrt_fault_thunk as Hook
+type Hooks
+	export let emitted as Hook
+
+	static function create() returns Self
+		return Self{emitted: mrt_fault_thunk as Hook}
+	end 'create'
+end 'Hooks'
 
 function main() returns ExitCode
+	let hooks = Hooks.create()
 	let h = spawn Calc.create()
 	let t = try await h.total() otherwise 0
-	return (emitted() + t) as ExitCode
+	return (hooks.emitted() + t) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -409,12 +465,19 @@ function mrt_fault_thunk() returns Integer
 	return 7
 end 'mrt_fault_thunk'
 
-var emitted = mrt_fault_thunk as Hook
+type Hooks
+	export let emitted as Hook
+
+	static function create() returns Self
+		return Self{emitted: mrt_fault_thunk as Hook}
+	end 'create'
+end 'Hooks'
 
 function main() returns ExitCode
+	let hooks = Hooks.create()
 	let h = spawn Calc.create()
 	let t = try await h.total() otherwise 0
-	return (emitted() + t) as ExitCode
+	return (hooks.emitted() + t) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -445,12 +508,19 @@ function mrt_rt_sigreturn() returns Integer
 	return 7
 end 'mrt_rt_sigreturn'
 
-var emitted = mrt_rt_sigreturn as Hook
+type Hooks
+	export let emitted as Hook
+
+	static function create() returns Self
+		return Self{emitted: mrt_rt_sigreturn as Hook}
+	end 'create'
+end 'Hooks'
 
 function main() returns ExitCode
+	let hooks = Hooks.create()
 	let h = spawn Calc.create()
 	let t = try await h.total() otherwise 0
-	return (emitted() + t) as ExitCode
+	return (hooks.emitted() + t) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -481,12 +551,19 @@ function mrt_rt_sigreturn() returns Integer
 	return 7
 end 'mrt_rt_sigreturn'
 
-var emitted = mrt_rt_sigreturn as Hook
+type Hooks
+	export let emitted as Hook
+
+	static function create() returns Self
+		return Self{emitted: mrt_rt_sigreturn as Hook}
+	end 'create'
+end 'Hooks'
 
 function main() returns ExitCode
+	let hooks = Hooks.create()
 	let h = spawn Calc.create()
 	let t = try await h.total() otherwise 0
-	return (emitted() + t) as ExitCode
+	return (hooks.emitted() + t) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -510,10 +587,17 @@ function mrt_not_a_chunk() returns Integer
 	return 7
 end 'mrt_not_a_chunk'
 
-var emitted = mrt_not_a_chunk as Hook
+type Hooks
+	export let emitted as Hook
+
+	static function create() returns Self
+		return Self{emitted: mrt_not_a_chunk as Hook}
+	end 'create'
+end 'Hooks'
 
 function main() returns ExitCode
-	return emitted() as ExitCode
+	let hooks = Hooks.create()
+	return hooks.emitted() as ExitCode
 end 'main'
 ```
 ```exitcode

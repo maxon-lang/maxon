@@ -72,15 +72,15 @@ function sleepRound(round Integer) returns Integer
 	return held.count() as Integer
 end 'sleepRound'
 
-// The reader's cancel lands near both its read deadline and the readiness the send delivers, so the
+// The reader's drop lands near both its read deadline and the readiness the send delivers, so the
 // poller arm races the deadline's expiry and the readiness walk.
 function raceReader(client TcpClient, conn TcpClient, round Integer) returns Integer
-	let reading = async readOnce(conn, idx: round)
+	let reader = async readOnce(conn, idx: round)
 	Scheduler.yield()
 	spinFor((SocketDeadlineBaseMs + round mod SocketDeadlineLengths) * NanosPerMilli + sweepOffsetNs(round))
 	_ = try client.send(SocketPayload) otherwise 0
 	spinFor(sweepWithinStepNs(round))
-	reading.cancel()
+	reader.cancel()
 
 	return 1
 end 'raceReader'

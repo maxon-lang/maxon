@@ -48,8 +48,6 @@ while that file's own bytes stay put. The hash keys every parse, so each extra f
 the whole program, and each missing one lets a stale parse survive.
 
 - A `let` constant's value is copied into every reader as a literal, so the value rides.
-- A `var` global's value is not copied: a reader loads it. Only its width and label ride, so editing its
-  initial value re-parses only the declaring file.
 - A parameter default's expression does not ride: a caller emits a call to the default's helper, the same
   bytes whatever the expression. The helper's return type and the parameter's name and presence do.
 - An interface body's private type aliases do not ride: no parse copies them, and their one consumer, the

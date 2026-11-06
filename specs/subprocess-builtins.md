@@ -1112,17 +1112,19 @@ let collectDeadlineMs = 10000
 
 let holdStdin = 4
 
-var parkedFrom = 0 as SchedulerEventCount
+typealias ParkMark = SharedValue with SchedulerEventCount
 
-function parkedInCollect() returns bool
-	if parkedFrom == 0 'notYet'
+function parkedInCollect(parkedFrom ParkMark) returns bool
+	let mark = parkedFrom.current()
+
+	if mark == 0 'notYet'
 		return false
 	end 'notYet'
 
 	#if os(Windows)
 	return true
 	#else
-	return Scheduler.counters().netpollBlocks >= parkedFrom
+	return Scheduler.counters().netpollBlocks >= mark
 	#endif
 end 'parkedInCollect'
 
@@ -1135,8 +1137,8 @@ function appendToken(out ByteArray, token String)
 	out.push(0)
 end 'appendToken'
 
-function collector(h FullRangeInt) returns ExitCode
-	parkedFrom = Scheduler.counters().netpollBlocks + 1
+function collector(h FullRangeInt, parkedFrom ParkMark) returns ExitCode
+	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 
 	let r = __Builtins.subprocessWaitCollect(h, collectDeadlineMs)
 	__Builtins.subprocessResultRelease(r)
@@ -1158,9 +1160,10 @@ function main() returns ExitCode
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let h = __Builtins.subprocessSpawn(argv, argc, empty.cstr(), env, 1, holdStdin, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
 
-	let collecting = async collector(h)
+	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
+	let collecting = async collector(h, parkedFrom: parkedFrom.clone())
 
-	while not parkedInCollect() 'untilParkedInCollect'
+	while not parkedInCollect(parkedFrom) 'untilParkedInCollect'
 		Scheduler.yield()
 	end 'untilParkedInCollect'
 
@@ -1206,17 +1209,19 @@ let collectDeadlineMs = 10000
 
 let holdStdin = 4
 
-var parkedFrom = 0 as SchedulerEventCount
+typealias ParkMark = SharedValue with SchedulerEventCount
 
-function parkedInCollect() returns bool
-	if parkedFrom == 0 'notYet'
+function parkedInCollect(parkedFrom ParkMark) returns bool
+	let mark = parkedFrom.current()
+
+	if mark == 0 'notYet'
 		return false
 	end 'notYet'
 
 	#if os(Windows)
 	return true
 	#else
-	return Scheduler.counters().netpollBlocks >= parkedFrom
+	return Scheduler.counters().netpollBlocks >= mark
 	#endif
 end 'parkedInCollect'
 
@@ -1229,8 +1234,8 @@ function appendToken(out ByteArray, token String)
 	out.push(0)
 end 'appendToken'
 
-function collector(h FullRangeInt) returns ExitCode
-	parkedFrom = Scheduler.counters().netpollBlocks + 1
+function collector(h FullRangeInt, parkedFrom ParkMark) returns ExitCode
+	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 
 	let r = __Builtins.subprocessWaitCollect(h, collectDeadlineMs)
 	__Builtins.subprocessResultRelease(r)
@@ -1252,14 +1257,15 @@ function main() returns ExitCode
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let h = __Builtins.subprocessSpawn(argv, argc, empty.cstr(), env, 1, holdStdin, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
 
-	let first = async collector(h)
+	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
+	let first = async collector(h, parkedFrom: parkedFrom.clone())
 
-	while not parkedInCollect() 'untilParkedInCollect'
+	while not parkedInCollect(parkedFrom) 'untilParkedInCollect'
 		Scheduler.yield()
 	end 'untilParkedInCollect'
 
 	// The first collector holds the slot and is parked in its group wait, so this second collect is the refusal.
-	let second = async collector(h)
+	let second = async collector(h, parkedFrom: parkedFrom.clone())
 
 	let unreachableSecond = await second
 	let unreachableFirst = await first

@@ -577,7 +577,7 @@ end 'main'
 ### Storage
 
 Integer arithmetic is always 64-bit, but an alias with a **non-negative** range is stored in the smallest
-unsigned width that holds it wherever values are packed: array elements and module-level variables.
+unsigned width that holds it wherever values are packed: array elements and module-level `let`s.
 
 | Range of the alias | Array element storage |
 |--------------------|-----------------------|
@@ -886,7 +886,7 @@ Write `value as Alias` to convert a value of another alias.
 Arithmetic keeps the alias of its operands. Two operands of one alias give that alias; an unnamed operand
 (a literal, a loop counter) adopts the named one, and so does an ancestor (`block + offset` over a
 `BlockId` and an `ElementIndex` is a `BlockId`); two aliases with no common ancestor are **E3005** until
-one side is cast. The same rule governs comparisons, and a [top-level initializer](#top-level-variables)
+one side is cast. The same rule governs comparisons, and a [top-level initializer](#top-level-bindings)
 refuses the same pairs. A shift takes the alias of its left operand.
 
 Two subtypes of one parent make a *mixed* expression. It lands in any destination one of its operands'
@@ -1044,8 +1044,7 @@ no cost, and `return` re-brands implicitly.
   same instance are two brands in the same way.
 - A call's result wears the alias its callee's `returns` clause names, bare or directory-qualified, as the
   file that declares the callee resolves it: a caller's own declaration of that name is another brand.
-- A field read, a read of a module-level `var` and a `match` payload binding wear the alias the field,
-  variable or payload was declared with, as its declaring file resolves it: with `held(v Xs)`, the
+- A field read and a `match` payload binding wear the alias the field or payload was declared with, as its declaring file resolves it: with `held(v Xs)`, the
   binding `v` in `held(v) then …` is an `Xs`.
 - A bare reference that reaches two `export`ed declarations, with none in the reading file's directory or
   the root, is ambiguous: **E3063**, resolved by qualifying with the directory namespace.
@@ -1283,7 +1282,7 @@ A `static function` belongs to the type rather than an instance. It has no `self
 | Call | `value.name()` | `Type.name()` |
 
 An instance method called with no receiver is [E3193](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3193):
-a bare call to it from a static method, a file-scope initializer or a `static var` initializer, or
+a bare call to it from a static method or a file-scope initializer, or
 `Type.name()` with no arguments. `Type.name(value, …)` calls it on `value`.
 
 A type declares each method name once. A static and an instance method of one name, a method in the type's
@@ -1296,7 +1295,7 @@ one.
 
 ### Static Fields
 
-`static var` and `static let` declare one value per type, read and written as `Type.name`:
+`static let` declares one constant per type, read as `Type.name`:
 
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -1304,38 +1303,38 @@ typealias Byte = int(0 to u8.max)
 type Limits
 	static let MAX_COUNT = 1000
 	static let SEPARATOR = 61 as Byte
-	static var used = 2 as Byte
 end 'Limits'
 
 function main() returns ExitCode
-	Limits.used = Limits.used + 1
-	print("{Limits.MAX_COUNT} {Limits.SEPARATOR} {Limits.used}\n")   // 1000 61 3
+	print("{Limits.MAX_COUNT} {Limits.SEPARATOR}\n")   // 1000 61
 	return 0
 end 'main'
 ```
 
+A `static` member is a function or a `let`: `var` after `static` is a syntax error. State a function updates
+belongs in a local `var` passed to a `mutable` parameter, in a field of a value the caller holds, or in a
+[service](#services--spawn).
+
 - A static field needs an initializer. Assigning to a `static let` is **E2013**; naming a static the type
   does not declare is **E2073**.
 - An initializer is any expression a function body accepts, read as though written inside the type's body:
-  a literal, a factory call (`static var shared = Cache.create()`), an array literal, or a struct literal of
+  a literal, a factory call (`static let shared = Cache.create()`), an array literal, or a struct literal of
   the enclosing type. A struct literal of *another* type is **E3076** — call its factory. A scalar static is
-  a compile-time constant, so a call that makes its value unknown is **E2045**, and a `static var` whose
-  initializer is a bare number is **E2004**.
+  a compile-time constant, so a call that makes its value unknown is **E2045**.
 - **Initializers run before `main`, exactly once**, whether or not the field is ever read, in dependency
   order rather than declaration order: one that reads another static, directly or through a function it
   calls, runs after it. Initializers that depend on each other in a cycle, or one that reads its own field,
-  are **E2012**. Assigning to a `static var` is a plain store; the initializer does not run again.
+  are **E2012**.
 - A `static let` whose value is decided entirely at compile time — a scalar or byte-string literal, an array
   literal of integers, an empty container, a payload-free union case, or a record whose every field is one of
   these — is **image data**: its bytes are laid down in read-only memory and nothing creates it at run time.
-  Any other `static let`, and every `static var`, is built before `main`.
+  Any other `static let` is built before `main`.
 - A static declared in `stdlib/` is kept only when reachable code reads it; one nothing reads is not emitted,
   and neither is its initializer.
 - A static field is a top-level binding whose name carries the type as a qualifier, so what its initializer
-  may reach follows the [Top-Level Variables](#top-level-variables) rules: a `let`'s initializer may not reach
-  a module-level `var` that holds a record (**E3165**), a `var`'s may not take a module-level `let`'s record
-  (**E3078**), and a `spawn` reachable from any global initializer is **E3164** — a
-  [`default` declaration](#program-wide-defaults--default) starts a program-wide service before `main`.
+  may reach follows the [Top-Level Bindings](#top-level-bindings) rules: a `spawn` reachable from any
+  global initializer is **E3164** — a [`default` declaration](#program-wide-defaults--default) starts a
+  program-wide service before `main`.
 - A `let` without `static` in a type body is an ordinary field with a default.
 
 ### Equality and Copying
@@ -1397,7 +1396,7 @@ Because the value is a word and not a box:
 - `sizeof(T)` is **8**, whatever the fields sum to.
 - A local, a parameter and a return are the word itself. A field of a heap record is one 8-byte slot,
   and `Array with T` is a dense 8-byte element.
-- Nothing is allocated, retained, released or destroyed. A module-level `let` or `var` of one always
+- Nothing is allocated, retained, released or destroyed. A module-level `let` of one always
   holds a scalar word: an initializer the compiler folds is baked in and nothing runs before `main`,
   while one it cannot fold runs its factory before `main` and stores the word into that slot.
 - `clone()` is the **identity** — the copy is the same word.
@@ -2890,14 +2889,13 @@ end 'main'
 
 - Every variable is initialized where it is declared, and its type is inferred from the initializer.
   A declaration takes no type annotation: `var x as Tally = 0` is **E2010** (`Expected '=' but got 'as'`).
-  A cast names the type instead — `var x = 0 as Tally` declares a `Tally`, locally and at file scope.
+  A cast names the type instead — `var x = 0 as Tally` declares a `Tally`; a file-scope `let` takes the same cast (`let limit = 5 as Tally`).
 - **A `var` is born a value of its alias, and every assignment to it is checked against it** (see
   [Range Checks](#range-checks)).
 - **A `var` takes the brand of the first branded value stored into it** when its initializer has none:
   `var a = [1 as Item, 2 as Item]` followed by `a = xs` for an `Xs` makes `a` an `Xs` for its whole life,
   and a later store of a `Ys` is **E3005** (`cannot assign a value of type 'Ys' to variable 'a', which
-  holds 'Xs'`). The first store in source order decides; for a module `var`, the first in the program's
-  file order. See [Generic-Instance and Function-Type Aliases Are Brands](#generic-instance-and-function-type-aliases-are-brands).
+  holds 'Xs'`). The first store in source order decides. See [Generic-Instance and Function-Type Aliases Are Brands](#generic-instance-and-function-type-aliases-are-brands).
 - Variables are block-scoped.
 - **A `var` that is never reassigned or mutated is E3077** (`variable 'x' is never reassigned; use 'let'
   instead of 'var'`) when a `let` in its place would compile: its initializer is a fresh record or a
@@ -2943,31 +2941,28 @@ end 'main'
   end 'main'
   ```
 
-### Top-Level Variables
+### Top-Level Bindings
 
-Variables can be declared at file scope, outside any function:
+A `let` can be declared at file scope, outside any function:
 
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-var callCount = 0 as Tally
+let START = 10 as Tally
 let MAX_SIZE = 1024
-var names = ["ada", "alan"]
+let names = ["ada", "alan"]
 let dataFile = FilePath from "data.txt"
 
-function bump() returns Tally
-	callCount = callCount + 1
-	return callCount
-end 'bump'
-
 function main() returns ExitCode
-	_ = bump()
-	print("{callCount} {MAX_SIZE} {names.count()} {dataFile.filename()}\n")   // 1 1024 2 data.txt
+	print("{START} {MAX_SIZE} {names.count()} {dataFile.filename()}\n")   // 10 1024 2 data.txt
 	return 0
 end 'main'
 ```
 
-- `var` declares module state any function in the file can reassign; `let` declares a constant.
+- `let` declares a constant any function in the file can read. A file-scope `var`, with or without `module`
+  or `export` before it, is a syntax error: state a function updates is a local `var` passed to a `mutable`
+  parameter, a field of a record, a [`SharedValue`](#sharedvalue--a-live-value-made-at-run-time), or the
+  fields of a [service](#services--spawn).
 - A binding shares its directory's one namespace with every other top-level name (see
   [Bare Names and Ambiguity](#bare-names-and-ambiguity)), and another directory's binding is read through
   its directory: `alpha.LIMIT`.
@@ -2982,8 +2977,7 @@ end 'main'
   constant, inlined at every use. Its initializer must have a value known at compile time, as a body knows
   `2 * WIDTH` or `sqrt(4.0)`; a call that makes it unknown is **E2045** (`Function calls are not allowed in
   global variable initializers`, naming the call). A derived constant keeps its operands' typealias, as in a
-  body: with `let a = 5 as Small`, `let s = a + a` is a `Small`. A `var` whose initializer is a bare number
-  is **E2004**; state its type (`var count = 0 as Tally`).
+  body: with `let a = 5 as Small`, `let s = a + a` is a `Small`.
 - A call in an initializer names its function as a call in a function body does: a name nothing declares is
   **E3004**, one the file cannot see is **E3008** (**E3088** for a `module` one), and one several directories
   declare is **E3095**. That one diagnostic covers every read and assignment of the binding. A tuple
@@ -3003,34 +2997,20 @@ end 'main'
   `let pair = (1, "one")` is a tuple of the types its elements have; a slot that states a tuple type —
   an element of `ArrayAlias from [...]` (`let steps = Steps from [(0, 1), (2, 3)]` over
   `typealias Steps = Array with Step` and `typealias Step = (Word, Word)`), a struct literal's field
-  (`static var origin = Holder{step: (7, 9)}`), a factory parameter, a union payload, or an element of another
+  (`static let origin = Holder{step: (7, 9)}`), a factory parameter, a union payload, or an element of another
   tuple — gives each element that slot's type. A tuple literal inside extra parentheses is the same tuple, and a
   `var` born from a tuple of bare numbers is refused as it is in a body.
-- A `let`'s initializer may not reach a
-  module-level `var` that holds a record — a String, an array, a struct, a boxed union — through any function
-  it calls (**E3165**, reported at the `var`'s use with its declaration as a note). A `let` is fixed at startup
-  and may not hold what a `var` owns, and what the initializer keeps is not followed, so reading only a number
-  out of the `var` is refused too. "Reaches" is the call graph, dispatches
-  included. A scalar `var` is readable, a `var`'s initializer may reach any global, and a `let`'s may reach
-  other `let`s.
-- The other direction is refused too: a `var`'s initializer may not call anything whose result may be, lie
-  within or hold a module-level `let`'s record (**E3078**, at the `var`'s declaration, naming the call). What
-  a call hands back is followed through further calls, witness dispatches and calls through function values;
-  a record built fresh from numbers read out of a `let` is legal.
 - A module-level `let` is [read-only](#read-only-values) through everything it reaches, for the program's whole
   life. A write through it, or through a record a call handed back out of it, is **E3159**; binding it, a field
   of it (`var m = H.index`) or such a call result, an element accessor's included (`var p = Origins.get(0)`),
   to a `var` is **E3078**. Read it through a `let`, or bind a
-  `clone()`. Storing its record anywhere something may write it — pushing it into a container, local or
-  module-level, storing it into a `var` field, putting it in an array literal or a map value, or handing it to
+  `clone()`. Storing its record anywhere something may write it — pushing it into a container, storing it into a `var` field, putting it in an array literal or a map value, or handing it to
   a function that keeps its parameter — is **E3078** too; store a `clone()`.
 - A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
   program-wide one with [`default`](#program-wide-defaults--default). A `Key.current()` or `Key.register()`
   reachable from a global initializer is [E3173](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3173): the
   defaults are built after every global initializer has run.
 - A top-level declaration is private to its file unless marked `export`, `module` or `public`.
-- A [service](#services--spawn) handler, and every function it reaches, may not read or write a module-level
-  `var` (**E3143**); keep service state in its fields.
 
 ---
 
@@ -3247,7 +3227,7 @@ end 'main'
   green thread and a `spawn` hands the factory's arguments to the service, which owns them, so `mutable`
   there is a parse error (**E2010**, `Expected 'a type' but got 'mutable'`).
 - Passing a `var` lets the callee's writes propagate. Any storage you could assign to at that point may be
-  passed and is written in place: a local `var`, a module-level `var`, a field of a binding (`p.x`), a field
+  passed and is written in place: a local `var`, a field of a binding (`p.x`), a field
   of the receiver (`count` or `self.count`), and a chain of them (`p.a.b`). The rule is exactly the
   assignment rule — an argument the callee writes is accepted here if and only if writing the same thing at
   the call site would be accepted.
@@ -3371,16 +3351,16 @@ captures, so handing that function a read-only value is **E3159**. A record [vie
 captured (**E3078**); a view of a number can, since the closure captures a copy.
 
 **A closure can go anywhere a value can.** A function value is one reference to a record holding the code
-and the captures, so a closure may be returned, stored in a field, a module-level variable, a container or
+and the captures, so a closure may be returned, stored in a field, a container or
 a union payload, and passed to `async`. A plain function is a record that
 lives for the whole program. Copies share: `var g = f` and `f.clone()` hold the same closure, and a function
-value is exempt from **E3078**. A module-level `let` or `var` may hold a function value, including a closure
+value is exempt from **E3078**. A module-level `let` may hold a function value, including a closure
 a factory call returns.
 
 **A closure may not be stored into what it captures.** The record would hold the closure and the closure the
 record, and neither would ever be released, so storing a closure — directly, or inside a value holding it —
 into a record it captures or a record that record reaches is **E3183**. The store is followed through fields,
-elements, payloads, tuples, literals, module variables, clones, returned values and the functions a
+elements, payloads, tuples, literals, clones, returned values and the functions a
 closure is handed to, in the order the stores run, and each cycle is reported once, at the store that closes
 it. Two names for one record that only exist at run time are beyond what the compiler can follow.
 
@@ -3410,17 +3390,16 @@ to globals or parameters, only pure callees) or **impure**, and the rules for ig
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-var counter = 0 as Tally
-
-function incrementAndGet() returns Tally
+function incrementAndGet(counter mutable Tally) returns Tally
 	counter = counter + 1
 	return counter
 end 'incrementAndGet'
 
 function main() returns ExitCode
-	_ = incrementAndGet()              // explicitly discarded
-	let now = incrementAndGet()        // used
-	// incrementAndGet()               // E3065: result of 'incrementAndGet' is not used
+	var counter = 0 as Tally
+	_ = incrementAndGet(counter)       // explicitly discarded
+	let now = incrementAndGet(counter) // used
+	// incrementAndGet(counter)        // E3065: result of 'incrementAndGet' is not used
 	print("{now}\n")                   // 2
 	return 0
 end 'main'
@@ -3647,7 +3626,7 @@ Both take a **type** and produce a compile-time `Count`.
   count — a record, a primitive, a growable `Array`, a runtime-sized `FixedArray with Int` — is refused
   (**E2015**); ask the value for its `count()`, or name a sized alias
   (`typealias Sized = FixedArray with 4 Int`) and take `countof(Sized)`.
-- `countof(T)` is also a constant in a [top-level initializer](#top-level-variables), alone or folded
+- `countof(T)` is also a constant in a [top-level initializer](#top-level-bindings), alone or folded
   (`let last = countof(Vec3) - 1`), and the binding is a `Count`. Such a `let` is a compile-time bound inside a
   function: over `let slots = countof(Vec4)`, `for i in 0 upto slots` proves its counter a
   [`FixedArray` index](#fixed-arrays-and-proven-indices).
@@ -4419,7 +4398,7 @@ end 'strictDigit'
 ```
 
 Each statement follows its usual rules: `break` and `continue` need a loop, `throw` needs a `throws` clause,
-and `return` needs an enclosing function (see [Top-Level Variables](#top-level-variables) for a handler in an
+and `return` needs an enclosing function (see [Top-Level Bindings](#top-level-bindings) for a handler in an
 initializer).
 
 #### Block Handler
@@ -4822,7 +4801,7 @@ name on its right-hand side read as the alias's own file means it, and a type bo
 to its own modifier before its right-hand side is walked. A member is held to its own modifier, whatever its
 type's, and an interface's members — its requirements' types included — are held to the interface's. A [service](#services--spawn)'s message is
 held to the narrower of its own modifier and its service type's. A `module`, `export` or `public`
-binding — a top-level `let` or `var`, or a `static let` or `static var` member — is held to the same rule
+binding — a top-level `let` or a `static let` member — is held to the same rule
 for its type, which is the type its initializer gives it, written or inferred, together with any alias the
 initializer was spelled through (`50 as Small`, `Tallies.create()`). Every other surface a declaration exposes
 is held to the same rule: an instance field at the narrower of its own modifier and its type's (an unmarked
@@ -5044,8 +5023,9 @@ Maxon has two concurrency tools:
 
 - **`async` / `await`** start a **coroutine** of the current green thread. Coroutines overlap *waiting* — for a
   timer, a socket, a child process — without creating threads.
-- **`spawn`** starts a **service**: a green thread of its own, scheduled independently and able to run in
-  parallel on another processor. You talk to it through messages.
+- **`spawn`** starts a **service**: state of its own that handles one message at a time, on whichever green
+  thread takes its next message, in parallel with other services on other processors. You talk to it through
+  messages.
 
 Both run on the runtime's scheduler, which maps green threads onto a pool of OS threads. There are no
 locks or atomics in user code: a value is only ever reachable from one green thread at a time, except
@@ -5112,7 +5092,7 @@ not 80.
   variable is lent like a move that ends at the drain: reading it, writing it or passing it is **E3102**
   (`use of moved value 'n': it is lent to the coroutine of the `async` call at 13:22 until that promise is
   awaited or cancelled`), a sibling field of a lent local too, and naming it in the statement that starts the
-  coroutine is **E3186**. A `var`, or a field of a local, may be lent; a module `var` or any other storage at a
+  coroutine is **E3186**. A `var`, or a field of a local, may be lent; any other storage at a
   by-reference position is **E2015** (`an `async` call takes only a local variable by reference`), a literal
   is **E3159**, and the variable's declared type must be the parameter's type (**E3005**, see
   [Parameter Passing](#parameter-passing)). A coroutine that writes a parameter is refused a
@@ -5355,7 +5335,8 @@ condition; use `await` or `sleep` to actually wait.
 ### Services — `spawn`
 
 A **service** is an ordinary `type` started with `spawn`. `spawn Type.factory(args)` returns a **handle**
-and runs a static factory of the type on a new green thread, which keeps the state the factory builds. The handle's methods
+and runs a static factory of the type as the service's first message, on a green thread other than the spawner's;
+the service keeps the state the factory builds. The handle's methods
 are exactly the type's `export` and `public` instance methods; each call on the handle is a **message** the
 service handles one at a time, in order.
 
@@ -5401,10 +5382,15 @@ end 'main'
 
 - **The same type is still a plain value.** `Calc.create()` without `spawn` is an ordinary record with
   ordinary calls, so a service's logic is unit-testable without threads.
-- **The factory runs on the service's thread.** Its output follows the spawner's until the spawner waits for the
-  service, and a coroutine it starts belongs to the service's strand.
-- **A factory that throws makes the `spawn` a throwing call.** The spawner waits until the factory has run on the
-  new service's thread, then receives either the handle or the factory's error, of the factory's own type. Write
+- **The factory runs before any message.** It runs on a green thread other than the spawner's, so its output
+  follows the spawner's until the spawner waits for the service, and a coroutine it starts belongs to the strand
+  that runs it.
+- **An idle service owns no green thread.** A message that reaches an idle service starts a runner that handles
+  the queued messages in order, at most 64 per turn, and yields between turns so every other runnable service
+  runs. A handler that waits (`await`, `sleep`, I/O) keeps its service held, and messages queue behind it up to
+  the mailbox's capacity.
+- **A factory that throws makes the `spawn` a throwing call.** The spawner waits until the factory has run,
+  then receives either the handle or the factory's error, of the factory's own type. Write
   `try spawn Type.factory(…)` with an `otherwise`, propagate it from a throwing function, or place it in a
   block-form `try`; a `spawn` of a throwing factory that nothing catches is **E3057**, and `try` on a factory
   that cannot throw is **E3055**. A factory that throws starts no service, and the factory's output
@@ -5477,8 +5463,7 @@ either side could write, because the two green threads may run at the same time 
   opaque type parameter — is **E3135**. So is one whose type can hold a promise in any slot: a record with a
   promise in a field, a union with a case carrying one, an array or list of promises, empty or not. A coroutine
   belongs to the strand that started it, so a promise that crossed would be dropped, awaited or cancelled by a
-  strand that does not own it; `await` the promise and send or return the result. A service's own state may
-  hold promises its handlers start. A reply that is part of the service's own state is **E3137**; return a copy. For a generic
+  strand that does not own it; `await` the promise and send or return the result. A reply that is part of the service's own state is **E3137**; return a copy. For a generic
   service the reply is judged at the `spawn` that fixes `T`, and a `returns T` message that hands back the
   state is **E3137** there whenever `T` resolves to a managed type; a scalar `T` crosses.
 - A value held at an interface type crosses as a message argument, in a service's state and as a reply,
@@ -5502,18 +5487,20 @@ either side could write, because the two green threads may run at the same time 
   reply whose graph holds a type the runtime cannot walk (an OS handle other than a socket) is **E3138** there. A generic service
   cannot be spawned over a value held at an interface type (**E2015**).
 
-**Module-level state.** A service handler or factory — and anything it calls — may not read or write a module-level
-`var` (**E3143**). Keep a service's state in its own fields and hand results back through replies.
+**A service's state holds no promise.** A field of a service type that is a `Promise`, an array of promises, or a
+record or union that holds one is [E3216](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3216), reported at the
+`spawn`. Each message may run on a different green thread, and a coroutine belongs to the strand that started it,
+so a promise kept in the state could be awaited or dropped by a strand that does not own it. A message or the
+factory `await`s or `.cancel()`s the coroutines it starts before it returns, and keeps their result in the field.
 
-A module-level `let` stays readable. In a program that spawns a service, every `let` record built before
+**Module-level state.** A service keeps its state in its own fields and hands results back through replies. A
+module-level `let` is readable from a handler or factory. In a program that spawns a service, every `let` record built before
 `main` is marked shared once the last global initializer has returned, so every count a handler steps on it
 is atomic; a record two `let`s reach counts both as its owners. A `let` whose graph no walk can mark — one
 holding an OS handle, a value held at an interface type, or a generic instance with no base layout — is
 **E3163** where a message or a factory can read it, and legal where only `main` does. A `spawn` a global initializer can
 reach is **E3164** (a [`default`](#program-wide-defaults--default) starts a program-wide service before
-`main`), a `let` whose initializer reaches a module-level `var` holding a record is **E3165**, and
-a `var` whose initializer may take a `let`'s record is **E3078** (see
-[Top-Level Variables](#top-level-variables)).
+`main`; see [Top-Level Bindings](#top-level-bindings)).
 
 **Output order.** Text printed by `main` and by a service handler or factory may interleave in any order; sequence it
 through awaited replies when order matters.
@@ -5522,7 +5509,9 @@ through awaited replies when order matters.
 
 A mailbox holds at most its **capacity** of queued messages: `DefaultMailboxCapacity` (1024), or the
 `MailboxCapacity` (`int(1 to 2^31)`) that `spawn(capacity: n) Type.factory(args)` names. The capacity is a
-ceiling: the mailbox's memory grows with its backlog, up to the capacity.
+ceiling: the mailbox's memory grows with its backlog, up to the capacity. A message counts from the moment its
+send is accepted until the service starts handling it, so a service that has not started yet takes exactly
+its capacity of messages and the next send finds the mailbox full; the message being handled does not count.
 
 A send queues the message, or fails with an error the compiler declares for each message,
 `<Service>.<message>.sendError`, whose two cases carry the arguments the send was given:
@@ -6511,10 +6500,9 @@ The rules:
 
 - **No write through a read-only value.** A field store, a method that writes its receiver, or an argument the
   callee writes is **E3159**. The diagnostic names the read-only root.
-- **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**, and so is a module
-  `var` initializer that may take a module-level `let`'s record. A module-level `let`'s record reaching a `var`
+- **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**. A module-level `let`'s record reaching a `var`
   through a ternary, a `match … gives` or a `try … otherwise` is the same **E3078**. Storing a read-only value into a `var` field, a
-  mutable container element or module storage, or passing it to a parameter that keeps it where something may
+  mutable container element, or passing it to a parameter that keeps it where something may
   write it, is **E3078** too. A `let` bound to a fresh record is the one exception, at its last use: the store
   consumes the name, so no `let` sees what the new holder writes. Stored there and read again afterwards, it is
   refused. A last use is judged per path: a store on one arm of an `if`, a `match` or a ternary is the last use on
@@ -6535,8 +6523,7 @@ The rules:
   - or moved in, either as a sole-owned value or as a `var` at its last use.
 
   A mutable value that is still shared elsewhere is **E3078**. A sole-owned tuple or record is moved in only
-  when the records it holds are unwritten too: one that holds a record a `var` of the function, or a module
-  `var`, may still write is **E3078**. The same rule applies to a parameter whose callee
+  when the records it holds are unwritten too: one that holds a record a `var` of the function may still write is **E3078**. The same rule applies to a parameter whose callee
   stores it into a `let` field; the compiler reads that from the callee's body.
 - **`let b = a`, where `a` is a `var`, moves `a`.** `b` is then the record's only holder, and read-only.
 - **Keys are read-only.** A stored Map key or Set element cannot be written through its container, and a key read
@@ -6603,7 +6590,7 @@ end 'main'
 | an [`async`](#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread, and its promise is [tied](#tied-and-must-use-promises) when the argument is the caller's mutable data; a variable at a `mutable` parameter is lent to the coroutine until its promise is awaited or cancelled; a promise moves to the coroutine |
 | a [closure](#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
 | a [service](#services--spawn) message | a mutable value moves to the service; a read-only value the sender does not own is shared; a tuple of heap-free elements the sender does not solely own is copied; a view, or a record a view declared earlier may reach, is **E3138** |
-| a `spawn` factory argument | moves to the service's green thread; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
+| a `spawn` factory argument | moves into the service; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
 | `SharedValue.publish`, `Key.register` | the value must be solely owned (**E3174**) or a tuple of heap-free elements, which is copied; every reader sees it read-only |
 
 ### Aliasing Between Arguments
@@ -6640,8 +6627,7 @@ Where the by-reference cell itself is the operand to move, the cure copies the l
 statement, passes the copy at that position and stores it back after the call (a `let` there is **E3159**).
 
 The refusal is judged per **root binding**. It counts reads of the cell's own root variable and of that
-variable's field paths, and all the fields of `self` share one root, as a module `var` or a `static var` is
-one root. Another name for the same record, such as a `view`, a `var` that took the record by move or a `let`
+variable's field paths, and all the fields of `self` share one root. Another name for the same record, such as a `view`, a `var` that took the record by move or a `let`
 alias of a parameter, is a pending operand of its own, and the runtime hold a read of it takes keeps the value
 alive across the write.
 
@@ -6712,8 +6698,9 @@ decorator of that shape reaches the clone check.
 - **Services own their state.** State that more than one thread uses lives in a [service](#services--spawn) and is
   reached by message. Messages and replies move their mutable arguments. A [view](#views-view) stays on its thread:
   a send refuses a view, and a writable record a view declared earlier in the function may reach.
-- **Module `var`s stay on one thread.** A module or static `var` that code running on another thread (a service,
-  or anything it calls) can reach is **E3143**.
+- **There is no module-level mutable state.** `var` is a local, a field of a `type`, or a parameter's target; a
+  file-scope or `static` `var` is a syntax error. State more than one thread uses is a service's fields or a
+  [`SharedValue`](#sharedvalue--a-live-value-made-at-run-time).
 - **Read-only values are shared.** A module `let` reachable from another thread, a value published through
   `SharedValue` or a registry `default`, and a read-only parameter sent in a message are marked shared before a
   second thread can see them. A shared value uses atomic counts, and nothing can write it, because it is read-only.
@@ -6880,7 +6867,6 @@ awaited or dropped exits with **75** instead (see [Concurrency](#exit-codes)).
 | [E3078](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3078) | a read-only value bound or stored where it could be written, or kept by a `let` field while another writer exists |
 | [E3086](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3086) | a field not definitely assigned before its struct literal |
 | [E3102](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3102) | use of a moved value |
-| [E3143](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3143) | a module `var` reachable from another thread |
 | [E3152](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3152) | `__Raw` used outside `runtime/` |
 | [E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159) | a write through a read-only value |
 | [E3163](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3163) | a module `let` read by a message or a factory that the share walk cannot mark |
@@ -6889,6 +6875,7 @@ awaited or dropped exits with **75** instead (see [Concurrency](#exit-codes)).
 | [E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) | raw memory or a raw handle used outside the library tier |
 | [E3186](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3186) | a local read by an operand evaluated before a call writes it through a `mutable` parameter |
 | [E3196](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3196)–[E3215](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3215) | the capability, window, tied-promise and unique checks (see [Capability Errors](#capability-errors)) |
+| [E3216](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3216) | a service whose state holds a promise |
 | [E5004](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e5004) | a chain of unchecked runtime functions that can exceed the stack margin |
 | exit 96 | a mutable value sent to another thread while not solely owned |
 | exit 101 | memory still allocated when `main` returns |

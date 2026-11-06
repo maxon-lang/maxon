@@ -14,10 +14,10 @@ category: concurrency
 a default value, a `panic`, a block handler, `ignore`, and propagation.
 
 ```text
-var promise = async mayFail(args)
+let promise = async mayFail(args)
 
-var result = try await promise otherwise defaultValue
-var result = try await promise otherwise panic("message")
+let result = try await promise otherwise defaultValue
+let result = try await promise otherwise panic("message")
 
 try await promise otherwise 'handler'
 	// handle error

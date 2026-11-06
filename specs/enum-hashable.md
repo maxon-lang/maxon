@@ -30,8 +30,10 @@ end 'Color'
 
 typealias Int = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Int)
-var scores = ColorMap.create()
-try scores.insert(Color.red, value: 100) otherwise ignore
+function demo()
+	var scores = ColorMap.create()
+	try scores.insert(Color.red, value: 100) otherwise ignore
+end 'demo'
 ```
 
 ## Tests
@@ -239,21 +241,20 @@ end 'LogCategory'
 
 typealias CategoryLevelMap = Map with (LogCategory, LogLevel)
 
-var categoryLevels = CategoryLevelMap.create()
-
-function setCategoryLevel(category LogCategory, level LogLevel)
+function setCategoryLevel(categoryLevels mutable CategoryLevelMap, category LogCategory, level LogLevel)
 	try categoryLevels.insert(category, value: level) otherwise ignore
 end 'setCategoryLevel'
 
-function getCategoryLevel(category LogCategory) returns LogLevel
+function getCategoryLevel(categoryLevels CategoryLevelMap, category LogCategory) returns LogLevel
 	return try categoryLevels.get(category) otherwise LogLevel.NONE
 end 'getCategoryLevel'
 
 function main() returns ExitCode
-	setCategoryLevel(LogCategory.compiler, level: LogLevel.INFO)
-	setCategoryLevel(LogCategory.lexer, level: LogLevel.ERROR)
-	let compilerLevel = getCategoryLevel(LogCategory.compiler)
-	let lexerLevel = getCategoryLevel(LogCategory.lexer)
+	var categoryLevels = CategoryLevelMap.create()
+	setCategoryLevel(categoryLevels, category: LogCategory.compiler, level: LogLevel.INFO)
+	setCategoryLevel(categoryLevels, category: LogCategory.lexer, level: LogLevel.ERROR)
+	let compilerLevel = getCategoryLevel(categoryLevels, category: LogCategory.compiler)
+	let lexerLevel = getCategoryLevel(categoryLevels, category: LogCategory.lexer)
 	let r1 = match compilerLevel 'c'
 		INFO gives true
 		NONE gives false

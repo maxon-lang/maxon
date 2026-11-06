@@ -1,37 +1,10 @@
-// ServiceGlobalAccessCheck.maxon — A SHARED WORD BELONGS TO ONE GREEN THREAD (E3143), the message-reachability closure,
-// the two rules that keep module `let`s safe to read from any green thread (E3163, E3164), and the one that keeps a
-// `let` from owning a `var`'s record (E3165).
+// ServiceGlobalAccessCheck.maxon — the message-reachability closure, and the two rules that keep module `let`s safe
+// to read from any green thread (E3163, E3164).
 //
-// ⭐⭐ **A MODULE-LEVEL `var` IS ONE WORD, AND A MESSAGE IS A GREEN THREAD THE SCHEDULER MAY PUT ON ANY OS
-// THREAD.** Those two facts cannot both hold in a program that compiles, so one of them is refused, and it
-// is the ACCESS: ⚖ a message — and anything reachable from one — may neither WRITE nor READ a module-level or
-// `static` `var`.
-// A module-level `let` stays legal, and that is the whole of the escape hatch: a written-once word has no second
-// writer for anybody to race, and `__module_init` marks its record shared before `main`, so the counts messages
-// step on it are atomic. A `let` no share walk can mark is refused where a message reads it (E3163), and a
-// `spawn` an initializer reaches is refused (E3164), because no green thread may run before the marks.
-//
-// ⭐⭐⭐ **NEITHER HALF CAN BE A RUN-TIME CHECK, BECAUSE THERE IS NO MOMENT AT WHICH THE RUNTIME COULD
-// NOTICE.** `done = done + 1` is a load, an add and a store; two Ms that interleave those six steps each
-// write the other's stale value back. Nothing traps, nothing leaks, no allocation is lost — the program
-// simply answers a number that is too small, sometimes. ⇒ the compiler is the only place that can stand, and
-// the ACCESS is the only site it can stand at.
-//
-// ⚠ **AND THE SAME PROGRAM IS PERFECTLY CORRECT AT ONE PROCESSOR**: every green thread runs on the one M, so
-// the six steps cannot interleave. A run at `MAXON_MAX_PROCS=1` is no evidence either way.
-//
-// ⛔⛔ **THE READ IS REFUSED TOO, AND IT IS THE HALF WITH TEETH — A USE-AFTER-FREE RATHER THAN A LOST
-// UPDATE.** A global's assignment DECREFS the record the slot was holding (`Parser.emitCheckedGlobalStore`),
-// so a reader that has already loaded the pointer reads on into freed memory.
-//
-// ⭐⭐ **THE RULE IS ABOUT WHO TOUCHES IT, NOT ABOUT GLOBALS AS SUCH.** A write to `self.<field>` is legal — a
-// service's fields are reached by ONE green thread, which is the whole point of putting state there. A READ
-// of a module-level `let` is legal, and is the escape hatch every configuration constant takes: it is
-// written once before any green thread exists and never again, so no store can free anything under a reader.
-// And a plain function no message reaches may read and write a module `var` all it likes: a `spawn`
-// somewhere does not make the rest of the program concurrent, and the tempting cheap implementation — refuse
-// every global access in any program that spawns — inherits the whole-program shape of "is this type a
-// service?" where it does not belong.
+// ⭐⭐ **A MODULE-LEVEL `let` IS WRITTEN ONCE, AND A MESSAGE IS A GREEN THREAD THE SCHEDULER MAY PUT ON ANY OS
+// THREAD.** `__module_init` marks a `let`'s record shared before `main`, so the counts messages step on it are
+// atomic. A `let` no share walk can mark is refused where a message reads it (E3163), and a `spawn` an initializer
+// reaches is refused (E3164), because no green thread may run before the marks.
 //
 // ⭐⭐ **IT OWNS NO CLOSURE OF ITS OWN, AND ITS DIRECTION IS THE OPPOSITE OF EVERY OTHER SUMMARY'S.** The
 // four whole-program summaries in `SemanticCheck` and the blocking graph in `ServiceCallCycleCheck` all ask
@@ -54,13 +27,10 @@
 // author a restructuring the language already prescribes. So it refuses, and it says so in the diagnostic
 // rather than pretending it found a call path (`SharedGlobalAccessRoute.throughAnUnnameableDispatch`).
 //
-// ⭐ `green-thread-globals.error.a-module-var-only-a-closure-call-in-a-handler-could-reach` pins the refusing
-// verdict.
-//
 // ⚠ **AN UNRESOLVABLE *NAMED* CALLEE IS NOT ONE OF THOSE, AND TREATING IT AS ONE WOULD MAKE THE RULE
 // VACUOUS-BY-REFUSAL.** A name no `IrFunction` declares is a Std-tier runtime entry point or an extern —
 // `__mm_retain`, `__write_stdout`, the `__mf_*` band — installed after lowering and declared in no source at
-// all. None of them has a body that could write a user's module slot, and none calls back into user code, so
+// all. None of them has a body that could read a user's module slot, and none calls back into user code, so
 // following them buys nothing. Counting them would mark every handler that prints or allocates as blind and
 // refuse essentially every service program in the corpus.
 
@@ -234,71 +204,6 @@ function sharedGlobalAccessSubject(route SharedGlobalAccessRoute, verb String, r
 	end 'road'
 end 'sharedGlobalAccessSubject'
 
-module typealias ModuleVarRoster = Array with readonly TopLevelDecl
-
-module function moduleVarDeclarationsOf(signatures ProgramSignatures, spawnsAService bool) returns ModuleVarRoster
-	var moduleVars = ModuleVarRoster.create(0)
-
-	if not spawnsAService 'nothingIsShared'
-		return moduleVars
-	end 'nothingIsShared'
-
-	for index in 0 upto signatures.topLevelDeclCount() 'eachDecl'
-		let decl = signatures.declAt(index)
-
-		if decl.mutable 'aVar'
-			moduleVars.push(decl)
-		end 'aVar'
-	end 'eachDecl'
-
-	return moduleVars
-end 'moduleVarDeclarationsOf'
-
-module function checkServiceGlobalAccesses(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, moduleVars ModuleVarRoster, reached BoolArray)
-	var reported = BoolArray.create(0)
-	reported.resize(moduleVars.count())
-
-	for row in 0 upto survey.moduleVarUses.sites.rowCount() 'eachAccess'
-		if not reachedAt(reached, funcIndex: survey.moduleVarUses.sites.funcAt(row)) 'noMessageRunsIt'
-			continue
-		end 'noMessageRunsIt'
-
-		let varIndex = survey.moduleVarUses.subjectAt(row)
-
-		let alreadyReported = try reported.get(varIndex) otherwise panic("checkServiceGlobalAccesses: reported.get OOB at {varIndex} below count {reported.count()}")
-
-		if alreadyReported 'oneDefectPerVar'
-			continue
-		end 'oneDefectPerVar'
-
-		try reported.set(varIndex, value: true) otherwise panic("checkServiceGlobalAccesses: reported.set OOB at {varIndex} below count {reported.count()}")
-		reportSharedGlobalAccess(project, signatures: signatures, funcNames: funcNames, survey: survey, decl: try moduleVars.get(varIndex) otherwise panic("checkServiceGlobalAccesses: moduleVars.get OOB at {varIndex} — every subject was filed against this roster"), row: row)
-	end 'eachAccess'
-end 'checkServiceGlobalAccesses'
-
-function reportSharedGlobalAccess(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, decl TopLevelDecl, row CsrIndex)
-	let readerIndex = survey.moduleVarUses.sites.funcAt(row)
-	let reader = functionAt(funcNames, index: readerIndex)
-	let blame = blameForSharedGlobalAccess(survey, funcIndex: readerIndex)
-	let message = functionAt(funcNames, index: blame.messageIndex)
-	let serviceName = try survey.serviceOf(blame.messageIndex) otherwise panic("reportSharedGlobalAccess: the blamed function {blame.messageIndex} is no service message — `blameForSharedGlobalAccess` walks back to a message seed")
-	let spawn = serviceSpawnSiteOf(signatures, typeName: serviceName)
-	let range = project.opRanges.get(survey.moduleVarUses.sites.opAt(row))
-	reportPositionedWithNote(project, code: ErrorCode.semanticModuleVarInServiceProgram, message: sharedGlobalAccessRefusal(blame.route, decl: decl, reader: reader.name, seed: survey.seedDescription(blame.messageIndex, name: message.name)), line: range.line, column: range.column, filePath: reader.sourceFilePath, note: DiagnosticNote.at(serviceSpawnNoteText(serviceName), line: spawn.line, column: spawn.column, filePath: spawn.declFilePath))
-end 'reportSharedGlobalAccess'
-
-function sharedGlobalAccessRefusal(route SharedGlobalAccessRoute, decl TopLevelDecl, reader ByteArray, seed String) returns String
-	let name = String.from(decl.name)
-	let noun = match decl.scope 'scope'
-		fileScope gives "module-level `var {name}`"
-		typeBody gives "static `var {name}`"
-	end 'scope'
-
-	var refusal = sharedGlobalAccessSubject(route, verb: "uses", reader: reader, seed: seed, noun: noun)
-	refusal.append(" — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `{name}` a `let`")
-	return refusal
-end 'sharedGlobalAccessRefusal'
-
 function reachedAt(reached BoolArray, funcIndex ElementIndex) returns bool
 	return try reached.get(funcIndex) otherwise panic("reachedAt: reached.get OOB at {funcIndex} below count {reached.count()} — every function index comes from the list the closure was sized to")
 end 'reachedAt'
@@ -317,7 +222,6 @@ module function checkUnmarkableLetReads(project Project, funcNames FunctionNameI
 		let letGlobal = managedGlobalAt(project, index: survey.globalUses.subjectAt(row))
 
 		match letGlobal.threadReach 'reach'
-			mainOnly or
 			everyThreadThrough or
 			packedInItsSlot then continue
 			everyThreadUnwalkable(noun) then reportUnmarkableLetRead(project, funcNames: funcNames, survey: survey, row: row, letGlobal: letGlobal, noun: noun)
@@ -342,7 +246,7 @@ end 'reportUnmarkableLetRead'
 // ⭐ **E3164: A `spawn` A GLOBAL INITIALIZER CAN RUN.** `__module_init` marks the `let`s every message may read
 // only after its last initializer returns, so no other green thread may exist before then. Closed
 // from the calls the global initializers make (`initializerCallees`), over the same widened graph
-// E3143 closes — not from `__module_init` as a whole, which also builds the `default`s after the
+// E3163 closes — not from `__module_init` as a whole, which also builds the `default`s after the
 // marks, where a spawn is legal.
 module function checkSpawnsDuringGlobalInitialization(project Project, module MaxonModule, funcNames FunctionNameIndex, survey ServiceProgramSurvey, dispatch WitnessDispatchTargets, initializers FuncIndexRows)
 	let reached = functionsSeedsCanRun(funcNames, survey: survey, seeds: seedsAt(survey, funcIndices: everyInitializerCallee(initializers)), dispatch: dispatch)
@@ -377,64 +281,6 @@ function initializerReaching(project Project, funcNames FunctionNameIndex, surve
 
 	panic("initializerReaching: no initializer reaches function {spawnerIndex}, yet the closure from `__module_init` marked it")
 end 'initializerReaching'
-
-// ⭐ **E3165: A `let` WHOSE INITIALIZER REACHES A MANAGED `var`.** A record read out of a `var` is still the
-// `var`'s to write, so a `let` holding it would not be fixed, and `__module_init` could not mark it shared with an
-// owner no `let` holds. What the initializer keeps is not followed, so a scalar read out of the `var` is refused
-// too. Closed over the call graph, so a function the initializer does not call reaches nothing; a run-time
-// dispatch widens the way E3143's closure does.
-//
-// ⚡ One closure over every `let` initializer at once, which is all a program that compiles pays. The closure is
-// distributive over its seeds, so some `let` alone reaches the use the joint closure found.
-module function checkLetInitializersReachNoVar(project Project, funcNames FunctionNameIndex, survey ServiceProgramSurvey, dispatch WitnessDispatchTargets, initializers FuncIndexRows)
-	var everyLetsCallees = FuncIndexArray.create(0)
-
-	for (position, row) in initializers.withIterator() 'eachGlobal'
-		if not managedGlobalAt(project, index: position.index()).isAVar() 'aLet'
-			everyLetsCallees.append(row)
-		end 'aLet'
-	end 'eachGlobal'
-
-	if let useRow = try reachedVarUseRow(project, survey: survey, reached: functionsSeedsCanRun(funcNames, survey: survey, seeds: seedsAt(survey, funcIndices: everyLetsCallees), dispatch: dispatch)) 'aLetReachesAVar'
-		let userIndex = survey.globalUses.sites.funcAt(useRow)
-
-		for (position, row) in initializers.withIterator() 'eachGlobal'
-			let global = managedGlobalAt(project, index: position.index())
-
-			if not global.isAVar() and reachedAt(functionsSeedsCanRun(funcNames, survey: survey, seeds: seedsAt(survey, funcIndices: row), dispatch: dispatch), funcIndex: userIndex) 'thisLetReachesIt'
-				reportLetInitializerReachingAVar(project, funcNames: funcNames, survey: survey, letGlobal: global, useRow: useRow)
-				return
-			end 'thisLetReachesIt'
-		end 'eachGlobal'
-
-		panic("checkLetInitializersReachNoVar: every `let` initializer together reaches function {userIndex}, yet none alone does — a widening is triggered by one reached function, which one initializer's own closure reaches")
-	end 'aLetReachesAVar'
-end 'checkLetInitializersReachNoVar'
-
-enum VarUseLookup implements Error
-	noneReached
-end 'VarUseLookup'
-
-// The first use of a managed `var`'s slot held by a `reached` function.
-function reachedVarUseRow(project Project, survey ServiceProgramSurvey, reached BoolArray) returns CsrIndex throws VarUseLookup
-	for row in 0 upto survey.globalUses.sites.rowCount() 'eachUse'
-		if reachedAt(reached, funcIndex: survey.globalUses.sites.funcAt(row)) and managedGlobalAt(project, index: survey.globalUses.subjectAt(row)).isAVar() 'reachedHere'
-			return row
-		end 'reachedHere'
-	end 'eachUse'
-
-	throw VarUseLookup.noneReached
-end 'reachedVarUseRow'
-
-function reportLetInitializerReachingAVar(project Project, funcNames FunctionNameIndex, survey ServiceProgramSurvey, letGlobal ManagedGlobal, useRow CsrIndex)
-	let varGlobal = managedGlobalAt(project, index: survey.globalUses.subjectAt(useRow))
-	let letName = String.from(letGlobal.declName)
-	let varName = String.from(varGlobal.declName)
-	let user = functionAt(funcNames, index: survey.globalUses.sites.funcAt(useRow))
-	let range = project.opRanges.get(survey.globalUses.sites.opAt(useRow))
-	let declaration = DiagnosticNote.at("`{varName}` is declared here", line: varGlobal.nameLine, column: varGlobal.nameColumn, filePath: varGlobal.declFilePath)
-	reportPositionedWithNote(project, code: ErrorCode.semanticLetInitializerReachesAVar, message: "the initializer of the `let` `{letName}` reaches the module-level `var` `{varName}` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `{varName}`. Make `{letName}` a `var`, or build its value without reading `{varName}`", line: range.line, column: range.column, filePath: user.sourceFilePath, note: declaration)
-end 'reportLetInitializerReachingAVar'
 
 // ⭐ **THE DECLARED FUNCTIONS EACH MANAGED GLOBAL'S INITIALIZER CALLS**, one row per `project.managedGlobals`
 // entry, read off `__module_init`. It emits each global's calls

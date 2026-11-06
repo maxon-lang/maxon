@@ -33,9 +33,9 @@ Swift's `isTotallyOrdered(belowOrEqualTo:)` semantics.
 
 **Example:**
 ```maxon
-var a = 10
-var b = 20
-var c = a.compare(b)   // returns Ordering.lessThan
+let a = 10
+let b = 20
+let c = a.compare(b)   // returns Ordering.lessThan
 ```
 
 **Notes:**

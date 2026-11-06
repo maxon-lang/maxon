@@ -174,15 +174,14 @@ case is about the void check, so the discard is spelled the way both rules accep
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var calls = 0 as Integer
-
-function answer() returns Integer
+function answer(calls mutable Integer) returns Integer
 	calls = calls + 1
 	return 42
 end 'answer'
 
 function main() returns ExitCode
-	_ = answer()
+	var calls = 0 as Integer
+	_ = answer(calls)
 	return 41 + calls
 end 'main'
 ```

@@ -33,7 +33,7 @@ end 'Counter'
 The literal must then provide `version`:
 
 ```text
-var c = Counter{version: 1}  // OK — value defaults to 0, version provided
+let c = Counter{version: 1}  // OK — value defaults to 0, version provided
 ```
 
 Inside a static factory returning `Self`, the assignment form can supply the

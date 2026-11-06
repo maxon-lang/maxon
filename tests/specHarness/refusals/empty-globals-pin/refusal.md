@@ -11,10 +11,10 @@ prefix matches every image ever linked.
 <!-- test: empty-globals-pin -->
 
 ```maxon
-var counter = 42 as Count
+let counter = 42 as Count
 
 function main() returns ExitCode
-	counter = counter + 1
+	print("{counter + 1}\n")
 	return 0
 end 'main'
 ```

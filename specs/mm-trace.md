@@ -207,34 +207,6 @@ end 'main'
 
 ```
 
-<!-- test: module-var-byte-string-read-allocates-no-record-per-read -->
-The negative control for its `let` sibling above: a module-scope `var` byte string, read the same three
-times. A `var` global has storage — the array is materialized ONCE at startup and every reference loads
-that one record — so its whole trace is that single startup allocation, whatever the read count. It must
-STAY that way.
-
-**If this block grows a line, the change reached the storage-backed global path**, which is not what a
-fix to the inlined `let` path is allowed to do.
-<!-- MmTrace -->
-```maxon
-var Buffer = b"critsplit"
-
-function main() returns ExitCode
-	let a = try Buffer.get(0) otherwise 0
-	let b = try Buffer.get(1) otherwise 0
-	let c = try Buffer.get(2) otherwise 0
-	return 0 if a + b + c == 318 else 1
-end 'main'
-```
-```exitcode
-0
-```
-```mm-trace
-mm_alloc ArrayRecord #1 size=48
-mm_decref ArrayRecord #1 rc=0
-mm_free ArrayRecord #1
-```
-
 <!-- test: module-let-array-globals-cost-no-allocation-at-all -->
 A module-scope `let` holding an array LITERAL, and one holding an empty container, are both constants: their
 bytes are decided when the program is compiled and nothing about them can change while it runs. So neither
@@ -580,10 +552,9 @@ type Facts
 	end 'create'
 end 'Facts'
 
-var MutableFacts = Facts.create()
-
 function main() returns ExitCode
-	return (MutableFacts.counts.count() + MutableFacts.names.count()) as ExitCode
+	let facts = Facts.create()
+	return (facts.counts.count() + facts.names.count()) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -592,13 +563,10 @@ end 'main'
 ```mm-trace
 mm_alloc ArrayRecord #1 size=48
 mm_alloc ArrayRecord #2 size=48
-mm_alloc Facts #3 size=16
-mm_decref Facts #3 rc=0
 mm_decref ArrayRecord #1 rc=0
 mm_free ArrayRecord #1
 mm_decref ArrayRecord #2 rc=0
 mm_free ArrayRecord #2
-mm_free Facts #3
 ```
 
 <!-- test: module-let-empty-array-as-a-map-miss-fallback-allocates-nothing -->
@@ -649,7 +617,7 @@ every miss read the empty fallback
 <!-- procs: 1 -->
 ⭐⭐ **THE ONE `__mm_alloc` A Std-TIER BODY ASKS FOR WITH NO TYPE TO NAME, AND THE TAG IS WHAT SAYS THE
 TRACED CALL WAS SPELLED WHOLE.** `handle.clone()` mints a SECOND handle box through
-`__mbox_handle_clone_box` — one Std-tier entry serving every service, so it has no layout to name and its
+`__cown_handle_clone_box` — one Std-tier entry serving every service, so it has no layout to name and its
 box is `Untagged`, which the monitor renders `tag=0`. Under `--debugstream` `__mm_alloc` takes a THIRD
 argument, the tag index; a caller that passes only two leaves the callee reading a register nothing wrote,
 and the garbage lands in this line's tag — a live box, a clean exit, and a trace that lies about what was

@@ -443,14 +443,11 @@ export type SourceClaims
 	export let declaredAliases as StringArray
 	export let extensionMethodKeys as StringArray
 	export let shadowedLibraryNames as StringArray
-	export let moduleVars as ModuleVarHolding
-	export let spawnsServices as bool
-	export let usesFunctionValues as bool
 	export let libraryExtensionMethods as StringArray
 	export let mentionedNames as StringArray
 
-	export static function create(moduleInit ModuleInitNeed, declaredNominals StringArray, declaredAliases StringArray, extensionMethodKeys StringArray, shadowedLibraryNames StringArray, moduleVars ModuleVarHolding, spawnsServices bool, usesFunctionValues bool, libraryExtensionMethods StringArray, mentionedNames StringArray) returns SourceClaims
-		return Self{moduleInit: moduleInit, declaredNominals: declaredNominals, declaredAliases: declaredAliases, extensionMethodKeys: extensionMethodKeys, shadowedLibraryNames: shadowedLibraryNames, moduleVars: moduleVars, spawnsServices: spawnsServices, usesFunctionValues: usesFunctionValues, libraryExtensionMethods: libraryExtensionMethods, mentionedNames: mentionedNames}
+	export static function create(moduleInit ModuleInitNeed, declaredNominals StringArray, declaredAliases StringArray, extensionMethodKeys StringArray, shadowedLibraryNames StringArray, libraryExtensionMethods StringArray, mentionedNames StringArray) returns SourceClaims
+		return Self{moduleInit: moduleInit, declaredNominals: declaredNominals, declaredAliases: declaredAliases, extensionMethodKeys: extensionMethodKeys, shadowedLibraryNames: shadowedLibraryNames, libraryExtensionMethods: libraryExtensionMethods, mentionedNames: mentionedNames}
 	end 'create'
 end 'SourceClaims'
 
@@ -528,10 +525,10 @@ export function claimsOfUserFiles(project Project) returns SourceClaims throws C
 	try foldExtensionsOfUserFiles(project, signatures: fold.signatures)
 	let nominals = fold.signatures.userDeclaredNominalNames()
 	let aliases = fold.signatures.userDeclaredAliasNames()
-	let written = try tokensWritten(project, paths: fold.paths)
+	let mentioned = try namesWritten(project, paths: fold.paths)
 	let shadowed = try namesTheLibraryAlsoDeclares(project, nominals: nominals, aliases: aliases)
 	let extensionKeys = try extensionMethodKeysWritten(project, signatures: fold.signatures)
-	return SourceClaims.create(fold.signatures.programModuleInitNeed(), declaredNominals: nominals, declaredAliases: aliases, extensionMethodKeys: extensionKeys, shadowedLibraryNames: shadowed, moduleVars: fold.signatures.userModuleVarHolding(), spawnsServices: fold.signatures.serviceSpawnCandidates().count() != 0, usesFunctionValues: written.usesFunctionValues, libraryExtensionMethods: try libraryExtensionMethodsOnConformers(project, signatures: fold.signatures), mentionedNames: written.names)
+	return SourceClaims.create(fold.signatures.programModuleInitNeed(), declaredNominals: nominals, declaredAliases: aliases, extensionMethodKeys: extensionKeys, shadowedLibraryNames: shadowed, libraryExtensionMethods: try libraryExtensionMethodsOnConformers(project, signatures: fold.signatures), mentionedNames: mentioned)
 end 'claimsOfUserFiles'
 
 function libraryExtensionMethodsOnConformers(project Project, signatures ProgramSignatures) returns StringArray throws CompileError
@@ -572,39 +569,15 @@ function libraryExtensionMethodsOnConformers(project Project, signatures Program
 	return methods
 end 'libraryExtensionMethodsOnConformers'
 
-type WrittenTokens
-	export var names as StringArray
-	export var usesFunctionValues as bool
-
-	static function create() returns WrittenTokens
-		return Self{names: StringArray.create(0), usesFunctionValues: false}
-	end 'create'
-end 'WrittenTokens'
-
-function opensAFunctionValue(tokens TokenArray, position ElementIndex) returns bool
-	let token = try tokens.get(position) otherwise panic("opensAFunctionValue: tokens.get OOB at {position} below count {tokens.count()}")
-
-	if token.kind != TokenKind.function or position + 1 >= tokens.count() 'notAFunctionWord'
-		return false
-	end 'notAFunctionWord'
-
-	let next = try tokens.get(position + 1) otherwise panic("opensAFunctionValue: tokens.get OOB at {position + 1} below count {tokens.count()}")
-	return next.kind == TokenKind.leftParen
-end 'opensAFunctionValue'
-
-function tokensWritten(project Project, paths MaxonSourcePathArray) returns WrittenTokens throws CompileError
-	var written = WrittenTokens.create()
+function namesWritten(project Project, paths MaxonSourcePathArray) returns StringArray throws CompileError
+	var written = StringArray.create(0)
 	var seen = SourceNameSet.create()
 
 	for path in paths 'eachFile'
 		view tokens = try queryActiveTokens(project, path: path)
 
 		for i in 0 upto tokens.count() 'eachToken'
-			let token = try tokens.get(i) otherwise panic("tokensWritten: tokens.get OOB at {i} below count {tokens.count()}")
-
-			if opensAFunctionValue(tokens, position: i) 'aFunctionValue'
-				written.usesFunctionValues = true
-			end 'aFunctionValue'
+			let token = try tokens.get(i) otherwise panic("namesWritten: tokens.get OOB at {i} below count {tokens.count()}")
 
 			if token.kind != TokenKind.identifier 'notAName'
 				continue
@@ -614,20 +587,20 @@ function tokensWritten(project Project, paths MaxonSourcePathArray) returns Writ
 
 			if not seen.contains(name) 'firstMention'
 				seen.insert(name)
-				written.names.push(name)
+				written.push(name)
 			end 'firstMention'
 
 			if i + 2 >= tokens.count() 'noMemberFollows'
 				continue
 			end 'noMemberFollows'
 
-			let dot = try tokens.get(i + 1) otherwise panic("tokensWritten: tokens.get OOB at {i + 1} below count {tokens.count()}")
+			let dot = try tokens.get(i + 1) otherwise panic("namesWritten: tokens.get OOB at {i + 1} below count {tokens.count()}")
 
 			if dot.kind != TokenKind.dot 'notQualified'
 				continue
 			end 'notQualified'
 
-			let member = try tokens.get(i + 2) otherwise panic("tokensWritten: tokens.get OOB at {i + 2} below count {tokens.count()}")
+			let member = try tokens.get(i + 2) otherwise panic("namesWritten: tokens.get OOB at {i + 2} below count {tokens.count()}")
 
 			if member.kind != TokenKind.identifier 'notAMemberName'
 				continue
@@ -637,13 +610,13 @@ function tokensWritten(project Project, paths MaxonSourcePathArray) returns Writ
 
 			if not seen.contains(qualified) 'firstQualifiedMention'
 				seen.insert(qualified)
-				written.names.push(qualified)
+				written.push(qualified)
 			end 'firstQualifiedMention'
 		end 'eachToken'
 	end 'eachFile'
 
 	return written
-end 'tokensWritten'
+end 'namesWritten'
 
 function namesTheLibraryAlsoDeclares(project Project, nominals StringArray, aliases StringArray) returns StringArray throws CompileError
 	var shadowed = StringArray.create(0)

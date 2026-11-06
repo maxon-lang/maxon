@@ -741,27 +741,6 @@ end 'main'
 error E3159: specs/parameter-mutation/let-global-string-to-appending-param-error.maxon:12:9: cannot pass 'GREETING', which is read-only (a module-level `let`), to a function that writes parameter 's' (in main); pass a clone()
 ```
 
-<!-- test: var-global-string-to-appending-param-ok -->
-A top-level `var` holds an owned heap record and may be grown through a helper.
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-var greeting = "hi"
-
-function grow(s mutable String) returns Integer
-	s.append("XY")
-	return s.byteLength()
-end 'grow'
-
-function main() returns ExitCode
-	return grow(greeting) as ExitCode
-end 'main'
-```
-```exitcode
-4
-```
-
 <!-- test: let-global-array-to-reading-param-ok -->
 A top-level `let` at a parameter the callee only reads stays legal — the refusal is per written
 position, so a global argument is not refused for being a global.

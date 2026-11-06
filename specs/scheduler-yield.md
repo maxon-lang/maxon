@@ -92,24 +92,25 @@ states above.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var flag = 0 as Integer
+typealias FlagCell = SharedValue with Integer
 
-function setter() returns Integer
-	flag = 1
+function setter(flag FlagCell) returns Integer
+	flag.publish(1 as Integer)
 	Scheduler.yield()
 	return 2
 end 'setter'
 
-function spinner() returns Integer
+function spinner(flag FlagCell) returns Integer
 	for _ in 0 upto 1000 'spin'
 		Scheduler.yield()
 	end 'spin'
-	return flag
+	return flag.current()
 end 'spinner'
 
 function main() returns ExitCode
-	let p1 = async spinner()
-	let p2 = async setter()
+	let flag = FlagCell.create(0 as Integer)
+	let p1 = async spinner(flag.clone())
+	let p2 = async setter(flag.clone())
 	let seen = await p1
 	let ack = await p2
 	return (seen + ack) as ExitCode
@@ -153,20 +154,21 @@ spin, `7` means a thousand yields went by without it running once.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var progressed = 0 as Integer
+typealias ProgressCell = SharedValue with Integer
 
-function worker() returns Integer
-	progressed = 1
+function worker(progressed ProgressCell) returns Integer
+	progressed.publish(1 as Integer)
 	Scheduler.yield()
 	return 7
 end 'worker'
 
 function main() returns ExitCode
-	let p = async worker()
+	let progressed = ProgressCell.create(0 as Integer)
+	let p = async worker(progressed.clone())
 	for _ in 0 upto 1000 'spin'
 		Scheduler.yield()
 	end 'spin'
-	return (progressed + await p) as ExitCode
+	return (progressed.current() + await p) as ExitCode
 end 'main'
 ```
 ```exitcode

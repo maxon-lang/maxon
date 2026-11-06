@@ -1111,20 +1111,22 @@ end 'main'
 A VOID function value is called at STATEMENT position, for its effect, with no result to bind — the
 call the statement position exists for, and the shape a table of void callbacks is driven by. The
 statement-position call path sends a function-typed local's name to the same indirect-call lowering the
-expression position uses; treated as a direct callee it would be E3004 ("call to undefined function"). The side effect (two increments of a module
-`var`) proves the call actually RAN, not merely that it compiled — a no-op would return 0.
+expression position uses; treated as a direct callee it would be E3004 ("call to undefined function"). The side effect (two increments of a shared cell
+passed to the callback) proves the call actually RAN, not merely that it compiled — a no-op would return 0.
 ```maxon
-var sideEffect = 0 as FullRangeInt
+typealias Cell = SharedValue with FullRangeInt
 
-function bump()
-	sideEffect = sideEffect + 7
+function bump(sideEffect Cell)
+	let next = sideEffect.current() + 7
+	sideEffect.publish(next)
 end 'bump'
 
 function main() returns ExitCode
+	let sideEffect = Cell.create(0 as FullRangeInt)
 	let cb = bump
-	cb()
-	cb()
-	return sideEffect as ExitCode
+	cb(sideEffect)
+	cb(sideEffect)
+	return sideEffect.current() as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1180,11 +1182,10 @@ A VOID function-typed FIELD called at STATEMENT position, for its effect — the
 callbacks or compiler passes keyed by a struct field is driven by, each entry a function value called for
 effect. The statement dispatcher parses `h.op` as a field load and applies the trailing call through the
 indirect-call lowering. The side effect (two
-increments of a module `var`) proves the call RAN — a no-op would return 0.
+increments of a shared cell passed to the callback) proves the call RAN — a no-op would return 0.
 ```maxon
-var sideEffect = 0 as FullRangeInt
-
-typealias Task = function()
+typealias Cell = SharedValue with FullRangeInt
+typealias Task = function(Cell)
 
 type Holder
 	export var op as Task
@@ -1194,15 +1195,17 @@ type Holder
 	end 'create'
 end 'Holder'
 
-function bump()
-	sideEffect = sideEffect + 7
+function bump(sideEffect Cell)
+	let next = sideEffect.current() + 7
+	sideEffect.publish(next)
 end 'bump'
 
 function main() returns ExitCode
+	let sideEffect = Cell.create(0 as FullRangeInt)
 	let h = Holder.create(bump)
-	h.op()
-	h.op()
-	return sideEffect as ExitCode
+	h.op(sideEffect)
+	h.op(sideEffect)
+	return sideEffect.current() as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1245,10 +1248,8 @@ A struct with TWO function-typed fields, each called at statement position. Each
 its OWN field — `p.first` runs `bumpA` (+10) and `p.second` runs `bumpB` (+4) — so the total is 14 only when
 the two field loads are not confused.
 ```maxon
-var effA = 0 as FullRangeInt
-var effB = 0 as FullRangeInt
-
-typealias Task = function()
+typealias Cell = SharedValue with FullRangeInt
+typealias Task = function(Cell)
 
 type Pair
 	export var first as Task
@@ -1259,19 +1260,23 @@ type Pair
 	end 'create'
 end 'Pair'
 
-function bumpA()
-	effA = effA + 10
+function bumpA(effA Cell)
+	let next = effA.current() + 10
+	effA.publish(next)
 end 'bumpA'
 
-function bumpB()
-	effB = effB + 4
+function bumpB(effB Cell)
+	let next = effB.current() + 4
+	effB.publish(next)
 end 'bumpB'
 
 function main() returns ExitCode
+	let effA = Cell.create(0 as FullRangeInt)
+	let effB = Cell.create(0 as FullRangeInt)
 	let p = Pair.create(bumpA, second: bumpB)
-	p.first()
-	p.second()
-	return (effA + effB) as ExitCode
+	p.first(effA)
+	p.second(effB)
+	return (effA.current() + effB.current()) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1283,9 +1288,8 @@ The receiver of a field call may itself be reached through a field CHAIN. `o.inn
 to the function-typed field and applies the trailing call for effect — the statement-position twin of the
 value-position `o.inner.op(21)`. The side effect (two increments) proves it ran.
 ```maxon
-var sideEffect = 0 as FullRangeInt
-
-typealias Task = function()
+typealias Cell = SharedValue with FullRangeInt
+typealias Task = function(Cell)
 
 type Holder
 	export var op as Task
@@ -1303,15 +1307,17 @@ type Outer
 	end 'create'
 end 'Outer'
 
-function bump()
-	sideEffect = sideEffect + 5
+function bump(sideEffect Cell)
+	let next = sideEffect.current() + 5
+	sideEffect.publish(next)
 end 'bump'
 
 function main() returns ExitCode
+	let sideEffect = Cell.create(0 as FullRangeInt)
 	let o = Outer.create(Holder.create(bump))
-	o.inner.op()
-	o.inner.op()
-	return sideEffect as ExitCode
+	o.inner.op(sideEffect)
+	o.inner.op(sideEffect)
+	return sideEffect.current() as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1324,12 +1330,12 @@ yields the `bump` function and the trailing `()` calls it — the statement-posi
 `pick()(21)`, and the chaining `parsePostfix` already does in expression position. The side effect (two
 increments) proves both hops ran.
 ```maxon
-var sideEffect = 0 as FullRangeInt
+typealias Cell = SharedValue with FullRangeInt
+typealias Task = function(Cell)
 
-typealias Task = function()
-
-function bump()
-	sideEffect = sideEffect + 6
+function bump(sideEffect Cell)
+	let next = sideEffect.current() + 6
+	sideEffect.publish(next)
 end 'bump'
 
 function pickBump() returns Task
@@ -1337,9 +1343,10 @@ function pickBump() returns Task
 end 'pickBump'
 
 function main() returns ExitCode
-	pickBump()()
-	pickBump()()
-	return sideEffect as ExitCode
+	let sideEffect = Cell.create(0 as FullRangeInt)
+	pickBump()(sideEffect)
+	pickBump()(sideEffect)
+	return sideEffect.current() as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1412,8 +1419,6 @@ The control: a real instance METHOD called at statement position stays a DIRECT 
 routed through the indirect-call path. `c.tick()` is a method on `Counter`, not a function-typed field,
 so it dispatches as a method. Two calls (+3 each) prove it ran.
 ```maxon
-var sideEffect = 0 as FullRangeInt
-
 typealias Ticks = int(i64.min to i64.max)
 
 type Counter
@@ -1424,15 +1429,15 @@ type Counter
 	end 'create'
 
 	function tick()
-		sideEffect = sideEffect + 3
+		self.n = self.n + 3
 	end 'tick'
 end 'Counter'
 
 function main() returns ExitCode
-	let c = Counter.create()
+	var c = Counter.create()
 	c.tick()
 	c.tick()
-	return sideEffect as ExitCode
+	return c.n as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1586,27 +1591,6 @@ end 'main'
 ```
 ```exitcode
 42
-```
-
-<!-- test: first-class-function.capturing-closure-in-global-errors -->
-A module-level binding takes its type from its initializer, and `handler` here is initialized with
-`0`, so it holds an `int` and a function value assigned to it is E3005. A module-level `let` or `var`
-initialized with a function, or with a call to a factory that returns one, holds a function value, and
-a capturing closure may be stored there (`closure-capture.module-level-function-values`).
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-var handler = 0 as Integer
-
-function main() returns ExitCode
-	let bump = 20
-	handler = function(n Integer) gives n + bump
-	return 42
-end 'main'
-```
-```maxoncstderr
-error E3005: specs/first-class-functions/first-class-function.capturing-closure-in-global-errors.maxon:9:2: cannot assign a value of type 'function' to global 'handler', which holds 'Integer': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.capturing-closure-in-container -->
@@ -2175,29 +2159,6 @@ end 'main'
 42
 ```
 
-<!-- test: first-class-function.capturing-closure-in-ternary-to-global-errors -->
-`handler` is initialized with `0` and holds an `int`, so the merged closure meets the type rule (see `capturing-closure-in-global-errors`).
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-function dbl(n Integer) returns Integer
-	return n * 2
-end 'dbl'
-
-var handler = 0 as Integer
-
-function main() returns ExitCode
-	let bump = 20
-	let f = function(n Integer) gives n + bump
-	handler = f if bump > 0 else dbl
-	return 42
-end 'main'
-```
-```maxoncstderr
-error E3005: specs/first-class-functions/first-class-function.capturing-closure-in-ternary-to-global-errors.maxon:14:2: cannot assign a value of type 'function' to global 'handler', which holds 'Integer': a function value is only usable where a function type declared with 'typealias' is expected
-```
-
 <!-- test: first-class-function.capturing-closure-in-ternary-used-in-frame -->
 A capturing closure merged through a ternary and called in the same frame.
 ```maxon
@@ -2329,30 +2290,6 @@ end 'main'
 A function value is assignable to a place declared with a function `typealias`, and to nothing
 else. This is a TYPE rule: it fires for a plain top-level function that captures nothing, and it
 would fire just the same if closures did not exist.
-
-<!-- test: first-class-function.function-value-into-int-global-errors -->
-Unchecked, this store reached the LOWERING, where a function pointer and an integer slot have
-different representations and the cast between them failed as an E9001 internal error — quoting
-a .NET type name, naming no source position, and describing no defect in the program. An
-internal error is by definition a compiler bug when a user program can provoke it.
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-var slot = 0 as Integer
-
-function dbl(n Integer) returns Integer
-	return n * 2
-end 'dbl'
-
-function main() returns ExitCode
-	slot = dbl
-	return 0 as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3005: specs/first-class-functions/first-class-function.function-value-into-int-global-errors.maxon:12:2: cannot assign a value of type 'function' to global 'slot', which holds 'Integer': a function value is only usable where a function type declared with 'typealias' is expected
-```
 
 <!-- test: first-class-function.function-value-into-int-local-errors -->
 The same rule for a LOCAL. The value is never read, so nothing downstream would report the mismatch:
@@ -3845,12 +3782,12 @@ ping
 ```
 
 
-<!-- test: a-directory-let-and-var-are-read-in-a-body-through-a-directory-named-like-a-primitive -->
+<!-- test: a-directory-lets-are-read-in-a-body-through-a-directory-named-like-a-primitive -->
 ```maxon
 // --- file: byte/m.maxon
 export let LIMIT = 7
 
-export var counter = 1 as Count
+export let counter = 1 as Count
 
 // --- file: main.maxon
 function main() returns ExitCode
@@ -3862,12 +3799,12 @@ end 'main'
 ```
 
 
-<!-- test: a-directory-let-and-var-are-read-at-module-scope-through-a-directory-named-like-a-primitive -->
+<!-- test: a-directory-lets-are-read-at-module-scope-through-a-directory-named-like-a-primitive -->
 ```maxon
 // --- file: byte/m.maxon
 export let LIMIT = 7
 
-export var counter = 1 as Count
+export let counter = 1 as Count
 
 // --- file: main.maxon
 let a = byte.LIMIT
@@ -3881,14 +3818,14 @@ end 'main'
 ```
 
 
-<!-- test: error.a-store-to-a-directory-var-through-a-directory-named-like-a-primitive-names-nothing -->
+<!-- test: error.a-store-to-a-directory-let-through-a-directory-named-like-a-primitive-names-nothing -->
 ```maxon
 // --- file: byte/m.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 export let LIMIT = 7
 
-export var counter = 1 as Integer
+export let counter = 1 as Integer
 
 export function ping()
 	print("ping\n")
@@ -3993,12 +3930,12 @@ ping
 ```
 
 
-<!-- test: a-directory-let-and-var-are-read-in-a-body-through-an-ordinary-directory -->
+<!-- test: a-directory-lets-are-read-in-a-body-through-an-ordinary-directory -->
 ```maxon
 // --- file: lib/m.maxon
 export let LIMIT = 7
 
-export var counter = 1 as Count
+export let counter = 1 as Count
 
 // --- file: main.maxon
 function main() returns ExitCode
@@ -4010,12 +3947,12 @@ end 'main'
 ```
 
 
-<!-- test: a-directory-let-and-var-are-read-at-module-scope-through-an-ordinary-directory -->
+<!-- test: a-directory-lets-are-read-at-module-scope-through-an-ordinary-directory -->
 ```maxon
 // --- file: lib/m.maxon
 export let LIMIT = 7
 
-export var counter = 1 as Count
+export let counter = 1 as Count
 
 // --- file: main.maxon
 let a = lib.LIMIT
@@ -4029,14 +3966,14 @@ end 'main'
 ```
 
 
-<!-- test: error.a-store-to-a-directory-var-through-an-ordinary-directory-names-nothing -->
+<!-- test: error.a-store-to-a-directory-let-through-an-ordinary-directory-names-nothing -->
 ```maxon
 // --- file: lib/m.maxon
 export typealias Integer = int(i64.min to i64.max)
 
 export let LIMIT = 7
 
-export var counter = 1 as Integer
+export let counter = 1 as Integer
 
 export function ping()
 	print("ping\n")
@@ -7006,30 +6943,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:15:2: function type mismatch assigning to variable 'f': expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
-```
-
-<!-- test: error.a-function-of-the-wrong-shape-written-to-a-global-is-refused -->
-The global door, which already judged the shape, stays refused.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-function seven() returns Integer
-	return 7
-end 'seven'
-
-function add(a Integer) returns Integer
-	return a + 1
-end 'add'
-
-var g = seven
-
-function main() returns ExitCode
-	g = add
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:15:2: function type mismatch assigning to global 'g': expected 'fn() returns Integer', got 'fn(Integer) returns Integer'
 ```
 
 <!-- test: error.a-function-of-the-wrong-shape-pushed-onto-an-array-of-functions-is-refused -->

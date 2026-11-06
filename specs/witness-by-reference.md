@@ -698,57 +698,6 @@ end 'main'
 0
 ```
 
-<!-- test: witness-by-reference.a-module-level-var-at-a-written-position-is-updated -->
-A module-level `var` is storage with an address, and the dispatch writes it.
-```maxon
-typealias Wide = int(0 to 100)
-
-interface Bumper
-	function bump(n mutable Wide)
-end 'Bumper'
-
-type Doubler implements Bumper
-	export let seed as Wide
-
-	static function create(seed Wide) returns Self
-		return Self{seed: seed}
-	end 'create'
-
-	function bump(n mutable Wide)
-		n = 50
-	end 'bump'
-end 'Doubler'
-
-var level = 3 as Wide
-
-type Holder uses T where T is Bumper
-	export var item as T
-
-	static function create(item T) returns Self
-		return Self{item: item}
-	end 'create'
-
-	function run()
-		self.item.bump(level)
-	end 'run'
-end 'Holder'
-
-typealias DoublerHolder = Holder with Doubler
-
-function main() returns ExitCode
-	let h = DoublerHolder.create(Doubler.create(1))
-	h.run()
-	print("{level}\n")
-	return 0
-end 'main'
-```
-```stdout
-50
-```
-```exitcode
-0
-```
-
 <!-- test: witness-by-reference.a-requirement-inherited-through-extends-follows-the-same-rule -->
 The requirement is declared by `Base` and reached through `Derived`; its convention belongs to the
 requirement, not to the interface the constraint names.

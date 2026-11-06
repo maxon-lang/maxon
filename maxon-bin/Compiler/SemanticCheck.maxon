@@ -86,7 +86,6 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	try requireStillWanted(project)
 
 	provenance.endStorageDoors()
-	provenance.checkVarInitializersTakeNoSharedRecord(funcNames)
 	try checkClosureCycles(project, module: module, signatures: signatures, funcNames: funcNames, provenance: provenance)
 	try requireStillWanted(project)
 
@@ -112,11 +111,11 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// reason: whether `f` yields depends on what `f` calls, which is only knowable once every file has merged.
 	checkAsyncYielding(project, module: module, funcNames: funcNames)
 
-	// E3139 and E3143 — two services that can await replies from each other, and a module-level `var` read or
-	// written from a green thread. Whole-program for `checkAsyncYielding`'s exact reason, and over ONE closure
-	// apiece rowed opposite ways over ONE shared call graph (`ServiceProgramSurvey`): the first asks which
-	// messages BLOCK ON a service, the second what a message RUNS. Their gates, their order and the single
-	// sweep they share are all in `checkServiceRules`.
+	// E3139 and E3163 — two services that can await replies from each other, and a module-level `let` no share
+	// walk can mark read from a green thread. Whole-program for `checkAsyncYielding`'s exact reason, and
+	// over ONE closure apiece rowed opposite ways over ONE shared call graph (`ServiceProgramSurvey`): the
+	// first asks which messages BLOCK ON a service, the second what a message RUNS. Their gates, their
+	// order and the single sweep they share are all in `checkServiceRules`.
 	checkServiceRules(project, module: module, signatures: signatures, funcNames: funcNames)
 	try requireStillWanted(project)
 
@@ -1095,7 +1094,7 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 		// No edge for a service op: this summary answers "does a call to this function write the
 		// caller's own parameter?", and a parameter a send hands over is shared read-only, refused
 		// (E3138) when the sender or the handler writes or keeps it. A `serviceSpawn` moves its factory's
-		// arguments to the service's green thread, so the factory writes none of this frame's.
+		// arguments to the service, so the factory writes none of this frame's.
 		serviceSpawn or
 		serviceSend or
 		serviceReplyCell or
@@ -1587,7 +1586,7 @@ function opConsumesAPromise(op MaxonOp) returns bool
 		panicAbortValue or
 		errorFlagEncode or
 
-		// A service's green thread is not a promise and no service op reclaims one: a Promise may not be
+		// A service is not a promise and no service op reclaims one: a Promise may not be
 		// sent or handed to a factory at all (`Parser.requireNoPromiseLeaves` refuses it), which is what
 		// keeps this answer true.
 		serviceSpawn or
@@ -1932,8 +1931,8 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		panicAbortValue or
 		errorFlagEncode or
 
-		// No service op re-awaits: a spawn defines a mailbox pointer or its start's cell and a reply cell
-		// defines a promise, so both fall through to the re-arm test below, and a send reads a mailbox
+		// No service op re-awaits: a spawn defines a cown pointer or its start's cell and a reply cell
+		// defines a promise, so both fall through to the re-arm test below, and a send reads a cown
 		// and a box.
 		serviceSpawn or
 		serviceSend or
@@ -2248,7 +2247,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// lowering will mint, through the one E3104 wire format, so a service refusal and a `sleep`
 					// refusal cannot become two spellings of one rejection.
 					serviceSpawn(_, _, state, _, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint, _) then validateServiceSpawn(project, module: module, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, state: state, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
-					serviceSend then requireTargetSupportsServiceEntry(project, func: func, opIndex: opIdx, subject: "a message send", entry: MboxSendName, blameTargetErrorsHere: blameTargetErrorsHere)
+					serviceSend then requireTargetSupportsServiceEntry(project, func: func, opIndex: opIdx, subject: "a message send", entry: CownSendName, blameTargetErrorsHere: blameTargetErrorsHere)
 
 					// ⭐ A REPLY CELL reaches the scheduler substrate exactly as the two above do — it mints a
 					// green-thread struct and steps the GT live count — and it is emitted only beside a
@@ -2279,7 +2278,7 @@ end 'validateAsyncCall'
 
 function validateServiceSpawn(project Project, module MaxonModule, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, state ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
 	validateCall(project, module: module, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: state, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
-	requireTargetSupportsServiceEntry(project, func: func, opIndex: opIndex, subject: "'spawn'", entry: SvcSpawnName, blameTargetErrorsHere: blameTargetErrorsHere)
+	requireTargetSupportsServiceEntry(project, func: func, opIndex: opIndex, subject: "'spawn'", entry: CownSpawnName, blameTargetErrorsHere: blameTargetErrorsHere)
 end 'validateServiceSpawn'
 
 // An undeclared callee is E3004, reported by `validateCall`, so its absent signature skips this
@@ -3572,7 +3571,7 @@ function reportIfNonYielding(project Project, op MaxonOp, opIndex ElementIndex, 
 
 		// ⚠ E3073's rule is exactly wrong for a service, so no service op may reach it. "function never
 		// yields; `async` is for I/O-concurrent work only" is a statement about a coroutine, which
-		// overlaps waiting and cannot overlap execution. A service's green thread is scheduled
+		// overlaps waiting and cannot overlap execution. A service's runner green threads are scheduled
 		// independently, and a message handler that never parks is the normal case.
 		serviceSpawn or
 		serviceSend or
@@ -3868,7 +3867,7 @@ end 'calleeIsChainable'
 // `true` reads all three as effectful and lets `_ = m.get(k)` compile clean where E3064 is owed. One body is
 // shared across instantiations, so the candidates have to be named.
 //
-// ⭐ **E3143's WIDENING ASKS THE SAME QUESTION AND READS THIS ANSWER** (`ServiceProgramSurvey.widenFrom`): a
+// ⭐ **THE MESSAGE CLOSURE'S WIDENING (E3163) ASKS THE SAME QUESTION AND READS THIS ANSWER** (`ServiceProgramSurvey.widenFrom`): a
 // store narrower than every declared member wearing the name would leave out a member a dispatch can land on,
 // which there is a missed refusal — so both rules need a scan that is complete by construction, and this is it.
 //
@@ -4088,8 +4087,8 @@ function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex Eleme
 		panicAbortValue or
 		errorFlagEncode or
 
-		// A service op is not an edge. A `spawn` hands the work to a green thread of its own and returns a
-		// handle, and the handler a send reaches runs on the service's thread, so whether it can park says
+		// A service op is not an edge. A `spawn` hands the work to a runner green thread of the service and returns a
+		// handle, and the handler a send reaches runs on one of the service's runners, so whether it can park says
 		// nothing about this frame — the opposite of `asyncCall`, whose coroutine runs on this frame's own
 		// thread.
 		serviceSpawn or
@@ -4166,8 +4165,8 @@ end 'recordCallGraphEdge'
 //     green thread, or drives one of its own coroutines.
 //   • `__gt_process_run` — parks on a child process until it exits.
 //   • `__gt_await_any` — the SELECT: it runs the shared cooperative drive loop, so it switches into
-//     other green threads and blocks this M on the netpoll exactly as an `await` does. `__mbox_close` is
-//     the counter-example and is deliberately absent — it completes INLINE. `__mbox_send` is absent too:
+//     other green threads and blocks this M on the netpoll exactly as an `await` does. `__cown_close` is
+//     the counter-example and is deliberately absent — it completes INLINE. `__cown_send` is absent too:
 //     it parks only when given `sendTimeout:`, which `opYields` reads off the `serviceSend` op.
 //     ⚠ **RE-MEASURED FOR THIS MEMBER, and the block below's finding holds one name later:** with
 //     `__gt_await_any` struck from the predicate and rebuilt, `async` over a function whose ONLY yield is
@@ -4524,7 +4523,6 @@ function functionTypeDoorSite(door PendingFunctionTypeDoor) returns String
 		containerElement gives "in a container element"
 		tupleElement gives "in a tuple element"
 		variable or
-		global or
 		field gives "assigning to {functionTypeDoorNoun(door.door)} '{namedDoorPlace(door)}'"
 	end 'd'
 end 'functionTypeDoorSite'
@@ -4680,9 +4678,9 @@ function requireTargetSupportsServiceEntry(project Project, func IrFunction, opI
 	// is allowed to blame is right only while one lane provides anything, so the verdict comes from
 	// `calleeNeedsFacilityTargetLacks` here exactly as it does for every other E3104.
 	//
-	// ⭐ **`greenThreads` IS THE RIGHT QUESTION, AND IT IS THE WHOLE QUESTION.** A service is a green thread
-	// with a mailbox: `MailboxRuntime` and `ServiceLoop` reach **no `StdOp.os*` op whatsoever** — every OS
-	// fact they touch arrives through the scheduler beneath them. So "can this target host a service?" IS
+	// ⭐ **`greenThreads` IS THE RIGHT QUESTION, AND IT IS THE WHOLE QUESTION.** A service is a cown
+	// its green-thread runners drain: `CownRuntime` and `ServiceBehaviour` reach **no `StdOp.os*` op
+	// whatsoever** — every OS fact they touch arrives through the scheduler beneath them. So "can this target host a service?" IS
 	// "does it have the green-thread floor?", asked of the one table that knows, rather than restated here.
 	// ⚠ MEASURED: `specs/services.md`'s own arm64 refusal case recorded the reason as
 	// `lowerTlsAlloc: TlsAlloc is x64-windows only` — a scheduler primitive, not a service one — and it is

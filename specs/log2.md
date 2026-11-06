@@ -20,14 +20,14 @@ Calculate the base-2 logarithm of a number.
 **Example:**
 
 ```maxon
-var x = 8.0
-var y = Math.log2(x)     // 3.0 (2^3 = 8)
+let x = 8.0
+let y = Math.log2(x)     // 3.0 (2^3 = 8)
 
-var z = 16.0
-var w = Math.log2(z)     // 4.0 (2^4 = 16)
+let z = 16.0
+let w = Math.log2(z)     // 4.0 (2^4 = 16)
 
-var a = 1024.0
-var b = Math.log2(a)     // 10.0 (2^10 = 1024)
+let a = 1024.0
+let b = Math.log2(a)     // 10.0 (2^10 = 1024)
 ```
 **Notes:**
 - Non-positive input answers as IEEE 754 defines it (user ruling): `log2(+0.0)` and

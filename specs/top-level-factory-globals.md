@@ -9,7 +9,7 @@ category: language
 ## Documentation
 
 A top-level binding may be initialized by a **user static factory call** —
-`var db = Database.create(EntryMap.create(), sourcePaths: StringArray.create(0))`. The initializer is
+`let db = Database.create(EntryMap.create(), sourcePaths: StringArray.create(0))`. The initializer is
 parsed by the body's expression parser into an initializer function, and — unless the record is decided at
 compile time and laid down as image data — `__module_init` calls it before `main` and stores its result in
 the binding's slot, so the call, its arguments and their drops are the
@@ -107,7 +107,7 @@ end 'Box'
 
 typealias IntBox = Box with Count
 
-var b = IntBox.create()
+let b = IntBox.create()
 
 function main() returns ExitCode
 	return b.n
@@ -132,7 +132,7 @@ end 'Box'
 
 typealias IntBox = Box with Count
 
-var b = IntBox.create()
+let b = IntBox.create()
 
 function main() returns ExitCode
 	return b.n
@@ -182,7 +182,7 @@ end 'Box'
 
 typealias IntBox = Box with Count
 
-var b = IntBox.create()
+let b = IntBox.create()
 
 function main() returns ExitCode
 	return 3
@@ -232,7 +232,7 @@ end 'Box'
 
 typealias IntBox = Box with Count
 
-var b = IntBox.create(9)
+let b = IntBox.create(9)
 
 function main() returns ExitCode
 	return b.n
@@ -307,7 +307,7 @@ type Counter
 	end 'create'
 end 'Counter'
 
-var c = Counter.create(Bytes.create(0))
+let c = Counter.create(Bytes.create(0))
 
 function main() returns ExitCode
 	return c.n
@@ -321,7 +321,7 @@ end 'main'
 Rule 3 reaches the CONTAINER door too, and by the same route: `__module_init` is a function no file
 wrote, so the pass that checks a call's visibility exempts every call it makes. Without the check here
 an exported generic's file-private `create` would be reachable from any file that writes
-`var b = Alias.create()`, while the byte-identical call in a function body is E3008.
+`let b = Alias.create()`, while the byte-identical call in a function body is E3008.
 ```maxon
 // --- file: api/box.maxon
 export typealias Count = int(0 to u64.max)
@@ -337,7 +337,7 @@ end 'Box'
 export typealias IntBox = Box with Count
 
 // --- file: bin/main.maxon
-var b = IntBox.create()
+let b = IntBox.create()
 
 function main() returns ExitCode
 	return b.n
@@ -393,7 +393,7 @@ type Mixed
 	end 'create'
 end 'Mixed'
 
-var m = Mixed.create(Bytes.create(0), seen: Bytes.create(0), tag: "hi")
+let m = Mixed.create(Bytes.create(0), seen: Bytes.create(0), tag: "hi")
 
 function main() returns ExitCode
 	print("{m.tag}\n")
@@ -420,7 +420,7 @@ type Database
 	end 'create'
 end 'Database'
 
-var db = Database.create()
+let db = Database.create()
 
 function main() returns ExitCode
 	return db.n
@@ -451,7 +451,7 @@ type Outer
 	end 'build'
 end 'Outer'
 
-var a = Outer.build()
+let a = Outer.build()
 
 function main() returns ExitCode
 	return a.v
@@ -482,7 +482,7 @@ type Outer
 	end 'build'
 end 'Outer'
 
-var a = Outer.build()
+let a = Outer.build()
 
 function main() returns ExitCode
 	print("{a.tag}\n")
@@ -520,7 +520,7 @@ export type Outer
 end 'Outer'
 
 // --- file: bin/main.maxon
-var a = Outer.build()
+let a = Outer.build()
 
 function main() returns ExitCode
 	return a.v
@@ -544,7 +544,7 @@ type Maker
 	end 'build'
 end 'Maker'
 
-var a = Maker.build()
+let a = Maker.build()
 
 function main() returns ExitCode
 	print("{a.0} {a.1}\n")
@@ -580,7 +580,7 @@ public typealias Num = int(0 to 1000)
 export typealias Pair = (Num, Num)
 
 // --- file: bin/main.maxon
-var a = Maker.build()
+let a = Maker.build()
 
 function main() returns ExitCode
 	print("{a.0} {a.1}\n")
@@ -613,7 +613,7 @@ type Maker
 	end 'build'
 end 'Maker'
 
-var a = Maker.build()
+let a = Maker.build()
 
 function main() returns ExitCode
 	print("{a.0} {a.1}\n")
@@ -640,7 +640,7 @@ type Maker
 	end 'build'
 end 'Maker'
 
-var a = Maker.build()
+let a = Maker.build()
 
 function main() returns ExitCode
 	print("{a.0} {a.1}\n")
@@ -675,7 +675,7 @@ type Maker
 	end 'build'
 end 'Maker'
 
-var a = Maker.build()
+let a = Maker.build()
 
 function main() returns ExitCode
 	return a.n as ExitCode
@@ -728,7 +728,7 @@ type Maker
 	end 'build'
 end 'Maker'
 
-var a = Maker.build()
+let a = Maker.build()
 
 function main() returns ExitCode
 	match a 'kind'
@@ -784,7 +784,7 @@ end 'Database'
 
 export typealias Integer = int(i64.min to i64.max)
 // --- file: bin/main.maxon
-var db = Database.create()
+let db = Database.create()
 
 function main() returns ExitCode
 	return db.n
@@ -831,7 +831,7 @@ end 'Database'
 
 export typealias Integer = int(i64.min to i64.max)
 // --- file: bin/main.maxon
-var db = Database.create()
+let db = Database.create()
 
 function main() returns ExitCode
 	return db.n
@@ -869,7 +869,7 @@ so the only edge that reaches it is the top-level initializer's. The separator i
 host (`\` on Windows, `/` elsewhere), which is what makes the exit code a portable assertion that the
 factory actually RAN rather than merely compiled.
 ```maxon
-var sep = FilePath.separator()
+let sep = FilePath.separator()
 
 function main() returns ExitCode
 	return sep.byteLength() as ExitCode
@@ -885,7 +885,7 @@ this initializer, and the `StringArray` built for `sources` is materialized, bor
 inside `__module_init` — so the exit-101 gate is asserting the argument cleanup on a callee whose body
 the compiler had to be told to lower.
 ```maxon
-var cfg = BuildConfig.create(StringArray.create(0), output: "app.exe", debug_info: false)
+let cfg = BuildConfig.create(StringArray.create(0), output: "app.exe", debug_info: false)
 
 function main() returns ExitCode
 	return cfg.sources.count() as ExitCode
@@ -914,15 +914,14 @@ type Holder
 	end 'create'
 end 'Holder'
 
-var h = Holder.create(StrMap.create())
+let h = Holder.create(StrMap.create())
 
 function main() returns ExitCode
-	h.table.upsert("a", value: 6)
 	return h.table.count() as ExitCode
 end 'main'
 ```
 ```exitcode
-1
+0
 ```
 
 <!-- test: error.a-factory-returning-an-interface-cannot-fill-a-global -->
@@ -1011,7 +1010,7 @@ type Maker
 	end 'color'
 end 'Maker'
 
-var g = Maker.color()
+let g = Maker.color()
 
 function main() returns ExitCode
 	if g == Color.green 'isGreen'

@@ -989,7 +989,7 @@ type Pair
 	end 'create'
 end 'Pair'
 
-var origin = Pair.create(4, hi: 5)
+let origin = Pair.create(4, hi: 5)
 
 function main() returns ExitCode
 	return (origin.lo + origin.hi) as ExitCode
@@ -997,53 +997,6 @@ end 'main'
 ```
 ```exitcode
 9
-```
-
-<!-- test: inline-records.a-module-level-var-is-reassigned -->
-A module-level `var` of an inline record holds the WORD in its `.data` slot, so a whole new value
-assigned to it is a scalar store and neither the read nor the write allocates.
-```maxon
-typealias Half = int(0 to u32.max)
-
-type Pair
-	export let lo as Half
-	export let hi as Half
-
-	static function create(lo Half, hi Half) returns Self
-		return Self{lo: lo, hi: hi}
-	end 'create'
-end 'Pair'
-
-var slot = Pair.create(1, hi: 2)
-
-function main() returns ExitCode
-	let before = HeapStats.allocationsLive()
-
-	if slot.lo != 1 'firstLo'
-		return 1
-	end 'firstLo'
-
-	slot = Pair.create(7, hi: 9)
-
-	if slot.lo != 7 'secondLo'
-		return 2
-	end 'secondLo'
-
-	if slot.hi != 9 'secondHi'
-		return 3
-	end 'secondHi'
-
-	let after = HeapStats.allocationsLive()
-
-	if after != before 'alloc'
-		return 4
-	end 'alloc'
-
-	return 0
-end 'main'
-```
-```exitcode
-0
 ```
 
 <!-- test: inline-records.a-contested-alias-is-read-in-the-declaring-file -->
@@ -1108,63 +1061,6 @@ end 'main'
 ```
 ```exitcode
 8
-```
-
-<!-- test: inline-records.a-module-level-var-whose-factory-is-not-folded -->
-A factory whose result is not decided at compile time — its body computes, and one argument rides a
-declared default — leaves the binding to `__module_init`, which RUNS the call before `main`. An inline record's
-slot is still one 8-byte word holding the VALUE, so the stored word reads back, a whole new value
-assigned over it is a scalar store, and nothing is allocated or released either side of `main`.
-```maxon
-typealias Half = int(0 to u32.max)
-
-type Pair
-	export let lo as Half
-	export let hi as Half
-
-	static function create(lo Half, hi Half) returns Self
-		return Self{lo: lo, hi: hi}
-	end 'create'
-
-	static function scaled(lo Half, by Half = 3) returns Self
-		return Self{lo: lo * by, hi: lo + by}
-	end 'scaled'
-end 'Pair'
-
-var built = Pair.scaled(5)
-
-function main() returns ExitCode
-	let before = HeapStats.allocationsLive()
-
-	if built.lo != 15 'initialLo'
-		return 1
-	end 'initialLo'
-
-	if built.hi != 8 'initialHi'
-		return 2
-	end 'initialHi'
-
-	built = Pair.create(20, hi: 21)
-
-	if built.lo != 20 'secondLo'
-		return 3
-	end 'secondLo'
-
-	if built.hi != 21 'secondHi'
-		return 4
-	end 'secondHi'
-
-	let after = HeapStats.allocationsLive()
-
-	if after != before 'alloc'
-		return 5
-	end 'alloc'
-
-	return 0
-end 'main'
-```
-```exitcode
-0
 ```
 
 <!-- test: inline-records.a-module-level-factory-handed-another-inline-record-for-a-field -->

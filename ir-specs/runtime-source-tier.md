@@ -37,17 +37,14 @@ module function probeWorkers() returns MachineWord
 	return __sched_max_active_workers()
 end 'probeWorkers'
 // --- file: main.maxon
-var used = 42 as FullRangeInt
-
 function main() returns ExitCode
-	return used - 42
+	return 0
 end 'main'
 ```
 ```exitcode
 0
 ```
 ```RequiredData
-i64 42
 i8 0
 i8 0
 i8 0
@@ -55,36 +52,17 @@ i8 0
 
 ```TargetIr:x64-windows
 data {
-  __data_used@0 = i64 42
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+  __mrt_program_started@3 = i8 0
 }
 
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegGlobal rax, __data_used
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegRegImm32 r8, rax, -42
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at main.maxon:4: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -125,18 +103,15 @@ module function probeWorkers() returns MachineWord
 	return __sched_max_active_workers()
 end 'probeWorkers'
 // --- file: main.maxon
-var used = 42 as Count
-
 function main() returns ExitCode
 	let workers = __Builtins.schedMaxActiveWorkers()
-	return used - 41 - workers
+	return 1 - workers
 end 'main'
 ```
 ```exitcode
 0
 ```
 ```RequiredData
-i64 42
 i64 1
 i8 0
 i8 0
@@ -148,12 +123,11 @@ __sched_max_active_workers
 
 ```TargetIr:x64-windows
 data {
-  __data_used@0 = i64 42
-  __sched_max_active_workers@8 = i64 1
-  __mrt_console_probe_stdin@16 = i8 0
-  __mrt_console_probe_stdout@17 = i8 0
-  __mrt_console_probe_stderr@18 = i8 0
-  __mrt_program_started@19 = i8 0
+  __sched_max_active_workers@0 = i64 1
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+  __mrt_program_started@11 = i8 0
 }
 
 func @main {
@@ -162,9 +136,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.callDirect __sched_max_active_workers
-    x64.leaRegGlobal rax, __data_used
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegRegImm32 rax, rax, -41
+    x64.movRegImm32 rax, 1
     x64.subRegReg rax, rax, r8
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
@@ -178,7 +150,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at main.maxon:5: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at main.maxon:3: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -215,12 +187,10 @@ module function probeWorkers() returns MachineWord
 	return __sched_max_active_workers()
 end 'probeWorkers'
 // --- file: main.maxon
-var used = 42 as FullRangeInt
-
 function main() returns ExitCode
 	let pid = Process.id()
 	if pid > 0 'aRealProcess'
-		return used - 42
+		return 0
 	end 'aRealProcess'
 
 	return 1
@@ -230,7 +200,6 @@ end 'main'
 0
 ```
 ```RequiredData
-i64 42
 i8 0
 i8 0
 i8 0
@@ -238,11 +207,10 @@ i8 0
 
 ```TargetIr:x64-windows
 data {
-  __data_used@0 = i64 42
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+  __mrt_program_started@3 = i8 0
 }
 
 func @main {
@@ -256,28 +224,12 @@ func @main {
     x64.cmpRegImm32 r8, 0
     x64.jcc belowEqual, ifcont
   aRealProcess:
-    x64.leaRegGlobal rax, __data_used
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegRegImm32 r8, rax, -42
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 1
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at main.maxon:6: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -294,21 +246,18 @@ would land between `used` and the console probes, which is where a prefix compar
 ```maxon
 typealias WorkerCount = int(0 to u64.max)
 
-var used = 42 as FullRangeInt
-
 function dormant() returns WorkerCount
 	return Scheduler.counters().maxActiveWorkers
 end 'dormant'
 
 function main() returns ExitCode
-	return used - 42
+	return 0
 end 'main'
 ```
 ```exitcode
 0
 ```
 ```RequiredData
-i64 42
 i8 0
 i8 0
 i8 0
@@ -316,106 +265,87 @@ i8 0
 
 ```TargetIr:x64-windows
 data {
-  __data_used@0 = i64 42
-  __gt_allg@8 = i64 0
-  __gt_allglen@16 = i64 0
-  __gt_allgcap@24 = i64 0
-  __gt_allg_lock@32 = i64 0
-  __gt_hold_epoch@40 = i64 0
-  __gt_run_queue_head@48 = i64 0
-  __gt_run_queue_tail@56 = i64 0
-  __gt_timer_count@64 = i64 0
-  __gt_timer_heap_base@72 = i64 0
-  __gt_timer_capacity@80 = i64 0
-  __gt_timer_seq@88 = i64 0
-  __gt_timer_when@96 = i64 9223372036854775807
-  __gt_quiesce_waiter@104 = i64 0
-  __gt_seed_bytes@112 = i64 8192
-  __gt_seed_sum_seen@120 = i64 0
-  __gt_seed_count_seen@128 = i64 0
-  __gt_seed_guard@136 = i64 0
-  __gt_keeps_cpu_clock@144 = i64 0
-  __gt_stack_pool@152 = i64 0
-  __sched_active_workers@160 = i64 1
-  __sched_max_active_workers@168 = i64 1
-  __sched_tls_index@176 = i64 0
-  __sched_tls_teb_offset@184 = i64 0
-  __sched_procs@192 = i64 0
-  __sched_allm@200 = i64 0
-  __sched_async_preempt_off@208 = i64 0
-  __sched_midle@216 = i64 0
-  __sched_pidle@224 = i64 0
-  __gt_gfree_head@232 = i64 0
-  __gt_gfree_nostack_head@240 = i64 0
-  __gt_cell_gfree_head@248 = i64 0
-  __sched_arena_cursor@256 = i64 0
-  __sched_arena_limit@264 = i64 0
-  __gt_records_carved@272 = i64 0
-  __gt_gfree_lock@280 = i64 0
-  __gt_gfree_lock_owner@288 = i64 0
-  __gt_gfree_lock_depth@296 = i64 0
-  __sched_npidle@304 = i64 0
-  __sched_runq_size@312 = i64 0
-  __sched_global_pushes@320 = i64 0
-  __sched_timer_scan_steps@328 = i64 0
-  __sched_mcount@336 = i64 0
-  __sched_nmidle@344 = i64 0
-  __sched_nmidlelocked@352 = i64 0
-  __sched_main_m@360 = i64 0
-  __sched_phase@368 = i64 0
-  __sched_lastpoll@376 = i64 0
-  __sched_poll_until@384 = i64 0
-  __sched_regain_head@392 = i64 0
-  __np_poller@400 = i64 0
-  __np_break@408 = i64 0
-  __np_wake_sig@416 = i64 0
-  __np_pd_table@424 = i64 0
-  __np_pd_cap@432 = i64 0
-  __np_waiters@440 = i64 0
-  __sched_num_procs@448 = i64 0
-  __sched_ncpu@456 = i64 0
-  __sched_shutdown_flag@464 = i64 0
-  __sched_lock@472 = i64 0
-  __sched_lock_depth_sink@480 = i64 0
-  __sched_nmspinning@488 = i64 0
-  __sched_needspinning@496 = i64 0
-  __sched_sysmon_event@504 = i64 0
-  __sched_sysmon_wait@512 = i64 0
-  __sched_timer_starts@520 = i64 0
-  __sched_preempt_ext_lock@528 = i64 0
-  __sched_preempt_context@536 = i64 0
-  __slab_arena_list@544 = i64 0
-  __slab_arena_map_l1@552 = i64 0
-  __slab_state@560 = i64 0
-  __mrt_console_probe_stdin@568 = i8 0
-  __mrt_console_probe_stdout@569 = i8 0
-  __mrt_console_probe_stderr@570 = i8 0
-  __mrt_program_started@571 = i8 0
+  __gt_allg@0 = i64 0
+  __gt_allglen@8 = i64 0
+  __gt_allgcap@16 = i64 0
+  __gt_allg_lock@24 = i64 0
+  __gt_hold_epoch@32 = i64 0
+  __gt_run_queue_head@40 = i64 0
+  __gt_run_queue_tail@48 = i64 0
+  __gt_timer_count@56 = i64 0
+  __gt_timer_heap_base@64 = i64 0
+  __gt_timer_capacity@72 = i64 0
+  __gt_timer_seq@80 = i64 0
+  __gt_timer_when@88 = i64 9223372036854775807
+  __gt_quiesce_waiter@96 = i64 0
+  __gt_seed_bytes@104 = i64 8192
+  __gt_seed_sum_seen@112 = i64 0
+  __gt_seed_count_seen@120 = i64 0
+  __gt_seed_guard@128 = i64 0
+  __gt_keeps_cpu_clock@136 = i64 0
+  __gt_stack_pool@144 = i64 0
+  __sched_active_workers@152 = i64 1
+  __sched_max_active_workers@160 = i64 1
+  __sched_tls_index@168 = i64 0
+  __sched_tls_teb_offset@176 = i64 0
+  __sched_procs@184 = i64 0
+  __sched_allm@192 = i64 0
+  __sched_async_preempt_off@200 = i64 0
+  __sched_midle@208 = i64 0
+  __sched_pidle@216 = i64 0
+  __gt_gfree_head@224 = i64 0
+  __gt_gfree_nostack_head@232 = i64 0
+  __gt_cell_gfree_head@240 = i64 0
+  __sched_arena_cursor@248 = i64 0
+  __sched_arena_limit@256 = i64 0
+  __gt_records_carved@264 = i64 0
+  __gt_gfree_lock@272 = i64 0
+  __gt_gfree_lock_owner@280 = i64 0
+  __gt_gfree_lock_depth@288 = i64 0
+  __sched_npidle@296 = i64 0
+  __sched_runq_size@304 = i64 0
+  __sched_global_pushes@312 = i64 0
+  __sched_timer_scan_steps@320 = i64 0
+  __sched_mcount@328 = i64 0
+  __sched_nmidle@336 = i64 0
+  __sched_nmidlelocked@344 = i64 0
+  __sched_main_m@352 = i64 0
+  __sched_phase@360 = i64 0
+  __sched_lastpoll@368 = i64 0
+  __sched_poll_until@376 = i64 0
+  __sched_regain_head@384 = i64 0
+  __np_poller@392 = i64 0
+  __np_break@400 = i64 0
+  __np_wake_sig@408 = i64 0
+  __np_pd_table@416 = i64 0
+  __np_pd_cap@424 = i64 0
+  __np_waiters@432 = i64 0
+  __sched_num_procs@440 = i64 0
+  __sched_ncpu@448 = i64 0
+  __sched_shutdown_flag@456 = i64 0
+  __sched_lock@464 = i64 0
+  __sched_lock_depth_sink@472 = i64 0
+  __sched_nmspinning@480 = i64 0
+  __sched_needspinning@488 = i64 0
+  __sched_sysmon_event@496 = i64 0
+  __sched_sysmon_wait@504 = i64 0
+  __sched_timer_starts@512 = i64 0
+  __sched_preempt_ext_lock@520 = i64 0
+  __sched_preempt_context@528 = i64 0
+  __slab_arena_list@536 = i64 0
+  __slab_arena_map_l1@544 = i64 0
+  __slab_state@552 = i64 0
+  __mrt_console_probe_stdin@560 = i8 0
+  __mrt_console_probe_stdout@561 = i8 0
+  __mrt_console_probe_stderr@562 = i8 0
+  __mrt_program_started@563 = i8 0
 }
 
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegGlobal rax, __data_used
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegRegImm32 r8, rax, -42
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-word-only-a-dead-user-function-reads-is-not-laid-out.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

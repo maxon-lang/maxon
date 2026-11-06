@@ -14,10 +14,13 @@ value being OVERWRITTEN before the binding takes the new one. Without that relea
 value but the LAST leaks: a binding's scope-exit drop only ever reaches its final value.
 
 ```maxon
-var s = build(1)   // owns the box from build(1)
-s = build(2)       // build(1) is dropped HERE, before s takes build(2)
-s = build(3)       // build(2) is dropped HERE
-print(s)           // s == build(3), dropped at scope exit
+function main() returns ExitCode
+	var s = build(1)   // owns the box from build(1)
+	s = build(2)       // build(1) is dropped HERE, before s takes build(2)
+	s = build(3)       // build(2) is dropped HERE
+	print(s)           // s == build(3), dropped at scope exit
+	return 0
+end 'main'
 ```
 
 Ownership is BINDING-level: whether a reassignment must drop is decided by whether the

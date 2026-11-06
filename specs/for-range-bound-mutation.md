@@ -15,10 +15,12 @@ either bound is therefore an ordinary write: it cannot change how many times the
 and the loop must not refuse it.
 
 ```text
-var n = 0 as Count
-for i in n upto 3 'l'      // runs 3 times whatever the body does to `n`
-    n = n + 1
-end 'l'
+function demo()
+	var n = 0 as Count
+	for i in n upto 3 'l'      // runs 3 times whatever the body does to `n`
+		n = n + 1
+	end 'l'
+end 'demo'
 ```
 
 The ARRAY form differs: it re-reads the array's live count on every step, so a `push` in the
@@ -181,16 +183,15 @@ valid, and the next step sees the cleared count and ends.
 ```maxon
 typealias Lines = Array with String
 
-var pending = Lines.create(0)
-
-function wipe()
+function wipe(pending mutable Lines)
 	pending.clear()
 end 'wipe'
 
 function main() returns ExitCode
+	var pending = Lines.create(0)
 	pending.push("hello world this is a long string for heap allocation {40 + 2}")
 	for it in pending 'scan'
-		wipe()
+		wipe(pending)
 		print("{it.byteLength()} [{it}]\n")
 	end 'scan'
 	print("{pending.count()}\n")
@@ -212,9 +213,8 @@ record's end.
 typealias Integer = int(i64.min to i64.max)
 typealias IntegerArray = Array with Integer
 
-var numbers = IntegerArray.create(0)
-
 function main() returns ExitCode
+	var numbers = IntegerArray.create(0)
 	numbers.push(1)
 	numbers.push(2)
 	var t = 0 as Integer

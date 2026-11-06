@@ -554,20 +554,22 @@ separates a promise dropped off the POLLER from one dropped at a plain I/O yield
 runs, never opens a socket, `parkedFrom` stays `0` for ever, and the drop takes the never-ran arm. The peek pins that the reader really was still parked when it was dropped — a completed thread
 reads `1`.
 ```maxon
-var parkedFrom = 0 as SchedulerEventCount
+typealias ParkMark = SharedValue with SchedulerEventCount
 
-function parkedInRecv() returns bool
-	if parkedFrom == 0 'notYet'
+function parkedInRecv(parkedFrom ParkMark) returns bool
+	let mark = parkedFrom.current()
+
+	if mark == 0 'notYet'
 		return false
 	end 'notYet'
 
-	return Scheduler.counters().netpollBlocks >= parkedFrom
+	return Scheduler.counters().netpollBlocks >= mark
 end 'parkedInRecv'
 
-function stall(listener TcpListener) returns ExitCode throws NetworkError
+function stall(listener TcpListener, parkedFrom ParkMark) returns ExitCode throws NetworkError
 	let client = try TcpClient.connect("127.0.0.1", port: listener.port())
 
-	parkedFrom = Scheduler.counters().netpollBlocks + 1
+	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 	_ = try client.recv(1024)
 
 	return 0
@@ -576,9 +578,10 @@ end 'stall'
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 
-	let reader = async stall(listener)
+	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
+	let reader = async stall(listener, parkedFrom: parkedFrom.clone())
 
-	while not parkedInRecv() 'untilParkedInRecv'
+	while not parkedInRecv(parkedFrom) 'untilParkedInRecv'
 		sleep(1)
 	end 'untilParkedInRecv'
 
@@ -624,11 +627,11 @@ read, and it has to wait for the count to move to do it.
 ```maxon
 typealias Dialled = int(0 to 1)
 
-var dialled = 0 as Dialled
+typealias DialledFlag = SharedValue with Dialled
 
-function stall(listener TcpListener) returns ExitCode throws NetworkError
+function stall(listener TcpListener, dialled DialledFlag) returns ExitCode throws NetworkError
 	let client = try TcpClient.connect("127.0.0.1", port: listener.port())
-	dialled = 1
+	dialled.publish(1 as Dialled)
 	sleep(1000)
 	_ = try client.recv(1024)
 
@@ -638,9 +641,10 @@ end 'stall'
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 
-	let reader = async stall(listener)
+	let dialled = DialledFlag.create(0 as Dialled)
+	let reader = async stall(listener, dialled: dialled.clone())
 
-	while dialled == 0 'untilDialled'
+	while dialled.current() == 0 'untilDialled'
 		Scheduler.yield()
 	end 'untilDialled'
 
@@ -690,21 +694,23 @@ no sleep has to outlast the host.
 // `NetworkError` variant a closed-under-it read can raise.
 typealias ReadOutcome = int(0 to 3)
 
-var parkedFrom = 0 as SchedulerEventCount
+typealias ParkMark = SharedValue with SchedulerEventCount
 
-function parkedInRecv() returns bool
-	if parkedFrom == 0 'notYet'
+function parkedInRecv(parkedFrom ParkMark) returns bool
+	let mark = parkedFrom.current()
+
+	if mark == 0 'notYet'
 		return false
 	end 'notYet'
 
-	return Scheduler.counters().netpollBlocks >= parkedFrom
+	return Scheduler.counters().netpollBlocks >= mark
 end 'parkedInRecv'
 
 // Nothing on the far side can ever write, so this read parks and stays parked until the owner closes under it.
-function readUntilClosed(client TcpClient) returns ReadOutcome
+function readUntilClosed(client TcpClient, parkedFrom ParkMark) returns ReadOutcome
 	var code = 0 as ReadOutcome
 
-	parkedFrom = Scheduler.counters().netpollBlocks + 1
+	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 
 	try client.recv(1024) otherwise (e) 'readErr'
 		match e 'which'
@@ -719,9 +725,10 @@ function readUntilClosed(client TcpClient) returns ReadOutcome
 end 'readUntilClosed'
 
 function readOver(client TcpClient) returns ExitCode
-	let reader = async readUntilClosed(client)
+	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
+	let reader = async readUntilClosed(client, parkedFrom: parkedFrom.clone())
 
-	while not parkedInRecv() 'untilParkedInRecv'
+	while not parkedInRecv(parkedFrom) 'untilParkedInRecv'
 		sleep(1)
 	end 'untilParkedInRecv'
 
@@ -797,10 +804,11 @@ lane runs — the descriptor reuse is only how this file reaches it.
 typealias ReadOutcome = int(0 to 3)
 typealias Answered = int(0 to 1)
 
-var peerFrom = 0 as SchedulerEventCount
-var parkedFrom = 0 as SchedulerEventCount
+typealias ParkMark = SharedValue with SchedulerEventCount
 
-function parkedAt(mark SchedulerEventCount) returns bool
+function parkedAt(from ParkMark) returns bool
+	let mark = from.current()
+
 	if mark == 0 'notYet'
 		return false
 	end 'notYet'
@@ -809,10 +817,10 @@ function parkedAt(mark SchedulerEventCount) returns bool
 end 'parkedAt'
 
 // Nothing is ever sent on this connection, so this read parks and is still parked when the owner closes.
-function readNothing(client TcpClient) returns ReadOutcome
+function readNothing(client TcpClient, parkedFrom ParkMark) returns ReadOutcome
 	var code = 0 as ReadOutcome
 
-	parkedFrom = Scheduler.counters().netpollBlocks + 1
+	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 
 	try client.recv(1024) otherwise (e) 'readErr'
 		match e 'which'
@@ -826,12 +834,12 @@ function readNothing(client TcpClient) returns ReadOutcome
 	return code
 end 'readNothing'
 
-function echoUntilAnswered(listener TcpListener) returns Answered
+function echoUntilAnswered(listener TcpListener, peerFrom ParkMark) returns Answered
 	var answered = 0 as Answered
 
 	while answered == 0 'serving'
 		let conn = try listener.accept() otherwise return 0
-		peerFrom = Scheduler.counters().netpollBlocks + 1
+		peerFrom.publish(Scheduler.counters().netpollBlocks + 1)
 		let heard = try conn.recv(1024) otherwise continue
 		_ = try conn.send(heard) otherwise return 0
 		answered = 1
@@ -846,13 +854,14 @@ function main() returns ExitCode
 end 'main'
 
 function reuseOver(listener TcpListener) returns ExitCode
-	let peer = async echoUntilAnswered(listener)
+	let peerFrom = ParkMark.create(0 as SchedulerEventCount)
+	let peer = async echoUntilAnswered(listener, peerFrom: peerFrom.clone())
 	let first = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise 'firstConnectFailed'
 		peer.cancel()
 		return 1
 	end 'firstConnectFailed'
 
-	let reused = reuseItsDescriptor(first, port: listener.port())
+	let reused = reuseItsDescriptor(first, port: listener.port(), peerFrom: peerFrom)
 	let answered = await peer
 
 	if answered != 1 'peer'
@@ -863,12 +872,13 @@ function reuseOver(listener TcpListener) returns ExitCode
 	return 0
 end 'reuseOver'
 
-function reuseItsDescriptor(first TcpClient, port NetworkPort) returns String
+function reuseItsDescriptor(first TcpClient, port NetworkPort, peerFrom ParkMark) returns String
 	while not parkedAt(peerFrom) 'untilPeerParked'
 		sleep(1)
 	end 'untilPeerParked'
 
-	let stale = async readNothing(first)
+	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
+	let stale = async readNothing(first, parkedFrom: parkedFrom.clone())
 
 	while not parkedAt(parkedFrom) 'untilReaderParked'
 		sleep(1)
@@ -927,20 +937,22 @@ has no bound, so a coroutine that never parks is a TIMEOUT and no sleep has to o
 ```maxon
 typealias ReadOutcome = int(0 to 3)
 
-var parkedFrom = 0 as SchedulerEventCount
+typealias ParkMark = SharedValue with SchedulerEventCount
 
-function parkedInRecv() returns bool
-	if parkedFrom == 0 'notYet'
+function parkedInRecv(parkedFrom ParkMark) returns bool
+	let mark = parkedFrom.current()
+
+	if mark == 0 'notYet'
 		return false
 	end 'notYet'
 
-	return Scheduler.counters().netpollBlocks >= parkedFrom
+	return Scheduler.counters().netpollBlocks >= mark
 end 'parkedInRecv'
 
-function readNothing(client TcpClient) returns ReadOutcome
+function readNothing(client TcpClient, parkedFrom ParkMark) returns ReadOutcome
 	var code = 0 as ReadOutcome
 
-	parkedFrom = Scheduler.counters().netpollBlocks + 1
+	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 
 	try client.recv(1024) otherwise (e) 'readErr'
 		match e 'which'
@@ -955,9 +967,10 @@ function readNothing(client TcpClient) returns ReadOutcome
 end 'readNothing'
 
 function readOver(client TcpClient) returns ExitCode
-	let first = async readNothing(client)
+	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
+	let first = async readNothing(client, parkedFrom: parkedFrom.clone())
 
-	while not parkedInRecv() 'untilParkedInRecv'
+	while not parkedInRecv(parkedFrom) 'untilParkedInRecv'
 		sleep(1)
 	end 'untilParkedInRecv'
 
@@ -1025,23 +1038,23 @@ cancelled reader's resume erases it, and `main` waits for ever — the runner re
 typealias ReadOutcome = int(0 to 3)
 typealias Phase = int(0 to 2)
 
-// 0 until the first reader is parked, 1 until `main` is about to issue its own read.
-var phase = 0 as Phase
+typealias PhaseFlag = SharedValue with Phase
+typealias ParkMark = SharedValue with SchedulerEventCount
 
-var parkedFrom = 0 as SchedulerEventCount
+function parkedInRecv(parkedFrom ParkMark) returns bool
+	let mark = parkedFrom.current()
 
-function parkedInRecv() returns bool
-	if parkedFrom == 0 'notYet'
+	if mark == 0 'notYet'
 		return false
 	end 'notYet'
 
-	return Scheduler.counters().netpollBlocks >= parkedFrom
+	return Scheduler.counters().netpollBlocks >= mark
 end 'parkedInRecv'
 
-function readOutcome(client TcpClient) returns ReadOutcome
+function readOutcome(client TcpClient, parkedFrom ParkMark) returns ReadOutcome
 	var code = 0 as ReadOutcome
 
-	parkedFrom = Scheduler.counters().netpollBlocks + 1
+	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 
 	try client.recv(1024) otherwise (e) 'readErr'
 		match e 'which'
@@ -1062,16 +1075,16 @@ end 'giveMainItsTurn'
 
 // Yielding rather than sleeping keeps this coroutine runnable, so it is what runs while `main`'s read is
 // suspended.
-function cancelFirstReader(client TcpClient) returns ReadOutcome
-	let first = async readOutcome(client)
+function cancelFirstReader(client TcpClient, parkedFrom ParkMark, phase PhaseFlag) returns ReadOutcome
+	let first = async readOutcome(client, parkedFrom: parkedFrom.clone())
 
-	while not parkedInRecv() 'untilFirstParked'
+	while not parkedInRecv(parkedFrom) 'untilFirstParked'
 		Scheduler.yield()
 	end 'untilFirstParked'
 
-	phase = 1
+	phase.publish(1 as Phase)
 
-	while phase == 1 'untilMainReads'
+	while phase.current() == 1 'untilMainReads'
 		Scheduler.yield()
 	end 'untilMainReads'
 
@@ -1082,15 +1095,18 @@ function cancelFirstReader(client TcpClient) returns ReadOutcome
 end 'cancelFirstReader'
 
 function readOver(client TcpClient) returns ExitCode
-	let canceller = async cancelFirstReader(client)
+	// 0 until the first reader is parked, 1 until `main` is about to issue its own read.
+	let phase = PhaseFlag.create(0 as Phase)
+	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
+	let canceller = async cancelFirstReader(client, parkedFrom: parkedFrom.clone(), phase: phase.clone())
 
-	while phase == 0 'untilFirstParked'
+	while phase.current() == 0 'untilFirstParked'
 		Scheduler.yield()
 	end 'untilFirstParked'
 
 	// The first reader's wait is ended under this read's own suspension, before the reader runs.
-	phase = 2
-	let second = readOutcome(client)
+	phase.publish(2 as Phase)
+	let second = readOutcome(client, parkedFrom: parkedFrom)
 	let unreachable = await canceller
 	print("second={second} canceller={unreachable}\n")
 	return 0
@@ -1177,18 +1193,20 @@ bound, so an accept that held its machine is a TIMEOUT and no sleep has to outla
 ```maxon
 typealias Served = int(0 to 1)
 
-var parkedFrom = 0 as SchedulerEventCount
+typealias ParkMark = SharedValue with SchedulerEventCount
 
-function parkedInAccept() returns bool
-	if parkedFrom == 0 'notYet'
+function parkedInAccept(parkedFrom ParkMark) returns bool
+	let mark = parkedFrom.current()
+
+	if mark == 0 'notYet'
 		return false
 	end 'notYet'
 
-	return Scheduler.counters().netpollBlocks >= parkedFrom
+	return Scheduler.counters().netpollBlocks >= mark
 end 'parkedInAccept'
 
-function acceptOne(listener TcpListener) returns Served
-	parkedFrom = Scheduler.counters().netpollBlocks + 1
+function acceptOne(listener TcpListener, parkedFrom ParkMark) returns Served
+	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 
 	let conn = try listener.accept() otherwise return 0
 	_ = try conn.recv(1024) otherwise return 0
@@ -1196,8 +1214,8 @@ function acceptOne(listener TcpListener) returns Served
 	return 1
 end 'acceptOne'
 
-function dialOnceParked(listener TcpListener) returns bool
-	while not parkedInAccept() 'untilParkedInAccept'
+function dialOnceParked(listener TcpListener, parkedFrom ParkMark) returns bool
+	while not parkedInAccept(parkedFrom) 'untilParkedInAccept'
 		sleep(1)
 	end 'untilParkedInAccept'
 
@@ -1208,8 +1226,9 @@ function dialOnceParked(listener TcpListener) returns bool
 end 'dialOnceParked'
 
 function exchangeOver(listener TcpListener) returns ExitCode
-	let acceptor = async acceptOne(listener)
-	let dialer = async dialOnceParked(listener)
+	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
+	let acceptor = async acceptOne(listener, parkedFrom: parkedFrom.clone())
+	let dialer = async dialOnceParked(listener, parkedFrom: parkedFrom.clone())
 
 	let served = await acceptor
 	let dialled = await dialer
@@ -1315,18 +1334,20 @@ to outlast the host.
 ```maxon
 let cleanExit = 42
 
-var parkedFrom = 0 as SchedulerEventCount
+typealias ParkMark = SharedValue with SchedulerEventCount
 
-function parkedInAccept() returns bool
-	if parkedFrom == 0 'notYet'
+function parkedInAccept(parkedFrom ParkMark) returns bool
+	let mark = parkedFrom.current()
+
+	if mark == 0 'notYet'
 		return false
 	end 'notYet'
 
-	return Scheduler.counters().netpollBlocks >= parkedFrom
+	return Scheduler.counters().netpollBlocks >= mark
 end 'parkedInAccept'
 
-function stall(listener TcpListener) returns ExitCode throws NetworkError
-	parkedFrom = Scheduler.counters().netpollBlocks + 1
+function stall(listener TcpListener, parkedFrom ParkMark) returns ExitCode throws NetworkError
+	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 	_ = try listener.accept()
 
 	return 0
@@ -1335,9 +1356,10 @@ end 'stall'
 function exchangeOver(listener TcpListener) returns ExitCode
 	let port = listener.port()
 
-	let acceptor = async stall(listener)
+	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
+	let acceptor = async stall(listener, parkedFrom: parkedFrom.clone())
 
-	while not parkedInAccept() 'untilParkedInAccept'
+	while not parkedInAccept(parkedFrom) 'untilParkedInAccept'
 		sleep(1)
 	end 'untilParkedInAccept'
 
@@ -1376,20 +1398,22 @@ never parks is a TIMEOUT and no sleep has to outlast the host.
 ```maxon
 typealias AcceptOutcome = int(0 to 3)
 
-var parkedFrom = 0 as SchedulerEventCount
+typealias ParkMark = SharedValue with SchedulerEventCount
 
-function parkedInAccept() returns bool
-	if parkedFrom == 0 'notYet'
+function parkedInAccept(parkedFrom ParkMark) returns bool
+	let mark = parkedFrom.current()
+
+	if mark == 0 'notYet'
 		return false
 	end 'notYet'
 
-	return Scheduler.counters().netpollBlocks >= parkedFrom
+	return Scheduler.counters().netpollBlocks >= mark
 end 'parkedInAccept'
 
-function acceptUntilClosed(listener TcpListener) returns AcceptOutcome
+function acceptUntilClosed(listener TcpListener, parkedFrom ParkMark) returns AcceptOutcome
 	var code = 0 as AcceptOutcome
 
-	parkedFrom = Scheduler.counters().netpollBlocks + 1
+	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 
 	try listener.accept() otherwise (e) 'acceptErr'
 		match e 'which'
@@ -1404,9 +1428,10 @@ function acceptUntilClosed(listener TcpListener) returns AcceptOutcome
 end 'acceptUntilClosed'
 
 function exchangeOver(listener TcpListener) returns ExitCode
-	let acceptor = async acceptUntilClosed(listener)
+	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
+	let acceptor = async acceptUntilClosed(listener, parkedFrom: parkedFrom.clone())
 
-	while not parkedInAccept() 'untilParkedInAccept'
+	while not parkedInAccept(parkedFrom) 'untilParkedInAccept'
 		sleep(1)
 	end 'untilParkedInAccept'
 
@@ -1450,10 +1475,10 @@ typealias Sleeping = int(0 to 1)
 
 let cleanExit = 42
 
-var sleeping = 0 as Sleeping
+typealias SleepingFlag = SharedValue with Sleeping
 
-function stall(listener TcpListener) returns ExitCode throws NetworkError
-	sleeping = 1
+function stall(listener TcpListener, sleeping SleepingFlag) returns ExitCode throws NetworkError
+	sleeping.publish(1 as Sleeping)
 	sleep(1000)
 	_ = try listener.accept()
 
@@ -1463,9 +1488,10 @@ end 'stall'
 function exchangeOver(listener TcpListener) returns ExitCode
 	let port = listener.port()
 
-	let acceptor = async stall(listener)
+	let sleeping = SleepingFlag.create(0 as Sleeping)
+	let acceptor = async stall(listener, sleeping: sleeping.clone())
 
-	while sleeping == 0 'untilSleeping'
+	while sleeping.current() == 0 'untilSleeping'
 		Scheduler.yield()
 	end 'untilSleeping'
 
@@ -1512,20 +1538,22 @@ wait has no bound, so a coroutine that never parks is a TIMEOUT and no sleep has
 ```maxon
 typealias AcceptOutcome = int(0 to 1)
 
-var parkedFrom = 0 as SchedulerEventCount
+typealias ParkMark = SharedValue with SchedulerEventCount
 
-function parkedInAccept() returns bool
-	if parkedFrom == 0 'notYet'
+function parkedInAccept(parkedFrom ParkMark) returns bool
+	let mark = parkedFrom.current()
+
+	if mark == 0 'notYet'
 		return false
 	end 'notYet'
 
-	return Scheduler.counters().netpollBlocks >= parkedFrom
+	return Scheduler.counters().netpollBlocks >= mark
 end 'parkedInAccept'
 
-function acceptNobody(listener TcpListener) returns AcceptOutcome
+function acceptNobody(listener TcpListener, parkedFrom ParkMark) returns AcceptOutcome
 	var code = 0 as AcceptOutcome
 
-	parkedFrom = Scheduler.counters().netpollBlocks + 1
+	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
 
 	try listener.accept() otherwise (e) 'acceptErr'
 		match e 'which'
@@ -1538,9 +1566,10 @@ function acceptNobody(listener TcpListener) returns AcceptOutcome
 end 'acceptNobody'
 
 function exchangeOver(listener TcpListener) returns ExitCode
-	let first = async acceptNobody(listener)
+	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
+	let first = async acceptNobody(listener, parkedFrom: parkedFrom.clone())
 
-	while not parkedInAccept() 'untilParkedInAccept'
+	while not parkedInAccept(parkedFrom) 'untilParkedInAccept'
 		sleep(1)
 	end 'untilParkedInAccept'
 

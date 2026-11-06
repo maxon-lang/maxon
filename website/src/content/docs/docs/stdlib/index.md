@@ -126,6 +126,8 @@ alias reaches a `FullRangeFloat` or `JsonFloat` parameter through `as`; a float 
 | `SpawnEnvironment`, `StdioRuntimeTriple` | the records `Subprocess` hands the runtime | Subprocess |
 | `AssertedReal` | `float(f64.min to f64.max)` | Testing |
 | `Tolerance` | `float(0.0 to f64.max)` | Testing |
+| `CownTortureSize` | `int(1 to u32.max)` ([CownTorture](/docs/stdlib/testing/#cowntorture)) | Testing |
+| `CownTortureViolations` | `int(0 to u64.max)` ([CownTorture](/docs/stdlib/testing/#cowntorture)) | Testing |
 
 `Byte` and `BytePos` are declared once, in `String` (see the table above). `BytePos`, `GraphemeIndex`,
 `JsonNodeId` and `Count` implement `ElementIndex`; `EntryCount`, `TableCapacity` and

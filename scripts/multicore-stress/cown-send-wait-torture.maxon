@@ -1,0 +1,138 @@
+// The sink's capacity is far below the offered load, so most sends wait for room. Every send ends
+// delivered or handed back, and the sink's `taken` must equal `delivered`. The even-numbered senders
+// use the 1 ms timeout so timer expiry races admission of a waiting sender; the others wait 50 ms.
+typealias Integer = int(i64.min to i64.max)
+typealias Tally = SharedValue with Integer
+typealias SenderHandleArray = Array with Sender.handle
+
+let senderCount = 8
+let messagesPerSender = 2500
+let attempted = senderCount * messagesPerSender
+let sinkCapacity = 4
+let quickTimeoutMs = 1
+let patientTimeoutMs = 50
+let pollLimit = 400000
+let exitLost = 3
+let exitUnbalanced = 4
+
+type Sink
+	var taken as Integer
+	var bytes as Integer
+
+	static function create() returns Self
+		return Self{taken: 0, bytes: 0}
+	end 'create'
+
+	export function take(s String)
+		self.taken = self.taken + 1
+		self.bytes = self.bytes + (s.byteLength() as Integer)
+	end 'take'
+
+	export function reportTaken() returns Integer
+		return self.taken
+	end 'reportTaken'
+end 'Sink'
+
+type Sender
+	var id as Integer
+	var delivered as Tally
+	var refused as Tally
+	var handedBack as Integer
+
+	static function create(id Integer, delivered Tally, refused Tally) returns Self
+		return Self{id: id, delivered: delivered, refused: refused, handedBack: 0}
+	end 'create'
+
+	export function run(sink Sink.handle, count Integer, quick bool)
+		let timeoutMs = quickTimeoutMs if quick else patientTimeoutMs
+		var deliveredHere = 0 as Integer
+		var refusedHere = 0 as Integer
+		var r = 0 as Integer
+
+		while r < count 'eachMessage'
+			let payload = "wait {self.id}:{r}"
+
+			try sink.take(payload, sendTimeout: timeoutMs) otherwise (e) 'refused'
+				match e 'why'
+					mailboxFull(back) then self.handedBack = self.handedBack + (back.byteLength() as Integer)
+					serviceStopped(back) then self.handedBack = self.handedBack + (back.byteLength() as Integer)
+				end 'why'
+
+				refusedHere = refusedHere + 1
+				r = r + 1
+				continue
+			end 'refused'
+
+			deliveredHere = deliveredHere + 1
+			r = r + 1
+		end 'eachMessage'
+
+		self.add(self.delivered, by: deliveredHere)
+		self.add(self.refused, by: refusedHere)
+	end 'run'
+
+	function add(cell Tally, by Integer)
+		while true 'retry'
+			let seen = cell.current()
+
+			if cell.publish(seen + by, replacing: seen) 'landed'
+				break
+			end 'landed'
+		end 'retry'
+	end 'add'
+end 'Sender'
+
+function main() returns ExitCode
+	let sink = spawn(capacity: sinkCapacity) Sink.create()
+	let delivered = Tally.create(0 as Integer)
+	let refused = Tally.create(0 as Integer)
+	var senders = SenderHandleArray.create(0)
+	var i = 0 as Integer
+
+	while i < senderCount 'spawnEach'
+		senders.push(spawn Sender.create(i, delivered: delivered.clone(), refused: refused.clone()))
+		i = i + 1
+	end 'spawnEach'
+
+	var k = 0 as ElementIndex
+
+	while k < senderCount 'startEach'
+		view sender = try senders.get(k) otherwise panic("cown-send-wait-torture: senders.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		try sender.run(sink.clone(), count: messagesPerSender, quick: k mod 2 == 0) otherwise panic("cown-send-wait-torture: a fresh sender refused its only message")
+		k = k + 1
+	end 'startEach'
+
+	var polls = 0 as Integer
+
+	while delivered.current() + refused.current() < attempted and polls < pollLimit 'waitForTheSenders'
+		Scheduler.yield()
+		polls = polls + 1
+	end 'waitForTheSenders'
+
+	if delivered.current() + refused.current() != attempted 'unbalanced'
+		print("delivered={delivered.current()} refused={refused.current()} attempted={attempted}\n")
+
+		return exitUnbalanced
+	end 'unbalanced'
+
+	var taken = 0 as Integer
+	var settles = 0 as Integer
+
+	while taken != delivered.current() and settles < pollLimit 'waitForTheSink'
+		let pending = try sink.reportTaken() otherwise panic("cown-send-wait-torture: a running sink with room takes the send")
+		taken = await pending
+		Scheduler.yield()
+		settles = settles + 1
+	end 'waitForTheSink'
+
+	print("delivered={delivered.current()}\n")
+	print("refused={refused.current()}\n")
+	print("taken={taken}\n")
+	print("procs={Scheduler.processorCount()}\n")
+
+	if taken != delivered.current() 'lost'
+		return exitLost
+	end 'lost'
+
+	return 0
+end 'main'

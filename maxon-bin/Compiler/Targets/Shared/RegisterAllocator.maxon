@@ -1308,10 +1308,9 @@ module function foldFunctionAllocation(project Project, stats RegAllocStats, fun
 	logEvent(CompilerLogGroup.codegen, level: LogLevel.trace, name: event, unit: project.traceUnit, arg0: classRowMax(facts.maxPressure) as TraceArg, arg1: stats.valuesSplit as TraceArg)
 end 'foldFunctionAllocation'
 
-// The whole per-function allocation, touching nothing the compile owns: a pool worker runs it, and
-// a message that reaches a module `var` is E3143. Everything it measures goes into values its
-// caller hands it. A hot-loop overflow leaves through `refusal` and a `throw`, because E5001 can
-// only be built from tables a `Project` holds.
+// The whole per-function allocation, touching nothing the compile owns: a pool worker runs it.
+// Everything it measures goes into values its caller hands it. A hot-loop overflow leaves through
+// `refusal` and a `throw`, because E5001 can only be built from tables a `Project` holds.
 module function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, counters RegAllocCounters, costs PoolPhaseCosts, facts RegAllocFacts, refusal RegAllocRefusalSite, debugValues DebugValueRoster, debugLocations DebugValueLocationArray, debugRanges DebugValueRangeArray, debugSpans DebugSpanRows) throws RegAllocRefusal
 	// Reverse-postorder first, so layout order matches execution order: the cold-spill splitter's
 	// before/after-peak classification and the colorer's dominance walk rest on it, and the parser

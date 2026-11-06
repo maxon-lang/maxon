@@ -147,16 +147,15 @@ end 'main'
 7
 ```
 
-<!-- test: public-constant-and-var-are-visible-across-files -->
+<!-- test: public-constants-are-visible-across-files -->
 ```maxon
 // --- file: api/limits.maxon
 public let BASE = 30
-public var counter = 5 as ExitCode
+public let START = 5 as ExitCode
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	counter = counter + BASE
-	return counter
+	return START + BASE
 end 'main'
 ```
 ```exitcode

@@ -212,8 +212,8 @@ end 'main'
 18
 ```
 
-<!-- test: escape-into-a-module-level-var -->
-A record stored into a module-level `var` outlives every frame, including the one that built it. The store
+<!-- test: escape-into-a-parameters-field -->
+A record stored into a field of a record its caller owns outlives every frame, including the one that built it. The store
 is the record as a VALUE rather than as an address — the same shape as storing it into a container or into
 another record's field.
 
@@ -254,17 +254,24 @@ function churn(seed Integer) returns Integer
 	return v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13 + v14 + v15
 end 'churn'
 
-var kept = Point.create(0, y: 0)
+type Keeper
+	export var point as Point
 
-function stash()
+	static function create() returns Self
+		return Self{point: Point.create(0, y: 0)}
+	end 'create'
+end 'Keeper'
+
+function stash(keeper Keeper)
 	var p = Point.create(11, y: 22)
-	kept = p
+	keeper.point = p
 end 'stash'
 
 function main() returns ExitCode
-	stash()
+	var keeper = Keeper.create()
+	stash(keeper)
 	let noise = churn(1000)
-	return kept.x if noise > 0 else 1
+	return keeper.point.x if noise > 0 else 1
 end 'main'
 ```
 ```exitcode

@@ -699,8 +699,8 @@ end 'main'
 0
 ```
 
-<!-- test: global-container-push-local -->
-Pushing a local struct into a global container keeps it alive beyond the local scope.
+<!-- test: by-reference-container-push-local -->
+Pushing a local struct into a `mutable` container parameter keeps it alive beyond the local scope.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -714,15 +714,14 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-var globalArr = ItemArray.create(0)
-
-function pushLocal()
+function pushLocal(kept mutable ItemArray)
 	let item = Item.create(123)
-	globalArr.push(item)
+	kept.push(item)
 end 'pushLocal'
 
 function main() returns ExitCode
-	pushLocal()
+	var globalArr = ItemArray.create(0)
+	pushLocal(globalArr)
 	view elem = try globalArr.get(0) otherwise Item.create(-1)
 	print("{elem.value}\n")
 	return 0
@@ -735,8 +734,8 @@ end 'main'
 123
 ```
 
-<!-- test: global-container-remove-frees -->
-Removing from a global container transfers ownership; element freed at scope exit.
+<!-- test: container-remove-frees -->
+Removing from a container transfers ownership; element freed at scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -750,9 +749,8 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-var globalArr = ItemArray.create(0)
-
 function main() returns ExitCode
+	var globalArr = ItemArray.create(0)
 	globalArr.push(Item.create(10))
 	globalArr.push(Item.create(20))
 	view removed = try globalArr.remove(0) otherwise 'err'
@@ -771,8 +769,8 @@ end 'main'
 1
 ```
 
-<!-- test: global-container-many-push-remove -->
-Many push/remove cycles on a global container leave no leaks.
+<!-- test: container-many-push-remove -->
+Many push/remove cycles on a container leave no leaks.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -786,9 +784,8 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-var globalArr = ItemArray.create(0)
-
 function main() returns ExitCode
+	var globalArr = ItemArray.create(0)
 	var i = 0 as Integer
 	while i < 20 'push'
 		globalArr.push(Item.create(i))

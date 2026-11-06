@@ -1105,17 +1105,16 @@ end 'main'
 <!-- test: ternary-expression.elision.false-arm-not-evaluated -->
 ### The false arm is not evaluated when the condition is true
 ```maxon
-var sideEffectCount = 0 as Integer
-
-function track(result Integer) returns Integer
-	sideEffectCount = sideEffectCount + 1
+function track(result Integer, count mutable Integer) returns Integer
+	count = count + 1
 	return result
 end 'track'
 
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	let x = 7 if true else track(9)
+	var sideEffectCount = 0 as Integer
+	let x = 7 if true else track(9, count: sideEffectCount)
 	if x != 7 'v'
 		return 99
 	end 'v'
@@ -1129,17 +1128,16 @@ end 'main'
 <!-- test: ternary-expression.elision.true-arm-not-evaluated -->
 ### The true arm is not evaluated when the condition is false
 ```maxon
-var sideEffectCount = 0 as Integer
-
-function track(result Integer) returns Integer
-	sideEffectCount = sideEffectCount + 1
+function track(result Integer, count mutable Integer) returns Integer
+	count = count + 1
 	return result
 end 'track'
 
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	let x = track(9) if false else 7
+	var sideEffectCount = 0 as Integer
+	let x = track(9, count: sideEffectCount) if false else 7
 	if x != 7 'v'
 		return 99
 	end 'v'
@@ -1154,17 +1152,16 @@ end 'main'
 ### The selected arm IS evaluated — exactly once, not zero times and not twice
 The counterpart direction: elision must not become elimination.
 ```maxon
-var sideEffectCount = 0 as Integer
-
-function track(result Integer) returns Integer
-	sideEffectCount = sideEffectCount + 1
+function track(result Integer, count mutable Integer) returns Integer
+	count = count + 1
 	return result
 end 'track'
 
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	let x = track(4) if true else track(9)
+	var sideEffectCount = 0 as Integer
+	let x = track(4, count: sideEffectCount) if true else track(9, count: sideEffectCount)
 	if x != 4 'v'
 		return 99
 	end 'v'
@@ -1178,18 +1175,17 @@ end 'main'
 <!-- test: ternary-expression.elision.chained-evaluates-only-the-winner -->
 ### In a chain, every arm but the winner is skipped
 ```maxon
-var sideEffectCount = 0 as Integer
-
-function track(result Integer) returns Integer
-	sideEffectCount = sideEffectCount + 1
+function track(result Integer, count mutable Integer) returns Integer
+	count = count + 1
 	return result
 end 'track'
 
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
+	var sideEffectCount = 0 as Integer
 	// Right-associates: track(1) if false else (track(2) if true else track(3))
-	let x = track(1) if false else track(2) if true else track(3)
+	let x = track(1, count: sideEffectCount) if false else track(2, count: sideEffectCount) if true else track(3, count: sideEffectCount)
 	if x != 2 'v'
 		return 99
 	end 'v'
@@ -1203,15 +1199,14 @@ end 'main'
 <!-- test: ternary-expression.elision.condition-always-evaluated -->
 ### The condition itself is always evaluated, exactly once
 ```maxon
-var sideEffectCount = 0 as FullRangeInt
-
-function pick() returns bool
-	sideEffectCount = sideEffectCount + 1
+function pick(count mutable FullRangeInt) returns bool
+	count = count + 1
 	return false
 end 'pick'
 
 function main() returns ExitCode
-	let x = 1 if pick() else 2
+	var sideEffectCount = 0 as FullRangeInt
+	let x = 1 if pick(sideEffectCount) else 2
 	if x != 2 'v'
 		return 99
 	end 'v'

@@ -9,7 +9,7 @@ category: language
 
 ## Documentation
 
-A `static let` / `static var` initializer runs **before `main`**, exactly once, whether or not anything ever
+A `static let` initializer runs **before `main`**, exactly once, whether or not anything ever
 reads the slot. Ordering among them is by DEPENDENCY: an initializer that reads another static runs after
 the one it reads, so no initializer can observe a slot that has not settled.
 
@@ -21,10 +21,8 @@ that two initializers cannot both be given.
 
 ### The scope of the declaration does not change the timing
 
-A `static` member and a module-level `var` agree — both initializers run before `main`, and neither needs a
-read to force one. `specs/dead-top-level-var-elim.md` states the module-scope half: a
-module-level var's initializer *"still runs even when the slot is dead"*. The first two cases below are that
-pair, on one program moved between the two positions.
+A `static` member and a module-level `let` agree — both initializers run before `main`, and neither needs a
+read to force one. The first two cases below are that pair, on one program moved between the two positions.
 
 ### A LIBRARY declaration is the one exception, and it is a COST rule
 
@@ -51,29 +49,24 @@ some value at run time.
 <!-- test: never-accessed-static-does-initialize -->
 ### A static that is never accessed still runs its initializer
 
-The control for the whole feature. Nothing reads `Counter.cached`, so the counter its initializer bumps is
+The control for the whole feature. Nothing reads `Counter.cached`, so the line its initializer prints is
 the only evidence that the initializer ran at all.
 
 ```maxon
 typealias Count = int(0 to u64.max)
 
 type Counter
-	static var initCount = 0 as Count
-	static var cached = Counter.createInstance()
+	static let cached = Counter.createInstance()
 	export var id as Count
 
 	static function createInstance() returns Counter
-		Counter.initCount = Counter.initCount + 1
-		return Counter{id: Counter.initCount}
+		print("init ")
+		return Counter{id: 1}
 	end 'createInstance'
-
-	static function getInitCount() returns Count
-		return Counter.initCount
-	end 'getInitCount'
 end 'Counter'
 
 function main() returns ExitCode
-	print("{Counter.getInitCount()}")
+	print("main")
 	return 0
 end 'main'
 ```
@@ -81,13 +74,13 @@ end 'main'
 0
 ```
 ```stdout
-1
+init main
 ```
 
-<!-- test: never-accessed-module-level-var-does-initialize -->
+<!-- test: never-accessed-module-level-let-does-initialize -->
 ### The same binding at MODULE scope initializes too
 
-The other half of the pair: the identical program with `cached` moved out of the `type` body. Where the
+The other half of the pair: the identical program with `cached` moved out of the `type` body as a module-level `let`. Where the
 binding is declared decides nothing about when its initializer runs, and the two halves agreeing is what
 makes that a rule rather than a coincidence of one scope.
 
@@ -95,23 +88,18 @@ makes that a rule rather than a coincidence of one scope.
 typealias Count = int(0 to u64.max)
 
 type Counter
-	static var initCount = 0 as Count
 	export var id as Count
 
 	static function createInstance() returns Counter
-		Counter.initCount = Counter.initCount + 1
-		return Counter{id: Counter.initCount}
+		print("init ")
+		return Counter{id: 1}
 	end 'createInstance'
-
-	static function getInitCount() returns Count
-		return Counter.initCount
-	end 'getInitCount'
 end 'Counter'
 
-var cached = Counter.createInstance()
+let cached = Counter.createInstance()
 
 function main() returns ExitCode
-	print("{Counter.getInitCount()}")
+	print("main")
 	return 0
 end 'main'
 ```
@@ -119,7 +107,7 @@ end 'main'
 0
 ```
 ```stdout
-1
+init main
 ```
 
 <!-- test: initializer-runs-before-main -->
@@ -132,7 +120,7 @@ the initializer's own output must land ahead of both of them rather than between
 typealias Count = int(0 to u64.max)
 
 type Late
-	static var value = Late.build()
+	static let value = Late.build()
 	export var n as Count
 
 	static function build() returns Late
@@ -162,36 +150,31 @@ init before after 7
 <!-- test: initializer-runs-exactly-once-across-many-accesses -->
 ### Many accesses, one initialization
 
-The counter is read AFTER several accesses rather than inferred from the cached value's own field, so a
-second run would show here as `2` even though every access answers with the same record.
+The initializer prints, so a second run would show here as a second `built` even though every access
+answers with the same record.
 
 ```maxon
 typealias Count = int(0 to u64.max)
 
 type Once
-	static var runs = 0 as Count
-	static var value = Once.build()
+	static let value = Once.build()
 	export var n as Count
 
 	static function build() returns Once
-		Once.runs = Once.runs + 1
+		print("built ")
 		return Once{n: 5}
 	end 'build'
 
 	static function get() returns Count
 		return Once.value.n
 	end 'get'
-
-	static function runCount() returns Count
-		return Once.runs
-	end 'runCount'
 end 'Once'
 
 function main() returns ExitCode
 	let a = Once.get()
 	let b = Once.get()
 	let c = Once.get()
-	print("{a} {b} {c} {Once.runCount()}")
+	print("{a} {b} {c}")
 	return 0
 end 'main'
 ```
@@ -199,110 +182,7 @@ end 'main'
 0
 ```
 ```stdout
-5 5 5 1
-```
-
-<!-- test: a-write-only-static-still-runs-its-initializer -->
-### A `static var` that is only ever WRITTEN still ran its initializer
-
-`Slot.value` is stored into before anything reads it, and the initializer's side effect is there anyway:
-`runs` is 1 even though the record `build()` produced is thrown away by the very next store. A write is a
-plain store — it neither re-runs the initializer nor stands in for one, so a static's side effects do not
-depend on how the program goes on to use the slot.
-
-```maxon
-typealias Count = int(0 to u64.max)
-
-type Slot
-	static var runs = 0 as Count
-	static var value = Slot.build()
-	export var n as Count
-
-	static function build() returns Slot
-		Slot.runs = Slot.runs + 1
-		return Slot{n: 1}
-	end 'build'
-
-	static function of(n Count) returns Self
-		return Self{n: n}
-	end 'of'
-
-	static function set(s Slot)
-		Slot.value = s
-	end 'set'
-
-	static function get() returns Count
-		return Slot.value.n
-	end 'get'
-
-	static function runCount() returns Count
-		return Slot.runs
-	end 'runCount'
-end 'Slot'
-
-function main() returns ExitCode
-	Slot.set(Slot.of(99))
-	print("{Slot.get()} {Slot.runCount()}")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-99 1
-```
-
-<!-- test: reassignment-does-not-re-run-the-initializer -->
-### A reassigned `static var` stays initialized
-
-The initializer has already run when `main` starts, so a store is only a store: the later accesses answer
-with the assigned value and the run count stays at 1.
-
-```maxon
-typealias Count = int(0 to u64.max)
-
-type Reassigned
-	static var runs = 0 as Count
-	static var value = Reassigned.build()
-	export var n as Count
-
-	static function build() returns Reassigned
-		Reassigned.runs = Reassigned.runs + 1
-		return Reassigned{n: 1}
-	end 'build'
-
-	static function of(n Count) returns Self
-		return Self{n: n}
-	end 'of'
-
-	static function set(s Reassigned)
-		Reassigned.value = s
-	end 'set'
-
-	static function get() returns Count
-		return Reassigned.value.n
-	end 'get'
-
-	static function runCount() returns Count
-		return Reassigned.runs
-	end 'runCount'
-end 'Reassigned'
-
-function main() returns ExitCode
-	let first = Reassigned.get()
-	Reassigned.set(Reassigned.of(42))
-	let second = Reassigned.get()
-	let third = Reassigned.get()
-	print("{first} {second} {third} {Reassigned.runCount()}")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1 42 42 1
+built 5 5 5
 ```
 
 <!-- test: one-static-initializer-reads-another -->
@@ -318,7 +198,7 @@ separates them.
 typealias Count = int(0 to u64.max)
 
 type Inner
-	static var value = Inner.build()
+	static let value = Inner.build()
 	export var n as Count
 
 	static function build() returns Inner
@@ -332,7 +212,7 @@ type Inner
 end 'Inner'
 
 type Outer
-	static var value = Outer.build()
+	static let value = Outer.build()
 	export var n as Count
 
 	static function build() returns Outer
@@ -369,7 +249,7 @@ before anything had filled it, and answer `1` or dereference a null.
 typealias Count = int(0 to u64.max)
 
 type Outer
-	static var value = Outer.build()
+	static let value = Outer.build()
 	export var n as Count
 
 	static function build() returns Outer
@@ -383,7 +263,7 @@ type Outer
 end 'Outer'
 
 type Inner
-	static var value = Inner.build()
+	static let value = Inner.build()
 	export var n as Count
 
 	static function build() returns Inner
@@ -424,7 +304,7 @@ closes and names the whole cycle, so the message identifies the loop rather than
 typealias Count = int(0 to u64.max)
 
 type Ping
-	static var value = Ping.build()
+	static let value = Ping.build()
 	export var n as Count
 
 	static function build() returns Ping
@@ -437,7 +317,7 @@ type Ping
 end 'Ping'
 
 type Pong
-	static var value = Pong.build()
+	static let value = Pong.build()
 	export var n as Count
 
 	static function build() returns Pong
@@ -468,7 +348,7 @@ instead of printing a list of one and leaving the author to infer the shape.
 typealias Count = int(0 to u64.max)
 
 type Loop
-	static var value = Loop.build()
+	static let value = Loop.build()
 	export var n as Count
 
 	static function build() returns Loop
@@ -501,27 +381,27 @@ reads contributes a zero and the total falls short.
 typealias Count = int(0 to u64.max)
 
 type Chain
-	static var s20 = Chain.build20()
-	static var s19 = Chain.build19()
-	static var s18 = Chain.build18()
-	static var s17 = Chain.build17()
-	static var s16 = Chain.build16()
-	static var s15 = Chain.build15()
-	static var s14 = Chain.build14()
-	static var s13 = Chain.build13()
-	static var s12 = Chain.build12()
-	static var s11 = Chain.build11()
-	static var s10 = Chain.build10()
-	static var s09 = Chain.build09()
-	static var s08 = Chain.build08()
-	static var s07 = Chain.build07()
-	static var s06 = Chain.build06()
-	static var s05 = Chain.build05()
-	static var s04 = Chain.build04()
-	static var s03 = Chain.build03()
-	static var s02 = Chain.build02()
-	static var s01 = Chain.build01()
-	static var s00 = Chain.build00()
+	static let s20 = Chain.build20()
+	static let s19 = Chain.build19()
+	static let s18 = Chain.build18()
+	static let s17 = Chain.build17()
+	static let s16 = Chain.build16()
+	static let s15 = Chain.build15()
+	static let s14 = Chain.build14()
+	static let s13 = Chain.build13()
+	static let s12 = Chain.build12()
+	static let s11 = Chain.build11()
+	static let s10 = Chain.build10()
+	static let s09 = Chain.build09()
+	static let s08 = Chain.build08()
+	static let s07 = Chain.build07()
+	static let s06 = Chain.build06()
+	static let s05 = Chain.build05()
+	static let s04 = Chain.build04()
+	static let s03 = Chain.build03()
+	static let s02 = Chain.build02()
+	static let s01 = Chain.build01()
+	static let s00 = Chain.build00()
 	export var n as Count
 
 	static function build00() returns Chain
@@ -658,7 +538,7 @@ it twice.
 
 ```maxon
 type Cached
-	static var text = Cached.build()
+	static let text = Cached.build()
 
 	static function build() returns String
 		return "held"
@@ -697,7 +577,7 @@ that only recurses and returns never reaches a suspension point, and `async` ref
 typealias Count = int(0 to u64.max)
 
 type Cache
-	static var value = Cache.build()
+	static let value = Cache.build()
 	export var n as Count
 
 	static function build() returns Cache
@@ -746,8 +626,8 @@ in nothing but whether a read reaches them.
 
 ```maxon
 type Untouched
-	static var never = Untouched.build()
-	static var other = Untouched.build()
+	static let never = Untouched.build()
+	static let other = Untouched.build()
 
 	static function build() returns String
 		return "x"

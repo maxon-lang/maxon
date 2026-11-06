@@ -20,11 +20,11 @@ Calculate the cosine of an angle (in radians).
 **Example:**
 
 ```maxon
-var x = 0.0
-var y = Math.cos(x)       // 1.0
+let x = 0.0
+let y = Math.cos(x)       // 1.0
 
-var pi = 3.14159265
-var z = Math.cos(pi)      // -1.0 (approximately)
+let pi = 3.14159265
+let z = Math.cos(pi)      // -1.0 (approximately)
 ```
 **Notes:**
 - The function works with radians, not degrees

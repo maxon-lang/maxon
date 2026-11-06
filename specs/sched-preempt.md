@@ -303,8 +303,8 @@ let attemptCap = 8
 let spinFloorMs = 150
 let deadlinesDueMs = 35
 
-var phase = 0 as Integer
-var honoured = false
+typealias PhaseCell = SharedValue with Integer
+typealias HonouredCell = SharedValue with bool
 
 // Recursive, so it is never inlined and every iteration passes a function prologue.
 function step(acc Integer, depth Integer) returns Integer
@@ -314,15 +314,15 @@ function step(acc Integer, depth Integer) returns Integer
 	return step((acc * 17 + depth) mod 1000003, depth: depth - 1)
 end 'step'
 
-function busy() returns Integer
+function busy(phase PhaseCell, honoured HonouredCell) returns Integer
 	sleep(1)
-	phase = 1
+	phase.publish(1 as Integer)
 	let start = Clock.nowMs()
 	var acc = 0 as Integer
 	var elapsed = 0 as Integer
 	var baseline = Scheduler.counters().preempts
 	var baselined = false
-	while elapsed < spinFloorMs or not honoured 'spin'
+	while elapsed < spinFloorMs or not honoured.current() 'spin'
 		var i = 0 as Integer
 		while i < 1000 'burst'
 			acc = step(acc, depth: 4)
@@ -335,36 +335,36 @@ function busy() returns Integer
 				baseline = now
 				baselined = true
 			end 'firstLook' else if now > baseline 'honouredAfterDue'
-				honoured = true
+				honoured.publish(true)
 			end 'honouredAfterDue'
 		end 'deadlinesDue'
 	end 'spin'
-	phase = 2
+	phase.publish(2 as Integer)
 	return acc mod 2 + 1
 end 'busy'
 
-function nap() returns Integer
+function nap(phase PhaseCell) returns Integer
 	sleep(30)
-	return phase
+	return phase.current()
 end 'nap'
 
 function main() returns ExitCode
 	var tries = 0 as Integer
 	while tries < attemptCap 'attempts'
 		tries = tries + 1
-		phase = 0
-		honoured = false
-		let a = async busy()
-		let b = async nap()
+		let phase = PhaseCell.create(0 as Integer)
+		let honoured = HonouredCell.create(false)
+		let a = async busy(phase.clone(), honoured: honoured.clone())
+		let b = async nap(phase.clone())
 		sleep(30)
-		let seenByOwner = phase
+		let seenByOwner = phase.current()
 		let q = await a
 		let seenBySibling = await b
 		if seenByOwner == 0 and seenBySibling == 2 'neverStarted'
 			continue
 		end 'neverStarted'
 
-		print("owner={seenByOwner} sibling={seenBySibling} busy={q > 0} preempted={honoured}\n")
+		print("owner={seenByOwner} sibling={seenBySibling} busy={q > 0} preempted={honoured.current()}\n")
 		return 0
 	end 'attempts'
 

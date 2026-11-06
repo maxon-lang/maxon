@@ -145,10 +145,8 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
 typealias Vec5 = FixedArray with 5 Int
 
-var trips = 0 as Int
-
 extension FixedArray
-	static function counted() returns Self
+	static function counted(trips mutable Int) returns Self
 		var i = 0 as Count
 		while i < countof(Self) 'each'
 			trips = trips + 1
@@ -157,8 +155,8 @@ extension FixedArray
 		return Self{}
 	end 'counted'
 
-	function rebuild() returns Int
-		let fresh = Self.counted()
+	function rebuild(trips mutable Int) returns Int
+		let fresh = Self.counted(trips)
 		var slots = 0 as Count
 		for _ in fresh 'countTheRecordsSlots'
 			slots = slots + 1
@@ -171,9 +169,12 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
+	var trips = 0 as Int
 	var a = Vec3.create()
 	var b = Vec5.create()
-	return a.rebuild() + b.rebuild() + trips
+	let first = a.rebuild(trips)
+	let second = b.rebuild(trips)
+	return first + second + trips
 end 'main'
 ```
 ```exitcode

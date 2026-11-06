@@ -542,18 +542,17 @@ function ident(v Integer) returns Integer
 	return v
 end 'ident'
 
-function remainder(d NegativeOne) returns Integer
-	return dividend mod d
+function remainder(n Integer, d NegativeOne) returns Integer
+	return n mod d
 end 'remainder'
 
 function main() returns ExitCode
-	dividend = ident(i64.min)
+	let n = ident(i64.min)
 	let d = ident(-1)
-	let r = remainder(d as NegativeOne)
+	let r = remainder(n, d: d as NegativeOne)
 	print("r={r}\n")
 	return 0
 end 'main'
-var dividend = 0 as Integer
 ```
 ```stdout
 r=0
@@ -806,10 +805,9 @@ function remainder(n BelowMinusOne, d BelowMinusOne) returns Integer
 end 'remainder'
 
 function main() returns ExitCode
-	bad = ident(-1)
+	let bad = ident(-1)
 	return remainder(i64.min, d: bad as BelowMinusOne) as ExitCode
 end 'main'
-var bad = 0 as Integer
 ```
 ```exitcode
 1
@@ -1009,17 +1007,16 @@ end 'ident'
 
 // The divisor's range excludes 0, so no `DivisionByZero` is possible — that error is about the
 // DIVISOR, and says nothing about a quotient that does not fit. `i64.min / -1` is `i64.max + 1`.
-function divide(d NegativeOne) returns Integer
-	return dividend / d
+function divide(n Integer, d NegativeOne) returns Integer
+	return n / d
 end 'divide'
 
 function main() returns ExitCode
-	dividend = ident(i64.min)
+	let n = ident(i64.min)
 	// Opaque, so the divide is not folded or rewritten as a negation.
 	let d = ident(-1)
-	return divide(d as NegativeOne) as ExitCode
+	return divide(n, d: d as NegativeOne) as ExitCode
 end 'main'
-var dividend = 0 as Integer
 ```
 ```exitcode
 1
@@ -2069,7 +2066,7 @@ before
 panic at divide-by-zero-premise-enforced-at-a-service-handler-entry.test:12: Range check failed: value outside typealias 'NonZero'
 Stack trace:
   in Divider.divideBy
-  in Divider.__loop
-  in Divider.__start_Divider.create
+  in Divider.__behave
+  in __cown_run
   in __gt_trampoline
 ```

@@ -3,7 +3,7 @@ feature: harness-gate-a-global-built-by-a-library-container-is-answered-without-
 ---
 # The a-global-built-by-a-library-container-is-answered-without-a-panic gate
 
-Three run cases each declare a module-level `var` built by a library container's `create()` (`FixedArray`, `Array`, `Map`), and one reads an enum case, a range bound and a static through member access, beside a plain case. The front-end question the spec runner asks before it batches runs without the library, so a container whose `create()` the library owns must be answered, never crash the worker that asked.
+Three run cases each declare a module-level `let` built by a library container's `create()` (`FixedArray`, `Array`, `Map`), and one reads an enum case, a range bound and a static through member access, beside a plain case. The front-end question the spec runner asks before it batches runs without the library, so a container whose `create()` the library owns must be answered, never crash the worker that asked.
 
 ## Tests
 
@@ -30,11 +30,9 @@ plain
 typealias Count = int(0 to 1000)
 typealias Vec3 = FixedArray with 3 Count
 
-var shared = Vec3.create()
+let shared = Vec3.create()
 
 function main() returns ExitCode
-	shared.set(0, value: 20)
-	shared.set(2, value: 21)
 	print("fixed-array {shared.count()}\n")
 	return 0
 end 'main'
@@ -54,11 +52,9 @@ fixed-array 3
 typealias Count = int(0 to 1000)
 typealias CountArray = Array with Count
 
-var counts = CountArray.create(0)
+let counts = CountArray.create(0)
 
 function main() returns ExitCode
-	counts.push(5)
-	counts.push(6)
 	print("array {counts.count()}\n")
 	return 0
 end 'main'
@@ -69,7 +65,7 @@ end 'main'
 ```
 
 ```stdout
-array 2
+array 0
 ```
 
 <!-- test: container-globals.map -->
@@ -78,10 +74,9 @@ array 2
 typealias Count = int(0 to u64.max)
 typealias StrMap = Map with (String, Count)
 
-var table = StrMap.create()
+let table = StrMap.create()
 
 function main() returns ExitCode
-	table.upsert("a", value: 6)
 	print("map {table.count()}\n")
 	return 0
 end 'main'
@@ -92,7 +87,7 @@ end 'main'
 ```
 
 ```stdout
-map 1
+map 0
 ```
 
 <!-- test: container-globals.member-reads -->
@@ -106,11 +101,11 @@ enum Colour
 end 'Colour'
 
 type Config
-	static var limit = 5 as Count
+	static let limit = 5 as Count
 end 'Config'
 
-var chosen = Colour.green
-var top = u8.max as Count
+let chosen = Colour.green
+let top = u8.max
 
 function main() returns ExitCode
 	if chosen == Colour.green 'isGreen'

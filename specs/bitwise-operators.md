@@ -16,9 +16,9 @@ Maxon provides bitwise operators for manipulating individual bits of integer val
 Returns 1 for each bit position where both operands have 1:
 
 ```maxon
-var a = 12       // 1100 in binary
-var b = 10       // 1010 in binary
-var c = a and b  // 1000 = 8
+let a = 12       // 1100 in binary
+let b = 10       // 1010 in binary
+let c = a and b  // 1000 = 8
 ```
 
 ### Bitwise OR (`or`)
@@ -26,9 +26,9 @@ var c = a and b  // 1000 = 8
 Returns 1 for each bit position where either operand has 1:
 
 ```maxon
-var a = 12      // 1100 in binary
-var b = 10      // 1010 in binary
-var c = a or b  // 1110 = 14
+let a = 12      // 1100 in binary
+let b = 10      // 1010 in binary
+let c = a or b  // 1110 = 14
 ```
 
 ### Bitwise XOR (`xor`)
@@ -36,9 +36,9 @@ var c = a or b  // 1110 = 14
 Returns 1 for each bit position where operands differ:
 
 ```maxon
-var a = 12       // 1100 in binary
-var b = 10       // 1010 in binary
-var c = a xor b  // 0110 = 6
+let a = 12       // 1100 in binary
+let b = 10       // 1010 in binary
+let c = a xor b  // 0110 = 6
 ```
 
 ### Bitwise NOT (`not`)
@@ -46,8 +46,8 @@ var c = a xor b  // 0110 = 6
 Flips all bits of an integer value:
 
 ```maxon
-var a = 5        // ...0101 in binary
-var b = not a    // ...1010 = -6
+let a = 5        // ...0101 in binary
+let b = not a    // ...1010 = -6
 ```
 
 ### Left Shift (`shl`)
@@ -55,8 +55,8 @@ var b = not a    // ...1010 = -6
 Shifts bits left by the specified amount, filling with zeros:
 
 ```maxon
-var a = 1
-var b = a shl 3  // 1000 = 8
+let a = 1
+let b = a shl 3  // 1000 = 8
 ```
 
 ### Right Shift (`shr`)
@@ -69,9 +69,9 @@ type says nothing about how the shift fills.
 A bare `int` is a signed 64-bit integer, so `shr` sign-propagates by default:
 
 ```maxon
-var a = 16
-var b = a shr 2       // 4       — a non-negative value fills with zeros either way
-var c = (-8) shr 1 // -4, not 9223372036854775804
+let a = 16
+let b = a shr 2       // 4       — a non-negative value fills with zeros either way
+let c = (-8) shr 1 // -4, not 9223372036854775804
 ```
 
 **A LOW BOUND OF 0 IS WHAT MAKES A TYPE UNSIGNED HERE**, and a right shift of one **zero-fills**.

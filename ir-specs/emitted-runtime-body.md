@@ -16821,7 +16821,7 @@ func @__managed_set {
     x64.loadRegSlot rdx, slot2
     x64.jmp stddone
   st#14:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_16]  ; "fatal error: an array record carries an element size no element access serves\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_14]  ; "fatal error: an array record carries an element size no element access serves\x0a"
     x64.movRegImm32 rdx, 78
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -17112,7 +17112,7 @@ func @__managed_set {
     x64.loadRegSlot rdx, slot2
     x64.jmp stddone
   st#14:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_16]  ; "fatal error: an array record carries an element size no element access serves\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_14]  ; "fatal error: an array record carries an element size no element access serves\x0a"
     x64.movRegImm32 rdx, 78
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -17383,7 +17383,7 @@ func @__managed_set {
     arm64.loadRegSlot x2, slot2
     arm64.b stddone
   st#14:
-    arm64.leaRdata x0, __fatal_msg_16  ; "fatal error: an array record carries an element size no element access serves\x0a"
+    arm64.leaRdata x0, __fatal_msg_14  ; "fatal error: an array record carries an element size no element access serves\x0a"
     arm64.movImm x1, 78
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -17656,7 +17656,7 @@ func @__managed_set {
     arm64.loadRegSlot x2, slot2
     arm64.b stddone
   st#14:
-    arm64.leaRdata x0, __fatal_msg_16  ; "fatal error: an array record carries an element size no element access serves\x0a"
+    arm64.leaRdata x0, __fatal_msg_14  ; "fatal error: an array record carries an element size no element access serves\x0a"
     arm64.movImm x1, 78
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -19424,13 +19424,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -19438,7 +19440,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -19448,7 +19450,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -19484,7 +19486,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -19512,52 +19514,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -19570,7 +19566,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -19579,19 +19575,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__rtlock_enter_slow {
@@ -20120,12 +20114,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -20133,7 +20129,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -20143,7 +20139,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -20178,7 +20174,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -20207,50 +20203,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -20261,7 +20248,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -20270,18 +20257,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__rtlock_enter_slow {
@@ -20824,13 +20809,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -20838,7 +20825,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -20848,7 +20835,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -20885,7 +20872,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -20913,52 +20900,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -20971,7 +20952,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -20980,19 +20961,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 chunk @mrt_host_spin_pause {
@@ -21096,13 +21075,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -21110,7 +21091,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -21120,7 +21101,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -21156,7 +21137,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -21184,52 +21165,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -21242,7 +21217,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -21251,19 +21226,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 chunk @mrt_host_spin_pause {
@@ -21367,12 +21340,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -21380,7 +21355,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -21390,7 +21365,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -21425,7 +21400,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -21454,50 +21429,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -21508,7 +21474,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -21517,18 +21483,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 chunk @mrt_host_spin_pause {
@@ -21626,12 +21590,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -21639,7 +21605,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -21649,7 +21615,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -21684,7 +21650,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -21713,50 +21679,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -21767,7 +21724,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -21776,18 +21733,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 chunk @mrt_host_spin_pause {
@@ -21939,12 +21894,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -21952,7 +21909,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -21962,7 +21919,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -21997,7 +21954,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -22026,50 +21983,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -22080,7 +22028,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -22089,18 +22037,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 chunk @__gt_preempt_m {
@@ -22203,12 +22149,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -22216,7 +22164,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -22226,7 +22174,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -22261,7 +22209,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -22290,50 +22238,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -22344,7 +22283,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -22353,18 +22292,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 chunk @__gt_preempt_m {
@@ -22520,13 +22457,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -22534,7 +22473,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -22544,7 +22483,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -22580,7 +22519,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -22608,52 +22547,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -22666,7 +22599,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -22675,19 +22608,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 chunk @mrt_host_event_set {
@@ -22796,12 +22727,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -22809,7 +22742,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -22819,7 +22752,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -22854,7 +22787,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -22883,50 +22816,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -22937,7 +22861,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -22946,18 +22870,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 chunk @mrt_host_event_set {
@@ -26270,2332 +26192,6 @@ func @__managed_byte_at {
 }
 ```
 
-<!-- test: a-mailbox-send-steps-its-lock-depth-with-a-plain-add -->
-**THE LOCK DEPTH HAS ONE WRITER, SO ITS STEP IS A PLAIN READ-MODIFY-WRITE.** Every runtime lock enter
-steps the calling machine's `MOffLocks` word up before the acquire, and every leave steps it down after the
-release, so an asynchronous stop can refuse a thread that holds a runtime lock. The word belongs to ONE
-machine, and only the OS thread running that machine writes it. Its readers are that same thread's own
-signal handler (Linux and macOS), which program order already serves, and on x64-windows the monitor,
-which reads it only while the thread is suspended. Neither needs the step to be atomic, so a locked
-read-modify-write buys nothing and costs a full barrier at every enter and every leave: on x64 it is
-`add qword [depth], ±1` with no `lock` prefix, and on arm64 a load, an add and a store.
-
-`__mbox_send` is the witness because it is the smallest body that takes a runtime lock on every message:
-one enter and one leave of its mailbox's lock on its append road, its first-message road and its handoff
-road, and one leave on
-each of its two refusing roads (a closed mailbox answers `stopped`, a mailbox holding its capacity answers
-`full`). A locked step in this pin — `x64.lock add` on an x64 lane, an atomic add on an arm64
-lane — is the per-message cost this case exists to keep out.
-
-**A SEND TO A PARKED RECEIVER COPIES THE MESSAGE INTO ITS INBOX, AS GO's `sendDirect` COPIES INTO THE
-RECEIVER'S ELEMENT.** A receiver parks only on an empty, open mailbox and holds the mailbox lock while it
-does, so a mailbox whose parked slot is non-zero under the lock has an empty ring. The send then skips the
-ring: it copies `bytes` of the staged message into the mailbox's inbox, the one slot the receiver reads each
-message from, which lives in the mailbox's own region (a green thread's stack moves while the thread is
-parked, so no address inside it is ever held), marks the receiver's park-argument word, which the
-receiver's park commit emptied and nothing else writes while it is parked, clears the mailbox's parked slot
-and leaves the lock. The receiver returns the inbox address from `__mbox_recv` without taking the lock
-again. A close hands nothing: it leaves the word empty, and the receiver re-enters the lock to find the ring
-empty and closed. A send that finds the parked slot empty and a receiver that has never entered
-`__mbox_recv` copies the message into the inbox too, as Go's `makechan` keeps a channel's buffer in the
-channel's own allocation, and the receiver's first receive answers it there without a copy. Any other send
-that finds the parked slot empty appends to the ring, and the receiver's later pop copies the head slot into
-the inbox behind any already queued, so the order is exact. A send that finds as many messages queued as
-the mailbox's capacity (1024 unless the spawn names another), the inbox's first message among them, queues
-nothing and answers `full`; a send to a closed mailbox likewise answers `stopped`, and in both the message
-is left in the sender's staging buffer. The append road cuts the ring, 16 slots of the concrete service's
-request union (or the capacity, when that is smaller), at the first message it puts there, and doubles it
-when it is full and still below the capacity: it copies the queued messages into the new ring in order,
-starting from the head, stores the new ring and frees the old one. The ring is runtime scaffolding like a
-green thread's stack, so it is cut with `__slab_alloc_scaffold` and freed with `__slab_free_scaffold`,
-which step none of the allocator's traffic columns: whether a message reaches the ring depends on whether
-its receiver had run and was parked, and a timing-dependent allocation must not reach the counts.
-
-**A SEND TO A PARKED RECEIVER READIES IT WITHOUT `__sched_lock`, AS GO's `goready` DOES.** Once the mailbox
-lock is left, the send holds the service it took from the mailbox's parked slot, and readies it on one of
-two roads:
-
-- **The lock-free road.** The send claims the service's strand with a compare-and-swap of its strand
-  holder from free to held. A free holder means its resume slot is 0 and no member of the strand runs, so
-  the winner is the strand's one publisher and needs no lock; a member a readier pushed onto the strand
-  queue while the holder was free is run by the turn this publish starts, after the resume slot. It stores the
-  service's status `ready`, stores the service into the strand's resume slot (which the strand's next turn
-  takes before anything else, so the owner still runs first), steps the strand's reference count, puts
-  the owner's token on its processor's run queue with `__sched_runq_put`, and pays the wake with
-  `__sched_wake_or_spawn`. Nothing on this road enters `__sched_lock`.
-- **The locked fallback.** A failed claim means the strand is held: a coroutine of the service is queued
-  or running. The send then calls `__gt_ready_locked`, which tries the claim once more and, losing it,
-  pushes the service onto the front of its strand queue under the strand's own lock, for the machine
-  holding the strand to find.
-
-A `__sched_lock` enter between the strand claim and the run-queue put is the second lock per wake this case
-exists to keep out.
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Counter
-	var calls as Integer
-
-	static function create() returns Self
-		return Self{calls: 0}
-	end 'create'
-
-	export function next(n Integer) returns Integer
-		self.calls = self.calls + 1
-
-		return n + 1
-	end 'next'
-end 'Counter'
-
-function main() returns ExitCode
-	let c = spawn Counter.create()
-	let a = try await c.next(1) otherwise 0
-
-	return a as ExitCode
-end 'main'
-```
-```exitcode
-2
-```
-```RequiredRuntime
-__mbox_send
-```
-```TargetIr:x64-windows
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 8192
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __sched_num_procs@440 = i64 0
-  __sched_ncpu@448 = i64 0
-  __sched_shutdown_flag@456 = i64 0
-  __sched_lock@464 = i64 0
-  __sched_lock_depth_sink@472 = i64 0
-  __sched_nmspinning@480 = i64 0
-  __sched_needspinning@488 = i64 0
-  __sched_sysmon_event@496 = i64 0
-  __sched_sysmon_wait@504 = i64 0
-  __sched_timer_starts@512 = i64 0
-  __sched_preempt_ext_lock@520 = i64 0
-  __sched_preempt_context@528 = i64 0
-  __slab_arena_list@536 = i64 0
-  __slab_arena_map_l1@544 = i64 0
-  __slab_state@552 = i64 0
-  __mrt_console_probe_stdin@560 = i8 0
-  __mrt_console_probe_stdout@561 = i8 0
-  __mrt_console_probe_stderr@562 = i8 0
-  __mrt_program_started@563 = i8 0
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 48
-    x64.movRegImm32 rbx, 1024
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
-    x64.movRegImm32 rax, 24
-    x64.movRegReg rdx, r8
-    x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegImm32 rbx, 1
-    x64.movRegImm32 rcx, 0
-    x64.callDirect __gt_cell_alloc
-    x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
-    x64.movRegReg r14, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r14 + 0], rax
-    x64.storeBaseDispReg.word64 [r14 + 8], rbx
-    x64.storeBaseDispReg.word64 [r14 + 16], r13
-    x64.movRegImm32 rax, 24
-    x64.movRegImm32 r9, 0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendrefused
-  sendaccepted:
-    x64.movRegReg rcx, r13
-    x64.callDirect __gt_try_await
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  critsplit:
-    x64.movRegReg rcx, r10
-  tryerr:
-    x64.movRegImm32 rbx, 0
-    x64.callDirect __mm_decref
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rbx, r8
-  trycont:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendrefused:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.storeSlotReg slot0, r8
-    x64.callDirect __mm_alloc
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot r8, slot0
-    x64.leaRegRegImm32 rax, r8, -1
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jmp tryerr
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-mailbox-send-steps-its-lock-depth-with-a-plain-add.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    x64.callDirect __mbox_unknown_tag
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
-  __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
-  __il_cont:
-    x64.movRegImm32 rax, 0
-    x64.callDirect __gt_cell_complete
-    x64.jmp serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  __il_body:
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.storeBaseDispReg.word64 [r14 + 0], r13
-  __il_cont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__mbox_send {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 96
-    x64.leaRegGlobal rsi, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.mov rsi, gs:[rsi]
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
-    x64.loadRegBaseDisp.word64 r8, [rdi + 40]
-    x64.cmpRegImm32 r8, -1314
-    x64.jcc equal, honourpreempt
-  honourresume:
-    x64.leaRegRegImm32 rdi, rcx, 96
-    x64.aluBaseDispImm32.add [rsi + 824], 1
-    x64.movRegImm32 r8, 1
-    x64.xchg8 [rdi], r8 <- r8
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, __rl_slow#48
-  sendtry:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 40]
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendclosed
-  sendroute:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 32]
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendhandoff
-  sendfirstcheck:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 72]
-    x64.cmpRegImm32 r8, 2
-    x64.jcc notEqual, mboxstatenotstarted
-  sendappend:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 24]
-    x64.loadRegBaseDisp.word64 r10, [rcx + 64]
-    x64.cmpRegReg r8, r10
-    x64.jcc equal, sendqueueing
-  sendringroom:
-    x64.loadRegBaseDisp.word64 r10, [rcx + 0]
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, sendqueueing
-  mboxhavering:
-    x64.loadRegBaseDisp.word64 r10, [rcx + 8]
-    x64.cmpRegReg r8, r10
-    x64.jcc equal, sendqueueing
-  sendfitted:
-    x64.leaRegRegImm32 r9, r8, 1
-    x64.storeBaseDispReg.word64 [rcx + 24], r9
-    x64.loadRegBaseDisp.word64 r9, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r10, [rcx + 8]
-    x64.loadRegBaseDisp.word64 r11, [rcx + 16]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 56]
-    x64.leaRegRegImm32 r10, r10, -1
-    x64.leaRegRegReg r8, r11, r8
-    x64.andRegReg r8, r8, r10
-    x64.imulRegReg r8, r8, rcx
-    x64.leaRegRegReg rcx, r9, r8
-    x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, cpyfd#38
-  cpyfrun#37:
-    x64.movRegReg r8, rax
-    x64.andRegImm32 r8, rax, -8
-    x64.movRegImm32 r9, 0
-  cpyfwh#39:
-    x64.cmpRegReg r9, r8
-    x64.jcc less, cpyfwb#40
-  cpyfth#42:
-    x64.cmpRegReg r8, rax
-    x64.jcc less, cpyftb#43
-  cpyfd#38:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#54
-  __rl_cont#53:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.jmp senddone
-  cpyftb#43:
-    x64.leaRegRegReg r9, rdx, r8
-    x64.loadRegBaseDisp.byte r9, [r9 + 0]
-    x64.leaRegRegReg r10, rcx, r8
-    x64.storeBaseDispReg.byte [r10 + 0], r9
-    x64.leaRegRegImm32 r8, r8, 1
-    x64.jmp cpyfth#42
-  cpyfwb#40:
-    x64.leaRegRegReg r10, rdx, r9
-    x64.loadRegBaseDisp.word64 r10, [r10 + 0]
-    x64.leaRegRegReg r11, rcx, r9
-    x64.storeBaseDispReg.word64 [r11 + 0], r10
-    x64.leaRegRegImm32 r9, r9, 8
-    x64.jmp cpyfwh#39
-  mboxstatenotstarted:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, mboxstatenotfresh
-  sendinboxfirst:
-    x64.leaRegRegImm32 r8, rcx, 104
-    x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, cpyfd#29
-  cpyfrun#28:
-    x64.movRegReg r9, rax
-    x64.andRegImm32 r9, rax, -8
-    x64.movRegImm32 r10, 0
-  cpyfwh#30:
-    x64.cmpRegReg r10, r9
-    x64.jcc less, cpyfwb#31
-  cpyfth#33:
-    x64.cmpRegReg r9, rax
-    x64.jcc less, cpyftb#34
-  cpyfd#29:
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 72], rax
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#52
-  __rl_cont#51:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.jmp senddone
-  cpyftb#34:
-    x64.leaRegRegReg r10, rdx, r9
-    x64.loadRegBaseDisp.byte r10, [r10 + 0]
-    x64.leaRegRegReg r11, r8, r9
-    x64.storeBaseDispReg.byte [r11 + 0], r10
-    x64.leaRegRegImm32 r9, r9, 1
-    x64.jmp cpyfth#33
-  cpyfwb#31:
-    x64.leaRegRegReg r11, rdx, r10
-    x64.loadRegBaseDisp.word64 r11, [r11 + 0]
-    x64.leaRegRegReg rbx, r8, r10
-    x64.storeBaseDispReg.word64 [rbx + 0], r11
-    x64.leaRegRegImm32 r10, r10, 8
-    x64.jmp cpyfwh#30
-  mboxstatenotfresh:
-    x64.cmpRegImm32 r8, 1
-    x64.jcc notEqual, mboxstateoutofdomain
-  sendqueueing:
-    x64.callDirect __mbox_send_queue
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendhandoff:
-    x64.leaRegRegImm32 r9, rcx, 104
-    x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, cpyfd#15
-  cpyfrun#14:
-    x64.movRegReg r10, rax
-    x64.andRegImm32 r10, rax, -8
-    x64.movRegImm32 r11, 0
-  cpyfwh#16:
-    x64.cmpRegReg r11, r10
-    x64.jcc less, cpyfwb#17
-  cpyfth#19:
-    x64.cmpRegReg r10, rax
-    x64.jcc less, cpyftb#20
-  cpyfd#15:
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 496], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rcx + 32], rax
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#50
-  __rl_cont#49:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.movRegImm32 rax, 0
-    x64.movRegImm32 rcx, 1
-    x64.leaRegRegImm32 rdx, r8, 552
-    x64.lock cmpxchg [rdx], rcx
-    x64.setccReg equal, rax
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, readyservicefree
-  readyservicelocked:
-    x64.movRegReg rcx, r8
-    x64.callDirect __gt_ready_locked
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, senddone
-  readyservicewake:
-    x64.callDirect __sched_wake_or_spawn
-    x64.jmp senddone
-  readyservicefree:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 48], rax
-    x64.storeBaseDispReg.word64 [r8 + 608], r8
-    x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rcx, r8, 560
-    x64.lock add [rcx], rax
-    x64.movRegReg rcx, r8
-    x64.callDirect __sched_runq_put
-    x64.callDirect __sched_wake_or_spawn
-  senddone:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  cpyftb#20:
-    x64.leaRegRegReg r11, rdx, r10
-    x64.loadRegBaseDisp.byte r11, [r11 + 0]
-    x64.leaRegRegReg rbx, r9, r10
-    x64.storeBaseDispReg.byte [rbx + 0], r11
-    x64.leaRegRegImm32 r10, r10, 1
-    x64.jmp cpyfth#19
-  cpyfwb#17:
-    x64.leaRegRegReg rbx, rdx, r11
-    x64.loadRegBaseDisp.word64 rbx, [rbx + 0]
-    x64.leaRegRegReg r12, r9, r11
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.leaRegRegImm32 r11, r11, 8
-    x64.jmp cpyfwh#16
-  honourpreempt:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, r9
-    x64.movRegReg rcx, rdi
-    x64.callDirect __gt_preempt
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot r9, slot3
-    x64.leaRegGlobal rsi, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.mov rsi, gs:[rsi]
-    x64.jmp honourresume
-  __rl_slow#48:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot4, rsi
-    x64.storeSlotReg slot5, rdi
-    x64.storeSlotReg slot3, r9
-    x64.movRegReg rcx, rdi
-    x64.movRegReg rdx, r8
-    x64.callDirect __rtlock_acquire
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot4
-    x64.loadRegSlot rdi, slot5
-    x64.loadRegSlot r9, slot3
-    x64.jmp sendtry
-  __rl_slow#54:
-    x64.storeSlotReg slot4, rsi
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rsi, slot4
-    x64.jmp __rl_cont#53
-  __rl_slow#52:
-    x64.storeSlotReg slot4, rsi
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rsi, slot4
-    x64.jmp __rl_cont#51
-  __rl_slow#50:
-    x64.storeSlotReg slot4, rsi
-    x64.storeSlotReg slot6, r8
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.movRegReg rax, r8
-    x64.loadRegSlot rsi, slot4
-    x64.loadRegSlot r8, slot6
-    x64.jmp __rl_cont#49
-  mboxstateoutofdomain:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_5]  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    x64.movRegImm32 rdx, 74
-    x64.movRegImm32 rax, 70
-    x64.callDirect __rt_abort
-    x64.movRegImm32 r8, 0
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendclosed:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#45
-  __rl_slow#46:
-    x64.storeSlotReg slot4, rsi
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rsi, slot4
-  __rl_cont#45:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.movRegImm32 r8, 2
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-```
-```TargetIr:x64-linux
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __np_src_key_free@448 = i64 0
-  __np_src_key_high@456 = i64 0
-  __np_child_signal@464 = i64 0
-  __np_pd_mtable@472 = i64 0
-  __np_pd_mcap@480 = i64 0
-  __sched_num_procs@488 = i64 0
-  __sched_ncpu@496 = i64 0
-  __sched_shutdown_flag@504 = i64 0
-  __sched_lock@512 = i64 0
-  __sched_lock_depth_sink@520 = i64 0
-  __sched_nmspinning@528 = i64 0
-  __sched_needspinning@536 = i64 0
-  __sched_sysmon_event@544 = i64 0
-  __sched_sysmon_wait@552 = i64 0
-  __sched_timer_starts@560 = i64 0
-  __mrt_envp@568 = i64 0
-  __mrt_signal_stack_bytes@576 = i64 0
-  __mrt_tls_next_key@584 = i64 0
-  __slab_arena_list@592 = i64 0
-  __slab_arena_map_l1@600 = i64 0
-  __slab_state@608 = i64 0
-  __mrt_program_started@616 = i8 0
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 48
-    x64.movRegImm32 rbx, 1024
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
-    x64.movRegImm32 rax, 24
-    x64.movRegReg rdx, r8
-    x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegImm32 rbx, 1
-    x64.movRegImm32 rcx, 0
-    x64.callDirect __gt_cell_alloc
-    x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
-    x64.movRegReg r14, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r14 + 0], rax
-    x64.storeBaseDispReg.word64 [r14 + 8], rbx
-    x64.storeBaseDispReg.word64 [r14 + 16], r13
-    x64.movRegImm32 rax, 24
-    x64.movRegImm32 r9, 0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendrefused
-  sendaccepted:
-    x64.movRegReg rcx, r13
-    x64.callDirect __gt_try_await
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  critsplit:
-    x64.movRegReg rcx, r10
-  tryerr:
-    x64.movRegImm32 rbx, 0
-    x64.callDirect __mm_decref
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rbx, r8
-  trycont:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendrefused:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.storeSlotReg slot0, r8
-    x64.callDirect __mm_alloc
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot r8, slot0
-    x64.leaRegRegImm32 rax, r8, -1
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jmp tryerr
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-mailbox-send-steps-its-lock-depth-with-a-plain-add.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    x64.callDirect __mbox_unknown_tag
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
-  __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
-  __il_cont:
-    x64.movRegImm32 rax, 0
-    x64.callDirect __gt_cell_complete
-    x64.jmp serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  __il_body:
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.storeBaseDispReg.word64 [r14 + 0], r13
-  __il_cont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__mbox_send {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 96
-    x64.leaRegGlobal rsi, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.mov rsi, gs:[rsi]
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
-    x64.loadRegBaseDisp.word64 r8, [rdi + 40]
-    x64.cmpRegImm32 r8, -1314
-    x64.jcc equal, honourpreempt
-  honourresume:
-    x64.leaRegRegImm32 rdi, rcx, 96
-    x64.aluBaseDispImm32.add [rsi + 824], 1
-    x64.movRegImm32 r8, 1
-    x64.xchg8 [rdi], r8 <- r8
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, __rl_slow#48
-  sendtry:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 40]
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendclosed
-  sendroute:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 32]
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendhandoff
-  sendfirstcheck:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 72]
-    x64.cmpRegImm32 r8, 2
-    x64.jcc notEqual, mboxstatenotstarted
-  sendappend:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 24]
-    x64.loadRegBaseDisp.word64 r10, [rcx + 64]
-    x64.cmpRegReg r8, r10
-    x64.jcc equal, sendqueueing
-  sendringroom:
-    x64.loadRegBaseDisp.word64 r10, [rcx + 0]
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, sendqueueing
-  mboxhavering:
-    x64.loadRegBaseDisp.word64 r10, [rcx + 8]
-    x64.cmpRegReg r8, r10
-    x64.jcc equal, sendqueueing
-  sendfitted:
-    x64.leaRegRegImm32 r9, r8, 1
-    x64.storeBaseDispReg.word64 [rcx + 24], r9
-    x64.loadRegBaseDisp.word64 r9, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r10, [rcx + 8]
-    x64.loadRegBaseDisp.word64 r11, [rcx + 16]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 56]
-    x64.leaRegRegImm32 r10, r10, -1
-    x64.leaRegRegReg r8, r11, r8
-    x64.andRegReg r8, r8, r10
-    x64.imulRegReg r8, r8, rcx
-    x64.leaRegRegReg rcx, r9, r8
-    x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, cpyfd#38
-  cpyfrun#37:
-    x64.movRegReg r8, rax
-    x64.andRegImm32 r8, rax, -8
-    x64.movRegImm32 r9, 0
-  cpyfwh#39:
-    x64.cmpRegReg r9, r8
-    x64.jcc less, cpyfwb#40
-  cpyfth#42:
-    x64.cmpRegReg r8, rax
-    x64.jcc less, cpyftb#43
-  cpyfd#38:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#54
-  __rl_cont#53:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.jmp senddone
-  cpyftb#43:
-    x64.leaRegRegReg r9, rdx, r8
-    x64.loadRegBaseDisp.byte r9, [r9 + 0]
-    x64.leaRegRegReg r10, rcx, r8
-    x64.storeBaseDispReg.byte [r10 + 0], r9
-    x64.leaRegRegImm32 r8, r8, 1
-    x64.jmp cpyfth#42
-  cpyfwb#40:
-    x64.leaRegRegReg r10, rdx, r9
-    x64.loadRegBaseDisp.word64 r10, [r10 + 0]
-    x64.leaRegRegReg r11, rcx, r9
-    x64.storeBaseDispReg.word64 [r11 + 0], r10
-    x64.leaRegRegImm32 r9, r9, 8
-    x64.jmp cpyfwh#39
-  mboxstatenotstarted:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, mboxstatenotfresh
-  sendinboxfirst:
-    x64.leaRegRegImm32 r8, rcx, 104
-    x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, cpyfd#29
-  cpyfrun#28:
-    x64.movRegReg r9, rax
-    x64.andRegImm32 r9, rax, -8
-    x64.movRegImm32 r10, 0
-  cpyfwh#30:
-    x64.cmpRegReg r10, r9
-    x64.jcc less, cpyfwb#31
-  cpyfth#33:
-    x64.cmpRegReg r9, rax
-    x64.jcc less, cpyftb#34
-  cpyfd#29:
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 72], rax
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#52
-  __rl_cont#51:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.jmp senddone
-  cpyftb#34:
-    x64.leaRegRegReg r10, rdx, r9
-    x64.loadRegBaseDisp.byte r10, [r10 + 0]
-    x64.leaRegRegReg r11, r8, r9
-    x64.storeBaseDispReg.byte [r11 + 0], r10
-    x64.leaRegRegImm32 r9, r9, 1
-    x64.jmp cpyfth#33
-  cpyfwb#31:
-    x64.leaRegRegReg r11, rdx, r10
-    x64.loadRegBaseDisp.word64 r11, [r11 + 0]
-    x64.leaRegRegReg rbx, r8, r10
-    x64.storeBaseDispReg.word64 [rbx + 0], r11
-    x64.leaRegRegImm32 r10, r10, 8
-    x64.jmp cpyfwh#30
-  mboxstatenotfresh:
-    x64.cmpRegImm32 r8, 1
-    x64.jcc notEqual, mboxstateoutofdomain
-  sendqueueing:
-    x64.callDirect __mbox_send_queue
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendhandoff:
-    x64.leaRegRegImm32 r9, rcx, 104
-    x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, cpyfd#15
-  cpyfrun#14:
-    x64.movRegReg r10, rax
-    x64.andRegImm32 r10, rax, -8
-    x64.movRegImm32 r11, 0
-  cpyfwh#16:
-    x64.cmpRegReg r11, r10
-    x64.jcc less, cpyfwb#17
-  cpyfth#19:
-    x64.cmpRegReg r10, rax
-    x64.jcc less, cpyftb#20
-  cpyfd#15:
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 496], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rcx + 32], rax
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#50
-  __rl_cont#49:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.movRegImm32 rax, 0
-    x64.movRegImm32 rcx, 1
-    x64.leaRegRegImm32 rdx, r8, 552
-    x64.lock cmpxchg [rdx], rcx
-    x64.setccReg equal, rax
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, readyservicefree
-  readyservicelocked:
-    x64.movRegReg rcx, r8
-    x64.callDirect __gt_ready_locked
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, senddone
-  readyservicewake:
-    x64.callDirect __sched_wake_or_spawn
-    x64.jmp senddone
-  readyservicefree:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 48], rax
-    x64.storeBaseDispReg.word64 [r8 + 608], r8
-    x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rcx, r8, 560
-    x64.lock add [rcx], rax
-    x64.movRegReg rcx, r8
-    x64.callDirect __sched_runq_put
-    x64.callDirect __sched_wake_or_spawn
-  senddone:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  cpyftb#20:
-    x64.leaRegRegReg r11, rdx, r10
-    x64.loadRegBaseDisp.byte r11, [r11 + 0]
-    x64.leaRegRegReg rbx, r9, r10
-    x64.storeBaseDispReg.byte [rbx + 0], r11
-    x64.leaRegRegImm32 r10, r10, 1
-    x64.jmp cpyfth#19
-  cpyfwb#17:
-    x64.leaRegRegReg rbx, rdx, r11
-    x64.loadRegBaseDisp.word64 rbx, [rbx + 0]
-    x64.leaRegRegReg r12, r9, r11
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.leaRegRegImm32 r11, r11, 8
-    x64.jmp cpyfwh#16
-  honourpreempt:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, r9
-    x64.movRegReg rcx, rdi
-    x64.callDirect __gt_preempt
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot r9, slot3
-    x64.leaRegGlobal rsi, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.mov rsi, gs:[rsi]
-    x64.jmp honourresume
-  __rl_slow#48:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot4, rsi
-    x64.storeSlotReg slot5, rdi
-    x64.storeSlotReg slot3, r9
-    x64.movRegReg rcx, rdi
-    x64.movRegReg rdx, r8
-    x64.callDirect __rtlock_acquire
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot4
-    x64.loadRegSlot rdi, slot5
-    x64.loadRegSlot r9, slot3
-    x64.jmp sendtry
-  __rl_slow#54:
-    x64.storeSlotReg slot4, rsi
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rsi, slot4
-    x64.jmp __rl_cont#53
-  __rl_slow#52:
-    x64.storeSlotReg slot4, rsi
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rsi, slot4
-    x64.jmp __rl_cont#51
-  __rl_slow#50:
-    x64.storeSlotReg slot4, rsi
-    x64.storeSlotReg slot6, r8
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.movRegReg rax, r8
-    x64.loadRegSlot rsi, slot4
-    x64.loadRegSlot r8, slot6
-    x64.jmp __rl_cont#49
-  mboxstateoutofdomain:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_5]  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    x64.movRegImm32 rdx, 74
-    x64.movRegImm32 rax, 70
-    x64.callDirect __rt_abort
-    x64.movRegImm32 r8, 0
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendclosed:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#45
-  __rl_slow#46:
-    x64.storeSlotReg slot4, rsi
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rsi, slot4
-  __rl_cont#45:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.movRegImm32 r8, 2
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-```
-```TargetIr:arm64-macos
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __sched_num_procs@448 = i64 0
-  __sched_ncpu@456 = i64 0
-  __sched_shutdown_flag@464 = i64 0
-  __sched_lock@472 = i64 0
-  __sched_lock_depth_sink@480 = i64 0
-  __sched_nmspinning@488 = i64 0
-  __sched_needspinning@496 = i64 0
-  __sched_sysmon_event@504 = i64 0
-  __sched_sysmon_wait@512 = i64 0
-  __sched_timer_starts@520 = i64 0
-  __slab_arena_list@528 = i64 0
-  __slab_arena_map_l1@536 = i64 0
-  __slab_state@544 = i64 0
-  __mrt_program_started@552 = i8 0
-}
-
-func @main {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x22
-    arm64.storeSlotReg slot3, x21
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.movImm x19, 1024
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.leaFuncAddr x0, Counter.__start_Counter.create
-    arm64.movImm x2, 24
-    arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movImm x19, 1
-    arm64.movImm x0, 0
-    arm64.bl __gt_cell_alloc
-    arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.storeBaseDispReg.word64 [x22 + 16], x21
-    arm64.movImm x2, 24
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
-    arm64.cmp x0, 0
-    arm64.b.ne sendrefused
-  sendaccepted:
-    arm64.movRegReg x0, x21
-    arm64.bl __gt_try_await
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  critsplit:
-    arm64.movRegReg x0, x9
-  tryerr:
-    arm64.movImm x19, 0
-    arm64.bl __mm_decref
-    arm64.b trycont
-  tryok:
-    arm64.movRegReg x19, x0
-  trycont:
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  sendrefused:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.movImm x2, 16
-    arm64.movImm x1, 0
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x2
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.storeBaseDispReg.word64 [x1 + 8], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.movRegReg x0, x1
-    arm64.b tryerr
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-mailbox-send-steps-its-lock-depth-with-a-plain-add.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    arm64.bl __mbox_unknown_tag
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
-    arm64.add x1, x1, 1
-  __il_cont:
-    arm64.movImm x2, 0
-    arm64.bl __gt_cell_complete
-    arm64.b serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  __il_body:
-    arm64.movImm x21, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x21
-  __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.retIndirect
-}
-
-func @__mbox_send {
-  entry:
-    arm64.prologue 80
-    arm64.leaGlobal x4, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x4
-    arm64.cmp x4, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x4, x16, x17
-    arm64.loadRegBaseDisp.word64 x5, [x4 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x5 + 40]
-    arm64.cmp x6, -1314
-    arm64.b.eq honourpreempt
-  honourresume:
-    arm64.add x5, x0, 96
-    arm64.loadRegBaseDisp.word64 x6, [x4 + 824]
-    arm64.add x6, x6, 1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x6
-    arm64.movImm x6, 1
-    arm64.arm64AtomicRmw.exchangeByte x6, [x5], x6
-    arm64.cmp x6, 0
-    arm64.b.ne __rl_slow#48
-  sendtry:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 40]
-    arm64.cmp x6, 0
-    arm64.b.ne sendclosed
-  sendroute:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 32]
-    arm64.cmp x6, 0
-    arm64.b.ne sendhandoff
-  sendfirstcheck:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 72]
-    arm64.cmp x6, 2
-    arm64.b.ne mboxstatenotstarted
-  sendappend:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 24]
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 64]
-    arm64.cmp x6, x7
-    arm64.b.eq sendqueueing
-  sendringroom:
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 0]
-    arm64.cmp x7, 0
-    arm64.b.eq sendqueueing
-  mboxhavering:
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 8]
-    arm64.cmp x6, x7
-    arm64.b.eq sendqueueing
-  sendfitted:
-    arm64.add x3, x6, 1
-    arm64.storeBaseDispReg.word64 [x0 + 24], x3
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x8, [x0 + 16]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 56]
-    arm64.sub x7, x7, 1
-    arm64.add x6, x8, x6
-    arm64.and x6, x6, x7
-    arm64.mul x0, x6, x0
-    arm64.add x0, x3, x0
-    arm64.cmp x2, 0
-    arm64.b.le cpyfd#38
-  cpyfrun#37:
-    arm64.and x3, x2, -8
-    arm64.movImm x6, 0
-  cpyfwh#39:
-    arm64.cmp x6, x3
-    arm64.b.lt cpyfwb#40
-  cpyfth#42:
-    arm64.cmp x3, x2
-    arm64.b.lt cpyftb#43
-  cpyfd#38:
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#54
-  __rl_cont#53:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.b senddone
-  cpyftb#43:
-    arm64.add x6, x1, x3
-    arm64.loadRegBaseDisp.byte x6, [x6 + 0]
-    arm64.add x7, x0, x3
-    arm64.storeBaseDispReg.byte [x7 + 0], x6
-    arm64.add x3, x3, 1
-    arm64.b cpyfth#42
-  cpyfwb#40:
-    arm64.add x7, x1, x6
-    arm64.loadRegBaseDisp.word64 x7, [x7 + 0]
-    arm64.add x8, x0, x6
-    arm64.storeBaseDispReg.word64 [x8 + 0], x7
-    arm64.add x6, x6, 8
-    arm64.b cpyfwh#39
-  mboxstatenotstarted:
-    arm64.cmp x6, 0
-    arm64.b.ne mboxstatenotfresh
-  sendinboxfirst:
-    arm64.add x3, x0, 104
-    arm64.cmp x2, 0
-    arm64.b.le cpyfd#29
-  cpyfrun#28:
-    arm64.and x6, x2, -8
-    arm64.movImm x7, 0
-  cpyfwh#30:
-    arm64.cmp x7, x6
-    arm64.b.lt cpyfwb#31
-  cpyfth#33:
-    arm64.cmp x6, x2
-    arm64.b.lt cpyftb#34
-  cpyfd#29:
-    arm64.movImm x1, 1
-    arm64.storeBaseDispReg.word64 [x0 + 72], x1
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#52
-  __rl_cont#51:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.b senddone
-  cpyftb#34:
-    arm64.add x7, x1, x6
-    arm64.loadRegBaseDisp.byte x7, [x7 + 0]
-    arm64.add x8, x3, x6
-    arm64.storeBaseDispReg.byte [x8 + 0], x7
-    arm64.add x6, x6, 1
-    arm64.b cpyfth#33
-  cpyfwb#31:
-    arm64.add x8, x1, x7
-    arm64.loadRegBaseDisp.word64 x8, [x8 + 0]
-    arm64.add x9, x3, x7
-    arm64.storeBaseDispReg.word64 [x9 + 0], x8
-    arm64.add x7, x7, 8
-    arm64.b cpyfwh#30
-  mboxstatenotfresh:
-    arm64.cmp x6, 1
-    arm64.b.ne mboxstateoutofdomain
-  sendqueueing:
-    arm64.bl __mbox_send_queue
-    arm64.epilogue 80
-    arm64.retIndirect
-  sendhandoff:
-    arm64.add x3, x0, 104
-    arm64.cmp x2, 0
-    arm64.b.le cpyfd#15
-  cpyfrun#14:
-    arm64.and x7, x2, -8
-    arm64.movImm x8, 0
-  cpyfwh#16:
-    arm64.cmp x8, x7
-    arm64.b.lt cpyfwb#17
-  cpyfth#19:
-    arm64.cmp x7, x2
-    arm64.b.lt cpyftb#20
-  cpyfd#15:
-    arm64.movImm x1, 1
-    arm64.storeBaseDispReg.word64 [x6 + 496], x1
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 32], x1
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#50
-  __rl_cont#49:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.movImm x0, 0
-    arm64.movImm x1, 1
-    arm64.add x2, x6, 552
-    arm64.arm64AtomicCas x0, [x2], x0, x1
-    arm64.cmp x0, 0
-    arm64.b.ne readyservicefree
-  readyservicelocked:
-    arm64.movRegReg x0, x6
-    arm64.bl __gt_ready_locked
-    arm64.cmp x0, 0
-    arm64.b.eq senddone
-  readyservicewake:
-    arm64.bl __sched_wake_or_spawn
-    arm64.b senddone
-  readyservicefree:
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x6 + 48], x0
-    arm64.storeBaseDispReg.word64 [x6 + 608], x6
-    arm64.movImm x0, 1
-    arm64.add x1, x6, 560
-    arm64.arm64AtomicRmw.add x0, [x1], x0
-    arm64.movRegReg x0, x6
-    arm64.bl __sched_runq_put
-    arm64.bl __sched_wake_or_spawn
-  senddone:
-    arm64.movImm x0, 0
-    arm64.epilogue 80
-    arm64.retIndirect
-  cpyftb#20:
-    arm64.add x8, x1, x7
-    arm64.loadRegBaseDisp.byte x8, [x8 + 0]
-    arm64.add x9, x3, x7
-    arm64.storeBaseDispReg.byte [x9 + 0], x8
-    arm64.add x7, x7, 1
-    arm64.b cpyfth#19
-  cpyfwb#17:
-    arm64.add x9, x1, x8
-    arm64.loadRegBaseDisp.word64 x9, [x9 + 0]
-    arm64.add x10, x3, x8
-    arm64.storeBaseDispReg.word64 [x10 + 0], x9
-    arm64.add x8, x8, 8
-    arm64.b cpyfwh#16
-  honourpreempt:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.storeSlotReg slot2, x2
-    arm64.storeSlotReg slot3, x3
-    arm64.movRegReg x0, x5
-    arm64.bl __gt_preempt
-    arm64.movRegReg x4, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x3, slot3
-    arm64.leaGlobal x4, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x4
-    arm64.cmp x4, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x4, x16, x17
-    arm64.b honourresume
-  __rl_slow#48:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.storeSlotReg slot2, x2
-    arm64.storeSlotReg slot3, x3
-    arm64.storeSlotReg slot4, x4
-    arm64.storeSlotReg slot5, x5
-    arm64.movRegReg x0, x5
-    arm64.movRegReg x1, x6
-    arm64.bl __rtlock_acquire
-    arm64.movRegReg x6, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x3, slot3
-    arm64.loadRegSlot x4, slot4
-    arm64.loadRegSlot x5, slot5
-    arm64.b sendtry
-  __rl_slow#54:
-    arm64.storeSlotReg slot4, x4
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-    arm64.b __rl_cont#53
-  __rl_slow#52:
-    arm64.storeSlotReg slot4, x4
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-    arm64.b __rl_cont#51
-  __rl_slow#50:
-    arm64.storeSlotReg slot4, x4
-    arm64.storeSlotReg slot6, x6
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-    arm64.loadRegSlot x6, slot6
-    arm64.b __rl_cont#49
-  mboxstateoutofdomain:
-    arm64.leaRdata x0, __fatal_msg_5  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    arm64.movImm x1, 74
-    arm64.movImm x2, 70
-    arm64.bl __rt_abort
-    arm64.movImm x0, 0
-    arm64.epilogue 80
-    arm64.retIndirect
-  sendclosed:
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#45
-  __rl_slow#46:
-    arm64.storeSlotReg slot4, x4
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-  __rl_cont#45:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.movImm x0, 2
-    arm64.epilogue 80
-    arm64.retIndirect
-}
-```
-```TargetIr:arm64-linux
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __np_src_key_free@448 = i64 0
-  __np_src_key_high@456 = i64 0
-  __np_child_signal@464 = i64 0
-  __np_pd_mtable@472 = i64 0
-  __np_pd_mcap@480 = i64 0
-  __sched_num_procs@488 = i64 0
-  __sched_ncpu@496 = i64 0
-  __sched_shutdown_flag@504 = i64 0
-  __sched_lock@512 = i64 0
-  __sched_lock_depth_sink@520 = i64 0
-  __sched_nmspinning@528 = i64 0
-  __sched_needspinning@536 = i64 0
-  __sched_sysmon_event@544 = i64 0
-  __sched_sysmon_wait@552 = i64 0
-  __sched_timer_starts@560 = i64 0
-  __mrt_envp@568 = i64 0
-  __mrt_signal_stack_bytes@576 = i64 0
-  __mrt_hwcap_atomics@584 = i64 0
-  __mrt_tls_next_key@592 = i64 0
-  __slab_arena_list@600 = i64 0
-  __slab_arena_map_l1@608 = i64 0
-  __slab_state@616 = i64 0
-  __mrt_program_started@624 = i8 0
-}
-
-func @main {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x22
-    arm64.storeSlotReg slot3, x21
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.movImm x19, 1024
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.leaFuncAddr x0, Counter.__start_Counter.create
-    arm64.movImm x2, 24
-    arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movImm x19, 1
-    arm64.movImm x0, 0
-    arm64.bl __gt_cell_alloc
-    arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.storeBaseDispReg.word64 [x22 + 16], x21
-    arm64.movImm x2, 24
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
-    arm64.cmp x0, 0
-    arm64.b.ne sendrefused
-  sendaccepted:
-    arm64.movRegReg x0, x21
-    arm64.bl __gt_try_await
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  critsplit:
-    arm64.movRegReg x0, x9
-  tryerr:
-    arm64.movImm x19, 0
-    arm64.bl __mm_decref
-    arm64.b trycont
-  tryok:
-    arm64.movRegReg x19, x0
-  trycont:
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  sendrefused:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.movImm x2, 16
-    arm64.movImm x1, 0
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x2
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.storeBaseDispReg.word64 [x1 + 8], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.movRegReg x0, x1
-    arm64.b tryerr
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-mailbox-send-steps-its-lock-depth-with-a-plain-add.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    arm64.bl __mbox_unknown_tag
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
-    arm64.add x1, x1, 1
-  __il_cont:
-    arm64.movImm x2, 0
-    arm64.bl __gt_cell_complete
-    arm64.b serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  __il_body:
-    arm64.movImm x21, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x21
-  __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.retIndirect
-}
-
-func @__mbox_send {
-  entry:
-    arm64.prologue 80
-    arm64.leaGlobal x4, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x4
-    arm64.cmp x4, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x4, x16, x17
-    arm64.loadRegBaseDisp.word64 x5, [x4 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x5 + 40]
-    arm64.cmp x6, -1314
-    arm64.b.eq honourpreempt
-  honourresume:
-    arm64.add x5, x0, 96
-    arm64.loadRegBaseDisp.word64 x6, [x4 + 824]
-    arm64.add x6, x6, 1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x6
-    arm64.movImm x6, 1
-    arm64.arm64AtomicRmw.exchangeByte x6, [x5], x6
-    arm64.cmp x6, 0
-    arm64.b.ne __rl_slow#48
-  sendtry:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 40]
-    arm64.cmp x6, 0
-    arm64.b.ne sendclosed
-  sendroute:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 32]
-    arm64.cmp x6, 0
-    arm64.b.ne sendhandoff
-  sendfirstcheck:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 72]
-    arm64.cmp x6, 2
-    arm64.b.ne mboxstatenotstarted
-  sendappend:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 24]
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 64]
-    arm64.cmp x6, x7
-    arm64.b.eq sendqueueing
-  sendringroom:
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 0]
-    arm64.cmp x7, 0
-    arm64.b.eq sendqueueing
-  mboxhavering:
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 8]
-    arm64.cmp x6, x7
-    arm64.b.eq sendqueueing
-  sendfitted:
-    arm64.add x3, x6, 1
-    arm64.storeBaseDispReg.word64 [x0 + 24], x3
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x8, [x0 + 16]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 56]
-    arm64.sub x7, x7, 1
-    arm64.add x6, x8, x6
-    arm64.and x6, x6, x7
-    arm64.mul x0, x6, x0
-    arm64.add x0, x3, x0
-    arm64.cmp x2, 0
-    arm64.b.le cpyfd#38
-  cpyfrun#37:
-    arm64.and x3, x2, -8
-    arm64.movImm x6, 0
-  cpyfwh#39:
-    arm64.cmp x6, x3
-    arm64.b.lt cpyfwb#40
-  cpyfth#42:
-    arm64.cmp x3, x2
-    arm64.b.lt cpyftb#43
-  cpyfd#38:
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#54
-  __rl_cont#53:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.b senddone
-  cpyftb#43:
-    arm64.add x6, x1, x3
-    arm64.loadRegBaseDisp.byte x6, [x6 + 0]
-    arm64.add x7, x0, x3
-    arm64.storeBaseDispReg.byte [x7 + 0], x6
-    arm64.add x3, x3, 1
-    arm64.b cpyfth#42
-  cpyfwb#40:
-    arm64.add x7, x1, x6
-    arm64.loadRegBaseDisp.word64 x7, [x7 + 0]
-    arm64.add x8, x0, x6
-    arm64.storeBaseDispReg.word64 [x8 + 0], x7
-    arm64.add x6, x6, 8
-    arm64.b cpyfwh#39
-  mboxstatenotstarted:
-    arm64.cmp x6, 0
-    arm64.b.ne mboxstatenotfresh
-  sendinboxfirst:
-    arm64.add x3, x0, 104
-    arm64.cmp x2, 0
-    arm64.b.le cpyfd#29
-  cpyfrun#28:
-    arm64.and x6, x2, -8
-    arm64.movImm x7, 0
-  cpyfwh#30:
-    arm64.cmp x7, x6
-    arm64.b.lt cpyfwb#31
-  cpyfth#33:
-    arm64.cmp x6, x2
-    arm64.b.lt cpyftb#34
-  cpyfd#29:
-    arm64.movImm x1, 1
-    arm64.storeBaseDispReg.word64 [x0 + 72], x1
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#52
-  __rl_cont#51:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.b senddone
-  cpyftb#34:
-    arm64.add x7, x1, x6
-    arm64.loadRegBaseDisp.byte x7, [x7 + 0]
-    arm64.add x8, x3, x6
-    arm64.storeBaseDispReg.byte [x8 + 0], x7
-    arm64.add x6, x6, 1
-    arm64.b cpyfth#33
-  cpyfwb#31:
-    arm64.add x8, x1, x7
-    arm64.loadRegBaseDisp.word64 x8, [x8 + 0]
-    arm64.add x9, x3, x7
-    arm64.storeBaseDispReg.word64 [x9 + 0], x8
-    arm64.add x7, x7, 8
-    arm64.b cpyfwh#30
-  mboxstatenotfresh:
-    arm64.cmp x6, 1
-    arm64.b.ne mboxstateoutofdomain
-  sendqueueing:
-    arm64.bl __mbox_send_queue
-    arm64.epilogue 80
-    arm64.retIndirect
-  sendhandoff:
-    arm64.add x3, x0, 104
-    arm64.cmp x2, 0
-    arm64.b.le cpyfd#15
-  cpyfrun#14:
-    arm64.and x7, x2, -8
-    arm64.movImm x8, 0
-  cpyfwh#16:
-    arm64.cmp x8, x7
-    arm64.b.lt cpyfwb#17
-  cpyfth#19:
-    arm64.cmp x7, x2
-    arm64.b.lt cpyftb#20
-  cpyfd#15:
-    arm64.movImm x1, 1
-    arm64.storeBaseDispReg.word64 [x6 + 496], x1
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 32], x1
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#50
-  __rl_cont#49:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.movImm x0, 0
-    arm64.movImm x1, 1
-    arm64.add x2, x6, 552
-    arm64.arm64AtomicCas x0, [x2], x0, x1
-    arm64.cmp x0, 0
-    arm64.b.ne readyservicefree
-  readyservicelocked:
-    arm64.movRegReg x0, x6
-    arm64.bl __gt_ready_locked
-    arm64.cmp x0, 0
-    arm64.b.eq senddone
-  readyservicewake:
-    arm64.bl __sched_wake_or_spawn
-    arm64.b senddone
-  readyservicefree:
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x6 + 48], x0
-    arm64.storeBaseDispReg.word64 [x6 + 608], x6
-    arm64.movImm x0, 1
-    arm64.add x1, x6, 560
-    arm64.arm64AtomicRmw.add x0, [x1], x0
-    arm64.movRegReg x0, x6
-    arm64.bl __sched_runq_put
-    arm64.bl __sched_wake_or_spawn
-  senddone:
-    arm64.movImm x0, 0
-    arm64.epilogue 80
-    arm64.retIndirect
-  cpyftb#20:
-    arm64.add x8, x1, x7
-    arm64.loadRegBaseDisp.byte x8, [x8 + 0]
-    arm64.add x9, x3, x7
-    arm64.storeBaseDispReg.byte [x9 + 0], x8
-    arm64.add x7, x7, 1
-    arm64.b cpyfth#19
-  cpyfwb#17:
-    arm64.add x9, x1, x8
-    arm64.loadRegBaseDisp.word64 x9, [x9 + 0]
-    arm64.add x10, x3, x8
-    arm64.storeBaseDispReg.word64 [x10 + 0], x9
-    arm64.add x8, x8, 8
-    arm64.b cpyfwh#16
-  honourpreempt:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.storeSlotReg slot2, x2
-    arm64.storeSlotReg slot3, x3
-    arm64.movRegReg x0, x5
-    arm64.bl __gt_preempt
-    arm64.movRegReg x4, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x3, slot3
-    arm64.leaGlobal x4, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x4
-    arm64.cmp x4, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x4, x16, x17
-    arm64.b honourresume
-  __rl_slow#48:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.storeSlotReg slot2, x2
-    arm64.storeSlotReg slot3, x3
-    arm64.storeSlotReg slot4, x4
-    arm64.storeSlotReg slot5, x5
-    arm64.movRegReg x0, x5
-    arm64.movRegReg x1, x6
-    arm64.bl __rtlock_acquire
-    arm64.movRegReg x6, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x3, slot3
-    arm64.loadRegSlot x4, slot4
-    arm64.loadRegSlot x5, slot5
-    arm64.b sendtry
-  __rl_slow#54:
-    arm64.storeSlotReg slot4, x4
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-    arm64.b __rl_cont#53
-  __rl_slow#52:
-    arm64.storeSlotReg slot4, x4
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-    arm64.b __rl_cont#51
-  __rl_slow#50:
-    arm64.storeSlotReg slot4, x4
-    arm64.storeSlotReg slot6, x6
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-    arm64.loadRegSlot x6, slot6
-    arm64.b __rl_cont#49
-  mboxstateoutofdomain:
-    arm64.leaRdata x0, __fatal_msg_5  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    arm64.movImm x1, 74
-    arm64.movImm x2, 70
-    arm64.bl __rt_abort
-    arm64.movImm x0, 0
-    arm64.epilogue 80
-    arm64.retIndirect
-  sendclosed:
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#45
-  __rl_slow#46:
-    arm64.storeSlotReg slot4, x4
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-  __rl_cont#45:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.movImm x0, 2
-    arm64.epilogue 80
-    arm64.retIndirect
-}
-```
-
 <!-- test: a-locked-ready-claims-the-strand-holder-with-a-cas -->
 **EVERY CLAIM OF A STRAND's HOLDER IS A COMPARE-AND-SWAP, SO A LOCK-FREE CLAIMER AND A LOCKED ONE NEVER BOTH
 WIN.** A strand's holder word says whether some machine owns the strand: free, or held while its owner's
@@ -28745,13 +26341,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -28759,7 +26357,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -28769,7 +26367,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -28806,7 +26404,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -28834,52 +26432,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -28892,7 +26484,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -28901,19 +26493,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_ready_locked {
@@ -29174,13 +26764,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -29188,7 +26780,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -29198,7 +26790,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -29234,7 +26826,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -29262,52 +26854,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -29320,7 +26906,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -29329,19 +26915,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_ready_locked {
@@ -29593,12 +27177,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -29606,7 +27192,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -29616,7 +27202,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -29651,7 +27237,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -29680,50 +27266,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -29734,7 +27311,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -29743,18 +27320,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_ready_locked {
@@ -30031,12 +27606,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -30044,7 +27621,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -30054,7 +27631,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -30089,7 +27666,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -30118,50 +27695,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -30172,7 +27740,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -30181,18 +27749,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_ready_locked {
@@ -30371,5348 +27937,6 @@ func @__gt_ready_locked {
     arm64.loadRegSlot x19, slot2
     arm64.epilogue 48
     arm64.ret
-}
-```
-
-<!-- test: a-mailbox-receive-takes-the-mailboxs-own-lock -->
-**A RECEIVE SERIALISES ONLY WITH ITS OWN MAILBOX.** A mailbox's ring, its head and count, its closed flag,
-its parked receiver and its receiver state are guarded by a lock the mailbox carries in its own region, not
-by `__sched_lock`, so two services' traffic never meets on a lock and a service's traffic never meets the
-scheduler's ready, park and run-queue work. `__mbox_recv` takes that lock on the `recvtry` road around its
-receiver-state read, its count read and its pop, and its `closed` read on the empty road is inside the same
-hold as the count read, so "empty and closed" is one instant. The first receive answers the message a send
-left in the inbox before the receiver ran, with no copy, and admits the first waiting sender into the ring.
-The pop copies the head slot into the mailbox's inbox and answers the inbox's address, and a
-ring that has grown past its first slots (16, or the capacity when that is smaller) is replaced by a fresh
-ring of that size once the pop empties it. It answers 0 only on a closed, empty mailbox, which is the one
-instant the service loop exits on, so no message is ever left queued behind the exit.
-
-What this pin shows is the lock each road enters and leaves: the lock word the enter and leave operate on
-is the mailbox's own lock field, computed from the `mbox` argument, and no load of `__sched_lock`
-appears anywhere in the body. The empty and open road keeps the lock: it stores the running green
-thread into the mailbox's `parkedGt` word and calls `__gt_park` with the lock still held, as Go's
-`chanrecv` parks with `c.lock` held and `chanparkcommit` releases it. Only the drained road, which returns 0,
-leaves before it returns. The hold crosses the switch to the machine's scheduler context, which releases it
-on the same OS thread before any other green thread runs there (`__gt_run_strand`'s mailbox commit, pinned
-by `a-strand-turn-takes-only-its-own-strands-lock`), so the lock, recursive on its owner thread, is never entered by a second
-green thread and nothing can append or close between the empty read and the registration. When the
-receiver resumes it reads the park-argument word: a send marked it after copying the message into the inbox,
-and `__mbox_recv` returns the inbox's address without entering the lock; a close left the word empty, and
-the road re-enters `recvtry`.
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Counter
-	var calls as Integer
-
-	static function create() returns Self
-		return Self{calls: 0}
-	end 'create'
-
-	export function next(n Integer) returns Integer
-		self.calls = self.calls + 1
-
-		return n + 1
-	end 'next'
-end 'Counter'
-
-function main() returns ExitCode
-	let c = spawn Counter.create()
-	let a = try await c.next(1) otherwise 0
-
-	return a as ExitCode
-end 'main'
-```
-```exitcode
-2
-```
-```RequiredRuntime
-__mbox_recv
-```
-```TargetIr:x64-windows
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 8192
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __sched_num_procs@440 = i64 0
-  __sched_ncpu@448 = i64 0
-  __sched_shutdown_flag@456 = i64 0
-  __sched_lock@464 = i64 0
-  __sched_lock_depth_sink@472 = i64 0
-  __sched_nmspinning@480 = i64 0
-  __sched_needspinning@488 = i64 0
-  __sched_sysmon_event@496 = i64 0
-  __sched_sysmon_wait@504 = i64 0
-  __sched_timer_starts@512 = i64 0
-  __sched_preempt_ext_lock@520 = i64 0
-  __sched_preempt_context@528 = i64 0
-  __slab_arena_list@536 = i64 0
-  __slab_arena_map_l1@544 = i64 0
-  __slab_state@552 = i64 0
-  __mrt_console_probe_stdin@560 = i8 0
-  __mrt_console_probe_stdout@561 = i8 0
-  __mrt_console_probe_stderr@562 = i8 0
-  __mrt_program_started@563 = i8 0
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 48
-    x64.movRegImm32 rbx, 1024
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
-    x64.movRegImm32 rax, 24
-    x64.movRegReg rdx, r8
-    x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegImm32 rbx, 1
-    x64.movRegImm32 rcx, 0
-    x64.callDirect __gt_cell_alloc
-    x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
-    x64.movRegReg r14, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r14 + 0], rax
-    x64.storeBaseDispReg.word64 [r14 + 8], rbx
-    x64.storeBaseDispReg.word64 [r14 + 16], r13
-    x64.movRegImm32 rax, 24
-    x64.movRegImm32 r9, 0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendrefused
-  sendaccepted:
-    x64.movRegReg rcx, r13
-    x64.callDirect __gt_try_await
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  critsplit:
-    x64.movRegReg rcx, r10
-  tryerr:
-    x64.movRegImm32 rbx, 0
-    x64.callDirect __mm_decref
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rbx, r8
-  trycont:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendrefused:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.storeSlotReg slot0, r8
-    x64.callDirect __mm_alloc
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot r8, slot0
-    x64.leaRegRegImm32 rax, r8, -1
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jmp tryerr
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-mailbox-receive-takes-the-mailboxs-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    x64.callDirect __mbox_unknown_tag
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
-  __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
-  __il_cont:
-    x64.movRegImm32 rax, 0
-    x64.callDirect __gt_cell_complete
-    x64.jmp serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  __il_body:
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.storeBaseDispReg.word64 [r14 + 0], r13
-  __il_cont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__mbox_recv {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 64
-    x64.movRegReg rbx, rcx
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
-    x64.cmpRegImm32 rdx, -1314
-    x64.jcc equal, honourpreempt
-  recvtry:
-    x64.leaRegRegImm32 rcx, rbx, 96
-    x64.aluBaseDispImm32.add [rax + 824], 1
-    x64.movRegImm32 rdx, 1
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#31
-  __rl_cont#30:
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 72]
-    x64.cmpRegImm32 rdx, 2
-    x64.jcc equal, recvcounted
-  mboxstatenotstarted:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, mboxstatenotfresh
-  recvstartfresh:
-    x64.movRegImm32 rdx, 2
-    x64.storeBaseDispReg.word64 [rbx + 72], rdx
-  recvcounted:
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 24]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, recvpopcheck
-  recvempty:
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, recvdrained
-  recvpark:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.storeBaseDispReg.word64 [rbx + 32], r12
-    x64.movRegImm32 rcx, 4
-    x64.movRegReg rdx, rbx
-    x64.callDirect __gt_park
-  recvresumed:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 496]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, recvretry
-  recvdelivered:
-    x64.leaRegRegImm32 r8, rbx, 104
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvretry:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.jmp recvtry
-  recvdrained:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#35
-  __rl_cont#34:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.movRegImm32 r8, 0
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvpopcheck:
-    x64.leaRegRegImm32 rsi, rbx, -584
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 664]
-    x64.cmpRegReg rdi, rsi
-    x64.jcc notEqual, recvtakering
-  recvpopfit:
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
-    x64.cmpRegImm32 rdx, 1
-    x64.setccReg equal, rdi
-    x64.cmpRegImm32 rsi, 16
-    x64.setccReg greater, rsi
-    x64.andRegReg rdi, rdi, rsi
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, recvpopnow
-  recvtakering:
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_recv_take
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvpopnow:
-    x64.leaRegRegImm32 rdx, rdx, -1
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rdi, [rbx + 16]
-    x64.loadRegBaseDisp.word64 r8, [rbx + 8]
-    x64.loadRegBaseDisp.word64 r9, [rbx + 56]
-    x64.movRegReg r10, rdi
-    x64.imulRegReg r10, rdi, r9
-    x64.leaRegRegReg rsi, rsi, r10
-    x64.leaRegRegImm32 r8, r8, -1
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.andRegReg rdi, rdi, r8
-    x64.storeBaseDispReg.word64 [rbx + 16], rdi
-    x64.storeBaseDispReg.word64 [rbx + 24], rdx
-    x64.leaRegRegImm32 r8, rbx, 104
-    x64.cmpRegImm32 r9, 0
-    x64.jcc lessEqual, cpyfd
-  cpyfrun:
-    x64.movRegReg rdx, r9
-    x64.andRegImm32 rdx, r9, -8
-    x64.movRegImm32 rdi, 0
-  cpyfwh:
-    x64.cmpRegReg rdi, rdx
-    x64.jcc less, cpyfwb
-  cpyfth:
-    x64.cmpRegReg rdx, r9
-    x64.jcc less, cpyftb
-  cpyfd:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#37
-  __rl_cont#36:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  cpyftb:
-    x64.leaRegRegReg rdi, rsi, rdx
-    x64.loadRegBaseDisp.byte rdi, [rdi + 0]
-    x64.leaRegRegReg r10, r8, rdx
-    x64.storeBaseDispReg.byte [r10 + 0], rdi
-    x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth
-  cpyfwb:
-    x64.leaRegRegReg r10, rsi, rdi
-    x64.loadRegBaseDisp.word64 r10, [r10 + 0]
-    x64.leaRegRegReg r11, r8, rdi
-    x64.storeBaseDispReg.word64 [r11 + 0], r10
-    x64.leaRegRegImm32 rdi, rdi, 8
-    x64.jmp cpyfwh
-  mboxstatenotfresh:
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, mboxstateoutofdomain
-  recvtakeinbox:
-    x64.leaRegRegImm32 rdx, rbx, -584
-    x64.loadRegBaseDisp.word64 rsi, [rdx + 664]
-    x64.cmpRegReg rsi, rdx
-    x64.jcc equal, recvtakeinboxalone
-  recvtakeinboxcontended:
-    x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_recv_take
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvtakeinboxalone:
-    x64.movRegImm32 rdx, 2
-    x64.storeBaseDispReg.word64 [rbx + 72], rdx
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#33
-  __rl_cont#32:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.leaRegRegImm32 r8, rbx, 104
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  honourpreempt:
-    x64.callDirect __gt_preempt
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.jmp recvtry
-  __rl_slow#31:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.callDirect __rtlock_acquire
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.jmp __rl_cont#30
-  __rl_slow#35:
-    x64.storeSlotReg slot0, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot0
-    x64.jmp __rl_cont#34
-  __rl_slow#37:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot2, r8
-    x64.callDirect __rtlock_release
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot r8, slot2
-    x64.jmp __rl_cont#36
-  __rl_slow#33:
-    x64.storeSlotReg slot0, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot0
-    x64.jmp __rl_cont#32
-  mboxstateoutofdomain:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_5]  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    x64.movRegImm32 rdx, 74
-    x64.movRegImm32 rax, 70
-    x64.callDirect __rt_abort
-    x64.movRegImm32 r8, 0
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-```
-```TargetIr:x64-linux
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __np_src_key_free@448 = i64 0
-  __np_src_key_high@456 = i64 0
-  __np_child_signal@464 = i64 0
-  __np_pd_mtable@472 = i64 0
-  __np_pd_mcap@480 = i64 0
-  __sched_num_procs@488 = i64 0
-  __sched_ncpu@496 = i64 0
-  __sched_shutdown_flag@504 = i64 0
-  __sched_lock@512 = i64 0
-  __sched_lock_depth_sink@520 = i64 0
-  __sched_nmspinning@528 = i64 0
-  __sched_needspinning@536 = i64 0
-  __sched_sysmon_event@544 = i64 0
-  __sched_sysmon_wait@552 = i64 0
-  __sched_timer_starts@560 = i64 0
-  __mrt_envp@568 = i64 0
-  __mrt_signal_stack_bytes@576 = i64 0
-  __mrt_tls_next_key@584 = i64 0
-  __slab_arena_list@592 = i64 0
-  __slab_arena_map_l1@600 = i64 0
-  __slab_state@608 = i64 0
-  __mrt_program_started@616 = i8 0
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 48
-    x64.movRegImm32 rbx, 1024
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
-    x64.movRegImm32 rax, 24
-    x64.movRegReg rdx, r8
-    x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegImm32 rbx, 1
-    x64.movRegImm32 rcx, 0
-    x64.callDirect __gt_cell_alloc
-    x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
-    x64.movRegReg r14, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r14 + 0], rax
-    x64.storeBaseDispReg.word64 [r14 + 8], rbx
-    x64.storeBaseDispReg.word64 [r14 + 16], r13
-    x64.movRegImm32 rax, 24
-    x64.movRegImm32 r9, 0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendrefused
-  sendaccepted:
-    x64.movRegReg rcx, r13
-    x64.callDirect __gt_try_await
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  critsplit:
-    x64.movRegReg rcx, r10
-  tryerr:
-    x64.movRegImm32 rbx, 0
-    x64.callDirect __mm_decref
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rbx, r8
-  trycont:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendrefused:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.storeSlotReg slot0, r8
-    x64.callDirect __mm_alloc
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot r8, slot0
-    x64.leaRegRegImm32 rax, r8, -1
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jmp tryerr
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-mailbox-receive-takes-the-mailboxs-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    x64.callDirect __mbox_unknown_tag
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
-  __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
-  __il_cont:
-    x64.movRegImm32 rax, 0
-    x64.callDirect __gt_cell_complete
-    x64.jmp serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  __il_body:
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.storeBaseDispReg.word64 [r14 + 0], r13
-  __il_cont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__mbox_recv {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 64
-    x64.movRegReg rbx, rcx
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
-    x64.cmpRegImm32 rdx, -1314
-    x64.jcc equal, honourpreempt
-  recvtry:
-    x64.leaRegRegImm32 rcx, rbx, 96
-    x64.aluBaseDispImm32.add [rax + 824], 1
-    x64.movRegImm32 rdx, 1
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#31
-  __rl_cont#30:
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 72]
-    x64.cmpRegImm32 rdx, 2
-    x64.jcc equal, recvcounted
-  mboxstatenotstarted:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, mboxstatenotfresh
-  recvstartfresh:
-    x64.movRegImm32 rdx, 2
-    x64.storeBaseDispReg.word64 [rbx + 72], rdx
-  recvcounted:
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 24]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, recvpopcheck
-  recvempty:
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, recvdrained
-  recvpark:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.storeBaseDispReg.word64 [rbx + 32], r12
-    x64.movRegImm32 rcx, 4
-    x64.movRegReg rdx, rbx
-    x64.callDirect __gt_park
-  recvresumed:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 496]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, recvretry
-  recvdelivered:
-    x64.leaRegRegImm32 r8, rbx, 104
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvretry:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.jmp recvtry
-  recvdrained:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#35
-  __rl_cont#34:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.movRegImm32 r8, 0
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvpopcheck:
-    x64.leaRegRegImm32 rsi, rbx, -584
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 664]
-    x64.cmpRegReg rdi, rsi
-    x64.jcc notEqual, recvtakering
-  recvpopfit:
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
-    x64.cmpRegImm32 rdx, 1
-    x64.setccReg equal, rdi
-    x64.cmpRegImm32 rsi, 16
-    x64.setccReg greater, rsi
-    x64.andRegReg rdi, rdi, rsi
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, recvpopnow
-  recvtakering:
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_recv_take
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvpopnow:
-    x64.leaRegRegImm32 rdx, rdx, -1
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rdi, [rbx + 16]
-    x64.loadRegBaseDisp.word64 r8, [rbx + 8]
-    x64.loadRegBaseDisp.word64 r9, [rbx + 56]
-    x64.movRegReg r10, rdi
-    x64.imulRegReg r10, rdi, r9
-    x64.leaRegRegReg rsi, rsi, r10
-    x64.leaRegRegImm32 r8, r8, -1
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.andRegReg rdi, rdi, r8
-    x64.storeBaseDispReg.word64 [rbx + 16], rdi
-    x64.storeBaseDispReg.word64 [rbx + 24], rdx
-    x64.leaRegRegImm32 r8, rbx, 104
-    x64.cmpRegImm32 r9, 0
-    x64.jcc lessEqual, cpyfd
-  cpyfrun:
-    x64.movRegReg rdx, r9
-    x64.andRegImm32 rdx, r9, -8
-    x64.movRegImm32 rdi, 0
-  cpyfwh:
-    x64.cmpRegReg rdi, rdx
-    x64.jcc less, cpyfwb
-  cpyfth:
-    x64.cmpRegReg rdx, r9
-    x64.jcc less, cpyftb
-  cpyfd:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#37
-  __rl_cont#36:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  cpyftb:
-    x64.leaRegRegReg rdi, rsi, rdx
-    x64.loadRegBaseDisp.byte rdi, [rdi + 0]
-    x64.leaRegRegReg r10, r8, rdx
-    x64.storeBaseDispReg.byte [r10 + 0], rdi
-    x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth
-  cpyfwb:
-    x64.leaRegRegReg r10, rsi, rdi
-    x64.loadRegBaseDisp.word64 r10, [r10 + 0]
-    x64.leaRegRegReg r11, r8, rdi
-    x64.storeBaseDispReg.word64 [r11 + 0], r10
-    x64.leaRegRegImm32 rdi, rdi, 8
-    x64.jmp cpyfwh
-  mboxstatenotfresh:
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, mboxstateoutofdomain
-  recvtakeinbox:
-    x64.leaRegRegImm32 rdx, rbx, -584
-    x64.loadRegBaseDisp.word64 rsi, [rdx + 664]
-    x64.cmpRegReg rsi, rdx
-    x64.jcc equal, recvtakeinboxalone
-  recvtakeinboxcontended:
-    x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_recv_take
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvtakeinboxalone:
-    x64.movRegImm32 rdx, 2
-    x64.storeBaseDispReg.word64 [rbx + 72], rdx
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#33
-  __rl_cont#32:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.leaRegRegImm32 r8, rbx, 104
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  honourpreempt:
-    x64.callDirect __gt_preempt
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.jmp recvtry
-  __rl_slow#31:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.callDirect __rtlock_acquire
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.jmp __rl_cont#30
-  __rl_slow#35:
-    x64.storeSlotReg slot0, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot0
-    x64.jmp __rl_cont#34
-  __rl_slow#37:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot2, r8
-    x64.callDirect __rtlock_release
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot r8, slot2
-    x64.jmp __rl_cont#36
-  __rl_slow#33:
-    x64.storeSlotReg slot0, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot0
-    x64.jmp __rl_cont#32
-  mboxstateoutofdomain:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_5]  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    x64.movRegImm32 rdx, 74
-    x64.movRegImm32 rax, 70
-    x64.callDirect __rt_abort
-    x64.movRegImm32 r8, 0
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-```
-```TargetIr:arm64-macos
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __sched_num_procs@448 = i64 0
-  __sched_ncpu@456 = i64 0
-  __sched_shutdown_flag@464 = i64 0
-  __sched_lock@472 = i64 0
-  __sched_lock_depth_sink@480 = i64 0
-  __sched_nmspinning@488 = i64 0
-  __sched_needspinning@496 = i64 0
-  __sched_sysmon_event@504 = i64 0
-  __sched_sysmon_wait@512 = i64 0
-  __sched_timer_starts@520 = i64 0
-  __slab_arena_list@528 = i64 0
-  __slab_arena_map_l1@536 = i64 0
-  __slab_state@544 = i64 0
-  __mrt_program_started@552 = i8 0
-}
-
-func @main {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x22
-    arm64.storeSlotReg slot3, x21
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.movImm x19, 1024
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.leaFuncAddr x0, Counter.__start_Counter.create
-    arm64.movImm x2, 24
-    arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movImm x19, 1
-    arm64.movImm x0, 0
-    arm64.bl __gt_cell_alloc
-    arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.storeBaseDispReg.word64 [x22 + 16], x21
-    arm64.movImm x2, 24
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
-    arm64.cmp x0, 0
-    arm64.b.ne sendrefused
-  sendaccepted:
-    arm64.movRegReg x0, x21
-    arm64.bl __gt_try_await
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  critsplit:
-    arm64.movRegReg x0, x9
-  tryerr:
-    arm64.movImm x19, 0
-    arm64.bl __mm_decref
-    arm64.b trycont
-  tryok:
-    arm64.movRegReg x19, x0
-  trycont:
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  sendrefused:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.movImm x2, 16
-    arm64.movImm x1, 0
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x2
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.storeBaseDispReg.word64 [x1 + 8], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.movRegReg x0, x1
-    arm64.b tryerr
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-mailbox-receive-takes-the-mailboxs-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    arm64.bl __mbox_unknown_tag
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
-    arm64.add x1, x1, 1
-  __il_cont:
-    arm64.movImm x2, 0
-    arm64.bl __gt_cell_complete
-    arm64.b serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  __il_body:
-    arm64.movImm x21, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x21
-  __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.retIndirect
-}
-
-func @__mbox_recv {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x20
-    arm64.storeSlotReg slot3, x19
-    arm64.movRegReg x19, x0
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 40]
-    arm64.cmp x2, -1314
-    arm64.b.eq honourpreempt
-  recvtry:
-    arm64.add x1, x19, 96
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 824]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x2
-    arm64.movImm x2, 1
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#31
-  __rl_cont#30:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 72]
-    arm64.cmp x2, 2
-    arm64.b.eq recvcounted
-  mboxstatenotstarted:
-    arm64.cmp x2, 0
-    arm64.b.ne mboxstatenotfresh
-  recvstartfresh:
-    arm64.movImm x2, 2
-    arm64.storeBaseDispReg.word64 [x19 + 72], x2
-  recvcounted:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 24]
-    arm64.cmp x2, 0
-    arm64.b.ne recvpopcheck
-  recvempty:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
-    arm64.cmp x2, 0
-    arm64.b.ne recvdrained
-  recvpark:
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x19 + 32], x20
-    arm64.movImm x0, 4
-    arm64.movRegReg x1, x19
-    arm64.bl __gt_park
-  recvresumed:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 496]
-    arm64.cmp x0, 0
-    arm64.b.eq recvretry
-  recvdelivered:
-    arm64.add x0, x19, 104
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvretry:
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.b recvtry
-  recvdrained:
-    arm64.movImm x2, 0
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#35
-  __rl_cont#34:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvpopcheck:
-    arm64.add x3, x19, -584
-    arm64.loadRegBaseDisp.word64 x4, [x3 + 664]
-    arm64.cmp x4, x3
-    arm64.b.ne recvtakering
-  recvpopfit:
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 8]
-    arm64.cmp x2, 1
-    arm64.cset x4, eq
-    arm64.cmp x3, 16
-    arm64.cset x3, gt
-    arm64.and x3, x4, x3
-    arm64.cbz x3, recvpopnow
-  recvtakering:
-    arm64.movImm x1, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __mbox_recv_take
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvpopnow:
-    arm64.sub x2, x2, 1
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x4, [x19 + 16]
-    arm64.loadRegBaseDisp.word64 x5, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x19 + 56]
-    arm64.mul x7, x4, x6
-    arm64.add x3, x3, x7
-    arm64.sub x5, x5, 1
-    arm64.add x4, x4, 1
-    arm64.and x4, x4, x5
-    arm64.storeBaseDispReg.word64 [x19 + 16], x4
-    arm64.storeBaseDispReg.word64 [x19 + 24], x2
-    arm64.add x2, x19, 104
-    arm64.cmp x6, 0
-    arm64.b.le cpyfd
-  cpyfrun:
-    arm64.and x4, x6, -8
-    arm64.movImm x5, 0
-  cpyfwh:
-    arm64.cmp x5, x4
-    arm64.b.lt cpyfwb
-  cpyfth:
-    arm64.cmp x4, x6
-    arm64.b.lt cpyftb
-  cpyfd:
-    arm64.movImm x3, 0
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
-    arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#37
-  __rl_cont#36:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.movRegReg x0, x2
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  cpyftb:
-    arm64.add x5, x3, x4
-    arm64.loadRegBaseDisp.byte x5, [x5 + 0]
-    arm64.add x7, x2, x4
-    arm64.storeBaseDispReg.byte [x7 + 0], x5
-    arm64.add x4, x4, 1
-    arm64.b cpyfth
-  cpyfwb:
-    arm64.add x7, x3, x5
-    arm64.loadRegBaseDisp.word64 x7, [x7 + 0]
-    arm64.add x8, x2, x5
-    arm64.storeBaseDispReg.word64 [x8 + 0], x7
-    arm64.add x5, x5, 8
-    arm64.b cpyfwh
-  mboxstatenotfresh:
-    arm64.cmp x2, 1
-    arm64.b.ne mboxstateoutofdomain
-  recvtakeinbox:
-    arm64.add x2, x19, -584
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 664]
-    arm64.cmp x3, x2
-    arm64.b.eq recvtakeinboxalone
-  recvtakeinboxcontended:
-    arm64.movImm x1, 1
-    arm64.movRegReg x0, x19
-    arm64.bl __mbox_recv_take
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvtakeinboxalone:
-    arm64.movImm x2, 2
-    arm64.storeBaseDispReg.word64 [x19 + 72], x2
-    arm64.movImm x2, 0
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#33
-  __rl_cont#32:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.add x0, x19, 104
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  honourpreempt:
-    arm64.movRegReg x0, x1
-    arm64.bl __gt_preempt
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.b recvtry
-  __rl_slow#31:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_acquire
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.b __rl_cont#30
-  __rl_slow#35:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#34
-  __rl_slow#37:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot2, x2
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#36
-  __rl_slow#33:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#32
-  mboxstateoutofdomain:
-    arm64.leaRdata x0, __fatal_msg_5  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    arm64.movImm x1, 74
-    arm64.movImm x2, 70
-    arm64.bl __rt_abort
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-```
-```TargetIr:arm64-linux
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __np_src_key_free@448 = i64 0
-  __np_src_key_high@456 = i64 0
-  __np_child_signal@464 = i64 0
-  __np_pd_mtable@472 = i64 0
-  __np_pd_mcap@480 = i64 0
-  __sched_num_procs@488 = i64 0
-  __sched_ncpu@496 = i64 0
-  __sched_shutdown_flag@504 = i64 0
-  __sched_lock@512 = i64 0
-  __sched_lock_depth_sink@520 = i64 0
-  __sched_nmspinning@528 = i64 0
-  __sched_needspinning@536 = i64 0
-  __sched_sysmon_event@544 = i64 0
-  __sched_sysmon_wait@552 = i64 0
-  __sched_timer_starts@560 = i64 0
-  __mrt_envp@568 = i64 0
-  __mrt_signal_stack_bytes@576 = i64 0
-  __mrt_hwcap_atomics@584 = i64 0
-  __mrt_tls_next_key@592 = i64 0
-  __slab_arena_list@600 = i64 0
-  __slab_arena_map_l1@608 = i64 0
-  __slab_state@616 = i64 0
-  __mrt_program_started@624 = i8 0
-}
-
-func @main {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x22
-    arm64.storeSlotReg slot3, x21
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.movImm x19, 1024
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.leaFuncAddr x0, Counter.__start_Counter.create
-    arm64.movImm x2, 24
-    arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movImm x19, 1
-    arm64.movImm x0, 0
-    arm64.bl __gt_cell_alloc
-    arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.storeBaseDispReg.word64 [x22 + 16], x21
-    arm64.movImm x2, 24
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
-    arm64.cmp x0, 0
-    arm64.b.ne sendrefused
-  sendaccepted:
-    arm64.movRegReg x0, x21
-    arm64.bl __gt_try_await
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  critsplit:
-    arm64.movRegReg x0, x9
-  tryerr:
-    arm64.movImm x19, 0
-    arm64.bl __mm_decref
-    arm64.b trycont
-  tryok:
-    arm64.movRegReg x19, x0
-  trycont:
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  sendrefused:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.movImm x2, 16
-    arm64.movImm x1, 0
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x2
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.storeBaseDispReg.word64 [x1 + 8], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.movRegReg x0, x1
-    arm64.b tryerr
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-mailbox-receive-takes-the-mailboxs-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    arm64.bl __mbox_unknown_tag
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
-    arm64.add x1, x1, 1
-  __il_cont:
-    arm64.movImm x2, 0
-    arm64.bl __gt_cell_complete
-    arm64.b serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  __il_body:
-    arm64.movImm x21, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x21
-  __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.retIndirect
-}
-
-func @__mbox_recv {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x20
-    arm64.storeSlotReg slot3, x19
-    arm64.movRegReg x19, x0
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 40]
-    arm64.cmp x2, -1314
-    arm64.b.eq honourpreempt
-  recvtry:
-    arm64.add x1, x19, 96
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 824]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x2
-    arm64.movImm x2, 1
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#31
-  __rl_cont#30:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 72]
-    arm64.cmp x2, 2
-    arm64.b.eq recvcounted
-  mboxstatenotstarted:
-    arm64.cmp x2, 0
-    arm64.b.ne mboxstatenotfresh
-  recvstartfresh:
-    arm64.movImm x2, 2
-    arm64.storeBaseDispReg.word64 [x19 + 72], x2
-  recvcounted:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 24]
-    arm64.cmp x2, 0
-    arm64.b.ne recvpopcheck
-  recvempty:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
-    arm64.cmp x2, 0
-    arm64.b.ne recvdrained
-  recvpark:
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x19 + 32], x20
-    arm64.movImm x0, 4
-    arm64.movRegReg x1, x19
-    arm64.bl __gt_park
-  recvresumed:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 496]
-    arm64.cmp x0, 0
-    arm64.b.eq recvretry
-  recvdelivered:
-    arm64.add x0, x19, 104
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvretry:
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.b recvtry
-  recvdrained:
-    arm64.movImm x2, 0
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#35
-  __rl_cont#34:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvpopcheck:
-    arm64.add x3, x19, -584
-    arm64.loadRegBaseDisp.word64 x4, [x3 + 664]
-    arm64.cmp x4, x3
-    arm64.b.ne recvtakering
-  recvpopfit:
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 8]
-    arm64.cmp x2, 1
-    arm64.cset x4, eq
-    arm64.cmp x3, 16
-    arm64.cset x3, gt
-    arm64.and x3, x4, x3
-    arm64.cbz x3, recvpopnow
-  recvtakering:
-    arm64.movImm x1, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __mbox_recv_take
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvpopnow:
-    arm64.sub x2, x2, 1
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x4, [x19 + 16]
-    arm64.loadRegBaseDisp.word64 x5, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x19 + 56]
-    arm64.mul x7, x4, x6
-    arm64.add x3, x3, x7
-    arm64.sub x5, x5, 1
-    arm64.add x4, x4, 1
-    arm64.and x4, x4, x5
-    arm64.storeBaseDispReg.word64 [x19 + 16], x4
-    arm64.storeBaseDispReg.word64 [x19 + 24], x2
-    arm64.add x2, x19, 104
-    arm64.cmp x6, 0
-    arm64.b.le cpyfd
-  cpyfrun:
-    arm64.and x4, x6, -8
-    arm64.movImm x5, 0
-  cpyfwh:
-    arm64.cmp x5, x4
-    arm64.b.lt cpyfwb
-  cpyfth:
-    arm64.cmp x4, x6
-    arm64.b.lt cpyftb
-  cpyfd:
-    arm64.movImm x3, 0
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
-    arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#37
-  __rl_cont#36:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.movRegReg x0, x2
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  cpyftb:
-    arm64.add x5, x3, x4
-    arm64.loadRegBaseDisp.byte x5, [x5 + 0]
-    arm64.add x7, x2, x4
-    arm64.storeBaseDispReg.byte [x7 + 0], x5
-    arm64.add x4, x4, 1
-    arm64.b cpyfth
-  cpyfwb:
-    arm64.add x7, x3, x5
-    arm64.loadRegBaseDisp.word64 x7, [x7 + 0]
-    arm64.add x8, x2, x5
-    arm64.storeBaseDispReg.word64 [x8 + 0], x7
-    arm64.add x5, x5, 8
-    arm64.b cpyfwh
-  mboxstatenotfresh:
-    arm64.cmp x2, 1
-    arm64.b.ne mboxstateoutofdomain
-  recvtakeinbox:
-    arm64.add x2, x19, -584
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 664]
-    arm64.cmp x3, x2
-    arm64.b.eq recvtakeinboxalone
-  recvtakeinboxcontended:
-    arm64.movImm x1, 1
-    arm64.movRegReg x0, x19
-    arm64.bl __mbox_recv_take
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvtakeinboxalone:
-    arm64.movImm x2, 2
-    arm64.storeBaseDispReg.word64 [x19 + 72], x2
-    arm64.movImm x2, 0
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#33
-  __rl_cont#32:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.add x0, x19, 104
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  honourpreempt:
-    arm64.movRegReg x0, x1
-    arm64.bl __gt_preempt
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.b recvtry
-  __rl_slow#31:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_acquire
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.b __rl_cont#30
-  __rl_slow#35:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#34
-  __rl_slow#37:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot2, x2
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#36
-  __rl_slow#33:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#32
-  mboxstateoutofdomain:
-    arm64.leaRdata x0, __fatal_msg_5  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    arm64.movImm x1, 74
-    arm64.movImm x2, 70
-    arm64.bl __rt_abort
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-```
-
-<!-- test: a-service-message-is-copied-into-its-mailbox-with-no-allocation -->
-**A MESSAGE IS NEVER A HEAP RECORD: IT IS COPIED FROM THE SENDER'S STAGING BUFFER INTO THE MAILBOX'S OWN
-STORAGE, AS GO COPIES A CHANNEL ELEMENT INTO `hchan`'s BUFFER.** The send fills a buffer its green thread
-owns (`__mbox_staging`, cut once from the scheduler's arena at the thread's first send and kept with its
-record) with plain stores: the tag, each argument and the reply cell, in that order, and no call
-stands between the last store and `__mbox_send`. `__mbox_send(mbox, msg, bytes, timeoutMs)`, where `bytes` is the size
-of the sender's request union as the parser knows it (24 here, a constant `main` passes), then copies `bytes` of it
-under the mailbox lock, into the parked receiver's inbox when one is parked (Go's `sendDirect`), into the
-inbox when the receiver has never run, and otherwise into the ring's tail slot, cutting the ring on the
-first message it puts there and doubling it, with a copy, when it is full and below the mailbox's capacity,
-and answers a status: delivered, `full` or `stopped`. `__mbox_recv(mbox)` answers a first message where
-it lies, and otherwise copies the head slot into the mailbox's one-slot inbox, shrinks a ring that has grown
-past its first 16 slots back to 16 once the queue is empty, and answers the inbox address, so the loop
-reads the tag and each argument from that address. A payload is
-moved into the staging buffer, and each copy after that moves plain words with no reference-count step.
-
-What these pins show is the absence. `main` allocates the service's state and its handle box and nothing for
-the message: its only `__mm_alloc` calls are those two. `Counter.__loop` has no `__mm_decref` of a request
-shell, its only one being the state's drop on the way out, and neither has a `__mm_free`. The stores into the
-staging buffer are the message, and `__mbox_staging` is the call before them, never between them and the
-send. The loop has no drain after it: `__mbox_recv` answers 0 only on a closed, empty mailbox, so nothing
-is left to drop when the loop exits, and its dispatch default calls `__mbox_unknown_tag`, which aborts.
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Counter
-	var calls as Integer
-
-	static function create() returns Self
-		return Self{calls: 0}
-	end 'create'
-
-	export function next(n Integer) returns Integer
-		self.calls = self.calls + 1
-
-		return n + 1
-	end 'next'
-end 'Counter'
-
-function main() returns ExitCode
-	let c = spawn Counter.create()
-	let a = try await c.next(1) otherwise 0
-
-	return a as ExitCode
-end 'main'
-```
-```exitcode
-2
-```
-```RequiredRuntime
-__mbox_send
-__mbox_recv
-```
-```TargetIr:x64-windows
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 8192
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __sched_num_procs@440 = i64 0
-  __sched_ncpu@448 = i64 0
-  __sched_shutdown_flag@456 = i64 0
-  __sched_lock@464 = i64 0
-  __sched_lock_depth_sink@472 = i64 0
-  __sched_nmspinning@480 = i64 0
-  __sched_needspinning@488 = i64 0
-  __sched_sysmon_event@496 = i64 0
-  __sched_sysmon_wait@504 = i64 0
-  __sched_timer_starts@512 = i64 0
-  __sched_preempt_ext_lock@520 = i64 0
-  __sched_preempt_context@528 = i64 0
-  __slab_arena_list@536 = i64 0
-  __slab_arena_map_l1@544 = i64 0
-  __slab_state@552 = i64 0
-  __mrt_console_probe_stdin@560 = i8 0
-  __mrt_console_probe_stdout@561 = i8 0
-  __mrt_console_probe_stderr@562 = i8 0
-  __mrt_program_started@563 = i8 0
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 48
-    x64.movRegImm32 rbx, 1024
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
-    x64.movRegImm32 rax, 24
-    x64.movRegReg rdx, r8
-    x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegImm32 rbx, 1
-    x64.movRegImm32 rcx, 0
-    x64.callDirect __gt_cell_alloc
-    x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
-    x64.movRegReg r14, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r14 + 0], rax
-    x64.storeBaseDispReg.word64 [r14 + 8], rbx
-    x64.storeBaseDispReg.word64 [r14 + 16], r13
-    x64.movRegImm32 rax, 24
-    x64.movRegImm32 r9, 0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendrefused
-  sendaccepted:
-    x64.movRegReg rcx, r13
-    x64.callDirect __gt_try_await
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  critsplit:
-    x64.movRegReg rcx, r10
-  tryerr:
-    x64.movRegImm32 rbx, 0
-    x64.callDirect __mm_decref
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rbx, r8
-  trycont:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendrefused:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.storeSlotReg slot0, r8
-    x64.callDirect __mm_alloc
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot r8, slot0
-    x64.leaRegRegImm32 rax, r8, -1
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jmp tryerr
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-service-message-is-copied-into-its-mailbox-with-no-allocation.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    x64.callDirect __mbox_unknown_tag
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
-  __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
-  __il_cont:
-    x64.movRegImm32 rax, 0
-    x64.callDirect __gt_cell_complete
-    x64.jmp serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  __il_body:
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.storeBaseDispReg.word64 [r14 + 0], r13
-  __il_cont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__mbox_send {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 96
-    x64.leaRegGlobal rsi, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.mov rsi, gs:[rsi]
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
-    x64.loadRegBaseDisp.word64 r8, [rdi + 40]
-    x64.cmpRegImm32 r8, -1314
-    x64.jcc equal, honourpreempt
-  honourresume:
-    x64.leaRegRegImm32 rdi, rcx, 96
-    x64.aluBaseDispImm32.add [rsi + 824], 1
-    x64.movRegImm32 r8, 1
-    x64.xchg8 [rdi], r8 <- r8
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, __rl_slow#48
-  sendtry:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 40]
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendclosed
-  sendroute:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 32]
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendhandoff
-  sendfirstcheck:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 72]
-    x64.cmpRegImm32 r8, 2
-    x64.jcc notEqual, mboxstatenotstarted
-  sendappend:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 24]
-    x64.loadRegBaseDisp.word64 r10, [rcx + 64]
-    x64.cmpRegReg r8, r10
-    x64.jcc equal, sendqueueing
-  sendringroom:
-    x64.loadRegBaseDisp.word64 r10, [rcx + 0]
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, sendqueueing
-  mboxhavering:
-    x64.loadRegBaseDisp.word64 r10, [rcx + 8]
-    x64.cmpRegReg r8, r10
-    x64.jcc equal, sendqueueing
-  sendfitted:
-    x64.leaRegRegImm32 r9, r8, 1
-    x64.storeBaseDispReg.word64 [rcx + 24], r9
-    x64.loadRegBaseDisp.word64 r9, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r10, [rcx + 8]
-    x64.loadRegBaseDisp.word64 r11, [rcx + 16]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 56]
-    x64.leaRegRegImm32 r10, r10, -1
-    x64.leaRegRegReg r8, r11, r8
-    x64.andRegReg r8, r8, r10
-    x64.imulRegReg r8, r8, rcx
-    x64.leaRegRegReg rcx, r9, r8
-    x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, cpyfd#38
-  cpyfrun#37:
-    x64.movRegReg r8, rax
-    x64.andRegImm32 r8, rax, -8
-    x64.movRegImm32 r9, 0
-  cpyfwh#39:
-    x64.cmpRegReg r9, r8
-    x64.jcc less, cpyfwb#40
-  cpyfth#42:
-    x64.cmpRegReg r8, rax
-    x64.jcc less, cpyftb#43
-  cpyfd#38:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#54
-  __rl_cont#53:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.jmp senddone
-  cpyftb#43:
-    x64.leaRegRegReg r9, rdx, r8
-    x64.loadRegBaseDisp.byte r9, [r9 + 0]
-    x64.leaRegRegReg r10, rcx, r8
-    x64.storeBaseDispReg.byte [r10 + 0], r9
-    x64.leaRegRegImm32 r8, r8, 1
-    x64.jmp cpyfth#42
-  cpyfwb#40:
-    x64.leaRegRegReg r10, rdx, r9
-    x64.loadRegBaseDisp.word64 r10, [r10 + 0]
-    x64.leaRegRegReg r11, rcx, r9
-    x64.storeBaseDispReg.word64 [r11 + 0], r10
-    x64.leaRegRegImm32 r9, r9, 8
-    x64.jmp cpyfwh#39
-  mboxstatenotstarted:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, mboxstatenotfresh
-  sendinboxfirst:
-    x64.leaRegRegImm32 r8, rcx, 104
-    x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, cpyfd#29
-  cpyfrun#28:
-    x64.movRegReg r9, rax
-    x64.andRegImm32 r9, rax, -8
-    x64.movRegImm32 r10, 0
-  cpyfwh#30:
-    x64.cmpRegReg r10, r9
-    x64.jcc less, cpyfwb#31
-  cpyfth#33:
-    x64.cmpRegReg r9, rax
-    x64.jcc less, cpyftb#34
-  cpyfd#29:
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 72], rax
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#52
-  __rl_cont#51:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.jmp senddone
-  cpyftb#34:
-    x64.leaRegRegReg r10, rdx, r9
-    x64.loadRegBaseDisp.byte r10, [r10 + 0]
-    x64.leaRegRegReg r11, r8, r9
-    x64.storeBaseDispReg.byte [r11 + 0], r10
-    x64.leaRegRegImm32 r9, r9, 1
-    x64.jmp cpyfth#33
-  cpyfwb#31:
-    x64.leaRegRegReg r11, rdx, r10
-    x64.loadRegBaseDisp.word64 r11, [r11 + 0]
-    x64.leaRegRegReg rbx, r8, r10
-    x64.storeBaseDispReg.word64 [rbx + 0], r11
-    x64.leaRegRegImm32 r10, r10, 8
-    x64.jmp cpyfwh#30
-  mboxstatenotfresh:
-    x64.cmpRegImm32 r8, 1
-    x64.jcc notEqual, mboxstateoutofdomain
-  sendqueueing:
-    x64.callDirect __mbox_send_queue
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendhandoff:
-    x64.leaRegRegImm32 r9, rcx, 104
-    x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, cpyfd#15
-  cpyfrun#14:
-    x64.movRegReg r10, rax
-    x64.andRegImm32 r10, rax, -8
-    x64.movRegImm32 r11, 0
-  cpyfwh#16:
-    x64.cmpRegReg r11, r10
-    x64.jcc less, cpyfwb#17
-  cpyfth#19:
-    x64.cmpRegReg r10, rax
-    x64.jcc less, cpyftb#20
-  cpyfd#15:
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 496], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rcx + 32], rax
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#50
-  __rl_cont#49:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.movRegImm32 rax, 0
-    x64.movRegImm32 rcx, 1
-    x64.leaRegRegImm32 rdx, r8, 552
-    x64.lock cmpxchg [rdx], rcx
-    x64.setccReg equal, rax
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, readyservicefree
-  readyservicelocked:
-    x64.movRegReg rcx, r8
-    x64.callDirect __gt_ready_locked
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, senddone
-  readyservicewake:
-    x64.callDirect __sched_wake_or_spawn
-    x64.jmp senddone
-  readyservicefree:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 48], rax
-    x64.storeBaseDispReg.word64 [r8 + 608], r8
-    x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rcx, r8, 560
-    x64.lock add [rcx], rax
-    x64.movRegReg rcx, r8
-    x64.callDirect __sched_runq_put
-    x64.callDirect __sched_wake_or_spawn
-  senddone:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  cpyftb#20:
-    x64.leaRegRegReg r11, rdx, r10
-    x64.loadRegBaseDisp.byte r11, [r11 + 0]
-    x64.leaRegRegReg rbx, r9, r10
-    x64.storeBaseDispReg.byte [rbx + 0], r11
-    x64.leaRegRegImm32 r10, r10, 1
-    x64.jmp cpyfth#19
-  cpyfwb#17:
-    x64.leaRegRegReg rbx, rdx, r11
-    x64.loadRegBaseDisp.word64 rbx, [rbx + 0]
-    x64.leaRegRegReg r12, r9, r11
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.leaRegRegImm32 r11, r11, 8
-    x64.jmp cpyfwh#16
-  honourpreempt:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, r9
-    x64.movRegReg rcx, rdi
-    x64.callDirect __gt_preempt
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot r9, slot3
-    x64.leaRegGlobal rsi, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.mov rsi, gs:[rsi]
-    x64.jmp honourresume
-  __rl_slow#48:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot4, rsi
-    x64.storeSlotReg slot5, rdi
-    x64.storeSlotReg slot3, r9
-    x64.movRegReg rcx, rdi
-    x64.movRegReg rdx, r8
-    x64.callDirect __rtlock_acquire
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot4
-    x64.loadRegSlot rdi, slot5
-    x64.loadRegSlot r9, slot3
-    x64.jmp sendtry
-  __rl_slow#54:
-    x64.storeSlotReg slot4, rsi
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rsi, slot4
-    x64.jmp __rl_cont#53
-  __rl_slow#52:
-    x64.storeSlotReg slot4, rsi
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rsi, slot4
-    x64.jmp __rl_cont#51
-  __rl_slow#50:
-    x64.storeSlotReg slot4, rsi
-    x64.storeSlotReg slot6, r8
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.movRegReg rax, r8
-    x64.loadRegSlot rsi, slot4
-    x64.loadRegSlot r8, slot6
-    x64.jmp __rl_cont#49
-  mboxstateoutofdomain:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_5]  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    x64.movRegImm32 rdx, 74
-    x64.movRegImm32 rax, 70
-    x64.callDirect __rt_abort
-    x64.movRegImm32 r8, 0
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendclosed:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#45
-  __rl_slow#46:
-    x64.storeSlotReg slot4, rsi
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rsi, slot4
-  __rl_cont#45:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.movRegImm32 r8, 2
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__mbox_recv {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 64
-    x64.movRegReg rbx, rcx
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
-    x64.cmpRegImm32 rdx, -1314
-    x64.jcc equal, honourpreempt
-  recvtry:
-    x64.leaRegRegImm32 rcx, rbx, 96
-    x64.aluBaseDispImm32.add [rax + 824], 1
-    x64.movRegImm32 rdx, 1
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#31
-  __rl_cont#30:
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 72]
-    x64.cmpRegImm32 rdx, 2
-    x64.jcc equal, recvcounted
-  mboxstatenotstarted:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, mboxstatenotfresh
-  recvstartfresh:
-    x64.movRegImm32 rdx, 2
-    x64.storeBaseDispReg.word64 [rbx + 72], rdx
-  recvcounted:
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 24]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, recvpopcheck
-  recvempty:
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, recvdrained
-  recvpark:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.storeBaseDispReg.word64 [rbx + 32], r12
-    x64.movRegImm32 rcx, 4
-    x64.movRegReg rdx, rbx
-    x64.callDirect __gt_park
-  recvresumed:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 496]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, recvretry
-  recvdelivered:
-    x64.leaRegRegImm32 r8, rbx, 104
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvretry:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.jmp recvtry
-  recvdrained:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#35
-  __rl_cont#34:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.movRegImm32 r8, 0
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvpopcheck:
-    x64.leaRegRegImm32 rsi, rbx, -584
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 664]
-    x64.cmpRegReg rdi, rsi
-    x64.jcc notEqual, recvtakering
-  recvpopfit:
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
-    x64.cmpRegImm32 rdx, 1
-    x64.setccReg equal, rdi
-    x64.cmpRegImm32 rsi, 16
-    x64.setccReg greater, rsi
-    x64.andRegReg rdi, rdi, rsi
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, recvpopnow
-  recvtakering:
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_recv_take
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvpopnow:
-    x64.leaRegRegImm32 rdx, rdx, -1
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rdi, [rbx + 16]
-    x64.loadRegBaseDisp.word64 r8, [rbx + 8]
-    x64.loadRegBaseDisp.word64 r9, [rbx + 56]
-    x64.movRegReg r10, rdi
-    x64.imulRegReg r10, rdi, r9
-    x64.leaRegRegReg rsi, rsi, r10
-    x64.leaRegRegImm32 r8, r8, -1
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.andRegReg rdi, rdi, r8
-    x64.storeBaseDispReg.word64 [rbx + 16], rdi
-    x64.storeBaseDispReg.word64 [rbx + 24], rdx
-    x64.leaRegRegImm32 r8, rbx, 104
-    x64.cmpRegImm32 r9, 0
-    x64.jcc lessEqual, cpyfd
-  cpyfrun:
-    x64.movRegReg rdx, r9
-    x64.andRegImm32 rdx, r9, -8
-    x64.movRegImm32 rdi, 0
-  cpyfwh:
-    x64.cmpRegReg rdi, rdx
-    x64.jcc less, cpyfwb
-  cpyfth:
-    x64.cmpRegReg rdx, r9
-    x64.jcc less, cpyftb
-  cpyfd:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#37
-  __rl_cont#36:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  cpyftb:
-    x64.leaRegRegReg rdi, rsi, rdx
-    x64.loadRegBaseDisp.byte rdi, [rdi + 0]
-    x64.leaRegRegReg r10, r8, rdx
-    x64.storeBaseDispReg.byte [r10 + 0], rdi
-    x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth
-  cpyfwb:
-    x64.leaRegRegReg r10, rsi, rdi
-    x64.loadRegBaseDisp.word64 r10, [r10 + 0]
-    x64.leaRegRegReg r11, r8, rdi
-    x64.storeBaseDispReg.word64 [r11 + 0], r10
-    x64.leaRegRegImm32 rdi, rdi, 8
-    x64.jmp cpyfwh
-  mboxstatenotfresh:
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, mboxstateoutofdomain
-  recvtakeinbox:
-    x64.leaRegRegImm32 rdx, rbx, -584
-    x64.loadRegBaseDisp.word64 rsi, [rdx + 664]
-    x64.cmpRegReg rsi, rdx
-    x64.jcc equal, recvtakeinboxalone
-  recvtakeinboxcontended:
-    x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_recv_take
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvtakeinboxalone:
-    x64.movRegImm32 rdx, 2
-    x64.storeBaseDispReg.word64 [rbx + 72], rdx
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#33
-  __rl_cont#32:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.leaRegRegImm32 r8, rbx, 104
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  honourpreempt:
-    x64.callDirect __gt_preempt
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.jmp recvtry
-  __rl_slow#31:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.callDirect __rtlock_acquire
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.jmp __rl_cont#30
-  __rl_slow#35:
-    x64.storeSlotReg slot0, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot0
-    x64.jmp __rl_cont#34
-  __rl_slow#37:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot2, r8
-    x64.callDirect __rtlock_release
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot r8, slot2
-    x64.jmp __rl_cont#36
-  __rl_slow#33:
-    x64.storeSlotReg slot0, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot0
-    x64.jmp __rl_cont#32
-  mboxstateoutofdomain:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_5]  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    x64.movRegImm32 rdx, 74
-    x64.movRegImm32 rax, 70
-    x64.callDirect __rt_abort
-    x64.movRegImm32 r8, 0
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-```
-```TargetIr:x64-linux
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __np_src_key_free@448 = i64 0
-  __np_src_key_high@456 = i64 0
-  __np_child_signal@464 = i64 0
-  __np_pd_mtable@472 = i64 0
-  __np_pd_mcap@480 = i64 0
-  __sched_num_procs@488 = i64 0
-  __sched_ncpu@496 = i64 0
-  __sched_shutdown_flag@504 = i64 0
-  __sched_lock@512 = i64 0
-  __sched_lock_depth_sink@520 = i64 0
-  __sched_nmspinning@528 = i64 0
-  __sched_needspinning@536 = i64 0
-  __sched_sysmon_event@544 = i64 0
-  __sched_sysmon_wait@552 = i64 0
-  __sched_timer_starts@560 = i64 0
-  __mrt_envp@568 = i64 0
-  __mrt_signal_stack_bytes@576 = i64 0
-  __mrt_tls_next_key@584 = i64 0
-  __slab_arena_list@592 = i64 0
-  __slab_arena_map_l1@600 = i64 0
-  __slab_state@608 = i64 0
-  __mrt_program_started@616 = i8 0
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 48
-    x64.movRegImm32 rbx, 1024
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
-    x64.movRegImm32 rax, 24
-    x64.movRegReg rdx, r8
-    x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegImm32 rbx, 1
-    x64.movRegImm32 rcx, 0
-    x64.callDirect __gt_cell_alloc
-    x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
-    x64.movRegReg r14, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r14 + 0], rax
-    x64.storeBaseDispReg.word64 [r14 + 8], rbx
-    x64.storeBaseDispReg.word64 [r14 + 16], r13
-    x64.movRegImm32 rax, 24
-    x64.movRegImm32 r9, 0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendrefused
-  sendaccepted:
-    x64.movRegReg rcx, r13
-    x64.callDirect __gt_try_await
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  critsplit:
-    x64.movRegReg rcx, r10
-  tryerr:
-    x64.movRegImm32 rbx, 0
-    x64.callDirect __mm_decref
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rbx, r8
-  trycont:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendrefused:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.storeSlotReg slot0, r8
-    x64.callDirect __mm_alloc
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot r8, slot0
-    x64.leaRegRegImm32 rax, r8, -1
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jmp tryerr
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-service-message-is-copied-into-its-mailbox-with-no-allocation.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    x64.callDirect __mbox_unknown_tag
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
-  __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
-  __il_cont:
-    x64.movRegImm32 rax, 0
-    x64.callDirect __gt_cell_complete
-    x64.jmp serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  __il_body:
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.storeBaseDispReg.word64 [r14 + 0], r13
-  __il_cont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__mbox_send {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 96
-    x64.leaRegGlobal rsi, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.mov rsi, gs:[rsi]
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
-    x64.loadRegBaseDisp.word64 r8, [rdi + 40]
-    x64.cmpRegImm32 r8, -1314
-    x64.jcc equal, honourpreempt
-  honourresume:
-    x64.leaRegRegImm32 rdi, rcx, 96
-    x64.aluBaseDispImm32.add [rsi + 824], 1
-    x64.movRegImm32 r8, 1
-    x64.xchg8 [rdi], r8 <- r8
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, __rl_slow#48
-  sendtry:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 40]
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendclosed
-  sendroute:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 32]
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendhandoff
-  sendfirstcheck:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 72]
-    x64.cmpRegImm32 r8, 2
-    x64.jcc notEqual, mboxstatenotstarted
-  sendappend:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 24]
-    x64.loadRegBaseDisp.word64 r10, [rcx + 64]
-    x64.cmpRegReg r8, r10
-    x64.jcc equal, sendqueueing
-  sendringroom:
-    x64.loadRegBaseDisp.word64 r10, [rcx + 0]
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, sendqueueing
-  mboxhavering:
-    x64.loadRegBaseDisp.word64 r10, [rcx + 8]
-    x64.cmpRegReg r8, r10
-    x64.jcc equal, sendqueueing
-  sendfitted:
-    x64.leaRegRegImm32 r9, r8, 1
-    x64.storeBaseDispReg.word64 [rcx + 24], r9
-    x64.loadRegBaseDisp.word64 r9, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r10, [rcx + 8]
-    x64.loadRegBaseDisp.word64 r11, [rcx + 16]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 56]
-    x64.leaRegRegImm32 r10, r10, -1
-    x64.leaRegRegReg r8, r11, r8
-    x64.andRegReg r8, r8, r10
-    x64.imulRegReg r8, r8, rcx
-    x64.leaRegRegReg rcx, r9, r8
-    x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, cpyfd#38
-  cpyfrun#37:
-    x64.movRegReg r8, rax
-    x64.andRegImm32 r8, rax, -8
-    x64.movRegImm32 r9, 0
-  cpyfwh#39:
-    x64.cmpRegReg r9, r8
-    x64.jcc less, cpyfwb#40
-  cpyfth#42:
-    x64.cmpRegReg r8, rax
-    x64.jcc less, cpyftb#43
-  cpyfd#38:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#54
-  __rl_cont#53:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.jmp senddone
-  cpyftb#43:
-    x64.leaRegRegReg r9, rdx, r8
-    x64.loadRegBaseDisp.byte r9, [r9 + 0]
-    x64.leaRegRegReg r10, rcx, r8
-    x64.storeBaseDispReg.byte [r10 + 0], r9
-    x64.leaRegRegImm32 r8, r8, 1
-    x64.jmp cpyfth#42
-  cpyfwb#40:
-    x64.leaRegRegReg r10, rdx, r9
-    x64.loadRegBaseDisp.word64 r10, [r10 + 0]
-    x64.leaRegRegReg r11, rcx, r9
-    x64.storeBaseDispReg.word64 [r11 + 0], r10
-    x64.leaRegRegImm32 r9, r9, 8
-    x64.jmp cpyfwh#39
-  mboxstatenotstarted:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, mboxstatenotfresh
-  sendinboxfirst:
-    x64.leaRegRegImm32 r8, rcx, 104
-    x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, cpyfd#29
-  cpyfrun#28:
-    x64.movRegReg r9, rax
-    x64.andRegImm32 r9, rax, -8
-    x64.movRegImm32 r10, 0
-  cpyfwh#30:
-    x64.cmpRegReg r10, r9
-    x64.jcc less, cpyfwb#31
-  cpyfth#33:
-    x64.cmpRegReg r9, rax
-    x64.jcc less, cpyftb#34
-  cpyfd#29:
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 72], rax
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#52
-  __rl_cont#51:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.jmp senddone
-  cpyftb#34:
-    x64.leaRegRegReg r10, rdx, r9
-    x64.loadRegBaseDisp.byte r10, [r10 + 0]
-    x64.leaRegRegReg r11, r8, r9
-    x64.storeBaseDispReg.byte [r11 + 0], r10
-    x64.leaRegRegImm32 r9, r9, 1
-    x64.jmp cpyfth#33
-  cpyfwb#31:
-    x64.leaRegRegReg r11, rdx, r10
-    x64.loadRegBaseDisp.word64 r11, [r11 + 0]
-    x64.leaRegRegReg rbx, r8, r10
-    x64.storeBaseDispReg.word64 [rbx + 0], r11
-    x64.leaRegRegImm32 r10, r10, 8
-    x64.jmp cpyfwh#30
-  mboxstatenotfresh:
-    x64.cmpRegImm32 r8, 1
-    x64.jcc notEqual, mboxstateoutofdomain
-  sendqueueing:
-    x64.callDirect __mbox_send_queue
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendhandoff:
-    x64.leaRegRegImm32 r9, rcx, 104
-    x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, cpyfd#15
-  cpyfrun#14:
-    x64.movRegReg r10, rax
-    x64.andRegImm32 r10, rax, -8
-    x64.movRegImm32 r11, 0
-  cpyfwh#16:
-    x64.cmpRegReg r11, r10
-    x64.jcc less, cpyfwb#17
-  cpyfth#19:
-    x64.cmpRegReg r10, rax
-    x64.jcc less, cpyftb#20
-  cpyfd#15:
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 496], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rcx + 32], rax
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#50
-  __rl_cont#49:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.movRegImm32 rax, 0
-    x64.movRegImm32 rcx, 1
-    x64.leaRegRegImm32 rdx, r8, 552
-    x64.lock cmpxchg [rdx], rcx
-    x64.setccReg equal, rax
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, readyservicefree
-  readyservicelocked:
-    x64.movRegReg rcx, r8
-    x64.callDirect __gt_ready_locked
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, senddone
-  readyservicewake:
-    x64.callDirect __sched_wake_or_spawn
-    x64.jmp senddone
-  readyservicefree:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 48], rax
-    x64.storeBaseDispReg.word64 [r8 + 608], r8
-    x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rcx, r8, 560
-    x64.lock add [rcx], rax
-    x64.movRegReg rcx, r8
-    x64.callDirect __sched_runq_put
-    x64.callDirect __sched_wake_or_spawn
-  senddone:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  cpyftb#20:
-    x64.leaRegRegReg r11, rdx, r10
-    x64.loadRegBaseDisp.byte r11, [r11 + 0]
-    x64.leaRegRegReg rbx, r9, r10
-    x64.storeBaseDispReg.byte [rbx + 0], r11
-    x64.leaRegRegImm32 r10, r10, 1
-    x64.jmp cpyfth#19
-  cpyfwb#17:
-    x64.leaRegRegReg rbx, rdx, r11
-    x64.loadRegBaseDisp.word64 rbx, [rbx + 0]
-    x64.leaRegRegReg r12, r9, r11
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.leaRegRegImm32 r11, r11, 8
-    x64.jmp cpyfwh#16
-  honourpreempt:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, r9
-    x64.movRegReg rcx, rdi
-    x64.callDirect __gt_preempt
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot r9, slot3
-    x64.leaRegGlobal rsi, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.mov rsi, gs:[rsi]
-    x64.jmp honourresume
-  __rl_slow#48:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot4, rsi
-    x64.storeSlotReg slot5, rdi
-    x64.storeSlotReg slot3, r9
-    x64.movRegReg rcx, rdi
-    x64.movRegReg rdx, r8
-    x64.callDirect __rtlock_acquire
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot4
-    x64.loadRegSlot rdi, slot5
-    x64.loadRegSlot r9, slot3
-    x64.jmp sendtry
-  __rl_slow#54:
-    x64.storeSlotReg slot4, rsi
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rsi, slot4
-    x64.jmp __rl_cont#53
-  __rl_slow#52:
-    x64.storeSlotReg slot4, rsi
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rsi, slot4
-    x64.jmp __rl_cont#51
-  __rl_slow#50:
-    x64.storeSlotReg slot4, rsi
-    x64.storeSlotReg slot6, r8
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.movRegReg rax, r8
-    x64.loadRegSlot rsi, slot4
-    x64.loadRegSlot r8, slot6
-    x64.jmp __rl_cont#49
-  mboxstateoutofdomain:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_5]  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    x64.movRegImm32 rdx, 74
-    x64.movRegImm32 rax, 70
-    x64.callDirect __rt_abort
-    x64.movRegImm32 r8, 0
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendclosed:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rdi], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#45
-  __rl_slow#46:
-    x64.storeSlotReg slot4, rsi
-    x64.movRegReg rcx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rsi, slot4
-  __rl_cont#45:
-    x64.aluBaseDispImm32.add [rsi + 824], -1
-    x64.movRegImm32 r8, 2
-    x64.epilogue 96
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__mbox_recv {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 64
-    x64.movRegReg rbx, rcx
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
-    x64.cmpRegImm32 rdx, -1314
-    x64.jcc equal, honourpreempt
-  recvtry:
-    x64.leaRegRegImm32 rcx, rbx, 96
-    x64.aluBaseDispImm32.add [rax + 824], 1
-    x64.movRegImm32 rdx, 1
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#31
-  __rl_cont#30:
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 72]
-    x64.cmpRegImm32 rdx, 2
-    x64.jcc equal, recvcounted
-  mboxstatenotstarted:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, mboxstatenotfresh
-  recvstartfresh:
-    x64.movRegImm32 rdx, 2
-    x64.storeBaseDispReg.word64 [rbx + 72], rdx
-  recvcounted:
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 24]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, recvpopcheck
-  recvempty:
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, recvdrained
-  recvpark:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.storeBaseDispReg.word64 [rbx + 32], r12
-    x64.movRegImm32 rcx, 4
-    x64.movRegReg rdx, rbx
-    x64.callDirect __gt_park
-  recvresumed:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 496]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, recvretry
-  recvdelivered:
-    x64.leaRegRegImm32 r8, rbx, 104
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvretry:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.jmp recvtry
-  recvdrained:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#35
-  __rl_cont#34:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.movRegImm32 r8, 0
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvpopcheck:
-    x64.leaRegRegImm32 rsi, rbx, -584
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 664]
-    x64.cmpRegReg rdi, rsi
-    x64.jcc notEqual, recvtakering
-  recvpopfit:
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
-    x64.cmpRegImm32 rdx, 1
-    x64.setccReg equal, rdi
-    x64.cmpRegImm32 rsi, 16
-    x64.setccReg greater, rsi
-    x64.andRegReg rdi, rdi, rsi
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, recvpopnow
-  recvtakering:
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_recv_take
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvpopnow:
-    x64.leaRegRegImm32 rdx, rdx, -1
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rdi, [rbx + 16]
-    x64.loadRegBaseDisp.word64 r8, [rbx + 8]
-    x64.loadRegBaseDisp.word64 r9, [rbx + 56]
-    x64.movRegReg r10, rdi
-    x64.imulRegReg r10, rdi, r9
-    x64.leaRegRegReg rsi, rsi, r10
-    x64.leaRegRegImm32 r8, r8, -1
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.andRegReg rdi, rdi, r8
-    x64.storeBaseDispReg.word64 [rbx + 16], rdi
-    x64.storeBaseDispReg.word64 [rbx + 24], rdx
-    x64.leaRegRegImm32 r8, rbx, 104
-    x64.cmpRegImm32 r9, 0
-    x64.jcc lessEqual, cpyfd
-  cpyfrun:
-    x64.movRegReg rdx, r9
-    x64.andRegImm32 rdx, r9, -8
-    x64.movRegImm32 rdi, 0
-  cpyfwh:
-    x64.cmpRegReg rdi, rdx
-    x64.jcc less, cpyfwb
-  cpyfth:
-    x64.cmpRegReg rdx, r9
-    x64.jcc less, cpyftb
-  cpyfd:
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#37
-  __rl_cont#36:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  cpyftb:
-    x64.leaRegRegReg rdi, rsi, rdx
-    x64.loadRegBaseDisp.byte rdi, [rdi + 0]
-    x64.leaRegRegReg r10, r8, rdx
-    x64.storeBaseDispReg.byte [r10 + 0], rdi
-    x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth
-  cpyfwb:
-    x64.leaRegRegReg r10, rsi, rdi
-    x64.loadRegBaseDisp.word64 r10, [r10 + 0]
-    x64.leaRegRegReg r11, r8, rdi
-    x64.storeBaseDispReg.word64 [r11 + 0], r10
-    x64.leaRegRegImm32 rdi, rdi, 8
-    x64.jmp cpyfwh
-  mboxstatenotfresh:
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, mboxstateoutofdomain
-  recvtakeinbox:
-    x64.leaRegRegImm32 rdx, rbx, -584
-    x64.loadRegBaseDisp.word64 rsi, [rdx + 664]
-    x64.cmpRegReg rsi, rdx
-    x64.jcc equal, recvtakeinboxalone
-  recvtakeinboxcontended:
-    x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_recv_take
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  recvtakeinboxalone:
-    x64.movRegImm32 rdx, 2
-    x64.storeBaseDispReg.word64 [rbx + 72], rdx
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#33
-  __rl_cont#32:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.leaRegRegImm32 r8, rbx, 104
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  honourpreempt:
-    x64.callDirect __gt_preempt
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.jmp recvtry
-  __rl_slow#31:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.callDirect __rtlock_acquire
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.jmp __rl_cont#30
-  __rl_slow#35:
-    x64.storeSlotReg slot0, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot0
-    x64.jmp __rl_cont#34
-  __rl_slow#37:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot2, r8
-    x64.callDirect __rtlock_release
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot r8, slot2
-    x64.jmp __rl_cont#36
-  __rl_slow#33:
-    x64.storeSlotReg slot0, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot0
-    x64.jmp __rl_cont#32
-  mboxstateoutofdomain:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_5]  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    x64.movRegImm32 rdx, 74
-    x64.movRegImm32 rax, 70
-    x64.callDirect __rt_abort
-    x64.movRegImm32 r8, 0
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-```
-```TargetIr:arm64-macos
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __sched_num_procs@448 = i64 0
-  __sched_ncpu@456 = i64 0
-  __sched_shutdown_flag@464 = i64 0
-  __sched_lock@472 = i64 0
-  __sched_lock_depth_sink@480 = i64 0
-  __sched_nmspinning@488 = i64 0
-  __sched_needspinning@496 = i64 0
-  __sched_sysmon_event@504 = i64 0
-  __sched_sysmon_wait@512 = i64 0
-  __sched_timer_starts@520 = i64 0
-  __slab_arena_list@528 = i64 0
-  __slab_arena_map_l1@536 = i64 0
-  __slab_state@544 = i64 0
-  __mrt_program_started@552 = i8 0
-}
-
-func @main {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x22
-    arm64.storeSlotReg slot3, x21
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.movImm x19, 1024
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.leaFuncAddr x0, Counter.__start_Counter.create
-    arm64.movImm x2, 24
-    arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movImm x19, 1
-    arm64.movImm x0, 0
-    arm64.bl __gt_cell_alloc
-    arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.storeBaseDispReg.word64 [x22 + 16], x21
-    arm64.movImm x2, 24
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
-    arm64.cmp x0, 0
-    arm64.b.ne sendrefused
-  sendaccepted:
-    arm64.movRegReg x0, x21
-    arm64.bl __gt_try_await
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  critsplit:
-    arm64.movRegReg x0, x9
-  tryerr:
-    arm64.movImm x19, 0
-    arm64.bl __mm_decref
-    arm64.b trycont
-  tryok:
-    arm64.movRegReg x19, x0
-  trycont:
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  sendrefused:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.movImm x2, 16
-    arm64.movImm x1, 0
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x2
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.storeBaseDispReg.word64 [x1 + 8], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.movRegReg x0, x1
-    arm64.b tryerr
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-service-message-is-copied-into-its-mailbox-with-no-allocation.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    arm64.bl __mbox_unknown_tag
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
-    arm64.add x1, x1, 1
-  __il_cont:
-    arm64.movImm x2, 0
-    arm64.bl __gt_cell_complete
-    arm64.b serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  __il_body:
-    arm64.movImm x21, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x21
-  __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.retIndirect
-}
-
-func @__mbox_send {
-  entry:
-    arm64.prologue 80
-    arm64.leaGlobal x4, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x4
-    arm64.cmp x4, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x4, x16, x17
-    arm64.loadRegBaseDisp.word64 x5, [x4 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x5 + 40]
-    arm64.cmp x6, -1314
-    arm64.b.eq honourpreempt
-  honourresume:
-    arm64.add x5, x0, 96
-    arm64.loadRegBaseDisp.word64 x6, [x4 + 824]
-    arm64.add x6, x6, 1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x6
-    arm64.movImm x6, 1
-    arm64.arm64AtomicRmw.exchangeByte x6, [x5], x6
-    arm64.cmp x6, 0
-    arm64.b.ne __rl_slow#48
-  sendtry:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 40]
-    arm64.cmp x6, 0
-    arm64.b.ne sendclosed
-  sendroute:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 32]
-    arm64.cmp x6, 0
-    arm64.b.ne sendhandoff
-  sendfirstcheck:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 72]
-    arm64.cmp x6, 2
-    arm64.b.ne mboxstatenotstarted
-  sendappend:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 24]
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 64]
-    arm64.cmp x6, x7
-    arm64.b.eq sendqueueing
-  sendringroom:
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 0]
-    arm64.cmp x7, 0
-    arm64.b.eq sendqueueing
-  mboxhavering:
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 8]
-    arm64.cmp x6, x7
-    arm64.b.eq sendqueueing
-  sendfitted:
-    arm64.add x3, x6, 1
-    arm64.storeBaseDispReg.word64 [x0 + 24], x3
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x8, [x0 + 16]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 56]
-    arm64.sub x7, x7, 1
-    arm64.add x6, x8, x6
-    arm64.and x6, x6, x7
-    arm64.mul x0, x6, x0
-    arm64.add x0, x3, x0
-    arm64.cmp x2, 0
-    arm64.b.le cpyfd#38
-  cpyfrun#37:
-    arm64.and x3, x2, -8
-    arm64.movImm x6, 0
-  cpyfwh#39:
-    arm64.cmp x6, x3
-    arm64.b.lt cpyfwb#40
-  cpyfth#42:
-    arm64.cmp x3, x2
-    arm64.b.lt cpyftb#43
-  cpyfd#38:
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#54
-  __rl_cont#53:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.b senddone
-  cpyftb#43:
-    arm64.add x6, x1, x3
-    arm64.loadRegBaseDisp.byte x6, [x6 + 0]
-    arm64.add x7, x0, x3
-    arm64.storeBaseDispReg.byte [x7 + 0], x6
-    arm64.add x3, x3, 1
-    arm64.b cpyfth#42
-  cpyfwb#40:
-    arm64.add x7, x1, x6
-    arm64.loadRegBaseDisp.word64 x7, [x7 + 0]
-    arm64.add x8, x0, x6
-    arm64.storeBaseDispReg.word64 [x8 + 0], x7
-    arm64.add x6, x6, 8
-    arm64.b cpyfwh#39
-  mboxstatenotstarted:
-    arm64.cmp x6, 0
-    arm64.b.ne mboxstatenotfresh
-  sendinboxfirst:
-    arm64.add x3, x0, 104
-    arm64.cmp x2, 0
-    arm64.b.le cpyfd#29
-  cpyfrun#28:
-    arm64.and x6, x2, -8
-    arm64.movImm x7, 0
-  cpyfwh#30:
-    arm64.cmp x7, x6
-    arm64.b.lt cpyfwb#31
-  cpyfth#33:
-    arm64.cmp x6, x2
-    arm64.b.lt cpyftb#34
-  cpyfd#29:
-    arm64.movImm x1, 1
-    arm64.storeBaseDispReg.word64 [x0 + 72], x1
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#52
-  __rl_cont#51:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.b senddone
-  cpyftb#34:
-    arm64.add x7, x1, x6
-    arm64.loadRegBaseDisp.byte x7, [x7 + 0]
-    arm64.add x8, x3, x6
-    arm64.storeBaseDispReg.byte [x8 + 0], x7
-    arm64.add x6, x6, 1
-    arm64.b cpyfth#33
-  cpyfwb#31:
-    arm64.add x8, x1, x7
-    arm64.loadRegBaseDisp.word64 x8, [x8 + 0]
-    arm64.add x9, x3, x7
-    arm64.storeBaseDispReg.word64 [x9 + 0], x8
-    arm64.add x7, x7, 8
-    arm64.b cpyfwh#30
-  mboxstatenotfresh:
-    arm64.cmp x6, 1
-    arm64.b.ne mboxstateoutofdomain
-  sendqueueing:
-    arm64.bl __mbox_send_queue
-    arm64.epilogue 80
-    arm64.retIndirect
-  sendhandoff:
-    arm64.add x3, x0, 104
-    arm64.cmp x2, 0
-    arm64.b.le cpyfd#15
-  cpyfrun#14:
-    arm64.and x7, x2, -8
-    arm64.movImm x8, 0
-  cpyfwh#16:
-    arm64.cmp x8, x7
-    arm64.b.lt cpyfwb#17
-  cpyfth#19:
-    arm64.cmp x7, x2
-    arm64.b.lt cpyftb#20
-  cpyfd#15:
-    arm64.movImm x1, 1
-    arm64.storeBaseDispReg.word64 [x6 + 496], x1
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 32], x1
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#50
-  __rl_cont#49:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.movImm x0, 0
-    arm64.movImm x1, 1
-    arm64.add x2, x6, 552
-    arm64.arm64AtomicCas x0, [x2], x0, x1
-    arm64.cmp x0, 0
-    arm64.b.ne readyservicefree
-  readyservicelocked:
-    arm64.movRegReg x0, x6
-    arm64.bl __gt_ready_locked
-    arm64.cmp x0, 0
-    arm64.b.eq senddone
-  readyservicewake:
-    arm64.bl __sched_wake_or_spawn
-    arm64.b senddone
-  readyservicefree:
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x6 + 48], x0
-    arm64.storeBaseDispReg.word64 [x6 + 608], x6
-    arm64.movImm x0, 1
-    arm64.add x1, x6, 560
-    arm64.arm64AtomicRmw.add x0, [x1], x0
-    arm64.movRegReg x0, x6
-    arm64.bl __sched_runq_put
-    arm64.bl __sched_wake_or_spawn
-  senddone:
-    arm64.movImm x0, 0
-    arm64.epilogue 80
-    arm64.retIndirect
-  cpyftb#20:
-    arm64.add x8, x1, x7
-    arm64.loadRegBaseDisp.byte x8, [x8 + 0]
-    arm64.add x9, x3, x7
-    arm64.storeBaseDispReg.byte [x9 + 0], x8
-    arm64.add x7, x7, 1
-    arm64.b cpyfth#19
-  cpyfwb#17:
-    arm64.add x9, x1, x8
-    arm64.loadRegBaseDisp.word64 x9, [x9 + 0]
-    arm64.add x10, x3, x8
-    arm64.storeBaseDispReg.word64 [x10 + 0], x9
-    arm64.add x8, x8, 8
-    arm64.b cpyfwh#16
-  honourpreempt:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.storeSlotReg slot2, x2
-    arm64.storeSlotReg slot3, x3
-    arm64.movRegReg x0, x5
-    arm64.bl __gt_preempt
-    arm64.movRegReg x4, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x3, slot3
-    arm64.leaGlobal x4, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x4
-    arm64.cmp x4, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x4, x16, x17
-    arm64.b honourresume
-  __rl_slow#48:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.storeSlotReg slot2, x2
-    arm64.storeSlotReg slot3, x3
-    arm64.storeSlotReg slot4, x4
-    arm64.storeSlotReg slot5, x5
-    arm64.movRegReg x0, x5
-    arm64.movRegReg x1, x6
-    arm64.bl __rtlock_acquire
-    arm64.movRegReg x6, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x3, slot3
-    arm64.loadRegSlot x4, slot4
-    arm64.loadRegSlot x5, slot5
-    arm64.b sendtry
-  __rl_slow#54:
-    arm64.storeSlotReg slot4, x4
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-    arm64.b __rl_cont#53
-  __rl_slow#52:
-    arm64.storeSlotReg slot4, x4
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-    arm64.b __rl_cont#51
-  __rl_slow#50:
-    arm64.storeSlotReg slot4, x4
-    arm64.storeSlotReg slot6, x6
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-    arm64.loadRegSlot x6, slot6
-    arm64.b __rl_cont#49
-  mboxstateoutofdomain:
-    arm64.leaRdata x0, __fatal_msg_5  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    arm64.movImm x1, 74
-    arm64.movImm x2, 70
-    arm64.bl __rt_abort
-    arm64.movImm x0, 0
-    arm64.epilogue 80
-    arm64.retIndirect
-  sendclosed:
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#45
-  __rl_slow#46:
-    arm64.storeSlotReg slot4, x4
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-  __rl_cont#45:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.movImm x0, 2
-    arm64.epilogue 80
-    arm64.retIndirect
-}
-
-func @__mbox_recv {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x20
-    arm64.storeSlotReg slot3, x19
-    arm64.movRegReg x19, x0
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 40]
-    arm64.cmp x2, -1314
-    arm64.b.eq honourpreempt
-  recvtry:
-    arm64.add x1, x19, 96
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 824]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x2
-    arm64.movImm x2, 1
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#31
-  __rl_cont#30:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 72]
-    arm64.cmp x2, 2
-    arm64.b.eq recvcounted
-  mboxstatenotstarted:
-    arm64.cmp x2, 0
-    arm64.b.ne mboxstatenotfresh
-  recvstartfresh:
-    arm64.movImm x2, 2
-    arm64.storeBaseDispReg.word64 [x19 + 72], x2
-  recvcounted:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 24]
-    arm64.cmp x2, 0
-    arm64.b.ne recvpopcheck
-  recvempty:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
-    arm64.cmp x2, 0
-    arm64.b.ne recvdrained
-  recvpark:
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x19 + 32], x20
-    arm64.movImm x0, 4
-    arm64.movRegReg x1, x19
-    arm64.bl __gt_park
-  recvresumed:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 496]
-    arm64.cmp x0, 0
-    arm64.b.eq recvretry
-  recvdelivered:
-    arm64.add x0, x19, 104
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvretry:
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.b recvtry
-  recvdrained:
-    arm64.movImm x2, 0
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#35
-  __rl_cont#34:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvpopcheck:
-    arm64.add x3, x19, -584
-    arm64.loadRegBaseDisp.word64 x4, [x3 + 664]
-    arm64.cmp x4, x3
-    arm64.b.ne recvtakering
-  recvpopfit:
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 8]
-    arm64.cmp x2, 1
-    arm64.cset x4, eq
-    arm64.cmp x3, 16
-    arm64.cset x3, gt
-    arm64.and x3, x4, x3
-    arm64.cbz x3, recvpopnow
-  recvtakering:
-    arm64.movImm x1, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __mbox_recv_take
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvpopnow:
-    arm64.sub x2, x2, 1
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x4, [x19 + 16]
-    arm64.loadRegBaseDisp.word64 x5, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x19 + 56]
-    arm64.mul x7, x4, x6
-    arm64.add x3, x3, x7
-    arm64.sub x5, x5, 1
-    arm64.add x4, x4, 1
-    arm64.and x4, x4, x5
-    arm64.storeBaseDispReg.word64 [x19 + 16], x4
-    arm64.storeBaseDispReg.word64 [x19 + 24], x2
-    arm64.add x2, x19, 104
-    arm64.cmp x6, 0
-    arm64.b.le cpyfd
-  cpyfrun:
-    arm64.and x4, x6, -8
-    arm64.movImm x5, 0
-  cpyfwh:
-    arm64.cmp x5, x4
-    arm64.b.lt cpyfwb
-  cpyfth:
-    arm64.cmp x4, x6
-    arm64.b.lt cpyftb
-  cpyfd:
-    arm64.movImm x3, 0
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
-    arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#37
-  __rl_cont#36:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.movRegReg x0, x2
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  cpyftb:
-    arm64.add x5, x3, x4
-    arm64.loadRegBaseDisp.byte x5, [x5 + 0]
-    arm64.add x7, x2, x4
-    arm64.storeBaseDispReg.byte [x7 + 0], x5
-    arm64.add x4, x4, 1
-    arm64.b cpyfth
-  cpyfwb:
-    arm64.add x7, x3, x5
-    arm64.loadRegBaseDisp.word64 x7, [x7 + 0]
-    arm64.add x8, x2, x5
-    arm64.storeBaseDispReg.word64 [x8 + 0], x7
-    arm64.add x5, x5, 8
-    arm64.b cpyfwh
-  mboxstatenotfresh:
-    arm64.cmp x2, 1
-    arm64.b.ne mboxstateoutofdomain
-  recvtakeinbox:
-    arm64.add x2, x19, -584
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 664]
-    arm64.cmp x3, x2
-    arm64.b.eq recvtakeinboxalone
-  recvtakeinboxcontended:
-    arm64.movImm x1, 1
-    arm64.movRegReg x0, x19
-    arm64.bl __mbox_recv_take
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvtakeinboxalone:
-    arm64.movImm x2, 2
-    arm64.storeBaseDispReg.word64 [x19 + 72], x2
-    arm64.movImm x2, 0
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#33
-  __rl_cont#32:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.add x0, x19, 104
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  honourpreempt:
-    arm64.movRegReg x0, x1
-    arm64.bl __gt_preempt
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.b recvtry
-  __rl_slow#31:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_acquire
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.b __rl_cont#30
-  __rl_slow#35:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#34
-  __rl_slow#37:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot2, x2
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#36
-  __rl_slow#33:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#32
-  mboxstateoutofdomain:
-    arm64.leaRdata x0, __fatal_msg_5  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    arm64.movImm x1, 74
-    arm64.movImm x2, 70
-    arm64.bl __rt_abort
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-```
-```TargetIr:arm64-linux
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __np_src_key_free@448 = i64 0
-  __np_src_key_high@456 = i64 0
-  __np_child_signal@464 = i64 0
-  __np_pd_mtable@472 = i64 0
-  __np_pd_mcap@480 = i64 0
-  __sched_num_procs@488 = i64 0
-  __sched_ncpu@496 = i64 0
-  __sched_shutdown_flag@504 = i64 0
-  __sched_lock@512 = i64 0
-  __sched_lock_depth_sink@520 = i64 0
-  __sched_nmspinning@528 = i64 0
-  __sched_needspinning@536 = i64 0
-  __sched_sysmon_event@544 = i64 0
-  __sched_sysmon_wait@552 = i64 0
-  __sched_timer_starts@560 = i64 0
-  __mrt_envp@568 = i64 0
-  __mrt_signal_stack_bytes@576 = i64 0
-  __mrt_hwcap_atomics@584 = i64 0
-  __mrt_tls_next_key@592 = i64 0
-  __slab_arena_list@600 = i64 0
-  __slab_arena_map_l1@608 = i64 0
-  __slab_state@616 = i64 0
-  __mrt_program_started@624 = i8 0
-}
-
-func @main {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x22
-    arm64.storeSlotReg slot3, x21
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.movImm x19, 1024
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.leaFuncAddr x0, Counter.__start_Counter.create
-    arm64.movImm x2, 24
-    arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movImm x19, 1
-    arm64.movImm x0, 0
-    arm64.bl __gt_cell_alloc
-    arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.storeBaseDispReg.word64 [x22 + 16], x21
-    arm64.movImm x2, 24
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
-    arm64.cmp x0, 0
-    arm64.b.ne sendrefused
-  sendaccepted:
-    arm64.movRegReg x0, x21
-    arm64.bl __gt_try_await
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  critsplit:
-    arm64.movRegReg x0, x9
-  tryerr:
-    arm64.movImm x19, 0
-    arm64.bl __mm_decref
-    arm64.b trycont
-  tryok:
-    arm64.movRegReg x19, x0
-  trycont:
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  sendrefused:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.movImm x2, 16
-    arm64.movImm x1, 0
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x2
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.storeBaseDispReg.word64 [x1 + 8], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.movRegReg x0, x1
-    arm64.b tryerr
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-service-message-is-copied-into-its-mailbox-with-no-allocation.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    arm64.bl __mbox_unknown_tag
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
-    arm64.add x1, x1, 1
-  __il_cont:
-    arm64.movImm x2, 0
-    arm64.bl __gt_cell_complete
-    arm64.b serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  __il_body:
-    arm64.movImm x21, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x21
-  __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.retIndirect
-}
-
-func @__mbox_send {
-  entry:
-    arm64.prologue 80
-    arm64.leaGlobal x4, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x4
-    arm64.cmp x4, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x4, x16, x17
-    arm64.loadRegBaseDisp.word64 x5, [x4 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x5 + 40]
-    arm64.cmp x6, -1314
-    arm64.b.eq honourpreempt
-  honourresume:
-    arm64.add x5, x0, 96
-    arm64.loadRegBaseDisp.word64 x6, [x4 + 824]
-    arm64.add x6, x6, 1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x6
-    arm64.movImm x6, 1
-    arm64.arm64AtomicRmw.exchangeByte x6, [x5], x6
-    arm64.cmp x6, 0
-    arm64.b.ne __rl_slow#48
-  sendtry:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 40]
-    arm64.cmp x6, 0
-    arm64.b.ne sendclosed
-  sendroute:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 32]
-    arm64.cmp x6, 0
-    arm64.b.ne sendhandoff
-  sendfirstcheck:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 72]
-    arm64.cmp x6, 2
-    arm64.b.ne mboxstatenotstarted
-  sendappend:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 24]
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 64]
-    arm64.cmp x6, x7
-    arm64.b.eq sendqueueing
-  sendringroom:
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 0]
-    arm64.cmp x7, 0
-    arm64.b.eq sendqueueing
-  mboxhavering:
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 8]
-    arm64.cmp x6, x7
-    arm64.b.eq sendqueueing
-  sendfitted:
-    arm64.add x3, x6, 1
-    arm64.storeBaseDispReg.word64 [x0 + 24], x3
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x8, [x0 + 16]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 56]
-    arm64.sub x7, x7, 1
-    arm64.add x6, x8, x6
-    arm64.and x6, x6, x7
-    arm64.mul x0, x6, x0
-    arm64.add x0, x3, x0
-    arm64.cmp x2, 0
-    arm64.b.le cpyfd#38
-  cpyfrun#37:
-    arm64.and x3, x2, -8
-    arm64.movImm x6, 0
-  cpyfwh#39:
-    arm64.cmp x6, x3
-    arm64.b.lt cpyfwb#40
-  cpyfth#42:
-    arm64.cmp x3, x2
-    arm64.b.lt cpyftb#43
-  cpyfd#38:
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#54
-  __rl_cont#53:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.b senddone
-  cpyftb#43:
-    arm64.add x6, x1, x3
-    arm64.loadRegBaseDisp.byte x6, [x6 + 0]
-    arm64.add x7, x0, x3
-    arm64.storeBaseDispReg.byte [x7 + 0], x6
-    arm64.add x3, x3, 1
-    arm64.b cpyfth#42
-  cpyfwb#40:
-    arm64.add x7, x1, x6
-    arm64.loadRegBaseDisp.word64 x7, [x7 + 0]
-    arm64.add x8, x0, x6
-    arm64.storeBaseDispReg.word64 [x8 + 0], x7
-    arm64.add x6, x6, 8
-    arm64.b cpyfwh#39
-  mboxstatenotstarted:
-    arm64.cmp x6, 0
-    arm64.b.ne mboxstatenotfresh
-  sendinboxfirst:
-    arm64.add x3, x0, 104
-    arm64.cmp x2, 0
-    arm64.b.le cpyfd#29
-  cpyfrun#28:
-    arm64.and x6, x2, -8
-    arm64.movImm x7, 0
-  cpyfwh#30:
-    arm64.cmp x7, x6
-    arm64.b.lt cpyfwb#31
-  cpyfth#33:
-    arm64.cmp x6, x2
-    arm64.b.lt cpyftb#34
-  cpyfd#29:
-    arm64.movImm x1, 1
-    arm64.storeBaseDispReg.word64 [x0 + 72], x1
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#52
-  __rl_cont#51:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.b senddone
-  cpyftb#34:
-    arm64.add x7, x1, x6
-    arm64.loadRegBaseDisp.byte x7, [x7 + 0]
-    arm64.add x8, x3, x6
-    arm64.storeBaseDispReg.byte [x8 + 0], x7
-    arm64.add x6, x6, 1
-    arm64.b cpyfth#33
-  cpyfwb#31:
-    arm64.add x8, x1, x7
-    arm64.loadRegBaseDisp.word64 x8, [x8 + 0]
-    arm64.add x9, x3, x7
-    arm64.storeBaseDispReg.word64 [x9 + 0], x8
-    arm64.add x7, x7, 8
-    arm64.b cpyfwh#30
-  mboxstatenotfresh:
-    arm64.cmp x6, 1
-    arm64.b.ne mboxstateoutofdomain
-  sendqueueing:
-    arm64.bl __mbox_send_queue
-    arm64.epilogue 80
-    arm64.retIndirect
-  sendhandoff:
-    arm64.add x3, x0, 104
-    arm64.cmp x2, 0
-    arm64.b.le cpyfd#15
-  cpyfrun#14:
-    arm64.and x7, x2, -8
-    arm64.movImm x8, 0
-  cpyfwh#16:
-    arm64.cmp x8, x7
-    arm64.b.lt cpyfwb#17
-  cpyfth#19:
-    arm64.cmp x7, x2
-    arm64.b.lt cpyftb#20
-  cpyfd#15:
-    arm64.movImm x1, 1
-    arm64.storeBaseDispReg.word64 [x6 + 496], x1
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 32], x1
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#50
-  __rl_cont#49:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.movImm x0, 0
-    arm64.movImm x1, 1
-    arm64.add x2, x6, 552
-    arm64.arm64AtomicCas x0, [x2], x0, x1
-    arm64.cmp x0, 0
-    arm64.b.ne readyservicefree
-  readyservicelocked:
-    arm64.movRegReg x0, x6
-    arm64.bl __gt_ready_locked
-    arm64.cmp x0, 0
-    arm64.b.eq senddone
-  readyservicewake:
-    arm64.bl __sched_wake_or_spawn
-    arm64.b senddone
-  readyservicefree:
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x6 + 48], x0
-    arm64.storeBaseDispReg.word64 [x6 + 608], x6
-    arm64.movImm x0, 1
-    arm64.add x1, x6, 560
-    arm64.arm64AtomicRmw.add x0, [x1], x0
-    arm64.movRegReg x0, x6
-    arm64.bl __sched_runq_put
-    arm64.bl __sched_wake_or_spawn
-  senddone:
-    arm64.movImm x0, 0
-    arm64.epilogue 80
-    arm64.retIndirect
-  cpyftb#20:
-    arm64.add x8, x1, x7
-    arm64.loadRegBaseDisp.byte x8, [x8 + 0]
-    arm64.add x9, x3, x7
-    arm64.storeBaseDispReg.byte [x9 + 0], x8
-    arm64.add x7, x7, 1
-    arm64.b cpyfth#19
-  cpyfwb#17:
-    arm64.add x9, x1, x8
-    arm64.loadRegBaseDisp.word64 x9, [x9 + 0]
-    arm64.add x10, x3, x8
-    arm64.storeBaseDispReg.word64 [x10 + 0], x9
-    arm64.add x8, x8, 8
-    arm64.b cpyfwh#16
-  honourpreempt:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.storeSlotReg slot2, x2
-    arm64.storeSlotReg slot3, x3
-    arm64.movRegReg x0, x5
-    arm64.bl __gt_preempt
-    arm64.movRegReg x4, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x3, slot3
-    arm64.leaGlobal x4, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x4
-    arm64.cmp x4, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x4, x16, x17
-    arm64.b honourresume
-  __rl_slow#48:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.storeSlotReg slot2, x2
-    arm64.storeSlotReg slot3, x3
-    arm64.storeSlotReg slot4, x4
-    arm64.storeSlotReg slot5, x5
-    arm64.movRegReg x0, x5
-    arm64.movRegReg x1, x6
-    arm64.bl __rtlock_acquire
-    arm64.movRegReg x6, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x3, slot3
-    arm64.loadRegSlot x4, slot4
-    arm64.loadRegSlot x5, slot5
-    arm64.b sendtry
-  __rl_slow#54:
-    arm64.storeSlotReg slot4, x4
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-    arm64.b __rl_cont#53
-  __rl_slow#52:
-    arm64.storeSlotReg slot4, x4
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-    arm64.b __rl_cont#51
-  __rl_slow#50:
-    arm64.storeSlotReg slot4, x4
-    arm64.storeSlotReg slot6, x6
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-    arm64.loadRegSlot x6, slot6
-    arm64.b __rl_cont#49
-  mboxstateoutofdomain:
-    arm64.leaRdata x0, __fatal_msg_5  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    arm64.movImm x1, 74
-    arm64.movImm x2, 70
-    arm64.bl __rt_abort
-    arm64.movImm x0, 0
-    arm64.epilogue 80
-    arm64.retIndirect
-  sendclosed:
-    arm64.movImm x0, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x5], x0
-    arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#45
-  __rl_slow#46:
-    arm64.storeSlotReg slot4, x4
-    arm64.movRegReg x0, x5
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x4, slot4
-  __rl_cont#45:
-    arm64.loadRegBaseDisp.word64 x0, [x4 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x4 + 824], x0
-    arm64.movImm x0, 2
-    arm64.epilogue 80
-    arm64.retIndirect
-}
-
-func @__mbox_recv {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x20
-    arm64.storeSlotReg slot3, x19
-    arm64.movRegReg x19, x0
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 40]
-    arm64.cmp x2, -1314
-    arm64.b.eq honourpreempt
-  recvtry:
-    arm64.add x1, x19, 96
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 824]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x2
-    arm64.movImm x2, 1
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#31
-  __rl_cont#30:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 72]
-    arm64.cmp x2, 2
-    arm64.b.eq recvcounted
-  mboxstatenotstarted:
-    arm64.cmp x2, 0
-    arm64.b.ne mboxstatenotfresh
-  recvstartfresh:
-    arm64.movImm x2, 2
-    arm64.storeBaseDispReg.word64 [x19 + 72], x2
-  recvcounted:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 24]
-    arm64.cmp x2, 0
-    arm64.b.ne recvpopcheck
-  recvempty:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
-    arm64.cmp x2, 0
-    arm64.b.ne recvdrained
-  recvpark:
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x19 + 32], x20
-    arm64.movImm x0, 4
-    arm64.movRegReg x1, x19
-    arm64.bl __gt_park
-  recvresumed:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 496]
-    arm64.cmp x0, 0
-    arm64.b.eq recvretry
-  recvdelivered:
-    arm64.add x0, x19, 104
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvretry:
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.b recvtry
-  recvdrained:
-    arm64.movImm x2, 0
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#35
-  __rl_cont#34:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvpopcheck:
-    arm64.add x3, x19, -584
-    arm64.loadRegBaseDisp.word64 x4, [x3 + 664]
-    arm64.cmp x4, x3
-    arm64.b.ne recvtakering
-  recvpopfit:
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 8]
-    arm64.cmp x2, 1
-    arm64.cset x4, eq
-    arm64.cmp x3, 16
-    arm64.cset x3, gt
-    arm64.and x3, x4, x3
-    arm64.cbz x3, recvpopnow
-  recvtakering:
-    arm64.movImm x1, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __mbox_recv_take
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvpopnow:
-    arm64.sub x2, x2, 1
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x4, [x19 + 16]
-    arm64.loadRegBaseDisp.word64 x5, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x19 + 56]
-    arm64.mul x7, x4, x6
-    arm64.add x3, x3, x7
-    arm64.sub x5, x5, 1
-    arm64.add x4, x4, 1
-    arm64.and x4, x4, x5
-    arm64.storeBaseDispReg.word64 [x19 + 16], x4
-    arm64.storeBaseDispReg.word64 [x19 + 24], x2
-    arm64.add x2, x19, 104
-    arm64.cmp x6, 0
-    arm64.b.le cpyfd
-  cpyfrun:
-    arm64.and x4, x6, -8
-    arm64.movImm x5, 0
-  cpyfwh:
-    arm64.cmp x5, x4
-    arm64.b.lt cpyfwb
-  cpyfth:
-    arm64.cmp x4, x6
-    arm64.b.lt cpyftb
-  cpyfd:
-    arm64.movImm x3, 0
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
-    arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#37
-  __rl_cont#36:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.movRegReg x0, x2
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  cpyftb:
-    arm64.add x5, x3, x4
-    arm64.loadRegBaseDisp.byte x5, [x5 + 0]
-    arm64.add x7, x2, x4
-    arm64.storeBaseDispReg.byte [x7 + 0], x5
-    arm64.add x4, x4, 1
-    arm64.b cpyfth
-  cpyfwb:
-    arm64.add x7, x3, x5
-    arm64.loadRegBaseDisp.word64 x7, [x7 + 0]
-    arm64.add x8, x2, x5
-    arm64.storeBaseDispReg.word64 [x8 + 0], x7
-    arm64.add x5, x5, 8
-    arm64.b cpyfwh
-  mboxstatenotfresh:
-    arm64.cmp x2, 1
-    arm64.b.ne mboxstateoutofdomain
-  recvtakeinbox:
-    arm64.add x2, x19, -584
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 664]
-    arm64.cmp x3, x2
-    arm64.b.eq recvtakeinboxalone
-  recvtakeinboxcontended:
-    arm64.movImm x1, 1
-    arm64.movRegReg x0, x19
-    arm64.bl __mbox_recv_take
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  recvtakeinboxalone:
-    arm64.movImm x2, 2
-    arm64.storeBaseDispReg.word64 [x19 + 72], x2
-    arm64.movImm x2, 0
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#33
-  __rl_cont#32:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.add x0, x19, 104
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  honourpreempt:
-    arm64.movRegReg x0, x1
-    arm64.bl __gt_preempt
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.b recvtry
-  __rl_slow#31:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_acquire
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.b __rl_cont#30
-  __rl_slow#35:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#34
-  __rl_slow#37:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot2, x2
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#36
-  __rl_slow#33:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#32
-  mboxstateoutofdomain:
-    arm64.leaRdata x0, __fatal_msg_5  ; "fatal error: mailbox receiver state is not fresh, inbox-queued or started\x0a"
-    arm64.movImm x1, 74
-    arm64.movImm x2, 70
-    arm64.bl __rt_abort
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
 }
 ```
 
@@ -35857,13 +28081,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -35871,7 +28097,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -35881,7 +28107,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -35918,7 +28144,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -35946,52 +28172,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -36004,7 +28224,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -36013,19 +28233,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__sched_init_procs {
@@ -36704,13 +28922,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -36718,7 +28938,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -36728,7 +28948,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -36765,7 +28985,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -36793,52 +29013,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -36851,7 +29065,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -36860,19 +29074,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_free_get {
@@ -37780,13 +29992,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -37794,7 +30008,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -37804,7 +30018,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -37840,7 +30054,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -37868,52 +30082,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -37926,7 +30134,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -37935,19 +30143,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_free_get {
@@ -38848,12 +31054,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -38861,7 +31069,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -38871,7 +31079,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -38906,7 +31114,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -38935,50 +31143,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -38989,7 +31188,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -38998,18 +31197,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_free_get {
@@ -40096,12 +32293,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -40109,7 +32308,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -40119,7 +32318,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -40154,7 +32353,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -40183,50 +32382,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -40237,7 +32427,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -40246,18 +32436,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_free_get {
@@ -41383,13 +33571,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -41397,7 +33587,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -41407,7 +33597,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -41444,7 +33634,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -41472,52 +33662,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -41530,7 +33714,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -41539,19 +33723,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__sched_wake_or_spawn {
@@ -41682,13 +33864,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -41696,7 +33880,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -41706,7 +33890,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -41742,7 +33926,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -41770,52 +33954,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -41828,7 +34006,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -41837,19 +34015,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__sched_wake_or_spawn {
@@ -41971,12 +34147,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -41984,7 +34162,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -41994,7 +34172,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -42029,7 +34207,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -42058,50 +34236,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -42112,7 +34281,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -42121,18 +34290,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__sched_wake_or_spawn {
@@ -42259,12 +34426,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -42272,7 +34441,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -42282,7 +34451,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -42317,7 +34486,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -42346,50 +34515,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -42400,7 +34560,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -42409,18 +34569,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__sched_wake_or_spawn {
@@ -42464,10 +34622,10 @@ follows it, and a member pushed in between is claimed back by compare-and-swap. 
 coroutines has an empty strand queue, and its one member comes back through the resume slot, so its turn
 takes no lock at all. That is every service's turn, and `main`'s in a program without `async`.
 
-A park other than a mailbox park is registered on the store the member waits on, under that store's own
-lock, before the pop. The registration and the pop are therefore never two holds of one lock. A mailbox park
-arrives already registered: the receiver stored itself as the mailbox's `parkedGt` while it held the mailbox
-lock, so the runner only commits the park.
+A park other than a send park is registered on the store the member waits on, under that store's own
+lock, before the pop. The registration and the pop are therefore never two holds of one lock. A send park
+arrives already registered: a sender that found the cown full linked itself into the cown's sender queue
+while it held the cown lock, so the runner only commits the park.
 
 A yielder goes behind its siblings on its strand queue, under the strand lock. When it has no sibling, its
 strand's token goes to the global run queue, and only that enqueue takes `__sched_lock`, as Go's
@@ -42481,12 +34639,12 @@ its `snfirst`, `snpop`, `snresume`, `sngot` or `snrelease` roads. It enters the 
 all: it adds -1 to the holder word atomically, re-reads the queue head with an acquire load, and only when
 that finds a member does `snrecheck` claim the strand back by compare-and-swap. Its cold hand-off roads give a locked owner's strand to that owner's machine (the
 `tsh`, `hp`, `pidleput` and `munlink` blocks). They keep `__sched_lock` only around the idle-processor list,
-the idle-machine list and the global queue, which are still the scheduler's words. For a mailbox
-park, `__gt_run_strand` stores the member's `waiting` status and leaves the mailbox lock the receive carried
-across the switch. It does so on the scheduler context, before `__gt_strand_next` runs, as Go's `park_m`
-calls `chanparkcommit` before it schedules. The call to `__gt_strand_next` then passes 0 as the parked
-member. `__gt_register_park` dispatches on the other kinds only, because a park made under the held mailbox
-lock leaves nothing to re-check or undo. In `__gt_run_strand`'s yield arm, `strandplace` enters the strand
+the idle-machine list and the global queue, which are still the scheduler's words. For a send park,
+`__gt_run_strand` (`strandcownsendcommit`) stores the member's `waiting` status, arms the send's deadline when
+it has one, and leaves the cown lock the send carried across the switch. It does so on the scheduler context,
+before `__gt_strand_next` runs, as Go's `park_m` calls `chanparkcommit` before it schedules. The call to
+`__gt_strand_next` then passes 0 as the parked member. `__gt_register_park` dispatches on the other kinds only,
+because a park made under the held cown lock leaves nothing to re-check or undo. In `__gt_run_strand`'s yield arm, `strandplace` enters the strand
 lock around the strand queue's head load and its append. `__sched_lock` appears only on the
 `strandbehindeveryone` road, around `__gt_enqueue`. A `__sched_lock` enter on a coroutine-free strand's turn
 puts every message a service receives on the lock every processor's scheduling takes.
@@ -42615,13 +34773,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -42629,7 +34789,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -42639,7 +34799,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -42676,7 +34836,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -42704,52 +34864,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -42762,7 +34916,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -42771,19 +34925,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_strand_next {
@@ -43556,20 +35708,20 @@ func @__gt_run_strand {
     x64.loadRegBaseDisp.word64 r15, [rax + 0]
     x64.movRegImm rax, 9223372036854775807
     x64.cmpRegReg r15, rax
-    x64.jcc equal, critsplit#59
+    x64.jcc equal, critsplit#55
   timerdueask:
     x64.callDirect __gt_now_ns
     x64.cmpRegReg r15, r8
-    x64.jcc greater, critsplit#60
+    x64.jcc greater, critsplit#56
   pollfire:
     x64.movRegReg rcx, r8
     x64.callDirect __gt_timer_check
     x64.jmp strandpoll
-  critsplit#59:
+  critsplit#55:
     x64.loadRegSlot rax, slot1
     x64.movRegReg r8, rax
     x64.jmp strandpoll
-  critsplit#60:
+  critsplit#56:
     x64.loadRegSlot rax, slot1
     x64.movRegReg r8, rax
   strandpoll:
@@ -43587,10 +35739,10 @@ func @__gt_run_strand {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [r12], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#42
+    x64.jcc notEqual, __rl_slow#38
   __rl_owned:
     x64.storeBaseDispReg.word64 [r12 + 8], rax
-  __rl_cont#40:
+  __rl_cont#36:
     x64.loadRegBaseDisp.word64 rax, [r12 + 472]
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, r15
@@ -43608,12 +35760,12 @@ func @__gt_run_strand {
     x64.movRegImm32 rdx, 0
     x64.xchg8 [r12], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#43
-    x64.jmp __rl_slow#46
+    x64.jcc equal, __rl_cont#39
+    x64.jmp __rl_slow#42
   __rl_nested:
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.storeBaseDispReg.word64 [r12 + 16], rcx
-  __rl_cont#43:
+  __rl_cont#39:
     x64.aluBaseDispImm32.add [rax + 824], -1
     x64.cmpRegImm32 r15, 0
     x64.jcc notEqual, strandbehindeveryone
@@ -43635,8 +35787,8 @@ func @__gt_run_strand {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#48
-  __rl_cont#47:
+    x64.jcc notEqual, __rl_slow#44
+  __rl_cont#43:
     x64.movRegReg rcx, r12
     x64.callDirect __gt_enqueue
     x64.leaRegGlobal rcx, __sched_lock
@@ -43646,8 +35798,8 @@ func @__gt_run_strand {
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#50
-  __rl_cont#49:
+    x64.jcc notEqual, __rl_slow#46
+  __rl_cont#45:
     x64.aluBaseDispImm32.add [rax + 824], -1
     x64.callDirect __sched_wake_or_spawn
     x64.movRegImm32 rax, 0
@@ -43662,28 +35814,9 @@ func @__gt_run_strand {
     x64.popReg rbp
     x64.retIndirect
   strandnotpreempt:
-    x64.cmpRegImm32 rax, 4
-    x64.jcc notEqual, strandnotmailbox
-  strandmailboxcommit:
-    x64.loadRegSlot rax, slot3
-    x64.loadRegBaseDisp.word64 rcx, [rax + 496]
-    x64.movRegImm32 rdx, 0
-    x64.storeBaseDispReg.word64 [rax + 496], rdx
-    x64.movRegImm32 rdx, 3
-    x64.storeBaseDispReg.word64 [rax + 48], rdx
-    x64.leaRegRegImm32 rcx, rcx, 96
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#39
-  __rl_cont#38:
-    x64.aluBaseDispImm32.add [rbx + 824], -1
-    x64.movRegReg rdx, r14
-    x64.jmp strandnext
-  strandnotmailbox:
     x64.cmpRegImm32 rax, 12
     x64.jcc notEqual, strandregister
-  strandmailboxsendcommit:
+  strandcownsendcommit:
     x64.loadRegSlot rax, slot3
     x64.loadRegBaseDisp.word64 rcx, [rax + 496]
     x64.storeSlotReg slot0, rcx
@@ -43695,12 +35828,12 @@ func @__gt_run_strand {
     x64.movRegImm32 rax, 3
     x64.loadRegSlot rdx, slot3
     x64.storeBaseDispReg.word64 [rdx + 48], rax
-    x64.leaRegRegImm32 rcx, rcx, 96
+    x64.leaRegRegImm32 rcx, rcx, 80
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#56
-  __rl_cont#55:
+    x64.jcc notEqual, __rl_slow#52
+  __rl_cont#51:
     x64.aluBaseDispImm32.add [rbx + 824], -1
     x64.jmp sendparkcommitted
   sendparkarm:
@@ -43712,8 +35845,8 @@ func @__gt_run_strand {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#52
-  __rl_cont#51:
+    x64.jcc notEqual, __rl_slow#48
+  __rl_cont#47:
     x64.movRegImm32 rax, 3
     x64.loadRegSlot rcx, slot3
     x64.storeBaseDispReg.word64 [rcx + 48], rax
@@ -43733,8 +35866,8 @@ func @__gt_run_strand {
     x64.movRegImm32 rsi, 0
     x64.xchg8 [rcx], rsi <- rsi
     x64.cmpRegImm32 rsi, 1
-    x64.jcc notEqual, __rl_slow#54
-  __rl_cont#53:
+    x64.jcc notEqual, __rl_slow#50
+  __rl_cont#49:
     x64.aluBaseDispImm32.add [rdx + 824], -1
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, parktimerpaid
@@ -43743,12 +35876,12 @@ func @__gt_run_strand {
     x64.callDirect __sched_wake_netpoller
   parktimerpaid:
     x64.loadRegSlot rax, slot0
-    x64.leaRegRegImm32 rcx, rax, 96
+    x64.leaRegRegImm32 rcx, rax, 80
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#58
-  __rl_cont#57:
+    x64.jcc notEqual, __rl_slow#54
+  __rl_cont#53:
     x64.aluBaseDispImm32.add [rbx + 824], -1
   sendparkcommitted:
     x64.movRegReg rdx, r14
@@ -43765,44 +35898,41 @@ func @__gt_run_strand {
     x64.leaRegGlobal rcx, __gt_hold_epoch
     x64.lock add [rcx], rax
     x64.jmp strandreap
-  __rl_slow#42:
+  __rl_slow#38:
     x64.movRegReg rcx, r12
     x64.callDirect __rtlock_enter_slow
-    x64.jmp __rl_cont#40
-  __rl_slow#46:
+    x64.jmp __rl_cont#36
+  __rl_slow#42:
     x64.storeSlotReg slot4, rax
     x64.movRegReg rcx, r12
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot4
+    x64.jmp __rl_cont#39
+  __rl_slow#44:
+    x64.callDirect __rtlock_acquire
     x64.jmp __rl_cont#43
+  __rl_slow#46:
+    x64.storeSlotReg slot4, rax
+    x64.callDirect __rtlock_release
+    x64.loadRegSlot rax, slot4
+    x64.jmp __rl_cont#45
+  __rl_slow#52:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#51
   __rl_slow#48:
     x64.callDirect __rtlock_acquire
     x64.jmp __rl_cont#47
   __rl_slow#50:
-    x64.storeSlotReg slot4, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#49
-  __rl_slow#39:
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#38
-  __rl_slow#56:
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#55
-  __rl_slow#52:
-    x64.callDirect __rtlock_acquire
-    x64.jmp __rl_cont#51
-  __rl_slow#54:
     x64.storeSlotReg slot4, rax
     x64.storeSlotReg slot5, rdx
     x64.movRegReg rdx, rsi
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot4
     x64.loadRegSlot rdx, slot5
-    x64.jmp __rl_cont#53
-  __rl_slow#58:
+    x64.jmp __rl_cont#49
+  __rl_slow#54:
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#57
+    x64.jmp __rl_cont#53
   strandhandedoff:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 912], rax
@@ -43816,7 +35946,7 @@ func @__gt_run_strand {
     x64.popReg rbp
     x64.retIndirect
   strandguardleaked:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_18]  ; "fatal error: a coroutine completed while it held its strand's guard\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_16]  ; "fatal error: a coroutine completed while it held its strand's guard\x0a"
     x64.movRegImm32 rdx, 68
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -44263,13 +36393,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -44277,7 +36409,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -44287,7 +36419,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -44323,7 +36455,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -44351,52 +36483,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -44409,7 +36535,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -44418,19 +36544,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_strand_next {
@@ -45199,20 +37323,20 @@ func @__gt_run_strand {
     x64.loadRegBaseDisp.word64 r15, [rax + 0]
     x64.movRegImm rax, 9223372036854775807
     x64.cmpRegReg r15, rax
-    x64.jcc equal, critsplit#59
+    x64.jcc equal, critsplit#55
   timerdueask:
     x64.callDirect __gt_now_ns
     x64.cmpRegReg r15, r8
-    x64.jcc greater, critsplit#60
+    x64.jcc greater, critsplit#56
   pollfire:
     x64.movRegReg rcx, r8
     x64.callDirect __gt_timer_check
     x64.jmp strandpoll
-  critsplit#59:
+  critsplit#55:
     x64.loadRegSlot rax, slot1
     x64.movRegReg r8, rax
     x64.jmp strandpoll
-  critsplit#60:
+  critsplit#56:
     x64.loadRegSlot rax, slot1
     x64.movRegReg r8, rax
   strandpoll:
@@ -45230,10 +37354,10 @@ func @__gt_run_strand {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [r12], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#42
+    x64.jcc notEqual, __rl_slow#38
   __rl_owned:
     x64.storeBaseDispReg.word64 [r12 + 8], rax
-  __rl_cont#40:
+  __rl_cont#36:
     x64.loadRegBaseDisp.word64 rax, [r12 + 472]
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, r15
@@ -45251,12 +37375,12 @@ func @__gt_run_strand {
     x64.movRegImm32 rdx, 0
     x64.xchg8 [r12], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc equal, __rl_cont#43
-    x64.jmp __rl_slow#46
+    x64.jcc equal, __rl_cont#39
+    x64.jmp __rl_slow#42
   __rl_nested:
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.storeBaseDispReg.word64 [r12 + 16], rcx
-  __rl_cont#43:
+  __rl_cont#39:
     x64.aluBaseDispImm32.add [rax + 824], -1
     x64.cmpRegImm32 r15, 0
     x64.jcc notEqual, strandbehindeveryone
@@ -45278,8 +37402,8 @@ func @__gt_run_strand {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#48
-  __rl_cont#47:
+    x64.jcc notEqual, __rl_slow#44
+  __rl_cont#43:
     x64.movRegReg rcx, r12
     x64.callDirect __gt_enqueue
     x64.leaRegGlobal rcx, __sched_lock
@@ -45289,8 +37413,8 @@ func @__gt_run_strand {
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#50
-  __rl_cont#49:
+    x64.jcc notEqual, __rl_slow#46
+  __rl_cont#45:
     x64.aluBaseDispImm32.add [rax + 824], -1
     x64.callDirect __sched_wake_or_spawn
     x64.movRegImm32 rax, 0
@@ -45305,28 +37429,9 @@ func @__gt_run_strand {
     x64.popReg rbp
     x64.retIndirect
   strandnotpreempt:
-    x64.cmpRegImm32 rax, 4
-    x64.jcc notEqual, strandnotmailbox
-  strandmailboxcommit:
-    x64.loadRegSlot rax, slot3
-    x64.loadRegBaseDisp.word64 rcx, [rax + 496]
-    x64.movRegImm32 rdx, 0
-    x64.storeBaseDispReg.word64 [rax + 496], rdx
-    x64.movRegImm32 rdx, 3
-    x64.storeBaseDispReg.word64 [rax + 48], rdx
-    x64.leaRegRegImm32 rcx, rcx, 96
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#39
-  __rl_cont#38:
-    x64.aluBaseDispImm32.add [rbx + 824], -1
-    x64.movRegReg rdx, r14
-    x64.jmp strandnext
-  strandnotmailbox:
     x64.cmpRegImm32 rax, 12
     x64.jcc notEqual, strandregister
-  strandmailboxsendcommit:
+  strandcownsendcommit:
     x64.loadRegSlot rax, slot3
     x64.loadRegBaseDisp.word64 rcx, [rax + 496]
     x64.storeSlotReg slot0, rcx
@@ -45338,12 +37443,12 @@ func @__gt_run_strand {
     x64.movRegImm32 rax, 3
     x64.loadRegSlot rdx, slot3
     x64.storeBaseDispReg.word64 [rdx + 48], rax
-    x64.leaRegRegImm32 rcx, rcx, 96
+    x64.leaRegRegImm32 rcx, rcx, 80
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#56
-  __rl_cont#55:
+    x64.jcc notEqual, __rl_slow#52
+  __rl_cont#51:
     x64.aluBaseDispImm32.add [rbx + 824], -1
     x64.jmp sendparkcommitted
   sendparkarm:
@@ -45355,8 +37460,8 @@ func @__gt_run_strand {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#52
-  __rl_cont#51:
+    x64.jcc notEqual, __rl_slow#48
+  __rl_cont#47:
     x64.movRegImm32 rax, 3
     x64.loadRegSlot rcx, slot3
     x64.storeBaseDispReg.word64 [rcx + 48], rax
@@ -45376,8 +37481,8 @@ func @__gt_run_strand {
     x64.movRegImm32 rsi, 0
     x64.xchg8 [rcx], rsi <- rsi
     x64.cmpRegImm32 rsi, 1
-    x64.jcc notEqual, __rl_slow#54
-  __rl_cont#53:
+    x64.jcc notEqual, __rl_slow#50
+  __rl_cont#49:
     x64.aluBaseDispImm32.add [rdx + 824], -1
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, parktimerpaid
@@ -45386,12 +37491,12 @@ func @__gt_run_strand {
     x64.callDirect __sched_wake_netpoller
   parktimerpaid:
     x64.loadRegSlot rax, slot0
-    x64.leaRegRegImm32 rcx, rax, 96
+    x64.leaRegRegImm32 rcx, rax, 80
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#58
-  __rl_cont#57:
+    x64.jcc notEqual, __rl_slow#54
+  __rl_cont#53:
     x64.aluBaseDispImm32.add [rbx + 824], -1
   sendparkcommitted:
     x64.movRegReg rdx, r14
@@ -45408,44 +37513,41 @@ func @__gt_run_strand {
     x64.leaRegGlobal rcx, __gt_hold_epoch
     x64.lock add [rcx], rax
     x64.jmp strandreap
-  __rl_slow#42:
+  __rl_slow#38:
     x64.movRegReg rcx, r12
     x64.callDirect __rtlock_enter_slow
-    x64.jmp __rl_cont#40
-  __rl_slow#46:
+    x64.jmp __rl_cont#36
+  __rl_slow#42:
     x64.storeSlotReg slot4, rax
     x64.movRegReg rcx, r12
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot4
+    x64.jmp __rl_cont#39
+  __rl_slow#44:
+    x64.callDirect __rtlock_acquire
     x64.jmp __rl_cont#43
+  __rl_slow#46:
+    x64.storeSlotReg slot4, rax
+    x64.callDirect __rtlock_release
+    x64.loadRegSlot rax, slot4
+    x64.jmp __rl_cont#45
+  __rl_slow#52:
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#51
   __rl_slow#48:
     x64.callDirect __rtlock_acquire
     x64.jmp __rl_cont#47
   __rl_slow#50:
-    x64.storeSlotReg slot4, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot4
-    x64.jmp __rl_cont#49
-  __rl_slow#39:
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#38
-  __rl_slow#56:
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#55
-  __rl_slow#52:
-    x64.callDirect __rtlock_acquire
-    x64.jmp __rl_cont#51
-  __rl_slow#54:
     x64.storeSlotReg slot4, rax
     x64.storeSlotReg slot5, rdx
     x64.movRegReg rdx, rsi
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot4
     x64.loadRegSlot rdx, slot5
-    x64.jmp __rl_cont#53
-  __rl_slow#58:
+    x64.jmp __rl_cont#49
+  __rl_slow#54:
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#57
+    x64.jmp __rl_cont#53
   strandhandedoff:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 912], rax
@@ -45459,7 +37561,7 @@ func @__gt_run_strand {
     x64.popReg rbp
     x64.retIndirect
   strandguardleaked:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_18]  ; "fatal error: a coroutine completed while it held its strand's guard\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_16]  ; "fatal error: a coroutine completed while it held its strand's guard\x0a"
     x64.movRegImm32 rdx, 68
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -45897,12 +37999,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -45910,7 +38014,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -45920,7 +38024,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -45955,7 +38059,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -45984,50 +38088,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -46038,7 +38133,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -46047,18 +38142,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_strand_next {
@@ -46957,18 +39050,18 @@ func @__gt_run_strand {
     arm64.ldar.word64 x25, [x0]
     arm64.movImm x0, 9223372036854775807
     arm64.cmp x25, x0
-    arm64.b.eq critsplit#59
+    arm64.b.eq critsplit#55
   timerdueask:
     arm64.bl __gt_now_ns
     arm64.cmp x25, x0
-    arm64.b.gt critsplit#60
+    arm64.b.gt critsplit#56
   pollfire:
     arm64.bl __gt_timer_check
     arm64.b strandpoll
-  critsplit#59:
+  critsplit#55:
     arm64.movRegReg x0, x24
     arm64.b strandpoll
-  critsplit#60:
+  critsplit#56:
     arm64.movRegReg x0, x24
   strandpoll:
     arm64.cmp x0, 0
@@ -46991,10 +39084,10 @@ func @__gt_run_strand {
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x20], x1
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#42
+    arm64.b.ne __rl_slow#38
   __rl_owned:
     arm64.storeBaseDispReg.word64 [x20 + 8], x0
-  __rl_cont#40:
+  __rl_cont#36:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 472]
     arm64.cmp x0, 0
     arm64.cset x24, eq
@@ -47017,12 +39110,12 @@ func @__gt_run_strand {
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x20], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#43
-    arm64.b __rl_slow#46
+    arm64.b.eq __rl_cont#39
+    arm64.b __rl_slow#42
   __rl_nested:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x20 + 16], x1
-  __rl_cont#43:
+  __rl_cont#39:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 824], x1
@@ -47051,8 +39144,8 @@ func @__gt_run_strand {
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#48
-  __rl_cont#47:
+    arm64.b.ne __rl_slow#44
+  __rl_cont#43:
     arm64.movRegReg x0, x20
     arm64.bl __gt_enqueue
     arm64.leaGlobal x0, __sched_lock
@@ -47067,8 +39160,8 @@ func @__gt_run_strand {
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#50
-  __rl_cont#49:
+    arm64.b.ne __rl_slow#46
+  __rl_cont#45:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 824]
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x1 + 824], x0
@@ -47087,29 +39180,9 @@ func @__gt_run_strand {
     arm64.epilogue 112
     arm64.retIndirect
   strandnotpreempt:
-    arm64.cmp x0, 4
-    arm64.b.ne strandnotmailbox
-  strandmailboxcommit:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 496]
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x23 + 496], x1
-    arm64.movImm x1, 3
-    arm64.storeBaseDispReg.word64 [x23 + 48], x1
-    arm64.add x0, x0, 96
-    arm64.movImm x1, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#39
-  __rl_cont#38:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x19 + 824], x0
-    arm64.movRegReg x1, x22
-    arm64.b strandnext
-  strandnotmailbox:
     arm64.cmp x0, 12
     arm64.b.ne strandregister
-  strandmailboxsendcommit:
+  strandcownsendcommit:
     arm64.loadRegBaseDisp.word64 x24, [x23 + 496]
     arm64.loadRegBaseDisp.word64 x25, [x23 + 680]
     arm64.movImm x0, 9223372036853775807
@@ -47118,12 +39191,12 @@ func @__gt_run_strand {
   sendparkunbounded:
     arm64.movImm x0, 3
     arm64.storeBaseDispReg.word64 [x23 + 48], x0
-    arm64.add x0, x24, 96
+    arm64.add x0, x24, 80
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#56
-  __rl_cont#55:
+    arm64.b.ne __rl_slow#52
+  __rl_cont#51:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 824]
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 824], x0
@@ -47144,8 +39217,8 @@ func @__gt_run_strand {
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#52
-  __rl_cont#51:
+    arm64.b.ne __rl_slow#48
+  __rl_cont#47:
     arm64.movImm x0, 3
     arm64.storeBaseDispReg.word64 [x23 + 48], x0
     arm64.leaGlobal x0, __gt_timer_when
@@ -47168,8 +39241,8 @@ func @__gt_run_strand {
     arm64.movImm x3, 0
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#54
-  __rl_cont#53:
+    arm64.b.ne __rl_slow#50
+  __rl_cont#49:
     arm64.loadRegBaseDisp.word64 x1, [x2 + 824]
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x2 + 824], x1
@@ -47178,12 +39251,12 @@ func @__gt_run_strand {
     arm64.movRegReg x0, x25
     arm64.bl __sched_wake_netpoller
   parktimerpaid:
-    arm64.add x0, x24, 96
+    arm64.add x0, x24, 80
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#58
-  __rl_cont#57:
+    arm64.b.ne __rl_slow#54
+  __rl_cont#53:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 824]
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 824], x0
@@ -47202,36 +39275,33 @@ func @__gt_run_strand {
     arm64.leaGlobal x1, __gt_hold_epoch
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.b strandreap
-  __rl_slow#42:
+  __rl_slow#38:
     arm64.movRegReg x0, x20
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#40
-  __rl_slow#46:
+    arm64.b __rl_cont#36
+  __rl_slow#42:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x20
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#43
-  __rl_slow#48:
+    arm64.b __rl_cont#39
+  __rl_slow#44:
     arm64.bl __rtlock_acquire
-    arm64.b __rl_cont#47
-  __rl_slow#50:
+    arm64.b __rl_cont#43
+  __rl_slow#46:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.loadRegSlot x1, slot1
-    arm64.b __rl_cont#49
-  __rl_slow#39:
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#38
-  __rl_slow#56:
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#55
+    arm64.b __rl_cont#45
   __rl_slow#52:
-    arm64.bl __rtlock_acquire
+    arm64.bl __rtlock_release
     arm64.b __rl_cont#51
-  __rl_slow#54:
+  __rl_slow#48:
+    arm64.bl __rtlock_acquire
+    arm64.b __rl_cont#47
+  __rl_slow#50:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
@@ -47240,10 +39310,10 @@ func @__gt_run_strand {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#53
-  __rl_slow#58:
+    arm64.b __rl_cont#49
+  __rl_slow#54:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#57
+    arm64.b __rl_cont#53
   strandhandedoff:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 912], x0
@@ -47259,7 +39329,7 @@ func @__gt_run_strand {
     arm64.epilogue 112
     arm64.retIndirect
   strandguardleaked:
-    arm64.leaRdata x0, __fatal_msg_18  ; "fatal error: a coroutine completed while it held its strand's guard\x0a"
+    arm64.leaRdata x0, __fatal_msg_16  ; "fatal error: a coroutine completed while it held its strand's guard\x0a"
     arm64.movImm x1, 68
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -47750,12 +39820,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -47763,7 +39835,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -47773,7 +39845,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -47808,7 +39880,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -47837,50 +39909,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -47891,7 +39954,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -47900,18 +39963,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_strand_next {
@@ -48810,18 +40871,18 @@ func @__gt_run_strand {
     arm64.ldar.word64 x25, [x0]
     arm64.movImm x0, 9223372036854775807
     arm64.cmp x25, x0
-    arm64.b.eq critsplit#59
+    arm64.b.eq critsplit#55
   timerdueask:
     arm64.bl __gt_now_ns
     arm64.cmp x25, x0
-    arm64.b.gt critsplit#60
+    arm64.b.gt critsplit#56
   pollfire:
     arm64.bl __gt_timer_check
     arm64.b strandpoll
-  critsplit#59:
+  critsplit#55:
     arm64.movRegReg x0, x24
     arm64.b strandpoll
-  critsplit#60:
+  critsplit#56:
     arm64.movRegReg x0, x24
   strandpoll:
     arm64.cmp x0, 0
@@ -48844,10 +40905,10 @@ func @__gt_run_strand {
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x20], x1
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#42
+    arm64.b.ne __rl_slow#38
   __rl_owned:
     arm64.storeBaseDispReg.word64 [x20 + 8], x0
-  __rl_cont#40:
+  __rl_cont#36:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 472]
     arm64.cmp x0, 0
     arm64.cset x24, eq
@@ -48870,12 +40931,12 @@ func @__gt_run_strand {
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x20], x1
     arm64.cmp x1, 1
-    arm64.b.eq __rl_cont#43
-    arm64.b __rl_slow#46
+    arm64.b.eq __rl_cont#39
+    arm64.b __rl_slow#42
   __rl_nested:
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x20 + 16], x1
-  __rl_cont#43:
+  __rl_cont#39:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 824], x1
@@ -48904,8 +40965,8 @@ func @__gt_run_strand {
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#48
-  __rl_cont#47:
+    arm64.b.ne __rl_slow#44
+  __rl_cont#43:
     arm64.movRegReg x0, x20
     arm64.bl __gt_enqueue
     arm64.leaGlobal x0, __sched_lock
@@ -48920,8 +40981,8 @@ func @__gt_run_strand {
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#50
-  __rl_cont#49:
+    arm64.b.ne __rl_slow#46
+  __rl_cont#45:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 824]
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x1 + 824], x0
@@ -48940,29 +41001,9 @@ func @__gt_run_strand {
     arm64.epilogue 112
     arm64.retIndirect
   strandnotpreempt:
-    arm64.cmp x0, 4
-    arm64.b.ne strandnotmailbox
-  strandmailboxcommit:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 496]
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x23 + 496], x1
-    arm64.movImm x1, 3
-    arm64.storeBaseDispReg.word64 [x23 + 48], x1
-    arm64.add x0, x0, 96
-    arm64.movImm x1, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
-    arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#39
-  __rl_cont#38:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 824]
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x19 + 824], x0
-    arm64.movRegReg x1, x22
-    arm64.b strandnext
-  strandnotmailbox:
     arm64.cmp x0, 12
     arm64.b.ne strandregister
-  strandmailboxsendcommit:
+  strandcownsendcommit:
     arm64.loadRegBaseDisp.word64 x24, [x23 + 496]
     arm64.loadRegBaseDisp.word64 x25, [x23 + 680]
     arm64.movImm x0, 9223372036853775807
@@ -48971,12 +41012,12 @@ func @__gt_run_strand {
   sendparkunbounded:
     arm64.movImm x0, 3
     arm64.storeBaseDispReg.word64 [x23 + 48], x0
-    arm64.add x0, x24, 96
+    arm64.add x0, x24, 80
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#56
-  __rl_cont#55:
+    arm64.b.ne __rl_slow#52
+  __rl_cont#51:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 824]
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 824], x0
@@ -48997,8 +41038,8 @@ func @__gt_run_strand {
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#52
-  __rl_cont#51:
+    arm64.b.ne __rl_slow#48
+  __rl_cont#47:
     arm64.movImm x0, 3
     arm64.storeBaseDispReg.word64 [x23 + 48], x0
     arm64.leaGlobal x0, __gt_timer_when
@@ -49021,8 +41062,8 @@ func @__gt_run_strand {
     arm64.movImm x3, 0
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#54
-  __rl_cont#53:
+    arm64.b.ne __rl_slow#50
+  __rl_cont#49:
     arm64.loadRegBaseDisp.word64 x1, [x2 + 824]
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x2 + 824], x1
@@ -49031,12 +41072,12 @@ func @__gt_run_strand {
     arm64.movRegReg x0, x25
     arm64.bl __sched_wake_netpoller
   parktimerpaid:
-    arm64.add x0, x24, 96
+    arm64.add x0, x24, 80
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#58
-  __rl_cont#57:
+    arm64.b.ne __rl_slow#54
+  __rl_cont#53:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 824]
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x19 + 824], x0
@@ -49055,36 +41096,33 @@ func @__gt_run_strand {
     arm64.leaGlobal x1, __gt_hold_epoch
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.b strandreap
-  __rl_slow#42:
+  __rl_slow#38:
     arm64.movRegReg x0, x20
     arm64.bl __rtlock_enter_slow
-    arm64.b __rl_cont#40
-  __rl_slow#46:
+    arm64.b __rl_cont#36
+  __rl_slow#42:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x20
     arm64.bl __rtlock_release
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#43
-  __rl_slow#48:
+    arm64.b __rl_cont#39
+  __rl_slow#44:
     arm64.bl __rtlock_acquire
-    arm64.b __rl_cont#47
-  __rl_slow#50:
+    arm64.b __rl_cont#43
+  __rl_slow#46:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.loadRegSlot x1, slot1
-    arm64.b __rl_cont#49
-  __rl_slow#39:
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#38
-  __rl_slow#56:
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#55
+    arm64.b __rl_cont#45
   __rl_slow#52:
-    arm64.bl __rtlock_acquire
+    arm64.bl __rtlock_release
     arm64.b __rl_cont#51
-  __rl_slow#54:
+  __rl_slow#48:
+    arm64.bl __rtlock_acquire
+    arm64.b __rl_cont#47
+  __rl_slow#50:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
@@ -49093,10 +41131,10 @@ func @__gt_run_strand {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#53
-  __rl_slow#58:
+    arm64.b __rl_cont#49
+  __rl_slow#54:
     arm64.bl __rtlock_release
-    arm64.b __rl_cont#57
+    arm64.b __rl_cont#53
   strandhandedoff:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 912], x0
@@ -49112,7 +41150,7 @@ func @__gt_run_strand {
     arm64.epilogue 112
     arm64.retIndirect
   strandguardleaked:
-    arm64.leaRdata x0, __fatal_msg_18  ; "fatal error: a coroutine completed while it held its strand's guard\x0a"
+    arm64.leaRdata x0, __fatal_msg_16  ; "fatal error: a coroutine completed while it held its strand's guard\x0a"
     arm64.movImm x1, 68
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -49651,13 +41689,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -49665,7 +41705,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -49675,7 +41715,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -49712,7 +41752,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -49740,52 +41780,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -49798,7 +41832,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -49807,19 +41841,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_ready {
@@ -49944,13 +41976,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -49958,7 +41992,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -49968,7 +42002,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -50004,7 +42038,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -50032,52 +42066,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -50090,7 +42118,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -50099,19 +42127,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_ready {
@@ -50227,12 +42253,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -50240,7 +42268,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -50250,7 +42278,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -50285,7 +42313,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -50314,50 +42342,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -50368,7 +42387,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -50377,18 +42396,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_ready {
@@ -50510,12 +42527,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -50523,7 +42542,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -50533,7 +42552,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -50568,7 +42587,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -50597,50 +42616,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -50651,7 +42661,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -50660,18 +42670,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_ready {
@@ -50845,13 +42853,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -50859,7 +42869,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -50869,7 +42879,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -50906,7 +42916,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -50934,52 +42944,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -50992,7 +42996,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -51001,19 +43005,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_runner_done {
@@ -51654,13 +43656,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -51668,7 +43672,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -51678,7 +43682,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -51714,7 +43718,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -51742,52 +43746,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -51800,7 +43798,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -51809,19 +43807,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_runner_done {
@@ -52453,12 +44449,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -52466,7 +44464,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -52476,7 +44474,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -52511,7 +44509,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -52540,50 +44538,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -52594,7 +44583,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -52603,18 +44592,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_runner_done {
@@ -53332,12 +45319,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -53345,7 +45334,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -53355,7 +45344,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -53390,7 +45379,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -53419,50 +45408,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -53473,7 +45453,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -53482,18 +45462,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_runner_done {
@@ -54278,13 +46256,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -54292,7 +46272,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -54302,7 +46282,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -54339,7 +46319,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -54367,52 +46347,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -54425,7 +46399,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -54434,19 +46408,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_free_get {
@@ -55453,13 +47425,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -55467,7 +47441,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -55477,7 +47451,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -55513,7 +47487,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -55541,52 +47515,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -55599,7 +47567,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -55608,19 +47576,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_free_get {
@@ -56620,12 +48586,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -56633,7 +48601,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -56643,7 +48611,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -56678,7 +48646,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -56707,50 +48675,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -56761,7 +48720,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -56770,18 +48729,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_free_get {
@@ -57936,12 +49893,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -57949,7 +49908,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -57959,7 +49918,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -57994,7 +49953,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -58023,50 +49982,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -58077,7 +50027,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -58086,18 +50036,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_free_get {
@@ -59154,4316 +51102,6 @@ func @__gt_runner_done {
     arm64.loadRegSlot x25, slot9
     arm64.epilogue 96
     arm64.ret
-}
-```
-
-<!-- test: a-runtime-lock-enter-is-an-atomic-on-its-word-with-no-call -->
-**A RUNTIME LOCK IS ONE WORD, AND ITS UNCONTENDED ENTER AND LEAVE ARE BYTE EXCHANGES ON THAT WORD WITH NO CALL
-AND NO LOOP, AS GO's `lock2` AND `unlock2` ARE.** A runtime lock — the scheduler's, the free list's, the roster's, a
-mailbox's, a record's — is held for a few instructions and taken on every message, spawn and wake, so its
-uncontended round trip is a cost all of them pay. The lock is a word that reads zero when free, whose low byte holds the held bit and a hint
-that sleepers are stacked, and whose spinner bit, sleeper-stack lock and sleeper pointer sit above that
-byte. The enter is the machine's lock-depth step and one exchange of the low byte for the held bit, which
-took the lock when it displaced zero; the leave is one exchange of the low byte for zero, then the depth
-step back. Neither is a compare-and-swap loop, and neither calls anything: no import, no chunk, no runtime
-function. The OS is reached only when the exchange displaced something else: an enter whose exchange
-displaced a nonzero byte calls the slow body, which spins for a bounded count and sleeps on its machine's own
-semaphore, and a leave whose exchange displaced a byte other than the bare held bit calls its slow body,
-which wakes a sleeper if the hint was set. A spinner recorded above the low byte does not send a leave out of
-line, because the exchange does not touch it.
-
-**THE SCHEDULER'S LOCK IS RECURSIVE ON AN OWNER TOKEN, WHICH GO's IS NOT.** A recursive lock carries an
-owner slot and a depth slot beside its word, and its enter stores the calling OS thread's own block there
-as the owner token, so a machine that already holds the lock finds its own token and steps the hold's
-depth instead of waiting. The scheduler re-enters `__sched_lock` on its timer and netpoll paths, which run
-under a hold of it; Go's timers and netpoll are per processor and take no nested scheduler lock.
-
-`__mbox_close` is the witness because its work is one lock round trip: it enters its mailbox's lock, stores
-the closed flag, and leaves on each of its two roads. What this pin shows is that round trip. A call between
-the depth step up and the store of the closed flag, or between a road's last store and its depth step down
-— an `iatCall` on x64-windows, an `importCall` on arm64-macos, a `callDirect` or `bl` to a lock body on the
-Linux lanes — is the per-lock cost this case exists to keep out. A call into the lock's contended path
-appears only behind the compare of the displaced byte.
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Counter
-	var calls as Integer
-
-	static function create() returns Self
-		return Self{calls: 0}
-	end 'create'
-
-	export function next(n Integer) returns Integer
-		self.calls = self.calls + 1
-
-		return n + 1
-	end 'next'
-end 'Counter'
-
-function main() returns ExitCode
-	let c = spawn Counter.create()
-	let a = try await c.next(1) otherwise 0
-
-	return a as ExitCode
-end 'main'
-```
-```exitcode
-2
-```
-```RequiredRuntime
-__mbox_close
-```
-```TargetIr:x64-windows
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 8192
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __sched_num_procs@440 = i64 0
-  __sched_ncpu@448 = i64 0
-  __sched_shutdown_flag@456 = i64 0
-  __sched_lock@464 = i64 0
-  __sched_lock_depth_sink@472 = i64 0
-  __sched_nmspinning@480 = i64 0
-  __sched_needspinning@488 = i64 0
-  __sched_sysmon_event@496 = i64 0
-  __sched_sysmon_wait@504 = i64 0
-  __sched_timer_starts@512 = i64 0
-  __sched_preempt_ext_lock@520 = i64 0
-  __sched_preempt_context@528 = i64 0
-  __slab_arena_list@536 = i64 0
-  __slab_arena_map_l1@544 = i64 0
-  __slab_state@552 = i64 0
-  __mrt_console_probe_stdin@560 = i8 0
-  __mrt_console_probe_stdout@561 = i8 0
-  __mrt_console_probe_stderr@562 = i8 0
-  __mrt_program_started@563 = i8 0
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 48
-    x64.movRegImm32 rbx, 1024
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
-    x64.movRegImm32 rax, 24
-    x64.movRegReg rdx, r8
-    x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegImm32 rbx, 1
-    x64.movRegImm32 rcx, 0
-    x64.callDirect __gt_cell_alloc
-    x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
-    x64.movRegReg r14, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r14 + 0], rax
-    x64.storeBaseDispReg.word64 [r14 + 8], rbx
-    x64.storeBaseDispReg.word64 [r14 + 16], r13
-    x64.movRegImm32 rax, 24
-    x64.movRegImm32 r9, 0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendrefused
-  sendaccepted:
-    x64.movRegReg rcx, r13
-    x64.callDirect __gt_try_await
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  critsplit:
-    x64.movRegReg rcx, r10
-  tryerr:
-    x64.movRegImm32 rbx, 0
-    x64.callDirect __mm_decref
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rbx, r8
-  trycont:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendrefused:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.storeSlotReg slot0, r8
-    x64.callDirect __mm_alloc
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot r8, slot0
-    x64.leaRegRegImm32 rax, r8, -1
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jmp tryerr
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-runtime-lock-enter-is-an-atomic-on-its-word-with-no-call.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    x64.callDirect __mbox_unknown_tag
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
-  __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
-  __il_cont:
-    x64.movRegImm32 rax, 0
-    x64.callDirect __gt_cell_complete
-    x64.jmp serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  __il_body:
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.storeBaseDispReg.word64 [r14 + 0], r13
-  __il_cont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__mbox_close {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 136
-    x64.leaRegRegImm32 rdx, rcx, 96
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.aluBaseDispImm32.add [rax + 824], 1
-    x64.movRegImm32 rax, 1
-    x64.xchg8 [rdx], rax <- rax
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_slow#44
-  __rl_cont#43:
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 40], rax
-    x64.leaRegRegImm32 rsi, rcx, -584
-    x64.movRegImm32 rbx, 0
-    x64.movRegImm32 r12, 0
-    x64.jmp closedrainsenders
-  sendfrontclaim:
-    x64.movRegImm32 rax, 0
-    x64.movRegImm32 r8, 3
-    x64.leaRegRegImm32 r9, rdi, 688
-    x64.lock cmpxchg [r9], r8
-    x64.setccReg equal, rax
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, closestopsender
-  sendfrontskip:
-    x64.loadRegBaseDisp.word64 rax, [rdi + 672]
-    x64.loadRegBaseDisp.word64 r8, [rdi + 664]
-    x64.movRegImm32 r9, 0
-    x64.storeBaseDispReg.word64 [rax + 664], r8
-    x64.storeBaseDispReg.word64 [r8 + 672], rax
-    x64.storeBaseDispReg.word64 [rdi + 664], r9
-    x64.storeBaseDispReg.word64 [rdi + 672], r9
-    x64.jmp closedrainsenders
-  closestopsender:
-    x64.loadRegBaseDisp.word64 rax, [rdi + 672]
-    x64.loadRegBaseDisp.word64 r8, [rdi + 664]
-    x64.movRegImm32 r9, 0
-    x64.storeBaseDispReg.word64 [rax + 664], r8
-    x64.storeBaseDispReg.word64 [r8 + 672], rax
-    x64.storeBaseDispReg.word64 [rdi + 664], r9
-    x64.storeBaseDispReg.word64 [rdi + 672], r9
-    x64.storeBaseDispReg.word64 [rdi + 664], r12
-    x64.movRegReg r12, rdi
-  closedrainsenders:
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 664]
-    x64.cmpRegReg rdi, rsi
-    x64.jcc notEqual, sendfrontclaim
-  closesendersdrained:
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 32]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, closewakeparked
-  closenoreceiver:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.movRegImm32 rsi, 0
-    x64.xchg8 [rdx], rsi <- rsi
-    x64.cmpRegImm32 rsi, 1
-    x64.jcc notEqual, __rl_slow#48
-  __rl_cont#47:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.jmp mboxwoken
-  closewakeparked:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rsi + 496], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rcx + 32], rax
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.movRegImm32 rdi, 0
-    x64.xchg8 [rdx], rdi <- rdi
-    x64.cmpRegImm32 rdi, 1
-    x64.jcc notEqual, __rl_slow#46
-  __rl_cont#45:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.movRegImm32 rax, 0
-    x64.movRegImm32 rcx, 1
-    x64.leaRegRegImm32 rdx, rsi, 552
-    x64.lock cmpxchg [rdx], rcx
-    x64.setccReg equal, rax
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, readyservicefree
-  readyservicelocked:
-    x64.movRegReg rcx, rsi
-    x64.callDirect __gt_ready_locked
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, mboxwoken
-  readyservicewake:
-    x64.callDirect __sched_wake_or_spawn
-    x64.jmp mboxwoken
-  readyservicefree:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rsi + 48], rax
-    x64.storeBaseDispReg.word64 [rsi + 608], rsi
-    x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rcx, rsi, 560
-    x64.lock add [rcx], rax
-    x64.movRegReg rcx, rsi
-    x64.callDirect __sched_runq_put
-    x64.callDirect __sched_wake_or_spawn
-  mboxwoken:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rax, rbx
-  closereadyloop:
-    x64.storeSlotReg slot4, rcx
-    x64.storeSlotReg slot3, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, closereadyone
-  closesettled:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, closefinished
-  closepaywake:
-    x64.callDirect __sched_wake_or_spawn
-  closefinished:
-    x64.epilogue 136
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  closereadyone:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 664]
-    x64.storeSlotReg slot0, rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rcx + 664], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 680]
-    x64.movRegImm rdx, 9223372036853775807
-    x64.cmpRegReg rax, rdx
-    x64.jcc notEqual, sendwakedisarm
-  sendwakereadyfree:
-    x64.callDirect __gt_ready_locked
-    x64.jmp closereadied
-  sendwakedisarm:
-    x64.leaRegGlobal rax, __sched_lock
-    x64.leaRegGlobal rdx, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
-    x64.mov rdx, gs:[rdx]
-    x64.aluBaseDispImm32.add [rdx + 824], 1
-    x64.movRegImm32 rdx, 1
-    x64.xchg8 [rax], rdx <- rdx
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#50
-  __rl_cont#49:
-    x64.leaRegGlobal rax, __gt_timer_count
-    x64.loadRegBaseDisp.word64 rdx, [rax + 0]
-    x64.leaRegGlobal rsi, __gt_timer_heap_base
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.movRegImm32 rdi, 0
-  tmscanhdr:
-    x64.cmpRegReg rdi, rdx
-    x64.jcc greaterEqual, sendwakereadylocked
-  tmscanbody:
-    x64.leaRegGlobal r8, __sched_timer_scan_steps
-    x64.aluBaseDispImm32.add [r8 + 0], 1
-    x64.imulRegRegImm32 r8, rdi, 32
-    x64.leaRegRegReg r8, rsi, r8
-    x64.loadRegBaseDisp.word64 r9, [r8 + 8]
-    x64.loadRegBaseDisp.word64 r10, [r8 + 24]
-    x64.cmpRegReg r9, rcx
-    x64.setccReg equal, r9
-    x64.cmpRegImm32 r10, 3
-    x64.setccReg equal, r10
-    x64.andRegReg r9, r9, r10
-    x64.cmpRegImm32 r9, 0
-    x64.jcc equal, tmadvance
-  tmremoveat:
-    x64.leaRegRegImm32 rcx, rdx, -1
-    x64.storeSlotReg slot6, rcx
-    x64.storeBaseDispReg.word64 [rax + 0], rcx
-    x64.cmpRegReg rdi, rcx
-    x64.jcc greaterEqual, tmrepublish
-  tmfillhole:
-    x64.imulRegRegImm32 rax, rcx, 32
-    x64.leaRegRegReg rax, rsi, rax
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rax + 8]
-    x64.loadRegBaseDisp.word64 r9, [rax + 16]
-    x64.loadRegBaseDisp.word64 rax, [rax + 24]
-    x64.storeBaseDispReg.word64 [r8 + 0], rcx
-    x64.storeBaseDispReg.word64 [r8 + 8], rdx
-    x64.storeBaseDispReg.word64 [r8 + 16], r9
-    x64.storeBaseDispReg.word64 [r8 + 24], rax
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, siftdownhdr
-  tmparentcmp:
-    x64.leaRegRegImm32 rax, rdi, -1
-    x64.shrRegImm8 rax, rax, 1
-    x64.imulRegRegImm32 rax, rax, 32
-    x64.leaRegRegReg rax, rsi, rax
-    x64.loadRegBaseDisp.word64 rdx, [rax + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.loadRegBaseDisp.word64 r8, [rax + 16]
-    x64.loadRegBaseDisp.word64 rax, [rax + 24]
-    x64.cmpRegReg rcx, rdx
-    x64.setccReg less, rax
-    x64.cmpRegReg rcx, rdx
-    x64.setccReg equal, rcx
-    x64.cmpRegReg r9, r8
-    x64.setccReg less, rdx
-    x64.andRegReg rcx, rcx, rdx
-    x64.orRegReg rax, rax, rcx
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, siftdownhdr
-  siftuphdr:
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, tmrepublish
-  siftupbody:
-    x64.leaRegRegImm32 rax, rdi, -1
-    x64.shrRegImm8 rax, rax, 1
-    x64.storeSlotReg slot2, rax
-    x64.imulRegRegImm32 rcx, rdi, 32
-    x64.leaRegRegReg rcx, rsi, rcx
-    x64.imulRegRegImm32 rax, rax, 32
-    x64.leaRegRegReg rax, rsi, rax
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rdi, [rcx + 8]
-    x64.loadRegBaseDisp.word64 r8, [rcx + 16]
-    x64.loadRegBaseDisp.word64 r9, [rcx + 24]
-    x64.loadRegBaseDisp.word64 r10, [rax + 0]
-    x64.loadRegBaseDisp.word64 r11, [rax + 8]
-    x64.loadRegBaseDisp.word64 rbx, [rax + 16]
-    x64.loadRegBaseDisp.word64 r12, [rax + 24]
-    x64.cmpRegReg rdx, r10
-    x64.setccReg less, r13
-    x64.cmpRegReg rdx, r10
-    x64.setccReg equal, r14
-    x64.cmpRegReg r8, rbx
-    x64.setccReg less, r15
-    x64.andRegReg r14, r14, r15
-    x64.orRegReg r13, r13, r14
-    x64.cmpRegImm32 r13, 0
-    x64.jcc equal, tmrepublish
-  siftupswap:
-    x64.storeBaseDispReg.word64 [rcx + 0], r10
-    x64.storeBaseDispReg.word64 [rcx + 8], r11
-    x64.storeBaseDispReg.word64 [rcx + 16], rbx
-    x64.storeBaseDispReg.word64 [rcx + 24], r12
-    x64.storeBaseDispReg.word64 [rax + 0], rdx
-    x64.storeBaseDispReg.word64 [rax + 8], rdi
-    x64.storeBaseDispReg.word64 [rax + 16], r8
-    x64.storeBaseDispReg.word64 [rax + 24], r9
-    x64.loadRegSlot rdi, slot2
-    x64.jmp siftuphdr
-  siftdownhaveleft:
-    x64.leaRegRegImm32 rcx, rax, 1
-    x64.loadRegSlot rdx, slot6
-    x64.cmpRegReg rcx, rdx
-    x64.jcc greaterEqual, siftdowncompare
-  siftdownchoose:
-    x64.imulRegRegImm32 rdx, rax, 32
-    x64.leaRegRegReg rdx, rsi, rdx
-    x64.imulRegRegImm32 r8, rcx, 32
-    x64.leaRegRegReg r8, rsi, r8
-    x64.loadRegBaseDisp.word64 r9, [rdx + 0]
-    x64.loadRegBaseDisp.word64 r10, [rdx + 8]
-    x64.loadRegBaseDisp.word64 r10, [rdx + 16]
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 24]
-    x64.loadRegBaseDisp.word64 rdx, [r8 + 0]
-    x64.loadRegBaseDisp.word64 r11, [r8 + 8]
-    x64.loadRegBaseDisp.word64 r11, [r8 + 16]
-    x64.loadRegBaseDisp.word64 r8, [r8 + 24]
-    x64.cmpRegReg rdx, r9
-    x64.setccReg less, r8
-    x64.cmpRegReg rdx, r9
-    x64.setccReg equal, rdx
-    x64.cmpRegReg r11, r10
-    x64.setccReg less, r9
-    x64.andRegReg rdx, rdx, r9
-    x64.orRegReg r8, r8, rdx
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, siftdowncompare
-  siftdowntakeright:
-    x64.movRegReg rax, rcx
-  siftdowncompare:
-    x64.storeSlotReg slot1, rax
-    x64.imulRegRegImm32 rax, rax, 32
-    x64.leaRegRegReg rax, rsi, rax
-    x64.imulRegRegImm32 rcx, rdi, 32
-    x64.leaRegRegReg rcx, rsi, rcx
-    x64.loadRegBaseDisp.word64 rdx, [rax + 0]
-    x64.loadRegBaseDisp.word64 rdi, [rax + 8]
-    x64.loadRegBaseDisp.word64 r8, [rax + 16]
-    x64.loadRegBaseDisp.word64 r9, [rax + 24]
-    x64.loadRegBaseDisp.word64 r10, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r11, [rcx + 8]
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 16]
-    x64.loadRegBaseDisp.word64 r12, [rcx + 24]
-    x64.storeSlotReg slot5, r12
-    x64.cmpRegReg rdx, r10
-    x64.setccReg less, r12
-    x64.cmpRegReg rdx, r10
-    x64.setccReg equal, r13
-    x64.cmpRegReg r8, rbx
-    x64.setccReg less, r14
-    x64.andRegReg r13, r13, r14
-    x64.orRegReg r12, r12, r13
-    x64.cmpRegImm32 r12, 0
-    x64.jcc equal, tmrepublish
-  siftdownswap:
-    x64.storeBaseDispReg.word64 [rcx + 0], rdx
-    x64.storeBaseDispReg.word64 [rcx + 8], rdi
-    x64.storeBaseDispReg.word64 [rcx + 16], r8
-    x64.storeBaseDispReg.word64 [rcx + 24], r9
-    x64.storeBaseDispReg.word64 [rax + 0], r10
-    x64.storeBaseDispReg.word64 [rax + 8], r11
-    x64.storeBaseDispReg.word64 [rax + 16], rbx
-    x64.loadRegSlot rcx, slot5
-    x64.storeBaseDispReg.word64 [rax + 24], rcx
-    x64.loadRegSlot rdi, slot1
-  siftdownhdr:
-    x64.leaRegRegReg rax, rdi, rdi
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.loadRegSlot rcx, slot6
-    x64.cmpRegReg rax, rcx
-    x64.jcc less, siftdownhaveleft
-  tmrepublish:
-    x64.loadRegSlot rax, slot6
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, timerwhenroot
-  timerwhenempty:
-    x64.movRegImm rax, 9223372036854775807
-    x64.leaRegGlobal rcx, __gt_timer_when
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.jmp sendwakereadylocked
-  timerwhenroot:
-    x64.loadRegBaseDisp.word64 rax, [rsi + 0]
-    x64.leaRegGlobal rcx, __gt_timer_when
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-  sendwakereadylocked:
-    x64.callDirect __sched_break_idle_poller
-    x64.loadRegSlot rcx, slot4
-    x64.callDirect __gt_ready_locked_held
-    x64.leaRegGlobal rcx, __sched_lock
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#52
-  __rl_cont#51:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-  closereadied:
-    x64.loadRegSlot rax, slot3
-    x64.orRegReg rax, rax, r8
-    x64.loadRegSlot rcx, slot0
-    x64.jmp closereadyloop
-  tmadvance:
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.jmp tmscanhdr
-  __rl_slow#44:
-    x64.storeSlotReg slot7, rcx
-    x64.storeSlotReg slot8, rdx
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
-    x64.callDirect __rtlock_acquire
-    x64.loadRegSlot rcx, slot7
-    x64.loadRegSlot rdx, slot8
-    x64.jmp __rl_cont#43
-  __rl_slow#48:
-    x64.storeSlotReg slot9, rax
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rsi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot9
-    x64.jmp __rl_cont#47
-  __rl_slow#46:
-    x64.storeSlotReg slot9, rax
-    x64.storeSlotReg slot10, rsi
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot9
-    x64.loadRegSlot rsi, slot10
-    x64.jmp __rl_cont#45
-  __rl_slow#50:
-    x64.storeSlotReg slot7, rcx
-    x64.movRegReg rcx, rax
-    x64.callDirect __rtlock_acquire
-    x64.loadRegSlot rcx, slot7
-    x64.jmp __rl_cont#49
-  __rl_slow#52:
-    x64.storeSlotReg slot9, rax
-    x64.storeSlotReg slot11, r8
-    x64.callDirect __rtlock_release
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot9
-    x64.loadRegSlot r8, slot11
-    x64.jmp __rl_cont#51
-}
-```
-```TargetIr:x64-linux
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __np_src_key_free@448 = i64 0
-  __np_src_key_high@456 = i64 0
-  __np_child_signal@464 = i64 0
-  __np_pd_mtable@472 = i64 0
-  __np_pd_mcap@480 = i64 0
-  __sched_num_procs@488 = i64 0
-  __sched_ncpu@496 = i64 0
-  __sched_shutdown_flag@504 = i64 0
-  __sched_lock@512 = i64 0
-  __sched_lock_depth_sink@520 = i64 0
-  __sched_nmspinning@528 = i64 0
-  __sched_needspinning@536 = i64 0
-  __sched_sysmon_event@544 = i64 0
-  __sched_sysmon_wait@552 = i64 0
-  __sched_timer_starts@560 = i64 0
-  __mrt_envp@568 = i64 0
-  __mrt_signal_stack_bytes@576 = i64 0
-  __mrt_tls_next_key@584 = i64 0
-  __slab_arena_list@592 = i64 0
-  __slab_arena_map_l1@600 = i64 0
-  __slab_state@608 = i64 0
-  __mrt_program_started@616 = i8 0
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 48
-    x64.movRegImm32 rbx, 1024
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
-    x64.movRegImm32 rax, 24
-    x64.movRegReg rdx, r8
-    x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegImm32 rbx, 1
-    x64.movRegImm32 rcx, 0
-    x64.callDirect __gt_cell_alloc
-    x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
-    x64.movRegReg r14, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r14 + 0], rax
-    x64.storeBaseDispReg.word64 [r14 + 8], rbx
-    x64.storeBaseDispReg.word64 [r14 + 16], r13
-    x64.movRegImm32 rax, 24
-    x64.movRegImm32 r9, 0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendrefused
-  sendaccepted:
-    x64.movRegReg rcx, r13
-    x64.callDirect __gt_try_await
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  critsplit:
-    x64.movRegReg rcx, r10
-  tryerr:
-    x64.movRegImm32 rbx, 0
-    x64.callDirect __mm_decref
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rbx, r8
-  trycont:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendrefused:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.storeSlotReg slot0, r8
-    x64.callDirect __mm_alloc
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot r8, slot0
-    x64.leaRegRegImm32 rax, r8, -1
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jmp tryerr
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-runtime-lock-enter-is-an-atomic-on-its-word-with-no-call.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    x64.callDirect __mbox_unknown_tag
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
-  __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
-  __il_cont:
-    x64.movRegImm32 rax, 0
-    x64.callDirect __gt_cell_complete
-    x64.jmp serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  __il_body:
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.storeBaseDispReg.word64 [r14 + 0], r13
-  __il_cont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__mbox_close {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 136
-    x64.leaRegRegImm32 rdx, rcx, 96
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.aluBaseDispImm32.add [rax + 824], 1
-    x64.movRegImm32 rax, 1
-    x64.xchg8 [rdx], rax <- rax
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rl_slow#44
-  __rl_cont#43:
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rcx + 40], rax
-    x64.leaRegRegImm32 rsi, rcx, -584
-    x64.movRegImm32 rbx, 0
-    x64.movRegImm32 r12, 0
-    x64.jmp closedrainsenders
-  sendfrontclaim:
-    x64.movRegImm32 rax, 0
-    x64.movRegImm32 r8, 3
-    x64.leaRegRegImm32 r9, rdi, 688
-    x64.lock cmpxchg [r9], r8
-    x64.setccReg equal, rax
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, closestopsender
-  sendfrontskip:
-    x64.loadRegBaseDisp.word64 rax, [rdi + 672]
-    x64.loadRegBaseDisp.word64 r8, [rdi + 664]
-    x64.movRegImm32 r9, 0
-    x64.storeBaseDispReg.word64 [rax + 664], r8
-    x64.storeBaseDispReg.word64 [r8 + 672], rax
-    x64.storeBaseDispReg.word64 [rdi + 664], r9
-    x64.storeBaseDispReg.word64 [rdi + 672], r9
-    x64.jmp closedrainsenders
-  closestopsender:
-    x64.loadRegBaseDisp.word64 rax, [rdi + 672]
-    x64.loadRegBaseDisp.word64 r8, [rdi + 664]
-    x64.movRegImm32 r9, 0
-    x64.storeBaseDispReg.word64 [rax + 664], r8
-    x64.storeBaseDispReg.word64 [r8 + 672], rax
-    x64.storeBaseDispReg.word64 [rdi + 664], r9
-    x64.storeBaseDispReg.word64 [rdi + 672], r9
-    x64.storeBaseDispReg.word64 [rdi + 664], r12
-    x64.movRegReg r12, rdi
-  closedrainsenders:
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 664]
-    x64.cmpRegReg rdi, rsi
-    x64.jcc notEqual, sendfrontclaim
-  closesendersdrained:
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 32]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, closewakeparked
-  closenoreceiver:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.movRegImm32 rsi, 0
-    x64.xchg8 [rdx], rsi <- rsi
-    x64.cmpRegImm32 rsi, 1
-    x64.jcc notEqual, __rl_slow#48
-  __rl_cont#47:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.jmp mboxwoken
-  closewakeparked:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rsi + 496], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rcx + 32], rax
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.movRegImm32 rdi, 0
-    x64.xchg8 [rdx], rdi <- rdi
-    x64.cmpRegImm32 rdi, 1
-    x64.jcc notEqual, __rl_slow#46
-  __rl_cont#45:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-    x64.movRegImm32 rax, 0
-    x64.movRegImm32 rcx, 1
-    x64.leaRegRegImm32 rdx, rsi, 552
-    x64.lock cmpxchg [rdx], rcx
-    x64.setccReg equal, rax
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, readyservicefree
-  readyservicelocked:
-    x64.movRegReg rcx, rsi
-    x64.callDirect __gt_ready_locked
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, mboxwoken
-  readyservicewake:
-    x64.callDirect __sched_wake_or_spawn
-    x64.jmp mboxwoken
-  readyservicefree:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rsi + 48], rax
-    x64.storeBaseDispReg.word64 [rsi + 608], rsi
-    x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rcx, rsi, 560
-    x64.lock add [rcx], rax
-    x64.movRegReg rcx, rsi
-    x64.callDirect __sched_runq_put
-    x64.callDirect __sched_wake_or_spawn
-  mboxwoken:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rax, rbx
-  closereadyloop:
-    x64.storeSlotReg slot4, rcx
-    x64.storeSlotReg slot3, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, closereadyone
-  closesettled:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, closefinished
-  closepaywake:
-    x64.callDirect __sched_wake_or_spawn
-  closefinished:
-    x64.epilogue 136
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  closereadyone:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 664]
-    x64.storeSlotReg slot0, rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rcx + 664], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 680]
-    x64.movRegImm rdx, 9223372036853775807
-    x64.cmpRegReg rax, rdx
-    x64.jcc notEqual, sendwakedisarm
-  sendwakereadyfree:
-    x64.callDirect __gt_ready_locked
-    x64.jmp closereadied
-  sendwakedisarm:
-    x64.leaRegGlobal rax, __sched_lock
-    x64.leaRegGlobal rdx, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
-    x64.mov rdx, gs:[rdx]
-    x64.aluBaseDispImm32.add [rdx + 824], 1
-    x64.movRegImm32 rdx, 1
-    x64.xchg8 [rax], rdx <- rdx
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#50
-  __rl_cont#49:
-    x64.leaRegGlobal rax, __gt_timer_count
-    x64.loadRegBaseDisp.word64 rdx, [rax + 0]
-    x64.leaRegGlobal rsi, __gt_timer_heap_base
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.movRegImm32 rdi, 0
-  tmscanhdr:
-    x64.cmpRegReg rdi, rdx
-    x64.jcc greaterEqual, sendwakereadylocked
-  tmscanbody:
-    x64.leaRegGlobal r8, __sched_timer_scan_steps
-    x64.aluBaseDispImm32.add [r8 + 0], 1
-    x64.imulRegRegImm32 r8, rdi, 32
-    x64.leaRegRegReg r8, rsi, r8
-    x64.loadRegBaseDisp.word64 r9, [r8 + 8]
-    x64.loadRegBaseDisp.word64 r10, [r8 + 24]
-    x64.cmpRegReg r9, rcx
-    x64.setccReg equal, r9
-    x64.cmpRegImm32 r10, 3
-    x64.setccReg equal, r10
-    x64.andRegReg r9, r9, r10
-    x64.cmpRegImm32 r9, 0
-    x64.jcc equal, tmadvance
-  tmremoveat:
-    x64.leaRegRegImm32 rcx, rdx, -1
-    x64.storeSlotReg slot6, rcx
-    x64.storeBaseDispReg.word64 [rax + 0], rcx
-    x64.cmpRegReg rdi, rcx
-    x64.jcc greaterEqual, tmrepublish
-  tmfillhole:
-    x64.imulRegRegImm32 rax, rcx, 32
-    x64.leaRegRegReg rax, rsi, rax
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rax + 8]
-    x64.loadRegBaseDisp.word64 r9, [rax + 16]
-    x64.loadRegBaseDisp.word64 rax, [rax + 24]
-    x64.storeBaseDispReg.word64 [r8 + 0], rcx
-    x64.storeBaseDispReg.word64 [r8 + 8], rdx
-    x64.storeBaseDispReg.word64 [r8 + 16], r9
-    x64.storeBaseDispReg.word64 [r8 + 24], rax
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, siftdownhdr
-  tmparentcmp:
-    x64.leaRegRegImm32 rax, rdi, -1
-    x64.shrRegImm8 rax, rax, 1
-    x64.imulRegRegImm32 rax, rax, 32
-    x64.leaRegRegReg rax, rsi, rax
-    x64.loadRegBaseDisp.word64 rdx, [rax + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.loadRegBaseDisp.word64 r8, [rax + 16]
-    x64.loadRegBaseDisp.word64 rax, [rax + 24]
-    x64.cmpRegReg rcx, rdx
-    x64.setccReg less, rax
-    x64.cmpRegReg rcx, rdx
-    x64.setccReg equal, rcx
-    x64.cmpRegReg r9, r8
-    x64.setccReg less, rdx
-    x64.andRegReg rcx, rcx, rdx
-    x64.orRegReg rax, rax, rcx
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, siftdownhdr
-  siftuphdr:
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, tmrepublish
-  siftupbody:
-    x64.leaRegRegImm32 rax, rdi, -1
-    x64.shrRegImm8 rax, rax, 1
-    x64.storeSlotReg slot2, rax
-    x64.imulRegRegImm32 rcx, rdi, 32
-    x64.leaRegRegReg rcx, rsi, rcx
-    x64.imulRegRegImm32 rax, rax, 32
-    x64.leaRegRegReg rax, rsi, rax
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rdi, [rcx + 8]
-    x64.loadRegBaseDisp.word64 r8, [rcx + 16]
-    x64.loadRegBaseDisp.word64 r9, [rcx + 24]
-    x64.loadRegBaseDisp.word64 r10, [rax + 0]
-    x64.loadRegBaseDisp.word64 r11, [rax + 8]
-    x64.loadRegBaseDisp.word64 rbx, [rax + 16]
-    x64.loadRegBaseDisp.word64 r12, [rax + 24]
-    x64.cmpRegReg rdx, r10
-    x64.setccReg less, r13
-    x64.cmpRegReg rdx, r10
-    x64.setccReg equal, r14
-    x64.cmpRegReg r8, rbx
-    x64.setccReg less, r15
-    x64.andRegReg r14, r14, r15
-    x64.orRegReg r13, r13, r14
-    x64.cmpRegImm32 r13, 0
-    x64.jcc equal, tmrepublish
-  siftupswap:
-    x64.storeBaseDispReg.word64 [rcx + 0], r10
-    x64.storeBaseDispReg.word64 [rcx + 8], r11
-    x64.storeBaseDispReg.word64 [rcx + 16], rbx
-    x64.storeBaseDispReg.word64 [rcx + 24], r12
-    x64.storeBaseDispReg.word64 [rax + 0], rdx
-    x64.storeBaseDispReg.word64 [rax + 8], rdi
-    x64.storeBaseDispReg.word64 [rax + 16], r8
-    x64.storeBaseDispReg.word64 [rax + 24], r9
-    x64.loadRegSlot rdi, slot2
-    x64.jmp siftuphdr
-  siftdownhaveleft:
-    x64.leaRegRegImm32 rcx, rax, 1
-    x64.loadRegSlot rdx, slot6
-    x64.cmpRegReg rcx, rdx
-    x64.jcc greaterEqual, siftdowncompare
-  siftdownchoose:
-    x64.imulRegRegImm32 rdx, rax, 32
-    x64.leaRegRegReg rdx, rsi, rdx
-    x64.imulRegRegImm32 r8, rcx, 32
-    x64.leaRegRegReg r8, rsi, r8
-    x64.loadRegBaseDisp.word64 r9, [rdx + 0]
-    x64.loadRegBaseDisp.word64 r10, [rdx + 8]
-    x64.loadRegBaseDisp.word64 r10, [rdx + 16]
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 24]
-    x64.loadRegBaseDisp.word64 rdx, [r8 + 0]
-    x64.loadRegBaseDisp.word64 r11, [r8 + 8]
-    x64.loadRegBaseDisp.word64 r11, [r8 + 16]
-    x64.loadRegBaseDisp.word64 r8, [r8 + 24]
-    x64.cmpRegReg rdx, r9
-    x64.setccReg less, r8
-    x64.cmpRegReg rdx, r9
-    x64.setccReg equal, rdx
-    x64.cmpRegReg r11, r10
-    x64.setccReg less, r9
-    x64.andRegReg rdx, rdx, r9
-    x64.orRegReg r8, r8, rdx
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, siftdowncompare
-  siftdowntakeright:
-    x64.movRegReg rax, rcx
-  siftdowncompare:
-    x64.storeSlotReg slot1, rax
-    x64.imulRegRegImm32 rax, rax, 32
-    x64.leaRegRegReg rax, rsi, rax
-    x64.imulRegRegImm32 rcx, rdi, 32
-    x64.leaRegRegReg rcx, rsi, rcx
-    x64.loadRegBaseDisp.word64 rdx, [rax + 0]
-    x64.loadRegBaseDisp.word64 rdi, [rax + 8]
-    x64.loadRegBaseDisp.word64 r8, [rax + 16]
-    x64.loadRegBaseDisp.word64 r9, [rax + 24]
-    x64.loadRegBaseDisp.word64 r10, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r11, [rcx + 8]
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 16]
-    x64.loadRegBaseDisp.word64 r12, [rcx + 24]
-    x64.storeSlotReg slot5, r12
-    x64.cmpRegReg rdx, r10
-    x64.setccReg less, r12
-    x64.cmpRegReg rdx, r10
-    x64.setccReg equal, r13
-    x64.cmpRegReg r8, rbx
-    x64.setccReg less, r14
-    x64.andRegReg r13, r13, r14
-    x64.orRegReg r12, r12, r13
-    x64.cmpRegImm32 r12, 0
-    x64.jcc equal, tmrepublish
-  siftdownswap:
-    x64.storeBaseDispReg.word64 [rcx + 0], rdx
-    x64.storeBaseDispReg.word64 [rcx + 8], rdi
-    x64.storeBaseDispReg.word64 [rcx + 16], r8
-    x64.storeBaseDispReg.word64 [rcx + 24], r9
-    x64.storeBaseDispReg.word64 [rax + 0], r10
-    x64.storeBaseDispReg.word64 [rax + 8], r11
-    x64.storeBaseDispReg.word64 [rax + 16], rbx
-    x64.loadRegSlot rcx, slot5
-    x64.storeBaseDispReg.word64 [rax + 24], rcx
-    x64.loadRegSlot rdi, slot1
-  siftdownhdr:
-    x64.leaRegRegReg rax, rdi, rdi
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.loadRegSlot rcx, slot6
-    x64.cmpRegReg rax, rcx
-    x64.jcc less, siftdownhaveleft
-  tmrepublish:
-    x64.loadRegSlot rax, slot6
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, timerwhenroot
-  timerwhenempty:
-    x64.movRegImm rax, 9223372036854775807
-    x64.leaRegGlobal rcx, __gt_timer_when
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.jmp sendwakereadylocked
-  timerwhenroot:
-    x64.loadRegBaseDisp.word64 rax, [rsi + 0]
-    x64.leaRegGlobal rcx, __gt_timer_when
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-  sendwakereadylocked:
-    x64.callDirect __sched_break_idle_poller
-    x64.loadRegSlot rcx, slot4
-    x64.callDirect __gt_ready_locked_held
-    x64.leaRegGlobal rcx, __sched_lock
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.movRegImm32 rdx, 0
-    x64.xchg8 [rcx], rdx <- rdx
-    x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#52
-  __rl_cont#51:
-    x64.aluBaseDispImm32.add [rax + 824], -1
-  closereadied:
-    x64.loadRegSlot rax, slot3
-    x64.orRegReg rax, rax, r8
-    x64.loadRegSlot rcx, slot0
-    x64.jmp closereadyloop
-  tmadvance:
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.jmp tmscanhdr
-  __rl_slow#44:
-    x64.storeSlotReg slot7, rcx
-    x64.storeSlotReg slot8, rdx
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
-    x64.callDirect __rtlock_acquire
-    x64.loadRegSlot rcx, slot7
-    x64.loadRegSlot rdx, slot8
-    x64.jmp __rl_cont#43
-  __rl_slow#48:
-    x64.storeSlotReg slot9, rax
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rsi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot9
-    x64.jmp __rl_cont#47
-  __rl_slow#46:
-    x64.storeSlotReg slot9, rax
-    x64.storeSlotReg slot10, rsi
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rdi
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot9
-    x64.loadRegSlot rsi, slot10
-    x64.jmp __rl_cont#45
-  __rl_slow#50:
-    x64.storeSlotReg slot7, rcx
-    x64.movRegReg rcx, rax
-    x64.callDirect __rtlock_acquire
-    x64.loadRegSlot rcx, slot7
-    x64.jmp __rl_cont#49
-  __rl_slow#52:
-    x64.storeSlotReg slot9, rax
-    x64.storeSlotReg slot11, r8
-    x64.callDirect __rtlock_release
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot9
-    x64.loadRegSlot r8, slot11
-    x64.jmp __rl_cont#51
-}
-```
-```TargetIr:arm64-macos
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __sched_num_procs@448 = i64 0
-  __sched_ncpu@456 = i64 0
-  __sched_shutdown_flag@464 = i64 0
-  __sched_lock@472 = i64 0
-  __sched_lock_depth_sink@480 = i64 0
-  __sched_nmspinning@488 = i64 0
-  __sched_needspinning@496 = i64 0
-  __sched_sysmon_event@504 = i64 0
-  __sched_sysmon_wait@512 = i64 0
-  __sched_timer_starts@520 = i64 0
-  __slab_arena_list@528 = i64 0
-  __slab_arena_map_l1@536 = i64 0
-  __slab_state@544 = i64 0
-  __mrt_program_started@552 = i8 0
-}
-
-func @main {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x22
-    arm64.storeSlotReg slot3, x21
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.movImm x19, 1024
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.leaFuncAddr x0, Counter.__start_Counter.create
-    arm64.movImm x2, 24
-    arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movImm x19, 1
-    arm64.movImm x0, 0
-    arm64.bl __gt_cell_alloc
-    arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.storeBaseDispReg.word64 [x22 + 16], x21
-    arm64.movImm x2, 24
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
-    arm64.cmp x0, 0
-    arm64.b.ne sendrefused
-  sendaccepted:
-    arm64.movRegReg x0, x21
-    arm64.bl __gt_try_await
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  critsplit:
-    arm64.movRegReg x0, x9
-  tryerr:
-    arm64.movImm x19, 0
-    arm64.bl __mm_decref
-    arm64.b trycont
-  tryok:
-    arm64.movRegReg x19, x0
-  trycont:
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  sendrefused:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.movImm x2, 16
-    arm64.movImm x1, 0
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x2
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.storeBaseDispReg.word64 [x1 + 8], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.movRegReg x0, x1
-    arm64.b tryerr
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-runtime-lock-enter-is-an-atomic-on-its-word-with-no-call.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    arm64.bl __mbox_unknown_tag
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
-    arm64.add x1, x1, 1
-  __il_cont:
-    arm64.movImm x2, 0
-    arm64.bl __gt_cell_complete
-    arm64.b serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  __il_body:
-    arm64.movImm x21, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x21
-  __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.retIndirect
-}
-
-func @__mbox_close {
-  entry:
-    arm64.prologue 80
-    arm64.storeSlotReg slot6, x22
-    arm64.storeSlotReg slot5, x21
-    arm64.storeSlotReg slot4, x20
-    arm64.storeSlotReg slot3, x19
-    arm64.add x1, x0, 96
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 824]
-    arm64.add x3, x3, 1
-    arm64.storeBaseDispReg.word64 [x2 + 824], x3
-    arm64.movImm x2, 1
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#44
-  __rl_cont#43:
-    arm64.movImm x2, 1
-    arm64.storeBaseDispReg.word64 [x0 + 40], x2
-    arm64.add x2, x0, -584
-    arm64.movImm x19, 0
-    arm64.movImm x20, 0
-    arm64.b closedrainsenders
-  sendfrontclaim:
-    arm64.movImm x4, 0
-    arm64.movImm x5, 3
-    arm64.add x6, x3, 688
-    arm64.arm64AtomicCas x4, [x6], x4, x5
-    arm64.cmp x4, 0
-    arm64.b.ne closestopsender
-  sendfrontskip:
-    arm64.loadRegBaseDisp.word64 x4, [x3 + 672]
-    arm64.loadRegBaseDisp.word64 x5, [x3 + 664]
-    arm64.movImm x6, 0
-    arm64.storeBaseDispReg.word64 [x4 + 664], x5
-    arm64.storeBaseDispReg.word64 [x5 + 672], x4
-    arm64.storeBaseDispReg.word64 [x3 + 664], x6
-    arm64.storeBaseDispReg.word64 [x3 + 672], x6
-    arm64.b closedrainsenders
-  closestopsender:
-    arm64.loadRegBaseDisp.word64 x4, [x3 + 672]
-    arm64.loadRegBaseDisp.word64 x5, [x3 + 664]
-    arm64.movImm x6, 0
-    arm64.storeBaseDispReg.word64 [x4 + 664], x5
-    arm64.storeBaseDispReg.word64 [x5 + 672], x4
-    arm64.storeBaseDispReg.word64 [x3 + 664], x6
-    arm64.storeBaseDispReg.word64 [x3 + 672], x6
-    arm64.storeBaseDispReg.word64 [x3 + 664], x20
-    arm64.movRegReg x20, x3
-  closedrainsenders:
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 664]
-    arm64.cmp x3, x2
-    arm64.b.ne sendfrontclaim
-  closesendersdrained:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 32]
-    arm64.cmp x2, 0
-    arm64.b.ne closewakeparked
-  closenoreceiver:
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.movImm x2, 0
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#48
-  __rl_cont#47:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.b closereadyloop
-  closewakeparked:
-    arm64.movImm x3, 0
-    arm64.storeBaseDispReg.word64 [x2 + 496], x3
-    arm64.movImm x3, 0
-    arm64.storeBaseDispReg.word64 [x0 + 32], x3
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.movImm x3, 0
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
-    arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#46
-  __rl_cont#45:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.movImm x0, 0
-    arm64.movImm x1, 1
-    arm64.add x3, x2, 552
-    arm64.arm64AtomicCas x0, [x3], x0, x1
-    arm64.cmp x0, 0
-    arm64.b.ne readyservicefree
-  readyservicelocked:
-    arm64.movRegReg x0, x2
-    arm64.bl __gt_ready_locked
-    arm64.cmp x0, 0
-    arm64.b.eq closereadyloop
-  readyservicewake:
-    arm64.bl __sched_wake_or_spawn
-    arm64.b closereadyloop
-  readyservicefree:
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x2 + 48], x0
-    arm64.storeBaseDispReg.word64 [x2 + 608], x2
-    arm64.movImm x0, 1
-    arm64.add x1, x2, 560
-    arm64.arm64AtomicRmw.add x0, [x1], x0
-    arm64.movRegReg x0, x2
-    arm64.bl __sched_runq_put
-    arm64.bl __sched_wake_or_spawn
-  closereadyloop:
-    arm64.cmp x20, 0
-    arm64.b.ne closereadyone
-  closesettled:
-    arm64.cmp x19, 0
-    arm64.b.eq closefinished
-  closepaywake:
-    arm64.bl __sched_wake_or_spawn
-  closefinished:
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.epilogue 80
-    arm64.ret
-  closereadyone:
-    arm64.loadRegBaseDisp.word64 x21, [x20 + 664]
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x20 + 664], x0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 680]
-    arm64.movImm x1, 9223372036853775807
-    arm64.cmp x0, x1
-    arm64.b.ne sendwakedisarm
-  sendwakereadyfree:
-    arm64.movRegReg x0, x20
-    arm64.bl __gt_ready_locked
-    arm64.b closereadied
-  sendwakedisarm:
-    arm64.leaGlobal x0, __sched_lock
-    arm64.leaGlobal x1, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x1
-    arm64.cmp x1, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x1, x16, x17
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 824]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x1 + 824], x2
-    arm64.movImm x1, 1
-    arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
-    arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#50
-  __rl_cont#49:
-    arm64.leaGlobal x0, __gt_timer_count
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.leaGlobal x2, __gt_timer_heap_base
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.movImm x3, 0
-  tmscanhdr:
-    arm64.cmp x3, x1
-    arm64.b.ge sendwakereadylocked
-  tmscanbody:
-    arm64.leaGlobal x4, __sched_timer_scan_steps
-    arm64.loadRegBaseDisp.word64 x5, [x4 + 0]
-    arm64.add x5, x5, 1
-    arm64.storeBaseDispReg.word64 [x4 + 0], x5
-    arm64.lsl x4, x3, 5
-    arm64.add x4, x2, x4
-    arm64.loadRegBaseDisp.word64 x5, [x4 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x4 + 24]
-    arm64.cmp x5, x20
-    arm64.cset x5, eq
-    arm64.cmp x6, 3
-    arm64.cset x6, eq
-    arm64.and x5, x5, x6
-    arm64.cbz x5, tmadvance
-  tmremoveat:
-    arm64.sub x1, x1, 1
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.cmp x3, x1
-    arm64.b.ge tmrepublish
-  tmfillhole:
-    arm64.lsl x0, x1, 5
-    arm64.add x0, x2, x0
-    arm64.loadRegBaseDisp.word64 x5, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 16]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 24]
-    arm64.storeBaseDispReg.word64 [x4 + 0], x5
-    arm64.storeBaseDispReg.word64 [x4 + 8], x6
-    arm64.storeBaseDispReg.word64 [x4 + 16], x7
-    arm64.storeBaseDispReg.word64 [x4 + 24], x0
-    arm64.cmp x3, 0
-    arm64.b.eq siftdownhdr
-  tmparentcmp:
-    arm64.sub x0, x3, 1
-    arm64.lsr x0, x0, 1
-    arm64.lsl x0, x0, 5
-    arm64.add x0, x2, x0
-    arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 16]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 24]
-    arm64.cmp x5, x4
-    arm64.cset x0, lt
-    arm64.cmp x5, x4
-    arm64.cset x4, eq
-    arm64.cmp x7, x6
-    arm64.cset x5, lt
-    arm64.and x4, x4, x5
-    arm64.orr x0, x0, x4
-    arm64.cbz x0, siftdownhdr
-  siftuphdr:
-    arm64.cmp x3, 0
-    arm64.b.eq tmrepublish
-  siftupbody:
-    arm64.sub x0, x3, 1
-    arm64.lsr x0, x0, 1
-    arm64.lsl x3, x3, 5
-    arm64.add x3, x2, x3
-    arm64.lsl x4, x0, 5
-    arm64.add x4, x2, x4
-    arm64.loadRegBaseDisp.word64 x5, [x3 + 0]
-    arm64.loadRegBaseDisp.word64 x6, [x3 + 8]
-    arm64.loadRegBaseDisp.word64 x7, [x3 + 16]
-    arm64.loadRegBaseDisp.word64 x8, [x3 + 24]
-    arm64.loadRegBaseDisp.word64 x9, [x4 + 0]
-    arm64.loadRegBaseDisp.word64 x10, [x4 + 8]
-    arm64.loadRegBaseDisp.word64 x11, [x4 + 16]
-    arm64.loadRegBaseDisp.word64 x12, [x4 + 24]
-    arm64.cmp x5, x9
-    arm64.cset x13, lt
-    arm64.cmp x5, x9
-    arm64.cset x14, eq
-    arm64.cmp x7, x11
-    arm64.cset x22, lt
-    arm64.and x14, x14, x22
-    arm64.orr x13, x13, x14
-    arm64.cbz x13, tmrepublish
-  siftupswap:
-    arm64.storeBaseDispReg.word64 [x3 + 0], x9
-    arm64.storeBaseDispReg.word64 [x3 + 8], x10
-    arm64.storeBaseDispReg.word64 [x3 + 16], x11
-    arm64.storeBaseDispReg.word64 [x3 + 24], x12
-    arm64.storeBaseDispReg.word64 [x4 + 0], x5
-    arm64.storeBaseDispReg.word64 [x4 + 8], x6
-    arm64.storeBaseDispReg.word64 [x4 + 16], x7
-    arm64.storeBaseDispReg.word64 [x4 + 24], x8
-    arm64.movRegReg x3, x0
-    arm64.b siftuphdr
-  siftdownhaveleft:
-    arm64.add x4, x0, 1
-    arm64.cmp x4, x1
-    arm64.b.ge siftdowncompare
-  siftdownchoose:
-    arm64.lsl x5, x0, 5
-    arm64.add x5, x2, x5
-    arm64.lsl x6, x4, 5
-    arm64.add x6, x2, x6
-    arm64.loadRegBaseDisp.word64 x7, [x5 + 0]
-    arm64.loadRegBaseDisp.word64 x8, [x5 + 8]
-    arm64.loadRegBaseDisp.word64 x8, [x5 + 16]
-    arm64.loadRegBaseDisp.word64 x5, [x5 + 24]
-    arm64.loadRegBaseDisp.word64 x5, [x6 + 0]
-    arm64.loadRegBaseDisp.word64 x9, [x6 + 8]
-    arm64.loadRegBaseDisp.word64 x9, [x6 + 16]
-    arm64.loadRegBaseDisp.word64 x6, [x6 + 24]
-    arm64.cmp x5, x7
-    arm64.cset x6, lt
-    arm64.cmp x5, x7
-    arm64.cset x5, eq
-    arm64.cmp x9, x8
-    arm64.cset x7, lt
-    arm64.and x5, x5, x7
-    arm64.orr x5, x6, x5
-    arm64.cbz x5, siftdowncompare
-  siftdowntakeright:
-    arm64.movRegReg x0, x4
-  siftdowncompare:
-    arm64.lsl x4, x0, 5
-    arm64.add x4, x2, x4
-    arm64.lsl x3, x3, 5
-    arm64.add x3, x2, x3
-    arm64.loadRegBaseDisp.word64 x5, [x4 + 0]
-    arm64.loadRegBaseDisp.word64 x6, [x4 + 8]
-    arm64.loadRegBaseDisp.word64 x7, [x4 + 16]
-    arm64.loadRegBaseDisp.word64 x8, [x4 + 24]
-    arm64.loadRegBaseDisp.word64 x9, [x3 + 0]
-    arm64.loadRegBaseDisp.word64 x10, [x3 + 8]
-    arm64.loadRegBaseDisp.word64 x11, [x3 + 16]
-    arm64.loadRegBaseDisp.word64 x12, [x3 + 24]
-    arm64.cmp x5, x9
-    arm64.cset x13, lt
-    arm64.cmp x5, x9
-    arm64.cset x14, eq
-    arm64.cmp x7, x11
-    arm64.cset x22, lt
-    arm64.and x14, x14, x22
-    arm64.orr x13, x13, x14
-    arm64.cbz x13, tmrepublish
-  siftdownswap:
-    arm64.storeBaseDispReg.word64 [x3 + 0], x5
-    arm64.storeBaseDispReg.word64 [x3 + 8], x6
-    arm64.storeBaseDispReg.word64 [x3 + 16], x7
-    arm64.storeBaseDispReg.word64 [x3 + 24], x8
-    arm64.storeBaseDispReg.word64 [x4 + 0], x9
-    arm64.storeBaseDispReg.word64 [x4 + 8], x10
-    arm64.storeBaseDispReg.word64 [x4 + 16], x11
-    arm64.storeBaseDispReg.word64 [x4 + 24], x12
-    arm64.movRegReg x3, x0
-  siftdownhdr:
-    arm64.add x0, x3, x3
-    arm64.add x0, x0, 1
-    arm64.cmp x0, x1
-    arm64.b.lt siftdownhaveleft
-  tmrepublish:
-    arm64.cmp x1, 0
-    arm64.b.ne timerwhenroot
-  timerwhenempty:
-    arm64.movImm x0, 9223372036854775807
-    arm64.leaGlobal x1, __gt_timer_when
-    arm64.stlr.word64 [x1], x0
-    arm64.b sendwakereadylocked
-  timerwhenroot:
-    arm64.loadRegBaseDisp.word64 x0, [x2 + 0]
-    arm64.leaGlobal x1, __gt_timer_when
-    arm64.stlr.word64 [x1], x0
-  sendwakereadylocked:
-    arm64.bl __sched_break_idle_poller
-    arm64.movRegReg x0, x20
-    arm64.bl __gt_ready_locked_held
-    arm64.leaGlobal x1, __sched_lock
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
-    arm64.movImm x3, 0
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
-    arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#52
-  __rl_cont#51:
-    arm64.loadRegBaseDisp.word64 x1, [x2 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x2 + 824], x1
-  closereadied:
-    arm64.orr x19, x19, x0
-    arm64.movRegReg x20, x21
-    arm64.b closereadyloop
-  tmadvance:
-    arm64.add x3, x3, 1
-    arm64.b tmscanhdr
-  __rl_slow#44:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_acquire
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.b __rl_cont#43
-  __rl_slow#48:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#47
-  __rl_slow#46:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot2, x2
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#45
-  __rl_slow#50:
-    arm64.bl __rtlock_acquire
-    arm64.b __rl_cont#49
-  __rl_slow#52:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot2, x2
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#51
-}
-```
-```TargetIr:arm64-linux
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __np_src_key_free@448 = i64 0
-  __np_src_key_high@456 = i64 0
-  __np_child_signal@464 = i64 0
-  __np_pd_mtable@472 = i64 0
-  __np_pd_mcap@480 = i64 0
-  __sched_num_procs@488 = i64 0
-  __sched_ncpu@496 = i64 0
-  __sched_shutdown_flag@504 = i64 0
-  __sched_lock@512 = i64 0
-  __sched_lock_depth_sink@520 = i64 0
-  __sched_nmspinning@528 = i64 0
-  __sched_needspinning@536 = i64 0
-  __sched_sysmon_event@544 = i64 0
-  __sched_sysmon_wait@552 = i64 0
-  __sched_timer_starts@560 = i64 0
-  __mrt_envp@568 = i64 0
-  __mrt_signal_stack_bytes@576 = i64 0
-  __mrt_hwcap_atomics@584 = i64 0
-  __mrt_tls_next_key@592 = i64 0
-  __slab_arena_list@600 = i64 0
-  __slab_arena_map_l1@608 = i64 0
-  __slab_state@616 = i64 0
-  __mrt_program_started@624 = i8 0
-}
-
-func @main {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x22
-    arm64.storeSlotReg slot3, x21
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.movImm x19, 1024
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.leaFuncAddr x0, Counter.__start_Counter.create
-    arm64.movImm x2, 24
-    arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movImm x19, 1
-    arm64.movImm x0, 0
-    arm64.bl __gt_cell_alloc
-    arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.storeBaseDispReg.word64 [x22 + 16], x21
-    arm64.movImm x2, 24
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
-    arm64.cmp x0, 0
-    arm64.b.ne sendrefused
-  sendaccepted:
-    arm64.movRegReg x0, x21
-    arm64.bl __gt_try_await
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  critsplit:
-    arm64.movRegReg x0, x9
-  tryerr:
-    arm64.movImm x19, 0
-    arm64.bl __mm_decref
-    arm64.b trycont
-  tryok:
-    arm64.movRegReg x19, x0
-  trycont:
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  sendrefused:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.movImm x2, 16
-    arm64.movImm x1, 0
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x2
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.storeBaseDispReg.word64 [x1 + 8], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.movRegReg x0, x1
-    arm64.b tryerr
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-runtime-lock-enter-is-an-atomic-on-its-word-with-no-call.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    arm64.bl __mbox_unknown_tag
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
-    arm64.add x1, x1, 1
-  __il_cont:
-    arm64.movImm x2, 0
-    arm64.bl __gt_cell_complete
-    arm64.b serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  __il_body:
-    arm64.movImm x21, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x21
-  __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.retIndirect
-}
-
-func @__mbox_close {
-  entry:
-    arm64.prologue 80
-    arm64.storeSlotReg slot6, x22
-    arm64.storeSlotReg slot5, x21
-    arm64.storeSlotReg slot4, x20
-    arm64.storeSlotReg slot3, x19
-    arm64.add x1, x0, 96
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 824]
-    arm64.add x3, x3, 1
-    arm64.storeBaseDispReg.word64 [x2 + 824], x3
-    arm64.movImm x2, 1
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 0
-    arm64.b.ne __rl_slow#44
-  __rl_cont#43:
-    arm64.movImm x2, 1
-    arm64.storeBaseDispReg.word64 [x0 + 40], x2
-    arm64.add x2, x0, -584
-    arm64.movImm x19, 0
-    arm64.movImm x20, 0
-    arm64.b closedrainsenders
-  sendfrontclaim:
-    arm64.movImm x4, 0
-    arm64.movImm x5, 3
-    arm64.add x6, x3, 688
-    arm64.arm64AtomicCas x4, [x6], x4, x5
-    arm64.cmp x4, 0
-    arm64.b.ne closestopsender
-  sendfrontskip:
-    arm64.loadRegBaseDisp.word64 x4, [x3 + 672]
-    arm64.loadRegBaseDisp.word64 x5, [x3 + 664]
-    arm64.movImm x6, 0
-    arm64.storeBaseDispReg.word64 [x4 + 664], x5
-    arm64.storeBaseDispReg.word64 [x5 + 672], x4
-    arm64.storeBaseDispReg.word64 [x3 + 664], x6
-    arm64.storeBaseDispReg.word64 [x3 + 672], x6
-    arm64.b closedrainsenders
-  closestopsender:
-    arm64.loadRegBaseDisp.word64 x4, [x3 + 672]
-    arm64.loadRegBaseDisp.word64 x5, [x3 + 664]
-    arm64.movImm x6, 0
-    arm64.storeBaseDispReg.word64 [x4 + 664], x5
-    arm64.storeBaseDispReg.word64 [x5 + 672], x4
-    arm64.storeBaseDispReg.word64 [x3 + 664], x6
-    arm64.storeBaseDispReg.word64 [x3 + 672], x6
-    arm64.storeBaseDispReg.word64 [x3 + 664], x20
-    arm64.movRegReg x20, x3
-  closedrainsenders:
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 664]
-    arm64.cmp x3, x2
-    arm64.b.ne sendfrontclaim
-  closesendersdrained:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 32]
-    arm64.cmp x2, 0
-    arm64.b.ne closewakeparked
-  closenoreceiver:
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.movImm x2, 0
-    arm64.arm64AtomicRmw.exchangeByte x2, [x1], x2
-    arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#48
-  __rl_cont#47:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.b closereadyloop
-  closewakeparked:
-    arm64.movImm x3, 0
-    arm64.storeBaseDispReg.word64 [x2 + 496], x3
-    arm64.movImm x3, 0
-    arm64.storeBaseDispReg.word64 [x0 + 32], x3
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.movImm x3, 0
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
-    arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#46
-  __rl_cont#45:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 824], x1
-    arm64.movImm x0, 0
-    arm64.movImm x1, 1
-    arm64.add x3, x2, 552
-    arm64.arm64AtomicCas x0, [x3], x0, x1
-    arm64.cmp x0, 0
-    arm64.b.ne readyservicefree
-  readyservicelocked:
-    arm64.movRegReg x0, x2
-    arm64.bl __gt_ready_locked
-    arm64.cmp x0, 0
-    arm64.b.eq closereadyloop
-  readyservicewake:
-    arm64.bl __sched_wake_or_spawn
-    arm64.b closereadyloop
-  readyservicefree:
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x2 + 48], x0
-    arm64.storeBaseDispReg.word64 [x2 + 608], x2
-    arm64.movImm x0, 1
-    arm64.add x1, x2, 560
-    arm64.arm64AtomicRmw.add x0, [x1], x0
-    arm64.movRegReg x0, x2
-    arm64.bl __sched_runq_put
-    arm64.bl __sched_wake_or_spawn
-  closereadyloop:
-    arm64.cmp x20, 0
-    arm64.b.ne closereadyone
-  closesettled:
-    arm64.cmp x19, 0
-    arm64.b.eq closefinished
-  closepaywake:
-    arm64.bl __sched_wake_or_spawn
-  closefinished:
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.epilogue 80
-    arm64.ret
-  closereadyone:
-    arm64.loadRegBaseDisp.word64 x21, [x20 + 664]
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x20 + 664], x0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 680]
-    arm64.movImm x1, 9223372036853775807
-    arm64.cmp x0, x1
-    arm64.b.ne sendwakedisarm
-  sendwakereadyfree:
-    arm64.movRegReg x0, x20
-    arm64.bl __gt_ready_locked
-    arm64.b closereadied
-  sendwakedisarm:
-    arm64.leaGlobal x0, __sched_lock
-    arm64.leaGlobal x1, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x1
-    arm64.cmp x1, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x1, x16, x17
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 824]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x1 + 824], x2
-    arm64.movImm x1, 1
-    arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
-    arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#50
-  __rl_cont#49:
-    arm64.leaGlobal x0, __gt_timer_count
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.leaGlobal x2, __gt_timer_heap_base
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.movImm x3, 0
-  tmscanhdr:
-    arm64.cmp x3, x1
-    arm64.b.ge sendwakereadylocked
-  tmscanbody:
-    arm64.leaGlobal x4, __sched_timer_scan_steps
-    arm64.loadRegBaseDisp.word64 x5, [x4 + 0]
-    arm64.add x5, x5, 1
-    arm64.storeBaseDispReg.word64 [x4 + 0], x5
-    arm64.lsl x4, x3, 5
-    arm64.add x4, x2, x4
-    arm64.loadRegBaseDisp.word64 x5, [x4 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x4 + 24]
-    arm64.cmp x5, x20
-    arm64.cset x5, eq
-    arm64.cmp x6, 3
-    arm64.cset x6, eq
-    arm64.and x5, x5, x6
-    arm64.cbz x5, tmadvance
-  tmremoveat:
-    arm64.sub x1, x1, 1
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.cmp x3, x1
-    arm64.b.ge tmrepublish
-  tmfillhole:
-    arm64.lsl x0, x1, 5
-    arm64.add x0, x2, x0
-    arm64.loadRegBaseDisp.word64 x5, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x7, [x0 + 16]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 24]
-    arm64.storeBaseDispReg.word64 [x4 + 0], x5
-    arm64.storeBaseDispReg.word64 [x4 + 8], x6
-    arm64.storeBaseDispReg.word64 [x4 + 16], x7
-    arm64.storeBaseDispReg.word64 [x4 + 24], x0
-    arm64.cmp x3, 0
-    arm64.b.eq siftdownhdr
-  tmparentcmp:
-    arm64.sub x0, x3, 1
-    arm64.lsr x0, x0, 1
-    arm64.lsl x0, x0, 5
-    arm64.add x0, x2, x0
-    arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 16]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 24]
-    arm64.cmp x5, x4
-    arm64.cset x0, lt
-    arm64.cmp x5, x4
-    arm64.cset x4, eq
-    arm64.cmp x7, x6
-    arm64.cset x5, lt
-    arm64.and x4, x4, x5
-    arm64.orr x0, x0, x4
-    arm64.cbz x0, siftdownhdr
-  siftuphdr:
-    arm64.cmp x3, 0
-    arm64.b.eq tmrepublish
-  siftupbody:
-    arm64.sub x0, x3, 1
-    arm64.lsr x0, x0, 1
-    arm64.lsl x3, x3, 5
-    arm64.add x3, x2, x3
-    arm64.lsl x4, x0, 5
-    arm64.add x4, x2, x4
-    arm64.loadRegBaseDisp.word64 x5, [x3 + 0]
-    arm64.loadRegBaseDisp.word64 x6, [x3 + 8]
-    arm64.loadRegBaseDisp.word64 x7, [x3 + 16]
-    arm64.loadRegBaseDisp.word64 x8, [x3 + 24]
-    arm64.loadRegBaseDisp.word64 x9, [x4 + 0]
-    arm64.loadRegBaseDisp.word64 x10, [x4 + 8]
-    arm64.loadRegBaseDisp.word64 x11, [x4 + 16]
-    arm64.loadRegBaseDisp.word64 x12, [x4 + 24]
-    arm64.cmp x5, x9
-    arm64.cset x13, lt
-    arm64.cmp x5, x9
-    arm64.cset x14, eq
-    arm64.cmp x7, x11
-    arm64.cset x22, lt
-    arm64.and x14, x14, x22
-    arm64.orr x13, x13, x14
-    arm64.cbz x13, tmrepublish
-  siftupswap:
-    arm64.storeBaseDispReg.word64 [x3 + 0], x9
-    arm64.storeBaseDispReg.word64 [x3 + 8], x10
-    arm64.storeBaseDispReg.word64 [x3 + 16], x11
-    arm64.storeBaseDispReg.word64 [x3 + 24], x12
-    arm64.storeBaseDispReg.word64 [x4 + 0], x5
-    arm64.storeBaseDispReg.word64 [x4 + 8], x6
-    arm64.storeBaseDispReg.word64 [x4 + 16], x7
-    arm64.storeBaseDispReg.word64 [x4 + 24], x8
-    arm64.movRegReg x3, x0
-    arm64.b siftuphdr
-  siftdownhaveleft:
-    arm64.add x4, x0, 1
-    arm64.cmp x4, x1
-    arm64.b.ge siftdowncompare
-  siftdownchoose:
-    arm64.lsl x5, x0, 5
-    arm64.add x5, x2, x5
-    arm64.lsl x6, x4, 5
-    arm64.add x6, x2, x6
-    arm64.loadRegBaseDisp.word64 x7, [x5 + 0]
-    arm64.loadRegBaseDisp.word64 x8, [x5 + 8]
-    arm64.loadRegBaseDisp.word64 x8, [x5 + 16]
-    arm64.loadRegBaseDisp.word64 x5, [x5 + 24]
-    arm64.loadRegBaseDisp.word64 x5, [x6 + 0]
-    arm64.loadRegBaseDisp.word64 x9, [x6 + 8]
-    arm64.loadRegBaseDisp.word64 x9, [x6 + 16]
-    arm64.loadRegBaseDisp.word64 x6, [x6 + 24]
-    arm64.cmp x5, x7
-    arm64.cset x6, lt
-    arm64.cmp x5, x7
-    arm64.cset x5, eq
-    arm64.cmp x9, x8
-    arm64.cset x7, lt
-    arm64.and x5, x5, x7
-    arm64.orr x5, x6, x5
-    arm64.cbz x5, siftdowncompare
-  siftdowntakeright:
-    arm64.movRegReg x0, x4
-  siftdowncompare:
-    arm64.lsl x4, x0, 5
-    arm64.add x4, x2, x4
-    arm64.lsl x3, x3, 5
-    arm64.add x3, x2, x3
-    arm64.loadRegBaseDisp.word64 x5, [x4 + 0]
-    arm64.loadRegBaseDisp.word64 x6, [x4 + 8]
-    arm64.loadRegBaseDisp.word64 x7, [x4 + 16]
-    arm64.loadRegBaseDisp.word64 x8, [x4 + 24]
-    arm64.loadRegBaseDisp.word64 x9, [x3 + 0]
-    arm64.loadRegBaseDisp.word64 x10, [x3 + 8]
-    arm64.loadRegBaseDisp.word64 x11, [x3 + 16]
-    arm64.loadRegBaseDisp.word64 x12, [x3 + 24]
-    arm64.cmp x5, x9
-    arm64.cset x13, lt
-    arm64.cmp x5, x9
-    arm64.cset x14, eq
-    arm64.cmp x7, x11
-    arm64.cset x22, lt
-    arm64.and x14, x14, x22
-    arm64.orr x13, x13, x14
-    arm64.cbz x13, tmrepublish
-  siftdownswap:
-    arm64.storeBaseDispReg.word64 [x3 + 0], x5
-    arm64.storeBaseDispReg.word64 [x3 + 8], x6
-    arm64.storeBaseDispReg.word64 [x3 + 16], x7
-    arm64.storeBaseDispReg.word64 [x3 + 24], x8
-    arm64.storeBaseDispReg.word64 [x4 + 0], x9
-    arm64.storeBaseDispReg.word64 [x4 + 8], x10
-    arm64.storeBaseDispReg.word64 [x4 + 16], x11
-    arm64.storeBaseDispReg.word64 [x4 + 24], x12
-    arm64.movRegReg x3, x0
-  siftdownhdr:
-    arm64.add x0, x3, x3
-    arm64.add x0, x0, 1
-    arm64.cmp x0, x1
-    arm64.b.lt siftdownhaveleft
-  tmrepublish:
-    arm64.cmp x1, 0
-    arm64.b.ne timerwhenroot
-  timerwhenempty:
-    arm64.movImm x0, 9223372036854775807
-    arm64.leaGlobal x1, __gt_timer_when
-    arm64.stlr.word64 [x1], x0
-    arm64.b sendwakereadylocked
-  timerwhenroot:
-    arm64.loadRegBaseDisp.word64 x0, [x2 + 0]
-    arm64.leaGlobal x1, __gt_timer_when
-    arm64.stlr.word64 [x1], x0
-  sendwakereadylocked:
-    arm64.bl __sched_break_idle_poller
-    arm64.movRegReg x0, x20
-    arm64.bl __gt_ready_locked_held
-    arm64.leaGlobal x1, __sched_lock
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
-    arm64.movImm x3, 0
-    arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
-    arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#52
-  __rl_cont#51:
-    arm64.loadRegBaseDisp.word64 x1, [x2 + 824]
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x2 + 824], x1
-  closereadied:
-    arm64.orr x19, x19, x0
-    arm64.movRegReg x20, x21
-    arm64.b closereadyloop
-  tmadvance:
-    arm64.add x3, x3, 1
-    arm64.b tmscanhdr
-  __rl_slow#44:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_acquire
-    arm64.movRegReg x2, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.b __rl_cont#43
-  __rl_slow#48:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#47
-  __rl_slow#46:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot2, x2
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#45
-  __rl_slow#50:
-    arm64.bl __rtlock_acquire
-    arm64.b __rl_cont#49
-  __rl_slow#52:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot2, x2
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#51
-}
-```
-
-<!-- test: a-mailbox-lock-is-a-zero-word-with-no-init-and-no-destroy -->
-**A MAILBOX's LOCK NEEDS NO INIT AND NO DESTROY, BECAUSE A ZERO WORD IS A FREE LOCK, AS GO's `hchan.lock`
-IS.** `__svc_spawn` takes the mailbox's region from `__slab_alloc`, which zeroes it, so the mailbox's lock
-is free the moment the region exists, and the spawn stores only the words a zero would be wrong for. When
-the last reference goes, the free roads of `__mbox_handle_destruct` and `__mbox_service_exit` hand the
-region to `__slab_free`, and the message ring when one was cut to `__slab_free_scaffold`, the
-uncounted door the ring was cut through, and to nothing else: a free lock word holds no OS object to release.
-
-What this pin shows is the three bodies' calls. `__svc_spawn` calls `__slab_alloc`, `__gt_spawn_green` and
-`__gt_ready`, and nothing between the region's arrival and its first store; each free road calls
-`__slab_free` and `__slab_free_scaffold` alone. An OS call at either place — `InitializeCriticalSectionAndSpinCount` or
-`DeleteCriticalSection` on x64-windows, a pthread mutex init or destroy on arm64-macos, a lock-init body on
-the Linux lanes — is a cost every service pays at its spawn and its teardown.
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Counter
-	var calls as Integer
-
-	static function create() returns Self
-		return Self{calls: 0}
-	end 'create'
-
-	export function next(n Integer) returns Integer
-		self.calls = self.calls + 1
-
-		return n + 1
-	end 'next'
-end 'Counter'
-
-function main() returns ExitCode
-	let c = spawn Counter.create()
-	let a = try await c.next(1) otherwise 0
-
-	return a as ExitCode
-end 'main'
-```
-```exitcode
-2
-```
-```RequiredRuntime
-__svc_spawn
-__mbox_handle_destruct
-__mbox_service_exit
-```
-```TargetIr:x64-windows
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 8192
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __sched_num_procs@440 = i64 0
-  __sched_ncpu@448 = i64 0
-  __sched_shutdown_flag@456 = i64 0
-  __sched_lock@464 = i64 0
-  __sched_lock_depth_sink@472 = i64 0
-  __sched_nmspinning@480 = i64 0
-  __sched_needspinning@488 = i64 0
-  __sched_sysmon_event@496 = i64 0
-  __sched_sysmon_wait@504 = i64 0
-  __sched_timer_starts@512 = i64 0
-  __sched_preempt_ext_lock@520 = i64 0
-  __sched_preempt_context@528 = i64 0
-  __slab_arena_list@536 = i64 0
-  __slab_arena_map_l1@544 = i64 0
-  __slab_state@552 = i64 0
-  __mrt_console_probe_stdin@560 = i8 0
-  __mrt_console_probe_stdout@561 = i8 0
-  __mrt_console_probe_stderr@562 = i8 0
-  __mrt_program_started@563 = i8 0
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 48
-    x64.movRegImm32 rbx, 1024
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
-    x64.movRegImm32 rax, 24
-    x64.movRegReg rdx, r8
-    x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegImm32 rbx, 1
-    x64.movRegImm32 rcx, 0
-    x64.callDirect __gt_cell_alloc
-    x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
-    x64.movRegReg r14, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r14 + 0], rax
-    x64.storeBaseDispReg.word64 [r14 + 8], rbx
-    x64.storeBaseDispReg.word64 [r14 + 16], r13
-    x64.movRegImm32 rax, 24
-    x64.movRegImm32 r9, 0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendrefused
-  sendaccepted:
-    x64.movRegReg rcx, r13
-    x64.callDirect __gt_try_await
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  critsplit:
-    x64.movRegReg rcx, r10
-  tryerr:
-    x64.movRegImm32 rbx, 0
-    x64.callDirect __mm_decref
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rbx, r8
-  trycont:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendrefused:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.storeSlotReg slot0, r8
-    x64.callDirect __mm_alloc
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot r8, slot0
-    x64.leaRegRegImm32 rax, r8, -1
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jmp tryerr
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-mailbox-lock-is-a-zero-word-with-no-init-and-no-destroy.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    x64.callDirect __mbox_unknown_tag
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
-  __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
-  __il_cont:
-    x64.movRegImm32 rax, 0
-    x64.callDirect __gt_cell_complete
-    x64.jmp serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  __il_body:
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.storeBaseDispReg.word64 [r14 + 0], r13
-  __il_cont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__svc_spawn {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegReg r13, rax
-    x64.movRegReg r14, r9
-    x64.leaRegRegImm32 rcx, r13, 104
-    x64.callDirect __slab_alloc
-    x64.movRegReg r15, r8
-    x64.storeBaseDispReg.word64 [r15 + 56], r13
-    x64.movRegImm rax, 4294967298
-    x64.storeBaseDispReg.word64 [r15 + 48], rax
-    x64.storeBaseDispReg.word64 [r15 + 64], r14
-    x64.leaRegRegImm32 rax, r15, -584
-    x64.storeBaseDispReg.word64 [r15 + 80], rax
-    x64.storeBaseDispReg.word64 [r15 + 88], rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect __gt_spawn_green
-    x64.storeBaseDispReg.word64 [r8 + 424], r12
-    x64.storeBaseDispReg.word64 [r8 + 432], r15
-    x64.movRegReg rcx, r8
-    x64.callDirect __gt_ready
-    x64.movRegReg r8, r15
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__mbox_handle_destruct {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
-  destructinspect:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 48]
-    x64.movRegReg rcx, rax
-    x64.shrRegImm8 rcx, rax, 32
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, destructdrop
-  destructclose:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_close
-    x64.movRegImm rax, 18446744069414584319
-    x64.leaRegRegImm32 rcx, rbx, 48
-    x64.lock xadd [rcx], rax <- rax
-    x64.movRegImm rcx, 4294967297
-    x64.cmpRegReg rax, rcx
-    x64.jcc notEqual, destructdone
-  destructfree:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, mboxfreeregion
-  mboxfreering:
-    x64.callDirect __slab_free_scaffold
-  mboxfreeregion:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __slab_free
-    x64.jmp destructdone
-  destructdrop:
-    x64.movRegImm rcx, 4294967297
-    x64.movRegReg rdx, rax
-    x64.subRegReg rdx, rax, rcx
-    x64.leaRegRegImm32 rcx, rbx, 48
-    x64.lock cmpxchg [rcx], rdx
-    x64.setccReg equal, rax
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, destructinspect
-  destructdone:
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @__mbox_service_exit {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.movRegImm rax, 18446744073709551615
-    x64.leaRegRegImm32 rcx, rbx, 48
-    x64.lock xadd [rcx], rax <- rax
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, exitdone
-  exitfree:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, mboxfreeregion
-  mboxfreering:
-    x64.callDirect __slab_free_scaffold
-  mboxfreeregion:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __slab_free
-  exitdone:
-    x64.movRegReg rcx, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.tailJmp __gt_owner_done
-}
-```
-```TargetIr:x64-linux
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __np_src_key_free@448 = i64 0
-  __np_src_key_high@456 = i64 0
-  __np_child_signal@464 = i64 0
-  __np_pd_mtable@472 = i64 0
-  __np_pd_mcap@480 = i64 0
-  __sched_num_procs@488 = i64 0
-  __sched_ncpu@496 = i64 0
-  __sched_shutdown_flag@504 = i64 0
-  __sched_lock@512 = i64 0
-  __sched_lock_depth_sink@520 = i64 0
-  __sched_nmspinning@528 = i64 0
-  __sched_needspinning@536 = i64 0
-  __sched_sysmon_event@544 = i64 0
-  __sched_sysmon_wait@552 = i64 0
-  __sched_timer_starts@560 = i64 0
-  __mrt_envp@568 = i64 0
-  __mrt_signal_stack_bytes@576 = i64 0
-  __mrt_tls_next_key@584 = i64 0
-  __slab_arena_list@592 = i64 0
-  __slab_arena_map_l1@600 = i64 0
-  __slab_state@608 = i64 0
-  __mrt_program_started@616 = i8 0
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 48
-    x64.movRegImm32 rbx, 1024
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
-    x64.movRegImm32 rax, 24
-    x64.movRegReg rdx, r8
-    x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegImm32 rbx, 1
-    x64.movRegImm32 rcx, 0
-    x64.callDirect __gt_cell_alloc
-    x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
-    x64.movRegReg r14, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r14 + 0], rax
-    x64.storeBaseDispReg.word64 [r14 + 8], rbx
-    x64.storeBaseDispReg.word64 [r14 + 16], r13
-    x64.movRegImm32 rax, 24
-    x64.movRegImm32 r9, 0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sendrefused
-  sendaccepted:
-    x64.movRegReg rcx, r13
-    x64.callDirect __gt_try_await
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  critsplit:
-    x64.movRegReg rcx, r10
-  tryerr:
-    x64.movRegImm32 rbx, 0
-    x64.callDirect __mm_decref
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rbx, r8
-  trycont:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  sendrefused:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.storeSlotReg slot0, r8
-    x64.callDirect __mm_alloc
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot r8, slot0
-    x64.leaRegRegImm32 rax, r8, -1
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jmp tryerr
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-mailbox-lock-is-a-zero-word-with-no-init-and-no-destroy.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    x64.callDirect __mbox_unknown_tag
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
-  __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
-  __il_cont:
-    x64.movRegImm32 rax, 0
-    x64.callDirect __gt_cell_complete
-    x64.jmp serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  __il_body:
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.storeBaseDispReg.word64 [r14 + 0], r13
-  __il_cont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__svc_spawn {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegReg r13, rax
-    x64.movRegReg r14, r9
-    x64.leaRegRegImm32 rcx, r13, 104
-    x64.callDirect __slab_alloc
-    x64.movRegReg r15, r8
-    x64.storeBaseDispReg.word64 [r15 + 56], r13
-    x64.movRegImm rax, 4294967298
-    x64.storeBaseDispReg.word64 [r15 + 48], rax
-    x64.storeBaseDispReg.word64 [r15 + 64], r14
-    x64.leaRegRegImm32 rax, r15, -584
-    x64.storeBaseDispReg.word64 [r15 + 80], rax
-    x64.storeBaseDispReg.word64 [r15 + 88], rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect __gt_spawn_green
-    x64.storeBaseDispReg.word64 [r8 + 424], r12
-    x64.storeBaseDispReg.word64 [r8 + 432], r15
-    x64.movRegReg rcx, r8
-    x64.callDirect __gt_ready
-    x64.movRegReg r8, r15
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-}
-
-func @__mbox_handle_destruct {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
-  destructinspect:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 48]
-    x64.movRegReg rcx, rax
-    x64.shrRegImm8 rcx, rax, 32
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, destructdrop
-  destructclose:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_close
-    x64.movRegImm rax, 18446744069414584319
-    x64.leaRegRegImm32 rcx, rbx, 48
-    x64.lock xadd [rcx], rax <- rax
-    x64.movRegImm rcx, 4294967297
-    x64.cmpRegReg rax, rcx
-    x64.jcc notEqual, destructdone
-  destructfree:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, mboxfreeregion
-  mboxfreering:
-    x64.callDirect __slab_free_scaffold
-  mboxfreeregion:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __slab_free
-    x64.jmp destructdone
-  destructdrop:
-    x64.movRegImm rcx, 4294967297
-    x64.movRegReg rdx, rax
-    x64.subRegReg rdx, rax, rcx
-    x64.leaRegRegImm32 rcx, rbx, 48
-    x64.lock cmpxchg [rcx], rdx
-    x64.setccReg equal, rax
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, destructinspect
-  destructdone:
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @__mbox_service_exit {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.mov rax, gs:[rax]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.movRegImm rax, 18446744073709551615
-    x64.leaRegRegImm32 rcx, rbx, 48
-    x64.lock xadd [rcx], rax <- rax
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, exitdone
-  exitfree:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, mboxfreeregion
-  mboxfreering:
-    x64.callDirect __slab_free_scaffold
-  mboxfreeregion:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __slab_free
-  exitdone:
-    x64.movRegReg rcx, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.tailJmp __gt_owner_done
-}
-```
-```TargetIr:arm64-macos
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __sched_num_procs@448 = i64 0
-  __sched_ncpu@456 = i64 0
-  __sched_shutdown_flag@464 = i64 0
-  __sched_lock@472 = i64 0
-  __sched_lock_depth_sink@480 = i64 0
-  __sched_nmspinning@488 = i64 0
-  __sched_needspinning@496 = i64 0
-  __sched_sysmon_event@504 = i64 0
-  __sched_sysmon_wait@512 = i64 0
-  __sched_timer_starts@520 = i64 0
-  __slab_arena_list@528 = i64 0
-  __slab_arena_map_l1@536 = i64 0
-  __slab_state@544 = i64 0
-  __mrt_program_started@552 = i8 0
-}
-
-func @main {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x22
-    arm64.storeSlotReg slot3, x21
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.movImm x19, 1024
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.leaFuncAddr x0, Counter.__start_Counter.create
-    arm64.movImm x2, 24
-    arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movImm x19, 1
-    arm64.movImm x0, 0
-    arm64.bl __gt_cell_alloc
-    arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.storeBaseDispReg.word64 [x22 + 16], x21
-    arm64.movImm x2, 24
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
-    arm64.cmp x0, 0
-    arm64.b.ne sendrefused
-  sendaccepted:
-    arm64.movRegReg x0, x21
-    arm64.bl __gt_try_await
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  critsplit:
-    arm64.movRegReg x0, x9
-  tryerr:
-    arm64.movImm x19, 0
-    arm64.bl __mm_decref
-    arm64.b trycont
-  tryok:
-    arm64.movRegReg x19, x0
-  trycont:
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  sendrefused:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.movImm x2, 16
-    arm64.movImm x1, 0
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x2
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.storeBaseDispReg.word64 [x1 + 8], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.movRegReg x0, x1
-    arm64.b tryerr
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-mailbox-lock-is-a-zero-word-with-no-init-and-no-destroy.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    arm64.bl __mbox_unknown_tag
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
-    arm64.add x1, x1, 1
-  __il_cont:
-    arm64.movImm x2, 0
-    arm64.bl __gt_cell_complete
-    arm64.b serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  __il_body:
-    arm64.movImm x21, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x21
-  __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.retIndirect
-}
-
-func @__svc_spawn {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.movRegReg x21, x2
-    arm64.movRegReg x22, x3
-    arm64.add x0, x21, 104
-    arm64.bl __slab_alloc
-    arm64.movRegReg x23, x0
-    arm64.storeBaseDispReg.word64 [x23 + 56], x21
-    arm64.movImm x0, 4294967298
-    arm64.storeBaseDispReg.word64 [x23 + 48], x0
-    arm64.storeBaseDispReg.word64 [x23 + 64], x22
-    arm64.add x0, x23, -584
-    arm64.storeBaseDispReg.word64 [x23 + 80], x0
-    arm64.storeBaseDispReg.word64 [x23 + 88], x0
-    arm64.movRegReg x0, x19
-    arm64.bl __gt_spawn_green
-    arm64.storeBaseDispReg.word64 [x0 + 424], x20
-    arm64.storeBaseDispReg.word64 [x0 + 432], x23
-    arm64.bl __gt_ready
-    arm64.movRegReg x0, x23
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-
-func @__mbox_handle_destruct {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-  destructinspect:
-    arm64.add x16, x19, 48
-    arm64.ldar.word64 x0, [x16]
-    arm64.lsr x1, x0, 32
-    arm64.cmp x1, 1
-    arm64.b.ne destructdrop
-  destructclose:
-    arm64.movRegReg x0, x19
-    arm64.bl __mbox_close
-    arm64.movImm x0, 18446744069414584319
-    arm64.add x1, x19, 48
-    arm64.arm64AtomicRmw.add x0, [x1], x0
-    arm64.movImm x1, 4294967297
-    arm64.cmp x0, x1
-    arm64.b.ne destructdone
-  destructfree:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq mboxfreeregion
-  mboxfreering:
-    arm64.bl __slab_free_scaffold
-  mboxfreeregion:
-    arm64.movRegReg x0, x19
-    arm64.bl __slab_free
-    arm64.b destructdone
-  destructdrop:
-    arm64.movImm x1, 4294967297
-    arm64.sub x1, x0, x1
-    arm64.add x2, x19, 48
-    arm64.arm64AtomicCas x0, [x2], x0, x1
-    arm64.cmp x0, 0
-    arm64.b.eq destructinspect
-  destructdone:
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @__mbox_service_exit {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.movImm x0, 18446744073709551615
-    arm64.add x1, x19, 48
-    arm64.arm64AtomicRmw.add x0, [x1], x0
-    arm64.cmp x0, 1
-    arm64.b.ne exitdone
-  exitfree:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq mboxfreeregion
-  mboxfreering:
-    arm64.bl __slab_free_scaffold
-  mboxfreeregion:
-    arm64.movRegReg x0, x19
-    arm64.bl __slab_free
-  exitdone:
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.tailBranch __gt_owner_done
-}
-```
-```TargetIr:arm64-linux
-data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_allg_lock@24 = i64 0
-  __gt_hold_epoch@32 = i64 0
-  __gt_run_queue_head@40 = i64 0
-  __gt_run_queue_tail@48 = i64 0
-  __gt_timer_count@56 = i64 0
-  __gt_timer_heap_base@64 = i64 0
-  __gt_timer_capacity@72 = i64 0
-  __gt_timer_seq@80 = i64 0
-  __gt_timer_when@88 = i64 9223372036854775807
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_seed_sum_seen@112 = i64 0
-  __gt_seed_count_seen@120 = i64 0
-  __gt_seed_guard@128 = i64 0
-  __gt_keeps_cpu_clock@136 = i64 0
-  __gt_stack_pool@144 = i64 0
-  __sched_active_workers@152 = i64 1
-  __sched_max_active_workers@160 = i64 1
-  __sched_tls_index@168 = i64 0
-  __sched_tls_teb_offset@176 = i64 0
-  __sched_procs@184 = i64 0
-  __sched_allm@192 = i64 0
-  __sched_async_preempt_off@200 = i64 0
-  __sched_midle@208 = i64 0
-  __sched_pidle@216 = i64 0
-  __gt_gfree_head@224 = i64 0
-  __gt_gfree_nostack_head@232 = i64 0
-  __gt_cell_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __gt_gfree_lock@272 = i64 0
-  __gt_gfree_lock_owner@280 = i64 0
-  __gt_gfree_lock_depth@288 = i64 0
-  __sched_npidle@296 = i64 0
-  __sched_runq_size@304 = i64 0
-  __sched_global_pushes@312 = i64 0
-  __sched_timer_scan_steps@320 = i64 0
-  __sched_mcount@328 = i64 0
-  __sched_nmidle@336 = i64 0
-  __sched_nmidlelocked@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __np_orphan_exited@440 = i64 0
-  __np_src_key_free@448 = i64 0
-  __np_src_key_high@456 = i64 0
-  __np_child_signal@464 = i64 0
-  __np_pd_mtable@472 = i64 0
-  __np_pd_mcap@480 = i64 0
-  __sched_num_procs@488 = i64 0
-  __sched_ncpu@496 = i64 0
-  __sched_shutdown_flag@504 = i64 0
-  __sched_lock@512 = i64 0
-  __sched_lock_depth_sink@520 = i64 0
-  __sched_nmspinning@528 = i64 0
-  __sched_needspinning@536 = i64 0
-  __sched_sysmon_event@544 = i64 0
-  __sched_sysmon_wait@552 = i64 0
-  __sched_timer_starts@560 = i64 0
-  __mrt_envp@568 = i64 0
-  __mrt_signal_stack_bytes@576 = i64 0
-  __mrt_hwcap_atomics@584 = i64 0
-  __mrt_tls_next_key@592 = i64 0
-  __slab_arena_list@600 = i64 0
-  __slab_arena_map_l1@608 = i64 0
-  __slab_state@616 = i64 0
-  __mrt_program_started@624 = i8 0
-}
-
-func @main {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x22
-    arm64.storeSlotReg slot3, x21
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.movImm x19, 1024
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.leaFuncAddr x0, Counter.__start_Counter.create
-    arm64.movImm x2, 24
-    arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movImm x19, 1
-    arm64.movImm x0, 0
-    arm64.bl __gt_cell_alloc
-    arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
-    arm64.movRegReg x22, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.storeBaseDispReg.word64 [x22 + 16], x21
-    arm64.movImm x2, 24
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
-    arm64.cmp x0, 0
-    arm64.b.ne sendrefused
-  sendaccepted:
-    arm64.movRegReg x0, x21
-    arm64.bl __gt_try_await
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  critsplit:
-    arm64.movRegReg x0, x9
-  tryerr:
-    arm64.movImm x19, 0
-    arm64.bl __mm_decref
-    arm64.b trycont
-  tryok:
-    arm64.movRegReg x19, x0
-  trycont:
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-  sendrefused:
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.movImm x2, 16
-    arm64.movImm x1, 0
-    arm64.storeSlotReg slot0, x0
-    arm64.movRegReg x0, x2
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.add x0, x0, -1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.storeBaseDispReg.word64 [x1 + 8], x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.movRegReg x0, x1
-    arm64.b tryerr
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-mailbox-lock-is-a-zero-word-with-no-init-and-no-destroy.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-
-func @Counter.__loop {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
-  unknowntag:
-    arm64.bl __mbox_unknown_tag
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
-    arm64.add x1, x1, 1
-  __il_cont:
-    arm64.movImm x2, 0
-    arm64.bl __gt_cell_complete
-    arm64.b serve
-}
-
-func @Counter.__start_Counter.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  __il_body:
-    arm64.movImm x21, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x21
-  __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.retIndirect
-}
-
-func @__svc_spawn {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.movRegReg x21, x2
-    arm64.movRegReg x22, x3
-    arm64.add x0, x21, 104
-    arm64.bl __slab_alloc
-    arm64.movRegReg x23, x0
-    arm64.storeBaseDispReg.word64 [x23 + 56], x21
-    arm64.movImm x0, 4294967298
-    arm64.storeBaseDispReg.word64 [x23 + 48], x0
-    arm64.storeBaseDispReg.word64 [x23 + 64], x22
-    arm64.add x0, x23, -584
-    arm64.storeBaseDispReg.word64 [x23 + 80], x0
-    arm64.storeBaseDispReg.word64 [x23 + 88], x0
-    arm64.movRegReg x0, x19
-    arm64.bl __gt_spawn_green
-    arm64.storeBaseDispReg.word64 [x0 + 424], x20
-    arm64.storeBaseDispReg.word64 [x0 + 432], x23
-    arm64.bl __gt_ready
-    arm64.movRegReg x0, x23
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
-    arm64.retIndirect
-}
-
-func @__mbox_handle_destruct {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-  destructinspect:
-    arm64.add x16, x19, 48
-    arm64.ldar.word64 x0, [x16]
-    arm64.lsr x1, x0, 32
-    arm64.cmp x1, 1
-    arm64.b.ne destructdrop
-  destructclose:
-    arm64.movRegReg x0, x19
-    arm64.bl __mbox_close
-    arm64.movImm x0, 18446744069414584319
-    arm64.add x1, x19, 48
-    arm64.arm64AtomicRmw.add x0, [x1], x0
-    arm64.movImm x1, 4294967297
-    arm64.cmp x0, x1
-    arm64.b.ne destructdone
-  destructfree:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq mboxfreeregion
-  mboxfreering:
-    arm64.bl __slab_free_scaffold
-  mboxfreeregion:
-    arm64.movRegReg x0, x19
-    arm64.bl __slab_free
-    arm64.b destructdone
-  destructdrop:
-    arm64.movImm x1, 4294967297
-    arm64.sub x1, x0, x1
-    arm64.add x2, x19, 48
-    arm64.arm64AtomicCas x0, [x2], x0, x1
-    arm64.cmp x0, 0
-    arm64.b.eq destructinspect
-  destructdone:
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @__mbox_service_exit {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.leaGlobal x0, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x0
-    arm64.cmp x0, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x0, x16, x17
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.movImm x0, 18446744073709551615
-    arm64.add x1, x19, 48
-    arm64.arm64AtomicRmw.add x0, [x1], x0
-    arm64.cmp x0, 1
-    arm64.b.ne exitdone
-  exitfree:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq mboxfreeregion
-  mboxfreering:
-    arm64.bl __slab_free_scaffold
-  mboxfreeregion:
-    arm64.movRegReg x0, x19
-    arm64.bl __slab_free
-  exitdone:
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.tailBranch __gt_owner_done
 }
 ```
 
@@ -66127,13 +53765,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -66141,7 +53781,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -66151,7 +53791,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -66188,7 +53828,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -66216,52 +53856,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -66274,7 +53908,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -66283,19 +53917,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_stack_alloc {
@@ -66859,13 +54491,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -66873,7 +54507,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -66883,7 +54517,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -66919,7 +54553,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -66947,52 +54581,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -67005,7 +54633,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -67014,19 +54642,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_stack_alloc {
@@ -67586,12 +55212,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -67599,7 +55227,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -67609,7 +55237,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -67644,7 +55272,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -67673,50 +55301,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -67727,7 +55346,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -67736,18 +55355,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_stack_alloc {
@@ -68390,12 +56007,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -68403,7 +56022,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -68413,7 +56032,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -68448,7 +56067,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -68477,50 +56096,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -68531,7 +56141,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -68540,18 +56150,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_stack_alloc {
@@ -73070,13 +60678,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -73084,7 +60694,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -73094,7 +60704,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -73131,7 +60741,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -73159,52 +60769,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -73217,7 +60821,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -73226,19 +60830,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_free_get {
@@ -73741,13 +61343,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -73755,7 +61359,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -73765,7 +61369,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -73801,7 +61405,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -73829,52 +61433,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -73887,7 +61485,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -73896,19 +61494,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__gt_free_get {
@@ -74406,12 +62002,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -74419,7 +62017,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -74429,7 +62027,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -74464,7 +62062,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -74493,50 +62091,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -74547,7 +62136,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -74556,18 +62145,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_free_get {
@@ -75139,12 +62726,14 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Counter.__start_Counter.create
+    arm64.leaFuncAddr x4, Counter.__behave
+    arm64.leaFuncAddr x5, Counter.__finish
     arm64.movImm x2, 24
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -75152,7 +62741,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
@@ -75162,7 +62751,7 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x22
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -75197,7 +62786,7 @@ func @main {
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.movImm x2, 16
@@ -75226,50 +62815,41 @@ func @main {
     arm64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=next] @__jumptable_4
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   next:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 16]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.add x1, x3, 1
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -75280,7 +62860,7 @@ func @Counter.__start_Counter.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -75289,18 +62869,16 @@ func @Counter.__start_Counter.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Counter.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__gt_free_get {
@@ -78808,13 +66386,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Counter.__start_Counter.create]
+    x64.leaRegFunc rsi, [rip + Counter.__behave]
+    x64.leaRegFunc rdi, [rip + Counter.__finish]
     x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -78822,7 +66402,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r14 + 0], rax
@@ -78832,7 +66412,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -78873,7 +66453,7 @@ func @main {
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.movRegImm32 rcx, 16
@@ -78901,52 +66481,46 @@ func @main {
     x64.retIndirect
 }
 
-func @Counter.__loop {
+func @Counter.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_6
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=next] @__jumptable_6
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   next:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 16]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.leaRegRegImm32 rdx, rax, 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.leaRegRegImm32 rdx, rsi, 1
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Counter.__start_Counter.create {
@@ -78959,7 +66533,7 @@ func @Counter.__start_Counter.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -78968,19 +66542,17 @@ func @Counter.__start_Counter.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Counter.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 chunk @mrt_write_stream {

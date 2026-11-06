@@ -64,7 +64,7 @@ grammar:
 | name | what it is |
 |---|---|
 | `Calc.request` | a union — one variant per message in declaration order, the first message at variant 0. A message's payload is its parameters, plus an integer `__reply` slot when it has a reply to deliver. |
-| `Calc.handle` | a one-field struct holding the mailbox pointer. A real 8-byte box, so moves, E3102, struct fields, arrays and the drop cascade all reach it by construction. |
+| `Calc.handle` | a one-field struct holding the pointer to the service's cown, the record that holds its state, its mailbox and its gate. A real 8-byte box, so moves, E3102, struct fields, arrays and the drop cascade all reach it by construction. |
 
 Whether a type is a service is a **whole-program** property: a `spawn` anywhere makes the type a service
 and subjects all its export methods to the service rules. That is why every service diagnostic fires **at
@@ -96,6 +96,21 @@ arguments back to the sender. `h.shutdown()` closes the mailbox once it has drai
 fail, and dropping the last handle closes the mailbox the same way; a message that was queued always runs.
 A reply's error type is the handler's own and nothing else, so no reply can answer `stopped`.
 
+### A service runs only while it has messages
+
+A service owns no green thread while its queue is empty. A message that reaches an idle service starts a runner, which takes
+the queued messages in order, at most 64 per turn, and yields its processor between turns so that every other runnable
+service runs before it continues; when the queue is empty the runner ends. A handler that waits (`await`, `sleep`, I/O)
+keeps the service held while it waits, and messages queue behind it up to the mailbox's capacity.
+
+### A service's state holds no promise
+
+A field of a service type, after alias resolution and generic instantiation, is not a `Promise`, an array of promises, or a
+record or union that holds one: **E3216**, at the `spawn` that makes the type a service. Each message may run on a different
+green thread, and a coroutine belongs to the strand that started it, so a promise kept in the state could be awaited or
+dropped by a strand that does not own its coroutine. A message or the factory `await`s (or `.cancel()`s) the coroutines it
+starts before it returns, and keeps their result in the field.
+
 ## Targets
 
 ⚠ **NO CASE HERE IS MARKED FOR STARTING A SERVICE, BECAUSE THE COMPILER SAYS SO LOUDER.** A running
@@ -106,7 +121,7 @@ naming the case. A marker would restate that and take the case out of the run in
 
 ⛔ **THE REFUSALS THAT DO EXCLUDE wasm32-wasi ARE EXCLUDED FOR THEIR DIAGNOSTIC, NOT FOR THEIR
 RULE.** Each is target-neutral and would be reached on every lane, but it is decided after the Maxon tier,
-and on wasm the same program is stopped there by E3104 for `__svc_spawn` / `__mbox_send`, so the stderr they
+and on wasm the same program is stopped there by E3104 for `__cown_spawn` / `__cown_send`, so the stderr they
 pin is not what the compiler emits there. They expire when wasm grows a service substrate, not when the
 rule moves — which is why the reason is written here rather than left to the marker.
 
@@ -983,7 +998,7 @@ error E3135: <fragment>:15:10: parameter `x` of the message `Box.put` is an opaq
 
 <!-- test: error.a-constrained-generic-service-is-refused -->
 A CONSTRAINED generic service is refused, and the refusal is a mechanism rather than caution: an instance method of a constrained generic takes one hidden witness pointer per constraint,
-and `Box.__loop` is synthesized with no `self` to source one from. Compare
+and `Box.__behave` is synthesized with no `self` to source one from. Compare
 `a-generic-service-is-supported`, whose only difference is the `where`.
 ```maxon
 interface Peekable
@@ -1021,7 +1036,7 @@ end 'main'
 public typealias Whole = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2015: <fragment>:31:10: Unsupported: `spawn Box.create(…)` — `type Box` constrains its type parameters, and an instance method of a constrained generic takes one hidden witness pointer per constraint, which the synthesized `Box.__loop` has no `self` to source. Spawn an UNCONSTRAINED generic or a plain type, or move the constrained work behind a message that takes concrete arguments
+error E2015: <fragment>:31:10: Unsupported: `spawn Box.create(…)` — `type Box` constrains its type parameters, and an instance method of a constrained generic takes one hidden witness pointer per constraint, which the synthesized `Box.__behave` has no `self` to source. Spawn an UNCONSTRAINED generic or a plain type, or move the constrained work behind a message that takes concrete arguments
 ```
 
 <!-- test: error.a-generic-factory-that-fixes-no-type-argument-is-refused -->
@@ -1053,7 +1068,7 @@ error E2015: <fragment>:15:10: Unsupported: `spawn Box.create(…)` fixes nothin
 
 <!-- test: error.a-spawn-inside-a-generic-body-is-refused -->
 The same rule one level out: a `spawn` inside another generic's body fixes the service's type arguments to
-the ENCLOSING declaration's type parameters, which name no layout. `Box.__loop` is synthesized per
+the ENCLOSING declaration's type parameters, which name no layout. `Box.__behave` is synthesized per
 instantiation and has no dictionary to read one from.
 ```maxon
 type Box uses T
@@ -1088,7 +1103,7 @@ end 'main'
 typealias Whole = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2015: <fragment>:22:11: Unsupported: `spawn Box.create(…)` fixes `type Box`'s type arguments to the enclosing declaration's own type parameters, which name no layout — and `Box.__loop` is synthesized per instantiation, so it has no dictionary to read one from. Spawn the service from a body that knows the concrete type
+error E2015: <fragment>:22:11: Unsupported: `spawn Box.create(…)` fixes `type Box`'s type arguments to the enclosing declaration's own type parameters, which name no layout — and `Box.__behave` is synthesized per instantiation, so it has no dictionary to read one from. Spawn the service from a body that knows the concrete type
 ```
 
 <!-- test: a-private-method-is-not-a-message -->
@@ -1356,15 +1371,14 @@ typealias Integer = int(i64.min to i64.max)
 acc=123
 ```
 
-<!-- test: a-mailbox-grows-past-its-first-ring-and-keeps-fifo-order -->
+<!-- test: a-long-backlog-of-string-messages-keeps-fifo-order -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
-⭐ **A BACKLOG LONGER THAN THE MAILBOX'S FIRST RING, EVERY MESSAGE CARRYING A HEAP `String`.** At one
-processor with preemption off the service's green thread does not run until `main` parks at the `await`, so
-all 100 `note` messages are queued at once — the first in the mailbox's inbox and the other 99 in the ring, far
-more than its first 16 slots, so it grows several times with managed payloads in it. The handler checks every message against the index FIFO order says it must
-carry, and the reply reports the count, any message that arrived out of place, and the first and last
-three. Exit 0 also says no payload leaked across a grow (exit 101).
+⭐ **A BACKLOG LONGER THAN ONE TURN'S BATCH, EVERY MESSAGE CARRYING A HEAP `String`.** At one processor with preemption off the
+service does not run until `main` parks at the `await`, so all 100 `note` messages are queued at once, more than the 64
+a service takes per turn. The handler checks every message against the index FIFO order says it must carry, and the reply
+reports the count, any message that arrived out of place, and the first and last three. Exit 0 also says no payload
+leaked across the turn boundary (exit 101).
 ```maxon
 typealias Tally = int(0 to 1000)
 
@@ -1419,17 +1433,14 @@ end 'main'
 seen=100 misplaced=0 m0 m1 m2 m97 m98 m99
 ```
 
-<!-- test: a-services-first-message-sits-in-its-inbox-and-the-queue-behind-it-keeps-fifo-order -->
+<!-- test: the-first-message-to-a-service-that-has-never-run-and-the-queue-behind-it-keep-fifo-order -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
-⭐ **THE FIRST MESSAGE TO A SERVICE THAT HAS NEVER RUN WAITS IN THE MAILBOX'S OWN INBOX, AND EVERY MESSAGE
-BEHIND IT QUEUES IN THE RING.** At one processor with preemption off the service's green thread does not run
-until `main` parks at the `await`, so `m0` arrives while no receiver has ever started and the 18 sends after
-it queue behind it: the ring fills its first 16 slots with `m1` to `m16` and the seventeenth, `m17`, grows it.
-The service's first receive must answer the inbox message before any ring slot, then the ring in send order.
-Every message carries a heap `String`, and the handler checks each against the index FIFO order says it must
-carry; a first receive that answered the ring's head first, or answered the inbox twice, or dropped it, shows
-as `misplaced` or as a short `seen`. Exit 0 also says the inbox message's `String` was released exactly once
+⭐ **THE FIRST MESSAGE TO A SERVICE THAT HAS NEVER RUN, AND EVERY MESSAGE BEHIND IT.** At one processor with preemption off
+the service has not started when `main` sends `m0` and the 18 messages after it, so all 19 are queued behind the service's
+start. The service must answer `m0` first and then the rest in send order. Every message carries a heap `String`, and the
+handler checks each against the index FIFO order says it must carry; a first message answered out of turn, answered twice or
+dropped shows as `misplaced` or as a short `seen`. Exit 0 also says the first message's `String` was released exactly once
 (exit 101).
 ```maxon
 typealias Tally = int(0 to 1000)
@@ -1566,20 +1577,15 @@ end 'main'
 refused=100 misplaced=0 valueRefused=4
 ```
 
-<!-- test: a-mailbox-grows-with-its-queue-wrapped-around-the-ring -->
+<!-- test: a-queue-refilled-after-it-drained-keeps-fifo-order -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
-⭐ **A GROW WHILE THE QUEUE STRADDLES THE END OF THE RING.** The ring is a circular buffer, so a grow must
-copy the oldest message first even when it does not sit in slot 0. At one processor with preemption off the
-service runs only when `main` parks at an `await`. Six `note` messages and the awaited `sync` go through
-the mailbox first: the first waits in its inbox and the other five and `sync` take ring slots 0 to 5, and the
-service takes them all, which leaves the ring EMPTY with its head at slot 6 — a pop moves the head and an
-empty ring keeps its size. Eighteen more `note` messages follow. The first finds the service parked and is
-handed to it directly; the other seventeen queue from slot 6 on, so the sixteenth fills the ring by wrapping
-from slot 15 round to slot 5 and the seventeenth meets a FULL ring whose head is not 0. Every message carries a heap `String`, and the handler checks each against the index FIFO order says
-it must carry. A grow that copied slots `0..15` in place, or forgot the wrapped run, hands the loop the
-messages out of order and `misplaced` is not 0; a payload dropped or doubled by it is a leak or a double
-free (exit 101).
+⭐ **A QUEUE THAT DRAINED COMPLETELY AND FILLS AGAIN KEEPS SEND ORDER.** At one processor with preemption off the service runs
+only when `main` parks at an `await`. Six `note` messages and the awaited `sync` go through the mailbox first and the service
+takes them all, which leaves its queue empty. Eighteen more `note` messages follow, and the order must continue from where
+the first batch stopped. Every message carries a heap `String`, and the handler checks each against the index FIFO order says
+it must carry; a message lost, repeated or reordered across the drain shows as `misplaced` and a payload dropped or doubled
+as a leak or a double free (exit 101).
 ```maxon
 typealias Tally = int(0 to 1000)
 
@@ -1646,19 +1652,14 @@ drained=6
 seen=24 misplaced=0
 ```
 
-<!-- test: a-mailbox-queues-into-a-fresh-ring-after-shrinking -->
+<!-- test: a-long-queue-refilled-after-it-drained-keeps-fifo-order -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
-⭐ **A SEND INTO THE RING THE MAILBOX SHRANK TO.** A ring that has grown past its first 16 slots is replaced
-by a fresh 16-slot ring when the service pops its last message. At one processor with preemption off the
-service runs only when `main` parks at an `await`. Forty `note` messages queue first, the first in the
-mailbox's inbox and the other 39 growing the ring to 64 slots, and the awaited `sync` behind them makes the
-service take every one: the pop of `sync` empties a 64-slot ring and shrinks it. Forty more follow. The first finds the service parked and is handed to it; the
-other thirty-nine queue into the NEW ring from slot 0, which is full at 16, doubles at the seventeenth and
-doubles again at the thirty-third. Each message carries a heap `String` and the handler checks it against
-the index FIFO order says it must carry. A shrink that left the old ring's size or its head behind the new
-region writes past a 16-slot ring or reads a stale one, so the order breaks or the heap does (exit 101); a
-shrink that freed the ring the next send then used would do the same.
+⭐ **A LONG QUEUE THAT DRAINED COMPLETELY AND FILLS AGAIN KEEPS SEND ORDER.** At one processor with preemption off the service
+runs only when `main` parks at an `await`. Forty `note` messages queue first, and the awaited `sync` behind them makes the
+service take every one. Forty more follow, longer than one turn's batch of 64 once the first batch is counted again. Each
+message carries a heap `String` and the handler checks it against the index FIFO order says it must carry, so an order that
+breaks across the drain, or a heap that does (exit 101), shows here.
 ```maxon
 typealias Tally = int(0 to 1000)
 
@@ -2799,12 +2800,10 @@ error E3005: <fragment>:16:26: Value 0 is outside the range of 'MailboxCapacity'
 <!-- test: a-capacity-that-is-not-a-power-of-two-fills-drains-and-fills-again-in-order -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
-A capacity of 20 is not a power of two, so the ring grows past 16 slots to 32 while the queue stops at 20. The
-service is parked on its empty mailbox at the start of each round, so a round's first send goes straight to it
-and the next 20 queue: the 22nd send is refused. `Scheduler.yield()` lets the service run them all, which
-empties the queue and returns the grown ring to its initial size, and the second round fills it again. The
-service logs the numbers in the order it receives them, so the output pins FIFO across the growth, the drain
-and the regrowth.
+A capacity of 20 is not a power of two, so 20 sends queue ahead of the service and the 21st is refused, whether or
+not the service has already run before the round starts. `Scheduler.yield()` lets the service run them all, which
+empties the queue, and the second round fills it again. The service logs the numbers in the order it receives them,
+so the output pins FIFO across the fill, the drain and the refill.
 ```maxon
 typealias Tally = int(0 to u64.max)
 
@@ -2862,10 +2861,10 @@ end 'main'
 0
 ```
 ```stdout
-refused after 21 sends
-refused after 21 sends
-order: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41
-sent 21 then 21, taken=42
+refused after 20 sends
+refused after 20 sends
+order: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39
+sent 20 then 20, taken=40
 ```
 
 <!-- test: a-trace-capture-stop-waits-for-room-in-a-full-recorder-mailbox -->
@@ -2950,17 +2949,16 @@ kept s1
 sent s1
 ```
 
-<!-- test: a-waiting-sender-of-a-capacity-one-mailbox-lands-in-a-ring-cut-for-it -->
+<!-- test: a-waiting-sender-of-a-capacity-one-mailbox-is-admitted-behind-what-was-queued -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
-⭐ **A WAITING SENDER'S MESSAGE LANDS IN THE RING WHEN THE FIRST RECEIVE TAKES THE INBOX MESSAGE, AND THE
-MAILBOX HAS NO RING YET.** The first send fills a capacity of one while the service has never run, so `s0`
-waits in the mailbox's inbox and nothing is queued behind it. The second send, given `sendTimeout:`, finds the
-mailbox full and parks `main` on the sender queue. The service's first receive hands `s0` to the loop and
-must put `main`'s `s1` somewhere that is not the inbox the loop now reads, so it cuts the ring there, queues
-`s1` in it and readies `main`. The loop then runs `s0` and `s1` in that order. A third send after `main` wakes
-and an awaited `count` behind it show the mailbox keeps working after its ring was cut late: `s2` is run
-before the count is read.
+⭐ **A WAITING SENDER IS ADMITTED BEHIND WHAT WAS QUEUED WHEN THE SERVICE STARTS ITS FIRST MESSAGE.** The first send fills a
+capacity of one while the service has never run, so `s0` is queued and nothing is behind it. The second send, given
+`sendTimeout:`, finds the mailbox full and parks `main` on the sender queue. When the service starts `s0` it frees the slot,
+which goes to `main`'s `s1`: `s1` is queued behind `s0` and `main` is readied. The service then runs `s0` and `s1` in that
+order. A third send after `main` wakes, a yield that lets the service start it (a queued message holds its slot until the
+handler starts) and an awaited `count` behind it show the mailbox keeps working afterwards: `s2` is run before the count
+is read.
 ```maxon
 type Store
 	var n as Integer
@@ -2994,6 +2992,7 @@ function main() returns ExitCode
 
 	print("sent s1\n")
 	try h.keep("s{2}") otherwise panic("the service has drained its queue, so a capacity of one takes the send")
+	Scheduler.yield()
 
 	let n = try await h.count() otherwise 'gone'
 		return 9
@@ -3015,17 +3014,14 @@ kept s2
 count=3
 ```
 
-<!-- test: a-waiting-sender-meets-a-full-ring-and-grows-it-when-the-inbox-message-leaves -->
+<!-- test: a-waiting-sender-of-a-capacity-seventeen-mailbox-is-admitted-in-fifo-order -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
-⭐ **A WAITING SENDER'S MESSAGE NEEDS A RING SLOT THE FIRST RECEIVE DID NOT FREE.** A capacity of 17 starts a
-16-slot ring. At one processor with preemption off the service has not run when `main` sends 17 messages: `m0`
-waits in the inbox and `m1` to `m16` fill the ring exactly. The eighteenth, given `sendTimeout:`, finds the
-mailbox full and parks `main`. The service's first receive takes the inbox message, which frees no ring slot,
-so the waiting `m17` must grow the full ring before it is queued behind `m16`. The handler checks each
-message against the index FIFO order says it must carry, and every message carries a heap `String`, so a
-sender placed over the ring's oldest slot, or a ring that was not grown, shows as `misplaced` or as a heap
-error (exit 101).
+⭐ **A WAITING SENDER BEHIND A FULL QUEUE IS ADMITTED LAST.** A capacity of 17 takes 17 messages while the service has not
+run: `m0` to `m16` fill the mailbox exactly. The eighteenth, given `sendTimeout:`, finds the mailbox full and parks `main`.
+When the service starts `m0` the slot it frees goes to the waiting `m17`, which is queued behind `m16`. The handler checks
+each message against the index FIFO order says it must carry, and every message carries a heap `String`, so a sender admitted
+ahead of an older message, or a message lost on the way in, shows as `misplaced` or as a heap error (exit 101).
 ```maxon
 typealias Tally = int(0 to 1000)
 
@@ -3083,16 +3079,15 @@ end 'main'
 seen=18 misplaced=0
 ```
 
-<!-- test: shutdown-before-the-service-runs-fails-a-waiting-sender-and-still-runs-the-inbox-message -->
+<!-- test: shutdown-before-the-service-runs-fails-a-waiting-sender-and-still-runs-the-queued-message -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
-⭐ **A WAITING SENDER BEHIND THE INBOX MESSAGE OF A SERVICE THAT HAS NEVER RUN, AND A `shutdown()` BEFORE IT
-DOES.** The waiting green thread cannot shut the service down itself, so a second service, `Closer`, does, and
-it is spawned after `Store` so that it runs before it. `s0` fills `Store`'s one slot while `Store` has never run,
-so it waits in the mailbox's inbox. `close` goes to `Closer`, and `s1`, given `sendTimeout:`, finds the mailbox
-full and parks `main` on the sender queue. Its wait is what lets `Closer` run: `Closer` shuts `Store` down
-while `s0` is still in the inbox and `s1` still waits. The waiting send fails `serviceStopped` with its
-`String`, and `Store`, which first runs after the shutdown, still runs `s0` from the inbox.
+⭐ **A WAITING SENDER BEHIND THE QUEUED MESSAGE OF A SERVICE THAT HAS NEVER RUN, AND A `shutdown()` BEFORE IT DOES.** The waiting
+green thread cannot shut the service down itself, so a second service, `Closer`, does, and it is spawned after `Store` so
+that it runs before it. `s0` fills `Store`'s one slot while `Store` has never run, so it is queued. `close` goes to `Closer`,
+and `s1`, given `sendTimeout:`, finds the mailbox full and parks `main` on the sender queue. Its wait is what lets `Closer`
+run: `Closer` shuts `Store` down while `s0` is still queued and `s1` still waits. The waiting send fails `serviceStopped`
+with its `String`, and `Store`, which first runs after the shutdown, still runs `s0`.
 ```maxon
 let longTimeoutMs = 60000
 
@@ -4230,13 +4225,13 @@ typealias Integer = int(i64.min to i64.max)
 ⭐⭐ **TWO SERVICES, TWO PAYLOAD KINDS, AND THE CROSSING BETWEEN TWO NAME TABLES.** `Logger.say` takes a
 `String` and CALLS A METHOD on it; `Worker.run` takes a `Logger.handle`. Neither is remarkable alone — the
 cases above pin each — and together they are the first program in this file whose signature-index and project
-name tables have DIVERGED at the id a payload carries. `<T>.__loop` resolves that id, and it has to resolve it
+name tables have DIVERGED at the id a payload carries. `<T>.__behave` resolves that id, and it has to resolve it
 against the table it came out of.
 
 ⛔ **RESOLVED AGAINST THE WRONG TABLE, IT IS A CLEAN REFUSAL OF A CORRECT PROGRAM:** `E3005 argument type
 mismatch for 'sink': expected 'Logger.handle', got 'ExitCode'` — with no file and no line, because the check
-is walking the synthesized loop. `ExitCode` is simply what the OTHER table holds at that number. See
-`Runtime/ServiceLoop.maxon`'s header for the crossing and `ModuleInit.projectScopedNameId` for the carrier's
+is running the synthesized behaviour. `ExitCode` is simply what the OTHER table holds at that number. See
+`Runtime/ServiceBehaviour.maxon`'s header for the crossing and `ModuleInit.projectScopedNameId` for the carrier's
 two-sided contract.
 
 ⚠ **WHY IT TAKES TWO SERVICES AND A METHOD CALL.** The two tables agree at every id until enough types are
@@ -5130,8 +5125,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3104: <fragment>:15:10: 'spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation
-error E3104: <fragment>:16:6: a message send lowers to the runtime entry '__mbox_send', which has no wasm32-wasi implementation
+error E3104: <fragment>:15:10: 'spawn' lowers to the runtime entry '__cown_spawn', which has no wasm32-wasi implementation
+error E3104: <fragment>:16:6: a message send lowers to the runtime entry '__cown_send', which has no wasm32-wasi implementation
 ```
 
 <!-- test: a-scalar-only-record-crosses-whole -->
@@ -9523,8 +9518,8 @@ note: <fragment>:28:10: the `spawn` that makes `Store` a service
 
 <!-- test: error.a-reply-may-not-return-a-message-parameter -->
 ⭐⭐ **THE SECOND POPULATION E3137 REFUSES.** `s`
-is reachable from nothing — it is a message PARAMETER, which arrives BORROWED out of the message the loop
-still owns and releases (`ServiceLoop.dropUnconsumedPayloads`). Handing it back would give the awaiter a
+is reachable from nothing — it is a message PARAMETER, which arrives BORROWED out of the message the behaviour
+still owns and releases (`ServiceBehaviour.dropUnconsumedPayloads`). Handing it back would give the awaiter a
 second reference to it, which is the same two-green-threads-one-refcount picture `return self` draws.
 
 ⚠ **THE CURE IS THE SAME `.clone()`**, but the refusal does not tell the author their value is reachable
@@ -10084,7 +10079,7 @@ error E3057: <fragment>:16:16: throwing function requires try: 'Calc.total'
 single word holding the handler error's `ordinal + bias`; a payload-carrying union's flag is a heap POINTER
 instead, so the box would cross green threads with no soleness rule to say it may.
 
-⚠ **IT FIRES AT THE `spawn` AND NOT AT A SEND, AND THAT IS FORCED RATHER THAN CONVENTIONAL.** `<T>.__loop` is
+⚠ **IT FIRES AT THE `spawn` AND NOT AT A SEND, AND THAT IS FORCED RATHER THAN CONVENTIONAL.** `<T>.__behave` is
 synthesized from the DECLARATION and completes a reply for every reply-bearing message of the type, so a
 message the cell cannot carry would put a wrong-width store into a body the service really runs — whether or
 not the program ever sends that message. There is no `spawn`-free program here to check it against.
@@ -11777,267 +11772,228 @@ typealias Integer = int(i64.min to i64.max)
 names a thread true
 ```
 
-<!-- test: a-service-shut-down-with-async-work-in-flight -->
+<!-- test: a-handler-that-awaits-its-coroutine-before-it-returns-leaves-nothing-in-flight -->
 <!-- procs: 4 -->
-⭐⭐ **A SERVICE SHUT DOWN WHILE A COROUTINE ITS HANDLER STARTED IS PARKED, AND THE PROOF THAT NOTHING IS
-STRANDED.** A coroutine runs only on its owner's strand, so if `<T>.__loop` exits with one still in flight
-and nothing reclaims it, nothing ever runs it again — and a stranded record never reaches the exit gate, so
-the exit gate alone cannot see the loss.
-
-`fire` builds the shape in three steps, and each one is load-bearing:
-
-- **`Scheduler.yield()` after the `async`** hands the strand to the coroutine, which runs until its `sleep` parks
-  it on a timer. The handler then reads `probe.started` and `isComplete()` answering `false`, so `parked=8`
-  says every one of the eight coroutines had started and not finished when its handler returned.
-- **The promise is kept in the service's state**, so the one thing that drops it is the shutdown's state drop
-  in `<T>.__loop`'s teardown, with the coroutine still parked: its timer is `ForeverMs`, so the coroutine
-  cannot finish before the shutdown reaches it.
-- **The coroutine carries a managed argument**, the `Probe`, which only the coroutine's reclaim releases.
-
-⛔ **A PROMISE DISCARDED AT ITS OWN STATEMENT BUILDS NONE OF THIS.** `let p = async slowWork(v)` followed by
-`_ = p` renounces the coroutine before it ever runs (`async-promise-drop.parked-timer-drop-cancel`'s ⚠), so
-the drop takes the queued arm and the shutdown finds nothing in flight. With a `Probe` in that shape it
-reads `started=0` at one processor and at four, even with `main` sleeping 50 ms before asking — and that
-shape stays GREEN under the sabotage below.
-
-✅ **THE `Probe` IS WHAT LETS THIS CASE SEE A LOST RECLAIM.** With the runner's half removed from
-`__gt_promise_drop`'s parked arm, the coroutine is never reclaimed and neither is its service's green thread,
-whose strand reference it still holds; this case exits **101** at one, four and sixteen processors, because the
-`Probe` is released only by that reclaim. The exit gate proper cannot see the loss — the drop's consumer half
-has already debited the green-thread live count — so the same program without the `Probe` argument exits 42 under the
-sabotage, carving more records than a sound runtime does.
-
-⭐ **THE SCHEDULER'S RECORD-CARVE COUNT IS THE INSTRUMENT THAT SEES A STRANDED RECORD.**
-`scripts/multicore-stress/service-async-strand-torture.maxon` runs this shape in batches of twenty services.
-A runtime that reclaims every record carves no more than two batches' records plus fewer than 64 on each of
-every other processor's two free lists, one of records and one of reply cells, plus the thirty-one spare cells
-one reply-cell carve leaves on the carving processor's own list, however many rounds run, and the torture runs until one record lost per round
-would carry `Scheduler.counters().threadRecordsCarved` to twice that bound. Every round reaches the shape (`parked=`
-equals the rounds) and the count stays under the bound at `MAXON_MAX_PROCS` 1, 4 and 16 — where the
-sabotaged runtime above exceeds it and exits 101. The
-CONTROL, the same batches with the handler `await`ing its coroutine so nothing is in flight at the shutdown,
-stays under the bound too.
-
-What reclaims the coroutine is the drop, not a sweep of the strand: the shutdown's state drop reaches the
-parked coroutine's promise, `__gt_promise_drop` takes it out of the timer store and performs both halves of
-its teardown. That runner half is also what releases the coroutine's strand reference (`GtOffStrandRefs`);
-without it the owner's record outlives `<T>.__loop` for ever, which is the second record the sabotage loses
-per round.
-
-The drop can leave another machine blocked in the poller until the deadline it just removed, and that
-machine counts as running, so the exit drain cannot end while it waits. With a `ForeverMs` timer that wait
-never ends; `__sched_break_idle_poller`, which the drop calls once nothing is left pending, breaks it.
-
-⇒ **the case is the proof.** It pins that a service may be shut down with `async` work in flight and
-the process still terminates cleanly — no 101, no 75, no hang.
+A handler may start a coroutine and yield to it, as long as it `await`s the coroutine before it returns: the result goes
+in the state and nothing in flight outlives the message. The service may be shut down with the coroutine long done, and the
+process ends cleanly (exit 0 also says no coroutine record was lost).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
-typealias StartedCell = SharedValue with bool
 
-// The shutdown's drop cancels the timer, so nothing ever waits it out.
-let WorkSleepMs = ForeverMs
-
-function slowWork(n Integer, started StartedCell) returns Integer
-	started.publish(true)
-	sleep(WorkSleepMs)
+function work(n Integer) returns Integer
+	sleep(1)
 	return n * 2
-end 'slowWork'
+end 'work'
 
 type Worker
-	var pending as IntPromiseArray
+	var total as Integer
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create(0)}
+		return Self{total: 0}
 	end 'create'
 
-	// The yield hands the strand to the coroutine, which runs until its sleep parks it. The promise then lives
-	// in the service's state, so the shutdown's state drop is the one thing that can reach it.
-	export function fire(v Integer) returns Integer
-		let started = StartedCell.create(false)
-		let p = async slowWork(v, started: started.clone())
+	export function add(v Integer) returns Integer
+		let p = async work(v)
 		Scheduler.yield()
-		let parked = started.current() and not p.isComplete()
-		self.pending.push(p)
-		return 1 if parked else 0
-	end 'fire'
+		self.total = self.total + (await p)
+		return self.total
+	end 'add'
 end 'Worker'
 
 function main() returns ExitCode
-	var parked = 0 as Integer
+	let w = spawn Worker.create()
+	var last = 0 as Integer
 
-	for round in 1 to 8 'rounds'
-		let w = spawn Worker.create()
-		parked = parked + (try await w.fire(round) otherwise 0)
+	for round in 1 to 4 'rounds'
+		last = try await w.add(round) otherwise 0
 	end 'rounds'
 
-	print("parked={parked}\n")
-	return 42
-end 'main'
-```
-```exitcode
-42
-```
-```stdout
-parked=8
-```
-
-<!-- test: a-service-shut-down-with-a-coroutine-parked-on-a-child -->
-<!-- procs: 4 -->
-<!-- tier: stdlib -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-**THE SAME SHUTDOWN, WITH THE COROUTINE PARKED ON A CHILD PROCESS.** The drop takes the poller arm of
-`__gt_promise_drop` (`__np_pd_drop`) instead of the timer arm. The handler yields until
-`Scheduler.counters().netpollBlocks` passes the count the coroutine recorded just before starting the child,
-so `parked=3` says each coroutine was parked on its child when its handler returned. Windows only, because
-the child is `cmd`'s `ping`.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
-
-typealias ParkedFrom = SharedValue with SchedulerEventCount
-
-function waitOnChild(parkedFrom ParkedFrom) returns Integer
-	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
-	return try __Builtins.runProcess("cmd /c ping -n 3 127.0.0.1 >nul") otherwise 99
-end 'waitOnChild'
-
-function parkedOnChild(parkedFrom ParkedFrom) returns bool
-	let recorded = parkedFrom.current()
-
-	if recorded == 0 'notYet'
-		return false
-	end 'notYet'
-
-	return Scheduler.counters().netpollBlocks >= recorded
-end 'parkedOnChild'
-
-type Worker
-	var pending as IntPromiseArray
-	let parkedFrom as ParkedFrom
-
-	static function create() returns Self
-		return Self{pending: IntPromiseArray.create(0), parkedFrom: ParkedFrom.create(0 as SchedulerEventCount)}
-	end 'create'
-
-	export function fire() returns Integer
-		let p = async waitOnChild(self.parkedFrom.clone())
-
-		while not parkedOnChild(self.parkedFrom) 'untilParked'
-			Scheduler.yield()
-		end 'untilParked'
-
-		let parked = not p.isComplete()
-		self.pending.push(p)
-		return 1 if parked else 0
-	end 'fire'
-end 'Worker'
-
-function main() returns ExitCode
-	var parked = 0 as Integer
-
-	for _ in 1 to 3 'rounds'
-		let w = spawn Worker.create()
-		parked = parked + (try await w.fire() otherwise 0)
-	end 'rounds'
-
-	print("parked={parked}\n")
-	return 42
-end 'main'
-```
-```exitcode
-42
-```
-```stdout
-parked=3
-```
-
-<!-- test: a-service-shut-down-with-a-coroutine-parked-in-recv -->
-<!-- procs: 4 -->
-**THE SAME SHUTDOWN, WITH THE COROUTINE PARKED IN A SOCKET READ** that its peer, the service's own
-listener, never answers. On epoll and kqueue the drop takes the poller arm (`__np_pd_drop`). On Windows the
-read has an overlapped request in flight, so the drop cancels it and takes the queued arm instead.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
-
-typealias ParkedFrom = SharedValue with SchedulerEventCount
-
-function stall(port NetworkPort, parkedFrom ParkedFrom) returns Integer
-	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return 1
-
-	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
-	_ = try client.recv(1024) otherwise return 2
-
+	print("total={last}\n")
+	w.shutdown()
 	return 0
-end 'stall'
-
-function parkedInRecv(parkedFrom ParkedFrom) returns bool
-	let recorded = parkedFrom.current()
-
-	if recorded == 0 'notYet'
-		return false
-	end 'notYet'
-
-	return Scheduler.counters().netpollBlocks >= recorded
-end 'parkedInRecv'
-
-type Worker
-	var pending as IntPromiseArray
-	let parkedFrom as ParkedFrom
-	var listener as TcpListener
-
-	static function create() returns Self
-		let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise panic("a loopback bind on an ephemeral port succeeds")
-		return Self{pending: IntPromiseArray.create(0), parkedFrom: ParkedFrom.create(0 as SchedulerEventCount), listener: listener}
-	end 'create'
-
-	export function fire() returns Integer
-		let p = async stall(self.listener.port(), parkedFrom: self.parkedFrom.clone())
-
-		while not parkedInRecv(self.parkedFrom) 'untilParked'
-			Scheduler.yield()
-		end 'untilParked'
-
-		let parked = not p.isComplete()
-		self.pending.push(p)
-		return 1 if parked else 0
-	end 'fire'
-end 'Worker'
-
-function main() returns ExitCode
-	var parked = 0 as Integer
-
-	for _ in 1 to 8 'rounds'
-		let w = spawn Worker.create()
-		parked = parked + (try await w.fire() otherwise 0)
-	end 'rounds'
-
-	print("parked={parked}\n")
-	return 42
 end 'main'
 ```
 ```exitcode
-42
+0
 ```
 ```stdout
-parked=8
+total=20
 ```
 
-<!-- test: a-service-that-keeps-a-coroutine-across-a-reply -->
+<!-- test: an-idle-service-holds-no-green-thread -->
 <!-- procs: 1 -->
-⭐⭐ **A SERVICE THAT OWNS AN UNFINISHED COROUTINE PARKS ON ITS MAILBOX LIKE ANY OTHER SERVICE.** `start`
-leaves `async work()` in the service's own state and replies, so between that reply and the next message the
-service waits on its mailbox still owning a coroutine that has not run. `main` then awaits `finish`.
+<!-- preempt: off -->
+⭐⭐ **A SERVICE WITH NOTHING QUEUED OWNS NO GREEN THREAD.** A hundred services are spawned one after another, each answers
+one reply, and every handle is kept alive. A service whose queue is empty is parked nowhere: the green thread that took its
+last message has ended and its record is back on a free list, so the next service's turn reuses it. At one processor with
+preemption off the scheduler's arena carves one fixed chunk of records, however many services exist: one service and two
+hundred carve the same number. A service that kept a thread parked for its next message would carve one record each on top
+of that chunk, so a hundred services would carve more than a hundred.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ProbeHandles = Array with Probe.handle
 
-⛔ **A WAIT PARKS, AND THIS SHAPE IS WHY IT MAY DO NOTHING ELSE.** A mailbox wait that ran other green
-threads nested on the waiter's stack would run `main` on top of the service — and `main`, awaiting the
-`finish` reply only that service can send, would be waiting on the frame it is standing on: such a runtime
-exits **92** (`schedulerDeadlock`) at one processor and at four. The service parks onto its
-machine's scheduler context instead, `main` runs on its own stack, and the program answers `1 + 1`.
+let services = 100
+
+let carveBound = 64
+
+type Probe
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function value() returns Integer
+		return self.n
+	end 'value'
+end 'Probe'
+
+function main() returns ExitCode
+	var handles = ProbeHandles.create(0)
+	var total = 0 as Integer
+
+	for i in 0 upto services 'eachService'
+		let h = spawn Probe.create(i)
+		total = total + (try await h.value() otherwise 0)
+		handles.push(h)
+	end 'eachService'
+
+	let carved = Scheduler.counters().threadRecordsCarved as Integer
+	print("total={total} idleServicesHoldNoThread={carved < carveBound}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+total=4950 idleServicesHoldNoThread=true
+```
+
+<!-- test: known-gap-a-promise-captured-by-a-closure-in-service-state-aborts-when-the-state-drops -->
+⚠ **A KNOWN GAP: THE STATE-FIELD REFUSAL SEES A PROMISE IN A FIELD'S TYPE, NOT ONE A CLOSURE CAPTURED.** `Keeper.size` is a
+function-typed field, so no `Promise` appears in the state's type and the build accepts it. The factory starts a coroutine,
+keeps its promise in a local array, and stores a closure that captures the array. The coroutine belongs to the strand that ran
+the factory, and the state is dropped by the runner that finishes the service, so the drop reaches a promise from a green
+thread that does not hold its strand and the runtime aborts with exit **70**. The abort is the backstop that stands in for a
+build refusal.
+```maxon
+typealias Count = int(0 to u64.max)
+typealias Sizer = function() returns Count
+typealias PromiseArray = Array with (Promise with Count)
+
+function compute() returns Count
+	sleep(1)
+	return 3
+end 'compute'
+
+type Keeper
+	var size as Sizer
+
+	static function create() returns Self
+		var ps = PromiseArray.create(0)
+		ps.push(async compute())
+		let w = function() gives ps.count() as Count
+		return Self{size: w}
+	end 'create'
+
+	export function reading() returns Count
+		return self.size()
+	end 'reading'
+end 'Keeper'
+
+function main() returns ExitCode
+	let h = spawn Keeper.create()
+	let n = try await h.reading() otherwise 0
+	print("reading={n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+70
+```
+```stdout
+reading=1
+```
+```stderr
+fatal error: promise dropped by a machine that does not hold its strand
+```
+
+<!-- test: a-cown-yields-its-processor-after-a-batch -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+⭐⭐ **A SERVICE TAKES AT MOST 64 MESSAGES PER TURN AND THEN LETS EVERY OTHER RUNNABLE SERVICE RUN.** At one processor with
+preemption off `main` queues 5000 `tick` messages to each of two services before it awaits, so both have a backlog far
+longer than one batch. Each handler counts its own messages and, on its 65th, records how far the other service has
+counted. A service that drained its whole backlog before yielding would reach its 65th message while the other had
+counted nothing (the first service records 0); batches of 64 interleave the two, so both record at least 64. Which service
+runs its first batch first is not pinned: either order leaves the second batch of the first service to see the other's
+first batch.
+```maxon
+typealias Count = int(0 to u64.max)
+typealias CountCell = SharedValue with Count
+
+let backlog = 5000
+let batchPlusOne = 65
+
+type Ticker
+	var n as Count
+	let mine as CountCell
+	let theirs as CountCell
+	let seen as CountCell
+
+	static function create(mine CountCell, theirs CountCell, seen CountCell) returns Self
+		return Self{n: 0, mine: mine, theirs: theirs, seen: seen}
+	end 'create'
+
+	export function tick()
+		self.n = self.n + 1
+		self.mine.publish(self.n)
+
+		if self.n == batchPlusOne 'recordTheOther'
+			self.seen.publish(self.theirs.current())
+		end 'recordTheOther'
+	end 'tick'
+
+	export function done() returns Count
+		return self.n
+	end 'done'
+end 'Ticker'
+
+function main() returns ExitCode
+	let countA = CountCell.create(0 as Count)
+	let countB = CountCell.create(0 as Count)
+	let seenA = CountCell.create(0 as Count)
+	let seenB = CountCell.create(0 as Count)
+	let a = spawn(capacity: 8192) Ticker.create(countA.clone(), theirs: countB.clone(), seen: seenA.clone())
+	let b = spawn(capacity: 8192) Ticker.create(countB.clone(), theirs: countA.clone(), seen: seenB.clone())
+
+	for _ in 0 upto backlog 'fill'
+		try a.tick() otherwise panic("a capacity of 8192 takes 5000 sends")
+	end 'fill'
+
+	for _ in 0 upto backlog 'fillB'
+		try b.tick() otherwise panic("a capacity of 8192 takes 5000 sends")
+	end 'fillB'
+
+	let doneA = try await a.done() otherwise 0
+	let doneB = try await b.done() otherwise 0
+	print("done={doneA} {doneB} interleaved={seenA.current() >= 64 and seenB.current() >= 64}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+done=5000 5000 interleaved=true
+```
+
+<!-- test: error.a-service-field-holding-a-promise-array-is-refused -->
+A service's state is run by whichever green thread takes its next message, and a coroutine belongs to the strand that started it,
+so a promise kept in the state could be awaited or dropped by a strand that does not own its coroutine. A field of an array of
+promises is refused at the `spawn`; `await` the promise before the message returns and keep its result in the field.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -12072,18 +12028,15 @@ function main() returns ExitCode
 	return (a + b) as ExitCode
 end 'main'
 ```
-```exitcode
-2
+```maxoncstderr
+error E3216: <fragment>:29:10: `Svc.pending` is a `IntPromiseArray` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it. `Svc` is a service, and a service's state is run by whichever green thread takes its next message, so a promise kept in it could be awaited or dropped by a strand that does not own its coroutine. `await` the promise (or `.cancel()` it) before the message or factory returns and keep its result in the field
 ```
 
-<!-- test: a-service-that-keeps-a-coroutine-across-a-reply.on-four-processors -->
-<!-- procs: 4 -->
-The same program on four processors, where the service and `main` may run on different machines — so the
-nesting cannot be read as an artifact of one machine running everything. A nesting runtime deadlocks here too.
+<!-- test: error.a-service-field-holding-a-promise-is-refused -->
+The same rule for a field whose type is a `Promise` itself.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
 
 function work() returns Integer
 	sleep(1)
@@ -12091,159 +12044,66 @@ function work() returns Integer
 end 'work'
 
 type Svc
-	var pending as IntPromiseArray
+	var held as IntPromise
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create(0)}
+		return Self{held: async work()}
 	end 'create'
 
-	export function start() returns Integer
-		self.pending.push(async work())
+	export function ping() returns Integer
 		return 1
-	end 'start'
-
-	export function finish() returns Integer
-		return self.pending.count() as Integer
-	end 'finish'
+	end 'ping'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let a = try await h.start() otherwise 0
-	let b = try await h.finish() otherwise 0
-	return (a + b) as ExitCode
+	h.shutdown()
+	return 0
 end 'main'
 ```
-```exitcode
-2
+```maxoncstderr
+error E3216: <fragment>:23:10: `Svc.held` is a `IntPromise` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it. `Svc` is a service, and a service's state is run by whichever green thread takes its next message, so a promise kept in it could be awaited or dropped by a strand that does not own its coroutine. `await` the promise (or `.cancel()` it) before the message or factory returns and keep its result in the field
 ```
 
-<!-- test: a-service-readied-while-its-own-coroutine-holds-the-strand -->
-<!-- procs: 1 -->
-⭐⭐ **A SEND TO A SERVICE PARKED ON ITS MAILBOX, WHILE A COROUTINE OF ITS OWN STILL HOLDS ITS STRAND, IS
-DELIVERED, AND THE SERVICE RUNS ON THAT STRAND.** A service and the coroutines it starts are one strand, and
-one machine at a time runs it: whoever claims the strand's holder publishes its token, and while it is held
-a readied member goes onto the strand queue for the holding machine to find. A send that finds its service
-parked readies it. When the strand is free that ready may claim the strand and publish it with no lock;
-when the strand is held, as here, the claim fails and the send takes the locked road, which pushes the
-service onto the front of its strand queue under the strand's own lock. This case is the second shape.
-
-`start` leaves `async work(self.arrived.clone())` in the service's state and replies, so the service parks on its
-empty mailbox and its strand runs `work` next. `work` yields until `finish` has run, and a yielding strand
-keeps its holder: the strand goes to the global queue's tail with `work` in it, and it is never given up.
-So whenever `main`'s `finish` arrives, the service is parked on its mailbox and the strand is held by `work`
-— on one processor `main` runs only once the service has parked and `work` has yielded the machine. The
-send must therefore leave the service where the holding strand finds it: `finish` sets `arrived`, `work`
-sees it at its next turn and returns 5, and `finish` answers it, so the program answers `1 + 5`.
-
-⛔ **A READY THAT PUBLISHED THE SERVICE WHILE `work` HOLDS THE STRAND** would hand one strand to two machines,
-or queue the service where its holding strand never looks. The first runs the service beside its own
-coroutine — two members of one strand at once. The second loses the wake: `finish` never runs, `work`
-yields for ever, and the case times out.
-
-✅ **A SOUNDNESS CONTROL, GREEN WHEN EVERY READY TAKES THE STRAND LOCK**, because then the locked road is
-the only road. It pins that a ready road which claims the strand without that lock still falls back to the
-locked road on a held strand. Which road a ready took is not observable from the program: both deliver the
-message, and the answer is the same. What makes this the held-strand road is the shape — `work` cannot
-return before `finish` has run, so the strand is held at the send.
+<!-- test: error.a-service-field-holding-a-record-that-holds-a-promise-is-refused -->
+A record that holds a promise is as much a promise in the state as the promise itself.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
 
-typealias ArrivedCell = SharedValue with bool
-
-function work(arrived ArrivedCell) returns Integer
-	while not arrived.current() 'spin'
-		Scheduler.yield()
-	end 'spin'
-
+function work() returns Integer
+	sleep(1)
 	return 5
 end 'work'
 
-type Svc
-	var pending as IntPromiseArray
-	let arrived as ArrivedCell
+type Holder
+	export var held as IntPromise
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create(0), arrived: ArrivedCell.create(false)}
+		return Self{held: async work()}
+	end 'create'
+end 'Holder'
+
+type Svc
+	var slot as Holder
+
+	static function create() returns Self
+		return Self{slot: Holder.create()}
 	end 'create'
 
-	export function start() returns Integer
-		self.pending.push(async work(self.arrived.clone()))
+	export function ping() returns Integer
 		return 1
-	end 'start'
-
-	export function finish() returns Integer
-		self.arrived.publish(true)
-		let p = try self.pending.pop() otherwise return 0
-		return await p
-	end 'finish'
+	end 'ping'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let a = try await h.start() otherwise 0
-	sleep(1)
-	let b = try await h.finish() otherwise 0
-	return (a + b) as ExitCode
+	h.shutdown()
+	return 0
 end 'main'
 ```
-```exitcode
-6
-```
-
-<!-- test: a-service-readied-while-its-own-coroutine-holds-the-strand.on-four-processors -->
-<!-- procs: 4 -->
-The same program on four processors, where `main` and the strand run on different machines, so the send
-and the strand's yields race. `main` sleeps before it sends so that the service has parked by then; were the
-message to arrive first, the service would find it without parking, and the answer would be the same. A
-ready that published the service beside its running coroutine runs two members of one strand at once here.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
-
-typealias ArrivedCell = SharedValue with bool
-
-function work(arrived ArrivedCell) returns Integer
-	while not arrived.current() 'spin'
-		Scheduler.yield()
-	end 'spin'
-
-	return 5
-end 'work'
-
-type Svc
-	var pending as IntPromiseArray
-	let arrived as ArrivedCell
-
-	static function create() returns Self
-		return Self{pending: IntPromiseArray.create(0), arrived: ArrivedCell.create(false)}
-	end 'create'
-
-	export function start() returns Integer
-		self.pending.push(async work(self.arrived.clone()))
-		return 1
-	end 'start'
-
-	export function finish() returns Integer
-		self.arrived.publish(true)
-		let p = try self.pending.pop() otherwise return 0
-		return await p
-	end 'finish'
-end 'Svc'
-
-function main() returns ExitCode
-	let h = spawn Svc.create()
-	let a = try await h.start() otherwise 0
-	sleep(1)
-	let b = try await h.finish() otherwise 0
-	return (a + b) as ExitCode
-end 'main'
-```
-```exitcode
-6
+```maxoncstderr
+error E3216: <fragment>:31:10: `Svc.slot` is a `Holder` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it. `Svc` is a service, and a service's state is run by whichever green thread takes its next message, so a promise kept in it could be awaited or dropped by a strand that does not own its coroutine. `await` the promise (or `.cancel()` it) before the message or factory returns and keep its result in the field
 ```
 
 <!-- test: main-is-never-run-on-top-of-a-service-it-awaits -->
@@ -12321,8 +12181,8 @@ a=7 b=7
 ```
 
 <!-- test: an-unsent-message-that-calls-the-library-still-compiles -->
-**A MESSAGE NOBODY SENDS IS STILL REACHABLE, BECAUSE THE SERVICE LOOP DISPATCHES IT.** `spawn` makes the
-synthesized `Reader.__loop` live, and that loop's switch names every message the type exports, so `read` is
+**A MESSAGE NOBODY SENDS IS STILL REACHABLE, BECAUSE THE SERVICE'S BEHAVIOUR DISPATCHES IT.** `spawn` makes the
+synthesized `Reader.__behave` live, and its switch names every message the type exports, so `read` is
 code the program keeps whether or not any handle ever calls it. Its call to `String.count` is therefore a live
 edge into the standard library. The compiler decides which library bodies to build by one reachability walk
 and which functions to keep by another; both must follow the loop's dispatch, or the second keeps a function
@@ -12386,7 +12246,7 @@ end 'main'
 ```
 
 <!-- test: a-message-that-spawns-a-service-keeps-that-services-unsent-messages-alive -->
-The edge is transitive. `Outer.start` is sent, and its body spawns `Inner`, so `Inner.__loop` is live and every
+The edge is transitive. `Outer.start` is sent, and its body spawns `Inner`, so `Inner.__behave` is live and every
 message it dispatches is reached — including `Inner.read`, which nobody sends and which calls the library.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -13465,45 +13325,6 @@ end 'main'
 ```maxoncstderr
 error E3137: <fragment>:21:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
 note: <fragment>:32:15: the `spawn` that makes `Worker` a service
-```
-
-<!-- test: error.spawn-factory-reaching-a-module-var-through-a-function-is-refused -->
-`create` runs on the service's own green thread, and the function it calls keeps a record in a module-level
-registry that `main` reads: one word two threads share.
-```maxon
-typealias Tally = int(0 to u64.max)
-typealias TallyArray = Array with Tally
-
-var registry = TallyArray.create(0)
-
-function remember(scale Tally)
-	registry.push(scale)
-end 'remember'
-
-type Worker
-	var scale as Tally
-
-	static function create(scale Tally) returns Self
-		remember(scale)
-		return Self{scale: scale}
-	end 'create'
-
-	export function measure(n Tally) returns Tally
-		return n * self.scale
-	end 'measure'
-end 'Worker'
-
-function main() returns ExitCode
-	let worker = spawn Worker.create(2)
-	let total = try await worker.measure(21) otherwise panic("the worker is running")
-	print("{total} {registry.count()}\n")
-	worker.shutdown()
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3143: <fragment>:8:2: `remember` uses the module-level `var registry`, and the factory `Worker.create` reaches it — a message or a factory runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `registry` a `let`
-note: <fragment>:25:15: the `spawn` that makes `Worker` a service
 ```
 
 <!-- test: error.reply-a-sibling-returns-a-local-another-local-aliases-refused -->
@@ -16820,7 +16641,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:25:10: 'startProbe' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation
+error E3104: <fragment>:25:10: 'startProbe' lowers to the runtime entry '__cown_spawn', which has no wasm32-wasi implementation
 ```
 
 <!-- test: error.a-library-send-is-rejected-at-its-crossing-on-wasm -->
@@ -16856,7 +16677,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:24:14: 'spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation
+error E3104: <fragment>:24:14: 'spawn' lowers to the runtime entry '__cown_spawn', which has no wasm32-wasi implementation
 error E3104: <fragment>:25:9: 'askProbe' lowers to the runtime entry '__gt_cell_alloc', which has no wasm32-wasi implementation
 ```
 
@@ -17356,10 +17177,9 @@ end 'main'
 0
 ```
 
-<!-- test: services.a-promise-the-factory-starts-belongs-to-the-services-strand -->
-The factory runs on the new service's own green thread, so a coroutine it starts belongs to the service's strand and
-the service's teardown may reclaim it. Started in the spawner, the same coroutine would be dropped by a machine that
-does not hold its strand.
+<!-- test: error.a-factory-that-starts-a-promise-the-state-keeps-is-refused -->
+The factory runs on whichever green thread takes the service's first turn, and a later message may run on another, so a
+coroutine the factory leaves in the state would belong to a strand that no later message shares.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Napped = Promise with Integer
@@ -17391,16 +17211,12 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```stdout
-v=1
-```
-```exitcode
-0
+```maxoncstderr
+error E3216: <fragment>:24:10: `Sleeper.held` is a `Napped` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it. `Sleeper` is a service, and a service's state is run by whichever green thread takes its next message, so a promise kept in it could be awaited or dropped by a strand that does not own its coroutine. `await` the promise (or `.cancel()` it) before the message or factory returns and keep its result in the field
 ```
 
-<!-- test: services.a-factory-fills-a-promise-array-the-state-keeps -->
-Every coroutine a factory pushes into an array the state keeps is started on the service's strand, so dropping the
-service reclaims all of them.
+<!-- test: error.a-factory-that-fills-a-promise-array-the-state-keeps-is-refused -->
+Every coroutine a factory pushes into an array the state keeps is a promise in the state.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Napped = Promise with Integer
@@ -17437,11 +17253,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```stdout
-napping=3
-```
-```exitcode
-0
+```maxoncstderr
+error E3216: <fragment>:30:10: `Sleepers.held` is a `NapArray` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it. `Sleepers` is a service, and a service's state is run by whichever green thread takes its next message, so a promise kept in it could be awaited or dropped by a strand that does not own its coroutine. `await` the promise (or `.cancel()` it) before the message or factory returns and keep its result in the field
 ```
 
 <!-- test: services.a-factorys-prints-follow-the-spawners-until-the-spawner-waits -->

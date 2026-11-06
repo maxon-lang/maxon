@@ -26,9 +26,9 @@ When a slice goes out of scope:
 A slice of a slice creates a new slice that still references the original parent buffer:
 
 ```maxon
-var s = "hello world"
-var first = s.slice(0, endIndex: 5)    // "hello" - parent is s's buffer
-var nested = first.slice(0, endIndex: 3) // "hel" - parent is STILL s's buffer
+let s = "hello world"
+let first = s.slice(0, endIndex: 5)    // "hello" - parent is s's buffer
+let nested = first.slice(0, endIndex: 3) // "hel" - parent is STILL s's buffer
 ```
 
 The `parent_off` for a nested slice is computed as `source.parent_off + start`, ensuring proper cleanup.

@@ -20,11 +20,11 @@ Truncate a floating-point number to an integer (toward zero).
 **Example:**
 
 ```maxon
-var x = 3.7
-var y = trunc(x)     // 3
+let x = 3.7
+let y = trunc(x)     // 3
 
-var neg = -3.7
-var z = trunc(neg)   // -3 (toward zero, removes fractional part)
+let neg = -3.7
+let z = trunc(neg)   // -3 (toward zero, removes fractional part)
 ```
 **Notes:**
 - Truncates toward zero (removes decimal part)

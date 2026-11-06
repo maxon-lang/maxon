@@ -27,9 +27,11 @@ end 'Value'
 Exported fields can be read and written (if mutable) from any code:
 
 ```text
-var v = Value.create(42, private: 100)
-print(v.n)           // OK - n is exported
-v.n = 50             // OK - n is exported and mutable
+function demo()
+	var v = Value.create(42, private: 100)
+	print(v.n)           // OK - n is exported
+	v.n = 50             // OK - n is exported and mutable
+end 'demo'
 ```
 
 ### Private Fields

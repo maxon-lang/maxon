@@ -29,7 +29,7 @@ end 'Direction'
 Create enum values using dot notation:
 
 ```maxon
-var dir = Direction.north
+let dir = Direction.north
 ```
 
 ### Associated Values
@@ -49,9 +49,9 @@ end 'Result'
 Contype cases with associated values:
 
 ```maxon
-var r1 = Result.success(42)
-var r2 = Result.failure(404, message: "Not found")
-var r3 = Result.pending
+let r1 = Result.success(42)
+let r2 = Result.failure(404, message: "Not found")
+let r3 = Result.pending
 ```
 
 ### Pattern Matching with Value Extraction
@@ -95,7 +95,7 @@ Both forms match the case without binding the associated value to a variable.
 Match expressions also support value extraction using `gives`:
 
 ```maxon
-var extracted = match container 'get'
+let extracted = match container 'get'
 	empty gives 0
 	value(n) gives n
 end 'get'
@@ -136,9 +136,9 @@ end 'Direction'
 Call methods using instance-dot-method syntax:
 
 ```maxon
-var dir = Direction.north
-var opp = dir.opposite()    // Direction.south
-var vert = dir.isVertical() // true
+let dir = Direction.north
+let opp = dir.opposite()    // Direction.south
+let vert = dir.isVertical() // true
 ```
 
 ## Tests

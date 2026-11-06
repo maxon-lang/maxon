@@ -1587,8 +1587,6 @@ Eight wide constants live across a call, then passed to an eight-argument call w
 ```maxon
 typealias Wide = int(0 to 100000000000000)
 
-var sink = 0 as Wide
-
 function opaque(a Wide) returns Wide
 	if a > 100 'big'
 		return a - 100
@@ -1597,8 +1595,7 @@ function opaque(a Wide) returns Wide
 end 'opaque'
 
 function eight(a Wide, b Wide, c Wide, d Wide, e Wide, f Wide, g Wide, h Wide) returns Wide
-	sink = sink + a + b + c + d + e + f + g + h
-	return sink
+	return a + b + c + d + e + f + g + h
 end 'eight'
 
 function install(p Wide) returns Wide
@@ -1610,10 +1607,13 @@ function install(p Wide) returns Wide
 	let c5 = 5000039595
 	let c6 = 5000047514
 	let c7 = 5000055433
+	var sink = 0 as Wide
 	var total = opaque(p)
-	total = total + eight(c0, b: c1, c: c2, d: c3, e: c4, f: c5, g: c6, h: c7)
+	sink = sink + eight(c0, b: c1, c: c2, d: c3, e: c4, f: c5, g: c6, h: c7)
+	total = total + sink
 	total = total + opaque(total)
-	total = total + eight(c0, b: c1, c: c2, d: c3, e: c4, f: c5, g: c6, h: c7)
+	sink = sink + eight(c0, b: c1, c: c2, d: c3, e: c4, f: c5, g: c6, h: c7)
+	total = total + sink
 	total = total + opaque(total)
 	return total
 end 'install'

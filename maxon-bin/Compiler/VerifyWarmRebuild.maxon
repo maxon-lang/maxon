@@ -300,25 +300,6 @@ let DeclarationEditText = "function warmRebuildProbe() returns bool\n\treturn tr
 let ConstantValueEditBefore = "let warmRebuildProbeConstant = 7"
 let ConstantValueEditAfter = "let warmRebuildProbeConstant = 8"
 
-// ⭐ **THE `var` PROBE: the SAME edit as the constant probe, asserting the OPPOSITE — and that
-// is the whole point of it.**
-//
-// `let X = 7` → `8` must re-parse EVERY file. `var X = 7` → `8` must re-parse only ONE. The two
-// declarations look identical, differ in one keyword, and have OPPOSITE correct answers — because a
-// `let`'s value is COPIED into its readers (a `literal` op) and a `var`'s is not. A reader of a
-// global emits `globalAddr __data_X` + `loadIndirect` whichever number the initializer held; the
-// value reaches only the `.data` image, which is rebuilt from the arena whenever the signature
-// query misses.
-//
-// So mixing a var's payload into the signature hash would be SOUND and would silently throw away
-// property (b): every keystroke on any global's initial value would re-parse the whole program.
-// That is the "sound, and useless" key this property exists to reject, wearing a different hat —
-// and NOTHING ELSE HERE CAN SEE IT. The constant probe asserts `fileCount` and would keep passing,
-// because a pessimal key re-parses everything for everything. Only an assertion that a var's value
-// edit re-parses ONE file can tell a correct key from an over-broad one.
-let GlobalValueEditBefore = "var warmRebuildProbeGlobal = 7 as Count"
-let GlobalValueEditAfter = "var warmRebuildProbeGlobal = 8 as Count"
-
 // ⭐ **THE IMAGED-RECORD PROBE: the same declaration twice, differing only in the BYTES A READER BAKES.**
 //
 // The constant probe above holds a scalar, whose value reaches its readers through `mixConstant`'s value
@@ -340,20 +321,6 @@ let ArrayValueEditAfter = "let warmRebuildProbeArray = [9, 9, 9]"
 let ArraySignEditBefore = "let warmRebuildProbeSignArray = [1, -1]"
 let ArraySignEditAfter = "let warmRebuildProbeSignArray = [1, u64.max]"
 
-// ⭐ **AND THE SAME EDIT ON A `var` ARRAY, ASSERTING THE OPPOSITE — the `let`/`var` pair one shape up.**
-//
-// A `var` is never imaged (`Parser.probedShape` answers `opaque` for one), so its record is a `.data` slot
-// and every reader emits `globalAddr <label>` + `loadIndirect` whichever elements the literal held: they
-// reach only the declaring file's `__global_init.<label>` function. Mixing them would be SOUND and would
-// re-parse the whole program on every keystroke inside any array initializer.
-//
-// ⚠ **THE SCALAR `var` PROBE ABOVE CANNOT STAND IN FOR THIS ONE.** A scalar `var` and an array `var` hash
-// through DIFFERENT arms (`mixDeclAnswer` and `mixConstant`'s record arms), so a key that mixed an array's
-// elements unconditionally would pass every other probe in this file, the scalar `var` one included, and
-// silently throw property (b) away for arrays.
-let ArrayGlobalValueEditBefore = "var warmRebuildProbeArrayGlobal = FullRangeIntArray from [1, 2]"
-let ArrayGlobalValueEditAfter = "var warmRebuildProbeArrayGlobal = FullRangeIntArray from [9, 9, 9]"
-
 // ⭐⭐ **THE DECLARATION BOTH BOX PROBES ARE BUILT OVER — BOUND ONCE, so "the type is held byte-identical
 // across the pair" is STRUCTURAL rather than asserted.** A second copy could drift by one byte — a renamed
 // field, an added `export` — and each probe would silently become a DECLARATION edit, which the probes above
@@ -372,15 +339,16 @@ let WarmRebuildProbeBoxDecl = "typealias WarmRebuildProbeSlot = int(0 to 9)\ntyp
 let StructFieldEditBefore = "let warmRebuildProbeStruct = WarmRebuildProbePair.create(1)"
 let StructFieldEditAfter = "let warmRebuildProbeStruct = WarmRebuildProbePair.create(2)"
 
-// ⭐ **AND THE SAME EDIT ON A `var` BOX, ASSERTING THE OPPOSITE — the array pair's twin, one arm over, and
-// the one probe that can see the `storedRecord` arm's over-mix guard.**
+// ⭐ **AND THE SAME EDIT ON A STORED `let` BOX, ASSERTING THE OPPOSITE — the imaged probe's twin.**
 //
-// ⛔ **NEITHER `var` PROBE ABOVE COVERS THIS ARM.** A `var` box settles to `storedRecord`, whose key is its
-// type, brand and label (`mixRecordStorage`), and that is all that keeps the slots out of the key. Mix the
-// construction in and every other probe here stays green while a keystroke inside any struct global's
-// initializer re-parses the whole program.
-let StructGlobalFieldEditBefore = "var warmRebuildProbeStructGlobal = WarmRebuildProbePair.create(1)"
-let StructGlobalFieldEditAfter = "var warmRebuildProbeStructGlobal = WarmRebuildProbePair.create(2)"
+// A `let` whose factory is handed a call's result is not image data: it is built by `__module_init` into a
+// `.data` slot, and every reader loads from the slot and bakes nothing of the construction. `create(1)`
+// becoming `create(2)` therefore moves no reader's bytes, and the key carries the slot's type, brand and
+// label and nothing of the construction (`mixRecordStorage`). Mix the construction in and every other probe
+// here stays green while a keystroke inside any stored global's initializer re-parses the whole program.
+let WarmRebuildProbeNumberDecl = "function warmRebuildProbeNumber(n WarmRebuildProbeSlot) returns WarmRebuildProbeSlot\n\treturn n\nend 'warmRebuildProbeNumber'"
+let StoredStructEditBefore = "let warmRebuildProbeStoredStruct = WarmRebuildProbePair.create(warmRebuildProbeNumber(1))"
+let StoredStructEditAfter = "let warmRebuildProbeStoredStruct = WarmRebuildProbePair.create(warmRebuildProbeNumber(2))"
 
 // ⭐ **THE `static`-FLAG PROBE: the same interface requirement twice, differing ONLY in the KEYWORD.**
 //
@@ -552,11 +520,11 @@ let MinFilesForInvalidation = 2 as Count
 //   (e) EDIT AN **IMAGED** RECORD CONSTANT'S CONTENT ⇒ EVERY file's parse must be invalidated, AND the
 //       same edit on a STORED one may invalidate only the edited file. (c)'s pair at the shapes whose
 //       value is a record rather than a number: an imaged `let` is `.rdata` and every read bakes its
-//       bytes, while a `var`'s record is a slot every read loads from. The two pull opposite ways for one
+//       bytes, while a stored `let`'s record is a slot every read loads from. The two pull opposite ways for one
 //       spelling, so a key that mixed content unconditionally satisfies half of this and throws (b) away.
 //       ⚠ **AND EACH RECORD ARM NEEDS ITS OWN PAIR**: an ARRAY and a BOX hash through different functions,
-//       so a guard deleted in one is invisible to the other's probes. See `ArrayValueEditBefore` +
-//       `ArrayGlobalValueEditBefore`, and `StructFieldEditBefore` + `StructGlobalFieldEditBefore`.
+//       so a guard deleted in one is invisible to the other's probes. See `ArrayValueEditBefore`,
+//       and `StructFieldEditBefore` + `StoredStructEditBefore`.
 //   (f) EDIT A DECLARATION'S VISIBILITY ⇒ EVERY file's parse must be invalidated, at each step
 //       from no modifier to `module`, `module` to `export`, and `export` to `public`, for every
 //       declaration kind in `visibilityFlipProbes`. No name and no value moves; another file's
@@ -610,16 +578,6 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: "{original}\n{ConstantValueEditAfter}\n")
 	let constantValueEditMisses = try parseMissesOnRequery(project)
 
-	// Seat the GLOBAL probe at its BEFORE value — a declaration edit, discarded for the same
-	// reason its constant twin is: it exists only to make the NEXT transition a change of the
-	// number alone.
-	fileChanged(project, path: editedPath, content: "{original}\n{GlobalValueEditBefore}\n")
-	_ = try parseMissesOnRequery(project)
-
-	// The measurement that keeps the constant probe's answer from being "everything, always".
-	fileChanged(project, path: editedPath, content: "{original}\n{GlobalValueEditAfter}\n")
-	let globalValueEditMisses = try parseMissesOnRequery(project)
-
 	// Seat the ARRAY probe at its BEFORE value — a declaration edit, discarded for the same reason its
 	// scalar twin's is.
 	fileChanged(project, path: editedPath, content: "{original}\n{ArrayValueEditBefore}\n")
@@ -637,13 +595,6 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: "{original}\n{ArraySignEditAfter}\n")
 	let arraySignEditMisses = try parseMissesOnRequery(project)
 
-	// Seat the `var` ARRAY probe, then measure the same edit on a binding whose readers bake nothing.
-	fileChanged(project, path: editedPath, content: "{original}\n{ArrayGlobalValueEditBefore}\n")
-	_ = try parseMissesOnRequery(project)
-
-	fileChanged(project, path: editedPath, content: "{original}\n{ArrayGlobalValueEditAfter}\n")
-	let arrayGlobalValueEditMisses = try parseMissesOnRequery(project)
-
 	// Seat the imaged-BOX probe, then measure it: same type declaration, same factory — only the SLOT a
 	// reader bakes moved. The declaration is interpolated rather than carried in each pair, so the two
 	// spellings cannot drift into a declaration edit (`WarmRebuildProbeBoxDecl`).
@@ -653,13 +604,13 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructFieldEditAfter}\n")
 	let structFieldEditMisses = try parseMissesOnRequery(project)
 
-	// Seat the `var` BOX probe, then measure it — the only probe that can see the `storedRecord` arm's
+	// Seat the stored-`let` BOX probe, then measure it — the only probe that can see the `storedRecord` arm's
 	// guard, the imaged one above being green with or without it.
-	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructGlobalFieldEditBefore}\n")
+	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{WarmRebuildProbeNumberDecl}\n{StoredStructEditBefore}\n")
 	_ = try parseMissesOnRequery(project)
 
-	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructGlobalFieldEditAfter}\n")
-	let structGlobalFieldEditMisses = try parseMissesOnRequery(project)
+	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{WarmRebuildProbeNumberDecl}\n{StoredStructEditAfter}\n")
+	let storedStructEditMisses = try parseMissesOnRequery(project)
 
 	// Seat the receiver-kind probe at its BEFORE value — a declaration edit, discarded for the same
 	// reason the two above are.
@@ -708,9 +659,7 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	let arraySignEditInvalidatesEveryFile = assertParseMisses("a top-level constant ARRAY's element SIGN edit re-parses EVERY file (parseMisses)", probe: arraySignEditMisses, expectedDelta: fileCount as QueryCount, project: project)
 	let structFieldEditInvalidatesEveryFile = assertParseMisses("an IMAGED struct constant's field edit re-parses EVERY file (parseMisses)", probe: structFieldEditMisses, expectedDelta: fileCount as QueryCount, project: project)
 
-	let globalValueEditIsLocal = assertParseMisses("a top-level VAR's value edit re-parses only the edited file (parseMisses)", probe: globalValueEditMisses, expectedDelta: OneQuery, project: project)
-	let arrayGlobalValueEditIsLocal = assertParseMisses("a top-level VAR ARRAY's value edit re-parses only the edited file (parseMisses)", probe: arrayGlobalValueEditMisses, expectedDelta: OneQuery, project: project)
-	let structGlobalFieldEditIsLocal = assertParseMisses("a STORED struct global's value edit re-parses only the edited file (parseMisses)", probe: structGlobalFieldEditMisses, expectedDelta: OneQuery, project: project)
+	let storedStructEditIsLocal = assertParseMisses("a STORED struct `let`'s value edit re-parses only the edited file (parseMisses)", probe: storedStructEditMisses, expectedDelta: OneQuery, project: project)
 
 	let receiverKindEditInvalidatesEveryFile = assertParseMisses("an interface requirement's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: receiverKindEditMisses, expectedDelta: fileCount as QueryCount, project: project)
 	let methodReceiverKindEditInvalidatesEveryFile = assertParseMisses("a method's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: methodReceiverKindEditMisses, expectedDelta: fileCount as QueryCount, project: project)
@@ -718,10 +667,10 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	let visibilityFlipsInvalidate = measurementsInvalidateEveryFile(visibilityFlips, fileCount: fileCount as QueryCount, project: project)
 	let declarationMovesInvalidate = measurementsInvalidateEveryFile(declarationMoves, fileCount: fileCount as QueryCount, project: project)
 
-	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and arraySignEditInvalidatesEveryFile and structFieldEditInvalidatesEveryFile and globalValueEditIsLocal and arrayGlobalValueEditIsLocal and structGlobalFieldEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile and visibilityFlipsInvalidate and declarationMovesInvalidate
+	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and arraySignEditInvalidatesEveryFile and structFieldEditInvalidatesEveryFile and storedStructEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile and visibilityFlipsInvalidate and declarationMovesInvalidate
 
 	if allOk 'passed'
-		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array, constant-array-sign and imaged-struct edits each re-parsed all {fileCount}; var-value, var-array and stored-struct edits each re-parsed 1 file; a requirement's and a method's `static`-flag edits each re-parsed all {fileCount}; {visibilityFlips.count()} visibility edits each re-parsed all {fileCount}; {declarationMoves.count()} declarations moved to another file each re-parsed all {fileCount}\n")
+		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array, constant-array-sign and imaged-struct edits each re-parsed all {fileCount}; a stored-struct edit re-parsed 1 file; a requirement's and a method's `static`-flag edits each re-parsed all {fileCount}; {visibilityFlips.count()} visibility edits each re-parsed all {fileCount}; {declarationMoves.count()} declarations moved to another file each re-parsed all {fileCount}\n")
 		return true
 	end 'passed'
 

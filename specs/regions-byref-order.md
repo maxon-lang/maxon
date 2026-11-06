@@ -5084,8 +5084,8 @@ end 'main'
 error E3186: <fragment>:25:50: argument 'label' is read by another operand of this statement and passed by reference to 'put' (parameter 'text') — a hold cannot protect a value its by-reference cell overwrites. Copy 'label' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
 ```
 
-<!-- test: module-var-cell-before -->
-A module `var` is handed by reference and read by an earlier operand.
+<!-- test: local-var-cell-before -->
+A local `var` is handed by reference and read by an earlier operand.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -5103,9 +5103,8 @@ function two(text String, k Tally) returns Tally
 	return (text.byteLength() as Tally) + k
 end 'two'
 
-var label = "original"
-
 function main() returns ExitCode
+	var label = "original"
 	let k = two(label, k: put(label))
 	keep(k)
 	print("ok\n")
@@ -5113,11 +5112,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3186: <fragment>:20:28: argument 'label' is read by another operand of this statement and passed by reference to 'put' (parameter 'text') — a hold cannot protect a value its by-reference cell overwrites. Copy 'label' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
+error E3186: <fragment>:19:28: argument 'label' is read by another operand of this statement and passed by reference to 'put' (parameter 'text') — a hold cannot protect a value its by-reference cell overwrites. Copy 'label' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
 ```
 
-<!-- test: module-var-cell-after -->
-A module `var` is handed by reference and read by a later operand.
+<!-- test: local-var-cell-after -->
+A local `var` is handed by reference and read by a later operand.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -5135,9 +5134,8 @@ function two2(k Tally, text String) returns Tally
 	return (text.byteLength() as Tally) + k
 end 'two2'
 
-var label = "original"
-
 function main() returns ExitCode
+	var label = "original"
 	let k = two2(put(label), text: label)
 	keep(k)
 	print("ok\n")
@@ -5151,8 +5149,8 @@ ok
 0
 ```
 
-<!-- test: module-var-field-path-cell-before -->
-A field of a record held in a module `var` is handed by reference and read by an earlier operand.
+<!-- test: local-var-field-path-cell-before -->
+A field of a record held in a local `var` is handed by reference and read by an earlier operand.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -5178,9 +5176,8 @@ type Holder
 	end 'create'
 end 'Holder'
 
-var holder = Holder.create()
-
 function main() returns ExitCode
+	var holder = Holder.create()
 	let k = two(holder.f, k: put(holder.f))
 	keep(k)
 	print("ok\n")
@@ -5188,11 +5185,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3186: <fragment>:28:31: argument 'holder.f' is read by another operand of this statement and passed by reference to 'put' (parameter 'text') — a hold cannot protect a value its by-reference cell overwrites. Copy 'holder.f' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
+error E3186: <fragment>:27:31: argument 'holder.f' is read by another operand of this statement and passed by reference to 'put' (parameter 'text') — a hold cannot protect a value its by-reference cell overwrites. Copy 'holder.f' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
 ```
 
-<!-- test: module-var-method-receiver-before -->
-A method called on a module `var` reads it before a later operand's write.
+<!-- test: local-var-method-receiver-before -->
+A method called on a local `var` reads it before a later operand's write.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -5210,9 +5207,8 @@ function sum(a Tally, b Tally) returns Tally
 	return a + b
 end 'sum'
 
-var label = "original"
-
 function main() returns ExitCode
+	var label = "original"
 	let k = sum(label.byteLength() as Tally, b: put(label))
 	keep(k)
 	print("ok\n")
@@ -5220,7 +5216,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3186: <fragment>:20:50: argument 'label' is read by another operand of this statement and passed by reference to 'put' (parameter 'text') — a hold cannot protect a value its by-reference cell overwrites. Copy 'label' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
+error E3186: <fragment>:19:50: argument 'label' is read by another operand of this statement and passed by reference to 'put' (parameter 'text') — a hold cannot protect a value its by-reference cell overwrites. Copy 'label' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
 ```
 
 <!-- test: function-value-two-cells-one-local -->
@@ -5651,77 +5647,6 @@ end 'main'
 error E3186: <fragment>:23:18: argument 'h.n' is read by another operand of this statement and passed by reference to 'bump' (parameter 'n') — a hold cannot protect a value its by-reference cell overwrites. Copy 'h' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
 ```
 
-<!-- test: static-var-cell-before -->
-A `static var` is handed by reference and read by an earlier operand.
-
-```maxon
-typealias Tally = int(0 to u64.max)
-
-type Cache
-	static var label = "original"
-end 'Cache'
-
-function put(text mutable String) returns Tally
-	text = "replaced"
-
-	return 1
-end 'put'
-
-function keep(_ T) uses T
-end 'keep'
-
-function two(text String, k Tally) returns Tally
-	return (text.byteLength() as Tally) + k
-end 'two'
-
-function main() returns ExitCode
-	let k = two(Cache.label, k: put(Cache.label))
-	keep(k)
-	print("ok\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3186: <fragment>:22:34: argument 'Cache.label' is read by another operand of this statement and passed by reference to 'put' (parameter 'text') — a hold cannot protect a value its by-reference cell overwrites. Copy 'Cache.label' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
-```
-
-<!-- test: static-var-cell-after -->
-A `static var` is handed by reference and read by a later operand.
-
-```maxon
-typealias Tally = int(0 to u64.max)
-
-type Cache
-	static var label = "original"
-end 'Cache'
-
-function put(text mutable String) returns Tally
-	text = "replaced"
-
-	return 1
-end 'put'
-
-function keep(_ T) uses T
-end 'keep'
-
-function two2(k Tally, text String) returns Tally
-	return (text.byteLength() as Tally) + k
-end 'two2'
-
-function main() returns ExitCode
-	let k = two2(put(Cache.label), text: Cache.label)
-	keep(k)
-	print("ok\n")
-	return 0
-end 'main'
-```
-```stdout
-ok
-```
-```exitcode
-0
-```
-
 <!-- test: captured-record-field-cell-before -->
 A field of a captured record is handed by reference inside a closure body and read by an earlier operand of the same statement.
 
@@ -6042,122 +5967,6 @@ end 'main'
 0
 ```
 
-<!-- test: static-var-field-path-write-lands -->
-A field of a `static var` record is handed to a `mutable` position, so the callee's write lands in the static.
-
-```maxon
-typealias Coord = int(i64.min to i64.max)
-
-type Node
-	export var f as Coord
-
-	static function create(f Coord) returns Node
-		return Node{f: f}
-	end 'create'
-end 'Node'
-
-type Cache
-	static var head = Node.create(1)
-end 'Cache'
-
-function put(n mutable Coord) returns Coord
-	n = 5
-
-	return 1
-end 'put'
-
-function main() returns ExitCode
-	let k = put(Cache.head.f)
-	print("{Cache.head.f} {k}\n")
-	return 0
-end 'main'
-```
-```stdout
-5 1
-```
-```exitcode
-0
-```
-
-<!-- test: static-var-field-path-cell-before -->
-A field of a `static var` record is handed by reference and read by an earlier operand.
-
-```maxon
-typealias Coord = int(i64.min to i64.max)
-
-type Node
-	export var f as Coord
-
-	static function create(f Coord) returns Node
-		return Node{f: f}
-	end 'create'
-end 'Node'
-
-type Cache
-	static var head = Node.create(1)
-end 'Cache'
-
-function put(n mutable Coord) returns Coord
-	n = 5
-
-	return 1
-end 'put'
-
-function two(n Coord, k Coord) returns Coord
-	return n + k
-end 'two'
-
-function main() returns ExitCode
-	let k = two(Cache.head.f, k: put(Cache.head.f))
-	print("{k}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3186: <fragment>:27:35: argument 'Cache.head.f' is read by another operand of this statement and passed by reference to 'put' (parameter 'n') — a hold cannot protect a value its by-reference cell overwrites. Copy 'Cache.head.f' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
-```
-
-<!-- test: static-var-field-path-cell-after -->
-A field of a `static var` record is handed by reference and read by a later operand, which sees the write.
-
-```maxon
-typealias Coord = int(i64.min to i64.max)
-
-type Node
-	export var f as Coord
-
-	static function create(f Coord) returns Node
-		return Node{f: f}
-	end 'create'
-end 'Node'
-
-type Cache
-	static var head = Node.create(1)
-end 'Cache'
-
-function put(n mutable Coord) returns Coord
-	n = 5
-
-	return 1
-end 'put'
-
-function two2(k Coord, n Coord) returns Coord
-	return n + k
-end 'two2'
-
-function main() returns ExitCode
-	let k = two2(put(Cache.head.f), n: Cache.head.f)
-	print("{k}\n")
-	return 0
-end 'main'
-```
-```stdout
-6
-```
-```exitcode
-0
-```
-
 <!-- test: two-cells-of-one-root-the-cure-is-a-var -->
 Two `mutable` positions that name fields of one record are two cells of one root; the cure for a cell is a `var` copy stored back, since a `let` at a `mutable` position is refused.
 
@@ -6372,133 +6181,6 @@ end 'main'
 ```
 ```stdout
 aba
-```
-```exitcode
-0
-```
-
-<!-- test: static-var-nested-field-path-write-lands -->
-A field two hops down a `static var` record is handed by reference through the type's name and through `Self`, and both writes land.
-
-```maxon
-typealias Coord = int(i64.min to i64.max)
-
-type Inner
-	export var f as Coord
-
-	static function create(f Coord) returns Inner
-		return Inner{f: f}
-	end 'create'
-end 'Inner'
-
-type Holder
-	export var inner as Inner
-
-	static function create() returns Holder
-		return Holder{inner: Inner.create(1)}
-	end 'create'
-end 'Holder'
-
-type Cache
-	static var head = Holder.create()
-
-	static function putThroughSelf() returns Coord
-		return put(Self.head.inner.f)
-	end 'putThroughSelf'
-end 'Cache'
-
-function put(n mutable Coord) returns Coord
-	n = n + 4
-
-	return 1
-end 'put'
-
-function main() returns ExitCode
-	let a = put(Cache.head.inner.f)
-	let b = Cache.putThroughSelf()
-	print("{Cache.head.inner.f} {a + b}\n")
-	return 0
-end 'main'
-```
-```stdout
-9 2
-```
-```exitcode
-0
-```
-
-<!-- test: namespace-qualified-var-write-lands -->
-A `var` another directory declares is handed by reference through its qualified name, so the callee's write lands.
-
-```maxon
-// --- file: lib/state.maxon
-function makeLabel() returns String
-	return "{1} original"
-end 'makeLabel'
-
-export var label = makeLabel()
-
-// --- file: app/main.maxon
-typealias Tally = int(0 to u64.max)
-
-function put(text mutable String) returns Tally
-	text = "replaced"
-
-	return 1
-end 'put'
-
-function main() returns ExitCode
-	let k = put(lib.label)
-	print("{k} {lib.label}\n")
-	return 0
-end 'main'
-```
-```stdout
-1 replaced
-```
-```exitcode
-0
-```
-
-<!-- test: namespace-qualified-static-field-path-write-lands -->
-A field of a `static var` record another directory declares is handed by reference through the qualified type name, and a bare qualified `var` of that directory is handed too.
-
-```maxon
-// --- file: lib/state.maxon
-export typealias Coord = int(i64.min to i64.max)
-
-export type Node
-	export var f as Coord
-
-	export static function create(f Coord) returns Node
-		return Node{f: f}
-	end 'create'
-end 'Node'
-
-export type Cache
-	export static var head = Node.create(1)
-	export static var counter = 1 as Coord
-end 'Cache'
-
-export var total = 1 as Coord
-
-// --- file: app/main.maxon
-function put(n mutable lib.Coord) returns lib.Coord
-	n = 5
-
-	return 1
-end 'put'
-
-function main() returns ExitCode
-	let a = put(lib.total)
-	let c = put(lib.Cache.counter)
-	let d = put(lib.Cache.head.f)
-	print("{a + c + d} {lib.total} {lib.Cache.counter} {lib.Cache.head.f}\n")
-	return 0
-end 'main'
-```
-```stdout
-3 5 5 5
 ```
 ```exitcode
 0

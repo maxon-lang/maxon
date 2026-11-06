@@ -225,7 +225,7 @@ hdr "Check 4: cross-P remote frees"
 
 # `HeapStats.slab().remoteFrees` sums one per-P word over `__sched_procs`, credited at every
 # free onto a span another processor holds cached. A record allocated on the M that built it and
-# released on whichever M ran its receiver is exactly that push, so a service program reads its own
+# released on whichever M ran its handler is exactly that push, so a service program reads its own
 # cross-P traffic.
 check_remote_free() {
 	local binary="$1" label="$2" unclamped serial procs

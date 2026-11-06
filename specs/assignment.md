@@ -278,27 +278,6 @@ end 'main'
 error E3005: specs/assignment/error.retype-local-errors.maxon:7:2: cannot assign a value of type 'String' to variable 'x', which holds 'Integer'
 ```
 
-<!-- test: error.retype-global-errors -->
-The SAME store to a GLOBAL, and the same error — this test and the local one above are the pair
-that pins the two paths together. A global cannot forward the assigned value, it must go through
-a typed load using the declared kind, so an accepted retype here would print a raw heap pointer
-with exit 0. One rule, one answer, either way.
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-var g = 0 as Integer
-
-function main() returns ExitCode
-	g = "hello"
-	print("{g}")
-	return 0 as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3005: specs/assignment/error.retype-global-errors.maxon:8:2: cannot assign a value of type 'String' to global 'g', which holds 'Integer'
-```
-
 <!-- test: error.retype-conditional-errors -->
 A retype the program never executes is still a type error: the rule is about the ASSIGNMENT, not
 about whether control reaches it. This branch is dead (`c` is `false`); accepted, the program would

@@ -37,7 +37,7 @@ end 'Config'
 
 Create type instances with literal syntax:
 ```maxon
-var p = Point.create(10, y: 20)
+let p = Point.create(10, y: 20)
 let config = Config.create(1, count: 0)
 ```
 
@@ -47,8 +47,11 @@ The mutability of a type instance is determined by `let` vs `var`:
 
 **var type** - Can modify `var` fields:
 ```maxon
-var p = Point.create(10, y: 20)
-p.x = 30   // OK: type is mutable, field is var
+function main() returns ExitCode
+	var p = Point.create(10, y: 20)
+	p.x = 30   // OK: type is mutable, field is var
+	return 0
+end 'main'
 ```
 
 **let type** - Cannot modify any fields:
@@ -61,9 +64,12 @@ let p = Point.create(10, y: 20)
 
 Even on a `var` type, `let` fields cannot be modified:
 ```maxon
-var c = Config.create(1, count: 0)
-c.count = 5     // OK: field is var
-// c.version = 2   // ERROR: field is let
+function main() returns ExitCode
+	var c = Config.create(1, count: 0)
+	c.count = 5     // OK: field is var
+	// c.version = 2   // ERROR: field is let
+	return 0
+end 'main'
 ```
 
 ## Tests

@@ -2218,20 +2218,20 @@ export union MaxonOp
 	// service's state stands at. `capacity` is the `spawn(capacity: n)` value or
 	// `DefaultMailboxCapacity`. `startReplies` is the parse's reading of the factory's `throws`
 	// clause, and the lowering reads it rather than deriving it again. Without it `result` is the
-	// mailbox POINTER, an integer the parser stores into a fresh `<T>.handle` box; with it `result` is
-	// a cell the parser awaits for the handle or the error. The start thunk, `<T>.__loop` and the
-	// mailbox's slot size are named by the TYPE and the factory, so the op carries none of them:
-	// `LowerMaxonToStd` derives them at the one place that emits the spawn call, which is what keeps
-	// the spawn site and `ServiceLoop`'s synthesis from coming to name different symbols.
+	// cown POINTER, an integer the parser stores into a fresh `<T>.handle` box; with it `result` is
+	// a cell the parser awaits for the handle or the error. The start thunk, `<T>.__behave`,
+	// `<T>.__finish` and the request slot size are named by the TYPE and the factory, so the op carries
+	// none of them: `LowerMaxonToStd` derives them at the one place that emits the spawn call, which is
+	// what keeps the spawn site and `ServiceBehaviour`'s synthesis from coming to name different symbols.
 	serviceSpawn(result ValueId, let typeName ByteArray, state ValueId, capacity ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mint CalleeMint, startReplies bool) = MaxonOpMeta{category: OpCategory.awaiting}
 
 	// ⭐⭐ **`serviceSend(result, status, callee, handle, request, bytes, timeoutMs, timed)` — COPY ONE
-	// MESSAGE INTO THE MAILBOX, OR WAIT FOR ROOM.** `status` is the `MboxSendStatus` `__mbox_send`
+	// MESSAGE INTO THE MAILBOX, OR WAIT FOR ROOM.** `status` is the `CownSendStatus` `__cown_send`
 	// answers, which the parser branches on to build the send error. `callee` is the message's own
-	// qualified name (`"Calc.bump"`), `handle` the mailbox pointer loaded out of the handle box, `request`
+	// qualified name (`"Calc.bump"`), `handle` the cown pointer loaded out of the handle box, `request`
 	// the request record the parser filled in this green thread's staging buffer (`emitEnumBox`), and
 	// `bytes` the size of the sender's request union — on an interface send the interface's, which can
-	// be narrower than the service's slot — which is how much of it the mailbox copies. `timeoutMs` is the
+	// be narrower than the service's slot — which is how much of it the send copies. `timeoutMs` is the
 	// call's `sendTimeout:`, or a literal 0 without one, and `timed` says the call wrote the label: only
 	// a timed send can park, which is what `SemanticCheck.opYields` reads.
 	//
@@ -3178,8 +3178,8 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 		// The error-flag ENCODE is arithmetic on a value the parser already holds — it calls nothing.
 		errorFlagEncode gives MaxonCalleeKind.noCallee
 
-		// A `spawn` names the factory its service's green thread runs; the start thunk and the loop the
-		// lowering names are the compiler's own.
+		// A `spawn` names the factory its service's start behaviour runs; the start thunk, `__behave` and
+		// `__finish` the lowering names are the compiler's own.
 		serviceSpawn gives MaxonCalleeKind.direct
 
 		// A SEND names the message it delivers, which is what credits an export reachable no other way.
@@ -3239,7 +3239,7 @@ export function maxonOpCalleeMint(op MaxonOp) returns CalleeMint
 end 'maxonOpCalleeMint'
 
 // ⭐ **DOES THIS OP START A SERVICE?** A `spawn` binds no callee (`maxonOpCalleeKind`), yet it makes the
-// synthesized `<T>.__loop` — and every handler that loop dispatches — live, so a walk that follows calls must
+// synthesized `<T>.__behave` — and every handler it dispatches — live, so a walk that follows calls must
 // ask this too. Every arm is named, so a variant added later is a compile error here rather than an omission.
 export function maxonOpIsIndirectCall(op MaxonOp) returns bool
 	return match op 'op'

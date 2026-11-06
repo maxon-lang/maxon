@@ -52,8 +52,8 @@ end 'main'
 Comparisons between int and float types require explicit casts:
 
 ```text
-var x = 5
-var y = 5.0
+let x = 5
+let y = 5.0
 if x == y 'check'    // Error: type mismatch
   return 1
 end 'check'

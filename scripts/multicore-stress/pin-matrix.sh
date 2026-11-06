@@ -200,10 +200,10 @@
 # than the transferability refusal E3138 because the first send did not merely
 # threaten a second owner, it TOOK the reference.
 #
-# ⭐⭐ service-fanin-torture IS THE MAILBOX'S OTHER SIDE. `service-torture` is ONE
-# sender and twelve mailboxes; this is twelve SENDER SERVICES and one, so the
-# multi-producer half of `__mbox_send` finally has more than one producer. Its
-# aggregate is accumulated by the SINK — whose handlers its own mailbox serializes
+# ⭐⭐ service-fanin-torture IS THE COWN QUEUE'S OTHER SIDE. `service-torture` is ONE
+# sender and twelve services; this is twelve SENDER SERVICES and one, so the
+# multi-producer half of `__cown_send` finally has more than one producer. Its
+# aggregate is accumulated by the SINK — whose handlers its own cown serializes
 # — rather than by `main`, which is what makes the reading sound at N >= 2 without
 # a cross-thread flag. MEASURED with the `default` row present: `aggregate=42680 taken=4800` at
 # every row, with workers/steals of 1/0, 2/6, 7/1, 12/24 and, on the new `default`
@@ -226,7 +226,7 @@
 # TABLE. `service-torture` moves 4,800 freshly built heap `String`s across to
 # twelve services and `service-fanin-torture` moves 4,800 the other way — in both,
 # a record allocated on the M that built it is RELEASED on whichever M ran its
-# receiver, which is the remote-free push these two were written for. Both now READ that
+# handler, which is the remote-free push these two were written for. Both now READ that
 # push directly — `HeapStats.slab().remoteFrees`, printed as `remoteFrees=` and
 # asserted by `validate.sh` — so a green run of the two service rows is a cross-P
 # allocation reading rather than a program that merely happens to produce one.

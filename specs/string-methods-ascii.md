@@ -356,10 +356,10 @@ HeLLoHELLO
 ```
 
 <!-- test: byte-methods-on-a-top-level-managed-binding -->
-### A module-scope `let` / `var` String is a receiver like any other
+### A module-scope `let` String is a receiver like any other
 ```maxon
 let Greeting = "Hello, World"
-var Mutable = "a-b-c"
+let Mutable = "a-b-c"
 
 function main() returns ExitCode
 	print("{Greeting.toLower()}\n")

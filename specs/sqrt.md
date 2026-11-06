@@ -20,11 +20,11 @@ Calculate the square root of a number.
 **Example:**
 
 ```maxon
-var x = 16.0
-var y = sqrt(x)      // 4.0
+let x = 16.0
+let y = sqrt(x)      // 4.0
 
-var z = 2.0
-var w = sqrt(z)      // 1.414213... (√2)
+let z = 2.0
+let w = sqrt(z)      // 1.414213... (√2)
 ```
 **Notes:**
 - Input must be non-negative (undefined behavior for negative values)

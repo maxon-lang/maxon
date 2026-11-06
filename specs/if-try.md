@@ -919,9 +919,7 @@ enum MyError implements Error
 	failed
 end 'MyError'
 
-var visits = 0 as Integer
-
-function recordVisit(succeed bool) throws MyError
+function recordVisit(succeed bool, visits mutable Integer) throws MyError
 	if not succeed 'check'
 		throw MyError.failed
 	end 'check'
@@ -929,11 +927,12 @@ function recordVisit(succeed bool) throws MyError
 end 'recordVisit'
 
 function main() returns ExitCode
+	var visits = 0 as Integer
 	var taken = 0 as Count
-	if try recordVisit(true) 'ok'
+	if try recordVisit(true, visits: visits) 'ok'
 		taken = taken + 1
 	end 'ok'
-	if try recordVisit(false) 'bad'
+	if try recordVisit(false, visits: visits) 'bad'
 		taken = taken + 10
 	end 'bad'
 	print("{taken} {visits}\n")
@@ -960,9 +959,7 @@ enum MyError implements Error
 	failed
 end 'MyError'
 
-var calls = 0 as Integer
-
-function impureFail(succeed bool) returns Integer throws MyError
+function impureFail(succeed bool, calls mutable Integer) returns Integer throws MyError
 	calls = calls + 1
 	if not succeed 'check'
 		throw MyError.failed
@@ -971,11 +968,12 @@ function impureFail(succeed bool) returns Integer throws MyError
 end 'impureFail'
 
 function main() returns ExitCode
+	var calls = 0 as Integer
 	var taken = 0 as Count
-	if let _ = try impureFail(true) 'ok'
+	if let _ = try impureFail(true, calls: calls) 'ok'
 		taken = taken + 1
 	end 'ok'
-	if let _ = try impureFail(false) 'bad'
+	if let _ = try impureFail(false, calls: calls) 'bad'
 		taken = taken + 10
 	end 'bad'
 	print("{taken} {calls}\n")

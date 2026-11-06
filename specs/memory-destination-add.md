@@ -1,7 +1,7 @@
 ---
 feature: memory-destination-add
 status: stable
-keywords: var, global, counter, add, memory operand, fusion, flags, isel, x64
+keywords: var, field, counter, add, memory operand, fusion, flags, isel, x64
 category: language
 ---
 # A Counter Step Is One Instruction, And Only Where That Is The Same Program
@@ -34,24 +34,31 @@ the wrong operation or the wrong direction therefore returns a different exit co
 
 ## Tests
 
-<!-- test: a-counter-step-on-a-global -->
-The loop's step on `hits` is one read, one add and one write of the same word, with nothing in
+<!-- test: a-counter-step-on-a-field -->
+The loop's step on `words.hits` is one read, one add and one write of the same word, with nothing in
 between. `7` steps of one.
 
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var hits = 0 as Word
+type Words
+	export var hits as Word
+
+	static function create(hits Word) returns Self
+		return Self{hits: hits}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
+	var words = Words.create(0)
 	var n = 0 as Count
 
 	while n < 7 'loop'
-		hits = hits + 1
+		words.hits = words.hits + 1
 		n = n + 1
 	end 'loop'
 
-	return hits as ExitCode
+	return words.hits as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -67,19 +74,26 @@ the compare and its branch, describing `0 + 1` — not less — and the program 
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var lo = 0 as Word
-var hi = 0 as Word
-var hits = 0 as Word
+type Words
+	export var lo as Word
+	export var hi as Word
+	export var hits as Word
+
+	static function create() returns Self
+		return Self{lo: 0, hi: 0, hits: 0}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	lo = 1
-	hi = 2
-	let next = hits + 1
-	let less = lo < hi
-	hits = next
+	var words = Words.create()
+	words.lo = 1
+	words.hi = 2
+	let next = words.hits + 1
+	let less = words.lo < words.hi
+	words.hits = next
 
 	if less 'less'
-		return (40 + hits) as ExitCode
+		return (40 + words.hits) as ExitCode
 	end 'less'
 
 	return 7
@@ -97,14 +111,21 @@ the second read see `4` and return 44.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var hits = 0 as Word
+type Words
+	export var hits as Word
+
+	static function create(hits Word) returns Self
+		return Self{hits: hits}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	hits = 3
-	let next = hits + 1
-	let seen = hits
-	hits = next
-	return (seen * 10 + hits) as ExitCode
+	var words = Words.create(0)
+	words.hits = 3
+	let next = words.hits + 1
+	let seen = words.hits
+	words.hits = next
+	return (seen * 10 + words.hits) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -118,13 +139,20 @@ in place at the final write would add to the `100` and return 101.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var slot = 5 as Word
+type Words
+	export var slot as Word
+
+	static function create(slot Word) returns Self
+		return Self{slot: slot}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	let seen = slot
-	slot = 100
-	slot = seen + 1
-	return slot as ExitCode
+	var words = Words.create(5)
+	let seen = words.slot
+	words.slot = 100
+	words.slot = seen + 1
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -140,22 +168,29 @@ typealias Word = int(i64.min to i64.max)
 
 typealias Depth = int(0 to 3)
 
-var slot = 5 as Word
+type Words
+	export var slot as Word
 
-function reset(depth Depth)
+	static function create(slot Word) returns Self
+		return Self{slot: slot}
+	end 'create'
+end 'Words'
+
+function reset(words mutable Words, depth Depth)
 	if depth > 0 'deeper'
-		reset(depth - 1)
+		reset(words, depth: depth - 1)
 		return
 	end 'deeper'
 
-	slot = 100
+	words.slot = 100
 end 'reset'
 
 function main() returns ExitCode
-	let seen = slot
-	reset(3)
-	slot = seen + 1
-	return slot as ExitCode
+	var words = Words.create(5)
+	let seen = words.slot
+	reset(words, depth: 3)
+	words.slot = seen + 1
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -168,12 +203,19 @@ The value read is needed after the write, so it must be in a register: `20 + 21`
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var total = 20 as Word
+type Words
+	export var total as Word
+
+	static function create(total Word) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	let before = total
-	total = before + 1
-	return (before + total) as ExitCode
+	var words = Words.create(20)
+	let before = words.total
+	words.total = before + 1
+	return (before + words.total) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -186,12 +228,19 @@ The sum is needed after the write, so it must be in a register: `21 * 2 - 21`.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var total = 20 as Word
+type Words
+	export var total as Word
+
+	static function create(total Word) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	let after = total + 1
-	total = after
-	return (after * 2 - total) as ExitCode
+	var words = Words.create(20)
+	let after = words.total + 1
+	words.total = after
+	return (after * 2 - words.total) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -204,11 +253,18 @@ end 'main'
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var slot = 12 as Word
+type Words
+	export var slot as Word
+
+	static function create() returns Self
+		return Self{slot: 12}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	slot = slot + 10
-	return slot as ExitCode
+	var words = Words.create()
+	words.slot = words.slot + 10
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -216,19 +272,26 @@ end 'main'
 ```
 
 <!-- test: add-a-register-to-the-word -->
-`12 + 10` with the operand in a register, read from another global. Any other operation returns 2,
+`12 + 10` with the operand in a register, read from another field. Any other operation returns 2,
 8, 14 or 6; an instruction written in the load direction leaves the word at 12.
 
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var slot = 12 as Word
-var operand = 0 as Word
+type Words
+	export var slot as Word
+	export var operand as Word
+
+	static function create() returns Self
+		return Self{slot: 12, operand: 0}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	operand = 10
-	slot = slot + operand
-	return slot as ExitCode
+	var words = Words.create()
+	words.operand = 10
+	words.slot = words.slot + words.operand
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -241,11 +304,18 @@ end 'main'
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var slot = 12 as Word
+type Words
+	export var slot as Word
+
+	static function create() returns Self
+		return Self{slot: 12}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	slot = slot - 10
-	return slot as ExitCode
+	var words = Words.create()
+	words.slot = words.slot - 10
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -259,13 +329,20 @@ direction leaves 12.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var slot = 12 as Word
-var operand = 0 as Word
+type Words
+	export var slot as Word
+	export var operand as Word
+
+	static function create() returns Self
+		return Self{slot: 12, operand: 0}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	operand = 10
-	slot = slot - operand
-	return slot as ExitCode
+	var words = Words.create()
+	words.operand = 10
+	words.slot = words.slot - words.operand
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -278,11 +355,18 @@ end 'main'
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var slot = 12 as Word
+type Words
+	export var slot as Word
+
+	static function create() returns Self
+		return Self{slot: 12}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	slot = slot and 10
-	return slot as ExitCode
+	var words = Words.create()
+	words.slot = words.slot and 10
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -296,13 +380,20 @@ direction leaves 12.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var slot = 12 as Word
-var operand = 0 as Word
+type Words
+	export var slot as Word
+	export var operand as Word
+
+	static function create() returns Self
+		return Self{slot: 12, operand: 0}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	operand = 10
-	slot = slot and operand
-	return slot as ExitCode
+	var words = Words.create()
+	words.operand = 10
+	words.slot = words.slot and words.operand
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -315,11 +406,18 @@ end 'main'
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var slot = 12 as Word
+type Words
+	export var slot as Word
+
+	static function create() returns Self
+		return Self{slot: 12}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	slot = slot or 10
-	return slot as ExitCode
+	var words = Words.create()
+	words.slot = words.slot or 10
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -333,13 +431,20 @@ direction leaves 12.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var slot = 12 as Word
-var operand = 0 as Word
+type Words
+	export var slot as Word
+	export var operand as Word
+
+	static function create() returns Self
+		return Self{slot: 12, operand: 0}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	operand = 10
-	slot = slot or operand
-	return slot as ExitCode
+	var words = Words.create()
+	words.operand = 10
+	words.slot = words.slot or words.operand
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -352,11 +457,18 @@ end 'main'
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var slot = 12 as Word
+type Words
+	export var slot as Word
+
+	static function create() returns Self
+		return Self{slot: 12}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	slot = slot xor 10
-	return slot as ExitCode
+	var words = Words.create()
+	words.slot = words.slot xor 10
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -370,13 +482,20 @@ direction leaves 12.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var slot = 12 as Word
-var operand = 0 as Word
+type Words
+	export var slot as Word
+	export var operand as Word
+
+	static function create() returns Self
+		return Self{slot: 12, operand: 0}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	operand = 10
-	slot = slot xor operand
-	return slot as ExitCode
+	var words = Words.create()
+	words.operand = 10
+	words.slot = words.slot xor words.operand
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -390,13 +509,20 @@ instruction: `10 + 4`. Adding the word to itself instead of the operand would re
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var hits = 4 as Word
-var operand = 0 as Word
+type Words
+	export var hits as Word
+	export var operand as Word
+
+	static function create() returns Self
+		return Self{hits: 4, operand: 0}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	operand = 10
-	hits = operand + hits
-	return hits as ExitCode
+	var words = Words.create()
+	words.operand = 10
+	words.hits = words.operand + words.hits
+	return words.hits as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -409,11 +535,18 @@ end 'main'
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var hits = 4 as Word
+type Words
+	export var hits as Word
+
+	static function create() returns Self
+		return Self{hits: 4}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	hits = 1 + hits
-	return hits as ExitCode
+	var words = Words.create()
+	words.hits = 1 + words.hits
+	return words.hits as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -427,31 +560,45 @@ code, and the program would fail its range check instead.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var slot = 3 as Word
+type Words
+	export var slot as Word
+
+	static function create() returns Self
+		return Self{slot: 3}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	slot = 10 - slot
-	return slot as ExitCode
+	var words = Words.create()
+	words.slot = 10 - words.slot
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode
 7
 ```
 
-<!-- test: two-globals-are-two-words -->
-`a` is written with `b + 1`, a read of a DIFFERENT global. `20 + 1`; adding in place to `a` would
+<!-- test: two-fields-are-two-words -->
+`a` is written with `b + 1`, a read of a DIFFERENT field. `20 + 1`; adding in place to `a` would
 return `5 + 1`.
 
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var a = 5 as Word
-var b = 0 as Word
+type Words
+	export var a as Word
+	export var b as Word
+
+	static function create() returns Self
+		return Self{a: 5, b: 0}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	b = 20
-	a = b + 1
-	return a as ExitCode
+	var words = Words.create()
+	words.b = 20
+	words.a = words.b + 1
+	return words.a as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -466,13 +613,20 @@ write as well would add a product nothing computed. `5 + 3 * 8`.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
-var slot = 5 as Word
-var operand = 0 as Word
+type Words
+	export var slot as Word
+	export var operand as Word
+
+	static function create() returns Self
+		return Self{slot: 5, operand: 0}
+	end 'create'
+end 'Words'
 
 function main() returns ExitCode
-	operand = 3
-	slot = slot + operand * 8
-	return slot as ExitCode
+	var words = Words.create()
+	words.operand = 3
+	words.slot = words.slot + words.operand * 8
+	return words.slot as ExitCode
 end 'main'
 ```
 ```exitcode

@@ -142,7 +142,7 @@ library-tier like every `__Builtins` member (E3185 outside `stdlib/` and `runtim
 
 The two front-end cases (`arity-checked`, `error.operand-type`) reach no substrate at all and carry no target
 marker. Neither does `over-service-replies`: a service runs on every lane with a green-thread substrate,
-and wasm32-wasi refuses `__svc_spawn` with the same E3104, which the harness counts as a SKIP.
+and wasm32-wasi refuses `__cown_spawn` with the same E3104, which the harness counts as a SKIP.
 
 ## Tests
 

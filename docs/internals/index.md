@@ -42,6 +42,8 @@ value is a wasm local.
 - [Memory Allocator](memory-allocator.md) — the runtime heap, its zeroing contract and the fill ladders
 - [Regions and Capabilities](regions.md) — where the capability checker runs, the inferred facts and the
   window, tied-promise and by-reference checks
+- [Cown Runtime](cown-runtime.md) — how a service runs on a cown: the behaviour chain, the gate word, the batched
+  runner, waiting senders, close and the multi-cown acquire
 - [Debug Stream](debug-stream.md) — the shared-memory event ring behind `--debugstream` and `maxon monitor`
 - [Debugger](debugger.md) — the parts of `maxon debug`
 - [Scaling](scaling.md) — keeping compilation linear in program size, and measuring it

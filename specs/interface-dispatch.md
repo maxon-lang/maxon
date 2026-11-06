@@ -1928,18 +1928,17 @@ fresh heap record, which is what launders the literal), `__mm_retain` for an agg
 ```maxon
 typealias Tally = int(0 to 100)
 
-var widenings = 0 as Tally
-
 // The discard below is the whole shape, so `widen` must have an effect — discarding a PURE result is
 // E3064 (`discarded-results.md`) and the program would never reach the retain this case is about.
-function widen(h Hashable) returns Hashable
+function widen(h Hashable, widenings mutable Tally) returns Hashable
 	widenings = widenings + 1
 	return h
 end 'widen'
 
 function main() returns ExitCode
+	var widenings = 0 as Tally
 	print("A")
-	_ = widen("abc")
+	_ = widen("abc", widenings: widenings)
 	print("B")
 	return widenings - 1
 end 'main'
@@ -3431,16 +3430,15 @@ type Thing implements Printer
 	end 'show'
 end 'Thing'
 
-var boxes = 0 as Tag
-
 // The discard is the shape under test, so `box` must have an effect — see `discarded-results.md`.
-function box() returns Printer
+function box(boxes mutable Tag) returns Printer
 	boxes = boxes + 1
 	return Thing.create(7)
 end 'box'
 
 function main() returns ExitCode
-	_ = box()
+	var boxes = 0 as Tag
+	_ = box(boxes)
 	return 2 + boxes
 end 'main'
 ```

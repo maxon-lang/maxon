@@ -913,18 +913,6 @@ export type VarInfo
 	export var declaredColumn = 0 as ColumnNumber
 	export var declaredToken = 0 as ElementIndex
 
-	// ⭐ **DOES THIS NAME DENOTE MODULE STORAGE — a top-level `var` — RATHER THAN A BINDING OF THIS
-	// FRAME?** True only for the storage-subject stand-in `Parser.topLevelStorageSubjectOf` mints.
-	//
-	// ⚠ **IT IS READ TO SUPPRESS THE `boundValue` TEST, NOT MERELY TO LABEL THE BINDING.** A stand-in
-	// has no SSA value at all, so its `boundValue` is 0 — and 0 is `self`'s own parameter id, the very
-	// coincidence `receiverOwnerMask`'s ⚠ block records three measured miscompiles from. Without this
-	// bit `Parser.receiverStorageMask` would read a global's write as a write of parameter 0's storage
-	// and refuse every call that hands that parameter anywhere: a false rejection with no compile error.
-	//
-	// False for every binding a `Scope` holds, which is every other constructor here.
-	export let namesModuleStorage as bool
-
 	// ⭐ **WAS THIS BINDING EVER MENTIONED? — HALF of E3012's evidence** (`Parser.reportUnusedBindings`).
 	//
 	// ⚠ **THE OTHER HALF IS NAME-SCOPED, AND IT HAS TO BE.** "Referenced" is a fact about the NAME within the
@@ -1055,8 +1043,8 @@ export type VarInfo
 	//
 	// The type is the binding's own copy: a binding rides its body's artifact, and its type is often a record the
 	// signature index holds (`ParseStaging.artifactOwnedOp`).
-	static function make(name ByteArray, varType MaxonType, kind BindingKind, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, payload PayloadBindingSlot = PayloadBindingSlot.unbound, isParameter bool = false, namesModuleStorage bool = false, isCellBinding bool = false, cellCrossesByReference bool = false, brandId TypeNameId = UnnamedTypeId, isErrorMatchObligation bool = false) returns VarInfo
-		return Self{name: name, varType: varType.clone(), kind: kind, rootKind: ReadOnlyRootKind.view if kind == BindingKind.view else ReadOnlyRootKind.letBinding, slot: slot, boundValue: boundValue, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, payload: payload, payloadSlotVacated: false, isParameter: isParameter, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, cellCrossesByReference: cellCrossesByReference, brandId: brandId, isErrorMatchObligation: isErrorMatchObligation}
+	static function make(name ByteArray, varType MaxonType, kind BindingKind, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, payload PayloadBindingSlot = PayloadBindingSlot.unbound, isParameter bool = false, isCellBinding bool = false, cellCrossesByReference bool = false, brandId TypeNameId = UnnamedTypeId, isErrorMatchObligation bool = false) returns VarInfo
+		return Self{name: name, varType: varType.clone(), kind: kind, rootKind: ReadOnlyRootKind.view if kind == BindingKind.view else ReadOnlyRootKind.letBinding, slot: slot, boundValue: boundValue, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, payload: payload, payloadSlotVacated: false, isParameter: isParameter, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, cellCrossesByReference: cellCrossesByReference, brandId: brandId, isErrorMatchObligation: isErrorMatchObligation}
 	end 'make'
 
 	export static function create(name ByteArray, varType MaxonType, kind BindingKind, slot VarSlot) returns VarInfo
@@ -1074,21 +1062,6 @@ export type VarInfo
 		self.payload = remappedPayloadSlot(self.payload, remap: remap)
 		self.brandId = remap.applyName(self.brandId)
 	end 'renumberTypeIds'
-
-	// ⭐⭐ **THE STORAGE-SUBJECT STAND-IN FOR A TOP-LEVEL `var`** — the ONE object a global's name is keyed
-	// on, minted and interned by `Parser.topLevelStorageSubjectOf`.
-	//
-	// It exists because a global has no `VarInfo` anywhere: `Scope` holds this frame's bindings, and the
-	// parser mints a FRESH receiver `VarInfo` at every access to a global (`dispatchOnManagedReceiver`,
-	// whose `boundValue` is that access's own load). Keying a subject on those would file one storage
-	// under a new object at every mention — the same defect a self-field alias would have had, which
-	// `Scope` cures for a local by holding ONE object per name.
-	//
-	// ⚠ Its `boundValue`/`slot` are 0 and MUST NOT be read: `namesModuleStorage` is what says so, and it
-	// is the bit every reader of `boundValue` on the storage-subject path tests first.
-	export static function createModuleStorageSubject(name ByteArray, varType MaxonType) returns VarInfo
-		return Self.make(name, varType: varType, kind: BindingKind.var, namesModuleStorage: true)
-	end 'createModuleStorageSubject'
 
 	// A self-field alias: the name of field `fieldIndex` of the enclosing type, bound at
 	// instance-method entry. It materializes NO stack slot and aliases NO SSA value — a read is a
@@ -1263,7 +1236,6 @@ export type VarInfo
 		writer.unsigned(self.declaredLine as CacheUnsigned)
 		writer.unsigned(self.declaredColumn as CacheUnsigned)
 		writer.unsigned(self.declaredToken as CacheUnsigned)
-		writer.flag(self.namesModuleStorage)
 		writer.flag(self.referenced)
 		writer.flag(self.mutabilityExercised)
 		writer.flag(self.isCellBinding)
@@ -1297,7 +1269,6 @@ export type VarInfo
 		let f_declaredLine = (try reader.unsigned()) as LineNumber
 		let f_declaredColumn = (try reader.unsigned()) as ColumnNumber
 		let f_declaredToken = (try reader.unsigned()) as ElementIndex
-		let f_namesModuleStorage = try reader.flag()
 		let f_referenced = try reader.flag()
 		let f_mutabilityExercised = try reader.flag()
 		let f_isCellBinding = try reader.flag()
@@ -1311,11 +1282,11 @@ export type VarInfo
 		let f_renumberedIn = (try reader.unsigned()) as RenumberingEpoch
 		let f_brandKey = try reader.bytes()
 
-		return Self{name: f_name, varType: f_varType, kind: f_kind, slot: f_slot, boundValue: f_boundValue, debugLocalRecorded: f_debugLocalRecorded, debugLocalSlot: f_debugLocalSlot, movedFrom: f_movedFrom, partiallyMoved: f_partiallyMoved, isSelfField: f_isSelfField, fieldIndex: f_fieldIndex, payload: f_payload, payloadSlotVacated: f_payloadSlotVacated, isParameter: f_isParameter, lastReadToken: f_lastReadToken, declaredLine: f_declaredLine, declaredColumn: f_declaredColumn, declaredToken: f_declaredToken, namesModuleStorage: f_namesModuleStorage, referenced: f_referenced, mutabilityExercised: f_mutabilityExercised, isCellBinding: f_isCellBinding, cellCrossesByReference: f_cellCrossesByReference, elementWritable: f_elementWritable, rootKind: f_rootKind, cellEpoch: f_cellEpoch, isErrorMatchObligation: f_isErrorMatchObligation, brandId: f_brandId, awaitingMoveReads: f_awaitingMoveReads, isEnrolled: false, enrolledAt: 0, renumberedIn: f_renumberedIn, brandKey: f_brandKey}
+		return Self{name: f_name, varType: f_varType, kind: f_kind, slot: f_slot, boundValue: f_boundValue, debugLocalRecorded: f_debugLocalRecorded, debugLocalSlot: f_debugLocalSlot, movedFrom: f_movedFrom, partiallyMoved: f_partiallyMoved, isSelfField: f_isSelfField, fieldIndex: f_fieldIndex, payload: f_payload, payloadSlotVacated: f_payloadSlotVacated, isParameter: f_isParameter, lastReadToken: f_lastReadToken, declaredLine: f_declaredLine, declaredColumn: f_declaredColumn, declaredToken: f_declaredToken, referenced: f_referenced, mutabilityExercised: f_mutabilityExercised, isCellBinding: f_isCellBinding, cellCrossesByReference: f_cellCrossesByReference, elementWritable: f_elementWritable, rootKind: f_rootKind, cellEpoch: f_cellEpoch, isErrorMatchObligation: f_isErrorMatchObligation, brandId: f_brandId, awaitingMoveReads: f_awaitingMoveReads, isEnrolled: false, enrolledAt: 0, renumberedIn: f_renumberedIn, brandKey: f_brandKey}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize264
-		return sizeof(VarInfo) as CacheSize264
+	static function cacheLayoutBytes() returns CacheSize256
+		return sizeof(VarInfo) as CacheSize256
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1911,7 +1882,7 @@ end 'UnusedBindingKind'
 // shadow is a different declaration with its own answer.
 //
 // The RANGE rides here and not on `VarInfo` because only these binding kinds are candidates: a self-field
-// alias, the destructuring temp and the module-storage stand-in all construct a `VarInfo` and none of them
+// alias and the destructuring temp both construct a `VarInfo` and neither of them
 // is checked, so a declaration span on the record would be a column most constructors fill with nothing.
 //
 // ⭐ **E3077 WALKS THIS SAME LIST** (`Parser.reportVarShouldBeLet`), and that is the shape that makes the
@@ -8892,39 +8863,49 @@ export function serviceHandleCompanionName(typeName ByteArray) returns ByteArray
 	return "{String.from(typeName)}.{String.from(ServiceHandleMemberName)}".toByteArray()
 end 'serviceHandleCompanionName'
 
-// The member half of the DISPATCH LOOP's symbol — `__`-prefixed so no source may declare it (E2051)
-// and no author may call it.
-let ServiceLoopMemberName = b"__loop"
+// The member halves of the behaviour functions' symbols — `__`-prefixed so no source may declare them
+// (E2051) and no author may call them.
+let ServiceBehaveMemberName = b"__behave"
+let ServiceFinishMemberName = b"__finish"
 
-// ⭐⭐ **`<T>.__loop` — THE SYNTHESIZED DISPATCH LOOP'S SYMBOL, SPELLED ONCE FOR ITS THREE READERS.**
-// `ServiceLoop.installServiceLoops` BUILDS the function under this name,
-// the start thunk `LowerMaxonToStd.emitServiceStart` builds calls it, and
-// `DeadFunctionElimination` keeps it alive through exactly that edge. Three spellings would be three chances
-// to build one symbol and root another — a link failure at best, and at worst a service whose loop is pruned.
+// ⭐⭐ **`<T>.__behave` AND `<T>.__finish` — THE SYNTHESIZED BEHAVIOUR FUNCTIONS' SYMBOLS, SPELLED ONCE FOR THEIR READERS.**
+// `ServiceBehaviour.installServiceBehaviours` BUILDS the functions under these names,
+// the spawn's lowering takes their addresses, and `DeadFunctionElimination` keeps them alive through exactly
+// that edge. Several spellings would be several chances to build one symbol and root another — a link failure
+// at best, and at worst a service whose behaviour is pruned.
 //
-// It is `qualifiedMethodName`'s shape, so it reads as what it is: a member of `<T>` the compiler wrote.
-module function serviceLoopSymbol(typeName ByteArray) returns ByteArray
-	return qualifiedMethodName(typeName, methodName: ServiceLoopMemberName)
-end 'serviceLoopSymbol'
+// They are `qualifiedMethodName`'s shape, so they read as what they are: members of `<T>` the compiler wrote.
+module function serviceBehaveSymbol(typeName ByteArray) returns ByteArray
+	return qualifiedMethodName(typeName, methodName: ServiceBehaveMemberName)
+end 'serviceBehaveSymbol'
+
+module function serviceFinishSymbol(typeName ByteArray) returns ByteArray
+	return qualifiedMethodName(typeName, methodName: ServiceFinishMemberName)
+end 'serviceFinishSymbol'
 
 let ServiceStartMemberPrefix = "__start_"
 
-module function serviceStartSymbol(loopSymbol ByteArray, factory ByteArray) returns ByteArray
-	return match splitQualifiedName(loopSymbol) 'split'
-		notQualified panic("serviceStartSymbol: '{String.from(loopSymbol)}' is not a loop symbol — `serviceLoopSymbolFor` answers `<owner>.__loop`")
-		parts(owner, _) gives qualifiedMethodName(owner, methodName: "{ServiceStartMemberPrefix}{String.from(factory)}".toByteArray())
-	end 'split'
+module function serviceStartSymbol(ownerSymbol ByteArray, factory ByteArray) returns ByteArray
+	return qualifiedMethodName(ownerSymbol, methodName: "{ServiceStartMemberPrefix}{String.from(factory)}".toByteArray())
 end 'serviceStartSymbol'
 
-module function isServiceLoopSymbol(name ByteArray) returns bool
+module function isServiceBehaveSymbol(name ByteArray) returns bool
+	return isServiceMemberSymbol(name, member: ServiceBehaveMemberName)
+end 'isServiceBehaveSymbol'
+
+module function isServiceFinishSymbol(name ByteArray) returns bool
+	return isServiceMemberSymbol(name, member: ServiceFinishMemberName)
+end 'isServiceFinishSymbol'
+
+function isServiceMemberSymbol(name ByteArray, member ByteArray) returns bool
 	return match splitQualifiedName(name) 'split'
 		notQualified gives false
-		parts(_, member) gives member.equals(ServiceLoopMemberName)
+		parts(_, last) gives last.equals(member)
 	end 'split'
-end 'isServiceLoopSymbol'
+end 'isServiceMemberSymbol'
 
 // ⭐⭐ **THE REPLY SLOT IS AN `Integer`, DELIBERATELY, AND THE PAYLOAD DROPS ARE WHY.** It is a raw
-// cell pointer, NOT a managed box: every payload drop — the loop's and a `__destruct_<U>`
+// cell pointer, NOT a managed box: every payload drop — `__behave`'s and a `__destruct_<U>`
 // cascade's — must SKIP it, and each does so structurally because a scalar payload is not managed.
 // A managed-typed slot here would hand those drops a box they must not free.
 //
@@ -8940,15 +8921,15 @@ export function serviceSendErrorCompanionName(messageKey ByteArray) returns Byte
 	return "{String.from(messageKey)}.{String.from(ServiceSendErrorSuffix)}".toByteArray()
 end 'serviceSendErrorCompanionName'
 
-// The one field of `<T>.handle`: the mailbox pointer. A real 8-byte box on `managedFileLayout`'s shape
+// The one field of `<T>.handle`: the cown pointer. A real 8-byte box on `managedFileLayout`'s shape
 // rather than a parse-time mark, so moves, E3102, struct fields, arrays and the drop cascade all reach it
 // by construction rather than through a special case at each door.
-module let ServiceHandleMailboxFieldName = b"mailbox"
+module let ServiceHandleCownFieldName = b"cown"
 
 // Its FIELD INDEX, for the one reader that loads it through a `StructLayout` rather than at a raw offset
 // (`Parser.emitServiceSendOp`). `buildServiceHandleStruct` adds exactly this one field, and the audit there
-// is what keeps the index and `ServiceHandleMailboxOffset` two spellings of one geometry.
-export let ServiceHandleMailboxFieldIndex = 0 as FieldIndex
+// is what keeps the index and `ServiceHandleCownOffset` two spellings of one geometry.
+export let ServiceHandleCownFieldIndex = 0 as FieldIndex
 
 // ⭐⭐ **`shutdown` IS THE HANDLE'S OWN METHOD, NOT A MESSAGE — AND IT YIELDS TO ONE OF THAT NAME.**
 // It closes the mailbox, so everything already queued still runs and every later send fails with
@@ -8960,12 +8941,12 @@ export let ServiceHandleMailboxFieldIndex = 0 as FieldIndex
 export let ServiceShutdownMethodName = b"shutdown"
 
 // ⭐⭐ **THE HANDLE BOX'S GEOMETRY AS A NUMBER, FOR THE ONE READER THAT HAS NO LAYOUT — the RUNTIME.**
-// `__mbox_handle_clone_box` mints a fresh handle box and `__mbox_handle_destruct` reads the mailbox out of
+// `__cown_handle_clone_box` mints a fresh handle box and `__cown_handle_destruct` reads the cown out of
 // one, and neither can ask `StructLayout` anything: they are Std-tier bodies built after the pipeline. The
 // pair is AUDITED against the layout at the one place that builds it
 // (`ServiceCompanions.buildServiceHandleStruct`), so a field added to the handle fails the compile rather
 // than making the runtime read past the record's end.
-export let ServiceHandleMailboxOffset = 0 as ByteOffset
+export let ServiceHandleCownOffset = 0 as ByteOffset
 export let ServiceHandleBoxSize = 8 as FullRangeInt
 
 // ⭐⭐ **SYNTHESIZE `<Union>.unionCases` BESIDE THE UNION THAT WAS JUST READ** (`/specs/union-cases.md`).
@@ -11227,7 +11208,7 @@ export enum FunctionTypeDoor
 	// The ASSIGNMENT-shaped doors, which differ from each other only in what the place is CALLED. They are
 	// arms of this enum rather than one `assigned` arm beside a noun STRING, and that is MEASURED, not
 	// tidiness: a `String` noun threaded on from `Parser.assignableValue` into the door cost ONE ALLOCATION
-	// PER ASSIGNMENT, per struct-literal field and per global store in the whole program — +1,852 in
+	// PER ASSIGNMENT and per struct-literal field in the whole program — +1,852 in
 	// `phase:parse` at scale rung 0, growing x1.96/x1.98/x1.99 with the corpus, on a path that records
 	// nothing almost every time. It reads as the SAME number whether the door's guard sits at the caller or
 	// inside the recorder, which is what identified the noun rather than the branch. A scalar carries the
@@ -11238,12 +11219,11 @@ export enum FunctionTypeDoor
 	// arm (`SemanticCheck.functionTypeDoorSite`) — the band discipline `StdOp` states in full. A new
 	// assignment-shaped door is APPENDED here; a new non-assignment door goes before `variable`.
 	variable
-	global
 	field
 end 'FunctionTypeDoor'
 
 // @generated library-cache begin
-let CacheCasesFunctionTypeDoor = [FunctionTypeDoor.cast, FunctionTypeDoor.returned, FunctionTypeDoor.payload, FunctionTypeDoor.enumCaseBacking, FunctionTypeDoor.containerElement, FunctionTypeDoor.tupleElement, FunctionTypeDoor.variable, FunctionTypeDoor.global, FunctionTypeDoor.field]
+let CacheCasesFunctionTypeDoor = [FunctionTypeDoor.cast, FunctionTypeDoor.returned, FunctionTypeDoor.payload, FunctionTypeDoor.enumCaseBacking, FunctionTypeDoor.containerElement, FunctionTypeDoor.tupleElement, FunctionTypeDoor.variable, FunctionTypeDoor.field]
 
 function cacheReadFunctionTypeDoor(reader LibraryCacheReader) returns FunctionTypeDoor throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -11278,7 +11258,6 @@ end 'cacheTableAgreesFunctionTypeDoor'
 export function functionTypeDoorNoun(door FunctionTypeDoor) returns String
 	match door 'd'
 		variable then return "variable"
-		global then return "global"
 		field then return "field"
 
 		// None of the rest takes a noun: a cast and a `return` ARE the construct, a payload and an enum case
@@ -11301,22 +11280,21 @@ export union SlotOwner
 end 'SlotOwner'
 
 // ⭐ **THE PLACE AN ASSIGNMENT NAMES, WORDED THE WAY `specs/assignment.md` WORDS IT.** The noun comes from
-// `functionTypeDoorNoun` directly above, so a global and a field still cannot come to be described two ways;
+// `functionTypeDoorNoun` directly above, so a variable and a field still cannot come to be described two ways;
 // what this adds is the NAME, and — for the one door whose name is ambiguous without it — the type that
 // declares the field. `p.x = "hello"` is a mismatch at `field 'x' of 'Point'`, and `x` alone would not say
-// which `x`, which is why the field arm takes an owner and the other two do not.
+// which `x`, which is why the field arm takes an owner and the other does not.
 //
 // ⚠ **RENDERED ONLY WHERE A DIAGNOSTIC IS BUILT**, under the same discipline as the noun: the doors thread a
 // scalar ENUM plus the names they already hold, never a phrase, because this path is every assignment in the
 // program and a String built per call is the +1,852 allocations `FunctionTypeDoor`'s header records.
 export function assignedPlacePhrase(door FunctionTypeDoor, name ByteArray, owner SlotOwner) returns String
-	// The noun REFUSES a door that names no place, so asking for it first is also the guard: the only three
-	// doors that reach the lines below are `variable`, `global` and `field`.
+	// The noun REFUSES a door that names no place, so asking for it first is also the guard: the only two
+	// doors that reach the lines below are `variable` and `field`.
 	let place = "{functionTypeDoorNoun(door)} '{String.from(name)}'"
 
 	match door 'd'
-		variable or
-		global then return place
+		variable then return place
 		field then break
 		cast or
 		returned or
@@ -11352,7 +11330,6 @@ end 'functionMisusePlacePhrase'
 export function brandedPlacePhrase(door FunctionTypeDoor, name ByteArray, owner SlotOwner) returns String
 	match door 'door'
 		variable or
-		global or
 		field then return assignedPlacePhrase(door, name: name, owner: owner)
 		payload then return "union payload '{String.from(name)}'"
 		containerElement then return "the element of '{String.from(name)}'"

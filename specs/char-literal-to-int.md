@@ -24,8 +24,8 @@ end 'chars'
 ### Arithmetic
 
 ```maxon
-var digit = 53  // codepoint for '5'
-var value = digit - '0'  // '0' coerced to 48, result is 5
+let digit = 53  // codepoint for '5'
+let value = digit - '0'  // '0' coerced to 48, result is 5
 ```
 
 ## Tests

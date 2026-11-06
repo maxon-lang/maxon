@@ -38,7 +38,7 @@ typealias FooContainer = Container with Foo
 typealias BarContainer = Container with Bar
 
 // FooContainer.Idx and BarContainer.Idx are distinct types
-var fooIdx = fooContainer.push(myFoo)   // returns FooContainer.Idx
+let fooIdx = fooContainer.push(myFoo)   // returns FooContainer.Idx
 fooContainer.get(fooIdx)                // OK
 barContainer.get(fooIdx)                // ERROR: type mismatch
 ```
@@ -48,7 +48,7 @@ barContainer.get(fooIdx)                // ERROR: type mismatch
 Use `as` to convert between compatible per-instance aliases (same base type and range):
 
 ```text
-var barIdx = fooIdx as BarContainer.Idx
+let barIdx = fooIdx as BarContainer.Idx
 barContainer.get(barIdx)  // OK after explicit conversion
 ```
 
@@ -57,7 +57,7 @@ barContainer.get(barIdx)  // OK after explicit conversion
 Cast a value into the per-instance type with `as`:
 
 ```text
-var idx = 0 as FooContainer.Idx
+let idx = 0 as FooContainer.Idx
 ```
 
 ## Tests

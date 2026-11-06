@@ -282,9 +282,7 @@ back in main
 above it, so it returns on that path. Its result is discarded here — a bare-call statement is a
 legal position for a value-returning function — and control must continue past it.
 ```maxon
-var calls = 0 as Integer
-
-function maybeFatal(b bool) returns Integer
+function maybeFatal(b bool, calls mutable Integer) returns Integer
 	calls = calls + 1
 	if b 'y'
 		return 5
@@ -293,7 +291,8 @@ function maybeFatal(b bool) returns Integer
 end 'maybeFatal'
 
 function main() returns ExitCode
-	_ = maybeFatal(true)
+	var calls = 0 as Integer
+	_ = maybeFatal(true, calls: calls)
 	print("back in main\n")
 	return calls - 1
 end 'main'

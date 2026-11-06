@@ -26,44 +26,8 @@ slot and silently return a wrong number.
 
 ## Tests
 
-<!-- test: file-private-same-name-cross-file-var -->
-Two files each declare a file-private `var counter` with a different value and mutate it by a
-different amount. Each file's `counter` is its own slot: `bumpA` sees 7 and `bumpB` sees 100.
-
-The three answers are deliberately distinct, so that aliasing cannot pass by coincidence:
-correct is `8 + 110 = 118`; aliasing onto featA's 7 gives `8 + 18 = 26`; aliasing onto featB's
-100 gives `101 + 111 = 212`, which is the aliasing this case exists to catch: `bumpA()` reading
-featB's slot and answering 101.
-```maxon
-// --- file: featA/a.maxon
-export typealias Num = int(i64.min to i64.max)
-
-var counter = 7 as Num
-
-export function bumpA() returns Num
-	counter = counter + 1
-	return counter
-end 'bumpA'
-
-// --- file: featB/b.maxon
-var counter = 100 as Num
-
-export function bumpB() returns Num
-	counter = counter + 10
-	return counter
-end 'bumpB'
-
-// --- file: app/main.maxon
-function main() returns ExitCode
-	return bumpA() + bumpB()
-end 'main'
-```
-```exitcode
-118
-```
-
 <!-- test: file-private-same-name-in-two-directories-through-a-generic-instance -->
-Two files in two DIRECTORIES each declare a file-private `limit`, `tag` and `var calls`. A generic type
+Two files in two DIRECTORIES each declare a file-private `limit`, `tag` and `calls` (a `SharedValue` cell). A generic type
 declared in `a.maxon` has a method that reads them, and `app/main.maxon` instantiates it and calls that method
 from beside its own three declarations of the same names. The method reads `a.maxon`'s declarations
 whichever file instantiated it or called it, and bumps `a.maxon`'s `calls`, never `main.maxon`'s.
@@ -74,7 +38,9 @@ The answers are distinct on purpose: `weighA` is `5 + 2 + 3`, and the method's s
 // --- file: lib/a.maxon
 let limit = 5
 let tag = b"AAA"
-var calls = 1 as Count
+let calls = CallCell.create(1 as Count)
+
+export typealias CallCell = SharedValue with Count
 
 export type Box uses T
 	export var value as T
@@ -84,8 +50,9 @@ export type Box uses T
 	end 'create'
 
 	export function weigh() returns Count
-		calls = calls + 1
-		return limit + calls + tag.count()
+		let next = calls.current() + 1
+		calls.publish(next)
+		return limit + next + tag.count()
 	end 'weigh'
 end 'Box'
 
@@ -99,12 +66,13 @@ end 'weighA'
 // --- file: app/main.maxon
 let limit = 70
 let tag = b"BBBBBB"
-var calls = 500 as Count
+let calls = CallCell.create(500 as Count)
 
 function weighMain() returns Count
 	let box = CountBox.create(2)
-	calls = calls + 1
-	return box.weigh() + limit + calls + tag.count()
+	let next = calls.current() + 1
+	calls.publish(next)
+	return box.weigh() + limit + next + tag.count()
 end 'weighMain'
 
 function main() returns ExitCode
@@ -115,38 +83,6 @@ end 'main'
 ```stdout
 10 588
 ```
-
-<!-- test: error.two-files-of-one-directory-each-declare-a-private-let-and-var-of-one-name -->
-The same declarations in two files of ONE directory: a private name still claims its name in the directory, so
-`main.maxon`'s `limit`, `tag` and `calls` are each refused against `a.maxon`'s.
-```maxon
-// --- file: a.maxon
-let limit = 5
-let tag = b"AAA"
-var calls = 1 as Count
-
-export function weighA() returns Count
-	calls = calls + 1
-	return limit + calls + tag.count()
-end 'weighA'
-
-// --- file: main.maxon
-let limit = 70
-let tag = b"BBBBBB"
-var calls = 500 as Count
-
-function main() returns ExitCode
-	calls = calls + 1
-	print("{weighA()} {limit + calls + tag.count()}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3006: <fragment>:13:5: duplicate definition of 'limit' — already declared as `let limit`
-error E3006: <fragment>:14:5: duplicate definition of 'tag' — already declared as `let tag`
-error E3006: <fragment>:15:5: duplicate definition of 'calls' — already declared as `var calls`
-```
-
 
 <!-- test: exported-globals-of-one-name-in-two-directories-are-read-qualified -->
 An `export`ed top-level binding is declared in its directory's scope, so two directories that each `export let
@@ -166,41 +102,6 @@ end 'main'
 ```
 ```exitcode
 76
-```
-
-<!-- test: exported-vars-of-one-name-in-two-directories-keep-their-own-storage -->
-Two directories each export a `var counter`, and each directory's function bumps its own: a bare `counter` in the
-declaring directory is that directory's. `app/main.maxon` reads each qualified, and the two slots hold 2 and 110.
-```maxon
-// --- file: alpha/a.maxon
-export var counter = 1 as Count
-
-export function bumpA() returns Count
-	counter = counter + 1
-	return counter
-end 'bumpA'
-
-// --- file: beta/b.maxon
-export var counter = 100 as Count
-
-export function bumpB() returns Count
-	counter = counter + 10
-	return counter
-end 'bumpB'
-
-// --- file: app/main.maxon
-function main() returns ExitCode
-	_ = bumpA()
-	_ = bumpB()
-	print("{alpha.counter} {beta.counter}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-2 110
 ```
 
 <!-- test: error.a-bare-read-of-a-name-two-directories-export-is-ambiguous -->

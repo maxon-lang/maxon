@@ -176,9 +176,10 @@ export type LoweredUnit
 end 'LoweredUnit'
 
 // ⛔ A `NameTable`, not a `Map`. A `Map` hashes its key through a witness slot, and a message that
-// dispatches through a witness the compiler cannot name is refused outright (E3143) — the lookups run on
-// a pool worker. `NameTable`'s index names no witness; the isel asks three or four times per call op, and
-// a bisection over the sorted names would walk the shared prefix of thirteen of them on every ask.
+// dispatches through a witness the compiler cannot name makes every address-taken function
+// message-reachable — the lookups run on a pool worker. `NameTable`'s index names no witness; the isel
+// asks three or four times per call op, and a bisection over the sorted names would walk the shared
+// prefix of thirteen of them on every ask.
 //
 // Every name lives in that one arena, so a worker's copy is seven array clones — five of them the name
 // table's — rather than two allocations per callee per worker.
@@ -1443,9 +1444,9 @@ end 'opTakesSyscallBracket'
 // A block has exactly ONE terminator, so keyed by the block the fact is exact.
 //
 // ⛔ **A DENSE COLUMN OVER THE MODULE'S BLOCK REFS, NOT A `Map`.** A `Map` hashes its key through a
-// witness slot, and the census runs on a pool worker, where a dispatch the compiler cannot name is
-// refused outright (E3143). A unit module's block refs are exactly `0 upto blocks.count()`, so a column
-// sized to that count answers for every block of the function.
+// witness slot, and the census runs on a pool worker, where a dispatch the compiler cannot name makes
+// every address-taken function message-reachable. A unit module's block refs are exactly
+// `0 upto blocks.count()`, so a column sized to that count answers for every block of the function.
 type FusedPredColumn
 	var fused as BoolArray
 	var preds as StdCmpPredArray

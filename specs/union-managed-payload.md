@@ -3611,11 +3611,11 @@ celsius 43.5
 
 <!-- test: a-read-only-payload-outlives-the-replacement-of-its-owner -->
 A payload bound out of a union that no name can write, here a `let` field, is still borrowed from the box that holds
-it, and the box from the record that holds that. `Holder.measure` binds `s` and makes one call with it; the call
-replaces the global `theHolder` that owns the box, which frees the box and drives the payload's count to zero, and the
+it, and the box from the record that holds that. `measure` binds `s` and makes one call with it; the call
+replaces the `Holder` a `Shelf` holds, which frees the box and drives the payload's count to zero, and the
 allocations in `reuse` take the freed record before the read. The payload is built at run time, because a literal is an
 immortal record no release can free. The hold the binding takes is lowered to the reference that carries it across
-the call that replaces the global, as it does across the call that overwrites a union field in
+the call that replaces the holder, as it does across the call that overwrites a union field in
 `a-read-only-payload-outlives-the-overwrite-of-the-union-field-that-holds-it`, so the answer is `68063` and not the
 bytes the freed record became.
 ```maxon
@@ -3627,25 +3627,32 @@ union Slot
 end 'Slot'
 
 type Holder
-	let slot as Slot
+	export let slot as Slot
 
 	static function create(slot Slot) returns Self
 		return Self{slot: slot}
 	end 'create'
 
-	function measure() returns Integer
-		return match slot 'm'
-			filled(s) gives replaceThenMeasure(s)
-			empty(n) gives n
-		end 'm'
-	end 'measure'
 end 'Holder'
+
+type Shelf
+	export var holder as Holder
+
+	static function create(holder Holder) returns Self
+		return Self{holder: holder}
+	end 'create'
+end 'Shelf'
+
+function measure(shelf Shelf) returns Integer
+	return match shelf.holder.slot 'm'
+		filled(s) gives replaceThenMeasure(s, shelf: shelf)
+		empty(n) gives n
+	end 'm'
+end 'measure'
 
 function text(n Integer) returns String
 	return "payload {n} built at runtime, long enough to be a real heap allocation"
 end 'text'
-
-var theHolder = Holder.create(Slot.filled(text(5)))
 
 function reuse(borrowed String) returns Integer
 	let refill = "r{borrowed.byteLength()} a fresh allocation of its own, reusing the freed record, yes"
@@ -3653,13 +3660,14 @@ function reuse(borrowed String) returns Integer
 	return (borrowed.byteLength() * 1000 + again.byteLength()) as Integer
 end 'reuse'
 
-function replaceThenMeasure(borrowed String) returns Integer
-	theHolder = Holder.create(Slot.empty(7))
+function replaceThenMeasure(borrowed String, shelf Shelf) returns Integer
+	shelf.holder = Holder.create(Slot.empty(7))
 	return reuse(borrowed)
 end 'replaceThenMeasure'
 
 function main() returns ExitCode
-	let measured = theHolder.measure()
+	var shelf = Shelf.create(Holder.create(Slot.filled(text(5))))
+	let measured = measure(shelf)
 	print("measured={measured}")
 	return 0
 end 'main'

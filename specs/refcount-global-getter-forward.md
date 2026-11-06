@@ -78,22 +78,25 @@ end 'Box'
 
 typealias ItemBox = Box with Item
 
-var cachedBase = ItemBox.create()
-var baseLoaded = false
-var cachedMerged = ItemBox.create()
-var mergedDone = false
-
-// Mirrors loadRuntimeModule: returns a BORROW of the cachedBase global.
-function loadBase() returns ItemBox
-	if baseLoaded 'hit'
-		return cachedBase
-	end 'hit'
+function makeBase() returns ItemBox
 	var b = ItemBox.create()
 	b.add(Item.create("first base item"))
 	b.add(Item.create("second base item"))
 	b.add(Item.create("third base item"))
-	cachedBase = b
-	baseLoaded = true
+	return b
+end 'makeBase'
+
+function makeMerged() returns ItemBox
+	var merged = ItemBox.create()
+	merged.add(Item.create("merged item"))
+	return merged
+end 'makeMerged'
+
+let cachedBase = makeBase()
+let cachedMerged = makeMerged()
+
+// Mirrors loadRuntimeModule: returns a BORROW of the cachedBase global.
+function loadBase() returns ItemBox
 	return cachedBase
 end 'loadBase'
 
@@ -104,13 +107,6 @@ function buildFor(wantMerged bool) returns ItemBox
 	if not wantMerged 'native'
 		return base
 	end 'native'
-	if mergedDone 'cached'
-		return cachedMerged
-	end 'cached'
-	var merged = ItemBox.create()
-	merged.add(Item.create("merged item"))
-	cachedMerged = merged
-	mergedDone = true
 	return cachedMerged
 end 'buildFor'
 

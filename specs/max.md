@@ -21,9 +21,9 @@ Returns the larger of two floating-point values.
 **Example:**
 
 ```maxon
-var x = max(3.0, 5.0)    // 5.0
-var y = max(10.0, 2.5)   // 10.0
-var z = max(-1.0, 1.0)   // 1.0
+let x = max(3.0, 5.0)    // 5.0
+let y = max(10.0, 2.5)   // 10.0
+let z = max(-1.0, 1.0)   // 1.0
 ```
 
 **Notes:**

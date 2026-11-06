@@ -372,7 +372,7 @@ function ident(v Integer) returns Integer
 	return v
 end 'ident'
 
-function divide(scratch IntArray, d NegativeOne) returns Integer
+function divide(scratch IntArray, d NegativeOne, dividend Integer) returns Integer
 	for i in 0 upto scratch.count() 'fill'
 		try scratch.set(i, value: i as Integer) otherwise panic("divide: i < scratch.count()")
 	end 'fill'
@@ -381,13 +381,12 @@ function divide(scratch IntArray, d NegativeOne) returns Integer
 end 'divide'
 
 function main() returns ExitCode
-	dividend = ident(i64.min)
+	let dividend = ident(i64.min)
 	var scratch = IntArray.create(0)
 	scratch.resize(4)
 	let d = ident(-1)
-	return divide(scratch, d: d as NegativeOne) as ExitCode
+	return divide(scratch, d: d as NegativeOne, dividend: dividend) as ExitCode
 end 'main'
-var dividend = 0 as Integer
 ```
 ```exitcode
 1

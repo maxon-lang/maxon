@@ -44,25 +44,18 @@ leak gate against the reciprocal over-retain.
 
 ## Tests
 
-<!-- test: module-global-reassign-then-read-borrow -->
-Reading a module global, reassigning it, then using the pre-read borrow.
+<!-- test: by-reference-reassign-then-read-borrow -->
+Reading a by-reference parameter, reassigning it, then using the pre-read borrow.
 ```maxon
-typealias Int = int(0 to 1000000)
-
-type Box
-	export var n as Int
-
-	static function create(v Int) returns Self
-		return Self{n: v}
-	end 'create'
-end 'Box'
-
-var gbox = Box.create(1)
+function swapIn(label mutable String) returns ExitCode
+	view old = label
+	label = "second label, long enough to live on the heap {40 + 2}"
+	return 1 if old.startsWith("first") else 0
+end 'swapIn'
 
 function main() returns ExitCode
-	view old = gbox
-	gbox = Box.create(2)
-	return old.n
+	var label = "first label, long enough to live on the heap {40 + 2}"
+	return swapIn(label)
 end 'main'
 ```
 ```exitcode
@@ -101,57 +94,47 @@ end 'main'
 6
 ```
 
-<!-- test: unrelated-global-reassign-keeps-borrow -->
-Loading one global read-only while a DIFFERENT global is reassigned stays balanced.
+<!-- test: unrelated-by-reference-reassign-keeps-borrow -->
+Loading one by-reference parameter read-only while a DIFFERENT one is reassigned stays balanced.
 ```maxon
-typealias Int = int(0 to 1000000)
-
-type Box
-	export var n as Int
-
-	static function create(v Int) returns Self
-		return Self{n: v}
-	end 'create'
-end 'Box'
-
-var ga = Box.create(3)
-var gb = Box.create(9)
+function swapOther(la String, lb mutable String) returns ExitCode
+	view a = la
+	lb = "replacement label, long enough to live on the heap {40 + 2}"
+	return 3 if a.startsWith("third") else 0
+end 'swapOther'
 
 function main() returns ExitCode
-	view a = ga
-	gb = Box.create(2)
-	return a.n
+	let la = "third label, long enough to live on the heap {40 + 2}"
+	var lb = "ninth label, long enough to live on the heap {40 + 2}"
+	return swapOther(la, lb: lb)
 end 'main'
 ```
 ```exitcode
 3
 ```
 
-<!-- test: loop-resident-global-reassign-borrow -->
-A loop that reassigns a global with a live borrow each iteration stays balanced.
+<!-- test: loop-resident-by-reference-reassign-borrow -->
+A loop that reassigns a by-reference parameter with a live borrow each iteration stays balanced.
 ```maxon
 typealias Int = int(0 to 1000000)
 
-type Box
-	export var n as Int
-
-	static function create(v Int) returns Self
-		return Self{n: v}
-	end 'create'
-end 'Box'
-
-var gbox = Box.create(0)
-
-function main() returns ExitCode
+function churn(label mutable String) returns Int
 	var sum = 0 as Int
 	var i = 0 as Int
 	while i < 3 'loop'
-		view old = gbox
-		gbox = Box.create(i + 1)
-		sum = sum + old.n
+		view old = label
+		label = "label number {i + 1}, long enough to live on the heap"
+		if old.contains("number {i}") 'seen'
+			sum = sum + 1
+		end 'seen'
 		i = i + 1
 	end 'loop'
 	return sum
+end 'churn'
+
+function main() returns ExitCode
+	var label = "label number 0, long enough to live on the heap"
+	return churn(label)
 end 'main'
 ```
 ```exitcode

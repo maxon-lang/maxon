@@ -1,6 +1,6 @@
 // GlobalDataTable — the backend's TWO data images. `.rdata`/`.rodata` holds the read-only
 // payloads (String and byte-string blobs, float islands, jump tables, witness tables, layout
-// descriptors); `.data` holds the writable ones (a scalar slot per top-level `var`, plus a
+// descriptors); `.data` holds the writable ones (a slot per stored top-level `let`, plus a
 // contiguous reserved RUN per `registerDataBlob` caller). Every image writer serializes the two
 // images and resolves code→data relocations against the offsets recorded here.
 //
@@ -394,7 +394,7 @@ end 'bytesMatchAt'
 // label live?" with a linear scan per reference is Θ(globals × references).
 export typealias DataSectionIndexMap = Map with (String, MachineWord)
 
-// ONE writable `.data` slot: a top-level `var`.
+// ONE writable `.data` slot: a stored top-level `let`.
 //
 // ⚠ IT CARRIES THE VALUE, NOT THE BYTES. The image is rendered from `(value, valueType)` by
 // `dataSectionImage`, once, at write time. Storing both a value and its serialized bytes

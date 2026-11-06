@@ -16,11 +16,11 @@ category: stdlib
 Checks if a collection contains a specific element. Requires the element type to be `Equatable`.
 
 ```text
-var numbers = [1, 2, 3, 4, 5]
+let numbers = [1, 2, 3, 4, 5]
 numbers.contains(3)    // true
 numbers.contains(99)   // false
 
-var s = "hello"
+let s = "hello"
 s.containsCharacter('l')   // true (Character search)
 ```
 
@@ -29,11 +29,11 @@ s.containsCharacter('l')   // true (Character search)
 Checks if a collection contains another collection as a contiguous subsequence.
 
 ```text
-var arr = [1, 2, 3, 4, 5]
+let arr = [1, 2, 3, 4, 5]
 arr.containsSequence([2, 3, 4])   // true
 arr.containsSequence([1, 3])      // false (not contiguous)
 
-var s = "hello world"
+let s = "hello world"
 s.contains("lo wo")                 // true (substring search)
 ```
 

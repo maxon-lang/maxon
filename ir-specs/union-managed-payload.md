@@ -742,8 +742,8 @@ func @main {
 ```
 
 <!-- test: a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner -->
-The control for the case above. `Holder.measure` binds the payload of a union in a `let` field for one call, and that
-call replaces the global that owns the holder, which releases the box the payload was read out of. The binding keeps
+The control for the case above. `measure` binds the payload of a union in a `let` field for one call, and that
+call replaces the `Holder` a `Shelf` holds, which releases the box the payload was read out of. The binding keeps
 its count across the call: in the pin, `matcharm#7` retains the payload with `__managed_retain` before the replacement
 and the arm's exit releases it with `__managed_decref`.
 ```maxon
@@ -753,24 +753,31 @@ union Slot
 end 'Slot'
 
 type Holder
-	let slot as Slot
+	export let slot as Slot
 
 	static function create(slot Slot) returns Holder
 		return Self{slot: slot}
 	end 'create'
 
-	function measure() returns Count
-		return match slot 'slot'
-			filled(bytes) gives replaceThenCount(bytes)
-			empty gives 0
-		end 'slot'
-	end 'measure'
 end 'Holder'
 
-var theHolder = Holder.create(Slot.empty)
+type Shelf
+	export var holder as Holder
 
-function replaceThenCount(bytes ByteArray) returns Count
-	theHolder = Holder.create(Slot.empty)
+	static function create(holder Holder) returns Shelf
+		return Self{holder: holder}
+	end 'create'
+end 'Shelf'
+
+function measure(shelf Shelf) returns Count
+	return match shelf.holder.slot 'slot'
+		filled(bytes) gives replaceThenCount(bytes, shelf: shelf)
+		empty gives 0
+	end 'slot'
+end 'measure'
+
+function replaceThenCount(bytes ByteArray, shelf Shelf) returns Count
+	shelf.holder = Holder.create(Slot.empty)
 
 	return bytes.count()
 end 'replaceThenCount'
@@ -778,9 +785,9 @@ end 'replaceThenCount'
 function main() returns ExitCode
 	var payload = ByteArray.create(0)
 	payload.resize(9)
-	theHolder = Holder.create(Slot.filled(payload))
+	var shelf = Shelf.create(Holder.create(Slot.filled(payload)))
 
-	return theHolder.measure()
+	return measure(shelf)
 end 'main'
 ```
 ```exitcode
@@ -788,14 +795,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __data_theHolder@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_console_probe_stdin@32 = i8 0
-  __mrt_console_probe_stdout@33 = i8 0
-  __mrt_console_probe_stderr@34 = i8 0
-  __mrt_program_started@35 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @Holder.create {
@@ -845,47 +851,47 @@ func @main {
     x64.movRegReg rcx, r8
     x64.orRegImm32 rcx, r8, 1
     x64.callDirect Holder.create
-    x64.leaRegGlobal rax, __data_theHolder
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.leaRegGlobal rax, __data_theHolder
-    x64.storeBaseDispReg.word64 [rax + 0], r8
-    x64.callDirect __destruct_Holder
+    x64.movRegReg r12, r8
+  __il_body#7:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
     x64.leaRegFunc rdx, [rip + __clone_Holder]
-    x64.leaRegGlobal rax, __data_theHolder
-    x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegReg rcx, r12
     x64.callDirect __mm_own_deep
-    x64.movRegReg r13, r8
-  __il_body#6:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Holder
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, 7
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, matcharm#8
-  matcharm#7:
+    x64.jcc notEqual, matcharm#12
+  matcharm#11:
     x64.leaRegRegImm32 r12, rax, -1
     x64.movRegReg rcx, r12
     x64.callDirect __managed_retain
     x64.movRegReg r14, r8
-  __il_body#13:
+  __il_body#17:
     x64.movRegImm32 r15, 2
     x64.movRegReg rcx, r15
     x64.callDirect __uretain_Slot
     x64.movRegReg rcx, r15
     x64.callDirect Holder.create
-    x64.leaRegGlobal rax, __data_theHolder
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.leaRegGlobal rax, __data_theHolder
-    x64.storeBaseDispReg.word64 [rax + 0], r8
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
     x64.callDirect __destruct_Holder
     x64.loadRegBaseDisp.word64 r12, [r12 + 8]
-  __il_cont#12:
+  __il_cont#16:
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
-    x64.jmp __il_cont#5
-  matcharm#8:
+    x64.jmp __il_cont#9
+  matcharm#12:
     x64.movRegImm32 r12, 0
-  __il_cont#5:
+  __il_cont#9:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -894,9 +900,11 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r13
-    x64.callDirect __destruct_Holder
+    x64.callDirect __destruct_Shelf
+  exitdrop:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
+  exitterminal:
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15
@@ -907,7 +915,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:42: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -922,13 +930,12 @@ func @main {
 ```
 ```TargetIr:x64-linux
 data {
-  __data_theHolder@0 = i64 0
-  __mrt_envp@8 = i64 0
-  __mrt_signal_stack_bytes@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @Holder.create {
@@ -978,47 +985,47 @@ func @main {
     x64.movRegReg rcx, r8
     x64.orRegImm32 rcx, r8, 1
     x64.callDirect Holder.create
-    x64.leaRegGlobal rax, __data_theHolder
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.leaRegGlobal rax, __data_theHolder
-    x64.storeBaseDispReg.word64 [rax + 0], r8
-    x64.callDirect __destruct_Holder
+    x64.movRegReg r12, r8
+  __il_body#7:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
     x64.leaRegFunc rdx, [rip + __clone_Holder]
-    x64.leaRegGlobal rax, __data_theHolder
-    x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegReg rcx, r12
     x64.callDirect __mm_own_deep
-    x64.movRegReg r13, r8
-  __il_body#6:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Holder
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, 7
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, matcharm#8
-  matcharm#7:
+    x64.jcc notEqual, matcharm#12
+  matcharm#11:
     x64.leaRegRegImm32 r12, rax, -1
     x64.movRegReg rcx, r12
     x64.callDirect __managed_retain
     x64.movRegReg r14, r8
-  __il_body#13:
+  __il_body#17:
     x64.movRegImm32 r15, 2
     x64.movRegReg rcx, r15
     x64.callDirect __uretain_Slot
     x64.movRegReg rcx, r15
     x64.callDirect Holder.create
-    x64.leaRegGlobal rax, __data_theHolder
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.leaRegGlobal rax, __data_theHolder
-    x64.storeBaseDispReg.word64 [rax + 0], r8
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
     x64.callDirect __destruct_Holder
     x64.loadRegBaseDisp.word64 r12, [r12 + 8]
-  __il_cont#12:
+  __il_cont#16:
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
-    x64.jmp __il_cont#5
-  matcharm#8:
+    x64.jmp __il_cont#9
+  matcharm#12:
     x64.movRegImm32 r12, 0
-  __il_cont#5:
+  __il_cont#9:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -1026,9 +1033,11 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r13
-    x64.callDirect __destruct_Holder
+    x64.callDirect __destruct_Shelf
+  exitdrop:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
+  exitterminal:
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15
@@ -1039,7 +1048,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:42: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -1054,11 +1063,10 @@ func @main {
 ```
 ```TargetIr:arm64-macos
 data {
-  __data_theHolder@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_program_started@32 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @Holder.create {
@@ -1102,48 +1110,47 @@ func @main {
     arm64.bl __managed_retain
     arm64.orr x0, x0, 1
     arm64.bl Holder.create
-    arm64.leaGlobal x1, __data_theHolder
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.leaGlobal x2, __data_theHolder
-    arm64.storeBaseDispReg.word64 [x2 + 0], x0
-    arm64.movRegReg x0, x1
-    arm64.bl __destruct_Holder
+    arm64.movRegReg x20, x0
+  __il_body#7:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
     arm64.leaFuncAddr x1, __clone_Holder
-    arm64.leaGlobal x0, __data_theHolder
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movRegReg x0, x20
     arm64.bl __mm_own_deep
-    arm64.movRegReg x21, x0
-  __il_body#6:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Holder
+  __il_body#10:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.and x1, x0, 7
     arm64.cmp x1, 1
-    arm64.b.ne matcharm#8
-  matcharm#7:
+    arm64.b.ne matcharm#12
+  matcharm#11:
     arm64.sub x20, x0, 1
     arm64.movRegReg x0, x20
     arm64.bl __managed_retain
     arm64.movRegReg x22, x0
-  __il_body#13:
+  __il_body#17:
     arm64.movImm x23, 2
     arm64.movRegReg x0, x23
     arm64.bl __uretain_Slot
     arm64.movRegReg x0, x23
     arm64.bl Holder.create
-    arm64.leaGlobal x1, __data_theHolder
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.leaGlobal x2, __data_theHolder
-    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
     arm64.movRegReg x0, x1
     arm64.bl __destruct_Holder
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
-  __il_cont#12:
+  __il_cont#16:
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
-    arm64.b __il_cont#5
-  matcharm#8:
+    arm64.b __il_cont#9
+  matcharm#12:
     arm64.movImm x20, 0
-  __il_cont#5:
+  __il_cont#9:
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
@@ -1151,9 +1158,11 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x21
-    arm64.bl __destruct_Holder
+    arm64.bl __destruct_Shelf
+  exitdrop:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
+  exitterminal:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -1163,7 +1172,7 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:42: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -1177,14 +1186,13 @@ func @main {
 ```
 ```TargetIr:arm64-linux
 data {
-  __data_theHolder@0 = i64 0
-  __mrt_envp@8 = i64 0
-  __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_hwcap_atomics@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
 }
 
 func @Holder.create {
@@ -1228,48 +1236,47 @@ func @main {
     arm64.bl __managed_retain
     arm64.orr x0, x0, 1
     arm64.bl Holder.create
-    arm64.leaGlobal x1, __data_theHolder
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.leaGlobal x2, __data_theHolder
-    arm64.storeBaseDispReg.word64 [x2 + 0], x0
-    arm64.movRegReg x0, x1
-    arm64.bl __destruct_Holder
+    arm64.movRegReg x20, x0
+  __il_body#7:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
     arm64.leaFuncAddr x1, __clone_Holder
-    arm64.leaGlobal x0, __data_theHolder
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movRegReg x0, x20
     arm64.bl __mm_own_deep
-    arm64.movRegReg x21, x0
-  __il_body#6:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Holder
+  __il_body#10:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.and x1, x0, 7
     arm64.cmp x1, 1
-    arm64.b.ne matcharm#8
-  matcharm#7:
+    arm64.b.ne matcharm#12
+  matcharm#11:
     arm64.sub x20, x0, 1
     arm64.movRegReg x0, x20
     arm64.bl __managed_retain
     arm64.movRegReg x22, x0
-  __il_body#13:
+  __il_body#17:
     arm64.movImm x23, 2
     arm64.movRegReg x0, x23
     arm64.bl __uretain_Slot
     arm64.movRegReg x0, x23
     arm64.bl Holder.create
-    arm64.leaGlobal x1, __data_theHolder
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.leaGlobal x2, __data_theHolder
-    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
     arm64.movRegReg x0, x1
     arm64.bl __destruct_Holder
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
-  __il_cont#12:
+  __il_cont#16:
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
-    arm64.b __il_cont#5
-  matcharm#8:
+    arm64.b __il_cont#9
+  matcharm#12:
     arm64.movImm x20, 0
-  __il_cont#5:
+  __il_cont#9:
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
@@ -1277,9 +1284,11 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x21
-    arm64.bl __destruct_Holder
+    arm64.bl __destruct_Shelf
+  exitdrop:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
+  exitterminal:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -1289,7 +1298,7 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-read-only-payload-keeps-its-count-across-a-call-that-can-release-its-owner.test:42: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

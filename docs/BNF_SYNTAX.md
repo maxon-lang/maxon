@@ -207,7 +207,6 @@ top_level_decl
               | interface_decl
               | extension_block
               | typealias_decl
-              | top_level_var
               | top_level_let
               | default_decl
               | conditional_block
@@ -330,7 +329,7 @@ method_decl   = visibility_prefix 'function' IDENTIFIER '(' [ receiver_param ','
                 'end' LABEL
 
 static_field_decl
-              = visibility_prefix 'static' ('var' | 'let') IDENTIFIER '=' expression NEWLINE
+              = visibility_prefix 'static' 'let' IDENTIFIER '=' expression NEWLINE
 
                 (* legal only inside a type body; `static` at file scope is a parse error *)
 
@@ -492,10 +491,9 @@ type_arg      = [ 'readonly' | capability ] generic_base 'with' [ INTEGER ] type
 tuple_type    = '(' type_ref ',' type_ref { ',' type_ref } ')'
 ```
 
-### 3.8 Top-Level Variables
+### 3.8 Top-Level Bindings
 
 ```
-top_level_var = visibility_prefix 'var' IDENTIFIER '=' expression NEWLINE
 top_level_let = visibility_prefix 'let' IDENTIFIER '=' expression NEWLINE
 ```
 

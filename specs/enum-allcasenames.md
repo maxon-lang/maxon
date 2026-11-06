@@ -23,7 +23,7 @@ for name in Color.allCaseNames 'loop'
 end 'loop'
 // Prints: red green blue
 
-var count = Color.allCaseNames.count()  // 3
+let count = Color.allCaseNames.count()  // 3
 ```
 
 This works with all backing types (simple, int, float, string, char, struct) and with unions (even those with associated values), because only the case names are returned.

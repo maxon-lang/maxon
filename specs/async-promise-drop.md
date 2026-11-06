@@ -129,18 +129,19 @@ Pins the divergence from a fire-and-forget-run model: a dropped thread's body NE
 the global to 1 if it ran, but `p` is never awaited and `main` never parks or yields, so its strand never
 reaches `incFlag` and the global stays 0. The drop cancels the never-run thread; it does not run it.
 ```maxon
-var flag = 0 as Integer
+typealias FlagCell = SharedValue with Integer
 
-function incFlag() returns Integer
+function incFlag(flag FlagCell) returns Integer
 	Scheduler.yield()
-	flag = 1
+	flag.publish(1 as Integer)
 	return 1
 end 'incFlag'
 
 function main() returns ExitCode
-	let p = async incFlag()
+	let flag = FlagCell.create(0 as Integer)
+	let p = async incFlag(flag.clone())
 	p.cancel()
-	return flag as ExitCode
+	return flag.current() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

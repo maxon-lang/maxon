@@ -216,7 +216,7 @@ end 'main'
   green thread and a `spawn` hands the factory's arguments to the service, which owns them, so `mutable`
   there is a parse error (**E2010**, `Expected 'a type' but got 'mutable'`).
 - Passing a `var` lets the callee's writes propagate. Any storage you could assign to at that point may be
-  passed and is written in place: a local `var`, a module-level `var`, a field of a binding (`p.x`), a field
+  passed and is written in place: a local `var`, a field of a binding (`p.x`), a field
   of the receiver (`count` or `self.count`), and a chain of them (`p.a.b`). The rule is exactly the
   assignment rule — an argument the callee writes is accepted here if and only if writing the same thing at
   the call site would be accepted.
@@ -340,16 +340,16 @@ captures, so handing that function a read-only value is **E3159**. A record [vie
 captured (**E3078**); a view of a number can, since the closure captures a copy.
 
 **A closure can go anywhere a value can.** A function value is one reference to a record holding the code
-and the captures, so a closure may be returned, stored in a field, a module-level variable, a container or
+and the captures, so a closure may be returned, stored in a field, a container or
 a union payload, and passed to `async`. A plain function is a record that
 lives for the whole program. Copies share: `var g = f` and `f.clone()` hold the same closure, and a function
-value is exempt from **E3078**. A module-level `let` or `var` may hold a function value, including a closure
+value is exempt from **E3078**. A module-level `let` may hold a function value, including a closure
 a factory call returns.
 
 **A closure may not be stored into what it captures.** The record would hold the closure and the closure the
 record, and neither would ever be released, so storing a closure — directly, or inside a value holding it —
 into a record it captures or a record that record reaches is **E3183**. The store is followed through fields,
-elements, payloads, tuples, literals, module variables, clones, returned values and the functions a
+elements, payloads, tuples, literals, clones, returned values and the functions a
 closure is handed to, in the order the stores run, and each cycle is reported once, at the store that closes
 it. Two names for one record that only exist at run time are beyond what the compiler can follow.
 
@@ -379,17 +379,16 @@ to globals or parameters, only pure callees) or **impure**, and the rules for ig
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-var counter = 0 as Tally
-
-function incrementAndGet() returns Tally
+function incrementAndGet(counter mutable Tally) returns Tally
 	counter = counter + 1
 	return counter
 end 'incrementAndGet'
 
 function main() returns ExitCode
-	_ = incrementAndGet()              // explicitly discarded
-	let now = incrementAndGet()        // used
-	// incrementAndGet()               // E3065: result of 'incrementAndGet' is not used
+	var counter = 0 as Tally
+	_ = incrementAndGet(counter)       // explicitly discarded
+	let now = incrementAndGet(counter) // used
+	// incrementAndGet(counter)        // E3065: result of 'incrementAndGet' is not used
 	print("{now}\n")                   // 2
 	return 0
 end 'main'

@@ -596,7 +596,7 @@ end 'main'
 error E3004: <fragment>:12:12: call to undefined function 'brokeHidden'
 ```
 
-<!-- test: cross-file-signatures.a-defaulted-parameter-of-a-factory-in-another-file-fills-in-a-global-initializer -->
+<!-- test: cross-file-signatures.a-defaulted-parameter-of-a-factory-in-another-file-fills-in-a-local-initializer -->
 `main.maxon`'s initializer omits `create`'s defaulted `n`, so the compiler calls the default's helper, which `types.maxon` declares. The helper is the compiler's call and no name `main.maxon` wrote, so the initializer is not refused for a file that cannot name it. It prints `6`.
 ```maxon
 // --- file: types.maxon
@@ -611,9 +611,8 @@ export type Rec
 end 'Rec'
 
 // --- file: main.maxon
-var r = Rec.create()
-
 function main() returns ExitCode
+	let r = Rec.create()
 	print("{r.v}\n")
 	return 0
 end 'main'
@@ -625,7 +624,7 @@ end 'main'
 6
 ```
 
-<!-- test: cross-file-signatures.a-field-default-built-by-a-helper-in-another-file-fills-in-a-global-initializer -->
+<!-- test: cross-file-signatures.a-field-default-built-by-a-helper-in-another-file-fills-in-a-local-initializer -->
 `Bag.items` is defaulted by a call, which `types.maxon` declares as a helper. `main.maxon`'s initializer builds a `Bag` without naming that helper, so the compiler's call to it is not refused for a file that cannot name it. It prints `3 0`.
 ```maxon
 // --- file: types.maxon
@@ -642,9 +641,8 @@ export type Bag
 end 'Bag'
 
 // --- file: main.maxon
-var bag = Bag.create(3)
-
 function main() returns ExitCode
+	let bag = Bag.create(3)
 	print("{bag.tag} {bag.items.count()}\n")
 	return 0
 end 'main'

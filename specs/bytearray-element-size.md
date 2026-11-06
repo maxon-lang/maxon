@@ -43,8 +43,10 @@ elements that follow. `insert` is where this shows, because it erases the slot
 its right-shift duplicated before writing the new element into it:
 
 ```text
-var a = b"hey"
-a.insert(1, value: 88)   // -> b"hXey", NOT b"hX\0\0"
+function demo()
+	var a = b"hey"
+	a.insert(1, value: 88)   // -> b"hXey", NOT b"hX\0\0"
+end 'demo'
 ```
 
 The tail bytes `e` and `y` had already been copied one slot right when the erase
@@ -309,12 +311,11 @@ site or it slips the gate entirely.
 typealias Byte = int(0 to u64.max)
 typealias Bytes = Array with Byte
 
-var BUFFER = b"hi"
+let BUFFER = b"hi"
 
 function main() returns ExitCode
 	var made = Bytes.create(0)
 	made.push(1)
-	BUFFER.push(2)
 	return made.count() + BUFFER.count()
 end 'main'
 ```
@@ -333,7 +334,7 @@ without asking the blob-fits-its-element rule would build a record striding 1 un
 typealias Byte = int(0 to u64.max)
 typealias Bytes = Array with Byte
 
-var KEYWORDS = [b"hi": 1]
+let KEYWORDS = [b"hi": 1]
 
 function main() returns ExitCode
 	var made = Bytes.create(0)
@@ -515,12 +516,11 @@ is built by `__module_init`, so it never reaches the expression-position emitter
 typealias Byte = int(0 to 100)
 typealias Bytes = Array with Byte
 
-var BUFFER = b"\xdf"
+let BUFFER = b"\xdf"
 
 function main() returns ExitCode
 	var made = Bytes.create(0)
 	made.push(1)
-	BUFFER.push(2)
 	return made.count() + BUFFER.count()
 end 'main'
 ```

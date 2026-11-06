@@ -786,8 +786,6 @@ enum Kw
 	omega
 end 'Kw'
 
-var counter = 10 as Integer
-
 function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
@@ -804,6 +802,7 @@ function shadowing() returns Integer
 end 'shadowing'
 
 function main() returns ExitCode
+	let counter = 10
 	return (shadowing() + counter) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)

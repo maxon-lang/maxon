@@ -221,7 +221,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:2: Unsupported: a `var` declaration in an `extension` body — an extension adds methods to types other declarations named and declares no storage of its own, so there is no type for this binding to belong to; declare it in the `type` body as a `static var`
+error E2015: <fragment>:5:2: Unsupported: a `var` declaration in an `extension` body — an extension adds methods to types other declarations named and declares no storage of its own, so there is no type for this binding to belong to; declare it as a field of the `type` body
 ```
 
 <!-- test: error.byte-is-not-an-extendable-primitive -->

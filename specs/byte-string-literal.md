@@ -147,12 +147,11 @@ end 'main'
 1 2
 ```
 
-<!-- test: byte-string-literal.top-level-map -->
+<!-- test: byte-string-literal.local-map -->
 
 ```maxon
-var m = [b"hello": 1 as Count, b"world": 2 as Count]
-
 function main() returns ExitCode
+		let m = [b"hello": 1 as Count, b"world": 2 as Count]
 		let v1 = try m.get(b"hello") otherwise 0
 		let v2 = try m.get(b"world") otherwise 0
 		print("{v1} {v2}")
@@ -166,7 +165,7 @@ end 'main'
 1 2
 ```
 
-<!-- test: byte-string-literal.top-level-map-struct -->
+<!-- test: byte-string-literal.local-map-struct -->
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -179,9 +178,8 @@ type Info
 		end 'create'
 end 'Info'
 
-var m = [b"hello": Info.create(10), b"world": Info.create(20)]
-
 function main() returns ExitCode
+		let m = [b"hello": Info.create(10), b"world": Info.create(20)]
 		view v1 = try m.get(b"hello") otherwise Info.create(0)
 		view v2 = try m.get(b"world") otherwise Info.create(0)
 		print("{v1.value} {v2.value}")
@@ -213,13 +211,12 @@ end 'main'
 0
 ```
 
-<!-- test: byte-string-literal.top-level-var -->
+<!-- test: byte-string-literal.local-var -->
 
-A module-scope `var` holds a byte string literal and can be reassigned to another one.
+A `var` holds a byte string literal and can be reassigned to another one.
 ```maxon
-var Buffer = b""
-
 function main() returns ExitCode
+		var Buffer = b""
 		if Buffer.count() != 0 'notEmpty'
 				return 1
 		end 'notEmpty'

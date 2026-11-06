@@ -31,9 +31,11 @@ end 'Counter'
 
 Call methods using dot notation:
 ```text
-var c = Counter{count: 0}
-c.increment()
-var value = c.get()
+function demo()
+	var c = Counter{count: 0}
+	c.increment()
+	let value = c.get()
+end 'demo'
 ```
 
 ### Static Methods
@@ -47,7 +49,7 @@ type Math
   end 'square'
 end 'Math'
 
-var result = Math.square(5)  // 25
+let result = Math.square(5)  // 25
 ```
 
 ### Export Modifier

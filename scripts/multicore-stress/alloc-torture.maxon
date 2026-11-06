@@ -83,7 +83,7 @@ function task(idx Integer, args StringArray, churn Integer) returns Integer
 end 'task'
 
 function argvOf(i Integer) returns StringArray
-	var argv = StringArray.create(argsPerTask, zeroed: false)
+	var argv = StringArray.create(0)
 
 	for k in 0 upto argsPerTask 'build'
 		argv.push("arg{i}-slot{k}")
@@ -104,10 +104,9 @@ function main() returns ExitCode
 	// Spawn phase: queue every task before awaiting any, so the scheduler spins
 	// up worker Ms to service the backlog (this is what makes >1 P go live).
 	for i in 0 upto tasks 'spawn'
-		let sealed = freeze argvOf(i)
-
 		// argv is handed to the async task and never referenced again by main —
 		// its final free lands on whichever worker P runs the task.
+		let sealed = freeze argvOf(i)
 		promises.push(async task(i, args: sealed, churn: churn))
 	end 'spawn'
 

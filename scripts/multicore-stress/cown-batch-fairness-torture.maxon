@@ -1,0 +1,99 @@
+// Capacity holds a whole flood, so no send waits and each queue is deep when its runner starts.
+// `batchProbe` is the first message past a full batch: at one processor a runner that yields after
+// its batch lets the other meter's first batch run before that message, so it sees at least
+// `batchMessages` of the other's. A runner that drains without yielding leaves it at 0.
+typealias Integer = int(i64.min to i64.max)
+typealias Tally = SharedValue with Integer
+
+let messagesPerMeter = 5000
+let batchProbe = 65
+let batchMessages = 64
+let pollLimit = 400000
+let exitWrongCount = 3
+let exitUnfair = 4
+
+type Meter
+	var count as Integer
+	var own as Tally
+	var other as Tally
+	var seenAtProbe as Tally
+
+	static function create(own Tally, other Tally, seenAtProbe Tally) returns Self
+		return Self{count: 0, own: own, other: other, seenAtProbe: seenAtProbe}
+	end 'create'
+
+	export function bump()
+		self.count = self.count + 1
+
+		let seen = self.own.current()
+		_ = self.own.publish(self.count, replacing: seen)
+
+		if self.count == batchProbe 'probe'
+			let before = self.seenAtProbe.current()
+			_ = self.seenAtProbe.publish(self.other.current(), replacing: before)
+		end 'probe'
+	end 'bump'
+
+	export function reportCount() returns Integer
+		return self.count
+	end 'reportCount'
+end 'Meter'
+
+function flood(meter Meter.handle)
+	var r = 0 as Integer
+
+	while r < messagesPerMeter 'eachMessage'
+		try meter.bump() otherwise panic("cown-batch-fairness-torture: a meter's mailbox holds every message the run sends it")
+		r = r + 1
+	end 'eachMessage'
+end 'flood'
+
+function waitForCount(meter Meter.handle) returns Integer
+	var polls = 0 as Integer
+	var count = 0 as Integer
+
+	while count != messagesPerMeter and polls < pollLimit 'waitForTheRun'
+		let pending = try meter.reportCount() otherwise panic("cown-batch-fairness-torture: a running meter with room takes the send")
+		count = await pending
+		Scheduler.yield()
+		polls = polls + 1
+	end 'waitForTheRun'
+
+	return count
+end 'waitForCount'
+
+function main() returns ExitCode
+	let ownA = Tally.create(0 as Integer)
+	let ownB = Tally.create(0 as Integer)
+	let seenByA = Tally.create(-1 as Integer)
+	let seenByB = Tally.create(-1 as Integer)
+	let a = spawn(capacity: messagesPerMeter + 1) Meter.create(ownA.clone(), other: ownB.clone(), seenAtProbe: seenByA.clone())
+	let b = spawn(capacity: messagesPerMeter + 1) Meter.create(ownB.clone(), other: ownA.clone(), seenAtProbe: seenByB.clone())
+
+	flood(a.clone())
+	flood(b.clone())
+
+	let countA = waitForCount(a.clone())
+	let countB = waitForCount(b.clone())
+
+	print("countA={countA}\n")
+	print("countB={countB}\n")
+	print("seenByA={seenByA.current()}\n")
+	print("seenByB={seenByB.current()}\n")
+	print("batch={batchMessages}\n")
+	print("procs={Scheduler.processorCount()}\n")
+
+	if countA != messagesPerMeter or countB != messagesPerMeter 'wrongCount'
+		return exitWrongCount
+	end 'wrongCount'
+
+	if Scheduler.processorCount() == 1 and (seenByA.current() < batchMessages or seenByB.current() < batchMessages) 'unfair'
+		print("fair=no\n")
+
+		return exitUnfair
+	end 'unfair'
+
+	print("fair=yes\n")
+
+	return 0
+end 'main'

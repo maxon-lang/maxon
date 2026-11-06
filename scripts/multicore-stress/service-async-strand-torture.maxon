@@ -1,58 +1,21 @@
-// SERVICE-ASYNC-STRAND torture — a service handler cancels a coroutine it started while that coroutine is
-// parked on a timer, run in batches across processors.
-//
-// ⭐⭐ THE SUBJECT IS BUILT, AND `parked=` WITNESSES IT. `fire` yields after its `async`, which hands the strand
-// to the coroutine: it runs until its sleep parks it, and the handler reads that it started and has not
-// finished. The promise is tied to the `Probe` it was given, so the handler cannot keep it in the service's
-// state: it cancels it, with the coroutine still parked on a timer far longer than the program runs. `parked=`
-// counts the subject rounds that reached the shape, and must equal `rounds=`.
-//
-// ⭐⭐ WHY IT READS `Scheduler.counters().threadRecordsCarved`. A coroutine the cancel fails to reclaim holds its own record, and
-// its owner's through the strand reference, for ever — and the exit gate cannot see it, because the drop's
-// consumer half has already debited the GT live count. The heap gate sees it only because the coroutine's
-// `Probe` argument is released by that same reclaim (a 101); the carve count sees it whatever the coroutine
-// carries.
-//
-// ⭐⭐ THE READING IS A BOUND, NOT A DIFFERENCE. Every batch spawns `BatchSize` services, awaits each one's reply
-// and drops every handle, then settles for `SettleMs`. At most two batches' records are live at once
-// (`RecordsPerService` each, plus `main`), and a spawn carves only when its processor's list and the global one
-// are both empty, and a reply-cell carve takes a batch whose spares wait unused on the carving processor's own
-// list, so a sound runtime carves no more than that population plus fewer than 64 on each of every other
-// processor's lists plus one batch's spares — `bound` — however many batches run. The phases run until one record lost per round
-// would carry the count to twice the bound. `leaked` is how far the count runs past `bound`, and MUST be 0.
-//
-// ⭐ THE CONTROL IS BUILT IN. `await` batches await their coroutine, so nothing is cancelled in flight.
-// The raw live columns (`rawStrand=`, `rawAwait=`) read the mailbox and envelope side of the same lifecycle.
-
 typealias Integer = int(i64.min to i64.max)
 typealias WorkerHandleArray = Array with Worker.handle
 typealias ReplyPromise = Promise with (Integer)
 typealias ReplyPromiseArray = Array with ReplyPromise
 
-// Far longer than the program runs: the handler's cancel drops the timer, so nothing ever waits it out.
-let ParkedSleepMs = 10000
-
-// The control's coroutine, which its handler waits out.
 let JoinedSleepMs = 5
 
-// Long enough for a batch's services to finish tearing down before the next batch.
 let SettleMs = 20
 
 let BatchSize = 20 as Integer
 let MinBatches = 5 as Integer
 
-// A service's own green thread, the reply cell its message is answered through, and the coroutine its handler
-// starts.
 let RecordsPerService = 3 as Integer
 
-// A processor's free list holds fewer than 64 records.
 let ListSlack = 63
 
-// A processor keeps one free list of GT records and one of reply cells, and a carve from either steps the
-// count.
 let FreeListPools = 2
 
-// `SchedRuntime.GtCellCarveBatch`, which this bound must track.
 let CellCarveBatch = 32
 let CarverOwnListBatchSpares = CellCarveBatch - 1
 
@@ -77,25 +40,13 @@ type Worker
 		return Self{probe: Probe.create()}
 	end 'create'
 
-	// THE SUBJECT: answers 1 when the coroutine has started and is parked.
-	export function fire(v Integer) returns Integer
-		let p = async slowWork(v, probe: self.probe, ms: ParkedSleepMs)
-		Scheduler.yield()
-		let parked = self.probe.started and not p.isComplete()
-		p.cancel()
-		return 1 if parked else 0
-	end 'fire'
-
-	// THE CONTROL: the same coroutine, awaited, so the handler cannot return while it is in flight.
 	export function joinIt(v Integer) returns Integer
 		let p = async slowWork(v, probe: self.probe, ms: JoinedSleepMs)
 		return await p
 	end 'joinIt'
 end 'Worker'
 
-// `BatchSize` services, one message each, every reply awaited; the handles die together at the return, which
-// shuts every service down.
-function batch(joined bool, base Integer) returns Integer
+function batch(base Integer) returns Integer
 	var hs = WorkerHandleArray.create(0)
 	var k = 0 as Integer
 
@@ -109,13 +60,7 @@ function batch(joined bool, base Integer) returns Integer
 
 	while j < BatchSize 'sendEach'
 		view h = try hs.get(j as ElementIndex) otherwise panic("hs.get OOB at {j} — bounded by the pushes above")
-
-		if joined 'control'
-			replies.push(try h.joinIt(base + j) otherwise panic("service-async-strand-torture: a fresh worker refused its only message"))
-		end 'control' else 'subject'
-			replies.push(try h.fire(base + j) otherwise panic("service-async-strand-torture: a fresh worker refused its only message"))
-		end 'subject'
-
+		replies.push(try h.joinIt(base + j) otherwise panic("service-async-strand-torture: a fresh worker refused its only message"))
 		j = j + 1
 	end 'sendEach'
 
@@ -131,12 +76,12 @@ function batch(joined bool, base Integer) returns Integer
 	return sum
 end 'batch'
 
-function phase(joined bool, batches Integer) returns Integer
+function phase(batches Integer) returns Integer
 	var sum = 0 as Integer
 	var b = 0 as Integer
 
 	while b < batches 'eachBatch'
-		sum = sum + batch(joined, base: b * BatchSize)
+		sum = sum + batch(b * BatchSize)
 		sleep(SettleMs)
 		b = b + 1
 	end 'eachBatch'
@@ -152,22 +97,14 @@ function main() returns ExitCode
 		batches = batches + 1
 	end 'enoughToDiscriminate'
 
-	// Past the one-time runtime allocations, so each raw reading is a steady state rather than start-up.
-	_ = phase(false, batches: 1)
-	_ = phase(true, batches: 1)
+	_ = phase(1)
 
-	let carvedBeforeStrand = Scheduler.counters().threadRecordsCarved
-	let rawBeforeStrand = HeapStats.rawAllocationsLive()
-	let parked = phase(false, batches: batches)
-	let carvedAfterStrand = Scheduler.counters().threadRecordsCarved
-	let rawAfterStrand = HeapStats.rawAllocationsLive()
-
-	let rawBeforeAwait = HeapStats.rawAllocationsLive()
-	_ = phase(true, batches: batches)
+	let rawBefore = HeapStats.rawAllocationsLive()
+	let answered = phase(batches)
 	let carved = Scheduler.counters().threadRecordsCarved
-	let rawAfterAwait = HeapStats.rawAllocationsLive()
+	let rawAfter = HeapStats.rawAllocationsLive()
 
 	let leaked = carved - bound if carved > bound else 0
-	print("leaked={leaked} carved={carved} bound={bound} parked={parked} strand={carvedAfterStrand - carvedBeforeStrand} await={carved - carvedAfterStrand} rawStrand={rawAfterStrand - rawBeforeStrand} rawAwait={rawAfterAwait - rawBeforeAwait} rounds={batches * BatchSize}\n")
+	print("leaked={leaked} carved={carved} bound={bound} answered={answered} rawAwait={rawAfter - rawBefore} rounds={batches * BatchSize}\n")
 	return 42
 end 'main'

@@ -20,14 +20,14 @@ Calculate the base-10 logarithm of a number.
 **Example:**
 
 ```maxon
-var x = 100.0
-var y = Math.log10(x)     // 2.0 (10^2 = 100)
+let x = 100.0
+let y = Math.log10(x)     // 2.0 (10^2 = 100)
 
-var z = 1000.0
-var w = Math.log10(z)     // 3.0 (10^3 = 1000)
+let z = 1000.0
+let w = Math.log10(z)     // 3.0 (10^3 = 1000)
 
-var a = 10.0
-var b = Math.log10(a)     // 1.0 (10^1 = 10)
+let a = 10.0
+let b = Math.log10(a)     // 1.0 (10^1 = 10)
 ```
 **Notes:**
 - Input must be positive (returns NaN for negative values)

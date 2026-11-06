@@ -22,16 +22,16 @@ Computes the arc tangent of y/x using the signs of both arguments to determine t
 
 ```maxon
 // Point on positive x-axis: angle = 0
-var a = Math.atan2(0.0, x: 1.0)    // 0.0
+let a = Math.atan2(0.0, x: 1.0)    // 0.0
 
 // Point on positive y-axis: angle = π/2
-var b = Math.atan2(1.0, x: 0.0)    // 1.5708 (≈ π/2)
+let b = Math.atan2(1.0, x: 0.0)    // 1.5708 (≈ π/2)
 
 // Point on negative x-axis: angle = π
-var c = Math.atan2(0.0, x: -1.0)   // 3.14159 (≈ π)
+let c = Math.atan2(0.0, x: -1.0)   // 3.14159 (≈ π)
 
 // Point on negative y-axis: angle = -π/2
-var d = Math.atan2(-1.0, x: 0.0)   // -1.5708 (≈ -π/2)
+let d = Math.atan2(-1.0, x: 0.0)   // -1.5708 (≈ -π/2)
 ```
 
 **Notes:**

@@ -2,8 +2,8 @@
 // READS IT.
 //
 // ⭐⭐ **THE RULES CLOSE OVER ONE CALL GRAPH, ROWED OPPOSITE WAYS.** `ServiceCallCycleCheck` asks *"which messages
-// BLOCK ON a service?"* (E3139), and `ServiceGlobalAccessCheck` asks *"what does a message RUN?"* (E3143, E3163)
-// and *"what does a global initializer run?"* (E3164, E3165). Two sweeps would let an edit to "the ops of a
+// BLOCK ON a service?"* (E3139), and `ServiceGlobalAccessCheck` asks *"what does a message RUN?"* (E3163)
+// and *"what does a global initializer run?"* (E3164). Two sweeps would let an edit to "the ops of a
 // function" reach one copy, the rules then closing over different graphs — a WRONG ANSWER rather than a compile
 // error.
 // So the walk is here, once, collecting the union of what the rules need; which rule consumes which column is
@@ -188,43 +188,39 @@ module type ServiceProgramSurvey
 
 	// funcIndex ⇒ the service this function is a message or the factory of. Asked once per FUNCTION
 	// rather than once per (function, service): `messageOwnerNameOf` already walks every service's
-	// every variant. A factory runs on its service's green thread, so every rule a message seeds, it
+	// every variant. A factory runs on a green thread as a message does, so every rule a message seeds, it
 	// seeds too.
 	var ownerPerFunc as MessageOwnerArray
 
 	// E3139's column: every (function, awaited service) pair.
 	export var awaits as ServiceAwaitRoster
 
-	// E3143's two columns of run-time dispatch: funcIndex ⇒ does its body call a closure value, and does it
+	// The message closure's two columns of run-time dispatch: funcIndex ⇒ does its body call a closure value, and does it
 	// dispatch through a witness. See `ServiceGlobalAccessCheck`'s header for why those are the one unknown that
 	// rule resolves toward refusing.
 	var callsAClosure as BoolArray
 	var dispatchesThroughAWitness as BoolArray
 
-	// ⭐ E3143's rows: one per witness dispatch — the function holding it and the requirement it dispatches —
+	// ⭐ The message closure's rows: one per witness dispatch — the function holding it and the requirement it dispatches —
 	// which is what narrows where it can land (`widenFrom`). A function's rows are contiguous, from its entry in
 	// `witnessDispatchStarts` to the next function's.
 	var witnessDispatchFuncs as FuncIndexArray
 	var witnessDispatchRequirements as NameRoster
 	var witnessDispatchStarts as EntryIndexArray
 
-	// ⭐ E3143's column: the functions whose ADDRESS this program takes — one entry per `functionRef` that
+	// ⭐ The message closure's column: the functions whose ADDRESS this program takes — one entry per `functionRef` that
 	// resolves to a declared function, and so every function a closure call can land on. Collected as indices
 	// rather than as a marked column because a `functionRef` may name a function this sweep has not reached yet.
 	var addressTaken as CsrColumn
 
-	// E3163's and E3165's roster: every op addressing the slot of a managed global.
+	// E3163's roster: every op addressing the slot of a managed global.
 	export var globalUses as SlotRoster
-
-	// E3143's roster: every op addressing the slot of a module-level or `static` `var`, filed against the
-	// position of that `var` in the `ModuleVarRoster` the rule was handed.
-	export var moduleVarUses as SlotRoster
 
 	// E3164's roster: every `spawn`, and the function holding it.
 	export var spawns as OpRoster
 
 	static function create() returns ServiceProgramSurvey
-		return Self{edges: CallGraphEdges.create(), ownerPerFunc: MessageOwnerArray.create(0), awaits: ServiceAwaitRoster.create(), callsAClosure: BoolArray.create(0), dispatchesThroughAWitness: BoolArray.create(0), witnessDispatchFuncs: FuncIndexArray.create(0), witnessDispatchRequirements: NameRoster.create(0), witnessDispatchStarts: EntryIndexArray.create(0), calleeGraph: buildCsr(CsrColumn.create(0), to: CsrColumn.create(0), nodeCount: 0), addressTaken: CsrColumn.create(0), globalUses: SlotRoster.create(), moduleVarUses: SlotRoster.create(), spawns: OpRoster.create()}
+		return Self{edges: CallGraphEdges.create(), ownerPerFunc: MessageOwnerArray.create(0), awaits: ServiceAwaitRoster.create(), callsAClosure: BoolArray.create(0), dispatchesThroughAWitness: BoolArray.create(0), witnessDispatchFuncs: FuncIndexArray.create(0), witnessDispatchRequirements: NameRoster.create(0), witnessDispatchStarts: EntryIndexArray.create(0), calleeGraph: buildCsr(CsrColumn.create(0), to: CsrColumn.create(0), nodeCount: 0), addressTaken: CsrColumn.create(0), globalUses: SlotRoster.create(), spawns: OpRoster.create()}
 	end 'create'
 
 	module function funcCount() returns CsrIndex
@@ -345,7 +341,7 @@ module type ServiceProgramSurvey
 	// ⭐⭐ **ONE FUNCTION'S EDGES, ITS AWAITS, ITS RUN-TIME DISPATCHES, ITS ADDRESS-TAKING AND ITS MODULE
 	// ACCESSES — ALL OUT OF THE SAME OP SWEEP.** Five facts about one body; five walks of it would be five
 	// chances to disagree about which ops that body has, which is this file's whole reason for existing.
-	function noteFunction(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndexByName FuncIndexByName, funcIndex ElementIndex, dispatch WitnessDispatchTargets, globalsByLabel SlotSubjectByLabel, moduleVarsByLabel SlotSubjectByLabel)
+	function noteFunction(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndexByName FuncIndexByName, funcIndex ElementIndex, dispatch WitnessDispatchTargets, globalsByLabel SlotSubjectByLabel)
 		if let owner = try messageOwnerNameOf(signatures, callee: func.name) 'aMessage'
 			self.ownerPerFunc.push(MessageOwner.service(owner))
 		end 'aMessage' else 'notAMessage'
@@ -387,7 +383,6 @@ module type ServiceProgramSurvey
 
 				if maxonOpNamesAGlobalLabel(op) 'addressesAGlobal'
 					self.globalUses.noteIfListed(maxonOpGlobalLabelName(op), listed: globalsByLabel, funcIndex: funcIndex, opIndex: opIndex)
-					self.moduleVarUses.noteIfListed(maxonOpGlobalLabelName(op), listed: moduleVarsByLabel, funcIndex: funcIndex, opIndex: opIndex)
 				end 'addressesAGlobal'
 
 				if maxonOpIsServiceSpawn(op) 'aSpawn'
@@ -418,15 +413,13 @@ end 'DispatchWidening'
 
 export typealias RequirementNameSet = Set with ByteArray
 
-// ⭐⭐ **THE WHOLE-PROGRAM SERVICE RULES, THE `let` INITIALIZER RULE, AND THE ONE SURVEY THEY SHARE.**
+// ⭐⭐ **THE WHOLE-PROGRAM SERVICE RULES, AND THE ONE SURVEY THEY SHARE.**
 //
 // ⚠ **THE GATES ARE ASKED BEFORE THE SWEEP, AND EACH IS EMPTY FOR A DIFFERENT ENORMOUS POPULATION.**
 // `serviceAwaitSites` is empty for every program that awaits no reply — every program with no service in it,
 // and every fire-and-forget one. `serviceTypeRoster` is empty for every program that spawns nothing, and the
-// other three service rules need a service too: `moduleVarDeclarationsOf` is empty for every program that
-// declares no module-level or `static` `var`, the unmarkable `let`s for every program whose `let`s can all be walked, and
-// `__module_init` exists only in a program with a managed global. E3165 needs no service, only a managed `var`
-// beside a `let` whose initializer calls.
+// other three service rules need a service too: the unmarkable `let`s are empty for every program whose `let`s can
+// all be walked, and `__module_init` exists only in a program with a managed global.
 //
 // ⚠ **E3139 REPORTS FIRST, and that ordering is the reason the calls are sequenced here rather than left to
 // `semanticCheck`.** A ring that cannot make progress is the more fundamental defect, so a program with both is
@@ -435,25 +428,21 @@ export function checkServiceRules(project Project, module MaxonModule, signature
 	let spawnsAService = serviceTypeRoster(signatures).count() != 0
 	let unmarkableLets = letShareWalksOf(project.managedGlobals, spawnsAService: spawnsAService).unmarkable
 	let blockingRuleApplies = project.serviceAwaitSites.count() != 0
-	let moduleVars = moduleVarDeclarationsOf(signatures, spawnsAService: spawnsAService)
-	let globalRuleApplies = moduleVars.count() != 0
 	let letRuleApplies = unmarkableLets.count() != 0
 	let initializerRuleApplies = spawnsAService and funcNames.byName.contains(ModuleInitName)
-	let letInitializerRuleApplies = aLetInitializerMayReachAVar(project.managedGlobals)
 	let registryRuleApplies = project.registryUseSites.count() != 0 and anyInitializerCalls(project.managedGlobals)
 
-	if not (blockingRuleApplies or globalRuleApplies or letRuleApplies or initializerRuleApplies or letInitializerRuleApplies or registryRuleApplies) 'noRuleHasAnythingToSay'
+	if not (blockingRuleApplies or letRuleApplies or initializerRuleApplies or registryRuleApplies) 'noRuleHasAnythingToSay'
 		return
 	end 'noRuleHasAnythingToSay'
 
 	var survey = ServiceProgramSurvey.create()
 	var dispatch = WitnessDispatchTargets.create(signatures, functions: funcNames.functions)
 	let globalsByLabel = managedGlobalsByLabel(project.managedGlobals)
-	let moduleVarsByLabel = slotLabelsOfModuleVars(moduleVars)
 
 	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
 		let func = try funcNames.functions.get(funcIndex) otherwise panic("checkServiceRules: functions.get OOB at {funcIndex}")
-		survey.noteFunction(project, module: module, signatures: signatures, func: func, funcIndexByName: funcNames.byName, funcIndex: funcIndex, dispatch: dispatch, globalsByLabel: globalsByLabel, moduleVarsByLabel: moduleVarsByLabel)
+		survey.noteFunction(project, module: module, signatures: signatures, func: func, funcIndexByName: funcNames.byName, funcIndex: funcIndex, dispatch: dispatch, globalsByLabel: globalsByLabel)
 	end 'eachFunc'
 
 	survey.settleCallGraph()
@@ -462,26 +451,14 @@ export function checkServiceRules(project Project, module MaxonModule, signature
 		checkServiceCallCycles(project, signatures: signatures, funcNames: funcNames, survey: survey)
 	end 'e3139'
 
-	if globalRuleApplies or letRuleApplies 'aMessageCanRunIt'
-		let reached = functionsSeedsCanRun(funcNames, survey: survey, seeds: survey.messageSeeds(), dispatch: dispatch)
-
-		if globalRuleApplies 'e3143'
-			checkServiceGlobalAccesses(project, signatures: signatures, funcNames: funcNames, survey: survey, moduleVars: moduleVars, reached: reached)
-		end 'e3143'
-
-		if letRuleApplies 'e3162'
-			checkUnmarkableLetReads(project, funcNames: funcNames, survey: survey, reached: reached)
-		end 'e3162'
-	end 'aMessageCanRunIt'
+	if letRuleApplies 'e3163'
+		checkUnmarkableLetReads(project, funcNames: funcNames, survey: survey, reached: functionsSeedsCanRun(funcNames, survey: survey, seeds: survey.messageSeeds(), dispatch: dispatch))
+	end 'e3163'
 
 	let initializers = initializerCallees(project, module: module, funcNames: funcNames)
 
-	if initializerRuleApplies 'e3163'
+	if initializerRuleApplies 'e3164'
 		checkSpawnsDuringGlobalInitialization(project, module: module, funcNames: funcNames, survey: survey, dispatch: dispatch, initializers: initializers)
-	end 'e3163'
-
-	if letInitializerRuleApplies 'e3164'
-		checkLetInitializersReachNoVar(project, funcNames: funcNames, survey: survey, dispatch: dispatch, initializers: initializers)
 	end 'e3164'
 
 	if registryRuleApplies 'e3173'
@@ -499,32 +476,6 @@ function managedGlobalsByLabel(globals ManagedGlobalArray) returns SlotSubjectBy
 
 	return byLabel
 end 'managedGlobalsByLabel'
-
-function slotLabelsOfModuleVars(moduleVars ModuleVarRoster) returns SlotSubjectByLabel
-	var byLabel = SlotSubjectByLabel.create()
-
-	for (position, decl) in moduleVars.withIterator() 'eachVar'
-		byLabel.upsert(try decl.dataLabel.label() otherwise panic("slotLabelsOfModuleVars: the `var` {String.from(decl.name)} has no `.data` slot, yet every `var` is stored"), value: position.index())
-	end 'eachVar'
-
-	return byLabel
-end 'slotLabelsOfModuleVars'
-
-// Only an initializer that calls can reach another global, and only a `var` among the managed globals is refused.
-function aLetInitializerMayReachAVar(globals ManagedGlobalArray) returns bool
-	var holdsAVar = false
-	var holdsACallingLet = false
-
-	for global in globals 'eachGlobal'
-		if global.isAVar() 'aVar'
-			holdsAVar = true
-		end 'aVar' else if global.initCallees.count() > 0 'aCallingLet'
-			holdsACallingLet = true
-		end 'aCallingLet'
-	end 'eachGlobal'
-
-	return holdsAVar and holdsACallingLet
-end 'aLetInitializerMayReachAVar'
 
 // Does this op take a function's ADDRESS — put a callable value somewhere a later `indirectCall` can find
 // it? The bands are `runTimeTargetOf`'s, so a newly appended op fails to compile here too, and this

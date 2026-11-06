@@ -85,8 +85,8 @@ A file's namespace is the directory it lives in (see `specs/namespaces.md`). Whe
 ```text
 // math/ops.maxon and text/ops.maxon both export 'add'.
 // In app/main.maxon:
-var result1 = math.add(1, 2)         // calls math/ops.maxon's add
-var result2 = text.add("hi", "lo")   // calls text/ops.maxon's add
+let result1 = math.add(1, 2)         // calls math/ops.maxon's add
+let result2 = text.add("hi", "lo")   // calls text/ops.maxon's add
 ```
 
 A bare `add(...)` from `app/main.maxon` is rejected by the self-hosted compiler with E3095:
@@ -1237,7 +1237,7 @@ end 'main'
 Cross-file access to an exported module-level var with a simple constant value.
 ```maxon
 // --- file: api/counter.maxon
-export var counter = 10 as ExitCode
+export let counter = 10 as ExitCode
 
 // --- file: app/main.maxon
 function main() returns ExitCode
@@ -1262,13 +1262,12 @@ export type Counter
 		end 'create'
 end 'Counter'
 
-export var shared = Counter.create(0)
+export let shared = Counter.create(42)
 
 // --- file: app/main.maxon
 function main() returns ExitCode
 		let c = Counter.create(1)
-		shared.value = 42 - c.value + c.value
-		return shared.value
+		return shared.value - c.value + c.value
 end 'main'
 ```
 ```exitcode
@@ -1279,7 +1278,7 @@ end 'main'
 Non-exported module-level var should not be accessible from another file.
 ```maxon
 // --- file: state.maxon
-var secret = 99 as ExitCode
+let secret = 99 as ExitCode
 
 // --- file: main.maxon
 function main() returns ExitCode
@@ -1623,7 +1622,7 @@ file is the same refusal with a different noun — `function 'x' is not exported
 export typealias Count = int(0 to u64.max)
 
 export type Holder
-	static var cached = Holder.build()
+	static let cached = Holder.build()
 	export var value as Count
 
 	static function build() returns Holder
@@ -1654,7 +1653,7 @@ static rather than the in-band pointer sentinel a record slot allows.
 ```maxon
 // --- file: counter.maxon
 export type Counter
-	static var hits = 7 as FullRangeInt
+	static let hits = 7 as FullRangeInt
 end 'Counter'
 
 // --- file: main.maxon

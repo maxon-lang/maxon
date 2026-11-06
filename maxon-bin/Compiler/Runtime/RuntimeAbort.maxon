@@ -238,8 +238,8 @@ export enum RuntimeAbort
 	// `__gt_register_park`: the park note carries a kind it does not register. `GtRuntime`'s
 	// `GtParkKind.timer` / `GtParkKind.netpoll` / `GtParkKind.netpollAny` /
 	// `GtParkKind.awaitPromise` / `GtParkKind.awaitAny` / `GtParkKind.quiesce` are the kinds it
-	// registers, and `GtParkKind.yielded` and `GtParkKind.preempt` are placed and `GtParkKind.mailbox` and
-	// `GtParkKind.mailboxSend` committed by the strand runner and never reach it — so any other value is a COMPILER bug rather than a program's, and it is silent
+	// registers, and `GtParkKind.yielded` and `GtParkKind.preempt` are placed and `GtParkKind.cownSend`
+	// committed by the strand runner and never reach it — so any other value is a COMPILER bug rather than a program's, and it is silent
 	// without this: the thread would be suspended having been registered on NO store at all, which is
 	// a hang three functions away from its cause. It is a separate code from `schedulerDeadlock`
 	// above, this registry's founding rule: a runtime that cannot register a park and a scheduler that
@@ -290,12 +290,13 @@ export enum RuntimeAbort
 	// the limit, which a `procs: 4` service program then crosses on its third machine.
 	schedulerThreadExhaustion = 97
 
-	// ⛔ `__mbox_send`: THE SEND PROTOCOL IS BROKEN — one invariant, between a waiting sender and its wakers,
-	// checked at its two ends. A sender about to wait must hold its message in its staging buffer
-	// (`GtOffStaging`), because the receive that frees a slot copies the message from there; any other
-	// address would deliver whatever that buffer held. A woken sender must find an outcome its waker
-	// published (`MailboxRuntime.MboxSendWake`), or its send would answer a status nobody decided. Both are
-	// COMPILER bugs rather than a program's, and two ends of one invariant report one number.
+	// ⛔ `__cown_send_wait`: THE SEND PROTOCOL IS BROKEN — one invariant, between a waiting sender and
+	// its wakers, checked at its two ends. A sender about to wait must hold its message in its staging
+	// buffer (`GtOffStaging`), because the runner that frees a slot copies the message from there; any
+	// other address would deliver whatever that buffer held. A woken sender must find an outcome its
+	// waker published (`CownRuntime.CownSendWake`), or its send would answer a status nobody decided.
+	// Both are COMPILER bugs rather than a program's, and two ends of one invariant report one number.
+	// `__cown_run` reports a behaviour of an unknown kind with it too.
 	serviceSendProtocolBroken = 98
 
 	// ⛔ `__gt_morestack` and `__gt_spawn`: the OS REFUSED the pages for a green thread's stack. Unguarded,
@@ -467,10 +468,10 @@ export enum RuntimeAbort
 	// that state word as though it were a P pointer.
 	slabEvictOfUnownedSpan = 127
 
-	// `__mbox_unknown_tag`, the default arm of `<T>.__loop`'s dispatch: a received request's tag
+	// `__cown_unknown_tag`, the default arm of `<T>.__behave`'s dispatch: a request's tag
 	// names no variant of the request union. The switch covers every variant, so only a corrupted
-	// mailbox slot reaches it.
-	serviceLoopUnknownMessageTag = 90
+	// behaviour record reaches it.
+	serviceUnknownMessageTag = 90
 
 	// ⚠ **108 IS VACANT, NOT REUSABLE.** The fault it would name — `__np_pd_open` / `__np_pd_release` finding
 	// a green thread still PUBLISHED on a direction word of the record they are about to reset — is not a
@@ -605,8 +606,6 @@ export enum RuntimeFatal
 	promiseDroppedOffItsStrand
 	promiseDroppedInAnUnknownPark
 	schedulerCountsInconsistent
-	mailboxReceiverStateOutOfDomain
-	mailboxTakeSourceOutOfDomain
 	startmCreditOnASpinningMachine
 	exceptionDispatchedBelowGreenThreadStackBottom
 	systemCallFromOutsideEveryKnownStack
@@ -715,8 +714,6 @@ function runtimeFatalReason(fatal RuntimeFatal) returns String
 		promiseDroppedOffItsStrand gives "promise dropped by a machine that does not hold its strand"
 		promiseDroppedInAnUnknownPark gives "promise dropped while waiting in an unknown kind of park"
 		schedulerCountsInconsistent gives "checkdead: inconsistent counts"
-		mailboxReceiverStateOutOfDomain gives "mailbox receiver state is not fresh, inbox-queued or started"
-		mailboxTakeSourceOutOfDomain gives "mailbox take source is not the ring or the inbox"
 		startmCreditOnASpinningMachine gives "startm: spinning credit handed to a machine that already holds one"
 		exceptionDispatchedBelowGreenThreadStackBottom gives "exception dispatched below green thread stack bottom"
 		systemCallFromOutsideEveryKnownStack gives "an OS call ran on no known stack"

@@ -151,8 +151,8 @@ end 'ServiceNodeLookup'
 //
 // ⚠ **THE GATE IS `serviceAwaitSites`, WHICH IS EMPTY FOR EVERY PROGRAM THAT AWAITS NO REPLY** — that is
 // every program with no service in it and every program that only sends fire-and-forget — and it
-// is asked by `checkServiceRules`, which owns the survey this check and E3143 share. Neither rule builds a
-// call graph of its own any more; see `ServiceProgramSurvey`.
+// is asked by `checkServiceRules`, which owns the survey this check and `ServiceGlobalAccessCheck` share. Neither rule builds a
+// call graph of its own; see `ServiceProgramSurvey`.
 module function checkServiceCallCycles(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey)
 	let graph = buildServiceBlockingGraph(signatures, funcNames: funcNames, survey: survey)
 	let onCycle = nodesOnACycle(graph.adjacency())
@@ -263,7 +263,7 @@ end 'blockingSiteFor'
 //
 // Does this op hand control to a NAMED function in this frame?
 //
-// ⚠ `module`, and `ServiceProgramSurvey` is the one asker for both rules. E3143's exclusion of a send is
+// ⚠ `module`, and `ServiceProgramSurvey` is the one asker for both rules. The message closure's exclusion of a send is
 // right there for the same reason read from the other end: a send's handler runs on the SERVICE's green
 // thread, and that handler is already a seed of that walk in its own right.
 module function opIsACallGraphEdge(op MaxonOp) returns bool

@@ -160,8 +160,8 @@ end 'main'
 Methods are called using the method call syntax:
 
 ```maxon
-var p = IntPair.create(10, b: 32)
-var result = p.sum()    // Call sum() method on instance p
+let p = IntPair.create(10, b: 32)
+let result = p.sum()    // Call sum() method on instance p
 ```
 
 ### Error: Missing Type Binding

@@ -45,6 +45,7 @@ cond ? a : b                   a if cond else b
 param (T) returns U            typealias F = function(T) returns U; param F
 import / include               (does not exist — a project compiles every .maxon under its directory)
 defer / lazy                   (do not exist)
+module var / static var        (do not exist — a local `var` passed to a `mutable` parameter, a field, a `SharedValue`, or a service's fields)
 ```
 
 ---
@@ -433,7 +434,7 @@ _ = sideEffect()     // discard (RHS MUST be a function call)
 A `let` of a bare number, literal arithmetic or a literal container is a constant that fits any alias its
 value fits, checked at each use. Cast the literal of a `let` (`let limit = 10 as Count`) only where some use
 needs the alias: when every use would take the plain constant the same way, the cast is **E3010**. A `var`
-— local, top-level or `static` — starts from a value of an alias: cast the number (`var total = 0 as Count`, `var size = (16 * 1024) as ByteCount`) or give an array literal a
+— a local — starts from a value of an alias: cast the number (`var total = 0 as Count`, `var size = (16 * 1024) as ByteCount`) or give an array literal a
 typed head (`TallyArray from [1, 2]`). A `for` counter takes the alias of its non-literal bound
 (`for i in 0 upto xs.count()` counts in `Count`) and is immutable in the body.
 
@@ -1168,19 +1169,19 @@ All declarations are file-private by default. Four tiers exist:
 - **`public`** — visible everywhere, and declared API surface, so it is exempt from the unused-export checks.
 
 No surface a declaration exposes may name a type less visible than the declaration: a function's signature
-and `where` clause, a top-level or `static` `let` or `var`'s type, a marked field's type, a union case's
+and `where` clause, a top-level or `static` `let`'s type, a marked field's type, a union case's
 payloads, a typealias's target, an `implements`, `where` or `extends` clause, and an enum's backing record.
 For that rule the tiers are ordered default < `module` < `export` < `public`, and naming a narrower type is
 E3167.
 
 A top-level name is declared once per directory, whatever its visibility and kind: a `type`, `enum`,
-`union`, `interface`, `typealias`, top-level `let` or `var`, and `function` share one namespace, and a second
+`union`, `interface`, `typealias`, top-level `let`, and `function` share one namespace, and a second
 declaration in the directory is **E3006**. Two directories may each declare the name; a bare name means the
 reader's own directory's declaration, else the root's, else the one visible declaration, and
 **E3063**/**E3095** ask for `dir.name` where several are equally near. A function name is declared once per
 directory and a method name once per type: Maxon has no overloading.
 
-At most one modifier may be written. `module` is a contextual keyword: it is recognised only immediately before a declaration token (`function`, `type`, `enum`, `var`, `let`, etc.), so user code can still use `module` as a parameter or local variable name.
+At most one modifier may be written. `module` is a contextual keyword: it is recognised only immediately before a declaration token (`function`, `type`, `enum`, `let`, etc.), so user code can still use `module` as a parameter or local variable name.
 
 ```maxon
 export function publicFunc() returns Tally ...
@@ -1189,8 +1190,8 @@ export type PublicType ...
 export typealias PublicAlias = int(0 to 100)
 export enum PublicEnum ...
 export union PublicUnion ...
-export var sharedState = 0
-module var featureState = 0                       // visible to this directory subtree
+export let sharedLimit = 0
+module let featureLimit = 0                       // visible to this directory subtree
 ```
 
 ### Conditional Compilation
@@ -1238,6 +1239,9 @@ Operators: `and`, `or`, `not`, plus parentheses for grouping.
   Reading a local in a statement that also hands it to a `mutable` parameter the callee writes, with the read
   running before the write, is **E3186**: copy it into a `let` in an earlier statement. `mutable` before a
   message or factory parameter's type is a parse error (**E2010**).
+- There is no module-level mutable state: a file-scope or `static` `var` is a syntax error. State that more
+  than one thread uses is a service's fields (reached by message) or a `SharedValue`. A service's state holds no
+  promise (**E3216**): a message or factory awaits or cancels the coroutines it starts before it returns.
 
 ### Regions and capabilities
 
@@ -1276,6 +1280,7 @@ Common refusals and their fixes:
 | **E3213** a promise dropped, overwritten or discarded | await it, cancel it, store it or return it; `_ = try h.m(x)` discards a service reply |
 | **E3214** a unique value cloned, frozen, or bound from a field or element | move it with `pop` or `remove`, or read it through a `view` |
 | **E3215** a type argument breaks a `where T is sendable` or `is isolated` bound | `immutable Job` or a value for `sendable`; a value or unique type for `isolated` |
+| **E3216** a service's state field can hold a promise | `await` or `.cancel()` the promise before the message or factory returns, and keep its result in the field |
 | **E3186** a local read before a by-reference call writes it | copy it into a `let` in an earlier statement and read the copy |
 | **E3005** a `Narrow` variable at a `mutable Wide` parameter | declare the variable at the parameter's type |
 

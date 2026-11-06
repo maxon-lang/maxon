@@ -39,9 +39,9 @@ expression as TargetType
 typealias Byte = int(0 to u8.max)
 typealias Integer = int(i64.min to i64.max)
 typealias Real = float(f64.min to f64.max)
-var b = 42 as Byte       // int literal in range (OK)
-var i = b as Integer     // ranged int -> wider ranged int (OK)
-var g = 100 as Real      // int -> float widening (OK)
+let b = 42 as Byte       // int literal in range (OK)
+let i = b as Integer     // ranged int -> wider ranged int (OK)
+let g = 100 as Real      // int -> float widening (OK)
 
 // A cast TARGET must name a ranged typealias. The bare keyword is legal only as
 // a `typealias` RHS, so `b as int` / `100 as float` are E3005, not casts:
@@ -53,11 +53,11 @@ var g = 100 as Real      // int -> float widening (OK)
 Lossy conversions are not allowed. The compiler reports error E3009:
 
 ```text
-var i = 5.0 as Integer   // ERROR: use trunc/round/floor/ceil instead
-var i = true as Integer  // ERROR: bool -> int not allowed
-var f = true as Real     // ERROR: bool -> float not allowed
-var b = 0 as bool        // ERROR: int -> bool not allowed
-var b = 0.0 as bool      // ERROR: float -> bool not allowed
+let i = 5.0 as Integer   // ERROR: use trunc/round/floor/ceil instead
+let i = true as Integer  // ERROR: bool -> int not allowed
+let f = true as Real     // ERROR: bool -> float not allowed
+let b = 0 as bool        // ERROR: int -> bool not allowed
+let b = 0.0 as bool      // ERROR: float -> bool not allowed
 
 // Each target names a declared alias. A BARE `int`/`float` target is refused
 // earlier and by a different rule (E3005), so it never reaches E3009 at all.

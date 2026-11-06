@@ -20,14 +20,14 @@ Round a floating-point number to the nearest integer.
 **Example:**
 
 ```maxon
-var x = 3.5
-var y = round(x)     // 4.0 (rounds to nearest)
+let x = 3.5
+let y = round(x)     // 4.0 (rounds to nearest)
 
-var z = 2.4
-var w = round(z)     // 2.0
+let z = 2.4
+let w = round(z)     // 2.0
 
 // To get an int result:
-var i = trunc(round(x))   // 4
+let i = trunc(round(x))   // 4
 ```
 **Notes:**
 - Rounds to the nearest integer

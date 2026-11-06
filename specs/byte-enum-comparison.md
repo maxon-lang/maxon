@@ -33,8 +33,11 @@ enum Ascii
 	space = 32
 end 'Ascii'
 
-var out = ByteArray.create(0)
-out.push(Ascii.space)   // OK — coerces to Byte, no .rawValue needed
+function main() returns ExitCode
+	var out = ByteArray.create(0)
+	out.push(Ascii.space)   // OK — coerces to Byte, no .rawValue needed
+	return 0
+end 'main'
 ```
 
 ## Tests

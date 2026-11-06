@@ -1,0 +1,1385 @@
+// 0 means idle: no runner and no queued behaviour. Otherwise the newest behaviour in the MCS queue.
+let CownOffLast = 0x00
+let CownOffGate = 0x08
+let CownOffShares = 0x10
+let CownOffCapacity = 0x18
+let CownOffSlotBytes = 0x20
+export let CownOffState = 0x28
+let CownOffBehave = 0x30
+let CownOffFinish = 0x38
+let CownOffSendNext = 0x40
+let CownOffSendPrev = CownOffSendNext + PointerFieldBytes
+// `cown + CownSendRootBias` reads as a green-thread record whose send links are `CownOffSendNext` and
+// `CownOffSendPrev`, so the sender queue shares the green-thread link helpers.
+let CownSendRootBias = CownOffSendNext - GtOffSendNext
+// Guards only the sender queue and the Waiters bit, never the send fast path.
+let CownOffLock = (CownOffSendPrev + PointerFieldBytes) as ByteOffset
+let CownHeaderBytes = (CownOffLock as FullRangeInt) + ExclusiveLockBytes
+
+// 0 until the successor links itself. Written with `storeRelease` and read with `loadAcquire`, which
+// is what makes the successor's record visible to the runner that holds the cown.
+let BehOffNext = 0x00
+let BehOffCode = 0x08
+let BehOffKind = 0x10
+export let BehOffPayload = 0x18
+let BehHeaderBytes = BehOffPayload as FullRangeInt
+let BehStartPayloadBytes = 8
+
+enum CownBehaviourKind
+	message = 0
+	start = 1
+	finish = 2
+	acquire = 3
+end 'CownBehaviourKind'
+
+// The gate word, stepped only by CAS loops so one read answers closed, room and waiters together.
+// Bits 0..59 count messages reserved and not yet started, from reservation until the handler starts,
+// so capacity N admits exactly N queued sends. Start and finish behaviours are outside the count.
+// FinishClaimed is set by the one CAS that sees Closed with nothing queued.
+let CownGateClosed = 0x4000000000000000
+let CownGateFinishClaimed = 0x2000000000000000
+let CownGateWaiters = 0x1000000000000000
+let CownGateQueuedMask = 0x0FFFFFFFFFFFFFFF
+let CownGateClosedAndQueuedMask = 0x4FFFFFFFFFFFFFFF
+let CownGateClosedAndOneQueued = 0x4000000000000001
+let CownOneQueued = 1
+
+let CownBatchMessages = 64
+let CownBudgetPerMessage = 1
+
+let CownInitialHandles = 1
+let CownInitialRefs = 2
+let CownHandleShift = 32 as FullRangeInt
+let CownHandleUnit = 1 shl CownHandleShift
+let CownRefUnit = 1
+module let CownShareUnit = CownHandleUnit + CownRefUnit
+let CownInitialShares = CownInitialHandles * CownHandleUnit + CownInitialRefs * CownRefUnit
+let CownSoleHandle = 1
+
+let CownChainEnd = 0
+let CownNoRunner = 0
+let CownRefusedReplyFlag = ErrorFlagOrdinalBias
+
+let GrpOffCount = 0x00
+let GrpOffPhase = 0x08
+let GrpOffCode = 0x10
+let GrpOffArg = 0x18
+let GrpOffSlotCount = 0x20
+let GrpHeaderBytes = 0x28
+let GrpSlotOffGroup = BehOffPayload
+let GrpSlotOffCown = BehOffPayload + PointerFieldBytes
+let GrpSlotBytes = BehHeaderBytes + 16
+let GrpPhaseOneDone = 1
+let GrpBias = 1
+
+export enum CownSendWake
+	pending = 0
+	delivered = 1
+	cancelled = 2
+	stopped = 3
+	timedOut = 4
+end 'CownSendWake'
+
+export enum CownSendStatus
+	delivered = 0
+	full = 1
+	stopped = 2
+end 'CownSendStatus'
+
+export let CownSpawnName = b"__cown_spawn"
+export let CownStagingName = b"__cown_staging"
+export let CownSendName = b"__cown_send"
+let CownSendWaitName = b"__cown_send_wait"
+let CownRunName = b"__cown_run"
+let CownDequeueSlowName = b"__cown_dequeue_slow"
+export let CownCloseName = b"__cown_close"
+export let CownSendAbandonName = b"__cown_send_abandon"
+export let CownHandleCloneBoxName = b"__cown_handle_clone_box"
+export let CownHandleDestructName = b"__cown_handle_destruct"
+export let CownReplyRefusedName = b"__cown_reply_refused"
+export let CownUnknownTagName = b"__cown_unknown_tag"
+let CownAcquireManyName = b"__cown_acquire_many"
+let CownMultiReleaseName = b"__cown_multi_release"
+export let CownTestMultiName = b"__cown_test_multi"
+let CownTestWorkerName = b"__cown_test_worker"
+let CownTestBodyName = b"__cown_test_body"
+
+export function installCownRuntime(module StdModule, requestStagingBytes ByteOffset)
+	buildCownSpawn(module)
+	buildCownStaging(module, bytes: requestStagingBytes)
+	buildCownSend(module)
+	buildCownSendWait(module)
+	buildCownRun(module)
+	buildCownDequeueSlow(module)
+	buildCownClose(module)
+	buildCownSendAbandon(module)
+	buildCownHandleCloneBox(module)
+	buildCownHandleDestruct(module)
+	buildCownReplyRefused(module)
+	buildCownUnknownTag(module)
+	buildCownInterfaceRuntime(module)
+	buildCownAcquireMany(module)
+	buildCownMultiRelease(module)
+	buildCownTestMulti(module)
+	buildCownTestWorker(module)
+	buildCownTestBody(module)
+end 'installCownRuntime'
+
+function emitStoreReleaseField(module StdModule, block IrBlock, record ValueId, offset ByteOffset, value ValueId)
+	module.appendOp(block, op: StdOp.storeRelease(record, offset: offset, valueId: value, valueType: StdType.i64))
+end 'emitStoreReleaseField'
+
+function emitCownLockAddr(module StdModule, block IrBlock, cown ValueId, ids ValueMinter) returns ValueId
+	return emitFieldAddr(module, block: block, record: cown, offset: CownOffLock, ids: ids)
+end 'emitCownLockAddr'
+
+function emitCownLockEnter(module StdModule, block IrBlock, cown ValueId, ids ValueMinter)
+	emitLockEnterAt(module, block: block, lock: emitCownLockAddr(module, block: block, cown: cown, ids: ids), kind: RuntimeLockKind.exclusive, ids: ids)
+end 'emitCownLockEnter'
+
+union CownLockHolder
+	currentMachine
+	machine(m ValueId)
+end 'CownLockHolder'
+
+function emitCownLockLeave(module StdModule, block IrBlock, cown ValueId, holder CownLockHolder, ids ValueMinter)
+	let lock = emitCownLockAddr(module, block: block, cown: cown, ids: ids)
+
+	match holder 'holder'
+		currentMachine then emitLockLeaveAt(module, block: block, lock: lock, kind: RuntimeLockKind.exclusive, ids: ids)
+		machine(m) then emitLockLeaveOnMachine(module, block: block, lock: lock, kind: RuntimeLockKind.exclusive, machine: m, ids: ids)
+	end 'holder'
+end 'emitCownLockLeave'
+
+function emitCownRefuse(module StdModule, block IrBlock, cown ValueId, status CownSendStatus, ids ValueMinter)
+	emitCownLockLeave(module, block: block, cown: cown, holder: CownLockHolder.currentMachine, ids: ids)
+	emitConstReturn(module, block: block, value: status.rawValue, ids: ids)
+end 'emitCownRefuse'
+
+function emitCownSendRoot(module StdModule, block IrBlock, cown ValueId, ids ValueMinter) returns ValueId
+	return emitBin(module, block: block, a: cown, b: emitConst(module, block: block, value: CownSendRootBias as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+end 'emitCownSendRoot'
+
+function emitCownSendAppend(module StdModule, block IrBlock, root ValueId, sender ValueId, ids ValueMinter)
+	let tail = emitLoadField(module, block: block, record: root, offset: GtOffSendPrev, ids: ids)
+
+	emitStoreField(module, block: block, record: sender, offset: GtOffSendNext, value: root)
+	emitStoreField(module, block: block, record: sender, offset: GtOffSendPrev, value: tail)
+	emitStoreField(module, block: block, record: tail, offset: GtOffSendNext, value: sender)
+	emitStoreField(module, block: block, record: root, offset: GtOffSendPrev, value: sender)
+end 'emitCownSendAppend'
+
+function emitCownSendUnlink(module StdModule, block IrBlock, sender ValueId, ids ValueMinter)
+	let before = emitLoadField(module, block: block, record: sender, offset: GtOffSendPrev, ids: ids)
+	let after = emitLoadField(module, block: block, record: sender, offset: GtOffSendNext, ids: ids)
+	let unlinked = emitConst(module, block: block, value: 0, ids: ids)
+
+	emitStoreField(module, block: block, record: before, offset: GtOffSendNext, value: after)
+	emitStoreField(module, block: block, record: after, offset: GtOffSendPrev, value: before)
+	emitStoreField(module, block: block, record: sender, offset: GtOffSendNext, value: unlinked)
+	emitStoreField(module, block: block, record: sender, offset: GtOffSendPrev, value: unlinked)
+end 'emitCownSendUnlink'
+
+export function emitCownClaimSender(module StdModule, block IrBlock, sender ValueId, outcome CownSendWake, lost IrBlock, won IrBlock, ids ValueMinter)
+	let claim = emitCasField(module, block: block, record: sender, offset: GtOffSendOutcome, expected: emitConst(module, block: block, value: CownSendWake.pending.rawValue, ids: ids), replacement: emitConst(module, block: block, value: outcome.rawValue, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: block, result: claim, lost: lost, won: won, ids: ids)
+end 'emitCownClaimSender'
+
+function emitCownBranchOnSenders(module StdModule, block IrBlock, root ValueId, waiting IrBlock, none IrBlock, ids ValueMinter) returns ValueId
+	let front = emitLoadField(module, block: block, record: root, offset: GtOffSendNext, ids: ids)
+	emitBranchOnCompareValues(module, block: block, a: front, pred: StdCmpPred.ne, b: root, whenTrue: waiting, whenFalse: none, ids: ids)
+
+	return front
+end 'emitCownBranchOnSenders'
+
+function emitCownClaimFrontSender(module StdModule, func IrFunction, scan IrBlock, root ValueId, outcome CownSendWake, empty IrBlock, won IrBlock, carried ValueIdArray, ids ValueMinter) returns ValueId
+	var claim = module.addBlock(func, label: b"sendfrontclaim", heat: BlockHeat.normal)
+	var skip = module.addBlock(func, label: b"sendfrontskip", heat: BlockHeat.normal)
+
+	let front = emitCownBranchOnSenders(module, block: scan, root: root, waiting: claim, none: empty, ids: ids)
+
+	emitCownClaimSender(module, block: claim, sender: front, outcome: outcome, lost: skip, won: won, ids: ids)
+
+	emitCownSendUnlink(module, block: skip, sender: front, ids: ids)
+	module.setTerminator(skip, op: StdOp.branch(scan.id))
+
+	if carried.count() > 0 'carriesValues'
+		pushBranchEdge(skip, to: scan, values: carried)
+	end 'carriesValues'
+
+	return front
+end 'emitCownClaimFrontSender'
+
+function emitCownReadyClaimedSender(module StdModule, func IrFunction, cur IrBlock, sender ValueId, cont IrBlock, ids ValueMinter)
+	var disarm = module.addBlock(func, label: b"sendwakedisarm", heat: BlockHeat.normal)
+	var readyLocked = module.addBlock(func, label: b"sendwakereadylocked", heat: BlockHeat.normal)
+	var readyFree = module.addBlock(func, label: b"sendwakereadyfree", heat: BlockHeat.normal)
+
+	let deadline = emitLoadField(module, block: cur, record: sender, offset: GtOffSendDeadline, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: deadline, pred: StdCmpPred.eq, against: GtDeadlineMaxNs, whenTrue: readyFree, whenFalse: disarm, ids: ids)
+
+	emitSchedLockEnter(module, block: disarm, ids: ids)
+	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: disarm, gt: sender, tag: emitConst(module, block: disarm, value: TimerTagSend, ids: ids), found: readyLocked, missing: readyLocked)
+
+	emitSchedBreakIdlePoller(module, block: readyLocked, ids: ids)
+	let lockedDebt = emitGtReady(module, block: readyLocked, gt: sender, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.held, ids: ids)
+	emitSchedLockLeave(module, block: readyLocked, ids: ids)
+	emitBranchCarrying(module, from: readyLocked, to: cont, values: argsOf(lockedDebt))
+
+	let freeDebt = emitGtReady(module, block: readyFree, gt: sender, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.free, ids: ids)
+	emitBranchCarrying(module, from: readyFree, to: cont, values: argsOf(freeDebt))
+end 'emitCownReadyClaimedSender'
+
+module function emitCownSharesStep(module StdModule, block IrBlock, cown ValueId, delta FullRangeInt, ids ValueMinter) returns ValueId
+	return emitFieldAccumulate(module, block: block, record: cown, offset: CownOffShares, delta: emitConst(module, block: block, value: delta, ids: ids), multiM: true, ids: ids)
+end 'emitCownSharesStep'
+
+function emitCownGiveBack(module StdModule, func IrFunction, cur IrBlock, cown ValueId, unit FullRangeInt, joined IrBlock, ids ValueMinter)
+	var freeRegion = module.addBlock(func, label: b"cownfreeregion", heat: BlockHeat.normal)
+
+	let prior = emitCownSharesStep(module, block: cur, cown: cown, delta: -unit, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: prior, pred: StdCmpPred.eq, against: unit, whenTrue: freeRegion, whenFalse: joined, ids: ids)
+
+	emitSlabFree(module, block: freeRegion, ptr: cown, kind: SlabBufferKind.cownRecord, ids: ids)
+	module.setTerminator(freeRegion, op: StdOp.branch(joined.id))
+end 'emitCownGiveBack'
+
+module function emitHandleBoxHolding(module StdModule, block IrBlock, mbox ValueId, boxBytes FullRangeInt, ids ValueMinter) returns ValueId
+	let size = emitConst(module, block: block, value: boxBytes, ids: ids)
+	let destructor = ids.mint()
+	module.appendOp(block, op: StdOp.funcAddr(destructor, funcName: CownHandleDestructName))
+	let box = ids.mint()
+	emitMmAllocCall(module, block: block, result: box, size: size, destructor: destructor, tag: mmTagIndex(MmTag.Untagged), ids: ids)
+	emitStoreField(module, block: block, record: box, offset: ServiceHandleCownOffset, value: mbox)
+	return box
+end 'emitHandleBoxHolding'
+
+function emitCownSchedule(module StdModule, block IrBlock, cown ValueId, beh ValueId, ids ValueMinter)
+	// The runner is readied last: its argument slots must hold the cown and the behaviour before
+	// another processor can pop it.
+	let entry = ids.mint()
+	module.appendOp(block, op: StdOp.funcAddr(entry, funcName: CownRunName))
+	let gt = ids.mint()
+	module.appendOp(block, op: StdOp.call(gt, callee: GtSpawnGreenName, args: argsOf(entry)))
+	emitStoreField(module, block: block, record: gt, offset: GtOffArgInline, value: cown)
+	emitStoreField(module, block: block, record: gt, offset: GtOffArgInline + GtArgSlotBytes, value: beh)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtReadyName, args: argsOf(gt)))
+end 'emitCownSchedule'
+
+function emitCownTailSwap(module StdModule, func IrFunction, cur IrBlock, cown ValueId, beh ValueId, joined IrBlock, ids ValueMinter) returns ValueId
+	var swap = module.addBlock(func, label: b"cownswap", heat: BlockHeat.normal)
+
+	module.setTerminator(cur, op: StdOp.branch(swap.id))
+
+	let prev = emitLoadField(module, block: swap, record: cown, offset: CownOffLast, ids: ids)
+	let swapped = emitCasField(module, block: swap, record: cown, offset: CownOffLast, expected: prev, replacement: beh, ids: ids)
+	emitBranchOnCasLost(module, block: swap, result: swapped, lost: swap, won: joined, ids: ids)
+
+	return prev
+end 'emitCownTailSwap'
+
+function emitCownPublish(module StdModule, func IrFunction, cur IrBlock, cown ValueId, beh ValueId, joined IrBlock, ids ValueMinter)
+	var swapped = module.addBlock(func, label: b"cownswapped", heat: BlockHeat.normal)
+	var idle = module.addBlock(func, label: b"cownidle", heat: BlockHeat.normal)
+	var busy = module.addBlock(func, label: b"cownbusy", heat: BlockHeat.normal)
+
+	let prev = emitCownTailSwap(module, func: func, cur: cur, cown: cown, beh: beh, joined: swapped, ids: ids)
+	emitBranchOnCompare(module, block: swapped, value: prev, pred: StdCmpPred.eq, against: CownNoRunner, whenTrue: idle, whenFalse: busy, ids: ids)
+
+	emitCownSchedule(module, block: idle, cown: cown, beh: beh, ids: ids)
+	module.setTerminator(idle, op: StdOp.branch(joined.id))
+
+	emitStoreReleaseField(module, block: busy, record: prev, offset: BehOffNext, value: beh)
+	module.setTerminator(busy, op: StdOp.branch(joined.id))
+end 'emitCownPublish'
+
+function emitCownEnqueueMessage(module StdModule, func IrFunction, cur IrBlock, cown ValueId, msg ValueId, bytes ValueId, joined IrBlock, ids ValueMinter)
+	let slotBytes = emitLoadField(module, block: cur, record: cown, offset: CownOffSlotBytes, ids: ids)
+	let size = emitBin(module, block: cur, a: slotBytes, b: emitConst(module, block: cur, value: BehHeaderBytes, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let beh = emitSlabAlloc(module, block: cur, bytes: size, kind: SlabBufferKind.cownBehaviour, ids: ids)
+	emitStoreField(module, block: cur, record: beh, offset: BehOffCode, value: emitLoadField(module, block: cur, record: cown, offset: CownOffBehave, ids: ids))
+	emitStoreField(module, block: cur, record: beh, offset: BehOffKind, value: emitConst(module, block: cur, value: CownBehaviourKind.message.rawValue, ids: ids))
+
+	let payload = emitFieldAddr(module, block: cur, record: beh, offset: BehOffPayload, ids: ids)
+	var copied = emitForwardCopy(module, func: func, cur: cur, dest: payload, src: msg, byteCount: bytes, ids: ids)
+
+	emitCownPublish(module, func: func, cur: copied, cown: cown, beh: beh, joined: joined, ids: ids)
+end 'emitCownEnqueueMessage'
+
+function emitCownEnqueueFinish(module StdModule, func IrFunction, cur IrBlock, cown ValueId, joined IrBlock, ids ValueMinter)
+	// The finish is queued at the tail like a message and never run inline, so an acquire slot queued
+	// behind the last message stays correct.
+	let beh = emitSlabAlloc(module, block: cur, bytes: emitConst(module, block: cur, value: BehHeaderBytes, ids: ids), kind: SlabBufferKind.cownBehaviour, ids: ids)
+	emitStoreField(module, block: cur, record: beh, offset: BehOffKind, value: emitConst(module, block: cur, value: CownBehaviourKind.finish.rawValue, ids: ids))
+
+	emitCownPublish(module, func: func, cur: cur, cown: cown, beh: beh, joined: joined, ids: ids)
+end 'emitCownEnqueueFinish'
+
+function emitCownFinishState(module StdModule, func IrFunction, cur IrBlock, cown ValueId, joined IrBlock, ids ValueMinter)
+	var drop = module.addBlock(func, label: b"cownfinishdrop", heat: BlockHeat.normal)
+
+	let state = emitLoadField(module, block: cur, record: cown, offset: CownOffState, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: state, pred: StdCmpPred.ne, against: 0, whenTrue: drop, whenFalse: joined, ids: ids)
+
+	let finish = emitLoadField(module, block: drop, record: cown, offset: CownOffFinish, ids: ids)
+	module.appendOp(drop, op: StdOp.callIndirect(ids.mint(), calleeReg: finish, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(cown)))
+	emitStoreField(module, block: drop, record: cown, offset: CownOffState, value: emitConst(module, block: drop, value: 0, ids: ids))
+	module.setTerminator(drop, op: StdOp.branch(joined.id))
+end 'emitCownFinishState'
+
+function emitCownGateMasked(module StdModule, block IrBlock, gate ValueId, mask FullRangeInt, ids ValueMinter) returns ValueId
+	return emitBin(module, block: block, a: gate, b: emitConst(module, block: block, value: mask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitCownGateMasked'
+
+function buildCownSpawn(module StdModule)
+	var func = IrFunction.createFromStd(CownSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 6, paramTypes: sixI64Params())
+	var ids = ValueMinter.create(6)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 6)
+	let startCode = 0
+	let startRecord = 1
+	let slotBytes = 2
+	let capacity = 3
+	let behave = 4
+	let finish = 5
+
+	let cown = emitSlabAlloc(module, block: entry, bytes: emitConst(module, block: entry, value: CownHeaderBytes, ids: ids), kind: SlabBufferKind.cownRecord, ids: ids)
+	emitStoreField(module, block: entry, record: cown, offset: CownOffSlotBytes, value: slotBytes)
+	emitStoreField(module, block: entry, record: cown, offset: CownOffShares, value: emitConst(module, block: entry, value: CownInitialShares, ids: ids))
+	emitStoreField(module, block: entry, record: cown, offset: CownOffCapacity, value: capacity)
+	emitStoreField(module, block: entry, record: cown, offset: CownOffBehave, value: behave)
+	emitStoreField(module, block: entry, record: cown, offset: CownOffFinish, value: finish)
+	let sendRoot = emitCownSendRoot(module, block: entry, cown: cown, ids: ids)
+	emitStoreField(module, block: entry, record: cown, offset: CownOffSendNext, value: sendRoot)
+	emitStoreField(module, block: entry, record: cown, offset: CownOffSendPrev, value: sendRoot)
+
+	let beh = emitSlabAlloc(module, block: entry, bytes: emitConst(module, block: entry, value: BehHeaderBytes + BehStartPayloadBytes, ids: ids), kind: SlabBufferKind.cownBehaviour, ids: ids)
+	emitStoreField(module, block: entry, record: beh, offset: BehOffCode, value: startCode)
+	emitStoreField(module, block: entry, record: beh, offset: BehOffKind, value: emitConst(module, block: entry, value: CownBehaviourKind.start.rawValue, ids: ids))
+	emitStoreField(module, block: entry, record: beh, offset: BehOffPayload, value: startRecord)
+	emitStoreField(module, block: entry, record: cown, offset: CownOffLast, value: beh)
+
+	emitCownSchedule(module, block: entry, cown: cown, beh: beh, ids: ids)
+
+	module.setTerminator(entry, op: StdOp.ret(cown))
+	module.functions.push(func)
+end 'buildCownSpawn'
+
+function buildCownStaging(module StdModule, bytes ByteOffset)
+	if (bytes as FullRangeInt) > SchedArenaChunkBytes 'largerThanAChunk'
+		panic("buildCownStaging: the largest request union is {bytes} byte(s), past the {SchedArenaChunkBytes}-byte scheduler-arena chunk a carve cannot span")
+	end 'largerThanAChunk'
+
+	var func = IrFunction.createFromStd(CownStagingName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var carve = module.addBlock(func, label: b"stagingcarve", heat: BlockHeat.normal)
+	var have = module.addBlock(func, label: b"staginghave", heat: BlockHeat.normal)
+
+	let selfGt = emitLoadCurrentGt(module, block: entry, ids: ids)
+	let staging = emitLoadField(module, block: entry, record: selfGt, offset: GtOffStaging, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: staging, pred: StdCmpPred.ne, against: 0, whenTrue: have, whenFalse: carve, ids: ids)
+
+	module.setTerminator(have, op: StdOp.ret(staging))
+
+	let carved = emitSchedCarveLocked(module, block: carve, bytes: bytes as FullRangeInt, caller: CallerMachine.published, ids: ids)
+	emitStoreField(module, block: carve, record: selfGt, offset: GtOffStaging, value: carved)
+	module.setTerminator(carve, op: StdOp.ret(carved))
+
+	module.functions.push(func)
+end 'buildCownStaging'
+
+function buildCownSend(module StdModule)
+	var func = IrFunction.createFromStd(CownSendName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var attempt = module.addBlock(func, label: b"sendtry", heat: BlockHeat.normal)
+	var refuseClosed = module.addBlock(func, label: b"sendclosed", heat: BlockHeat.cold)
+	var roomCheck = module.addBlock(func, label: b"sendroomcheck", heat: BlockHeat.normal)
+	var reserve = module.addBlock(func, label: b"sendreserve", heat: BlockHeat.normal)
+	var enqueue = module.addBlock(func, label: b"sendenqueue", heat: BlockHeat.normal)
+	var full = module.addBlock(func, label: b"sendfull", heat: BlockHeat.cold)
+	var refuseFull = module.addBlock(func, label: b"sendrefusefull", heat: BlockHeat.cold)
+	var waitForRoom = module.addBlock(func, label: b"sendwaitforroom", heat: BlockHeat.cold)
+	var doneBlock = module.addBlock(func, label: b"senddone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 4)
+	let cown = 0
+	let msg = 1
+	let bytes = 2
+	let timeoutMs = 3
+
+	let machine = ids.mint()
+	entry = emitGtHonourPreemptRequestOnMachine(module, func: func, block: entry, machine: machine, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(attempt.id))
+
+	let gate = emitLoadField(module, block: attempt, record: cown, offset: CownOffGate, ids: ids)
+	emitBranchOnCompare(module, block: attempt, value: emitCownGateMasked(module, block: attempt, gate: gate, mask: CownGateClosed, ids: ids), pred: StdCmpPred.eq, against: 0, whenTrue: roomCheck, whenFalse: refuseClosed, ids: ids)
+
+	emitConstReturn(module, block: refuseClosed, value: CownSendStatus.stopped.rawValue, ids: ids)
+
+	let queued = emitCownGateMasked(module, block: roomCheck, gate: gate, mask: CownGateQueuedMask, ids: ids)
+	let capacity = emitLoadField(module, block: roomCheck, record: cown, offset: CownOffCapacity, ids: ids)
+	emitBranchOnCompareValues(module, block: roomCheck, a: queued, pred: StdCmpPred.eq, b: capacity, whenTrue: full, whenFalse: reserve, ids: ids)
+
+	let reserved = emitBin(module, block: reserve, a: gate, b: emitConst(module, block: reserve, value: CownOneQueued, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let claimed = emitCasField(module, block: reserve, record: cown, offset: CownOffGate, expected: gate, replacement: reserved, ids: ids)
+	emitBranchOnCasLost(module, block: reserve, result: claimed, lost: attempt, won: enqueue, ids: ids)
+
+	emitCownEnqueueMessage(module, func: func, cur: enqueue, cown: cown, msg: msg, bytes: bytes, joined: doneBlock, ids: ids)
+
+	emitBranchOnCompare(module, block: full, value: timeoutMs, pred: StdCmpPred.eq, against: 0, whenTrue: refuseFull, whenFalse: waitForRoom, ids: ids)
+
+	emitConstReturn(module, block: refuseFull, value: CownSendStatus.full.rawValue, ids: ids)
+
+	let status = ids.mint()
+	module.appendOp(waitForRoom, op: StdOp.call(status, callee: CownSendWaitName, args: fourArgs(cown, second: msg, third: bytes, fourth: timeoutMs)))
+	module.setTerminator(waitForRoom, op: StdOp.ret(status))
+
+	emitConstReturn(module, block: doneBlock, value: CownSendStatus.delivered.rawValue, ids: ids)
+	module.functions.push(func)
+end 'buildCownSend'
+
+// Guarded and pinned, as `__cown_close` is: the inlined enqueue, schedule and ready frames outgrow
+// the unguarded stack margin (E5004).
+function buildCownSendWait(module StdModule)
+	var func = IrFunction.createFromStd(CownSendWaitName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var refuseFull = module.addBlock(func, label: b"sendwaitrefusefull", heat: BlockHeat.cold)
+	var waitGate = module.addBlock(func, label: b"sendwaitgate", heat: BlockHeat.normal)
+	var stagingMismatch = module.addBlock(func, label: b"sendstagingmismatch", heat: BlockHeat.cold)
+	var locked = module.addBlock(func, label: b"sendwaitlocked", heat: BlockHeat.normal)
+	var attempt = module.addBlock(func, label: b"sendwaittry", heat: BlockHeat.normal)
+	var refuseStopped = module.addBlock(func, label: b"sendwaitstopped", heat: BlockHeat.cold)
+	var roomCheck = module.addBlock(func, label: b"sendwaitroomcheck", heat: BlockHeat.normal)
+	var reserve = module.addBlock(func, label: b"sendwaitreserve", heat: BlockHeat.normal)
+	var raced = module.addBlock(func, label: b"sendwaitraced", heat: BlockHeat.normal)
+	var announce = module.addBlock(func, label: b"sendwaitannounce", heat: BlockHeat.normal)
+	var enqueue = module.addBlock(func, label: b"sendenqueue", heat: BlockHeat.normal)
+	var deadlined = module.addBlock(func, label: b"senddeadlined", heat: BlockHeat.normal)
+	var woken = module.addBlock(func, label: b"sendwoken", heat: BlockHeat.normal)
+	var wakeLocked = module.addBlock(func, label: b"sendwakelocked", heat: BlockHeat.normal)
+	var timedOut = module.addBlock(func, label: b"sendtimedout", heat: BlockHeat.normal)
+	var wakeUnlocked = module.addBlock(func, label: b"sendwakeunlocked", heat: BlockHeat.normal)
+	var wakeFailed = module.addBlock(func, label: b"sendwakefailed", heat: BlockHeat.normal)
+	var wakeStopped = module.addBlock(func, label: b"sendwakestopped", heat: BlockHeat.normal)
+	var wakeNotStopped = module.addBlock(func, label: b"sendwakenotstopped", heat: BlockHeat.normal)
+	var wakeUnexpected = module.addBlock(func, label: b"sendwakeunexpected", heat: BlockHeat.cold)
+	var doneBlock = module.addBlock(func, label: b"senddone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 4)
+	let cown = 0
+	let msg = 1
+	let bytes = 2
+	let timeoutMs = 3
+
+	let selfGt = emitLoadCurrentGt(module, block: entry, ids: ids)
+	let stackBase = emitLoadField(module, block: entry, record: selfGt, offset: GtOffStackBase, ids: ids)
+	let onGreenStack = emitCompareWithConstant(module, block: entry, value: stackBase, pred: StdCmpPred.ne, against: 0, ids: ids)
+	let renounced = emitLoadField(module, block: entry, record: selfGt, offset: GtOffRenounced, ids: ids)
+	let promiseHeld = emitCompareWithConstant(module, block: entry, value: renounced, pred: StdCmpPred.eq, against: GtPromiseHeld, ids: ids)
+	let mayWait = emitBin(module, block: entry, a: onGreenStack, b: promiseHeld, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(mayWait, thenBlockId: waitGate.id, elseBlockId: refuseFull.id))
+
+	emitConstReturn(module, block: refuseFull, value: CownSendStatus.full.rawValue, ids: ids)
+
+	let staging = emitLoadField(module, block: waitGate, record: selfGt, offset: GtOffStaging, ids: ids)
+	emitBranchOnCompareValues(module, block: waitGate, a: msg, pred: StdCmpPred.eq, b: staging, whenTrue: locked, whenFalse: stagingMismatch, ids: ids)
+
+	emitRuntimeAbort(module, func: func, block: stagingMismatch, abort: RuntimeAbort.serviceSendProtocolBroken, ids: ids)
+
+	emitCownLockEnter(module, block: locked, cown: cown, ids: ids)
+	module.setTerminator(locked, op: StdOp.branch(attempt.id))
+
+	let gate = emitLoadField(module, block: attempt, record: cown, offset: CownOffGate, ids: ids)
+	emitBranchOnCompare(module, block: attempt, value: emitCownGateMasked(module, block: attempt, gate: gate, mask: CownGateClosed, ids: ids), pred: StdCmpPred.eq, against: 0, whenTrue: roomCheck, whenFalse: refuseStopped, ids: ids)
+
+	emitCownRefuse(module, block: refuseStopped, cown: cown, status: CownSendStatus.stopped, ids: ids)
+
+	let queued = emitCownGateMasked(module, block: roomCheck, gate: gate, mask: CownGateQueuedMask, ids: ids)
+	let capacity = emitLoadField(module, block: roomCheck, record: cown, offset: CownOffCapacity, ids: ids)
+	emitBranchOnCompareValues(module, block: roomCheck, a: queued, pred: StdCmpPred.eq, b: capacity, whenTrue: announce, whenFalse: reserve, ids: ids)
+
+	let reserved = emitBin(module, block: reserve, a: gate, b: emitConst(module, block: reserve, value: CownOneQueued, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let claimedRoom = emitCasField(module, block: reserve, record: cown, offset: CownOffGate, expected: gate, replacement: reserved, ids: ids)
+	emitBranchOnCasLost(module, block: reserve, result: claimedRoom, lost: attempt, won: raced, ids: ids)
+
+	emitCownLockLeave(module, block: raced, cown: cown, holder: CownLockHolder.currentMachine, ids: ids)
+	emitCownEnqueueMessage(module, func: func, cur: raced, cown: cown, msg: msg, bytes: bytes, joined: doneBlock, ids: ids)
+
+	let waiting = emitBin(module, block: announce, a: gate, b: emitConst(module, block: announce, value: CownGateWaiters, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+	let announced = emitCasField(module, block: announce, record: cown, offset: CownOffGate, expected: gate, replacement: waiting, ids: ids)
+	emitBranchOnCasLost(module, block: announce, result: announced, lost: attempt, won: enqueue, ids: ids)
+
+	let sendRoot = emitCownSendRoot(module, block: enqueue, cown: cown, ids: ids)
+	emitStoreField(module, block: enqueue, record: selfGt, offset: GtOffSendOutcome, value: emitConst(module, block: enqueue, value: CownSendWake.pending.rawValue, ids: ids))
+	let sendDeadline = emitGtDeadlineAfterMs(module, func: func, cur: enqueue, ms: timeoutMs, joined: deadlined, ids: ids)
+
+	emitStoreField(module, block: deadlined, record: selfGt, offset: GtOffSendDeadline, value: sendDeadline)
+	emitCownSendAppend(module, block: deadlined, root: sendRoot, sender: selfGt, ids: ids)
+
+	emitGtPark(module, ids: ids, cur: deadlined, kind: GtParkKind.cownSend.rawValue, arg: cown, cont: woken)
+
+	let wakeOutcome = emitLoadAcquireField(module, block: woken, record: selfGt, offset: GtOffSendOutcome, ids: ids)
+	emitBranchOnCompare(module, block: woken, value: wakeOutcome, pred: StdCmpPred.eq, against: CownSendWake.delivered.rawValue, whenTrue: doneBlock, whenFalse: wakeFailed, ids: ids)
+
+	emitBranchOnCompare(module, block: wakeFailed, value: wakeOutcome, pred: StdCmpPred.eq, against: CownSendWake.stopped.rawValue, whenTrue: wakeStopped, whenFalse: wakeNotStopped, ids: ids)
+	emitConstReturn(module, block: wakeStopped, value: CownSendStatus.stopped.rawValue, ids: ids)
+
+	let wasTimedOut = emitCompareWithConstant(module, block: wakeNotStopped, value: wakeOutcome, pred: StdCmpPred.eq, against: CownSendWake.timedOut.rawValue, ids: ids)
+	let wasCancelled = emitCompareWithConstant(module, block: wakeNotStopped, value: wakeOutcome, pred: StdCmpPred.eq, against: CownSendWake.cancelled.rawValue, ids: ids)
+	let wasRefused = emitBin(module, block: wakeNotStopped, a: wasTimedOut, b: wasCancelled, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(wakeNotStopped, op: StdOp.condBranch(wasRefused, thenBlockId: wakeLocked.id, elseBlockId: wakeUnexpected.id))
+
+	emitCownLockEnter(module, block: wakeLocked, cown: cown, ids: ids)
+	let stillQueued = emitLoadField(module, block: wakeLocked, record: selfGt, offset: GtOffSendNext, ids: ids)
+	emitBranchOnCompare(module, block: wakeLocked, value: stillQueued, pred: StdCmpPred.ne, against: 0, whenTrue: timedOut, whenFalse: wakeUnlocked, ids: ids)
+
+	emitCownSendUnlink(module, block: timedOut, sender: selfGt, ids: ids)
+	module.setTerminator(timedOut, op: StdOp.branch(wakeUnlocked.id))
+
+	emitCownRefuse(module, block: wakeUnlocked, cown: cown, status: CownSendStatus.full, ids: ids)
+
+	emitRuntimeAbort(module, func: func, block: wakeUnexpected, abort: RuntimeAbort.serviceSendProtocolBroken, ids: ids)
+
+	emitConstReturn(module, block: doneBlock, value: CownSendStatus.delivered.rawValue, ids: ids)
+	module.functions.push(func)
+end 'buildCownSendWait'
+
+// Admitting a waiting sender transfers the slot the started message freed: the gate is not
+// decremented, so a later non-waiting send sees a full gate and cannot overtake the waiters. When no
+// sender is found, Waiters is cleared in the same CAS as the decrement.
+function buildCownDequeueSlow(module StdModule)
+	var func = IrFunction.createFromStd(CownDequeueSlowName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var scan = module.addBlock(func, label: b"dequeuescan", heat: BlockHeat.normal)
+	var admit = module.addBlock(func, label: b"dequeueadmit", heat: BlockHeat.normal)
+	var admitted = module.addBlock(func, label: b"dequeueadmitted", heat: BlockHeat.normal)
+	var admitWoken = module.addBlock(func, label: b"dequeuewoken", heat: BlockHeat.normal)
+	var admitWake = module.addBlock(func, label: b"dequeuewake", heat: BlockHeat.normal)
+	var admitPaid = module.addBlock(func, label: b"dequeuepaid", heat: BlockHeat.normal)
+	var noSender = module.addBlock(func, label: b"dequeuenosender", heat: BlockHeat.normal)
+	var settle = module.addBlock(func, label: b"dequeuesettle", heat: BlockHeat.normal)
+	var settled = module.addBlock(func, label: b"dequeuesettled", heat: BlockHeat.normal)
+	var claimFinish = module.addBlock(func, label: b"dequeueclaimfinish", heat: BlockHeat.cold)
+	var doneBlock = module.addBlock(func, label: b"dequeuedone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let cown = 0
+
+	emitCownLockEnter(module, block: entry, cown: cown, ids: ids)
+	let root = emitCownSendRoot(module, block: entry, cown: cown, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(scan.id))
+
+	let front = emitCownClaimFrontSender(module, func: func, scan: scan, root: root, outcome: CownSendWake.delivered, empty: noSender, won: admit, carried: ValueIdArray.create(0), ids: ids)
+
+	let staging = emitLoadField(module, block: admit, record: front, offset: GtOffStaging, ids: ids)
+	let slotBytes = emitLoadField(module, block: admit, record: cown, offset: CownOffSlotBytes, ids: ids)
+	emitCownEnqueueMessage(module, func: func, cur: admit, cown: cown, msg: staging, bytes: slotBytes, joined: admitted, ids: ids)
+
+	emitCownSendUnlink(module, block: admitted, sender: front, ids: ids)
+	emitCownLockLeave(module, block: admitted, cown: cown, holder: CownLockHolder.currentMachine, ids: ids)
+	emitCownReadyClaimedSender(module, func: func, cur: admitted, sender: front, cont: admitWoken, ids: ids)
+
+	let wakeDebt = ids.mint()
+	admitWoken.blockArgs.push(IrBlockArg.create(wakeDebt, argType: StdType.i64))
+	emitSchedWakeIfOwed(module, cur: admitWoken, owed: wakeDebt, wake: admitWake, cont: admitPaid, ids: ids)
+	module.setTerminator(admitPaid, op: StdOp.retVoid)
+
+	module.setTerminator(noSender, op: StdOp.branch(settle.id))
+
+	let gate = emitLoadField(module, block: settle, record: cown, offset: CownOffGate, ids: ids)
+	let waitersSet = emitCownGateMasked(module, block: settle, gate: gate, mask: CownGateWaiters, ids: ids)
+	let withoutWaiters = emitBin(module, block: settle, a: gate, b: waitersSet, opcode: StdBinOpcode.sub, ids: ids)
+	let lastOfClosed = emitCmp(module, block: settle, a: emitCownGateMasked(module, block: settle, gate: gate, mask: CownGateClosedAndQueuedMask, ids: ids), b: emitConst(module, block: settle, value: CownGateClosedAndOneQueued, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let claimBit = emitBin(module, block: settle, a: lastOfClosed, b: emitConst(module, block: settle, value: CownGateFinishClaimed, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let stepped = emitBin(module, block: settle, a: emitBin(module, block: settle, a: withoutWaiters, b: emitConst(module, block: settle, value: CownOneQueued, ids: ids), opcode: StdBinOpcode.sub, ids: ids), b: claimBit, opcode: StdBinOpcode.bitOr, ids: ids)
+	let casStep = emitCasField(module, block: settle, record: cown, offset: CownOffGate, expected: gate, replacement: stepped, ids: ids)
+	emitBranchOnCasLost(module, block: settle, result: casStep, lost: settle, won: settled, ids: ids)
+
+	emitCownLockLeave(module, block: settled, cown: cown, holder: CownLockHolder.currentMachine, ids: ids)
+	emitBranchOnCompare(module, block: settled, value: lastOfClosed, pred: StdCmpPred.ne, against: 0, whenTrue: claimFinish, whenFalse: doneBlock, ids: ids)
+
+	emitCownEnqueueFinish(module, func: func, cur: claimFinish, cown: cown, joined: doneBlock, ids: ids)
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildCownDequeueSlow'
+
+// The cown stays held across the `__gt_resched` that ends a batch, so state never changes thread inside
+// a busy period. A behaviour record is freed only after the release decision: freeing it before the
+// `CAS(Last, cur, 0)` would let a recycled address match the tail. A lost CAS means a sender won the
+// tail and has not yet stored `next`; that window lies in unguarded code with no park point, so
+// spinning on `next` is bounded.
+function buildCownRun(module StdModule)
+	var func = IrFunction.createFromStd(CownRunName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var loop = module.addBlock(func, label: b"runloop", heat: BlockHeat.normal)
+	var notMessage = module.addBlock(func, label: b"runnotmessage", heat: BlockHeat.normal)
+	var notStart = module.addBlock(func, label: b"runnotstart", heat: BlockHeat.normal)
+	var notFinish = module.addBlock(func, label: b"runnotfinish", heat: BlockHeat.normal)
+	var unknownKind = module.addBlock(func, label: b"rununknownkind", heat: BlockHeat.cold)
+	var account = module.addBlock(func, label: b"runaccount", heat: BlockHeat.normal)
+	var accountFast = module.addBlock(func, label: b"runaccountfast", heat: BlockHeat.normal)
+	var accountSlow = module.addBlock(func, label: b"runaccountslow", heat: BlockHeat.cold)
+	var accountWon = module.addBlock(func, label: b"runaccountwon", heat: BlockHeat.normal)
+	var claimFinish = module.addBlock(func, label: b"runclaimfinish", heat: BlockHeat.cold)
+	var messageCall = module.addBlock(func, label: b"runmessagecall", heat: BlockHeat.normal)
+	var startCall = module.addBlock(func, label: b"runstartcall", heat: BlockHeat.normal)
+	var finishCall = module.addBlock(func, label: b"runfinishcall", heat: BlockHeat.normal)
+	var finishDone = module.addBlock(func, label: b"runfinishdone", heat: BlockHeat.normal)
+	var grant = module.addBlock(func, label: b"rungrant", heat: BlockHeat.normal)
+	var grantRun = module.addBlock(func, label: b"rungrantrun", heat: BlockHeat.normal)
+	var grantExit = module.addBlock(func, label: b"rungrantexit", heat: BlockHeat.normal)
+	var afterCall = module.addBlock(func, label: b"runaftercall", heat: BlockHeat.normal)
+	var forward = module.addBlock(func, label: b"runforward", heat: BlockHeat.normal)
+	var drain = module.addBlock(func, label: b"rundrain", heat: BlockHeat.normal)
+	var drained = module.addBlock(func, label: b"rundrained", heat: BlockHeat.normal)
+	var spin = module.addBlock(func, label: b"runspin", heat: BlockHeat.normal)
+	var spinForward = module.addBlock(func, label: b"runspinforward", heat: BlockHeat.normal)
+	var advance = module.addBlock(func, label: b"runadvance", heat: BlockHeat.normal)
+	var carryOn = module.addBlock(func, label: b"runcarryon", heat: BlockHeat.normal)
+	var resched = module.addBlock(func, label: b"runresched", heat: BlockHeat.normal)
+	var released = module.addBlock(func, label: b"runreleased", heat: BlockHeat.normal)
+	var giveBack = module.addBlock(func, label: b"rungiveback", heat: BlockHeat.normal)
+	var exit = module.addBlock(func, label: b"runexit", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 2)
+	let cown = 0
+	let first = 1
+
+	let cur = ids.mint()
+	let budget = ids.mint()
+	let finished = ids.mint()
+	loop.blockArgs.push(IrBlockArg.create(cur, argType: StdType.i64))
+	loop.blockArgs.push(IrBlockArg.create(budget, argType: StdType.i64))
+	loop.blockArgs.push(IrBlockArg.create(finished, argType: StdType.i64))
+	emitBranchCarrying(module, from: entry, to: loop, values: threeArgs(first, second: emitConst(module, block: entry, value: CownBatchMessages, ids: ids), third: emitConst(module, block: entry, value: 0, ids: ids)))
+
+	let kind = emitLoadField(module, block: loop, record: cur, offset: BehOffKind, ids: ids)
+	emitBranchOnCompare(module, block: loop, value: kind, pred: StdCmpPred.eq, against: CownBehaviourKind.message.rawValue, whenTrue: account, whenFalse: notMessage, ids: ids)
+
+	emitBranchOnCompare(module, block: notMessage, value: kind, pred: StdCmpPred.eq, against: CownBehaviourKind.start.rawValue, whenTrue: startCall, whenFalse: notStart, ids: ids)
+	emitBranchOnCompare(module, block: notStart, value: kind, pred: StdCmpPred.eq, against: CownBehaviourKind.finish.rawValue, whenTrue: finishCall, whenFalse: notFinish, ids: ids)
+	emitBranchOnCompare(module, block: notFinish, value: kind, pred: StdCmpPred.eq, against: CownBehaviourKind.acquire.rawValue, whenTrue: grant, whenFalse: unknownKind, ids: ids)
+
+	emitRuntimeAbort(module, func: func, block: unknownKind, abort: RuntimeAbort.serviceSendProtocolBroken, ids: ids)
+
+	let gate = emitLoadField(module, block: account, record: cown, offset: CownOffGate, ids: ids)
+	emitBranchOnCompare(module, block: account, value: emitCownGateMasked(module, block: account, gate: gate, mask: CownGateWaiters, ids: ids), pred: StdCmpPred.ne, against: 0, whenTrue: accountSlow, whenFalse: accountFast, ids: ids)
+
+	let lastOfClosed = emitCmp(module, block: accountFast, a: emitCownGateMasked(module, block: accountFast, gate: gate, mask: CownGateClosedAndQueuedMask, ids: ids), b: emitConst(module, block: accountFast, value: CownGateClosedAndOneQueued, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let claimBit = emitBin(module, block: accountFast, a: lastOfClosed, b: emitConst(module, block: accountFast, value: CownGateFinishClaimed, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let stepped = emitBin(module, block: accountFast, a: emitBin(module, block: accountFast, a: gate, b: emitConst(module, block: accountFast, value: CownOneQueued, ids: ids), opcode: StdBinOpcode.sub, ids: ids), b: claimBit, opcode: StdBinOpcode.bitOr, ids: ids)
+	let started = emitCasField(module, block: accountFast, record: cown, offset: CownOffGate, expected: gate, replacement: stepped, ids: ids)
+	emitBranchOnCasLost(module, block: accountFast, result: started, lost: account, won: accountWon, ids: ids)
+
+	emitBranchOnCompare(module, block: accountWon, value: lastOfClosed, pred: StdCmpPred.ne, against: 0, whenTrue: claimFinish, whenFalse: messageCall, ids: ids)
+
+	emitCownEnqueueFinish(module, func: func, cur: claimFinish, cown: cown, joined: messageCall, ids: ids)
+
+	module.appendOp(accountSlow, op: StdOp.call(ids.mint(), callee: CownDequeueSlowName, args: argsOf(cown)))
+	module.setTerminator(accountSlow, op: StdOp.branch(messageCall.id))
+
+	let messageCode = emitLoadField(module, block: messageCall, record: cur, offset: BehOffCode, ids: ids)
+	let request = emitFieldAddr(module, block: messageCall, record: cur, offset: BehOffPayload, ids: ids)
+	module.appendOp(messageCall, op: StdOp.callIndirect(ids.mint(), calleeReg: messageCode, resultType: StdReturnType.void, argFloatMask: 0, args: twoArgs(cown, second: request)))
+	let budgetSpent = emitBin(module, block: messageCall, a: budget, b: emitConst(module, block: messageCall, value: CownBudgetPerMessage, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+
+	let budgetAfter = ids.mint()
+	let finishedAfter = ids.mint()
+	afterCall.blockArgs.push(IrBlockArg.create(budgetAfter, argType: StdType.i64))
+	afterCall.blockArgs.push(IrBlockArg.create(finishedAfter, argType: StdType.i64))
+	emitBranchCarrying(module, from: messageCall, to: afterCall, values: twoArgs(budgetSpent, second: finished))
+
+	let startCode = emitLoadField(module, block: startCall, record: cur, offset: BehOffCode, ids: ids)
+	module.appendOp(startCall, op: StdOp.callIndirect(ids.mint(), calleeReg: startCode, resultType: StdReturnType.void, argFloatMask: 0, args: twoArgs(cown, second: cur)))
+	emitBranchCarrying(module, from: startCall, to: afterCall, values: twoArgs(budget, second: finished))
+
+	emitCownFinishState(module, func: func, cur: finishCall, cown: cown, joined: finishDone, ids: ids)
+	emitBranchCarrying(module, from: finishDone, to: afterCall, values: twoArgs(budget, second: emitConst(module, block: finishDone, value: 1, ids: ids)))
+
+	// A runner that reaches an acquire slot ends without releasing the cown or giving back its alive
+	// reference, so a caller must not acquire a closed cown.
+	let group = emitLoadField(module, block: grant, record: cur, offset: BehOffPayload, ids: ids)
+	let priorCount = emitFieldAccumulate(module, block: grant, record: group, offset: GrpOffCount, delta: emitConst(module, block: grant, value: -1, ids: ids), multiM: true, ids: ids)
+	emitBranchOnCompare(module, block: grant, value: priorCount, pred: StdCmpPred.eq, against: 1, whenTrue: grantRun, whenFalse: grantExit, ids: ids)
+
+	let groupCode = emitLoadField(module, block: grantRun, record: group, offset: GrpOffCode, ids: ids)
+	module.appendOp(grantRun, op: StdOp.callIndirect(ids.mint(), calleeReg: groupCode, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(group)))
+	module.setTerminator(grantRun, op: StdOp.branch(grantExit.id))
+
+	module.appendOp(grantExit, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(emitLoadCurrentGt(module, block: grantExit, ids: ids))))
+	module.setTerminator(grantExit, op: StdOp.retVoid)
+
+	let next = emitLoadAcquireField(module, block: afterCall, record: cur, offset: BehOffNext, ids: ids)
+	emitBranchOnCompare(module, block: afterCall, value: next, pred: StdCmpPred.eq, against: 0, whenTrue: drain, whenFalse: forward, ids: ids)
+
+	let nextNode = ids.mint()
+	advance.blockArgs.push(IrBlockArg.create(nextNode, argType: StdType.i64))
+	emitBranchCarrying(module, from: forward, to: advance, values: argsOf(next))
+
+	let released0 = emitCasField(module, block: drain, record: cown, offset: CownOffLast, expected: cur, replacement: emitConst(module, block: drain, value: 0, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: drain, result: released0, lost: spin, won: drained, ids: ids)
+
+	emitSlabFree(module, block: drained, ptr: cur, kind: SlabBufferKind.cownBehaviour, ids: ids)
+	module.setTerminator(drained, op: StdOp.branch(released.id))
+
+	let linked = emitLoadAcquireField(module, block: spin, record: cur, offset: BehOffNext, ids: ids)
+	emitBranchOnCompare(module, block: spin, value: linked, pred: StdCmpPred.eq, against: 0, whenTrue: spin, whenFalse: spinForward, ids: ids)
+	emitBranchCarrying(module, from: spinForward, to: advance, values: argsOf(linked))
+
+	emitSlabFree(module, block: advance, ptr: cur, kind: SlabBufferKind.cownBehaviour, ids: ids)
+	emitBranchOnCompare(module, block: advance, value: budgetAfter, pred: StdCmpPred.eq, against: 0, whenTrue: resched, whenFalse: carryOn, ids: ids)
+
+	emitBranchCarrying(module, from: carryOn, to: loop, values: threeArgs(nextNode, second: budgetAfter, third: finishedAfter))
+
+	module.appendOp(resched, op: StdOp.call(ids.mint(), callee: GtReschedName, args: ValueIdArray.create(0)))
+	emitBranchCarrying(module, from: resched, to: loop, values: threeArgs(nextNode, second: emitConst(module, block: resched, value: CownBatchMessages, ids: ids), third: finishedAfter))
+
+	emitBranchOnCompare(module, block: released, value: finishedAfter, pred: StdCmpPred.ne, against: 0, whenTrue: giveBack, whenFalse: exit, ids: ids)
+
+	emitCownGiveBack(module, func: func, cur: giveBack, cown: cown, unit: CownRefUnit, joined: exit, ids: ids)
+
+	module.appendOp(exit, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(emitLoadCurrentGt(module, block: exit, ids: ids))))
+	module.setTerminator(exit, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildCownRun'
+
+function buildCownClose(module StdModule)
+	var func = IrFunction.createFromStd(CownCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var attempt = module.addBlock(func, label: b"closetry", heat: BlockHeat.normal)
+	var closing = module.addBlock(func, label: b"closeclosing", heat: BlockHeat.normal)
+	var closed = module.addBlock(func, label: b"closeclosed", heat: BlockHeat.normal)
+	var lockSenders = module.addBlock(func, label: b"closelocksenders", heat: BlockHeat.normal)
+	var drainSenders = module.addBlock(func, label: b"closedrainsenders", heat: BlockHeat.normal)
+	var stopSender = module.addBlock(func, label: b"closestopsender", heat: BlockHeat.normal)
+	var sendersDrained = module.addBlock(func, label: b"closesendersdrained", heat: BlockHeat.normal)
+	var readyLoop = module.addBlock(func, label: b"closereadyloop", heat: BlockHeat.normal)
+	var readyOne = module.addBlock(func, label: b"closereadyone", heat: BlockHeat.normal)
+	var readied = module.addBlock(func, label: b"closereadied", heat: BlockHeat.normal)
+	var settled = module.addBlock(func, label: b"closesettled", heat: BlockHeat.normal)
+	var payWake = module.addBlock(func, label: b"closepaywake", heat: BlockHeat.normal)
+	var afterSenders = module.addBlock(func, label: b"closeaftersenders", heat: BlockHeat.normal)
+	var enqueueFinish = module.addBlock(func, label: b"closeenqueuefinish", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"closedone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let cown = 0
+
+	module.setTerminator(entry, op: StdOp.branch(attempt.id))
+
+	let gate = emitLoadField(module, block: attempt, record: cown, offset: CownOffGate, ids: ids)
+	emitBranchOnCompare(module, block: attempt, value: emitCownGateMasked(module, block: attempt, gate: gate, mask: CownGateClosed, ids: ids), pred: StdCmpPred.ne, against: 0, whenTrue: doneBlock, whenFalse: closing, ids: ids)
+
+	// Closing and claiming the finish are one CAS, so exactly one party runs `__finish`.
+	let nothingQueued = emitCompareWithConstant(module, block: closing, value: emitCownGateMasked(module, block: closing, gate: gate, mask: CownGateQueuedMask, ids: ids), pred: StdCmpPred.eq, against: 0, ids: ids)
+	let claimBit = emitBin(module, block: closing, a: nothingQueued, b: emitConst(module, block: closing, value: CownGateFinishClaimed, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let closedGate = emitBin(module, block: closing, a: emitBin(module, block: closing, a: gate, b: emitConst(module, block: closing, value: CownGateClosed, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids), b: claimBit, opcode: StdBinOpcode.bitOr, ids: ids)
+	let casClosed = emitCasField(module, block: closing, record: cown, offset: CownOffGate, expected: gate, replacement: closedGate, ids: ids)
+	emitBranchOnCasLost(module, block: closing, result: casClosed, lost: attempt, won: closed, ids: ids)
+
+	let sendRoot = emitCownSendRoot(module, block: closed, cown: cown, ids: ids)
+	let noDebt = emitConst(module, block: closed, value: WakeDebtNone, ids: ids)
+	emitBranchOnCompare(module, block: closed, value: emitCownGateMasked(module, block: closed, gate: gate, mask: CownGateWaiters, ids: ids), pred: StdCmpPred.ne, against: 0, whenTrue: lockSenders, whenFalse: afterSenders, ids: ids)
+
+	emitCownLockEnter(module, block: lockSenders, cown: cown, ids: ids)
+	let chain = ids.mint()
+	drainSenders.blockArgs.push(IrBlockArg.create(chain, argType: StdType.i64))
+	emitBranchCarrying(module, from: lockSenders, to: drainSenders, values: argsOf(emitConst(module, block: lockSenders, value: CownChainEnd, ids: ids)))
+	let waiting = emitCownClaimFrontSender(module, func: func, scan: drainSenders, root: sendRoot, outcome: CownSendWake.stopped, empty: sendersDrained, won: stopSender, carried: argsOf(chain), ids: ids)
+
+	emitCownSendUnlink(module, block: stopSender, sender: waiting, ids: ids)
+	emitStoreField(module, block: stopSender, record: waiting, offset: GtOffSendNext, value: chain)
+	emitBranchCarrying(module, from: stopSender, to: drainSenders, values: argsOf(waiting))
+
+	emitCownLockLeave(module, block: sendersDrained, cown: cown, holder: CownLockHolder.currentMachine, ids: ids)
+	emitBranchCarrying(module, from: sendersDrained, to: readyLoop, values: twoArgs(chain, second: noDebt))
+
+	let link = ids.mint()
+	let owed = ids.mint()
+	readyLoop.blockArgs.push(IrBlockArg.create(link, argType: StdType.i64))
+	readyLoop.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
+	emitBranchOnCompare(module, block: readyLoop, value: link, pred: StdCmpPred.eq, against: CownChainEnd, whenTrue: settled, whenFalse: readyOne, ids: ids)
+
+	let following = emitLoadField(module, block: readyOne, record: link, offset: GtOffSendNext, ids: ids)
+	emitStoreField(module, block: readyOne, record: link, offset: GtOffSendNext, value: emitConst(module, block: readyOne, value: CownChainEnd, ids: ids))
+	emitCownReadyClaimedSender(module, func: func, cur: readyOne, sender: link, cont: readied, ids: ids)
+
+	let wakeDebt = ids.mint()
+	readied.blockArgs.push(IrBlockArg.create(wakeDebt, argType: StdType.i64))
+	let owedNow = emitBin(module, block: readied, a: owed, b: wakeDebt, opcode: StdBinOpcode.bitOr, ids: ids)
+	emitBranchCarrying(module, from: readied, to: readyLoop, values: twoArgs(following, second: owedNow))
+
+	emitSchedWakeIfOwed(module, cur: settled, owed: owed, wake: payWake, cont: afterSenders, ids: ids)
+
+	emitBranchOnCompare(module, block: afterSenders, value: nothingQueued, pred: StdCmpPred.ne, against: 0, whenTrue: enqueueFinish, whenFalse: doneBlock, ids: ids)
+
+	emitCownEnqueueFinish(module, func: func, cur: enqueueFinish, cown: cown, joined: doneBlock, ids: ids)
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildCownClose'
+
+function buildCownSendAbandon(module StdModule)
+	var func = IrFunction.createFromStd(CownSendAbandonName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var dequeue = module.addBlock(func, label: b"abandondequeue", heat: BlockHeat.normal)
+	var woken = module.addBlock(func, label: b"abandonwoken", heat: BlockHeat.normal)
+	var gone = module.addBlock(func, label: b"abandongone", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 1)
+	let sender = 0
+
+	let cown = emitLoadField(module, block: entry, record: sender, offset: GtOffParkArg, ids: ids)
+	emitCownLockEnter(module, block: entry, cown: cown, ids: ids)
+	emitCownClaimSender(module, block: entry, sender: sender, outcome: CownSendWake.cancelled, lost: gone, won: dequeue, ids: ids)
+
+	emitCownSendUnlink(module, block: dequeue, sender: sender, ids: ids)
+	emitCownLockLeave(module, block: dequeue, cown: cown, holder: CownLockHolder.currentMachine, ids: ids)
+	emitCownReadyClaimedSender(module, func: func, cur: dequeue, sender: sender, cont: woken, ids: ids)
+
+	let debt = ids.mint()
+	woken.blockArgs.push(IrBlockArg.create(debt, argType: StdType.i64))
+	module.setTerminator(woken, op: StdOp.ret(debt))
+
+	emitCownLockLeave(module, block: gone, cown: cown, holder: CownLockHolder.currentMachine, ids: ids)
+	emitConstReturn(module, block: gone, value: WakeDebtNone, ids: ids)
+
+	module.functions.push(func)
+end 'buildCownSendAbandon'
+
+function buildCownHandleCloneBox(module StdModule)
+	var func = IrFunction.createFromStd(CownHandleCloneBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 1)
+	let handleBox = 0
+
+	let cown = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleCownOffset, ids: ids)
+	_ = emitCownSharesStep(module, block: entry, cown: cown, delta: CownShareUnit, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(emitHandleBoxHolding(module, block: entry, mbox: cown, boxBytes: ServiceHandleBoxSize, ids: ids)))
+
+	module.functions.push(func)
+end 'buildCownHandleCloneBox'
+
+function buildCownHandleDestruct(module StdModule)
+	var func = IrFunction.createFromStd(CownHandleDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var inspect = module.addBlock(func, label: b"destructinspect", heat: BlockHeat.normal)
+	var dropShare = module.addBlock(func, label: b"destructdrop", heat: BlockHeat.normal)
+	var closeIt = module.addBlock(func, label: b"destructclose", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"destructdone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let handleBox = 0
+
+	let cown = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleCownOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(inspect.id))
+
+	let shares = emitLoadAcquireField(module, block: inspect, record: cown, offset: CownOffShares, ids: ids)
+	let handles = emitBin(module, block: inspect, a: shares, b: emitConst(module, block: inspect, value: CownHandleShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	emitBranchOnCompare(module, block: inspect, value: handles, pred: StdCmpPred.eq, against: CownSoleHandle, whenTrue: closeIt, whenFalse: dropShare, ids: ids)
+
+	let remaining = emitBin(module, block: dropShare, a: shares, b: emitConst(module, block: dropShare, value: CownShareUnit, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let dropped = emitCasField(module, block: dropShare, record: cown, offset: CownOffShares, expected: shares, replacement: remaining, ids: ids)
+	emitBranchOnCasLost(module, block: dropShare, result: dropped, lost: inspect, won: doneBlock, ids: ids)
+
+	// Close first, then give the share back: `__cown_close` reads the record, so this share must outlive it.
+	module.appendOp(closeIt, op: StdOp.call(ids.mint(), callee: CownCloseName, args: argsOf(cown)))
+	emitCownGiveBack(module, func: func, cur: closeIt, cown: cown, unit: CownShareUnit, joined: doneBlock, ids: ids)
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildCownHandleDestruct'
+
+function buildCownReplyRefused(module StdModule)
+	var func = IrFunction.createFromStd(CownReplyRefusedName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 1)
+	let cell = 0
+	let noResult = emitConst(module, block: entry, value: 0, ids: ids)
+	let refused = emitConst(module, block: entry, value: CownRefusedReplyFlag, ids: ids)
+
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtCellCompleteName, args: threeArgs(cell, second: noResult, third: refused)))
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtPromiseDropName, args: argsOf(cell)))
+	module.setTerminator(entry, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildCownReplyRefused'
+
+function buildCownUnknownTag(module StdModule)
+	var func = IrFunction.createFromStd(CownUnknownTagName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.cold)
+	emitRuntimeAbort(module, func: func, block: entry, abort: RuntimeAbort.serviceUnknownMessageTag, ids: ids)
+	module.functions.push(func)
+end 'buildCownUnknownTag'
+
+function emitCownParkWaiting(module StdModule, block IrBlock, machine ValueId, gt ValueId, cown ValueId, ids ValueMinter)
+	emitGtMarkWaiting(module, block: block, gt: gt, ids: ids)
+	emitCownLockLeave(module, block: block, cown: cown, holder: CownLockHolder.machine(machine), ids: ids)
+end 'emitCownParkWaiting'
+
+export function emitCownSendParkCommit(module StdModule, func IrFunction, block IrBlock, machine ValueId, gt ValueId, cown ValueId, ids ValueMinter) returns IrBlock
+	var arm = module.addBlock(func, label: b"sendparkarm", heat: BlockHeat.normal)
+	var unbounded = module.addBlock(func, label: b"sendparkunbounded", heat: BlockHeat.normal)
+	var committed = module.addBlock(func, label: b"sendparkcommitted", heat: BlockHeat.normal)
+
+	let deadline = emitLoadField(module, block: block, record: gt, offset: GtOffSendDeadline, ids: ids)
+	emitBranchOnCompare(module, block: block, value: deadline, pred: StdCmpPred.eq, against: GtDeadlineMaxNs, whenTrue: unbounded, whenFalse: arm, ids: ids)
+
+	// Lock order is the cown lock, then `__sched_lock`: arming the deadline takes the scheduler lock inside
+	// this cown lock's hold, so nothing may take a cown lock while holding `__sched_lock`.
+	var armed = emitGtArmTimerDeadline(module, func: func, cur: arm, gt: gt, deadline: deadline, tag: TimerTagSend, ids: ids)
+	emitCownLockLeave(module, block: armed, cown: cown, holder: CownLockHolder.machine(machine), ids: ids)
+	module.setTerminator(armed, op: StdOp.branch(committed.id))
+
+	emitCownParkWaiting(module, block: unbounded, machine: machine, gt: gt, cown: cown, ids: ids)
+	module.setTerminator(unbounded, op: StdOp.branch(committed.id))
+
+	return committed
+end 'emitCownSendParkCommit'
+
+function emitCownGroupSlot(module StdModule, block IrBlock, group ValueId, index ValueId, ids ValueMinter) returns ValueId
+	let scaled = emitBin(module, block: block, a: index, b: emitConst(module, block: block, value: GrpSlotBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+
+	return emitFieldAddr(module, block: block, record: emitBin(module, block: block, a: group, b: scaled, opcode: StdBinOpcode.add, ids: ids), offset: GrpHeaderBytes as ByteOffset, ids: ids)
+end 'emitCownGroupSlot'
+
+function emitCownGroupSlotCown(module StdModule, block IrBlock, group ValueId, index ValueId, ids ValueMinter) returns ValueId
+	return emitFieldAddr(module, block: block, record: emitCownGroupSlot(module, block: block, group: group, index: index, ids: ids), offset: GrpSlotOffCown, ids: ids)
+end 'emitCownGroupSlotCown'
+
+// Phase 0 sorts the cowns by address and collapses duplicates. Phase 1 swaps each tail in ascending
+// order, and a cown queued behind another group's slot first waits for that group's phase-one flag, so
+// two groups cannot enqueue on a pair of cowns in opposite orders. Phase 2 sets the flag and subtracts
+// the granted count plus the bias; the party that reaches zero runs `code(group)`, which must call
+// `__cown_multi_release`.
+function buildCownAcquireMany(module StdModule)
+	var func = IrFunction.createFromStd(CownAcquireManyName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params())
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var outer = module.addBlock(func, label: b"acquireouter", heat: BlockHeat.normal)
+	var take = module.addBlock(func, label: b"acquiretake", heat: BlockHeat.normal)
+	var scan = module.addBlock(func, label: b"acquirescan", heat: BlockHeat.normal)
+	var scanBody = module.addBlock(func, label: b"acquirescanbody", heat: BlockHeat.normal)
+	var placed = module.addBlock(func, label: b"acquireplaced", heat: BlockHeat.normal)
+	var skip = module.addBlock(func, label: b"acquireskip", heat: BlockHeat.normal)
+	var shiftStart = module.addBlock(func, label: b"acquireshiftstart", heat: BlockHeat.normal)
+	var shift = module.addBlock(func, label: b"acquireshift", heat: BlockHeat.normal)
+	var shiftBody = module.addBlock(func, label: b"acquireshiftbody", heat: BlockHeat.normal)
+	var write = module.addBlock(func, label: b"acquirewrite", heat: BlockHeat.normal)
+	var sealed = module.addBlock(func, label: b"acquiresealed", heat: BlockHeat.normal)
+	var initSlots = module.addBlock(func, label: b"acquireinit", heat: BlockHeat.normal)
+	var initBody = module.addBlock(func, label: b"acquireinitbody", heat: BlockHeat.normal)
+	var phaseOneStart = module.addBlock(func, label: b"acquirephaseonestart", heat: BlockHeat.normal)
+	var phaseOne = module.addBlock(func, label: b"acquirephaseone", heat: BlockHeat.normal)
+	var swapBlock = module.addBlock(func, label: b"acquireswap", heat: BlockHeat.normal)
+	var swapped = module.addBlock(func, label: b"acquireswapped", heat: BlockHeat.normal)
+	var grantedNow = module.addBlock(func, label: b"acquiregrantednow", heat: BlockHeat.normal)
+	var behind = module.addBlock(func, label: b"acquirebehind", heat: BlockHeat.normal)
+	var waitStart = module.addBlock(func, label: b"acquirewaitstart", heat: BlockHeat.normal)
+	var waitPhase = module.addBlock(func, label: b"acquirewaitphase", heat: BlockHeat.normal)
+	var link = module.addBlock(func, label: b"acquirelink", heat: BlockHeat.normal)
+	var phaseTwo = module.addBlock(func, label: b"acquirephasetwo", heat: BlockHeat.normal)
+	var runGroup = module.addBlock(func, label: b"acquirerun", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"acquiredone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 4)
+	let cowns = 0
+	let count = 1
+	let code = 2
+	let arg = 3
+
+	let slotsBytes = emitBin(module, block: entry, a: count, b: emitConst(module, block: entry, value: GrpSlotBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let size = emitBin(module, block: entry, a: slotsBytes, b: emitConst(module, block: entry, value: GrpHeaderBytes, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let group = emitSlabAlloc(module, block: entry, bytes: size, kind: SlabBufferKind.cownBehaviour, ids: ids)
+	emitStoreField(module, block: entry, record: group, offset: GrpOffCode, value: code)
+	emitStoreField(module, block: entry, record: group, offset: GrpOffArg, value: arg)
+
+	let taken = ids.mint()
+	let placedCount = ids.mint()
+	outer.blockArgs.push(IrBlockArg.create(taken, argType: StdType.i64))
+	outer.blockArgs.push(IrBlockArg.create(placedCount, argType: StdType.i64))
+	emitBranchCarrying(module, from: entry, to: outer, values: twoArgs(emitConst(module, block: entry, value: 0, ids: ids), second: emitConst(module, block: entry, value: 0, ids: ids)))
+
+	emitBranchOnCompareValues(module, block: outer, a: taken, pred: StdCmpPred.eq, b: count, whenTrue: sealed, whenFalse: take, ids: ids)
+
+	let pending = emitLoadField(module, block: take, record: emitBin(module, block: take, a: cowns, b: emitBin(module, block: take, a: taken, b: emitConst(module, block: take, value: PointerFieldBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids), opcode: StdBinOpcode.add, ids: ids), offset: 0, ids: ids)
+
+	let scanIndex = ids.mint()
+	let lessCount = ids.mint()
+	let dupCount = ids.mint()
+	scan.blockArgs.push(IrBlockArg.create(scanIndex, argType: StdType.i64))
+	scan.blockArgs.push(IrBlockArg.create(lessCount, argType: StdType.i64))
+	scan.blockArgs.push(IrBlockArg.create(dupCount, argType: StdType.i64))
+	let noneYet = emitConst(module, block: take, value: 0, ids: ids)
+	emitBranchCarrying(module, from: take, to: scan, values: threeArgs(noneYet, second: noneYet, third: noneYet))
+
+	emitBranchOnCompareValues(module, block: scan, a: scanIndex, pred: StdCmpPred.eq, b: placedCount, whenTrue: placed, whenFalse: scanBody, ids: ids)
+
+	let existing = emitLoadField(module, block: scanBody, record: emitCownGroupSlotCown(module, block: scanBody, group: group, index: scanIndex, ids: ids), offset: 0, ids: ids)
+	let isLess = emitCmp(module, block: scanBody, a: existing, b: pending, pred: StdCmpPred.lt, ids: ids)
+	let isSame = emitCmp(module, block: scanBody, a: existing, b: pending, pred: StdCmpPred.eq, ids: ids)
+	emitBranchCarrying(module, from: scanBody, to: scan, values: threeArgs(emitBin(module, block: scanBody, a: scanIndex, b: emitConst(module, block: scanBody, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids), second: emitBin(module, block: scanBody, a: lessCount, b: isLess, opcode: StdBinOpcode.add, ids: ids), third: emitBin(module, block: scanBody, a: dupCount, b: isSame, opcode: StdBinOpcode.add, ids: ids)))
+
+	emitBranchOnCompare(module, block: placed, value: dupCount, pred: StdCmpPred.ne, against: 0, whenTrue: skip, whenFalse: shiftStart, ids: ids)
+
+	emitBranchCarrying(module, from: skip, to: outer, values: twoArgs(emitBin(module, block: skip, a: taken, b: emitConst(module, block: skip, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids), second: placedCount))
+
+	let shiftIndex = ids.mint()
+	shift.blockArgs.push(IrBlockArg.create(shiftIndex, argType: StdType.i64))
+	emitBranchCarrying(module, from: shiftStart, to: shift, values: argsOf(placedCount))
+
+	emitBranchOnCompareValues(module, block: shift, a: shiftIndex, pred: StdCmpPred.eq, b: lessCount, whenTrue: write, whenFalse: shiftBody, ids: ids)
+
+	let below = emitBin(module, block: shiftBody, a: shiftIndex, b: emitConst(module, block: shiftBody, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let moved = emitLoadField(module, block: shiftBody, record: emitCownGroupSlotCown(module, block: shiftBody, group: group, index: below, ids: ids), offset: 0, ids: ids)
+	emitStoreField(module, block: shiftBody, record: emitCownGroupSlotCown(module, block: shiftBody, group: group, index: shiftIndex, ids: ids), offset: 0, value: moved)
+	emitBranchCarrying(module, from: shiftBody, to: shift, values: argsOf(below))
+
+	emitStoreField(module, block: write, record: emitCownGroupSlotCown(module, block: write, group: group, index: lessCount, ids: ids), offset: 0, value: pending)
+	emitBranchCarrying(module, from: write, to: outer, values: twoArgs(emitBin(module, block: write, a: taken, b: emitConst(module, block: write, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids), second: emitBin(module, block: write, a: placedCount, b: emitConst(module, block: write, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)))
+
+	emitStoreField(module, block: sealed, record: group, offset: GrpOffSlotCount, value: placedCount)
+	emitStoreField(module, block: sealed, record: group, offset: GrpOffCount, value: emitBin(module, block: sealed, a: placedCount, b: emitConst(module, block: sealed, value: GrpBias, ids: ids), opcode: StdBinOpcode.add, ids: ids))
+	let initIndex = ids.mint()
+	initSlots.blockArgs.push(IrBlockArg.create(initIndex, argType: StdType.i64))
+	emitBranchCarrying(module, from: sealed, to: initSlots, values: argsOf(emitConst(module, block: sealed, value: 0, ids: ids)))
+
+	emitBranchOnCompareValues(module, block: initSlots, a: initIndex, pred: StdCmpPred.eq, b: placedCount, whenTrue: phaseOneStart, whenFalse: initBody, ids: ids)
+
+	let initSlot = emitCownGroupSlot(module, block: initBody, group: group, index: initIndex, ids: ids)
+	emitStoreField(module, block: initBody, record: initSlot, offset: BehOffKind, value: emitConst(module, block: initBody, value: CownBehaviourKind.acquire.rawValue, ids: ids))
+	emitStoreField(module, block: initBody, record: initSlot, offset: GrpSlotOffGroup, value: group)
+	emitBranchCarrying(module, from: initBody, to: initSlots, values: argsOf(emitBin(module, block: initBody, a: initIndex, b: emitConst(module, block: initBody, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)))
+
+	let slotIndex = ids.mint()
+	let granted = ids.mint()
+	phaseOne.blockArgs.push(IrBlockArg.create(slotIndex, argType: StdType.i64))
+	phaseOne.blockArgs.push(IrBlockArg.create(granted, argType: StdType.i64))
+	emitBranchCarrying(module, from: phaseOneStart, to: phaseOne, values: twoArgs(emitConst(module, block: phaseOneStart, value: 0, ids: ids), second: emitConst(module, block: phaseOneStart, value: 0, ids: ids)))
+
+	emitBranchOnCompareValues(module, block: phaseOne, a: slotIndex, pred: StdCmpPred.eq, b: placedCount, whenTrue: phaseTwo, whenFalse: swapBlock, ids: ids)
+
+	let slot = emitCownGroupSlot(module, block: swapBlock, group: group, index: slotIndex, ids: ids)
+	let cown = emitLoadField(module, block: swapBlock, record: slot, offset: GrpSlotOffCown, ids: ids)
+	let prev = emitCownTailSwap(module, func: func, cur: swapBlock, cown: cown, beh: slot, joined: swapped, ids: ids)
+	emitBranchOnCompare(module, block: swapped, value: prev, pred: StdCmpPred.eq, against: CownNoRunner, whenTrue: grantedNow, whenFalse: behind, ids: ids)
+
+	emitBranchCarrying(module, from: grantedNow, to: phaseOne, values: twoArgs(emitBin(module, block: grantedNow, a: slotIndex, b: emitConst(module, block: grantedNow, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids), second: emitBin(module, block: grantedNow, a: granted, b: emitConst(module, block: grantedNow, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)))
+
+	let prevKind = emitLoadField(module, block: behind, record: prev, offset: BehOffKind, ids: ids)
+	emitBranchOnCompare(module, block: behind, value: prevKind, pred: StdCmpPred.eq, against: CownBehaviourKind.acquire.rawValue, whenTrue: waitStart, whenFalse: link, ids: ids)
+
+	let prevGroup = emitLoadField(module, block: waitStart, record: prev, offset: GrpSlotOffGroup, ids: ids)
+	module.setTerminator(waitStart, op: StdOp.branch(waitPhase.id))
+
+	let prevPhase = emitLoadAcquireField(module, block: waitPhase, record: prevGroup, offset: GrpOffPhase, ids: ids)
+	emitBranchOnCompare(module, block: waitPhase, value: prevPhase, pred: StdCmpPred.ne, against: 0, whenTrue: link, whenFalse: waitPhase, ids: ids)
+
+	emitStoreReleaseField(module, block: link, record: prev, offset: BehOffNext, value: slot)
+	emitBranchCarrying(module, from: link, to: phaseOne, values: twoArgs(emitBin(module, block: link, a: slotIndex, b: emitConst(module, block: link, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids), second: granted))
+
+	emitStoreReleaseField(module, block: phaseTwo, record: group, offset: GrpOffPhase, value: emitConst(module, block: phaseTwo, value: GrpPhaseOneDone, ids: ids))
+	let release = emitBin(module, block: phaseTwo, a: granted, b: emitConst(module, block: phaseTwo, value: GrpBias, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let negated = emitBin(module, block: phaseTwo, a: emitConst(module, block: phaseTwo, value: 0, ids: ids), b: release, opcode: StdBinOpcode.sub, ids: ids)
+	let priorCount = emitFieldAccumulate(module, block: phaseTwo, record: group, offset: GrpOffCount, delta: negated, multiM: true, ids: ids)
+	emitBranchOnCompareValues(module, block: phaseTwo, a: priorCount, pred: StdCmpPred.eq, b: release, whenTrue: runGroup, whenFalse: doneBlock, ids: ids)
+
+	let groupCode = emitLoadField(module, block: runGroup, record: group, offset: GrpOffCode, ids: ids)
+	module.appendOp(runGroup, op: StdOp.callIndirect(ids.mint(), calleeReg: groupCode, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(group)))
+	module.setTerminator(runGroup, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildCownAcquireMany'
+
+function buildCownMultiRelease(module StdModule)
+	var func = IrFunction.createFromStd(CownMultiReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"releaseloop", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"releasebody", heat: BlockHeat.normal)
+	var forward = module.addBlock(func, label: b"releaseforward", heat: BlockHeat.normal)
+	var tryIdle = module.addBlock(func, label: b"releasetryidle", heat: BlockHeat.normal)
+	var spin = module.addBlock(func, label: b"releasespin", heat: BlockHeat.normal)
+	var spinForward = module.addBlock(func, label: b"releasespinforward", heat: BlockHeat.normal)
+	var handOff = module.addBlock(func, label: b"releasehandoff", heat: BlockHeat.normal)
+	var step = module.addBlock(func, label: b"releasestep", heat: BlockHeat.normal)
+	var freeGroup = module.addBlock(func, label: b"releasefree", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let group = 0
+
+	let slotCount = emitLoadField(module, block: entry, record: group, offset: GrpOffSlotCount, ids: ids)
+	let index = ids.mint()
+	release.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
+	emitBranchCarrying(module, from: entry, to: release, values: argsOf(emitConst(module, block: entry, value: 0, ids: ids)))
+
+	emitBranchOnCompareValues(module, block: release, a: index, pred: StdCmpPred.eq, b: slotCount, whenTrue: freeGroup, whenFalse: body, ids: ids)
+
+	let slot = emitCownGroupSlot(module, block: body, group: group, index: index, ids: ids)
+	let cown = emitLoadField(module, block: body, record: slot, offset: GrpSlotOffCown, ids: ids)
+	let successor = emitLoadAcquireField(module, block: body, record: slot, offset: BehOffNext, ids: ids)
+	emitBranchOnCompare(module, block: body, value: successor, pred: StdCmpPred.eq, against: 0, whenTrue: tryIdle, whenFalse: forward, ids: ids)
+
+	let nextNode = ids.mint()
+	handOff.blockArgs.push(IrBlockArg.create(nextNode, argType: StdType.i64))
+	emitBranchCarrying(module, from: forward, to: handOff, values: argsOf(successor))
+
+	let idled = emitCasField(module, block: tryIdle, record: cown, offset: CownOffLast, expected: slot, replacement: emitConst(module, block: tryIdle, value: 0, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: tryIdle, result: idled, lost: spin, won: step, ids: ids)
+
+	let linked = emitLoadAcquireField(module, block: spin, record: slot, offset: BehOffNext, ids: ids)
+	emitBranchOnCompare(module, block: spin, value: linked, pred: StdCmpPred.eq, against: 0, whenTrue: spin, whenFalse: spinForward, ids: ids)
+	emitBranchCarrying(module, from: spinForward, to: handOff, values: argsOf(linked))
+
+	emitCownSchedule(module, block: handOff, cown: cown, beh: nextNode, ids: ids)
+	module.setTerminator(handOff, op: StdOp.branch(step.id))
+
+	emitBranchCarrying(module, from: step, to: release, values: argsOf(emitBin(module, block: step, a: index, b: emitConst(module, block: step, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)))
+
+	emitSlabFree(module, block: freeGroup, ptr: group, kind: SlabBufferKind.cownBehaviour, ids: ids)
+	module.setTerminator(freeGroup, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildCownMultiRelease'
+
+let TestOffInUse = CownHeaderBytes as ByteOffset
+let TestOffCount = (CownHeaderBytes as ByteOffset) + PointerFieldBytes
+let TestCownBytes = CownHeaderBytes + 16
+let TestCtxOffViolations = 0x00
+let TestCtxOffDone = 0x08
+let TestCtxOffExpected = 0x10
+let TestCtxOffCowns = 0x18
+let TestCtxOffCownCount = 0x20
+let TestCtxOffRounds = 0x28
+let TestCtxBytes = 0x30
+let TestPairBytes = 16
+let TestPairWidth = 2
+let TestFirstShift = 13
+let TestSecondShift = 7
+let TestThirdShift = 17
+let TestSecondPickShift = 20
+let TestSeedBias = 1
+
+function emitCownTestCownAt(module StdModule, block IrBlock, array ValueId, index ValueId, ids ValueMinter) returns ValueId
+	let scaled = emitBin(module, block: block, a: index, b: emitConst(module, block: block, value: PointerFieldBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+
+	return emitLoadField(module, block: block, record: emitBin(module, block: block, a: array, b: scaled, opcode: StdBinOpcode.add, ids: ids), offset: 0, ids: ids)
+end 'emitCownTestCownAt'
+
+function emitCownTestStep(module StdModule, block IrBlock, index ValueId, ids ValueMinter) returns ValueId
+	return emitBin(module, block: block, a: index, b: emitConst(module, block: block, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+end 'emitCownTestStep'
+
+function buildCownTestMulti(module StdModule)
+	var func = IrFunction.createFromStd(CownTestMultiName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var notPowerOfTwo = module.addBlock(func, label: b"testnotpowertwo", heat: BlockHeat.cold)
+	var prepared = module.addBlock(func, label: b"testprepared", heat: BlockHeat.normal)
+	var makeLoop = module.addBlock(func, label: b"testmakeloop", heat: BlockHeat.normal)
+	var makeBody = module.addBlock(func, label: b"testmakebody", heat: BlockHeat.normal)
+	var spawnStart = module.addBlock(func, label: b"testspawnstart", heat: BlockHeat.normal)
+	var spawnLoop = module.addBlock(func, label: b"testspawnloop", heat: BlockHeat.normal)
+	var spawnBody = module.addBlock(func, label: b"testspawnbody", heat: BlockHeat.normal)
+	var waitLoop = module.addBlock(func, label: b"testwaitloop", heat: BlockHeat.normal)
+	var waitYield = module.addBlock(func, label: b"testwaityield", heat: BlockHeat.normal)
+	var verify = module.addBlock(func, label: b"testverify", heat: BlockHeat.normal)
+	var sumLoop = module.addBlock(func, label: b"testsumloop", heat: BlockHeat.normal)
+	var sumBody = module.addBlock(func, label: b"testsumbody", heat: BlockHeat.normal)
+	var check = module.addBlock(func, label: b"testcheck", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 3)
+	let cownCount = 0
+	let workers = 1
+	let rounds = 2
+
+	let below = emitBin(module, block: entry, a: cownCount, b: emitConst(module, block: entry, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let overlap = emitBin(module, block: entry, a: cownCount, b: below, opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: overlap, pred: StdCmpPred.eq, against: 0, whenTrue: prepared, whenFalse: notPowerOfTwo, ids: ids)
+
+	emitRuntimeAbort(module, func: func, block: notPowerOfTwo, abort: RuntimeAbort.serviceSendProtocolBroken, ids: ids)
+
+	let ctx = emitSlabAlloc(module, block: prepared, bytes: emitConst(module, block: prepared, value: TestCtxBytes, ids: ids), kind: SlabBufferKind.cownBehaviour, ids: ids)
+	let array = emitSlabAlloc(module, block: prepared, bytes: emitBin(module, block: prepared, a: cownCount, b: emitConst(module, block: prepared, value: PointerFieldBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids), kind: SlabBufferKind.cownBehaviour, ids: ids)
+	emitStoreField(module, block: prepared, record: ctx, offset: TestCtxOffCowns, value: array)
+	emitStoreField(module, block: prepared, record: ctx, offset: TestCtxOffCownCount, value: cownCount)
+	emitStoreField(module, block: prepared, record: ctx, offset: TestCtxOffRounds, value: rounds)
+
+	let made = ids.mint()
+	makeLoop.blockArgs.push(IrBlockArg.create(made, argType: StdType.i64))
+	emitBranchCarrying(module, from: prepared, to: makeLoop, values: argsOf(emitConst(module, block: prepared, value: 0, ids: ids)))
+
+	emitBranchOnCompareValues(module, block: makeLoop, a: made, pred: StdCmpPred.eq, b: cownCount, whenTrue: spawnStart, whenFalse: makeBody, ids: ids)
+
+	let fresh = emitSlabAlloc(module, block: makeBody, bytes: emitConst(module, block: makeBody, value: TestCownBytes, ids: ids), kind: SlabBufferKind.cownBehaviour, ids: ids)
+	let slotAddr = emitBin(module, block: makeBody, a: array, b: emitBin(module, block: makeBody, a: made, b: emitConst(module, block: makeBody, value: PointerFieldBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: makeBody, record: slotAddr, offset: 0, value: fresh)
+	emitBranchCarrying(module, from: makeBody, to: makeLoop, values: argsOf(emitCownTestStep(module, block: makeBody, index: made, ids: ids)))
+
+	let spawned = ids.mint()
+	spawnLoop.blockArgs.push(IrBlockArg.create(spawned, argType: StdType.i64))
+	emitBranchCarrying(module, from: spawnStart, to: spawnLoop, values: argsOf(emitConst(module, block: spawnStart, value: 0, ids: ids)))
+
+	emitBranchOnCompareValues(module, block: spawnLoop, a: spawned, pred: StdCmpPred.eq, b: workers, whenTrue: waitLoop, whenFalse: spawnBody, ids: ids)
+
+	let workerEntry = ids.mint()
+	module.appendOp(spawnBody, op: StdOp.funcAddr(workerEntry, funcName: CownTestWorkerName))
+	let gt = ids.mint()
+	module.appendOp(spawnBody, op: StdOp.call(gt, callee: GtSpawnGreenName, args: argsOf(workerEntry)))
+	emitStoreField(module, block: spawnBody, record: gt, offset: GtOffArgInline, value: ctx)
+	emitStoreField(module, block: spawnBody, record: gt, offset: GtOffArgInline + GtArgSlotBytes, value: emitBin(module, block: spawnBody, a: spawned, b: emitConst(module, block: spawnBody, value: TestSeedBias, ids: ids), opcode: StdBinOpcode.add, ids: ids))
+	module.appendOp(spawnBody, op: StdOp.call(ids.mint(), callee: GtReadyName, args: argsOf(gt)))
+	emitBranchCarrying(module, from: spawnBody, to: spawnLoop, values: argsOf(emitCownTestStep(module, block: spawnBody, index: spawned, ids: ids)))
+
+	let total = emitBin(module, block: waitLoop, a: workers, b: rounds, opcode: StdBinOpcode.mul, ids: ids)
+	let done = emitLoadAcquireField(module, block: waitLoop, record: ctx, offset: TestCtxOffDone, ids: ids)
+	emitBranchOnCompareValues(module, block: waitLoop, a: done, pred: StdCmpPred.eq, b: total, whenTrue: verify, whenFalse: waitYield, ids: ids)
+
+	module.appendOp(waitYield, op: StdOp.call(ids.mint(), callee: GtReschedName, args: ValueIdArray.create(0)))
+	module.setTerminator(waitYield, op: StdOp.branch(waitLoop.id))
+
+	let summed = ids.mint()
+	let sum = ids.mint()
+	sumLoop.blockArgs.push(IrBlockArg.create(summed, argType: StdType.i64))
+	sumLoop.blockArgs.push(IrBlockArg.create(sum, argType: StdType.i64))
+	emitBranchCarrying(module, from: verify, to: sumLoop, values: twoArgs(emitConst(module, block: verify, value: 0, ids: ids), second: emitConst(module, block: verify, value: 0, ids: ids)))
+
+	emitBranchOnCompareValues(module, block: sumLoop, a: summed, pred: StdCmpPred.eq, b: cownCount, whenTrue: check, whenFalse: sumBody, ids: ids)
+
+	let cown = emitCownTestCownAt(module, block: sumBody, array: array, index: summed, ids: ids)
+	let counted = emitLoadField(module, block: sumBody, record: cown, offset: TestOffCount, ids: ids)
+	emitBranchCarrying(module, from: sumBody, to: sumLoop, values: twoArgs(emitCownTestStep(module, block: sumBody, index: summed, ids: ids), second: emitBin(module, block: sumBody, a: sum, b: counted, opcode: StdBinOpcode.add, ids: ids)))
+
+	let expected = emitLoadAcquireField(module, block: check, record: ctx, offset: TestCtxOffExpected, ids: ids)
+	let mismatched = emitCmp(module, block: check, a: sum, b: expected, pred: StdCmpPred.ne, ids: ids)
+	let overlaps = emitLoadAcquireField(module, block: check, record: ctx, offset: TestCtxOffViolations, ids: ids)
+	module.setTerminator(check, op: StdOp.ret(emitBin(module, block: check, a: overlaps, b: mismatched, opcode: StdBinOpcode.add, ids: ids)))
+
+	module.functions.push(func)
+end 'buildCownTestMulti'
+
+function buildCownTestWorker(module StdModule)
+	var func = IrFunction.createFromStd(CownTestWorkerName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var loop = module.addBlock(func, label: b"workerloop", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"workerbody", heat: BlockHeat.normal)
+	var finished = module.addBlock(func, label: b"workerfinished", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 2)
+	let ctx = 0
+	let seed = 1
+
+	let rounds = emitLoadField(module, block: entry, record: ctx, offset: TestCtxOffRounds, ids: ids)
+	let cownCount = emitLoadField(module, block: entry, record: ctx, offset: TestCtxOffCownCount, ids: ids)
+	let array = emitLoadField(module, block: entry, record: ctx, offset: TestCtxOffCowns, ids: ids)
+	let pair = emitSlabAlloc(module, block: entry, bytes: emitConst(module, block: entry, value: TestPairBytes, ids: ids), kind: SlabBufferKind.cownBehaviour, ids: ids)
+	let mask = emitBin(module, block: entry, a: cownCount, b: emitConst(module, block: entry, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+
+	let round = ids.mint()
+	let state = ids.mint()
+	loop.blockArgs.push(IrBlockArg.create(round, argType: StdType.i64))
+	loop.blockArgs.push(IrBlockArg.create(state, argType: StdType.i64))
+	emitBranchCarrying(module, from: entry, to: loop, values: twoArgs(emitConst(module, block: entry, value: 0, ids: ids), second: seed))
+
+	emitBranchOnCompareValues(module, block: loop, a: round, pred: StdCmpPred.eq, b: rounds, whenTrue: finished, whenFalse: body, ids: ids)
+
+	let mixed1 = emitBin(module, block: body, a: state, b: emitBin(module, block: body, a: state, b: emitConst(module, block: body, value: TestFirstShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids), opcode: StdBinOpcode.bitXor, ids: ids)
+	let mixed2 = emitBin(module, block: body, a: mixed1, b: emitBin(module, block: body, a: mixed1, b: emitConst(module, block: body, value: TestSecondShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids), opcode: StdBinOpcode.bitXor, ids: ids)
+	let mixed3 = emitBin(module, block: body, a: mixed2, b: emitBin(module, block: body, a: mixed2, b: emitConst(module, block: body, value: TestThirdShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids), opcode: StdBinOpcode.bitXor, ids: ids)
+	let firstIndex = emitBin(module, block: body, a: mixed3, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let secondIndex = emitBin(module, block: body, a: emitBin(module, block: body, a: mixed3, b: emitConst(module, block: body, value: TestSecondPickShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids), b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitStoreField(module, block: body, record: pair, offset: 0, value: emitCownTestCownAt(module, block: body, array: array, index: firstIndex, ids: ids))
+	emitStoreField(module, block: body, record: pair, offset: PointerFieldBytes, value: emitCownTestCownAt(module, block: body, array: array, index: secondIndex, ids: ids))
+
+	let bodyEntry = ids.mint()
+	module.appendOp(body, op: StdOp.funcAddr(bodyEntry, funcName: CownTestBodyName))
+	module.appendOp(body, op: StdOp.call(ids.mint(), callee: CownAcquireManyName, args: fourArgs(pair, second: emitConst(module, block: body, value: TestPairWidth, ids: ids), third: bodyEntry, fourth: ctx)))
+	module.appendOp(body, op: StdOp.call(ids.mint(), callee: GtReschedName, args: ValueIdArray.create(0)))
+	emitBranchCarrying(module, from: body, to: loop, values: twoArgs(emitCownTestStep(module, block: body, index: round, ids: ids), second: mixed3))
+
+	module.appendOp(finished, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(emitLoadCurrentGt(module, block: finished, ids: ids))))
+	module.setTerminator(finished, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildCownTestWorker'
+
+function buildCownTestBody(module StdModule)
+	var func = IrFunction.createFromStd(CownTestBodyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var enterLoop = module.addBlock(func, label: b"bodyenterloop", heat: BlockHeat.normal)
+	var enterBody = module.addBlock(func, label: b"bodyenterbody", heat: BlockHeat.normal)
+	var hold = module.addBlock(func, label: b"bodyhold", heat: BlockHeat.normal)
+	var leaveLoop = module.addBlock(func, label: b"bodyleaveloop", heat: BlockHeat.normal)
+	var leaveBody = module.addBlock(func, label: b"bodyleavebody", heat: BlockHeat.normal)
+	var finish = module.addBlock(func, label: b"bodyfinish", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let group = 0
+
+	let slotCount = emitLoadField(module, block: entry, record: group, offset: GrpOffSlotCount, ids: ids)
+	let ctx = emitLoadField(module, block: entry, record: group, offset: GrpOffArg, ids: ids)
+
+	let entered = ids.mint()
+	enterLoop.blockArgs.push(IrBlockArg.create(entered, argType: StdType.i64))
+	emitBranchCarrying(module, from: entry, to: enterLoop, values: argsOf(emitConst(module, block: entry, value: 0, ids: ids)))
+
+	emitBranchOnCompareValues(module, block: enterLoop, a: entered, pred: StdCmpPred.eq, b: slotCount, whenTrue: hold, whenFalse: enterBody, ids: ids)
+
+	let enteredCown = emitLoadField(module, block: enterBody, record: emitCownGroupSlotCown(module, block: enterBody, group: group, index: entered, ids: ids), offset: 0, ids: ids)
+	let wasHeld = emitCmp(module, block: enterBody, a: emitLoadField(module, block: enterBody, record: enteredCown, offset: TestOffInUse, ids: ids), b: emitConst(module, block: enterBody, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	_ = emitFieldAccumulate(module, block: enterBody, record: ctx, offset: TestCtxOffViolations, delta: wasHeld, multiM: true, ids: ids)
+	emitStoreField(module, block: enterBody, record: enteredCown, offset: TestOffInUse, value: emitConst(module, block: enterBody, value: 1, ids: ids))
+	emitBranchCarrying(module, from: enterBody, to: enterLoop, values: argsOf(emitCownTestStep(module, block: enterBody, index: entered, ids: ids)))
+
+	module.appendOp(hold, op: StdOp.call(ids.mint(), callee: GtReschedName, args: ValueIdArray.create(0)))
+	let left = ids.mint()
+	leaveLoop.blockArgs.push(IrBlockArg.create(left, argType: StdType.i64))
+	emitBranchCarrying(module, from: hold, to: leaveLoop, values: argsOf(emitConst(module, block: hold, value: 0, ids: ids)))
+
+	emitBranchOnCompareValues(module, block: leaveLoop, a: left, pred: StdCmpPred.eq, b: slotCount, whenTrue: finish, whenFalse: leaveBody, ids: ids)
+
+	let leftCown = emitLoadField(module, block: leaveBody, record: emitCownGroupSlotCown(module, block: leaveBody, group: group, index: left, ids: ids), offset: 0, ids: ids)
+	let counted = emitLoadField(module, block: leaveBody, record: leftCown, offset: TestOffCount, ids: ids)
+	emitStoreField(module, block: leaveBody, record: leftCown, offset: TestOffCount, value: emitCownTestStep(module, block: leaveBody, index: counted, ids: ids))
+	emitStoreField(module, block: leaveBody, record: leftCown, offset: TestOffInUse, value: emitConst(module, block: leaveBody, value: 0, ids: ids))
+	emitBranchCarrying(module, from: leaveBody, to: leaveLoop, values: argsOf(emitCownTestStep(module, block: leaveBody, index: left, ids: ids)))
+
+	_ = emitFieldAccumulate(module, block: finish, record: ctx, offset: TestCtxOffExpected, delta: slotCount, multiM: true, ids: ids)
+	module.appendOp(finish, op: StdOp.call(ids.mint(), callee: CownMultiReleaseName, args: argsOf(group)))
+	_ = emitFieldAccumulate(module, block: finish, record: ctx, offset: TestCtxOffDone, delta: emitConst(module, block: finish, value: 1, ids: ids), multiM: true, ids: ids)
+	module.setTerminator(finish, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildCownTestBody'

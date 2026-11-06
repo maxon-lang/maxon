@@ -1,11 +1,11 @@
 // GlobalInitOrder — WHICH ORDER `__module_init` FILLS THE MANAGED GLOBALS IN, and the refusal for a program
 // that admits no order at all.
 //
-// ⚖ **A `static let` / `static var` INITIALIZER RUNS EAGERLY, BEFORE `main`, EXACTLY ONCE** (user ruling),
-// and so does a module-level `var`'s: the two are one population (`ModuleInit`). The initializer expression
+// ⚖ **A `static let` INITIALIZER RUNS EAGERLY, BEFORE `main`, EXACTLY ONCE** (user ruling),
+// and so does a module-level `let`'s: the two are one population (`ModuleInit`). The initializer expression
 // itself may not name another global — `ProgramSignatures.evaluateDecl` answers `notFound` for a managed
 // decl, so `let A = "x"` / `let B = A` is E2004 — but it may CALL, and what a callee's BODY reads is not
-// bounded by that rule. `type Outer / static var value = Outer.build()` whose `build()` calls `Inner.get()`
+// bounded by that rule. `type Outer / static let value = Outer.build()` whose `build()` calls `Inner.get()`
 // reads `Inner`'s slot, so `Inner` must be filled first.
 //
 // ⛔⛔ **DECLARATION ORDER IS NOT DEPENDENCY ORDER, AND USING IT WOULD BE A SILENT WRONG ANSWER.** A program
@@ -29,11 +29,9 @@
 // function the op does not name at all: a minted parameter-default helper, and the witness impls a reached
 // conformer's tables might dispatch through.
 //
-// ⭐ **THE EVIDENCE IS THE EMITTED `globalAddr`, AND IT IS BIDIRECTIONAL** — the same op, read the same way,
-// as `DeadGlobalElimination.liveGlobalLabels`. A WRITE opens with `globalAddr` exactly as a read does, so an
-// initializer that assigns another global's slot depends on it too; that is what keeps
-// `Parser.emitCheckedGlobalStore`'s unconditional decref of the old value correct when the store is issued
-// from inside an initializer.
+// ⭐ **THE EVIDENCE IS THE EMITTED `globalAddr`** — the same op, read the same way,
+// as `DeadGlobalElimination.liveGlobalLabels`. A read opens with `globalAddr`, so an initializer that reads
+// another global's slot depends on it.
 //
 // ⭐ **THE EDGE PRIMITIVES ARE `StdlibSource`'s** — `markMaxonCalleeEdge` for a direct call / `functionRef` /
 // `serviceSend`, `markConformerWitnessImpls` for a reached type's witness impls, `markOneReachable` for one

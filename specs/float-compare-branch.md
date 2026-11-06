@@ -185,7 +185,7 @@ end 'main'
 block — the edge a one-block lowering leaves unrewired. `r`'s incoming `7` must arrive on it;
 when it does not, the value that arrives is whatever the register happens to hold.
 
-The NaN is computed at RUNTIME from a global, not written as a literal: a folded NaN would
+The NaN is computed at RUNTIME from a shared cell, not written as a literal: a folded NaN would
 reach the backend as a constant, a folded compare emits no `ucomisd` and no `jp` at all, and
 the test would pass while testing nothing.
 
@@ -196,11 +196,20 @@ saying why. Division by zero is a language-level error (a constant zero divisor 
 a possibly-zero one throws), so there is no route from a divide to a NaN at all. Overflow to
 `inf` and `inf - inf` are silent, which is exactly what this case needs.
 ```maxon
-var big = 1.0e308 as FullRangeFloat
+type Magnitude
+	export let big as FullRangeFloat
+
+	static function create(big FullRangeFloat) returns Self
+		return Self{big: big}
+	end 'create'
+end 'Magnitude'
+
+typealias MagnitudeCell = SharedValue with Magnitude
 
 function main() returns ExitCode
+	let source = MagnitudeCell.create(Magnitude.create(1.0e308))
 	var r = 7 as ExitCode
-	let inf = big * 10.0
+	let inf = source.current().big * 10.0
 	let nan = inf - inf
 	if nan == nan 'check'
 		r = 1
@@ -218,11 +227,20 @@ the `jp` takes the THEN edge. So this is the same first-block jump as `eq-nan-el
 carrying a phi to the OTHER successor — a lowering that routed only the second block's jump
 through the trampoline fails here with `7` instead of `1`.
 ```maxon
-var big = 1.0e308 as FullRangeFloat
+type Magnitude
+	export let big as FullRangeFloat
+
+	static function create(big FullRangeFloat) returns Self
+		return Self{big: big}
+	end 'create'
+end 'Magnitude'
+
+typealias MagnitudeCell = SharedValue with Magnitude
 
 function main() returns ExitCode
+	let source = MagnitudeCell.create(Magnitude.create(1.0e308))
 	var r = 7 as ExitCode
-	let inf = big * 10.0
+	let inf = source.current().big * 10.0
 	let nan = inf - inf
 	if nan != nan 'check'
 		r = 1
@@ -239,11 +257,20 @@ end 'main'
 which `ucomisd` SETS on unordered, so it would take the then-branch and return 1. Only an
 `above`-family jump on swapped operands returns 7.
 ```maxon
-var big = 1.0e308 as FullRangeFloat
+type Magnitude
+	export let big as FullRangeFloat
+
+	static function create(big FullRangeFloat) returns Self
+		return Self{big: big}
+	end 'create'
+end 'Magnitude'
+
+typealias MagnitudeCell = SharedValue with Magnitude
 
 function main() returns ExitCode
+	let source = MagnitudeCell.create(Magnitude.create(1.0e308))
 	var r = 7 as ExitCode
-	let inf = big * 10.0
+	let inf = source.current().big * 10.0
 	let nan = inf - inf
 	let x = 5.0
 	if nan < x 'check'
@@ -259,11 +286,20 @@ end 'main'
 <!-- test: le-nan-is-false -->
 `nan <= x` must be FALSE, for the same reason with ZF also set.
 ```maxon
-var big = 1.0e308 as FullRangeFloat
+type Magnitude
+	export let big as FullRangeFloat
+
+	static function create(big FullRangeFloat) returns Self
+		return Self{big: big}
+	end 'create'
+end 'Magnitude'
+
+typealias MagnitudeCell = SharedValue with Magnitude
 
 function main() returns ExitCode
+	let source = MagnitudeCell.create(Magnitude.create(1.0e308))
 	var r = 7 as ExitCode
-	let inf = big * 10.0
+	let inf = source.current().big * 10.0
 	let nan = inf - inf
 	let x = 5.0
 	if nan <= x 'check'
@@ -282,11 +318,20 @@ unordered sets CF. It is here to pin that the lowering does NOT grow a `jp` it d
 need: if this ever starts emitting one, the `above` family's whole reason for existing has
 been forgotten.
 ```maxon
-var big = 1.0e308 as FullRangeFloat
+type Magnitude
+	export let big as FullRangeFloat
+
+	static function create(big FullRangeFloat) returns Self
+		return Self{big: big}
+	end 'create'
+end 'Magnitude'
+
+typealias MagnitudeCell = SharedValue with Magnitude
 
 function main() returns ExitCode
+	let source = MagnitudeCell.create(Magnitude.create(1.0e308))
 	var r = 7 as ExitCode
-	let inf = big * 10.0
+	let inf = source.current().big * 10.0
 	let nan = inf - inf
 	let x = 5.0
 	if nan > x 'check'
@@ -306,10 +351,19 @@ A float compare whose result is a VALUE rather than a branch condition — it is
 and `nan != nan` materializes TRUE, which for `==` means the parity bit has to be folded
 into the byte `sete` produced rather than into a jump.
 ```maxon
-var big = 1.0e308 as FullRangeFloat
+type Magnitude
+	export let big as FullRangeFloat
+
+	static function create(big FullRangeFloat) returns Self
+		return Self{big: big}
+	end 'create'
+end 'Magnitude'
+
+typealias MagnitudeCell = SharedValue with Magnitude
 
 function main() returns ExitCode
-	let inf = big * 10.0
+	let source = MagnitudeCell.create(Magnitude.create(1.0e308))
+	let inf = source.current().big * 10.0
 	let nan = inf - inf
 	let a = nan == nan
 	let b = nan != nan

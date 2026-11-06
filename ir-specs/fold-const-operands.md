@@ -516,7 +516,7 @@ func @__managed_get {
     x64.popReg rbp
     x64.ret
   ld#5:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_16]  ; "fatal error: an array record carries an element size no element access serves\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_14]  ; "fatal error: an array record carries an element size no element access serves\x0a"
     x64.movRegImm32 rdx, 78
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -724,7 +724,7 @@ func @__managed_fill {
     x64.loadRegSlot r9, slot3
     x64.jmp flddone
   fi#12:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_16]  ; "fatal error: an array record carries an element size no element access serves\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_14]  ; "fatal error: an array record carries an element size no element access serves\x0a"
     x64.movRegImm32 rdx, 78
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -1215,7 +1215,7 @@ func @__managed_get {
     x64.popReg rbp
     x64.ret
   ld#5:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_16]  ; "fatal error: an array record carries an element size no element access serves\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_14]  ; "fatal error: an array record carries an element size no element access serves\x0a"
     x64.movRegImm32 rdx, 78
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -1423,7 +1423,7 @@ func @__managed_fill {
     x64.loadRegSlot r9, slot3
     x64.jmp flddone
   fi#12:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_16]  ; "fatal error: an array record carries an element size no element access serves\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_14]  ; "fatal error: an array record carries an element size no element access serves\x0a"
     x64.movRegImm32 rdx, 78
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -1893,7 +1893,7 @@ func @__managed_get {
     arm64.epilogue 16
     arm64.ret
   ld#5:
-    arm64.leaRdata x0, __fatal_msg_16  ; "fatal error: an array record carries an element size no element access serves\x0a"
+    arm64.leaRdata x0, __fatal_msg_14  ; "fatal error: an array record carries an element size no element access serves\x0a"
     arm64.movImm x1, 78
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -2084,7 +2084,7 @@ func @__managed_fill {
     arm64.loadRegSlot x3, slot3
     arm64.b flddone
   fi#12:
-    arm64.leaRdata x0, __fatal_msg_16  ; "fatal error: an array record carries an element size no element access serves\x0a"
+    arm64.leaRdata x0, __fatal_msg_14  ; "fatal error: an array record carries an element size no element access serves\x0a"
     arm64.movImm x1, 78
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -2556,7 +2556,7 @@ func @__managed_get {
     arm64.epilogue 16
     arm64.ret
   ld#5:
-    arm64.leaRdata x0, __fatal_msg_16  ; "fatal error: an array record carries an element size no element access serves\x0a"
+    arm64.leaRdata x0, __fatal_msg_14  ; "fatal error: an array record carries an element size no element access serves\x0a"
     arm64.movImm x1, 78
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -2747,7 +2747,7 @@ func @__managed_fill {
     arm64.loadRegSlot x3, slot3
     arm64.b flddone
   fi#12:
-    arm64.leaRdata x0, __fatal_msg_16  ; "fatal error: an array record carries an element size no element access serves\x0a"
+    arm64.leaRdata x0, __fatal_msg_14  ; "fatal error: an array record carries an element size no element access serves\x0a"
     arm64.movImm x1, 78
     arm64.movImm x2, 70
     arm64.bl __rt_abort

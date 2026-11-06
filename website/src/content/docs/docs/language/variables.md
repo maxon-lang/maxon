@@ -139,14 +139,13 @@ end 'main'
 
 - Every variable is initialized where it is declared, and its type is inferred from the initializer.
   A declaration takes no type annotation: `var x as Tally = 0` is **E2010** (`Expected '=' but got 'as'`).
-  A cast names the type instead — `var x = 0 as Tally` declares a `Tally`, locally and at file scope.
+  A cast names the type instead — `var x = 0 as Tally` declares a `Tally`; a file-scope `let` takes the same cast (`let limit = 5 as Tally`).
 - **A `var` is born a value of its alias, and every assignment to it is checked against it** (see
   [Range Checks](/docs/language/ranged-typealiases/#range-checks)).
 - **A `var` takes the brand of the first branded value stored into it** when its initializer has none:
   `var a = [1 as Item, 2 as Item]` followed by `a = xs` for an `Xs` makes `a` an `Xs` for its whole life,
   and a later store of a `Ys` is **E3005** (`cannot assign a value of type 'Ys' to variable 'a', which
-  holds 'Xs'`). The first store in source order decides; for a module `var`, the first in the program's
-  file order. See [Generic-Instance and Function-Type Aliases Are Brands](/docs/language/ranged-typealiases/#generic-instance-and-function-type-aliases-are-brands).
+  holds 'Xs'`). The first store in source order decides. See [Generic-Instance and Function-Type Aliases Are Brands](/docs/language/ranged-typealiases/#generic-instance-and-function-type-aliases-are-brands).
 - Variables are block-scoped.
 - **A `var` that is never reassigned or mutated is E3077** (`variable 'x' is never reassigned; use 'let'
   instead of 'var'`) when a `let` in its place would compile: its initializer is a fresh record or a
@@ -192,31 +191,28 @@ end 'main'
   end 'main'
   ```
 
-## Top-Level Variables
+## Top-Level Bindings
 
-Variables can be declared at file scope, outside any function:
+A `let` can be declared at file scope, outside any function:
 
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-var callCount = 0 as Tally
+let START = 10 as Tally
 let MAX_SIZE = 1024
-var names = ["ada", "alan"]
+let names = ["ada", "alan"]
 let dataFile = FilePath from "data.txt"
 
-function bump() returns Tally
-	callCount = callCount + 1
-	return callCount
-end 'bump'
-
 function main() returns ExitCode
-	_ = bump()
-	print("{callCount} {MAX_SIZE} {names.count()} {dataFile.filename()}\n")   // 1 1024 2 data.txt
+	print("{START} {MAX_SIZE} {names.count()} {dataFile.filename()}\n")   // 10 1024 2 data.txt
 	return 0
 end 'main'
 ```
 
-- `var` declares module state any function in the file can reassign; `let` declares a constant.
+- `let` declares a constant any function in the file can read. A file-scope `var`, with or without `module`
+  or `export` before it, is a syntax error: state a function updates is a local `var` passed to a `mutable`
+  parameter, a field of a record, a [`SharedValue`](/docs/language/async/#sharedvalue--a-live-value-made-at-run-time), or the
+  fields of a [service](/docs/language/async/#services--spawn).
 - A binding shares its directory's one namespace with every other top-level name (see
   [Bare Names and Ambiguity](/docs/language/namespaces/#bare-names-and-ambiguity)), and another directory's binding is read through
   its directory: `alpha.LIMIT`.
@@ -231,8 +227,7 @@ end 'main'
   constant, inlined at every use. Its initializer must have a value known at compile time, as a body knows
   `2 * WIDTH` or `sqrt(4.0)`; a call that makes it unknown is **E2045** (`Function calls are not allowed in
   global variable initializers`, naming the call). A derived constant keeps its operands' typealias, as in a
-  body: with `let a = 5 as Small`, `let s = a + a` is a `Small`. A `var` whose initializer is a bare number
-  is **E2004**; state its type (`var count = 0 as Tally`).
+  body: with `let a = 5 as Small`, `let s = a + a` is a `Small`.
 - A call in an initializer names its function as a call in a function body does: a name nothing declares is
   **E3004**, one the file cannot see is **E3008** (**E3088** for a `module` one), and one several directories
   declare is **E3095**. That one diagnostic covers every read and assignment of the binding. A tuple
@@ -252,31 +247,17 @@ end 'main'
   `let pair = (1, "one")` is a tuple of the types its elements have; a slot that states a tuple type —
   an element of `ArrayAlias from [...]` (`let steps = Steps from [(0, 1), (2, 3)]` over
   `typealias Steps = Array with Step` and `typealias Step = (Word, Word)`), a struct literal's field
-  (`static var origin = Holder{step: (7, 9)}`), a factory parameter, a union payload, or an element of another
+  (`static let origin = Holder{step: (7, 9)}`), a factory parameter, a union payload, or an element of another
   tuple — gives each element that slot's type. A tuple literal inside extra parentheses is the same tuple, and a
   `var` born from a tuple of bare numbers is refused as it is in a body.
-- A `let`'s initializer may not reach a
-  module-level `var` that holds a record — a String, an array, a struct, a boxed union — through any function
-  it calls (**E3165**, reported at the `var`'s use with its declaration as a note). A `let` is fixed at startup
-  and may not hold what a `var` owns, and what the initializer keeps is not followed, so reading only a number
-  out of the `var` is refused too. "Reaches" is the call graph, dispatches
-  included. A scalar `var` is readable, a `var`'s initializer may reach any global, and a `let`'s may reach
-  other `let`s.
-- The other direction is refused too: a `var`'s initializer may not call anything whose result may be, lie
-  within or hold a module-level `let`'s record (**E3078**, at the `var`'s declaration, naming the call). What
-  a call hands back is followed through further calls, witness dispatches and calls through function values;
-  a record built fresh from numbers read out of a `let` is legal.
 - A module-level `let` is [read-only](/docs/language/memory-model/#read-only-values) through everything it reaches, for the program's whole
   life. A write through it, or through a record a call handed back out of it, is **E3159**; binding it, a field
   of it (`var m = H.index`) or such a call result, an element accessor's included (`var p = Origins.get(0)`),
   to a `var` is **E3078**. Read it through a `let`, or bind a
-  `clone()`. Storing its record anywhere something may write it — pushing it into a container, local or
-  module-level, storing it into a `var` field, putting it in an array literal or a map value, or handing it to
+  `clone()`. Storing its record anywhere something may write it — pushing it into a container, storing it into a `var` field, putting it in an array literal or a map value, or handing it to
   a function that keeps its parameter — is **E3078** too; store a `clone()`.
 - A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
   program-wide one with [`default`](/docs/language/async/#program-wide-defaults--default). A `Key.current()` or `Key.register()`
   reachable from a global initializer is [E3173](/docs/cli/error-codes/#e3173--registryreachedfromglobalinitializer): the
   defaults are built after every global initializer has run.
 - A top-level declaration is private to its file unless marked `export`, `module` or `public`.
-- A [service](/docs/language/async/#services--spawn) handler, and every function it reaches, may not read or write a module-level
-  `var` (**E3143**); keep service state in its fields.

@@ -193,7 +193,7 @@ The `RequiredRdata` block is optional. When present, the test compiles the sourc
 
 ### Data Section Verification
 
-To verify the `.data` section (mutable globals), include a `RequiredData` block. Same format as `RequiredRdata`, with additional types:
+To verify the `.data` section (the image's writable bytes, which hold the runtime's own state), include a `RequiredData` block. Same format as `RequiredRdata`, with additional types:
 
 - `i8 1` — 1 byte, signed int8
 - `i16 256` — 2 bytes, little-endian int16
@@ -204,9 +204,6 @@ To verify the `.data` section (mutable globals), include a `RequiredData` block.
 Example:
 
 ```maxon
-var flag = true
-var counter = 42 as Count
-
 function main() returns ExitCode
 	return 0
 end 'main'
@@ -215,11 +212,10 @@ end 'main'
 0
 ```
 ```RequiredData
-i64 42
-i8 1
+i64 0
 ```
 
-Note: Globals are sorted largest-first in the data section to minimize alignment padding, so the i64 appears before the i8 regardless of source order.
+Note: Globals are sorted largest-first in the data section to minimize alignment padding. A block pins a prefix of the section, so it cannot be empty.
 
 ### Executable Examples (Compile Errors)
 
@@ -500,13 +496,7 @@ and runs each program once; `--batch=off` compiles and runs every case on its ow
 name (`type`, `enum`, `union`, `interface`) is whole-program, and so is an extension method of one
 signature on one type, so two cases declaring the same name land in different programs, and so do a case
 declaring a nominal type and another case that names that word (a `typealias` of it, or the library's own type
-of that name), and a case declaring a `typealias` and another that names the word without declaring it. A
-case declaring a module-level `var` and a case that spawns a service land in different programs too: a
-closure call reached from a service message reaches every function whose address the program takes, so
-[E3143](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3143) refuses the pair together while each compiles
-alone. A case whose module-level `var` may hold a function value (any initializer that is not a plain scalar) and a case
-that writes a function type or a closure also land apart, since a closure call in the second may reach the first's `var`
-and [E3188](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3188) refuses a `let` bound to what that call can write. So do
+of that name), and a case declaring a `typealias` and another that names the word without declaring it. So do
 a case declaring a type that implements `Iterable`, `Iterator` or any other library interface with extension methods and a
 case that names one of those methods: the extension's body is expanded over every conformer in the program, and it
 cannot name a cursor type that is file-private (E3008). The declared and mentioned names come from the compiler's own front end, one pass per case
@@ -554,7 +544,7 @@ the whole process shares. A case declaring any name the standard library
 also declares (an enum such as `StringError`, an alias such as `ByteArray`, an interface such as
 `InitableFromStringLiteral`) runs alone too, because every other case's use of that name would change meaning.
 
-So does a case whose own module-level `var`, `let` or `static` initializers run program code, which the
+So does a case whose own module-level `let` or `static` initializers run program code, which the
 compiler's front end answers before any batch is built (`ModuleInitNeed.runsProgramCode`): such an initializer
 runs before `main` for every case of a program, so its effects would belong to no case. A case the front end
 refuses is placed alone, and its own compile reports why.

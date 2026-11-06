@@ -19,7 +19,7 @@
 //
 // Layout: two PT_LOAD segments, always.
 //   Segment 1 (R+X), file offset 0: ELF header + program headers + `.text` + `.rodata`
-//   Segment 2 (R+W), page-aligned:  `.data` (the top-level `var` globals prelude)
+//   Segment 2 (R+W), page-aligned:  `.data` (the top-level globals prelude)
 //
 // A `--coverage` build's counters need no third segment: they are a reserved run of ordinary `.data`
 // bytes, so they ride Segment 2 like any other global.
@@ -95,7 +95,7 @@ let ElfStrtabAlign = 1
 let ElfSymtabFirstGlobal = 1
 
 // A PT_LOAD segment with `p_filesz == 0` is degenerate. The globals prelude is empty for any program
-// with no top-level `var`, so the `.data` SEGMENT is FLOORED at these 8 bytes to stay non-empty.
+// with no top-level global, so the `.data` SEGMENT is FLOORED at these 8 bytes to stay non-empty.
 //
 // ⚠ A FLOOR, NOT A TAIL — it is `max`, never `+`. A `+ 8` would push the segment 8 bytes past the
 // globals in every program that HAS globals; the loader would not care (it maps 8 harmless zeros)
@@ -275,7 +275,7 @@ end 'patchArm64ElfRelocations'
 // which is why the ELF layout's VAs (`textVmAddr`/`rdataVmAddr`/`dataVmAddr`) drop straight in.
 //
 // `ripRelDisp32` targets `.rodata` (a String literal or f64 island); `dataSectionRipRelDisp32` targets
-// `.data` (a top-level `var`'s `lea`). Every other kind PANICS rather than defaulting: symdata is not
+// `.data` (a top-level global's `lea`). Every other kind PANICS rather than defaulting: symdata is not
 // addressed from code, and the arm64 pairs never appear in an x64 module. (The `.rdata`-INTERNAL
 // descriptor slot — patched with a `.text` VA, not a disp32 in code — is not an `RdataRelocKind`: it rides
 // `GlobalDataTable.pendingRdataRelocs` and is baked by `bakeFuncAbs64Relocs`.) This is duplicated from
@@ -346,7 +346,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	let rodataVAddr = ElfLoadAddr + rodataFileOffset
 	let codeSegmentSize = rodataFileOffset + rdataSize as BytePos
 
-	// --- Segment 2 (R+W): .data (the top-level `var` globals prelude) ---
+	// --- Segment 2 (R+W): .data (the top-level globals prelude) ---
 	// ⚠ NO BSS/heap tail. The allocator mmaps its own arenas (`osAllocPages`), so `.data` holds
 	// globals and nothing else — the same conclusion MachOWriter states as "segment vmsize ==
 	// filesize (no zerofill tail needed)". `p_memsz == p_filesz` therefore describes what this image

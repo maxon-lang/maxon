@@ -14,16 +14,16 @@ category: expressions
 The unary minus operator `-` negates a numeric value:
 
 ```text
-var x = 5
-var y = -x       // y is -5
-var z = -10      // z is -10
+let x = 5
+let y = -x       // y is -5
+let z = -10      // z is -10
 ```
 
 It works with both integers and floats:
 
 ```text
-var f = 3.14
-var g = -f       // g is -3.14
+let f = 3.14
+let g = -f       // g is -3.14
 ```
 
 ## Tests

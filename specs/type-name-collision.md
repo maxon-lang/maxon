@@ -2751,19 +2751,15 @@ module function fromA() returns ExitCode
 end 'fromA'
 
 // --- file: lib/b.maxon
-typealias CallTally = int(0 to 100)
-
 module union Container
 	empty
 	holds(s String)
 end 'Container'
 
-var fromBCalls = 0 as CallTally
-
 // `main.maxon` DISCARDS this function's result, which is the whole shape this case is about — so the
 // callee must have an effect, or the discard is E3064 (`specs/discarded-results.md`) and the
 // program never reaches the union it exists to exercise.
-module function fromB() returns Container
+module function fromB(fromBCalls mutable Count) returns Container
 	fromBCalls = fromBCalls + 1
 	return Container.holds("hi")
 end 'fromB'
@@ -2781,7 +2777,8 @@ function relay(c Container) returns ExitCode
 end 'relay'
 
 function main() returns ExitCode
-	_ = fromB()
+	var fromBCalls = 0 as Count
+	_ = fromB(fromBCalls)
 
 	return 5 + fromA()
 end 'main'

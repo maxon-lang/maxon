@@ -15,8 +15,8 @@ A `map` is a collection that stores key-value pairs. It provides fast lookup, in
 Use map literal syntax with key-value pairs:
 
 ```text
-var scores = [1: 100, 2: 85, 3: 92]                 // map<int,int>
-var lookup = [10: 1000, 20: 2000, 30: 3000]         // map<int,int>
+let scores = [1: 100, 2: 85, 3: 92]                 // map<int,int>
+let lookup = [10: 1000, 20: 2000, 30: 3000]         // map<int,int>
 ```
 
 The key and value types are automatically inferred from the literal values.
@@ -56,9 +56,9 @@ m.upsert(1, value: 150)    // Updates key 1 to 150
 Get the value for a key. Throws `MapError.keyNotFound` if the key is not in the map.
 
 ```text
-var m = [10: 5, 20: 3]
-var v = try m.get(10) otherwise 0    // 5
-var w = try m.get(30) otherwise 0    // 0 (key not found, fallback used)
+let m = [10: 5, 20: 3]
+let v = try m.get(10) otherwise 0    // 5
+let w = try m.get(30) otherwise 0    // 0 (key not found, fallback used)
 ```
 
 ### contains(key) returns bool
@@ -66,7 +66,7 @@ var w = try m.get(30) otherwise 0    // 0 (key not found, fallback used)
 Check if a key exists in the map. Returns `true` if found, `false` otherwise.
 
 ```text
-var m = [1: 10, 2: 20]
+let m = [1: 10, 2: 20]
 m.contains(1)      // true
 m.contains(3)      // false
 ```
@@ -86,7 +86,7 @@ m.remove(9)        // Returns false, key wasn't present
 Get the number of key-value pairs in the map.
 
 ```text
-var m = [1: 10, 2: 20, 3: 30]
+let m = [1: 10, 2: 20, 3: 30]
 m.count()          // 3
 ```
 
@@ -95,7 +95,7 @@ m.count()          // 3
 Get the current capacity (number of slots) of the internal hash table.
 
 ```text
-var m = [1: 100]
+let m = [1: 100]
 m.capacity()       // 16 (initial capacity)
 ```
 
@@ -1245,7 +1245,7 @@ keys having been freed the instant they were stored) and then **segfault**, wher
 Both columns managed, and the map is read only AFTER `main` has allocated over whatever the init freed —
 so a released key or value is a wrong answer here rather than a lucky one.
 ```maxon
-var m = [b"alpha": "one", b"beta": "two"]
+let m = [b"alpha": "one", b"beta": "two"]
 
 function main() returns ExitCode
 	var churn = ByteArray.create(0)
@@ -1283,7 +1283,7 @@ type Info
 	end 'create'
 end 'Info'
 
-var table = [b"if": Info.create("conditional", n: 1), b"else": Info.create("alternative", n: 2)]
+let table = [b"if": Info.create("conditional", n: 1), b"else": Info.create("alternative", n: 2)]
 
 function main() returns ExitCode
 	view e = try table.get(b"else") otherwise panic("the file-scope literal lost a key")
@@ -1313,7 +1313,7 @@ error E2015: <fragment>:3:26: Unsupported: this `Map`'s value is an int — got 
 The first pair fixes both columns. A later pair whose half has another type is refused where it is
 written, in the words a body's literal gets.
 ```maxon
-var m = [b"a": 1, b"b": "two"]
+let m = [b"a": 1, b"b": "two"]
 
 function main() returns ExitCode
 	return m.count() as ExitCode
@@ -1353,13 +1353,14 @@ enum Kind
 	two
 end 'Kind'
 
-var m = [b"a": Kind.one, b"b": Kind.two]
+let m = [b"a": Kind.one, b"b": Kind.two]
 
 function main() returns ExitCode
-	m.upsert(b"c", value: Kind.one)
+	var grown = m.clone()
+	grown.upsert(b"c", value: Kind.one)
 	let k = try m.get(b"b") otherwise Kind.one
 	print("{k.name}\n")
-	return m.count() as ExitCode
+	return grown.count() as ExitCode
 end 'main'
 ```
 ```exitcode

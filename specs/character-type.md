@@ -14,9 +14,9 @@ The `character` type represents an Extended Grapheme Cluster (EGC) — what user
 ### Syntax
 
 ```maxon
-var letter = 'A'
-var accent = 'é'
-var emoji = '🎉'
+let letter = 'A'
+let accent = 'é'
+let emoji = '🎉'
 ```
 Character literals are enclosed in single quotes.
 
@@ -25,8 +25,8 @@ Character literals are enclosed in single quotes.
 An EGC represents what a user perceives as a single character, even if composed of multiple Unicode code points:
 
 ```maxon
-var family = '👨‍👩‍👧‍👦'  // Family emoji (multiple code points joined with ZWJ)
-var flag = '🇺🇸'          // Flag (regional indicator pair)
+let family = '👨‍👩‍👧‍👦'  // Family emoji (multiple code points joined with ZWJ)
+let flag = '🇺🇸'          // Flag (regional indicator pair)
 ```
 
 ### String Iteration
@@ -34,7 +34,7 @@ var flag = '🇺🇸'          // Flag (regional indicator pair)
 Iterating over a string yields `character` values (EGCs):
 
 ```maxon
-var s = "café"
+let s = "café"
 for c in s 'chars'
 	print("{c}")  // iterates 4 times: 'c', 'a', 'f', 'é' (not 5 bytes)
 end 'chars'
@@ -43,14 +43,14 @@ end 'chars'
 ### Character Methods
 
 ```maxon
-var c = 'é'
-var b = c.bytes()
+let c = 'é'
+let b = c.bytes()
 b.count()              // Returns byte length of UTF-8 encoding (2 for é)
-var cp = c.codepoints()
+let cp = c.codepoints()
 cp.count()             // Returns number of Unicode codepoints
 "{c}"                 // Converts to string via interpolation
 
-var a = 'A'
+let a = 'A'
 a.asciiValue()         // Returns 65 (ASCII code for 'A')
 ```
 
@@ -59,10 +59,10 @@ a.asciiValue()         // Returns 65 (ASCII code for 'A')
 The `asciiValue()` method returns the ASCII code (0-127) for single-byte ASCII characters:
 
 ```maxon
-var letter = 'A'
+let letter = 'A'
 print("{letter.asciiValue()}\n")  // Prints: 65
 
-var digit = '0'
+let digit = '0'
 print("{digit.asciiValue()}\n")   // Prints: 48
 ```
 

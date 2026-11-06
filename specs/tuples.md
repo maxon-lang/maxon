@@ -14,8 +14,8 @@ category: types
 Tuples are fixed-size, ordered collections of values with potentially different types. They use parenthesized syntax for both type annotations and literals.
 
 ```text
-var point = (10, 20)
-var pair = (42, "hello")
+let point = (10, 20)
+let pair = (42, "hello")
 ```
 
 ### Element Access
@@ -23,7 +23,7 @@ var pair = (42, "hello")
 Access tuple elements using positional dot syntax `.0`, `.1`, `.2`, etc.:
 
 ```text
-var t = (10, 20)
+let t = (10, 20)
 t.0   // 10
 t.1   // 20
 ```
@@ -33,14 +33,14 @@ t.1   // 20
 Tuples can be destructured into individual variables:
 
 ```text
-var (x, y) = (10, 20)
+let (x, y) = (10, 20)
 // x is 10, y is 20
 ```
 
 Tuple destructuring also works in `for` loops when the iterator returns a tuple:
 
 ```text
-var m = ["a": 1, "b": 2]
+let m = ["a": 1, "b": 2]
 for (key, value) in m 'loop'
   print("{key}: {value}\n")
 end 'loop'

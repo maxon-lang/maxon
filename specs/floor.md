@@ -20,14 +20,14 @@ Round a floating-point number down to the nearest integer (toward negative infin
 **Example:**
 
 ```maxon
-var x = 3.9
-var y = floor(x)     // 3.0
+let x = 3.9
+let y = floor(x)     // 3.0
 
-var neg = -3.2
-var z = floor(neg)   // -4.0 (rounds down toward negative infinity)
+let neg = -3.2
+let z = floor(neg)   // -4.0 (rounds down toward negative infinity)
 
 // To get an int result:
-var i = trunc(floor(x))   // 3
+let i = trunc(floor(x))   // 3
 ```
 **Notes:**
 - Always rounds toward negative infinity

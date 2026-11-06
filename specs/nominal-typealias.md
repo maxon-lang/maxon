@@ -1359,24 +1359,6 @@ end 'main'
 error E3005: <fragment>:16:4: cannot assign a value of type 'Narrow' to field 'w' of 'Holder', which holds 'Wide' — cast the value with 'as Wide'
 ```
 
-<!-- test: error.global-store-across-aliases -->
-```maxon
-typealias Wide = int(0 to u64.max)
-typealias Narrow = int(0 to 16)
-
-var shared = 9 as Wide
-
-function main() returns ExitCode
-	let n = 5 as Narrow
-	shared = n
-	print("{shared}")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:9:2: cannot assign a value of type 'Narrow' to global 'shared', which holds 'Wide' — cast the value with 'as Wide'
-```
-
 <!-- test: error.union-payload-across-aliases -->
 ```maxon
 typealias Wide = int(0 to u64.max)

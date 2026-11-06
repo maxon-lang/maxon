@@ -19,8 +19,8 @@ Closures can capture variables from their enclosing scope. When a closure refere
 - **A captured promise moves**, like any other managed local.
 
 ```text
-var offset = 10
-var f = function(x int) gives x + offset
+let offset = 10
+let f = function(x int) gives x + offset
 ```
 
 Nested closures capture through their enclosing closure, and a value held at an interface type is captured
@@ -38,14 +38,14 @@ exists at run time is beyond it.
 This is especially useful with higher-order functions like `map`:
 
 ```text
-var multiplier = 3
-var results = numbers.map(function(x) gives x * multiplier)
+let multiplier = 3
+let results = numbers.map(function(x) gives x * multiplier)
 ```
 
 Use `_` as a parameter name to ignore the parameter:
 
 ```text
-var values = items.map(function(_) gives defaultValue)
+let values = items.map(function(_) gives defaultValue)
 ```
 
 ## Tests
@@ -502,10 +502,9 @@ function bumped(n Integer) returns Integer
 end 'bumped'
 
 let Base = 20
-var offset = 21 as Integer
+let offset = 22
 
 function main() returns ExitCode
-	offset = offset + 1
 	return Base + offset + bumped(-1)
 end 'main'
 ```
@@ -2108,36 +2107,6 @@ end 'main'
 0
 ```
 
-<!-- test: closure-capture.a-module-var-closure-that-replaces-itself-keeps-its-captures-while-it-runs -->
-The same hold covers a closure read out of a module-level `var`.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-function idle() returns Integer
-	return 1
-end 'idle'
-
-var current = idle
-
-function replaceThenMeasure(text String) returns Integer
-	current = idle
-	return text.byteLength() as Integer
-end 'replaceThenMeasure'
-
-function main() returns ExitCode
-	let word = "a word padded long enough to heap allocate {1}"
-	current = function() gives replaceThenMeasure(word)
-	print("{current()} {current()}\n")
-	return 0
-end 'main'
-```
-```stdout
-44 1
-```
-```exitcode
-0
-```
-
 <!-- test: closure-capture.a-field-closure-replaced-by-its-own-argument-runs-as-read -->
 The call holds the closure it reads out of a field before it evaluates its arguments, so an argument that replaces the field's closure does not free the one being called.
 ```maxon
@@ -2237,15 +2206,15 @@ function adder(text String) returns Op
 end 'adder'
 
 let doubler = twice
-var current = adder("a text padded long enough to heap allocate 2")
 
-function install(text String)
-	current = function(n Integer) gives n * (text.byteLength() as Integer)
+function install(text String) returns Op
+	return function(n Integer) gives n * (text.byteLength() as Integer)
 end 'install'
 
 function main() returns ExitCode
+	var current = adder("a text padded long enough to heap allocate 2")
 	print("{doubler(3)} {current(4)}\n")
-	install("a text padded long enough to heap allocate {1}")
+	current = install("a text padded long enough to heap allocate {1}")
 	print("{current(1)}\n")
 	current = doubler
 	print("{current(5)} {doubler(6)}\n")
@@ -2356,10 +2325,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias Thunk = function() returns Integer
 
-var flag = 0 as Integer
+typealias FlagCell = SharedValue with Integer
 
-function setFlag() returns Integer
-	flag = 1
+function setFlag(flag FlagCell) returns Integer
+	flag.publish(1 as Integer)
 	Scheduler.yield()
 	return 1
 end 'setFlag'
@@ -2368,16 +2337,17 @@ function finished(p IntPromise) returns Integer
 	return 1 if p.isComplete() else 0
 end 'finished'
 
-function later() returns Thunk
-	let p = async setFlag()
+function later(flag FlagCell) returns Thunk
+	let p = async setFlag(flag.clone())
 	return function() gives finished(p)
 end 'later'
 
 function main() returns ExitCode
-	let f = later()
+	let flag = FlagCell.create(0 as Integer)
+	let f = later(flag.clone())
 	Scheduler.yield()
 	Scheduler.yield()
-	print("{flag} {f()}\n")
+	print("{flag.current()} {f()}\n")
 	return 0
 end 'main'
 ```
@@ -3448,134 +3418,6 @@ end 'main'
 error E3183: <fragment>:35:11: this closure captures 'b' and is stored into a record 'b' holds, so 'b' would hold the closure and the closure would hold 'b', and neither would ever be released. Store it somewhere 'b' does not reach, or capture what the closure needs instead of 'b' itself
 ```
 
-<!-- test: closure-capture.error.a-closure-stashed-in-a-module-var-stored-into-what-it-captures -->
-A module-level `var` hands back what was stored into it, so a closure read back out of one is the closure stored there.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Thunk = function() returns Integer
-
-function idle() returns Integer
-	return 0
-end 'idle'
-
-function idleThunk() returns Thunk
-	return idle
-end 'idleThunk'
-
-var stash = idleThunk()
-
-type Counter
-	export var n as Integer
-	export var read as Thunk
-
-	static function create() returns Self
-		return Self{n: 1, read: idle}
-	end 'create'
-end 'Counter'
-
-function arm(h Counter)
-	stash = function() gives h.n
-	h.read = stash
-end 'arm'
-
-function main() returns ExitCode
-	var c = Counter.create()
-	arm(c)
-	return c.read() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3183: <fragment>:26:11: this closure captures 'h' and is stored into a record 'h' holds, so 'h' would hold the closure and the closure would hold 'h', and neither would ever be released. Store it somewhere 'h' does not reach, or capture what the closure needs instead of 'h' itself
-```
-
-<!-- test: closure-capture.error.a-closure-a-callee-stashes-in-a-module-var-stored-into-what-it-captures -->
-A callee that stores a closure into a module-level `var` stores it for its caller too.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Thunk = function() returns Integer
-
-function idle() returns Integer
-	return 0
-end 'idle'
-
-function idleThunk() returns Thunk
-	return idle
-end 'idleThunk'
-
-var stash = idleThunk()
-
-type Counter
-	export var n as Integer
-	export var read as Thunk
-
-	static function create() returns Self
-		return Self{n: 1, read: idle}
-	end 'create'
-end 'Counter'
-
-function remember(h Counter)
-	stash = function() gives h.n
-end 'remember'
-
-function arm(h Counter)
-	remember(h)
-	h.read = stash
-end 'arm'
-
-function main() returns ExitCode
-	var c = Counter.create()
-	arm(c)
-	return c.read() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3183: <fragment>:30:11: this closure captures 'h' and is stored into a record 'h' holds, so 'h' would hold the closure and the closure would hold 'h', and neither would ever be released. Store it somewhere 'h' does not reach, or capture what the closure needs instead of 'h' itself
-```
-
-<!-- test: closure-capture.error.a-callee-stores-a-module-vars-closure-into-what-it-captures -->
-A callee that stores what a module-level `var` holds into its argument stores the closure its caller put there.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Thunk = function() returns Integer
-
-function idle() returns Integer
-	return 0
-end 'idle'
-
-function idleThunk() returns Thunk
-	return idle
-end 'idleThunk'
-
-var stash = idleThunk()
-
-type Counter
-	export var n as Integer
-	export var read as Thunk
-
-	static function create() returns Self
-		return Self{n: 1, read: idle}
-	end 'create'
-end 'Counter'
-
-function install(h Counter)
-	h.read = stash
-end 'install'
-
-function arm(h Counter)
-	stash = function() gives h.n
-	install(h)
-end 'arm'
-
-function main() returns ExitCode
-	var c = Counter.create()
-	arm(c)
-	return c.read() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3183: <fragment>:30:2: this value holds a closure that captures 'h' and is stored into a record 'h' holds, so 'h' would hold the closure and the closure would hold 'h', and neither would ever be released. Store it somewhere 'h' does not reach, or capture what the closure needs instead of 'h' itself
-```
-
 <!-- test: closure-capture.error.an-array-of-closures-appended-into-what-they-capture -->
 Appending an array of function values shares its closures with the receiver.
 ```maxon
@@ -4128,21 +3970,20 @@ type Slot
 	end 'create'
 end 'Slot'
 
-var slot = Slot.create()
-
-function arm(b Box)
+function arm(b Box, slot mutable Slot)
 	slot.show = function() gives b.n
 end 'arm'
 
 function main() returns ExitCode
+	var slot = Slot.create()
 	let b = Box.create(1)
-	arm(b)
+	arm(b, slot: slot)
 	print("{slot.show()} {b.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:29:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:28:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: closure-capture.error.a-let-captured-by-an-escaping-closure-that-returns-it-is-refused -->
@@ -4168,15 +4009,14 @@ type Slot
 	end 'create'
 end 'Slot'
 
-var slot = Slot.create()
-
-function arm(b Box)
+function arm(b Box, slot mutable Slot)
 	slot.get = function() gives b
 end 'arm'
 
 function main() returns ExitCode
+	var slot = Slot.create()
 	let b = Box.create(1)
-	arm(b)
+	arm(b, slot: slot)
 	var x = slot.get()
 	x.n = 5
 	print("{b.n}\n")
@@ -4184,7 +4024,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:29:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:28:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: closure-capture.error.a-let-captured-by-an-escaping-closure-read-through-another-function-is-refused -->
@@ -4210,77 +4050,26 @@ type Slot
 	end 'create'
 end 'Slot'
 
-var slot = Slot.create()
-
-function arm(b Box)
+function arm(b Box, slot mutable Slot)
 	slot.get = function() gives b
 end 'arm'
 
-function fetch() returns Box
+function fetch(slot Slot) returns Box
 	return slot.get()
 end 'fetch'
 
 function main() returns ExitCode
+	var slot = Slot.create()
 	let b = Box.create(1)
-	arm(b)
-	var x = fetch()
+	arm(b, slot: slot)
+	var x = fetch(slot)
 	x.n = 5
 	print("{b.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:33:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
-```
-
-<!-- test: closure-capture.error.a-let-captured-by-an-escaping-closure-that-keeps-it-is-refused -->
-The escaping closure's body hands `b` to `stash`, which pushes it into a module array that `main` then writes through.
-
-```maxon
-typealias Count = int(0 to 1000)
-typealias Boxes = Array with Box
-typealias Read = function() returns Count
-
-type Box
-	export var n as Count
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-type Slot
-	export var show as Read
-
-	static function create() returns Self
-		return Self{show: function() gives 0}
-	end 'create'
-end 'Slot'
-
-var kept = Boxes.create(0)
-var slot = Slot.create()
-
-function stash(b Box) returns Count
-	kept.push(b)
-	return 0
-end 'stash'
-
-function arm(b Box)
-	slot.show = function() gives stash(b)
-end 'arm'
-
-function main() returns ExitCode
-	let b = Box.create(1)
-	arm(b)
-	_ = slot.show()
-	var k = try kept.get(0) otherwise return 1
-	k.n = 5
-	print("{b.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:36:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:32:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: closure-capture.error.a-parameter-kept-through-a-recursive-callee-beside-a-closure-is-refused -->
@@ -4307,25 +4096,24 @@ type Slot
 	end 'create'
 end 'Slot'
 
-var kept = Boxes.create(0)
-var slot = Slot.create()
-
-function arm(b Box, depth Count)
+function arm(b Box, depth Count, slot mutable Slot, kept mutable Boxes)
 	slot.show = function() gives b.n
 
 	if depth > 0 'deeper'
-		helper(b, depth: 0)
+		helper(b, depth: 0, slot: slot, kept: kept)
 	end 'deeper'
 end 'arm'
 
-function helper(b Box, depth Count)
+function helper(b Box, depth Count, slot mutable Slot, kept mutable Boxes)
 	kept.push(b)
-	arm(b, depth: depth)
+	arm(b, depth: depth, slot: slot, kept: kept)
 end 'helper'
 
 function main() returns ExitCode
+	var kept = Boxes.create(0)
+	var slot = Slot.create()
 	let b = Box.create(1)
-	arm(b, depth: 1)
+	arm(b, depth: 1, slot: slot, kept: kept)
 	var k = try kept.get(0) otherwise return 1
 	k.n = 5
 	print("{b.n}\n")
@@ -4333,7 +4121,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:40:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:39:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: closure-capture.a-closure-in-a-returned-array-literal-runs-after-its-frame-died -->
@@ -4433,114 +4221,6 @@ end 'main'
 error E3078: <fragment>:20:11: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
 ```
 
-<!-- test: closure-capture.error.an-array-literal-of-closures-stored-into-a-module-var-keeps-what-they-capture -->
-The literal assigned to a module-level `var` outlives `arm`, so the closure in it keeps `b`, as a closure pushed there does.
-
-```maxon
-typealias Count = int(0 to 1000)
-typealias Read = function() returns Count
-typealias Reads = Array with Read
-
-type Box
-	export var n as Count
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-var shows = Reads.create(0)
-
-function arm(b Box)
-	shows = [function() gives b.n]
-end 'arm'
-
-function main() returns ExitCode
-	let b = Box.create(1)
-	arm(b)
-	print("{b.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:22:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
-```
-
-<!-- test: closure-capture.error.an-array-literal-of-closures-stored-into-a-module-record-field-keeps-what-they-capture -->
-The literal assigned to a field of a module-level record outlives `arm`, so the closure in it keeps `b`.
-
-```maxon
-typealias Count = int(0 to 1000)
-typealias Read = function() returns Count
-typealias Reads = Array with Read
-
-type Box
-	export var n as Count
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-type Shelf
-	export var shows as Reads
-
-	static function create() returns Self
-		return Self{shows: Reads.create(0)}
-	end 'create'
-end 'Shelf'
-
-var shelf = Shelf.create()
-
-function arm(b Box)
-	shelf.shows = [function() gives b.n]
-end 'arm'
-
-function main() returns ExitCode
-	let b = Box.create(1)
-	arm(b)
-	print("{b.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:30:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
-```
-
-<!-- test: closure-capture.error.a-nested-array-literal-of-closures-pushed-into-a-module-var-keeps-what-they-capture -->
-The inner literal becomes an element of an array that outlives `arm`, so its closure keeps `b`.
-
-```maxon
-typealias Count = int(0 to 1000)
-typealias Read = function() returns Count
-typealias Reads = Array with Read
-typealias Groups = Array with Reads
-
-type Box
-	export var n as Count
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-var groups = Groups.create(0)
-
-function arm(b Box)
-	groups.push([function() gives b.n])
-end 'arm'
-
-function main() returns ExitCode
-	let b = Box.create(1)
-	arm(b)
-	print("{b.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:23:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
-```
-
 <!-- test: closure-capture.error.a-nested-array-literal-of-closures-pushed-into-what-they-capture -->
 The inner literal is an element of an array `self` holds, so the closure in it would be held by the record it captures.
 ```maxon
@@ -4604,37 +4284,4 @@ end 'main'
 ```
 ```maxoncstderr
 error E3183: <fragment>:20:12: this value holds a closure that captures 'h' and is stored into a record 'h' holds, so 'h' would hold the closure and the closure would hold 'h', and neither would ever be released. Store it somewhere 'h' does not reach, or capture what the closure needs instead of 'h' itself
-```
-
-<!-- test: closure-capture.error.an-array-literal-of-closures-kept-in-a-module-var-stored-into-what-they-capture -->
-A module-level `var` hands back the literal stored into it.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Thunk = function() returns Integer
-typealias Thunks = Array with Thunk
-
-type Counter
-	export var n as Integer
-	export var reads as Thunks
-
-	static function create() returns Self
-		return Self{n: 1, reads: Thunks.create(0)}
-	end 'create'
-end 'Counter'
-
-var stash = Thunks.create(0)
-
-function arm(h Counter)
-	stash = [function() gives h.n]
-	h.reads = stash
-end 'arm'
-
-function main() returns ExitCode
-	var c = Counter.create()
-	arm(c)
-	return c.reads.count() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3183: <fragment>:19:12: this value holds a closure that captures 'h' and is stored into a record 'h' holds, so 'h' would hold the closure and the closure would hold 'h', and neither would ever be released. Store it somewhere 'h' does not reach, or capture what the closure needs instead of 'h' itself
 ```

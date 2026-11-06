@@ -185,7 +185,7 @@ error E3092: api/<fragment>:3:18: exported typealias 'UnusedAlias' is never refe
 // --- file: api/counter.maxon
 export typealias Integer = int(i64.min to i64.max)
 
-export var unusedCounter = 99 as Integer
+export let unusedCounter = 99 as Integer
 
 export function readCounter() returns Integer
 	return unusedCounter
@@ -197,7 +197,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3092: api/<fragment>:5:12: exported variable 'unusedCounter' is never referenced outside its declaring file
+error E3092: api/<fragment>:5:12: exported constant 'unusedCounter' is never referenced outside its declaring file
 ```
 
 <!-- test: error.unused-exported-const -->
@@ -369,7 +369,7 @@ end 'main'
 // --- file: api/counter.maxon
 public typealias Integer = int(i64.min to i64.max)
 
-public var unusedCounter = 99 as Integer
+public let unusedCounter = 99 as Integer
 
 export function readCounter() returns Integer
 	return unusedCounter
@@ -481,7 +481,7 @@ end 'main'
 <!-- test: cross-file-var-read-is-a-reference -->
 ```maxon
 // --- file: api/counter.maxon
-export var usedCounter = 9 as FullRangeInt
+export let usedCounter = 9 as FullRangeInt
 
 // --- file: app/main.maxon
 function main() returns ExitCode
@@ -1072,7 +1072,7 @@ end 'main'
 // --- stdlib-overlay: Builtins.maxon
 public typealias OverlayCount = int(0 to 1000)
 
-module var overlayShared = 5 as OverlayCount
+module let overlayShared = 5 as OverlayCount
 
 // --- stdlib-overlay: Math.maxon
 public function overlayCaller() returns OverlayCount

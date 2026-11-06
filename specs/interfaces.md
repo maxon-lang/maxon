@@ -90,8 +90,8 @@ end 'Point'
 Methods are called using the method call syntax - `instance.method()`:
 
 ```maxon
-var p = Point.create(10, y: 20)
-var h = p.hash()
+let p = Point.create(10, y: 20)
+let h = p.hash()
 ```
 
 The method receives the instance as an implicit first parameter. Fields are accessed directly by name within the method body.

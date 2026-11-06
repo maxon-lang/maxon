@@ -706,21 +706,31 @@ end 'main'
 <!-- test: error.stdlib-overlay-module-init-collides-with-the-compilers-own -->
 
 ⭐⭐ **THE MAXON-TIER `FunctionNameIndex` DOOR, AND IT NEEDS NO CALL ANYWHERE.** `__module_init` is
-installed on `globals.count() != 0` alone (`ModuleInit`), so a program with ONE managed global holds the
+installed on `globals.count() != 0` alone, so a program with ONE managed global holds the
 compiler's copy and this declaration both — a pair with MIXED provenance, which is the one shape
 `refuseDuplicateFunctionName` reports rather than panics. The index that meets it first is a Maxon-tier
 one (`StdlibSource.reachableMaxonFunctionNames` / `IR/PassPipeline.run`), upstream of every runtime
-installer. Drop the `var` and the program has no managed global, no `__module_init` is installed, and the
+installer. The global is a `let` whose value a function builds at run time, so it has a slot and `__module_init` builds it. Drop it
+and the program has no managed global, no `__module_init` is installed, and the
 next case's door — not this one — is what answers.
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
 export function __module_init()
 end '__module_init'
 // --- file: main.maxon
-var banner = "hello"
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function grown() returns IntArray
+	var items = IntArray.create(0)
+	items.push(1)
+	return items
+end 'grown'
+
+let items = grown()
 
 function main() returns ExitCode
-	return banner.byteLength() as ExitCode
+	return items.count() as ExitCode
 end 'main'
 ```
 ```maxoncstderr

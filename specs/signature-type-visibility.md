@@ -1379,7 +1379,7 @@ type Secret
 	end 'create'
 end 'Secret'
 
-export var SHARED = Secret.create(7)
+export let SHARED = Secret.create(7)
 
 // --- file: app/main.maxon
 function main() returns ExitCode
@@ -1387,7 +1387,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:11:12: exported variable 'api.SHARED' names file-private type 'Secret' in its type
+error E3167: api/<fragment>:11:12: exported constant 'api.SHARED' names file-private type 'Secret' in its type
 ```
 
 <!-- test: error.an-export-static-let-of-a-file-private-enum-type-is-refused -->

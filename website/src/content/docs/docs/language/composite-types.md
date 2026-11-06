@@ -144,7 +144,7 @@ A `static function` belongs to the type rather than an instance. It has no `self
 | Call | `value.name()` | `Type.name()` |
 
 An instance method called with no receiver is [E3193](/docs/cli/error-codes/#e3193--semanticinstancemethodcalledwithoutreceiver):
-a bare call to it from a static method, a file-scope initializer or a `static var` initializer, or
+a bare call to it from a static method or a file-scope initializer, or
 `Type.name()` with no arguments. `Type.name(value, …)` calls it on `value`.
 
 A type declares each method name once. A static and an instance method of one name, a method in the type's
@@ -157,7 +157,7 @@ one.
 
 ### Static Fields
 
-`static var` and `static let` declare one value per type, read and written as `Type.name`:
+`static let` declares one constant per type, read as `Type.name`:
 
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -165,38 +165,38 @@ typealias Byte = int(0 to u8.max)
 type Limits
 	static let MAX_COUNT = 1000
 	static let SEPARATOR = 61 as Byte
-	static var used = 2 as Byte
 end 'Limits'
 
 function main() returns ExitCode
-	Limits.used = Limits.used + 1
-	print("{Limits.MAX_COUNT} {Limits.SEPARATOR} {Limits.used}\n")   // 1000 61 3
+	print("{Limits.MAX_COUNT} {Limits.SEPARATOR}\n")   // 1000 61
 	return 0
 end 'main'
 ```
 
+A `static` member is a function or a `let`: `var` after `static` is a syntax error. State a function updates
+belongs in a local `var` passed to a `mutable` parameter, in a field of a value the caller holds, or in a
+[service](/docs/language/async/#services--spawn).
+
 - A static field needs an initializer. Assigning to a `static let` is **E2013**; naming a static the type
   does not declare is **E2073**.
 - An initializer is any expression a function body accepts, read as though written inside the type's body:
-  a literal, a factory call (`static var shared = Cache.create()`), an array literal, or a struct literal of
+  a literal, a factory call (`static let shared = Cache.create()`), an array literal, or a struct literal of
   the enclosing type. A struct literal of *another* type is **E3076** — call its factory. A scalar static is
-  a compile-time constant, so a call that makes its value unknown is **E2045**, and a `static var` whose
-  initializer is a bare number is **E2004**.
+  a compile-time constant, so a call that makes its value unknown is **E2045**.
 - **Initializers run before `main`, exactly once**, whether or not the field is ever read, in dependency
   order rather than declaration order: one that reads another static, directly or through a function it
   calls, runs after it. Initializers that depend on each other in a cycle, or one that reads its own field,
-  are **E2012**. Assigning to a `static var` is a plain store; the initializer does not run again.
+  are **E2012**.
 - A `static let` whose value is decided entirely at compile time — a scalar or byte-string literal, an array
   literal of integers, an empty container, a payload-free union case, or a record whose every field is one of
   these — is **image data**: its bytes are laid down in read-only memory and nothing creates it at run time.
-  Any other `static let`, and every `static var`, is built before `main`.
+  Any other `static let` is built before `main`.
 - A static declared in `stdlib/` is kept only when reachable code reads it; one nothing reads is not emitted,
   and neither is its initializer.
 - A static field is a top-level binding whose name carries the type as a qualifier, so what its initializer
-  may reach follows the [Top-Level Variables](/docs/language/variables/#top-level-variables) rules: a `let`'s initializer may not reach
-  a module-level `var` that holds a record (**E3165**), a `var`'s may not take a module-level `let`'s record
-  (**E3078**), and a `spawn` reachable from any global initializer is **E3164** — a
-  [`default` declaration](/docs/language/async/#program-wide-defaults--default) starts a program-wide service before `main`.
+  may reach follows the [Top-Level Bindings](/docs/language/variables/#top-level-bindings) rules: a `spawn` reachable from any
+  global initializer is **E3164** — a [`default` declaration](/docs/language/async/#program-wide-defaults--default) starts a
+  program-wide service before `main`.
 - A `let` without `static` in a type body is an ordinary field with a default.
 
 ### Equality and Copying
@@ -258,7 +258,7 @@ Because the value is a word and not a box:
 - `sizeof(T)` is **8**, whatever the fields sum to.
 - A local, a parameter and a return are the word itself. A field of a heap record is one 8-byte slot,
   and `Array with T` is a dense 8-byte element.
-- Nothing is allocated, retained, released or destroyed. A module-level `let` or `var` of one always
+- Nothing is allocated, retained, released or destroyed. A module-level `let` of one always
   holds a scalar word: an initializer the compiler folds is baked in and nothing runs before `main`,
   while one it cannot fold runs its factory before `main` and stores the word into that slot.
 - `clone()` is the **identity** — the copy is the same word.

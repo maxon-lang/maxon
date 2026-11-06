@@ -1178,27 +1178,20 @@ policy that folds every new run into the run beside it, or a node power that rea
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
+typealias CallCell = SharedValue with Integer
 
-type CompareTally
-	export var calls as Integer
-
-	static function create() returns CompareTally
-		return Self{calls: 0}
-	end 'create'
-end 'CompareTally'
-
-var tally = CompareTally.create()
-
-function counted(x Integer, y Integer) returns Ordering
-	tally.calls = tally.calls + 1
+function counted(x Integer, y Integer, tally CallCell) returns Ordering
+	let next = tally.current() + 1
+	tally.publish(next)
 	return x.compare(y)
 end 'counted'
 
-function sortCounting(a IntArray)
-	a.sortBy(function(x Integer, y Integer) gives counted(x, y: y))
+function sortCounting(a IntArray, tally CallCell)
+	a.sortBy(function(x Integer, y Integer) gives counted(x, y: y, tally: tally))
 end 'sortCounting'
 
 function main() returns ExitCode
+	let tally = CallCell.create(0 as Integer)
 	var a = IntArray.create(0)
 	var r = 2463534242 as Integer
 
@@ -1207,7 +1200,7 @@ function main() returns ExitCode
 		a.push(r and 0xFFFFF)
 	end 'fill'
 
-	sortCounting(a)
+	sortCounting(a, tally: tally)
 
 	var ordered = true
 
@@ -1220,10 +1213,10 @@ function main() returns ExitCode
 		end 'outOfOrder'
 	end 'walk'
 
-	if ordered and tally.calls <= 32 * (a.count() as Integer) 'withinTheBound'
+	if ordered and tally.current() <= 32 * (a.count() as Integer) 'withinTheBound'
 		print("sorted within n log n\n")
 	end 'withinTheBound' else 'overTheBound'
-		print("ordered={ordered} compares={tally.calls}\n")
+		print("ordered={ordered} compares={tally.current()}\n")
 	end 'overTheBound'
 
 	return 0
@@ -1241,18 +1234,32 @@ sorted within n log n
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-let Items = 65536
+let Items = 8192
 let ComparesPerItemBound = 64
 let RunBreakerStride = 8
 
-type Adversary
-	export var values as IntArray
+type Trace
 	export var solid as Integer
 	export var candidate as Integer
-	export var gas as Integer
 	export var calls as Integer
 
-	static function create(items Integer) returns Adversary
+	static function create(items Integer) returns Trace
+		var solid = 0 as Integer
+
+		for i in 0 upto items 'count'
+			if i mod RunBreakerStride == RunBreakerStride - 1 'breaksARun'
+				solid = solid + 1
+			end 'breaksARun'
+		end 'count'
+
+		return Self{solid: solid, candidate: 0, calls: 0}
+	end 'create'
+end 'Trace'
+
+type Numbering
+	export var values as IntArray
+
+	static function create(items Integer) returns Numbering
 		var values = IntArray.create(0)
 		var solid = 0 as Integer
 
@@ -1265,47 +1272,42 @@ type Adversary
 			end 'undecided'
 		end 'fill'
 
-		return Self{values: values, solid: solid, candidate: 0, gas: items, calls: 0}
+		return Self{values: values}
 	end 'create'
+end 'Numbering'
 
-	function valueOf(item Integer) returns Integer
-		return try self.values.get(item as ElementIndex) otherwise panic("Adversary.valueOf: every item the sort holds is one this adversary numbered")
-	end 'valueOf'
+typealias ValueCell = SharedValue with Numbering
+typealias TraceCell = SharedValue with Trace
 
-	function freeze(item Integer)
-		try self.values.set(item as ElementIndex, value: self.solid) otherwise panic("Adversary.freeze: every item the sort holds is one this adversary numbered")
-		self.solid = self.solid + 1
-	end 'freeze'
+function valueOf(values ValueCell, item Integer) returns Integer
+	return try values.current().values.get(item as ElementIndex) otherwise panic("valueOf: every item the sort holds is one this adversary numbered")
+end 'valueOf'
 
-	function compare(x Integer, y Integer) returns Ordering
-		self.calls = self.calls + 1
+function adversarial(x Integer, y Integer, values ValueCell, trace TraceCell) returns Ordering
+	var state = trace.current().clone()
+	state.calls = state.calls + 1
 
-		if self.valueOf(x) == self.gas and self.valueOf(y) == self.gas 'bothUndecided'
-			if x == self.candidate 'freezeTheCandidate'
-				self.freeze(x)
-			end 'freezeTheCandidate' else 'freezeTheOther'
-				self.freeze(y)
-			end 'freezeTheOther'
-		end 'bothUndecided'
+	if valueOf(values, item: x) == Items and valueOf(values, item: y) == Items 'bothUndecided'
+		var fresh = values.current().clone()
+		let victim = x if x == state.candidate else y
+		try fresh.values.set(victim as ElementIndex, value: state.solid) otherwise panic("adversarial: every item the sort holds is one this adversary numbered")
+		values.publish(fresh)
+		state.solid = state.solid + 1
+	end 'bothUndecided'
 
-		if self.valueOf(x) == self.gas 'xUndecided'
-			self.candidate = x
-		end 'xUndecided' else if self.valueOf(y) == self.gas 'yUndecided'
-			self.candidate = y
-		end 'yUndecided'
+	if valueOf(values, item: x) == Items 'xUndecided'
+		state.candidate = x
+	end 'xUndecided' else if valueOf(values, item: y) == Items 'yUndecided'
+		state.candidate = y
+	end 'yUndecided'
 
-		return self.valueOf(x).compare(self.valueOf(y))
-	end 'compare'
-end 'Adversary'
+	trace.publish(state)
 
-var adversary = Adversary.create(Items)
-
-function adversarial(x Integer, y Integer) returns Ordering
-	return adversary.compare(x, y: y)
+	return valueOf(values, item: x).compare(valueOf(values, item: y))
 end 'adversarial'
 
-function sortAgainst(items IntArray)
-	items.sortBy(function(x Integer, y Integer) gives adversarial(x, y: y))
+function sortAgainst(items IntArray, values ValueCell, trace TraceCell)
+	items.sortBy(function(x Integer, y Integer) gives adversarial(x, y: y, values: values, trace: trace))
 end 'sortAgainst'
 
 function main() returns ExitCode
@@ -1315,7 +1317,9 @@ function main() returns ExitCode
 		items.push(i)
 	end 'fill'
 
-	sortAgainst(items)
+	let values = ValueCell.create(Numbering.create(Items))
+	let trace = TraceCell.create(Trace.create(Items))
+	sortAgainst(items, values: values, trace: trace)
 
 	var ordered = true
 
@@ -1323,15 +1327,17 @@ function main() returns ExitCode
 		let before = try items.get(i - 1) otherwise return 99
 		let after = try items.get(i) otherwise return 99
 
-		if adversary.valueOf(before) > adversary.valueOf(after) 'outOfOrder'
+		if valueOf(values, item: before) > valueOf(values, item: after) 'outOfOrder'
 			ordered = false
 		end 'outOfOrder'
 	end 'walk'
 
-	if ordered and adversary.calls <= ComparesPerItemBound * Items 'withinTheBound'
+	let calls = trace.current().calls
+
+	if ordered and calls <= ComparesPerItemBound * Items 'withinTheBound'
 		print("sorted within the bound\n")
 	end 'withinTheBound' else 'overTheBound'
-		print("ordered={ordered} compares={adversary.calls} perItem={adversary.calls / Items}\n")
+		print("ordered={ordered} compares={calls} perItem={calls / Items}\n")
 	end 'overTheBound'
 
 	return 0

@@ -83,18 +83,18 @@ family a program is in decides what its rows mean**, so it is the first column h
   failing runs — **the exit code is the discriminator**.
   Prints `remoteFrees=`; that reading is a LOWER BOUND, since sinks are still queued when `main`
   reads it.
-- **`service-fanin-torture.maxon`** — the mailbox's MULTI-PRODUCER side: twelve SENDER services and
-  one sink, where `service-torture` is one sender and twelve mailboxes. 48,000 heap `String`s are
+- **`service-fanin-torture.maxon`** — a cown queue's MULTI-PRODUCER side: twelve SENDER services and
+  one sink, where `service-torture` is one sender and twelve services. 48,000 heap `String`s are
   built by twelve green threads and dropped by a thirteenth, so **leak-freedom here is the exit code
-  and nothing else**. Its aggregate is accumulated by the sink, whose mailbox serialises its own
-  handlers, which is what makes the reading sound above one P without a cross-thread flag.
+  and nothing else**. Its aggregate is accumulated by the sink, whose cown runs one handler at a
+  time, which is what makes the reading sound above one P without a cross-thread flag.
   Its `remoteFrees=` is the stronger of the two: every payload but the last has already crossed by
   the time it reports.
 - **`registry-replace-torture.maxon`** — one service and `main` register and conditionally replace
   ONE service key 20,000 times each, from different Ms, while `main` also sends through
   `current()`. A registry slot holds a handle box only the registry owns, so a register on one thread
   and a replace on another step different box counts; a slot sharing the registering frame's box
-  loses a decrement across the two threads, which is 101 at the leak gate or a mailbox closed under a
+  loses a decrement across the two threads, which is 101 at the leak gate or a cown closed under a
   live holder. ⚠ `aggregate=` is the same in passing and failing runs — **the exit code is the
   discriminator**.
 - **`syscall-stack-torture.maxon`** — the only program that puts more than one M inside the **syscall
@@ -117,16 +117,31 @@ family a program is in decides what its rows mean**, so it is the first column h
   since been deleted, so it cannot go red here — which is itself the finding. What it still proves is
   that the global sweep, the pop-then-test in `__sched_find_runnable` and the ring/steal machinery
   survive concurrent scavenging.
-- **`service-async-strand-torture.maxon`** — services shut down while a coroutine their handler
-  started is PARKED: the handler yields after its `async` so the coroutine runs to its `sleep`, and
-  keeps the promise in the service's state so the shutdown is what drops it. `parked=` witnesses that
-  shape and must equal `rounds=` — a promise discarded at its own statement is renounced before it
-  runs and builds nothing. A strand is invisible to the exit gate, because the drop already debited
-  the live count, so the scheduler's record-carve count is the instrument: `leaked=` is how far it runs
-  past the most a runtime that reclaims every record can carve, and the rounds grow with the processor
-  count until one record lost per round would reach twice that bound. The coroutine's `Probe` argument
-  makes the heap gate a second witness: a lost reclaim is also a 101. The control is built in: one arm
-  awaits its coroutine. ⚠ **NO DRIVER RUNS IT.**
+- **`service-async-strand-torture.maxon`** — services torn down in batches after a handler awaited a
+  coroutine it started (a service's state cannot hold a promise, so a handler always joins its
+  coroutines before it returns). The scheduler's record-carve count is the instrument: `leaked=` is how
+  far it runs past the most a runtime that reclaims every record can carve, and the rounds grow with the
+  processor count until one record lost per round would reach twice that bound. The coroutine's `Probe`
+  argument makes the heap gate a second witness: a lost reclaim is also a 101. ⚠ **NO DRIVER RUNS IT.**
+- **`cown-handoff-torture.maxon`** — eight counter services, each with room for every message of the run,
+  and six pusher services that each send every counter 3,000 messages. A counter checks that each
+  pusher's messages arrive in the order they were sent (`misordered=`) and that every one arrived
+  (`hits=`, `checksum=`), so a cown handed from one runner to the next loses or reorders nothing.
+  Exit 3 is a wrong count, 4 a misordering, 5 a wrong checksum.
+- **`cown-batch-fairness-torture.maxon`** — two services each flooded with 5,000 messages. At one
+  processor the first service's runner must give the processor up after its 64-message batch, so its
+  65th message sees at least 64 of the other service's messages done (`fair=yes`); a runner that drains
+  without yielding starves the second and exits 4. Exit 3 is a wrong count.
+- **`cown-close-race-torture.maxon`** — `shutdown()` raced against a sender bursting 600 messages at the
+  victim service, 400 times with a varying head start. Every message the send accepted must run:
+  the victim's tally must equal the sender's accepted count. Exit 3 is a lost message, 4 a queue that
+  never drained.
+- **`cown-send-wait-torture.maxon`** — eight sender services each send 2,500 messages, with a 1 ms or a
+  50 ms `sendTimeout:`, to one sink of capacity 4. Every send is delivered or handed back
+  `mailboxFull`, and the sink must run exactly the delivered ones. Exit 3 is a delivered message the
+  sink never ran, 4 a send neither delivered nor refused.
+- **`cown-multi-torture.maxon`** — `CownTorture.violations`, the multi-cown acquire's mutual-exclusion
+  check ([`CownTorture`](../../docs/STDLIB_REFERENCE.md#cowntorture)). Exit 1 is a violation.
 - **`refcount-service-refused.maxon`** — a **MUST-NOT-COMPILE** entry: `refcount-torture` written
   against services. A send is a MOVE, so the first send takes the shared `String` away from `main`
   and the second asks `main` to give up a reference it no longer holds. `compile-all.sh` asserts the

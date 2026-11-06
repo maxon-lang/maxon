@@ -59,8 +59,10 @@ type Counter
   end 'increment'
 end 'Counter'
 
-var c = Counter{value: 0}
-c.increment()  // OK: chainable, result can be discarded
+function demo()
+  var c = Counter{value: 0}
+  c.increment()  // OK: chainable, result can be discarded
+end 'demo'
 ```
 
 ### Discarding Tuple Elements
@@ -69,7 +71,7 @@ When destructuring a tuple, individual elements can be discarded with `_`. If th
 
 ```text
 // OK: one element used
-var (result, _) = pureFunc()
+let (result, _) = pureFunc()
 
 // Error: all elements discarded for pure function
 (_, _) = pureFunc()
@@ -195,20 +197,19 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-var counter = 0 as Integer
-
-function incrementAndGet() returns Integer
+function incrementAndGet(counter mutable Integer) returns Integer
 	counter = counter + 1
 	return counter
 end 'incrementAndGet'
 
 function main() returns ExitCode
-	incrementAndGet()
+	var counter = 0 as Integer
+	incrementAndGet(counter)
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3065: specs/discarded-results/impure-function-discarded.maxon:13:2: result of 'incrementAndGet' is not used (use '_ = expr' to discard)
+error E3065: specs/discarded-results/impure-function-discarded.maxon:12:2: result of 'incrementAndGet' is not used (use '_ = expr' to discard)
 ```
 
 <!-- test: impure-method-statement-discarded -->
@@ -256,8 +257,6 @@ correctly from one that does not. `impure-function-discarded` is the plain call,
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var counter = 0 as Integer
-
 type Inner
 	export var n as Integer
 
@@ -266,8 +265,8 @@ type Inner
 	end 'create'
 
 	function bump() returns Integer
-		counter = counter + 1
-		return counter
+		self.n = self.n + 1
+		return self.n
 	end 'bump'
 end 'Inner'
 
@@ -286,7 +285,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3065: specs/discarded-results/impure-field-chain-statement-discarded.maxon:29:10: result of 'Inner.bump' is not used (use '_ = expr' to discard)
+error E3065: specs/discarded-results/impure-field-chain-statement-discarded.maxon:27:10: result of 'Inner.bump' is not used (use '_ = expr' to discard)
 ```
 
 <!-- test: impure-static-member-statement-discarded -->
@@ -298,22 +297,21 @@ E3065 with the `_ =` cure, exactly as the three shapes above are, the subject sp
 `Type.method` key it is stored by.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-var ticks = 0 as Integer
-
 type Clock
-	static function tick() returns Integer
+	static function tick(ticks mutable Integer) returns Integer
 		ticks = ticks + 1
 		return ticks
 	end 'tick'
 end 'Clock'
 
 function main() returns ExitCode
-	Clock.tick()
+	var ticks = 0 as Integer
+	Clock.tick(ticks)
 	return ticks as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3065: specs/discarded-results/impure-static-member-statement-discarded.maxon:13:8: result of 'Clock.tick' is not used (use '_ = expr' to discard)
+error E3065: specs/discarded-results/impure-static-member-statement-discarded.maxon:12:8: result of 'Clock.tick' is not used (use '_ = expr' to discard)
 ```
 
 <!-- test: pure-static-member-statement-discarded -->
@@ -345,16 +343,15 @@ static that returns nothing compiles clean through the same arm the two cases ab
 RUN, not merely compile: `bump` is the only writer of `ticks`, so the exit code is what tells the two apart.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-var ticks = 0 as Integer
-
 type Clock
-	static function bump()
+	static function bump(ticks mutable Integer)
 		ticks = ticks + 3
 	end 'bump'
 end 'Clock'
 
 function main() returns ExitCode
-	Clock.bump()
+	var ticks = 0 as Integer
+	Clock.bump(ticks)
 	return ticks as ExitCode
 end 'main'
 ```
@@ -367,15 +364,14 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-var counter = 0 as Integer
-
-function incrementAndGet() returns Integer
+function incrementAndGet(counter mutable Integer) returns Integer
 	counter = counter + 1
 	return counter
 end 'incrementAndGet'
 
 function main() returns ExitCode
-	_ = incrementAndGet()
+	var counter = 0 as Integer
+	_ = incrementAndGet(counter)
 	return 0
 end 'main'
 ```
@@ -600,19 +596,18 @@ error E3064: specs/discarded-results/try-pure-let-discard.maxon:17:2: result of 
 
 typealias Integer = int(i64.min to i64.max)
 
-var counter = 0 as Integer
-
 enum ParseError implements Error
 	invalidFormat
 end 'ParseError'
 
-function parseNum(s String) returns Integer throws ParseError
+function parseNum(s String, counter mutable Integer) returns Integer throws ParseError
 	counter = counter + (s.byteLength() as Integer)
 	throw ParseError.invalidFormat
 end 'parseNum'
 
 function main() returns ExitCode
-	_ = try parseNum("abc") otherwise 0
+	var counter = 0 as Integer
+	_ = try parseNum("abc", counter: counter) otherwise 0
 	return 0
 end 'main'
 ```
@@ -625,19 +620,18 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-var counter = 0 as Integer
-
 enum MyError implements Error
 	failed
 end 'MyError'
 
-function doWork() returns Integer throws MyError
+function doWork(counter mutable Integer) returns Integer throws MyError
 	counter = counter + 1
 	throw MyError.failed
 end 'doWork'
 
 function main() returns ExitCode
-	try doWork() otherwise ignore
+	var counter = 0 as Integer
+	try doWork(counter) otherwise ignore
 	return 0
 end 'main'
 ```
@@ -983,15 +977,14 @@ the widening, which the laundered `try` statements above are the reason for.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var hits = 0 as Integer
-
-function bump() returns Integer
+function bump(hits mutable Integer) returns Integer
 	hits = hits + 1
 	return hits
 end 'bump'
 
 function main() returns ExitCode
-	_ = bump() + 1
+	var hits = 0 as Integer
+	_ = bump(hits) + 1
 	return hits - 1
 end 'main'
 ```
@@ -1215,17 +1208,18 @@ typealias Integer = int(i64.min to i64.max)
 typealias Count = int(0 to 1000)
 typealias Widths = Map with (String, Count)
 
-var hashCalls = 0 as Integer
+typealias HashCalls = SharedValue with Integer
 
 type Loud implements Hashable, Equatable
 	export let id as Integer
+	export let calls as HashCalls
 
-	static function create(id Integer) returns Loud
-		return Loud{id: id}
+	static function create(id Integer, calls HashCalls) returns Loud
+		return Loud{id: id, calls: calls}
 	end 'create'
 
 	function hash() returns HashValue
-		hashCalls = hashCalls + 1
+		calls.publish(calls.current() + 1)
 		return (id and 0xFFFF) as HashValue
 	end 'hash'
 
@@ -1254,19 +1248,20 @@ type Registry
 end 'Registry'
 
 function main() returns ExitCode
+	let hashCalls = HashCalls.create(0 as Integer)
 	var loud = LoudMap.create()
-	try loud.insert(Loud.create(1), value: 2) otherwise return 2
+	try loud.insert(Loud.create(1, calls: hashCalls.clone()), value: 2) otherwise return 2
 	let registry = Registry.create()
 
 	if registry.declares("a") 'found'
 		return 1
 	end 'found'
 
-	return hashCalls as ExitCode
+	return hashCalls.current() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/discarded-results/error.pure-map-lookup-discarded-while-another-key-type-has-an-effectful-hash.maxon:39:3: result of pure function 'Registry.widthOf' must be used
+error E3064: specs/discarded-results/error.pure-map-lookup-discarded-while-another-key-type-has-an-effectful-hash.maxon:40:3: result of pure function 'Registry.widthOf' must be used
 ```
 
 <!-- test: error.filepath-keyed-map-lookup-discarded-is-refused-on-every-target -->
@@ -1821,21 +1816,20 @@ end 'Box'
 
 typealias BoxArray = Array with Box
 
-var registry = BoxArray.create(0)
-
-function enroll() returns Box
+function enroll(registry mutable BoxArray) returns Box
 	var box = Box.create()
 	registry.push(box)
 	return box
 end 'enroll'
 
-function tamper() returns Integer
-	var box = enroll()
+function tamper(registry mutable BoxArray) returns Integer
+	var box = enroll(registry)
 	return box.bump()
 end 'tamper'
 
 function main() returns ExitCode
-	_ = tamper()
+	var registry = BoxArray.create(0)
+	_ = tamper(registry)
 
 	if (try registry.get(0) otherwise return 2).read() != 1 'wrong'
 		return 1
@@ -3315,9 +3309,7 @@ The same move out of a module-level chain.
 typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __ManagedList with Integer
 
-var shelf = IntChain.create()
-
-function takeFromShelf() returns Integer
+function takeFromShelf(shelf mutable IntChain) returns Integer
 	var mine = IntChain.create()
 
 	let node = try shelf.head() otherwise 'empty'
@@ -3329,8 +3321,9 @@ function takeFromShelf() returns Integer
 end 'takeFromShelf'
 
 function main() returns ExitCode
+	var shelf = IntChain.create()
 	_ = shelf.insertLast(5)
-	_ = takeFromShelf()
+	_ = takeFromShelf(shelf)
 	return 0 if shelf.count() == 0 else 1
 end 'main'
 ```
@@ -3351,9 +3344,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var shared = Box.create(0)
-
-function scribble() returns Small
+function scribble(shared mutable Box) returns Small
 	var held = Box.create(0)
 	var other = Box.create(0)
 	var i = 0 as Small
@@ -3372,7 +3363,8 @@ function scribble() returns Small
 end 'scribble'
 
 function main() returns ExitCode
-	_ = scribble()
+	var shared = Box.create(0)
+	_ = scribble(shared)
 	return 0 if shared.n == 7 else 1
 end 'main'
 ```
@@ -3603,7 +3595,7 @@ runs, so the flag stays 0.
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 
-var flag = 0 as Integer
+typealias FlagCell = SharedValue with Integer
 
 type Holder
 	var promise as IntPromise
@@ -3613,22 +3605,23 @@ type Holder
 	end 'wrap'
 end 'Holder'
 
-function worker() returns Integer
+function worker(flag FlagCell) returns Integer
 	Scheduler.yield()
-	flag = 1
+	flag.publish(1 as Integer)
 	return 1
 end 'worker'
 
-function keep() returns Integer
-	var promise = async worker()
+function keep(flag FlagCell) returns Integer
+	var promise = async worker(flag.clone())
 	let holder = Holder.wrap(promise)
 	_ = holder
 	return 1
 end 'keep'
 
 function main() returns ExitCode
-	_ = keep()
-	return flag as ExitCode
+	let flag = FlagCell.create(0 as Integer)
+	_ = keep(flag.clone())
+	return flag.current() as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -3642,23 +3635,24 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias PromiseArray = Array with IntPromise
 
-var flag = 0 as Integer
+typealias FlagCell = SharedValue with Integer
 
-function worker() returns Integer
+function worker(flag FlagCell) returns Integer
 	Scheduler.yield()
-	flag = 1
+	flag.publish(1 as Integer)
 	return 1
 end 'worker'
 
-function park() returns Integer
+function park(flag FlagCell) returns Integer
 	var parked = PromiseArray.create(0)
-	parked.push(async worker())
+	parked.push(async worker(flag.clone()))
 	return 1
 end 'park'
 
 function main() returns ExitCode
-	_ = park()
-	return flag as ExitCode
+	let flag = FlagCell.create(0 as Integer)
+	_ = park(flag.clone())
+	return flag.current() as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -3670,7 +3664,7 @@ A function every path of which panics has an effect, so its result is not must-u
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var armed = false
+let armed = false
 
 function refuse() returns Integer
 	panic("refused")
@@ -3692,7 +3686,7 @@ The same call as a bare statement is E3065, with the `_ =` cure.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var armed = false
+let armed = false
 
 function refuse() returns Integer
 	panic("refused")
@@ -3715,7 +3709,7 @@ reaches a call that never comes back, so none is pure and `_ =` discards the res
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var armed = false
+let armed = false
 
 function refuse() returns Integer
 	panic("refused")
@@ -3745,7 +3739,7 @@ The wrapper's bare call is E3065 like the panicking function's own, with the `_ 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var armed = false
+let armed = false
 
 function refuse() returns Integer
 	panic("refused")

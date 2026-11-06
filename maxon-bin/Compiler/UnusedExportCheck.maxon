@@ -576,7 +576,7 @@ function seedBindings(signatures ProgramSignatures, tracked TrackedDecls)
 			continue
 		end 'compilerOwned'
 
-		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedBinding, key: decl.name, displayName: String.from(decl.name), noun: subjectNoun(bindingSubjectKind(decl.mutable)), visibility: decl.visibility, declFile: tracked.fileOf(decl.declFilePath, signatures: signatures), nameLine: decl.nameLine, nameColumn: decl.nameColumn, isAlias: false))
+		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedBinding, key: decl.name, displayName: String.from(decl.name), noun: subjectNoun(SignatureSubjectKind.constantBinding), visibility: decl.visibility, declFile: tracked.fileOf(decl.declFilePath, signatures: signatures), nameLine: decl.nameLine, nameColumn: decl.nameColumn, isAlias: false))
 	end 'eachDecl'
 end 'seedBindings'
 
@@ -1239,8 +1239,7 @@ end 'DemandingOwner'
 
 function demandingOwnerOf(demand SignatureTypeDemand) returns DemandingOwner
 	match demand.demandingKind 'kind'
-		constantBinding or
-		variableBinding then return DemandingOwner.none
+		constantBinding then return DemandingOwner.none
 		structDeclaration or
 		enumDeclaration or
 		unionDeclaration or
@@ -1291,8 +1290,7 @@ end 'ownerIsCredited'
 
 function demandIsReached(tracked TrackedDecls, demand SignatureTypeDemand) returns bool
 	match demand.demandingKind 'kind'
-		constantBinding or
-		variableBinding then return reachedFromOutsideItsFile(tracked.bindingIndex, tracked: tracked, name: demand.demandingName)
+		constantBinding then return reachedFromOutsideItsFile(tracked.bindingIndex, tracked: tracked, name: demand.demandingName)
 		structDeclaration or
 		enumDeclaration or
 		unionDeclaration or
@@ -1472,6 +1470,6 @@ function noteSlotType(signatures ProgramSignatures, tracked TrackedDecls, index 
 
 		// `globalSlotType` ADOPTS the slot's type into the index's own interner — that is the whole reason
 		// it exists as its own door rather than taking a table — so the walk is told exactly that.
-		found(_, valueType, _, _) then noteComponentType(signatures, tracked: tracked, type: valueType, typeNames: signatures.indexTypeNames(), denotedBy: reader, reader: reader)
+		found(_, valueType, _) then noteComponentType(signatures, tracked: tracked, type: valueType, typeNames: signatures.indexTypeNames(), denotedBy: reader, reader: reader)
 	end 'slot'
 end 'noteSlotType'

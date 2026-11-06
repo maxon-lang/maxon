@@ -376,10 +376,9 @@ function takes(code ExitCode) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-  base = opaque(0) as ExitCode
+  let base = opaque(0) as ExitCode
   return takes(base - 5)
 end 'main'
-var base = 0 as ExitCode
 ```
 ```exitcode
 1
@@ -419,10 +418,9 @@ function takes(code ExitCode) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-  base = opaque(0) as ExitCode
+  let base = opaque(0) as ExitCode
   return takes(base - 5)
 end 'main'
-var base = 0 as ExitCode
 ```
 ```exitcode
 1
@@ -630,7 +628,7 @@ function wide(n Integer) returns Integer
 end 'wide'
 
 function pick(b bool) returns Num
-	w = wide(1000) as Num
+	let w = wide(1000) as Num
 	return try mk(b) otherwise w * 5
 end 'pick'
 
@@ -639,7 +637,6 @@ function main() returns ExitCode
 	print("v={v}")
 	return 7
 end 'main'
-var w = 0 as Num
 ```
 ```exitcode
 1

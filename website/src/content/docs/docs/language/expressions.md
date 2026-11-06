@@ -209,7 +209,7 @@ Both take a **type** and produce a compile-time `Count`.
   count — a record, a primitive, a growable `Array`, a runtime-sized `FixedArray with Int` — is refused
   (**E2015**); ask the value for its `count()`, or name a sized alias
   (`typealias Sized = FixedArray with 4 Int`) and take `countof(Sized)`.
-- `countof(T)` is also a constant in a [top-level initializer](/docs/language/variables/#top-level-variables), alone or folded
+- `countof(T)` is also a constant in a [top-level initializer](/docs/language/variables/#top-level-bindings), alone or folded
   (`let last = countof(Vec3) - 1`), and the binding is a `Count`. Such a `let` is a compile-time bound inside a
   function: over `let slots = countof(Vec4)`, `for i in 0 upto slots` proves its counter a
   [`FixedArray` index](#fixed-arrays-and-proven-indices).

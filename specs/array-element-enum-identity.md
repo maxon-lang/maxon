@@ -94,7 +94,7 @@ error E3005: <fragment>:3:17: argument type mismatch for 'value': expected 'Stri
 
 <!-- test: error.a-top-level-literal-of-a-string-then-an-int -->
 ```maxon
-var xs = ["a", 1]
+let xs = ["a", 1]
 
 function main() returns ExitCode
 	return xs.count() as ExitCode
@@ -119,7 +119,7 @@ union Other
 	skip
 end 'Other'
 
-var globalOps = [Op.add(7), Other.skip]
+let globalOps = [Op.add(7), Other.skip]
 
 function main() returns ExitCode
 	return globalOps.count() as ExitCode

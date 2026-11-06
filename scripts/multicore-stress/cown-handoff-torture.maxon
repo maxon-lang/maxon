@@ -1,0 +1,169 @@
+// Each counter's capacity holds every message of the run, so no send waits and the only way a
+// message is lost or reordered is the hand-off of the counter's cown between runners. A pusher's
+// messages to one counter must arrive in send order.
+typealias Integer = int(i64.min to i64.max)
+typealias IntegerArray = Array with Integer
+typealias CounterHandleArray = Array with Counter.handle
+typealias PusherHandleArray = Array with Pusher.handle
+
+let counterCount = 8
+let pusherCount = 6
+let roundsPerPusher = 3000
+let expectedHits = pusherCount * roundsPerPusher
+let pollLimit = 400000
+let exitWrongCount = 3
+let exitMisordered = 4
+let exitWrongChecksum = 5
+
+type Counter
+	var hits as Integer
+	var tape as String
+	var next as IntegerArray
+	var seen as IntegerArray
+	var misordered as Integer
+
+	static function create() returns Self
+		var next = IntegerArray.create(0)
+		var k = 0 as Integer
+
+		while k < pusherCount 'eachPusher'
+			next.push(0)
+			k = k + 1
+		end 'eachPusher'
+
+		return Self{hits: 0, tape: "start", next: next, seen: IntegerArray.create(0), misordered: 0}
+	end 'create'
+
+	export function record(label String, pusher Integer, n Integer)
+		self.hits = self.hits + 1
+		self.tape = "{label}/{n}"
+		self.seen.push(n)
+
+		let want = try self.next.get(pusher as ElementIndex) otherwise panic("cown-handoff-torture: next.get OOB at {pusher} — create pushed one slot per pusher")
+
+		if want != n 'outOfOrder'
+			self.misordered = self.misordered + 1
+		end 'outOfOrder'
+
+		try self.next.set(pusher as ElementIndex, value: n + 1) otherwise panic("cown-handoff-torture: next.set OOB at {pusher} — create pushed one slot per pusher")
+	end 'record'
+
+	export function reportHits() returns Integer
+		return self.hits
+	end 'reportHits'
+
+	export function reportMisordered() returns Integer
+		return self.misordered
+	end 'reportMisordered'
+
+	export function reportChecksum() returns Integer
+		var sum = 0 as Integer
+
+		for v in self.seen 'eachSeen'
+			sum = sum + v
+		end 'eachSeen'
+
+		return sum
+	end 'reportChecksum'
+end 'Counter'
+
+type Pusher
+	var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+
+	export function run(counter Counter.handle, rounds Integer)
+		var r = 0 as Integer
+
+		while r < rounds 'eachRound'
+			try counter.record("p{self.id}", pusher: self.id, n: r) otherwise panic("cown-handoff-torture: a counter's mailbox holds every message the run sends it")
+			r = r + 1
+		end 'eachRound'
+	end 'run'
+end 'Pusher'
+
+function main() returns ExitCode
+	var counters = CounterHandleArray.create(0)
+	var c = 0 as Integer
+
+	while c < counterCount 'spawnCounter'
+		counters.push(spawn(capacity: expectedHits) Counter.create())
+		c = c + 1
+	end 'spawnCounter'
+
+	var pushers = PusherHandleArray.create(0)
+	var p = 0 as Integer
+
+	while p < pusherCount 'spawnPusher'
+		pushers.push(spawn Pusher.create(p))
+		p = p + 1
+	end 'spawnPusher'
+
+	var k = 0 as ElementIndex
+
+	while k < pusherCount 'eachPusher'
+		view pusher = try pushers.get(k) otherwise panic("cown-handoff-torture: pushers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		var j = 0 as ElementIndex
+
+		while j < counterCount 'eachCounter'
+			let rotated = (k + j) mod counterCount
+			view counter = try counters.get(rotated) otherwise panic("cown-handoff-torture: counters.get OOB at {rotated} — the rotation is bounded by the count the pushes above filled")
+			try pusher.run(counter.clone(), rounds: roundsPerPusher) otherwise panic("cown-handoff-torture: a fresh pusher refused a message")
+			j = j + 1
+		end 'eachCounter'
+
+		k = k + 1
+	end 'eachPusher'
+
+	var expectedChecksum = 0 as Integer
+	var r = 0 as Integer
+
+	while r < roundsPerPusher 'eachRound'
+		expectedChecksum = expectedChecksum + (pusherCount * r)
+		r = r + 1
+	end 'eachRound'
+
+	var verdict = 0 as ExitCode
+	var j = 0 as ElementIndex
+
+	while j < counterCount 'checkEach'
+		view counter = try counters.get(j) otherwise panic("cown-handoff-torture: counters.get OOB at {j} — the loop is bounded by the count the pushes above filled")
+		var polls = 0 as Integer
+		var hits = 0 as Integer
+
+		while polls < pollLimit 'waitForTheRun'
+			let pending = try counter.reportHits() otherwise panic("cown-handoff-torture: a running counter with room takes the send")
+			hits = await pending
+
+			if hits == expectedHits 'arrived'
+				break
+			end 'arrived'
+
+			Scheduler.yield()
+			polls = polls + 1
+		end 'waitForTheRun'
+
+		let misorderedPending = try counter.reportMisordered() otherwise panic("cown-handoff-torture: a running counter with room takes the send")
+		let misordered = await misorderedPending
+		let checksumPending = try counter.reportChecksum() otherwise panic("cown-handoff-torture: a running counter with room takes the send")
+		let checksum = await checksumPending
+
+		print("counter={j} hits={hits} misordered={misordered} checksum={checksum}\n")
+
+		if hits != expectedHits 'wrongCount'
+			verdict = exitWrongCount as ExitCode
+		end 'wrongCount' else if misordered != 0 'misordered'
+			verdict = exitMisordered as ExitCode
+		end 'misordered' else if checksum != expectedChecksum 'wrongChecksum'
+			verdict = exitWrongChecksum as ExitCode
+		end 'wrongChecksum'
+
+		j = j + 1
+	end 'checkEach'
+
+	print("procs={Scheduler.processorCount()}\n")
+
+	return verdict
+end 'main'

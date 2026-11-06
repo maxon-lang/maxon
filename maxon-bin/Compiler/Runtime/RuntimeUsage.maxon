@@ -223,7 +223,8 @@ export type RuntimeUsage
 	// deep entry, and one that co-owns only boxes with slots must not carry the blitting one.
 	export var usesMmOwnDeep as bool
 
-	// ⭐ The program declares at least one MANAGED top-level `var`, so it carries
+	// ⭐ The program declares at least one MANAGED top-level `let` (a record the compiler cannot image,
+	// so it has a storage slot), so it carries
 	// `__module_init` + `__maxon_global_cleanup` and every entry stub calls them around `main`. Set NOT by
 	// this Maxon-module scan but by `installManagedGlobalInit`, which is where the decision is made — the
 	// same discipline the leak/GT gates follow (see `BackendDispatch.buildBackend`'s header): an entry stub
@@ -653,7 +654,7 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures Func
 
 		// These carry the green-thread scheduler and imply the heap (`recordGtUsage`), detected by op
 		// kind because the calls that need it do not exist until lowering: `async`'s `__gt_*` calls,
-		// and a service's `__svc_spawn` and `__mbox_send`, which reach `__gt_spawn_green`, `__gt_ready`
+		// and a service's `__cown_spawn` and `__cown_send`, which reach `__gt_spawn_green`, `__gt_ready`
 		// and the slab.
 		asyncCall or
 		await or
@@ -761,6 +762,10 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesIncref = true
 		usage.usesHeap = true
 	end 'sharedValue'
+
+	if callee.equals(CownTestMultiName) 'cownTest'
+		recordGtUsage(usage)
+	end 'cownTest'
 
 	if isServiceRegistryRuntimeCallee(callee) 'serviceRegistry'
 		usage.usesServiceRegistry = true

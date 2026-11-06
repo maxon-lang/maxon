@@ -63,12 +63,14 @@ fall-through and which is the branch.
 
 <!-- test: an-inverted-signed-branch-keeps-its-arms -->
 Every signed integer predicate, each written so that ONE arm is correct and the other returns
-its own exit code. The operands come from a global the constant folder cannot see through, so
+its own exit code. The operands come from a shared cell the constant folder cannot see through, so
 each comparison survives to the backend as a real compare-and-branch pair.
 ```maxon
-var seed = 4 as FullRangeInt
+typealias SeedCell = SharedValue with FullRangeInt
 
 function main() returns ExitCode
+	let source = SeedCell.create(4 as FullRangeInt)
+	let seed = source.current()
 	let a = seed
 	let b = seed + 1
 	var hits = 0 as Count
@@ -124,14 +126,23 @@ lowering that drops the parity test on x86) sends the NaN down the then-arm and 
 instead of 0. `float-compare-branch.md` pins the same predicates with only ONE arm written,
 which no inversion can reach.
 
-The NaN is built at RUNTIME from a global by overflow (`inf - inf`) rather than division: a
+The NaN is built at RUNTIME from a shared cell by overflow (`inf - inf`) rather than division: a
 folded NaN reaches the backend as a constant and emits no compare at all, and division by zero
 is a language-level error with no route to a NaN.
 ```maxon
-var big = 1.0e308 as FullRangeFloat
+type Magnitude
+	export let big as FullRangeFloat
+
+	static function create(big FullRangeFloat) returns Self
+		return Self{big: big}
+	end 'create'
+end 'Magnitude'
+
+typealias MagnitudeCell = SharedValue with Magnitude
 
 function main() returns ExitCode
-	let inf = big * 10.0
+	let source = MagnitudeCell.create(Magnitude.create(1.0e308))
+	let inf = source.current().big * 10.0
 	let nan = inf - inf
 	let x = 5.0
 	var hits = 0 as Count
@@ -232,10 +243,11 @@ A branch on a materialized boolean, which AArch64 selects as a register zero-tes
 cleanup that reached for a condition-code table here would find nothing to invert; one that
 swapped the targets without swapping the spelling inverts the program.
 ```maxon
-var seed = 4 as FullRangeInt
+typealias SeedCell = SharedValue with FullRangeInt
 
 function main() returns ExitCode
-	let flag = seed > 3
+	let source = SeedCell.create(4 as FullRangeInt)
+	let flag = source.current() > 3
 	var hits = 0 as Count
 
 	if flag 'yes'
@@ -264,9 +276,11 @@ edge's parallel copies and must therefore NOT be threaded away; a cleanup that b
 block because it "looks like" a forwarding jump drops the copy and the loop accumulates whatever
 the register happened to hold. The four iterations contribute 1, 10, 1, 10.
 ```maxon
-var seed = 4 as Count
+typealias SeedCell = SharedValue with Count
 
 function main() returns ExitCode
+	let source = SeedCell.create(4 as Count)
+	let seed = source.current()
 	var total = 0 as ExitCode
 	var i = 0 as Count
 	while i < seed 'loop'
@@ -295,7 +309,7 @@ branches, and an entry re-pointed at the wrong survivor returns another arm's nu
 ```maxon
 typealias Val = int(i64.min to i64.max)
 
-var seed = 4 as Val
+typealias SeedCell = SharedValue with Val
 
 function classify(n Val) returns Val
 	if n > 3 'big'
@@ -318,6 +332,8 @@ function pick(n Val) returns Val
 end 'pick'
 
 function main() returns ExitCode
+	let source = SeedCell.create(4 as Val)
+	let seed = source.current()
 	let a = classify(seed)
 	let b = pick(seed)
 	if a != 40 'aWrong'

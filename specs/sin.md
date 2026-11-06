@@ -20,12 +20,12 @@ Calculate the sine of an angle (in radians).
 **Example:**
 
 ```maxon
-var x = 0.0
-var y = Math.sin(x)       // 0.0
+let x = 0.0
+let y = Math.sin(x)       // 0.0
 
 // Note: π ≈ 3.14159265
-var halfPi = 1.5708  // π/2
-var z = Math.sin(halfPi)  // 1.0 (approximately)
+let halfPi = 1.5708  // π/2
+let z = Math.sin(halfPi)  // 1.0 (approximately)
 ```
 **Notes:**
 - The function works with radians, not degrees

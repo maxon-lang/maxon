@@ -27,9 +27,9 @@ var list = IntManagedList.create()
 Insert at the front or back, receiving a handle to the new node:
 
 ```text
-var first = list.insertFirst(10)
-var last = list.insertLast(30)
-var middle = list.insertAfter(first, value: 20)
+let first = list.insertFirst(10)
+let last = list.insertLast(30)
+let middle = list.insertAfter(first, value: 20)
 ```
 
 ### Traversal
@@ -37,11 +37,11 @@ var middle = list.insertAfter(first, value: 20)
 Use node handles to traverse the list:
 
 ```text
-var node = try list.head() otherwise 'err'
+let node = try list.head() otherwise 'err'
   // list is empty
 end 'err'
 print("{node.value()}")
-var next = try node.next() otherwise 'err2'
+let next = try node.next() otherwise 'err2'
   // at end of list
 end 'err2'
 ```

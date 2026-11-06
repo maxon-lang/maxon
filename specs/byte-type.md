@@ -19,9 +19,9 @@ There is no `byte` type. A byte is a ranged typealias like any other narrow doma
 ```maxon
 typealias Pixel = int(0 to u8.max)
 
-var b = 255 as Pixel        // 8-bit unsigned value
-var zero = 0 as Pixel       // Zero byte
-var hex = 0xff as Pixel     // From hex literal
+let b = 255 as Pixel        // 8-bit unsigned value
+let zero = 0 as Pixel       // Zero byte
+let hex = 0xff as Pixel     // From hex literal
 ```
 
 ### Character Literals
@@ -29,7 +29,7 @@ var hex = 0xff as Pixel     // From hex literal
 Single-quoted character literals produce `character` type values (Extended Grapheme Clusters):
 
 ```maxon
-var c = 'A'                // Creates a character value
+let c = 'A'                // Creates a character value
 ```
 
 Note: The `character` type is NOT the same as `byte`. See the character-type spec for details.

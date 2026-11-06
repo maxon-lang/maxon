@@ -113,17 +113,16 @@ type Holder
 	end 'create'
 end 'Holder'
 
-var holder = Holder.create(Box.create(1))
-
-function bump() returns Count
+function bump(box Box) returns Count
 	sleep(1)
-	holder.box.n = 5
+	box.n = 5
 	return 1
 end 'bump'
 
 function main() returns ExitCode
+	var holder = Holder.create(Box.create(1))
 	view v = holder.box
-	let task = async bump()
+	let task = async bump(holder.box)
 	let r = await task
 	print("{v.n} {r}\n")
 	return 0
@@ -234,23 +233,22 @@ type Holder
 	end 'create'
 end 'Holder'
 
-var kept = Boxes.create(0)
-
-function stash(b Box)
+function stash(b Box, kept mutable Boxes)
 	kept.push(b)
 end 'stash'
 
 function main() returns ExitCode
+	var kept = Boxes.create(0)
 	var h = Holder.create(Box.create(1))
 	h.box.n = 3
 	view v = h.box
-	stash(v)
+	stash(v, kept: kept)
 	print("{kept.count()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:31:2: cannot pass 'v', which is read-only (a `view`), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:30:2: cannot pass 'v', which is read-only (a `view`), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: view-binding.error.a-returned-view-is-refused -->

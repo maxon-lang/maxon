@@ -242,8 +242,6 @@ constant) folds the whole chain to `mov rax, 707` — no `neg` is emitted and th
 checks a constant. Neither the parser's constant domain nor the fold pass looks through memory, so a
 load of a global keeps the three `neg`s, and the reuse copy this case exists to pin, on every lane.
 ```maxon
-var seed = 0 as Integer
-
 function negs(p Integer) returns Integer
 	let x = p + 7
 	let n1 = -x
@@ -253,6 +251,7 @@ function negs(p Integer) returns Integer
 end 'negs'
 
 function main() returns ExitCode
+	let seed = (CommandLine.args().count() - 1) as Integer
 	let r = negs(seed)
 	if r == 707 'ok'
 		return 0

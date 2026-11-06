@@ -101,9 +101,6 @@ An array grows by doubling while small and eases toward 1.25x once it is large.
 | `sortBy(cmp function(Element, Element) returns Ordering)` | Stable sort by a comparator; any element type. |
 | `sortUnstableBy(cmp function(Element, Element) returns Ordering)` | Unstable sort by a comparator. |
 
-A sort reads and writes no module-level state, so it may run inside a service message handler without
-tripping [E3143](/docs/cli/error-codes/#e3143--semanticmodulevarinserviceprogram).
-
 ### Iterating
 
 | Member | Returns | Description |

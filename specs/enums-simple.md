@@ -29,7 +29,7 @@ end 'Direction'
 Create enum values using dot notation:
 
 ```maxon
-var dir = Direction.north
+let dir = Direction.north
 ```
 
 ### Enum Methods
@@ -67,9 +67,9 @@ end 'Direction'
 Call methods using instance-dot-method syntax:
 
 ```maxon
-var dir = Direction.north
-var opp = dir.opposite()    // Direction.south
-var vert = dir.isVertical() // true
+let dir = Direction.north
+let opp = dir.opposite()    // Direction.south
+let vert = dir.isVertical() // true
 ```
 
 ## Tests

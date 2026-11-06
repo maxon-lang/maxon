@@ -208,14 +208,12 @@ end 'main'
 0
 ```
 
-<!-- test: a-top-level-map-of-promises-reclaims-a-removed-entry -->
+<!-- test: a-local-map-of-promises-reclaims-a-removed-entry -->
 <!-- process: own -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias PromiseMap = Map with (String, IntPromise)
-
-var shelf = PromiseMap.create()
 
 function work(n Integer) returns Integer
 	Scheduler.yield()
@@ -223,6 +221,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
+	var shelf = PromiseMap.create()
 	shelf.upsert("a", value: async work(1))
 
 	if shelf.remove("a") 'removed'

@@ -86,14 +86,14 @@ can say whether a header-free BUFFER leaked:
   destructor, so this layer covers the header-carrying records (a struct, a String record, an
   array's outer handle) and the header-free buffers behind them alike.
 - **RAW.** Beneath the boxes sits the slab, whose counted door `__slab_alloc` is called directly by the
-  scheduler's processors, the service mailboxes' records, shared-value cells, environment-variable and host-text copies, and the
+  scheduler's processors, the services' cown records, shared-value cells, environment-variable and host-text copies, and the
   subprocess scratch buffers. A green thread is not among them: its STACK comes from `osAllocPages`, and
   its RECORD from the scheduler's own record arena, which is carved from `osAllocPages` chunks —
   scaffolding like the stack, invisible to both layers. A runtime buffer whose allocation count follows
-  the schedule or the environment is scaffolding of the same kind: a mailbox's MESSAGE RING, the timer
+  the schedule or the environment is scaffolding of the same kind: a service's BEHAVIOUR RECORDS (one per queued message), the timer
   store, an `awaitAny`'s scratch, the subprocess table and its per-slot buffers, and the poller's table
-  and descriptors. Whether a message is queued at all, for one, depends on whether its receiver was
-  parked when it arrived, so a ring cut, grown or shrunk in these columns would make two identical runs
+  and descriptors. Whether a message waits behind another, for one, depends on whether the service's
+  runner was running when it arrived, so a behaviour record cut in these columns would make two identical runs
   report different counts. These come from the slab's uncounted door (`__slab_alloc_scaffold`, freed by
   `__slab_free_scaffold`), and a green thread's staging buffer from the scheduler's arena; none is
   credited to either layer. The slab's other callers are genuinely header-free and no `__mm_alloc`
@@ -122,8 +122,8 @@ is exactly what the process-wide totals answer (`process-totals-are-the-six-summ
 They read two columns. `mmRawAllocTotal` is cumulative and only ever rises; `mmRawAllocLive` rises with
 each slab request and FALLS at the slab's free door `__slab_free`. A `__slab_alloc` caller that frees its region moves the
 live column back: the subprocess runner's and the read probe's per-call scratch, and a service's
-mailbox, freed by whichever of its handle and its service lets go last (its message ring goes back with
-it through the uncounted door and moves neither column). A green-thread record is never credited at
+cown record, freed by whichever of its handle and its finishing runner lets go last (the behaviour records go back
+through the uncounted door and move neither column). A green-thread record is never credited at
 all: it comes from the scheduler's record arena, not the slab, and is recycled through the scheduler's
 own free lists (`runtime-scratch-reclaim.md`'s `spawn-await-loop-is-bounded`). `__mm_alloc`'s boxes move
 the tracked columns only, so the public raw figures are untouched by them. `raw-live-falls-below-raw-total` below pins the two-number shape.
@@ -588,43 +588,38 @@ mm_free ArrayRecord #8
 a plausible `0` hides. `__gt_init` takes the scheduler's tables from `__slab_alloc` before `main` runs, and
 `main` itself runs on a green thread, so by its first line the columns already count that scaffolding and
 are not 0. Three windows follow, each pinned to the regions it cuts: the spawn, the first message, and a
-second message. `__svc_spawn` takes the service's MAILBOX straight from `__slab_alloc`
-(`MailboxRuntime.maxon`) with no box header, so the raw columns rise and the tracked ones do not. The last
-assertion separates the byte column from the count column: the mailbox is many bytes wide, so the two
+second message. `__cown_spawn` takes the service's COWN straight from `__slab_alloc`
+(`CownRuntime.maxon`) with no box header, so the raw columns rise and the tracked ones do not. The last
+assertion separates the byte column from the count column: the cown is many bytes wide, so the two
 deltas cannot be equal unless one of the two intrinsics is wired to the other's slot.
 
-⭐ **THE MAILBOX IS ONE REGION: ITS RECORD, ITS ONE-SLOT INBOX AND ITS OWN 8-BYTE LOCK WORD.** A mailbox's
-ring bookkeeping, closed flag and parked receiver are guarded by a lock of the mailbox's own, not by
-`__sched_lock`, and the receiver reads each message from an inbox inside the mailbox, sized at spawn to one
-`Counter.request`. So the region `__svc_spawn` cuts holds the record, the lock word that follows it and
-the inbox — a runtime lock is one zeroed word, so the slab's zeroing is its whole initialisation. The byte
-column counts the size requested, not the slab class it lands in, so the spawn window is exactly one raw
-region of that size. A lock or an inbox cut as a region of its own reads two regions.
+⭐ **THE COWN IS ONE REGION: ITS STATE BOX, ITS QUEUE TAIL, ITS GATE WORD, ITS TWO REFERENCE COUNTS, ITS TWO CODE
+POINTERS AND ITS OWN 8-BYTE LOCK WORD.** The queue's tail and the gate that answers "closed, full or waiting" are
+single words stepped by atomic operations, and the lock guards only the queue of senders waiting for room, so the
+region `__cown_spawn` cuts holds all of it — a runtime lock is one zeroed word, so the slab's zeroing is its whole
+initialisation. The byte column counts the size requested, not the slab class it lands in, so the spawn window is
+exactly one raw region of `cownRecordBytes`. A lock cut as a region of its own reads two regions.
 
-⭐ **THE FIRST MESSAGE CUTS NO COUNTED REGION, AND THE SECOND WINDOW IS WHERE THAT IS SAID.** At one
-processor with preemption off the spawned service has not run when `main` sends, so no receiver is parked
-and the message is copied into the mailbox's own inbox, which the region `__svc_spawn` cut already holds:
-the first message cuts no message ring either. The ring a LATER queued message cuts (16 slots of one
-`Counter.request` each) is scaffolding, taken from the slab's uncounted door, because whether a message
-queues, and so whether a ring is cut, grown or shrunk, depends on the schedule — a receiver that is
-already parked is handed the message directly and no ring exists — and a timing-dependent allocation must
-not reach the counts. The sender's staging buffer is arena memory and is uncounted too. So the window
-around the first message moves NEITHER raw column. A first message that cut a ring from the counted door
-would read one region and 16 slots of bytes here.
+⭐ **A MESSAGE CUTS NO COUNTED REGION, AND THE SECOND WINDOW IS WHERE THAT IS SAID.** At one processor with
+preemption off the spawned service has not run when `main` sends, so the message waits in the cown's queue as a
+BEHAVIOUR RECORD: a header and a copy of the request, taken from the slab's uncounted door, because whether a message
+waits behind another, and so how many records exist at once, depends on the schedule, and a timing-dependent allocation
+must not reach the counts. The sender's staging buffer is arena memory and is uncounted too. So the window around the
+first message moves NEITHER raw column. A message that cut its record from the counted door would read one region and
+its bytes here.
 
-⭐ **A LATER MESSAGE TAKES NO RAW REGION EITHER, AND THE THIRD WINDOW IS WHERE THAT IS SAID.** A second
-message to the SAME service is copied into the ring, or straight into the parked receiver's inbox, and
-moves neither raw column. The reply cell is not raw: it is carved from the scheduler's
-arena. A queue that cut a counted region per message would move both.
+⭐ **A LATER MESSAGE TAKES NO RAW REGION EITHER, AND THE THIRD WINDOW IS WHERE THAT IS SAID.** A second message to the
+SAME service is copied into a behaviour record of its own and moves neither raw column. The reply cell is not raw: it is
+carved from the scheduler's arena. A queue that cut a counted region per message would move both.
 
 ⚠ **THE WITNESS IS A SERVICE AND NOT AN `async` SPAWN**, because a green thread moves neither column: its
 record comes from the scheduler's record arena and its stack from `osAllocPages` (see *The two LAYERS*
 above). An `async` spawn and await would read `after == before`.
 
 ✅ **THE HALVES FAIL FOR DIFFERENT REASONS.** With the raw columns' maintenance removed from
-`__slab_alloc`, the scaffolding and mailbox assertions go RED — a column nothing maintains reads 0 at
+`__slab_alloc`, the scaffolding and cown assertions go RED — a column nothing maintains reads 0 at
 `main`'s first line and moves in no window — while the equalities of the second and third windows hold
-vacuously; that is why the mailbox's region is counted beside them. A ring or a staging buffer taken from
+vacuously; that is why the cown's region is counted beside them. A behaviour record or a staging buffer taken from
 the counted door fails the second window, and a queue that cuts a counted region per message fails the
 third.
 ```maxon
@@ -644,9 +639,7 @@ type Counter
 	end 'next'
 end 'Counter'
 
-let mailboxRecordBytes = 96
-let lockWordBytes = 8
-let requestSlotBytes = 24
+let cownRecordBytes = 88
 
 function main() returns ExitCode
 	let before = __Builtins.mmRawAllocTotal()
@@ -664,9 +657,9 @@ function main() returns ExitCode
 	if before > 0 'theSchedulerIsInstalledBeforeMain'
 		score = score + 1
 	end 'theSchedulerIsInstalledBeforeMain'
-	if afterSpawn - before == 1 and bytesAfterSpawn - bytesBefore == mailboxRecordBytes + requestSlotBytes + lockWordBytes 'theMailboxCarriesItsInboxAndLock'
+	if afterSpawn - before == 1 and bytesAfterSpawn - bytesBefore == cownRecordBytes 'theCownIsOneRegion'
 		score = score + 2
-	end 'theMailboxCarriesItsInboxAndLock'
+	end 'theCownIsOneRegion'
 	if afterFirst == afterSpawn and bytesAfterFirst == bytesAfterSpawn 'theFirstQueuedMessageCutsNoCountedRegion'
 		score = score + 4
 	end 'theFirstQueuedMessageCutsNoCountedRegion'
@@ -688,25 +681,24 @@ end 'main'
 <!-- procs: 1 -->
 <!-- preempt: off -->
 **THE CASE THAT PINS THE RAW COLUMNS AS TWO NUMBERS: A COUNTED CALLER FREES, SO `live` FALLS BELOW
-`total`.** The caller is a service's MAILBOX, the one counted raw region a service owns. `__svc_spawn`
+`total`.** The caller is a service's COWN, the one counted raw region a service owns. `__cown_spawn`
 cuts it from `__slab_alloc`, and whichever of its two owners lets go LAST hands it back through
-`__slab_free`: the handle, dropped when `serveOnce` returns, closes the mailbox, and the service's green
-thread, waking to a closed and drained queue, runs `__mbox_service_exit` and frees it. So the window around
+`__slab_free`: the handle, dropped when `serveOnce` returns, closes the cown, and the runner that finishes the service
+(it holds the cown's own reference until its state is dropped) frees it. So the window around
 `serveOnce` and the wait after it credits `total` by exactly ONE region and leaves `live` where it started.
 A runtime whose free door did not debit the live column would leave `live` one above.
 
 ⭐ **EXACTLY ONE, BECAUSE A MESSAGE TAKES NO COUNTED REGION.** At one processor with preemption off the
-service has not run when `main` sends, so the awaited `next` waits in the mailbox's inbox. A message
-ring, cut only by a message that queues behind another, is scaffolding from the slab's uncounted door,
-freed with the mailbox through the matching uncounted door: whether a ring exists depends on whether the
-receiver was parked when a message arrived, and a timing-dependent allocation must not reach the counts. The sender's staging buffer is arena
-memory and uncounted too. A queue that wrapped each request in an envelope of its own, or took its ring
-from the counted door, would credit `total` once more and free it again, so `live` would still come back
-and only the count would tell.
+service has not run when `main` sends, so the awaited `next` waits in the cown's queue. The behaviour record that holds it
+is scaffolding from the slab's uncounted door, freed through the matching uncounted door: how many records exist at once
+depends on whether the runner was running when a message arrived, and a timing-dependent allocation must not reach the
+counts. The sender's staging buffer is arena memory and uncounted too. A queue that took its records from the counted door
+would credit `total` once more per message and free each again, so `live` would still come back and only the count would
+tell.
 
 ⚠ **THE WAIT IS A BOUNDED YIELD LOOP, NOT A FIXED NUMBER OF YIELDS**, because the free runs on the
-SERVICE's green thread after the handle drop has made it ready. At one processor the first yield runs it.
-The budget is what keeps a runtime that never frees the mailbox a red case rather than a hang.
+FINISH RUNNER's green thread after the handle drop has made it ready. At one processor the first yield runs it.
+The budget is what keeps a runtime that never frees the cown a red case rather than a hang.
 
 It is asserted only where there is something to compare — the window credited something, so the count
 moved — because `0 == 0` says nothing about a runtime that maintains no raw counter at all.
@@ -755,9 +747,9 @@ function main() returns ExitCode
 	if total > totalBefore 'somethingToCompare'
 		score = score + 1
 	end 'somethingToCompare'
-	if live == liveBefore 'theMailboxWentBack'
+	if live == liveBefore 'theCownWentBack'
 		score = score + 4
-	end 'theMailboxWentBack'
+	end 'theCownWentBack'
 	if total - totalBefore == 1 'oneRawRegionPerServiceAndNonePerMessage'
 		score = score + 8
 	end 'oneRawRegionPerServiceAndNonePerMessage'
@@ -773,15 +765,15 @@ end 'main'
 <!-- procs: 1 -->
 <!-- preempt: off -->
 ⭐⭐ **A MESSAGE IS COPIED INTO ITS MAILBOX, SO SENDING ONE MOVES NO TRACKED COLUMN.** The sender fills its
-green thread's staging buffer and `__mbox_send` copies it into the mailbox's ring, or into the mailbox's
-inbox when the receiver is parked or has never run; the receiver reads it from the inbox. Nothing is boxed, so `mmAllocTotal` does not move per message. The case
+green thread's staging buffer and `__cown_send` copies it into a behaviour record linked into the cown's queue; the
+runner reads it from there. Nothing is boxed, so `mmAllocTotal` does not move per message. The case
 compares two windows on one service whose messages carry only `Integer`s: ONE awaited `read`, and
 eight `add`s that return nothing followed by the same awaited `read`. The two must move the tracked count by
 the same amount — whatever an awaited reply costs, it costs it once in each window — so a message that
 allocated a tracked box would put the second window eight above the first, and nothing else can.
 
 ⚠ **THE WARM-UP `read` IS WHAT MAKES THE WINDOWS COMPARABLE.** It is sent before either window, so every
-one-time cost of a first message is paid before the first reading. The mailbox's ring and `main`'s staging
+one-time cost of a first message is paid before the first reading. The behaviour records and `main`'s staging
 buffer are scaffolding outside both layers, so this case reads only the tracked column and neither can
 move it.
 ```maxon
@@ -1024,7 +1016,7 @@ fails the count halves.
 
 ⚠ The spawn comes FIRST so `main` runs on a green thread with columns of its own. The factory runs on the
 service's own green thread, so `main` awaits one reply before the window opens: the service has then built
-itself and is parked on its mailbox throughout.
+itself and is idle throughout.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)

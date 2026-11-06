@@ -20,14 +20,14 @@ Calculate the absolute value of a number.
 **Example:**
 
 ```maxon
-var x = -5.5
-var y = abs(x)       // 5.5
+let x = -5.5
+let y = abs(x)       // 5.5
 
-var i = -42.0
-var j = abs(i)       // 42.0
+let i = -42.0
+let j = abs(i)       // 42.0
 
 // To get an int result:
-var k = trunc(abs(-3.7))   // 3
+let k = trunc(abs(-3.7))   // 3
 ```
 **Notes:**
 - `abs(0.0)` returns `0.0`

@@ -526,36 +526,3 @@ end 'main'
 
 A module-global load that a function only reads — no value derived from
 it reaches a retention — borrows the global and takes no reference.
-
-<!-- test: global-struct-load-borrow -->
-A module-level managed struct global is read borrow-only inside a
-function — it reads a single field and returns a scalar comparison. The
-load carries no incref/decref bracket: neither call appears in the
-emitted code.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Config
-	export var threshold as Integer
-
-	static function create(threshold Integer) returns Self
-		return Self{threshold: threshold}
-	end 'create'
-end 'Config'
-
-var cfg = Config.create(10)
-
-function check(value Integer) returns Integer
-	if value > cfg.threshold 'high'
-		return value
-	end 'high'
-	return 0
-end 'check'
-
-function main() returns ExitCode
-	return check(42)
-end 'main'
-```
-```exitcode
-42
-```

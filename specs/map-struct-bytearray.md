@@ -80,14 +80,11 @@ type Database
 	end 'create'
 end 'Database'
 
-var db = Database.create(EntryMap.create(), sourcePaths: StringArray.create(0))
+let db = Database.create(EntryMap.create(), sourcePaths: StringArray.create(0))
 
 function storeAndCheck(key String, data ByteArray)
 	if db.sourceFiles.contains(key) 'exists'
-		view existing = try db.sourceFiles.get(key) otherwise 'skip'
-			return
-		end 'skip'
-		let existingCount = existing.data.count()
+		let existingCount = db.sourceFiles.count()
 		print("existing: {existingCount}\n")
 	end 'exists' else 'newFile'
 		print("new\n")
@@ -136,15 +133,12 @@ export type Database
 	end 'create'
 end 'Database'
 
-export var db = Database.create(EntryMap.create(), sourcePaths: EntryPaths.create(0))
+export let db = Database.create(EntryMap.create(), sourcePaths: EntryPaths.create(0))
 
 // --- file: app/1-Logic.maxon
 export function storeAndCheck(key String, data EntryBytes)
 	if db.sourceFiles.contains(key) 'exists'
-		view existing = try db.sourceFiles.get(key) otherwise 'skip'
-			return
-		end 'skip'
-		let existingCount = existing.data.count()
+		let existingCount = db.sourceFiles.count()
 		print("existing: {existingCount}\n")
 	end 'exists' else 'newFile'
 		print("new\n")

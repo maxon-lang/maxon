@@ -2700,7 +2700,7 @@ type MaxonToStdLowering
 	end 'witnessCountOf'
 
 	function witnessParamCountForFunc(func IrFunction) returns ParamCount
-		if isSignaturelessCompilerCallee(func.name, funcSignatures: self.funcSignatures) or isServiceLoopSymbol(func.name) 'aFunctionTheCompilerBuiltWithoutASignature'
+		if isSignaturelessCompilerCallee(func.name, funcSignatures: self.funcSignatures) or isServiceBehaveSymbol(func.name) or isServiceFinishSymbol(func.name) 'aFunctionTheCompilerBuiltWithoutASignature'
 			return 0
 		end 'aFunctionTheCompilerBuiltWithoutASignature'
 
@@ -6361,15 +6361,15 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(gt, offset: GtOffReleaser, valueId: releaserPtr, valueType: StdType.i64))
 	end 'emitAsyncReleaserStore'
 
-	// ⭐⭐ **`spawn <T>.<factory>(…)` → `__svc_spawn(&<T>.__start_<factory>, record, slotBytes,
-	// capacity)`.** The op carries the TYPE, the state and the factory; the loop's and the start
-	// thunk's symbols are derived here, from those names, because deriving them at the parse would put
-	// each symbol in a second place — and a `funcAddr` naming a symbol nothing built is a link failure
-	// with no line on it.
+	// ⭐⭐ **`spawn <T>.<factory>(…)` → `__cown_spawn(&<T>.__start_<factory>, record, slotBytes,
+	// capacity, &<T>.__behave, &<T>.__finish)`.** The op carries the TYPE, the state and the factory;
+	// the three symbols are derived here, from those names, because deriving them at the parse would
+	// put each symbol in a second place — and a `funcAddr` naming a symbol nothing built is a link
+	// failure with no line on it.
 	//
-	// ⚠ The thunk is ROOTED by this `funcAddr`, which `DeadFunctionElimination` treats as a static
-	// edge (`stdFunctionReferenceOf`), and the loop by the thunk's call. Neither is reachable from
-	// anything else, which is what keeps a service-free program's output byte-identical.
+	// ⚠ The thunk, `__behave` and `__finish` are ROOTED by this call's `funcAddr`s, which
+	// `DeadFunctionElimination` treats as static edges (`stdFunctionReferenceOf`). None is reachable
+	// from anything else, which is what keeps a service-free program's output byte-identical.
 	function lowerServiceSpawn(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 's'
 			serviceSpawn(result, typeName, state, capacity, callee, args, argLabels, _, _, _, _, startReplies) then self.emitServiceSpawn(result, typeName: typeName, state: state, capacity: capacity, callee: callee, args: args, argLabels: argLabels, replies: startReplies, dstBlock: dstBlock)
@@ -6378,8 +6378,8 @@ type MaxonToStdLowering
 	end 'lowerServiceSpawn'
 
 	// ⭐ **WHICH INSTANTIATION THE SPAWNED STATE STANDS AT** — this tier's two columns, handed to the ONE
-	// classifier `ServiceLoop.spawnedInstancesByService` also reads, so the loop this names is the
-	// loop that was built.
+	// classifier `ServiceBehaviour.spawnedInstancesByService` also reads, so the `__behave` and
+	// `__finish` this names are the ones that were built.
 	function spawnedStateInstance(state ValueId) returns ServiceStateInstance
 		return serviceStateInstanceOfValueType(self.valueTagOf(state), nameId: try self.valueNameIds.get(state) otherwise panic("spawnedStateInstance: v{state} is not in '{String.from(self.currentFuncName())}'s dense value-name column"))
 	end 'spawnedStateInstance'
@@ -6404,26 +6404,33 @@ type MaxonToStdLowering
 		let slots = AsyncArgumentSlots.recorded(sig.paramTypes, byReference: target.byReference)
 		let cell = self.emitServiceStartCell(result, replies: replies, dstBlock: dstBlock)
 		let record = self.emitServiceStartRecord(words, slots: slots, cell: cell, dstBlock: dstBlock)
-		let loopName = serviceLoopSymbolFor(self.signatures, typeName: typeName, instance: self.spawnedStateInstance(state))
-		let thunkName = serviceStartSymbol(loopName, factory: callee)
+		let instance = self.spawnedStateInstance(state)
+		let thunkName = serviceStartSymbol(serviceOwnerSymbolFor(self.signatures, typeName: typeName, instance: instance), factory: callee)
 
 		if not self.stdModule.serviceStartThunks.contains(thunkName) 'notBuiltYet'
 			self.stdModule.serviceStartThunks.insert(thunkName.clone())
-			self.buildServiceStartThunk(thunkName, loopName: loopName, callee: callee, wordCount: words.count(), slots: slots, target: target, replies: replies)
+			self.buildServiceStartThunk(thunkName, callee: callee, wordCount: words.count(), slots: slots, target: target, replies: replies)
 		end 'notBuiltYet'
 
-		let thunkPtr = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(thunkPtr, funcName: thunkName))
+		let thunkPtr = self.emitFuncAddr(thunkName, dstBlock: dstBlock)
+		let behavePtr = self.emitFuncAddr(serviceBehaveSymbolFor(self.signatures, typeName: typeName, instance: instance), dstBlock: dstBlock)
+		let finishPtr = self.emitFuncAddr(serviceFinishSymbolFor(self.signatures, typeName: typeName, instance: instance), dstBlock: dstBlock)
 		let slotBytes = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(slotBytes, value: requireServiceRequestLayout(self.signatures, typeName: typeName).boxSizeBytes() as FullRangeInt, valueType: StdType.i64))
 
-		let mailbox = match cell 'cell'
+		let cown = match cell 'cell'
 			absent gives result
 			allocated gives self.mintStdValueId()
 		end 'cell'
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(mailbox, callee: SvcSpawnName, args: fourArgs(thunkPtr, second: record, third: slotBytes, fourth: capacity)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(cown, callee: CownSpawnName, args: sixArgs(thunkPtr, second: record, third: slotBytes, fourth: capacity, fifth: behavePtr, sixth: finishPtr)))
 	end 'emitServiceStart'
+
+	function emitFuncAddr(funcName ByteArray, dstBlock IrBlock) returns ValueId
+		let address = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(address, funcName: funcName))
+		return address
+	end 'emitFuncAddr'
 
 	// Only a throwing factory's spawn waits for its start. Its result is this cell, which the parser
 	// awaits and the start thunk completes with the handle or the factory's error
@@ -6466,20 +6473,23 @@ type MaxonToStdLowering
 		return record
 	end 'emitServiceStartRecord'
 
-	// `<loop>.__start_<factory>(record, mailbox)`, where the service's green thread starts: it loads
+	// `<T>.__start_<factory>(cown, behaviour)`, the service's start behaviour: it loads
 	// every word of the record, calls the factory, releases the arguments and the record, reports a
-	// throwing factory's outcome, and enters the loop. It runs on that green thread's stack, so it
-	// takes its stack guard. It reads nothing of the spawning function, so one body serves every spawn
-	// of that factory into that loop, and `StdModule.serviceStartThunks` dedups it by name.
-	function buildServiceStartThunk(name ByteArray, loopName ByteArray, callee ByteArray, wordCount ElementIndex, slots AsyncArgumentSlots, target AsyncSpawnTarget, replies bool)
+	// throwing factory's outcome, and stores the started state into the cown. It runs on a green
+	// thread's stack, so it takes its stack guard. It reads nothing of the spawning function, so one body
+	// serves every spawn of that factory into that service, and `StdModule.serviceStartThunks` dedups it
+	// by name.
+	function buildServiceStartThunk(name ByteArray, callee ByteArray, wordCount ElementIndex, slots AsyncArgumentSlots, target AsyncSpawnTarget, replies bool)
 		let spawnersSpan = self.stdModule.spans.current
 		self.stdModule.spans.current = NoSpanId
 		var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true)
 		var entry = self.stdModule.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-		let record = 0 as ValueId
-		let mailbox = 1
-		self.stdModule.appendOp(entry, op: StdOp.param(record, index: 0, paramType: StdType.i64))
-		self.stdModule.appendOp(entry, op: StdOp.param(mailbox, index: 1, paramType: StdType.i64))
+		let cown = 0 as ValueId
+		let behaviour = 1 as ValueId
+		self.stdModule.appendOp(entry, op: StdOp.param(cown, index: 0, paramType: StdType.i64))
+		self.stdModule.appendOp(entry, op: StdOp.param(behaviour, index: 1, paramType: StdType.i64))
+		let record = self.mintStdValueId()
+		self.stdModule.appendOp(entry, op: StdOp.loadIndirect(record, addrId: behaviour, offset: BehOffPayload, valueType: StdType.i64))
 		var factoryArgs = ValueIdArray.create(0)
 
 		for k in 0 upto wordCount 'eachWord'
@@ -6490,7 +6500,7 @@ type MaxonToStdLowering
 
 		let started = self.mintStdValueId()
 		let report = self.emitServiceFactoryCall(started, callee: callee, args: factoryArgs, record: record, cellOffset: (wordCount as ByteOffset) * GtArgSlotBytes, replies: replies, entry: entry)
-		self.nextValueId = finishServiceStart(self.stdModule, func: func, entry: entry, nextValue: self.nextValueId, record: record, mailbox: mailbox, state: started, loopName: loopName, target: target, funcSignatures: self.funcSignatures, signatures: self.signatures, typeNames: self.typeNames, report: report)
+		self.nextValueId = finishServiceStart(self.stdModule, func: func, entry: entry, nextValue: self.nextValueId, record: record, cown: cown, state: started, target: target, funcSignatures: self.funcSignatures, signatures: self.signatures, typeNames: self.typeNames, report: report)
 		self.stdModule.spans.current = spawnersSpan
 	end 'buildServiceStartThunk'
 
@@ -6507,14 +6517,14 @@ type MaxonToStdLowering
 		return ServiceStartReport.throughCell(cell, errorFlag: errorFlag)
 	end 'emitServiceFactoryCall'
 
-	// ⭐ **`h.m(…)` → `__mbox_send(mailbox, request, bytes, timeoutMs)`.** Everything else about a send
+	// ⭐ **`h.m(…)` → `__cown_send(cown, request, bytes, timeoutMs)`.** Everything else about a send
 	// happened at the parse: the arguments were MOVED into the request in the staging buffer, the request
-	// was tagged, and the mailbox was loaded out of the handle. The op's `callee` is carried for
+	// was tagged, and the cown was loaded out of the handle. The op's `callee` is carried for
 	// `UnusedExportCheck` and `StdlibSource`, which read it as a reference to the message, and `timed`
 	// for `SemanticCheck.opYields` — none is a lowering question, so nothing here reads them.
 	function lowerServiceSend(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 's'
-			serviceSend(_, status, _, handle, request, bytes, timeoutMs, _) then self.stdModule.appendOp(dstBlock, op: StdOp.call(status, callee: MboxSendName, args: fourArgs(handle, second: request, third: bytes, fourth: timeoutMs)))
+			serviceSend(_, status, _, handle, request, bytes, timeoutMs, _) then self.stdModule.appendOp(dstBlock, op: StdOp.call(status, callee: CownSendName, args: fourArgs(handle, second: request, third: bytes, fourth: timeoutMs)))
 			default panic("lowerServiceSend: expected a `serviceSend` op, got a different MaxonOp variant — `lowerOp` routes only `serviceSend` here")
 		end 's'
 	end 'lowerServiceSend'
@@ -7544,7 +7554,7 @@ end 'MaxonToStdLowering'
 // ⛔⛔ **IT RUNS IMMEDIATELY AFTER `lowerMaxonToStd` AND MUST NOT BE MOVED BELOW `inlineLeaves`, WHICH
 // FALSIFIES ITS CONDITION HONESTLY.** `InlineLeaves.copyBlockOps` stamps each cloned op with the CALLEE's
 // span on purpose — that is what lets a debugger step into an inlined body — so an author's leaf inlined
-// into a synthesized `<T>.__loop` leaves that compiler-emitted function holding real, correct spans. Asked
+// into a synthesized `<T>.__behave` leaves that compiler-emitted function holding real, correct spans. Asked
 // at the end of the whole pipeline this check read those as a leak and PANICKED on any service with an
 // inlinable handler. Nothing is given up by asking earlier: a leaked cursor is a fact about the lowering
 // walk, and the lowering walk is above this line.

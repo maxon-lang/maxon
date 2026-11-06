@@ -121,6 +121,8 @@ alias reaches a `FullRangeFloat` or `JsonFloat` parameter through `as`; a float 
 | `SpawnEnvironment`, `StdioRuntimeTriple` | the records `Subprocess` hands the runtime | Subprocess |
 | `AssertedReal` | `float(f64.min to f64.max)` | Testing |
 | `Tolerance` | `float(0.0 to f64.max)` | Testing |
+| `CownTortureSize` | `int(1 to u32.max)` ([CownTorture](#cowntorture)) | Testing |
+| `CownTortureViolations` | `int(0 to u64.max)` ([CownTorture](#cowntorture)) | Testing |
 
 `Byte` and `BytePos` are declared once, in `String` (see the table above). `BytePos`, `GraphemeIndex`,
 `JsonNodeId` and `Count` implement `ElementIndex`; `EntryCount`, `TableCapacity` and
@@ -711,9 +713,6 @@ An array grows by doubling while small and eases toward 1.25x once it is large.
 | `sortUnstable()` | Unstable sort (pattern-defeating quicksort). Requires `Element is Comparable`. |
 | `sortBy(cmp function(Element, Element) returns Ordering)` | Stable sort by a comparator; any element type. |
 | `sortUnstableBy(cmp function(Element, Element) returns Ordering)` | Unstable sort by a comparator. |
-
-A sort reads and writes no module-level state, so it may run inside a service message handler without
-tripping [E3143](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3143).
 
 ### Iterating
 
@@ -2519,7 +2518,7 @@ ALPN the first of its protocols the client lists. Same targets as `TlsClient`.
 
 The handshake runs on the stream's first `send`, `recv`, `shutdownWrite` or `handshake()`, under the options'
 handshake deadline (30 s by default), so a client that connects and then stalls holds only its own stream. A server
-that accepts in a loop and moves each stream to a green thread of its own (a `spawn`ed service) answers other
+that accepts in a loop and moves each stream into a service of its own (a `spawn`ed one) answers other
 clients meanwhile.
 
 ### TlsServerOptions
@@ -2914,13 +2913,13 @@ connection closes. Keep-alive, chunked transfer and `Expect: 100-continue` are o
 | `setLimits(caps HttpServerLimits)` | — | — | Replace the caps later requests are parsed under. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `HttpServerError` | Make an `accept()` still waiting `milliseconds` after this call throw `acceptTimedOut`; `0` clears it. Throws `listenerClosed` once the server is closed. |
 | `accept()` | `HttpExchange` | `HttpServerError` | Take the next connection and the one request on it. An `OPTIONS *` is answered here, and the next connection taken. |
-| `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection on a green thread of its own. |
+| `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection in a service of its own. |
 | `close()` | — | — | Stop listening: a parked or later `accept()` throws `listenerClosed`, which ends `serve`. |
 
 `close()` writes the server, so the server it is called on is held in a `var`; through a `let` it is
 [E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159).
 
-`serve` moves each accepted connection, a `TcpClient` or a `TlsStream`, to a green thread of its own, which reads its
+`serve` moves each accepted connection, a `TcpClient` or a `TlsStream`, to a service of its own, which reads its
 request and runs its handler. A client that stalls delays only its own connection, and a handler that computes
 without waiting delays only its own: connections run on as many processors as the program has. Connections in
 flight are bounded by the operating system's socket limits, each in time by [`HttpServerLimits`](#httpserverlimits)
@@ -4545,6 +4544,18 @@ end 'TestFailure'
 
 A `test` declaration is implicitly `throws TestFailure`. An error of any other type raised in a test body is
 reported as a failure naming the error and the line of the operation that threw it.
+
+### CownTorture
+
+`CownTorture` stress-tests the runtime's multi-cown acquire, the primitive that takes several services' states
+at once. It is what `scripts/multicore-stress/cown-multi-torture.maxon` runs.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `violations(cownCount, workers:, rounds:)` | `CownTortureViolations` | `workers` green threads each run `rounds` rounds. A round acquires two cowns drawn from `cownCount` cowns (a draw may repeat one), and holds them across a yield. Answers how many times a held cown was entered again, plus one when the per-cown entry counts do not add up to the acquisitions made; 0 means mutual exclusion held. `cownCount` must be a power of two, and any other value aborts the process. |
+
+`CownTortureSize` is `int(1 to u32.max)`, the type of all three arguments, and `CownTortureViolations` is
+`int(0 to u64.max)`.
 
 ## Build
 

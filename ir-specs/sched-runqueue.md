@@ -175,13 +175,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Ping.__start_Ping.create]
+    x64.leaRegFunc rsi, [rip + Ping.__behave]
+    x64.leaRegFunc rdi, [rip + Ping.__finish]
     x64.movRegImm32 rax, 16
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeSlotReg slot0, r12
@@ -189,7 +191,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg rbx, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r8 + 0], rax
     x64.storeBaseDispReg.word64 [r8 + 8], rbx
@@ -197,7 +199,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r8
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -265,7 +267,7 @@ func @main {
     x64.retIndirect
   sendrefused:
     x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at sched-runqueue.a-thief-reads-the-victims-ring-with-acquire-loads.test:17: the one message this frame sends to a service it owns cannot fail\x0a"
     x64.callDirect mrt_panic
@@ -280,51 +282,45 @@ func @main {
     x64.retIndirect
 }
 
-func @Ping.__loop {
+func @Ping.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=hit] @__jumptable_6
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=hit] @__jumptable_6
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   hit:
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 8]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.loadRegBaseDisp.word64 rdx, [rax + 0]
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Ping.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Ping.__start_Ping.create {
@@ -337,7 +333,7 @@ func @Ping.__start_Ping.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -346,19 +342,17 @@ func @Ping.__start_Ping.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Ping.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__sched_steal {
@@ -580,13 +574,15 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.leaRegFunc rcx, [rip + Ping.__start_Ping.create]
+    x64.leaRegFunc rsi, [rip + Ping.__behave]
+    x64.leaRegFunc rdi, [rip + Ping.__finish]
     x64.movRegImm32 rax, 16
     x64.movRegReg rdx, r8
     x64.movRegReg r9, rbx
-    x64.callDirect __svc_spawn
+    x64.callDirect __cown_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
+    x64.leaRegFunc rdx, [rip + __cown_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeSlotReg slot0, r12
@@ -594,7 +590,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg rbx, r8
-    x64.callDirect __mbox_staging
+    x64.callDirect __cown_staging
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r8 + 0], rax
     x64.storeBaseDispReg.word64 [r8 + 8], rbx
@@ -602,7 +598,7 @@ func @main {
     x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r8
-    x64.callDirect __mbox_send
+    x64.callDirect __cown_send
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, sendrefused
   sendaccepted:
@@ -670,7 +666,7 @@ func @main {
     x64.retIndirect
   sendrefused:
     x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_reply_refused
+    x64.callDirect __cown_reply_refused
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at sched-runqueue.a-thief-reads-the-victims-ring-with-acquire-loads.test:17: the one message this frame sends to a service it owns cannot fail\x0a"
     x64.callDirect mrt_panic
@@ -685,51 +681,45 @@ func @main {
     x64.retIndirect
 }
 
-func @Ping.__loop {
+func @Ping.__behave {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-  serve:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, dispatch
-  finished:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_service_exit
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=unknowntag [[0]=hit] @__jumptable_6
+    x64.loadRegBaseDisp.word64 rax, [rcx + 40]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.jumpTable rcx, default=unknowntag [[0]=hit] @__jumptable_6
   unknowntag:
-    x64.callDirect __mbox_unknown_tag
+    x64.callDirect __cown_unknown_tag
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
   hit:
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 8]
   __il_body:
-    x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.aluBaseDispImm32.add [rax + 0], 1
+    x64.loadRegBaseDisp.word64 rdx, [rax + 0]
   __il_cont:
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
-    x64.jmp serve
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Ping.__finish {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @Ping.__start_Ping.create {
@@ -742,7 +732,7 @@ func @Ping.__start_Ping.create {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 24]
   __il_body:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 rcx, 8
@@ -751,19 +741,17 @@ func @Ping.__start_Ping.create {
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r12
-    x64.callDirect Ping.__loop
     x64.movRegReg rax, r8
+    x64.storeBaseDispReg.word64 [rbx + 40], r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.retIndirect
+    x64.ret
 }
 
 func @__sched_steal {
@@ -977,19 +965,21 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Ping.__start_Ping.create
+    arm64.leaFuncAddr x4, Ping.__behave
+    arm64.leaFuncAddr x5, Ping.__finish
     arm64.movImm x2, 16
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x19, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x1, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
@@ -997,7 +987,7 @@ func @main {
     arm64.movImm x2, 16
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -1064,7 +1054,7 @@ func @main {
     arm64.retIndirect
   sendrefused:
     arm64.movRegReg x0, x19
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
   tryerr:
     arm64.leaRdata x0, __str_blob_2  ; "panic at sched-runqueue.a-thief-reads-the-victims-ring-with-acquire-loads.test:17: the one message this frame sends to a service it owns cannot fail\x0a"
     arm64.bl mrt_panic
@@ -1081,49 +1071,40 @@ func @main {
     arm64.retIndirect
 }
 
-func @Ping.__loop {
+func @Ping.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=hit] @__jumptable_6
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=hit] @__jumptable_6
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   hit:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x1
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Ping.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Ping.__start_Ping.create {
@@ -1134,7 +1115,7 @@ func @Ping.__start_Ping.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -1143,18 +1124,16 @@ func @Ping.__start_Ping.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Ping.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__sched_steal {
@@ -1370,19 +1349,21 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Ping.__start_Ping.create
+    arm64.leaFuncAddr x4, Ping.__behave
+    arm64.leaFuncAddr x5, Ping.__finish
     arm64.movImm x2, 16
     arm64.movRegReg x3, x19
-    arm64.bl __svc_spawn
+    arm64.bl __cown_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mbox_handle_destruct
+    arm64.leaFuncAddr x1, __cown_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x19, x0
-    arm64.bl __mbox_staging
+    arm64.bl __cown_staging
     arm64.movRegReg x1, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
@@ -1390,7 +1371,7 @@ func @main {
     arm64.movImm x2, 16
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.bl __mbox_send
+    arm64.bl __cown_send
     arm64.cmp x0, 0
     arm64.b.ne sendrefused
   sendaccepted:
@@ -1457,7 +1438,7 @@ func @main {
     arm64.retIndirect
   sendrefused:
     arm64.movRegReg x0, x19
-    arm64.bl __mbox_reply_refused
+    arm64.bl __cown_reply_refused
   tryerr:
     arm64.leaRdata x0, __str_blob_2  ; "panic at sched-runqueue.a-thief-reads-the-victims-ring-with-acquire-loads.test:17: the one message this frame sends to a service it owns cannot fail\x0a"
     arm64.bl mrt_panic
@@ -1474,49 +1455,40 @@ func @main {
     arm64.retIndirect
 }
 
-func @Ping.__loop {
+func @Ping.__behave {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-  serve:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.cmp x0, 0
-    arm64.b.ne dispatch
-  finished:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_service_exit
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=unknowntag [[0]=hit] @__jumptable_6
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.jumpTable x0, default=unknowntag [[0]=hit] @__jumptable_6
   unknowntag:
-    arm64.bl __mbox_unknown_tag
+    arm64.bl __cown_unknown_tag
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.retIndirect
+    arm64.epilogue 16
+    arm64.ret
   hit:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
   __il_body:
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x1, x1, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x1
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
   __il_cont:
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
-    arm64.b serve
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Ping.__finish {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @Ping.__start_Ping.create {
@@ -1527,7 +1499,7 @@ func @Ping.__start_Ping.create {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 24]
   __il_body:
     arm64.movImm x21, 0
     arm64.movImm x0, 8
@@ -1536,18 +1508,16 @@ func @Ping.__start_Ping.create {
     arm64.movRegReg x22, x0
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
   __il_cont:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x20
-    arm64.bl Ping.__loop
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 40], x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
-    arm64.retIndirect
+    arm64.ret
 }
 
 func @__sched_steal {

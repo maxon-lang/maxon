@@ -55,8 +55,7 @@ let PRIMES = [2, 3, 5, 7, 11]
 - A call that returns a record runs in `__module_init` before `main`; a call that returns a scalar not
   known at compile time is **E2045**
 - Initializers that depend on each other in a cycle are **E2012**
-- A top-level `var` is module state rather than a constant: its initializer runs before `main`, and any
-  function in the file may reassign it (`docs/LANGUAGE_REFERENCE.md`, *Top-Level Variables*)
+- A top-level `var` does not exist (`specs/module-var-removed.md`): a module-level binding is a `let`
 
 ---
 
@@ -200,17 +199,15 @@ end 'main'
 ```
 
 <!-- test: a-top-level-short-circuit-is-a-constant -->
-`and` and `or` over constants are constants themselves, so they initialize a scalar `var`, whose initializer must be known before `main`.
+`and` and `or` over constants are constants themselves, so they initialize another constant.
 ```maxon
 let BOTH = true and true
 let EITHER = false or true
 let NEITHER = false and true
-var READY = BOTH and EITHER and not NEITHER
+let READY = BOTH and EITHER and not NEITHER
 
 function main() returns ExitCode
 	print("{BOTH} {EITHER} {NEITHER} {READY}\n")
-	READY = false
-	print("{READY}\n")
 	return 0
 end 'main'
 ```
@@ -219,7 +216,6 @@ end 'main'
 ```
 ```stdout
 true true false true
-false
 ```
 
 <!-- test: cast-in-constant -->
@@ -562,7 +558,7 @@ typealias Step = (Word, Word)
 type Holder
 	export var step as Step
 
-	static var origin = Holder{step: (7, 9)}
+	static let origin = Holder{step: (7, 9)}
 
 	static function get() returns Holder
 		return Holder.origin
@@ -608,7 +604,7 @@ the tuple type owes, exactly as the same literal is in a body.
 typealias Num = int(0 to 1000)
 
 let named = (7, "seven")
-var other = ("a", "b", 3 as Num)
+let other = ("a", "b", 3 as Num)
 
 function main() returns ExitCode
 	print("{named.0} {named.1} {other.0}{other.1} {other.2}\n")
@@ -620,19 +616,6 @@ end 'main'
 ```
 ```stdout
 7 seven ab 3
-```
-
-<!-- test: error.a-top-level-var-of-an-unstated-tuple-of-bare-numbers -->
-A module-scope `var` born from a tuple of bare numbers is refused as it is in a body.
-```maxon
-var point = (10, 20)
-
-function main() returns ExitCode
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2004: <fragment>:2:13: A var cannot start from a bare number: write 'var name = expr as Type'.
 ```
 
 <!-- test: a-top-level-let-of-an-unstated-tuple-holding-an-empty-container -->
@@ -1198,7 +1181,7 @@ export let BVAL = SECRET + 1
 ### Error: A global's initializer must consume everything up to the end of its line
 
 A global's initializer is parsed out of the token region the declaration scan marked off, so whatever the
-expression does not reach is refused rather than abandoned — otherwise `var g = Box.create() zzz` would
+expression does not reach is refused rather than abandoned — otherwise `let g = Box.create() zzz` would
 compile, run, and ignore `zzz`. The refusal is the one a body's binding gets. The interpolation body and
 the captured parameter default follow the same rule.
 
@@ -1214,7 +1197,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var g = Box.create() zzz
+let g = Box.create() zzz
 
 function main() returns ExitCode
 	return g.v
@@ -2042,7 +2025,7 @@ error E3004: <fragment>:2:9: call to undefined function 'nothere'
 ```
 
 <!-- test: error.a-static-initializer-calling-a-sibling-instance-method-bare-has-no-receiver -->
-`fresh` is an instance method, so a `static var` initializer calling it bare has no receiver to call it on,
+`fresh` is an instance method, so a `static let` initializer calling it bare has no receiver to call it on,
 and is refused as the same call in a static method's body is.
 ```maxon
 typealias Digit = int(0 to 9)
@@ -2050,7 +2033,7 @@ typealias Digit = int(0 to 9)
 type Holder
 	export var n as Digit
 
-	static var shared = fresh()
+	static let shared = fresh()
 
 	function fresh() returns Holder
 		return Holder{n: 1}
@@ -2136,22 +2119,6 @@ end 'main'
 error E3004: <fragment>:2:9: call to undefined function 'nothere'
 ```
 
-<!-- test: error.an-assignment-to-a-refused-call-var-reports-the-call-once -->
-`G`'s initializer is a refused call, so assigning `G` is not reported again.
-```maxon
-typealias Digit = int(0 to 9)
-
-var G = nothere(7)
-
-function main() returns ExitCode
-	G = 3 as Digit
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3004: <fragment>:4:9: call to undefined function 'nothere'
-```
-
 <!-- test: error.a-type-read-after-a-refused-call-constant-is-used -->
 `H` stops at its read of `G`, whose initializer is a refused call; `Small`, named after that read, still
 counts as used.
@@ -2175,7 +2142,7 @@ error E3004: <fragment>:4:9: call to undefined function 'nothere'
 ```maxon
 typealias Digit = int(0 to 9)
 
-var G = nothere(7)
+let G = nothere(7)
 
 function main() returns ExitCode
 	G.n = 3 as Digit
@@ -2237,7 +2204,7 @@ typealias Digit = int(0 to 9)
 type Holder
 	export var n as Digit
 
-	static var shared = nothere(7)
+	static let shared = nothere(7)
 
 	static function reset()
 		Holder.shared.n = 3 as Digit
@@ -2338,56 +2305,6 @@ end 'useLarger'
 error E3008: <fragment>:3:11: function 'larger' is not exported
 ```
 
-<!-- test: error.a-tuple-assignment-to-a-refused-call-var-reports-the-tuple-assignment-and-the-call -->
-`G`'s initializer is a refused call, and a tuple assignment naming a module `var` is refused whatever
-its value. The two are independent, so both are reported, the tuple assignment ahead of the call.
-```maxon
-typealias Digit = int(0 to 9)
-
-var G = nothere(7)
-
-function pair() returns (Digit, Digit)
-	return (1 as Digit, 2 as Digit)
-end 'pair'
-
-function main() returns ExitCode
-	var y = 0 as Digit
-	(G, y) = pair()
-	return y as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3004: <fragment>:4:9: call to undefined function 'nothere'
-error E2015: <fragment>:12:3: Unsupported: a tuple-assignment target naming the module-scope binding 'G' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)
-```
-
-<!-- test: error.a-tuple-assignment-to-a-module-var-beside-a-refused-call-in-another-function-body -->
-The same refused call written in another function body, beside the same tuple assignment.
-```maxon
-typealias Digit = int(0 to 9)
-
-var G = 0 as Digit
-
-function pair() returns (Digit, Digit)
-	return (1 as Digit, 2 as Digit)
-end 'pair'
-
-function other() returns Digit
-	let h = nothere(7)
-	return h
-end 'other'
-
-function main() returns ExitCode
-	var y = 0 as Digit
-	(G, y) = pair()
-	return (y + other()) as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3004: <fragment>:11:10: call to undefined function 'nothere'
-error E2015: <fragment>:17:3: Unsupported: a tuple-assignment target naming the module-scope binding 'G' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)
-```
-
 <!-- test: error.a-refused-call-inside-a-record-literal-reports-the-call-and-the-cast-before-it -->
 The refused call sits inside a record literal; the cast written before it is still read, so its unneeded
 `as Small` is reported beside the call, as in a function body.
@@ -2443,7 +2360,7 @@ Every use of `G` below meets a constant whose initializer is a refused call: onl
 ```maxon
 typealias Digit = int(0 to 9)
 
-var G = nothere(7)
+let G = nothere(7)
 
 function use(n Digit) returns Digit
 	return n
@@ -2799,24 +2716,6 @@ end 'main'
 error E3005: <fragment>:11:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode' — cast the argument with 'as Small'
 ```
 
-<!-- test: a-top-level-exit-code-var-is-reassigned-as-an-exit-code -->
-A module `var` born from an `ExitCode` cast is an `ExitCode` slot, read and written as one.
-```maxon
-var code = 3 as ExitCode
-
-function bump()
-	code = code + 4
-end 'bump'
-
-function main() returns ExitCode
-	bump()
-	return code
-end 'main'
-```
-```exitcode
-7
-```
-
 <!-- test: a-match-expression-in-a-call-argument-ends-a-top-level-let-at-its-own-line -->
 The newlines a `match` expression keeps between its arms inside a call's parentheses belong to the initializer: the `let` ends at the line holding the closing parenthesis.
 ```maxon
@@ -2845,35 +2744,6 @@ end 'main'
 ```
 ```stdout
 loud! next
-```
-
-<!-- test: a-match-expression-in-a-call-argument-ends-a-top-level-var-at-its-own-line -->
-```maxon
-enum Mode
-	quiet
-	loud
-end 'Mode'
-
-function tag(text String, tail String) returns String
-	return "{text}{tail}"
-end 'tag'
-
-var LABEL = tag(match Mode.quiet 'm'
-	quiet gives "quiet"
-	loud gives "loud"
-end 'm', tail: "?")
-var NEXT = "next"
-
-function main() returns ExitCode
-	print("{LABEL} {NEXT}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-quiet? next
 ```
 
 <!-- test: a-match-expression-in-a-parenthesised-group-ends-a-top-level-let-at-its-own-line -->
@@ -2990,33 +2860,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E2080: <fragment>:14:2: `return` has no function to leave in the initializer of 'LEVEL' — end a handler there with `panic(…)`, or give the `try` a fallback value with `otherwise <expr>`
-```
-
-<!-- test: error.a-return-in-a-handler-block-of-a-top-level-var-names-the-initializer -->
-```maxon
-enum ParseError implements Error
-	bad
-end 'ParseError'
-
-function parse(n Count) returns Count throws ParseError
-	if n > 5 'big'
-		throw ParseError.bad
-	end 'big'
-	return n
-end 'parse'
-
-var level = try parse(3) otherwise (e) 'h'
-	return 3
-end 'h'
-
-function main() returns ExitCode
-	level = level + 1
-	print("{level}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2080: <fragment>:14:2: `return` has no function to leave in the initializer of 'level' — end a handler there with `panic(…)`, or give the `try` a fallback value with `otherwise <expr>`
 ```
 
 <!-- test: error.a-return-in-a-handler-block-of-a-top-level-record-let-names-the-initializer -->

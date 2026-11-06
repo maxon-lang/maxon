@@ -695,7 +695,7 @@ export enum ErrorCode
 	// So is a `FixedArray` `get`/`set` whose index is not proven inside the size: write `try`, or give
 	// the index a ranged type within `int(0 to N-1)` for a `FixedArray with N`.
 	// So is a `spawn` of a factory that throws: the spawner waits for the factory to run on the
-	// service's green thread and receives the handle or the factory's error.
+	// service's start behaviour and receives the handle or the factory's error.
 	throwingFunctionRequiresTry = "E3057"
 
 	// 'otherwise' is written without a 'try'.
@@ -784,7 +784,7 @@ export enum ErrorCode
 	// returns its own array is pure. A call through a closure counts as the closure's body when the
 	// closure is known where the call is made -- a closure literal, or a named function, handed to a
 	// helper that only calls it; a closure the call cannot identify is an effect.
-	// Releasing a value that can own a green thread, a mailbox or an operating-system handle
+	// Releasing a value that can own a green thread, a service handle or an operating-system handle
 	// (a promise, a file, a socket, a type parameter's value) is an effect of the releasing function.
 	semanticDiscardedPureResult = "E3064"
 
@@ -935,8 +935,8 @@ export enum ErrorCode
 	// through everything it reaches. Refused: binding such a value, a field of it or a
 	// call result that may share its storage to a `var`; storing it into a `var` field, a mutable container
 	// element or module storage, putting it in an array literal, or passing it to a parameter the callee keeps
-	// where something may write it, one an escaping closure captures included;
-	// and a module-level `var` initializer that may take a module-level `let`'s record. A `let` bound to a fresh
+	// where something may write it, one an escaping closure captures included.
+	// A `let` bound to a fresh
 	// record may be stored or kept there at its last use, where the store consumes the name; stored there and
 	// read again afterwards, it is refused, since the holder may write what the `let` reads. When a callee both
 	// keeps and writes a read-only argument, the keep is reported here rather than the write (E3159).
@@ -945,7 +945,7 @@ export enum ErrorCode
 	// A `let` field, a `let` payload and a `readonly` element have no other writer, so what is stored into one,
 	// directly or through a parameter the callee stores there, must be read-only, a value type, or moved in (a
 	// sole-owned value, or a `var` at its last use). A sole-owned tuple or record is moved in only when no
-	// record it holds is one a `var` of the function or a module `var` may still write. A generic body that
+	// record it holds is one a `var` of the function may still write. A generic body that
 	// keeps a value of its type parameter is judged at each instantiation.
 	// A parameter that keeps a `unique` value takes the caller's mutable data by move, so a `let` handed to it
 	// is refused; the moved `var` read again afterwards is E3102. A `view` lives only inside its function:
@@ -1011,7 +1011,7 @@ export enum ErrorCode
 	// an `export` (global) decl is never referenced from any file
 	// outside its declaring file. The decl could be file-private (drop the
 	// modifier) or `module`-visible. Applies to functions, types, enums,
-	// typealiases, top-level constants, top-level vars, and exported struct
+	// typealiases, top-level constants, and exported struct
 	// fields. Emitted by `checkUnusedExports` after all files have been
 	// parsed and type-resolved.
 	// A `public` declaration is EXEMPT. `export` says "other files may see
@@ -1717,7 +1717,6 @@ export enum ErrorCode
 	// that owns what it captures, and it does not cross to another thread. An
 	// opaque type parameter has no layout at the send, so the sender cannot know what it is handing over.
 	// A value held at an interface type does cross: the request carries its witness half beside it.
-	// The service's own state may hold promises its handlers start on the service's strand.
 	// The diagnostic fires at the `spawn` that made the type a service, which may be in a different file
 	// from the method it names: whether a type is a service is a whole-program property, and the site that
 	// decided it is the one worth naming. A factory argument is reported at the argument.
@@ -1747,7 +1746,7 @@ export enum ErrorCode
 
 	// An `export` method of a SERVICE returns a value the service's own state can still reach, so the caller
 	// would end up holding a second reference to it -- on another green thread.
-	// A service is a green thread with a mailbox, and the language guarantees one green thread per box: that
+	// A service's state is run by one green thread at a time, and the language guarantees one green thread per box: that
 	// is what makes a reference-count step a plain load/add/store rather than an atomic one. A reply that
 	// aliased service state would put one box in two green threads' hands, which corrupts the heap rather
 	// than merely being slow -- the same rule a message ARGUMENT obeys by MOVING, read from the other end.
@@ -1795,7 +1794,7 @@ export enum ErrorCode
 	// reference is a second owner for the rest of the function, whatever its initializer was. Reassigning the
 	// `var` a fresh record makes it sendable again. A record whose fields are all `let` is written by nothing,
 	// so it is shared instead and the view stays valid.
-	// Every argument of a `spawn`'s factory moves to the service's green thread on the same terms, so
+	// Every argument of a `spawn`'s factory moves into the service on the same terms, so
 	// a borrowed one is refused, naming the argument and the `spawn` -- a generic factory's
 	// argument at a type parameter included. An owned one this frame also shares is caught by the
 	// run-time walk described below (exit 96). A field read off a temporary
@@ -1833,7 +1832,7 @@ export enum ErrorCode
 	// The compiler builds a directed graph over service TYPES and refuses any cycle in it. An edge `A -> B`
 	// exists when a message of `A`, or the factory `A` is spawned with, AWAITS a reply from a
 	// `B.handle` -- transitively through ordinary functions, so a message that calls a helper that
-	// awaits still contributes the edge. A factory counts: it runs on the service's green thread.
+	// awaits still contributes the edge. A factory counts: it runs as the service's start behaviour.
 	// ONLY BLOCKING EDGES COUNT. A send that is not awaited is not an edge: a send returns at once, queued
 	// or failed with its `sendError`, so it cannot participate in a wait cycle -- which is what keeps
 	// peer-to-peer messaging legal, and is the whole of why the rule is not crippling.
@@ -1862,7 +1861,7 @@ export enum ErrorCode
 	// IEEE-754 bit patterns that can span more of the i64 range than the line a `try await` fuses the send's
 	// error and the handler's on can hold.
 	// It fires at the `spawn` rather than at a send, as every service diagnostic does, and for a reason of
-	// its own beyond the usual one: the dispatch loop the compiler synthesizes completes a reply for every
+	// its own beyond the usual one: the message dispatch the compiler synthesizes completes a reply for every
 	// reply-bearing message of the type, so a message the cell cannot carry would put a wrong-width store
 	// into a body the service really runs, whether or not the program ever sends that message.
 	// The cure is to return a value that fits the word and throw a payload-free `enum`, or to drop the
@@ -1924,44 +1923,6 @@ export enum ErrorCode
 	// second consume that this half cannot see -- across a loop back edge, where one lexical `await`
 	// consumes one thread on every iteration.
 	semanticPromiseAlreadyConsumed = "E3142"
-
-	// A module-level `var` or a `static var` is READ OR WRITTEN by a service MESSAGE, or by an ordinary function
-	// a message reaches through the call graph. A message runs on a green thread the scheduler may put on any OS
-	// thread, and a module `var` is one word every one of them shares.
-	// THE TWO DIRECTIONS FAIL DIFFERENTLY AND BOTH ARE REFUSED BY THIS ONE CODE, because they are one rule
-	// with one cure and one reachability question; only the diagnostic's subject clause differs.
-	// A WRITE is an arithmetic failure rather than a crash, which is why it cannot be a run-time check:
-	// `total = total + by` is a load, an add and a store two Ms can interleave, nothing traps, nothing
-	// leaks, and the program merely answers a number that is sometimes too small. MEASURED at
-	// MAXON_MAX_PROCS=16 over 1200 sends, ten runs: five lost an update and every one exited 0.
-	// A READ is worse. The write that changes the slot RELEASES the record it was holding, so a green
-	// thread that has already loaded the pointer reads on into freed memory -- a use-after-free, not a
-	// stale word. MEASURED: 12 services spinning on `label.count()` while `main` reassigned an
-	// INTERPOLATED string 4000 times read 8 of 8 clean at one processor and 20 of 20 EXIT 139 at sixteen,
-	// several panicking inside `utf8DecodeAt` with "value outside typealias 'Codepoint'".
-	// THE RULE IS ABOUT WHO TOUCHES IT, not about globals as such. A write to `self.<field>` is legal -- a
-	// service's fields are reached by one green thread, which is the whole point of putting state there. A
-	// read of a module-level `let` is legal and is the escape hatch every configuration constant takes: it
-	// is written once before any green thread exists, so no store can free anything under a reader. And a
-	// plain function no message reaches may read and write a module `var` all it likes: a `spawn` somewhere
-	// does not make the rest of the program concurrent. A service's factory runs on the service's
-	// green thread, so it and what it reaches are held to the rule as a message is.
-	// REACHABILITY IS TRANSITIVE, exactly as a service's blocking edge (E3139) is, and that is what makes
-	// the rule worth having -- a rule keyed on writes syntactically inside a handler body would refuse only
-	// the shape an author would have spotted anyway, while the race does not care which frame the store
-	// instruction sits in.
-	// An INDIRECT or WITNESS dispatch reached from a message is followed by treating every function it could
-	// land on as message-reachable -- every address-taken function for a closure call, every function wearing
-	// the requirement's name for a witness dispatch -- which is this rule's refusing direction: unlike E3139 --
-	// where a missed edge costs a guarantee -- a missed edge here costs a silently wrong answer at run time.
-	// The cure is always available and is always the same for both directions: keep the value in a field of
-	// `self` and hand it back through a reply, or make the global a `let`. A reply is a Promise the awaiter
-	// owns, so the value is handled by one green thread at every instant.
-	// The diagnostic anchors at the ACCESS -- which is where the program can be repaired -- names the message
-	// or factory that reaches it, and carries the `spawn` that made the type a service as a note,
-	// because whether a type is a service is a whole-program property whose cause may be in another
-	// file.
-	semanticModuleVarInServiceProgram = "E3143"
 
 	// A union case's payload argument carries a `name:` label naming no payload of that case --
 	// `TwoParts.values(10, z: 20)` where the case declares `a` and `b`.
@@ -2167,7 +2128,7 @@ export enum ErrorCode
 	// runs, so the counts green threads on different OS threads step on it are atomic -- which needs a
 	// walk over its graph, and none can be built for an OS handle, a value held at an interface type,
 	// or a generic instance with no base layout. A `let` no message or factory can reach stays legal
-	// and unmarked, since only `main` counts it. Reached through the call graph E3143 closes,
+	// and unmarked, since only `main` counts it. Reached through the call graph a message runs,
 	// dispatches included, and reported at the read with the message or factory that reaches it; the
 	// note is the declaration. Keep the value in a field of the service that reads it.
 	semanticUnmarkableLetReadByAMessage = "E3163"
@@ -2180,15 +2141,6 @@ export enum ErrorCode
 	// a function `main` calls.
 	semanticSpawnDuringGlobalInitialization = "E3164"
 
-	// A module-level `let`'s initializer reaches a module-level `var` whose value holds a record. A `let` is fixed
-	// at startup and may not hold what a `var` owns: the `var` may write the record after `main` starts, and in a
-	// program that spawns a service the `let`'s graph could not be marked shared with an owner outside the
-	// `let`s. What the initializer calls is followed through the call graph, dispatches included. Refused
-	// whether or not the program spawns, and even when only a scalar is read out of the `var`, since what the initializer keeps is
-	// not followed. A scalar `var` owns no record and is not refused. Reported at the `var`'s use; the note is its
-	// declaration. Make the binding a `var`, or build its value without reading the `var`.
-	semanticLetInitializerReachesAVar = "E3165"
-
 	// A declaration exposes a type less visible than the declaration. Whoever may reach a declaration must
 	// be able to name every type it exposes, so each type an exported surface names must carry a written
 	// visibility at least the surface's own. The tiers, narrowest first: no modifier (file-private),
@@ -2197,9 +2149,9 @@ export enum ErrorCode
 	//   type"), the throws type ("in its throws clause"), and the `where` clause of a generic function or
 	//   an extension ("in its where clause");
 	// - a `module`, `export` or `public` binding -- a top-level `let` or `var`, or a `static let` or
-	//   `static var` member -- ("in its type"): the type its initializer gives it, written or inferred, and
-	//   the typealias the initializer was spelled through (`50 as Small`, `Tallies.create()`); a `let` is a
-	//   "constant" and a `var` a "variable";
+	//   `static let` member -- ("in its type"): the type its initializer gives it, written or inferred, and
+	//   the typealias the initializer was spelled through (`50 as Small`, `Tallies.create()`); the subject is
+	//   a "constant";
 	// - an instance "field" ("in its type"), at the narrower of the field's own modifier and its type's; an
 	//   unmarked field is private to its type and is asked nothing;
 	// - a "union case", at the union's tier ("in the type of payload 'v'");
@@ -2321,7 +2273,7 @@ export enum ErrorCode
 	// A closure, or a value holding one, is stored into a record the closure captures or a record that
 	// record reaches. A closure holds a counted reference to every record it captures, so the record would
 	// hold the closure and the closure the record, and neither would ever be released. The store is
-	// followed through fields, array elements, union payloads, tuples, struct literals, module variables,
+	// followed through fields, array elements, union payloads, tuples, struct literals,
 	// clones, returned values and the callees a closure is handed to, in the order the stores run, and each
 	// cycle is reported once, at the store that closes it. Store
 	// the closure somewhere the captured record does not reach, or capture the value the closure needs
@@ -2353,7 +2305,7 @@ export enum ErrorCode
 	// call, a closure literal that captures it, or the cell of another `mutable` parameter the callee writes. A hold cannot protect a value its cell overwrites, so the statement is refused.
 	// The refusal is per root binding: it counts reads of the local the cell is rooted in and of that local's
 	// field paths (`bump(h.n, h: h.copy())`), the fields of `self` sharing the one root `self`, and a module
-	// or static `var` being one root. Another name for the same record, a `view` or a `var` that took the
+	// being one root. Another name for the same record, a `view` or a `var` that took the
 	// record by move, is not that local. A read that runs after the write sees the new value and is accepted.
 	// A call receiver that is itself a by-reference writer is judged after its arguments, and is refused
 	// when an argument reads the root it writes.
@@ -2406,7 +2358,7 @@ export enum ErrorCode
 	semanticServiceSendTimeoutReserved = "E3192"
 
 	// An instance method is called with no value to call it on: a bare call to a sibling instance method
-	// from a `static` method, a file-scope initializer or a `static var` initializer, none of which has a
+	// from a `static` method, a file-scope initializer or a `static let` initializer, none of which has a
 	// `self`, or `Type.method()` with an empty argument list. Call it on a value, `value.method(…)`, or
 	// pass the value as the first argument, `Type.method(value, …)`; or declare the method `static` if it
 	// uses no instance state.
@@ -2568,6 +2520,14 @@ export enum ErrorCode
 	// spell either bound; they belong to a generic type's own `where` clause. Reported at the instantiation.
 	semanticRegionBoundRefused = "E3215"
 
+	// A service type's state can hold a promise. A field of a service type that is a `Promise`, an array of
+	// promises, or a record or union holding one is refused, reported at the `spawn` that makes the type a
+	// service and naming the field. A service's state is run by whichever green thread takes its next
+	// message, and a coroutine belongs to the strand that started it, so a promise kept in the state could be
+	// awaited or dropped by a strand that does not own its coroutine. `await` the promise, or `.cancel()` it,
+	// before the message or factory returns, and keep its result in the field.
+	semanticServiceStateHoldsAPromise = "E3216"
+
 	// A member is used that its type does not have: a method the type does not declare, a method a
 	// conditional extension gives only to types meeting its `where` clause, or `allCases` on a union. The
 	// message names the type as source would qualify it, so the library's `Range` in a program declaring
@@ -2644,7 +2604,7 @@ export enum ErrorCode
 	// function, the call and the chain to the second take. Pass the held state down instead of taking
 	// the lock twice: give the inner function a form that expects the lock held.
 	// What this does not cover: calls the backend inserts after the lock marks are expanded, code
-	// hand-assembled into the image, a lock word that is not one global (a mailbox's or a stack pool's),
+	// hand-assembled into the image, a lock word that is not one global (a cown's or a stack pool's),
 	// and a build whose function names collide, which E4015 reports and which skips the check.
 	nestedExclusiveLockTake = "E5005"
 

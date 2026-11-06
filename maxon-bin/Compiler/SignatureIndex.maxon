@@ -215,11 +215,8 @@ enum SignatureDiscriminator
 	// make `f(p cstring)` and `f(n i64)` one function.
 	typeShapeCstring = 145
 
-	// A declared FIELD's mutability, mixed into the hash beside its name and type. The
-	// struct twin of `declShapeConstant`/`declShapeMutable`, and distinct constants rather than a reuse
-	// of them: those two discriminate a top-level `let` from a `var`, and colliding a field's `let` with
-	// a global's would let an edit that swaps one for the other land on the hash the other already
-	// occupied. What rides is ACCEPTANCE — `var count` → `let count` must turn every other file's
+	// A declared FIELD's mutability, mixed into the hash beside its name and type. What rides is
+	// ACCEPTANCE — `var count` → `let count` must turn every other file's
 	// `c.count = 5` into E2013, and a reader whose memo did not move would go on compiling it.
 	fieldShapeMutable = 16
 	fieldShapeImmutable = 17
@@ -325,14 +322,6 @@ enum SignatureDiscriminator
 	// hash alike on the terms the two do not share.
 	imageBoxSlotShapeEmptyArray = 118
 	imageBoxSlotShapeNestedBox = 119
-
-	// A declaration's MUTABILITY, mixed into the hash beside its value. `let X = 5` and `var X = 5`
-	// are the same name and the same number and compile to COMPLETELY different code — one inlines
-	// as a literal, the other loads from `.data` — so a reader's parse memo must move when one
-	// becomes the other. Without these, changing `let` to `var` would leave every reader's memo
-	// valid and every reader still inlining a number that now has storage behind it.
-	declShapeConstant = 12
-	declShapeMutable = 13
 
 	// A function's PER-PARAMETER CONSUME BITS, mixed into the hash beside its name so a
 	// cross-file caller re-parses when a callee's consume set changes. What rides is ACCEPTANCE and OWNERSHIP:
@@ -924,15 +913,15 @@ export function fileScopedDeclKey(name ByteArray, declFilePath FilePath) returns
 	return "{declFilePath.toString()}{FileScopedKeySeparator}{String.from(name)}".toByteArray()
 end 'fileScopedDeclKey'
 
-// The prefix every top-level `var`'s `.data` label carries — a NAMESPACE, and today nothing more.
+// The prefix every stored top-level binding's `.data` label carries — a NAMESPACE, and today nothing more.
 //
-// ⚠ **IT DOES NOT ROUTE THE SECTION, and an earlier draft of this comment claimed it did.** What
+// ⚠ **IT DOES NOT ROUTE THE SECTION.** What
 // puts a global in writable `.data` is the RELOCATION KIND: `encodeLeaRegGlobal` (X64Backend) files
 // every global's `lea` as `RdataRelocKind.dataSectionRipRelDisp32` unconditionally, and
 // `patchRdataRelocationsX86` measures that kind — and only that kind — from `.data`'s RVA. The
 // label's TEXT is never consulted on the way. MEASURED: with this constant set to `"zzz_"` the
 // suite's globals still land in `.data`, still take their stores, and the program still returns the
-// right answer. The claim it "would be classified `rdata` and fault on its first store" was false.
+// right answer.
 //
 // So what it buys is READABILITY — `__data_counter` in the rendered Target IR says what it is.
 //
@@ -942,7 +931,7 @@ let DataLabelPrefix = "__data_"
 
 // ⭐ What separates a `.data` label from its collision-breaking ordinal — and the character is
 // load-bearing, not cosmetic. **`$` is legal in no Maxon identifier**, so `__data_counter$1` is a
-// label only this disambiguator can ever mint: no user-written `var` can collide with one. That is
+// label only this disambiguator can ever mint: no user-written name can collide with one. That is
 // exactly what lets `uniqueDataLabel` COUNT instead of SEARCH (below).
 let DataLabelDisambiguator = "$"
 
@@ -1547,16 +1536,6 @@ export type ManagedGlobal
 	export static function create(label ByteArray, initializer ManagedGlobalInitializer, valueType MaxonType, cleanupDrop OwnershipCallee, range SourceRange, declName ByteArray, nameLine LineNumber, nameColumn ColumnNumber, declFilePath FilePath, initCallees NameRoster, threadReach GlobalThreadReach) returns ManagedGlobal
 		return Self{label: label, initializer: initializer, valueType: valueType, cleanupDrop: cleanupDrop, range: range, declName: declName, nameLine: nameLine, nameColumn: nameColumn, declFilePath: declFilePath, initCallees: initCallees, threadReach: threadReach}
 	end 'create'
-
-	// `globalThreadReach` answers `mainOnly` for exactly the `var`s.
-	export function isAVar() returns bool
-		return match self.threadReach 'reach'
-			mainOnly gives true
-			everyThreadThrough or
-			everyThreadUnwalkable or
-			packedInItsSlot gives false
-		end 'reach'
-	end 'isAVar'
 end 'ManagedGlobal'
 
 export typealias ManagedGlobalArray = Array with ManagedGlobal
@@ -1568,12 +1547,6 @@ export enum ModuleInitNeed
 	buildsRecords
 	runsProgramCode
 end 'ModuleInitNeed'
-
-export enum ModuleVarHolding
-	none
-	scalarsOnly
-	holdsValues
-end 'ModuleVarHolding'
 
 enum InitializerShape
 	scalar
@@ -1649,9 +1622,6 @@ end 'tokenKindIsRecordShaped'
 // Which green threads may count a managed global's record, and so what `__module_init` owes it in a program
 // that spawns a service.
 export union GlobalThreadReach
-	// A `var`: E3143 keeps every message off it, so only `main`'s green thread counts its record.
-	mainOnly
-
 	// A `let`, which every message may read: `callee` marks its graph shared, so every count on it is atomic.
 	everyThreadThrough(let callee ByteArray)
 
@@ -1707,16 +1677,8 @@ end 'managedLiteralRecord'
 // cleanup's unconditional decref relies on never being observed (see `ModuleInit`).
 let ManagedGlobalInitialSlot = 0
 
-// A top-level `let` OR `var`, as the declaration sweep found it: WHAT it is called, WHETHER it is
-// mutable, WHERE it was written, and the TOKEN RANGE of its initializer — read, never evaluated on
-// the spot.
-//
-// ⭐ **ONE ARENA FOR BOTH KINDS.** A top-level `var` is not a
-// new declaration form; it is this one with `mutable: true` and a home. Its initializer is read by the
-// identical parse, the identical memoized DFS, the identical cycle detection and the identical
-// forward-reference-by-deferred-evaluation trick, so a second arena would only be free to disagree
-// about what `BASE * 2` is worth. What a `var` adds is settled in exactly two fields: `mutable` and
-// `dataLabel`.
+// A top-level `let`, as the declaration sweep found it: WHAT it is called, WHERE it was written, and the
+// TOKEN RANGE of its initializer — read, never evaluated on the spot.
 //
 // **THE RANGE, AND NOT A TREE.** The sweep and the evaluation are two halves of ONE query
 // (`Queries.queryProgramSignatures`) and the token memo is live throughout, so the range is enough —
@@ -1730,8 +1692,8 @@ export type TopLevelDecl
 	// becomes a fact about its NAME: a FILE-PRIVATE declaration is filed under a key carrying its declaring
 	// file's path, an exported one under its bare name. Two files may each declare a file-private `counter`
 	// and each file's reads resolve to its OWN (`global-file-private-same-name.md`, `top-level-let.md`), so
-	// rejecting the second declaration is forbidden by the spec. A `var`'s `.data` LABEL is derived from
-	// this key path-free (`assignDataLabels`): a label carrying a file path would land in the rendered
+	// rejecting the second declaration is forbidden by the spec. A stored declaration's `.data` LABEL is derived
+	// from this key path-free (`assignDataLabels`): a label carrying a file path would land in the rendered
 	// Target IR and the emitted binary. Computed once at construction so that the sweep's write and every
 	// later read cannot spell it differently.
 	export let storageKey as ByteArray
@@ -1741,31 +1703,24 @@ export type TopLevelDecl
 	// the prefix back off at E2012 time.
 	export let name as ByteArray
 
-	// `var` or `let` — WHETHER THIS NAME MAY BE WRITTEN, and nothing else. Storage is a separate question
-	// (`hasStorage` below): a record `let` the compiler cannot image is immutable AND stored, an imaged one
-	// is immutable and slotless, so which door a USE goes through is that bit and this one is only what the
-	// two WRITE sites ask.
-	export let mutable as bool
-
 	// ⭐⭐ **DOES THIS DECLARATION HAVE A `.data` SLOT?** — the ONE criterion deciding which of the two doors
 	// a USE goes through (`constantValueOf` materializes a value, `globalDeclFor` loads a slot), which decls
 	// the layout reserves storage for, and which ones `assignDataLabels` labels. Read from all four, so it is
 	// ONE fact rather than four re-derivations that could give a binding a slot the layout never laid down.
 	//
-	// ⚠ **A `var` IS NOT THE WHOLE ANSWER**. Every `var` is stored — that is what a `var` IS,
-	// so this starts life equal to `mutable`. So is a RECORD `let` the compiler cannot lay down as bytes: a
-	// managed-element array literal, a container holding members, a factory's result, a boxed case. Their
-	// value is a heap record `__module_init` builds and no READ can re-materialize one, so the binding gets a
-	// slot while `let` keeps refusing the write (E2013 at an assignment, E3159 at a receiver-writing method).
+	// ⚠ **A RECORD `let` THE COMPILER CANNOT LAY DOWN AS BYTES IS STORED**: a managed-element array
+	// literal, a container holding members, a factory's result, a boxed case. Their value is a heap record
+	// `__module_init` builds and no READ can re-materialize one, so the binding gets a slot while `let`
+	// keeps refusing the write (E2013 at an assignment, E3159 at a receiver-writing method).
 	//
-	// ⭐⭐ **AND AN IMAGED `let` FLIPS IT THE OTHER WAY** (⚖ user ruling: a `let` is image data). A constant
+	// ⭐⭐ **AN IMAGED `let` HAS NO SLOT** (⚖ user ruling: a `let` is image data). A constant
 	// array literal and an empty `Array with T` ARE bytes the compiler can lay down, so each read is one
 	// `.rdata` address and there is no slot, no `__module_init` construction and no cleanup drop.
 	// `settleStoredRecord` and `settleImagedOutcome` are the ONLY writers of this bit, and they are where
 	// `outcome` becomes a record — so the storage model and the value cannot disagree.
 	//
 	// ⚠ **A FIELD RATHER THAN A FUNCTION THAT RE-READS `outcome`.** The obvious spelling is a test over
-	// `mutable` and the outcome, asked afresh at each of the four readers. A bool written where the
+	// the outcome, asked afresh at each of the four readers. A bool written where the
 	// outcome is written says the same thing once, is O(1) at every ask, and — the part that matters — makes
 	// the answer available in the window where the outcome is not yet settled, which the four readers
 	// straddle (see below).
@@ -1803,9 +1758,9 @@ export type TopLevelDecl
 	// ⭐ THE `.data` LABEL — this binding's IR IDENTITY, and `unlabelled` for every binding with no
 	// slot.
 	//
-	// ⚠ **WHICH BINDINGS THOSE ARE IS `hasStorage`, NEVER `mutable`.** A `let` takes either storage model
-	// (see that field), so an imaged record `let` and a scalar `let` are unlabelled while a record `let` the
-	// compiler cannot image is labelled like any `var`.
+	// ⚠ **WHICH BINDINGS THOSE ARE IS `hasStorage`.** A `let` takes either storage model (see that field),
+	// so an imaged record `let` and a scalar `let` are unlabelled while a record `let` the compiler cannot
+	// image is labelled.
 	//
 	// DERIVED FROM THE KEY, not a second spelling of it: `assignDataLabels` walks the arena in
 	// declaration order and hands each STORED decl its bare name, disambiguated ONLY where an
@@ -1837,7 +1792,7 @@ export type TopLevelDecl
 	// eager init. The question here is who supplied the file, which is exactly the loader's own partition.
 	export let declaredByTheCorpus as bool
 
-	// ⭐ **WHICH BODY DECLARED THIS BINDING — file scope, or a `type` body's `static let`/`static var`.**
+	// ⭐ **WHICH BODY DECLARED THIS BINDING — file scope, or a `type` body's `static let`.**
 	// It decides nothing about WHEN the initializer runs (both run before `main`, in dependency order —
 	// `ModuleInit`); it says where the initializer's tokens are SEATED, which is what makes `Self`-shaped
 	// construction legal inside a type body and nowhere else (`Parser.seatInDeclaringTypeBody`).
@@ -1849,13 +1804,12 @@ export type TopLevelDecl
 	export var letCast as LetCastDeclaration
 	export var letCastReads as LetCastReadArray
 
-	export static function create(name ByteArray, mutable bool, visibility Visibility, declFilePath FilePath, initStart ElementIndex, initEnd ElementIndex, initRange SourceRange, nameLine LineNumber, nameColumn ColumnNumber, scope EnclosingTypeScope, declaredByTheCorpus bool) returns TopLevelDecl
+	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath, initStart ElementIndex, initEnd ElementIndex, initRange SourceRange, nameLine LineNumber, nameColumn ColumnNumber, scope EnclosingTypeScope, declaredByTheCorpus bool) returns TopLevelDecl
 		return Self{
 			storageKey: fileScopedDeclKey(name, declFilePath: declFilePath) if visibility == Visibility.file else name,
 			name: name,
 			visibility: visibility,
-			mutable: mutable,
-			hasStorage: mutable,
+			hasStorage: false,
 			declFilePath: declFilePath,
 			initStart: initStart,
 			initEnd: initEnd,
@@ -1876,7 +1830,6 @@ export type TopLevelDecl
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.storageKey)
 		writer.bytes(self.name)
-		writer.flag(self.mutable)
 		writer.flag(self.hasStorage)
 		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
 		writer.text(self.declFilePath.toString())
@@ -1897,7 +1850,6 @@ export type TopLevelDecl
 	static function cacheRead(reader LibraryCacheReader) returns TopLevelDecl throws LibraryCacheDamage
 		let f_storageKey = try reader.bytes()
 		let f_name = try reader.bytes()
-		let f_mutable = try reader.flag()
 		let f_hasStorage = try reader.flag()
 		let f_visibility = try cacheReadVisibility(reader)
 		let f_declFilePath = try reader.path()
@@ -1914,11 +1866,11 @@ export type TopLevelDecl
 		let f_letCast = try cacheReadLetCastDeclaration(reader)
 		let f_letCastReads = try cacheReadLetCastReadArray(reader)
 
-		return Self{storageKey: f_storageKey, name: f_name, mutable: f_mutable, hasStorage: f_hasStorage, visibility: f_visibility, declFilePath: f_declFilePath, initStart: f_initStart, initEnd: f_initEnd, initRange: f_initRange, nameLine: f_nameLine, nameColumn: f_nameColumn, outcome: f_outcome, defined: f_defined, dataLabel: f_dataLabel, declaredByTheCorpus: f_declaredByTheCorpus, scope: f_scope, letCast: f_letCast, letCastReads: f_letCastReads}
+		return Self{storageKey: f_storageKey, name: f_name, hasStorage: f_hasStorage, visibility: f_visibility, declFilePath: f_declFilePath, initStart: f_initStart, initEnd: f_initEnd, initRange: f_initRange, nameLine: f_nameLine, nameColumn: f_nameColumn, outcome: f_outcome, defined: f_defined, dataLabel: f_dataLabel, declaredByTheCorpus: f_declaredByTheCorpus, scope: f_scope, letCast: f_letCast, letCastReads: f_letCastReads}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize144
-		return sizeof(TopLevelDecl) as CacheSize144
+	static function cacheLayoutBytes() returns CacheSize136
+		return sizeof(TopLevelDecl) as CacheSize136
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -2451,7 +2403,7 @@ end 'ProbedImage'
 let GlobalInitializerPrefix = b"__global_init."
 export let ConstInitializerFunctionName = b"__const_initializer"
 
-export function isGlobalInitializerName(name ByteArray) returns bool
+function isGlobalInitializerName(name ByteArray) returns bool
 	return bytesStartWith(name, prefix: GlobalInitializerPrefix)
 end 'isGlobalInitializerName'
 
@@ -2640,25 +2592,18 @@ export type TopLevelImageRecord
 	// @generated library-cache end
 end 'TopLevelImageRecord'
 
-// The outcome of a USE-SITE lookup for a top-level `var` — `TopLevelConstantLookup`'s twin, and
+// The outcome of a USE-SITE lookup for a stored top-level binding — `TopLevelConstantLookup`'s twin, and
 // deliberately a DIFFERENT type carrying DIFFERENT payload. A constant's use needs its VALUE (it
-// inlines a number); a var's use needs its LABEL and TYPE (it emits a load against a slot). One
+// inlines a number); a stored binding's use needs its LABEL and TYPE (it emits a load against a slot). One
 // union carrying both would have an arm every caller had to prove it was not holding.
 //
-// ⚠ **THE WHOLE `MaxonType`, NOT A BARE TAG**. A `var Buffer = b"…"` loads a value of the
+// ⚠ **THE WHOLE `MaxonType`, NOT A BARE TAG**. A stored `Buffer` loads a value of the
 // CONCRETE `Array with Byte` instance, and an instance is its gid — a tag alone cannot say which one, and
 // a use site that re-derived it would be a second answer to "what type is this global?" free to name a
 // different instance than the slot was laid out for.
-//
-// ⚠ **AND THE MUTABILITY, because a STORED binding is not necessarily a `var`.** A
-// record `let` the compiler cannot image has a slot — its value is a heap record no read can re-materialize
-// — so "which slot does this name denote?" and "may it be written?" are two questions, and this door answers
-// the first. The second is asked by the two sites that WRITE (`Parser.parseTopLevelAssignment`, and the
-// synthetic receiver binding a method call is dispatched on), off this bit; without it such a `let` would
-// silently accept both.
 export union TopLevelGlobalLookup
 	// `brand` is the generic-instance alias the initializer spelled (`Xs.create()`), or empty.
-	found(let label ByteArray, valueType MaxonType, let brand ByteArray, mutable bool)
+	found(let label ByteArray, valueType MaxonType, let brand ByteArray)
 	notFound
 
 	// `TopLevelConstantLookup.poisoned`, for a binding with a slot.
@@ -2678,15 +2623,12 @@ end 'BindingTypeClaim'
 // (`declFor`) and are never interchangeable at a use site: an inlined binding materializes its value, a
 // stored one loads from a slot.
 //
-// ⚠ **IT IS `inlined` vs `stored`, NOT `let` vs `var`**. The two questions diverge in BOTH
-// directions: a record a read cannot re-materialize gets a `.data` slot whichever keyword declared
-// it, while a `let` whose bytes the compiler can lay down is INLINED and gets none.
-// `TopLevelDecl.hasStorage` is the one criterion, and naming this enum after the storage rather
-// than the keyword is what stops a reader assuming they coincide.
+// ⚠ **IT IS `inlined` vs `stored`, NOT scalar vs record**. A record a read cannot re-materialize gets a
+// `.data` slot, while a `let` whose bytes the compiler can lay down is INLINED and gets none.
+// `TopLevelDecl.hasStorage` is the one criterion.
 //
-// An enum, not the bare `mutable bool` the decl carries: at a CALL SITE `wanted: DeclKind.inlined` says
-// what is being asked for, where `wanted: false` would be a magic value the reader has to decode against
-// the field's polarity.
+// An enum, not a bare bool: at a CALL SITE `wanted: DeclKind.inlined` says what is being asked for, where
+// `wanted: false` would be a magic value the reader has to decode against the field's polarity.
 enum DeclKind
 	inlined
 	stored
@@ -2851,7 +2793,7 @@ end 'kindFollowsADeclarationView'
 // about the tag; it goes through `recordPointerSlotType`, which carries its own reachability guard. A door
 // serving both applies this one's guard — written for a folded scalar and perfectly right about one — to
 // a factory's declared RETURN type, where the `named` tag means a boxed union or a tuple alias
-// and not a ranged alias at all: a legal program PANICS, told that its `var` is *"tagged 'int'"* in a
+// and not a ranged alias at all: a legal program PANICS, told that its global is *"tagged 'int'"* in a
 // program with no int in it. So the arms below say what is true of THIS caller, and the record
 // tags that could break through here name the door that takes them.
 //
@@ -6653,8 +6595,8 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
 end 'managedFieldDropCallee'
 
 // ⭐⭐⭐ **HOW A VALUE OF THIS DECLARED TYPE IS RETAINED — THE DUAL OF `managedNameDropCallee`.** A
-// retain must acquire exactly what the matching drop releases. A `<T>.handle` box owns its mailbox
-// share and gives it back from its own destructor (`MailboxRuntime.MboxHandleDestructName`), so its
+// retain must acquire exactly what the matching drop releases. A `<T>.handle` box owns its cown
+// share and gives it back from its own destructor (`CownRuntime.CownHandleDestructName`), so its
 // retain is the plain box incref.
 //
 // ⭐⭐ **THE FIVE OS-RESOURCE AGGREGATES TAKE THE PLAIN BOX INCREF, AND THAT IS SYMMETRIC.** They are
@@ -6674,7 +6616,7 @@ function managedNameRetainCallee(signatures ProgramSignatures, declaredName Byte
 	return match compilerOwnedAggregateOf(signatures, name: declaredName) 'compilerOwned'
 		// Kept apart from `userDeclared` below though the callee is the same: the five OS-resource arms answer
 		// it because their destruct is refcount-checked, `serviceHandle` because its box's own destructor steps
-		// the mailbox shares, `userDeclared` because a plain box is a plain box. Same answer, three different
+		// the cown shares, `userDeclared` because a plain box is a plain box. Same answer, three different
 		// reasons, and the day any of them changes only one arm should move.
 		managedFile or
 		managedDirectory or
@@ -6766,8 +6708,8 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 		managedHandle then return ProfileHandleDestructName
 		managedPin then return GtPinDestructName
 
-		//   • A `<T>.handle` takes the plain decref: its box is minted with `__mbox_handle_destruct` as its
-		//     destructor, which steps the mailbox's `handles` and `refs` shares when the box's own count reaches
+		//   • A `<T>.handle` takes the plain decref: its box is minted with `__cown_handle_destruct` as its
+		//     destructor, which steps the cown's `handles` and `refs` shares when the box's own count reaches
 		//     zero.
 		serviceHandle then return MmDecrefName
 		userDeclared then break
@@ -7007,7 +6949,7 @@ module function serviceHandleCascadeCallee(action CascadeAction, clone ByteArray
 end 'serviceHandleCascadeCallee'
 
 module function serviceHandleClonerOf(signatures ProgramSignatures, handleName ByteArray) returns ByteArray
-	return MboxInterfaceCloneBoxName if signatures.isInterfaceHandle(handleName) else MboxHandleCloneBoxName
+	return CownInterfaceCloneBoxName if signatures.isInterfaceHandle(handleName) else CownHandleCloneBoxName
 end 'serviceHandleClonerOf'
 
 export union UncloneableExistentialSlot
@@ -7417,11 +7359,11 @@ export enum CompilerOwnedAggregate
 	managedPin
 
 	// ⭐⭐ **ONE THAT NEEDS A DIFFERENT ANSWER.** A `<T>.handle`
-	// box holds one machine word — the mailbox pointer — and its DROP is what shuts a service down: the last
-	// handle to go closes the mailbox, and the last reference to go frees it. Its CLONE is a second handle to
+	// box holds one machine word — the cown pointer — and its DROP is what shuts a service down: the last
+	// handle to go closes the cown, and the last reference to go frees it. Its CLONE is a second handle to
 	// the SAME service, never a second service. Neither is expressible as a synthesized per-type entry, and
 	// neither is the plain `__mm_decref` a scalar-fielded struct box would otherwise take — which would free
-	// eight bytes and leave a green thread parked on a mailbox nobody can ever close.
+	// eight bytes and leave a cown nobody can ever close.
 	//
 	// ⚠ It is DELIBERATELY OUTSIDE the `managedFile to managedPin` range: it is the one compiler-owned
 	// aggregate that IS deep-clonable, so a reader answering "not clonable" for the rest must not answer it
@@ -7539,10 +7481,10 @@ function instanceCascadeStrategy(signatures ProgramSignatures, id GenericInstanc
 	end 'theChain'
 
 	// A handle's clone is a SECOND HANDLE to the same service, never a duplicated box: `__clone_<mangled>`
-	// would copy the mailbox pointer while stepping neither count. It sits with the other compiler-owned
+	// would copy the cown pointer while stepping neither count. It sits with the other compiler-owned
 	// records rather than at the top, so the containers above pay nothing.
 	if signatures.instanceBaseIsServiceHandle(id) 'serviceHandle'
-		return ManagedCascadeStrategy.direct(serviceHandleCascadeCallee(action, clone: MboxHandleCloneBoxName))
+		return ManagedCascadeStrategy.direct(serviceHandleCascadeCallee(action, clone: CownHandleCloneBoxName))
 	end 'serviceHandle'
 
 	if signatures.instanceBaseIsSharedValue(id) 'sharedValue'
@@ -10993,8 +10935,8 @@ end 'cacheReadTupleElementTokenOwnerMap'
 // The fields of an iterator record that hold a managed-memory cursor — see `ProgramSignatures.managedCursorFieldsOf`.
 export typealias CursorFieldIndexArray = Array with FieldIndex
 
-// The NAMES every top-level MANAGED binding in the program is declared under — `let` and `var`
-// alike — the filter `Parser.managedTopLevelBaseAt` asks before it will build a file-scoped
+// The NAMES every top-level MANAGED binding in the program is declared under — the filter
+// `Parser.managedTopLevelBaseAt` asks before it will build a file-scoped
 // key. See `ProgramSignatures.managedTopLevelNames` for why the answer has to be a name and not a
 // bool.
 module typealias ManagedTopLevelNameSet = Set with ByteArray
@@ -16060,7 +16002,6 @@ export type SettledDeclarations
 
 	// The settled answer, by registration key. Empty until the closure runs.
 	module var globalAliasReturnKeys as GlobalAliasReturnKeySet
-	module var mutableGlobalAliasReturnKeys as GlobalAliasReturnKeySet
 
 	// ⭐ **THE BARE NAMES OF EVERY FUNCTION THAT DECLARES A `mutable` PARAMETER**, kept because the PARSER's
 	// local-cell prescan needs exactly it. That prescan reads a callee out of TOKENS, so all it has is what the
@@ -16225,11 +16166,9 @@ export type SettledDeclarations
 	module var authorDeclaredNames as HashDigestSet
 	module var libraryMeantNames as HashDigestSet
 
-	// ⭐ **THE NAMES OF EVERY MANAGED TOP-LEVEL BINDING IN THE PROGRAM** — `let` AND `var` — written
+	// ⭐ **THE NAMES OF EVERY MANAGED TOP-LEVEL BINDING IN THE PROGRAM** — written
 	// once per managed binding by `settleManagedValue`, read once per probe by
-	// `Parser.managedTopLevelBaseAt`. It covers both kinds because the initializer fold settles both the
-	// same way and the probe behind it has to consider both: `msg.append("!")` on a managed `var`
-	// receiver has the identical token shape `Live.count()` on a managed `let` does.
+	// `Parser.managedTopLevelBaseAt`.
 	//
 	// It exists because the reader is on a HOT path: `methodCallsAt` runs at every dotted-call shape in
 	// the program, and the probe behind it builds a file-scoped STRING key (~4 allocations —
@@ -16457,7 +16396,7 @@ export type SettledDeclarations
 	export static function create(os Os) returns SettledDeclarations
 		let interfaces = IrInterfaceMap.create()
 
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(0), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(0), structNamesInDeclOrder: NameRoster.create(0), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(0), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, fixedArrayFromSizes: FixedSizeArray.create(0), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), scriptlibFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(0), constLiteralSites: GenericInstantiationSiteArray.create(0), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), extensionInnerAliasKeepers: ExtensionInnerAliasSiteMap.create(), typeBodyInnerAliasMembers: ExtensionInnerAliasNameSet.create(), libraryExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorShadowedInnerAliases: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(0), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(0), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(0), descriptorScanSites: DescriptorScanSiteArray.create(0), fixedElementCountNeeds: DescriptorNeedNameSet.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, conformerIndex: DeclaredConformerIndex.unbuilt(), extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), decls: TopLevelDeclArray.create(0), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), sawMutableMarker: false, sawMutableFunctionValue: false, sawRegionSurface: false, byRefBareNames: BareNameSet.create(), opaqueByRefBareNames: BareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), mutableGlobalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcReturnsReceiverField: DeclaredBodyFactNameSet.create(), funcReturnsParameter: DeclaredBodyFactNameSet.create(), funcFieldMoveOutForwards: FreshReturnForwardMap.create(), interfaceRequirementNames: MethodNameSet.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), sweptDeclarations: SweptDeclarationMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(0), userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: NameRoster.create(0), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(0), serviceSpawnCandidateKeys: ServiceSpawnCandidateKeyIndex.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), corpusArrayRecordName: ArrayRecordName.of(SynthesizedArrayRecordSeed), shadowRoster: ShadowSpellingRoster.none(), qualifiedTypeClaims: TypeNameClaimLog.create(), typeHeadClaims: TypeNameClaimLog.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: TypeNameClaimLog.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(0), nominalNameCollisions: TypeNameCollisionArray.create(0), fileModuleDirectories: ModuleDirectoryByFile.create(), namespaceQualifiers: DeclaredTypeNameSet.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(0), namespaceQualifiedFunctions: NamespaceQualifiedFunctionMap.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), functionDirectoryHolders: DirectoryHolderMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(0), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(0), structNamesInDeclOrder: NameRoster.create(0), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(0), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, fixedArrayFromSizes: FixedSizeArray.create(0), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), scriptlibFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(0), constLiteralSites: GenericInstantiationSiteArray.create(0), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), extensionInnerAliasKeepers: ExtensionInnerAliasSiteMap.create(), typeBodyInnerAliasMembers: ExtensionInnerAliasNameSet.create(), libraryExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorShadowedInnerAliases: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(0), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(0), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(0), descriptorScanSites: DescriptorScanSiteArray.create(0), fixedElementCountNeeds: DescriptorNeedNameSet.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, conformerIndex: DeclaredConformerIndex.unbuilt(), extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), decls: TopLevelDeclArray.create(0), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), sawMutableMarker: false, sawMutableFunctionValue: false, sawRegionSurface: false, byRefBareNames: BareNameSet.create(), opaqueByRefBareNames: BareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcReturnsReceiverField: DeclaredBodyFactNameSet.create(), funcReturnsParameter: DeclaredBodyFactNameSet.create(), funcFieldMoveOutForwards: FreshReturnForwardMap.create(), interfaceRequirementNames: MethodNameSet.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), sweptDeclarations: SweptDeclarationMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(0), userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: NameRoster.create(0), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(0), serviceSpawnCandidateKeys: ServiceSpawnCandidateKeyIndex.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), corpusArrayRecordName: ArrayRecordName.of(SynthesizedArrayRecordSeed), shadowRoster: ShadowSpellingRoster.none(), qualifiedTypeClaims: TypeNameClaimLog.create(), typeHeadClaims: TypeNameClaimLog.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: TypeNameClaimLog.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(0), nominalNameCollisions: TypeNameCollisionArray.create(0), fileModuleDirectories: ModuleDirectoryByFile.create(), namespaceQualifiers: DeclaredTypeNameSet.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(0), namespaceQualifiedFunctions: NamespaceQualifiedFunctionMap.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), functionDirectoryHolders: DirectoryHolderMap.create()}
 	end 'create'
 
 	static function unused() returns SettledDeclarations
@@ -16548,7 +16487,6 @@ export type SettledDeclarations
 		writer.flag(self.sawRegionSurface)
 		cacheWriteGlobalAliasReturnMap(writer, value: self.funcGlobalAliasReturns)
 		cacheWriteGlobalAliasReturnKeySet(writer, value: self.globalAliasReturnKeys)
-		cacheWriteGlobalAliasReturnKeySet(writer, value: self.mutableGlobalAliasReturnKeys)
 		cacheWriteBareNameSet(writer, value: self.byRefBareNames)
 		cacheWriteBareNameSet(writer, value: self.opaqueByRefBareNames)
 		cacheWriteFuncThrowsMap(writer, value: self.funcThrows)
@@ -16695,7 +16633,6 @@ export type SettledDeclarations
 		let f_sawRegionSurface = try reader.flag()
 		let f_funcGlobalAliasReturns = try cacheReadGlobalAliasReturnMap(reader)
 		let f_globalAliasReturnKeys = try cacheReadGlobalAliasReturnKeySet(reader)
-		let f_mutableGlobalAliasReturnKeys = try cacheReadGlobalAliasReturnKeySet(reader)
 		let f_byRefBareNames = try cacheReadBareNameSet(reader)
 		let f_opaqueByRefBareNames = try cacheReadBareNameSet(reader)
 		let f_funcThrows = try cacheReadFuncThrowsMap(reader)
@@ -16770,11 +16707,11 @@ export type SettledDeclarations
 		let f_genericInstancesBySite = try cacheReadGenericFunctionInstancesBySite(reader)
 		let f_genericInstancesByName = try cacheReadGenericFunctionInstanceMap(reader)
 
-		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, fixedArrayFromSizes: f_fixedArrayFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, extensionInnerAliasKeepers: f_extensionInnerAliasKeepers, typeBodyInnerAliasMembers: f_typeBodyInnerAliasMembers, libraryExtensionInnerAliasMembers: f_libraryExtensionInnerAliasMembers, authorExtensionInnerAliasMembers: f_authorExtensionInnerAliasMembers, authorShadowedInnerAliases: f_authorShadowedInnerAliases, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, extensionMethodConstraints: f_extensionMethodConstraints, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, sawMutableMarker: f_sawMutableMarker, sawMutableFunctionValue: f_sawMutableFunctionValue, sawRegionSurface: f_sawRegionSurface, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, mutableGlobalAliasReturnKeys: f_mutableGlobalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, funcDiverges: f_funcDiverges, funcAlwaysThrows: f_funcAlwaysThrows, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcConstructsFromParams: f_funcConstructsFromParams, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReturnsParameter: f_funcReturnsParameter, funcFieldMoveOutForwards: f_funcFieldMoveOutForwards, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, sweptDeclarations: f_sweptDeclarations, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionMethodDeclFiles: f_extensionMethodDeclFiles, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, authorMints: f_authorMints, contestedNominalClaims: f_contestedNominalClaims, contestedBindingNames: f_contestedBindingNames, contestedClaimHolders: f_contestedClaimHolders, bindingSiteHolders: f_bindingSiteHolders, sweptGenericSites: f_sweptGenericSites, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, functionDirectoryHolders: f_functionDirectoryHolders, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName}
+		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, fixedArrayFromSizes: f_fixedArrayFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, extensionInnerAliasKeepers: f_extensionInnerAliasKeepers, typeBodyInnerAliasMembers: f_typeBodyInnerAliasMembers, libraryExtensionInnerAliasMembers: f_libraryExtensionInnerAliasMembers, authorExtensionInnerAliasMembers: f_authorExtensionInnerAliasMembers, authorShadowedInnerAliases: f_authorShadowedInnerAliases, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, extensionMethodConstraints: f_extensionMethodConstraints, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, sawMutableMarker: f_sawMutableMarker, sawMutableFunctionValue: f_sawMutableFunctionValue, sawRegionSurface: f_sawRegionSurface, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, funcDiverges: f_funcDiverges, funcAlwaysThrows: f_funcAlwaysThrows, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcConstructsFromParams: f_funcConstructsFromParams, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReturnsParameter: f_funcReturnsParameter, funcFieldMoveOutForwards: f_funcFieldMoveOutForwards, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, sweptDeclarations: f_sweptDeclarations, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionMethodDeclFiles: f_extensionMethodDeclFiles, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, authorMints: f_authorMints, contestedNominalClaims: f_contestedNominalClaims, contestedBindingNames: f_contestedBindingNames, contestedClaimHolders: f_contestedClaimHolders, bindingSiteHolders: f_bindingSiteHolders, sweptGenericSites: f_sweptGenericSites, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, functionDirectoryHolders: f_functionDirectoryHolders, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize1168
-		return sizeof(SettledDeclarations) as CacheSize1168
+	static function cacheLayoutBytes() returns CacheSize1160
+		return sizeof(SettledDeclarations) as CacheSize1160
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -19274,9 +19211,9 @@ export type ProgramSignatures
 		return self.settledDeclarations().shadowRoster
 	end 'shadowRoster'
 
-	// Could `name` denote a top-level MANAGED binding — `let` or `var` — anywhere in this program? A
+	// Could `name` denote a top-level MANAGED binding anywhere in this program? A
 	// `false` is final; a `true` still has to be resolved by `constantValueOf`/`globalDeclFor`, which is
-	// what applies file-private scoping and tells the two kinds apart. See `managedTopLevelNames`.
+	// what applies file-private scoping and tells the two storage models apart. See `managedTopLevelNames`.
 	export function namesManagedTopLevel(name ByteArray) returns bool
 		return self.settledDeclarations().managedTopLevelNames.contains(name)
 	end 'namesManagedTopLevel'
@@ -19409,7 +19346,7 @@ export type ProgramSignatures
 			self.mainThreadSettled().descriptorScanSites.push(site)
 		end 'eachDescriptorScanSite'
 
-		// Bindings — `let` and `var` alike — are RECORDED here and EVALUATED later
+		// Bindings are RECORDED here and EVALUATED later
 		// (`evaluateInitializers`), and the gap between the two is the whole reason a forward
 		// reference works — see that function.
 		for binding in bindings 'eachBinding'
@@ -20689,11 +20626,6 @@ export type ProgramSignatures
 		return self.settledDeclarations().globalAliasReturnKeys.count() != 0
 	end 'programReturnsAnImmutableGlobalAlias'
 
-	export function returnsMutableGlobalAlias(callee ByteArray) returns bool
-		self.closeGlobalAliasReturns()
-		return self.settledDeclarations().mutableGlobalAliasReturnKeys.contains(callee)
-	end 'returnsMutableGlobalAlias'
-
 	// ⭐⭐ **CLOSE THE IMMUTABLE-GLOBAL-RETURN RELATION — the fixpoint that turns `get()` returning what
 	// `inner()` returns into "`get()` may hand back a `let` global too", transitively.**
 	//
@@ -20720,11 +20652,10 @@ export type ProgramSignatures
 			return
 		end 'noReturnedNameCanSeedIt'
 
-		self.publishGlobalAliasReturnKeys(false)
-		self.publishGlobalAliasReturnKeys(true)
+		self.publishGlobalAliasReturnKeys()
 	end 'closeGlobalAliasReturns'
 
-	function publishGlobalAliasReturnKeys(mutableGlobals bool)
+	function publishGlobalAliasReturnKeys()
 		// ⚡⚡ **AND THE SAME GATE ASKED EXACTLY, WHICH THE ONE ABOVE CANNOT BE.** `sawGlobalNameReturn` is
 		// raised at the SWEEP, where no name can be resolved, so it says only *"some body returned a bare
 		// name"* — true of nearly every program, because `return EmptySourceText` and `return SomeConstant`
@@ -20733,7 +20664,7 @@ export type ProgramSignatures
 		// `false` means reachability would run from an empty seed set and mark nothing. Skipping it skips
 		// the node space, both edge columns, the CSR build and the BFS — a cost billed to `phase:parse`,
 		// because this closure is asked lazily and its FIRST asker is `Parser.beginFunction`.
-		if not self.anyRecordedReturnNamesAGlobal(mutableGlobals) 'noSeedResolvesToOne'
+		if not self.anyRecordedReturnNamesAGlobal() 'noSeedResolvesToOne'
 			return
 		end 'noSeedResolvesToOne'
 
@@ -20742,7 +20673,7 @@ export type ProgramSignatures
 		for (_, info) in self.settledDeclarations().funcGlobalAliasReturns 'eachRecorded'
 			let node = nodes.nodeFor(info.bareName, callability: info.callability)
 
-			if self.returnsAGlobalDirectly(info, mutableGlobals: mutableGlobals) 'namesOneItself'
+			if self.returnsAGlobalDirectly(info) 'namesOneItself'
 				try nodes.seeds.set(node, value: true) otherwise panic("closeGlobalAliasReturns: seeds.set OOB at {node} despite the node having just been interned")
 			end 'namesOneItself'
 		end 'eachRecorded'
@@ -20770,11 +20701,6 @@ export type ProgramSignatures
 		for (name, info) in self.settledDeclarations().funcGlobalAliasReturns 'publishKeys'
 			let marked = try mayAlias.get(nodes.nodeFor(info.bareName, callability: info.callability)) otherwise panic("closeGlobalAliasReturns: mayAlias.get OOB for a node interned before the graph was built")
 
-			if marked and mutableGlobals 'markedMutable'
-				self.mainThreadSettled().mutableGlobalAliasReturnKeys.insert(name)
-				continue
-			end 'markedMutable'
-
 			if marked 'marked'
 				self.mainThreadSettled().globalAliasReturnKeys.insert(name)
 			end 'marked'
@@ -20784,9 +20710,9 @@ export type ProgramSignatures
 	// ⚡ **IS THERE A SEED AT ALL?** — the closure's exact precondition, over the SAME per-declaration test the
 	// seed loop uses, so the two cannot come to disagree about what a seed is. It walks and resolves nothing
 	// the seed loop would not have resolved anyway; what it buys is the right to stop before the graph exists.
-	function anyRecordedReturnNamesAGlobal(mutableGlobals bool) returns bool
+	function anyRecordedReturnNamesAGlobal() returns bool
 		for (_, info) in self.settledDeclarations().funcGlobalAliasReturns 'eachRecorded'
-			if self.returnsAGlobalDirectly(info, mutableGlobals: mutableGlobals) 'namesOneItself'
+			if self.returnsAGlobalDirectly(info) 'namesOneItself'
 				return true
 			end 'namesOneItself'
 		end 'eachRecorded'
@@ -20796,11 +20722,9 @@ export type ProgramSignatures
 
 	// Does this body return a name that DENOTES an immutable stored global, read from its own file? The
 	// closure's seed test, asked once per recorded declaration.
-	function returnsAGlobalDirectly(info GlobalAliasReturnInfo, mutableGlobals bool) returns bool
+	function returnsAGlobalDirectly(info GlobalAliasReturnInfo) returns bool
 		for returned in info.returnedNames 'eachName'
-			let names = self.namesMutableRecordGlobal(returned, readerFilePath: info.declFilePath) if mutableGlobals else self.namesImmutableRecordGlobal(returned, readerFilePath: info.declFilePath)
-
-			if names 'namesAGlobal'
+			if self.namesImmutableRecordGlobal(returned, readerFilePath: info.declFilePath) 'namesAGlobal'
 				return true
 			end 'namesAGlobal'
 		end 'eachName'
@@ -20808,18 +20732,9 @@ export type ProgramSignatures
 		return false
 	end 'returnsAGlobalDirectly'
 
-	export function namesMutableRecordGlobal(name ByteArray, readerFilePath FilePath) returns bool
-		match self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.stored) 'stored'
-			found(index) then return self.declAt(index).mutable
-			notFound then break
-		end 'stored'
-
-		return false
-	end 'namesMutableRecordGlobal'
-
 	// ⭐ **DOES `name`, READ FROM `readerFilePath`, DENOTE A `let`-DECLARED TOP-LEVEL BINDING WITH A RECORD?**
 	// The one place the halves of that question are joined — the SAME scoped-then-bare probe every other
-	// reader of a top-level name goes through (`declFor`), and the declaration's own `mutable` bit.
+	// reader of a top-level name goes through (`declFor`).
 	//
 	// ⚠ **IT ASKS ABOUT THE RECORD AND THEREFORE ABOUT BOTH STORAGE MODELS.** The rule rests on two
 	// names being able to reach ONE record, and an IMAGED `let` shares one exactly as a stored one
@@ -20828,7 +20743,7 @@ export type ProgramSignatures
 	// either way.
 	export function namesImmutableRecordGlobal(name ByteArray, readerFilePath FilePath) returns bool
 		match self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.stored) 'stored'
-			found(index) then return not self.declAt(index).mutable and not declIsAPayloadFreeUnionCase(self.declAt(index))
+			found(index) then return not declIsAPayloadFreeUnionCase(self.declAt(index))
 			notFound then break
 		end 'stored'
 
@@ -21203,7 +21118,7 @@ export type ProgramSignatures
 		// content hash. What a reader does depend on is the helper's RETURN TYPE, and that rides already,
 		// through the ordinary `FuncReturnTypeEntry` the same sweep publishes for it. Mixing the expression
 		// would be sound and WRONG: every keystroke inside any default would re-parse the whole program,
-		// which is the `var`-payload mistake one registry over.
+		// which is the stored-binding payload mistake `mixDeclAnswer` avoids, one registry over.
 		for i in 0 upto info.paramNames.count() 'eachName'
 			let paramName = try info.paramNames.get(i) otherwise panic("recordParamDefaults: paramNames.get OOB at {i} despite i < count")
 			state = Hasher.combined(mixBytes(state, bytes: paramName), value: defaultProducerMark(info.producerFor(i as ParamCount)))
@@ -22979,12 +22894,12 @@ export type ProgramSignatures
 		end 'identity'
 	end 'mixRequirementType'
 
-	// Add one top-level DECLARATION (a `let` or a `var`) to the arena. No value yet:
+	// Add one top-level DECLARATION (a `let`) to the arena. No value yet:
 	// `evaluateInitializers` supplies that once every file has been folded in.
 	//
 	// On a duplicate storage key the declaration whose file's path identity sorts earliest is held, so the
 	// kept binding does not depend on the order files are folded in. A file that declares the same name
-	// twice — `let A = 1` then `let A = 2`, or a `let`/`var` collision — keeps the FIRST here and is
+	// twice — `let A = 1` then `let A = 2` — keeps the FIRST here and is
 	// diagnosed E3006 by the real parse (`isRedeclaredBinding` → `Parser.raiseBindingFailure`), the
 	// top-level twin of the positioned duplicate-FUNCTION check `commitFuncSignatures` makes. A
 	// file-private name declared in two files is legal, and `TopLevelDecl.storageKey` gives those two decls
@@ -24220,7 +24135,7 @@ export type ProgramSignatures
 	// declaration's own diagnostic has already failed the build, and its readers add none of their
 	// own.
 	//
-	// A `var` reads as `notFound` here too — not because it is undefined, but because it is not a
+	// A stored binding reads as `notFound` here too — not because it is undefined, but because it is not a
 	// CONSTANT and this door only answers for constants. Its reader (`Parser.parseVariableReference`)
 	// asks `globalDeclFor` next, and emits a LOAD.
 	export function constantValueOf(name ByteArray, readerFilePath FilePath) returns TopLevelConstantLookup
@@ -24279,7 +24194,7 @@ export type ProgramSignatures
 
 	// ⭐⭐ **THE ONE PLACE A CROSS-FILE CONSTANT READ LEAVES A TRACE, AND IT HAS TO BE HERE BECAUSE
 	// NOWHERE ELSE KEEPS ONE.** A `let` with no storage is INLINED at its use site — it becomes a
-	// `literal` op carrying the number — so unlike a `var` (which emits a `globalAddr` naming its
+	// `literal` op carrying the number — so unlike a stored binding (which emits a `globalAddr` naming its
 	// `.data` label) a constant reference is invisible in the IR by the time any whole-module pass
 	// runs. `checkUnusedExports` would therefore see `export let LIMIT` read from three other files as
 	// read from NONE, and report E3092 on a genuinely-used constant: a WRONG ANSWER, not a missed one.
@@ -24331,7 +24246,7 @@ export type ProgramSignatures
 		return self.resolvedGlobalOf(index, into: self.typeNames)
 	end 'globalSlotType'
 
-	// The top-level `let`/`var` arena, walked by `checkUnusedExports`. `declAt` is exported for the same
+	// The top-level `let` arena, walked by `checkUnusedExports`. `declAt` is exported for the same
 	// reason: the check seeds from every declaration, so it needs the arena and not a by-name probe.
 	export function topLevelDeclCount() returns ElementIndex
 		return self.settledDeclarations().decls.count()
@@ -24340,12 +24255,11 @@ export type ProgramSignatures
 	// ⭐ **THE STORED-BINDING DOOR** — what `name` denotes as a top-level global with a `.data` slot, read
 	// from `readerFilePath`. The twin of `constantValueOf`, and the reason the two are separate: an inlined
 	// binding's use MATERIALIZES its value and a stored one's LOADS from a slot, so a caller that could not
-	// tell them apart would have to guess which code to emit. It is every `var` plus every record `let` the
-	// compiler cannot image — see `TopLevelDecl.hasStorage` — and the answer carries which of
-	// those it found.
+	// tell them apart would have to guess which code to emit. It is every record `let` the
+	// compiler cannot image — see `TopLevelDecl.hasStorage`.
 	//
 	// It resolves through the IDENTICAL scoped-then-bare probe (`declFor`), which is the whole point
-	// of extending the storage key to vars: this is what makes featA's `counter` and featB's
+	// of the storage key: this is what makes featA's `counter` and featB's
 	// `counter` two slots instead of one.
 	// ⚠ **`into` IS THE READER'S OWN INTERNER, and it is `returnTypeOf`'s discipline applied to a SLOT.** A
 	// factory-built global's type is the callee's declared return type, which lives in THIS index's interner
@@ -24375,10 +24289,6 @@ export type ProgramSignatures
 	end 'globalMapColumns'
 
 	function immutableMapColumnsOf(decl TopLevelDecl) returns ColumnPair throws AbsentError
-		if decl.mutable 'aVarMapIsNeverConstant'
-			throw AbsentError.absent
-		end 'aVarMapIsNeverConstant'
-
 		match decl.outcome 'state'
 			storedRecord(_, _, _, mapColumns) then return try mapLiteralColumnPair(mapColumns)
 			default throws AbsentError.absent
@@ -24395,7 +24305,7 @@ export type ProgramSignatures
 			// parse resolves it through (`slotStorageType` on a read, `foreignNameOf` on a store).
 			value(_, tag, typeName) then return BindingTypeClaim.create(constantValueTypeIn(tag, typeName: typeName, into: into), brand: EmptySourceText)
 
-			// ⭐ A MANAGED `var` reads exactly as a scalar one does — the slot is real, it
+			// ⭐ A MANAGED literal's slot is real, it
 			// is just a POINTER rather than a value. Its type is the literal's own, so a read of the name
 			// and a use of the literal it was initialized from are the same type by construction.
 			managedValue(_, kind) then return BindingTypeClaim.create(self.managedConstValueType(kind, elementFilePath: decl.declFilePath), brand: EmptySourceText)
@@ -24413,7 +24323,7 @@ export type ProgramSignatures
 	end 'bindingTypeClaimAt'
 
 	// The `.data` label and TYPE of the global at `index` — everything a load or a store needs to
-	// name it. A var whose initializer failed reads as `poisoned`: the declaration's own diagnostic
+	// name it. A binding whose initializer failed reads as `poisoned`: the declaration's own diagnostic
 	// has already failed the build, and a slot with no value is a slot with no bytes to emit.
 	function resolvedGlobalOf(index ElementIndex, into TypeNameInterner) returns TopLevelGlobalLookup
 		view decl = self.declAt(index)
@@ -24437,13 +24347,13 @@ export type ProgramSignatures
 		view decl = self.declAt(index)
 		let claim = try self.bindingTypeClaimAt(index, into: into) otherwise panic("ProgramSignatures.storedGlobalFound: '{String.from(decl.name)}' has a slot and a settled value, so `bindingTypeClaimAt` has a type to give it")
 
-		return TopLevelGlobalLookup.found(self.slotLabelOf(decl), valueType: claim.valueType, brand: claim.brand, mutable: decl.mutable)
+		return TopLevelGlobalLookup.found(self.slotLabelOf(decl), valueType: claim.valueType, brand: claim.brand)
 	end 'storedGlobalFound'
 
 	// ⭐ **THE `MaxonType` A MANAGED TOP-LEVEL BINDING OF `kind` DENOTES** — the SAME type its literal gives
 	// a value in expression position (`Parser.emitStringLiteral` / `emitByteStringLiteralValue`), stated once
-	// so a `let`'s inlined literal, a `var`'s slot, the module-init store and the cleanup's drop cannot
-	// disagree about what the binding IS.
+	// so a `let`'s inlined literal, a stored binding's slot, the module-init store and the cleanup's drop
+	// cannot disagree about what the binding IS.
 	//
 	// A METHOD rather than a free function because a byte string's type is the CONCRETE `Array with Byte`
 	// instance, and an instance is a gid only the interner can mint — the very `internArrayByteInstance` the
@@ -24506,7 +24416,7 @@ export type ProgramSignatures
 	end 'declIsAnImagedRecord'
 
 	function imagedRecordKindOf(decl TopLevelDecl) returns ByteArray throws AbsentError
-		if decl.mutable or decl.hasStorage 'notAnImage'
+		if decl.hasStorage 'notAnImage'
 			throw AbsentError.absent
 		end 'notAnImage'
 
@@ -24533,7 +24443,7 @@ export type ProgramSignatures
 		for i in 0 upto self.settledDeclarations().decls.count() 'eachDecl'
 			let decl = self.declAt(i)
 
-			if decl.hasStorage and not decl.mutable 'anImmutableSlot'
+			if decl.hasStorage 'anImmutableSlot'
 				labels.insert(self.dataLabelOf(decl))
 			end 'anImmutableSlot'
 		end 'eachDecl'
@@ -24617,7 +24527,7 @@ export type ProgramSignatures
 	// and a whole-program query under a per-file one is asked once per FILE, which is how a linear
 	// walk becomes quadratic (docs/internals/query-spine.md, Whole-program queries under per-file ones).
 	//
-	// A var whose initializer FAILED contributes no slot: the build has already failed on its
+	// A binding whose initializer FAILED contributes no slot: the build has already failed on its
 	// diagnostic, and there is no value to lay down.
 	export function declaredGlobals(live LiveGlobalLabelSet, fileRanks FileEmissionRankMap) returns DataSectionEntryArray
 		var entries = DataSectionEntryArray.create(0)
@@ -24762,7 +24672,7 @@ export type ProgramSignatures
 	// whole-program query under a per-file one is asked once per FILE, which is how a linear walk becomes
 	// quadratic (docs/internals/query-spine.md, Whole-program queries under per-file ones).
 	//
-	// A var whose initializer FAILED contributes nothing: the build has already failed on its diagnostic.
+	// A binding whose initializer FAILED contributes nothing: the build has already failed on its diagnostic.
 	export function managedGlobals(live LiveGlobalLabelSet, fileRanks FileEmissionRankMap) returns ManagedGlobalArray
 		var entries = ManagedGlobalArray.create(0)
 
@@ -24813,51 +24723,6 @@ export type ProgramSignatures
 
 		return need
 	end 'programModuleInitNeed'
-
-	export function userModuleVarHolding() returns ModuleVarHolding
-		var holding = ModuleVarHolding.none
-
-		for i in 0 upto self.settledDeclarations().decls.count() 'each'
-			view decl = self.declAt(i)
-
-			if not decl.mutable or decl.declaredByTheCorpus 'notAnAuthorsVar'
-				continue
-			end 'notAnAuthorsVar'
-
-			match self.initializerShapeOf(decl) 'shape'
-				scalar then holding = ModuleVarHolding.holdsValues if self.initializerNamesAValue(decl) else ModuleVarHolding.scalarsOnly
-				records or
-				runsCode then return ModuleVarHolding.holdsValues
-			end 'shape'
-
-			if holding == ModuleVarHolding.holdsValues 'settled'
-				return holding
-			end 'settled'
-		end 'each'
-
-		return holding
-	end 'userModuleVarHolding'
-
-	function initializerNamesAValue(decl TopLevelDecl) returns bool
-		let tokens = self.declTokenStreamOf(decl).prepared.tokens
-		var previousKind = TokenKind.equals
-
-		for position in decl.initStart upto decl.initEnd 'eachToken'
-			let token = try tokens.get(position) otherwise panic("ProgramSignatures.initializerNamesAValue: initializer token {position} of '{String.from(decl.name)}' is not below the declaring file's {tokens.count()} tokens")
-
-			if tokenKindIsSkippedLayout(token.kind) 'layout'
-				continue
-			end 'layout'
-
-			if token.kind == TokenKind.identifier and previousKind != TokenKind.as 'aValueName'
-				return true
-			end 'aValueName'
-
-			previousKind = token.kind
-		end 'eachToken'
-
-		return false
-	end 'initializerNamesAValue'
 
 	// Read off the initializer's tokens and default-deny: a token not explicitly scalar- or record-shaped
 	// runs code. A member read is scalar only as `.min`/`.max` or an enum or union case, and a comparison
@@ -24968,10 +24833,6 @@ export type ProgramSignatures
 	// A `let` is walked the way a sent message argument is, through the same door; a value packed into
 	// its own slot word has no graph to walk.
 	function globalThreadReach(decl TopLevelDecl, valueType MaxonType) returns GlobalThreadReach
-		if decl.mutable 'aVar'
-			return GlobalThreadReach.mainOnly
-		end 'aVar'
-
 		return match self.transferWalkOf(transferSubjectOf(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType), typeNames: self.typeNames), action: CascadeAction.shareWalk, roots: TransferRoots.several, readerFilePath: decl.declFilePath) 'walk'
 			closed gives GlobalThreadReach.packedInItsSlot
 			walkedBy(callee) gives GlobalThreadReach.everyThreadThrough(callee)
@@ -25171,10 +25032,6 @@ export type ProgramSignatures
 		return winner.nameLine != decl.nameLine or winner.nameColumn != decl.nameColumn or not winner.declFilePath.toString().equals(decl.declFilePath.toString())
 	end 'isRedeclaredBinding'
 
-	export function incumbentBindingKeyword(decl TopLevelDecl) returns String
-		return bindingKeyword(self.recordedDeclFor(decl).mutable)
-	end 'incumbentBindingKeyword'
-
 	function resolvedValueOf(index ElementIndex) returns TopLevelConstantLookup
 		let decl = self.declAt(index)
 
@@ -25264,10 +25121,10 @@ export type ProgramSignatures
 	// file's path, so this file's own `SHARED` is found before anyone's exported one of that name.
 	//
 	// ⭐ **ONE PROBE FOR BOTH KINDS, FILTERED BY `wanted`.** The scoped-then-bare order is the
-	// resolution RULE, and it is the same rule for a `let` and a `var` — so it is written once. What
+	// resolution RULE, and it is the same rule for an inlined and a stored binding — so it is written once. What
 	// differs is only which kind the caller can use, and a caller asking for the wrong kind gets
-	// `notFound`, which is the truth: no CONSTANT of that name is visible here, even though a var is.
-	// A second copy of this walk for vars would be free to drift on the probe order, and the failure
+	// `notFound`, which is the truth: no CONSTANT of that name is visible here, even though a stored one is.
+	// A second copy of this walk for stored bindings would be free to drift on the probe order, and the failure
 	// mode of that drift is silent — featA's `counter` resolving to featB's slot.
 	function declFor(name ByteArray, readerFilePath FilePath, wanted DeclKind) returns TopLevelDeclLookup
 		if let scoped = try self.settledDeclarations().declIndex.get(fileScopedDeclKey(name, declFilePath: readerFilePath)) 'filePrivate'
@@ -25326,7 +25183,7 @@ export type ProgramSignatures
 	// see a refusal at all, a file-private declaration being filed under a key the reader can never spell.
 	//
 	// ⭐ **THE DECLARING PATH IS THE CALLER'S TO SUPPLY, AND FOR A STATIC MEMBER IT IS ITS TYPE'S.** A
-	// `static var` may be written only in a `type` body — an `extension` is refused outright
+	// `static let` may be written only in a `type` body — an `extension` is refused outright
 	// (`static-variables/error.static-binding-in-an-extension`, E2015) — so a static's declaring file IS the
 	// file its type is declared in, which is what lets `Parser.staticRosterVerdictFor` hand this the struct
 	// layout's `declFilePath`.
@@ -25392,7 +25249,7 @@ export type ProgramSignatures
 	// with 42 still baked into it. (`QueryEngine.parseMemoKey` is the other half — see the `hash`
 	// field.)
 	function mixConstant(state HashDigest, decl TopLevelDecl) returns HashDigest
-		let keyed = mixBytes(self.mixMutability(mixDeclaringTier(state, visibility: decl.visibility, declFilePath: decl.declFilePath), mutable: decl.mutable), bytes: decl.storageKey)
+		let keyed = mixBytes(mixDeclaringTier(state, visibility: decl.visibility, declFilePath: decl.declFilePath), bytes: decl.storageKey)
 
 		match decl.outcome 'o'
 			value(payload, tag, typeName) then return self.mixDeclAnswer(keyed, decl: decl, payload: payload, tag: tag, typeName: typeName)
@@ -25434,8 +25291,8 @@ export type ProgramSignatures
 	// opposite failure and a WRONG ANSWER rather than a slow one: every reader's `.rdata` moves while the key
 	// stands still, and each reader keeps a memo built over the old bytes.
 	//
-	// ⚠ **`mutable` CANNOT STAND IN FOR THE BIT.** A `var` is never imaged, but a `let` takes EITHER model —
-	// an array of scalars is `.rdata`, one of managed elements has a slot (`TopLevelDecl.hasStorage`).
+	// ⚠ **THE BIT IS `hasStorage`.** A `let` takes EITHER model — an array of scalars is `.rdata`, one of
+	// managed elements has a slot (`TopLevelDecl.hasStorage`).
 	//
 	// Both directions are gated, and by DIFFERENT probes, because one probe cannot see both: see
 	// `VerifyWarmRebuild`'s property (e).
@@ -25492,17 +25349,6 @@ export type ProgramSignatures
 		return mixed
 	end 'mixImageTexts'
 
-	// ⚠ **MUTABILITY RIDES THE HASH, and it is the half a `var` adds.** `let X = 5` and `var X = 5`
-	// carry the same key and the same value and compile to COMPLETELY different code in every reader:
-	// a constant becomes a `literal` op, a var becomes `globalAddr` + `loadIndirect`. A reader's own
-	// bytes do not move when `let` becomes `var`, so — exactly as for the constant's VALUE — only this
-	// hash can carry it, and without it every reader would keep a memo that inlines a number the
-	// declaration no longer promises. (`ProgramSignatures.hash`'s field comment is the whole argument;
-	// this is the second fact it applies to.)
-	function mixMutability(state HashDigest, mutable bool) returns HashDigest
-		return Hasher.combined(state, value: SignatureDiscriminator.declShapeMutable if mutable else SignatureDiscriminator.declShapeConstant)
-	end 'mixMutability'
-
 	// Mix a managed constant's KIND. Its own discriminator per kind, so `let G = "ab"` and a
 	// hypothetical byte-string of the same bytes hash apart — they materialize different records and
 	// give the reader a different TYPE, which is exactly the acceptance a stale memo would keep.
@@ -25514,37 +25360,33 @@ export type ProgramSignatures
 		end 'k'
 	end 'mixManagedKind'
 
-	// ⭐⭐ **MIX WHAT A READER COPIES — AND A `var` DOES NOT COPY ITS VALUE.**
+	// ⭐⭐ **MIX WHAT A READER COPIES — AND A STORED BINDING'S READER COPIES NOTHING OF ITS VALUE.**
 	//
-	// This is the one place a `let` and a `var` genuinely diverge, and getting it backwards costs
-	// incrementality rather than correctness, which is exactly why it is worth being exact about.
+	// Getting this backwards costs incrementality rather than correctness, which is exactly why it is
+	// worth being exact about.
 	//
-	//   • A `let`'s VALUE is COPIED INTO every reader — a use becomes a `literal` op carrying the
+	//   • An inlined `let`'s VALUE is COPIED INTO every reader — a use becomes a `literal` op carrying the
 	//     number — so `let X = 7` → `8` changes what other files COMPILE TO while their own bytes
 	//     never move. Only this hash can carry that. (`verify-warm-rebuild` property 3(c).)
 	//
-	//   • A `var`'s value is copied into NOTHING. A reader emits `globalAddr __data_X` +
-	//     `loadIndirect` and that is byte-identical whether the initializer said 7 or 8 — the number
+	//   • A stored binding's value is copied into NOTHING. A reader emits `globalAddr __data_X` +
+	//     `loadIndirect` and that is byte-identical whatever the initializer held — the value
 	//     reaches only the `.data` IMAGE, which is rebuilt from the arena whenever this query misses.
-	//     Verified, not assumed: `globalDeclFor` hands a use site `(label, tag)` and no payload
-	//     (`TopLevelGlobalLookup`), and `emitGlobalLoad` deliberately does NOT `recordConst` — a
-	//     mutable location's value is not a constant the folder may use.
+	//     `globalDeclFor` hands a use site `(label, tag)` and no payload (`TopLevelGlobalLookup`).
 	//
-	// So a var mixes its TAG and its LABEL and stops there:
-	//   - the TAG because it decides the load's WIDTH (`i1` moves one byte, `i64` eight), so
-	//     `var flag = false` → `var flag = 0` really does change every reader's code;
+	// So a stored binding mixes its TAG and its LABEL and stops there:
+	//   - the TAG because it decides the load's WIDTH (`i1` moves one byte, `i64` eight);
 	//   - the LABEL because it IS the reader's IR identity — the slot the emitted `globalAddr` names.
 	//
 	// ⚠ Mixing the PAYLOAD too would be SOUND and WRONG: it would re-parse every file in the program
-	// whenever any global's initial value moved, which is precisely the "sound, and useless"
+	// whenever any stored global's initial value moved, which is precisely the "sound, and useless"
 	// failure `verify-warm-rebuild`'s property (b) exists to reject — the composite-source-hash key
-	// wearing a different hat. `globalValueEditIsLocal` is the probe that keeps this honest.
-	// ⚠ **THE FORK IS `hasStorage`, WHICH IS THE ONE THE RECORD ARMS ASK** (`mixRecordStorage`). For a folded
-	// SCALAR the two spellings coincide — nothing but the record settles (`settleStoredRecord`,
-	// `settleImagedOutcome`) move the bit off `mutable`, and no scalar goes through them — so this reads as
-	// `not decl.mutable` today and is written the other way
-	// deliberately: "does a reader bake this?" answered two ways in one function is how the two would come to
-	// disagree the day a third storage model exists.
+	// wearing a different hat.
+	// ⚠ **THE FORK IS `hasStorage`, WHICH IS THE ONE THE RECORD ARMS ASK** (`mixRecordStorage`). Only the
+	// record settles (`settleStoredRecord`, `settleImagedOutcome`) write the bit and no scalar goes through
+	// them, so a folded SCALAR takes the inlined arm today; the fork is written as the question the record
+	// arms ask because "does a reader bake this?" answered two ways in one function is how the two would
+	// come to disagree the day a third storage model exists.
 	function mixDeclAnswer(state HashDigest, decl TopLevelDecl, payload FullRangeInt, tag ValueTypeTag, typeName ByteArray) returns HashDigest
 		if not decl.hasStorage 'inlinedBakesItsValue'
 			return self.mixConstantValue(state, payload: payload, tag: tag, typeName: typeName)
@@ -25559,9 +25401,9 @@ export type ProgramSignatures
 		return Hasher.combined(self.mixValueTag(Hasher.combined(state, value: SignatureDiscriminator.constShapeValue), tag: tag, typeName: typeName), value: payload as HashDigest)
 	end 'mixConstantValue'
 
-	// Mix a FOLDED LITERAL's TAG. Shared by both arms of `mixDeclAnswer`, so a `let` and a `var`
+	// Mix a FOLDED LITERAL's TAG. Shared by both arms of `mixDeclAnswer`, so an inlined and a stored binding
 	// cannot come to disagree about what distinguishes a bool from an int — the difference between
-	// them is which EXTRA facts ride along (a constant's payload; a var's label), never this one.
+	// them is which EXTRA facts ride along (a constant's payload; a stored binding's label), never this one.
 	//
 	// ⭐ **AND SHARED WITH THE STRUCT FIELD DEFAULT** (`mixDefaultLiteral`), which is the same question
 	// about the same three tags: a `boolean` 1 and an `integer` 1 are the same number and different
@@ -34470,8 +34312,8 @@ export type ProgramSignatures
 			serviceStates.insert(service)
 		end 'eachService'
 
-		// A spawned type's state is the service loop's heap record — its receiver, the target of its
-		// mutations, and what shutdown decrefs — so it is never packed, whatever its fields.
+		// A spawned type's state is the cown's heap record — its receiver, the target of its
+		// mutations, and what `__finish` drops — so it is never packed, whatever its fields.
 		for (_, slot) in self.structSlots 'eachDeclaredType'
 			var layout = self.ownLayoutAtSlot(slot)
 
@@ -34885,8 +34727,8 @@ export type ProgramSignatures
 
 	// ⭐⭐⭐ **A DECLARED SLOT TYPE AS ONE INSTANTIATION FIXES IT — THE ONE HOME, because THREE sites read it
 	// and each of them types one end of a service's reply.** The cell the send mints
-	// (`internPromiseInstanceForReply`), the handler result the loop calls for
-	// (`ServiceLoop.serviceHandlerReturnType`) and the value the await hands back
+	// (`internPromiseInstanceForReply`), the handler result `__behave` calls for
+	// (`ServiceBehaviour.serviceHandlerReturnType`) and the value the await hands back
 	// (`Parser.fixedReplyResultType`) are one type seen from three tiers; a depth this answered differently
 	// at any of them is a reply the awaiter reads at a type the handler did not produce.
 	//
@@ -38742,8 +38584,8 @@ export type ProgramSignatures
 		end 'builtinOwesADropCallee'
 
 		// A generic service's handle lands here, and it carries its instantiation, so the tag decides and no
-		// name is asked. Its one field is the mailbox word (`buildServiceHandleStruct` panics on a second), so
-		// it takes the plain decref, and the box's own destructor releases the mailbox.
+		// name is asked. Its one field is the cown word (`buildServiceHandleStruct` panics on a second), so
+		// it takes the plain decref, and the box's own destructor releases the cown.
 		if self.genericInstanceOwesADrop(id) 'managed'
 			return destructorSymbol(self.mangleGenericInstance(id))
 		end 'managed'
@@ -42596,7 +42438,7 @@ export type ProgramSignatures
 	end 'declarationSiteOf'
 
 	function isOwnedByTheCompiler(callee ByteArray) returns bool
-		return (isCompilerInternalCallee(callee) and not isParamDefaultHelperName(callee) and not isFieldDefaultHelperName(callee)) or isServiceLoopSymbol(callee)
+		return (isCompilerInternalCallee(callee) and not isParamDefaultHelperName(callee) and not isFieldDefaultHelperName(callee)) or isServiceBehaveSymbol(callee) or isServiceFinishSymbol(callee)
 	end 'isOwnedByTheCompiler'
 
 	export function calleeMayCarryALayoutDescriptor(callee ByteArray) returns bool
@@ -42762,7 +42604,7 @@ export type ProgramSignatures
 		end 'noBindingOfThisName'
 
 		return match self.globalDeclFor(name, readerFilePath: readerFilePath, into: into) 'binding'
-			found(_, valueType, _, _) gives maxonTypeTag(valueType) == ValueTypeTag.function
+			found(_, valueType, _) gives maxonTypeTag(valueType) == ValueTypeTag.function
 			notFound or
 			poisoned gives false
 		end 'binding'
@@ -44153,7 +43995,6 @@ export type ProgramSignatures
 		fingerprint.note("funcGlobalAliasReturns", value: declarations.funcGlobalAliasReturns.count())
 		fingerprint.noteFlag("sawGlobalNameReturn", flag: self.sawGlobalNameReturn)
 		fingerprint.note("globalAliasReturnKeys", value: declarations.globalAliasReturnKeys.count())
-		fingerprint.note("mutableGlobalAliasReturnKeys", value: declarations.mutableGlobalAliasReturnKeys.count())
 		fingerprint.noteFlag("globalAliasReturnsClosed", flag: self.globalAliasReturnsClosed)
 		fingerprint.note("byRefBareNames", value: declarations.byRefBareNames.count())
 		fingerprint.note("deepCloneAnswers", value: self.deepCloneAnswers.count())

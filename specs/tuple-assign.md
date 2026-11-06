@@ -14,9 +14,11 @@ category: statements
 Tuple assignment allows assigning multiple return values from a function call (or a tuple expression) to existing mutable variables in a single statement.
 
 ```text
-var pos = 0
-var block = ""
-(pos, block) = parseNext(input, pos)
+function demo()
+	var pos = 0
+	var block = ""
+	(pos, block) = parseNext(input, pos)
+end 'demo'
 ```
 
 This is different from tuple destructuring declaration (`var (a, b) = ...`), which creates new variables. Tuple assignment requires the variables to already exist and be mutable (`var`).

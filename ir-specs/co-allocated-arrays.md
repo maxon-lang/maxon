@@ -25,10 +25,17 @@ function make() returns Planes
 	return Planes.create()
 end 'make'
 
-var maker = make as PlanesMaker
+type Makers
+	export var maker as PlanesMaker
+
+	static function create() returns Self
+		return Self{maker: make as PlanesMaker}
+	end 'create'
+end 'Makers'
 
 function main() returns ExitCode
-	var planes = maker()
+	let makers = Makers.create()
+	var planes = makers.maker()
 
 	if planes.get(0) == 0 'zero'
 		return 0
@@ -42,14 +49,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __data_maker@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_console_probe_stdin@32 = i8 0
-  __mrt_console_probe_stdout@33 = i8 0
-  __mrt_console_probe_stderr@34 = i8 0
-  __mrt_program_started@35 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @make {
@@ -76,17 +82,25 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegGlobal rax, __data_maker
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body:
+    x64.leaRegRdata rbx, [rip + __fnrec_make]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
+    x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.movRegReg rcx, rbx
     x64.callReg rax
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -94,21 +108,21 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, ifcont
   zero:
-    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jmp exitdrop
   ifcont:
-    x64.movRegImm32 r12, 1
+    x64.movRegImm32 r13, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+  exitdrop:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Makers
+  exitterminal:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -117,13 +131,12 @@ func @main {
 ```
 ```TargetIr:x64-linux
 data {
-  __data_maker@0 = i64 0
-  __mrt_envp@8 = i64 0
-  __mrt_signal_stack_bytes@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @make {
@@ -150,17 +163,25 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegGlobal rax, __data_maker
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body:
+    x64.leaRegRdata rbx, [rip + __fnrec_make]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
+    x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.movRegReg rcx, rbx
     x64.callReg rax
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -168,21 +189,21 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, ifcont
   zero:
-    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jmp exitdrop
   ifcont:
-    x64.movRegImm32 r12, 1
+    x64.movRegImm32 r13, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+  exitdrop:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Makers
+  exitterminal:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -191,11 +212,10 @@ func @main {
 ```
 ```TargetIr:arm64-macos
 data {
-  __data_maker@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_program_started@32 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @make {
@@ -215,19 +235,27 @@ func @make {
 
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaGlobal x0, __data_maker
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+  __il_body:
+    arm64.leaRdata x19, __fnrec_make
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
     arm64.movRegReg x0, x19
     arm64.bl __mm_retain
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.movRegReg x0, x19
     arm64.blr x1
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.bl __mm_decref
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
@@ -235,35 +263,35 @@ func @main {
     arm64.cmp x0, 0
     arm64.b.ne ifcont
   zero:
-    arm64.movImm x20, 0
+    arm64.movImm x21, 0
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b exitdrop
   ifcont:
-    arm64.movImm x20, 1
+    arm64.movImm x21, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
+  exitdrop:
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Makers
+  exitterminal:
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 ```
 ```TargetIr:arm64-linux
 data {
-  __data_maker@0 = i64 0
-  __mrt_envp@8 = i64 0
-  __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_hwcap_atomics@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
 }
 
 func @make {
@@ -283,19 +311,27 @@ func @make {
 
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaGlobal x0, __data_maker
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+  __il_body:
+    arm64.leaRdata x19, __fnrec_make
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
     arm64.movRegReg x0, x19
     arm64.bl __mm_retain
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.movRegReg x0, x19
     arm64.blr x1
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.bl __mm_decref
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
@@ -303,22 +339,23 @@ func @main {
     arm64.cmp x0, 0
     arm64.b.ne ifcont
   zero:
-    arm64.movImm x20, 0
+    arm64.movImm x21, 0
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b exitdrop
   ifcont:
-    arm64.movImm x20, 1
+    arm64.movImm x21, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
+  exitdrop:
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Makers
+  exitterminal:
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 ```
@@ -338,10 +375,17 @@ function make(n ElementIndex) returns Planes
 	return Planes.create(n)
 end 'make'
 
-var maker = make as PlanesMaker
+type Makers
+	export var maker as PlanesMaker
+
+	static function create() returns Self
+		return Self{maker: make as PlanesMaker}
+	end 'create'
+end 'Makers'
 
 function main() returns ExitCode
-	var planes = maker(8)
+	let makers = Makers.create()
+	var planes = makers.maker(8)
 
 	if (try planes.get(7) otherwise 1) == 0 'zero'
 		return 0
@@ -358,14 +402,13 @@ __managed_create_sized
 ```
 ```TargetIr:x64-windows
 data {
-  __data_maker@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_console_probe_stdin@32 = i8 0
-  __mrt_console_probe_stdout@33 = i8 0
-  __mrt_console_probe_stderr@34 = i8 0
-  __mrt_program_started@35 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @make {
@@ -389,18 +432,26 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegGlobal rax, __data_maker
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body:
+    x64.leaRegRdata rbx, [rip + __fnrec_make]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
+    x64.movRegReg r13, r8
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.movRegReg rdx, rbx
     x64.callReg rax
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.movRegImm32 rdx, 7
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -408,26 +459,26 @@ func @main {
     x64.jcc belowEqual, __im_slow
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 56]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
   tryok:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, ifcont
   zero:
-    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jmp exitdrop
   ifcont:
-    x64.movRegImm32 r12, 1
+    x64.movRegImm32 r13, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+  exitdrop:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Makers
+  exitterminal:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -590,13 +641,12 @@ func @__managed_create_sized {
 ```
 ```TargetIr:x64-linux
 data {
-  __data_maker@0 = i64 0
-  __mrt_envp@8 = i64 0
-  __mrt_signal_stack_bytes@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @make {
@@ -620,18 +670,26 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegGlobal rax, __data_maker
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body:
+    x64.leaRegRdata rbx, [rip + __fnrec_make]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
+    x64.movRegReg r13, r8
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.movRegReg rdx, rbx
     x64.callReg rax
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.movRegImm32 rdx, 7
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -639,26 +697,26 @@ func @main {
     x64.jcc belowEqual, __im_slow
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 56]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
   tryok:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, ifcont
   zero:
-    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jmp exitdrop
   ifcont:
-    x64.movRegImm32 r12, 1
+    x64.movRegImm32 r13, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+  exitdrop:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Makers
+  exitterminal:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -821,11 +879,10 @@ func @__managed_create_sized {
 ```
 ```TargetIr:arm64-macos
 data {
-  __data_maker@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_program_started@32 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @make {
@@ -842,20 +899,28 @@ func @make {
 
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaGlobal x0, __data_maker
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+  __il_body:
+    arm64.leaRdata x19, __fnrec_make
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
     arm64.movRegReg x0, x19
     arm64.bl __mm_retain
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x21, x0
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.movRegReg x1, x19
     arm64.blr x2
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.bl __mm_decref
     arm64.movImm x1, 7
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
@@ -863,27 +928,28 @@ func @main {
     arm64.b.ls __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 56]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
   tryok:
     arm64.cmp x0, 0
     arm64.b.ne ifcont
   zero:
-    arm64.movImm x20, 0
+    arm64.movImm x21, 0
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b exitdrop
   ifcont:
-    arm64.movImm x20, 1
+    arm64.movImm x21, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
+  exitdrop:
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Makers
+  exitterminal:
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   __im_slow:
     arm64.movRegReg x0, x19
@@ -1035,14 +1101,13 @@ func @__managed_create_sized {
 ```
 ```TargetIr:arm64-linux
 data {
-  __data_maker@0 = i64 0
-  __mrt_envp@8 = i64 0
-  __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_hwcap_atomics@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
 }
 
 func @make {
@@ -1059,20 +1124,28 @@ func @make {
 
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaGlobal x0, __data_maker
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+  __il_body:
+    arm64.leaRdata x19, __fnrec_make
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
     arm64.movRegReg x0, x19
     arm64.bl __mm_retain
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x21, x0
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.movRegReg x1, x19
     arm64.blr x2
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.bl __mm_decref
     arm64.movImm x1, 7
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
@@ -1080,27 +1153,28 @@ func @main {
     arm64.b.ls __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 56]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
   tryok:
     arm64.cmp x0, 0
     arm64.b.ne ifcont
   zero:
-    arm64.movImm x20, 0
+    arm64.movImm x21, 0
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b exitdrop
   ifcont:
-    arm64.movImm x20, 1
+    arm64.movImm x21, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
+  exitdrop:
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Makers
+  exitterminal:
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   __im_slow:
     arm64.movRegReg x0, x19
@@ -5252,10 +5326,17 @@ function make(n ElementIndex) returns Cells
 	return Cells.create(n)
 end 'make'
 
-var maker = make as CellsMaker
+type Makers
+	export var maker as CellsMaker
+
+	static function create() returns Self
+		return Self{maker: make as CellsMaker}
+	end 'create'
+end 'Makers'
 
 function main() returns ExitCode
-	var cells = maker(6)
+	let makers = Makers.create()
+	var cells = makers.maker(6)
 
 	return cells.count() as ExitCode
 end 'main'
@@ -5265,14 +5346,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __data_maker@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_console_probe_stdin@32 = i8 0
-  __mrt_console_probe_stdout@33 = i8 0
-  __mrt_console_probe_stderr@34 = i8 0
-  __mrt_program_started@35 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @make {
@@ -5296,41 +5376,55 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegGlobal rax, __data_maker
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body:
+    x64.leaRegRdata rbx, [rip + __fnrec_make]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#7:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
+    x64.movRegReg r13, r8
     x64.movRegImm32 rcx, 6
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.movRegReg rdx, rbx
     x64.callReg rax
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
-  __il_cont:
-    x64.cmpRegImm32 r12, 0
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+  __il_cont#6:
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
+    x64.cmpRegReg r13, rax
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+  exitdrop:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Makers
+  exitterminal:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-runtime-sized-creation-is-one-sized-create.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-runtime-sized-creation-is-one-sized-create.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -5339,13 +5433,12 @@ func @main {
 ```
 ```TargetIr:x64-linux
 data {
-  __data_maker@0 = i64 0
-  __mrt_envp@8 = i64 0
-  __mrt_signal_stack_bytes@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @make {
@@ -5369,40 +5462,54 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegGlobal rax, __data_maker
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body:
+    x64.leaRegRdata rbx, [rip + __fnrec_make]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#7:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
+    x64.movRegReg r13, r8
     x64.movRegImm32 rcx, 6
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.movRegReg rdx, rbx
     x64.callReg rax
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
-  __il_cont:
-    x64.cmpRegImm32 r12, 0
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+  __il_cont#6:
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 r12, 255
+    x64.cmpRegImm32 r13, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+  exitdrop:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Makers
+  exitterminal:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-runtime-sized-creation-is-one-sized-create.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-runtime-sized-creation-is-one-sized-create.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -5411,11 +5518,10 @@ func @main {
 ```
 ```TargetIr:arm64-macos
 data {
-  __data_maker@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_program_started@32 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @make {
@@ -5432,56 +5538,69 @@ func @make {
 
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaGlobal x0, __data_maker
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+  __il_body:
+    arm64.leaRdata x19, __fnrec_make
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#7:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
     arm64.movRegReg x0, x19
     arm64.bl __mm_retain
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x21, x0
     arm64.movImm x0, 6
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.movRegReg x1, x19
     arm64.blr x2
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-  __il_cont:
-    arm64.cmp x20, 0
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+  __il_cont#6:
+    arm64.cmp x21, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x20, 255
+    arm64.cmp x21, 255
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
+  exitdrop:
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Makers
+  exitterminal:
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at a-runtime-sized-creation-is-one-sized-create.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-runtime-sized-creation-is-one-sized-create.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 ```
 ```TargetIr:arm64-linux
 data {
-  __data_maker@0 = i64 0
-  __mrt_envp@8 = i64 0
-  __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_hwcap_atomics@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
 }
 
 func @make {
@@ -5498,43 +5617,57 @@ func @make {
 
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaGlobal x0, __data_maker
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+  __il_body:
+    arm64.leaRdata x19, __fnrec_make
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#7:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
     arm64.movRegReg x0, x19
     arm64.bl __mm_retain
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x21, x0
     arm64.movImm x0, 6
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.movRegReg x1, x19
     arm64.blr x2
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-  __il_cont:
-    arm64.cmp x20, 0
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+  __il_cont#6:
+    arm64.cmp x21, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x20, 255
+    arm64.cmp x21, 255
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
+  exitdrop:
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Makers
+  exitterminal:
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at a-runtime-sized-creation-is-one-sized-create.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-runtime-sized-creation-is-one-sized-create.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 ```
@@ -5551,10 +5684,17 @@ function make() returns Cells
 	return Cells.create(8)
 end 'make'
 
-var maker = make as CellsMaker
+type Makers
+	export var maker as CellsMaker
+
+	static function create() returns Self
+		return Self{maker: make as CellsMaker}
+	end 'create'
+end 'Makers'
 
 function main() returns ExitCode
-	var cells = maker()
+	let makers = Makers.create()
+	var cells = makers.maker()
 
 	return cells.count() as ExitCode
 end 'main'
@@ -5564,14 +5704,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __data_maker@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_console_probe_stdin@32 = i8 0
-  __mrt_console_probe_stdout@33 = i8 0
-  __mrt_console_probe_stderr@34 = i8 0
-  __mrt_program_started@35 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @make {
@@ -5766,40 +5905,54 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegGlobal rax, __data_maker
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body:
+    x64.leaRegRdata rbx, [rip + __fnrec_make]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#7:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
+    x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.movRegReg rcx, rbx
     x64.callReg rax
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
-  __il_cont:
-    x64.cmpRegImm32 r12, 0
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+  __il_cont#6:
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
+    x64.cmpRegReg r13, rax
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+  exitdrop:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Makers
+  exitterminal:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-constant-length-creation-is-allocated-where-it-is-created.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-constant-length-creation-is-allocated-where-it-is-created.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -5808,13 +5961,12 @@ func @main {
 ```
 ```TargetIr:x64-linux
 data {
-  __data_maker@0 = i64 0
-  __mrt_envp@8 = i64 0
-  __mrt_signal_stack_bytes@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @make {
@@ -6009,39 +6161,53 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegGlobal rax, __data_maker
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body:
+    x64.leaRegRdata rbx, [rip + __fnrec_make]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#7:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
+    x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.movRegReg rcx, rbx
     x64.callReg rax
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
-  __il_cont:
-    x64.cmpRegImm32 r12, 0
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+  __il_cont#6:
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 r12, 255
+    x64.cmpRegImm32 r13, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+  exitdrop:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Makers
+  exitterminal:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-constant-length-creation-is-allocated-where-it-is-created.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-constant-length-creation-is-allocated-where-it-is-created.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -6050,11 +6216,10 @@ func @main {
 ```
 ```TargetIr:arm64-macos
 data {
-  __data_maker@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_program_started@32 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @make {
@@ -6261,55 +6426,68 @@ func @make {
 
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaGlobal x0, __data_maker
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+  __il_body:
+    arm64.leaRdata x19, __fnrec_make
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#7:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
     arm64.movRegReg x0, x19
     arm64.bl __mm_retain
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.movRegReg x0, x19
     arm64.blr x1
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-  __il_cont:
-    arm64.cmp x20, 0
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+  __il_cont#6:
+    arm64.cmp x21, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x20, 255
+    arm64.cmp x21, 255
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
+  exitdrop:
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Makers
+  exitterminal:
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at a-constant-length-creation-is-allocated-where-it-is-created.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-constant-length-creation-is-allocated-where-it-is-created.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 ```
 ```TargetIr:arm64-linux
 data {
-  __data_maker@0 = i64 0
-  __mrt_envp@8 = i64 0
-  __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_hwcap_atomics@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
 }
 
 func @make {
@@ -6516,42 +6694,56 @@ func @make {
 
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaGlobal x0, __data_maker
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+  __il_body:
+    arm64.leaRdata x19, __fnrec_make
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#7:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
     arm64.movRegReg x0, x19
     arm64.bl __mm_retain
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.movRegReg x0, x19
     arm64.blr x1
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-  __il_cont:
-    arm64.cmp x20, 0
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+  __il_cont#6:
+    arm64.cmp x21, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x20, 255
+    arm64.cmp x21, 255
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
+  exitdrop:
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Makers
+  exitterminal:
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at a-constant-length-creation-is-allocated-where-it-is-created.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-constant-length-creation-is-allocated-where-it-is-created.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 ```

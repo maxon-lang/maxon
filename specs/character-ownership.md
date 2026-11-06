@@ -590,23 +590,27 @@ end 'main'
 ```
 
 <!-- test: rebinding-a-module-string-in-body-walks-the-old-string -->
-### Rebinding a module `var` String inside a `for` over it
+### Rebinding a `mutable` String parameter inside a `for` over it
 
-The same rule for a module `var`: the loop walks the 86-byte string it started on, and `k` totals
+The same rule for a `mutable` parameter: the loop walks the 86-byte string it started on, and `k` totals
 the byte length of every cluster of it.
 
 ```maxon
 typealias ByteTally = int(0 to 1000)
 
-var banner = "hello world this is a long string for heap allocation"
-
-function main() returns ExitCode
+function walk(banner mutable String) returns ByteTally
 	banner = "{banner} {40 + 2} and more text to make it heap"
 	var k = 0 as ByteTally
 	for c in banner 'l'
 		banner = "z"
 		k = k + (c.byteLength() as ByteTally)
 	end 'l'
+	return k
+end 'walk'
+
+function main() returns ExitCode
+	var banner = "hello world this is a long string for heap allocation"
+	let k = walk(banner)
 	print("{k} {banner}\n")
 	return 0
 end 'main'

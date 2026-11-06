@@ -19,14 +19,14 @@ The `stdlib/unicode/grapheme` module provides functions for grapheme segmentatio
 import unicode/grapheme
 
 // Get grapheme break property for a codepoint
-var prop = graphemeBreakProperty(0x1F600)  // Returns GBP_Extended_Pictographic info
+let prop = graphemeBreakProperty(0x1F600)  // Returns GBP_Extended_Pictographic info
 
 // Check if there's a boundary between two positions
-var boundary = is_grapheme_boundary(data, len, pos)
+let boundary = is_grapheme_boundary(data, len, pos)
 
 // Find next/previous grapheme boundary
-var next = nextGraphemeBoundary(data, len, offset)
-var prev = prevGraphemeBoundary(data, len, offset)
+let next = nextGraphemeBoundary(data, len, offset)
+let prev = prevGraphemeBoundary(data, len, offset)
 ```
 
 ### String Integration
@@ -34,7 +34,7 @@ var prev = prevGraphemeBoundary(data, len, offset)
 Strings automatically use grapheme clusters for iteration:
 
 ```maxon
-var s = "👨‍👩‍👧"  // Family emoji - 1 grapheme, 18 bytes, 5 codepoints
+let s = "👨‍👩‍👧"  // Family emoji - 1 grapheme, 18 bytes, 5 codepoints
 print("{s.count()}\n")         // 1 (grapheme count)
 print("{s.bytes().count()}\n") // 18 (byte count)
 

@@ -16,23 +16,23 @@ The `string` type provides an efficient, UTF-8 encoded string with automatic mem
 Short strings (up to 15 bytes) are stored directly in the string value itself, requiring no heap allocation.
 
 ```maxon
-var short = "hello"        // Stored inline (5 bytes)
-var longer = "this is a longer string"  // Heap allocated
+let short = "hello"        // Stored inline (5 bytes)
+let longer = "this is a longer string"  // Heap allocated
 ```
 
 ### String Methods
 
 ```maxon
-var s = "hello"
-var len = s.count()           // Returns 5 (grapheme count)
-var bytes = s.bytes().count() // Returns 5 (byte count)
-var empty = s.isEmpty()       // Returns false
+let s = "hello"
+let len = s.count()           // Returns 5 (grapheme count)
+let bytes = s.bytes().count() // Returns 5 (byte count)
+let empty = s.isEmpty()       // Returns false
 ```
 
 ### Search Methods
 
 ```maxon
-var s = "hello world"
+let s = "hello world"
 s.startsWith("hello")      // true
 s.endsWith("world")        // true
 s.contains("lo wo")        // true (substring search)
@@ -43,22 +43,22 @@ s.findFirst("world")            // 6 (index, or -1 if not found)
 ### Split
 
 ```maxon
-var parts = "hello world foo".split(" ")   // ["hello", "world", "foo"]
-var csv = "a,b,c".split(",")              // ["a", "b", "c"]
+let parts = "hello world foo".split(" ")   // ["hello", "world", "foo"]
+let csv = "a,b,c".split(",")              // ["a", "b", "c"]
 ```
 
 `split(delimiter: String) returns Array with String` divides a string into an array of substrings. If the delimiter is not found, the result is a single-element array containing the original string. An empty delimiter also returns a single-element array. Consecutive delimiters produce empty strings in the result:
 
 ```maxon
-var parts = "a,,b".split(",")   // ["a", "", "b"]
+let parts = "a,,b".split(",")   // ["a", "", "b"]
 ```
 
 ### String Concatenation
 
 ```maxon
-var greeting = "Hello"
-var name = "World"
-var message = greeting + ", " + name + "!"  // "Hello, World!"
+let greeting = "Hello"
+let name = "World"
+let message = greeting + ", " + name + "!"  // "Hello, World!"
 ```
 
 ### Character Iteration
@@ -66,7 +66,7 @@ var message = greeting + ", " + name + "!"  // "Hello, World!"
 Iterate over grapheme clusters (user-perceived characters) in a string:
 
 ```maxon
-var s = "café"
+let s = "café"
 for c in s 'loop'
 	print("{c}\n")  // Prints c, a, f, é (4 chars, not 5 bytes)
 end 'loop'
@@ -109,7 +109,7 @@ end 'utf16'
 
 Characters outside the Basic Multilingual Plane (codepoints > U+FFFF like emoji) produce surrogate pairs in UTF-16:
 ```maxon
-var emoji = "😀"
+let emoji = "😀"
 for u in emoji.utf16() 'loop'
 	print("{u}\n")  // 55357, 56832 (surrogate pair for U+1F600)
 end 'loop'
@@ -142,10 +142,10 @@ utf16DecodeSurrogates(55357, low: 56832)  // 128512 (U+1F600)
 Create a substring view that shares storage with the original string:
 
 ```maxon
-var s = "hello world"
-var start = s.startIndex()
-var spaceIdx = try s.findFirst(" ") otherwise return  // find throws StringError.notFound if not found
-var sub = s.slice(start, endIndex: spaceIdx)  // "hello" - shares storage with s
+let s = "hello world"
+let start = s.startIndex()
+let spaceIdx = try s.findFirst(" ") otherwise return  // find throws StringError.notFound if not found
+let sub = s.slice(start, endIndex: spaceIdx)  // "hello" - shares storage with s
 print(sub)
 ```
 
@@ -156,11 +156,14 @@ Slices are immutable views into the parent string. They do not copy data, making
 Strings use copy-on-write (COW) semantics for efficiency:
 
 ```maxon
-var original = "hello"
-var copy = original        // Both share the same storage
-copy = copy.toLower()      // copy gets its own storage, original unchanged
-print(original)            // "hello" - not modified
-print(copy)                // "hello" - new copy
+function main() returns ExitCode
+	let original = "hello"
+	var copy = original        // Both share the same storage
+	copy = copy.toLower()      // copy gets its own storage, original unchanged
+	print(original)            // "hello" - not modified
+	print(copy)                // "hello" - new copy
+	return 0
+end 'main'
 ```
 
 When you assign a string to another variable, they share storage. If either is mutated, a copy is made automatically, ensuring the other remains unchanged.
@@ -269,18 +272,17 @@ Hello, World!
 
 <!-- test: print-multiple-literals-and-global -->
 ```maxon
-var total = 0 as Integer
-
-function bump(n Integer) returns Integer
+function bump(n Integer, total mutable Integer) returns Integer
 	total = total + n
 	return total
 end 'bump'
 
 function main() returns ExitCode
+	var total = 0 as Integer
 	print("foo")
-	let a = bump(10)
+	let a = bump(10, total: total)
 	print("bar")
-	let b = bump(5)
+	let b = bump(5, total: total)
 	print("baz")
 	return b - a - 5
 end 'main'

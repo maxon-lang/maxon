@@ -201,7 +201,7 @@ ALPN the first of its protocols the client lists. Same targets as `TlsClient`.
 
 The handshake runs on the stream's first `send`, `recv`, `shutdownWrite` or `handshake()`, under the options'
 handshake deadline (30 s by default), so a client that connects and then stalls holds only its own stream. A server
-that accepts in a loop and moves each stream to a green thread of its own (a `spawn`ed service) answers other
+that accepts in a loop and moves each stream into a service of its own (a `spawn`ed one) answers other
 clients meanwhile.
 
 ### TlsServerOptions
@@ -596,13 +596,13 @@ connection closes. Keep-alive, chunked transfer and `Expect: 100-continue` are o
 | `setLimits(caps HttpServerLimits)` | — | — | Replace the caps later requests are parsed under. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `HttpServerError` | Make an `accept()` still waiting `milliseconds` after this call throw `acceptTimedOut`; `0` clears it. Throws `listenerClosed` once the server is closed. |
 | `accept()` | `HttpExchange` | `HttpServerError` | Take the next connection and the one request on it. An `OPTIONS *` is answered here, and the next connection taken. |
-| `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection on a green thread of its own. |
+| `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection in a service of its own. |
 | `close()` | — | — | Stop listening: a parked or later `accept()` throws `listenerClosed`, which ends `serve`. |
 
 `close()` writes the server, so the server it is called on is held in a `var`; through a `let` it is
 [E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord).
 
-`serve` moves each accepted connection, a `TcpClient` or a `TlsStream`, to a green thread of its own, which reads its
+`serve` moves each accepted connection, a `TcpClient` or a `TlsStream`, to a service of its own, which reads its
 request and runs its handler. A client that stalls delays only its own connection, and a handler that computes
 without waiting delays only its own: connections run on as many processors as the program has. Connections in
 flight are bounded by the operating system's socket limits, each in time by [`HttpServerLimits`](#httpserverlimits)

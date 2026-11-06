@@ -165,8 +165,6 @@ because its two-call surface (`subpSpawn` then `subpReadLine`) CAN bracket the r
 ```maxon
 let flagName = "spawn-read-line-interleave.flag"
 
-var order = 0 as Integer
-
 function flagPath() returns FilePath
 	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
 end 'flagPath'
@@ -177,15 +175,25 @@ function clearFlag()
 	end 'present'
 end 'clearFlag'
 
-function slow() returns Integer
+function record(order OrderCell, digit Integer)
+	while true 'retry'
+		let seen = order.current()
+
+		if order.publish(seen * 10 + digit, replacing: seen) 'landed'
+			break
+		end 'landed'
+	end 'retry'
+end 'record'
+
+function slow(order OrderCell) returns Integer
 	_ = spawnReadLine("while [ ! -f {flagName} ]; do sleep 0.05; done; echo hello")
-	order = order * 10 + 1
+	record(order, digit: 1)
 	return 1
 end 'slow'
 
-function fast() returns Integer
+function fast(order OrderCell) returns Integer
 	sleep(50)
-	order = order * 10 + 2
+	record(order, digit: 2)
 	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
 	return 2
 end 'fast'
@@ -193,15 +201,17 @@ end 'fast'
 function main() returns ExitCode
 	clearFlag()
 
-	let p1 = async slow()
-	let p2 = async fast()
+	let order = OrderCell.create(0 as Integer)
+	let p1 = async slow(order.clone())
+	let p2 = async fast(order.clone())
 	_ = await p1
 	_ = await p2
 
 	clearFlag()
-	return order as ExitCode
+	return order.current() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
+typealias OrderCell = SharedValue with Integer
 ```
 ```exitcode
 21

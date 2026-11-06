@@ -859,7 +859,7 @@ let POffReservedPendingWaiter = 0x50 as ByteOffset
 
 // ⭐⭐⭐ **GO'S `runnext` — THE ONE GREEN THREAD THIS PROCESSOR RUNS BEFORE IT CONSULTS ITS RING**
 // (`proc.go:7530`). Every ready puts its thread here and kicks whatever the slot held to the ring TAIL, so the
-// thread a running thread just woke is the next to run, while its reply, its mailbox and its stack are still
+// thread a running thread just woke is the next to run, while its reply, its cown and its stack are still
 // in this core's caches.
 //
 // ⛔⛔ **A THREAD TAKEN FROM THE SLOT INHERITS THE TIME SLICE AND MUST NOT STEP `POffSchedTick`** (Go's
@@ -1579,7 +1579,7 @@ end 'targetPreemptDelivery'
 // global run queue and its counts, the idle processor and machine lists, the machine roster, the
 // regain list and the process phase, and with them the timer store and the poll-descriptor band.
 // Every other shared structure has its own lock or claim: a GT record's
-// (`GtRuntime.GtOffRecordLock`), `__gt_gfree_lock`, `__gt_allg_lock`, the registry's, a mailbox's,
+// (`GtRuntime.GtOffRecordLock`), `__gt_gfree_lock`, `__gt_allg_lock`, the registry's, a cown's,
 // and the CAS claims argued at their words.
 //
 // ⚠ **ONE LOCK OVER THE QUEUE, THE TIMERS AND THE POLLER, AND THAT IS A DEADLOCK ARGUMENT.**
@@ -1741,7 +1741,7 @@ let SchedWakeOrSpawnName = b"__sched_wake_or_spawn"
 // ⭐⭐ `__sched_wake_netpoller(when)` — Go's `wakeNetPoller` (`proc.go:4018`): a deadline `when` has just become
 // the earliest the scheduler waits for. If a machine is blocked in the poller for a LATER deadline, break its
 // wait; if none is polling, `__sched_wake_poller`. `GtRuntime.__gt_register_park`, `__np_pd_deadline` and a send's
-// park (`GtRuntime.emitGtArmTimerDeadline`, which holds the sender's mailbox lock) call it with `__sched_lock`
+// park (`GtRuntime.emitGtArmTimerDeadline`, which holds the sender's cown lock) call it with `__sched_lock`
 // released; the wake takes it. EXPORTED for `GtRuntime.__gt_register_park`.
 export let SchedWakeNetpollerName = b"__sched_wake_netpoller"
 
@@ -2631,12 +2631,8 @@ end 'emitSchedWakeMachine'
 // other order would leave an instant holding the lock with a zero count, which is exactly the
 // instant a stop would wedge every other machine.
 export function emitLockEnterAt(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
-	emitLockEnterOnMachine(module, block: block, lock: lock, kind: kind, machine: emitLoadCurrentM(module, block: block, ids: ids), ids: ids)
+	emitLockEnterWithDepth(module, block: block, lock: lock, kind: kind, depthRecord: emitLoadCurrentM(module, block: block, ids: ids), depthOffset: MOffLocks, ids: ids)
 end 'emitLockEnterAt'
-
-export function emitLockEnterOnMachine(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, machine ValueId, ids ValueMinter)
-	emitLockEnterWithDepth(module, block: block, lock: lock, kind: kind, depthRecord: machine, depthOffset: MOffLocks, ids: ids)
-end 'emitLockEnterOnMachine'
 
 export function emitLockLeaveAt(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
 	emitLockLeaveOnMachine(module, block: block, lock: lock, kind: kind, machine: emitLoadCurrentM(module, block: block, ids: ids), ids: ids)
@@ -5794,14 +5790,14 @@ end 'emitGtArenaCarve'
 // ⭐⭐ **`__sched_arena_carve(bytes) -> address` — CARVE `bytes` FROM THE SCHEDULER's ARENA.** It
 // takes no lock: every caller holds `__gt_gfree_lock` (`__gt_free_get` across its consult and
 // carve, and `emitSchedCarveLocked` around the call for `emitSchedAllocM`'s machines, the monitor's
-// M and `__mbox_staging`), so every carve shares one cursor. The carve is the `bytes` at
+// M and `__cown_staging`), so every carve shares one cursor. The carve is the `bytes` at
 // `__sched_arena_cursor`; when the current chunk has no room for them, a new chunk of
 // `SchedArenaChunkBytes` is mapped and the old one's tail is abandoned. A chunk's pages arrive zeroed
 // and nothing is carved twice or ever returned, so a carve needs no `memFill` and is never freed.
 //
 // ⭐⭐ **THE ARENA IS SCHEDULER SCAFFOLDING, LIKE THE STACKS, AND IS NEVER THE COUNTED SLAB.** It
 // holds the GT records (`__gt_free_get`), the machines (`emitSchedAllocM`) and the message staging
-// buffers (`__mbox_staging`), whose creation all depend on timing — which processor a spawn runs
+// buffers (`__cown_staging`), whose creation all depend on timing — which processor a spawn runs
 // on, which record a spawn reuses, when `__sysmon` retakes a processor or finds a timer overdue —
 // and outside the slab that timing cannot reach the allocation counts `scale-test` requires to be
 // identical between two compiles of one program.
@@ -7143,8 +7139,10 @@ function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueI
 
 	// ⚠ **AND NOTHING PARKED, BECAUSE A RENOUNCED THREAD PARKS AGAIN ON ITS WAY OUT.** A dropped reader's
 	// unwinding drops its socket, and `__ms_close` opens with an I/O yield — so the thread is briefly on the
-	// TIMER store with nothing runnable, which the test above reads as "finished". A service's mailbox park is
-	// on none of these stores, so a parked service still does not hold the exit open.
+	// TIMER store with nothing runnable, which the test above reads as "finished". An idle cown owns no
+	// green thread, and a sender parked on `cownSend` is on none of these stores because it parks only
+	// while its cown holds `capacity` queued messages, so a runner exists for it: neither holds the exit
+	// open.
 	let stillParked = emitGtStoresPending(module, block: block, ids: ids)
 	let nothingPending = emitCompareWithConstant(module, block: block, value: stillParked, pred: StdCmpPred.eq, against: 0, ids: ids)
 	let quiet = emitBin(module, block: block, a: nothingRunnable, b: nothingPending, opcode: StdBinOpcode.bitAnd, ids: ids)
@@ -7356,7 +7354,7 @@ end 'emitSchedRaiseHighWater'
 // the StoreLoad barrier — that function states it at the instruction and forbids the "optimisation"
 // back to a plain store, and this is the reader it protects. The `runnext` slot's is
 // `__sched_runq_put`'s exchange, which a publish with no lock ends on
-// (`GtRuntime.emitGtReadyParkedService`): `lock cmpxchg` on x64, and on arm64 its `stlxr`, which
+// (`GtRuntime.emitGtReady` with `SchedLockHold.free`): `lock cmpxchg` on x64, and on arm64 its `stlxr`, which
 // the acquire reads below cannot pass. ⚠ A caller that already HELD the lock and pushed to the ring
 // inside it has neither: the `lock xadd` is what covers it, which is why `__gt_timer_check` and the
 // poller's readiness walk may publish inside their walk and wake once after it.
@@ -8628,10 +8626,10 @@ function emitSchedRegainUnlinkLocked(module StdModule, func IrFunction, cur IrBl
 end 'emitSchedRegainUnlinkLocked'
 
 // ⭐ `__sched_main_take_proc()` — the main machine takes an idle processor if it holds none. The exit drain's
-// release runs on the main OS thread, which left the loop by the park road with no processor, and a release
-// that closes a service's mailbox readies the parked service: a ready from a processor-less machine starts a
-// worker on the idle processor, so the service's exit would run concurrently with the rest of the release
-// even at one processor. Holding the processor, the readied thread waits on this machine's ring until the
+// release runs on the main OS thread, which left the loop by the park road with no processor, and a
+// release that closes an idle cown spawns its finish runner: a ready from a processor-less machine
+// starts a worker on the idle processor, so the service's state drop would run concurrently with the
+// rest of the release even at one processor. Holding the processor, the readied thread waits on this machine's ring until the
 // drain loop is next entered. With no idle processor the machine goes on as it was.
 function buildSchedMainTakeProc(module StdModule, target Target)
 	var func = IrFunction.createFromStd(SchedMainTakeProcName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))

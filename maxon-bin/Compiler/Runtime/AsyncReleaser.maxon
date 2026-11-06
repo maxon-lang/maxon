@@ -75,7 +75,7 @@
 //       the struct must precede the caller's own arrival"*.
 //
 //       ⚠ **THE CROSS-M DROP-VERSUS-COMPLETION IS REACHABLE.** A reply cell IS a promise, completed by
-//       `__gt_cell_complete` on the SERVICE's green thread while the CLIENT may drop or cancel it on another
+//       `__gt_cell_complete` on the SERVICE's runner green thread while the CLIENT may drop or cancel it on another
 //       M. `services.pending-reply-dropped-then-answered` and `services.completed-reply-dropped-is-reclaimed`
 //       are the two orders, committed. The hazard is absent because of the ordering rule, not because nobody
 //       can stand there.
@@ -248,7 +248,7 @@ end 'serviceReplyNeedsReleaser'
 // ⭐ **THE PLAN, AND ITS THREE DEPARTURES FROM `asyncReleasePlanFor` ARE THE THREE FACTS ABOUT A CELL.**
 //
 //   • **NO ARGUMENT SLOTS.** A message's arguments were moved into the request at the send and are
-//     released by `<T>.__loop` (consumed by the handler, or dropped slot by slot beside it) — the GT
+//     released by `<T>.__behave` (consumed by the handler, or dropped slot by slot beside it) — the GT
 //     struct's inline argument region is never written for a cell and may hold a previous
 //     tenant's words. Deriving them from the message's parameters, as the async plan does, would
 //     release those.
@@ -632,8 +632,8 @@ function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets NameRoster,
 		panicAbortValue or
 		errorFlagEncode then break
 
-		// A SERVICE's green thread owns its state and its messages and releases them in its own loop
-		// (`ServiceLoop`), so it needs no per-callee releaser: the GT-struct release protocol this file
+		// A SERVICE's state and messages are released by `<T>.__finish` and `<T>.__behave`
+		// (`ServiceBehaviour`), so it needs no per-callee releaser: the GT-struct release protocol this file
 		// implements is the `async` PROMISE's, and a service has no promise.
 		serviceSend or
 		serviceReplyCell then break
@@ -785,7 +785,7 @@ export union ServiceStartReport
 	throughCell(cell ValueId, errorFlag ValueId)
 end 'ServiceStartReport'
 
-export function finishServiceStart(module StdModule, func IrFunction, entry IrBlock, nextValue ValueId, record ValueId, mailbox ValueId, state ValueId, loopName ByteArray, target AsyncSpawnTarget, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner, report ServiceStartReport) returns ValueId
+export function finishServiceStart(module StdModule, func IrFunction, entry IrBlock, nextValue ValueId, record ValueId, cown ValueId, state ValueId, target AsyncSpawnTarget, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner, report ServiceStartReport) returns ValueId
 	let plan = asyncReleasePlanFor(target, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames)
 	var ids = ValueMinter.resuming(nextValue)
 	var cur = emitCellSlotReleases(module, func: func, ids: ids, cur: emitSlotReleases(module, func: func, ids: ids, cur: entry, base: record, slots: plan.argSlots), base: record, slots: plan.cellSlots)
@@ -793,35 +793,35 @@ export function finishServiceStart(module StdModule, func IrFunction, entry IrBl
 	module.appendOp(cur, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(record)))
 
 	match report 'report'
-		unreported then enterServiceLoop(module, cur: cur, ids: ids, state: state, mailbox: mailbox, loopName: loopName)
-		throughCell(cell, errorFlag) then finishReportedStart(module, func: func, cur: cur, ids: ids, cell: cell, errorFlag: errorFlag, state: state, mailbox: mailbox, loopName: loopName)
+		unreported then storeServiceState(module, cur: cur, cown: cown, state: state)
+		throughCell(cell, errorFlag) then finishReportedStart(module, func: func, cur: cur, ids: ids, cell: cell, errorFlag: errorFlag, state: state, cown: cown)
 	end 'report'
 
 	module.functions.push(func)
 	return ids.nextId()
 end 'finishServiceStart'
 
-function enterServiceLoop(module StdModule, cur IrBlock, ids ValueMinter, state ValueId, mailbox ValueId, loopName ByteArray)
-	module.appendOp(cur, op: StdOp.call(ids.mint(), callee: loopName, args: twoArgs(state, second: mailbox)))
+// Always the start thunk's last act: a send or close made once the spawner holds the handle links
+// behind this running start behaviour, so no behaviour reads the state before this store.
+function storeServiceState(module StdModule, cur IrBlock, cown ValueId, state ValueId)
+	module.appendOp(cur, op: StdOp.storeIndirect(cown, offset: CownOffState, valueId: state, valueType: StdType.i64))
 	module.setTerminator(cur, op: StdOp.retVoid)
-end 'enterServiceLoop'
+end 'storeServiceState'
 
-// The handle is minted before the branch and holds the mailbox share the start's initial counts
-// gave it, so the failure arm hands that share back by releasing the handle. That arm completes the
-// cell before the teardown, because `__mbox_service_exit` ends in `__gt_owner_done`, this thread's
-// last act.
-function finishReportedStart(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, cell ValueId, errorFlag ValueId, state ValueId, mailbox ValueId, loopName ByteArray)
+// The handle is minted before the branch and holds the cown share the start's initial counts
+// gave it, so the failure arm hands that share back by releasing the handle. That arm stores no
+// state, so the cown's finish finds none and skips the drop.
+function finishReportedStart(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, cell ValueId, errorFlag ValueId, state ValueId, cown ValueId)
 	var started = module.addBlock(func, label: b"svcstarted", heat: BlockHeat.normal)
 	var failed = module.addBlock(func, label: b"svcfailed", heat: BlockHeat.cold)
-	let handle = emitHandleBoxHolding(module, block: cur, mbox: mailbox, boxBytes: ServiceHandleBoxSize, ids: ids)
+	let handle = emitHandleBoxHolding(module, block: cur, mbox: cown, boxBytes: ServiceHandleBoxSize, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: errorFlag, pred: StdCmpPred.eq, against: NoErrorFlag, whenTrue: started, whenFalse: failed, ids: ids)
 
 	module.appendOp(started, op: StdOp.call(ids.mint(), callee: GtCellCompleteName, args: threeArgs(cell, second: handle, third: emitConst(module, block: started, value: NoErrorFlag, ids: ids))))
-	enterServiceLoop(module, cur: started, ids: ids, state: state, mailbox: mailbox, loopName: loopName)
+	storeServiceState(module, cur: started, cown: cown, state: state)
 
 	module.appendOp(failed, op: StdOp.call(ids.mint(), callee: GtCellCompleteName, args: threeArgs(cell, second: emitConst(module, block: failed, value: 0, ids: ids), third: errorFlag)))
 	module.appendOp(failed, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(handle)))
-	module.appendOp(failed, op: StdOp.call(ids.mint(), callee: MboxServiceExitName, args: argsOf(mailbox)))
 	module.setTerminator(failed, op: StdOp.retVoid)
 end 'finishReportedStart'
 

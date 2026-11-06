@@ -14,7 +14,7 @@ The `bool` type stores boolean values - either `true` or `false`.
 ### Syntax
 
 ```maxon
-var flag bool = true
+let flag = true
 let condition = false
 ```
 ### Example

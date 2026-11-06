@@ -18,8 +18,8 @@ The Maxon standard library provides commonly used functions and types. Functions
 The `Math.exp(x)` function computes e^x (the exponential function).
 
 ```text
-var result = Math.exp(0.0)  // returns 1.0
-var e = Math.exp(1.0)       // returns ~2.718
+let result = Math.exp(0.0)  // returns 1.0
+let e = Math.exp(1.0)       // returns ~2.718
 ```
 
 ## Tests

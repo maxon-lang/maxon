@@ -23,12 +23,12 @@ typealias IntArray = Array with Int
 
 Create an empty array:
 ```text
-var arr = IntArray.create(0)
+let arr = IntArray.create(0)
 ```
 
 Create an array from a literal:
 ```text
-var arr = [1, 2, 3]
+let arr = [1, 2, 3]
 ```
 
 ### Adding Elements
@@ -38,10 +38,12 @@ Use `push` to add elements to the end:
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
-var arr = IntArray.create(0)
-arr.push(10)
-arr.push(20)
-arr.push(30)
+function demo()
+	var arr = IntArray.create(0)
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+end 'demo'
 ```
 
 Use `insert` to add at a specific index:
@@ -53,13 +55,13 @@ arr.insert(1, 15)  // Insert 15 at index 1
 
 Use `get` to access elements (throws on out-of-bounds):
 ```text
-var val = try arr.get(0) otherwise 0  // Returns 0 if out of bounds
+let val = try arr.get(0) otherwise 0  // Returns 0 if out of bounds
 ```
 
 Use `first` and `last` for convenience:
 ```text
-var first = try arr.first() otherwise 0  // First element or default
-var last = try arr.last() otherwise 0    // Last element or default
+let first = try arr.first() otherwise 0  // First element or default
+let last = try arr.last() otherwise 0    // Last element or default
 ```
 
 ### Modifying Elements
@@ -73,7 +75,7 @@ arr.set(0, 100)  // Set first element to 100
 
 Use `pop` to remove and return the last element:
 ```text
-var val = try arr.pop() otherwise 0  // Pop or use default if empty
+let val = try arr.pop() otherwise 0  // Pop or use default if empty
 ```
 
 Use `remove` to remove at a specific index:
@@ -89,9 +91,9 @@ arr.clear()
 ### Size and Capacity
 
 ```text
-var size = arr.count()       // Number of elements
-var cap = arr.capacity()     // Current capacity
-var empty = arr.isEmpty()    // true if count() == 0
+let size = arr.count()       // Number of elements
+let cap = arr.capacity()     // Current capacity
+let empty = arr.isEmpty()    // true if count() == 0
 arr.reserve(100)             // Ensure capacity >= 100
 ```
 
@@ -525,7 +527,7 @@ Get on an empty module-level array throws error and is caught by otherwise.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
-var arr = IntArray.create(0)
+let arr = IntArray.create(0)
 
 function main() returns ExitCode
 	let val = try arr.get(0) otherwise -1

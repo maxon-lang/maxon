@@ -198,7 +198,7 @@ end 'main'
 ## Storage
 
 Integer arithmetic is always 64-bit, but an alias with a **non-negative** range is stored in the smallest
-unsigned width that holds it wherever values are packed: array elements and module-level variables.
+unsigned width that holds it wherever values are packed: array elements and module-level `let`s.
 
 | Range of the alias | Array element storage |
 |--------------------|-----------------------|

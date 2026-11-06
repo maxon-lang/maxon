@@ -107,7 +107,7 @@ type Site
 	end 'here'
 end 'Site'
 
-var site = Site.here()
+let site = Site.here()
 
 function main() returns ExitCode
 	print("{site.file}@{site.line}\n")

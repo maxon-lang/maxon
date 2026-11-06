@@ -253,26 +253,25 @@ type Holder
 	end 'create'
 end 'Holder'
 
-var holder = Holder.create(Box.create(0))
-
-function register(b Box)
+function register(holder mutable Holder, b Box)
 	holder.box = b
 end 'register'
 
-function clobber()
+function clobber(holder mutable Holder)
 	holder.box.n = 99
 end 'clobber'
 
 function main() returns ExitCode
+	var holder = Holder.create(Box.create(0))
 	let a = Box.create(1)
-	register(a)
-	clobber()
+	register(holder, b: a)
+	clobber(holder)
 	print("{a.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:32:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:31:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-binding-capabilities.a-fresh-let-kept-by-a-callee-at-its-last-use-is-consumed -->
@@ -297,20 +296,19 @@ type Holder
 	end 'create'
 end 'Holder'
 
-var holder = Holder.create(Box.create(0))
-
-function register(b Box)
+function register(holder mutable Holder, b Box)
 	holder.box = b
 end 'register'
 
-function clobber()
+function clobber(holder mutable Holder)
 	holder.box.n = 99
 end 'clobber'
 
 function main() returns ExitCode
+	var holder = Holder.create(Box.create(0))
 	let a = Box.create(1)
-	register(a)
-	clobber()
+	register(holder, b: a)
+	clobber(holder)
 	print("{holder.box.n}\n")
 	return 0
 end 'main'
@@ -337,27 +335,26 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create(0)
-
-function stash(b Box)
+function stash(kept mutable Boxes, b Box)
 	kept.push(b)
 end 'stash'
 
-function bump()
+function bump(kept mutable Boxes)
 	var w = try kept.get(0) otherwise return
 	w.n = 99
 end 'bump'
 
 function main() returns ExitCode
+	var kept = Boxes.create(0)
 	let a = Box.create(1)
-	stash(a)
-	bump()
+	stash(kept, b: a)
+	bump(kept)
 	print("{a.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:26:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:25:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-binding-capabilities.error.a-let-of-a-var-a-container-holds-is-refused -->
@@ -482,30 +479,24 @@ type Holder
 	end 'create'
 end 'Holder'
 
-var holder = Holder.create(Box.create(0))
-
-function register(b Box) returns Count
+function register(holder mutable Holder, b Box) returns Count
 	holder.box = b
 	return 0
 end 'register'
 
-function clobber()
-	holder.box.n = 99
-end 'clobber'
-
 function main() returns ExitCode
+	var holder = Holder.create(Box.create(0))
 	var b = Box.create(1)
 	b.n = 2
 	let x = b
-	let f = function() gives register(b)
+	let f = function() gives register(holder, b: b)
 	_ = f()
-	clobber()
 	print("{x.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:35:36: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:30:47: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: let-binding-capabilities.error.an-element-of-a-lent-parameter-kept-in-a-let-field-is-refused -->
@@ -572,9 +563,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create(0)
-
-function keepAndReturn(b Box) returns Box
+function keepAndReturn(kept mutable Boxes, b Box) returns Box
 	kept.push(b)
 	return b
 end 'keepAndReturn'
@@ -584,9 +573,10 @@ function printOne(b Box)
 end 'printOne'
 
 function main() returns ExitCode
+	var kept = Boxes.create(0)
 	let s = Box.create(3)
 	let flag = kept.count() == 0
-	printOne(keepAndReturn(s) if flag else s)
+	printOne(keepAndReturn(kept, b: s) if flag else s)
 	print("{kept.count()}\n")
 	return 0
 end 'main'
@@ -614,25 +604,24 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create(0)
-
 function matches(b Box) returns bool
 	return b.n > 1
 end 'matches'
 
-function take(b Box) returns Count
+function take(kept mutable Boxes, b Box) returns Count
 	kept.push(b)
 	return b.n
 end 'take'
 
 function scan() returns Count
+	var kept = Boxes.create(0)
 	var i = 0 as Count
 
 	while i < 3 'trips'
 		let doc = Box.create(i)
 
 		if matches(doc) 'ours'
-			return take(doc)
+			return take(kept, b: doc)
 		end 'ours'
 
 		print("{doc.n}\n")
@@ -748,33 +737,32 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create(0)
-
-function stash(b Box)
+function stash(kept mutable Boxes, b Box)
 	kept.push(b)
 end 'stash'
 
-function bump()
+function bump(kept mutable Boxes)
 	var w = try kept.get(0) otherwise return
 	w.n = 99
 end 'bump'
 
 function main() returns ExitCode
+	var kept = Boxes.create(0)
 	let a = Box.create(1)
 
 	if kept.count() > 5 'never'
 		return 1
 	end 'never' else 'always'
-		stash(a)
+		stash(kept, b: a)
 	end 'always'
 
-	bump()
+	bump(kept)
 	print("{a.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:30:3: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:29:3: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-binding-capabilities.a-let-destructure-that-names-only-a-scalar-of-a-writable-result-is-accepted -->
@@ -1953,69 +1941,6 @@ end 'main'
 0
 ```
 
-<!-- test: let-binding-capabilities.error.a-fresh-tuple-holding-a-module-var-is-refused-by-a-let-field -->
-`gBox` is module storage that `main` writes after the `let` field has been given the tuple.
-
-```maxon
-typealias Count = int(0 to 1000)
-
-type Box
-	export var n as Count
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-type Frozen
-	export let held as (Box, Box)
-
-	static function create() returns Self
-		let f = Self{held: (Box.create(1), gBox)}
-		gBox.n = 9
-		return f
-	end 'create'
-end 'Frozen'
-
-var gBox = Box.create(5)
-
-function main() returns ExitCode
-	let fr = Frozen.create()
-	print("{fr.held.1.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:16:16: cannot store a value that reaches 'a module variable', which something may still write, into a `let` field 'Frozen.held': a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
-```
-
-<!-- test: let-binding-capabilities.error.a-let-tuple-holding-a-module-var-is-refused -->
-The tuple is bound with `let`, and `gBox` is written after it.
-
-```maxon
-typealias Count = int(0 to 1000)
-
-type Box
-	export var n as Count
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-var gBox = Box.create(5)
-
-function main() returns ExitCode
-	let t = (Box.create(1), gBox)
-	gBox.n = 9
-	print("{t.1.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3188: <fragment>:15:6: cannot bind `let` 't' to a value reached through 'a module variable', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
-```
-
 <!-- test: let-binding-capabilities.a-let-bound-to-the-awaited-result-of-a-promise-removed-from-a-var-array-is-accepted -->
 `remove` moves the promise out of `replies`, so the record `await` hands back no longer lies inside the array that `dispatch` keeps pushing to.
 
@@ -2071,8 +1996,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-binding-capabilities.a-var-moved-into-a-fresh-record-bound-by-a-let-is-accepted-beside-an-unrelated-module-var -->
-`shelf` is a module `var` of the same type as `box`, and `holder` holds `box`, a local `var` that is dead after `wrap` takes it: nothing `holder` holds is `shelf`'s record.
+<!-- test: let-binding-capabilities.a-var-moved-into-a-fresh-record-bound-by-a-let-is-accepted-beside-an-unrelated-local -->
+`shelf` is a local of the same type as `box`, and `holder` holds `box`, a local `var` that is dead after `wrap` takes it: nothing `holder` holds is `shelf`'s record.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2088,8 +2013,6 @@ type Box
 		return Self{n: n}
 	end 'create'
 end 'Box'
-
-var shelf = Box.create(7)
 
 type Holder
 	var box as Box
@@ -2107,6 +2030,7 @@ function keep() returns Count
 end 'keep'
 
 function main() returns ExitCode
+	let shelf = Box.create(7)
 	let kept = keep()
 	return (shelf.read() + kept) as ExitCode
 end 'main'
@@ -2115,8 +2039,8 @@ end 'main'
 8
 ```
 
-<!-- test: let-binding-capabilities.a-let-of-a-fresh-record-literal-holding-a-parameter-is-accepted-beside-an-unrelated-module-var -->
-The literal `built` holds the parameter `box`, which is the caller's record and no module `var`'s; `shelf` is only another `Box`.
+<!-- test: let-binding-capabilities.a-let-of-a-fresh-record-literal-holding-a-parameter-is-accepted-beside-an-unrelated-local -->
+The literal `built` holds the parameter `box`, which is the caller's record and no other local's; `shelf` is only another `Box`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2132,8 +2056,6 @@ type Box
 		return Self{n: n}
 	end 'create'
 end 'Box'
-
-var shelf = Box.create(7)
 
 type Holder
 	var box as Box
@@ -2145,6 +2067,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
+	let shelf = Box.create(7)
 	let holder = Holder.wrap(Box.create(1))
 	_ = holder
 	return shelf.read() as ExitCode
@@ -2152,58 +2075,6 @@ end 'main'
 ```
 ```exitcode
 7
-```
-
-<!-- test: let-binding-capabilities.error.a-var-a-function-stored-in-a-module-var-is-refused-when-a-fresh-record-takes-it-into-a-let -->
-`register` stores `box` in the module `var` `shelf`, so the `holder` that takes `box` still reaches a record `shelf` writes.
-
-```maxon
-typealias Count = int(0 to 1000)
-typealias BoxArray = Array with Box
-
-type Box
-	var n as Count
-
-	function read() returns Count
-		return self.n
-	end 'read'
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-var shelf = BoxArray.create(0)
-
-function register(b Box)
-	shelf.push(b)
-end 'register'
-
-type Holder
-	var box as Box
-
-	function peek() returns Count
-		return self.box.read()
-	end 'peek'
-
-	static function wrap(box Box) returns Self
-		return Self{box: box}
-	end 'wrap'
-end 'Holder'
-
-function keep() returns Count
-	var box = Box.create(1)
-	register(box)
-	let holder = Holder.wrap(box)
-	return holder.peek()
-end 'keep'
-
-function main() returns ExitCode
-	return keep() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3188: <fragment>:38:6: cannot bind `let` 'holder' to a value reached through 'box', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
 ```
 
 <!-- test: let-binding-capabilities.a-let-of-a-string-field-of-a-var-keeps-its-value-when-the-field-is-appended-to -->
@@ -2294,8 +2165,8 @@ end 'main'
 hi hi!
 ```
 
-<!-- test: let-binding-capabilities.a-let-of-a-fresh-record-holding-an-all-let-record-a-module-var-also-holds-is-accepted -->
-`register` stores `box` in the module `var` `shelf`, but `Box` has only `let` fields, so no write through `shelf` changes the `Box` the `holder` takes: a write reaches `shelf`'s array, never a `Box`.
+<!-- test: let-binding-capabilities.a-let-of-a-fresh-record-holding-an-all-let-record-a-mutable-parameter-also-holds-is-accepted -->
+`register` stores `box` in the array `shelf` it is lent, but `Box` has only `let` fields, so no write through `shelf` changes the `Box` the `holder` takes: a write reaches `shelf`'s array, never a `Box`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2313,9 +2184,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var shelf = BoxArray.create(0)
-
-function register(b Box)
+function register(shelf mutable BoxArray, b Box)
 	shelf.push(b)
 end 'register'
 
@@ -2332,8 +2201,9 @@ type Holder
 end 'Holder'
 
 function keep() returns Count
+	var shelf = BoxArray.create(0)
 	let box = Box.create(1)
-	register(box)
+	register(shelf, b: box)
 	let holder = Holder.wrap(box)
 	return holder.peek()
 end 'keep'

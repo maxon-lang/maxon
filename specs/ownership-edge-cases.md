@@ -725,64 +725,6 @@ end 'main'
 77
 ```
 
-<!-- test: rc-global-struct-outlives-local -->
-A global variable holds a struct that outlives the function that created it.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Cfg
-	export var level as Integer
-
-	static function create(level Integer) returns Self
-		return Self{level: level}
-	end 'create'
-end 'Cfg'
-
-var globalCfg = Cfg.create(0)
-
-function setup()
-	globalCfg = Cfg.create(42)
-end 'setup'
-
-function main() returns ExitCode
-	setup()
-	return globalCfg.level
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: rc-global-reassign-decrefs-old -->
-Reassigning a global struct var decrefs the old object and increfs the new one.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type State
-	export var val as Integer
-
-	static function create(val Integer) returns Self
-		return Self{val: val}
-	end 'create'
-end 'State'
-
-var g = State.create(0)
-
-function step(n Integer)
-	g = State.create(n)
-end 'step'
-
-function main() returns ExitCode
-	step(10)
-	step(20)
-	step(30)
-	return g.val
-end 'main'
-```
-```exitcode
-30
-```
-
 <!-- test: rc-enum-no-struct-payload-freed -->
 A simple enum enum (no struct payload) is freed correctly at scope exit.
 ```maxon
@@ -1911,76 +1853,6 @@ end 'main'
 5
 ```
 
-<!-- test: rc-global-array-push-local-no-leak -->
-Pushing a local struct into a global array must not leak. When the global array is cleaned up, all elements (including those pushed from other function scopes) must be freed.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Item
-	export var value as Integer
-
-	static function create(value Integer) returns Self
-		return Self{value: value}
-	end 'create'
-end 'Item'
-
-typealias ItemArray = Array with Item
-
-var globalArr = ItemArray.create(0)
-
-function pushLocal()
-	let item = Item.create(123)
-	globalArr.push(item)
-end 'pushLocal'
-
-function main() returns ExitCode
-	pushLocal()
-	var elem = try globalArr.get(0) otherwise Item.create(-1)
-	return elem.value
-end 'main'
-```
-```exitcode
-123
-```
-
-<!-- test: rc-global-array-push-remove-loop-no-leak -->
-Pushing many structs into a global array and then removing them all must not leak. Each removed element must be properly decreffed.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Item
-	export var value as Integer
-
-	static function create(value Integer) returns Self
-		return Self{value: value}
-	end 'create'
-end 'Item'
-
-typealias ItemArray = Array with Item
-
-var globalArr = ItemArray.create(0)
-
-function main() returns ExitCode
-	var i = 0 as Integer
-	while i < 10 'push'
-		globalArr.push(Item.create(i))
-		i = i + 1
-	end 'push'
-	var total = 0 as Integer
-	while globalArr.count() > 0 'remove'
-		view elem = try globalArr.remove(0) otherwise 'err'
-			return 99
-		end 'err'
-		total = total + elem.value
-		i = i + 1
-	end 'remove'
-	return total
-end 'main'
-```
-```exitcode
-45
-```
-
 <!-- test: rc-struct-field-overwrite-in-if-no-leak -->
 Assigning a new struct to a struct field inside an if block must decref the old value and not leak the old struct's managed children (e.g., arrays).
 ```maxon
@@ -2102,42 +1974,10 @@ end 'main'
 0
 ```
 
-<!-- test: rc-module-level-struct-nested-field-assign -->
-Assigning to a nested field of a module-level struct variable must not leak. The struct access chain must properly manage refcounts for intermediate accesses.
-```maxon
-typealias SmallInt = int(0 to 255)
-
-type Inner
-		export var x as SmallInt
-
-		static function create(x SmallInt) returns Self
-			return Self{x: x}
-		end 'create'
-end 'Inner'
-
-type Outer
-		export var inner as Inner
-
-		static function create(inner Inner) returns Self
-			return Self{inner: inner}
-		end 'create'
-end 'Outer'
-
-var state = Outer.create(Inner.create(0))
-
-function main() returns ExitCode
-		state.inner.x = 99
-		return state.inner.x
-end 'main'
-```
-```exitcode
-99
-```
-
 <!-- test: rc-top-level-array-literal-no-leak -->
 A module-level array literal must not leak. The array and its element storage must be freed during global cleanup.
 ```maxon
-var items = FullRangeIntArray from [10, 20, 30]
+let items = FullRangeIntArray from [10, 20, 30]
 
 function main() returns ExitCode
 	let a = try items.get(0) otherwise 0

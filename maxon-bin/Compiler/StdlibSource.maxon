@@ -1233,7 +1233,7 @@ function markMaxonCallees(module MaxonModule, signatures ProgramSignatures, func
 			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
 			markMaxonCalleeEdge(op, byName: byName, reached: reached, worklist: worklist, names: names)
 			markCorpusSlotInitCallees(op, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
-			markServiceLoopHandlers(op, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
+			markServiceBehaviourHandlers(op, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
 		end 'eachOp'
 	end 'eachBlock'
 end 'markMaxonCallees'
@@ -1259,15 +1259,15 @@ module function markMaxonCalleeEdge(op MaxonOp, byName FuncIndexByName, reached 
 	end 'kind'
 end 'markMaxonCalleeEdge'
 
-// ⭐⭐ **A `spawn` REACHES EVERY HANDLER ITS SERVICE LOOP DISPATCHES.** `<T>.__loop` is built after this walk
-// (`installServiceLoops`), and `DeadFunctionElimination` reaches it through the `funcAddr` the `spawn` lowers
-// to — so the loop's calls are credited here, at the op that makes the loop live, from the roster the loop is
-// built from (`serviceLoopHandlerCallees`). Its other callees are runtime entries and synthesized drops, never
+// ⭐⭐ **A `spawn` REACHES EVERY HANDLER ITS SERVICE'S `__behave` DISPATCHES.** `<T>.__behave` is built after
+// this walk (`installServiceBehaviours`), and `DeadFunctionElimination` reaches it through the `funcAddr` the
+// `spawn` lowers to — so its calls are credited here, at the op that makes it live, from the roster it is
+// built from (`serviceBehaviourHandlerCallees`). Its other callees are runtime entries and synthesized drops, never
 // stdlib source.
 //
 // ⚡ Credited once per TYPE: the spawn sites and the messages of one service both grow with the program, and
 // their product would not.
-function markServiceLoopHandlers(op MaxonOp, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
+function markServiceBehaviourHandlers(op MaxonOp, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
 	if not maxonOpIsServiceSpawn(op) 'startsNoService'
 		return
 	end 'startsNoService'
@@ -1278,12 +1278,12 @@ function markServiceLoopHandlers(op MaxonOp, signatures ProgramSignatures, byNam
 		return
 	end 'alreadyCredited'
 
-	for handler in serviceLoopHandlerCallees(signatures, typeName: typeName) 'eachHandler'
+	for handler in serviceBehaviourHandlerCallees(signatures, typeName: typeName) 'eachHandler'
 		markOneReachable(handler, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachHandler'
 
 	creditedServices.insert(typeName)
-end 'markServiceLoopHandlers'
+end 'markServiceBehaviourHandlers'
 
 // ⭐⭐⭐ **THE DATA EDGE THIS WALK CANNOT SEE — A WITNESS TABLE'S METHOD SLOTS — CREDITED AT THE CONFORMER
 // THE WALK REACHES.** `__witness_<Type>.<Iface>`'s slots are `.rdata` relocations, so the
@@ -1514,7 +1514,7 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 		return true
 	end 'threadsOne'
 
-	// ⭐ **AND A SERVICE LOOP IS THE THIRD: `<T>.__loop` calls every handler, and it is built after this scan.**
+	// ⭐ **AND A SERVICE IS THE THIRD: `<T>.__behave` calls every handler, and it is built after this scan.**
 	// A user handler's body is scanned below like any other, so what this answers for is a handler that IS
 	// stdlib source. See `anyServiceHandlerReachesStdlib` for why it is asked of the roster and not per `spawn`.
 	if signatures.spawnsAnyService() and anyServiceHandlerReachesStdlib(signatures, stdlib: stdlib) 'aHandlerIsStdlib'
@@ -1624,12 +1624,12 @@ function anyNameReachesStdlib(names NameRoster, stdlib FunctionNameSet) returns 
 	return false
 end 'anyNameReachesStdlib'
 
-// The short-circuit's half of `markServiceLoopHandlers`. Asked once over the ROSTER — every type any `spawn`
+// The short-circuit's half of `markServiceBehaviourHandlers`. Asked once over the ROSTER — every type any `spawn`
 // starts, so a superset of what the precise walk credits, which only ever costs that walk — rather than at
 // each `spawn`, whose handler roster would be rebuilt per site.
 function anyServiceHandlerReachesStdlib(signatures ProgramSignatures, stdlib FunctionNameSet) returns bool
 	for typeName in serviceTypeRoster(signatures) 'eachService'
-		if anyNameReachesStdlib(serviceLoopHandlerCallees(signatures, typeName: typeName), stdlib: stdlib) 'found'
+		if anyNameReachesStdlib(serviceBehaviourHandlerCallees(signatures, typeName: typeName), stdlib: stdlib) 'found'
 			return true
 		end 'found'
 	end 'eachService'
@@ -1928,11 +1928,11 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 
 		// The service and `async` ops are seeds as well as edges: a stdlib body is never blamed for its own
 		// ops, so the entry each lowers to must reach the user's crossing through this fixpoint.
-		serviceSpawn(_, _, _, _, callee, _, _, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: SvcSpawnName, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		serviceSpawn(_, _, _, _, callee, _, _, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: CownSpawnName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 
 		// ⭐ A SEND REACHES ITS MESSAGE, so it is an EDGE exactly as an `async` spawn is — the handler runs on
 		// another green thread, but it is the same function and it reaches whatever that function reaches.
-		serviceSend(_, _, callee, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: MboxSendName, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		serviceSend(_, _, callee, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: CownSendName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 
 		// A REPLY CELL names the message only to derive its releaser symbol; the `serviceSend` beside it is
 		// the edge to that message, and noting it twice would credit one call graph edge to two ops.

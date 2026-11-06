@@ -269,7 +269,7 @@ end 'appendDataSectionEntries'
 // StdToWasm's header) — so this backend's isel, encode and link work is fused into the single
 // `buildWasmCoreModule` call and billed together to `encode`. The `$run` entry (and the `wasi:cli/exit`
 // import it calls) are synthesized inside that call, so `augmentWithRuntime` is NOT run for wasm and
-// its `wasi` arm stays unreached. `globalData` reaches it because a top-level `var` is a `.data` slot
+// its `wasi` arm stays unreached. `globalData` reaches it because a stored top-level `let` is a `.data` slot
 // this backend lays into an active linear-memory segment and resolves every `globalAddr` against —
 // the same laid-out table the native writers serialize into their `.data` section. The bytes ride in
 // the CodeResult's `wasmCoreModule` field; every machine-code field is empty (see
@@ -704,7 +704,7 @@ end 'appendGlobalCleanupGate'
 //   • **THE DRAIN RELEASES THE MANAGED GLOBALS AND THE REGISTRY ITSELF**
 //     (`GtRuntime.buildGtDrainAtExit`), because a handler still running there may read one, and a
 //     released global may be the last owner of a service handle, whose drop is what lets that
-//     service's green thread finish.
+//     service finish.
 //   • **BEFORE `__mm_leak_check`**, because a worker M's `__gt_reclaim` steps the very counters that gate
 //     reads. Un-joined, the two race and a clean program reports 101 intermittently — and a green thread
 //     that had not finished yet would report 75 for work that was merely still running.

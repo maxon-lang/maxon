@@ -1,11 +1,11 @@
-// ModuleInit — the two synthesized functions a program with MANAGED top-level `var`s carries, and
+// ModuleInit — the two synthesized functions a program with MANAGED top-level globals carries, and
 // nothing else does: `__module_init`, which fills EVERY managed global's `.data` pointer slot BEFORE
 // `main`, and `__maxon_global_cleanup`, which releases each managed global AFTER `main` returns.
 //
 // ⭐⭐ **EVERY SLOT IS FILLED BEFORE `main`, WITHOUT EXCEPTION, AND THAT IS WHAT MAKES BOTH FUNCTIONS
-// BRANCH-FREE** (⚖ user ruling: a `static let`/`static var` initializer runs eagerly, before `main`, in
+// BRANCH-FREE** (⚖ user ruling: a `static let` initializer runs eagerly, before `main`, in
 // DEPENDENCY order). Where the binding was declared decides nothing — a `static` member and a file-scope
-// `var` are one population here. So `__module_init` has no slot to skip and `__maxon_global_cleanup` has no
+// `let` are one population here. So `__module_init` has no slot to skip and `__maxon_global_cleanup` has no
 // null to test: the only value a slot can hold when the cleanup reads it is the record the init put there.
 // The ORDER the globals arrive in is `GlobalInitOrder`'s answer, and a cycle is refused there (E2012) rather
 // than settled to some value at run time.
@@ -14,8 +14,8 @@
 // halves are load-bearing and neither is negotiable:
 //
 //   • **A pointer, because a record cannot be baked.** A `.data` slot holding the ADDRESS of another
-//     section's bytes would need a compile-time VA, and there is none under ASLR
-//     (`specs/static-variables.md:729-730`). So the image holds zero and this function writes the address.
+//     section's bytes would need a compile-time VA, and there is none under ASLR.
+//     So the image holds zero and this function writes the address.
 //
 //     ⚠⚠ **SO EVERY SLOT ACCESS IS ONE WIDTH — `declaredAggregateSlotWidth()` — AND IT IS STATED RATHER
 //     THAN DERIVED FROM THE VALUE'S TYPE.** The store that fills a slot and the load that drains it pass
@@ -26,11 +26,8 @@
 //     lowering"*), that tag being the value's identity and never its storage. It is the same
 //     identity-vs-storage split `payloadStorageOf` states for a union PAYLOAD slot, reached through the
 //     same shared accessor so the two widths cannot come apart.
-//   • **OWNED, not the immortal `.rdata` record a `let` shares.** A `var` is MUTATED — `msg.append("!")`
-//     rewrites `buffer@0`/`length@8` in place — and mutating the one shared record would make every `let`
-//     of the same literal observe the change, while dropping it would free read-only data. The spec
-//     leak-gates exactly this (`static-variables.md`'s `top-level-var-string-mutate-cross-function`: "must
-//     NOT be shared as an immortal static record: it mutates correctly and frees cleanly").
+//   • **OWNED, not the immortal `.rdata` record a literal would otherwise share.** The cleanup drops the
+//     slot's record, and dropping an immortal one would free read-only data.
 //
 // ⭐⭐ **THEY ARE BUILT AT THE MAXON TIER, NOT THE STD TIER — the one design choice worth stating.** Every
 // other compiler-synthesized function in the compiler (`installMmRuntime`, `installStringRuntime`, the destructor
@@ -126,7 +123,6 @@ export function letShareWalksOf(globals ManagedGlobalArray, spawnsAService bool)
 	if spawnsAService 'aSecondGreenThreadMayCount'
 		for global in globals 'eachGlobal'
 			match global.threadReach 'reach'
-				mainOnly or
 				packedInItsSlot then continue
 				everyThreadThrough(callee) then marked.push(SharedLet.create(global, walk: callee))
 				everyThreadUnwalkable then unmarkable.push(global)
@@ -141,12 +137,9 @@ end 'letShareWalksOf'
 // and store the record's address into its `.data` slot.
 //
 // ⚠ **THE STORE IS BARE — NO LOAD OF THE OLD VALUE AND NO DECREF.** The slot is guaranteed zero here: the
-// `.data` image put it there, and the only code that could have overwritten it is an EARLIER initializer's
-// — which would be a write to this slot, and a write is a `globalAddr` `GlobalInitOrder` reads as a
-// dependency, so that initializer runs after this store rather than before it. A decref would therefore be
-// reading a null pointer. The user-visible re-assignment lives in `Parser.emitCheckedGlobalStore` and this
-// initialization lives here, so the fact ("this store is the first one") is expressed by WHICH CODE EMITS
-// IT rather than by a test in the middle of a lowering.
+// `.data` image put it there, and no code assigns a module-level binding, so a decref would be reading a
+// null pointer. The fact ("this store is the first one") is expressed by WHICH CODE EMITS IT rather than by
+// a test in the middle of a lowering.
 //
 // ⭐⭐ **THE ORDER IS DEPENDENCY ORDER, AND CORRECTNESS DOES DEPEND ON IT.** An initializer's body may call,
 // and a callee may read another global's slot — so a global must be built after every global it reads.
@@ -223,8 +216,8 @@ end 'runtimeFunctionOrNone'
 // ⭐⭐ **EVERY MARKABLE `let` RECORD IS MARKED SHARED BEFORE `main` RUNS**, so the count every message steps on it
 // is atomic; no other green thread exists yet, because a `spawn` a global initializer can reach is refused
 // (`ServiceGlobalAccessCheck`). One visit table serves every `let`, because a record two of them reach has both
-// slots as owners; `__mm_walk_settle` aborts on an owner no `let` holds, which is a record a `var` could still
-// write. It runs after the LAST store, when no initializer temporary holds a record any more. A program with no
+// slots as owners; `__mm_walk_settle` aborts on an owner no `let` holds.
+// It runs after the LAST store, when no initializer temporary holds a record any more. A program with no
 // walked `let` opens no table: `__mm_walk_settle` is installed only beside a walk.
 function markLetsShared(fn SynthesizedFunction, sharedLets SharedLetArray, site SynthesizedSite)
 	var visits = fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, site: site)
@@ -405,9 +398,9 @@ end 'SynthesizedSite'
 // It records into `project.opRanges` and `project.valueOrigins` in the same lockstep
 // `FileParseArtifact.emitOp` uses — the span table is keyed by op index and asserts it is appended in
 // step, so a synthesized op that skipped it would misattribute every later span by one.
-// ⭐ EXPORTED for `Runtime/ServiceLoop.maxon`, the second producer of Maxon-tier functions the compiler
+// ⭐ EXPORTED for `Runtime/ServiceBehaviour.maxon`, the second producer of Maxon-tier functions the compiler
 // builds and the only one outside this file. Everything the carrier's header says is why
-// it exists holds for that producer word for word: a `<T>.__loop` needs the dense per-value type columns
+// it exists holds for that producer word for word: a `<T>.__behave` needs the dense per-value type columns
 // `LowerMaxonToStd` reads, and a second carrier would be a second place they could fall out of lockstep.
 export type SynthesizedFunction
 	var module as MaxonModule
@@ -502,7 +495,7 @@ export type SynthesizedFunction
 	// ⚠ The split is INVISIBLE from inside this file: `__module_init` and `__maxon_global_cleanup` take one
 	// `int` parameter between them, so `open`'s half is never exercised with a NAMED type. A producer that
 	// resolves its types through `project.typeNames` and then mints from them crosses twice, and a double
-	// crossing REFUSES a correct program — `Runtime/ServiceLoop.maxon`'s header carries that reading. A third
+	// crossing REFUSES a correct program — `Runtime/ServiceBehaviour.maxon`'s header carries that reading. A third
 	// producer should read this box before it writes a `mint`.
 	function projectScopedNameId(tag ValueTypeTag, nameId TypeNameId) returns TypeNameId
 		if not tagNamesAnIndexInternedType(tag) 'carriesNoNameToCross'
@@ -683,10 +676,10 @@ export type SynthesizedFunction
 		return result
 	end 'emitPositionalCall'
 
-	// ⭐ **A POSITIONAL CALL WHOSE RESULT NOBODY READS** — a drop, a runtime step, a mailbox close. It is
+	// ⭐ **A POSITIONAL CALL WHOSE RESULT NOBODY READS** — a drop, a runtime step, a cown close. It is
 	// `emitPositionalCall` with `void`/`UnnamedTypeId` and the result discarded, which keeps a three-part
 	// incantation in ONE spelling: the `_ =`, the `ValueTypeTag.void` and the `UnnamedTypeId` are one fact —
-	// *this call answers nothing* — and `Runtime/ServiceLoop.maxon` makes eight more of them.
+	// *this call answers nothing* — and `Runtime/ServiceBehaviour.maxon` makes more of them.
 	export function emitPositionalCallDiscarding(callee ByteArray, args ValueIdArray, site SynthesizedSite)
 		_ = self.emitPositionalCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, site: site)
 	end 'emitPositionalCallDiscarding'

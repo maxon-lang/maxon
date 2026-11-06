@@ -14,8 +14,8 @@ The `split` method divides a string into an array of substrings, separated by a 
 **Signature:** `split(delimiter: String) returns Array with String`
 
 ```text
-var parts = "hello world foo".split(" ")   // ["hello", "world", "foo"]
-var csv = "a,b,c".split(",")              // ["a", "b", "c"]
+let parts = "hello world foo".split(" ")   // ["hello", "world", "foo"]
+let csv = "a,b,c".split(",")              // ["a", "b", "c"]
 ```
 
 If the delimiter is not found, the result is a single-element array containing the original string. If the delimiter is empty, the original string is returned as a single-element array.
@@ -23,7 +23,7 @@ If the delimiter is not found, the result is a single-element array containing t
 Consecutive delimiters produce empty strings in the result:
 
 ```text
-var parts = "a,,b".split(",")   // ["a", "", "b"]
+let parts = "a,,b".split(",")   // ["a", "", "b"]
 ```
 
 ## Tests

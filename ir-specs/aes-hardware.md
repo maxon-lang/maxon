@@ -274,7 +274,7 @@ func @__cpufeat_aes_cipher_encrypt_block {
     x64.loadRegSlot r9, slot5
     x64.jmp abddone
   abbad:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_13]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_11]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     x64.movRegImm32 rdx, 89
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -530,7 +530,7 @@ func @__cpufeat_aes_cipher_encrypt_block {
     x64.loadRegSlot r9, slot5
     x64.jmp abddone
   abbad:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_13]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_11]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     x64.movRegImm32 rdx, 89
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -779,7 +779,7 @@ func @__cpufeat_aes_cipher_encrypt_block {
     arm64.loadRegSlot x5, slot5
     arm64.b abddone
   abbad:
-    arm64.leaRdata x0, __fatal_msg_13  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    arm64.leaRdata x0, __fatal_msg_11  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     arm64.movImm x1, 89
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -1030,7 +1030,7 @@ func @__cpufeat_aes_cipher_encrypt_block {
     arm64.loadRegSlot x5, slot5
     arm64.b abddone
   abbad:
-    arm64.leaRdata x0, __fatal_msg_13  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    arm64.leaRdata x0, __fatal_msg_11  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     arm64.movImm x1, 89
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -5434,7 +5434,7 @@ func @__cpufeat_aes_cipher_ctr_xor {
     x64.loadRegSlot r9, slot5
     x64.jmp cx8ddone
   cxbad:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_13]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_11]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     x64.movRegImm32 rdx, 89
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -5883,7 +5883,7 @@ func @__cpufeat_aes_cipher_ctr_xor {
     x64.loadRegSlot r9, slot5
     x64.jmp cx8ddone
   cxbad:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_13]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_11]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     x64.movRegImm32 rdx, 89
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -6324,7 +6324,7 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.loadRegSlot x6, slot5
     arm64.b cx8ddone
   cxbad:
-    arm64.leaRdata x0, __fatal_msg_13  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    arm64.leaRdata x0, __fatal_msg_11  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     arm64.movImm x1, 89
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -6771,7 +6771,7 @@ func @__cpufeat_aes_cipher_ctr_xor {
     arm64.loadRegSlot x6, slot5
     arm64.b cx8ddone
   cxbad:
-    arm64.leaRdata x0, __fatal_msg_13  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    arm64.leaRdata x0, __fatal_msg_11  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     arm64.movImm x1, 89
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -7143,7 +7143,7 @@ func @__cpufeat_aes_cipher_gcm_init {
     x64.loadRegSlot rdx, slot2
     x64.jmp giddone
   gibad:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_13]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_11]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     x64.movRegImm32 rdx, 89
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -7321,7 +7321,7 @@ func @__cpufeat_aes_cipher_gcm_seal {
     x64.loadRegSlot r10, slot16
     x64.jmp gpddone
   gpbad:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_13]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_11]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     x64.movRegImm32 rdx, 89
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -7522,7 +7522,7 @@ func @__cpufeat_aes_cipher_gcm_open {
     x64.loadRegSlot r10, slot17
     x64.jmp gpddone
   gpbad:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_13]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_11]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     x64.movRegImm32 rdx, 89
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -8585,7 +8585,7 @@ func @__cpufeat_aes_cipher_gcm_init {
     x64.loadRegSlot rdx, slot2
     x64.jmp giddone
   gibad:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_13]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_11]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     x64.movRegImm32 rdx, 89
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -8763,7 +8763,7 @@ func @__cpufeat_aes_cipher_gcm_seal {
     x64.loadRegSlot r10, slot16
     x64.jmp gpddone
   gpbad:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_13]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_11]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     x64.movRegImm32 rdx, 89
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -8964,7 +8964,7 @@ func @__cpufeat_aes_cipher_gcm_open {
     x64.loadRegSlot r10, slot17
     x64.jmp gpddone
   gpbad:
-    x64.leaRegRdata rcx, [rip + __fatal_msg_13]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    x64.leaRegRdata rcx, [rip + __fatal_msg_11]  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     x64.movRegImm32 rdx, 89
     x64.movRegImm32 rax, 70
     x64.callDirect __rt_abort
@@ -10024,7 +10024,7 @@ func @__cpufeat_aes_cipher_gcm_init {
     arm64.loadRegSlot x2, slot2
     arm64.b giddone
   gibad:
-    arm64.leaRdata x0, __fatal_msg_13  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    arm64.leaRdata x0, __fatal_msg_11  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     arm64.movImm x1, 89
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -10200,7 +10200,7 @@ func @__cpufeat_aes_cipher_gcm_seal {
     arm64.loadRegSlot x7, slot14
     arm64.b gpddone
   gpbad:
-    arm64.leaRdata x0, __fatal_msg_13  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    arm64.leaRdata x0, __fatal_msg_11  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     arm64.movImm x1, 89
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -10403,7 +10403,7 @@ func @__cpufeat_aes_cipher_gcm_open {
     arm64.loadRegSlot x7, slot14
     arm64.b gpddone
   gpbad:
-    arm64.leaRdata x0, __fatal_msg_13  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    arm64.leaRdata x0, __fatal_msg_11  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     arm64.movImm x1, 89
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -11145,7 +11145,7 @@ func @__cpufeat_aes_cipher_gcm_init {
     arm64.loadRegSlot x2, slot2
     arm64.b giddone
   gibad:
-    arm64.leaRdata x0, __fatal_msg_13  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    arm64.leaRdata x0, __fatal_msg_11  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     arm64.movImm x1, 89
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -11321,7 +11321,7 @@ func @__cpufeat_aes_cipher_gcm_seal {
     arm64.loadRegSlot x7, slot14
     arm64.b gpddone
   gpbad:
-    arm64.leaRdata x0, __fatal_msg_13  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    arm64.leaRdata x0, __fatal_msg_11  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     arm64.movImm x1, 89
     arm64.movImm x2, 70
     arm64.bl __rt_abort
@@ -11524,7 +11524,7 @@ func @__cpufeat_aes_cipher_gcm_open {
     arm64.loadRegSlot x7, slot14
     arm64.b gpddone
   gpbad:
-    arm64.leaRdata x0, __fatal_msg_13  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
+    arm64.leaRdata x0, __fatal_msg_11  ; "fatal error: a hardware crypto routine was handed a buffer or schedule of the wrong size\x0a"
     arm64.movImm x1, 89
     arm64.movImm x2, 70
     arm64.bl __rt_abort

@@ -433,24 +433,6 @@ typealias Real = float(f64.min to f64.max)
 42
 ```
 
-<!-- test: int-literal-to-float-global -->
-A top-level `var` keeps the type its initializer gave it, so a later store of an integer widens into
-the slot rather than overwriting an f64 with eight bytes of two's complement.
-```maxon
-var scale = 0.0 as FullRangeFloat
-
-function main() returns ExitCode
-	scale = 3
-	if scale == 3.0 'exact'
-		return trunc(scale * 14.0)
-	end 'exact'
-	return 7
-end 'main'
-```
-```exitcode
-42
-```
-
 <!-- test: int-literal-to-float-local -->
 A LOCAL `var` keeps its declared type across a rebind for the same reason. Without the coercion the
 binding would silently become an int — `scale == 3.0` on the very next line would report "cannot
@@ -584,20 +566,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3009: specs/implicit-type-conversion/float-to-int-alias-field-default-rejected.maxon:6:13: cannot implicitly convert 'float' to 'Count': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
-```
-
-<!-- test: float-to-int-global-rejected -->
-```maxon
-var counter = 0 as Integer
-
-function main() returns ExitCode
-	counter = 3.7
-	return counter
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3009: specs/implicit-type-conversion/float-to-int-global-rejected.maxon:5:2: cannot implicitly convert 'float' to 'Integer': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: float-to-int-local-rejected -->

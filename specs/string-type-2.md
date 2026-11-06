@@ -1066,37 +1066,6 @@ v=ab text=abXY
 v=ab text=abXY
 ```
 
-<!-- test: a-returned-borrow-stored-in-a-module-var-is-copied-not-written-through -->
-### A Module `var` Takes A Copy Too
-`slot = relay(v)` stores through the global door, which copies what the binding door copies.
-```maxon
-function make() returns String
-	var m = "a"
-	m.append("b")
-	return m
-end 'make'
-
-function relay(s String) returns String
-	return s
-end 'relay'
-
-var slot = "zz"
-
-function main() returns ExitCode
-	let v = make()
-	slot = relay(v)
-	slot.append("XY")
-	print("v={v} slot={slot}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-v=ab slot=abXY
-```
-
 <!-- test: a-returned-literal-is-cloned-not-shared -->
 ### A Returned Literal Is Cloned, and the `.rdata` Record Is Untouched
 ⚠ **THE OTHER ARM OF `__str_retain`, WHICH IS WHAT LETS THE RETURN DOOR RETAIN AT ALL.** A `String`

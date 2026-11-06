@@ -557,8 +557,7 @@ no doc comment, which is how it finds them.
   `spec-test ir-specs` natively on every lane beside the suite, and each Linux runner also compiles and
   compares every other native lane's pins.
 - **A default run batches.** A spec's plain run cases compile into the fewest programs whose type names and
-  extension methods do not overlap, and in which no case declaring a module-level `var` shares a program
-  with a case that spawns a service, and run once each; a case whose end marker is missing or reports green
+  extension methods do not overlap, and run once each; a case whose end marker is missing or reports green
   threads still live, and every case of a program that exited non-zero, reruns alone from the same binary,
   and output outside every marker FAILS every case of that program. A batched FAIL is compiled alone only
   to diagnose it: a solo PASS turns into a FAIL naming the batching gap, which is fixed by a new

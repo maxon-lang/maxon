@@ -23,8 +23,8 @@ Converts a primitive value to its string representation.
 
 **Example:**
 ```maxon
-var x = 42
-var s = x.toString()
+let x = 42
+let s = x.toString()
 print(s)   // prints "42"
 ```
 

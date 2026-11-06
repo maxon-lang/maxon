@@ -18,7 +18,7 @@
 // dominator tree (`WasmFlowPlan`, WasmStructuredFlow.maxon). An irreducible one falls back to a
 // `loop`+`br_table` state machine (`emitDispatcher`), which handles any CFG shape.
 //
-// SCOPE: scalar core, f64, top-level-`var` globals + String literals (`.data`/`.rdata` active
+// SCOPE: scalar core, f64, top-level globals + String literals (`.data`/`.rdata` active
 // segments, `print`), the HEAP — `osAllocPages` → `memory.grow`, the narrow BYTE load/store band a
 // String's per-byte access needs, and the leak gate (`__mm_leak_check`) on the exit path — scalar
 // ERROR HANDLING (`throws`/`try`/`throw`/`panic`), and now CONSTRAINED-TYPE-PARAMETER DISPATCH: a
@@ -322,8 +322,8 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 
 	// The two linear-memory images, rendered ONCE in `GlobalDataTable`'s layout order
 	// (deterministic — no map iteration):
-	//   • `.data`  — the top-level-`var` slots, at `WasmDataBaseOffset`. Empty for a program with
-	//     no top-level `var`.
+	//   • `.data`  — the top-level global slots, at `WasmDataBaseOffset`. Empty for a program with
+	//     no top-level global.
 	//   • `.rdata` — the String-literal records + blobs, at `rdataBase` (immediately after the
 	//     `.data` image, 8-aligned). Empty for a program with no String literal.
 	// Both are shared by the per-function emitters (a `globalAddr` resolves against `.data`, an
@@ -3714,7 +3714,7 @@ type WasmFuncEmitter
 	end 'emitPanicCall'
 
 	// ----------------------------------------------------------------------
-	// Memory band: top-level `var` globals (globalAddr / loadIndirect / storeIndirect)
+	// Memory band: top-level globals (globalAddr / loadIndirect / storeIndirect)
 	// ----------------------------------------------------------------------
 
 	// `globalAddr` → `i32.const <base + the global's `.data` offset>`. On the native backends this

@@ -1,7 +1,7 @@
 ---
 feature: lazy-static
 status: experimental
-keywords: [static, var, let, initializer, before-main, struct-literal]
+keywords: [static, let, initializer, before-main, struct-literal]
 category: language
 ---
 
@@ -9,7 +9,7 @@ category: language
 
 ## Documentation
 
-A static field can be initialized by a function call, an array literal, or a struct literal of the type whose
+A `static let` can be initialized by a function call, an array literal, or a struct literal of the type whose
 body declares it, as well as by a constant. The cases here pin the VALUE every such initializer leaves in its
 slot; `specs/lazy-static-observable.md` pins WHEN it runs, which no case here can see, and the one exception
 to that timing: a standard-library static that nothing reads is not emitted at all, initializer included.
@@ -18,7 +18,7 @@ to that timing: a standard-library static that nothing reads is not emitted at a
 
 ```text
 type MyType
-	static var cached = SomeType.create()
+	static let cached = SomeType.create()
 	static let DEFAULTS = [1, 2, 3]
 end 'MyType'
 ```
@@ -27,8 +27,7 @@ end 'MyType'
 
 - Every initializer runs before `main`, exactly once, in dependency order, whether or not anything reads the
   field, a standard-library static aside (`specs/lazy-static-observable.md`)
-- Every read answers with the value the initializer left, until a `static var` is assigned
-- Assigning to a `static var` is a plain store; the initializer does not run again
+- Every read answers with the value the initializer left
 - Assigning to a `static let` is E2013 (`specs/static-variables.md`)
 - A constant initializer is folded at compile time
 
@@ -55,7 +54,7 @@ end 'CharacterSet'
 typealias Count = int(0 to u64.max)
 
 type Config
-	static var value = Config.makeValue()
+	static let value = Config.makeValue()
 	export var n as Count
 
 	static function makeValue() returns Config
@@ -78,34 +77,30 @@ end 'main'
 
 <!-- test: lazy-static.initialized-once -->
 ### A static initialized only once
+The initializer prints, so a second run would print twice.
 
 ```maxon
 typealias Count = int(0 to u64.max)
 
 type Counter
-	static var initCount = 0 as Count
-	static var cached = Counter.createInstance()
+	static let cached = Counter.createInstance()
 	export var id as Count
 
 	static function createInstance() returns Counter
-		Counter.initCount = Counter.initCount + 1
-		return Counter{id: Counter.initCount}
+		print("init ")
+		return Counter{id: 7}
 	end 'createInstance'
 
 	static function getInstance() returns Counter
 		return Counter.cached
 	end 'getInstance'
-
-	static function getInitCount() returns Count
-		return Counter.initCount
-	end 'getInitCount'
 end 'Counter'
 
 function main() returns ExitCode
 	let a = Counter.getInstance()
 	let b = Counter.getInstance()
 	let c = Counter.getInstance()
-	print("{a.id} {b.id} {c.id} {Counter.getInitCount()}")
+	print("{a.id} {b.id} {c.id}")
 	return 0
 end 'main'
 ```
@@ -113,7 +108,7 @@ end 'main'
 0
 ```
 ```stdout
-1 1 1 1
+init 7 7 7
 ```
 
 <!-- test: lazy-static.factory-call-with-labelled-argument -->
@@ -132,7 +127,7 @@ type Point
 end 'Point'
 
 type Defaults
-	static var origin = Point.create(0, y: 0)
+	static let origin = Point.create(0, y: 0)
 
 	static function getOrigin() returns Point
 		return Defaults.origin
@@ -152,49 +147,6 @@ end 'main'
 0 0
 ```
 
-<!-- test: lazy-static.mutable-reassign -->
-### A static var built by a call can be reassigned
-
-```maxon
-typealias Count = int(0 to u64.max)
-
-type State
-	static var current = State.makeDefault()
-	export var value as Count
-
-	static function makeDefault() returns State
-		return State{value: 0}
-	end 'makeDefault'
-
-	static function get() returns State
-		return State.current
-	end 'get'
-
-	static function set(s State)
-		State.current = s
-	end 'set'
-
-	static function create(value Count) returns Self
-		return Self{value: value}
-	end 'create'
-end 'State'
-
-function main() returns ExitCode
-	let a = State.get()
-	print("{a.value} ")
-	State.set(State.create(99))
-	let b = State.get()
-	print("{b.value}")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-0 99
-```
-
 <!-- test: lazy-static.multiple-fields -->
 ### Several call-initialized statics in one type
 
@@ -202,8 +154,8 @@ end 'main'
 typealias Count = int(0 to u64.max)
 
 type Cache
-	static var a = Cache.buildA()
-	static var b = Cache.buildB()
+	static let a = Cache.buildA()
+	static let b = Cache.buildB()
 	export var n as Count
 
 	static function buildA() returns Cache
@@ -235,7 +187,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Lookup
-	static var values = IntArray from [10, 20, 30]
+	static let values = IntArray from [10, 20, 30]
 
 	static function get(index Integer) returns Integer
 		return try Lookup.values.get(index as ElementIndex) otherwise -1
@@ -471,7 +423,7 @@ A struct construction is a CALL whose callee is a TYPE rather than a function, a
 arguments are its FIELDS. Everything the cases below assert follows from that one sentence: a field's
 value is admitted from exactly the set a factory ARGUMENT is (a constant, a String or array literal, an
 empty container, another call — or another construction), a field the literal omits takes the DEFAULT its
-declaration supplies, and the record is built before `main` the same way a `static var x = T.create()`
+declaration supplies, and the record is built before `main` the same way a `static let x = T.create()`
 is.
 
 The construction is legal **inside the type's own body and nowhere else**, which is the ordinary E3076
@@ -489,7 +441,7 @@ type Pair
 	export var a as Count
 	export var b as Count
 
-	static var origin = Pair{a: 1, b: 2}
+	static let origin = Pair{a: 1, b: 2}
 
 	static function get() returns Pair
 		return Pair.origin
@@ -519,7 +471,7 @@ the box after `main` — this case is leak-gated (a missed drop, or a doubled on
 type Holder
 	export var name as String
 
-	static var greeting = Holder{name: "hi"}
+	static let greeting = Holder{name: "hi"}
 
 	static function get() returns Holder
 		return Holder.greeting
@@ -551,7 +503,7 @@ type Pair
 	export var a as Count
 	export var b as Count
 
-	static var origin = Pair{a: SEED, b: 2}
+	static let origin = Pair{a: SEED, b: 2}
 
 	static function get() returns Pair
 		return Pair.origin
@@ -581,7 +533,7 @@ typealias CountArray = Array with Count
 type Holder
 	export var xs as CountArray
 
-	static var seeded = Holder{xs: [1, 2, 3]}
+	static let seeded = Holder{xs: [1, 2, 3]}
 
 	static function get() returns Holder
 		return Holder.seeded
@@ -621,7 +573,7 @@ end 'Inner'
 type Outer
 	export var inner as Inner
 
-	static var base = Outer{inner: Inner.create(7)}
+	static let base = Outer{inner: Inner.create(7)}
 
 	static function get() returns Outer
 		return Outer.base
@@ -651,7 +603,7 @@ type Pair
 	export var a as Count
 	export var b = 7 as Count
 
-	static var origin = Pair{a: 1}
+	static let origin = Pair{a: 1}
 
 	static function get() returns Pair
 		return Pair.origin
@@ -671,42 +623,6 @@ end 'main'
 1 7
 ```
 
-<!-- test: lazy-static.struct-literal-reassigned -->
-### A struct-literal static var reassigned to another literal
-
-```maxon
-typealias Count = int(0 to u64.max)
-
-type Pair
-	export var a as Count
-	export var b as Count
-
-	static var origin = Pair{a: 1, b: 2}
-
-	static function bump()
-		Pair.origin = Pair{a: 9, b: 9}
-	end 'bump'
-
-	static function get() returns Pair
-		return Pair.origin
-	end 'get'
-end 'Pair'
-
-function main() returns ExitCode
-	let p = Pair.get()
-	Pair.bump()
-	let q = Pair.get()
-	print("{p.a} {q.a}")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1 9
-```
-
 <!-- test: lazy-static.struct-literal-in-two-types -->
 ### Two types, each with its own struct-literal static
 
@@ -716,7 +632,7 @@ typealias Count = int(0 to u64.max)
 type A
 	export var n as Count
 
-	static var one = A{n: 1}
+	static let one = A{n: 1}
 
 	static function get() returns A
 		return A.one
@@ -726,7 +642,7 @@ end 'A'
 type B
 	export var n as Count
 
-	static var two = B{n: 2}
+	static let two = B{n: 2}
 
 	static function get() returns B
 		return B.two
@@ -757,7 +673,7 @@ type Pair
 	export var a as Count
 	export var b as Count
 
-	static var origin = Pair{a: 1, b: 2}
+	static let origin = Pair{a: 1, b: 2}
 end 'Pair'
 
 function main() returns ExitCode
@@ -788,7 +704,7 @@ end 'Inner'
 type Outer
 	export var inner as Inner
 
-	static var base = Outer{inner: Inner{n: 7}}
+	static let base = Outer{inner: Inner{n: 7}}
 
 	static function get() returns Outer
 		return Outer.base
@@ -844,7 +760,7 @@ type Pair
 	export var a as Count
 	export var b as Count
 
-	static var origin = Pair{1, 2}
+	static let origin = Pair{1, 2}
 
 	static function get() returns Pair
 		return Pair.origin
@@ -879,7 +795,7 @@ type Box
 end 'Box'
 
 type Holder
-	static var b = Box.create() zzz
+	static let b = Box.create() zzz
 
 	static function get() returns Integer
 		return Holder.b.v

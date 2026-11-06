@@ -23,7 +23,7 @@ for color in Color.allCases 'loop'
 end 'loop'
 // Prints: red green blue
 
-var count = Color.allCases.count()  // 3
+let count = Color.allCases.count()  // 3
 ```
 
 This works with all backing types (simple, int, float, string, char). The array always contains the cases in their declaration order.

@@ -77,8 +77,8 @@ enum Color
   blue      // rawValue = 2
 end 'Color'
 
-var c = Color.green
-var ordinal = c.rawValue  // 1
+let c = Color.green
+let ordinal = c.rawValue  // 1
 ```
 
 ```text
@@ -87,8 +87,8 @@ enum HttpStatus
   notFound = 404
 end 'HttpStatus'
 
-var status = HttpStatus.ok
-var code = status.rawValue    // 200
+let status = HttpStatus.ok
+let code = status.rawValue    // 200
 ```
 
 ### name
@@ -102,8 +102,8 @@ enum Color
   blue
 end 'Color'
 
-var c = Color.green
-var n = c.name  // "green"
+let c = Color.green
+let n = c.name  // "green"
 ```
 
 This is different from `rawValue` for backed enum - `name` always returns the case name:
@@ -114,9 +114,9 @@ enum HttpStatus
   notFound = 404
 end 'HttpStatus'
 
-var s = HttpStatus.notFound
-var code = s.rawValue  // 404
-var n = s.name         // "notFound"
+let s = HttpStatus.notFound
+let code = s.rawValue  // 404
+let n = s.name         // "notFound"
 ```
 
 ### fromRawValue
@@ -132,7 +132,7 @@ enum Color
   blue    // ordinal 2
 end 'Color'
 
-var c = try Color.fromRawValue(1) otherwise Color.red  // Color.green
+let c = try Color.fromRawValue(1) otherwise Color.red  // Color.green
 ```
 
 For backed enum, the raw value is the explicit backing value:
@@ -143,7 +143,7 @@ enum HttpStatus
   notFound = 404
 end 'HttpStatus'
 
-var status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
+let status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
 // status is HttpStatus.notFound
 ```
 
@@ -158,7 +158,7 @@ enum Color
   blue
 end 'Color'
 
-var c = try Color.fromName("green") otherwise Color.red  // Color.green
+let c = try Color.fromName("green") otherwise Color.red  // Color.green
 ```
 
 ### Comparison
@@ -166,7 +166,7 @@ var c = try Color.fromName("green") otherwise Color.red  // Color.green
 Enum support `==` and `!=` directly:
 
 ```text
-var status = HttpStatus.ok
+let status = HttpStatus.ok
 if status == HttpStatus.ok 'check'
   // ...
 end 'check'

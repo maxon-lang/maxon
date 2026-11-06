@@ -2579,8 +2579,6 @@ end 'Lexer'
 // (e.g. unterminated string literal) so queryTokens can route them through
 // the project's diagnostic sink and stop the pipeline before parsing runs
 // on partial tokens.
-//
-// It reaches no module `var` — not even the logger's — so a pool worker may run it (E3143).
 export function tokenize(source String, keywords KeywordTable) returns TokenArray throws LexerError
 	let bytes = source.toByteArray()
 	let cursor = try bytes.cursor() otherwise 'emptySource'
@@ -2866,8 +2864,7 @@ end 'KeywordInfo'
 typealias KeywordInfoMap = Map with (ByteArray, KeywordInfo)
 
 // ⭐ **THE RESERVED WORDS, AS A VALUE EACH OWNER BUILDS ONCE AND HANDS TO EVERY `tokenize` IT RUNS** — a compile's
-// `Project`, an LSP session, one formatting pass. Not a module `var`: a lexer on a pool worker may reach none
-// (E3143). It is the only place the set is written down; every keyword question is asked of it.
+// `Project`, an LSP session, one formatting pass. It is the only place the set is written down; every keyword question is asked of it.
 export type KeywordTable
 	let byName as KeywordInfoMap
 

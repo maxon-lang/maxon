@@ -119,16 +119,19 @@ end 'main'
 500
 ```
 
-### U16 Global Variable Write
+### U16 By-Reference Write
 
-<!-- test: short-type.u16-global-write -->
+<!-- test: short-type.u16-by-reference-write -->
 ```maxon
 typealias U16 = int(0 to 65535)
 
-var counter = 0 as U16
+function store(counter mutable U16)
+	counter = 99 as U16
+end 'store'
 
 function main() returns ExitCode
-	counter = 99 as U16
+	var counter = 0 as U16
+	store(counter)
 	return counter
 end 'main'
 ```

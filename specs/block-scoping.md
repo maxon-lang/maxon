@@ -27,7 +27,7 @@ end 'check'
 The iterator variable is immutable and scoped to the loop body:
 
 ```text
-var arr = [1 as Count, 2, 3]
+let arr = [1 as Count, 2, 3]
 for item in arr 'loop'
   // item is immutable
   // item = 99  // error: not mutable

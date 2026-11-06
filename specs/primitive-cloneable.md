@@ -23,8 +23,8 @@ Returns a copy of the primitive value.
 
 **Example:**
 ```maxon
-var x = 42
-var y = x.clone()   // y is 42
+let x = 42
+let y = x.clone()   // y is 42
 ```
 
 ## Tests

@@ -11,7 +11,6 @@ end 'SignatureSpelling'
 export enum SignatureSubjectKind
 	declaredFunction
 	constantBinding
-	variableBinding
 	instanceField
 	unionCase
 	structDeclaration
@@ -20,10 +19,6 @@ export enum SignatureSubjectKind
 	interfaceDeclaration
 	aliasDeclaration
 end 'SignatureSubjectKind'
-
-module function bindingSubjectKind(mutable bool) returns SignatureSubjectKind
-	return SignatureSubjectKind.variableBinding if mutable else SignatureSubjectKind.constantBinding
-end 'bindingSubjectKind'
 
 function declarationSubjectKind(kind TypeDeclKind) returns SignatureSubjectKind
 	return match kind 'kind'
@@ -42,7 +37,6 @@ module function subjectNoun(kind SignatureSubjectKind) returns String
 	return match kind 'kind'
 		declaredFunction gives "function"
 		constantBinding gives "constant"
-		variableBinding gives "variable"
 		instanceField gives "field"
 		unionCase gives "union case"
 		structDeclaration gives "type"
@@ -419,7 +413,7 @@ function checkDeclaredBindings(project Project, signatures ProgramSignatures)
 		end 'noBindingAnAuthorWrote'
 
 		let claim = try signatures.bindingTypeClaimAt(index, into: bindingTypeNames) otherwise continue
-		let subject = SignatureSubject.create(SignatureSpelling.inDeclaringFile, tier: decl.visibility, readerFilePath: decl.declFilePath, nameLine: decl.nameLine, nameColumn: decl.nameColumn, enclosing: enclosingTypeOf(decl.name), declaredName: decl.name, kind: bindingSubjectKind(decl.mutable))
+		let subject = SignatureSubject.create(SignatureSpelling.inDeclaringFile, tier: decl.visibility, readerFilePath: decl.declFilePath, nameLine: decl.nameLine, nameColumn: decl.nameColumn, enclosing: enclosingTypeOf(decl.name), declaredName: decl.name, kind: SignatureSubjectKind.constantBinding)
 		var seen = ReportedTypeNameSet.create()
 		walkSignatureType(project, signatures: signatures, subject: subject, where: SignaturePosition.declaredType, declared: claim.valueType, typeNames: bindingTypeNames, seen: seen)
 		walkSpelledBrand(project, signatures: signatures, subject: subject, where: SignaturePosition.declaredType, brand: claim.brand, seen: seen)

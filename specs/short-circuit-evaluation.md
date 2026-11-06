@@ -40,15 +40,14 @@ Short-circuit semantics compose through chains of `and`/`or` expressions. In
 
 <!-- test: and-skips-right-when-left-false -->
 ```maxon
-var sideEffectCount = 0 as FullRangeInt
-
-function trackAndReturn(result bool) returns bool
+function trackAndReturn(result bool, sideEffectCount mutable FullRangeInt) returns bool
 	sideEffectCount = sideEffectCount + 1
 	return result
 end 'trackAndReturn'
 
 function main() returns ExitCode
-	let result = trackAndReturn(false) and trackAndReturn(true)
+	var sideEffectCount = 0 as FullRangeInt
+	let result = trackAndReturn(false, sideEffectCount: sideEffectCount) and trackAndReturn(true, sideEffectCount: sideEffectCount)
 	if result 'r'
 		return 99
 	end 'r'
@@ -61,15 +60,14 @@ end 'main'
 
 <!-- test: and-evaluates-right-when-left-true -->
 ```maxon
-var sideEffectCount = 0 as FullRangeInt
-
-function trackAndReturn(result bool) returns bool
+function trackAndReturn(result bool, sideEffectCount mutable FullRangeInt) returns bool
 	sideEffectCount = sideEffectCount + 1
 	return result
 end 'trackAndReturn'
 
 function main() returns ExitCode
-	let result = trackAndReturn(true) and trackAndReturn(true)
+	var sideEffectCount = 0 as FullRangeInt
+	let result = trackAndReturn(true, sideEffectCount: sideEffectCount) and trackAndReturn(true, sideEffectCount: sideEffectCount)
 	if not result 'r'
 		return 99
 	end 'r'
@@ -82,15 +80,14 @@ end 'main'
 
 <!-- test: or-skips-right-when-left-true -->
 ```maxon
-var sideEffectCount = 0 as FullRangeInt
-
-function trackAndReturn(result bool) returns bool
+function trackAndReturn(result bool, sideEffectCount mutable FullRangeInt) returns bool
 	sideEffectCount = sideEffectCount + 1
 	return result
 end 'trackAndReturn'
 
 function main() returns ExitCode
-	let result = trackAndReturn(true) or trackAndReturn(false)
+	var sideEffectCount = 0 as FullRangeInt
+	let result = trackAndReturn(true, sideEffectCount: sideEffectCount) or trackAndReturn(false, sideEffectCount: sideEffectCount)
 	if not result 'r'
 		return 99
 	end 'r'
@@ -103,15 +100,14 @@ end 'main'
 
 <!-- test: or-evaluates-right-when-left-false -->
 ```maxon
-var sideEffectCount = 0 as FullRangeInt
-
-function trackAndReturn(result bool) returns bool
+function trackAndReturn(result bool, sideEffectCount mutable FullRangeInt) returns bool
 	sideEffectCount = sideEffectCount + 1
 	return result
 end 'trackAndReturn'
 
 function main() returns ExitCode
-	let result = trackAndReturn(false) or trackAndReturn(true)
+	var sideEffectCount = 0 as FullRangeInt
+	let result = trackAndReturn(false, sideEffectCount: sideEffectCount) or trackAndReturn(true, sideEffectCount: sideEffectCount)
 	if not result 'r'
 		return 99
 	end 'r'
@@ -124,15 +120,14 @@ end 'main'
 
 <!-- test: and-chain-short-circuits-on-first-false -->
 ```maxon
-var sideEffectCount = 0 as FullRangeInt
-
-function trackAndReturn(result bool) returns bool
+function trackAndReturn(result bool, sideEffectCount mutable FullRangeInt) returns bool
 	sideEffectCount = sideEffectCount + 1
 	return result
 end 'trackAndReturn'
 
 function main() returns ExitCode
-	let result = trackAndReturn(true) and trackAndReturn(false) and trackAndReturn(true)
+	var sideEffectCount = 0 as FullRangeInt
+	let result = trackAndReturn(true, sideEffectCount: sideEffectCount) and trackAndReturn(false, sideEffectCount: sideEffectCount) and trackAndReturn(true, sideEffectCount: sideEffectCount)
 	if result 'r'
 		return 99
 	end 'r'
@@ -145,15 +140,14 @@ end 'main'
 
 <!-- test: or-chain-short-circuits-on-first-true -->
 ```maxon
-var sideEffectCount = 0 as FullRangeInt
-
-function trackAndReturn(result bool) returns bool
+function trackAndReturn(result bool, sideEffectCount mutable FullRangeInt) returns bool
 	sideEffectCount = sideEffectCount + 1
 	return result
 end 'trackAndReturn'
 
 function main() returns ExitCode
-	let result = trackAndReturn(false) or trackAndReturn(true) or trackAndReturn(false)
+	var sideEffectCount = 0 as FullRangeInt
+	let result = trackAndReturn(false, sideEffectCount: sideEffectCount) or trackAndReturn(true, sideEffectCount: sideEffectCount) or trackAndReturn(false, sideEffectCount: sideEffectCount)
 	if not result 'r'
 		return 99
 	end 'r'
@@ -202,15 +196,14 @@ end 'main'
 ```maxon
 typealias Integer = int(0 to u64.max)
 
-var trace = 0 as Integer
-
-function setFlag(bit Integer) returns bool
+function setFlag(bit Integer, trace mutable Integer) returns bool
 	trace = trace or bit
 	return false
 end 'setFlag'
 
 function main() returns ExitCode
-	if setFlag(1) and setFlag(2) 'never'
+	var trace = 0 as Integer
+	if setFlag(1, trace: trace) and setFlag(2, trace: trace) 'never'
 		return 99
 	end 'never'
 	return trace as ExitCode
@@ -222,20 +215,19 @@ end 'main'
 
 <!-- test: short-circuit-in-while-condition -->
 ```maxon
-var trace = 0 as FullRangeInt
-
-function check() returns bool
+function check(trace mutable FullRangeInt) returns bool
 	trace = trace + 1
 	return trace < 3
 end 'check'
 
-function alwaysFalse() returns bool
+function alwaysFalse(trace mutable FullRangeInt) returns bool
 	trace = trace + 100
 	return false
 end 'alwaysFalse'
 
 function main() returns ExitCode
-	while check() and alwaysFalse() 'loop'
+	var trace = 0 as FullRangeInt
+	while check(trace) and alwaysFalse(trace) 'loop'
 		return 99
 	end 'loop'
 	return trace
@@ -247,26 +239,25 @@ end 'main'
 
 <!-- test: nested-short-circuit -->
 ```maxon
-var calls = 0 as FullRangeInt
-
-function a() returns bool
+function a(calls mutable FullRangeInt) returns bool
 	calls = calls + 1
 	return true
 end 'a'
 
-function b() returns bool
+function b(calls mutable FullRangeInt) returns bool
 	calls = calls + 10
 	return false
 end 'b'
 
-function c() returns bool
+function c(calls mutable FullRangeInt) returns bool
 	calls = calls + 100
 	return true
 end 'c'
 
 function main() returns ExitCode
-	let inner = b() or c()
-	let result = a() and inner
+	var calls = 0 as FullRangeInt
+	let inner = b(calls) or c(calls)
+	let result = a(calls) and inner
 	if result 'r'
 		return calls as ExitCode
 	end 'r'

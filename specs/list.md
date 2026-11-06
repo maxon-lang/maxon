@@ -17,7 +17,7 @@ Internally, List is backed by a `__ManagedList` — a doubly linked list of node
 Use the `List from` syntax with an array literal or any `Array` value (`List from values`):
 
 ```maxon
-var list = List from [1, 2, 3]
+let list = List from [1, 2, 3]
 ```
 
 Or create an empty list with an explicit type:
@@ -25,7 +25,7 @@ Or create an empty list with an explicit type:
 ```text
 typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
-var empty = IntList.create()
+let empty = IntList.create()
 ```
 
 ### Methods

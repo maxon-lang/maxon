@@ -30,8 +30,8 @@ function double(x Integer) returns Integer
   return x * 2
 end 'double'
 
-var n = 21 as Integer
-var result = double(n)  // result is 42
+let n = 21 as Integer
+let result = double(n)  // result is 42
 ```
 
 ### What a `mutable` Parameter Takes
@@ -83,33 +83,6 @@ function main() returns ExitCode
 	var n = 0 as Integer
 	setTo99(n)
 	print("{n}")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-99
-```
-
-<!-- test: pass-by-reference.mutate-module-global-ref -->
-### A module-level `var` at a by-reference position is written
-A `mutable` parameter is passed by reference, and a module-level `var` is storage with an address like any
-other. It is not cell-resident the way a local `var` is, so the write has to reach the global itself.
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-var counter = 0 as Integer
-
-function setTo99(x mutable Integer)
-	x = 99
-end 'setTo99'
-
-function main() returns ExitCode
-	setTo99(counter)
-	print("{counter}")
 	return 0
 end 'main'
 ```
@@ -256,7 +229,7 @@ end 'main'
 ```
 
 <!-- test: pass-by-reference.mutate-ranged-float-alias-ref -->
-### A RANGED FLOAT ALIAS field and global are written, and the address is not converted
+### A RANGED FLOAT ALIAS field and local are written, and the address is not converted
 A ranged float alias is spelled `named`, not `float`, so a door that retypes the handed-over address
 without resolving the alias hands the callee a value whose machine class disagrees with the parameter's
 — and an argument that crosses the float domain has a conversion inserted on it. The address is an
@@ -264,8 +237,6 @@ address in either case, so the alias is resolved where the slot is retyped.
 ```maxon
 
 typealias Weight = float(0.0 to 1000.0)
-
-var scale = 1.0 as Weight
 
 function setTo99(w mutable Weight)
 	w = 99.0
@@ -280,6 +251,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
+	var scale = 1.0 as Weight
 	var b = Box.create()
 	setTo99(b.w)
 	setTo99(scale)
@@ -776,31 +748,6 @@ end 'main'
 ```stdout
 107 107
 ```
-
-<!-- test: pass-by-reference.an-async-call-with-a-global-at-a-by-reference-position-is-refused -->
-A module-level `var` cannot be lent to a coroutine until its promise is awaited, so it is not taken by reference.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-var shared = "orig"
-
-function rename(dest mutable String, n Integer) returns Integer
-	Scheduler.yield()
-	dest = "renamed-{n}"
-	return n
-end 'rename'
-
-function main() returns ExitCode
-	let p = async rename(shared, n: 7)
-	let r = await p
-	print("{r} {shared}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2015: <fragment>:13:23: Unsupported: an `async` call takes only a local variable by reference, and 'shared' is not one: the coroutine writes it while the caller is free to run, and only a local can be lent until the promise is awaited. Copy it into a local `var`
-```
-
 
 <!-- test: pass-by-reference.an-async-string-argument-a-callee-reassigns-is-released-on-await-and-on-cancel -->
 The caller's `var` holds the coroutine's final value after the await and releases it once, and a coroutine cancelled before it starts never runs.
@@ -1646,26 +1593,25 @@ end 'main'
 error E3005: <fragment>:19:11: argument type mismatch for 'n': expected 'Wide', got 'Narrow': the callee may write any 'Wide' through a by-reference parameter, which a 'Narrow' variable cannot hold. Declare the variable or field it names as Wide, or pass a Wide local
 ```
 
-<!-- test: pass-by-reference.a-narrow-module-var-at-a-wider-mutable-parameter-is-refused -->
-A module `var` handed by reference to a callee that takes the wider alias is refused.
+<!-- test: pass-by-reference.a-narrow-local-var-at-a-wider-mutable-parameter-is-refused -->
+A local `var` handed by reference to a callee that takes the wider alias is refused.
 ```maxon
 typealias Wide = int(0 to 100)
 typealias Narrow = int(0 to 10) implements Wide
-
-var level = 3 as Narrow
 
 function bumpWide(n mutable Wide)
 	n = 50
 end 'bumpWide'
 
 function main() returns ExitCode
+	var level = 3 as Narrow
 	bumpWide(level)
 	print("{level}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:12:11: argument type mismatch for 'n': expected 'Wide', got 'Narrow': the callee may write any 'Wide' through a by-reference parameter, which a 'Narrow' variable cannot hold. Declare the variable or field it names as Wide, or pass a Wide local
+error E3005: <fragment>:11:11: argument type mismatch for 'n': expected 'Wide', got 'Narrow': the callee may write any 'Wide' through a by-reference parameter, which a 'Narrow' variable cannot hold. Declare the variable or field it names as Wide, or pass a Wide local
 ```
 
 <!-- test: pass-by-reference.an-async-call-refuses-a-narrow-var-the-coroutine-could-widen -->

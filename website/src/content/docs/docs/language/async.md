@@ -9,8 +9,9 @@ Maxon has two concurrency tools:
 
 - **`async` / `await`** start a **coroutine** of the current green thread. Coroutines overlap *waiting* — for a
   timer, a socket, a child process — without creating threads.
-- **`spawn`** starts a **service**: a green thread of its own, scheduled independently and able to run in
-  parallel on another processor. You talk to it through messages.
+- **`spawn`** starts a **service**: state of its own that handles one message at a time, on whichever green
+  thread takes its next message, in parallel with other services on other processors. You talk to it through
+  messages.
 
 Both run on the runtime's scheduler, which maps green threads onto a pool of OS threads. There are no
 locks or atomics in user code: a value is only ever reachable from one green thread at a time, except
@@ -77,7 +78,7 @@ not 80.
   variable is lent like a move that ends at the drain: reading it, writing it or passing it is **E3102**
   (`use of moved value 'n': it is lent to the coroutine of the `async` call at 13:22 until that promise is
   awaited or cancelled`), a sibling field of a lent local too, and naming it in the statement that starts the
-  coroutine is **E3186**. A `var`, or a field of a local, may be lent; a module `var` or any other storage at a
+  coroutine is **E3186**. A `var`, or a field of a local, may be lent; any other storage at a
   by-reference position is **E2015** (`an `async` call takes only a local variable by reference`), a literal
   is **E3159**, and the variable's declared type must be the parameter's type (**E3005**, see
   [Parameter Passing](/docs/language/functions/#parameter-passing)). A coroutine that writes a parameter is refused a
@@ -320,7 +321,8 @@ condition; use `await` or `sleep` to actually wait.
 ## Services — `spawn`
 
 A **service** is an ordinary `type` started with `spawn`. `spawn Type.factory(args)` returns a **handle**
-and runs a static factory of the type on a new green thread, which keeps the state the factory builds. The handle's methods
+and runs a static factory of the type as the service's first message, on a green thread other than the spawner's;
+the service keeps the state the factory builds. The handle's methods
 are exactly the type's `export` and `public` instance methods; each call on the handle is a **message** the
 service handles one at a time, in order.
 
@@ -366,10 +368,15 @@ end 'main'
 
 - **The same type is still a plain value.** `Calc.create()` without `spawn` is an ordinary record with
   ordinary calls, so a service's logic is unit-testable without threads.
-- **The factory runs on the service's thread.** Its output follows the spawner's until the spawner waits for the
-  service, and a coroutine it starts belongs to the service's strand.
-- **A factory that throws makes the `spawn` a throwing call.** The spawner waits until the factory has run on the
-  new service's thread, then receives either the handle or the factory's error, of the factory's own type. Write
+- **The factory runs before any message.** It runs on a green thread other than the spawner's, so its output
+  follows the spawner's until the spawner waits for the service, and a coroutine it starts belongs to the strand
+  that runs it.
+- **An idle service owns no green thread.** A message that reaches an idle service starts a runner that handles
+  the queued messages in order, at most 64 per turn, and yields between turns so every other runnable service
+  runs. A handler that waits (`await`, `sleep`, I/O) keeps its service held, and messages queue behind it up to
+  the mailbox's capacity.
+- **A factory that throws makes the `spawn` a throwing call.** The spawner waits until the factory has run,
+  then receives either the handle or the factory's error, of the factory's own type. Write
   `try spawn Type.factory(…)` with an `otherwise`, propagate it from a throwing function, or place it in a
   block-form `try`; a `spawn` of a throwing factory that nothing catches is **E3057**, and `try` on a factory
   that cannot throw is **E3055**. A factory that throws starts no service, and the factory's output
@@ -442,8 +449,7 @@ either side could write, because the two green threads may run at the same time 
   opaque type parameter — is **E3135**. So is one whose type can hold a promise in any slot: a record with a
   promise in a field, a union with a case carrying one, an array or list of promises, empty or not. A coroutine
   belongs to the strand that started it, so a promise that crossed would be dropped, awaited or cancelled by a
-  strand that does not own it; `await` the promise and send or return the result. A service's own state may
-  hold promises its handlers start. A reply that is part of the service's own state is **E3137**; return a copy. For a generic
+  strand that does not own it; `await` the promise and send or return the result. A reply that is part of the service's own state is **E3137**; return a copy. For a generic
   service the reply is judged at the `spawn` that fixes `T`, and a `returns T` message that hands back the
   state is **E3137** there whenever `T` resolves to a managed type; a scalar `T` crosses.
 - A value held at an interface type crosses as a message argument, in a service's state and as a reply,
@@ -467,18 +473,20 @@ either side could write, because the two green threads may run at the same time 
   reply whose graph holds a type the runtime cannot walk (an OS handle other than a socket) is **E3138** there. A generic service
   cannot be spawned over a value held at an interface type (**E2015**).
 
-**Module-level state.** A service handler or factory — and anything it calls — may not read or write a module-level
-`var` (**E3143**). Keep a service's state in its own fields and hand results back through replies.
+**A service's state holds no promise.** A field of a service type that is a `Promise`, an array of promises, or a
+record or union that holds one is [E3216](/docs/cli/error-codes/#e3216--semanticservicestateholdsapromise), reported at the
+`spawn`. Each message may run on a different green thread, and a coroutine belongs to the strand that started it,
+so a promise kept in the state could be awaited or dropped by a strand that does not own it. A message or the
+factory `await`s or `.cancel()`s the coroutines it starts before it returns, and keeps their result in the field.
 
-A module-level `let` stays readable. In a program that spawns a service, every `let` record built before
+**Module-level state.** A service keeps its state in its own fields and hands results back through replies. A
+module-level `let` is readable from a handler or factory. In a program that spawns a service, every `let` record built before
 `main` is marked shared once the last global initializer has returned, so every count a handler steps on it
 is atomic; a record two `let`s reach counts both as its owners. A `let` whose graph no walk can mark — one
 holding an OS handle, a value held at an interface type, or a generic instance with no base layout — is
 **E3163** where a message or a factory can read it, and legal where only `main` does. A `spawn` a global initializer can
 reach is **E3164** (a [`default`](#program-wide-defaults--default) starts a program-wide service before
-`main`), a `let` whose initializer reaches a module-level `var` holding a record is **E3165**, and
-a `var` whose initializer may take a `let`'s record is **E3078** (see
-[Top-Level Variables](/docs/language/variables/#top-level-variables)).
+`main`; see [Top-Level Bindings](/docs/language/variables/#top-level-bindings)).
 
 **Output order.** Text printed by `main` and by a service handler or factory may interleave in any order; sequence it
 through awaited replies when order matters.
@@ -487,7 +495,9 @@ through awaited replies when order matters.
 
 A mailbox holds at most its **capacity** of queued messages: `DefaultMailboxCapacity` (1024), or the
 `MailboxCapacity` (`int(1 to 2^31)`) that `spawn(capacity: n) Type.factory(args)` names. The capacity is a
-ceiling: the mailbox's memory grows with its backlog, up to the capacity.
+ceiling: the mailbox's memory grows with its backlog, up to the capacity. A message counts from the moment its
+send is accepted until the service starts handling it, so a service that has not started yet takes exactly
+its capacity of messages and the next send finds the mailbox full; the message being handled does not count.
 
 A send queues the message, or fails with an error the compiler declares for each message,
 `<Service>.<message>.sendError`, whose two cases carry the arguments the send was given:

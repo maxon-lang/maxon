@@ -19,14 +19,17 @@ break 'label'   // Break from loop with specified label
 **Example:**
 
 ```maxon
-var x = 5 as Count
-while true 'loop'
-	x = x + 2
-	if x == 11 'check'
-		break
-	end 'check'
-end 'loop'
-// x is now 11
+function main() returns ExitCode
+	var x = 5 as Count
+	while true 'loop'
+		x = x + 2
+		if x == 11 'check'
+			break
+		end 'check'
+	end 'loop'
+	// x is now 11
+	return 0
+end 'main'
 ```
 
 **Labeled Break Example:**

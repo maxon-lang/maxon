@@ -196,7 +196,7 @@ Write `value as Alias` to convert a value of another alias.
 Arithmetic keeps the alias of its operands. Two operands of one alias give that alias; an unnamed operand
 (a literal, a loop counter) adopts the named one, and so does an ancestor (`block + offset` over a
 `BlockId` and an `ElementIndex` is a `BlockId`); two aliases with no common ancestor are **E3005** until
-one side is cast. The same rule governs comparisons, and a [top-level initializer](/docs/language/variables/#top-level-variables)
+one side is cast. The same rule governs comparisons, and a [top-level initializer](/docs/language/variables/#top-level-bindings)
 refuses the same pairs. A shift takes the alias of its left operand.
 
 Two subtypes of one parent make a *mixed* expression. It lands in any destination one of its operands'
@@ -354,8 +354,7 @@ no cost, and `return` re-brands implicitly.
   same instance are two brands in the same way.
 - A call's result wears the alias its callee's `returns` clause names, bare or directory-qualified, as the
   file that declares the callee resolves it: a caller's own declaration of that name is another brand.
-- A field read, a read of a module-level `var` and a `match` payload binding wear the alias the field,
-  variable or payload was declared with, as its declaring file resolves it: with `held(v Xs)`, the
+- A field read and a `match` payload binding wear the alias the field or payload was declared with, as its declaring file resolves it: with `held(v Xs)`, the
   binding `v` in `held(v) then …` is an `Xs`.
 - A bare reference that reaches two `export`ed declarations, with none in the reading file's directory or
   the root, is ambiguous: **E3063**, resolved by qualifying with the directory namespace.

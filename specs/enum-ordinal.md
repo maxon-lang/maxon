@@ -20,9 +20,9 @@ enum HttpStatus
   serverError = 500
 end 'HttpStatus'
 
-var s = HttpStatus.notFound
-var pos = s.ordinal    // 1 (second case declared)
-var code = s.rawValue  // 404 (the backing value)
+let s = HttpStatus.notFound
+let pos = s.ordinal    // 1 (second case declared)
+let code = s.rawValue  // 404 (the backing value)
 ```
 
 For simple enum (no explicit values), `.ordinal` and `.rawValue` are identical:

@@ -46,7 +46,7 @@ Cast values into a ranged type with `as TypeName`:
 
 ```maxon
 typealias Age = int(0 to 150)
-var myAge = 25 as Age
+let myAge = 25 as Age
 ```
 
 A literal needs no cast — when it flows into a slot that already has a
@@ -603,20 +603,18 @@ typealias Integer = int(i64.min to i64.max)
 typealias Positive = int(1 to i64.max)
 typealias HalfRadix = int(1 to 8)
 
-var bits = 1 as Positive
-
 function ident(v Positive) returns Positive
 	return v
 end 'ident'
 
-function quotient(halfRadix HalfRadix) returns Integer
+function quotient(halfRadix HalfRadix, bits Positive) returns Integer
 	let half = bits shr 1
 	return half / (halfRadix as Positive)
 end 'quotient'
 
 function main() returns ExitCode
-	bits = ident(i64.max)
-	print("{quotient(8)}\n")
+	let bits = ident(i64.max)
+	print("{quotient(8, bits: bits)}\n")
 	return 0
 end 'main'
 ```

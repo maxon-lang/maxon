@@ -3,7 +3,7 @@ feature: harness-gate-a-case-whose-initializer-runs-code-is-left-out-before-the-
 ---
 # The a-case-whose-initializer-runs-code-is-left-out-before-the-batch-runs gate
 
-The middle case's module-level `var` is initialized by a static factory that prints, so it runs alone while the other two still batch.
+The middle case's module-level `let` is initialized by a static factory that prints, so it runs alone while the other two still batch.
 
 ## Tests
 
@@ -38,11 +38,10 @@ type Seed
 	end 'create'
 end 'Seed'
 
-var seed = Seed.create()
+let seed = Seed.create()
 
 function main() returns ExitCode
-	seed.n = seed.n + 1
-	print("main {seed.n}\n")
+	print("main {seed.n + 1}\n")
 	return 0
 end 'main'
 ```

@@ -298,30 +298,39 @@ order is the exit order (`order` steps in base 4 as each task finishes, so the q
 child's 2, then the slow child's 1 read `57`), so a wake that waited for the oldest child instead of the one
 that exited gives a different number too.
 ```maxon
-var order = 0 as Integer
+function record(order OrderCell, digit Integer)
+	while true 'retry'
+		let seen = order.current()
 
-function slow() returns Integer
+		if order.publish(seen * 4 + digit, replacing: seen) 'landed'
+			break
+		end 'landed'
+	end 'retry'
+end 'record'
+
+function slow(order OrderCell) returns Integer
 	let code = try __Builtins.runProcess("sleep 0.9; exit 1") otherwise 99
-	order = order * 4 + 1
+	record(order, digit: 1)
 	return code
 end 'slow'
 
-function middle() returns Integer
+function middle(order OrderCell) returns Integer
 	let code = try __Builtins.runProcess("sleep 0.5; exit 2") otherwise 99
-	order = order * 4 + 2
+	record(order, digit: 2)
 	return code
 end 'middle'
 
-function quick() returns Integer
+function quick(order OrderCell) returns Integer
 	let code = try __Builtins.runProcess("exit 3") otherwise 99
-	order = order * 4 + 3
+	record(order, digit: 3)
 	return code
 end 'quick'
 
 function main() returns ExitCode
-	let p1 = async slow()
-	let p2 = async middle()
-	let p3 = async quick()
+	let order = OrderCell.create(0 as Integer)
+	let p1 = async slow(order.clone())
+	let p2 = async middle(order.clone())
+	let p3 = async quick(order.clone())
 	let r1 = await p1
 	let r2 = await p2
 	let r3 = await p3
@@ -330,9 +339,10 @@ function main() returns ExitCode
 		return 99
 	end 'statuses'
 
-	return order as ExitCode
+	return order.current() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
+typealias OrderCell = SharedValue with Integer
 ```
 ```exitcode
 57
@@ -400,8 +410,6 @@ OUT; no elapsed time is compared to a threshold, so a slow host cannot reorder t
 ```maxon
 let flagName = "async-subprocess-interleave.flag"
 
-var order = 0 as Integer
-
 function flagPath() returns FilePath
 	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
 end 'flagPath'
@@ -412,15 +420,25 @@ function clearFlag()
 	end 'present'
 end 'clearFlag'
 
-function slow() returns Integer
+function record(order OrderCell, digit Integer)
+	while true 'retry'
+		let seen = order.current()
+
+		if order.publish(seen * 10 + digit, replacing: seen) 'landed'
+			break
+		end 'landed'
+	end 'retry'
+end 'record'
+
+function slow(order OrderCell) returns Integer
 	_ = try __Builtins.runProcess("cmd /c for /l %i in (1,1,100000) do @if exist {flagName} (exit 0) else (ping -n 2 127.0.0.1 >nul)") otherwise 99
-	order = order * 10 + 1
+	record(order, digit: 1)
 	return 1
 end 'slow'
 
-function fast() returns Integer
+function fast(order OrderCell) returns Integer
 	sleep(50)
-	order = order * 10 + 2
+	record(order, digit: 2)
 	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
 	return 2
 end 'fast'
@@ -428,15 +446,17 @@ end 'fast'
 function main() returns ExitCode
 	clearFlag()
 
-	let p1 = async slow()
-	let p2 = async fast()
+	let order = OrderCell.create(0 as Integer)
+	let p1 = async slow(order.clone())
+	let p2 = async fast(order.clone())
 	_ = await p1
 	_ = await p2
 
 	clearFlag()
-	return order as ExitCode
+	return order.current() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
+typealias OrderCell = SharedValue with Integer
 ```
 ```exitcode
 21
@@ -461,8 +481,6 @@ measurement can say which way each falls.
 ```maxon
 let flagName = "async-subprocess-interleave.flag"
 
-var order = 0 as Integer
-
 function flagPath() returns FilePath
 	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
 end 'flagPath'
@@ -473,15 +491,25 @@ function clearFlag()
 	end 'present'
 end 'clearFlag'
 
-function slow() returns Integer
+function record(order OrderCell, digit Integer)
+	while true 'retry'
+		let seen = order.current()
+
+		if order.publish(seen * 10 + digit, replacing: seen) 'landed'
+			break
+		end 'landed'
+	end 'retry'
+end 'record'
+
+function slow(order OrderCell) returns Integer
 	_ = try __Builtins.runProcess("while [ ! -f {flagName} ]; do sleep 0.05; done") otherwise 99
-	order = order * 10 + 1
+	record(order, digit: 1)
 	return 1
 end 'slow'
 
-function fast() returns Integer
+function fast(order OrderCell) returns Integer
 	sleep(50)
-	order = order * 10 + 2
+	record(order, digit: 2)
 	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
 	return 2
 end 'fast'
@@ -489,15 +517,17 @@ end 'fast'
 function main() returns ExitCode
 	clearFlag()
 
-	let p1 = async slow()
-	let p2 = async fast()
+	let order = OrderCell.create(0 as Integer)
+	let p1 = async slow(order.clone())
+	let p2 = async fast(order.clone())
 	_ = await p1
 	_ = await p2
 
 	clearFlag()
-	return order as ExitCode
+	return order.current() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
+typealias OrderCell = SharedValue with Integer
 ```
 ```exitcode
 21
@@ -545,10 +575,6 @@ let flagName = "async-subprocess-parked-child.flag"
 
 let childRunsMs = 1000
 
-var parkedFrom = 0 as SchedulerEventCount
-
-var wakesAtRelease = 0 as SchedulerEventCount
-
 function flagPath() returns FilePath
 	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
 end 'flagPath'
@@ -563,15 +589,15 @@ function slow() returns Integer
 	return try __Builtins.runProcess("cmd /c for /l %i in (1,1,100000) do @if exist {flagName} (exit 0) else (ping -n 2 127.0.0.1 >nul)") otherwise 99
 end 'slow'
 
-function release() returns Integer
+function release(parkedFrom SchedulerEventCount) returns SchedulerEventCount
 	while Scheduler.counters().netpollBlocks < parkedFrom 'untilChildParked'
 		Scheduler.yield()
 	end 'untilChildParked'
 
 	sleep(childRunsMs)
-	wakesAtRelease = Scheduler.counters().parkWakes
+	let wakesAtRelease = Scheduler.counters().parkWakes
 	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
-	return 0
+	return wakesAtRelease
 end 'release'
 
 function main() returns ExitCode
@@ -579,11 +605,11 @@ function main() returns ExitCode
 	sleep(1)
 	let beforeWakes = Scheduler.counters().parkWakes
 	let beforeParks = Scheduler.counters().netpollBlocks
-	parkedFrom = beforeParks + 1
+	let parkedFrom = beforeParks + 1
 	let p = async slow()
-	let r = async release()
+	let r = async release(parkedFrom)
 	_ = await p
-	_ = await r
+	let wakesAtRelease = await r
 	let wakes = wakesAtRelease - beforeWakes
 	let parks = Scheduler.counters().netpollBlocks - beforeParks
 
@@ -626,10 +652,6 @@ let flagName = "async-subprocess-parked-child.flag"
 
 let childRunsMs = 1000
 
-var parkedFrom = 0 as SchedulerEventCount
-
-var wakesAtRelease = 0 as SchedulerEventCount
-
 function flagPath() returns FilePath
 	return try FilePath.from(flagName) otherwise panic("flagName is a valid path")
 end 'flagPath'
@@ -644,15 +666,15 @@ function slow() returns Integer
 	return try __Builtins.runProcess("while [ ! -f {flagName} ]; do sleep 0.05; done") otherwise 99
 end 'slow'
 
-function release() returns Integer
+function release(parkedFrom SchedulerEventCount) returns SchedulerEventCount
 	while Scheduler.counters().netpollBlocks < parkedFrom 'untilChildParked'
 		Scheduler.yield()
 	end 'untilChildParked'
 
 	sleep(childRunsMs)
-	wakesAtRelease = Scheduler.counters().parkWakes
+	let wakesAtRelease = Scheduler.counters().parkWakes
 	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
-	return 0
+	return wakesAtRelease
 end 'release'
 
 function main() returns ExitCode
@@ -660,11 +682,11 @@ function main() returns ExitCode
 	sleep(1)
 	let beforeWakes = Scheduler.counters().parkWakes
 	let beforeParks = Scheduler.counters().netpollBlocks
-	parkedFrom = beforeParks + 1
+	let parkedFrom = beforeParks + 1
 	let p = async slow()
-	let r = async release()
+	let r = async release(parkedFrom)
 	_ = await p
-	_ = await r
+	let wakesAtRelease = await r
 	let wakes = wakesAtRelease - beforeWakes
 	let parks = Scheduler.counters().netpollBlocks - beforeParks
 
@@ -813,84 +835,93 @@ sixty-fifth parks: the program would never hold sixty-five waits open together, 
 exercising the property at all, and would say nothing about the ceiling it exists to deny. A two-second
 child is still running when the last spawn returns, however the spawns interleave with that machine.
 ```maxon
-var done = 0 as Integer
+function tally(done DoneCell)
+	while true 'retry'
+		let seen = done.current()
 
-function child() returns Integer
+		if done.publish(seen + 1, replacing: seen) 'landed'
+			break
+		end 'landed'
+	end 'retry'
+end 'tally'
+
+function child(done DoneCell) returns Integer
 	let code = try __Builtins.runProcess("cmd /c ping -n 3 127.0.0.1 >nul") otherwise 99
 
 	if code == 0 'completed'
-		done = done + 1
+		tally(done)
 	end 'completed'
 
 	return code
 end 'child'
 
 function main() returns ExitCode
-	let p00 = async child()
-	let p01 = async child()
-	let p02 = async child()
-	let p03 = async child()
-	let p04 = async child()
-	let p05 = async child()
-	let p06 = async child()
-	let p07 = async child()
-	let p08 = async child()
-	let p09 = async child()
-	let p10 = async child()
-	let p11 = async child()
-	let p12 = async child()
-	let p13 = async child()
-	let p14 = async child()
-	let p15 = async child()
-	let p16 = async child()
-	let p17 = async child()
-	let p18 = async child()
-	let p19 = async child()
-	let p20 = async child()
-	let p21 = async child()
-	let p22 = async child()
-	let p23 = async child()
-	let p24 = async child()
-	let p25 = async child()
-	let p26 = async child()
-	let p27 = async child()
-	let p28 = async child()
-	let p29 = async child()
-	let p30 = async child()
-	let p31 = async child()
-	let p32 = async child()
-	let p33 = async child()
-	let p34 = async child()
-	let p35 = async child()
-	let p36 = async child()
-	let p37 = async child()
-	let p38 = async child()
-	let p39 = async child()
-	let p40 = async child()
-	let p41 = async child()
-	let p42 = async child()
-	let p43 = async child()
-	let p44 = async child()
-	let p45 = async child()
-	let p46 = async child()
-	let p47 = async child()
-	let p48 = async child()
-	let p49 = async child()
-	let p50 = async child()
-	let p51 = async child()
-	let p52 = async child()
-	let p53 = async child()
-	let p54 = async child()
-	let p55 = async child()
-	let p56 = async child()
-	let p57 = async child()
-	let p58 = async child()
-	let p59 = async child()
-	let p60 = async child()
-	let p61 = async child()
-	let p62 = async child()
-	let p63 = async child()
-	let p64 = async child()
+	let done = DoneCell.create(0 as Integer)
+	let p00 = async child(done.clone())
+	let p01 = async child(done.clone())
+	let p02 = async child(done.clone())
+	let p03 = async child(done.clone())
+	let p04 = async child(done.clone())
+	let p05 = async child(done.clone())
+	let p06 = async child(done.clone())
+	let p07 = async child(done.clone())
+	let p08 = async child(done.clone())
+	let p09 = async child(done.clone())
+	let p10 = async child(done.clone())
+	let p11 = async child(done.clone())
+	let p12 = async child(done.clone())
+	let p13 = async child(done.clone())
+	let p14 = async child(done.clone())
+	let p15 = async child(done.clone())
+	let p16 = async child(done.clone())
+	let p17 = async child(done.clone())
+	let p18 = async child(done.clone())
+	let p19 = async child(done.clone())
+	let p20 = async child(done.clone())
+	let p21 = async child(done.clone())
+	let p22 = async child(done.clone())
+	let p23 = async child(done.clone())
+	let p24 = async child(done.clone())
+	let p25 = async child(done.clone())
+	let p26 = async child(done.clone())
+	let p27 = async child(done.clone())
+	let p28 = async child(done.clone())
+	let p29 = async child(done.clone())
+	let p30 = async child(done.clone())
+	let p31 = async child(done.clone())
+	let p32 = async child(done.clone())
+	let p33 = async child(done.clone())
+	let p34 = async child(done.clone())
+	let p35 = async child(done.clone())
+	let p36 = async child(done.clone())
+	let p37 = async child(done.clone())
+	let p38 = async child(done.clone())
+	let p39 = async child(done.clone())
+	let p40 = async child(done.clone())
+	let p41 = async child(done.clone())
+	let p42 = async child(done.clone())
+	let p43 = async child(done.clone())
+	let p44 = async child(done.clone())
+	let p45 = async child(done.clone())
+	let p46 = async child(done.clone())
+	let p47 = async child(done.clone())
+	let p48 = async child(done.clone())
+	let p49 = async child(done.clone())
+	let p50 = async child(done.clone())
+	let p51 = async child(done.clone())
+	let p52 = async child(done.clone())
+	let p53 = async child(done.clone())
+	let p54 = async child(done.clone())
+	let p55 = async child(done.clone())
+	let p56 = async child(done.clone())
+	let p57 = async child(done.clone())
+	let p58 = async child(done.clone())
+	let p59 = async child(done.clone())
+	let p60 = async child(done.clone())
+	let p61 = async child(done.clone())
+	let p62 = async child(done.clone())
+	let p63 = async child(done.clone())
+	let p64 = async child(done.clone())
 	_ = await p00
 	_ = await p01
 	_ = await p02
@@ -956,9 +987,10 @@ function main() returns ExitCode
 	_ = await p62
 	_ = await p63
 	_ = await p64
-	return done as ExitCode
+	return done.current() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
+typealias DoneCell = SharedValue with Integer
 ```
 ```exitcode
 65
@@ -973,84 +1005,93 @@ completed. `sleep 2` outlives the burst of spawns for the same reason as the Win
 child — a child that exited at once would be reaped by another machine's idle poll before the sixty-fifth
 parked, and the program would never hold sixty-five waits open at the same time.
 ```maxon
-var done = 0 as Integer
+function tally(done DoneCell)
+	while true 'retry'
+		let seen = done.current()
 
-function child() returns Integer
+		if done.publish(seen + 1, replacing: seen) 'landed'
+			break
+		end 'landed'
+	end 'retry'
+end 'tally'
+
+function child(done DoneCell) returns Integer
 	let code = try __Builtins.runProcess("sleep 2") otherwise 99
 
 	if code == 0 'completed'
-		done = done + 1
+		tally(done)
 	end 'completed'
 
 	return code
 end 'child'
 
 function main() returns ExitCode
-	let p00 = async child()
-	let p01 = async child()
-	let p02 = async child()
-	let p03 = async child()
-	let p04 = async child()
-	let p05 = async child()
-	let p06 = async child()
-	let p07 = async child()
-	let p08 = async child()
-	let p09 = async child()
-	let p10 = async child()
-	let p11 = async child()
-	let p12 = async child()
-	let p13 = async child()
-	let p14 = async child()
-	let p15 = async child()
-	let p16 = async child()
-	let p17 = async child()
-	let p18 = async child()
-	let p19 = async child()
-	let p20 = async child()
-	let p21 = async child()
-	let p22 = async child()
-	let p23 = async child()
-	let p24 = async child()
-	let p25 = async child()
-	let p26 = async child()
-	let p27 = async child()
-	let p28 = async child()
-	let p29 = async child()
-	let p30 = async child()
-	let p31 = async child()
-	let p32 = async child()
-	let p33 = async child()
-	let p34 = async child()
-	let p35 = async child()
-	let p36 = async child()
-	let p37 = async child()
-	let p38 = async child()
-	let p39 = async child()
-	let p40 = async child()
-	let p41 = async child()
-	let p42 = async child()
-	let p43 = async child()
-	let p44 = async child()
-	let p45 = async child()
-	let p46 = async child()
-	let p47 = async child()
-	let p48 = async child()
-	let p49 = async child()
-	let p50 = async child()
-	let p51 = async child()
-	let p52 = async child()
-	let p53 = async child()
-	let p54 = async child()
-	let p55 = async child()
-	let p56 = async child()
-	let p57 = async child()
-	let p58 = async child()
-	let p59 = async child()
-	let p60 = async child()
-	let p61 = async child()
-	let p62 = async child()
-	let p63 = async child()
-	let p64 = async child()
+	let done = DoneCell.create(0 as Integer)
+	let p00 = async child(done.clone())
+	let p01 = async child(done.clone())
+	let p02 = async child(done.clone())
+	let p03 = async child(done.clone())
+	let p04 = async child(done.clone())
+	let p05 = async child(done.clone())
+	let p06 = async child(done.clone())
+	let p07 = async child(done.clone())
+	let p08 = async child(done.clone())
+	let p09 = async child(done.clone())
+	let p10 = async child(done.clone())
+	let p11 = async child(done.clone())
+	let p12 = async child(done.clone())
+	let p13 = async child(done.clone())
+	let p14 = async child(done.clone())
+	let p15 = async child(done.clone())
+	let p16 = async child(done.clone())
+	let p17 = async child(done.clone())
+	let p18 = async child(done.clone())
+	let p19 = async child(done.clone())
+	let p20 = async child(done.clone())
+	let p21 = async child(done.clone())
+	let p22 = async child(done.clone())
+	let p23 = async child(done.clone())
+	let p24 = async child(done.clone())
+	let p25 = async child(done.clone())
+	let p26 = async child(done.clone())
+	let p27 = async child(done.clone())
+	let p28 = async child(done.clone())
+	let p29 = async child(done.clone())
+	let p30 = async child(done.clone())
+	let p31 = async child(done.clone())
+	let p32 = async child(done.clone())
+	let p33 = async child(done.clone())
+	let p34 = async child(done.clone())
+	let p35 = async child(done.clone())
+	let p36 = async child(done.clone())
+	let p37 = async child(done.clone())
+	let p38 = async child(done.clone())
+	let p39 = async child(done.clone())
+	let p40 = async child(done.clone())
+	let p41 = async child(done.clone())
+	let p42 = async child(done.clone())
+	let p43 = async child(done.clone())
+	let p44 = async child(done.clone())
+	let p45 = async child(done.clone())
+	let p46 = async child(done.clone())
+	let p47 = async child(done.clone())
+	let p48 = async child(done.clone())
+	let p49 = async child(done.clone())
+	let p50 = async child(done.clone())
+	let p51 = async child(done.clone())
+	let p52 = async child(done.clone())
+	let p53 = async child(done.clone())
+	let p54 = async child(done.clone())
+	let p55 = async child(done.clone())
+	let p56 = async child(done.clone())
+	let p57 = async child(done.clone())
+	let p58 = async child(done.clone())
+	let p59 = async child(done.clone())
+	let p60 = async child(done.clone())
+	let p61 = async child(done.clone())
+	let p62 = async child(done.clone())
+	let p63 = async child(done.clone())
+	let p64 = async child(done.clone())
 	_ = await p00
 	_ = await p01
 	_ = await p02
@@ -1116,9 +1157,10 @@ function main() returns ExitCode
 	_ = await p62
 	_ = await p63
 	_ = await p64
-	return done as ExitCode
+	return done.current() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
+typealias DoneCell = SharedValue with Integer
 ```
 ```exitcode
 65

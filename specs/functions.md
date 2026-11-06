@@ -287,15 +287,14 @@ the statement takes the `_ =` discard — bare it would be E3065, and were `noop
 be E3064 (`discarded-results.md`). The BARE form belongs to a callee that returns nothing, which
 `discarded-results.md`'s `void-function-ok` pins. The program returns 0.
 ```maxon
-var runs = 0 as Integer
-
-function noop(x Integer) returns Integer
+function noop(x Integer, runs mutable Integer) returns Integer
 	runs = runs + 1
 	return x
 end 'noop'
 
 function main() returns ExitCode
-	_ = noop(5)
+	var runs = 0 as Integer
+	_ = noop(5, runs: runs)
 	return runs - 1
 end 'main'
 typealias Integer = int(i64.min to i64.max)

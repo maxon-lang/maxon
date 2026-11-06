@@ -529,14 +529,12 @@ synthesized by the same machinery and its needs were declared from `genericInsta
 ```maxon
 typealias Tally = int(0 to 100)
 
-var inits = 0 as Tally
-
 type Box uses T
 	var v as T
 
 	// The instance is DISCARDED below, which is what runs the cascade — so the factory must have an effect
 	// or the discard is E3064 (`discarded-results.md`).
-	static function init(x T) returns Self
+	static function init(x T, inits mutable Tally) returns Self
 		inits = inits + 1
 		return Self{v: x}
 	end 'init'
@@ -545,7 +543,8 @@ end 'Box'
 typealias CharacterSetBox = Box with CharacterSet
 
 function main() returns ExitCode
-	_ = CharacterSetBox.init(CharacterSet.whitespaces())
+	var inits = 0 as Tally
+	_ = CharacterSetBox.init(CharacterSet.whitespaces(), inits: inits)
 	return inits - 1
 end 'main'
 ```

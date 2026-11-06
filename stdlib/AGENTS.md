@@ -12,8 +12,6 @@ convention.
 
 Stdlib algorithms carry no instrumentation: no `Log` call, and no sink threaded through a call cone to replace
 one, since a parameter added to N functions for one feature is a refactor of the dependency, not its removal.
-No function `Array.sort` reaches may touch module-level storage, or it stops being callable from a service
-message (E3143). `specs/green-thread-globals.md`'s `a-handler-may-sort-its-own-field` pins this.
 
 ## Where a file goes
 

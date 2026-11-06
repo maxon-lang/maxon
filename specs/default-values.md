@@ -20,7 +20,7 @@ function repeat(value Count, times Count = 1) returns Count
   return value * times
 end 'repeat'
 
-var result = repeat(7)  // times defaults to 1, result is 7
+let result = repeat(7)  // times defaults to 1, result is 7
 ```
 
 ### String Defaults
@@ -49,7 +49,7 @@ function sum(items IntArray = [1, 2, 3]) returns Integer
   return total
 end 'sum'
 
-var result = sum()  // uses default [1, 2, 3], result is 6
+let result = sum()  // uses default [1, 2, 3], result is 6
 ```
 
 ### Enum Defaults
@@ -65,7 +65,7 @@ function paint(color Color = Color.blue) returns ExitCode
   return color.rawValue
 end 'paint'
 
-var result = paint()  // uses default Color.blue, result is 2
+let result = paint()  // uses default Color.blue, result is 2
 ```
 
 ### A Defaulted First Parameter May Be Named
@@ -403,8 +403,8 @@ type Pair
 	end 'create'
 end 'Pair'
 
-var boxed = Box.make(2)
-var paired = Pair.create(1)
+let boxed = Box.make(2)
+let paired = Pair.create(1)
 
 function main() returns ExitCode
 	print("{boxed.n} {boxed.tag} {paired.a} {paired.b}\n")
@@ -437,7 +437,7 @@ type Roster
 	end 'of'
 end 'Roster'
 
-var empty = Roster.of()
+let empty = Roster.of()
 
 function main() returns ExitCode
 	return empty.names.count() as ExitCode

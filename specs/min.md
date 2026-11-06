@@ -21,9 +21,9 @@ Returns the smaller of two floating-point values.
 **Example:**
 
 ```maxon
-var x = min(3.0, 5.0)    // 3.0
-var y = min(10.0, 2.5)   // 2.5
-var z = min(-1.0, 1.0)   // -1.0
+let x = min(3.0, 5.0)    // 3.0
+let y = min(10.0, 2.5)   // 2.5
+let z = min(-1.0, 1.0)   // -1.0
 ```
 
 **Notes:**

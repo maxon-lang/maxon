@@ -20,11 +20,11 @@ Calculate the tangent of an angle (in radians).
 **Example:**
 
 ```maxon
-var x = 0.0
-var y = Math.tan(x)       // 0.0
+let x = 0.0
+let y = Math.tan(x)       // 0.0
 
-var quarterPi = 0.785398  // π/4
-var z = Math.tan(quarterPi)    // 1.0 (approximately)
+let quarterPi = 0.785398  // π/4
+let z = Math.tan(quarterPi)    // 1.0 (approximately)
 ```
 **Notes:**
 - The function works with radians, not degrees

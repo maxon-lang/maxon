@@ -146,8 +146,7 @@ let x = 42          // immutable constant: fits any alias its value fits
 var y = 10 as Count // mutable: a var names its alias (E2004 without the cast)
 _ = sideEffect()  // discard: no binding, no unused check
 
-// Top-level variables (outside functions)
-var globalCounter = 0 as Count   // mutable, accessible from any function
+// Top-level constants (outside functions)
 let MAX_SIZE = 1024     // immutable constant
 
 // Static fields (inside types): every initializer runs once, before main,
@@ -158,7 +157,7 @@ type Origin
 
 	static let zero = Origin{x: 0, y: 0}                    // struct literal: own type only
 	static let ws = CharacterSet.whitespacesAndNewlines()   // function call
-	static var data = [10 as Coord, 20 as Coord, 30 as Coord] // array literal: a var names its element alias
+	static let data = [10 as Coord, 20 as Coord, 30 as Coord] // array literal
 	static let MAX = 100                                    // compile-time constant
 end 'Origin'
 
@@ -277,7 +276,7 @@ end 'check'
 greet("Smith", title: "Dr.")
 ```
 
-**Parameter passing:** A parameter is a `let` passed by value; reassigning it is E2013. A value-type parameter (a number, `bool`, an enum or `String`) the function reassigns is marked `mutable` before its type and is passed by reference -- the write propagates back to the caller's storage: a local `var`, a module-level `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a read-only value, a literal or an expression to a `mutable` parameter is a compile error (E3159), and the variable's declared type must be the parameter's type, alias included (E3005). A record parameter is never rebound; copy it into a local `var`. `mutable` before a message or factory parameter's type is a parse error (E2010).
+**Parameter passing:** A parameter is a `let` passed by value; reassigning it is E2013. A value-type parameter (a number, `bool`, an enum or `String`) the function reassigns is marked `mutable` before its type and is passed by reference -- the write propagates back to the caller's storage: a local `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a read-only value, a literal or an expression to a `mutable` parameter is a compile error (E3159), and the variable's declared type must be the parameter's type, alias included (E3005). A record parameter is never rebound; copy it into a local `var`. `mutable` before a message or factory parameter's type is a parse error (E2010).
 
 **Purity and discarded results:** The compiler infers function purity (no side effects). Pure function results must always be used (E3064). Impure function results require `_ =` to explicitly discard (E3065). Chainable methods (returning own type via `self`) can be freely discarded.
 
@@ -384,8 +383,8 @@ export enum Color                               // visible everywhere
 export union Result                             // visible everywhere
 export typealias Score = int(0 to 100)          // visible everywhere
 module typealias FeatureScore = int(0 to 100)   // visible to this directory subtree
-export var sharedCounter = 0                    // visible everywhere
-module var featureState = 0                     // visible to this directory subtree
+export let sharedLimit = 0                      // visible everywhere
+module let featureLimit = 0                     // visible to this directory subtree
 ```
 
 When two directories both expose the same bare name, an unqualified reference is ambiguous: **E3095** for functions and top-level bindings, **E3063** for a type name of any kind (typealias, type, enum, union, interface) — where neither the reading file's directory nor the project root declares the name (a bare name means the reader's own directory's declaration, then the root's). A project declaration of a name the standard library also declares is what the bare name means, and the library's is `stdlib.Score`. Qualify to disambiguate: `api.format(...)`, `lib.fmt.Score`, `export.Score` for the project root. Two nameable type declarations of one name in one directory are refused at the declaration (**E3061** for two typealiases, **E3006** otherwise). A directory that cannot be written as a qualifier is **E3182**. A type that is not visible hides its members too: reaching a field or method through a value of it is **E3008**.
@@ -533,7 +532,6 @@ type Point implements Hashable, Describable   // interface conformance
 		export let name = "point"             // public immutable with default
 		var internal = 0 as Coord             // private field
 
-		static var count = 0               // static mutable field
 		static let MAX = 100               // static immutable constant
 
 		function hash() returns HashValue   // interface method
@@ -1027,9 +1025,9 @@ for q in arr 'each'
 end 'each'
 ```
 
-- `async` starts a coroutine of the CURRENT green thread — not a new thread. It overlaps waiting, not execution; `spawn` starts a **service**, which is what creates an independently scheduled green thread (`specs/services.md`)
+- `async` starts a coroutine of the CURRENT green thread — not a new thread. It overlaps waiting, not execution; `spawn` starts a **service**, which handles one message at a time on whichever green thread takes its next message, in parallel with other services (`specs/services.md`). A service type whose state holds a promise is **E3216**; a file-scope or `static` `var` is a syntax error
 - Every service send is a throwing call: `try h.m(x) otherwise …`, `try await h.m(x)` for a reply, `let p = try h.m(x)` to keep the reply as a promise. A send queues the message, or fails with `<Svc>.<msg>.sendError` — `mailboxFull(args)` or `serviceStopped(args)`, handing the arguments back. A full mailbox fails it at once; `try h.m(x, sendTimeout: 50)` waits up to 50 ms for room, in line behind the senders already waiting, and `sendTimeout: ForeverMs` waits as long as it takes. `sendTimeout:` is the call's last argument, or its only one; a message parameter named `sendTimeout` is **E3192**. A message that returns or throws, sent as a statement, is **E3190**; `_ = try h.m(x)` discards its reply
-- `spawn(capacity: n) T.create()` sets the mailbox's capacity, a `MailboxCapacity` (`int(1 to 2^31)`); a bare `spawn` takes `DefaultMailboxCapacity` (1024). `h.shutdown()` lets the queued messages run, then stops the service; later sends fail `serviceStopped`
+- `spawn(capacity: n) T.create()` sets the mailbox's capacity, a `MailboxCapacity` (`int(1 to 2^31)`); a service that has not started takes exactly that many messages; a bare `spawn` takes `DefaultMailboxCapacity` (1024). `h.shutdown()` lets the queued messages run, then stops the service; later sends fail `serviceStopped`
 - Green threads run on the four native lanes; `wasm32-wasi` refuses `async` and `spawn` with **E3104**, and its `sleep` waits the whole program
 - Every wait PARKS: the waiter gives its machine back to the scheduler and whoever completes the wait readies it. A coroutine hands over at `await` points, `sleep` calls, `Scheduler.yield()`, I/O and a send given `sendTimeout:` to a full mailbox, and only there
 - A green thread that has held its processor for 10 ms is preempted at its next function entry, `spawn`, `async` call, service send, `await` or `awaitAny`, or when a service takes its next message, and may resume on another OS thread

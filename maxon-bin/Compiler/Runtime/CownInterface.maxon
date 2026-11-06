@@ -1,0 +1,157 @@
+let CownInterfaceRuntimePrefix = b"__cown_iface_"
+export let CownInterfaceCloneBoxName = b"__cown_iface_clone_box"
+export let CownInterfaceSendName = b"__cown_iface_send"
+
+let CownInterfaceConversionPrefix = b"__cown_iface_from."
+let CownInterfaceStubPrefix = b"__cown_iface_stub."
+let CownInterfaceTablePrefix = b"__cown_iface_table."
+let CownInterfaceSlotBytes = 8
+
+module function buildCownInterfaceRuntime(module StdModule)
+	buildCownInterfaceCloneBox(module)
+	buildCownInterfaceSend(module)
+end 'buildCownInterfaceRuntime'
+
+export function isInterfaceHandleRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: CownInterfaceRuntimePrefix)
+end 'isInterfaceHandleRuntimeCallee'
+
+export function isInterfaceHandleConversionCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: CownInterfaceConversionPrefix)
+end 'isInterfaceHandleConversionCallee'
+
+export function interfaceHandleConversionName(serviceTypeName ByteArray, interfaceName ByteArray) returns ByteArray
+	return "{String.from(CownInterfaceConversionPrefix)}{String.from(serviceTypeName)}.{String.from(interfaceName)}".toByteArray()
+end 'interfaceHandleConversionName'
+
+function interfaceHandleStubName(serviceTypeName ByteArray, interfaceName ByteArray, slot CaseIndex) returns ByteArray
+	return "{String.from(CownInterfaceStubPrefix)}{String.from(serviceTypeName)}.{String.from(interfaceName)}.{slot}".toByteArray()
+end 'interfaceHandleStubName'
+
+function interfaceHandleTableLabel(serviceTypeName ByteArray, interfaceName ByteArray) returns String
+	return "{String.from(CownInterfaceTablePrefix)}{String.from(serviceTypeName)}.{String.from(interfaceName)}"
+end 'interfaceHandleTableLabel'
+
+export function interfaceSendSlotOffset(slot CaseIndex) returns FullRangeInt
+	return (slot as FullRangeInt) * CownInterfaceSlotBytes
+end 'interfaceSendSlotOffset'
+
+function buildCownInterfaceCloneBox(module StdModule)
+	var func = IrFunction.createFromStd(CownInterfaceCloneBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 1)
+	let handleBox = 0
+
+	let cown = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleCownOffset, ids: ids)
+	let table = emitLoadField(module, block: entry, record: handleBox, offset: InterfaceHandleTableOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(emitInterfaceHandleBox(module, block: entry, cown: cown, table: table, ids: ids)))
+	module.functions.push(func)
+end 'buildCownInterfaceCloneBox'
+
+function emitInterfaceHandleBox(module StdModule, block IrBlock, cown ValueId, table ValueId, ids ValueMinter) returns ValueId
+	_ = emitCownSharesStep(module, block: block, cown: cown, delta: CownShareUnit, ids: ids)
+	return emitInterfaceHandleBoxHolding(module, block: block, cown: cown, table: table, ids: ids)
+end 'emitInterfaceHandleBox'
+
+module function emitInterfaceHandleBoxHolding(module StdModule, block IrBlock, cown ValueId, table ValueId, ids ValueMinter) returns ValueId
+	let box = emitHandleBoxHolding(module, block: block, mbox: cown, boxBytes: InterfaceHandleBoxSize, ids: ids)
+	emitStoreField(module, block: block, record: box, offset: InterfaceHandleTableOffset, value: table)
+	return box
+end 'emitInterfaceHandleBoxHolding'
+
+function buildCownInterfaceSend(module StdModule)
+	var func = IrFunction.createFromStd(CownInterfaceSendName, returnType: StdReturnType.value(StdType.i64), paramCount: 5, paramTypes: fiveI64Params())
+	var ids = ValueMinter.create(5)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 5)
+	let handleBox = 0
+	let slotOffset = 1
+	let request = 2
+	let bytes = 3
+	let timeoutMs = 4
+
+	let cown = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleCownOffset, ids: ids)
+	let table = emitLoadField(module, block: entry, record: handleBox, offset: InterfaceHandleTableOffset, ids: ids)
+	let stub = emitLoadField(module, block: entry, record: emitBin(module, block: entry, a: table, b: slotOffset, opcode: StdBinOpcode.add, ids: ids), offset: 0, ids: ids)
+	let status = ids.mint()
+	module.appendOp(entry, op: StdOp.callIndirect(status, calleeReg: stub, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: fourArgs(cown, second: request, third: bytes, fourth: timeoutMs)))
+	module.setTerminator(entry, op: StdOp.ret(status))
+	module.functions.push(func)
+end 'buildCownInterfaceSend'
+
+// Every interface with a handle, not only the service's own `conformsTo`: a handle widens to an interface
+// its service reaches through `extends` (`ProgramSignatures.serviceHandleWidensTo`), and that conversion is
+// called too.
+export function installInterfaceHandleConversions(module StdModule, globalData GlobalDataTable, usage RuntimeUsage, signatures ProgramSignatures)
+	if usage.neededInterfaceConversions.count() == 0 'noConversion'
+		return
+	end 'noConversion'
+
+	var built = 0 as Count
+
+	for serviceTypeName in serviceCompanionRoster(signatures) 'eachService'
+		for interfaceName in signatures.interfacesWithHandles() 'eachInterfaceHandle'
+			if usage.neededInterfaceConversions.contains(interfaceHandleConversionName(serviceTypeName, interfaceName: interfaceName)) 'thisPairIsConverted'
+				buildInterfaceHandleConversion(module, globalData: globalData, signatures: signatures, serviceTypeName: serviceTypeName, interfaceName: interfaceName)
+				built = built + 1
+			end 'thisPairIsConverted'
+		end 'eachInterfaceHandle'
+	end 'eachService'
+
+	if built != usage.neededInterfaceConversions.count() 'aConversionOfADeadService'
+		panic("installInterfaceHandleConversions: {usage.neededInterfaceConversions.count()} conversion(s) are called and {built} were built — a reached body converts the handle of a service that is not on the companion roster, the set `ServiceCompanions.interfaceServiceImplementers` vets")
+	end 'aConversionOfADeadService'
+end 'installInterfaceHandleConversions'
+
+function buildInterfaceHandleConversion(module StdModule, globalData GlobalDataTable, signatures ProgramSignatures, serviceTypeName ByteArray, interfaceName ByteArray)
+	let interfaceRequest = requireServiceRequestLayout(signatures, typeName: interfaceName)
+	let serviceRequest = requireServiceRequestLayout(signatures, typeName: serviceTypeName)
+	let label = interfaceHandleTableLabel(serviceTypeName, interfaceName: interfaceName)
+	var blob = ByteArray.create(0)
+	blob.growFilled(interfaceSendSlotOffset(interfaceRequest.caseCount()) as ElementIndex, value: 0)
+	_ = globalData.registerRdataConstantLabeled(label, bytes: blob, kind: RdataPayloadKind.witnessTable)
+
+	for slot in 0 upto interfaceRequest.caseCount() 'eachSlot'
+		let serviceCase = try serviceRequest.indexOfCase(interfaceRequest.caseNameAt(slot)) otherwise panic("buildInterfaceHandleConversion: `{String.from(serviceTypeName)}` has no message `{String.from(interfaceRequest.caseNameAt(slot))}` of `{String.from(interfaceName)}` — conformance requires every requirement, and a message is an exported instance method")
+
+		let stubName = interfaceHandleStubName(serviceTypeName, interfaceName: interfaceName, slot: slot)
+		buildInterfaceSendStub(module, name: stubName, serviceTag: serviceRequest.tagOfIndex(serviceCase), interfaceBytes: interfaceRequest.boxSizeBytes(), slotBytes: serviceRequest.boxSizeBytes())
+		globalData.recordFuncAbs64InRdata(stubName, rdataLabel: label, offsetInLabel: interfaceSendSlotOffset(slot) as ByteOffset)
+	end 'eachSlot'
+
+	var func = IrFunction.createFromStd(interfaceHandleConversionName(serviceTypeName, interfaceName: interfaceName), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 1)
+	let serviceHandle = 0
+
+	let cown = emitLoadField(module, block: entry, record: serviceHandle, offset: ServiceHandleCownOffset, ids: ids)
+	let table = ids.mint()
+	module.appendOp(entry, op: StdOp.rdataAddr(table, label: globalData.labelBytesOf(label)))
+	module.setTerminator(entry, op: StdOp.ret(emitInterfaceHandleBox(module, block: entry, cown: cown, table: table, ids: ids)))
+	module.functions.push(func)
+end 'buildInterfaceHandleConversion'
+
+function buildInterfaceSendStub(module StdModule, name ByteArray, serviceTag FullRangeInt, interfaceBytes ByteOffset, slotBytes ByteOffset)
+	if interfaceBytes > slotBytes 'widerThanTheSlot'
+		panic("buildInterfaceSendStub: `{String.from(name)}` copies {interfaceBytes} byte(s) of an interface request into a behaviour record of {slotBytes} — an interface request union holds only the requirements an implementer declares as messages, so the concrete service's union must be at least as wide, and this pair breaks that")
+	end 'widerThanTheSlot'
+
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
+	var ids = ValueMinter.create(4)
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 4)
+	let cown = 0
+	let request = 1
+	let bytes = 2
+	let timeoutMs = 3
+
+	emitStoreField(module, block: entry, record: request, offset: UnionTagOffset, value: emitConst(module, block: entry, value: serviceTag, ids: ids))
+	let status = ids.mint()
+	module.appendOp(entry, op: StdOp.call(status, callee: CownSendName, args: fourArgs(cown, second: request, third: bytes, fourth: timeoutMs)))
+	module.setTerminator(entry, op: StdOp.ret(status))
+	module.functions.push(func)
+end 'buildInterfaceSendStub'

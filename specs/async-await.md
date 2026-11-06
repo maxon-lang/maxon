@@ -13,16 +13,16 @@ Maxon supports cooperative concurrency via `async` and `await`. ⚖ **An `async`
 
 ```text
 // Start a coroutine of this green thread
-var promise = async someFunction(arg1, arg2)
+let promise = async someFunction(arg1, arg2)
 
 // Wait for the result
-var result = await promise
+let result = await promise
 
 // Parallel work
-var p1 = async foo(1)
-var p2 = async bar(2)
-var r1 = await p1
-var r2 = await p2
+let p1 = async foo(1)
+let p2 = async bar(2)
+let r1 = await p1
+let r2 = await p2
 ```
 
 **Key properties:**
@@ -112,23 +112,27 @@ that works.
 typealias IntPromise = Promise with Integer                  // work() does not throw
 typealias IntPromiseArray = Array with IntPromise
 
-var arr = IntPromiseArray.create(0)
-arr.push(async work(1))
-arr.push(async work(2))
-for p in arr 'each'
-    let result = await p   // unboxed automatically
-end 'each'
+function demo()
+    var arr = IntPromiseArray.create(0)
+    arr.push(async work(1))
+    arr.push(async work(2))
+    for p in arr 'each'
+        let result = await p   // unboxed automatically
+    end 'each'
+end 'demo'
 
 typealias FetchPromise = Promise with (Integer, FetchError)  // fetch() throws FetchError
 typealias FetchPromiseArray = Array with FetchPromise
 
-var fetches = FetchPromiseArray.create(0)
-fetches.push(async fetch(1))
-for p in fetches 'each'
-    let result = try await p otherwise (e) 'failed'          // e is a FetchError
-        return match e 'why' ... end 'why'
-    end 'failed'
-end 'each'
+function demoFetch()
+    var fetches = FetchPromiseArray.create(0)
+    fetches.push(async fetch(1))
+    for p in fetches 'each'
+        let result = try await p otherwise (e) 'failed'          // e is a FetchError
+            return match e 'why' ... end 'why'
+        end 'failed'
+    end 'each'
+end 'demoFetch'
 ```
 
 ## Tests
@@ -180,15 +184,14 @@ end 'main'
 
 <!-- test: async-await.void -->
 ```maxon
-var flag = 0 as ExitCode
-
-function setFlag()
+function setFlag(flag mutable ExitCode)
 		_ = File.exists(FilePath from "noyield.txt")
 		flag = 1
 end 'setFlag'
 
 function main() returns ExitCode
-		let p = async setFlag()
+		var flag = 0 as ExitCode
+		let p = async setFlag(flag)
 		await p
 		return flag
 end 'main'
@@ -333,13 +336,11 @@ end 'main'
 
 <!-- test: async-await.try-await.void -->
 ```maxon
-var flag = 0 as ExitCode
-
 enum TestError implements Error
 		failed
 end 'TestError'
 
-function maySetFlag(succeed bool) throws TestError
+function maySetFlag(succeed bool, flag mutable ExitCode) throws TestError
 		_ = File.exists(FilePath from "noyield.txt")
 		if succeed 'ok'
 				flag = 1
@@ -349,7 +350,8 @@ function maySetFlag(succeed bool) throws TestError
 end 'maySetFlag'
 
 function main() returns ExitCode
-		let p = async maySetFlag(true)
+		var flag = 0 as ExitCode
+		let p = async maySetFlag(true, flag: flag)
 		try await p otherwise ignore
 		return flag
 end 'main'
@@ -488,8 +490,6 @@ The `otherwise (e)` binding must still be typed at the thunk's `throws` type.
 ```maxon
 typealias Code = int(0 to 100)
 
-var flag = 0 as Code
-
 enum TaskError implements Error
 		timedOut
 		crashed
@@ -502,7 +502,7 @@ enum TaskError implements Error
 		end 'code'
 end 'TaskError'
 
-function maySetFlag(succeed bool) throws TaskError
+function maySetFlag(succeed bool, flag mutable Code) throws TaskError
 		_ = File.exists(FilePath from "noyield.txt")
 		if succeed 'ok'
 				flag = 1
@@ -512,7 +512,8 @@ function maySetFlag(succeed bool) throws TaskError
 end 'maySetFlag'
 
 function main() returns ExitCode
-		let p = async maySetFlag(false)
+		var flag = 0 as Code
+		let p = async maySetFlag(false, flag: flag)
 		try await p otherwise (e) 'failed'
 				flag = e.code()
 		end 'failed'
@@ -2947,21 +2948,20 @@ to publish, so the wakeup is the whole notification.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var flag = 0 as Integer
-
-function setFlag()
+function setFlag(flag mutable Integer)
 		_ = File.exists(FilePath from "noyield.txt")
 		flag = 1
 end 'setFlag'
 
-function bump() returns Integer
-		let p = async setFlag()
+function bump(flag mutable Integer) returns Integer
+		let p = async setFlag(flag)
 		await p
 		return flag + 40
 end 'bump'
 
 function main() returns ExitCode
-		let q = async bump()
+		var flag = 0 as Integer
+		let q = async bump(flag)
 		return await q
 end 'main'
 ```

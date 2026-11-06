@@ -17,9 +17,11 @@ bind does with the ownership instead. `.clone()` is the one construct that makes
 second, independent value:
 
 ```text
-let a = Point.create(1, y: 2)
-var b = a.clone()   // b is a new, independent copy
-b.x = 99            // a.x is still 1
+function demo()
+	let a = Point.create(1, y: 2)
+	var b = a.clone()   // b is a new, independent copy
+	b.x = 99            // a.x is still 1
+end 'demo'
 ```
 
 Conformance to `Cloneable` is auto-generated: a struct conforms once every field

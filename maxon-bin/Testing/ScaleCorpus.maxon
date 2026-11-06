@@ -94,7 +94,7 @@
 // which is indistinguishable from a compiler that did not change. Each family has a knob of its own:
 //   • `float` — `FloatOpsBase`.
 //   • integer `/` and `mod`, the `idiv` fixed-register path — `IntDivideBase`.
-//   • top-level `let` and `var` — `GlobalConstsBase`, `GlobalVarsBase`.
+//   • top-level `let`, plain and record-valued — `GlobalConstsBase`, `GlobalBoxesBase`.
 //   • `type` declarations — `StructTypesBase`.
 //   • `match`, `enum`, `String`, `Array with`, `type ... uses`, `interface`, `implements`, `print`, `or`,
 //     `xor` and struct field writes — `EnumTypesBase` onwards.
@@ -382,7 +382,7 @@ end 'confinedCrossCallDefs'
 // ONE file, N top-level `let` constants — the constant ARENA, the initializer DFS and its memo.
 //
 // ⚠ TWO WHOLE CONSTRUCTS WERE INVISIBLE HERE, AND THE MANIFEST DID NOT MERELY MISS THEM — IT REPORTED THEM
-// AS COVERED. Top-level `let` and top-level `var` each carried spec cases
+// AS COVERED. Top-level `let` and top-level record `let` each carried spec cases
 // (281 -> 295, then 295 -> 317), and this corpus generated NEITHER, at any rung. The float case at least
 // printed "no float" in plain text under NOT GENERATED, and was read as a footnote
 // about the reader's own measurement. This one was worse: the manifest listed `let / var` under
@@ -399,22 +399,19 @@ let GlobalConstsBase = 32
 // modulus whose successors stay well inside i64 would do; a thousand keeps the emitted literals short.
 let GlobalConstModulus = 1000
 
-// ONE file, N top-level `var`s — `.data` slots, `GlobalDataTable.layOut`, and a
-// `globalAddr`/`loadIndirect`/`storeIndirect` triple per access.
+// ONE file, N top-level record `let`s — `.data` slots, `GlobalDataTable.layOut`, and a
+// `globalAddr`/`loadIndirect` pair per access.
 //
 // ⚠ NOT `GlobalConstsBase` WITH A DIFFERENT KEYWORD. The two share a syntax and NOTHING else, which
 // is exactly the trap that let both go unmeasured behind one manifest line. A `let` is folded into
-// its uses and has NO BACKEND AT ALL; a `var` is storage that survives to the linker, lays out a
+// its uses and has NO BACKEND AT ALL; a record `let` is storage that survives to the linker, lays out a
 // section, and loads through an impure op. A change to the data-section layout moves this knob and
 // cannot move that one. Two knobs that a future change must be free to move independently are not
 // one knob — the rule `FloatSpillLoopsBase` states against `PressuredLoopsBase`.
-let GlobalVarsBase = 32
+let GlobalBoxesBase = 32
 
-// The value each global `var` is seeded with, cycled so the `.data` image is not one repeated byte
-// pattern. A top-level `var`'s initializer MUST be a constant expression (E2045 otherwise), so this is
-// a literal and CANNOT be seeded from `scaleSeed()` — and it does not need to be. See
-// `globalVarsSource` for why a global is fold-resistant for free.
-let GlobalVarSeedModulus = 7
+// The offset added to the seed in each global box, cycled so the boxes are not one repeated value.
+let GlobalBoxSeedModulus = 7
 
 // ONE file, N `type` declarations — the PER-TYPE cost: the type table and the layout descriptor.
 //
@@ -438,7 +435,7 @@ let StructTypesBase = 8
 // ⚠ NOT `structTypes` WITH A BIGGER NUMBER. One knob grows how many types the compiler must LAY OUT;
 // this one grows how many times a type is BUILT. A change to field WRITES moves this one and not
 // that one; a change to the layout descriptor moves that one and not this one. Same rule as
-// `GlobalVarsBase` above, and as `FloatSpillLoopsBase` against `PressuredLoopsBase`.
+// `GlobalBoxesBase` above, and as `FloatSpillLoopsBase` against `PressuredLoopsBase`.
 let StructAllocsBase = 32
 
 // The bounded set of types `scaleStructAllocs` rotates over. CONSTANT on purpose: were the alloc knob
@@ -1486,7 +1483,7 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	// constants: the call keeps the DECLARATIONS alive, which is the whole of what that knob measures
 	// (see `globalConstsSource`).
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "l_consts", source: globalConstsSource(knobAt(GlobalConstsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(GlobalConstsDriver))
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "m_globals", source: globalVarsSource(knobAt(GlobalVarsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(GlobalVarsDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "m_globals", source: globalBoxesSource(knobAt(GlobalBoxesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(GlobalBoxesDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "n_stypes", source: structTypesSource(knobAt(StructTypesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StructTypesDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "o_sallocs", source: structAllocsSource(knobAt(StructAllocsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StructAllocsDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "p_divide", source: intDivideSource(knobAt(IntDivideBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(DivideDriver))
@@ -2521,7 +2518,8 @@ end 'floatSpillSource'
 // prefix written down twice is a prefix that can drift, and the failure is not a bad measurement but a
 // generated program that does not compile at all.
 let GlobalConstPrefix = "gc"
-let GlobalVarPrefix = "gv"
+let GlobalBoxPrefix = "gb"
+let GlobalBoxTypeName = "ScaleGlobalBox"
 let StructTypePrefix = "ScaleType"
 let AllocTypePrefix = "ScaleAlloc"
 
@@ -2588,58 +2586,47 @@ end 'globalConstsSource'
 let GlobalConstSeedLow = 1
 let GlobalConstSeedHigh = 2
 
-let GlobalVarsDriver = "scaleGlobalVars"
+let GlobalBoxesDriver = "scaleGlobalBoxes"
 
-// The `GlobalVarsBase` knob: N top-level `var`s, each stored to and loaded back through the opaque
-// seed.
+// The `GlobalBoxesBase` knob: N top-level `let`s, each holding a record built by a factory, and each read
+// through the opaque seed.
 //
-// ⚠ A GLOBAL IS FOLD-RESISTANT FOR FREE, AND IT HAS TO BE, BECAUSE IT CANNOT BE SEEDED. A top-level
-// `var`'s initializer must be a CONSTANT expression — `var b = scaleSeed()` is E2045, and even
-// `var b = a + 1` over another global is E2004 (`Undefined constant 'a'`) — so the two tricks the rest
-// of this corpus relies on (a loop-carried var, a call result) are both unavailable at the point of
-// declaration. They are also unnecessary: a global READ is opaque to the folder no matter what the
-// global was initialized to, because `FoldConstOperands.classifyFoldableDef` records `neither` for
-// `loadIndirect`. The store below writes the opaque
-// `acc`, and the load reads a location the folder must assume anything could have written.
-//
-// That opacity is a PROPERTY, not an accident, and `specs/global-load-not-hoisted.md` verifies the
-// ANSWER a program gets. ⚠ **`StdOp.loadIndirect`'s `isPure: false` IS NOT THE MECHANISM:
-// `StdOpMeta.isPure` has ZERO readers**, so it holds nothing off —
-// the folder is stopped by the match arm named above, and nothing HOISTS because no pass hoists.
-//
-// The knob must still never be "fixed" by making the load pure to tidy up a number: that declaration
-// starts being read the moment DCE/CSE/LICM or the inliner lands, and a wrong one is a silent wrong
-// answer — and it would be read long before anyone re-read this comment.
+// A `let` of a record built from a call stays storage that survives to the linker: it owns a `.data` slot,
+// `__module_init` builds the record into it, and a read is a `globalAddr` and a `loadIndirect` of the slot
+// before the field load. The call is `scaleSeed()`, so no initializer is a constant that could be imaged into
+// `.rdata` and read without a slot. That is what this knob measures, beside the plain constants of `GlobalConstsBase`, which fold
+// into their uses and have no backend at all. A change to the data-section layout or to the global
+// initializer moves this knob and cannot move that one.
 //
 // Only `acc` and one loaded value are ever live, so the knob measures `.data` layout and the
-// address/load/store triple, and can never quietly become a register-pressure knob and trip E5001.
-function globalVarsSource(varCount KnobSize) returns String
+// address/load pair, and can never quietly become a register-pressure knob and trip E5001.
+function globalBoxesSource(boxCount KnobSize) returns String
 	var out = StringBuilder.create()
-	out.append("// Generated by ScaleCorpus: the global-vars knob — {varCount} top-level `var`s in .data, each stored to and loaded back.\n")
+	out.append("// Generated by ScaleCorpus: the global-boxes knob — {boxCount} top-level record `let`s in .data, each read back.\n")
+	out.append("\ntype {GlobalBoxTypeName}\n")
+	out.append("\texport let n as {ScaleIntAlias}\n")
+	out.append("\n")
+	out.append("\tstatic function create(n {ScaleIntAlias}) returns Self\n")
+	out.append("\t\treturn Self\{n: n\}\n")
+	out.append("\tend 'create'\n")
+	out.append("end '{GlobalBoxTypeName}'\n")
+	out.append("\n")
 
-	for v in 0 upto varCount as ElementIndex 'eachVar'
-		out.append("var {GlobalVarPrefix}{v} = {v mod GlobalVarSeedModulus} as {ScaleIntAlias}\n")
-	end 'eachVar'
+	for v in 0 upto boxCount as ElementIndex 'eachBox'
+		out.append("let {GlobalBoxPrefix}{v} = {GlobalBoxTypeName}.create({SeedName}() + {v mod GlobalBoxSeedModulus})\n")
+	end 'eachBox'
 
 	out.append("\n")
-	out.append(witnessedDriverHeader(GlobalVarsDriver))
+	out.append(witnessedDriverHeader(GlobalBoxesDriver))
 
-	// The load reads back what the store one line above put there — this global's literal initializer
-	// plus the accumulator — so the fold is neutralized against exactly that. It is the store that is
-	// really under test here: a `storeIndirect` that did not land, or a `loadIndirect` that read the
-	// wrong slot, moves this and nothing else does.
-	//
-	// ⚠ EACH GLOBAL IS WRITTEN EXACTLY ONCE, which is what makes its prior value the literal initializer.
-	// `main` calls this driver once; a second call would read back a value this line does not predict.
-	for v in 0 upto varCount as ElementIndex 'eachUse'
-		out.append("\t{GlobalVarPrefix}{v} = {GlobalVarPrefix}{v} + a\n")
-		out.append("\tacc = acc + {GlobalVarPrefix}{v}{neutralizeText(corpusSeedValue() + ((v mod GlobalVarSeedModulus) as TrackedValue))}\n")
+	for v in 0 upto boxCount as ElementIndex 'eachUse'
+		out.append("\tacc = acc + {GlobalBoxPrefix}{v}.n{neutralizeText(corpusSeedValue() + ((v mod GlobalBoxSeedModulus) as TrackedValue))}\n")
 		out.append(accProbe("\t"))
 	end 'eachUse'
 
-	out.append(accWitnessTail(GlobalVarsDriver))
+	out.append(accWitnessTail(GlobalBoxesDriver))
 	return out.build()
-end 'globalVarsSource'
+end 'globalBoxesSource'
 
 // One `type` declaration: two fields, and the explicit `static create` that is the only way to build
 // one today.
@@ -2986,17 +2973,16 @@ end 'structAllocsSource'
 
 let DivideDriver = "scaleDivide"
 
-// The bare-idiv knob's dividend: a file-private top-level `var`, initialised from a literal so it
-// carries NO alias, and assigned the seed once at the top of the driver.
+// The bare-idiv knob's dividend: a driver-local `let` of the seed, cast into an alias of its own.
 //
-// It is UNNAMED because a named dividend cannot meet a differently-aliased divisor. The divisor must
+// It carries its OWN alias because a seed-aliased dividend cannot meet a differently-aliased divisor. The divisor must
 // carry `ScaleDivisor` — its non-zero range is what makes the divide a bare `idiv` at all — and the two
 // casts that would put a `ScaleInt` dividend beside it both destroy the knob: casting the DIVISOR to
 // `ScaleInt` discards the non-zero proof (E3057, a checked divide, which is the OTHER knob's subject),
 // and casting the DIVIDEND into `ScaleDivisor` guards a value outside 1..8. A value with no alias may
 // meet either; `specs/ranged-typealias.md`'s `div-divisor-range-does-not-narrow-the-dividend` is
 // written the same way. The quotient adopts the divisor's alias and is cast back per group.
-let DivideDividendGlobal = "scaleDividend"
+let DivideDividendLocal = "scaleDividend"
 
 // The `IntDivideBase` knob: N `/` and `mod` groups over a divisor derived from the opaque seed.
 //
@@ -3006,15 +2992,14 @@ let DivideDividendGlobal = "scaleDividend"
 // `acc`, which the group has just written and the next group will read, is live ACROSS an `idiv` that
 // clobbers both RAX and RDX. That is the constraint the whole path exists to satisfy, and a corpus of
 // `20 / 4` could never provoke it — that folds before it reaches an allocator at all. The dividend is
-// `DivideDividendGlobal`, loaded per group; it costs one store in the driver and one load per group.
+// `DivideDividendLocal`, bound once at the top of the driver.
 function intDivideSource(groupCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the int-divide knob — {groupCount} `/` and `mod` groups over an opaque, non-zero divisor.\n")
 	out.append("typealias {ScaleDividendAlias} = int(0 to i64.max)\n")
 	out.append("typealias {ScaleDivisorAlias} = int(1 to {DivisorMask + 1}) implements {ScaleDividendAlias}\n")
-	out.append("var {DivideDividendGlobal} = 0 as {ScaleDividendAlias}\n")
 	out.append(witnessedDriverHeader(DivideDriver))
-	out.append("\t{DivideDividendGlobal} = a as {ScaleDividendAlias}\n")
+	out.append("\tlet {DivideDividendLocal} = a as {ScaleDividendAlias}\n")
 
 	// The dividend is the pinned seed and the divisor is derived from it by the `mod` this line writes, so
 	// both the quotient and the remainder are known here — and knowing them SEPARATELY is what makes
@@ -3023,9 +3008,9 @@ function intDivideSource(groupCount KnobSize) returns String
 	for i in 0 upto groupCount as ElementIndex 'eachGroup'
 		// The CAST is what keeps this the BARE `idiv` knob — see `DivisorMask`'s ⚠⚠ paragraph.
 		out.append("\tlet d{i} = ((a mod {DivisorMask + 1}) + 1) as {ScaleDivisorAlias}\n")
-		out.append("\tacc = acc + {asScaleInt("({DivideDividendGlobal} / d{i})")}{neutralizeText(corpusSeedQuotient())}\n")
+		out.append("\tacc = acc + {asScaleInt("({DivideDividendLocal} / d{i})")}{neutralizeText(corpusSeedQuotient())}\n")
 		out.append(accProbe("\t"))
-		out.append("\tacc = acc + {asScaleInt("({DivideDividendGlobal} mod d{i})")}{neutralizeText(corpusSeedRemainder())}\n")
+		out.append("\tacc = acc + {asScaleInt("({DivideDividendLocal} mod d{i})")}{neutralizeText(corpusSeedRemainder())}\n")
 		out.append(accProbe("\t"))
 	end 'eachGroup'
 
@@ -5587,8 +5572,8 @@ export function printCorpusManifest()
 	print("      RAX/RDX clobber (a constant divisor folds and measures nothing). BOTH shapes, on\n")
 	print("      two knobs: the divisor cast into a NON-ZERO range (the bare idiv) and the divisor left\n")
 	print("      possibly-zero (the CHECKED divide — cmp/setcc/or plus a three-block `try` fork).\n")
-	print("      The bare-idiv knob's DIVIDEND IS UNNAMED — a top-level `var` (`{DivideDividendGlobal}`),\n")
-	print("      stored once per driver and loaded once per group — BECAUSE a named dividend cannot meet\n")
+	print("      The bare-idiv knob's DIVIDEND CARRIES ITS OWN ALIAS — a driver-local `let` (`{DivideDividendLocal}`),\n")
+	print("      bound once per driver — BECAUSE a seed-aliased dividend cannot meet\n")
 	print("      a differently-aliased divisor: casting the divisor to `{ScaleIntAlias}` discards its\n")
 	print("      non-zero proof (E3057, a checked divide), and casting the dividend into `{ScaleDivisorAlias}`\n")
 	print("      guards a value outside its range. The quotient adopts `{ScaleDivisorAlias}` and is cast\n")
@@ -5596,7 +5581,7 @@ export function printCorpusManifest()
 	print("    TOP-LEVEL let — the constant arena and its initializer DFS, as a 2-PARENT DAG so an\n")
 	print("      unmemoized DFS would go exponential rather than merely slow. It is FOLDED into every\n")
 	print("      use and emits almost no code: that is correct, and it is the front end being measured\n")
-	print("    TOP-LEVEL var — .data slots, GlobalDataTable.layOut, globalAddr/loadIndirect/storeIndirect\n")
+	print("    TOP-LEVEL record let — .data slots, GlobalDataTable.layOut, globalAddr/loadIndirect\n")
 	print("    STRUCTS (the heap): `type` declarations, an explicit `static create`, Self\{\} construction,\n")
 	print("      field READS *and* field WRITES (`p.y = ...`, and `o.inner.x = ...` through a loaded box),\n")
 	print("      a struct crossing a CALL BOUNDARY as a parameter, and the __mm_alloc site each create\n")
@@ -5725,7 +5710,7 @@ export function printCorpusManifest()
 	print("  the growth — x2 linear, x4 quadratic — read straight off the counts):\n")
 	print("    function count, file count, sequential-if ops, block/CFG count, call-chain depth,\n")
 	print("    pressured-loop COUNT, loop-nest DEPTH, locals-in-scope per function (the V dimension),\n")
-	print("    float-op groups, float-spill loop COUNT, top-level `let` COUNT, top-level `var` COUNT,\n")
+	print("    float-op groups, float-spill loop COUNT, top-level `let` COUNT, top-level record `let` COUNT,\n")
 	print("    `type` declaration COUNT (a per-TYPE cost), struct `create` SITE count (a per-SITE cost,\n")
 	print("    over a FIXED set of types, so the two move independently), int-divide groups AND\n")
 	print("    CHECKED-divide groups (two knobs, because the second costs three BLOCKS per group where the\n")

@@ -36,7 +36,7 @@ function areSame(a Point, b Point) returns bool
   return a is b
 end 'areSame'
 
-var p = Point{x: 1, y: 2}
+let p = Point{x: 1, y: 2}
 areSame(p, b: p)  // true  — same reference passed twice
 ```
 

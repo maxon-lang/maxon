@@ -1,0 +1,100 @@
+// Every message a send accepted must run although `shutdown()` lands mid-burst: the victim's `ran`
+// tally must reach the accepted count. `i mod 5` yields vary how far the hammer gets before the close.
+typealias Integer = int(i64.min to i64.max)
+typealias Tally = SharedValue with Integer
+
+let iterations = 400
+let burst = 600
+let pollLimit = 200000
+let exitLost = 3
+let exitStalled = 4
+
+type Victim
+	var ran as Integer
+	var bytes as Integer
+	var tally as Tally
+
+	static function create(tally Tally) returns Self
+		return Self{ran: 0, bytes: 0, tally: tally}
+	end 'create'
+
+	export function take(s String)
+		self.ran = self.ran + 1
+		self.bytes = self.bytes + (s.byteLength() as Integer)
+
+		let seen = self.tally.current()
+		_ = self.tally.publish(self.ran, replacing: seen)
+	end 'take'
+end 'Victim'
+
+type Hammer
+	var handedBack as Integer
+
+	static function create() returns Self
+		return Self{handedBack: 0}
+	end 'create'
+
+	export function run(target Victim.handle, burst Integer) returns Integer
+		var accepted = 0 as Integer
+		var r = 0 as Integer
+
+		while r < burst 'eachMessage'
+			let payload = "hit {r}"
+
+			try target.take(payload) otherwise (e) 'refused'
+				match e 'why'
+					mailboxFull(back) then self.handedBack = self.handedBack + (back.byteLength() as Integer)
+					serviceStopped(back) then self.handedBack = self.handedBack + (back.byteLength() as Integer)
+				end 'why'
+
+				return accepted
+			end 'refused'
+
+			accepted = accepted + 1
+			r = r + 1
+		end 'eachMessage'
+
+		return accepted
+	end 'run'
+end 'Hammer'
+
+function main() returns ExitCode
+	var i = 0 as Integer
+
+	while i < iterations 'eachRace'
+		let tally = Tally.create(0 as Integer)
+		let victim = spawn(capacity: burst) Victim.create(tally.clone())
+		let hammer = spawn Hammer.create()
+		let pending = try hammer.run(victim.clone(), burst: burst) otherwise panic("cown-close-race-torture: a fresh hammer refused its only message")
+
+		var turns = 0 as Integer
+
+		while turns < (i mod 5) 'letTheHammerRun'
+			Scheduler.yield()
+			turns = turns + 1
+		end 'letTheHammerRun'
+
+		victim.shutdown()
+
+		let accepted = await pending
+		var polls = 0 as Integer
+
+		while tally.current() != accepted and polls < pollLimit 'waitForTheQueue'
+			Scheduler.yield()
+			polls = polls + 1
+		end 'waitForTheQueue'
+
+		if tally.current() != accepted 'lost'
+			print("iteration={i} accepted={accepted} ran={tally.current()}\n")
+
+			return (exitStalled if polls >= pollLimit else exitLost) as ExitCode
+		end 'lost'
+
+		i = i + 1
+	end 'eachRace'
+
+	print("races={iterations}\n")
+	print("procs={Scheduler.processorCount()}\n")
+
+	return 0
+end 'main'

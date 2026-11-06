@@ -35,7 +35,7 @@ release's version as its heading when the release is cut.
   type lies inside, or a counted-loop counter between compile-time bounds — cannot throw, so a `try` on it
   is E3055.
   Fix: drop the `try … otherwise` and write the call bare.
-- A `module`, `export` or `public` top-level `let` or `var`, or `static let` or `static var`
+- A `module`, `export` or `public` top-level `let`, or `static let`
   member, whose type is less visible than the binding is E3167 (`exported constant 'api.BIG' names
   file-private enum 'Status' in its type`). The type is the one the initializer gives it, inferred or
   not, and includes the typealias the initializer was spelled through (`50 as Small`,
@@ -122,7 +122,7 @@ release's version as its heading when the release is cut.
 - A `static` requirement called through a type parameter (`T.make()`) is E3116, where it was E3004.
   Fix: call the static on a concrete type that implements the interface.
 - Assigning to a method (`Ops.twice = f`) is E2013, where it was E2004.
-  Fix: store the function value in a `var` or a `static var`.
+  Fix: store the function value in a `var`.
 - A primitive's static called in a module-level initializer (`let n = int.fromString("5")`) is E2015, where
   it was E2004.
   Fix: compute the value in a function, or write it as a literal.
@@ -134,11 +134,10 @@ release's version as its heading when the release is cut.
 - A `?`, `;`, `|`, `&`, `$`, `%`, `~`, `^`, backtick, control character or non-ASCII character outside a
   string literal or a comment is E1010 (`Unexpected character`); the lexer skipped it before.
   Fix: delete the character, or move it into a string literal or a comment.
-- A fresh tuple or record that holds a record a `var` of the function, or a module `var`, may still write
+- A fresh tuple or record that holds a record a `var` of the function may still write
   is E3078 when it is stored into a `let` field, a `let` payload or a `readonly` element, or passed to a
   parameter that stores it there (`Frozen.create((Box.create(1), id(p)))` with `p` a `var` written later);
-  it compiled before, with the `let` field's contents writable through `p`. A `let` bound to a fresh tuple
-  or record holding a module `var`'s record that is written later is E3188 (`let t = (Box.create(1), gBox)`).
+  it compiled before, with the `let` field's contents writable through `p`.
   Fix: hold a `.clone()` of the record, or a record of its own.
 - A function value fits a function type only by variance: a read-only parameter may be wider than the
   type's, a `mutable` parameter must be the same type, and a result may be narrower.
@@ -225,8 +224,8 @@ release's version as its heading when the release is cut.
   file-scope initializer that takes the plain constant (`let S = Base as Small`) is E3010, as a read in a
   function body is.
   Fix: write the bare literal (`let Base = 2`).
-- A bare call to an instance method of the enclosing type from a `static` method, a file-scope initializer
-  or a `static var` initializer is E3193, with or without arguments: a first argument there is never the
+- A bare call to an instance method of the enclosing type from a `static` method or a file-scope
+  initializer is E3193, with or without arguments: a first argument there is never the
   receiver (`bump(m)` with `m` a `Maker` no longer fills `self`).
   Fix: call it on a value (`m.bump()`) or pass the receiver explicitly (`Maker.bump(m)`).
 - In a type that declares a `static` and an instance method of one name, a bare call from an instance method
@@ -257,12 +256,10 @@ release's version as its heading when the release is cut.
   Fix: `await` the promise and send, return or pass the result it yields.
 - `spawn Type.factory(args)` runs the factory on the new service's own green thread instead of on the
   spawner's, and its arguments move there the way a message's do. A coroutine the factory starts therefore
-  belongs to the service's strand, so a factory may keep promises in the state it builds. Programs that
-  compiled before are refused. A binding passed to a factory is moved whether or not the factory keeps it, so
+  belongs to the service's strand. Programs that compiled before are refused. A binding passed to a factory is moved whether or not the factory keeps it, so
   reading it after the `spawn` is E3102, and a borrowed argument crosses on a message argument's terms, so
   one read out of a `var` field or a container is E3138 even where the factory does not keep it. A factory,
-  or a function it calls, is held to the rules a message handler is: reading or writing a module-level or
-  `static` `var` is E3143, reading a module-level `let` no share walk can mark is E3163, and awaiting a
+  or a function it calls, is held to the rules a message handler is: reading a module-level `let` no share walk can mark is E3163, and awaiting a
   reply in a cycle of services is E3139. A factory argument held at an opaque type parameter (a `T` value
   inside a generic function) is E2015.
   Fix: pass `binding.clone()` to keep reading the binding, and `.clone()` a borrowed argument; keep the
@@ -320,7 +317,7 @@ release's version as its heading when the release is cut.
   under `stdlib/helpers/tls`.
   Fix: drop the `()`, as in `block.label` and `certificate.issuer`.
 - A top-level name is declared once per directory, whatever its kind and visibility: a `type`, `enum`,
-  `union`, `interface`, `typealias`, top-level `let` or `var`, and `function` share one namespace, private or
+  `union`, `interface`, `typealias`, top-level `let`, and `function` share one namespace, private or
   exported and generic or not. A second declaration in a directory is E3006 (`duplicate definition of
   'Point' — already declared as `type Point``), including two files of one directory that each declare a
   file-private `helper` and a `type Point` beside a `function Point`. Directories are separate scopes, and
@@ -336,7 +333,7 @@ release's version as its heading when the release is cut.
   Fix: write `export.name` for the project root's declaration and `dir.name` for another directory's.
 - A bare read of a name that the reader's directory declares as a function means that function, where it
   read another directory's exported `let` of the name.
-  Fix: write `dir.name` to read the `let`; another directory's top-level `let` or `var` is read as
+  Fix: write `dir.name` to read the `let`; another directory's top-level `let` is read as
   `alpha.LIMIT`.
 - A `String` or `Character` interpolated with `q` (`"{name:q}"`) prints between quotes with a literal's
   escapes, where the specifier left it plain: `{`/`}` are `\{`/`\}` in a `String`, control characters are
@@ -384,10 +381,10 @@ release's version as its heading when the release is cut.
 - A variable handed to a `mutable` parameter of an `async` callee is lent to the coroutine, which writes the
   caller's own variable, where the coroutine wrote storage of its own and nothing reached the caller. Until
   the promise is awaited or cancelled, reading, writing or passing the variable is E3102, and naming it in the
-  statement that starts the coroutine is E3186. A module `var` or other non-local storage at a by-reference
+  statement that starts the coroutine is E3186. Non-local storage at a by-reference
   position of an `async` call is E2015.
   Fix: `await` or `.cancel()` the promise before the variable is used again, and pass a local `var` or a field
-  of one; copy a module `var` into a local first.
+  of one.
 - A variable passed at a `mutable` parameter must be declared at the parameter's own type, alias included: a
   `Narrow` variable at a `mutable Wide` parameter, or a `Wide` one at a `mutable Narrow` parameter, is E3005 at
   the call, in direct calls, method calls, calls through function values and interfaces, generic functions and
@@ -447,6 +444,22 @@ release's version as its heading when the release is cut.
   out.
   Fix: call it with `try`, as in `match try child.tryReadStdoutLine() otherwise …`; call `reclaimStdout()`
   before `release()` where `takeStdout()` was used.
+- A module-level or `static` `var` is removed: `var` at file scope, in a `module` or `export` declaration, or
+  after `static` is a syntax error, where it declared one word shared by every function. `let` stays, at file
+  scope and after `static`.
+  Fix: keep a counter or flag a function updates in a local `var` and pass it to the function as a `mutable`
+  parameter; keep state a closure writes in a record the closure captures; share state between a service, a
+  coroutine and `main` through a `SharedValue`, or keep it in a field of the service and reach it with a
+  message; write a value that is never reassigned as a `let`.
+- A service type whose state holds a promise — a field of type `Promise`, an array of promises, a record that
+  holds one — is E3216, reported at the `spawn`. Each message may run on a different green thread, and a
+  coroutine belongs to the strand that started it.
+  Fix: `await` the promise, or `.cancel()` it, before the message or factory returns, and keep its result in
+  the field.
+- A service's `spawn(capacity: n)` admits exactly `n` queued messages. A service that was parked idle took one
+  more directly, so the `n + 1`th send succeeded; it now fails `mailboxFull` (or waits, with a `sendTimeout:`).
+  Fix: give the service a capacity one larger where a program relies on the extra slot, or give the send a
+  `sendTimeout:`.
 
 ## 0.5.0 — 2026-10-08
 

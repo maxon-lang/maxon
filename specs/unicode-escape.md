@@ -14,17 +14,17 @@ The `\uXXXX` escape sequence allows specifying Unicode characters by their code 
 ### Syntax
 
 ```maxon
-var nbsp = '\u00A0'          // Non-breaking space character
-var s = "Price:\u00A0$5"     // Non-breaking space in string
-var sigma = '\u03A3'         // Greek capital sigma
+let nbsp = '\u00A0'          // Non-breaking space character
+let s = "Price:\u00A0$5"     // Non-breaking space in string
+let sigma = '\u03A3'         // Greek capital sigma
 ```
 
 ### Character Literals
 
 ```maxon
-var nel = '\u0085'           // U+0085 NEL (Next Line)
-var nbsp = '\u00A0'          // U+00A0 Non-Breaking Space
-var ideographic = '\u3000'   // U+3000 Ideographic Space
+let nel = '\u0085'           // U+0085 NEL (Next Line)
+let nbsp = '\u00A0'          // U+00A0 Non-Breaking Space
+let ideographic = '\u3000'   // U+3000 Ideographic Space
 ```
 
 ### String Literals
@@ -32,9 +32,9 @@ var ideographic = '\u3000'   // U+3000 Ideographic Space
 Works in both plain and interpolated strings:
 
 ```maxon
-var s = "hello\u0021"        // "hello!"
-var name = "world"
-var s2 = "hello\u0021 {name}" // "hello! world"
+let s = "hello\u0021"        // "hello!"
+let name = "world"
+let s2 = "hello\u0021 {name}" // "hello! world"
 ```
 
 ## Tests

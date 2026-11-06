@@ -4067,40 +4067,6 @@ end 'main'
 error E3005: <fragment>:12:10: argument type mismatch for 's': expected 'String', got 'type parameter': a generic body is compiled ONCE, against the declaration view, so a type parameter is an opaque machine word here and nothing has fixed what it points at — this is refused even where every 'with' in the program binds it to that very type. Declare the place at the type parameter too, or make the call from a concrete instantiation, where the type argument is known
 ```
 
-<!-- test: error.opaque-type-parameter-into-a-concrete-aggregate-global -->
-The ASSIGNMENT half of the same rule. The verdict is `TypeRules.checkDeclaredType`'s, so the global's own
-door reports it without restating anything.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-var slot = "x"
-
-type Outer uses T
-	var n as Integer
-
-	function put(t T) returns Integer
-		slot = t
-		return n
-	end 'put'
-
-	static function create() returns Self
-		return Self{n: 1}
-	end 'create'
-end 'Outer'
-
-typealias O = Outer with Integer
-
-function main() returns ExitCode
-	var o = O.create()
-	print("{o.put(42)}")
-	print("{slot}")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:10:3: cannot assign a value of type 'type parameter' to global 'slot', which holds 'String'
-```
-
 <!-- test: error.opaque-type-parameter-at-a-concrete-aggregate-argument-is-refused-at-a-matching-instantiation -->
 ⭐ **THE CONTROL, AND IT IS A REFUSAL.** The first case's program with its ONE instantiation changed to
 `Outer with String`, so `T` is bound to exactly the type the formal declares — without this rule it would

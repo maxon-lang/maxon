@@ -1,41 +1,39 @@
 ---
 feature: static-variables
 status: experimental
-keywords: [static, var, global, mutable, module, type]
+keywords: [static, let, global, module, type]
 category: language
 ---
-# Static Variables
+# Static Members and Top-Level Bindings
 
 ## Documentation
 
-### Top-Level `var` Declarations
+### Top-Level `let` Declarations
 
-Top-level `var` declarations define mutable module-level variables stored in the program's writable data section. A `var` is never image data; a top-level `let` whose value is decided at compile time is, and lives in read-only memory.
+A top-level binding is a `let`. A module-level `var` and a `static var` do not exist (`specs/module-var-removed.md`): mutable state belongs in a local `var`, a record, a `SharedValue` or a service. A top-level `let` whose value is decided at compile time is image data and lives in read-only memory.
 
 #### Syntax
 
 ```maxon
-var counter = 0 as Count
-export var globalState = false
+let LIMIT = 100
+export let Greeting = "hello"
 ```
 
 #### Features
 
-- **Runtime storage**: Variables are stored in the writable data section
-- **Initialization**: Every initializer runs before `main`, exactly once, in dependency order, whether or not anything reads the variable (`specs/lazy-static-observable.md`)
+- **Runtime storage**: A value decided at compile time is image data; any other is built before `main`
+- **Initialization**: Every initializer runs before `main`, exactly once, in dependency order, whether or not anything reads the binding (`specs/lazy-static-observable.md`)
 - **Type inference**: Type is inferred from the initializer
-- **Export support**: Use `export var` to make variables available to other modules
+- **Export support**: Use `export let` to make bindings available to other modules
 
 #### Initializer Requirements
 
-A top-level `let` or `var` initializer is any expression a function body accepts, parsed by the body's
+A top-level `let` initializer is any expression a function body accepts, parsed by the body's
 expression parser with the same meaning and the same diagnostics. A scalar binding must have a value known at
-compile time (E2045 names the call that makes it unknown), and a `var` that starts from a bare number is
-E2004. A record whose value is decided at compile time is laid down as read-only data; any other is built by
-`__module_init` before `main`, in dependency order. A struct literal is refused at file scope (E3076); inside a
-`type` body a static member may be initialized by a struct literal of that type (`specs/lazy-static.md`). What an initializer's calls may reach is restricted further: E3165, E3078 and E3164, below and in `specs/green-thread-globals.md`.
-
-Code a service's message can run touches no module-level `var` and no `static var` (E3143, `specs/green-thread-globals.md`); a program that spawns a service may still declare one that only `main` and its callees use.
+compile time (E2045 names the call that makes it unknown). A record whose value is decided at compile time is
+laid down as read-only data; any other is built by `__module_init` before `main`, in dependency order. A struct
+literal is refused at file scope (E3076); inside a `type` body a static member may be initialized by a struct
+literal of that type (`specs/lazy-static.md`). What an initializer's calls may reach is restricted further: E3164, below and in `specs/green-thread-globals.md`.
 
 A top-level `let`'s record is read-only through every name that reaches it — a `let` bound to it, a field
 read off it, a parameter it was passed to. Calling a method that writes its receiver on it, or passing it
@@ -44,7 +42,7 @@ E3078, at the store, since the function that later writes the field cannot see w
 
 ### Static Fields in Types
 
-Types can have static fields that are shared across all instances. Static fields use the `static` keyword before `var` or `let`.
+Types can have static fields that are shared across all instances. A static field is written `static let`.
 
 #### Syntax
 
@@ -52,8 +50,7 @@ Types can have static fields that are shared across all instances. Static fields
 typealias Score = int(i64.min to i64.max)
 
 type Counter
-	static var count = 0 as Score  // Mutable static field
-	static let MAX = 100           // Immutable static field
+	static let MAX = 100           // Static field
 
 	export var value as Score      // Instance field
 
@@ -68,123 +65,20 @@ end 'Counter'
 - **Shared storage**: One copy exists for the type, not per instance
 - **Direct access**: Access via `TypeName.fieldName` syntax
 - **Static let**: Immutable (E2013 on assignment); image data when its value is decided at compile time, otherwise built before `main` (same as top-level `let`)
-- **Static var**: Mutable storage, never image data (same as top-level `var`)
 - **Initializer**: The top-level initializer grammar above, plus a struct literal of the declaring type
 
 #### Access Patterns
 
 ```maxon
 function main() returns ExitCode
-	Counter.count = Counter.count + 1   // Access static field
 	var c = Counter.create(10)          // Create instance
 	c.value = 20                        // Access instance field
-	print("{c.value} {Counter.count} {Counter.MAX}")
+	print("{c.value} {Counter.MAX}")    // Access static field
 	return 0
 end 'main'
 ```
 
 ## Tests
-
-<!-- test: top-level-var-basic -->
-```maxon
-var counter = 0 as FullRangeInt
-
-function main() returns ExitCode
-	counter = 42
-	return counter
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: top-level-var-increment -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-var total = 10 as Integer
-
-function add(n Integer)
-	total = total + n
-end 'add'
-
-function main() returns ExitCode
-	add(5)
-	add(27)
-	return total
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: top-level-var-multiple -->
-```maxon
-var a = 1 as FullRangeInt
-var b = 2 as FullRangeInt
-var c = 3 as FullRangeInt
-
-function main() returns ExitCode
-	a = a * 10
-	b = b * 10
-	c = c * 10
-	return a + b + c
-end 'main'
-```
-```exitcode
-60
-```
-
-<!-- test: top-level-var-with-let -->
-```maxon
-let BASE = 40
-var offset = 0 as FullRangeInt
-
-function main() returns ExitCode
-	offset = 2
-	return BASE + offset
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: static-var-basic -->
-```maxon
-type Counter
-	static var count = 0 as FullRangeInt
-end 'Counter'
-
-function main() returns ExitCode
-	Counter.count = 42
-	return Counter.count
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: static-var-increment -->
-```maxon
-type Counter
-	static var count = 0 as FullRangeInt
-
-	static function increment()
-		Counter.count = Counter.count + 1
-	end 'increment'
-end 'Counter'
-
-function main() returns ExitCode
-	Counter.increment()
-	Counter.increment()
-	Counter.increment()
-	return Counter.count
-end 'main'
-```
-```exitcode
-3
-```
 
 <!-- test: static-let-basic -->
 ```maxon
@@ -200,19 +94,17 @@ end 'main'
 42
 ```
 
-<!-- test: static-var-multiple-types -->
+<!-- test: static-let-multiple-types -->
 ```maxon
 type TypeA
-	static var value = 10 as FullRangeInt
+	static let value = 32
 end 'TypeA'
 
 type TypeB
-	static var value = 20 as FullRangeInt
+	static let value = 10
 end 'TypeB'
 
 function main() returns ExitCode
-	TypeA.value = TypeA.value + 2
-	TypeB.value = TypeB.value + 10
 	return TypeA.value + TypeB.value
 end 'main'
 ```
@@ -226,11 +118,10 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Thing
-	static var created = 0 as Integer
+	static let base = 2
 	export var id as Integer
 
 	static function make(n Integer) returns Thing
-		Thing.created = Thing.created + 1
 		return Thing{id: n}
 	end 'make'
 end 'Thing'
@@ -238,7 +129,7 @@ end 'Thing'
 function main() returns ExitCode
 	let a = Thing.make(10)
 	let b = Thing.make(20)
-	return Thing.created + a.id + b.id
+	return Thing.base + a.id + b.id
 end 'main'
 ```
 ```exitcode
@@ -302,13 +193,12 @@ miss, and one that dropped the type would make two types' `MAX_SIZE` one slot.
 // --- file: api/limits.maxon
 export type Config
 	export static let MAX_SIZE = 40
-	export static var used = 2 as FullRangeInt
+	export static let used = 2
 end 'Config'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	Config.used = Config.used + Config.MAX_SIZE
-	return Config.used
+	return Config.used + Config.MAX_SIZE
 end 'main'
 ```
 ```exitcode
@@ -357,7 +247,7 @@ restricted to literals** — a user static FACTORY CALL is built by `__module_in
 
 ⭐ **THE ONE FORM WHOSE ANSWER DEPENDS ON *WHICH* BODY THE BINDING WAS DECLARED IN IS A STRUCT LITERAL**, and
 that is E3076's ordinary constructor restriction rather than a rule of the initializer grammar. A static
-member is written inside the `type` body that declares it, so `static var origin = Pair{a: 1, b: 2}` inside
+member is written inside the `type` body that declares it, so `static let origin = Pair{a: 1, b: 2}` inside
 `type Pair` is admitted for the same reason `Self{…}` is admitted in a method; the identical initializer at
 FILE scope is written inside no type body and stays refused. `specs/lazy-static.md` holds the cases for both
 halves.
@@ -384,7 +274,7 @@ type Pair
 	export var a as Count
 	export var b as Count
 
-	static var origin = Pair{a: 1, b: 2, c: 3}
+	static let origin = Pair{a: 1, b: 2, c: 3}
 
 	static function get() returns Pair
 		return Pair.origin
@@ -409,7 +299,7 @@ type Pair
 	export var a as Count
 	export var b as Count
 
-	static var origin = Pair{a: 1}
+	static let origin = Pair{a: 1}
 
 	static function get() returns Pair
 		return Pair.origin
@@ -465,7 +355,7 @@ type Pair
 	export var a as Count
 	export var b as Count
 
-	static var origin = Pair{a: "hi", b: 2}
+	static let origin = Pair{a: "hi", b: 2}
 
 	static function get() returns Pair
 		return Pair.origin
@@ -489,7 +379,7 @@ typealias Percent = int(0 to 100)
 type Pair
 	export var a as Percent
 
-	static var origin = Pair{a: 500}
+	static let origin = Pair{a: 500}
 
 	static function get() returns Pair
 		return Pair.origin
@@ -530,7 +420,7 @@ type Paint
 	export let c as Color
 	export let n as Count
 
-	static var one = Paint{c: 7, n: 1}
+	static let one = Paint{c: 7, n: 1}
 
 	static function get() returns Paint
 		return Paint.one
@@ -576,7 +466,7 @@ type Holder
 	export let s as Sized
 	export let tag as Integer
 
-	static var one = Holder{s: Square.create(4), tag: 77}
+	static let one = Holder{s: Square.create(4), tag: 77}
 
 	static function get() returns Holder
 		return Holder.one
@@ -601,7 +491,7 @@ its witness table names the standard library's own `String.hash`, which a progra
 type Holder
 	export let key as Hashable
 
-	static var one = Holder{key: "ab1cd"}
+	static let one = Holder{key: "ab1cd"}
 
 	static function get() returns Holder
 		return Holder.one
@@ -631,7 +521,7 @@ type Holder
 	export let s as Sized
 	export let tag as Integer
 
-	static var one = Holder{s: 5, tag: 77}
+	static let one = Holder{s: 5, tag: 77}
 
 	static function get() returns Holder
 		return Holder.one
@@ -661,7 +551,7 @@ type Row
 end 'Row'
 
 type Cache
-	static var head = Row.create(42)
+	static let head = Row.create(42)
 end 'Cache'
 
 function main() returns ExitCode
@@ -674,16 +564,14 @@ end 'main'
 
 <!-- test: static-managed-members -->
 A `String` static and an array static in one type: both materialize once before `main`, both are read
-through their qualified names, the array's record is MUTATED in place through a method call written as a
-statement, and both are freed at exit.
+through their qualified names, and both are freed at exit.
 ```maxon
 type Names
 	static let GREETING = "hi"
-	static var items = FullRangeIntArray from [1, 2, 3]
+	static let items = FullRangeIntArray from [1, 2, 3]
 end 'Names'
 
 function main() returns ExitCode
-	Names.items.push(9)
 	print("{Names.GREETING}{Names.items.count()}\n")
 	return 0
 end 'main'
@@ -692,7 +580,7 @@ end 'main'
 0
 ```
 ```stdout
-hi4
+hi3
 ```
 
 <!-- test: error.static-let-array-mutate -->
@@ -718,118 +606,8 @@ end 'main'
 error E3159: <fragment>:7:23: cannot pass 'Cache.xs', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
-<!-- test: static-struct-member-field-write -->
-A field STORE through a struct-valued static goes through the ordinary field-chain door, rooted at the
-qualified name. On the read side the value falls out and `parsePostfix` takes the hop; the WRITE reaches
-the chain resolver, where the base `Cache` is neither a value in scope nor a bare global, so the chain
-must be rooted at the qualified name rather than refused as `E2004: Undefined variable 'Cache'` — a name
-defined four lines up. Both spellings root at `Cache.head`.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Row
-	export var n as Integer
-
-	static function create(n Integer) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Row'
-
-type Cache
-	static var head = Row.create(1)
-end 'Cache'
-
-function main() returns ExitCode
-	Cache.head.n = 42
-	return Cache.head.n as ExitCode
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: static-var-bool -->
-```maxon
-var initialized = false
-
-function init()
-	initialized = true
-end 'init'
-
-function main() returns ExitCode
-	if initialized 'check1'
-		return 1
-	end 'check1'
-	init()
-	if initialized 'check2'
-		return 42
-	end 'check2'
-	return 0
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: static-var-bool-adjacent-globals -->
-Bool global followed by non-zero global must not bleed adjacent data.
-
-```maxon
-var flag = false
-var counter = 42 as FullRangeInt
-
-function main() returns ExitCode
-	if flag 'checkFalse'
-		print("flag should be false\n")
-		return 1
-	end 'checkFalse'
-	if counter == 42 'checkCounter'
-		return 0
-	end 'checkCounter'
-	print("counter wrong\n")
-	return 1
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: top-level-var-enum-initializer -->
-```maxon
-enum Color
-		Red
-		Green
-		Blue
-end 'Color'
-
-var current = Color.Green
-
-function main() returns ExitCode
-	let isGreen = match current 'check'
-		Green gives true
-		Red gives false
-		Blue gives false
-	end 'check'
-	if isGreen 'check'
-		current = Color.Blue
-		let isBlue = match current 'check2'
-			Blue gives true
-			Red gives false
-			Green gives false
-		end 'check2'
-		if isBlue 'check2'
-			return 42
-		end 'check2'
-	end 'check'
-	return 0
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: top-level-var-enum-initializer-cross-file -->
-Cross-file: enum defined in one file, top-level var initialized with it in another.
+<!-- test: top-level-let-enum-initializer-cross-file -->
+Cross-file: enum defined in one file, top-level `let` initialized with it in another.
 ```maxon
 // --- file: api/defs.maxon
 export enum CpuArch
@@ -839,7 +617,7 @@ export enum CpuArch
 end 'CpuArch'
 
 // --- file: app/main.maxon
-var currentCpu = CpuArch.x64
+let currentCpu = CpuArch.x64
 
 function main() returns ExitCode
 	let result = match currentCpu 'check'
@@ -854,107 +632,16 @@ end 'main'
 42
 ```
 
-<!-- test: top-level-var-const-expr -->
-```maxon
-let BASE = 20
-var offset = (BASE + 1) as FullRangeInt
-
-function main() returns ExitCode
-	offset = offset * 2
-	return offset
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: top-level-var-array-literal -->
-```maxon
-var items = FullRangeIntArray from [10, 20, 30]
-
-function main() returns ExitCode
-	try items.set(1, value: 12) otherwise panic("test invariant: set OOB")
-	let a = try items.get(0) otherwise 0
-	let b = try items.get(1) otherwise 0
-	let c = try items.get(2) otherwise 0
-	return a + b + c
-end 'main'
-```
-```exitcode
-52
-```
-
-<!-- test: top-level-var-array-cross-function -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-typealias IntegerArray = Array with Integer
-var scores = IntegerArray from [10, 20, 30]
-
-function getTotal() returns Integer
-	let a = try scores.get(0) otherwise 0
-	let b = try scores.get(1) otherwise 0
-	let c = try scores.get(2) otherwise 0
-	return a + b + c
-end 'getTotal'
-
-function setScore(index Integer, value Integer)
-	try scores.set(index as ElementIndex, value: value) otherwise panic("test invariant: set OOB")
-end 'setScore'
-
-function main() returns ExitCode
-	setScore(1, value: 12)
-	return getTotal()
-end 'main'
-```
-```exitcode
-52
-```
-
-<!-- test: top-level-var-array-mutate-cross-function -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-typealias IntegerArray = Array with Integer
-var counters = IntegerArray from [0, 0, 0]
-
-function increment(index Integer)
-	let current = try counters.get(index as ElementIndex) otherwise 0
-	try counters.set(index as ElementIndex, value: current + 1) otherwise panic("test invariant: set OOB")
-end 'increment'
-
-function total() returns Integer
-	let a = try counters.get(0) otherwise 0
-	let b = try counters.get(1) otherwise 0
-	let c = try counters.get(2) otherwise 0
-	return a + b + c
-end 'total'
-
-function main() returns ExitCode
-	increment(0)
-	increment(0)
-	increment(1)
-	increment(2)
-	increment(2)
-	increment(2)
-	return total()
-end 'main'
-```
-```exitcode
-6
-```
-
-### An array binding has STORAGE whichever keyword declared it
+### An array binding has STORAGE
 
 A top-level array is a HEAP record with a `.data` pointer slot, built by `__module_init` before `main`
-and released by `__maxon_global_cleanup` after it — for a `let` exactly as for a `var`. A `let` differs
-in one thing only: it refuses the write, both at an assignment (E2013) and at a receiver-writing method
-(E3159).
+and released by `__maxon_global_cleanup` after it. A `let` refuses the write, both at an assignment (E2013)
+and at a receiver-writing method (E3159).
 
 A never-mutated `let` array is NOT promoted to an immortal shared static record: an `Array`'s own methods
 rewrite its record (a `push` detaches the buffer by writing `buffer@0`/`capacity@16`/`length@8`), and a
 `.rdata` record cannot be written — so immortality would need an enforced never-mutated guarantee and a
-real COPY promotion for `var b = <borrowed array>`, neither of which exists. Heap for both is what can be
+real COPY promotion for `var b = <borrowed array>`, neither of which exists. Heap is what can be
 stated truthfully.
 
 <!-- test: top-level-let-array-literal -->
@@ -976,7 +663,7 @@ An array literal's elements are body expressions, so a reference to another top-
 and arithmetic on it — is an element.
 ```maxon
 let BASE = 20
-var xs = FullRangeIntArray from [BASE, BASE + 2]
+let xs = FullRangeIntArray from [BASE, BASE + 2]
 
 function main() returns ExitCode
 	let a = try xs.get(0) otherwise 0
@@ -988,12 +675,12 @@ end 'main'
 42
 ```
 
-<!-- test: top-level-var-array-string-elements -->
+<!-- test: top-level-let-array-string-elements -->
 A String-element array global owns its elements: each literal is CLONED into the record, and
 `__managed_decref`'s walk `__str_decref`s every live slot at exit. Leak-gated — a missed clone double-frees
 the immortal `.rdata` record and a missed stamp leaks all of them.
 ```maxon
-var names = ["ab", "cde"]
+let names = ["ab", "cde"]
 
 function main() returns ExitCode
 	let a = try names.get(0) otherwise ""
@@ -1007,40 +694,6 @@ end 'main'
 ```
 ```stdout
 abcde
-```
-
-<!-- test: top-level-array-grow-reassign-untouched -->
-Three array globals in one program: one grown past its initial capacity in a loop and then REASSIGNED to
-a fresh literal (the old record must be released, not leaked), one never touched at all, and an
-immutable one only read. `3 + 4 + 6 + 2`.
-
-⚠ **`untouched` DOES NOT REACH THE BINARY**: nothing names it, so dead-global
-elimination drops its slot, the `__managed_create`/`__managed_push` run that would build it and the `__managed_decref` that
-would free it — which is why the emitted `.data` holds `grow` and `fixed` alone. The declaration contributes
-nothing to the answer, and what the case pins is the pair that matters here: `grow`
-and `fixed` are TWO LIVE array globals sharing one `__module_init`, so the prune is per-global rather
-than per-init.
-```maxon
-
-var grow = FullRangeIntArray from [1]
-var untouched = FullRangeIntArray from [7, 7, 7]
-let fixed = [4, 5, 6]
-
-function main() returns ExitCode
-	var i = 0 as FullRangeInt
-	while i < 200 'fill'
-		grow.push(i)
-		i = i + 1
-	end 'fill'
-	grow = [3, 4]
-	let a = try grow.get(0) otherwise 0
-	let b = try grow.get(1) otherwise 0
-	let c = try fixed.get(2) otherwise 0
-	return a + b + c + grow.count() as FullRangeInt
-end 'main'
-```
-```exitcode
-15
 ```
 
 <!-- test: error.top-level-let-array-mutate -->
@@ -1108,7 +761,7 @@ A `let` array's record cannot be laundered into a mutable ALIAS. A borrowed mana
 `var` is promoted to owned by an INCREF of the same box — reference semantics, deliberately, because the
 alias is observable — so without this refusal `var b = A` then `b.push(9)` would grow `A`. A `var` is a
 writable name, and the record it would name is one the program declared `let`, so the BINDING is refused
-(E3078). Refused where the SOURCE is immutable, and only there: the same binding off a `var` global shares.
+(E3078).
 
 ⚠ **THE REFUSAL IS ON THE BINDING.** `var b = A` is E3078; `let b = A` is legal and can only read
 (`top-level-let-array-let-alias`). The mark rides the VALUE and is CARRIED through the promotion, so the
@@ -1255,7 +908,7 @@ else M` launders exactly what `var pick = A` is refused for. Without that inheri
 compile and return 3.
 ```maxon
 let A = FullRangeIntArray from [1, 2]
-var M = FullRangeIntArray from [5, 5]
+let M = FullRangeIntArray from [5, 5]
 
 function main() returns ExitCode
 	var pick = A if M.count() == 2 else M
@@ -1272,7 +925,7 @@ The same merge, through the `match`-expression door rather than the ternary — 
 serves both, so a phi that inherits the mark for one inherits it for the other by construction.
 ```maxon
 let A = FullRangeIntArray from [1, 2]
-var M = FullRangeIntArray from [5, 5]
+let M = FullRangeIntArray from [5, 5]
 
 enum Which
 	fixed
@@ -1321,23 +974,6 @@ end 'main'
 error E3078: <fragment>:17:6: cannot assign the result of 'pick', which may share storage with a module-level `let`, to mutable binding 'mine'; use 'let' instead of 'var', or use clone()
 ```
 
-<!-- test: top-level-array-merge-of-mutable-globals-shares -->
-The merge mark is narrow to the same thing the direct one is: a merge of two MUTABLE globals still binds
-and still SHARES, so the phi rule refuses laundering rather than refusing merges. `P` grows, `Q` does not.
-```maxon
-var P = FullRangeIntArray from [1, 2]
-var Q = FullRangeIntArray from [5, 5]
-
-function main() returns ExitCode
-	var pick = P if Q.count() == 2 else Q
-	pick.push(9)
-	return P.count() + Q.count()
-end 'main'
-```
-```exitcode
-5
-```
-
 <!-- test: top-level-let-array-let-alias -->
 A `let` binding of a `let` array is fine and stays fine: it can only read, so there is nothing to
 launder. This is the remedy the refusal above names, so it has to work. A `let` binding of a MERGE that
@@ -1352,22 +988,6 @@ end 'main'
 ```
 ```exitcode
 2
-```
-
-<!-- test: top-level-var-array-var-alias-shares -->
-Off a MUTABLE global the same binding is legal and SHARES the record — reference semantics; it returns 3
-here. The refusal above keys on the source's immutability, not on aliasing itself.
-```maxon
-var A = FullRangeIntArray from [1, 2]
-
-function main() returns ExitCode
-	var b = A
-	b.push(9)
-	return A.count()
-end 'main'
-```
-```exitcode
-3
 ```
 
 <!-- test: top-level-let-struct-accessor-read-only -->
@@ -1399,37 +1019,6 @@ end 'main'
 ```
 ```exitcode
 1
-```
-
-<!-- test: top-level-var-struct-accessor-write-shares -->
-The same accessor off a `var` global, which is the case that says the rule keys on IMMUTABILITY
-and not on returning a global at all: the write goes through and is observable on the global. It is the
-one keyword's difference that proves the refusal below is guarding the `let` claim rather than the aliasing.
-```maxon
-typealias Count = int(0 to u64.max)
-
-type Box
-	export var n as Count
-
-	static var shared = Box.make()
-
-	static function make() returns Box
-		return Box{n: 1}
-	end 'make'
-
-	static function get() returns Box
-		return Box.shared
-	end 'get'
-end 'Box'
-
-function main() returns ExitCode
-	var a = Box.get()
-	a.n = 99
-	return Box.shared.n as ExitCode
-end 'main'
-```
-```exitcode
-99
 ```
 
 <!-- test: error.let-global-accessor-result-field-write -->
@@ -1934,7 +1523,7 @@ error E3078: <fragment>:18:3: cannot assign a value, which may share storage wit
 An empty array literal has no element to infer a type from, so it is refused with the diagnostic a
 function body's `[]` gets (`arrays/multi-line-literal-empty-still-rejected`).
 ```maxon
-var items = []
+let items = []
 
 function main() returns ExitCode
 	return 0
@@ -1948,7 +1537,7 @@ error E2015: <fragment>:2:13: Unsupported: an empty array literal `[]` — its e
 Every element must have the first element's type — the same rule, in the same words, a literal in a
 function body gets.
 ```maxon
-var xs = [1, "a"]
+let xs = [1, "a"]
 
 function main() returns ExitCode
 	return 0
@@ -1973,113 +1562,14 @@ end 'main'
 <!-- test: top-level-array-bool-element -->
 A top-level array literal of `bool` elements is what a body's is.
 ```maxon
-var flags = [true, false]
+let flags = [true, false, true]
 
 function main() returns ExitCode
-	flags.push(true)
 	return flags.count()
 end 'main'
 ```
 ```exitcode
 3
-```
-
-<!-- test: top-level-var-string-literal -->
-A top-level `var` string is valid and reassignable — it materializes once at startup, like an
-array-literal global.
-```maxon
-var greeting = "hello"
-
-function main() returns ExitCode
-	print("{greeting} ")
-	greeting = "world"
-	print(greeting)
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-hello world
-```
-
-<!-- test: top-level-var-string-mutate-cross-function -->
-A `var` string global mutated in place across a function boundary must NOT be shared as an
-immortal static record: it mutates correctly and frees cleanly (no leaked copy-on-write buffer).
-```maxon
-var msg = "hi"
-
-function bump()
-	msg.append("!")
-end 'bump'
-
-function main() returns ExitCode
-	bump()
-	bump()
-	print(msg)
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-hi!!
-```
-
-<!-- test: top-level-var-union-starts-empty-and-is-reassigned-to-a-managed-payload -->
-A `var` of a one-word union starts as its payload-free case, which is a bare word with no heap behind it,
-and `main` reassigns it to a case that owns a `String`. The reassigned payload is released at exit like any
-other global's.
-```maxon
-union Holder
-	empty
-	holding(text String)
-end 'Holder'
-
-var held = Holder.empty
-
-function main() returns ExitCode
-	held = Holder.holding("abc{3}")
-	print("stored\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-stored
-```
-
-<!-- test: static-var-union-starts-empty-and-is-reassigned-to-a-managed-payload -->
-The same holds for a `static var` of a type, which no module-level declaration is involved in.
-```maxon
-union Holder
-	empty
-	holding(text String)
-end 'Holder'
-
-type Slot
-	static var held = Holder.empty
-
-	static function fill()
-		Slot.held = Holder.holding("abc{3}")
-	end 'fill'
-end 'Slot'
-
-function main() returns ExitCode
-	Slot.fill()
-	print("stored\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-stored
 ```
 
 <!-- test: top-level-let-string-literal -->
@@ -2099,237 +1589,6 @@ Ada
 ```
 
 ### A `let` initializer may not reach a managed `var`
-
-⚖ **A `let` IS FIXED AT STARTUP, SO ITS INITIALIZER MAY NOT READ A MODULE-LEVEL `var` THAT HOLDS A RECORD.**
-An initializer cannot name another global, but it may call, and a callee may read one. A record read out of a
-`var` is still owned by the `var`, which can write it after `main` starts, so the `let` would not be fixed.
-The refusal is E3165, at the read, with the `var`'s declaration as a note — even when only a scalar is read out
-of the `var`: the compiler does not follow what the initializer keeps.
-
-"Reaches" is the call graph, closed through run-time
-dispatches the way every whole-program service rule closes it. A scalar `var` owns no record and is not
-refused; a `var` initializer and a `let` read by a `let` initializer are legal.
-
-<!-- test: error.a-let-initializer-may-not-read-a-managed-var -->
-The initializer's own callee hands back the `var`'s record, so `l` and `g` would own one record and `g`
-could rewrite what `l` is fixed to.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function current() returns Self
-		return g
-	end 'current'
-end 'Box'
-
-var g = Box.create()
-let l = Box.current()
-
-function main() returns ExitCode
-	print("l={l.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3165: <fragment>:10:10: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
-note: <fragment>:14:5: `g` is declared here
-```
-
-<!-- test: error.a-let-initializer-may-not-read-a-scalar-out-of-a-managed-var -->
-**THE ACCEPTED OVER-APPROXIMATION.** `copied` builds a fresh record and keeps only the number, so nothing `g`
-owns reaches `l` — and it is refused all the same, because the rule is about what the initializer reaches,
-not about what it keeps.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function copied() returns Self
-		return Self{n: g.n}
-	end 'copied'
-end 'Box'
-
-var g = Box.create()
-let l = Box.copied()
-
-function main() returns ExitCode
-	print("l={l.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3165: <fragment>:10:18: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
-note: <fragment>:14:5: `g` is declared here
-```
-
-<!-- test: error.a-let-initializer-may-not-reach-a-managed-var-through-a-call -->
-The read is two calls below the initializer: `current` names no global, `inner` does.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function current() returns Self
-		return Box.inner()
-	end 'current'
-
-	static function inner() returns Self
-		return g
-	end 'inner'
-end 'Box'
-
-var g = Box.create()
-let l = Box.current()
-
-function main() returns ExitCode
-	print("l={l.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3165: <fragment>:14:10: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
-note: <fragment>:18:5: `g` is declared here
-```
-
-<!-- test: error.a-let-initializer-may-not-reach-a-managed-var-through-the-member-it-calls -->
-The initializer calls `make`, and that member reads `g`.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function make(seed Integer) returns Self
-		return Self{n: g.n + seed}
-	end 'make'
-end 'Box'
-
-var g = Box.create()
-let l = Box.make(2)
-
-function main() returns ExitCode
-	print("l={l.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3165: <fragment>:10:18: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
-note: <fragment>:14:5: `g` is declared here
-```
-
-<!-- test: a-member-a-let-initializer-does-not-call-may-read-a-managed-var -->
-**THE CONTROL FOR THE CASE ABOVE.** The initializer calls `plain`; the member `make` that reads `g`
-is never called from it, so nothing refuses the program.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function plain() returns Self
-		return Self{n: 1}
-	end 'plain'
-
-	static function make(seed Integer) returns Self
-		return Self{n: g.n + seed}
-	end 'make'
-end 'Box'
-
-var g = Box.create()
-let l = Box.plain()
-
-function main() returns ExitCode
-	g.n = 9
-	let m = Box.make(1)
-	print("l={l.n} g={g.n} m={m.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```exitcode
-0
-```
-```stdout
-l=1 g=9 m=10
-```
-
-<!-- test: a-let-initializer-may-read-a-scalar-var -->
-A scalar `var` owns no record, so a `let` initializer may read it.
-```maxon
-type Box
-	export var n as Integer
-
-	static function sized() returns Self
-		return Self{n: count}
-	end 'sized'
-end 'Box'
-
-var count = 3 as Integer
-let l = Box.sized()
-
-function main() returns ExitCode
-	count = 4
-	print("l={l.n} count={count}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```exitcode
-0
-```
-```stdout
-l=3 count=4
-```
-
-<!-- test: a-var-initializer-may-read-a-managed-var -->
-A `var` may share what another `var` owns: neither is fixed.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function current() returns Self
-		return g
-	end 'current'
-end 'Box'
-
-var g = Box.create()
-var v = Box.current()
-
-function main() returns ExitCode
-	v.n = 9
-	print("v={v.n} g={g.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```exitcode
-0
-```
-```stdout
-v=9 g=9
-```
 
 <!-- test: a-let-initializer-may-read-another-let -->
 A `let` may hold what another `let` holds: both are fixed.
@@ -2362,199 +1621,11 @@ typealias Integer = int(i64.min to i64.max)
 a=7 b=7
 ```
 
-### A `var` initializer may not take a `let`'s record
+### A write through a record a call hands back out of a `let`
 
-⚖ **THE OTHER DIRECTION: A MODULE-LEVEL `var` MAY NOT BE HANDED A RECORD A MODULE-LEVEL `let` HOLDS.** The `var` could
-write the record the `let` is fixed to. Unlike E3165 this is a question about FLOW: what the initializer's call may
-hand back, at any depth — the `let`'s record itself or a record built around it. It is answered by the
-storage-provenance summary of the call, carried through calls, witness dispatches and calls through function values.
-A value built fresh out of numbers read from a `let` is legal. The refusal is E3078, at the `var`'s declaration.
-
-The same summary refuses a write, inside a function, through a record a call handed back out of a `let`
-(E3159).
-
-<!-- test: error.a-var-initializer-may-not-take-a-lets-record -->
-`current` hands back the `let`'s own record, so `main`'s write through `v` would change `a`.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function current() returns Self
-		return a
-	end 'current'
-end 'Box'
-
-let a = Box.create()
-var v = Box.current()
-
-function main() returns ExitCode
-	v.n = 9
-	print("a={a.n} v={v.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3078: <fragment>:15:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
-```
-
-<!-- test: error.a-var-initializer-may-not-take-a-record-holding-a-lets-record -->
-`around` builds a fresh record, but the record it holds is `a`'s. The `var` field `box` would let `w` write
-it, so the store into `box` is the refusal.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-end 'Box'
-
-type Wrap
-	export var box as Box
-
-	static function around() returns Self
-		return Self{box: a}
-	end 'around'
-end 'Wrap'
-
-let a = Box.create()
-var w = Wrap.around()
-
-function main() returns ExitCode
-	w.box.n = 9
-	print("a={a.n} w={w.box.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3078: <fragment>:14:15: cannot store 'a', which is read-only (a module-level `let`), into mutable place 'Wrap.box'; use clone()
-```
-
-<!-- test: a-var-initializer-may-take-a-record-holding-a-lets-record-in-a-let-field -->
-**THE TWIN.** The same wrapper with `box` a `let` field: `w` holds `a`'s record read-only and writes only its own
-`count`.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-end 'Box'
-
-type Wrap
-	export let box as Box
-	export var count as Integer
-
-	static function around() returns Self
-		return Self{box: a, count: 0}
-	end 'around'
-end 'Wrap'
-
-let a = Box.create()
-var w = Wrap.around()
-
-function main() returns ExitCode
-	w.count = 3
-	print("a={a.n} w={w.box.n} {w.count}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```exitcode
-0
-```
-```stdout
-a=7 w=7 3
-```
-
-<!-- test: error.a-var-initializer-may-not-take-a-lets-record-through-two-calls -->
-`current` names no global; the record comes back from `inner`, one call further down.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function current() returns Self
-		return Box.inner()
-	end 'current'
-
-	static function inner() returns Self
-		return a
-	end 'inner'
-end 'Box'
-
-let a = Box.create()
-var v = Box.current()
-
-function main() returns ExitCode
-	v.n = 9
-	print("a={a.n} v={v.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3078: <fragment>:19:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
-```
-
-<!-- test: error.a-var-initializer-may-not-take-a-lets-record-through-a-witness-dispatch -->
-`through` dispatches `box` on a `Source`, and the conformer that answers hands back `a`.
-```maxon
-interface Source
-	function box() returns Box
-end 'Source'
-
-type FromLet implements Source
-	export var tag as Integer
-
-	static function create() returns Self
-		return Self{tag: 1}
-	end 'create'
-
-	function box() returns Box
-		return a
-	end 'box'
-end 'FromLet'
-
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function viaSource() returns Self
-		return through(FromLet.create())
-	end 'viaSource'
-end 'Box'
-
-function through(source Source) returns Box
-	return source.box()
-end 'through'
-
-let a = Box.create()
-var v = Box.viaSource()
-
-function main() returns ExitCode
-	v.n = 9
-	print("a={a.n} v={v.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3078: <fragment>:35:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.viaSource` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
-```
+A write, inside a function, through a record a call handed back out of a module-level `let` is E3159; a local
+`var` bound to that record is refused at the binding. The storage-provenance summary of the call answers it,
+carried through calls, witness dispatches and calls through function values.
 
 <!-- test: error.a-local-var-may-not-write-through-a-lets-record-a-call-hands-back -->
 A local `var` bound to the record a call hands back out of a module-level `let` is refused at the binding.
@@ -2583,50 +1654,6 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3078: <fragment>:17:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'w'; use 'let' instead of 'var', or use clone()
-```
-
-<!-- test: a-var-initializer-may-build-fresh-from-a-lets-scalars -->
-**THE CONTROL.** `fresh` reads a number out of `a` and builds a record of its own, and a local `var` holding `a`'s
-record through a wrapper may write the wrapper's own field.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function fresh() returns Self
-		return Self{n: a.n + 1}
-	end 'fresh'
-end 'Box'
-
-type Wrap
-	export let box as Box
-	export var count as Integer
-
-	static function around() returns Self
-		return Self{box: a, count: 0}
-	end 'around'
-end 'Wrap'
-
-let a = Box.create()
-var b = Box.fresh()
-
-function main() returns ExitCode
-	b.n = 9
-	var w = Wrap.around()
-	w.count = 3
-	print("a={a.n} b={b.n} w={w.count} {w.box.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```exitcode
-0
-```
-```stdout
-a=7 b=9 w=3 7
 ```
 
 <!-- test: error.a-lets-record-a-call-handed-back-may-not-go-to-a-writing-parameter -->
@@ -2740,75 +1767,6 @@ typealias Integer = int(i64.min to i64.max)
 error E3078: <fragment>:25:6: cannot assign the result of 'pick', which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
-<!-- test: a-var-initializer-may-take-a-number-read-through-a-nested-call -->
-**THE CONTROL FOR A NESTED CALL.** `current` hands `copyOf` the `let`'s record, and `copyOf` keeps only its number.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function current() returns Self
-		return a
-	end 'current'
-
-	static function copyOf(source Box) returns Self
-		return Self{n: source.n}
-	end 'copyOf'
-end 'Box'
-
-let a = Box.create()
-var v = Box.copyOf(Box.current())
-
-function main() returns ExitCode
-	v.n = 9
-	print("a={a.n} v={v.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```exitcode
-0
-```
-```stdout
-a=7 v=9
-```
-
-<!-- test: error.a-var-initializer-may-not-take-a-lets-record-a-nested-call-passes-back -->
-`pass` hands back the parameter it is given, which is `a`'s record.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function current() returns Self
-		return a
-	end 'current'
-
-	static function pass(source Box) returns Self
-		return source
-	end 'pass'
-end 'Box'
-
-let a = Box.create()
-var v = Box.pass(Box.current())
-
-function main() returns ExitCode
-	v.n = 9
-	print("a={a.n} v={v.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3078: <fragment>:19:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.pass` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
-```
-
 ### A top-level `let` and a type of one name are one name declared twice
 
 A directory declares a name once, whatever its kind: a top-level `let` beside a `type`, `union` or
@@ -2878,58 +1836,13 @@ end 'main'
 error E3006: <fragment>:5:5: duplicate definition of 'IntArray' — already declared as `typealias IntArray`
 ```
 
-<!-- test: data-section-bool-global-with-green-threads-runs -->
-A program whose own globals end on a 1-byte slot starts the scheduler, whose words it lays out after
-them, and runs a coroutine to completion.
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-var flag = true
-
-function compute() returns Integer
-	_ = File.exists(FilePath from "noyield.txt")
-	return 42
-end 'compute'
-
-function main() returns ExitCode
-	let promise = async compute()
-	let result = await promise
-
-	if flag 'read'
-		return result
-	end 'read'
-
-	return 1
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: top-level-var-byte-ranged-type -->
-Module-level var with a byte-sized ranged type.
-```maxon
-typealias SmallInt = int(0 to u8.max)
-
-var counter = 42 as SmallInt
-
-function main() returns ExitCode
-		return counter
-end 'main'
-```
-```exitcode
-42
-```
-
 <!-- test: top-level-let-scalar-reassign-error -->
 Assigning to an immutable top-level `let` is E2013 — and the diagnostic names the `let` the
 author actually wrote, rather than reporting a name that is defined two lines up as undefined.
 
 That distinction is the whole reason the assignment path probes for a constant at all: a name
-that is neither a local nor a top-level `var` would otherwise fall through to "undefined
-variable", sending the reader hunting for a typo instead of at the `let` they meant to make a
-`var`. The struct twin below pins the same arm for a struct `let`.
+that is not a local would otherwise fall through to "undefined
+variable", sending the reader hunting for a typo instead of at the `let` they assigned. The struct twin below pins the same arm for a struct `let`.
 
 ```maxon
 let origin = 5
@@ -2968,8 +1881,8 @@ end 'main'
 error E2013: <fragment>:16:3: cannot assign to immutable variable: 'origin'
 ```
 
-<!-- test: top-level-var-function-call-error -->
-Function calls are not allowed in module-level `var` initializers.
+<!-- test: top-level-let-function-call-error -->
+Function calls are not allowed in module-level `let` initializers.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2977,7 +1890,7 @@ function getDefault() returns Integer
 	return 42
 end 'getDefault'
 
-var value = getDefault()
+let value = getDefault()
 
 function main() returns ExitCode
 	return value
@@ -3003,22 +1916,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3006: <fragment>:3:5: duplicate definition of 'A' — already declared as `let A`
-```
-
-<!-- test: top-level-var-let-duplicate-declaration-error -->
-The storage key is kind-independent, so a `var` and a `let` sharing one name in one file collide the
-same way — the second declaration is the duplicate.
-
-```maxon
-var counter = 0 as FullRangeInt
-let counter = 5
-
-function main() returns ExitCode
-	return counter
-end 'main'
-```
-```maxoncstderr
-error E3006: <fragment>:3:5: duplicate definition of 'counter' — already declared as `var counter`
 ```
 
 <!-- test: error.top-level-let-array-owned-merge-alias -->
@@ -3595,7 +2492,7 @@ end 'main'
 either side of it, so an image that stamped the wrong case's tag answers something other than 20 — and one
 that folded the constant to a bare tag instead of laying a box down would hand `match` the number 1 to
 dereference. The tag is read off the layout at one door (`unionCaseLayoutOf`), which is the same door
-`__module_init` builds a `var`'s box through, so the two spellings of this case cannot disagree about which
+`__module_init` builds a union box through, so the image and the built box cannot disagree about which
 number goes in.
 
 Reading the same `let` three times must give ONE answer. It is not a slot load: each read is a `lea` at the
@@ -3688,58 +2585,6 @@ end 'main'
 count=4 sum=28 first=7
 ```
 
-<!-- test: a-boxed-union-var-shared-across-many-reads-frees-cleanly -->
-⭐⭐ **THE `var` TWIN, AND THE EXIT CODE IS THE GATE.** The identical program with one keyword changed. A
-`var` is never imaged — `settleRecordValue` writes `hasStorage = decl.mutable or not recordShapeHasAnImage(…)`
-— so this binding keeps the whole built path the `let` above does not have: `__module_init` allocates the
-box, stores the tag, zeroes the payload slots and writes the pointer into a `.data` slot, and
-`__maxon_global_cleanup` drops it after `main`.
-
-⛔ **AND THE REFCOUNTS ARE REAL HERE, WHICH IS THE WHOLE REASON THIS CASE EXISTS.** The slot owns one
-reference; every `push` CO-OWNS the same box through a `__mm_incref` that actually steps a counter; the
-array's destructor releases four; the cleanup releases the slot's. Those have to balance, and an unbalanced
-pair is a leak (exit 101) or a double free — neither of which the stdout comparison can see. With
-one extra `__mm_incref` in `ModuleInit.builtUnionCaseBox`, **this case exits 101 and the `let` case above
-does not move**, which is exactly the asymmetry the pair is here to state.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias BoxedArray = Array with Boxed
-
-union Boxed
-	plain
-	withPayload(n Integer)
-end 'Boxed'
-
-var sentinel = Boxed.plain
-
-function tagOf(b Boxed) returns Integer
-	return match b 'k'
-		plain gives 7
-		withPayload(n) gives n
-	end 'k'
-end 'tagOf'
-
-function main() returns ExitCode
-	var xs = BoxedArray.create(0)
-	var i = 0 as Integer
-	var sum = 0 as Integer
-	while i < 4 'each'
-		xs.push(sentinel)
-		sum = sum + tagOf(sentinel)
-		i = i + 1
-	end 'each'
-	view first = try xs.get(0) otherwise Boxed.plain
-	print("count={xs.count()} sum={sum} first={tagOf(first)}")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-count=4 sum=28 first=7
-```
-
 <!-- test: error.a-boxed-union-constant-cannot-be-read-through-a-payload-less-alternative -->
 An `or` pattern binds a payload only on the alternative that names it. `none or some(n)` reads `n` on the
 `none` path too, where no pattern bound it, so the arm is refused (E3129) — for a union constant as for any
@@ -3753,33 +2598,6 @@ union Counter
 end 'Counter'
 
 let sentinel = Counter.none
-
-function valueOf(c Counter) returns Integer
-	return match c 'k'
-		none or
-			some(n) gives n
-	end 'k'
-end 'valueOf'
-
-function main() returns ExitCode
-	return valueOf(sentinel) as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3129: <fragment>:14:9: the payload binding 'n' cannot be honoured: case 'none' of `union Counter` binds nothing at payload slot 0, so on that case's path the arm body would read a value no pattern bound. Give 'none' an arm of its own
-```
-
-<!-- test: error.a-boxed-union-var-cannot-be-read-through-a-payload-less-alternative -->
-The same refusal for a `var` global holding a boxed union.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-union Counter
-	none
-	some(n Integer)
-end 'Counter'
-
-var sentinel = Counter.none
 
 function valueOf(c Counter) returns Integer
 	return match c 'k'
@@ -3938,7 +2756,7 @@ sentence about it sends the author to a name that is perfectly visible.
 ```maxon
 // --- file: dir_a/config.maxon
 export type Config
-	module static var used = 42 as FullRangeInt
+	module static let used = 42 as FullRangeInt
 end 'Config'
 
 // --- file: dir_b/main.maxon
@@ -3988,7 +2806,7 @@ union Op
 	nop
 end 'Op'
 
-var globalOps = [Op.add(7), Op.nop]
+let globalOps = [Op.add(7), Op.nop]
 
 function main() returns ExitCode
 	view first = try globalOps.get(0) otherwise Op.nop
@@ -4025,7 +2843,7 @@ end 'Op'
 
 typealias OpArray = Array with Op
 
-var keywordMap = [
+let keywordMap = [
 	b"if": KeywordInfo.create(1, helpText: "Conditional statement."),
 	b"else": KeywordInfo.create(2, helpText: "Alternative branch.")
 ]
@@ -4058,7 +2876,7 @@ union Op
 	nop
 end 'Op'
 
-var opMap = [
+let opMap = [
 	b"add": Op.add(5),
 	b"nop": Op.nop
 ]
@@ -4095,12 +2913,12 @@ function describe(n Kind) returns String
 	return "kind {n}"
 end 'describe'
 
-var keywordMap = [
+let keywordMap = [
 	b"if": KeywordInfo.create(1, helpText: describe(1)),
 	b"else": KeywordInfo.create(2, helpText: describe(2))
 ]
 
-var unusedNames = StringArray.create(0)
+let unusedNames = StringArray.create(0)
 
 function main() returns ExitCode
 	view info = try keywordMap.get(b"else") otherwise KeywordInfo.create(0, helpText: "")
@@ -4115,69 +2933,6 @@ end 'main'
 0
 ```
 
-<!-- test: module-union-store-then-match -->
-A store of a payload-carrying case into a module-level union var. The wrong answer is silent: the
-match reads the slot's ordinal rather than the box's tag and gives 0.
-```maxon
-typealias Small = int(0 to 100)
-
-union Hold
-	unowned
-	owned(v Small)
-end 'Hold'
-
-var hold = Hold.unowned
-
-function seed()
-	hold = Hold.owned(5)
-end 'seed'
-
-function main() returns ExitCode
-	seed()
-	return match hold 'm'
-		unowned gives 0
-		owned(v) gives v
-	end 'm'
-end 'main'
-```
-```exitcode
-5
-```
-
-<!-- test: module-union-two-storing-functions -->
-Two functions each store a different case, so a stale value id carried between them has no
-definition in its own function and surfaces out of the register allocator rather than as an answer.
-```maxon
-typealias Small = int(0 to 100)
-
-union Hold
-	unowned
-	owned(v Small)
-end 'Hold'
-
-var hold = Hold.unowned
-
-function seed()
-	hold = Hold.owned(5)
-end 'seed'
-
-function clear()
-	hold = Hold.unowned
-end 'clear'
-
-function main() returns ExitCode
-	clear()
-	seed()
-	return match hold 'm'
-		unowned gives 0
-		owned(v) gives v
-	end 'm'
-end 'main'
-```
-```exitcode
-5
-```
-
 <!-- test: module-union-read-initializer -->
 The declared initializer reaches `main` neither read nor written on the way, so the tag read must
 find the case the declaration named.
@@ -4189,7 +2944,7 @@ union Hold
 	owned(v Small)
 end 'Hold'
 
-var hold = Hold.owned(9)
+let hold = Hold.owned(9)
 
 function main() returns ExitCode
 	return match hold 'm'
@@ -4200,135 +2955,6 @@ end 'main'
 ```
 ```exitcode
 9
-```
-
-<!-- test: module-union-reassign-releases-old -->
-Each store to the global releases the previous occupant; a loop of them leaks otherwise, and the
-suite fails the run on a leaked allocation.
-```maxon
-typealias Small = int(0 to 100)
-
-union Hold
-	unowned
-	owned(v Small)
-end 'Hold'
-
-var hold = Hold.unowned
-
-function main() returns ExitCode
-	var i = 0 as Small
-	while i < 10 'fill'
-		hold = Hold.owned(i)
-		i = i + 1
-	end 'fill'
-
-	return match hold 'm'
-		unowned gives 0
-		owned(v) gives v
-	end 'm'
-end 'main'
-```
-```exitcode
-9
-```
-
-<!-- test: module-union-payload-free-union-stays-scalar -->
-A union whose cases all lack payloads is a bare discriminant rather than a box, so its global
-keeps the compile-time-constant ordinal — the control for the boxed cases above.
-```maxon
-union Mode
-	off
-	on
-end 'Mode'
-
-var mode = Mode.off
-
-function seed()
-	mode = Mode.on
-end 'seed'
-
-function main() returns ExitCode
-	seed()
-	return match mode 'm'
-		off gives 0
-		on gives 6
-	end 'm'
-end 'main'
-```
-```exitcode
-6
-```
-
-<!-- test: module-enum-stays-scalar -->
-A plain enum global folds to its ordinal, which is the second control: nothing about the union
-boxing may reach a type that never had a payload to box.
-```maxon
-enum Color
-	red
-	green
-end 'Color'
-
-var c = Color.red
-
-function seed()
-	c = Color.green
-end 'seed'
-
-function main() returns ExitCode
-	seed()
-	return match c 'm'
-		red gives 0
-		green gives 7
-	end 'm'
-end 'main'
-```
-```exitcode
-7
-```
-
-<!-- test: module-union-in-monomorphized-method -->
-Monomorphization rebuilds every op in the body, so the slot's type name must travel with the
-rebuilt load and store; without it the specialization alone lowers the global as a bare integer
-and the tag read dereferences it.
-```maxon
-typealias Small = int(0 to 100)
-
-union Hold
-	unowned
-	owned(v Small)
-end 'Hold'
-
-var hold = Hold.unowned
-
-type Cell uses T
-	export var item as T
-
-	static function create(item T) returns Self
-		return Self{item: item}
-	end 'create'
-
-	function stash(v Small)
-		hold = Hold.owned(v)
-	end 'stash'
-
-	function readBack() returns Small
-		return match hold 'r'
-			unowned gives 0
-			owned(v) gives v
-		end 'r'
-	end 'readBack'
-end 'Cell'
-
-typealias SmallCell = Cell with Small
-
-function main() returns ExitCode
-	let c = SmallCell.create(1)
-	c.stash(5)
-	return c.readBack()
-end 'main'
-```
-```exitcode
-5
 ```
 
 ⭐⭐ **A CONSTANT'S TAG IS NOT ITS IDENTITY.** `named` covers every declared `enum` AND every boxed `union`;
@@ -4814,144 +3440,10 @@ end 'main'
 1 99
 ```
 
-<!-- test: error.a-let-initializer-may-not-read-a-managed-var-beside-a-spawn -->
-**A `let` THAT HOLDS WHAT A `var` OWNS CANNOT BE MARKED SHARED.** `l` is the record `g` owns, so marking `l`'s
-graph before `main` would meet an owner no `let` holds. The program is refused at compile time rather than
-stopping before `main` runs.
+<!-- test: a-top-level-let-map-with-cast-values-reads-back-typed -->
+A cast names its type at file scope too, so a top-level `let` map built from `as Count` values is a typed map that reads back as `Count`.
 ```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function current() returns Self
-		return g
-	end 'current'
-end 'Box'
-
-var g = Box.create()
-let l = Box.current()
-
-type Reader
-	var asked as Integer
-
-	static function create() returns Self
-		return Self{asked: 0}
-	end 'create'
-
-	export function read() returns Integer
-		self.asked = self.asked + 1
-		return l.n
-	end 'read'
-end 'Reader'
-
-function main() returns ExitCode
-	let h = spawn Reader.create()
-	let n = try await h.read() otherwise 0
-	print("n={n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3165: <fragment>:10:10: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
-note: <fragment>:14:5: `g` is declared here
-```
-
-<!-- test: error.a-var-initializer-may-not-take-a-lets-record-beside-a-spawn -->
-**AND A `var` MAY NOT TAKE WHAT A `let` HOLDS.** `v` would be an owner of `a`'s record that no `let` is, so marking
-`a` shared before `main` would meet it. Refused at compile time.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function current() returns Self
-		return a
-	end 'current'
-end 'Box'
-
-let a = Box.create()
-var v = Box.current()
-
-type Reader
-	var asked as Integer
-
-	static function create() returns Self
-		return Self{asked: 0}
-	end 'create'
-
-	export function read() returns Integer
-		self.asked = self.asked + 1
-		return a.n
-	end 'read'
-end 'Reader'
-
-function main() returns ExitCode
-	let h = spawn Reader.create()
-	let n = try await h.read() otherwise 0
-	print("n={n} v={v.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3078: <fragment>:15:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
-```
-
-<!-- test: error.a-top-level-var-bound-to-a-bare-integer -->
-A top-level `var` initialized with a bare integer literal is refused at the literal.
-```maxon
-var Hits = 0
-
-function main() returns ExitCode
-	Hits = Hits + 1
-	return Hits
-end 'main'
-```
-```maxoncstderr
-error E2004: <fragment>:2:12: A var cannot start from a bare number: write 'var name = expr as Type'.
-```
-
-<!-- test: error.a-static-var-bound-to-a-bare-integer -->
-A `static var` initialized with a bare integer literal is refused at the literal.
-```maxon
-type Counter
-	static var hits = 7
-end 'Counter'
-
-function main() returns ExitCode
-	Counter.hits = Counter.hits + 1
-	return Counter.hits
-end 'main'
-```
-```maxoncstderr
-error E2004: <fragment>:3:20: A var cannot start from a bare number: write 'var name = expr as Type'.
-```
-
-<!-- test: error.a-top-level-var-bound-to-a-map-of-bare-numbers -->
-A top-level `var` initialized with a map literal of bare numbers is refused at the bracket.
-```maxon
-var Scores = [1: 10, 2: 20]
-
-function main() returns ExitCode
-	Scores.upsert(3, value: 30)
-	return Scores.count() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E2004: <fragment>:2:14: A var cannot start from a bare number: write 'var name = expr as Type'.
-```
-
-<!-- test: a-top-level-var-map-with-cast-values-reads-back-typed -->
-A cast names its type at file scope too, so a top-level `var` map built from `as Count` values is a typed map that can grow and reads back as `Count`.
-```maxon
-var Tally = [b"one": 1 as Count, b"two": 2 as Count]
+let Tally = [b"one": 1 as Count, b"two": 2 as Count, b"three": 3 as Count]
 
 function show(v Count)
 	print("{v}\n")
@@ -4960,7 +3452,6 @@ end 'show'
 function main() returns ExitCode
 	let one = try Tally.get(b"one") otherwise 0
 	show(one)
-	Tally.upsert(b"three", value: 3)
 	print("{Tally.count()}\n")
 	return 0
 end 'main'
@@ -4973,12 +3464,12 @@ end 'main'
 3
 ```
 
-<!-- test: error.a-top-level-var-map-values-keep-their-alias -->
+<!-- test: error.a-top-level-let-map-values-keep-their-alias -->
 The alias a file-scope cast names is the column's type, so a read of it does not pass where another alias is declared.
 ```maxon
 typealias Score = int(0 to 100)
 
-var Tally = [b"one": 1 as Count]
+let Tally = [b"one": 1 as Count]
 
 function show(v Score)
 	print("{v}\n")
@@ -4994,93 +3485,15 @@ end 'main'
 error E3005: <fragment>:12:2: argument type mismatch for 'v': expected 'Score', got 'Count' — cast the argument with 'as Score'
 ```
 
-<!-- test: error.a-static-var-adopts-the-brand-of-its-first-branded-store -->
-A `static var` initialized from a literal carries no brand until the first branded value is stored into it; a store of another brand is refused.
+<!-- test: a-top-level-character-is-a-record-slot -->
+A character initializer is the expression a body would write, so the global holds a `Character` record that
+is read as it was built.
 ```maxon
-typealias Xs = Array with String
-typealias Ys = Array with String
-
-type Registry
-	static var items = ["a"]
-end 'Registry'
-
-function main() returns ExitCode
-	Registry.items = Xs.create(0)
-	Registry.items = Ys.create(0)
-	print("{Registry.items.count()}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:11:2: cannot assign a value of type 'Ys' to global 'Registry.items', which holds 'Xs'
-```
-
-<!-- test: error.a-read-of-an-adopted-static-var-reaches-only-its-own-brands-parameter -->
-```maxon
-typealias Xs = Array with String
-typealias Ys = Array with String
-
-type Registry
-	static var items = ["a"]
-end 'Registry'
-
-function takeYs(ys Ys)
-	print("{ys.count()}\n")
-end 'takeYs'
-
-function main() returns ExitCode
-	Registry.items = Xs.create(0)
-	takeYs(Registry.items)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:15:2: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
-```
-
-<!-- test: a-static-var-keeps-no-brand-until-a-branded-value-is-stored -->
-A read of a `static var` that was never given a branded value fits a parameter of any brand of its instance.
-```maxon
-typealias Xs = Array with String
-typealias Ys = Array with String
-
-type Registry
-	static var items = ["a"]
-end 'Registry'
-
-function takeXs(xs Xs)
-	print("{xs.count()}\n")
-end 'takeXs'
-
-function takeYs(ys Ys)
-	print("{ys.count()}\n")
-end 'takeYs'
-
-function main() returns ExitCode
-	takeXs(Registry.items)
-	takeYs(Registry.items)
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1
-1
-```
-
-<!-- test: a-top-level-character-is-a-record-slot-a-var-can-reassign -->
-A character initializer is the expression a body would write, so the global holds a `Character` record: a `let`
-is read as it was built, and a `var`'s slot takes a new character.
-```maxon
-var c = 'x'
+let c = 'x'
 let d = 'é'
 
 function main() returns ExitCode
 	print("{c}{d}\n")
-	c = 'y'
-	print("{c}\n")
 	return 0
 end 'main'
 ```
@@ -5089,7 +3502,6 @@ end 'main'
 ```
 ```stdout
 xé
-y
 ```
 
 ### A static member's initializer ends at the line holding the closing bracket of a kept `match` block
@@ -5123,37 +3535,6 @@ end 'main'
 ```
 ```stdout
 loud! next
-```
-
-<!-- test: a-match-expression-in-a-call-argument-of-a-static-var -->
-```maxon
-enum Mode
-	quiet
-	loud
-end 'Mode'
-
-function tag(text String, tail String) returns String
-	return "{text}{tail}"
-end 'tag'
-
-type Holder
-	static var LABEL = tag(match Mode.quiet 'm'
-		quiet gives "quiet"
-		loud gives "loud"
-	end 'm', tail: "?")
-	static var NEXT = "next"
-end 'Holder'
-
-function main() returns ExitCode
-	print("{Holder.LABEL} {Holder.NEXT}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-quiet? next
 ```
 
 <!-- test: error.a-return-in-a-handler-block-of-a-static-let-names-the-initializer -->

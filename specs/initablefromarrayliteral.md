@@ -14,7 +14,7 @@ category: type-system
 The stdlib `Array` type implements `InitableFromArrayLiteral`, allowing initialization from array literals:
 
 ```text
-var arr = [1, 2, 3]
+let arr = [1, 2, 3]
 ```
 
 This creates an Array containing the elements 1, 2, and 3.

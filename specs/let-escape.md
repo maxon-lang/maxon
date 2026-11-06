@@ -67,21 +67,20 @@ function zeroBox(w Box)
 	w.n = 0
 end 'zeroBox'
 
-var registry = Boxes.create(0)
-
-function register(b Box)
+function register(b Box, registry mutable Boxes)
 	registry.push(b)
 end 'register'
 
-function clobber()
+function clobber(registry mutable Boxes)
 	var w = try registry.get(0) otherwise return
 	w.n = 99
 end 'clobber'
 
 function main() returns ExitCode
+	var registry = Boxes.create(0)
 	let a = Box.create(2)
-	register(a)
-	clobber()
+	register(a, registry: registry)
+	clobber(registry)
 	return 0
 end 'main'
 ```
@@ -144,29 +143,28 @@ end 'Tag'
 
 typealias Tags = Array with Tag
 
-var registry = Boxes.create(0)
-var tags = Tags.create(0)
-
-function register(b Box)
+function register(b Box, registry mutable Boxes)
 	registry.push(b)
 end 'register'
 
-function retag()
+function retag(tags mutable Tags)
 	tags.push(Tag.create(1))
 	var w = try tags.get(0) otherwise return
 	w.t = 9
 end 'retag'
 
 function main() returns ExitCode
+	var registry = Boxes.create(0)
+	var tags = Tags.create(0)
 	let a = Box.create(2)
-	register(a)
-	retag()
+	register(a, registry: registry)
+	retag(tags)
 	print("{a.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:66:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:65:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-escape.error.a-let-kept-in-one-container-of-a-holder-and-read-again-is-refused -->
@@ -628,9 +626,7 @@ function zeroBox(w Box)
 	w.n = 0
 end 'zeroBox'
 
-var registry = Boxes.create(0)
-
-function register(b Box)
+function register(b Box, registry mutable Boxes)
 	registry.push(b)
 end 'register'
 
@@ -640,16 +636,17 @@ function quiet() returns Count
 end 'quiet'
 
 function main() returns ExitCode
+	var registry = Boxes.create(0)
 	let a = Box.create(2)
 	let handle = async quiet()
-	register(a)
+	register(a, registry: registry)
 	let r = await handle
 	print("{a.n}{r}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:55:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:54:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-escape.error.a-let-the-callee-pushes-and-returns-is-refused-at-the-push-though-the-caller-reads-it-before-the-write -->
@@ -714,26 +711,25 @@ type Box
 end 'Box'
 
 let shared = Box.create(7)
-var registry = Boxes.create(0)
-
-function register()
+function register(registry mutable Boxes)
 	registry.push(shared)
 end 'register'
 
-function clobber()
+function clobber(registry mutable Boxes)
 	var w = try registry.get(0) otherwise return
 	w.n = 99
 end 'clobber'
 
 function main() returns ExitCode
-	register()
-	clobber()
+	var registry = Boxes.create(0)
+	register(registry)
+	clobber(registry)
 	print("{shared.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:17:11: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the container push writes'; use clone()
+error E3078: <fragment>:15:11: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the container push writes'; use clone()
 ```
 
 <!-- test: let-escape.error.a-module-lets-record-handed-to-a-callee-that-keeps-it-is-refused -->
@@ -760,29 +756,28 @@ type Holder
 end 'Holder'
 
 let shared = Box.create(7)
-var registry = Boxes.create(0)
-var holder = Holder.create(Box.create(0))
-
-function stash(b Box)
+function stash(b Box, registry mutable Boxes, holder mutable Holder)
 	registry.push(b)
 	holder.box = b
 end 'stash'
 
-function clobber()
+function clobber(registry mutable Boxes, holder mutable Holder)
 	var w = try registry.get(0) otherwise return
 	w.n = 99
 	holder.box.n = 55
 end 'clobber'
 
 function main() returns ExitCode
-	stash(shared)
-	clobber()
+	var registry = Boxes.create(0)
+	var holder = Holder.create(Box.create(0))
+	stash(shared, registry: registry, holder: holder)
+	clobber(registry, holder: holder)
 	print("{shared.n} {holder.box.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:37:2: cannot pass 'shared', which is read-only (a module-level `let`), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:36:2: cannot pass 'shared', which is read-only (a module-level `let`), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-escape.error.a-module-lets-record-handed-to-a-factory-that-keeps-it-in-a-field-is-refused -->
@@ -874,17 +869,16 @@ type Holder
 end 'Holder'
 
 let shared = Box.create(7)
-var registry = Holder.create(Box.create(0))
-
-function remember()
+function remember(registry mutable Holder)
 	registry.box = shared
 end 'remember'
 
-function bump()
+function bump(registry mutable Holder)
 	registry.box.n = 99
 end 'bump'
 
 function main() returns ExitCode
+	var registry = Holder.create(Box.create(0))
 	var lit = [shared]
 	var w = try lit.get(0) otherwise return 1
 	w.n = 11
@@ -894,16 +888,16 @@ function main() returns ExitCode
 	var mv = try m.get(1) otherwise return 2
 	mv.n = 22
 
-	remember()
-	bump()
+	remember(registry)
+	bump(registry)
 	print("{shared.n} {w.n} {mv.n} {registry.box.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:25:11: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'Holder.box'; use clone()
-error E3078: <fragment>:33:13: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the array literal'; use clone()
-error E3078: <fragment>:38:4: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the container upsert writes'; use clone()
+error E3078: <fragment>:23:11: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'Holder.box'; use clone()
+error E3078: <fragment>:32:13: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the array literal'; use clone()
+error E3078: <fragment>:37:4: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the container upsert writes'; use clone()
 ```
 
 <!-- test: let-escape.error.a-module-lets-record-in-a-literal-and-a-map-value-is-refused -->
@@ -1049,25 +1043,23 @@ type Other
 	end 'create'
 end 'Other'
 
-var others = OtherBoxes.create(0)
-
-var registry = Boxes.create(0)
-
-function register(b Box)
+function register(b Box, registry mutable Boxes)
 	registry.push(b)
 end 'register'
 
-function wipeFirst() returns Count
+function wipeFirst(others mutable OtherBoxes) returns Count
 	var w = try others.get(0) otherwise return 1
 	w.m = 0
 	return 0
 end 'wipeFirst'
 
 function main() returns ExitCode
-	let task = async wipeFirst()
+	var others = OtherBoxes.create(0)
+	var registry = Boxes.create(0)
 	others.push(Other.create(1))
+	let task = async wipeFirst(others)
 	let b = Box.create(2)
-	register(b)
+	register(b, registry: registry)
 	Scheduler.yield()
 	print("{b.n}\n")
 	let r = await task
@@ -1075,7 +1067,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:40:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:38:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-escape.a-module-lets-record-a-call-hands-back-is-stored-as-a-clone -->
@@ -1257,22 +1249,21 @@ type Holder
 	end 'create'
 end 'Holder'
 
-var holder = Holder.create()
-
-function note(id Count)
+function note(holder mutable Holder, id Count)
 	holder.seen.insert(id)
 end 'note'
 
 function main() returns ExitCode
+	var holder = Holder.create()
 	let layout = Layout.create()
 	holder.items.push(layout)
-	note(7)
+	note(holder, id: 7)
 	print("{layout.names.count()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:32:15: cannot store `let` 'layout' into mutable place 'an element of the container push writes'; use clone()
+error E3078: <fragment>:31:15: cannot store `let` 'layout' into mutable place 'an element of the container push writes'; use clone()
 ```
 
 <!-- test: let-escape.a-getter-that-hands-back-a-clone-of-what-the-factory-minted-is-accepted -->
@@ -1678,24 +1669,23 @@ type Box
 	end 'create'
 end 'Box'
 
-var registry = Boxes.create(0)
-
-function register(b Box)
+function register(b Box, registry mutable Boxes)
 	registry.push(b)
 end 'register'
 
-function clobber()
+function clobber(registry mutable Boxes)
 	var w = try registry.get(0) otherwise return
 	w.n = 99
 end 'clobber'
 
 function main() returns ExitCode
+	var registry = Boxes.create(0)
 	var i = 0 as Count
 
 	while i < 2 'trips'
 		let r = Box.create(2)
-		clobber()
-		register(r)
+		clobber(registry)
+		register(r, registry: registry)
 		print("{r.n}\n")
 		i = i + 1
 	end 'trips'
@@ -1704,7 +1694,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:30:3: cannot pass 'r', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:29:3: cannot pass 'r', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-escape.error.a-callee-writing-a-let-through-its-holders-own-method-is-refused -->
@@ -2184,27 +2174,26 @@ function zeroBox(w Box)
 	w.n = 0
 end 'zeroBox'
 
-var registry = Boxes.create(0)
-
-function register(b Box)
+function register(b Box, registry mutable Boxes)
 	registry.push(b)
 end 'register'
 
-function clobber()
+function clobber(registry mutable Boxes)
 	var w = try registry.get(0) otherwise return
 	w.n = 99
 end 'clobber'
 
 function main() returns ExitCode
+	var registry = Boxes.create(0)
 	let a = Box.create(2)
-	register(a)
-	clobber()
+	register(a, registry: registry)
+	clobber(registry)
 	print("{a.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:54:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:53:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-escape.error.a-record-stored-into-a-parameters-container-is-written-through-the-parameter -->
@@ -2696,74 +2685,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3078: <fragment>:61:4: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'Cursor.attach', which keeps it where something may write it; pass a clone()
-```
-
-<!-- test: let-escape.error.an-awaited-task-may-write-a-record-stored-while-it-ran -->
-`register` keeps its parameter in a module container, and `a` is read afterwards, so the call is refused whatever the awaited task writes.
-
-```maxon
-typealias Count = int(0 to 1000)
-typealias Boxes = Array with Box
-
-type Box
-	export var n as Count
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-type Reg
-	export var items as Boxes
-
-	static function create() returns Self
-		return Self{items: Boxes.create(0)}
-	end 'create'
-end 'Reg'
-
-type Outer
-	export var inner as Reg
-
-	static function create() returns Self
-		return Self{inner: Reg.create()}
-	end 'create'
-end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
-
-var registry = Boxes.create(0)
-
-function register(b Box)
-	registry.push(b)
-end 'register'
-
-function clobber() returns Count
-	var w = try registry.get(0) otherwise return 0
-	w.n = 99
-	return 1
-end 'clobber'
-
-function main() returns ExitCode
-	let a = Box.create(2)
-	let handle = async clobber()
-	register(a)
-	let r = await handle
-	print("{a.n}{r}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:56:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-escape.error.a-record-the-callee-creates-and-stores-is-written-through-its-holder -->
@@ -3278,47 +3199,6 @@ a7
 0
 ```
 
-<!-- test: let-escape.error.a-yielding-call-lets-a-spawned-task-write-a-record-stored-in-a-module-container -->
-`register` keeps its parameter in a module container, and `b` is read after the yield, so the call is refused.
-
-```maxon
-typealias Count = int(0 to 1000)
-typealias Boxes = Array with Box
-
-type Box
-	export var n as Count
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-var registry = Boxes.create(0)
-
-function register(b Box)
-	registry.push(b)
-end 'register'
-
-function wipeFirst() returns Count
-	var w = try registry.get(0) otherwise return 1
-	w.n = 0
-	return 0
-end 'wipeFirst'
-
-function main() returns ExitCode
-	let task = async wipeFirst()
-	let b = Box.create(2)
-	register(b)
-	Scheduler.yield()
-	print("{b.n}\n")
-	let r = await task
-	return r as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:28:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
-```
-
 <!-- test: let-escape.error.a-module-lets-record-a-call-hands-back-cannot-be-stored-where-it-is-written -->
 `pick` returns a module `let`, which is image data, so storing the call's result into a `var` field is refused and asks for `clone()`.
 
@@ -3390,27 +3270,26 @@ type Holder
 	end 'create'
 end 'Holder'
 
-var holder = Holder.create()
-
-function g()
+function g(holder mutable Holder)
 	var w = try holder.items.get(0) otherwise return
 	w.n = 5
 end 'g'
 
-function f()
-	g()
+function f(holder mutable Holder)
+	g(holder)
 end 'f'
 
 function main() returns ExitCode
+	var holder = Holder.create()
 	let b = Box.create(1)
 	holder.items.push(b)
-	f()
+	f(holder)
 	print("{b.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:34:15: cannot store `let` 'b' into mutable place 'an element of the container push writes'; use clone()
+error E3078: <fragment>:33:15: cannot store `let` 'b' into mutable place 'an element of the container push writes'; use clone()
 ```
 
 <!-- test: let-escape.error.a-record-handed-through-a-function-typed-by-an-alias-of-its-instance -->
@@ -3439,28 +3318,27 @@ typealias N0 = Box with S0
 typealias ViaAlias = Box with N0
 typealias Holder = Array with ViaAlias
 
-var holder = Holder.create(0)
-
 function keep(b ViaAlias) returns ViaAlias
 	return b
 end 'keep'
 
-function clobber()
+function clobber(holder mutable Holder)
 	var w = try holder.get(0) otherwise return
 	w.item.item.n = 5
 end 'clobber'
 
 function main() returns ExitCode
+	var holder = Holder.create(0)
 	let b = Box.create(Box.create(S0.create(1)))
 	let k = keep(b)
 	holder.push(k)
-	clobber()
+	clobber(holder)
 	print("{b.item.item.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:38:9: cannot store `let` 'k' into mutable place 'an element of the container push writes'; use clone()
+error E3078: <fragment>:37:9: cannot store `let` 'k' into mutable place 'an element of the container push writes'; use clone()
 ```
 
 <!-- test: let-escape.error.a-record-cast-to-an-alias-of-its-instance -->
@@ -3489,24 +3367,23 @@ typealias N0 = Box with S0
 typealias ViaAlias = Box with N0
 typealias Holder = Array with ViaAlias
 
-var holder = Holder.create(0)
-
-function clobber()
+function clobber(holder mutable Holder)
 	var w = try holder.get(0) otherwise return
 	w.item.item.n = 5
 end 'clobber'
 
 function main() returns ExitCode
+	var holder = Holder.create(0)
 	let b = Box.create(Box.create(S0.create(1)))
 	let k = b as ViaAlias
 	holder.push(k)
-	clobber()
+	clobber(holder)
 	print("{b.item.item.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:34:9: cannot store `let` 'k' into mutable place 'an element of the container push writes'; use clone()
+error E3078: <fragment>:33:9: cannot store `let` 'k' into mutable place 'an element of the container push writes'; use clone()
 ```
 
 <!-- test: let-escape.error.a-write-to-the-set-a-let-record-holds-through-its-holder -->
@@ -3719,23 +3596,22 @@ type Holder
 	end 'create'
 end 'Holder'
 
-var holder = Holder.create()
-
-function grow(id Count)
+function grow(holder mutable Holder, id Count)
 	var target = try holder.items.get(0) otherwise return
 	target.names.insert(id)
 end 'grow'
 
 function main() returns ExitCode
+	var holder = Holder.create()
 	let layout = Layout.create()
 	holder.items.push(layout)
-	grow(7)
+	grow(holder, id: 7)
 	print("{layout.names.count()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:33:15: cannot store `let` 'layout' into mutable place 'an element of the container push writes'; use clone()
+error E3078: <fragment>:32:15: cannot store `let` 'layout' into mutable place 'an element of the container push writes'; use clone()
 ```
 
 <!-- test: let-escape.error.a-record-a-factory-minted-into-its-holder-is-written-through-the-holder-after-a-getter-hands-it-back -->
@@ -4183,13 +4059,11 @@ type Box
 	end 'create'
 end 'Box'
 
-var registry = Boxes.create(0)
-
-function register(b Box)
+function register(b Box, registry mutable Boxes)
 	registry.push(b)
 end 'register'
 
-function clobberAll()
+function clobberAll(registry mutable Boxes)
 	for i in 0 upto registry.count() 'each'
 		var w = try registry.get(i) otherwise return
 		w.n = 99
@@ -4197,18 +4071,19 @@ function clobberAll()
 end 'clobberAll'
 
 function main() returns ExitCode
+	var registry = Boxes.create(0)
 	let a = Box.create(1)
 	let b = Box.create(2)
-	register(a)
-	register(b)
-	clobberAll()
+	register(a, registry: registry)
+	register(b, registry: registry)
+	clobberAll(registry)
 	print("{a.n} {b.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:29:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
-error E3078: <fragment>:30:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:28:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:29:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-escape.error.a-let-lent-a-record-minted-before-the-loop-is-written-on-a-later-trip-through-storage-an-earlier-trip-filled -->
@@ -4226,9 +4101,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var registry = Boxes.create(0)
-
-function register(b Box)
+function register(b Box, registry mutable Boxes)
 	registry.push(b)
 end 'register'
 
@@ -4236,19 +4109,20 @@ function same(b Box) returns Box
 	return b
 end 'same'
 
-function clobber()
+function clobber(registry mutable Boxes)
 	var w = try registry.get(0) otherwise return
 	w.n = 99
 end 'clobber'
 
 function main() returns ExitCode
+	var registry = Boxes.create(0)
 	var outer = Box.create(2)
 	var i = 0 as Count
 
 	while i < 2 'trips'
 		let r = same(outer)
-		clobber()
-		register(r)
+		clobber(registry)
+		register(r, registry: registry)
 		print("{r.n}\n")
 		i = i + 1
 	end 'trips'
@@ -4257,7 +4131,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3188: <fragment>:33:7: cannot bind `let` 'r' to a value reached through 'outer', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+error E3188: <fragment>:32:7: cannot bind `let` 'r' to a value reached through 'outer', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
 ```
 
 <!-- test: let-escape.error.a-callee-handed-the-let-and-its-holder-writes-the-let-through-the-holder -->
@@ -4756,9 +4630,7 @@ type Memo
 	end 'create'
 end 'Memo'
 
-var layouts = Layouts.create(0)
-
-function sigsOf(memo Memo) returns Sigs
+function sigsOf(memo Memo, layouts Layouts) returns Sigs
 	var made = Sigs.create()
 
 	for layout in layouts 'each'
@@ -4769,22 +4641,23 @@ function sigsOf(memo Memo) returns Sigs
 	return made
 end 'sigsOf'
 
-function measure()
+function measure(layouts mutable Layouts)
 	var layout = try layouts.get(0) otherwise return
 	layout.detail.size = 8
 end 'measure'
 
 function main() returns ExitCode
+	var layouts = Layouts.create(0)
 	layouts.push(Layout.create())
 	var memo = Memo.create()
-	let sigs = sigsOf(memo)
-	measure()
+	let sigs = sigsOf(memo, layouts: layouts)
+	measure(layouts)
 	print("{sigs.decls.count()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3188: <fragment>:67:6: cannot bind `let` 'sigs' to a value reached through 'memo', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+error E3188: <fragment>:66:6: cannot bind `let` 'sigs' to a value reached through 'memo', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
 ```
 
 <!-- test: let-escape.error.a-field-assigned-a-global-record-in-the-let-is-written-through-the-global-is-refused -->
@@ -4835,9 +4708,7 @@ type Memo
 	end 'create'
 end 'Memo'
 
-var layouts = Layouts.create(0)
-
-function sigsOf(memo Memo) returns Sigs
+function sigsOf(memo Memo, layouts Layouts) returns Sigs
 	var made = Sigs.create()
 
 	for layout in layouts 'each'
@@ -4850,22 +4721,23 @@ function sigsOf(memo Memo) returns Sigs
 	return made
 end 'sigsOf'
 
-function measure()
+function measure(layouts mutable Layouts)
 	var layout = try layouts.get(0) otherwise return
 	layout.detail.size = 8
 end 'measure'
 
 function main() returns ExitCode
+	var layouts = Layouts.create(0)
 	layouts.push(Layout.create())
 	var memo = Memo.create()
-	let sigs = sigsOf(memo)
-	measure()
+	let sigs = sigsOf(memo, layouts: layouts)
+	measure(layouts)
 	print("{sigs.decls.count()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3188: <fragment>:69:6: cannot bind `let` 'sigs' to a value reached through 'memo', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+error E3188: <fragment>:68:6: cannot bind `let` 'sigs' to a value reached through 'memo', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
 ```
 
 <!-- test: let-escape.error.a-let-held-by-a-local-holder-that-a-local-world-also-holds-is-written-through-the-world-after-both-are-stored -->

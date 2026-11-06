@@ -188,7 +188,7 @@ function handOffIsAClosureCapture(door ThreadHandOffDoor) returns bool
 	end 'door'
 end 'handOffIsAClosureCapture'
 
-// The displacement from a top-level `var`'s `globalAddr` to the value itself: ZERO, because every
+// The displacement from a module global's `globalAddr` to the value itself: ZERO, because every
 // global is its OWN labelled `.data` slot and the label already names the exact address.
 //
 // Named rather than written `0` at the three emit sites, because the zero is a CLAIM ("this label
@@ -1977,7 +1977,7 @@ export union SourceParseError implements Error
 
 	// ⭐ **THE FIFTH, AND IT IS ABOUT WHAT COMES BACK RATHER THAN ABOUT WHAT GOES OUT.** Every arm above
 	// refuses a value CROSSING TO the service; this one refuses a message whose REPLY will not fit the two
-	// words a cell carries. It fires at the same `spawn` for the same reason — `<T>.__loop` is synthesized
+	// words a cell carries. It fires at the same `spawn` for the same reason — `<T>.__behave` is synthesized
 	// from the declaration, so a message the cell cannot carry would put a wrong-width store in a body the
 	// service really runs, whether or not the program ever sends one.
 	serviceReplyNotCarriable(explanation String, line LineNumber, column ColumnNumber)
@@ -2329,10 +2329,9 @@ end 'returnTypeTagOrVoid'
 // here rather than taken unilaterally.
 export let SelfParamName = b"__self"
 
-// ⭐ **THE RECEIVER'S SOURCE SPELLING, WHICH IS NOT ITS KEY.** `storageSubjectBindingOf` must be given
-// `__self` to resolve the receiver out of `Scope`, and no source ever writes that — so a diagnostic that
-// blamed the key would point the reader at a name absent from their file. `self` is the spelling they
-// wrote, or (for the BARE call that wrote no receiver at all) the one they would.
+// ⭐ **THE RECEIVER'S SOURCE SPELLING, WHICH IS NOT ITS KEY.** Resolving the receiver out of `Scope` takes
+// `__self`, and no source ever writes that — so a diagnostic that blamed the key would point the reader
+// at a name absent from their file. `self` is the spelling they wrote, or (for the BARE call that wrote no receiver at all) the one they would.
 //
 // ⚠ **IT HAS TWO READERS, WHICH IS WHY IT IS NAMED FOR THE RECEIVER RATHER THAN FOR BLAME** —
 // `displayParamName` (every diagnostic that names a parameter, the by-reference overlap message's
@@ -3493,15 +3492,6 @@ end 'StorageSubject'
 
 let ClosureCaptureMoveDisplay = b"the closure that captures it"
 
-// One interned stand-in per top-level name a storage subject can be, so `g.push(1)` on one line and
-// `g.clear()` on the next are the SAME subject.
-union TopLevelStorageSubjectTable
-	unwritten
-	entries(interned VarInfoMap)
-end 'TopLevelStorageSubjectTable'
-
-let noTopLevelStorageSubjects = TopLevelStorageSubjectTable.unwritten
-
 // Which immutable binding a merge phi's arm named, so a later refusal can blame it by name.
 union MergeBlameColumn
 	unwritten
@@ -3751,13 +3741,6 @@ end 'joinedOccupantExclusivity'
 function occupantExclusivityReaches(exclusivity CellOccupantExclusivity, threshold CellOccupantExclusivity) returns bool
 	return joinedOccupantExclusivity(exclusivity, b: threshold) == exclusivity
 end 'occupantExclusivityReaches'
-
-function moduleVarBrandKey(label ByteArray) returns ByteArray
-	var key = ByteArray.create(0)
-	key.append(b"global|")
-	key.append(label)
-	return key
-end 'moduleVarBrandKey'
 
 type HandedBrand
 	export let key as ByteArray
@@ -5700,12 +5683,12 @@ end 'CallInstanceSource'
 type ServiceSpawnLaunch
 	export let typeName as ByteArray
 	export let capacity as ValueId
-	export let mailbox as ValueId
+	export let cown as ValueId
 	export let tempFloor as ElementIndex
 	export let ownedFloor as ElementIndex
 
-	static function create(typeName ByteArray, capacity ValueId, mailbox ValueId, tempFloor ElementIndex, ownedFloor ElementIndex) returns Self
-		return Self{typeName: typeName, capacity: capacity, mailbox: mailbox, tempFloor: tempFloor, ownedFloor: ownedFloor}
+	static function create(typeName ByteArray, capacity ValueId, cown ValueId, tempFloor ElementIndex, ownedFloor ElementIndex) returns Self
+		return Self{typeName: typeName, capacity: capacity, cown: cown, tempFloor: tempFloor, ownedFloor: ownedFloor}
 	end 'create'
 end 'ServiceSpawnLaunch'
 
@@ -5921,7 +5904,7 @@ end 'tagCarriesStructLayout'
 // logged for the overlap check.
 function bindingMayRootACell(binding VarInfo) returns bool
 	let tag = maxonTypeTag(binding.varType)
-	return binding.isCellBinding or binding.namesModuleStorage or tagCarriesStructLayout(tag) or tagIsByteRecord(tag)
+	return binding.isCellBinding or tagCarriesStructLayout(tag) or tagIsByteRecord(tag)
 end 'bindingMayRootACell'
 
 // The resolved END of a field-access chain `base.f1.…fN`: the `box` its LAST field lives in
@@ -8186,6 +8169,9 @@ let SchedSliceCountArity = 0
 // batch entry and the specs spell it.
 let BuiltinsGtQuiesceName = b"__Builtins.gtQuiesce"
 let GtQuiesceArity = 0
+
+let BuiltinsCownTestMultiName = b"__Builtins.cownTestMulti"
+let CownTestMultiArity = 3
 
 // ⭐⭐ **`__Builtins.schedNetpollBlockCount()` — how many times a green thread has suspended on the NETWORK
 // POLLER waiting for a socket to become ready.** It is the witness that a socket wait really left the
@@ -13665,13 +13651,11 @@ union ManagedReceiverBinding
 	// A managed `let` — `bytes`/`kind` are what `emitManagedConstant` re-materializes.
 	constant(let bytes ByteArray, kind ManagedConstKind)
 
-	// A STORED managed binding (a `var`, or a record `let` the compiler cannot image) —
-	// `label`/`valueType` are what `emitGlobalLoad` reads the slot with, and `mutable` is what
-	// decides whether a receiver-writing method on it is legal. It carries that bit rather than assuming
-	// `true` because such a `let` is stored AND immutable: `Live.push(1)` must be E3159 where
-	// `Buffer.push(1)` is legal, and the synthetic `VarInfo` the dispatch wears is the only thing that can
-	// say so.
-	global(let label ByteArray, valueType MaxonType, mutable bool)
+	// A STORED managed binding (a record `let` the compiler cannot image) — `label`/`valueType` are what
+	// `emitGlobalLoad` reads the slot with. Such a `let` is stored AND immutable: `Live.push(1)` must be
+	// E3159 where `Buffer.push(1)` is legal, and the synthetic `VarInfo` the dispatch wears is the only
+	// thing that can say so.
+	global(let label ByteArray, valueType MaxonType)
 	none
 
 	// ⭐ An IMAGE-DATA `let` whose value is a RECORD the image describes — a constant array literal, an
@@ -14589,7 +14573,7 @@ typealias TryBlockErrorMemberArray = Array with TryBlockErrorMember
 // both add to the member's own tag, `top` is the highest fused tag it can produce (where the next member
 // starts one past), and `fusable` says whether the arithmetic that produced them was performable at all.
 // ⚠ **IT IS `module`, NOT FILE-PRIVATE**, because a service's reply error union is placed by the same arithmetic: `ServiceCompanions`
-// asks for the two members' positions and `ServiceLoop` reads the handler member's offset back to shift the
+// asks for the two members' positions and `ServiceBehaviour` reads the handler member's offset back to shift the
 // flag it writes into the cell. A second computation of the same line would be one fact in two places, and a
 // disagreement between them is a `match e` arm dispatching on the wrong member.
 module type FusedPlacement
@@ -15770,8 +15754,7 @@ function typeDeclarationHeaderIn(tokens TokenArray, index ElementIndex) returns 
 end 'typeDeclarationHeaderIn'
 
 function topLevelBindingIn(tokens TokenArray, index ElementIndex) returns bool
-	let kind = tokenKindAt(tokens, index: index)
-	return (kind == TokenKind.let or kind == TokenKind.var) and namedDeclarationBeginsIn(tokens, index: index)
+	return tokenKindAt(tokens, index: index) == TokenKind.let and namedDeclarationBeginsIn(tokens, index: index)
 end 'topLevelBindingIn'
 
 function viewBindingIn(tokens TokenArray, index ElementIndex) returns bool
@@ -15817,7 +15800,7 @@ enum NamePosition
 end 'NamePosition'
 
 // ⭐ **WHICH MEMBER LIST A TYPE MEMBER IS BEING READ FROM** — the ONE thing the two bodies that share
-// `parseTypeMember` disagree about: a `type` body may declare STORAGE (`static let` / `static var`), an
+// `parseTypeMember` disagree about: a `type` body may declare STORAGE (a field or a `static let`), an
 // `extension` body may not, because an extension adds methods to types other declarations named and has no
 // declaration of its own for a slot to belong to.
 //
@@ -16984,7 +16967,7 @@ end 'divisorProofMayBeNegativeOne'
 // ⭐ **THE ONE E2013 "you may not write this name" DIAGNOSTIC**, built from the token that names the
 // target. THREE statements raise it and they know three different things — a local binding declared `let`
 // (`requireMutableBinding`), a top-level binding that has a slot and still refuses the write
-// (`storeToGlobal`), and a name that resolved to an INLINED top-level constant
+// (`parseTopLevelAssignment`), and a name that resolved to an INLINED top-level constant
 // (`rejectNonGlobalAssignment`) — but they are one RULE stated once, and nothing else makes the three agree
 // on the payload or the anchor. A fourth site, or a future change to what E2013 says, has one place to go.
 //
@@ -17842,8 +17825,8 @@ let GuardedQuotientBlockLabel = b"divok"
 // its identity says "not materialized yet". That is the whole economy: a `Parser` is built per file per pass and per
 // top-level constant, and nearly none of them fills most of these.
 //
-// ⛔ **HELD BY AN OWNER AND HANDED TO EVERY PARSER IT BUILDS, NEVER MODULE `var`s.** A parse on a pool worker may reach
-// no module `var` (E3143), and a counted record retained from two OS threads is a lost update. A parse whose artifact
+// ⛔ **HELD BY AN OWNER AND HANDED TO EVERY PARSER IT BUILDS, NEVER MODULE-LEVEL.** A counted record retained from two
+// OS threads is a lost update. A parse whose artifact
 // crosses a pool boundary builds its own (`ParseStaging.parseFile`): the artifact's functions keep the placeholders,
 // and a move carries only a record owned inside the moved graph.
 // ⛔ **FIELDS, BECAUSE A `let` HOLDING AN EMPTY CONTAINER IS IMAGE DATA** (⚖ user ruling): storing a
@@ -18636,20 +18619,20 @@ type FunctionBodyState
 	export var mergeImmutableBlame as MergeBlameColumn
 
 	// ⭐⭐ **WHICH VALUES WERE READ OUT OF A SLOT THAT CAN BE REBOUND WHILE A NAME STILL HOLDS THE VALUE**
-	// — a MUTABLE struct field (`self.items`, `h.items`) or a MUTABLE top-level global (`var G`).
-	// The fact that makes such a read OWE A REFERENCE the moment it is bound to a name.
+	// — a MUTABLE struct field (`self.items`, `h.items`) or a cell. The fact that makes such a read OWE A
+	// REFERENCE the moment it is bound to a name.
 	//
 	// ⚠ **THE BORROW MODEL'S STRUCTURAL ARGUMENT DOES NOT REACH A WRITABLE SLOT.**
 	// `declareInitializedBinding` leaves an immutable binding of a borrowed managed value BORROWED — no
 	// retain, no scope-exit drop — on the reasoning stated at its `aliasImmutableSource` arm: "the owner
 	// always outlives every alias of it, structurally". That holds for the borrows it was written against —
 	// a PARAMETER (the caller owns the box and cannot be rebound from here) and an immortal `.rdata` literal
-	// — because their owner is not storage this function can overwrite. A field and a `var` global ARE:
+	// — because their owner is not storage this function can overwrite. A field IS:
 	// the STORAGE outlives the alias, but the VALUE in it does not, and the store that replaces it drops
 	// exactly the record the alias still names.
 	//
-	// Both spellings — `let old = items` + `items = fresh` inside a method, and `let old = G` + `G =
-	// fresh` at top level, each read back afterwards — must answer `sum 10` / `sum 3`. A bare
+	// `let old = items` + `items = fresh` inside a method, read back afterwards, must answer
+	// `sum 10` / `sum 3`. A bare
 	// `loadIndirect` with no retain dies **0xC0000005** on the next read, because the field store's
 	// `__managed_decref` has freed the record. It is the one thing between here and a working corpus
 	// `Map`: `Map.grow()` is four `let old… = <field>` binds followed by four field stores.
@@ -19401,10 +19384,6 @@ export type Parser
 	// The sole output. Every emit/registry write lands here, never on `Project`.
 	var artifact as FileParseArtifact
 
-	// ⭐ **THE STORAGE-SUBJECT STAND-IN FOR EVERY TOP-LEVEL `var` THIS FILE NAMES** (`VarInfo.
-	// createModuleStorageSubject`). FILE-scoped and never reset, deliberately: a global's storage is the
-	// same storage in every function of the file. Holds `noTopLevelStorageSubjects` until the first mint.
-	var topLevelStorageSubjects as TopLevelStorageSubjectTable
 	var genericParameterNames = NameRoster.create(0)
 
 	var bodyState as FunctionBodyState
@@ -20261,7 +20240,6 @@ export type Parser
 			pos: 0,
 			artifact: FileParseArtifact.create(job.path, livesUnderStdlibDirectory: job.livesUnderStdlibDirectory, sourceBytes: sourceBytes),
 			libraryBlame: LibraryBlame.unblamed,
-			topLevelStorageSubjects: noTopLevelStorageSubjects,
 			bodyState: FunctionBodyState.fresh(anchors, firstValueId: 0, returnSpelling: EmptySourceText, returnBrand: EmptySourceText, provenance: anchors.noDeferredProvenance, mayReturnAGlobalAlias: false, closureEnv: ClosureEnvParam.none, returnAlias: anchors.undeclaredAlias, paramSites: sharedEmptyParamSites, layoutParam: HiddenWordParam.none, countParam: HiddenWordParam.none, nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction),
 			claimOpFloor: 0,
 			heldAwaits: HeldAwaitArray.create(0),
@@ -20921,7 +20899,7 @@ export type Parser
 	// sweep would not record the binding, and `declaredOutcome`'s drift guard would panic on a
 	// program that is perfectly correct.
 	function atTopLevelBindingKeyword() returns bool
-		return self.at(TokenKind.let) or self.at(TokenKind.var)
+		return self.at(TokenKind.let)
 	end 'atTopLevelBindingKeyword'
 
 	// ⭐ **DOES THE TOKEN AT `index` OPEN A FUNCTION DECLARATION — `function <name> (` — rather than
@@ -20942,7 +20920,7 @@ export type Parser
 	//     the NAME slot and the group's `(` after it. MEASURED without the clause: every declaration after
 	//     that line went unrecorded — a `union` declared below it earned **E2015 `a match pattern naming
 	//     'found' … enum-case patterns arrive in a later wave`**, blaming an unbuilt feature for a type the
-	//     index never received, and a top-level `var` below it took `ProgramSignatures.recordedDeclFor`'s
+	//     index never received, and a top-level binding below it took `ProgramSignatures.recordedDeclFor`'s
 	//     drift guard down as a compiler PANIC. It is the SEQUENCE and not the word `and`: any word-shaped
 	//     operator (`or`, `xor`, `mod`, `is`) reaches it, which is why the cure is where a declaration may
 	//     STAND rather than what may follow the keyword.
@@ -25439,7 +25417,7 @@ export type Parser
 				continue
 			end 'isWhere'
 
-			// ⭐⭐ **`static let` / `static var` — A TYPE-QUALIFIED TOP-LEVEL BINDING, swept exactly as a
+			// ⭐⭐ **`static let` — A TYPE-QUALIFIED TOP-LEVEL BINDING, swept exactly as a
 			// file-scope one is.** It has to be recorded HERE and not by the caller's depth-0 gate for
 			// `recordScannedType`'s own reason: this walk consumes the whole `type` declaration, so its members
 			// are never offered to the outer loop — and the outer loop could not qualify the name in any case,
@@ -25451,9 +25429,8 @@ export type Parser
 			if depth == 0 and self.staticBindingKeywordAt(self.pos) 'isStaticBinding'
 				// The `static` keyword's index is the anchor the visibility is read backwards from: `export
 				// static let X` puts `static` where the modifier would otherwise be, exactly as it does for a
-				// method (`declaredFunctionVisibility`). The cursor is then seated on the `let`/`var` itself,
-				// which is where the shared binding reader begins — the outer walk arrives here on whichever
-				// of the three tokens opens the declaration.
+				// method (`declaredFunctionVisibility`). The cursor is then seated on the `let` itself,
+				// which is where the shared binding reader begins.
 				let modifierAnchor = pastVisibilityModifiers(self.tokens, index: self.pos)
 				self.pos = modifierAnchor + 1
 				self.recordScannedBinding(bindingOut, qualifier: self.enclosingType.clone(), modifierAnchor: modifierAnchor)
@@ -26833,6 +26810,11 @@ export type Parser
 	function structFieldKeywordAt(index ElementIndex) returns bool
 		let afterModifier = pastVisibilityModifiers(self.tokens, index: index)
 		let kind = self.kindAt(afterModifier)
+
+		if afterModifier > 0 and self.kindAt((afterModifier - 1) as ElementIndex) == TokenKind.static 'aWordAfterStatic'
+			return false
+		end 'aWordAfterStatic'
+
 		return kind == TokenKind.let or kind == TokenKind.var
 	end 'structFieldKeywordAt'
 
@@ -26847,7 +26829,7 @@ export type Parser
 	// keyword taught to one reader and not another cannot put two readers of one grammar a token apart.
 	function staticBindingKeywordAt(index ElementIndex) returns bool
 		let afterModifier = pastVisibilityModifiers(self.tokens, index: index)
-		return self.kindAt(afterModifier) == TokenKind.static and self.structFieldKeywordAt(afterModifier + 1)
+		return self.kindAt(afterModifier) == TokenKind.static and self.kindAt(pastVisibilityModifiers(self.tokens, index: afterModifier + 1)) == TokenKind.let
 	end 'staticBindingKeywordAt'
 
 	// Read one field declaration into `layout`. THE one field reader, shared by the sweep and the real
@@ -27564,7 +27546,7 @@ export type Parser
 		// because a duplicate is an error independent of whether the held declaration's initializer
 		// also failed: that failure reports at the held declaration's own statement, this at the other.
 		if self.signatures.isRedeclaredBinding(decl) 'redeclared'
-			throw SourceParseError.duplicateTopLevelDeclaration(String.from(decl.name), incumbentKeyword: self.signatures.incumbentBindingKeyword(decl), line: decl.nameLine, column: decl.nameColumn)
+			throw SourceParseError.duplicateTopLevelDeclaration(String.from(decl.name), incumbentKeyword: BindingKeyword, line: decl.nameLine, column: decl.nameColumn)
 		end 'redeclared'
 
 		// ⚠ The outcome is bound to a local before the match, and the payload is thrown from
@@ -27578,8 +27560,8 @@ export type Parser
 			// Nothing a top-level binding can fold to is unstorable: a scalar occupies its `.data` slot as a
 			// value, a managed one as a pointer `__module_init` fills before `main`. `globalStdType` is the
 			// one home of that enumeration.
-			value(_, tag, typeName) then try self.requireGlobalVarNotBornFromABareNumber(decl, bare: (tag == ValueTypeTag.integer or tag == ValueTypeTag.float) and typeName.isEmpty())
-			storedRecord(valueType, _, _, _) then try self.parseStoredRecordInitializer(decl, valueType: valueType)
+			storedRecord(valueType, _, _, _) then try self.parseGlobalInitializer(decl, valueType: valueType)
+			value or
 			poisoned or
 			managedValue or
 			imagedRecord or
@@ -27591,11 +27573,6 @@ export type Parser
 			evaluating then panic("Parser.reportBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
 	end 'reportBindingFailure'
-
-	function parseStoredRecordInitializer(decl TopLevelDecl, valueType MaxonType) throws SourceParseError
-		try self.requireGlobalVarNotBornFromABareNumber(decl, bare: self.globalSlotHoldsBareNumbers(valueType))
-		try self.parseGlobalInitializer(decl, valueType: valueType)
-	end 'parseStoredRecordInitializer'
 
 	function parseGlobalInitializer(decl TopLevelDecl, valueType MaxonType) throws SourceParseError
 		let resume = self.pos
@@ -27631,26 +27608,6 @@ export type Parser
 		self.commitRangeChecks(name)
 		self.pos = resume
 	end 'parseGlobalInitializer'
-
-	function globalSlotHoldsBareNumbers(slot MaxonType) returns bool
-		if maxonTypeTag(slot) == ValueTypeTag.genericInstance 'anInstance'
-			return self.instanceHoldsBareNumbers(genericInstanceIdOf(slot))
-		end 'anInstance'
-
-		if maxonTypeTag(slot) != ValueTypeTag.structRef 'neitherAContainerNorARecord'
-			return false
-		end 'neitherAContainerNorARecord'
-
-		view name = self.signatures.indexSpaceTypeName(slot)
-		return isTupleTypeName(name) and self.tupleHoldsBareNumbers(name)
-	end 'globalSlotHoldsBareNumbers'
-
-	function requireGlobalVarNotBornFromABareNumber(decl TopLevelDecl, bare bool) throws SourceParseError
-		if decl.mutable and bare 'aBareNumberVar'
-			let first = self.tokenAt(decl.initStart)
-			throw SourceParseError.varStartsFromBareNumber(first.line, column: first.column)
-		end 'aBareNumberVar'
-	end 'requireGlobalVarNotBornFromABareNumber'
 
 	function requireInitializerNamesNoRegistry(decl TopLevelDecl) throws SourceParseError
 		if not self.signatures.declaresADefault() 'noRegistryToReach'
@@ -27925,7 +27882,7 @@ export type Parser
 
 		// A clone, so the slot holds a box only the registry owns: the slot's box is released on whichever
 		// thread replaces it, while the caller's box takes a plain unshared decrement. A box both held would
-		// lose a count update, and that count alone decides when the mailbox closes and is freed.
+		// lose a count update, and that count alone decides when the cown closes and is freed.
 		let stored = self.emitRuntimeCall(serviceHandleClonerOf(self.signatures, handleName: self.valueTypeName(handle)), args: argsOf(handle), resultTag: self.tagOf(handle), resultNameId: self.valueNameId(handle), range: range)
 
 		return match replacement 'replacement'
@@ -28141,11 +28098,7 @@ export type Parser
 	// parse reads. Two scanners would put the sweep's idea of the initializer and the parser's idea of it a
 	// token apart, and the sweep would fold a different expression than the one the user wrote.
 	//
-	// ⭐ **`let` AND `var` READ IDENTICALLY, WHICH IS WHY THIS IS ONE FUNCTION.** They differ in the
-	// keyword and in nothing else: a top-level `var`'s initializer is read by the same initializer
-	// parse as a `let`'s. The mutability is simply carried through to the decl, where it decides storage.
-	//
-	// ⭐⭐ **AND A `static let` / `static var` MEMBER OF A `type` BODY READS THROUGH IT TOO, WHICH IS
+	// ⭐⭐ **A `static let` MEMBER OF A `type` BODY READS THROUGH IT TOO, WHICH IS
 	// THE WHOLE OF THAT FEATURE'S STORAGE MODEL.** `qualifier` is empty at file scope and the enclosing
 	// type's name inside a `type` body, so a static member is a top-level binding whose NAME is
 	// `Counter.count` — and every downstream mechanism (the initializer fold, the `.data` arena, the
@@ -28153,8 +28106,7 @@ export type Parser
 	// needed no teaching at all. See `declaredBindingName` for why the qualification IS the per-type
 	// identity rather than something built beside it.
 	function readTopLevelBinding(visibility Visibility, qualifier EnclosingTypeScope) returns TopLevelDecl throws SourceParseError
-		let mutable = self.at(TokenKind.var)
-		try self.consume(TokenKind.var if mutable else TokenKind.let)
+		try self.consume(TokenKind.let)
 		let nameTok = try self.consume(TokenKind.identifier)
 
 		// The BARE name is what the reserved test sees, exactly as `parseFunction` checks `create` rather
@@ -28171,7 +28123,7 @@ export type Parser
 		// body it is reading (`parseTypeMember` passes the enclosing type, the file-scope dispatcher passes
 		// nothing), so the fact is recorded at the one place that is TOLD it rather than inferred later from
 		// the shape of the name. See `TopLevelDecl.scope` for why the two positions differ at all.
-		return TopLevelDecl.create(self.declaredBindingName(qualifier, nameTok: nameTok), mutable: mutable, visibility: visibility, declFilePath: self.job.path, initStart: initStart, initEnd: initEnd, initRange: SourceRange.ofToken(self.tokenAt(initStart)), nameLine: nameTok.line, nameColumn: nameTok.column, scope: qualifier.clone(), declaredByTheCorpus: self.job.isStdlibSource)
+		return TopLevelDecl.create(self.declaredBindingName(qualifier, nameTok: nameTok), visibility: visibility, declFilePath: self.job.path, initStart: initStart, initEnd: initEnd, initRange: SourceRange.ofToken(self.tokenAt(initStart)), nameLine: nameTok.line, nameColumn: nameTok.column, scope: qualifier.clone(), declaredByTheCorpus: self.job.isStdlibSource)
 	end 'readTopLevelBinding'
 
 	// ⭐ **THE STORAGE NAME A BINDING DECLARATION CLAIMS — bare at file scope, `Type.member` inside a `type`
@@ -33161,20 +33113,24 @@ export type Parser
 			self.advance()
 		end 'staticMember'
 
-		// ⭐⭐ **`static var count = 0` / `static let MAX = 100` — A TYPE-QUALIFIED TOP-LEVEL BINDING.**
+		// ⭐⭐ **`static let MAX = 100` — A TYPE-QUALIFIED TOP-LEVEL BINDING.**
 		// It is not a field and takes no slot in the instance layout (`atStructFieldKeyword` never sees it —
 		// that predicate looks past a VISIBILITY modifier, not past `static`); it is one copy for the TYPE,
 		// which is exactly what a top-level binding already is. So it is READ by the top-level binding reader
 		// and REPORTED by the top-level binding's own failure door, under the name `Counter.count` — the whole
 		// mechanism, and the reason nothing downstream of the parser learned that static members exist.
 		//
-		// ⚠ The cursor sits on `let`/`var` here — `static` is consumed above — which is precisely where
+		// ⚠ The cursor sits on `let` here — `static` is consumed above — which is precisely where
 		// `readTopLevelBinding` expects to begin, so the sweep's arm and this one enter it identically.
 		if self.atTopLevelBindingKeyword() 'staticBinding'
-			try self.requireMemberListDeclaresStorage(memberList)
+			try self.requireMemberListDeclaresStorage(memberList, isStatic: true)
 			try self.raiseBindingFailure(try self.readTopLevelBinding(visibility, qualifier: self.enclosingType.clone()))
 			return
 		end 'staticBinding'
+
+		if self.at(TokenKind.var) and not isStatic 'anExtensionField'
+			try self.requireMemberListDeclaresStorage(memberList, isStatic: false)
+		end 'anExtensionField'
 
 		// A NESTED (inner) typealias — `export typealias Idx = int(0 to u64.max)`. The
 		// `export` (visibility) is already consumed above; a nested typealias takes no `static`. Its
@@ -33248,13 +33204,14 @@ export type Parser
 	// `atStructFieldKeyword` claims it as a FIELD one door up, so a member list reaching the `staticBinding`
 	// arm at all is either an extension's or carries the `static` the arm is named for. The message names
 	// the keyword the author wrote, so both spellings read as the mistake they are.
-	function requireMemberListDeclaresStorage(memberList MemberList) throws SourceParseError
+	function requireMemberListDeclaresStorage(memberList MemberList, isStatic bool) throws SourceParseError
 		if memberList == MemberList.typeBody 'aTypeBody'
 			return
 		end 'aTypeBody'
 
 		let tok = self.current()
-		throw SourceParseError.unsupported("a `{tok.kind.rawValue}` declaration in an `extension` body — an extension adds methods to types other declarations named and declares no storage of its own, so there is no type for this binding to belong to; declare it in the `type` body as a `static {tok.kind.rawValue}`", line: tok.line, column: tok.column)
+		let cure = "declare it in the `type` body as a `static {tok.kind.rawValue}`" if isStatic else "declare it as a field of the `type` body"
+		throw SourceParseError.unsupported("a `{tok.kind.rawValue}` declaration in an `extension` body — an extension adds methods to types other declarations named and declares no storage of its own, so there is no type for this binding to belong to; {cure}", line: tok.line, column: tok.column)
 	end 'requireMemberListDeclaresStorage'
 
 	// Parse a function: `[static] function <name>(<params>) [returns <Type>] <body> end
@@ -34617,8 +34574,7 @@ export type Parser
 	// `declareCellLocal`). That is E3077 *"variable 'n' is never reassigned; use 'let' instead of 'var'"* on
 	// `var n = 0` + `setTo99(n)` — exactly the bindings pass-by-reference exists to serve. The scope answers
 	// for both representations and agrees with the stand-in wherever the stand-in is right: a `let`, a
-	// parameter and a self-field alias are all `BindingKind.let`, and a top-level `var` is not in scope here
-	// at all.
+	// parameter and a self-field alias are all `BindingKind.let`.
 	function markNameMutabilityExercised(name ByteArray)
 		if not self.bodyState.scope.contains(name) 'namesNoLocalBinding'
 			return
@@ -37472,7 +37428,8 @@ export type Parser
 			// for why the scan finding `count` is harmless.)
 			try self.parseExplicitSelfFieldAssignment(func, block: block)
 		end 'selfFieldAssign' else if form == StatementForm.staticMemberAssign 'staticMemberAssign'
-			// `Counter.count = 42` — a store to a static member's module storage. Its own arm, ahead of
+			// `Counter.count = 42` — a write to a static member, refused as an assignment to an immutable
+			// binding. Its own arm, ahead of
 			// `fieldAssignsAt`, whose token shape it shares EXACTLY: what tells the two apart is that this base
 			// names a TYPE and that one a VALUE, which is the same separation `methodCallsAt` draws between
 			// `c.increment()` and `Point.create()`. Left to the field arm it reaches `requireStructBase` and is
@@ -37594,7 +37551,7 @@ export type Parser
 			let valueTempFloor = self.bodyState.pendingTempDrops.count()
 			let valueOpFloor = self.artifact.module.ops.count()
 			let operandStart = self.bodyState.operandOrder.eventCount()
-			let valueResult = try self.parsePostfix(func, operandStart: operandStart, value: try self.parseVariableReference(func), resultUsed: false)
+			let valueResult = try self.parsePostfix(func, operandStart: operandStart, value: try self.parseVariableReference(), resultUsed: false)
 			try self.finishCallStatement(func, result: valueResult, opFloor: valueOpFloor, tempFloor: valueTempFloor, anchor: valueAnchor)
 		end 'valueHeadedCallStmt' else if form == StatementForm.spawnStmt 'spawnStmt'
 			// ⭐ **`spawn Calc.create()` ON A LINE OF ITS OWN** — a service started for its EFFECT, its handle
@@ -37619,7 +37576,7 @@ export type Parser
 			// tail when it owns heap. Treating `cb` as a direct call instead is what misreported it E3004.
 			if self.calleeIsFunctionTypedLocal() 'functionLocalCallStmt'
 				let operandStart = self.bodyState.operandOrder.eventCount()
-				_ = try self.parsePostfix(func, operandStart: operandStart, value: try self.parseVariableReference(func), resultUsed: false)
+				_ = try self.parsePostfix(func, operandStart: operandStart, value: try self.parseVariableReference(), resultUsed: false)
 			end 'functionLocalCallStmt' else 'directCallStmt'
 				// A trailing `(` on the call's RESULT is a call-result callee (`getFn()()`) — the result is itself a
 				// `function` value, applied by `parsePostfix` as an indirect call, the statement-position twin of the
@@ -38508,7 +38465,7 @@ export type Parser
 		// ⭐⭐ **AND A `let` NEEDS IT TOO WHEN THE VALUE CAME OUT OF A REBINDABLE SLOT.** The `mutable`
 		// gate alone rested on "a `let` is never reassigned", which answers the wrong half: the hazard is not
 		// this BINDING being rebound, it is the STORAGE the value was read out of being rebound underneath it.
-		// A mutable field or `var` global is exactly that storage, its store drops the old occupant, and the
+		// A mutable field is exactly that storage, its store drops the old occupant, and the
 		// immutable binding then names freed memory — the segfault `Map.grow()`'s four `let old… = <field>`
 		// binds hit, where the runnable oracle increfs at the same point and prints the answer. The two gates
 		// are ONE question asked of two things — "can the value under this name be dropped while the name is
@@ -39524,9 +39481,8 @@ export type Parser
 	// means the same thing.
 	//
 	// ⛔ **A TARGET THAT DOES NOT NAME A LOCAL IS REFUSED, NOT QUIETLY REDIRECTED.** A self field
-	// (`count = 1` inside a method) and a module-scope `var` are each written through a DIFFERENT store —
-	// `emitCheckedSelfFieldStore` and `emitCheckedGlobalStore` — and each of those parses its own right-hand
-	// side, which a tuple assignment has already evaluated. Routing such a name to the local rebind instead
+	// (`count = 1` inside a method) is written through a DIFFERENT store — `emitCheckedSelfFieldStore` —
+	// which parses its own right-hand side, which a tuple assignment has already evaluated. Routing such a name to the local rebind instead
 	// would silently rebind the field's ALIAS and never write the receiver's storage: a wrong answer, not a
 	// missing feature. E2015 is exactly "a shape this compiler does not lower HERE yet"; the name that
 	// resolves to nothing at all keeps the E2004/E2013 answer a plain `x = …` gives it.
@@ -40109,7 +40065,7 @@ export type Parser
 		end 'aVarOthersMayAlsoStoreInto'
 	end 'adoptFirstBrandedStore'
 
-	// ⭐ **AN ASSIGNMENT TO A `var` — A LOCAL OR A MODULE `var` — IS A MUTABLE DOOR, ASKED ON THE TERMS A `var`
+	// ⭐ **AN ASSIGNMENT TO A `var` IS A MUTABLE DOOR, ASKED ON THE TERMS A `var`
 	// BINDING IS** (`requireMutableBindingSource`): a name spelled bare moves or is refused, and a value no local name
 	// spells — or the record of a parameter or of the receiver — is asked of what it may be derived from. A byte
 	// record the assignment does not own is copied into the slot, and reaches nothing. A `var` handed over is filed
@@ -40574,17 +40530,16 @@ export type Parser
 		return self.unsharedStoredByteRecord(moved, range: range)
 	end 'ownedValueACellTakes'
 
-	// ⭐⭐ **REBIND A CELL-RESIDENT BINDING — THE WRITE A CALLER OBSERVES.** The exact shape
-	// `emitCheckedGlobalStore` already uses for module storage, one storage kind over, and for the same reason:
-	// a durable slot's write is THREE things and not one — take ownership of the new value, RELEASE the record
-	// the slot was holding, then store.
+	// ⭐⭐ **REBIND A CELL-RESIDENT BINDING — THE WRITE A CALLER OBSERVES.** A durable slot's write is THREE
+	// things and not one — take ownership of the new value, RELEASE the record the slot was holding, then
+	// store.
 	//
 	// ⚠ **THE ORDER IS LOAD-BEARING IN BOTH DIRECTIONS.** The release must come AFTER the new value is settled
 	// (`n = Node.create(n.value + 1)` reads the old occupant while building the new one) and BEFORE the store
 	// overwrites the only pointer to it. `reassignBindingValue`'s own header states the same rule for a `var`:
 	// *"release the overwritten allocation BEFORE the rebind, while `oldValue` still names it"*.
 	//
-	// ⚠ **UNLIKE THE GLOBAL STORE, THE DISPLACED VALUE IS LOADED RATHER THAN REMEMBERED.** A cell's occupant
+	// ⚠ **THE DISPLACED VALUE IS LOADED RATHER THAN REMEMBERED.** A cell's occupant
 	// may have been written by a CALLEE through the very pointer this binding holds, so an SSA value the parser
 	// captured earlier is not what the cell contains — releasing that would free a record the cell no longer
 	// holds and leak the one it does. The load is what the cell actually holds at this instant, which is the
@@ -40875,40 +40830,28 @@ export type Parser
 		end 'trackNew'
 	end 'reassignBindingValue'
 
-	// Assign to a name that is not a local: a top-level `var` (a STORE to its `.data` slot), a
-	// top-level `let` (E2013 — assigning to a constant), or nothing (E2004).
-	//
-	// **THE `let` ARM IS WHY THE CONSTANT IS PROBED AT ALL.** Without it a top-level `let` would
-	// resolve as neither a local nor a var and be reported "undefined variable: 'origin'" — naming a
-	// name that IS defined, three lines up, which is a diagnostic that sends the reader looking for a
-	// typo instead of at the `let` they meant to write `var`. `specs/static-variables.md`'s
-	// `top-level-let-struct-reassign-error` pins the honest one (E2013).
-	//
-	// The type check the local path applies is applied here too, and through the same
-	// `typesAgree`/`assignTypeMismatch` pair — a global is no less able to be handed a bool where it
-	// declared an int, and a laundered value in a `.data` slot is exactly as wrong as one in a
-	// register. The check happens BEFORE the store is emitted, so a rejected program emits no op.
+	// Assign to a name that is not a local: a top-level `let` (E2013 — assigning to a constant), or
+	// nothing (E2004).
 	//
 	// ⚠ **HAVING A SLOT IS NOT PERMISSION TO WRITE ONE**. `globalDeclFor` answers "which slot
 	// does this name denote?", and an array `let` has an answer to that — its value is a heap record, so it
-	// is STORED like a `var` and read like one. Whether it may be WRITTEN is the separate question this
-	// statement is the only asker of, so the `mutable` bit rides the lookup and the refusal happens here.
-	// Without it `let xs = [1, 2]` would silently accept `xs = [3, 4]` — an accepted write that should have
-	// been refused, which is a wrong answer rather than a compile error.
+	// is STORED and read through its slot. A module binding is never writable, so a `found` is E2013 and
+	// `xs = [3, 4]` is refused. `specs/static-variables.md`'s `top-level-let-struct-reassign-error` pins the
+	// diagnostic.
 	// ⭐ **AND A STATIC MEMBER'S STORE IS THE SAME STATEMENT**, reached with a name token spelling
-	// `Counter.count` (`staticMemberNameToken`). Every arm below is the answer it needs: a `static var` finds
-	// its slot, a `static let` is an inlined constant and gets the E2013 a top-level `let` gets, and a
-	// misspelled member is undefined. Nothing here distinguishes the two spellings, which is the point.
+	// `Counter.count` (`staticMemberNameToken`). A stored `static let` finds its slot, an inlined one is a
+	// constant, and both get the E2013 a top-level `let` gets; a misspelled member is undefined. Nothing
+	// here distinguishes the two storage shapes, which is the point.
 	function parseTopLevelAssignment(func IrFunction, block IrBlock, nameTok Token) throws SourceParseError
 		match self.signatures.globalDeclFor(nameTok.value, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
-			found(label, valueType, brand, mutable) then try self.storeToGlobal(func, block: block, nameTok: nameTok, label: label, valueType: valueType, brand: brand, mutable: mutable)
+			found then throw assignToImmutableError(nameTok)
 			notFound then try self.rejectNonGlobalAssignment(nameTok)
 			poisoned then _ = try self.parseExpression(func, block: block)
 		end 'global'
 	end 'parseTopLevelAssignment'
 
-	// `Counter.count = 42` — consume the `<Type> . <member> =` head and hand the store to the module-storage
-	// writer under the qualified name. The base is read through `typeBaseTokenAt`, the ONE reader of a
+	// `Counter.count = 42` — consume the `<Type> . <member> =` head and hand the write to
+	// `parseTopLevelAssignment` under the qualified name. The base is read through `typeBaseTokenAt`, the ONE reader of a
 	// type-naming base, so `Self.count = 1` inside a static method is the same statement written the other
 	// way and needs no arm of its own.
 	//
@@ -40925,88 +40868,6 @@ export type Parser
 
 		try self.parseTopLevelAssignment(func, block: block, nameTok: nameTok)
 	end 'parseStaticMemberAssignment'
-
-	// Write a top-level global, or refuse because it is immutable — an array `let`, the one binding that has
-	// a slot and still refuses the write.
-	//
-	// It raises E2013 HERE rather than through `rejectNonGlobalAssignment` below, because the two know
-	// different things and the difference is the whole diagnostic: that one is reached having established
-	// the name is NOT a stored global, so it must go and ask whether the name exists at all before it can
-	// choose between E2013 and E2004. This one is holding the resolution that proves the name is declared,
-	// so the question is already answered and re-asking it through a kind-filtered door would report a
-	// declared name as undefined.
-	function storeToGlobal(func IrFunction, block IrBlock, nameTok Token, label ByteArray, valueType MaxonType, brand ByteArray, mutable bool) throws SourceParseError
-		if not mutable 'immutableGlobal'
-			throw assignToImmutableError(nameTok)
-		end 'immutableGlobal'
-
-		try self.emitCheckedGlobalStore(func, block: block, nameTok: nameTok, label: label, valueType: valueType, brand: brand)
-	end 'storeToGlobal'
-
-	// Parse the right-hand side, check it against the global's declared type, and store it.
-	//
-	// ⭐⭐ **A MANAGED GLOBAL'S WRITE IS THREE THINGS, NOT ONE**: take ownership of the new
-	// value, RELEASE the record the slot was holding, then store. The order matters in both directions —
-	// the release must come after the new value is settled (it may be built from the old one) and before
-	// the store overwrites the only pointer to it.
-	//
-	// ⚠ **THE OLD-VALUE DECREF IS UNCONDITIONAL, WITH NO NULL TEST.** A null guard would then need the
-	// initializer function special-cased BY NAME to suppress it, which is only necessary where a
-	// global's first store is an ordinary store into a slot that is still zero. The initializing store
-	// is not on this path at all — it is `ModuleInit`'s own emission — so every store reaching HERE
-	// finds a slot that is already filled.
-	//
-	// ⭐ **INCLUDING A STORE ISSUED FROM INSIDE ANOTHER GLOBAL'S INITIALIZER**, which is the one shape that
-	// could reach an empty slot. A write emits the same `globalAddr` a read does, so `GlobalInitOrder` sees
-	// it as a dependency and settles the written global FIRST — and a pair that writes each other's slots
-	// has no such order and is E2012.
-	function emitCheckedGlobalStore(func IrFunction, block IrBlock, nameTok Token, label ByteArray, valueType MaxonType, brand ByteArray) throws SourceParseError
-		let valueStart = self.pos
-		self.stateDeclaredLiteralTarget(valueType, scopeFilePath: self.job.path, valueStart: valueStart)
-		let value = try self.parseExpression(func, block: block)
-
-		// The slot keeps the type its declaration gave it, so `g = 3` into a `var g = 0.0` stores a WIDENED
-		// f64 and not the integer's raw bytes — the same coercion the local rebind above performs, through
-		// the same door.
-		let stored = try self.assignableValue(nameTok, value: value, declared: self.floatResolvedTag(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType)), declaredNameId: typeNameIdOf(valueType), door: FunctionTypeDoor.global, placeOwner: SlotOwner.unowned, voice: SlotMismatchVoice.assignedPlace)
-
-		// The same nominal question every other store asks: `structRef == structRef` above agrees for any two
-		// structs, and one gid is every brand of its instance.
-		try self.requireSlotAggregateIdentity(valueType, value: value, placeDoor: FunctionTypeDoor.global, placeName: nameTok.value, placeOwner: SlotOwner.unowned, placeBrand: self.declaredBrand(brand, resolved: valueType, readerFilePath: self.job.path), placeSpelling: brand, voice: SlotMismatchVoice.assignedPlace, anchor: nameTok)
-		self.recordRangeCheckSite(stored, destination: valueType, line: nameTok.line, column: nameTok.column)
-		self.recordAdoptableStore(moduleVarBrandKey(label), declaredBrand: brand, valueType: valueType, value: value, phrase: assignedPlacePhrase(FunctionTypeDoor.global, name: nameTok.value, owner: SlotOwner.unowned), anchor: nameTok)
-
-		// ⭐ **THE EFFECT SUMMARY'S "modifies global state" SEED (E3064).** Recorded here because past this
-		// door the write is a `globalAddr` + `storeIndirect` pair a READ emits too. See
-		// `IrFunction.writesModuleStorage`.
-		func.writesModuleStorage = true
-
-		let range = SourceRange.ofToken(nameTok)
-
-		// `from:` names the interner `valueType`'s ids live in — this file's own, which is the table
-		// `globalDeclFor` was handed and therefore the one it minted into. A folded enum or union case arrives
-		// as a `named` and IS resolved through this query, so naming the whole-program table here would panic
-		// `foreignNameOf` on every scalar-enum global's write.
-		if not self.signatures.typeIsManagedFor(valueType, from: self.artifact.typeNames, readerFilePath: self.job.path) 'scalarGlobal'
-			self.emitGlobalStore(label, valueType: valueType, value: stored, range: range)
-			return
-		end 'scalarGlobal'
-
-		// The slot is DURABLE STORAGE, exactly as a struct field or a union payload is, so the new value
-		// arrives through the one door that decides copy-vs-co-own-vs-adopt for all of them: a borrowed String
-		// is COPIED into a fresh owned record, an owned value held by a LIVE BINDING is CO-OWNED (the slot takes
-		// its own reference and the binding keeps its own — the 2026-08-12 durable-store ruling), and an owned
-		// TEMPORARY is ADOPTED, its pending statement-end drop cancelled. A second spelling here would be free
-		// to leak the temporary or double-free the source.
-		let moved = try self.moveManagedValueInto(stored, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: tagIsByteRecord(maxonTypeTag(valueType)), range: range)
-		let owned = self.unsharedStoredByteRecord(moved, range: range)
-
-		let displaced = self.emitGlobalLoad(label, valueType: valueType, range: range)
-		self.emitGlobalStore(label, valueType: valueType, value: owned, range: range)
-		self.emitDecref(displaced, range: range)
-		self.noteNameBindSite(func, boundName: nameTok.value, value: owned, anchor: nameTok)
-		try self.noteAssignmentDoor(func, place: nameTok.value, value: stored, sourceName: self.rhsBareLocalSourceName(valueStart), anchor: nameTok)
-	end 'emitCheckedGlobalStore'
 
 	// **THE MUTABILITY RULE FOR A LOCAL BINDING — TWO DOORS, BECAUSE THE TWO STATEMENTS THAT WRITE A
 	// BINDING WRITE TWO DIFFERENT THINGS.** The reassignment `x = 5` gives the NAME a new value; the field
@@ -41668,7 +41529,7 @@ export type Parser
 	// **CHECK AN ASSIGNED VALUE AGAINST ITS DECLARED SLOT AND HAND BACK THE VALUE THAT SLOT WANTS** — the
 	// verdict and the coercion in ONE call, so a caller cannot take the `ok` and forget the conversion.
 	// `voice` is the SENTENCE the refusal is told in and nothing else — see `SlotMismatchVoice`.
-	// A local `var` rebind and a top-level global store go through it, and so does a field or container
+	// A local `var` rebind goes through it, and so does a field or container
 	// element whose slot is unmanaged; a managed slot is `requireManagedValueMatches`'.
 	//
 	// It returns a value rather than nothing precisely because the caller must REBIND: the promoted id is
@@ -41676,8 +41537,8 @@ export type Parser
 	// store the raw integer bits.
 	//
 	// ⚠ **EVERY ARGUMENT IT TAKES IS A SCALAR, AND THAT IS MEASURED RATHER THAN STYLISTIC.** This is one of
-	// the hottest paths in the parser — every `var` rebind, every struct-literal field, every field write
-	// and every global store — so what crosses the boundary is what the program pays per assignment. The
+	// the hottest paths in the parser — every `var` rebind, every struct-literal field and every field write
+	// — so what crosses the boundary is what the program pays per assignment. The
 	// declared type arrives as the `(tag, nameId)` PAIR every other type-deciding door in this file takes
 	// rather than a noun STRING: threading a string on into the function-type door costs
 	// one allocation per call, for a record almost every call then discards. See `FunctionTypeDoor`.
@@ -43593,8 +43454,8 @@ export type Parser
 	//
 	// A STORED-but-immutable binding — an array `let` the compiler could not image (a managed element, a
 	// non-empty container) — never reaches here: it resolves through `globalDeclFor` like any other global,
-	// and `storeToGlobal` refuses it there with this same diagnostic, holding the resolution that proves the
-	// name is declared.
+	// and `parseTopLevelAssignment` refuses it there with this same diagnostic, holding the resolution that
+	// proves the name is declared.
 	function rejectNonGlobalAssignment(nameTok Token) throws SourceParseError
 		match self.constantLookup(nameTok.value, readerFilePath: self.job.path) 'constant'
 			// Every kind of constant is immutable — assigning to a managed `let`, to an imaged record or to
@@ -43900,8 +43761,8 @@ export type Parser
 	end 'admitReturnedAggregate'
 
 	// ⭐⭐⭐ **AN `export` METHOD OF A SERVICE MAY NOT RETURN A VALUE ITS OWN STATE CAN STILL REACH (E3137).** A
-	// service's state is COUNTED — one green thread owns it, so its counts step plain — and a reply that aliased
-	// it would put a counted box in two green threads' hands, which corrupts the heap rather than merely being
+	// service's state is COUNTED — only the runner holding the cown touches it, so its counts step plain — and a
+	// reply that aliased it would put a counted box in two green threads' hands, which corrupts the heap rather than merely being
 	// slow. A reply is always MOVED: it is the MESSAGE ARGUMENT move (`handOff`) read
 	// from the other end, and it asks the SAME question that door does: does this frame provably hold the only
 	// reference?
@@ -43941,9 +43802,9 @@ export type Parser
 	// not transitive and a container the handler mints in its own frame whose ELEMENTS are the service's state
 	// passes every static rule there is.
 	//
-	// ⛔ **THE WALK ITSELF IS NOT EMITTED HERE — `ServiceLoop.publishReplyValue` EMITS IT, AT THE
+	// ⛔ **THE WALK ITSELF IS NOT EMITTED HERE — `ServiceBehaviour.publishReplyValue` EMITS IT, AT THE
 	// PUBLISH.** A `return` still owes releases before the reply is handed over: this frame's scope
-	// drops, and the loop's drop of the message's payloads. A local the reply was built over, or a
+	// drops, and `<T>.__behave`'s drop of the message's payloads. A local the reply was built over, or a
 	// message parameter it holds, is a second owner until then and none after, so a walk here would
 	// abort a reply that crosses with one owner. What stays here is the refusal of a graph no walk can
 	// be built for, which needs a position.
@@ -45106,7 +44967,7 @@ export type Parser
 		var refused = self.artifact.module.addBlock(func, label: b"sendrefused", heat: BlockHeat.cold)
 		var accepted = self.artifact.module.addBlock(func, label: b"sendaccepted", heat: BlockHeat.normal)
 
-		let isRefused = self.emitCompareAgainstLiteral(status, literal: MboxSendStatus.delivered.rawValue, op: MaxonCmpOp.ne, opTok: anchor)
+		let isRefused = self.emitCompareAgainstLiteral(status, literal: CownSendStatus.delivered.rawValue, op: MaxonCmpOp.ne, opTok: anchor)
 		self.emitCondBranch(self.bodyState.currentBlock, cond: isRefused, thenId: refused.id, elseId: accepted.id, ifTok: anchor)
 
 		return (refused, accepted)
@@ -45365,10 +45226,10 @@ export type Parser
 	function sendErrorTagShift(layout EnumLayout) returns FullRangeInt
 		let full = try layout.indexOfCase(ServiceSendMailboxFullCaseName) otherwise panic("sendErrorTagShift: `{String.from(layout.name)}` declares no `{String.from(ServiceSendMailboxFullCaseName)}` case — `buildServiceSendErrorUnion` builds both")
 		let stopped = try layout.indexOfCase(ServiceSendServiceStoppedCaseName) otherwise panic("sendErrorTagShift: `{String.from(layout.name)}` declares no `{String.from(ServiceSendServiceStoppedCaseName)}` case — `buildServiceSendErrorUnion` builds both")
-		let shift = layout.tagOfIndex(full) - MboxSendStatus.full.rawValue
+		let shift = layout.tagOfIndex(full) - CownSendStatus.full.rawValue
 
-		if layout.tagOfIndex(stopped) - MboxSendStatus.stopped.rawValue != shift 'statusesDrifted'
-			panic("sendErrorTagShift: `{String.from(layout.name)}` tags `full` and `stopped` {layout.tagOfIndex(stopped) - layout.tagOfIndex(full)} apart, while `MboxSendStatus` numbers them {MboxSendStatus.stopped.rawValue - MboxSendStatus.full.rawValue} apart — the runtime answers the status and the tag is derived from it by one shift")
+		if layout.tagOfIndex(stopped) - CownSendStatus.stopped.rawValue != shift 'statusesDrifted'
+			panic("sendErrorTagShift: `{String.from(layout.name)}` tags `full` and `stopped` {layout.tagOfIndex(stopped) - layout.tagOfIndex(full)} apart, while `CownSendStatus` numbers them {CownSendStatus.stopped.rawValue - CownSendStatus.full.rawValue} apart — the runtime answers the status and the tag is derived from it by one shift")
 		end 'statusesDrifted'
 
 		return shift
@@ -45377,7 +45238,7 @@ export type Parser
 	function releaseRefusedReply(reply ServiceReplyValue, range SourceRange)
 		match reply 'reply'
 			fireAndForget then return
-			cell(promise) then _ = self.emitRuntimeCall(MboxReplyRefusedName, args: argsOf(promise), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			cell(promise) then _ = self.emitRuntimeCall(CownReplyRefusedName, args: argsOf(promise), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'reply'
 	end 'releaseRefusedReply'
 
@@ -47546,7 +47407,7 @@ export type Parser
 	// and every reader of a producing op asks it, so an op added to `MaxonOp` is classified once.
 	function routableOpAt(opIdx ElementIndex) returns RoutableOp
 		return match try self.artifact.module.ops.get(opIdx) otherwise panic("routableOpAt: opRef {opIdx} not in module.ops") 'op'
-			call(result, callee, args, _, _, _, _, _) gives RoutableOp.send(result) if callee.equals(MboxInterfaceSendName) else RoutableOp.call(result, callee: callee, receiver: receiverArgumentOf(args))
+			call(result, callee, args, _, _, _, _, _) gives RoutableOp.send(result) if callee.equals(CownInterfaceSendName) else RoutableOp.call(result, callee: callee, receiver: receiverArgumentOf(args))
 			serviceSend(result, _, _, _, _, _, _, _) gives RoutableOp.send(result)
 			tryCall(result, _, callee, args, _, _, _, _, _) gives RoutableOp.tryChannelCall(result, callee: callee, receiver: receiverArgumentOf(args))
 			witnessDispatch(result, _, _, _, _, _, _, _) gives RoutableOp.witness(result)
@@ -49769,7 +49630,7 @@ export type Parser
 	//
 	// ⛔ **BOTH RETAIN DOORS ASK `ProgramSignatures.retainCalleeOf`, and `result` is which shape they
 	// need** — this one retains for effect, `emitRetainCall` needs a fresh SSA name for the same box.
-	// A door that spells `__mm_retain` itself frees a live mailbox when the value is a handle
+	// A door that spells `__mm_retain` itself frees a live cown when the value is a handle
 	// (`specs/services.md`, `a-handle-read-out-of-an-array-survives-a-second-send`).
 	function emitIncref(value ValueId, range SourceRange)
 		if self.valueIsImmortalFunction(value) 'anImmortalRecord'
@@ -51081,7 +50942,7 @@ export type Parser
 	// ⭐⭐ **WHICH RETAIN A BORROWED AGGREGATE TAKES — and an EXISTENTIAL takes a DIFFERENT one, because a
 	// CONCRETE type's protocol is a compile-time fact and a conformer's is not.**
 	// A concrete value's entry is `retainCalleeOf`'s, which is the plain box retain for almost
-	// everything and the mailbox pair for a `<T>.handle`. A conformer may be neither — `int`/`bool` conform
+	// everything and the cown handle pair for a `<T>.handle`. A conformer may be neither — `int`/`bool` conform
 	// intrinsically and are held at an interface as their RAW
 	// VALUE (which is what makes them representable there where a `float` is not, E3121), and a `String`
 	// literal is an IMMORTAL `.rdata` record that must be COPIED rather than increfed. So the existential arm
@@ -51210,10 +51071,10 @@ export type Parser
 		end 'bufferRecord'
 
 		// ⭐⭐⭐ **A SERVICE HANDLE IS `structRef`-TAGGED AND IS NOT A PLAIN STRUCT BOX — a durable sink takes
-		// a SHARE of it, never a copy.** A handle's identity IS the mailbox it names, and each handle box owns
-		// one share of the mailbox, given back by its destructor (`__mbox_handle_destruct`). `__mm_own`'s copy
-		// arm allocates a second box and blits the mailbox pointer into it without taking a share, so two
-		// boxes would give back ONE share: the first drop closes the mailbox, the service drains, and the next
+		// a SHARE of it, never a copy.** A handle's identity IS the cown it names, and each handle box owns
+		// one share of the cown, given back by its destructor (`__cown_handle_destruct`). `__mm_own`'s copy
+		// arm allocates a second box and blits the cown pointer into it without taking a share, so two
+		// boxes would give back ONE share: the first drop closes the cown, the service drains, and the next
 		// send is refused as stopped.
 		//
 		// ⚠ It is `emitIncref`, which asks `retainCalleeOf` — so the reference a sink takes and the
@@ -51249,7 +51110,7 @@ export type Parser
 	// which is why this is EXACT rather than conservative: a type either predicate refuses has no such imaged
 	// box anywhere in the program, so no value of it can be one and the cheaper acquire stays right.
 	//
-	// ⛔ **A SERVICE HANDLE IS EXCLUDED HERE AND NOT ONLY AT THE SINK DOOR.** A handle's box NAMES a mailbox
+	// ⛔ **A SERVICE HANDLE IS EXCLUDED HERE AND NOT ONLY AT THE SINK DOOR.** A handle's box NAMES a cown
 	// whose drop steps two shares; a copy of it is a second name holding one share, which
 	// `coOwnConcreteRecordForSink`'s handle arm records as a measured wrong answer. Its `create()` does not
 	// construct from params today, so the predicates below would refuse it anyway — but this door is the one
@@ -51307,7 +51168,7 @@ export type Parser
 	// one selector would make the aliasing one clone too.
 	//
 	// ⛔⛔ **AND THAT ARGUMENT IS ABOUT A BOX WHOSE CONTENTS ARE ITS VALUE, WHICH IS NOT EVERY `structRef`.**
-	// A box may instead be a NAME for something the runtime counts — a service handle names a mailbox — and
+	// A box may instead be a NAME for something the runtime counts — a service handle names a cown — and
 	// for one of those a copy is not a private version of the same value, it is a second name holding one
 	// share. The caller gates such a box out before it reaches here (`coOwnConcreteRecordForSink`'s handle
 	// arm); a co-own road added later owes the same gate, because this door cannot tell the two boxes apart
@@ -51728,7 +51589,7 @@ export type Parser
 	// COPIES, which is why `var b = <a String let>` stays legal and correct.
 	//
 	// Widening the incref into a copy is not an option here — a borrowed array bound to a `var` SHARES when
-	// the source is mutable, for a `var` global and for a parameter alike — so copying would change a
+	// the source is mutable, for a parameter, say — so copying would change a
 	// defined answer rather than fix an undefined one.
 	//
 	// ⭐ **THE PER-VALUE SURFACE COLUMN RIDES ACROSS, HERE AND NOT IN ANY ARM.** All three arms mint a
@@ -52369,35 +52230,6 @@ export type Parser
 		if not self.isDottedChain(keyStart, pastEnd: keyPastEnd) 'keyIsNotAPath'
 			return
 		end 'keyIsNotAPath'
-
-		// ⛔⛔ **A PATH ROOTED IN A WRITABLE GLOBAL IS NOT LINTED, AND THAT IS SOUNDNESS RATHER THAN TASTE**
-		// (spec-port `map-struct-bytearray`). The suppression scan below rests on a premise that holds for a
-		// binding this function owns and FAILS for a top-level `var`: that the only code which can invalidate
-		// the membership answer is code the scan can SEE touching this path. A `var` global's storage is
-		// reachable from every function in the program, so any call in the then-block — `print(…)`, a helper,
-		// anything — may `upsert` into the very table the `contains` probed, under a receiver spelling this
-		// token walk has no way to connect to it. Reporting one would be a false accusation.
-		//
-		// ⚠ **THE TEST IS `namesWritableModuleStorage`, WHICH IS THE ARGUMENT ABOVE AND NOT A PROXY FOR IT.**
-		// Written as "the base is not a local or a capture", its complement is much larger than
-		// "a mutable global": a `let` global's container refuses mutation at every door — both
-		// `m.upsert(…)` on it directly and `fill(m)` into a mutating parameter are E3159 — so nothing in the
-		// then-block can invalidate a membership answer probed through one, and a key that is a top-level
-		// `let` cannot be rewritten either. Both were skipped, and both are exactly what the lint is for.
-		// LOCAL FIRST, which is what keeps a shadowing local a different subject — `storageSubjectNameAt`'s
-		// rule, for its reason.
-		//
-		// ⚠ **BOTH REFERENCES SKIP THE WHOLE GLOBAL FAMILY, and this is where the token-level design is
-		// SHARPER than what they express structurally**: their `BuildAccessPath` / `buildAccessPath` cannot
-		// canonicalize a global load at all, so the path is `null` and the lint is skipped for every global —
-		// while this walk holds the tokens AND the declaration, so it can tell the two apart. MEASURED against
-		// the runnable oracle, which compiles the global-rooted program and refuses the byte-identical one
-		// whose base is a PARAMETER; and pinned by the canonical corpus, whose
-		// `map-struct-bytearray/struct-field-access-in-untaken-if-branch` is exactly the `var`-rooted program
-		// and expects exit 0.
-		if self.baseNamesWritableModuleStorage(condStart) or self.baseNamesWritableModuleStorage(keyStart) 'pathIsRootedInWritableModuleStorage'
-			return
-		end 'pathIsRootedInWritableModuleStorage'
 
 		// The THEN block's own extent — `continuesAtElse: false`, so the scan stops at the first `end` and
 		// never walks an `else` branch, which the membership test did not guard.
@@ -55141,8 +54973,8 @@ export type Parser
 	// ⛔⛔ **THE TOP-LEVEL HALF IS NOT ONLY A LANGUAGE RULE: THE RECORD MAY BE `.rdata`.** A module-level
 	// `let` whose fields are image data reserves no storage at all, so `SharedFacts.counts.push(1)` reaches
 	// `__mm_cow_detach`, which writes a page mapped READ-ONLY on x64; on wasm32-wasi, which has no read-only
-	// section, the same write rewrites the constant. `moduleStorageSubjectName` mints no subject for an
-	// immutable global, so this door is where a chain's write to one is refused.
+	// section, the same write rewrites the constant. `storageSubjectNameAt` mints no subject for a
+	// module-level name, so this door is where a chain's write to one is refused.
 	//
 	// ⚠ **THE BLAME IS THE BASE'S NAME AND NOT THE STORAGE SUBJECT'S, and the two differ exactly where it
 	// matters.** The subject for `self.items.clear()` is `items`; what decides whether the WRITE is legal is
@@ -55199,13 +55031,9 @@ export type Parser
 		return WriteBlame.blamed(baseTok.value, holder: WriteBlameHolder.moduleLet) if self.namesImmutableTopLevelBinding(baseTok.value) else WriteBlame.unblamed
 	end 'immutableTopLevelChainBase'
 
-	// Does `name` denote a top-level binding this file may READ but not WRITE through? It is
-	// `namesTopLevelBinding`'s pair of probes with the mutability asked of each: a CONSTANT is a `let` by
-	// construction — a `var` never reaches the constant registry — and a slot-backed binding carries the
-	// keyword on its own declaration.
-	//
-	// ⚠ **`moduleStorageSubjectName` CANNOT ANSWER THIS**, and `namesWritableModuleStorage`'s header says
-	// why: it excludes an immutable top-level binding deliberately.
+	// Does `name` denote a top-level binding this file may READ but not WRITE through? Every top-level
+	// binding is a `let`, so it is `namesTopLevelBinding`'s pair of probes: a CONSTANT, or a slot-backed
+	// binding.
 	function namesImmutableTopLevelBinding(name ByteArray) returns bool
 		let isConstant = match self.constantLookup(name, readerFilePath: self.job.path) 'constant'
 			found or
@@ -55222,7 +55050,7 @@ export type Parser
 		end 'anInlinedOrImagedLet'
 
 		return match self.signatures.globalDeclFor(name, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
-			found(_, _, _, mutable) gives not mutable
+			found gives true
 			notFound or
 			poisoned gives false
 		end 'global'
@@ -55230,8 +55058,7 @@ export type Parser
 
 	// ⭐⭐ **THE STORAGE A CHAIN AT `baseIndex` NAMES, or empty when it names none** — `iterationSubjectNameAt`
 	// (THE one derivation of *which binding a write goes through*) plus the one test that says the name denotes
-	// storage this function body can reason about at all. A top-level `var` is such storage too: it differs
-	// from a local only in WHERE the record is anchored.
+	// storage this function body can reason about at all.
 	//
 	// ⚠ **LOCAL FIRST, which is what keeps a shadowing local a DIFFERENT subject** — the same order
 	// `parseAssignment` resolves an assignment target in, and the reason `shadowed-source-is-writable`
@@ -55240,7 +55067,7 @@ export type Parser
 	function storageSubjectNameAt(baseIndex ElementIndex) returns StorageSubject
 		match self.valueBaseAt(baseIndex) 'base'
 			thisFrame then break
-			unbound then return self.moduleStorageSubjectName(self.tokenAt(baseIndex).value) if self.baseNamesModuleLevelAt(baseIndex) else StorageSubject.none
+			unbound or
 			captured or
 			alwaysAType then return StorageSubject.none
 		end 'base'
@@ -55248,89 +55075,6 @@ export type Parser
 		let baseName = self.iterationSubjectNameAt(baseIndex)
 		return StorageSubject.storage(baseName) if self.bodyState.scope.contains(baseName) else StorageSubject.none
 	end 'storageSubjectNameAt'
-
-	// ⭐ **THE STORAGE SUBJECT A MODULE-STORAGE NAME IS — itself, once it denotes storage a write can reach.**
-	// It takes a NAME rather than a token index so `dispatchOnManagedReceiver` can ask it of a static member
-	// no single token spells; a second spelling of "is this global a subject" would be free to admit an
-	// immutable binding.
-	function moduleStorageSubjectName(name ByteArray) returns StorageSubject
-		return StorageSubject.storage(name) if self.namesWritableModuleStorage(name) else StorageSubject.none
-	end 'moduleStorageSubjectName'
-
-	// Does the chain base at `index` name a top-level `var` — module storage any function in the program can
-	// write? `namesWritableModuleStorage` with `baseNamesModuleLevelAt` in front of it, which keeps a local
-	// that shadows a global's name reading as the local and settles a head a type shares.
-	function baseNamesWritableModuleStorage(index ElementIndex) returns bool
-		return self.baseNamesModuleLevelAt(index) and self.namesWritableModuleStorage(self.tokenAt(index).value)
-	end 'baseNamesWritableModuleStorage'
-
-	// Does `name` denote a top-level `var` — module storage a body can WRITE? An immutable top-level binding
-	// is excluded on purpose: every write door refuses it already (E2013 at `storeToGlobal`, E3159 at
-	// `noteReceiverWrite` and through `fieldChainImmutableNameAt`).
-	//
-	// ⚠ **THE BOOL GATE IN FRONT OF THE RESOLUTION IS THE COST**, and it is `managedTopLevelBaseAt`'s for
-	// its reason: `globalDeclFor` BOXES a union per call, while this runs on every array-method and
-	// struct-method receiver in the program. `namesManagedTopLevel` is a set membership test and a `false`
-	// from it is final, so a program with no top-level managed binding — the whole scale corpus — never
-	// reaches the box.
-	function namesWritableModuleStorage(name ByteArray) returns bool
-		if not self.signatures.namesManagedTopLevel(name) 'notAManagedTopLevelName'
-			return false
-		end 'notAManagedTopLevelName'
-
-		return self.globalIsWritable(name)
-	end 'namesWritableModuleStorage'
-
-	function globalIsWritable(name ByteArray) returns bool
-		return match self.signatures.globalDeclFor(name, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
-			found(_, _, _, mutable) gives mutable
-			notFound or
-			poisoned gives false
-		end 'global'
-	end 'globalIsWritable'
-
-	// ⭐⭐ **THE BINDING A SUBJECT NAME DENOTES — THE ONE RESOLUTION, and the only place the two kinds of
-	// storage are told apart.** A name `Scope` holds is that binding; anything else reaching here is a
-	// top-level `var` (`storageSubjectNameAt` admits nothing else) and gets its interned stand-in.
-	function storageSubjectBindingOf(subjectName ByteArray) returns VarInfo
-		if self.bodyState.scope.contains(subjectName) 'bindingOfThisFrame'
-			return self.bodyState.scope.getInfo(subjectName)
-		end 'bindingOfThisFrame'
-
-		return self.topLevelStorageSubjectOf(subjectName)
-	end 'storageSubjectBindingOf'
-
-	// ⭐ **ONE STAND-IN PER TOP-LEVEL NAME, INTERNED FOR THE FILE** — see
-	// `VarInfo.createModuleStorageSubject` for what it stands in for and why identity on the parser's
-	// per-access receiver bindings would not do. Interning is what makes `g.push(1)` on line 4 and
-	// `g.clear()` on line 5 the SAME subject.
-	//
-	// The table is installed on the first mint (`TopLevelStorageSubjectTable`): a `Parser` is built per
-	// top-level constant by `SignatureIndex.foldInitializerDuringSweep`, so an unconditional `create()` in the
-	// constructor would be one map per constant in the program, and the overwhelming majority of files name
-	// no writable global at all.
-	function topLevelStorageSubjectOf(subjectName ByteArray) returns VarInfo
-		var existing = try self.internedStorageSubject(subjectName) otherwise 'mint'
-			var minted = VarInfo.createModuleStorageSubject(subjectName, varType: self.moduleStorageTypeOf(subjectName))
-			var interned = self.storageSubjectsForWrite()
-			interned.upsert(subjectName, value: minted)
-			return minted
-		end 'mint'
-
-		return existing
-	end 'topLevelStorageSubjectOf'
-
-	// The declared type of the top-level `var` `subjectName` names, read through the ONE home of that
-	// question. A `notFound` is impossible rather than merely unexpected — `storageSubjectNameAt` admits a
-	// name only past `namesWritableModuleStorage`, which resolves through this very lookup — so it panics
-	// rather than inventing a type nothing declared.
-	function moduleStorageTypeOf(subjectName ByteArray) returns MaxonType
-		match self.signatures.globalDeclFor(subjectName, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
-			found(_, valueType, _, _) then return valueType
-			notFound or
-			poisoned then panic("moduleStorageTypeOf: '{String.from(subjectName)}' is not a top-level binding with a value — a subject name reaches here only past `namesWritableModuleStorage`, which asks this same lookup")
-		end 'global'
-	end 'moduleStorageTypeOf'
 
 	// The index of the `end` token that closes the block statement opening at `startIndex`,
 	// found by counting block openers against `end`s — the same depth-counted token walk
@@ -64994,10 +64738,6 @@ export type Parser
 			throw self.regionRefusal(ErrorCode.semanticIsolatedCallOpensTwoRegions, message: "'{String.from(unqualifiedMemberOf(callee))}' hands back mutable data of the isolated region it opens; use it inside a `modify` block", line: anchor.line, column: anchor.column)
 		end 'leavesTheOpenedRegion'
 
-		if self.job.initializerRole == InitializerRole.ordinary and self.signatures.returnsMutableGlobalAlias(callee) 'handsBackModuleState'
-			return
-		end 'handsBackModuleState'
-
 		if not self.signatures.returnsFreshValue(callee) 'mayHandBackAnArgument'
 			if let readOnly = try self.readOnlyInputCapability(args, resultKeepsItsItemCapabilities: self.valueHoldsAFrozenTupleItem(result)) 'readsReadOnlyData'
 				self.setValueCapability(result, capability: readOnly)
@@ -65579,11 +65319,11 @@ export type Parser
 		// ⭐⭐ **THE FACTORY CALL IS READ THROUGH THE ORDINARY STATIC-CALL DOOR.** The arguments, the
 		// labels, the defaults and the diagnostics are all the ordinary call's;
 		// the door then emits a `serviceSpawn` op in place of the call (`emitServiceSpawnOp`), because
-		// the factory runs on the new service's green thread. Every argument moves there
-		// (`CallArgTarget.movedInto`): the factory runs after this frame may have released a borrowed
+		// the factory runs as the service's start behaviour, on a runner green thread. Every argument moves
+		// there (`CallArgTarget.movedInto`): the factory runs after this frame may have released a borrowed
 		// argument, or a parameter cell it made. `inferInstanceOf` because a generic target's type
 		// arguments exist nowhere but this argument list.
-		let launch = ServiceSpawnLaunch.create(typeName, capacity: capacity, mailbox: self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId), tempFloor: self.bodyState.pendingTempDrops.count(), ownedFloor: self.bodyState.ownedBindings.count())
+		let launch = ServiceSpawnLaunch.create(typeName, capacity: capacity, cown: self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId), tempFloor: self.bodyState.pendingTempDrops.count(), ownedFloor: self.bodyState.ownedBindings.count())
 
 		// A field read off a temporary crosses as an argument only because
 		// `releaseHandOffBuildTemps` releases that temporary with the spawn — so the marks are
@@ -65604,7 +65344,7 @@ export type Parser
 
 		match self.lastSpawnStart 'reply'
 			noReply then return try self.finishImmediateSpawn(typeName, launch: launch, instance: instance, spawnTok: spawnTok, memberTok: memberTok, handling: handling, tryTok: tryTok)
-			viaCell(callee) then return try self.awaitServiceStart(typeName, factory: callee, cell: launch.mailbox, instance: instance, spawnTok: spawnTok, handling: handling)
+			viaCell(callee) then return try self.awaitServiceStart(typeName, factory: callee, cell: launch.cown, instance: instance, spawnTok: spawnTok, handling: handling)
 		end 'reply'
 	end 'parseSpawn'
 
@@ -65614,7 +65354,7 @@ export type Parser
 			caught then throw SourceParseError.tryOnNonThrowing(String.from(self.signatures.diagnosticCalleeSpelling(qualifiedMethodName(typeName, methodName: memberTok.value))), line: tryTok.line, column: tryTok.column)
 		end 'handling'
 
-		return self.emitServiceHandle(typeName, mailbox: launch.mailbox, instance: instance, spawnTok: spawnTok, memberTok: memberTok)
+		return self.emitServiceHandle(typeName, cown: launch.cown, instance: instance, spawnTok: spawnTok, memberTok: memberTok)
 	end 'finishImmediateSpawn'
 
 	function awaitServiceStart(typeName ByteArray, factory ByteArray, cell ValueId, instance ServiceStateInstance, spawnTok Token, handling SpawnStartHandling) returns ValueId throws SourceParseError
@@ -65733,33 +65473,34 @@ export type Parser
 			// its own line.
 			messageReplyAliasesServiceState then throw SourceParseError.serviceReplyAliasesState(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, note: DiagnosticNote.none)
 			messageDeclaresTheSendTimeoutLabel then throw SourceParseError.registryRefused(ErrorCode.semanticServiceSendTimeoutReserved, explanation: serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, note: DiagnosticNote.none)
+			stateFieldHoldsAPromise then throw SourceParseError.registryRefused(ErrorCode.semanticServiceStateHoldsAPromise, explanation: serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, note: DiagnosticNote.none)
 		end 'roster'
 	end 'requireServiceRosterIsDispatchable'
 
 	// ⭐ **WHICH INSTANTIATION A VALUE OF A SERVICE'S OWN SHAPE NAMES** — this tier's two columns, handed to
-	// the ONE classifier the lowering and `ServiceLoop` also read (`serviceStateInstanceOfValueType`), so the
-	// loop that is built is the loop that is called.
+	// the ONE classifier the lowering and `ServiceBehaviour` also read (`serviceStateInstanceOfValueType`), so
+	// the `<T>.__behave` that is built is the one that is called.
 	function serviceStateInstanceOf(value ValueId) returns ServiceStateInstance
 		return serviceStateInstanceOfValueType(self.tagOf(value), nameId: self.valueNameId(value))
 	end 'serviceStateInstanceOf'
 
-	// ⭐⭐ **WRAP A STARTED SERVICE'S MAILBOX IN A HANDLE BOX** — for a factory that cannot throw, whose
-	// `serviceSpawn` answers the MAILBOX, a bare machine word. `emitBoxAllocWithDestructor` is the one
+	// ⭐⭐ **WRAP A STARTED SERVICE'S COWN IN A HANDLE BOX** — for a factory that cannot throw, whose
+	// `serviceSpawn` answers the COWN, a bare machine word. `emitBoxAllocWithDestructor` is the one
 	// `__mm_alloc` door — it is where a box's destructor argument is decided, and this box's
-	// (`__mbox_handle_destruct`) gives back the mailbox share the spawn's initial counts hold.
+	// (`__cown_handle_destruct`) gives back the cown share the spawn's initial counts hold.
 	// Enrolling the result through `trackOwnedTemp` is what makes a handle an ORDINARY owned value:
 	// `let h = …` binds it, a second read after a move is E3102, an array element drop reaches it, and
-	// its scope-exit drop is what shuts the service down. A throwing factory's handle is minted on the
-	// service's green thread and comes back through the start's await, which marks it sole
+	// its scope-exit drop is what shuts the service down. A throwing factory's handle is minted by the
+	// start behaviour on a runner green thread and comes back through the start's await, which marks it sole
 	// (`awaitServiceStart`).
-	function emitServiceHandle(typeName ByteArray, mailbox ValueId, instance ServiceStateInstance, spawnTok Token, memberTok Token) returns ValueId
+	function emitServiceHandle(typeName ByteArray, cown ValueId, instance ServiceStateInstance, spawnTok Token, memberTok Token) returns ValueId
 		let range = SourceRange.between(spawnTok, last: memberTok)
 
 		view handle = self.serviceHandleLayout(typeName)
 		let handleType = self.serviceHandleValueType(handle, instance: instance)
-		let box = self.emitBoxAllocWithDestructor(self.emitLiteral(handle.sizeBytes() as FullRangeInt, valueType: MaxonType.integer, range: range), destructor: self.emitCodeAddress(MboxHandleDestructName, range: range), resultTag: maxonTypeTag(handleType), resultNameId: typeNameIdOf(handleType), range: range, tag: MmTag.Untagged)
+		let box = self.emitBoxAllocWithDestructor(self.emitLiteral(handle.sizeBytes() as FullRangeInt, valueType: MaxonType.integer, range: range), destructor: self.emitCodeAddress(CownHandleDestructName, range: range), resultTag: maxonTypeTag(handleType), resultNameId: typeNameIdOf(handleType), range: range, tag: MmTag.Untagged)
 		self.trackOwnedTemp(box, exclusivity: OwnedHeapExclusivity.sole)
-		self.emitIndirectStore(box, offset: ServiceHandleMailboxOffset, value: mailbox, storageType: MaxonType.integer, range: range)
+		self.emitIndirectStore(box, offset: ServiceHandleCownOffset, value: cown, storageType: MaxonType.integer, range: range)
 		return box
 	end 'emitServiceHandle'
 
@@ -69133,7 +68874,7 @@ export type Parser
 				// (`parsePostfix`) apply the `(args)`. The same diversion — reading the SAME predicate —
 				// runs at statement position (`parseStatement`'s `callStmt`); see `calleeIsFunctionTypedLocal`.
 				if self.calleeIsFunctionTypedLocal() 'functionLocalCall'
-					return try self.parseVariableReference(func)
+					return try self.parseVariableReference()
 				end 'functionLocalCall'
 
 				// A call in an EXPRESSION — its result IS the expression, so a void callee has nothing
@@ -69149,7 +68890,7 @@ export type Parser
 				return try self.parseDottedPrimary(func, resultUsed: true)
 			end 'dotted'
 
-			return try self.parseVariableReference(func)
+			return try self.parseVariableReference()
 		end 'namedPrimary'
 
 		let tok = self.current()
@@ -69856,18 +69597,6 @@ export type Parser
 		return fresh
 	end 'declaredTypeAliasesForWrite'
 
-	// The storage-subject stand-in table.
-	function storageSubjectsForWrite() returns VarInfoMap
-		match self.topLevelStorageSubjects 'state'
-			unwritten then break
-			entries(table) then return table
-		end 'state'
-
-		let fresh = VarInfoMap.create()
-		self.topLevelStorageSubjects = TopLevelStorageSubjectTable.entries(fresh)
-		return fresh
-	end 'storageSubjectsForWrite'
-
 	// The tuple-slot surface column.
 	function bufferSurfaceSlotsForWrite() returns ValueSlotSurfaceMap
 		match self.bodyState.bufferSurfaceSlots 'state'
@@ -70069,14 +69798,6 @@ export type Parser
 			entries(scanned) then return try scanned.get(literalOp)
 		end 'function'
 	end 'scannedGraphemeVerdict'
-
-	// The stand-in this file already interned for top-level name `subjectName`.
-	function internedStorageSubject(subjectName ByteArray) returns VarInfo throws MapError
-		match self.topLevelStorageSubjects 'file'
-			unwritten then throw MapError.keyNotFound
-			entries(interned) then return try interned.get(subjectName)
-		end 'file'
-	end 'internedStorageSubject'
 
 	// Turn a whole-program tuple-element rejection into a POSITIONED diagnostic. The index raises it (only it
 	// knows what a canonical element is); the parser is the only party holding a token to anchor it on, which
@@ -73085,7 +72806,7 @@ export type Parser
 
 		// ⭐ **`Counter.count` — A READ OF A STATIC MEMBER, which is a read of a top-level binding whose
 		// NAME happens to carry a dot.** So it routes to `topLevelBindingReference`, the very door a bare
-		// global name uses: a `static let` INLINES its folded value and a `static var` LOADS from its `.data`
+		// global name uses: a `static let` INLINES its folded value or LOADS from its `.data`
 		// slot, through the same two probes and the same emitted ops. Nothing about this arm is static-member
 		// machinery — it only spells the name.
 		//
@@ -73109,11 +72830,11 @@ export type Parser
 		end 'managedTopLevelField'
 
 		if self.chainHeadsAValue(chain) 'aBindingHeadsIt'
-			return try self.parseVariableReference(func)
+			return try self.parseVariableReference()
 		end 'aBindingHeadsIt'
 
 		if self.qualifiedBindingIdentityIsAt(self.pos) 'namespaceQualifiedBinding'
-			return try self.parseNamespaceQualifiedBindingRead(func)
+			return try self.parseNamespaceQualifiedBindingRead()
 		end 'namespaceQualifiedBinding'
 
 		// `beta.helper` READ AS A VALUE — asked below every type-named arm, so the type reading keeps every chain
@@ -73320,7 +73041,7 @@ export type Parser
 		end 'aMethodOnTheMember'
 
 		self.advance()
-		return try self.topLevelBindingReference(func, tok: nameTok, site: self.lastConsumedSite())
+		return try self.topLevelBindingReference(nameTok)
 	end 'parseStaticMemberAccess'
 
 	// ⭐ **DOES `<baseTok>.<member at memberIndex>` NAME A DECLARED STATIC MEMBER?** — the ONE
@@ -74548,7 +74269,7 @@ export type Parser
 
 	// Emit the record: validate + classify every payload field (type-check each argument) BEFORE any
 	// op, then open the record — a construct `__mm_alloc`s a box of `8 + maxArity*8` bytes, a service
-	// message takes its green thread's staging buffer (`__mbox_staging`) — store the case TAG at
+	// message takes its green thread's staging buffer (`__cown_staging`) — store the case TAG at
 	// offset 0, store each payload at `8 + slot*8`, and, for a construct, ZERO-FILL the unused slots
 	// `[arity, maxArity)`.
 	//
@@ -74663,7 +74384,7 @@ export type Parser
 	function openPayloadRecord(layout EnumLayout, fill PayloadFill, range SourceRange) returns ValueId
 		match fill 'destination'
 			unionConstruct then return self.allocatedUnionBox(layout, range: range)
-			serviceMessage then return self.emitRuntimeCall(MboxStagingName, args: ValueIdArray.create(0), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			serviceMessage then return self.emitRuntimeCall(CownStagingName, args: ValueIdArray.create(0), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'destination'
 	end 'openPayloadRecord'
 
@@ -74708,7 +74429,7 @@ export type Parser
 		self.recordRangedTargetSite(value, target: alias, line: anchor.line, column: anchor.column)
 	end 'recordPayloadRangeCheck'
 
-	// ⭐⭐ **MOVE EVERY MANAGED PAYLOAD OF A MESSAGE INTO THE SERVICE'S GREEN THREAD — or refuse.** The
+	// ⭐⭐ **MOVE EVERY MANAGED PAYLOAD OF A MESSAGE TO THE SERVICE — or refuse.** The
 	// send's half of `emitEnumBox`'s two-fill split; a `unionConstruct` fill returns at the first line and the
 	// whole step is inert for every union in every program that spawns nothing.
 	//
@@ -76456,7 +76177,7 @@ export type Parser
 		// candidate walk's guess and grow the registry for an instantiation no source names.
 		//
 		// ⛔ **A `spawn` INSIDE ANOTHER GENERIC BODY FIXES NOTHING**, and the instance it would name is the
-		// one shape `ServiceLoop` cannot build a loop for: `receiverLayoutSourceOf` would forward a descriptor
+		// one shape `ServiceBehaviour` cannot build `<T>.__behave` for: `receiverLayoutSourceOf` would forward a descriptor
 		// the synthesized body has no slot for. Refused here rather than aborting the compiler two tiers down.
 		if not self.signatures.argsAreFullyConcrete(typeArgs) 'stillOpaque'
 			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theArgumentsAreStillOpaque, typeName: base, callee: callee, site: site)
@@ -76740,11 +76461,10 @@ export type Parser
 		// position, so it must resolve to the same binding.
 		//
 		// Were this arm BELOW the managed one, the inversion would be a LIVE
-		// wrong answer rather than a latent one. With a top-level `var msg = "GLOBAL-TWELVE"` and a
+		// wrong answer rather than a latent one. With a top-level `let msg = "GLOBAL-TWELVE"` and a
 		// `let msg = "ab"` in `main`, a closure body would read the CAPTURE for `{msg}` (printing `ab`) and the
 		// GLOBAL for `msg.byteLength()` (yielding 13) — two resolutions of one name, in one expression,
-		// neither of them a compile error. The `var` half is the worse one: a `var` receiver is WRITABLE,
-		// so a mutating method would have written the global while the program named a local.
+		// neither of them a compile error.
 		match self.valueBaseAt(self.pos) 'receiver'
 			thisFrame then return try self.dispatchMethodOnBinding(func, binding: self.thisFrameBindingOf(baseTok), baseTok: baseTok, subjectName: self.storageSubjectNameAt(self.pos), resultUsed: resultUsed)
 			captured(frame) then return try self.capturedMethodCall(func, baseTok: baseTok, enclosing: self.capturedFrame(frame).scope, frame: frame, resultUsed: resultUsed)
@@ -76811,21 +76531,21 @@ export type Parser
 			inlineWord or
 			imageRecord or
 			imageBox then break
-			constant(bytes, kind) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.job.path), mutable: false, resultUsed: resultUsed))
-			global(label, valueType, mutable) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnGlobalReceiver(func, tok: tok, label: label, valueType: valueType, mutable: mutable, resultUsed: resultUsed))
+			constant(bytes, kind) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.job.path), resultUsed: resultUsed))
+			global(label, valueType) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnGlobalReceiver(func, tok: tok, label: label, valueType: valueType, resultUsed: resultUsed))
 			none or
 			poisoned then return ManagedTopLevelDispatch.notAManagedReceiver
 		end 'binding'
 
 		let (value, valueType) = self.materializeImageOrInlineBinding(binding.clone(), tok: tok)
-		return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: value, varType: valueType, mutable: false, resultUsed: resultUsed))
+		return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: value, varType: valueType, resultUsed: resultUsed))
 	end 'dispatchOnManagedTopLevelReceiver'
 
-	function dispatchOnGlobalReceiver(func IrFunction, tok Token, label ByteArray, valueType MaxonType, mutable bool, resultUsed bool) returns ValueId throws SourceParseError
+	function dispatchOnGlobalReceiver(func IrFunction, tok Token, label ByteArray, valueType MaxonType, resultUsed bool) returns ValueId throws SourceParseError
 		let walk = self.markLateReads()
-		let loaded = self.noteGlobalLetMapColumns(self.emitGlobalReceiverLoad(label, valueType: valueType, mutable: mutable, tok: tok), tok: tok, mutable: mutable)
+		let loaded = self.noteGlobalLetMapColumns(self.emitGlobalReceiverLoad(label, valueType: valueType, tok: tok), tok: tok)
 		self.deferReadsSince(walk)
-		return try self.dispatchOnManagedReceiver(func, baseTok: tok, value: loaded, varType: valueType, mutable: mutable, resultUsed: resultUsed)
+		return try self.dispatchOnManagedReceiver(func, baseTok: tok, value: loaded, varType: valueType, resultUsed: resultUsed)
 	end 'dispatchOnGlobalReceiver'
 
 	// ⭐ **THE SHAPE OF A SYNTHETIC RECEIVER BINDING, DECIDED ONCE.** A top-level managed receiver is not a
@@ -76840,10 +76560,10 @@ export type Parser
 	// arm is dead here and only its tail applies. Deriving it from the name is also what lets a STATIC
 	// MEMBER through: its storage is `Names.items`, which no single token spells, so a token read would
 	// answer `Names` — a name that denotes no storage — and silently drop the write.
-	function dispatchOnManagedReceiver(func IrFunction, baseTok Token, value ValueId, varType MaxonType, mutable bool, resultUsed bool) returns ValueId throws SourceParseError
-		var binding = VarInfo.createValueBinding(baseTok.value, varType: varType, kind: bindingKindOfMutability(mutable), boundValue: value, brandId: self.brandIdOf(value))
+	function dispatchOnManagedReceiver(func IrFunction, baseTok Token, value ValueId, varType MaxonType, resultUsed bool) returns ValueId throws SourceParseError
+		var binding = VarInfo.createValueBinding(baseTok.value, varType: varType, kind: BindingKind.let, boundValue: value, brandId: self.brandIdOf(value))
 		binding.rootKind = ReadOnlyRootKind.moduleLet
-		return try self.dispatchMethodOnBinding(func, binding: binding, baseTok: baseTok, subjectName: self.moduleStorageSubjectName(baseTok.value), resultUsed: resultUsed)
+		return try self.dispatchMethodOnBinding(func, binding: binding, baseTok: baseTok, subjectName: StorageSubject.none, resultUsed: resultUsed)
 	end 'dispatchOnManagedReceiver'
 
 	// ⭐ **BUILD THE RECEIVER A BINDING DENOTES AND HAND IT TO THE ONE DISPATCHER.** The cursor sits ON the
@@ -77913,7 +77633,7 @@ export type Parser
 		end 'constant'
 
 		return match self.signatures.globalDeclFor(tok.value, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
-			found(label, valueType, _, mutable) gives ManagedReceiverBinding.global(label, valueType: valueType, mutable: mutable)
+			found(label, valueType, _) gives ManagedReceiverBinding.global(label, valueType: valueType)
 			notFound gives ManagedReceiverBinding.none
 			poisoned gives ManagedReceiverBinding.poisoned
 		end 'global'
@@ -77999,7 +77719,7 @@ export type Parser
 		// ⭐⭐⭐ **A MEMBER CALL ON A `<T>.handle` IS A MESSAGE SEND, AND THAT IS THE WHOLE OF LOCATION
 		// TRANSPARENCY.** Dispatch is decided by the RECEIVER's type: a `Calc` value takes direct
 		// calls, a `Calc.handle` takes messages, and `c.bump(3)` is spelled identically either way. Intercepted
-		// HERE, ahead of the field/method split, because a handle has exactly one field — the mailbox, at
+		// HERE, ahead of the field/method split, because a handle has exactly one field — the cown, at
 		// `Visibility.file` — and every member an author can name on one is a message, `clone` or `shutdown`.
 		//
 		// ⚠ **ALL THREE DISPATCH ENTRIES FUNNEL THROUGH THIS FUNCTION**, so one interception covers a handle
@@ -78188,7 +77908,7 @@ export type Parser
 		end 'theShutdownMethod'
 
 		if memberTok.value.equals(CloneMethodName) 'aSecondHandle'
-			return try self.emitServiceHandleClone(base, cloner: MboxHandleCloneBoxName, baseTok: baseTok, memberTok: memberTok)
+			return try self.emitServiceHandleClone(base, cloner: CownHandleCloneBoxName, baseTok: baseTok, memberTok: memberTok)
 		end 'aSecondHandle'
 
 		throw SourceParseError.serviceNotAMessage(serviceNotAMessageRefusal(typeName, handleName: base.layout.name, member: memberTok.value, declaresIt: self.signatures.declaresCallee(qualifiedMethodName(typeName, methodName: memberTok.value))), line: memberTok.line, column: memberTok.column)
@@ -78236,7 +77956,7 @@ export type Parser
 		end 'theShutdownMethod'
 
 		if memberTok.value.equals(CloneMethodName) 'aSecondHandle'
-			return try self.emitServiceHandleClone(base, cloner: MboxInterfaceCloneBoxName, baseTok: baseTok, memberTok: memberTok)
+			return try self.emitServiceHandleClone(base, cloner: CownInterfaceCloneBoxName, baseTok: baseTok, memberTok: memberTok)
 		end 'aSecondHandle'
 
 		if witnessSlotsRequireMethod(self.requirementSlotsOf(interfaceName), methodName: memberTok.value) 'aRequirementNoHandleCanSend'
@@ -78415,8 +78135,6 @@ export type Parser
 	// ⚠ The request sits in this thread's one staging buffer until the op copies it out, so nothing
 	// between `emitEnumBox`'s fill and the op may send: a nested send would overwrite it.
 	function emitServiceSendOp(base StructBase, box ValueId, request EnumLayout, caseIndex CaseIndex, handBack SharedSlotHandBackArray, callee ByteArray, spelling ByteArray, reply ServiceReplyValue, route MessageRoute, range SourceRange, argsAreChecked bool, timeout SendTimeoutArgument) returns ValueId
-		// A table send is a runtime call, not an `indirectCall`, so E3143 does not widen it to every
-		// address-taken function in the program; the stubs it reaches only retag and send.
 		let bytes = self.emitLiteral(request.boxSizeBytes() as FullRangeInt, valueType: MaxonType.integer, range: range)
 		let sent = self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
 
@@ -78465,18 +78183,18 @@ export type Parser
 	end 'routeOrHoldSend'
 
 	function emitMailboxSend(base StructBase, box ValueId, bytes ValueId, callee ByteArray, sent ValueId, range SourceRange, timeoutMs ValueId, timed bool) returns ValueId
-		let mailbox = self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleMailboxFieldIndex, range: range)
+		let cown = self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleCownFieldIndex, range: range)
 		let status = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.serviceSend(sent, status: status, callee: callee, handle: mailbox, request: box, bytes: bytes, timeoutMs: timeoutMs, timed: timed), range: range)
+		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.serviceSend(sent, status: status, callee: callee, handle: cown, request: box, bytes: bytes, timeoutMs: timeoutMs, timed: timed), range: range)
 		return sent
 	end 'emitMailboxSend'
 
 	function emitInterfaceSend(base StructBase, slot CaseIndex, box ValueId, bytes ValueId, range SourceRange, timeoutMs ValueId) returns ValueId
 		let slotOffset = self.emitLiteral(interfaceSendSlotOffset(slot), valueType: MaxonType.integer, range: range)
-		return self.emitRuntimeCall(MboxInterfaceSendName, args: fiveArgs(base.box, second: slotOffset, third: box, fourth: bytes, fifth: timeoutMs), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(CownInterfaceSendName, args: fiveArgs(base.box, second: slotOffset, third: box, fourth: bytes, fifth: timeoutMs), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 	end 'emitInterfaceSend'
 
-	// ⭐ **`h.shutdown()` — CLOSE THE MAILBOX, AND THE LOOP DRAINS IT.** Everything already queued
+	// ⭐ **`h.shutdown()` — CLOSE THE MAILBOX, AND WHAT IS QUEUED STILL RUNS.** Everything already queued
 	// still runs and a later send fails with `serviceStopped`; nothing is enqueued, so it takes no
 	// slot and cannot fail.
 	//
@@ -78496,13 +78214,13 @@ export type Parser
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
 		let range = SourceRange.between(baseTok, last: rparenTok)
-		return self.emitRuntimeCall(MboxCloseName, args: argsOf(self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleMailboxFieldIndex, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(CownCloseName, args: argsOf(self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleCownFieldIndex, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitServiceShutdown'
 
 	// ⭐ **`h.clone()` — A SECOND HANDLE TO THE SAME SERVICE, NEVER A SECOND SERVICE.** It cannot take
 	// `emitSynthesizedStructClone`'s road: that emits `__clone_<T>`, a symbol `installStructCascades` never
-	// builds for a companion, and a blitted copy of the box would name the mailbox twice while its counts said
-	// once. `MboxHandleCloneBoxName` is the SAME entry `SignatureIndex.managedNameCascadeStrategy` hands back for
+	// builds for a companion, and a blitted copy of the box would name the cown twice while its counts said
+	// once. `CownHandleCloneBoxName` is the SAME entry `SignatureIndex.managedNameCascadeStrategy` hands back for
 	// a handle held in a field or an array element, so a handle cloned three different ways takes one body.
 	function emitServiceHandleClone(base StructBase, cloner ByteArray, baseTok Token, memberTok Token) returns ValueId throws SourceParseError
 		self.advance()
@@ -86962,7 +86680,7 @@ export type Parser
 
 		let name = try subjectName.storageName() otherwise return NoParamPositions
 
-		if self.storageSubjectBindingOf(name).isSelfField 'ownedByTheTypeNotTheCaller'
+		if self.bodyState.scope.getInfo(name).isSelfField 'ownedByTheTypeNotTheCaller'
 			return NoParamPositions
 		end 'ownedByTheTypeNotTheCaller'
 
@@ -87160,16 +86878,6 @@ export type Parser
 			return self.enclosingSelfParamMask(func)
 		end 'fieldOfTheEnclosingReceiver'
 
-		// ⚠ **MODULE STORAGE REACHES NO PARAMETER, AND THE ARM IS EXPLICIT FOR `receiverOwnerMask`'s OWN
-		// REASON.** A top-level `var` is addressed by `.data` label, never handed to this body — a callee
-		// that writes it writes it BY NAME, which is a site recorded in the callee, not a fact about any
-		// argument. The stand-in's `boundValue` is 0 and 0 is `self`'s parameter id, so falling through to
-		// the value test would mark parameter 0's storage written off that coincidence and refuse every
-		// call handing it on: a false rejection with no compile error. See `VarInfo.namesModuleStorage`.
-		if binding.namesModuleStorage 'moduleStorageNotTheCallers'
-			return NoParamPositions
-		end 'moduleStorageNotTheCallers'
-
 		return paramMaskOfValue(func, value: binding.boundValue)
 	end 'receiverStorageMask'
 
@@ -87205,7 +86913,7 @@ export type Parser
 	// receiver-value path has no binding to find.
 	function subjectStorageMask(func IrFunction, subjectName StorageSubject) returns ParamPositionMask
 		let name = try subjectName.storageName() otherwise return NoParamPositions
-		return self.receiverStorageMask(func, binding: self.storageSubjectBindingOf(name))
+		return self.receiverStorageMask(func, binding: self.bodyState.scope.getInfo(name))
 	end 'subjectStorageMask'
 
 	// Is this DECLARED type an `Array` instance? Asked by `arrayManagedFieldAt`, the `x.managed` ROUTING
@@ -89372,18 +89080,18 @@ export type Parser
 			constant or
 			none then throw SourceParseError.undefinedVariable(String.from(tok.value), line: tok.line, column: tok.column)
 			poisoned then panic("resolveFieldChain: a poisoned base is answered by `chainBaseIsDeferred` before the chain is resolved, in both the read and the write door")
-			global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(tok, label: label, valueType: valueType, mutable: mutable)
+			global(label, valueType) then return try self.resolveGlobalFieldChain(tok, label: label, valueType: valueType)
 		end 'binding'
 
 		let (value, valueType) = self.materializeImageOrInlineBinding(binding.clone(), tok: tok)
-		return try self.resolveValueFieldChain(tok, value: value, valueType: valueType, mutable: false)
+		return try self.resolveValueFieldChain(tok, value: value, valueType: valueType)
 	end 'resolveManagedBindingFieldChain'
 
 	// An immutable slot's base is marked as a bare read of it is, so a field read through it into a
 	// `var` (`var m = H.index`) is E3078 rather than a second, writable name for the `let`'s record.
-	function resolveGlobalFieldChain(baseTok Token, label ByteArray, valueType MaxonType, mutable bool) returns FieldChainStep throws SourceParseError
-		let loaded = self.emitGlobalReceiverLoad(label, valueType: valueType, mutable: mutable, tok: baseTok)
-		return try self.resolveValueFieldChain(baseTok, value: loaded, valueType: valueType, mutable: mutable)
+	function resolveGlobalFieldChain(baseTok Token, label ByteArray, valueType MaxonType) returns FieldChainStep throws SourceParseError
+		let loaded = self.emitGlobalReceiverLoad(label, valueType: valueType, tok: baseTok)
+		return try self.resolveValueFieldChain(baseTok, value: loaded, valueType: valueType)
 	end 'resolveGlobalFieldChain'
 
 	// ⭐ **THE CHAIN ITSELF, FROM A BASE THIS FRAME ALREADY HOLDS** — a `.data` slot's occupant above, and an
@@ -89393,12 +89101,11 @@ export type Parser
 	//
 	// No `baseBindingOf` here, and it would be a no-op if there were: `createValueBinding` cannot mint a
 	// self-field alias, so such a base always holds its own value.
-	function resolveValueFieldChain(baseTok Token, value ValueId, valueType MaxonType, mutable bool) returns FieldChainStep throws SourceParseError
-		var binding = VarInfo.createValueBinding(baseTok.value, varType: valueType, kind: bindingKindOfMutability(mutable), boundValue: value)
+	function resolveValueFieldChain(baseTok Token, value ValueId, valueType MaxonType) returns FieldChainStep throws SourceParseError
+		var binding = VarInfo.createValueBinding(baseTok.value, varType: valueType, kind: BindingKind.let, boundValue: value)
 		var base = try self.requireStructBase(binding, baseTok: baseTok)
-		var cell = ArgumentRoot.rooted(self.topLevelStorageSubjectOf(baseTok.value)) if mutable else ArgumentRoot.none
 
-		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: binding, cell: cell)
+		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: binding, cell: ArgumentRoot.none)
 	end 'resolveValueFieldChain'
 
 	function resolveThisFrameFieldChain(baseTok Token) returns FieldChainStep throws SourceParseError
@@ -89673,8 +89380,7 @@ export type Parser
 	// the two spellings cannot come to disagree about any of it. They differ only in how the index
 	// was found and which tokens the span covers, which is all either caller passes in.
 	//
-	// The right-hand side is parsed AFTER the rejection, so a refused program emits no op —
-	// `emitCheckedGlobalStore`'s discipline, and its name, for its reason.
+	// The right-hand side is parsed AFTER the rejection, so a refused program emits no op.
 	function emitCheckedSelfFieldStore(func IrFunction, block IrBlock, receiver ValueId, layout StructLayout, index FieldIndex, fieldTok Token, range SourceRange) throws SourceParseError
 		if not layout.fieldIsMutable(index) 'immutableField'
 			throw SourceParseError.assignToImmutableField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
@@ -90044,8 +89750,7 @@ export type Parser
 		// a `let`'s box is as much the binding as an array field is.
 		func.writesThroughParamMask = func.writesThroughParamMask or self.subjectStorageMask(func, subjectName: subjectName)
 
-		// Parsed AFTER both rejections, so a refused program emits no op — `emitCheckedGlobalStore`'s
-		// discipline, for its reason. The value's start is captured so `emitFieldWrite` can decide, for a
+		// Parsed AFTER both rejections, so a refused program emits no op. The value's start is captured so `emitFieldWrite` can decide, for a
 		// MANAGED field, whether the new value is a bare-local reference to poison.
 		let valueStart = self.pos
 		let storedType = self.storedFieldType(step.box, layout: step.layout, index: index)
@@ -90192,7 +89897,7 @@ export type Parser
 		//
 		// This is the order the other DURABLE-STORAGE writes in this file already use and state for themselves —
 		// `reassignCellBinding` ("the release must come AFTER the new value is settled and BEFORE the store"),
-		// `emitCheckedGlobalStore`, and `reassignBindingValue` in an inline comment rather than its header.
+		// and `reassignBindingValue` in an inline comment rather than its header.
 		// ⚠ `emitOpaqueFieldReassign`, this same function's other arm, releases between its two acquires; the
 		// reason each order is safe is written at its own decref.
 		//
@@ -90775,8 +90480,8 @@ export type Parser
 		end 'structTypedField'
 
 		// The layout is proved BEFORE the box is loaded, so a base this door is going to refuse emits no op
-		// — `emitCheckedGlobalStore`'s discipline, and `structLayoutOfType` can still throw for a generic
-		// instance whose base carries no layout of its own.
+		// — `structLayoutOfType` can still throw for a generic instance whose base carries no layout of
+		// its own.
 		var layout = try self.structLayoutOfType(BaseAccessKind.field, tag: baseTag, nameId: baseTypeNameId, baseTok: baseTok)
 
 		let box = try self.baseBoxOf(binding, baseTok: baseTok)
@@ -92691,8 +92396,8 @@ export type Parser
 
 	// ⭐ **THE ONE `storeIndirect` EMIT**, the mirror of `emitIndirectLoad` above and true on the same
 	// terms. A field write, a union tag store, a union payload store, a union's unused-slot zero-fill, a
-	// capturing closure's env-slot fill (`buildClosureEnv`), a String record's field
-	// (`emitStoreStringField`) and a global's slot (`emitGlobalStore`) all reach here — one op shape, so
+	// capturing closure's env-slot fill (`buildClosureEnv`) and a String record's field
+	// (`emitStoreStringField`) all reach here — one op shape, so
 	// the offset-and-width derivation a box's stores must agree on lives in one place (a literal storing
 	// `y` at one width and an assignment storing it at another would corrupt the box silently — see
 	// `emitFieldStore`).
@@ -92735,15 +92440,13 @@ export type Parser
 	// the right register class. The collapsed float alias's NAME comes back off the box the cell
 	// address wears (`wearAliasOf`), so the loaded value stays nominal.
 	//
-	// ⭐⭐ **A CELL IS THE THIRD REBINDABLE SLOT.** `overwritableSlotReads`
-	// names its producers as *"the TWO ways a managed value comes out of storage a later statement can
-	// overwrite"* — a mutable FIELD and a `var` GLOBAL. A cell is a third: `emitCellStore` decrefs the
+	// ⭐⭐ **A CELL IS A REBINDABLE SLOT, AS A MUTABLE FIELD IS.** `emitCellStore` decrefs the
 	// occupant it displaces (`reassignBindingValue`'s cell arm), so `let old = n` + `n = Node.create(99)` on a
 	// by-reference parameter leaves `old` naming freed memory for the same reason as a field's. MEASURED without
 	// this line: `refcount-reassigned-slot-borrow/byref-param-reassign-then-read-borrow` returned
 	// **1061109567** (`0x3F3F3F3F`, the freed-slab fill) where the spec pins 5.
 	//
-	// ⚠ **IT IS MARKED AT THE LOAD, NOT AT THE PARAMETER**, because that is where its two siblings mark and
+	// ⚠ **IT IS MARKED AT THE LOAD, NOT AT THE PARAMETER**, because that is where the field read marks and
 	// because the parameter is not the only cell: a `var` LOCAL promoted to a cell (`declareCellLocal`, so a
 	// callee can write it) is rebindable by this frame's own store and dangles identically. One door covers
 	// both, which is the census argument `bindingValue` makes directly above.
@@ -92830,7 +92533,7 @@ export type Parser
 	// resolved at PARSE time is the op: `resolveTypes` never rewrites an op's type, so the parser is
 	// the last tier that can make it concrete.
 	// ⭐⭐ **THE CASCADE ITSELF LIVES IN `SignatureIndex`, BECAUSE A SECOND FAMILY OF ASKER EXISTS
-	// WITHOUT A PARSER.** A top-level `static var origin = Pair{a: 1}` resolves its box's slot widths on the
+	// WITHOUT A PARSER.** A top-level `static let origin = Pair{a: 1}` resolves its box's slot widths on the
 	// INDEX side — `SynthesizedFunction` holds neither an interner nor the alias registry — and a slot stored
 	// at one width by `__module_init` and loaded at another by a body is a corrupted box no diagnostic can
 	// report. The two facts only a `Parser` holds are the interner an id was minted in and the READER's file
@@ -92874,7 +92577,7 @@ export type Parser
 	// Resolve a variable reference to the SSA value its binding aliases — the
 	// value-substitution model emits NO load op; the reference simply IS the bound
 	// value. A name with no local binding may still be a TOP-LEVEL CONSTANT (which inlines) or a
-	// TOP-LEVEL `var` (which loads); only a name that is none of the three is a positioned parse
+	// slot-backed TOP-LEVEL `let` (which loads); only a name that is none of the three is a positioned parse
 	// error (undefinedVariable).
 	//
 	// LOCAL FIRST. A local binding SHADOWS a top-level constant of the same name — `let OFFSET = 10`
@@ -92896,7 +92599,7 @@ export type Parser
 	// `lastBareBindingImmutableName`, the E3159 blame name of a bare-identifier call ARGUMENT (see
 	// `bareArgImmutableName`). Each arm that can answer sets it, through the same `immutableReceiverNameOf`
 	// a receiver asks, so an argument and a receiver naming the same binding get the same verdict.
-	function parseVariableReference(func IrFunction) returns ValueId throws SourceParseError
+	function parseVariableReference() returns ValueId throws SourceParseError
 		// Captured before the cursor leaves it: a by-reference call argument identifies the ONE read that may
 		// take a cell's address by the token it stands on (`cellArgumentToken`).
 		let site = CellArgumentToken.at(self.pos)
@@ -92982,7 +92685,7 @@ export type Parser
 			declared then break
 		end 'meaning'
 
-		return try self.topLevelBindingReference(func, tok: tok, site: site)
+		return try self.topLevelBindingReference(tok)
 	end 'parseVariableReference'
 
 	function qualifiedBindingIdentityAt(index ElementIndex) returns ByteArray throws AbsentError
@@ -93000,7 +92703,7 @@ export type Parser
 		return not identity.isEmpty()
 	end 'qualifiedBindingIdentityIsAt'
 
-	function parseNamespaceQualifiedBindingRead(func IrFunction) returns ValueId throws SourceParseError
+	function parseNamespaceQualifiedBindingRead() returns ValueId throws SourceParseError
 		let headTok = self.current()
 		let dots = self.dottedChainLengthAt(self.pos)
 		let memberTok = self.tokenAt(self.pos + dots * TokensPerQualifierSegment)
@@ -93008,7 +92711,7 @@ export type Parser
 		self.pos = self.pos + dots * TokensPerQualifierSegment + 1
 
 		let identityTok = Token.create(TokenKind.identifier, line: memberTok.line, column: memberTok.column, value: identity.clone(), startByte: headTok.startByte, endByte: memberTok.endByte)
-		return try self.topLevelBindingReference(func, tok: identityTok, site: self.lastConsumedSite())
+		return try self.topLevelBindingReference(identityTok)
 	end 'parseNamespaceQualifiedBindingRead'
 
 	// Publish the blame name of the bare identifier just resolved, or clear it when the binding may be
@@ -93245,13 +92948,13 @@ export type Parser
 		return self.bodyState.captureNames.count() - 1
 	end 'claimCaptureSlot'
 
-	// A bare name that is not a local: a top-level constant, a top-level `var`, or nothing.
+	// A bare name that is not a local: a top-level constant, a slot-backed top-level `let`, or nothing.
 	//
 	// A top-level CONSTANT is a `let`, so it is immutable wherever it is read — and for a MANAGED one that
 	// is not a formality: `let G = "hi"` materializes the ONE immortal `.rdata` record every read of those
 	// bytes shares, so a callee that appended through it would write read-only memory, which E3159
 	// refuses. It publishes its name for the same reason a `let` local does.
-	function topLevelBindingReference(func IrFunction, tok Token, site CellArgumentToken) returns ValueId throws SourceParseError
+	function topLevelBindingReference(tok Token) returns ValueId throws SourceParseError
 		match self.constantLookup(tok.value, readerFilePath: self.job.path) 'constant'
 			found(payload, tag, typeName) then return self.readFoldedConstant(tok, payload: payload, tag: tag, typeName: typeName)
 			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
@@ -93266,7 +92969,7 @@ export type Parser
 			return try self.sweepReadOfAnUnfoldedName(tok)
 		end 'aSweepReadsNoSlot'
 
-		return try self.topLevelGlobalRead(func, tok: tok, site: site)
+		return try self.topLevelGlobalRead(tok)
 	end 'topLevelBindingReference'
 
 	function sweepReadOfAnUnfoldedName(tok Token) returns ValueId throws SourceParseError
@@ -93531,11 +93234,11 @@ export type Parser
 	// column (`recordConst`) exactly as a written-out literal does — which is what keeps `let SHIFT =
 	// 1` … `x shl SHIFT` folding, and THE SHIFT RULE seeing a count it can check.
 	//
-	// **A TOP-LEVEL `var` IS THE OTHER HALF OF THAT STORY, AND IT IS THE OPPOSITE ONE** — see
+	// **A SLOT-BACKED TOP-LEVEL `let` IS THE OTHER HALF OF THAT STORY, AND IT IS THE OPPOSITE ONE** — see
 	// `topLevelGlobalRead` directly below. It is the read that does NOT
 	// disappear.
 
-	// A use of a top-level `var` loads from its `.data` slot — the exact inverse of a constant's read:
+	// A use of a slot-backed top-level `let` loads from its `.data` slot — the exact inverse of a constant's read:
 	// nothing is folded, a slot IS reserved, a relocation IS emitted, and the backend very much knows this
 	// feature exists. A by-reference argument is the one use that loads nothing, taking the slot's own
 	// address instead (`moduleSlotReference`).
@@ -93550,16 +93253,16 @@ export type Parser
 	// ⚠ The load is NOT hoisted out of a loop that writes the same global, and that is not this
 	// function's doing — it is `loadIndirect`'s `isPure: false` (see StdDialect). Get that wrong and
 	// this emits perfectly correct IR that a later pass silently breaks.
-	function topLevelGlobalRead(func IrFunction, tok Token, site CellArgumentToken) returns ValueId throws SourceParseError
+	function topLevelGlobalRead(tok Token) returns ValueId throws SourceParseError
 		match self.signatures.globalDeclFor(tok.value, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
-			found(label, valueType, brand, mutable) then return self.noteGlobalLetMapColumns(self.moduleSlotReference(func, tok: tok, site: site, label: label, valueType: valueType, brand: brand, mutable: mutable), tok: tok, mutable: mutable)
+			found(label, valueType, brand) then return self.noteGlobalLetMapColumns(self.moduleSlotReference(tok, label: label, valueType: valueType, brand: brand), tok: tok)
 			notFound then return try self.emitFunctionRef(tok)
 			poisoned then return self.mintDeferredValue()
 		end 'global'
 	end 'topLevelGlobalRead'
 
-	function noteGlobalLetMapColumns(read ValueId, tok Token, mutable bool) returns ValueId
-		if mutable or not self.signatures.isMapShapedInstanceAt(self.tagOf(read), nameId: self.valueNameId(read)) 'notAnImmutableMap'
+	function noteGlobalLetMapColumns(read ValueId, tok Token) returns ValueId
+		if not self.signatures.isMapShapedInstanceAt(self.tagOf(read), nameId: self.valueNameId(read)) 'notAnImmutableMap'
 			return read
 		end 'notAnImmutableMap'
 
@@ -93586,93 +93289,25 @@ export type Parser
 		return answer
 	end 'globalMapColumnsAnswerFor'
 
-	// What `mutable` decides depends on which arm is taken: on the load it is whether the borrowed occupant
-	// may become a mutable ALIAS (`recordSlotRead`), and on the hand-over it is the write permission
-	// itself — the callee stores through the address, which a `let` slot must refuse exactly as `G = v` does.
-	function moduleSlotReference(func IrFunction, tok Token, site CellArgumentToken, label ByteArray, valueType MaxonType, brand ByteArray, mutable bool) returns ValueId
-		self.noteModuleVarRead(tok, mutable: mutable)
-
-		if mutable and self.cellWasRequestedAt(site) 'aRequestedWritableSlot'
-			self.argumentRoot = ArgumentRoot.rooted(self.topLevelStorageSubjectOf(tok.value))
-		end 'aRequestedWritableSlot'
-
-		if self.mayHandOverStorageAt(site, writableHere: mutable, slotType: valueType) 'handOverTheSlot'
-			let storage = self.moduleSlotCellAddress(func, tok: tok, label: label, valueType: valueType, brand: brand)
-
-			if not self.cellArgumentWantsAPlace 'theSlotAlone'
-				self.cellArgumentToken = CellArgumentToken.none
-				self.publishBareBindingName(tok, holder: WriteBlameHolder.moduleLet, blamed: false)
-				return storage
-			end 'theSlotAlone'
-
-			self.handOverPlaceStorage(storage)
-		end 'handOverTheSlot'
-
-		let loaded = self.brandedGlobalLoad(label, valueType: valueType, brand: brand, tok: tok, mutable: mutable)
-
-		return self.recordSlotRead(loaded, tok: tok, mutable: mutable, publishesBlame: true)
-	end 'moduleSlotReference'
-
-	// Recorded as a WRITE of the slot, because that is what the callee does through this address — the same
-	// two marks `storeToGlobal` leaves, so the module-var census and E3064's effect summary see the write
-	// whichever spelling performs it. Nothing marks a borrowed occupant here: none was loaded, so there is no
-	// value for `recordSlotRead`'s rebindable-slot rule to guard.
-	function moduleSlotCellAddress(func IrFunction, tok Token, label ByteArray, valueType MaxonType, brand ByteArray) returns ValueId
-		func.writesModuleStorage = true
-
-		let addr = self.emitGlobalAddr(label, range: SourceRange.ofToken(tok))
-		self.retypeValue(addr, valueType: self.resolveFloatAliasType(valueType, scopeFilePath: self.job.path))
-		self.wearDeclaredFloatAlias(addr, declared: valueType, scopeFilePath: self.job.path)
-		self.noteHandedStorageType(addr, varType: valueType)
-
-		if namesAnUnbrandedInstance(brand, valueType: valueType) 'anUnbrandedModuleVar'
-			self.noteHandedBrand(addr, key: moduleVarBrandKey(label), phrase: assignedPlacePhrase(FunctionTypeDoor.global, name: tok.value, owner: SlotOwner.unowned))
-		end 'anUnbrandedModuleVar'
-
-		self.brandValue(addr, brand: brand)
-		return addr
-	end 'moduleSlotCellAddress'
-
-	function namesAnUnbrandedInstance(brand ByteArray, valueType MaxonType) returns bool
-		return brand.isEmpty() and maxonTypeTag(valueType) == ValueTypeTag.genericInstance
-	end 'namesAnUnbrandedInstance'
-
-	// A global read wears the brand its initializer spelled (`var shared = Xs.create()` reads as an `Xs`).
-	function brandedGlobalLoad(label ByteArray, valueType MaxonType, brand ByteArray, tok Token, mutable bool) returns ValueId
+	// A global read wears the brand its initializer spelled (`let shared = Xs.create()` reads as an `Xs`).
+	function moduleSlotReference(tok Token, label ByteArray, valueType MaxonType, brand ByteArray) returns ValueId
 		let loaded = self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok))
 		self.brandValue(loaded, brand: brand)
 
-		if mutable and namesAnUnbrandedInstance(brand, valueType: valueType) 'anUnbrandedVar'
-			self.noteBrandOrigin(loaded, key: moduleVarBrandKey(label))
-		end 'anUnbrandedVar'
-
-		return loaded
-	end 'brandedGlobalLoad'
+		return self.recordSlotRead(loaded, tok: tok, publishesBlame: true)
+	end 'moduleSlotReference'
 
 	// The one slot-read door for a module global, taken by the bare read and the receiver load alike: a
 	// `let` receiver left unmarked lets `var q = Origins.get(0)` write the `let`'s record through `q`.
-	function recordSlotRead(value ValueId, tok Token, mutable bool, publishesBlame bool) returns ValueId
-		let inert = not mutable and self.signatures.globalIsAPayloadFreeUnionCase(tok.value, readerFilePath: self.job.path)
+	function recordSlotRead(value ValueId, tok Token, publishesBlame bool) returns ValueId
+		let inert = self.signatures.globalIsAPayloadFreeUnionCase(tok.value, readerFilePath: self.job.path)
 
-		// The blame name rides the same mutability answer (a top-level `let` refuses a write through it
-		// exactly as a `let` local does), published here so the constant and the slot-backed halves of a
-		// top-level read reach `lastBareBindingImmutableName` through one decision each.
+		// The blame name (a top-level `let` refuses a write through it exactly as a `let` local does) is
+		// published here so the constant and the slot-backed halves of a top-level read reach
+		// `lastBareBindingImmutableName` through one decision each.
 		if publishesBlame 'aBareRead'
-			self.publishBareBindingName(tok, holder: WriteBlameHolder.moduleLet, blamed: not mutable and not inert)
+			self.publishBareBindingName(tok, holder: WriteBlameHolder.moduleLet, blamed: not inert)
 		end 'aBareRead'
-
-		// ⭐ **THE WRITABLE ARM IS NOT "NOTHING TO RECORD".** A `var` global's slot is rebindable
-		// storage exactly as a `var` field is, and `emitCheckedGlobalStore` decrefs the old occupant on the
-		// way past — so `let old = G` + `G = fresh` dangles for the identical reason. The two arms carry the
-		// two halves of one question — can this slot be REBOUND — and the answer feeds the binding promotion
-		// rather than the aliasing refusal. See `overwritableSlotReads`.
-		if mutable 'writableSlot'
-			if self.valueMayNameARecord(value) 'managedOccupant'
-				self.markOverwritableSlotRead(value)
-			end 'managedOccupant'
-
-			return value
-		end 'writableSlot'
 
 		if inert 'noRecordToMark'
 			return value
@@ -93718,27 +93353,23 @@ export type Parser
 		end 'function'
 	end 'mergeBlameOf'
 
-	function emitGlobalReceiverLoad(label ByteArray, valueType MaxonType, mutable bool, tok Token) returns ValueId
-		self.noteModuleVarRead(tok, mutable: mutable)
-
+	function emitGlobalReceiverLoad(label ByteArray, valueType MaxonType, tok Token) returns ValueId
 		let loaded = self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok))
-		return self.recordSlotRead(loaded, tok: tok, mutable: mutable, publishesBlame: false)
+		return self.recordSlotRead(loaded, tok: tok, publishesBlame: false)
 	end 'emitGlobalReceiverLoad'
 
 	// ⭐⭐ **THE ONE WRITER OF `overwritableSlotReads`** — `markReadOnly`'s twin, through the
 	// same install door discipline (`ValueMarkColumn`).
 	//
-	// Its THREE producers are the three ways a managed value comes out of storage a later statement can
-	// overwrite: `emitFieldLoad` (every `self.items`, `h.items` and chain hop funnels through it),
-	// `recordSlotRead`'s WRITABLE arm (the exact complement of its immutable arm), and
+	// Its producers are the ways a managed value comes out of storage a later statement can overwrite:
+	// `emitFieldLoad` (every `self.items`, `h.items` and chain hop funnels through it) and
 	// `emitCellLoad` (the by-reference parameter and cell-resident `var`, whose store decrefs the
-	// occupant it displaces exactly as the other two do). All three gate on the value being MANAGED, so a
+	// occupant it displaces exactly as a field store does). Both gate on the value being MANAGED, so a
 	// scalar field — which owns no heap and can be freed by nothing — never enters the set and never costs a
 	// hash.
 	//
-	// ⚠ **A LIST OF "TWO" WENT STALE WHILE A THIRD SLOT KIND EXISTED AND DANGLED.** It is
-	// DERIVED by grepping `self.markOverwritableSlotRead(` rather than remembered — the census
-	// `markBufferSurface` keeps two functions down, for this reason.
+	// ⚠ **THE LIST OF PRODUCERS IS DERIVED BY GREPPING `self.markOverwritableSlotRead(`** rather than
+	// remembered — the census `markBufferSurface` keeps two functions down, for this reason.
 	function markOverwritableSlotRead(value ValueId)
 		self.bodyState.overwritableSlotReads = withValueMarked(self.bodyState.overwritableSlotReads, value: value)
 	end 'markOverwritableSlotRead'
@@ -95100,22 +94731,14 @@ export type Parser
 		return self.emitIndirectLoad(valueType, box: addr, offset: GlobalSlotOffset, storageType: storageType, range: range)
 	end 'emitGlobalLoad'
 
-	// `globalAddr <label>` then `storeIndirect <addr> 0 <value>` — a global's write, the mirror of
-	// `emitGlobalLoad`. It defines no value: a store is a statement.
-	function emitGlobalStore(label ByteArray, valueType MaxonType, value ValueId, range SourceRange)
-		let addr = self.emitGlobalAddr(label, range: range)
-		self.emitIndirectStore(addr, offset: GlobalSlotOffset, value: value, storageType: self.fieldStorageType(valueType), range: range)
-	end 'emitGlobalStore'
-
-	// The `globalAddr` half both a read and a write open with. A POINTER, so its value is typed
+	// The `globalAddr` half a read opens with. A POINTER, so its value is typed
 	// `integer` — the Maxon tier has no pointer type today, and an address is a machine word; the
 	// Std tier it lowers into is typeless anyway, and nothing dispatches on this value's tag (it is
 	// read only by the load/store that follows).
 	//
 	// ⭐ **AN ACCESS IS ONE OP, AND NOTHING GUARDS IT.** Every managed global's slot is filled before `main`
 	// by `__module_init` (⚖ user ruling: a static initializer runs eagerly, in dependency order), so a read
-	// cannot meet an unfilled slot and a write cannot meet one either — which is what makes
-	// `emitCheckedGlobalStore`'s unconditional decref of the old value correct.
+	// cannot meet an unfilled slot.
 	function emitGlobalAddr(label ByteArray, range SourceRange) returns ValueId
 		let addr = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.globalAddr(addr, label: label), range: range)
@@ -95215,7 +94838,7 @@ export type Parser
 	end 'probeRecordInitializer'
 
 	function probedRecordOf(decl TopLevelDecl, value ValueId) returns RecordInitializerProbe throws ConstEvalError
-		if (self.constIsKnown(value) or self.floatConstIsKnown(value)) and not self.varStartsAsAnEmptyCaseOfAnOwningType(decl, value: value) 'aKnownScalar'
+		if self.constIsKnown(value) or self.floatConstIsKnown(value) 'aKnownScalar'
 			return RecordInitializerProbe.scalar(self.constValueOfKnown(value))
 		end 'aKnownScalar'
 
@@ -95237,14 +94860,10 @@ export type Parser
 
 		let valueType = self.signatures.adoptTypeFrom(self.typeOf(value), from: self.artifact.typeNames)
 		try self.requireGlobalContainerElementsAreNotBuffers(decl, brand: self.brandOf(value))
-		let settled = ProbedRecord.create(valueType, brand: self.brandOf(value), runsProgramCode: self.probeRunsProgramCode(), mapColumns: self.probedMapColumns(decl, value: value), shape: self.probedShape(decl, value: value))
+		let settled = ProbedRecord.create(valueType, brand: self.brandOf(value), runsProgramCode: self.probeRunsProgramCode(), mapColumns: self.probedMapColumns(value), shape: self.probedShape(decl, value: value))
 
 		return RecordInitializerProbe.record(settled)
 	end 'probedRecordOf'
-
-	function varStartsAsAnEmptyCaseOfAnOwningType(decl TopLevelDecl, value ValueId) returns bool
-		return decl.mutable and self.signatures.typeOwesDropFor(self.typeOf(value), from: self.artifact.typeNames, readerFilePath: self.job.path)
-	end 'varStartsAsAnEmptyCaseOfAnOwningType'
 
 	function probedInlineWordOf(value ValueId) returns ConstValue throws AbsentError
 		var nodes = ProbedConstructionArray.create(0)
@@ -95293,11 +94912,7 @@ export type Parser
 		return false
 	end 'probeRunsProgramCode'
 
-	function probedMapColumns(decl TopLevelDecl, value ValueId) returns MapLiteralColumns
-		if decl.mutable 'aVarMapIsNeverConstant'
-			return MapLiteralColumns.none
-		end 'aVarMapIsNeverConstant'
-
+	function probedMapColumns(value ValueId) returns MapLiteralColumns
 		if not self.signatures.isMapShapedInstanceAt(self.tagOf(value), nameId: self.valueNameId(value)) 'notAMap'
 			return MapLiteralColumns.none
 		end 'notAMap'
@@ -95307,10 +94922,6 @@ export type Parser
 	end 'probedMapColumns'
 
 	function probedShape(decl TopLevelDecl, value ValueId) returns ProbedShape
-		if decl.mutable 'aVarIsNeverImaged'
-			return ProbedShape.opaque
-		end 'aVarIsNeverImaged'
-
 		let blob = try self.constantBlobShape(value) otherwise 'notABlob'
 			return self.shapeOfNotedValue(decl, value: value)
 		end 'notABlob'
@@ -95646,7 +95257,7 @@ export type Parser
 	end 'noteConstLetCast'
 
 	function foldedValueOfBodyResult(decl TopLevelDecl, value ValueId) returns FoldedInitializer throws ConstEvalError
-		if (self.constIsKnown(value) or self.floatConstIsKnown(value)) and not self.varStartsAsAnEmptyCaseOfAnOwningType(decl, value: value) 'aKnownScalar'
+		if self.constIsKnown(value) or self.floatConstIsKnown(value) 'aKnownScalar'
 			return FoldedInitializer.scalar(self.constValueOfKnown(value))
 		end 'aKnownScalar'
 
@@ -95741,7 +95352,7 @@ export type Parser
 
 	// ⭐⭐ **SEAT THE INITIALIZER IN THE BODY THE DECLARATION WAS WRITTEN IN.** An initializer parser is built
 	// per DECL over a token range, so it starts at file scope however the binding was declared — and a
-	// `static var origin = Pair{…}` is written INSIDE `type Pair`, which is the whole of why that literal is
+	// `static let origin = Pair{…}` is written INSIDE `type Pair`, which is the whole of why that literal is
 	// legal there and E3076 anywhere else. Seating the owning type is what lets the construction door reach
 	// `requireConstructible` VERBATIM instead of restating a location rule.
 	//
@@ -95869,7 +95480,7 @@ export type Parser
 
 	// A `public`, `export` or `module` `let`'s type is API surface, so only a file-private one is tracked.
 	export function recordedConstLetCast(decl TopLevelDecl) returns LetCastDeclaration
-		if decl.mutable or decl.scope.isType() or decl.visibility != Visibility.file 'notAFilePrivateLet'
+		if decl.scope.isType() or decl.visibility != Visibility.file 'notAFilePrivateLet'
 			return LetCastDeclaration.none
 		end 'notAFilePrivateLet'
 
@@ -95980,7 +95591,7 @@ export type Parser
 	//   • inside a CLOSURE, `self` is a CAPTURE — the receiver comes out of the env block, through the very
 	//     door `parseSelfPrimary` resolves it through, so `doubled()` and `self.doubled()` still emit the
 	//     same call from inside a closure body as they do outside one;
-	//   • in a `static` method, a file-scope initializer or a `static var` initializer there is no `self`
+	//   • in a `static` method, a file-scope initializer or a `static let` initializer there is no `self`
 	//     at all, so this answers `unavailable` and `parseCallNamed` refuses the call as E3193 before the
 	//     arity check, which would count the hidden `self` parameter as the missing argument.
 	// The caller (`parseCall`) has already established `name` IS a sibling (`isImplicitSelfMethod`), so the map
@@ -96681,6 +96292,10 @@ export type Parser
 			if callee.equals(BuiltinsSchedSliceCountName) 'schedSliceCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedSliceCountName, runtimeName: SchedSliceCountName, arity: SchedSliceCountArity, resultTag: ValueTypeTag.integer, resultAlias: CountAliasName, calleeTok: anchor)
 			end 'schedSliceCount'
+
+			if callee.equals(BuiltinsCownTestMultiName) 'cownTestMulti'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: CownTestMultiName, arity: CownTestMultiArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: CountAliasName, resultUsed: resultUsed, calleeTok: anchor)
+			end 'cownTestMulti'
 
 			if callee.equals(BuiltinsGtQuiesceName) 'gtQuiesce'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsGtQuiesceName, runtimeName: GtQuiesceName, arity: GtQuiesceArity, resultTag: ValueTypeTag.integer, resultAlias: CountAliasName, calleeTok: anchor)
@@ -98872,12 +98487,6 @@ export type Parser
 		panic("captureMentionEnd: no token of the closure mentions `{String.from(name)}`, and only the implicit receiver is captured without being spelled — the capture scan and the closure's tokens disagree about where the closure starts")
 	end 'captureMentionEnd'
 
-	function noteModuleVarRead(tok Token, mutable bool)
-		if mutable 'aWritableSlot'
-			self.noteOperandRead(self.topLevelStorageSubjectOf(tok.value), at: self.pos)
-		end 'aWritableSlot'
-	end 'noteModuleVarRead'
-
 	function readReceiverValue(anchor Token) returns ValueId throws SourceParseError
 		let receiver = try self.requireReceiverValue(anchor)
 		self.noteOperandRead(self.receiverRootBinding(), at: self.pos)
@@ -99452,8 +99061,8 @@ export type Parser
 		self.noteIdentityPrimitiveClone(result, callee: callee, args: args)
 		self.settleFloatResult(result)
 
-		// A `spawn`'s factory call is not adopted: its result is the service's state, on the service's
-		// thread.
+		// A `spawn`'s factory call is not adopted: its result is the service's state, held by the
+		// cown.
 		if let launch = try serviceSite.launch() 'aFactoryCall'
 			return try self.emitServiceSpawnOp(launch, spawnTok: try serviceSite.token() otherwise panic("emitResolvedCall: a site that answers a launch answers its token"), writtenCallee: writtenCallee, callee: callee, state: result, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, defaultedArgs: defaultedArgs, mint: mint, constructed: constructed, inferInstanceOf: inferInstanceOf)
 		end 'aFactoryCall'
@@ -101423,10 +101032,10 @@ export type Parser
 
 		self.recordConstantArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor)
 		self.recordOpaqueArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructed)
-		let startReplies = self.noteSpawnStartReply(launch.mailbox, callee: callee)
+		let startReplies = self.noteSpawnStartReply(launch.cown, callee: callee)
 		let spawnSpan = SourceRange.between(spawnTok, last: rparenTok)
 		self.bodyState.emittedCall = EmittedCallOp.at(self.artifact.module.ops.count())
-		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.serviceSpawn(launch.mailbox, typeName: launch.typeName, state: state, capacity: launch.capacity, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(blames), defaultedArgs: defaultedArgs, mint: mint, startReplies: startReplies), range: spawnSpan)
+		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.serviceSpawn(launch.cown, typeName: launch.typeName, state: state, capacity: launch.capacity, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(blames), defaultedArgs: defaultedArgs, mint: mint, startReplies: startReplies), range: spawnSpan)
 		self.noteCallToken(spawnSpan, args: args, start: spawnSpan)
 		return state
 	end 'emitServiceSpawnOp'
@@ -102401,7 +102010,7 @@ export type Parser
 	//     (`argumentMessageMayShare`); at a message or a publish, an all-`let` record this frame
 	//     does not solely own (`immutableRecordIsSharedNotMoved`);
 	//   • an OWNED value this frame solely owns is MOVED — the source binding poisoned (E3102 on a later read) or
-	//     the temporary drained. **No incref: the frame's own `+1` rides into the mailbox**, which is what makes
+	//     the temporary drained. **No incref: the frame's own `+1` rides into the message**, which is what makes
 	//     the service the record's one owner rather than its second;
 	//   • a TRIVIAL TUPLE (`valueIsCopyableTuple`) this frame does not solely own is COPIED — it
 	//     has no identity, so the fresh record is the receiver's alone and the caller keeps its own.
@@ -102837,7 +102446,7 @@ export type Parser
 
 	// ⭐⭐ **WALK THE GRAPH, OR REFUSE IT** — shared by the send and publish doors so the two cannot
 	// walk one graph differently; the reply door asks the same decision and leaves the walk to the
-	// service loop. It emits a walk only where nothing is thrown.
+	// `<T>.__behave`. It emits a walk only where nothing is thrown.
 	//
 	// ⛔ **SOLENESS IS NOT TRANSITIVE, SO THE GRAPH IS WALKED AT RUN TIME, IMMEDIATELY BEFORE THE HAND-OFF.** A
 	// box this frame solely owns can hold a payload it only co-owns — an incref'd store, a factory's alias, a

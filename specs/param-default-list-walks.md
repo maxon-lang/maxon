@@ -372,7 +372,7 @@ type Box
 	end 'make'
 end 'Box'
 
-var shared = Box.make(b: 3, c: 4)
+let shared = Box.make(b: 3, c: 4)
 
 function main() returns ExitCode
 	return shared.n as ExitCode
@@ -770,7 +770,7 @@ type Maker
 	end 'makeText'
 end 'Maker'
 
-var g = Maker.makeText("s")
+let g = Maker.makeText("s")
 
 function main() returns ExitCode
 	return g.n as ExitCode
@@ -805,7 +805,7 @@ type Box
 	end 'make'
 end 'Box'
 
-var shared = Box.make(b: 3)
+let shared = Box.make(b: 3)
 
 function main() returns ExitCode
 	return (shared.bag.n + shared.b) as ExitCode

@@ -2915,11 +2915,11 @@ A managed top-level binding named like the chain's second segment binds nothing 
 ```maxon
 // --- file: sub/calc.maxon
 export type Calc
-	export static var n = 7 as ExitCode
+	export static let n = 7 as ExitCode
 end 'Calc'
 
 // --- file: main.maxon
-var Calc = FullRangeIntArray from [1]
+let Calc = FullRangeIntArray from [1]
 
 function size(xs FullRangeIntArray) returns ExitCode
 	return xs.count() as ExitCode
@@ -2933,38 +2933,13 @@ end 'main'
 7
 ```
 
-<!-- test: a-parameter-named-like-a-qualified-type-segment-is-not-the-storage-subject -->
-A store through the chain roots at the directory type's static past a parameter named `Calc`: the parameter is
-the stored value, and `sub.Calc.inst` is where it lands.
-```maxon
-// --- file: sub/calc.maxon
-export type Calc
-	export var f as ExitCode
-
-	export static var inst = Calc{f: 0}
-end 'Calc'
-
-// --- file: main.maxon
-function poke(Calc ExitCode) returns ExitCode
-	sub.Calc.inst.f = Calc
-	return sub.Calc.inst.f
-end 'poke'
-
-function main() returns ExitCode
-	return poke(5)
-end 'main'
-```
-```exitcode
-5
-```
-
 <!-- test: a-local-array-named-like-a-qualified-type-segment-leaves-a-managed-static -->
 A method call through a managed static reads the directory type's array past a local array named `Calc`, and
 the bare `Calc.count()` counts the local (3 + 2).
 ```maxon
 // --- file: sub/calc.maxon
 export type Calc
-	export static var managed = FullRangeIntArray from [4, 5, 6]
+	export static let managed = FullRangeIntArray from [4, 5, 6]
 end 'Calc'
 
 // --- file: main.maxon

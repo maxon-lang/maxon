@@ -14,7 +14,7 @@ The `float` type stores 64-bit double-precision floating-point numbers.
 ### Syntax
 
 ```maxon
-var pi = 3.14159 as FullRangeFloat
+let pi = 3.14159 as FullRangeFloat
 let ratio = 2.5
 ```
 Float literals must include a decimal point:
@@ -499,9 +499,8 @@ function settle(r mutable Ratio)
 	show(r)
 end 'settle'
 
-var level = 0.5 as Ratio
-
 function main() returns ExitCode
+	var level = 0.5 as Ratio
 	settle(level)
 	return 0
 end 'main'

@@ -503,8 +503,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3104: <fragment>:15:10: 'spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation
-error E3104: <fragment>:16:6: a message send lowers to the runtime entry '__mbox_send', which has no wasm32-wasi implementation
+error E3104: <fragment>:15:10: 'spawn' lowers to the runtime entry '__cown_spawn', which has no wasm32-wasi implementation
+error E3104: <fragment>:16:6: a message send lowers to the runtime entry '__cown_send', which has no wasm32-wasi implementation
 ```
 
 ### A user's own declaration outranks a stdlib module's free function

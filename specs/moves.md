@@ -29,10 +29,12 @@ print(t)           // fine — the box drops ONCE, at t's scope exit
 ```
 
 ```maxon
-var t = build(1)   // t owns the box
-let u = t          // t is MUTABLE, so ownership MOVES to u; t is now moved-from
-print(u)           // u still usable
-// print(t)        // ERROR: use of moved value 't'
+function demo()
+	var t = build(1)   // t owns the box
+	let u = t          // t is MUTABLE, so ownership MOVES to u; t is now moved-from
+	print(u)           // u still usable
+	// print(t)        // ERROR: use of moved value 't'
+end 'demo'
 ```
 
 A `var` source moves because a second name for its value could watch it change: `t = <other>` would
@@ -1159,9 +1161,8 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create(0)
-
 function stash(b isolated Box)
+	var kept = Boxes.create(0)
 	kept.push(merge b)
 end 'stash'
 
@@ -1178,7 +1179,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:23:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:22:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: moves.error.a-door-read-on-one-branch-is-reported-at-that-read-once -->
@@ -1197,9 +1198,8 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create(0)
-
 function stash(b isolated Box)
+	var kept = Boxes.create(0)
 	kept.push(merge b)
 end 'stash'
 
@@ -1221,7 +1221,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:25:11: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:24:11: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: moves.error.a-door-on-one-branch-is-seen-by-the-read-after-the-join -->
@@ -1240,9 +1240,8 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create(0)
-
 function stash(b isolated Box)
+	var kept = Boxes.create(0)
 	kept.push(merge b)
 end 'stash'
 
@@ -1263,5 +1262,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:27:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:26:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```

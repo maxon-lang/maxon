@@ -24,11 +24,11 @@ Returns an integer hash value for the primitive.
 
 **Example:**
 ```maxon
-var x = 42
-var h = x.hash()    // returns 42
+let x = 42
+let h = x.hash()    // returns 42
 
-var f = 3.14
-var fh = f.hash()   // both halves of the bit pattern, folded: 300063655
+let f = 3.14
+let fh = f.hash()   // both halves of the bit pattern, folded: 300063655
 ```
 
 **Notes:**
@@ -54,8 +54,8 @@ Compares two values for equality.
 
 **Example:**
 ```maxon
-var a = 42
-var b = 42
+let a = 42
+let b = 42
 if a.equals(b) 'check'
 	print("equal\n")
 end 'check'

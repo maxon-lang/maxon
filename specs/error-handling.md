@@ -311,15 +311,14 @@ enum MyError implements Error
 	failed
 end 'MyError'
 
-var counter = 0 as Integer
-
-function mayFail() returns Integer throws MyError
+function mayFail(counter mutable Integer) returns Integer throws MyError
 	counter = counter + 1
 	throw MyError.failed
 end 'mayFail'
 
 function main() returns ExitCode
-	try mayFail() otherwise ignore
+	var counter = 0 as Integer
+	try mayFail(counter) otherwise ignore
 	return 42
 end 'main'
 ```
@@ -337,16 +336,15 @@ enum MyError implements Error
 	failed
 end 'MyError'
 
-var counter = 0 as Integer
-
-function mayFail() returns Integer throws MyError
+function mayFail(counter mutable Integer) returns Integer throws MyError
 	counter = counter + 1
 	throw MyError.failed
 end 'mayFail'
 
 function main() returns ExitCode
+	var counter = 0 as Integer
 	var result = 0 as Integer
-	try mayFail() otherwise 'err'
+	try mayFail(counter) otherwise 'err'
 		result = 42
 	end 'err'
 	return result
@@ -366,9 +364,7 @@ enum MyError implements Error
 	failed
 end 'MyError'
 
-var counter = 0 as Integer
-
-function mayFail(shouldFail bool) returns Integer throws MyError
+function mayFail(shouldFail bool, counter mutable Integer) returns Integer throws MyError
 	counter = counter + 1
 	if shouldFail 'check'
 		throw MyError.failed
@@ -377,8 +373,9 @@ function mayFail(shouldFail bool) returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
+	var counter = 0 as Integer
 	var result = 0 as Integer
-	try mayFail(false) otherwise 'err'
+	try mayFail(false, counter: counter) otherwise 'err'
 		result = 42
 	end 'err'
 	return result
@@ -398,16 +395,15 @@ enum MyError implements Error
 	failed
 end 'MyError'
 
-var counter = 0 as Integer
-
-function mayFail() returns Integer throws MyError
+function mayFail(counter mutable Integer) returns Integer throws MyError
 	counter = counter + 1
 	throw MyError.failed
 end 'mayFail'
 
 function main() returns ExitCode
+	var counter = 0 as Integer
 	var caught = 0 as Integer
-	try mayFail() otherwise (e) 'handler'
+	try mayFail(counter) otherwise (e) 'handler'
 		match e 'kind'
 			failed then caught = 42
 		end 'kind'
@@ -922,16 +918,15 @@ enum MyError implements Error
 	failed
 end 'MyError'
 
-var counter = 0 as Integer
-
-function mayFail() returns Integer throws MyError
+function mayFail(counter mutable Integer) returns Integer throws MyError
 	counter = counter + 1
 	throw MyError.failed
 end 'mayFail'
 
 function main() returns ExitCode
+	var counter = 0 as Integer
 	var result = 0 as Integer
-	try mayFail() otherwise (e) 'handler'
+	try mayFail(counter) otherwise (e) 'handler'
 		match e 'check'
 			failed then result = 42
 		end 'check'
@@ -955,9 +950,7 @@ enum MyError implements Error
 	notFound
 end 'MyError'
 
-var counter = 0 as Integer
-
-function mayFail(code Integer) returns Integer throws MyError
+function mayFail(code Integer, counter mutable Integer) returns Integer throws MyError
 	counter = counter + 1
 	if code == 1 'c1'
 		throw MyError.failed
@@ -969,8 +962,9 @@ function mayFail(code Integer) returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
+	var counter = 0 as Integer
 	var result = 0 as Integer
-	try mayFail(2) otherwise (e) 'handler'
+	try mayFail(2, counter: counter) otherwise (e) 'handler'
 		match e 'check'
 			failed then result = 10
 			timeout then result = 20
@@ -994,9 +988,7 @@ enum MyError implements Error
 	failed
 end 'MyError'
 
-var counter = 0 as Integer
-
-function mayFail(shouldFail bool) returns Integer throws MyError
+function mayFail(shouldFail bool, counter mutable Integer) returns Integer throws MyError
 	counter = counter + 1
 	if shouldFail 'check'
 		throw MyError.failed
@@ -1005,8 +997,9 @@ function mayFail(shouldFail bool) returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
+	var counter = 0 as Integer
 	var result = 0 as Integer
-	try mayFail(false) otherwise (e) 'handler'
+	try mayFail(false, counter: counter) otherwise (e) 'handler'
 		match e 'kind'
 			failed then result = 99
 		end 'kind'
@@ -1029,16 +1022,15 @@ union MyError implements Error
 	failed
 end 'MyError'
 
-var counter = 0 as Integer
-
-function mayFail() returns Integer throws MyError
+function mayFail(counter mutable Integer) returns Integer throws MyError
 	counter = counter + 1
 	throw MyError.notFound(42)
 end 'mayFail'
 
 function main() returns ExitCode
+	var counter = 0 as Integer
 	var result = 0 as Integer
-	try mayFail() otherwise (e) 'handler'
+	try mayFail(counter) otherwise (e) 'handler'
 		match e 'check'
 			notFound(code) then result = code
 			failed then result = 1
@@ -1062,16 +1054,15 @@ union MyError implements Error
 	failed
 end 'MyError'
 
-var counter = 0 as Integer
-
-function mayFail() returns Integer throws MyError
+function mayFail(counter mutable Integer) returns Integer throws MyError
 	counter = counter + 1
 	throw MyError.notFound(42)
 end 'mayFail'
 
 function main() returns ExitCode
+	var counter = 0 as Integer
 	var result = 0 as Integer
-	try mayFail() otherwise (e) 'handler'
+	try mayFail(counter) otherwise (e) 'handler'
 		match e 'check'
 			notFound(code) then result = code
 			failed then result = 0
@@ -1707,9 +1698,7 @@ enum MyError implements Error
 	failed
 end 'MyError'
 
-var counter = 0 as Integer
-
-function mayFail() returns Integer throws MyError
+function mayFail(counter mutable Integer) returns Integer throws MyError
 	counter = counter + 1
 	if counter == 3 'check'
 		throw MyError.failed
@@ -1718,9 +1707,10 @@ function mayFail() returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
+	var counter = 0 as Integer
 	var total = 0 as Integer
 	while true 'loop'
-		let v = try mayFail() otherwise break
+		let v = try mayFail(counter) otherwise break
 		total = total + v
 	end 'loop'
 	return total
@@ -1740,9 +1730,7 @@ enum MyError implements Error
 	failed
 end 'MyError'
 
-var counter = 0 as Integer
-
-function mayFail() returns Integer throws MyError
+function mayFail(counter mutable Integer) returns Integer throws MyError
 	counter = counter + 1
 	if counter == 2 'check'
 		throw MyError.failed
@@ -1751,11 +1739,12 @@ function mayFail() returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
+	var counter = 0 as Integer
 	var total = 0 as Integer
 	var iter = 0 as Integer
 	while iter < 4 'loop'
 		iter = iter + 1
-		let v = try mayFail() otherwise continue
+		let v = try mayFail(counter) otherwise continue
 		total = total + v
 	end 'loop'
 	return total

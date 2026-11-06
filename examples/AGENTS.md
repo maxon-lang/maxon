@@ -12,8 +12,7 @@ count formula; there is no C arm because `vendor/` holds no C binary-trees.
 
 ## msort.maxon
 
-A worker sorts its own chunk with `Array.sort`, from inside a service message — the sort cone reaches
-no module-level `var`, so E3143 does not refuse it. What the program still writes for itself is
+A worker sorts its own chunk with `Array.sort`, from inside a service message. What the program writes for itself is
 `mergedPair`, because **joining runs that are already ordered is not a sort and the library has no
 call for it**: `mergeChunks` is handed the finished chunks and must consume them pairwise. That is the
 one piece of sorting machinery here, and it is stable for the same reason `sort` is — an equal key

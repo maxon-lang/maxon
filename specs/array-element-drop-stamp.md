@@ -23,29 +23,6 @@ still runs, which is where the promises' own strand drops them.
 
 ## Tests
 
-<!-- test: a-top-level-array-of-promises-reclaims-an-unawaited-element -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
-
-var held = IntPromiseArray.create(0)
-
-function work(n Integer) returns Integer
-	Scheduler.yield()
-	return n
-end 'work'
-
-function main() returns ExitCode
-	held.push(async work(1))
-	held.clear()
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
 <!-- test: a-local-array-of-promises-reclaims-an-unawaited-element -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -59,38 +36,6 @@ end 'work'
 
 function main() returns ExitCode
 	var held = IntPromiseArray.create(0)
-	held.push(async work(1))
-	held.clear()
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: a-top-level-array-of-throwing-promises-reclaims-an-unawaited-element -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias CheckedPromise = Promise with (Integer, WorkError)
-typealias CheckedPromiseArray = Array with CheckedPromise
-
-enum WorkError implements Error
-	failed
-end 'WorkError'
-
-var held = CheckedPromiseArray.create(0)
-
-function work(n Integer) returns Integer throws WorkError
-	Scheduler.yield()
-
-	if n < 0 'negative'
-		throw WorkError.failed
-	end 'negative'
-
-	return n
-end 'work'
-
-function main() returns ExitCode
 	held.push(async work(1))
 	held.clear()
 	return 0
@@ -131,38 +76,6 @@ end 'main'
 0
 ```
 
-<!-- test: a-top-level-array-of-records-holding-a-promise-reclaims-an-unawaited-element -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-type Job
-	var running as IntPromise
-
-	static function start(running IntPromise) returns Self
-		return Self{running: running}
-	end 'start'
-end 'Job'
-
-typealias JobArray = Array with Job
-
-var held = JobArray.create(0)
-
-function work(n Integer) returns Integer
-	Scheduler.yield()
-	return n
-end 'work'
-
-function main() returns ExitCode
-	held.push(Job.start(async work(1)))
-	held.clear()
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
 <!-- test: a-local-array-of-records-holding-a-promise-reclaims-an-unawaited-element -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -186,39 +99,6 @@ end 'work'
 function main() returns ExitCode
 	var held = JobArray.create(0)
 	held.push(Job.start(async work(1)))
-	held.clear()
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: a-top-level-array-of-generic-instances-over-a-promise-reclaims-an-unawaited-element -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-type Box uses Item
-	var item as Item
-
-	static function wrap(item Item) returns Self
-		return Self{item: item}
-	end 'wrap'
-end 'Box'
-
-typealias PromiseBox = Box with IntPromise
-typealias PromiseBoxArray = Array with PromiseBox
-
-var held = PromiseBoxArray.create(0)
-
-function work(n Integer) returns Integer
-	Scheduler.yield()
-	return n
-end 'work'
-
-function main() returns ExitCode
-	held.push(PromiseBox.wrap(async work(1)))
 	held.clear()
 	return 0
 end 'main'
@@ -259,35 +139,6 @@ end 'main'
 0
 ```
 
-<!-- test: a-top-level-array-of-unions-carrying-a-promise-reclaims-an-unawaited-element -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-
-union Slot
-	running(job IntPromise)
-	idle
-end 'Slot'
-
-typealias SlotArray = Array with Slot
-
-var held = SlotArray.create(0)
-
-function work(n Integer) returns Integer
-	Scheduler.yield()
-	return n
-end 'work'
-
-function main() returns ExitCode
-	held.push(Slot.running(async work(1)))
-	held.clear()
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
 <!-- test: a-local-array-of-unions-carrying-a-promise-reclaims-an-unawaited-element -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -308,30 +159,6 @@ end 'work'
 function main() returns ExitCode
 	var held = SlotArray.create(0)
 	held.push(Slot.running(async work(1)))
-	held.clear()
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: a-top-level-array-of-tuples-holding-a-promise-reclaims-an-unawaited-element -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias Entry = (Integer, IntPromise)
-typealias EntryArray = Array with Entry
-
-var held = EntryArray.create(0)
-
-function work(n Integer) returns Integer
-	Scheduler.yield()
-	return n
-end 'work'
-
-function main() returns ExitCode
-	held.push((1, async work(1)))
 	held.clear()
 	return 0
 end 'main'
@@ -363,29 +190,6 @@ end 'main'
 0
 ```
 
-<!-- test: a-top-level-array-of-records-holding-a-string-releases-its-element -->
-```maxon
-type Label
-	var text as String
-
-	static function named(text String) returns Self
-		return Self{text: text}
-	end 'named'
-end 'Label'
-
-typealias LabelArray = Array with Label
-
-var held = LabelArray.create(0)
-
-function main() returns ExitCode
-	held.push(Label.named("held {1 + 1}"))
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
 <!-- test: a-local-array-of-records-holding-a-string-releases-its-element -->
 ```maxon
 type Label
@@ -406,38 +210,6 @@ end 'main'
 ```
 ```exitcode
 0
-```
-
-<!-- test: a-top-level-array-of-inline-records-owns-nothing-to-release -->
-```maxon
-typealias Small = int(0 to 255)
-
-type Cell
-	let low as Small
-	let high as Small
-
-	static function of(low Small, high Small) returns Self
-		return Self{low: low, high: high}
-	end 'of'
-
-	function total() returns Small
-		return (self.low + self.high) as Small
-	end 'total'
-end 'Cell'
-
-typealias CellArray = Array with Cell
-
-var held = CellArray.create(0)
-
-function main() returns ExitCode
-	held.push(Cell.of(3, high: 4))
-
-	let cell = try held.get(0) otherwise panic("one was pushed")
-	return cell.total() as ExitCode
-end 'main'
-```
-```exitcode
-7
 ```
 
 <!-- test: a-local-array-of-inline-records-owns-nothing-to-release -->

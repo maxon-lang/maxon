@@ -210,35 +210,6 @@ end 'main'
 6
 ```
 
-<!-- test: error.a-module-var-returned-by-a-function-is-refused-by-a-let-field -->
-The twin of the case above with a module-level `var`: `banner` hands back a value some function may still write,
-so a `let` field cannot keep it.
-
-```maxon
-var Banner = b"banner"
-
-type Label
-	export let text as ByteArray
-
-	static function create(text ByteArray) returns Self
-		return Self{text: text}
-	end 'create'
-end 'Label'
-
-function banner() returns ByteArray
-	return Banner
-end 'banner'
-
-function main() returns ExitCode
-	let label = Label.create(banner())
-
-	return label.text.count() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:17:20: cannot pass a value other names may still write to parameter 'text' of 'Label.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
-```
-
 <!-- test: a-merge-of-a-let-field-and-a-fresh-value-is-kept-by-a-let-field -->
 `pick` returns the `let` field on one path and a fresh array on the other. Neither has another writer, so the
 `let` field of the label keeps either.

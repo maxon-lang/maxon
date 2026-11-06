@@ -132,10 +132,9 @@ The rules:
 
 - **No write through a read-only value.** A field store, a method that writes its receiver, or an argument the
   callee writes is **E3159**. The diagnostic names the read-only root.
-- **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**, and so is a module
-  `var` initializer that may take a module-level `let`'s record. A module-level `let`'s record reaching a `var`
+- **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**. A module-level `let`'s record reaching a `var`
   through a ternary, a `match … gives` or a `try … otherwise` is the same **E3078**. Storing a read-only value into a `var` field, a
-  mutable container element or module storage, or passing it to a parameter that keeps it where something may
+  mutable container element, or passing it to a parameter that keeps it where something may
   write it, is **E3078** too. A `let` bound to a fresh record is the one exception, at its last use: the store
   consumes the name, so no `let` sees what the new holder writes. Stored there and read again afterwards, it is
   refused. A last use is judged per path: a store on one arm of an `if`, a `match` or a ternary is the last use on
@@ -156,8 +155,7 @@ The rules:
   - or moved in, either as a sole-owned value or as a `var` at its last use.
 
   A mutable value that is still shared elsewhere is **E3078**. A sole-owned tuple or record is moved in only
-  when the records it holds are unwritten too: one that holds a record a `var` of the function, or a module
-  `var`, may still write is **E3078**. The same rule applies to a parameter whose callee
+  when the records it holds are unwritten too: one that holds a record a `var` of the function may still write is **E3078**. The same rule applies to a parameter whose callee
   stores it into a `let` field; the compiler reads that from the callee's body.
 - **`let b = a`, where `a` is a `var`, moves `a`.** `b` is then the record's only holder, and read-only.
 - **Keys are read-only.** A stored Map key or Set element cannot be written through its container, and a key read
@@ -224,7 +222,7 @@ end 'main'
 | an [`async`](/docs/language/async/#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread, and its promise is [tied](/docs/language/async/#tied-and-must-use-promises) when the argument is the caller's mutable data; a variable at a `mutable` parameter is lent to the coroutine until its promise is awaited or cancelled; a promise moves to the coroutine |
 | a [closure](/docs/language/functions/#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
 | a [service](/docs/language/async/#services--spawn) message | a mutable value moves to the service; a read-only value the sender does not own is shared; a tuple of heap-free elements the sender does not solely own is copied; a view, or a record a view declared earlier may reach, is **E3138** |
-| a `spawn` factory argument | moves to the service's green thread; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
+| a `spawn` factory argument | moves into the service; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
 | `SharedValue.publish`, `Key.register` | the value must be solely owned (**E3174**) or a tuple of heap-free elements, which is copied; every reader sees it read-only |
 
 ### Aliasing Between Arguments
@@ -261,8 +259,7 @@ Where the by-reference cell itself is the operand to move, the cure copies the l
 statement, passes the copy at that position and stores it back after the call (a `let` there is **E3159**).
 
 The refusal is judged per **root binding**. It counts reads of the cell's own root variable and of that
-variable's field paths, and all the fields of `self` share one root, as a module `var` or a `static var` is
-one root. Another name for the same record, such as a `view`, a `var` that took the record by move or a `let`
+variable's field paths, and all the fields of `self` share one root. Another name for the same record, such as a `view`, a `var` that took the record by move or a `let`
 alias of a parameter, is a pending operand of its own, and the runtime hold a read of it takes keeps the value
 alive across the write.
 
@@ -333,8 +330,9 @@ decorator of that shape reaches the clone check.
 - **Services own their state.** State that more than one thread uses lives in a [service](/docs/language/async/#services--spawn) and is
   reached by message. Messages and replies move their mutable arguments. A [view](/docs/language/variables/#views-view) stays on its thread:
   a send refuses a view, and a writable record a view declared earlier in the function may reach.
-- **Module `var`s stay on one thread.** A module or static `var` that code running on another thread (a service,
-  or anything it calls) can reach is **E3143**.
+- **There is no module-level mutable state.** `var` is a local, a field of a `type`, or a parameter's target; a
+  file-scope or `static` `var` is a syntax error. State more than one thread uses is a service's fields or a
+  [`SharedValue`](/docs/language/async/#sharedvalue--a-live-value-made-at-run-time).
 - **Read-only values are shared.** A module `let` reachable from another thread, a value published through
   `SharedValue` or a registry `default`, and a read-only parameter sent in a message are marked shared before a
   second thread can see them. A shared value uses atomic counts, and nothing can write it, because it is read-only.
@@ -501,7 +499,6 @@ awaited or dropped exits with **75** instead (see [Concurrency](/docs/language/a
 | [E3078](/docs/cli/error-codes/#e3078--semanticvarfromimmutable) | a read-only value bound or stored where it could be written, or kept by a `let` field while another writer exists |
 | [E3086](/docs/cli/error-codes/#e3086--semanticfieldnotinitialized) | a field not definitely assigned before its struct literal |
 | [E3102](/docs/cli/error-codes/#e3102--useaftermove) | use of a moved value |
-| [E3143](/docs/cli/error-codes/#e3143--semanticmodulevarinserviceprogram) | a module `var` reachable from another thread |
 | [E3152](/docs/cli/error-codes/#e3152--rawintrinsicoutsideruntimetier) | `__Raw` used outside `runtime/` |
 | [E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord) | a write through a read-only value |
 | [E3163](/docs/cli/error-codes/#e3163--semanticunmarkableletreadbyamessage) | a module `let` read by a message or a factory that the share walk cannot mark |
@@ -510,6 +507,7 @@ awaited or dropped exits with **75** instead (see [Concurrency](/docs/language/a
 | [E3185](/docs/cli/error-codes/#e3185--rawsurfaceoutsidelibrarytier) | raw memory or a raw handle used outside the library tier |
 | [E3186](/docs/cli/error-codes/#e3186--argumentoverlapswrittenparameter) | a local read by an operand evaluated before a call writes it through a `mutable` parameter |
 | [E3196](/docs/cli/error-codes/#e3196--semanticcapabilitymismatchatstore)–[E3215](/docs/cli/error-codes/#e3215--semanticregionboundrefused) | the capability, window, tied-promise and unique checks (see [Capability Errors](/docs/language/regions/#capability-errors)) |
+| [E3216](/docs/cli/error-codes/#e3216--semanticservicestateholdsapromise) | a service whose state holds a promise |
 | [E5004](/docs/cli/error-codes/#e5004--unguardedstackchain) | a chain of unchecked runtime functions that can exceed the stack margin |
 | exit 96 | a mutable value sent to another thread while not solely owned |
 | exit 101 | memory still allocated when `main` returns |

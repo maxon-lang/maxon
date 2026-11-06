@@ -65,7 +65,7 @@ name on its right-hand side read as the alias's own file means it, and a type bo
 to its own modifier before its right-hand side is walked. A member is held to its own modifier, whatever its
 type's, and an interface's members — its requirements' types included — are held to the interface's. A [service](/docs/language/async/#services--spawn)'s message is
 held to the narrower of its own modifier and its service type's. A `module`, `export` or `public`
-binding — a top-level `let` or `var`, or a `static let` or `static var` member — is held to the same rule
+binding — a top-level `let` or a `static let` member — is held to the same rule
 for its type, which is the type its initializer gives it, written or inferred, together with any alias the
 initializer was spelled through (`50 as Small`, `Tallies.create()`). Every other surface a declaration exposes
 is held to the same rule: an instance field at the narrower of its own modifier and its type's (an unmarked

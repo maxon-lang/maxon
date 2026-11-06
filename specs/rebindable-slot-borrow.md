@@ -141,35 +141,6 @@ end 'main'
 [hello world 42 padded out long enough for the heap] [replacement 7 padded out long enough for the heap] [filler 9 padded out long enough for the heap]
 ```
 
-<!-- test: mutable-global-read-survives-the-global-being-replaced -->
-**THE SECOND SLOT KIND.** A top-level `var` is rebindable storage exactly as a field is: the store
-releases the old occupant, and `old` holds its own reference.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
-
-var G = IntArray.create(0)
-
-function main() returns ExitCode
-	G.push(1)
-	G.push(2)
-	view old = G
-	var fresh = IntArray.create(0)
-	fresh.push(99)
-	G = fresh
-
-	var sum = 0 as Integer
-	for i in 0 upto old.count() 'walk'
-		sum = sum + (try old.get(i) otherwise 0)
-	end 'walk'
-	print("sum {sum}")
-	return 0
-end 'main'
-```
-```stdout
-sum 3
-```
-
 <!-- test: an-immutable-field-read-is-counted-too -->
 A `let` field cannot be stored to, so its occupant is never replaced; the binding is counted like any
 other read, and the program answers what it read.

@@ -88,9 +88,10 @@ outstanding 0
 0
 ```
 
-<!-- test: builtins-gt-quiesce.answers-what-nothing-can-finish -->
+<!-- test: builtins-gt-quiesce.a-service-with-nothing-queued-strands-no-thread -->
 <!-- tier: stdlib -->
-The service waits on its mailbox for a message that only `main` could send, so nothing can ever finish it. The wait answers the one green thread that is left instead of ending the program, and a second wait after the
+A service with nothing queued owns no green thread: its runner ended after the one message it was sent and nothing is
+parked waiting for another. The wait answers `0` at once, with the service still alive, and a second wait after the
 shutdown finds none.
 ```maxon
 typealias Count = int(0 to 1000)
@@ -123,7 +124,7 @@ end 'main'
 ```
 ```stdout
 greeted 1
-stranded 1
+stranded 0
 outstanding 0
 ```
 ```exitcode
@@ -425,7 +426,8 @@ after the wait
 <!-- test: builtins-gt-quiesce.answers-while-a-pinned-thread-waits-for-its-machine -->
 `main` pins itself to its machine, so while it is parked in the wait that machine blocks for `main`'s next turn and
 joins no idle list. The wait still answers when every other machine is idle, as a machine waiting for its pinned
-thread counts as idle: the one green thread that is left, then none once the service has been shut down.
+thread counts as idle: the service's runner ended after the one message it was sent, so no green thread is left,
+and a second wait after the shutdown finds none either.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -464,7 +466,7 @@ end 'main'
 ```
 ```stdout
 greeted 1
-stranded 1
+stranded 0
 outstanding 0
 ```
 ```exitcode

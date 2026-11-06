@@ -1,19 +1,19 @@
-// MANY-SENDER torture — the mailbox's MULTI-PRODUCER side,
+// MANY-SENDER torture — a cown queue's MULTI-PRODUCER side,
 // which nothing else in this directory reaches.
 //
-// ⭐⭐ `service-torture.maxon` IS ONE SENDER AND TWELVE MAILBOXES; THIS IS TWELVE
-// SENDERS AND ONE. That is not a rearrangement of the same program: a mailbox is a
+// ⭐⭐ `service-torture.maxon` IS ONE SENDER AND TWELVE SERVICES; THIS IS TWELVE
+// SENDERS AND ONE. That is not a rearrangement of the same program: a cown's queue is a
 // multi-producer / single-consumer queue, and with `main` the only sender its
 // producer side has exactly one party at every `MAXON_MAX_PROCS`. Here twelve
-// SERVICE green threads — each of which the scheduler may put on a different M —
-// push into one `__mbox_send` concurrently, which is the shape the queue's CAS was
+// SENDER services — whose runners the scheduler may put on different Ms —
+// push into one `__cown_send` concurrently, which is the shape the queue's tail CAS was
 // written for and the only shape that can contend it.
 //
 // ⭐⭐ THE SINK PRINTS, AND THAT IS WHAT MAKES THE READING SOUND WITHOUT REPLIES.
 // A service send has no reply, so a sender cannot be told anything and `main` cannot learn when
 // the work is finished — which rules out `main` reading the counters, because it
 // would read them before the senders had run. The SINK can: its handlers are
-// serialized by its own mailbox, so the message that brings `taken` to
+// serialized by its own cown, so the message that brings `taken` to
 // `expectedTotal` is by construction the last one, and everything this program wants
 // to report is known at exactly that instant. No cross-thread flag, no global
 // stepped by two green threads, nothing that is a race at N >= 2.
@@ -88,7 +88,7 @@ type Sink
 		self.bytes = self.bytes + (s.byteLength() as Integer)
 
 		// The last message to arrive is the only one that can report, and it knows it
-		// is the last because this handler is the mailbox's single consumer.
+		// is the last because the cown runs one handler at a time.
 		if self.taken == expectedTotal 'lastMessage'
 			print("aggregate={self.bytes}\n")
 			print("taken={self.taken}\n")

@@ -73,7 +73,7 @@ strand's token itself and then pays the wake the ready owed, as Go's `wakep` doe
 only on an idle processor. So a program whose only green thread is `main` keeps one M at one processor, and
 above one it may reach a second that has only `main`'s token to run (`SchedRuntime.maxon`'s header).
 
-⭐ **A `spawn` IS WHAT ADDS TOKENS** (`specs/services.md`, *"A send MOVES, and that is load-bearing"*). `__svc_spawn` calls
+⭐ **A `spawn` IS WHAT ADDS TOKENS** (`specs/services.md`, *"A send MOVES, and that is load-bearing"*). `__cown_spawn` calls
 `__gt_spawn_green` and publishes the new green thread's token to a P RING, which is exactly what a ring, a
 steal and a worker loop are for — so the five cases at the END of this file, which run services, are where
 the tiers carry more than `main`'s one token.
@@ -170,39 +170,43 @@ a wrong answer. Removing the stamp altogether is the coarser sabotage and does n
 green-thread program takes an access violation (exit `0xC0000005`).
 A zero here is not a benign default and a plausible-looking non-zero is not enough either.
 ```maxon
-var order = 0 as Integer
-var posA = 0 as Integer
-var posB = 0 as Integer
-var posC = 0 as Integer
+typealias Cell = SharedValue with Integer
 
-function inner() returns Integer
+function tick(order Cell) returns Integer
+	let next = order.current() + 1
+	order.publish(next)
+	return next
+end 'tick'
+
+function inner(order Cell, posC Cell) returns Integer
 	Scheduler.parallelBoundary()
-	order = order + 1
-	posC = order
+	posC.publish(tick(order))
 	return 1
 end 'inner'
 
-function sibling() returns Integer
+function sibling(order Cell, posB Cell) returns Integer
 	Scheduler.parallelBoundary()
-	order = order + 1
-	posB = order
+	posB.publish(tick(order))
 	return 1
 end 'sibling'
 
-function outer() returns Integer
+function outer(order Cell, posA Cell, posC Cell) returns Integer
 	Scheduler.parallelBoundary()
-	order = order + 1
-	posA = order
-	let c = async inner()
+	posA.publish(tick(order))
+	let c = async inner(order.clone(), posC: posC.clone())
 	return await c
 end 'outer'
 
 function main() returns ExitCode
-	let a = async outer()
-	let b = async sibling()
+	let order = Cell.create(0 as Integer)
+	let posA = Cell.create(0 as Integer)
+	let posB = Cell.create(0 as Integer)
+	let posC = Cell.create(0 as Integer)
+	let a = async outer(order.clone(), posA: posA.clone(), posC: posC.clone())
+	let b = async sibling(order.clone(), posB: posB.clone())
 	let ra = await a
 	let rb = await b
-	print("ra={ra} rb={rb} posA={posA} posB={posB} posC={posC}")
+	print("ra={ra} rb={rb} posA={posA.current()} posB={posB.current()} posC={posC.current()}")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -219,38 +223,42 @@ ra=1 rb=1 posA=1 posB=2 posC=3
 in order run in that order, whatever order their promises are awaited in. The awaits here run BACKWARDS
 on purpose — `p3` first — so a queue that handed back the newest entry would be visible as `a3=1`.
 ```maxon
-var order = 0 as Integer
-var a1 = 0 as Integer
-var a2 = 0 as Integer
-var a3 = 0 as Integer
+typealias Cell = SharedValue with Integer
 
-function first() returns Integer
+function tick(order Cell) returns Integer
+	let next = order.current() + 1
+	order.publish(next)
+	return next
+end 'tick'
+
+function first(order Cell, a1 Cell) returns Integer
 	Scheduler.parallelBoundary()
-	order = order + 1
-	a1 = order
+	a1.publish(tick(order))
 	return 1
 end 'first'
 
-function second() returns Integer
+function second(order Cell, a2 Cell) returns Integer
 	Scheduler.parallelBoundary()
-	order = order + 1
-	a2 = order
+	a2.publish(tick(order))
 	return 1
 end 'second'
 
-function third() returns Integer
+function third(order Cell, a3 Cell) returns Integer
 	Scheduler.parallelBoundary()
-	order = order + 1
-	a3 = order
+	a3.publish(tick(order))
 	return 1
 end 'third'
 
 function main() returns ExitCode
-	let p1 = async first()
-	let p2 = async second()
-	let p3 = async third()
+	let order = Cell.create(0 as Integer)
+	let a1 = Cell.create(0 as Integer)
+	let a2 = Cell.create(0 as Integer)
+	let a3 = Cell.create(0 as Integer)
+	let p1 = async first(order.clone(), a1: a1.clone())
+	let p2 = async second(order.clone(), a2: a2.clone())
+	let p3 = async third(order.clone(), a3: a3.clone())
 	let s = (await p3) + (await p2) + (await p1)
-	print("s={s} a1={a1} a2={a2} a3={a3}")
+	print("s={s} a1={a1.current()} a2={a2.current()} a3={a3.current()}")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -429,27 +437,28 @@ decides whether `sibling` ever gets a turn:
 
 It reads the sibling's flag as its own result, so the assertion is what the YIELDER saw.
 ```maxon
-var siblingRan = 0 as Integer
+typealias Cell = SharedValue with Integer
 
-function yielder() returns Integer
+function yielder(siblingRan Cell) returns Integer
 	var i = 0 as Integer
 	while i < 1000 'spin'
 		Scheduler.yield()
 		i = i + 1
 	end 'spin'
 
-	return siblingRan
+	return siblingRan.current()
 end 'yielder'
 
-function sibling() returns Integer
+function sibling(siblingRan Cell) returns Integer
 	Scheduler.parallelBoundary()
-	siblingRan = 1
+	siblingRan.publish(1 as Integer)
 	return 1
 end 'sibling'
 
 function main() returns ExitCode
-	let y = async yielder()
-	let s = async sibling()
+	let siblingRan = Cell.create(0 as Integer)
+	let y = async yielder(siblingRan.clone())
+	let s = async sibling(siblingRan.clone())
 	let seen = await y
 	let done = await s
 	print("seen={seen} done={done}")
@@ -472,11 +481,12 @@ awaits the strand runner reaches `marker`, and it must reclaim that coroutine in
 `ran` stays 0 and the two live results still arrive. A scheduler that ran it would both set `ran` and leave
 a thread nobody awaits, which is the green-thread live-count abort (75) rather than 7.
 ```maxon
-var ran = 0 as Integer
+typealias Cell = SharedValue with Integer
 
-function marker() returns Integer
+function marker(ran Cell) returns Integer
 	Scheduler.parallelBoundary()
-	ran = ran + 1
+	let next = ran.current() + 1
+	ran.publish(next)
 	return 1
 end 'marker'
 
@@ -486,13 +496,14 @@ function ok(v Integer) returns Integer
 end 'ok'
 
 function main() returns ExitCode
+	let ran = Cell.create(0 as Integer)
 	let p1 = async ok(3)
-	let m = async marker()
+	let m = async marker(ran.clone())
 	m.cancel()
 	let p2 = async ok(4)
 	let a = await p1
 	let b = await p2
-	print("ran={ran}")
+	print("ran={ran.current()}")
 	return (a + b) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -516,23 +527,25 @@ before it, which `Scheduler.counters().recycledThreads` counts.
 ✅ **THIS CASE OWNS THE FRONT SWEEP.** With the drop's front sweep removed, this case reads `recycled=0`
 while the other two drop cases below stay GREEN, so the count is this case's road and nobody else's.
 ```maxon
-var ran = 0 as Integer
+typealias Cell = SharedValue with Integer
 
-function neverRuns() returns Integer
+function neverRuns(ran Cell) returns Integer
 	Scheduler.parallelBoundary()
-	ran = ran + 1
+	let next = ran.current() + 1
+	ran.publish(next)
 	return 1
 end 'neverRuns'
 
 function main() returns ExitCode
+	let ran = Cell.create(0 as Integer)
 	var i = 0 as Integer
 	while i < 5000 'loop'
-		let p = async neverRuns()
+		let p = async neverRuns(ran.clone())
 		p.cancel()
 		i = i + 1
 	end 'loop'
 
-	print("ran={ran} recycled={Scheduler.counters().recycledThreads}")
+	print("ran={ran.current()} recycled={Scheduler.counters().recycledThreads}")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)

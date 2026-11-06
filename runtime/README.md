@@ -248,8 +248,7 @@ global.
 ⚠ Every slot is naturally aligned (`naturallyAlignedSlotOffset`), so a user segment ending on a 1-, 2- or
 4-byte slot is followed by zero padding before the first runtime word. arm64's exclusive and acquire/release
 loads and stores fault on a misaligned address and x64 does not, so a layout that drops the alignment
-crashes only the arm64 lanes. `specs/static-variables.md`'s
-`data-section-runtime-word-after-a-bool-is-aligned` pins the pad.
+crashes only the arm64 lanes.
 
 ## What may be tier source
 

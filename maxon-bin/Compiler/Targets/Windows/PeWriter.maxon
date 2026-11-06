@@ -5,7 +5,7 @@
 // `asInvoker` application manifest) + headers, with an optional `.rdata` / `.symtab` /
 // `.data` section when the backend produced any and a trailing COFF symbol table for
 // debuggers when debug symbols are present. `.data` is a WRITABLE section holding the
-// initial image of every top-level `var`. The `.rsrc` manifest opts every
+// initial image of every top-level global. The `.rsrc` manifest opts every
 // produced binary out of Windows' UAC installer-detection heuristic (see buildRsrcSection).
 // The import table is MULTI-DLL — kernel32, ws2_32, ntdll, bcryptprimitives and crypt32, one
 // thunk run, one directory entry and one Hint/Name region each, derived from `ImportDll` rather
@@ -51,8 +51,8 @@ let SectionIdataFlags = 0xC0000040  // INITIALIZED_DATA | READ | WRITE
 let SectionSymtabFlags = 0xC0000040  // INITIALIZED_DATA | READ | WRITE
 
 // `.data` — INITIALIZED_DATA | READ | WRITE. The WRITE bit is the whole point of the section:
-// a top-level `var` is stored to at run time, and a global in read-only `.rdata` would fault on
-// its first assignment.
+// a stored top-level `let`'s slot is written at run time by `__module_init`, and a global in read-only
+// `.rdata` would fault on that first store.
 //
 // ⚠ What routes a label HERE is the RELOCATION KIND — `dataSectionRipRelDisp32`, measured from
 // `dataRva` by `patchRdataRelocationsX86` — and NOT the `__data_` name prefix (see
@@ -1338,7 +1338,7 @@ end 'patchRelocationsX86'
 
 // Patch code→data-section relocations: a RIP-relative disp32 in the code gets the distance to its
 // target's slot. `ripRelDisp32` targets `.rdata`;
-// `dataSectionRipRelDisp32` targets `.data` and is what a top-level `var`'s `lea` uses.
+// `dataSectionRipRelDisp32` targets `.data` and is what a top-level global's `lea` uses.
 //
 // The two arms differ ONLY in which section RVA they measure from, which is exactly what the kind
 // discriminates — `reloc.rdataOffset` was already resolved within its own section by the backend.
@@ -1924,7 +1924,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let rdataSize = codeResult.rdata.count()
 	let symdataSize = codeResult.symdata.count()
 
-	// The `.data` image: the initial bytes of every top-level `var`. Empty for a program with no
+	// The `.data` image: the initial bytes of every top-level global. Empty for a program with no
 	// global, which is most of the corpus — and the section is then OMITTED ENTIRELY, so a
 	// global-free program's binary carries no `.data` section.
 	let dataSize = codeResult.dataPrelude.count()

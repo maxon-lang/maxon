@@ -116,28 +116,38 @@ Two async threads sleep for different durations; the shorter-sleep one resumes a
 records its completion order into a global (`order = order * 10 + tag`), so `21` proves the fast thread
 (tag 2) completed before the slow thread (tag 1) — deadline order, not spawn order.
 ```maxon
-var order = 0 as Integer
+function record(order OrderCell, digit Integer)
+	while true 'retry'
+		let seen = order.current()
 
-function slow() returns Integer
+		if order.publish(seen * 10 + digit, replacing: seen) 'landed'
+			break
+		end 'landed'
+	end 'retry'
+end 'record'
+
+function slow(order OrderCell) returns Integer
 	sleep(100)
-	order = order * 10 + 1
+	record(order, digit: 1)
 	return 1
 end 'slow'
 
-function fast() returns Integer
+function fast(order OrderCell) returns Integer
 	sleep(10)
-	order = order * 10 + 2
+	record(order, digit: 2)
 	return 2
 end 'fast'
 
 function main() returns ExitCode
-	let p1 = async slow()
-	let p2 = async fast()
+	let order = OrderCell.create(0 as Integer)
+	let p1 = async slow(order.clone())
+	let p2 = async fast(order.clone())
 	_ = await p1
 	_ = await p2
-	return order as ExitCode
+	return order.current() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
+typealias OrderCell = SharedValue with Integer
 ```
 ```exitcode
 21
@@ -164,11 +174,19 @@ on a fast machine and a slow one alike; 600 ms clears the longest deadline by 20
 typealias Integer = int(i64.min to i64.max)
 typealias Millis = int(0 to u64.max)
 
-var order = 0 as Integer
+typealias OrderCell = SharedValue with Integer
 
-function sleeper(ms Millis, tag Integer) returns Integer
+function sleeper(ms Millis, tag Integer, order OrderCell) returns Integer
 	sleep(ms as Milliseconds)
-	order = order * 10 + tag
+
+	while true 'retry'
+		let seen = order.current()
+
+		if order.publish(seen * 10 + tag, replacing: seen) 'landed'
+			break
+		end 'landed'
+	end 'retry'
+
 	return tag
 end 'sleeper'
 
@@ -182,17 +200,18 @@ function hog(ns DurationNanos) returns Integer
 end 'hog'
 
 function main() returns ExitCode
-	let p1 = async sleeper(400, tag: 1)
-	let p2 = async sleeper(300, tag: 2)
-	let p3 = async sleeper(200, tag: 3)
-	let p4 = async sleeper(100, tag: 4)
+	let order = OrderCell.create(0 as Integer)
+	let p1 = async sleeper(400, tag: 1, order: order.clone())
+	let p2 = async sleeper(300, tag: 2, order: order.clone())
+	let p3 = async sleeper(200, tag: 3, order: order.clone())
+	let p4 = async sleeper(100, tag: 4, order: order.clone())
 	let busy = async hog(600000000)
 	_ = await p1
 	_ = await p2
 	_ = await p3
 	_ = await p4
 	_ = await busy
-	print("order={order}")
+	print("order={order.current()}")
 	return 0
 end 'main'
 ```

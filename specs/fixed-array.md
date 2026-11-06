@@ -23,7 +23,7 @@ Create a concrete fixed array type using `typealias` with element type and size:
 ```text
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
-var v = Vec3.create()  // zero-initialized, 3 elements on the stack
+let v = Vec3.create()  // zero-initialized, 3 elements on the stack
 ```
 
 The size is part of the type. A `FixedArray with 3 Int` is a different type from `FixedArray with 4 Int`.
@@ -33,7 +33,7 @@ The size is part of the type. A `FixedArray with 3 Int` is a different type from
 Fixed arrays implement `BuiltinArrayLiteral`, so you can initialize them from an array literal using `from`. The element type and size are inferred from the literal:
 
 ```text
-var v = FixedArray from [10, 20, 30]  // inferred as FixedArray with 3 Int
+let v = FixedArray from [10, 20, 30]  // inferred as FixedArray with 3 Int
 ```
 
 The inferred type is compatible with a typealias of the same element type and size, so a `FixedArray from [...]` can be passed to a function expecting the typealias:
@@ -46,7 +46,7 @@ function process(v Vec3) returns Int
   return v.get(0)
 end 'process'
 
-var v = FixedArray from [10, 20, 30]
+let v = FixedArray from [10, 20, 30]
 process(v)  // works — inferred type matches Vec3
 ```
 
@@ -57,7 +57,7 @@ the fixed array makes the access total: it cannot fail, so it is written bare, a
 refused (E3055).
 
 ```text
-var value = v.get(0)
+let value = v.get(0)
 v.set(0, value: 42)
 ```
 
@@ -79,7 +79,7 @@ A constant index at or past the size is refused at compile time (E3005). Any oth
 `try` (E3057 without it):
 
 ```text
-var value = try v.get(i) otherwise 0
+let value = try v.get(i) otherwise 0
 try v.set(i, value: 42) otherwise ignore
 ```
 
@@ -90,8 +90,8 @@ The `.count()` method always returns the fixed size of the fixed array:
 ```text
 typealias Int = int(i64.min to i64.max)
 typealias Vec4 = FixedArray with 4 Int
-var v = Vec4.create()
-var n = v.count()  // always 4
+let v = Vec4.create()
+let n = v.count()  // always 4
 ```
 
 ### Storage
@@ -1064,30 +1064,6 @@ record). Its three premises are the ones
 [top-level-factory-globals](top-level-factory-globals.md) pins for every declared generic: the `create()`
 must EXIST, be NAMEABLE from its declaring file, and return `Self`. `__module_init` then emits a bare
 `call FixedArray.create` with no stamps at all, and the record it hands back is already published.
-
-<!-- test: a-fixed-array-global-is-built-by-the-declarations-own-static -->
-The global is filled from one function and read from another, so what is under test is the slot
-`__module_init` wrote before `main` and not a local the same statement built.
-```maxon
-typealias Int = int(i64.min to i64.max)
-typealias Vec3 = FixedArray with 3 Int
-
-var shared = Vec3.create()
-
-function fill() returns Int
-	shared.set(0, value: 20)
-	shared.set(2, value: 21)
-	return 0
-end 'fill'
-
-function main() returns ExitCode
-	_ = fill()
-	return (shared.get(0) + shared.get(2) + (shared.count() as Int)) as ExitCode
-end 'main'
-```
-```exitcode
-44
-```
 
 ## The Fixed Size Is The Bound, And The Buffer Under It Is Not
 
