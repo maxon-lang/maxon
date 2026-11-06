@@ -384,6 +384,7 @@ function parkAndDrop() returns Integer
 	let q = async fast()
 	let r = await q
 	let done = 1 if s.isComplete() else 0
+	s.cancel()
 	return r + done
 end 'parkAndDrop'
 
@@ -499,6 +500,7 @@ function parkAndDrop() returns Integer
 	let q = async fast()
 	let r = await q
 	let done = 1 if p.isComplete() else 0
+	p.cancel()
 	return r + done
 end 'parkAndDrop'
 
@@ -573,6 +575,8 @@ function main() returns ExitCode
 		if s.isComplete() 'finishedEarly'
 			early = early + 1
 		end 'finishedEarly'
+
+		s.cancel()
 	end 'drops'
 
 	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")

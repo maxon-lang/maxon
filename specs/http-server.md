@@ -2855,6 +2855,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: stdlib/HttpServer.maxon:338:35: argument `handler` of the message `ConnectionWorker.serve` is a PARAMETER shared with the service, and the handler `ConnectionWorker.serve` writes or keeps its parameter `handler`. A record both threads reach may be written by neither. Send a `.clone()`, or make `ConnectionWorker.serve` only read `handler`
 error E3210: <fragment>:11:11: 'CountingHandler.handle' writes its receiver, but 'HttpHandler.handle' does not declare `mutable self`
+error E3138: stdlib/HttpServer.maxon:338:35: argument `handler` of the message `ConnectionWorker.serve` is a PARAMETER shared with the service, and the handler `ConnectionWorker.serve` writes or keeps its parameter `handler`. A record both threads reach may be written by neither. Send a `.clone()`, or make `ConnectionWorker.serve` only read `handler`
 ```

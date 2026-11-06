@@ -847,7 +847,11 @@ end 'main'
 
 function reuseOver(listener TcpListener) returns ExitCode
 	let peer = async echoUntilAnswered(listener)
-	let first = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
+	let first = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise 'firstConnectFailed'
+		peer.cancel()
+		return 1
+	end 'firstConnectFailed'
+
 	let reused = reuseItsDescriptor(first, port: listener.port())
 	let answered = await peer
 
@@ -873,9 +877,20 @@ function reuseItsDescriptor(first TcpClient, port NetworkPort) returns String
 	first.close()
 
 	// The lowest free descriptor is the one just closed, so this connection inherits the released record.
-	var second = try TcpClient.connect("127.0.0.1", port: port) otherwise return "the second connect failed\n"
-	_ = try second.send("reuse\n") otherwise return "the send failed\n"
-	let echo = try second.recv(1024) otherwise return "the echo never arrived\n"
+	var second = try TcpClient.connect("127.0.0.1", port: port) otherwise 'secondConnectFailed'
+		stale.cancel()
+		return "the second connect failed\n"
+	end 'secondConnectFailed'
+
+	_ = try second.send("reuse\n") otherwise 'sendFailed'
+		stale.cancel()
+		return "the send failed\n"
+	end 'sendFailed'
+
+	let echo = try second.recv(1024) otherwise 'echoNeverArrived'
+		stale.cancel()
+		return "the echo never arrived\n"
+	end 'echoNeverArrived'
 
 	let outcome = await stale
 	return "echoed={echo == "reuse\n"} outcome={outcome}\n"
@@ -983,11 +998,14 @@ coroutine that started it keeps itself runnable. That the reader is parked is a 
 `readOutcome` publishes `parkedFrom` in the statement before its `recv`, the canceller yields until the netpoll
 count has reached it and only then raises `phase`, and `main` yields until it sees that, so no sleep has to
 outlast how long the reader takes to get there. `main` announces its read through `phase` and issues it, and
-the read opens with a genuine suspension, during which the canceller is the one member the strand can run: it
-cancels the first reader, which ends that wait and queues the reader, and yields. A yield fires what is due
-before it places the yielder, so `main`'s own resumption is fired there — and a readied OWNER joins the front
-of its strand's queue where a coroutine joins the back. `main` therefore finds the socket empty and reaches its
-wait while the first reader's has ended and the reader has not yet run.
+the read opens with a genuine suspension, during which the canceller is the one member the strand can run. The
+first reader's promise is tied to the socket, so cancelling it waits for the reader to finish, and a wait fires
+nothing that is due: the reader would run before `main`'s resumption is fired. So the canceller first starts
+`giveMainItsTurn`, a coroutine that queues ahead of the reader and does one yield. The canceller then cancels the first reader, which
+ends that wait and queues the reader, and parks until it finishes. `giveMainItsTurn` runs next, and its yield fires
+what is due before it places the yielder, so `main`'s own resumption is fired there — and a readied OWNER joins the
+front of its strand's queue where a coroutine joins the back. `main` therefore finds the socket empty and reaches
+its wait while the first reader's has ended and the reader has not yet run.
 
 ⚠ **A MACHINE WAITING IN THE POLLER CAN FIRE `main`'s RESUMPTION BEFORE THE CANCELLER RUNS**, since registering
 it breaks that wait. `main` then meets the first reader still published and stops by the ordinary road — the
@@ -998,7 +1016,8 @@ in the one named stop.
 suspension, and it runs every readied member of the strand first. Readiness and a deadline are processed by
 whichever machine is polling, at a time the program does not choose, and one landing before the second reader's
 suspension is settled there, before its call is issued. A cancel is issued by the strand, at a point the program
-picks.
+picks. Without `giveMainItsTurn`'s yield the cancelled reader is the first thing the strand runs, settles the word, and
+`main` then waits on it for ever.
 
 ⚠ **A RUNTIME THAT FREES THE WORD WHEN THE WAIT ENDS DOES NOT STOP.** `main` publishes itself on the word, the
 cancelled reader's resume erases it, and `main` waits for ever — the runner reports the case TIMED OUT.
@@ -1036,6 +1055,11 @@ function readOutcome(client TcpClient) returns ReadOutcome
 	return code
 end 'readOutcome'
 
+function giveMainItsTurn() returns ReadOutcome
+	Scheduler.yield()
+	return 0
+end 'giveMainItsTurn'
+
 // Yielding rather than sleeping keeps this coroutine runnable, so it is what runs while `main`'s read is
 // suspended.
 function cancelFirstReader(client TcpClient) returns ReadOutcome
@@ -1051,9 +1075,10 @@ function cancelFirstReader(client TcpClient) returns ReadOutcome
 		Scheduler.yield()
 	end 'untilMainReads'
 
+	let turn = async giveMainItsTurn()
 	first.cancel()
-	Scheduler.yield()
-	return 0
+
+	return await turn
 end 'cancelFirstReader'
 
 function readOver(client TcpClient) returns ExitCode

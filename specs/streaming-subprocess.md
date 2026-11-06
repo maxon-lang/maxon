@@ -245,7 +245,9 @@ function dropAParkedSleeper() returns Integer
 	let victim = async sleeper()
 	let q = async fast()
 	let r = await q
-	return r + (1 if victim.isComplete() else 0)
+	let done = 1 if victim.isComplete() else 0
+	victim.cancel()
+	return r + done
 end 'dropAParkedSleeper'
 
 function main() returns ExitCode
