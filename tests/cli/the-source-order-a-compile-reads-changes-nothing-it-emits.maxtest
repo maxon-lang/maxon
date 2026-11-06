@@ -9,27 +9,52 @@ let SourceOrderIrSuffix = ".ir"
 let ExtensionFileName = "ext.maxon"
 let ExtensionSource = "export extension Iterable\n\texport typealias ElementTransform = function(Element, Element) returns Element\n\n\texport function combine(transform ElementTransform, seed Element) returns Element\n\t\tvar total = seed\n\n\t\tfor item in self 'each'\n\t\t\ttotal = transform(total, item)\n\t\tend 'each'\n\n\t\treturn total\n\tend 'combine'\nend 'Iterable'\n"
 let OrderSensitiveMainSource = "typealias Number = int(0 to 99)\ntypealias Numbers = Array with Number\n\nfunction main() returns ExitCode\n\tvar xs = Numbers.create()\n\txs.push(3)\n\txs.push(1)\n\n\tvar mapped = xs.map(function(n) gives n)\n\tmapped.push(5)\n\n\tlet total = xs.combine(function(a, b) gives (a + b) as Number, seed: 0)\n\tprint(\"\{mapped.count()} \{total}\\n\")\n\treturn 0\nend 'main'\n"
+let OwnConformerSourceOrderCaseDirName = "the-source-order-a-compile-reads-changes-nothing-an-own-conformer-emits"
+let OwnConformerMainSource = "typealias Quantum = int(0 to 99)\n\ntype Zebra uses Item implements Iterable with (Item, ZebraCursor)\n\ttypealias ZebraCursor = ArrayIterator with Item\n\ttypealias ZebraItems = Array with Item\n\tvar items as ZebraItems\n\n\tstatic function make() returns Self\n\t\treturn Self\{items: ZebraItems.create()}\n\tend 'make'\n\n\tfunction add(item Item)\n\t\tself.items.push(item)\n\tend 'add'\n\n\tfunction createIterator() returns ZebraCursor throws IterationError\n\t\treturn try self.items.createIterator()\n\tend 'createIterator'\nend 'Zebra'\n\ntypealias QuantumZebra = Zebra with Quantum\n\nfunction main() returns ExitCode\n\tvar sack = QuantumZebra.make()\n\tsack.add(3)\n\tsack.add(1)\n\n\tvar mapped = sack.map(function(n) gives n)\n\tmapped.push(5)\n\n\tlet total = sack.combine(function(a, b) gives (a + b) as Quantum, seed: 0)\n\tprint(\"\{mapped.count()} \{total}\\n\")\n\treturn 0\nend 'main'\n"
 
 function buildEmittingIr(dir FilePath, outputStem String, order String) returns CollectedOutput
 	let output = dir.join(outputStem)
 	return spawnCompiler([BuildCommandWord, dir.toString(), "{OutputFlagPrefix}{output.toString()}", SourceOrderEmitIrFlag], staged: dir, environment: Environment.inheritUpdating([SourceOrderVariableName: order]))
 end 'buildEmittingIr'
 
+function requireTargetIrIsOrderIndependent(dir FilePath) throws TestFailure
+	let natural = buildEmittingIr(dir, outputStem: NaturalOutputStem, order: "")
+	let naturalSaid = "It wrote to stdout: {natural.stdout} and to stderr: {natural.stderr}"
+	try Expect.equal(natural.exitCode(), expected: 0, message: "the build with {SourceOrderVariableName} unset failed. {naturalSaid}")
+
+	let reversed = buildEmittingIr(dir, outputStem: ReversedOutputStem, order: ReversedOrder)
+	let reversedSaid = "It wrote to stdout: {reversed.stdout} and to stderr: {reversed.stderr}"
+	try Expect.equal(reversed.exitCode(), expected: 0, message: "the build with {SourceOrderVariableName}={ReversedOrder} failed. {reversedSaid}")
+
+	let naturalIr = try File.readText(dir.join("{NaturalOutputStem}{SourceOrderIrSuffix}")) otherwise panic("the build that exited 0 wrote its Target IR beside the output")
+	let reversedIr = try File.readText(dir.join("{ReversedOutputStem}{SourceOrderIrSuffix}")) otherwise panic("the build that exited 0 wrote its Target IR beside the output")
+	try Expect.isFalse(naturalIr.isEmpty(), message: "the build with {SourceOrderVariableName} unset wrote no Target IR. {naturalSaid}")
+	try Expect.isTrue(naturalIr == reversedIr, message: "the Target IR differs between the natural source order and {SourceOrderVariableName}={ReversedOrder}: the compiler's output depends on the order its files and declarations are read in")
+end 'requireTargetIrIsOrderIndependent'
+
 test 'the order a compile reads its sources in changes no byte of the Target IR it emits'
 	let dir = freshCaseDir(TheSourceOrderCaseDirName)
 	writeStagedFile(dir.join(ExtensionFileName), content: ExtensionSource)
 	writeStagedFile(dir.join(StagedProgramFileName), content: OrderSensitiveMainSource)
-
-	let natural = buildEmittingIr(dir, outputStem: NaturalOutputStem, order: "")
-	let naturalSaid = "It wrote to stdout: {natural.stdout} and to stderr: {natural.stderr}"
-	Expect.equal(natural.exitCode(), expected: 0, message: "the build with {SourceOrderVariableName} unset failed. {naturalSaid}")
-
-	let reversed = buildEmittingIr(dir, outputStem: ReversedOutputStem, order: ReversedOrder)
-	let reversedSaid = "It wrote to stdout: {reversed.stdout} and to stderr: {reversed.stderr}"
-	Expect.equal(reversed.exitCode(), expected: 0, message: "the build with {SourceOrderVariableName}={ReversedOrder} failed. {reversedSaid}")
-
-	let naturalIr = File.readText(dir.join("{NaturalOutputStem}{SourceOrderIrSuffix}"))
-	let reversedIr = File.readText(dir.join("{ReversedOutputStem}{SourceOrderIrSuffix}"))
-	Expect.isFalse(naturalIr.isEmpty(), message: "the build with {SourceOrderVariableName} unset wrote no Target IR. {naturalSaid}")
-	Expect.isTrue(naturalIr == reversedIr, message: "the Target IR differs between the natural source order and {SourceOrderVariableName}={ReversedOrder}: the compiler's output depends on the order its files and declarations are read in")
+	requireTargetIrIsOrderIndependent(dir)
 end 'the order a compile reads its sources in changes no byte of the Target IR it emits'
+
+test 'the order a compile reads its sources in changes no byte of the Target IR of a program that declares its own generic conformer'
+	let dir = freshCaseDir(OwnConformerSourceOrderCaseDirName)
+	writeStagedFile(dir.join(ExtensionFileName), content: ExtensionSource)
+	writeStagedFile(dir.join(StagedProgramFileName), content: OwnConformerMainSource)
+	requireTargetIrIsOrderIndependent(dir)
+end 'the order a compile reads its sources in changes no byte of the Target IR of a program that declares its own generic conformer'
+
+let ServicesSourceOrderCaseDirName = "the-source-order-a-compile-reads-changes-nothing-a-spawn-emits"
+let ServicesSubDirectoryName = "sub"
+let ServicesSubFileName = "services.maxon"
+let ServicesSubSource = "export typealias Reading = int(0 to 1000)\n\nexport type Calc\n\tvar n as Reading\n\n\texport static function create() returns Self\n\t\treturn Self\{n: 3}\n\tend 'create'\n\n\texport function ping() returns Reading\n\t\treturn self.n\n\tend 'ping'\nend 'Calc'\n\nexport type Gauge\n\tvar n as Reading\n\n\texport static function create() returns Self\n\t\treturn Self\{n: 4}\n\tend 'create'\n\n\texport function ping() returns Reading\n\t\treturn self.n\n\tend 'ping'\nend 'Gauge'\n"
+let ServicesMainSource = "typealias Count = int(0 to 1000)\n\ntype Alpha\n\tvar n as Count\n\n\tstatic function create() returns Self\n\t\treturn Self\{n: 1}\n\tend 'create'\n\n\texport function ping() returns Count\n\t\treturn self.n\n\tend 'ping'\nend 'Alpha'\n\ntype Beta\n\tvar n as Count\n\n\tstatic function create() returns Self\n\t\treturn Self\{n: 2}\n\tend 'create'\n\n\texport function ping() returns Count\n\t\treturn self.n\n\tend 'ping'\nend 'Beta'\n\ntype Gauge\n\tvar n as Count\n\n\tstatic function create() returns Self\n\t\treturn Self\{n: 5}\n\tend 'create'\n\n\texport function ping() returns Count\n\t\treturn self.n\n\tend 'ping'\nend 'Gauge'\n\nfunction startOwnGauge()\n\tlet h = spawn Gauge.create()\n\t_ = try await h.ping() otherwise 0\nend 'startOwnGauge'\n\nfunction startAlpha()\n\tlet h = spawn Alpha.create()\n\t_ = try await h.ping() otherwise 0\nend 'startAlpha'\n\nfunction startBeta()\n\tlet h = spawn Beta.create()\n\t_ = try await h.ping() otherwise 0\nend 'startBeta'\n\nfunction startCalc()\n\tlet h = spawn sub.Calc.create()\n\t_ = try await h.ping() otherwise 0\nend 'startCalc'\n\nfunction startGauge()\n\tlet h = spawn sub.Gauge.create()\n\t_ = try await h.ping() otherwise 0\nend 'startGauge'\n\nfunction main() returns ExitCode\n\tstartAlpha()\n\tstartBeta()\n\tstartCalc()\n\tstartGauge()\n\tstartOwnGauge()\n\treturn 0\nend 'main'\n"
+
+test 'the order a compile reads its sources in changes no byte of the Target IR of a program that spawns plain and directory-qualified services'
+	let dir = freshCaseDir(ServicesSourceOrderCaseDirName)
+	writeStagedFile(dir.join(StagedProgramFileName), content: ServicesMainSource)
+	writeStagedFile(stagingDir(dir.join(ServicesSubDirectoryName).toString()).join(ServicesSubFileName), content: ServicesSubSource)
+	requireTargetIrIsOrderIndependent(dir)
+end 'the order a compile reads its sources in changes no byte of the Target IR of a program that spawns plain and directory-qualified services'

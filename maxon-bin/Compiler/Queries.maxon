@@ -2579,6 +2579,7 @@ function foldEveryFileInto(project Project, pool FrontEndPool, merged MaxonModul
 	let pathOrderProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
 	let pathOrder = sourceFilesInPathOrder(project.db.sourcePaths)
 	let emissionOrder = sourceFilesInEmissionOrder(project)
+	project.emissionRanks = emissionRanksFrom(project, emissionOrder: emissionOrder)
 	recordPhase(project, phase: CompilePhase.merge, probe: pathOrderProbe)
 
 	while true 'untilTheFoldStands'
@@ -2702,6 +2703,73 @@ function sourceFilesInEmissionOrder(project Project) returns EmissionSlotArray
 
 	return slots
 end 'sourceFilesInEmissionOrder'
+
+export typealias FileEmissionRankMap = Map with (String, ElementIndex)
+
+function emissionRanksFrom(project Project, emissionOrder EmissionSlotArray) returns FileEmissionRankMap
+	var ranks = FileEmissionRankMap.create()
+
+	for (iter, slot) in emissionOrder.withIterator() 'eachFileInEmissionOrder'
+		let path = try project.db.sourcePaths.get(slot.position) otherwise panic("emissionRanksFrom: sourcePaths.get OOB at {slot.position}")
+		ranks.upsert(path.toString(), value: iter.index())
+	end 'eachFileInEmissionOrder'
+
+	return ranks
+end 'emissionRanksFrom'
+
+module function compareSourcePositions(leftLine LineNumber, leftColumn ColumnNumber, rightLine LineNumber, rightColumn ColumnNumber) returns Ordering
+	let byLine = leftLine.compare(rightLine)
+
+	if byLine != Ordering.equalTo 'linesDiffer'
+		return byLine
+	end 'linesDiffer'
+
+	return leftColumn.compare(rightColumn)
+end 'compareSourcePositions'
+
+export type DeclarationPosition
+	export let rank as ElementIndex
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	export static function of(ranks FileEmissionRankMap, path FilePath, line LineNumber, column ColumnNumber, kind String, name ByteArray) returns DeclarationPosition
+		let rank = try ranks.get(path.toString()) otherwise panic("DeclarationPosition.of: the file declaring {kind} `{String.from(name)}` is not one the compile read")
+		return Self{rank: rank, line: line, column: column}
+	end 'of'
+
+	export function compare(other DeclarationPosition) returns Ordering
+		let byFile = self.rank.compare(other.rank)
+
+		if byFile != Ordering.equalTo 'filesDiffer'
+			return byFile
+		end 'filesDiffer'
+
+		return compareSourcePositions(self.line, leftColumn: self.column, rightLine: other.line, rightColumn: other.column)
+	end 'compare'
+end 'DeclarationPosition'
+
+export typealias DeclarationPositionArray = Array with DeclarationPosition
+
+export typealias DeclarationOrder = Array with ElementIndex
+
+export function declarationsInPositionOrder(positions DeclarationPositionArray) returns DeclarationOrder
+	var order = DeclarationOrder.create()
+	var ascending = true
+
+	for i in 0 upto positions.count() 'eachPosition'
+		order.push(i)
+
+		if i > 0 and (try positions.get(i - 1) otherwise panic("declarationsInPositionOrder: positions.get OOB at {i - 1}")).compare(try positions.get(i) otherwise panic("declarationsInPositionOrder: positions.get OOB at {i}")) != Ordering.lessThan 'outOfOrder'
+			ascending = false
+		end 'outOfOrder'
+	end 'eachPosition'
+
+	if not ascending 'needsSorting'
+		order.sortBy(function(left ElementIndex, right ElementIndex) gives (try positions.get(left) otherwise panic("declarationsInPositionOrder: positions.get OOB at {left}")).compare(try positions.get(right) otherwise panic("declarationsInPositionOrder: positions.get OOB at {right}")))
+	end 'needsSorting'
+
+	return order
+end 'declarationsInPositionOrder'
 
 typealias FoldCount = int(1 to u64.max)
 

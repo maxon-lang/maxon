@@ -24104,15 +24104,25 @@ export type ProgramSignatures
 	//
 	// A var whose initializer FAILED contributes no slot: the build has already failed on its
 	// diagnostic, and there is no value to lay down.
-	export function declaredGlobals(live LiveGlobalLabelSet) returns DataSectionEntryArray
+	export function declaredGlobals(live LiveGlobalLabelSet, fileRanks FileEmissionRankMap) returns DataSectionEntryArray
 		var entries = DataSectionEntryArray.create()
 
-		for i in 0 upto self.settledDeclarations().decls.count() 'each'
-			let decl = self.declAt(i)
+		var stored = DeclarationOrder.create()
+		var storedPositions = DeclarationPositionArray.create()
 
-			if not self.contributesStorage(decl, live: live) 'noReachableSlot'
+		for i in 0 upto self.settledDeclarations().decls.count() 'eachDeclaration'
+			view candidate = self.declAt(i)
+
+			if not self.contributesStorage(candidate, live: live) 'noReachableSlot'
 				continue
 			end 'noReachableSlot'
+
+			stored.push(i)
+			storedPositions.push(DeclarationPosition.of(fileRanks, path: candidate.declFilePath, line: candidate.nameLine, column: candidate.nameColumn, kind: "the global", name: candidate.name))
+		end 'eachDeclaration'
+
+		for slot in declarationsInPositionOrder(storedPositions) 'each'
+			let decl = self.declAt(try stored.get(slot) otherwise panic("ProgramSignatures.declaredGlobals: stored.get OOB at {slot}"))
 
 			match decl.outcome 'state'
 				value(payload, tag, typeName) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: self.foldedGlobalStdType(tag, typeName: typeName, name: decl.name), value: payload, reach: DataReach.declared))
@@ -24130,7 +24140,15 @@ export type ProgramSignatures
 			end 'state'
 		end 'each'
 
-		for declaration in self.liveWinningDefaults() 'eachBuiltDefault'
+		let winningDefaults = self.liveWinningDefaults()
+		var defaultPositions = DeclarationPositionArray.create()
+
+		for declaration in winningDefaults 'eachWinningDefault'
+			defaultPositions.push(DeclarationPosition.of(fileRanks, path: declaration.declFilePath, line: declaration.keyLine, column: declaration.keyColumn, kind: "the default", name: declaration.key))
+		end 'eachWinningDefault'
+
+		for slot in declarationsInPositionOrder(defaultPositions) 'eachBuiltDefault'
+			let declaration = try winningDefaults.get(slot) otherwise panic("ProgramSignatures.declaredGlobals: winningDefaults.get OOB at {slot}")
 			entries.push(DataSectionEntry.create(String.from(defaultSlotLabel(declaration.key)), valueType: StdType.i64, value: ManagedGlobalInitialSlot, reach: DataReach.declared))
 		end 'eachBuiltDefault'
 
@@ -24824,6 +24842,10 @@ export type ProgramSignatures
 	export function declAt(index ElementIndex) returns TopLevelDecl
 		return try self.settledDeclarations().decls.get(index) otherwise panic("ProgramSignatures.declAt: decls.get OOB at {index} — every index handed out is one this arena minted")
 	end 'declAt'
+
+	export function declCount() returns ElementIndex
+		return self.settledDeclarations().decls.count()
+	end 'declCount'
 
 	function ownDeclAt(index ElementIndex) returns TopLevelDecl
 		return try self.mainThreadSettled().decls.get(index) otherwise panic("ProgramSignatures.ownDeclAt: decls.get OOB at {index} — every index handed out is one this arena minted")

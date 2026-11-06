@@ -3258,7 +3258,7 @@ func @main {
     arm64.bl __managed_push
     arm64.b __im_cont#288
   __rc_panic#406:
-    arm64.leaRdata x0, __str_blob_264  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_264  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot68
@@ -7072,7 +7072,7 @@ func @main {
     arm64.bl __managed_push
     arm64.b __im_cont#288
   __rc_panic#406:
-    arm64.leaRdata x0, __str_blob_264  ; "panic at Array.maxon:501: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_264  ; "panic at Array.maxon:504: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot68

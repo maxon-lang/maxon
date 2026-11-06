@@ -758,64 +758,174 @@ end 'stdFunctionReferenceOf'
 // below is part of the sweep, not a courtesy after it — see `ValueOriginTable.remapFunctionIndices`.
 function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Project)
 	let total = module.funcCount()
+	var live = FuncIndexArray.create()
+
+	for i in 0 upto total 'eachFunc'
+		let isLive = try reached.get(i) otherwise panic("eliminateDeadFunctions: reached.get OOB at function index {i}")
+
+		if isLive 'live'
+			live.push(i)
+		end 'live'
+	end 'eachFunc'
+
+	canonicalizeEmissionOrder(module, live: live)
+
 	var kept = IrFunctionArray.create()
 
 	// Old index → new index, filled for EVERY old index so the remap can index it directly; the entries
 	// for dropped functions are never read (the remap consults `reached` first).
 	var newIndexOfOld = FuncIndexArray.create()
+	newIndexOfOld.resize(total)
 
-	// Did dropping renumber any function that SURVIVES? Only a survivor whose index moved has an origin
-	// row to relocate; a drop with no survivor after it moves nothing (see the trailing-drop skip below).
+	// Did the sweep renumber any function that SURVIVES? Only a survivor whose index moved has an origin
+	// row to relocate.
 	var keptNumberingShifted = false
 
-	for i in 0 upto total 'eachFunc'
-		var func = module.getFunc(i)
-		let isLive = try reached.get(i) otherwise panic("eliminateDeadFunctions: reached.get OOB at function index {i}")
-		let newIndex = kept.count()
-		newIndexOfOld.push(newIndex)
+	for position in 0 upto live.count() 'eachSurvivor'
+		let old = try live.get(position) otherwise panic("eliminateDeadFunctions: live.get OOB at {position}")
+		try newIndexOfOld.set(old, value: position) otherwise panic("eliminateDeadFunctions: newIndexOfOld.set OOB at function index {old}")
+		kept.push(module.getFunc(old))
 
-		if isLive 'live'
-			if newIndex != i 'moved'
-				keptNumberingShifted = true
-			end 'moved'
-
-			kept.push(func)
-		end 'live'
-	end 'eachFunc'
-
-	let dropped = total - kept.count()
+		if position != old 'moved'
+			keptNumberingShifted = true
+		end 'moved'
+	end 'eachSurvivor'
 
 	if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.ir).debug("dfe: dropped {dropped} unreachable function(s) of {total}")
+		compilerLogger(CompilerLogGroup.ir).debug("dfe: dropped {total - kept.count()} unreachable function(s) of {total}")
 	end 'debugging'
 
 	module.functions = kept
 
-	// Nothing dropped ⇒ `newIndexOfOld` is the identity and no row loses its function, so the remap could
-	// only rebuild the origin columns into an exact copy of themselves. Skipped rather than absorbed into
-	// `remapFunctionIndices`, because the saving is the whole REBUILD (the columns are sized by the
-	// program's value count, so the copy is linear in program size): measured +487,704 … +20,528,128 bytes
-	// across the scale ladder, all of it on a corpus that drops nothing.
-	if dropped == 0 'numberingUnchanged'
+	if not keptNumberingShifted 'numberingUnchanged'
 		return
 	end 'numberingUnchanged'
 
-	// ⭐ TRAILING DROPS ARE FREE TOO. When every dropped function sits AFTER every survivor — no
-	// survivor's index moved — the remap would keep each survivor's rows at their existing index and
-	// merely discard the trailing dropped rows. But those rows are `lookup`ed by (funcIndex, valueId)
-	// and a dropped function's index is now beyond `module.functions`, so no survivor's lookup can ever
-	// match one: leaving them costs a few extra iterations on the cold E5001 path and nothing else,
-	// where rebuilding the program-sized columns costs the same linear bytes the `dropped == 0` case
-	// avoids. Compiling stdlib source into every program makes this the common case: a stdlib module the
-	// program does not use (e.g. Clock in a program that reads no clock) merges after the user source and
-	// drops as a block, so a program that installs no emitted runtime (the runtime functions append AFTER
-	// it) drops ONLY trailing functions — without this skip every such compile would pay the full rebuild
-	// that loading stdlib newly forced on it. A program that DOES install runtime drops the module from
-	// the MIDDLE
-	// (the runtime sits after it), a survivor's index moves, and the remap correctly runs.
-	if not keptNumberingShifted 'trailingDropsOnly'
-		return
-	end 'trailingDropsOnly'
-
 	project.valueOrigins.remapFunctionIndices(reached, newIndexOfOld: newIndexOfOld)
 end 'sweepUnreachedFunctions'
+
+function canonicalizeEmissionOrder(module StdModule, live FuncIndexArray)
+	var runStart = 0 as ElementIndex
+
+	while runStart < live.count() 'eachRun'
+		var runEnd = runStart + 1
+
+		while runEnd < live.count() and sharesEmissionRun(module, left: runStart, right: runEnd, live: live) 'extendRun'
+			runEnd = runEnd + 1
+		end 'extendRun'
+
+		if runEnd - runStart > 1 and not runIsOrdered(module, live: live, from: runStart, upto: runEnd) 'worthSorting'
+			var run = FuncIndexArray.create()
+
+			for position in runStart upto runEnd 'eachMember'
+				run.push(try live.get(position) otherwise panic("canonicalizeEmissionOrder: live.get OOB at {position}"))
+			end 'eachMember'
+
+			run.sortBy(function(left ElementIndex, right ElementIndex) gives compareWithinEmissionRun(module, left: left, right: right))
+
+			for offset in 0 upto run.count() 'eachPlaced'
+				try live.set(runStart + offset, value: try run.get(offset) otherwise panic("canonicalizeEmissionOrder: run.get OOB at {offset}")) otherwise panic("canonicalizeEmissionOrder: live.set OOB at {runStart + offset}")
+			end 'eachPlaced'
+		end 'worthSorting'
+
+		runStart = runEnd
+	end 'eachRun'
+end 'canonicalizeEmissionOrder'
+
+function runIsOrdered(module StdModule, live FuncIndexArray, from ElementIndex, upto ElementIndex) returns bool
+	for position in from + 1 upto upto 'eachAdjacentPair'
+		let earlier = try live.get(position - 1) otherwise panic("runIsOrdered: live.get OOB at {position - 1}")
+		let later = try live.get(position) otherwise panic("runIsOrdered: live.get OOB at {position}")
+
+		if compareWithinEmissionRun(module, left: earlier, right: later) == Ordering.greaterThan 'outOfOrder'
+			return false
+		end 'outOfOrder'
+	end 'eachAdjacentPair'
+
+	return true
+end 'runIsOrdered'
+
+function sharesEmissionRun(module StdModule, left ElementIndex, right ElementIndex, live FuncIndexArray) returns bool
+	let leftIndex = try live.get(left) otherwise panic("sharesEmissionRun: live.get OOB at {left}")
+	let rightIndex = try live.get(right) otherwise panic("sharesEmissionRun: live.get OOB at {right}")
+	view leftFunc = module.getFunc(leftIndex)
+	view rightFunc = module.getFunc(rightIndex)
+
+	if not leftFunc.sourceFilePath.isEmpty() 'aParsedFunction'
+		return leftFunc.sourceFilePath.equals(rightFunc.sourceFilePath)
+	end 'aParsedFunction'
+
+	if not rightFunc.sourceFilePath.isEmpty() 'aParsedNeighbour'
+		return false
+	end 'aParsedNeighbour'
+
+	let family = synthesisFamilyOf(module, name: leftFunc.name)
+	return family != SynthesisFamily.none and family == synthesisFamilyOf(module, name: rightFunc.name)
+end 'sharesEmissionRun'
+
+function compareWithinEmissionRun(module StdModule, left ElementIndex, right ElementIndex) returns Ordering
+	view leftFunc = module.getFunc(left)
+	view rightFunc = module.getFunc(right)
+	let leftIsParsed = not leftFunc.sourceFilePath.isEmpty()
+
+	if leftIsParsed != not rightFunc.sourceFilePath.isEmpty() 'aMixedPair'
+		panic("compareWithinEmissionRun: '{String.from(leftFunc.name)}' and '{String.from(rightFunc.name)}' share a run, and one has a source file where the other has none — a run holds one file's functions or one synthesized family")
+	end 'aMixedPair'
+
+	if not leftIsParsed 'aSynthesizedFamily'
+		return compareBytesOrdinally(leftFunc.name, right: rightFunc.name)
+	end 'aSynthesizedFamily'
+
+	let leftIsHelper = isParamDefaultHelperName(leftFunc.name) or isFieldDefaultHelperName(leftFunc.name)
+	let rightIsHelper = isParamDefaultHelperName(rightFunc.name) or isFieldDefaultHelperName(rightFunc.name)
+
+	if leftIsHelper != rightIsHelper 'helpersFollowTheirFile'
+		return Ordering.greaterThan if leftIsHelper else Ordering.lessThan
+	end 'helpersFollowTheirFile'
+
+	let byPosition = compareSourcePositions(leftFunc.nameLine, leftColumn: leftFunc.nameColumn, rightLine: rightFunc.nameLine, rightColumn: rightFunc.nameColumn)
+
+	if byPosition != Ordering.equalTo 'positionsDiffer'
+		return byPosition
+	end 'positionsDiffer'
+
+	return compareBytesOrdinally(leftFunc.name, right: rightFunc.name)
+end 'compareWithinEmissionRun'
+
+enum SynthesisFamily
+	none
+	destructor
+	cloner
+	soleWalk
+	shareWalk
+	adapter
+	serviceStart
+end 'SynthesisFamily'
+
+function synthesisFamilyOf(module StdModule, name ByteArray) returns SynthesisFamily
+	if bytesStartWith(name, prefix: DestructorPrefix) 'aDestructor'
+		return SynthesisFamily.destructor
+	end 'aDestructor'
+
+	if bytesStartWith(name, prefix: ClonerPrefix) 'aCloner'
+		return SynthesisFamily.cloner
+	end 'aCloner'
+
+	if bytesStartWith(name, prefix: SoleWalkPrefix) 'aSoleWalk'
+		return SynthesisFamily.soleWalk
+	end 'aSoleWalk'
+
+	if bytesStartWith(name, prefix: ShareWalkPrefix) 'aShareWalk'
+		return SynthesisFamily.shareWalk
+	end 'aShareWalk'
+
+	if bytesStartWith(name, prefix: WitnessSlotAdapterPrefix) 'anAdapter'
+		return SynthesisFamily.adapter
+	end 'anAdapter'
+
+	if module.serviceStartThunks.contains(name) 'aServiceStart'
+		return SynthesisFamily.serviceStart
+	end 'aServiceStart'
+
+	return SynthesisFamily.none
+end 'synthesisFamilyOf'

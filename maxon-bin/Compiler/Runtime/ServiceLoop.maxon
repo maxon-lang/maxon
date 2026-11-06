@@ -52,11 +52,13 @@
 // A program that spawns nothing builds NOTHING here: `serviceTypeRoster` is empty, which is every program
 // that never writes `spawn`.
 export function installServiceLoops(module MaxonModule, project Project, signatures ProgramSignatures) throws CompileError
-	let services = serviceTypeRoster(signatures)
+	let discovered = serviceTypeRoster(signatures)
 
-	if services.count() == 0 'spawnsNothing'
+	if discovered.count() == 0 'spawnsNothing'
 		return
 	end 'spawnsNothing'
+
+	let services = servicesInDeclarationOrder(discovered, signatures: signatures, fileRanks: project.emissionRanks)
 
 	view funcNames = try FunctionNameIndex.create(module.functions, project: project)
 
@@ -80,6 +82,23 @@ export function installServiceLoops(module MaxonModule, project Project, signatu
 	end 'eachService'
 end 'installServiceLoops'
 
+function servicesInDeclarationOrder(discovered NameRoster, signatures ProgramSignatures, fileRanks FileEmissionRankMap) returns NameRoster
+	var positions = DeclarationPositionArray.create()
+
+	for typeName in discovered 'eachService'
+		view layout = spawnTargetLayoutOf(signatures, typeName: typeName)
+		positions.push(DeclarationPosition.of(fileRanks, path: layout.declFilePath, line: layout.declLine, column: layout.declColumn, kind: "the service type", name: typeName))
+	end 'eachService'
+
+	var ordered = NameRoster.create()
+
+	for slot in declarationsInPositionOrder(positions) 'eachInDeclarationOrder'
+		ordered.push(try discovered.get(slot) otherwise panic("servicesInDeclarationOrder: discovered.get OOB at {slot}"))
+	end 'eachInDeclarationOrder'
+
+	return ordered
+end 'servicesInDeclarationOrder'
+
 // ⭐⭐ **THE LOOP IS MONOMORPHIC WHERE THE COMPANIONS ARE NOT, AND THAT IS THE WHOLE OF WHAT A GENERIC
 // SERVICE COSTS.** One `<T>.request` and one `<T>.handle` serve every instantiation — neither carries a type
 // argument — but the loop CALLS the handlers and DROPS the state, and both of those are per-instance facts:
@@ -96,8 +115,18 @@ function buildServiceLoops(module MaxonModule, project Project, signatures Progr
 	// built from the discovery walk's raw token candidates, so a type can be on it with not one
 	// `serviceSpawn` op behind it. There is nothing to build a loop for and nothing that could call
 	// one.
-	for gid in instances 'eachInstantiation'
-		buildServiceLoop(module, project: project, signatures: signatures, funcNames: funcNames, typeName: typeName, instance: ServiceStateInstance.at(gid))
+	var mangledInstances = NameRoster.create()
+	var instanceOrder = DeclarationOrder.create()
+
+	for gid in instances 'eachMangled'
+		instanceOrder.push(mangledInstances.count())
+		mangledInstances.push(signatures.mangleGenericInstance(gid))
+	end 'eachMangled'
+
+	instanceOrder.sortBy(function(left ElementIndex, right ElementIndex) gives compareBytesOrdinally(try mangledInstances.get(left) otherwise panic("buildServiceLoops: mangledInstances.get OOB at {left}"), right: try mangledInstances.get(right) otherwise panic("buildServiceLoops: mangledInstances.get OOB at {right}")))
+
+	for slot in instanceOrder 'eachInstantiation'
+		buildServiceLoop(module, project: project, signatures: signatures, funcNames: funcNames, typeName: typeName, instance: ServiceStateInstance.at(try instances.get(slot) otherwise panic("buildServiceLoops: instances.get OOB at {slot}")))
 	end 'eachInstantiation'
 end 'buildServiceLoops'
 
