@@ -19135,6 +19135,10 @@ export type ProgramSignatures
 			self.recordFunctionTypeAlias(functionAlias)
 		end 'eachFunctionAlias'
 
+		if self.allFilesFolded and functionAliases.count() > 0 'aLateDeclaration'
+			self.settleContestsOfLateFunctionAliases(functionAliases)
+		end 'aLateDeclaration'
+
 		// The fold already knows the file's provenance, so the corpus/user split a compiler-owned type name
 		// turns on (`Project.declarationContestsACompilerOwnedName`) is DERIVED here once per file rather than
 		// per declaration — and derived through the one predicate that owns it, never re-spelled
@@ -27726,6 +27730,17 @@ export type ProgramSignatures
 	// The bound is one round per name plus one: an acyclic chain of contested slots is at most that deep, so
 	// reaching it with the keys still moving means a cycle, which has no settled key and cannot be minted
 	// from.
+	function settleContestsOfLateFunctionAliases(lateAliases FunctionTypeAliasArray)
+		let contested = self.mainThreadSettled().functionTypeAliases.shapeContestNames(self.crossKindScopedAliasNames())
+
+		for alias in lateAliases 'eachLateAlias'
+			if contested.contains(alias.name) 'aContestedName'
+				self.settleFunctionAliasShapeContests()
+				return
+			end 'aContestedName'
+		end 'eachLateAlias'
+	end 'settleContestsOfLateFunctionAliases'
+
 	export function settleFunctionAliasShapeContests()
 		let names = self.mainThreadSettled().functionTypeAliases.shapeContestNames(self.crossKindScopedAliasNames())
 

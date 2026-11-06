@@ -3764,6 +3764,170 @@ end 'main'
 18 4 6
 ```
 
+<!-- test: three-directories-each-declare-a-transform-and-the-last-declares-it-in-an-extension -->
+Three directories each declare `Transform`, the first two in the bodies of their types and the third in `extension` bodies, which the compile publishes after the contested names are settled. Every directory reads its own, whatever else is compiled with it.
+```maxon
+// --- file: one/main.maxon
+typealias Level = int(0 to 125)
+
+type Other uses U
+	typealias Transform = function(Count) returns Count
+	var item as U
+
+	static function create(item U) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function twice(f Transform, n Count) returns Count
+		return f(f(n))
+	end 'twice'
+end 'Other'
+
+function bump(x Level) returns Level
+	return x + 1
+end 'bump'
+
+type Box uses T
+	typealias Transform = function(Level) returns Level
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function run(n Level, f Transform = bump) returns Level
+		return f(n)
+	end 'run'
+end 'Box'
+
+typealias LevelBox = Box with Level
+typealias LevelOther = Other with Level
+
+export function runOne() returns ExitCode
+	let b = LevelBox.create(3)
+	let o = LevelOther.create(3)
+	print("{b.run(5)} {b.run(5, f: function(x) gives x + 2)} {o.twice(function(x) gives x * 3, n: 2)}\n")
+	return 0
+end 'runOne'
+
+// --- file: two/main.maxon
+typealias Level = int(0 to 125)
+
+function triple(x Count) returns Count
+	return x * 3
+end 'triple'
+
+type Late uses U
+	var item as U
+
+	static function create(item U) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function twice(n Count, f Transform = triple) returns Count
+		return f(f(n))
+	end 'twice'
+
+	typealias Transform = function(Count) returns Count
+end 'Late'
+
+function bump(x Level) returns Level
+	return x + 1
+end 'bump'
+
+type Early uses T
+	typealias Transform = function(Level) returns Level
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function run(n Level, f Transform = bump) returns Level
+		return f(n)
+	end 'run'
+end 'Early'
+
+typealias LevelEarly = Early with Level
+typealias LevelLate = Late with Level
+
+export function runTwo() returns ExitCode
+	let e = LevelEarly.create(3)
+	let l = LevelLate.create(3)
+	print("{l.twice(2)} {e.run(5)}\n")
+	return 0
+end 'runTwo'
+
+// --- file: three/main.maxon
+typealias Level = int(0 to 125)
+
+function triple(x Count) returns Count
+	return x * 3
+end 'triple'
+
+function bump(x Level) returns Level
+	return x + 1
+end 'bump'
+
+type Plain uses U
+	var item as U
+
+	static function create(item U) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Plain'
+
+extension Plain
+	typealias Transform = function(Count) returns Count
+
+	function twice(n Count, f Transform = triple) returns Count
+		return f(f(n))
+	end 'twice'
+end 'Plain'
+
+type Leveled uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Leveled'
+
+extension Leveled
+	typealias Transform = function(Level) returns Level
+
+	function run(n Level, f Transform = bump) returns Level
+		return f(n)
+	end 'run'
+end 'Leveled'
+
+typealias LevelLeveled = Leveled with Level
+typealias LevelPlain = Plain with Level
+
+export function runThree() returns ExitCode
+	let l = LevelLeveled.create(3)
+	let p = LevelPlain.create(3)
+	print("{p.twice(2)} {p.twice(2, f: function(x) gives x + 1)} {l.run(5)}\n")
+	return 0
+end 'runThree'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	_ = one.runOne()
+	_ = two.runTwo()
+	_ = three.runThree()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6 7 18
+18 6
+18 4 6
+```
+
 <!-- test: the-default-of-a-second-method-is-filled-at-a-call-from-main -->
 ```maxon
 typealias Level = int(0 to 125)
