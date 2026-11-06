@@ -21,11 +21,11 @@ Usage:
   python scripts/bench-aes.py --check-go                         # only locate Go and print its version
 
 Lanes (default: the host's own native lane):
-  x64    arms: maxon, go-bitsliced, go-purego (-tags purego, std), go-aesni (std)
+  x64    arms: maxon, go-purego (-tags purego, std), go-aesni (std)
   arm64  the same arms with go-armv8 for the hardware one; on a host that is not arm64 the run is
          shipped to the shared Mac through scripts/mac-host.sh (the commit must be pushed)
   wasm   maxon built with --target=wasm32-wasi, go built with GOOS=wasip1 GOARCH=wasm, both run under
-         vendor/wasmtime; arms: maxon, go-bitsliced, go-std (Go's wasm std IS its portable code)
+         vendor/wasmtime; arms: maxon, go-std (Go's wasm std IS its portable code)
 
 Go is found by scripts/bench_common.locate_go (MAXON_GO, PATH, then the usual install directory).
 Every Maxon arm compiles its own checkout's copy of bench/aes/aes.maxon; --ref builds a compiler from
@@ -64,10 +64,9 @@ LANES = (LANE_X64, LANE_ARM64, LANE_WASM)
 X64_MACHINES = ("amd64", "x86_64")
 ARM64_MACHINES = ("arm64", "aarch64")
 
-ROLE_BITSLICED = "bitsliced"
 ROLE_PORTABLE = "portable"
 ROLE_HARDWARE = "hardware"
-ROLES = (ROLE_BITSLICED, ROLE_PORTABLE, ROLE_HARDWARE)
+ROLES = (ROLE_PORTABLE, ROLE_HARDWARE)
 
 GO_MODULE_FILE = "go.mod"
 GO_SOURCE_SUFFIX = ".go"
@@ -75,8 +74,6 @@ GO_PACKAGE = "."
 GO_VARIANT_DEFAULT = "default"
 GO_VARIANT_PUREGO = "purego"
 GO_VARIANT_TAGS = {GO_VARIANT_DEFAULT: [], GO_VARIANT_PUREGO: ["purego"]}
-GO_ARM_STD = "std"
-GO_ARM_BITSLICED = "bitsliced"
 GO_WASM_ENV = {"GOOS": "wasip1", "GOARCH": "wasm"}
 GO_WASM_SUFFIX = ".wasm"
 
@@ -116,8 +113,8 @@ MAC_JOB_ALIVE = ": alive (pid "
 MAC_ROWS_FILE = "bench/aes/out/arm64-rows.json"
 ROWS_STAGING_SUFFIX = ".partial"
 
-LOG_COLUMNS = ("date", "head", "tree", "lane", "host", "runs", "arm", "workload", "Maxon", "Go bitsliced", "Go portable",
-               "Go hardware", "vs bitsliced", "vs portable", "vs hardware", "note")
+LOG_COLUMNS = ("date", "head", "tree", "lane", "host", "runs", "arm", "workload", "Maxon", "Go portable", "Go hardware",
+               "vs portable", "vs hardware", "note")
 COLUMN_ARM = LOG_COLUMNS.index("arm")
 COLUMN_WORKLOAD = LOG_COLUMNS.index("workload")
 
@@ -137,8 +134,7 @@ dated, and the ratio columns are the numbers the AES parity work drives to 1.0 o
 
 Columns: `Maxon` and the Go columns are the best time of `runs` interleaved process runs, each of which
 already took the best of 5 repetitions: MB/s, or microseconds per operation for key setup. `vs ...` is the
-Maxon time over that Go arm's time, so below 1.0 Maxon is faster. The Go arms are `bitsliced` (a
-function-for-function Go port of the stdlib algorithm, `bench/aes/go/bitsliced.go`), `portable` (`-tags purego`
+Maxon time over that Go arm's time, so below 1.0 Maxon is faster. The Go arms are `portable` (`-tags purego`
 on x64 and arm64, Go's own wasm build on wasm: the table AES with constant-time GHASH) and `hardware`
 (Go's default build: AES-NI and PCLMULQDQ on x64, ARMv8 Crypto on arm64; absent on wasm). `arm` names the
 Maxon compiler (`slot`, `ref@<sha>`, or a `--label`); `tree` is whether the harness's checkout was clean.
@@ -153,7 +149,6 @@ class GoArm:
     name: str
     role: str
     variant: str
-    program_arm: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -172,17 +167,15 @@ def hardware_arm_name(lane):
 
 
 def native_go_arms(lane):
-    return (GoArm("go-bitsliced", ROLE_BITSLICED, GO_VARIANT_DEFAULT, GO_ARM_BITSLICED),
-            GoArm("go-purego", ROLE_PORTABLE, GO_VARIANT_PUREGO, GO_ARM_STD),
-            GoArm(hardware_arm_name(lane), ROLE_HARDWARE, GO_VARIANT_DEFAULT, GO_ARM_STD))
+    return (GoArm("go-purego", ROLE_PORTABLE, GO_VARIANT_PUREGO),
+            GoArm(hardware_arm_name(lane), ROLE_HARDWARE, GO_VARIANT_DEFAULT))
 
 
 LANE_TABLE = {
     LANE_X64: Lane(LANE_X64, (), bench_common.EXE, {}, bench_common.EXE, NATIVE_DIVISOR, native_go_arms(LANE_X64)),
     LANE_ARM64: Lane(LANE_ARM64, (), bench_common.EXE, {}, bench_common.EXE, NATIVE_DIVISOR, native_go_arms(LANE_ARM64)),
     LANE_WASM: Lane(LANE_WASM, (MAXON_WASM_TARGET,), MAXON_WASM_SUFFIX, GO_WASM_ENV, GO_WASM_SUFFIX, WASM_DIVISOR,
-                    (GoArm("go-bitsliced", ROLE_BITSLICED, GO_VARIANT_DEFAULT, GO_ARM_BITSLICED),
-                     GoArm("go-std", ROLE_PORTABLE, GO_VARIANT_DEFAULT, GO_ARM_STD))),
+                    (GoArm("go-std", ROLE_PORTABLE, GO_VARIANT_DEFAULT),)),
 }
 
 
@@ -239,15 +232,14 @@ def build_go_arms(go, lane, out_dir):
     return executables, version
 
 
-def program_arguments(lane, kind, go_arm):
-    settings = [str(REPEATS), str(lane.divisor)]
-    if kind == KIND_GO:
-        return [go_arm.program_arm] + settings
-    return [] if lane.name == LANE_WASM else settings
+def program_arguments(lane, kind):
+    if kind == KIND_MAXON and lane.name == LANE_WASM:
+        return []
+    return [str(REPEATS), str(lane.divisor)]
 
 
-def runnable_command(lane, wasmtime, kind, exe, go_arm=None):
-    arguments = program_arguments(lane, kind, go_arm)
+def runnable_command(lane, wasmtime, kind, exe):
+    arguments = program_arguments(lane, kind)
     if lane.name != LANE_WASM:
         return [exe] + arguments
     flags = WASMTIME_EXIT_CODE_FLAGS if kind == KIND_MAXON else []
@@ -457,7 +449,7 @@ def run_lane(args, lane_name):
     for go_arm in lane.go_arms:
         exe = go_executables[go_arm.variant]
         runnables.append({"name": go_arm.name, "kind": KIND_GO, "dir": os.path.dirname(exe),
-                          "command": runnable_command(lane, wasmtime, KIND_GO, exe, go_arm)})
+                          "command": runnable_command(lane, wasmtime, KIND_GO, exe)})
 
     best, seen, order, resolutions = collect(runnables, args.runs, args.warmup)
     maxon_names = [arm["label"] for arm in maxon_arms]

@@ -15,8 +15,6 @@ const (
 	defaultRepeats = 5
 	usageExit      = 2
 	ctrCounter     = 2
-	armStd         = "std"
-	armBitsliced   = "bitsliced"
 	clockLine      = "clock"
 )
 
@@ -112,31 +110,6 @@ func stdImpl(key128, key256 []byte) impl {
 	}
 }
 
-func bitslicedImpl(key128, key256 []byte) impl {
-	a128, a256 := NewBitslicedAes(key128), NewBitslicedAes(key256)
-	g128, g256 := NewBitslicedGcm(key128), NewBitslicedGcm(key256)
-	return impl{
-		keySetup: func(key []byte) []byte { return NewBitslicedAes(key).EncryptBlock(key) },
-		block128: a128.EncryptBlock,
-		keySetupInto: func(output, key []byte) []byte {
-			out := blockOutput(output)
-			copy(out, NewBitslicedAes(key).EncryptBlock(key))
-			return out
-		},
-		block128Into: func(block []byte) []byte {
-			copy(block, a128.EncryptBlock(block))
-			return block
-		},
-		ctr128:      func(n, d []byte) []byte { return a128.XorKeyStream(n, ctrCounter, d) },
-		ctr256:      func(n, d []byte) []byte { return a256.XorKeyStream(n, ctrCounter, d) },
-		seal128:     g128.Seal,
-		seal128Into: func(o, n, d, a []byte) []byte { return append(o[:0], g128.Seal(n, d, a)...) },
-		open128:     g128.Open,
-		seal256:     g256.Seal,
-		seal256Into: func(o, n, d, a []byte) []byte { return append(o[:0], g256.Seal(n, d, a)...) },
-	}
-}
-
 type clock struct {
 	nanos      func() int64
 	resolution int64
@@ -182,12 +155,7 @@ func (s settings) measure(name string, bytesPerOp, baseIterations int, op func(p
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: aes std|bitsliced [repeats [divisor]]")
-		os.Exit(usageExit)
-	}
-
-	run := settings{repeats: positiveArgument(2, defaultRepeats), divisor: positiveArgument(3, 1), clock: newClock()}
+	run := settings{repeats: positiveArgument(1, defaultRepeats), divisor: positiveArgument(2, 1), clock: newClock()}
 
 	key128 := filled(16, 0)
 	key256 := filled(32, 0)
@@ -198,16 +166,7 @@ func main() {
 	kib1 := filled(1024, 7)
 	kib16 := filled(16384, 7)
 
-	var m impl
-	switch os.Args[1] {
-	case armStd:
-		m = stdImpl(key128, key256)
-	case armBitsliced:
-		m = bitslicedImpl(key128, key256)
-	default:
-		fmt.Fprintf(os.Stderr, "aes: unknown arm %q, expected %s or %s\n", os.Args[1], armStd, armBitsliced)
-		os.Exit(usageExit)
-	}
+	m := stdImpl(key128, key256)
 
 	sealed16k := m.seal128(nonce, kib16, aad)
 

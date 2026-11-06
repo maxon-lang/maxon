@@ -14,11 +14,14 @@ dated, and the ratio columns are the numbers the AES parity work drives to 1.0 o
 
 Columns: `Maxon` and the Go columns are the best time of `runs` interleaved process runs, each of which
 already took the best of 5 repetitions: MB/s, or microseconds per operation for key setup. `vs ...` is the
-Maxon time over that Go arm's time, so below 1.0 Maxon is faster. The Go arms are `bitsliced` (a
-function-for-function Go port of the stdlib algorithm, `bench/aes/go/bitsliced.go`), `portable` (`-tags purego`
+Maxon time over that Go arm's time, so below 1.0 Maxon is faster. The Go arms are `portable` (`-tags purego`
 on x64 and arm64, Go's own wasm build on wasm: the table AES with constant-time GHASH) and `hardware`
 (Go's default build: AES-NI and PCLMULQDQ on x64, ARMv8 Crypto on arm64; absent on wasm). `arm` names the
 Maxon compiler (`slot`, `ref@<sha>`, or a `--label`); `tree` is whether the harness's checkout was clean.
+
+## With the Go bitsliced arm, through eda7728b0
+
+`Go bitsliced` was a function-for-function Go port of the stdlib algorithm (`bench/aes/go/bitsliced.go`), kept to separate code-generation gaps from algorithm gaps until parity was reached.
 
 | date | head | tree | lane | host | runs | arm | workload | Maxon | Go bitsliced | Go portable | Go hardware | vs bitsliced | vs portable | vs hardware | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -1585,3 +1588,8 @@ Maxon compiler (`slot`, `ref@<sha>`, or a `--label`); `tree` is whether the harn
 | 2026-11-03 | ff7a7f61a | clean | arm64 | Darwin arm64 | 5 | slot | gcm-128-open-16k | 8451.5 MB/s | 169.7 MB/s | 132.3 MB/s | 7235.7 MB/s | 0.02 | 0.02 | 0.86 | ff7a7f61a (slab hit paths, create(n), runtime-sized FixedArray) against 5cb02e045 |
 | 2026-11-03 | ff7a7f61a | clean | arm64 | Darwin arm64 | 5 | slot | gcm-256-seal-16k | 7044.5 MB/s | 138.5 MB/s | 118.6 MB/s | 6348.6 MB/s | 0.02 | 0.02 | 0.90 | ff7a7f61a (slab hit paths, create(n), runtime-sized FixedArray) against 5cb02e045 |
 | 2026-11-03 | ff7a7f61a | clean | arm64 | Darwin arm64 | 5 | slot | gcm-256-seal-16k-into | 7636.3 MB/s | 138.4 MB/s | 119.2 MB/s | 7679.9 MB/s | 0.02 | 0.02 | 1.01 | ff7a7f61a (slab hit paths, create(n), runtime-sized FixedArray) against 5cb02e045 |
+
+## Portable and hardware arms
+
+| date | head | tree | lane | host | runs | arm | workload | Maxon | Go portable | Go hardware | vs portable | vs hardware | note |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|

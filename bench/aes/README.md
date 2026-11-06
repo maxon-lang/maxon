@@ -14,8 +14,7 @@ It is an INSTRUMENT: it exits 0 whatever the ratio is. Non-zero means the measur
 ```
 bench/aes/
   aes.maxon            the Maxon program
-  go/main.go           the Go program: the `std` arm (crypto/aes, crypto/cipher) and the `bitsliced` arm
-  go/bitsliced.go      the stdlib's bitsliced AES and GHASH, in Go
+  go/main.go           the Go program (crypto/aes, crypto/cipher)
   go/clock_windows.go  the Go timing clock on Windows: QueryPerformanceCounter
   go/clock_other.go    the Go timing clock elsewhere, wasip1 included: time.Since
   go/go.mod            the Go module (maxon.dev/bench/aes), which needs Go 1.27 or newer
@@ -58,7 +57,7 @@ prices the cipher and its per-call work alone.
 
 ```
 aes [repeats [divisor]]                       the Maxon program; both default to 5 and 1
-aes std|bitsliced [repeats [divisor]]         the Go program
+aes [repeats [divisor]]                       the Go program
 ```
 
 Each workload runs `base iterations / divisor` ops (at least 1), `repeats` times, and prints one line:
@@ -85,20 +84,14 @@ iterations and repeats.
 
 | Lane | Maxon | Go arms |
 |---|---|---|
-| `x64` | the native build | `go-bitsliced`, `go-purego` (`std` built with `-tags purego`), `go-aesni` (`std`, the default build) |
-| `arm64` | the native build | `go-bitsliced`, `go-purego`, `go-armv8` (`std`, the default build) |
-| `wasm` | `--target=wasm32-wasi` | `go-bitsliced`, `go-std` (`std`, `GOOS=wasip1 GOARCH=wasm`) |
+| `x64` | the native build | `go-purego` (built with `-tags purego`), `go-aesni` (the default build) |
+| `arm64` | the native build | `go-purego`, `go-armv8` (the default build) |
+| `wasm` | `--target=wasm32-wasi` | `go-std` (`GOOS=wasip1 GOARCH=wasm`) |
 
-- **`bitsliced`** runs the same algorithm as the stdlib, so its ratio isolates the compiler.
 - **`portable`** (`go-purego`, and `go-std` on wasm, whose standard build is Go's portable code) is Go's
   table AES with constant-time GHASH.
 - **`hardware`** (`go-aesni`, `go-armv8`) is AES-NI and PCLMULQDQ on x64 and the ARMv8 Crypto Extensions
   on arm64. It runs on the native lanes.
-
-⛔ **`go/bitsliced.go` MIRRORS `stdlib/helpers/crypto/AesBitsliced.maxon`'s encrypt path and
-`stdlib/AesGcm.maxon`, function for function. Every change to either is ported into it in the same
-commit.** Both are correct AES, so a stale port still prints matching digests: the bitsliced arm would
-time an algorithm the stdlib has left behind while every check stays green.
 
 ## The harness
 
