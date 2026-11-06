@@ -119,6 +119,8 @@
 // (a live range crossing a call is confined to the callee-saved registers, and this compiler refuses rather
 // than spills).
 
+let MostOpsScannedForAConstant = 32
+
 // The block labels this pass mints. They reach the rendered Target IR, so they are short, prefixed
 // `__im_` (inline-managed, disjoint from `InsertRangeChecks`' `__rc_`), and each names WHAT THE BLOCK IT
 // LABELS DOES rather than which guard sent control there.
@@ -288,7 +290,7 @@ export function inlineManagedPrimitives(project Project, module StdModule, usesG
 			continue
 		end 'notInTheProgram'
 
-		var inliner = PrimitiveInliner.create(module, func: func, usesGreenThreads: usesGreenThreads, funcIndex: funcIndex, origins: project.valueOrigins, strides: project.stdOpElementStrides, trivialElements: project.stdOpTrivialElementSites, globalData: project.globalData)
+		var inliner = PrimitiveInliner.create(module, func: func, usesGreenThreads: usesGreenThreads, traced: project.debugStream, road: createRoadOf(project), target: project.target, funcIndex: funcIndex, origins: project.valueOrigins, strides: project.stdOpElementStrides, trivialElements: project.stdOpTrivialElementSites, globalData: project.globalData)
 		inliner.run()
 		expanded = expanded + inliner.expanded
 	end 'eachFunc'
@@ -299,6 +301,14 @@ export function inlineManagedPrimitives(project Project, module StdModule, usesG
 		compilerLogger(CompilerLogGroup.ir).debug("inlineManagedPrimitives: expanded {total} managed-primitive call site(s) across {module.funcCount()} function(s)")
 	end 'debugging'
 end 'inlineManagedPrimitives'
+
+function createRoadOf(project Project) returns CoAllocatedAllocRoad
+	if project.debugStream 'traced'
+		return CoAllocatedAllocRoad.call
+	end 'traced'
+
+	return CoAllocatedAllocRoad.slabHit
+end 'createRoadOf'
 
 // Per-function expander: owns the module and function it rewrites plus the fresh-ValueId counter its
 // inline ops draw from, seeded past every id the function already uses.
@@ -317,6 +327,9 @@ type PrimitiveInliner
 	// two checked expanders off the same op index.
 	var trivialElements as StdOpTrivialElementSiteSet
 	let usesGreenThreads as bool
+	let traced as bool
+	let road as CoAllocatedAllocRoad
+	let buildTarget as Target
 
 	// ⚠ **SEEDED LAZILY, AND THAT IS A COST DECISION.** `nextFreeValueId` walks every block-arg and
 	// every live op of the function and MATERIALIZES the live-op index array to do it — and this pass
@@ -337,8 +350,8 @@ type PrimitiveInliner
 	var missingBufferMade as bool
 	export var expanded as InlinedSiteCount
 
-	static function create(module StdModule, func IrFunction, usesGreenThreads bool, funcIndex ElementIndex, origins ValueOriginTable, strides StdOpElementStrideMap, trivialElements StdOpTrivialElementSiteSet, globalData GlobalDataTable) returns PrimitiveInliner
-		return Self{module: module, func: func, usesGreenThreads: usesGreenThreads, strides: strides, trivialElements: trivialElements, globalData: globalData, ids: ValueMinter.create(0), seeded: false, seedFloor: 0, funcIndex: funcIndex, origins: origins, freshRecords: FreshRecordSet.create(), missingBufferRef: 0, missingBufferMade: false, expanded: 0}
+	static function create(module StdModule, func IrFunction, usesGreenThreads bool, traced bool, road CoAllocatedAllocRoad, target Target, funcIndex ElementIndex, origins ValueOriginTable, strides StdOpElementStrideMap, trivialElements StdOpTrivialElementSiteSet, globalData GlobalDataTable) returns PrimitiveInliner
+		return Self{module: module, func: func, usesGreenThreads: usesGreenThreads, traced: traced, road: road, buildTarget: target, strides: strides, trivialElements: trivialElements, globalData: globalData, ids: ValueMinter.create(0), seeded: false, seedFloor: 0, funcIndex: funcIndex, origins: origins, freshRecords: FreshRecordSet.create(), missingBufferRef: 0, missingBufferMade: false, expanded: 0}
 	end 'create'
 
 	// The function's fresh-ValueId counter, seeded past every id it already uses on first use.
@@ -623,12 +636,64 @@ type PrimitiveInliner
 			return self.expandWordPut(blockRef, pos: pos, callee: callee, args: args, resultId: resultId)
 		end 'wordPut'
 
+		if callee.equals(ManagedCreateSizedName) 'createSized'
+			return self.expandCoAllocatedCreate(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, placement: BufferPlacement.bounded)
+		end 'createSized'
+
+		if callee.equals(ManagedCreateFixedName) 'createFixed'
+			return self.expandCoAllocatedCreate(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, placement: BufferPlacement.always)
+		end 'createFixed'
+
 		if callee.equals(ManagedCreateName) 'create'
 			self.freshRecords.insert(resultId)
 		end 'create'
 
 		return blockRef
 	end 'expandPlainCall'
+
+	function expandCoAllocatedCreate(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, placement BufferPlacement) returns ElementIndex
+		let stampId = argAt(args, index: 0, callee: callee)
+		let capacityId = argAt(args, index: 1, callee: callee)
+		let lengthId = argAt(args, index: 2, callee: callee)
+		let destroyId = argAt(args, index: 3, callee: callee)
+
+		let stamp = try self.constantDefinedBefore(blockRef, pos: pos, valueId: stampId) otherwise 'stampNotKnown'
+			return blockRef
+		end 'stampNotKnown'
+
+		let capacity = try self.constantDefinedBefore(blockRef, pos: pos, valueId: capacityId) otherwise 'capacityNotKnown'
+			return blockRef
+		end 'capacityNotKnown'
+
+		let shape = try coAllocatedCreateShapeOf(stamp, capacity: capacity, placement: placement) otherwise 'notInline'
+			return blockRef
+		end 'notInline'
+
+		var carve = self.carveContinuation(blockRef, pos: pos)
+		var head = self.blockAt(blockRef)
+		var created = emitCoAllocatedCreate(self.module, func: self.func, cur: head, traced: self.traced, road: self.road, target: self.buildTarget, shape: shape, elementSize: stampId, length: lengthId, elementDestroy: destroyId, ids: self.valueIds())
+		attachBlockArgs(carve.cont, valueIds: argsOf(resultId), argType: StdType.i64)
+		self.module.setTerminator(created.block, op: StdOp.branch(carve.cont.id))
+		attachEdge(created.block, targetId: carve.cont.id, argIds: argsOf(created.record))
+
+		return self.finish(carve)
+	end 'expandCoAllocatedCreate'
+
+	function constantDefinedBefore(blockRef ElementIndex, pos ElementIndex, valueId ValueId) returns FullRangeInt throws AbsentError
+		var def = StdFoldableDef.create()
+		var scanned = 0 as ElementIndex
+
+		while scanned < pos and scanned < MostOpsScannedForAConstant 'eachEarlierOp'
+			scanned = scanned + 1
+			classifyFoldableDef(self.opAt(blockRef, pos: pos - scanned), def: def)
+
+			if def.isConstDef() and def.definedId == valueId 'theConstant'
+				return def.constant
+			end 'theConstant'
+		end 'eachEarlierOp'
+
+		throw AbsentError.absent
+	end 'constantDefinedBefore'
 
 	// The THROWING ones, reached as an `StdOp.tryCall` over the dual-register `(value, flag)` ABI and
 	// told apart the same way.

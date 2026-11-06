@@ -1464,3 +1464,48 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: an-array-created-at-a-constant-capacity-reads-zero-in-a-slot-an-earlier-array-left-filled -->
+An array created at a capacity the compiler knows takes its record and its buffer from the allocator at the creating
+function, with no call. The slot it takes may be one an earlier array released with every byte set, and it still reads
+zero: the zeroing contract holds on that road as on the call's. **If the recycled slot is not cleared, the second array
+reads the first one's bytes.**
+```maxon
+function leaveFilled() returns Count
+	var bytes = ByteArray.create(16)
+
+	for i in 0 upto 16 'fill'
+		try bytes.set(i, value: 255) otherwise panic("set")
+	end 'fill'
+
+	return bytes.count()
+end 'leaveFilled'
+
+function sumOfFresh() returns Count
+	let fresh = ByteArray.create(16)
+	var total = 0 as Count
+
+	for i in 0 upto 16 'eachByte'
+		total = total + (try fresh.get(i) otherwise panic("get")) as Count
+	end 'eachByte'
+
+	return total + fresh.count() + (fresh.capacity() as Count)
+end 'sumOfFresh'
+
+function main() returns ExitCode
+	for _ in 0 upto 4 'eachRound'
+		if leaveFilled() != 16 'filled'
+			return 1
+		end 'filled'
+
+		if sumOfFresh() != 32 'zero'
+			return 2
+		end 'zero'
+	end 'eachRound'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```

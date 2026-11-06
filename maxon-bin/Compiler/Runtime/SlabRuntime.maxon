@@ -2241,13 +2241,30 @@ function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, clas
 	module.appendOp(refill, op: StdOp.call(fresh, callee: SlabRefillName, args: threeArgs(classIdx, second: myP, third: mcacheRow)))
 	emitBranchCarrying(module, from: refill, to: ready, values: argsOf(fresh))
 
-	return emitSlabPop(module, func: func, ready: ready, span: span, classIdx: classIdx, evict: SlabEvictSlot.address(mcacheSlot), zeroed: zeroed, slotId: slotId, ids: ids, label: label)
+	return emitSlabPop(module, func: func, ready: ready, span: span, classIdx: classIdx, evict: SlabEvictSlot.address(mcacheSlot), zeroed: zeroed, abortRoad: SlabAbortRoad.returnsTheDoor, slotId: slotId, ids: ids, label: label)
 end 'emitSlabAllocClass'
 
 union SlabEvictSlot
 	address(slot ValueId)
 	ofOwner
 end 'SlabEvictSlot'
+
+module enum SlabAbortRoad
+	returnsTheDoor
+	endsInline
+end 'SlabAbortRoad'
+
+function emitSlabAbort(module StdModule, func IrFunction, block IrBlock, road SlabAbortRoad, callee ByteArray, args ValueIdArray, ids ValueMinter)
+	match road 'road'
+		returnsTheDoor then emitCallAndReturn(module, block: block, callee: callee, args: args, ids: ids)
+		endsInline then emitCallThenDead(module, func: func, block: block, callee: callee, args: args, ids: ids)
+	end 'road'
+end 'emitSlabAbort'
+
+function emitCallThenDead(module StdModule, func IrFunction, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: callee.clone(), args: args))
+	emitDeadTerminator(module, func: func, block: block, ids: ids)
+end 'emitCallThenDead'
 
 type SlabEvictRoute
 	export var entry as IrBlock
@@ -2273,7 +2290,7 @@ end 'SlabEvictRoute'
 // argument in every call. Here the two spellings are two EMISSIONS of one emitter,
 // into the entry doors that differ by exactly that bit, so no program carries the arm it never takes and no
 // allocation tests for it.
-function emitSlabPop(module StdModule, func IrFunction, ready IrBlock, span ValueId, classIdx ValueId, evict SlabEvictSlot, zeroed bool, slotId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
+function emitSlabPop(module StdModule, func IrFunction, ready IrBlock, span ValueId, classIdx ValueId, evict SlabEvictSlot, zeroed bool, abortRoad SlabAbortRoad, slotId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
 	var recycled = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	var virgin = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	var handOut = module.addBlock(func, label: label, heat: BlockHeat.normal)
@@ -2314,7 +2331,7 @@ function emitSlabPop(module StdModule, func IrFunction, ready IrBlock, span Valu
 	// downstream.
 	emitBranchOnCompareValues(module, block: virgin, a: bumpNext, pred: StdCmpPred.ge, b: bumpEnd, whenTrue: exhausted, whenFalse: handOut, ids: ids)
 
-	emitCallAndReturn(module, block: exhausted, callee: SlabPastEndName, args: argsOf(slotSize), ids: ids)
+	emitSlabAbort(module, func: func, block: exhausted, road: abortRoad, callee: SlabPastEndName, args: argsOf(slotSize), ids: ids)
 
 	let nextBump = emitBin(module, block: handOut, a: bumpNext, b: slotSize, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: handOut, record: span, offset: MspanBumpNextOffset, value: nextBump)
@@ -2329,7 +2346,7 @@ function emitSlabPop(module StdModule, func IrFunction, ready IrBlock, span Valu
 	let remaining = emitBin(module, block: consumed, a: live, b: one, opcode: StdBinOpcode.sub, ids: ids)
 	emitStoreField(module, block: consumed, record: span, offset: MspanFreeCountOffset, value: remaining)
 
-	var route = emitSlabEvictRoute(module, func: func, how: evict, unlink: unlink, span: span, ids: ids, label: label)
+	var route = emitSlabEvictRoute(module, func: func, how: evict, abortRoad: abortRoad, unlink: unlink, span: span, ids: ids, label: label)
 	emitBranchOnCompare(module, block: consumed, value: remaining, pred: StdCmpPred.eq, against: 0, whenTrue: route.entry, whenFalse: done, ids: ids)
 	pushBranchEdge(consumed, to: done, values: argsOf(slot))
 
@@ -2345,14 +2362,14 @@ function emitSlabPop(module StdModule, func IrFunction, ready IrBlock, span Valu
 	return done
 end 'emitSlabPop'
 
-function emitSlabEvictRoute(module StdModule, func IrFunction, how SlabEvictSlot, unlink IrBlock, span ValueId, ids ValueMinter, label ByteArray) returns SlabEvictRoute
+function emitSlabEvictRoute(module StdModule, func IrFunction, how SlabEvictSlot, abortRoad SlabAbortRoad, unlink IrBlock, span ValueId, ids ValueMinter, label ByteArray) returns SlabEvictRoute
 	match how 'how'
 		address(slot) then return SlabEvictRoute.create(unlink, slot: slot)
-		ofOwner then return emitSlabEvictOwnerRoute(module, func: func, unlink: unlink, span: span, ids: ids, label: label)
+		ofOwner then return emitSlabEvictOwnerRoute(module, func: func, abortRoad: abortRoad, unlink: unlink, span: span, ids: ids, label: label)
 	end 'how'
 end 'emitSlabEvictRoute'
 
-function emitSlabEvictOwnerRoute(module StdModule, func IrFunction, unlink IrBlock, span ValueId, ids ValueMinter, label ByteArray) returns SlabEvictRoute
+function emitSlabEvictOwnerRoute(module StdModule, func IrFunction, abortRoad SlabAbortRoad, unlink IrBlock, span ValueId, ids ValueMinter, label ByteArray) returns SlabEvictRoute
 	var lookup = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	var holder = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	var rawRow = module.addBlock(func, label: label, heat: BlockHeat.normal)
@@ -2368,7 +2385,7 @@ function emitSlabEvictOwnerRoute(module StdModule, func IrFunction, unlink IrBlo
 	emitBranchOnCompare(module, block: lookup, value: owner, pred: StdCmpPred.eq, against: SlabNoProcessor, whenTrue: rawRow, whenFalse: holder, ids: ids)
 
 	emitBranchOnCompare(module, block: holder, value: owner, pred: StdCmpPred.lt, against: SlabNoProcessor, whenTrue: unowned, whenFalse: procRow, ids: ids)
-	emitCallAndReturn(module, block: unowned, callee: SlabEvictUnownedName, args: argsOf(owner), ids: ids)
+	emitSlabAbort(module, func: func, block: unowned, road: abortRoad, callee: SlabEvictUnownedName, args: argsOf(owner), ids: ids)
 
 	let rawBase = emitMcacheRowAt(module, block: rawRow, state: state, row: SlabRawShardRow, ids: ids)
 	emitBranchCarrying(module, from: rawRow, to: unlink, values: argsOf(emitMcacheSlotAddr(module, block: rawRow, mcacheRow: rawBase, classIdx: classIdx, ids: ids)))
@@ -2650,7 +2667,7 @@ end 'emitSlabFastAllocOwnArm'
 
 // The hit path as a leaf. Only loads precede the probe's verdict and the row is credited after it, so a
 // bail has stored nothing and the full body that takes over credits the request once.
-module function emitSlabFastAlloc(module StdModule, func IrFunction, cur IrBlock, size ValueId, zeroed bool, counting SlabCounting, model MachineModel, bail IrBlock, slotId ValueId, ids ValueMinter) returns IrBlock
+module function emitSlabFastAlloc(module StdModule, func IrFunction, cur IrBlock, size ValueId, zeroed bool, counting SlabCounting, model MachineModel, abortRoad SlabAbortRoad, bail IrBlock, slotId ValueId, ids ValueMinter) returns IrBlock
 	var small = module.addBlock(func, label: b"small", heat: BlockHeat.normal)
 
 	emitSlabSizeRouting(module, block: cur, size: size, osDirect: bail, small: small, ids: ids)
@@ -2669,7 +2686,7 @@ module function emitSlabFastAlloc(module StdModule, func IrFunction, cur IrBlock
 	emitSlabFastAllocUnscheduled(module, func: func, block: walk.unscheduled, state: state, classIdx: class, size: size, counting: counting, bail: bail, pop: pop, ids: ids)
 	emitSlabFastAllocOwnArm(module, func: func, arm: walk.own, state: state, classIdx: class, size: size, counting: counting, bail: bail, pop: pop, ids: ids)
 
-	return emitSlabPop(module, func: func, ready: pop, span: span, classIdx: class, evict: SlabEvictSlot.ofOwner, zeroed: zeroed, slotId: slotId, ids: ids, label: b"pop")
+	return emitSlabPop(module, func: func, ready: pop, span: span, classIdx: class, evict: SlabEvictSlot.ofOwner, zeroed: zeroed, abortRoad: abortRoad, slotId: slotId, ids: ids, label: b"pop")
 end 'emitSlabFastAlloc'
 
 function buildSlabAllocFast(module StdModule, name ByteArray, zeroed bool, counting SlabCounting, model MachineModel)
@@ -2683,7 +2700,7 @@ function buildSlabAllocFast(module StdModule, name ByteArray, zeroed bool, count
 	let size = 0
 
 	let slot = ids.mint()
-	var served = emitSlabFastAlloc(module, func: func, cur: entry, size: size, zeroed: zeroed, counting: counting, model: model, bail: bail, slotId: slot, ids: ids)
+	var served = emitSlabFastAlloc(module, func: func, cur: entry, size: size, zeroed: zeroed, counting: counting, model: model, abortRoad: SlabAbortRoad.returnsTheDoor, bail: bail, slotId: slot, ids: ids)
 	module.setTerminator(served, op: StdOp.ret(slot))
 
 	emitCallAndReturn(module, block: bail, callee: slabSlowDoorName(name), args: argsOf(size), ids: ids)

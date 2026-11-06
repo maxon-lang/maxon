@@ -1781,20 +1781,56 @@ function buildMmAllocFast(module StdModule, model MachineModel)
 
 	let total = emitBoxTotal(module, block: entry, size: size, ids: ids)
 	let slot = ids.mint()
-	var served = emitSlabFastAlloc(module, func: func, cur: entry, size: total, zeroed: true, counting: SlabCounting.tracked, model: model, bail: bail, slotId: slot, ids: ids)
+	var served = emitSlabFastAlloc(module, func: func, cur: entry, size: total, zeroed: true, counting: SlabCounting.tracked, model: model, abortRoad: SlabAbortRoad.returnsTheDoor, bail: bail, slotId: slot, ids: ids)
 
-	emitStoreField(module, block: served, record: slot, offset: HeaderDestructorOffset, value: destructor)
-	let payloadOffset = emitConst(module, block: served, value: HeaderBytes, ids: ids)
-	let payload = emitBin(module, block: served, a: slot, b: payloadOffset, opcode: StdBinOpcode.add, ids: ids)
+	let payload = emitBoxPayload(module, block: served, slot: slot, destructor: destructor, ids: ids)
 	module.setTerminator(served, op: StdOp.ret(payload))
 
-	// `__mm_alloc_slow` rounds its size again, so it is handed `total` less the prefix: `emitBoxTotal` of
-	// that is `total`, and the slow body allocates and credits the size the leaf computed.
-	let slowSize = emitBin(module, block: bail, a: total, b: emitConst(module, block: bail, value: boxPrefixBytes(false), ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let slowSize = emitSlowAllocSize(module, block: bail, total: total, ids: ids)
 	emitCallAndReturn(module, block: bail, callee: MmAllocSlowName, args: twoArgs(slowSize, second: destructor), ids: ids)
 
 	module.functions.push(func)
 end 'buildMmAllocFast'
+
+function emitBoxPayload(module StdModule, block IrBlock, slot ValueId, destructor ValueId, ids ValueMinter) returns ValueId
+	emitStoreField(module, block: block, record: slot, offset: HeaderDestructorOffset, value: destructor)
+	let payloadOffset = emitConst(module, block: block, value: HeaderBytes, ids: ids)
+
+	return emitBin(module, block: block, a: slot, b: payloadOffset, opcode: StdBinOpcode.add, ids: ids)
+end 'emitBoxPayload'
+
+function emitSlowAllocSize(module StdModule, block IrBlock, total ValueId, ids ValueMinter) returns ValueId
+	return emitBin(module, block: block, a: total, b: emitConst(module, block: block, value: boxPrefixBytes(false), ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+end 'emitSlowAllocSize'
+
+module type InlineBoxAlloc
+	module var block as IrBlock
+	module let payload as ValueId
+
+	static function create(block IrBlock, payload ValueId) returns InlineBoxAlloc
+		return Self{block: block, payload: payload}
+	end 'create'
+end 'InlineBoxAlloc'
+
+module function emitMmAllocInline(module StdModule, func IrFunction, cur IrBlock, size ValueId, destructor ValueId, model MachineModel, ids ValueMinter) returns InlineBoxAlloc
+	var bail = module.addBlock(func, label: b"__ia_slow", heat: BlockHeat.cold)
+	var joined = module.addBlock(func, label: b"__ia_done", heat: BlockHeat.normal)
+	let payload = ids.mint()
+	joined.blockArgs.push(IrBlockArg.create(payload, argType: StdType.i64))
+
+	let total = emitBoxTotal(module, block: cur, size: size, ids: ids)
+	let slot = ids.mint()
+	var served = emitSlabFastAlloc(module, func: func, cur: cur, size: total, zeroed: true, counting: SlabCounting.tracked, model: model, abortRoad: SlabAbortRoad.endsInline, bail: bail, slotId: slot, ids: ids)
+	let hit = emitBoxPayload(module, block: served, slot: slot, destructor: destructor, ids: ids)
+	emitBranchCarrying(module, from: served, to: joined, values: argsOf(hit))
+
+	let slowSize = emitSlowAllocSize(module, block: bail, total: total, ids: ids)
+	let slowPayload = ids.mint()
+	module.appendOp(bail, op: StdOp.call(slowPayload, callee: MmAllocSlowName, args: twoArgs(slowSize, second: destructor)))
+	emitBranchCarrying(module, from: bail, to: joined, values: argsOf(slowPayload))
+
+	return InlineBoxAlloc.create(joined, payload: payload)
+end 'emitMmAllocInline'
 
 function buildMmAllocBody(module StdModule, name ByteArray)
 	// ⚠ **THE ARITY IS THE FLAG'S, AND THAT IS WHY EVERY CALL SITE GOES THROUGH `emitMmAllocCall`.** A

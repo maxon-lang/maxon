@@ -3984,7 +3984,7 @@ function buildManagedCreate(module StdModule)
 	emitRequireElementSize(module, func: func, entry: entry, elementSize: elementSize, proceed: ok, ids: ids)
 
 	let recordSize = emitConst(module, block: ok, value: ManagedRecordBytes as FullRangeInt, ids: ids)
-	let record = emitMintRecord(module, block: ok, allocBytes: recordSize, elementSize: elementSize, elementDestroy: elementDestroy, ids: ids)
+	let record = emitMintRecord(module, block: ok, traced: module.debugStream, allocBytes: recordSize, elementSize: elementSize, elementDestroy: elementDestroy, ids: ids)
 	module.setTerminator(ok, op: StdOp.ret(record))
 
 	module.functions.push(func)
@@ -4000,21 +4000,29 @@ function emitRequireElementSize(module StdModule, func IrFunction, entry IrBlock
 	emitRuntimeAbort(module, func: func, block: badSize, abort: RuntimeAbort.arrayElementSizeZero, ids: ids)
 end 'emitRequireElementSize'
 
-function emitMintRecord(module StdModule, block IrBlock, allocBytes ValueId, elementSize ValueId, elementDestroy ValueId, ids ValueMinter) returns ValueId
+function emitMintRecord(module StdModule, block IrBlock, traced bool, allocBytes ValueId, elementSize ValueId, elementDestroy ValueId, ids ValueMinter) returns ValueId
 	let recordDestructor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	let record = ids.mint()
-	emitMmAllocCall(module, block: block, result: record, size: allocBytes, destructor: recordDestructor, tag: mmTagIndex(MmTag.ArrayRecord), ids: ids)
-	emitStoreField(module, block: block, record: record, offset: ManagedRecordElementSizeOffset, value: elementSize)
-	emitStoreField(module, block: block, record: record, offset: ManagedRecordElementDestroyOffset, value: elementDestroy)
+
+	for op in mmAllocOps(traced, result: record, size: allocBytes, destructor: recordDestructor, tag: mmTagIndex(MmTag.ArrayRecord), ids: ids) 'eachAllocOp'
+		module.appendOp(block, op: op)
+	end 'eachAllocOp'
+
+	emitStoreElementFields(module, block: block, record: record, elementSize: elementSize, elementDestroy: elementDestroy)
 
 	return record
 end 'emitMintRecord'
+
+function emitStoreElementFields(module StdModule, block IrBlock, record ValueId, elementSize ValueId, elementDestroy ValueId)
+	emitStoreField(module, block: block, record: record, offset: ManagedRecordElementSizeOffset, value: elementSize)
+	emitStoreField(module, block: block, record: record, offset: ManagedRecordElementDestroyOffset, value: elementDestroy)
+end 'emitStoreElementFields'
 
 // Which buffers `buildManagedCreateSized` allocates with the record. `bounded` stops at
 // `CoAllocationMaxBytes`, for arrays that can grow. `always` is for a FixedArray, which never strands
 // its inline bytes by growing; one that is frozen for sharing and then written detaches to a buffer
 // of its own and leaves them unused until the record dies.
-enum BufferPlacement
+export enum BufferPlacement
 	bounded
 	always
 end 'BufferPlacement'
@@ -4135,7 +4143,7 @@ function placeBufferUpToTheBound(module StdModule, frame SizedCreateFrame, ids V
 	let coAllocatedNoBuffer = emitConst(module, block: frame.coAllocatedArm, value: 0, ids: ids)
 	emitBranchCarrying(module, from: frame.coAllocatedArm, to: frame.alloc, values: threeArgs(frame.coAllocatedBytes, second: coAllocatedNoBuffer, third: frame.room))
 
-	let record = emitMintRecord(module, block: frame.alloc, allocBytes: frame.allocBytes, elementSize: frame.elementSize, elementDestroy: frame.elementDestroy, ids: ids)
+	let record = emitMintRecord(module, block: frame.alloc, traced: module.debugStream, allocBytes: frame.allocBytes, elementSize: frame.elementSize, elementDestroy: frame.elementDestroy, ids: ids)
 	emitBranchOnCompareValues(module, block: frame.alloc, a: frame.allocBytes, pred: StdCmpPred.gt, b: frame.recordBytes, whenTrue: frame.coPublish, whenFalse: checkSeparate, ids: ids)
 	emitBranchOnCompare(module, block: checkSeparate, value: bufferBytes, pred: StdCmpPred.ne, against: 0, whenTrue: separatePublish, whenFalse: frame.done, ids: ids)
 
@@ -4154,23 +4162,110 @@ function placeBufferAlongsideTheRecord(module StdModule, frame SizedCreateFrame,
 	module.setTerminator(frame.measure, op: StdOp.branch(frame.coAllocatedArm.id))
 	emitBranchCarrying(module, from: frame.coAllocatedArm, to: frame.alloc, values: twoArgs(frame.coAllocatedBytes, second: frame.room))
 
-	let record = emitMintRecord(module, block: frame.alloc, allocBytes: frame.allocBytes, elementSize: frame.elementSize, elementDestroy: frame.elementDestroy, ids: ids)
+	let record = emitMintRecord(module, block: frame.alloc, traced: module.debugStream, allocBytes: frame.allocBytes, elementSize: frame.elementSize, elementDestroy: frame.elementDestroy, ids: ids)
 	emitBranchOnCompareValues(module, block: frame.alloc, a: frame.allocBytes, pred: StdCmpPred.gt, b: frame.recordBytes, whenTrue: frame.coPublish, whenFalse: frame.done, ids: ids)
 
 	emitCoAllocatedPublishAndReturn(module, frame: frame, record: record, ids: ids)
 end 'placeBufferAlongsideTheRecord'
 
+function emitPublishCoAllocatedBuffer(module StdModule, block IrBlock, record ValueId, capacity ValueId, ids ValueMinter)
+	let leadOffset = emitConst(module, block: block, value: coAllocatedBufferOffset(), ids: ids)
+	let coBuffer = emitBin(module, block: block, a: record, b: leadOffset, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: block, record: record, offset: ManagedRecordBufferOffset, value: coBuffer)
+	emitStoreField(module, block: block, record: record, offset: ManagedRecordCapacityOffset, value: capacity)
+	emitMarkBufferCoAllocated(module, block: block, record: record, ids: ids)
+end 'emitPublishCoAllocatedBuffer'
+
 function emitCoAllocatedPublishAndReturn(module StdModule, frame SizedCreateFrame, record ValueId, ids ValueMinter)
-	let leadOffset = emitConst(module, block: frame.coPublish, value: coAllocatedBufferOffset(), ids: ids)
-	let coBuffer = emitBin(module, block: frame.coPublish, a: record, b: leadOffset, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: frame.coPublish, record: record, offset: ManagedRecordBufferOffset, value: coBuffer)
-	emitStoreField(module, block: frame.coPublish, record: record, offset: ManagedRecordCapacityOffset, value: frame.reservedRoom)
-	emitMarkBufferCoAllocated(module, block: frame.coPublish, record: record, ids: ids)
+	emitPublishCoAllocatedBuffer(module, block: frame.coPublish, record: record, capacity: frame.reservedRoom, ids: ids)
 	module.setTerminator(frame.coPublish, op: StdOp.branch(frame.done.id))
 
 	emitStoreField(module, block: frame.done, record: record, offset: ManagedRecordLengthOffset, value: frame.length)
 	module.setTerminator(frame.done, op: StdOp.ret(record))
 end 'emitCoAllocatedPublishAndReturn'
+
+export enum CoAllocatedCreateRefused implements Error
+	capacityNotInline
+	strideNotWholeSlot
+	bufferPastThePlacement
+end 'CoAllocatedCreateRefused'
+
+let MostInlineCreateRoom = 1 shl 24
+
+export type CoAllocatedCreateShape
+	export let room as FullRangeInt
+	export let bufferBytes as FullRangeInt
+
+	static function create(room FullRangeInt, bufferBytes FullRangeInt) returns CoAllocatedCreateShape
+		return Self{room: room, bufferBytes: bufferBytes}
+	end 'create'
+end 'CoAllocatedCreateShape'
+
+function wholeSlotStrideBytesOfStamp(stamp FullRangeInt) returns FullRangeInt throws CoAllocatedCreateRefused
+	for stride in SingleOpStride.allCases 'eachStride'
+		if singleOpStrideStamp(stride) == stamp and not singleOpStrideIsPacked(stride) 'theStampsStride'
+			return singleOpStrideBytes(stride)
+		end 'theStampsStride'
+	end 'eachStride'
+
+	throw CoAllocatedCreateRefused.strideNotWholeSlot
+end 'wholeSlotStrideBytesOfStamp'
+
+export function coAllocatedCreateShapeOf(stamp FullRangeInt, capacity FullRangeInt, placement BufferPlacement) returns CoAllocatedCreateShape throws CoAllocatedCreateRefused
+	if capacity < 1 or capacity > MostInlineCreateRoom 'capacityNotInline'
+		throw CoAllocatedCreateRefused.capacityNotInline
+	end 'capacityNotInline'
+
+	let strideBytes = try wholeSlotStrideBytesOfStamp(stamp)
+	let room = capacity if capacity >= MinimumCapacity else MinimumCapacity
+	let bufferBytes = room * strideBytes
+
+	if placement == BufferPlacement.bounded and bufferBytes > CoAllocationMaxBytes 'bufferPastThePlacement'
+		throw CoAllocatedCreateRefused.bufferPastThePlacement
+	end 'bufferPastThePlacement'
+
+	return CoAllocatedCreateShape.create(room, bufferBytes: bufferBytes)
+end 'coAllocatedCreateShapeOf'
+
+export enum CoAllocatedAllocRoad
+	call
+	slabHit
+end 'CoAllocatedAllocRoad'
+
+export type CoAllocatedCreated
+	export var block as IrBlock
+	export let record as ValueId
+
+	static function create(block IrBlock, record ValueId) returns CoAllocatedCreated
+		return Self{block: block, record: record}
+	end 'create'
+end 'CoAllocatedCreated'
+
+let MostInlineSlabAllocBytes = 512
+
+export function emitCoAllocatedCreate(module StdModule, func IrFunction, cur IrBlock, traced bool, road CoAllocatedAllocRoad, target Target, shape CoAllocatedCreateShape, elementSize ValueId, length ValueId, elementDestroy ValueId, ids ValueMinter) returns CoAllocatedCreated
+	var created = emitCoAllocatedRecord(module, func: func, cur: cur, traced: traced, road: road, target: target, shape: shape, elementSize: elementSize, elementDestroy: elementDestroy, ids: ids)
+	let room = emitConst(module, block: created.block, value: shape.room, ids: ids)
+	emitPublishCoAllocatedBuffer(module, block: created.block, record: created.record, capacity: room, ids: ids)
+	emitStoreField(module, block: created.block, record: created.record, offset: ManagedRecordLengthOffset, value: length)
+
+	return created
+end 'emitCoAllocatedCreate'
+
+function emitCoAllocatedRecord(module StdModule, func IrFunction, cur IrBlock, traced bool, road CoAllocatedAllocRoad, target Target, shape CoAllocatedCreateShape, elementSize ValueId, elementDestroy ValueId, ids ValueMinter) returns CoAllocatedCreated
+	let allocBytesKnown = coAllocatedBufferOffset() + shape.bufferBytes
+	let allocBytes = emitConst(module, block: cur, value: allocBytesKnown, ids: ids)
+
+	if road == CoAllocatedAllocRoad.slabHit and allocBytesKnown <= MostInlineSlabAllocBytes 'inlineHit'
+		let recordDestructor = emitConst(module, block: cur, value: TrivialDestructor, ids: ids)
+		var box = emitMmAllocInline(module, func: func, cur: cur, size: allocBytes, destructor: recordDestructor, model: machineModel(target), ids: ids)
+		emitStoreElementFields(module, block: box.block, record: box.payload, elementSize: elementSize, elementDestroy: elementDestroy)
+
+		return CoAllocatedCreated.create(box.block, record: box.payload)
+	end 'inlineHit'
+
+	return CoAllocatedCreated.create(cur, record: emitMintRecord(module, block: cur, traced: traced, allocBytes: allocBytes, elementSize: elementSize, elementDestroy: elementDestroy, ids: ids))
+end 'emitCoAllocatedRecord'
 
 // `__managed_push(arr, value)` — append `value`, growing first if the buffer is full.
 function buildManagedPush(module StdModule)
