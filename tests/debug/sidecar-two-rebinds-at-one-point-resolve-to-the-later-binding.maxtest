@@ -1,0 +1,20 @@
+let EqualBindsCaseLabel = "sidecar-two-rebinds-at-one-point-resolve-to-the-later-binding"
+
+let EqualBindsLocalName = "chosen"
+let EqualBindsValue = "215"
+
+test 'two rebinds of a var to existing values that open at one point show the later binding'
+	let staged = builtFixture(EqualBindsCaseLabel, fixture: EqualBindsFixtureName)
+	let endAt = anchorLine(staged.join(StagedProgramFileName), anchor: "end")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(endAt)}", RunCommand, "{PrintCommand} {EqualBindsLocalName}"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(answers.count(), expected: 1, message: "`{PrintCommand} {EqualBindsLocalName}` printed {answers.count()} `{ValueEventName}` events. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let answered = eventAt(answers, index: 0)
+
+	Expect.equal(textOf(answered, node: nodeAt(memberOf(answered, node: answered.root, key: ValueKey), index: 0), key: DisplayKey), expected: EqualBindsValue, message: "`{EqualBindsLocalName} = second` rebinds the name to a value that was computed earlier, in the same gap as the `var {EqualBindsLocalName} = first` binding, so the two bindings tie on where they open. The later binding in the program wins the tie. {said}")
+end 'two rebinds of a var to existing values that open at one point show the later binding'

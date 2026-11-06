@@ -1,20 +1,7 @@
 let ShadowCaseLabel = "sidecar-rows-of-one-name-do-not-shadow-each-other"
 
 let ShadowedLocalName = "limit"
-let MostBytesOfOneInstruction = 15
 let StackSlotMark = "[rbp-"
-
-function placeOfRow(row String) returns String
-	let tokens = whitespaceTokens(row)
-
-	for (iter, token) in tokens.withIterator() 'eachToken'
-		if token.endsWith(")") and iter.index() > 0 and (try tokens.get(iter.index() - 1) otherwise continue).startsWith("[0x") 'theRangeLimit'
-			return try tokens.get(iter.index() + 1) otherwise panic("debug tests: a local row names a range and no place after it: {row}")
-		end 'theRangeLimit'
-	end 'eachToken'
-
-	panic("debug tests: a local row carries no code range: {row}")
-end 'placeOfRow'
 
 test 'two rows of one local in different places overlap by no more than the instruction that hands one over to the next'
 	let staged = builtFixture(ShadowCaseLabel, fixture: SpilledVarFixtureName)
@@ -33,15 +20,11 @@ test 'two rows of one local in different places overlap by no more than the inst
 
 	for (leftAt, left) in rows.withIterator() 'eachRow'
 		inASlot = inASlot + 1 if left.contains(StackSlotMark) else inASlot
-		let (leftStart, leftLimit) = requiredCodeRange(left, what: "a `{ShadowedLocalName}` row")
 
 		for rightAt in leftAt.index() + 1 upto rows.count() 'eachLaterRow'
 			let right = try rows.get(rightAt) otherwise panic("debug tests: rows.get OOB at {rightAt}")
-			let (rightStart, rightLimit) = requiredCodeRange(right, what: "a `{ShadowedLocalName}` row")
-			let overlapStart = leftStart if leftStart > rightStart else rightStart
-			let overlapLimit = leftLimit if leftLimit < rightLimit else rightLimit
 
-			if placeOfRow(left) != placeOfRow(right) and overlapLimit > overlapStart and overlapLimit - overlapStart > MostBytesOfOneInstruction 'shadows'
+			if overlapOfRowsInDifferentPlaces(left, right: right) > MostBytesOfOneInstruction 'shadows'
 				shadowing.push("{left}   ///   {right}")
 			end 'shadows'
 		end 'eachLaterRow'

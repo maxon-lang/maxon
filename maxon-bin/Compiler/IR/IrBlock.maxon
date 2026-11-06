@@ -632,6 +632,14 @@ export type IrBlock
 	export var condBranch as CondBranch
 	export var blockArgs as IrBlockArgArray
 
+	export var exitMoved = false
+	export var exitMovedTo = 0 as BlockId
+
+	export function moveExitTo(block BlockId)
+		self.exitMoved = true
+		self.exitMovedTo = block
+	end 'moveExitTo'
+
 	// Outgoing branch-argument lists — the values each successor edge passes to
 	// that successor's block-args (phis). Populated by the PARSER (on-the-fly
 	// SSA, `recordBranchEdge`), carried verbatim through `lowerMaxonToStd` and
@@ -933,6 +941,8 @@ export type IrBlock
 		cacheWriteTerminator(writer, value: self.terminator)
 		cacheWriteCondBranch(writer, value: self.condBranch)
 		cacheWriteIrBlockArgArray(writer, value: self.blockArgs)
+		writer.flag(self.exitMoved)
+		writer.unsigned(self.exitMovedTo as CacheUnsigned)
 		cacheWriteBranchEdgeArray(writer, value: self.branchEdges)
 	end 'cacheWrite'
 
@@ -946,13 +956,15 @@ export type IrBlock
 		let f_terminator = try cacheReadTerminator(reader)
 		let f_condBranch = try cacheReadCondBranch(reader)
 		let f_blockArgs = try cacheReadIrBlockArgArray(reader)
+		let f_exitMoved = try reader.flag()
+		let f_exitMovedTo = (try reader.unsigned()) as BlockId
 		let f_branchEdges = try cacheReadBranchEdgeArray(reader)
 
-		return Self{id: f_id, label: f_label, heat: f_heat, role: f_role, inlineSite: f_inlineSite, opRefs: f_opRefs, terminator: f_terminator, condBranch: f_condBranch, blockArgs: f_blockArgs, branchEdges: f_branchEdges, opsHeld: false}
+		return Self{id: f_id, label: f_label, heat: f_heat, role: f_role, inlineSite: f_inlineSite, opRefs: f_opRefs, terminator: f_terminator, condBranch: f_condBranch, blockArgs: f_blockArgs, exitMoved: f_exitMoved, exitMovedTo: f_exitMovedTo, branchEdges: f_branchEdges, opsHeld: false}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize88
-		return sizeof(IrBlock) as CacheSize88
+	static function cacheLayoutBytes() returns CacheSize104
+		return sizeof(IrBlock) as CacheSize104
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

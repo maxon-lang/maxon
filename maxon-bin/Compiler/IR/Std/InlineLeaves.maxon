@@ -5087,9 +5087,13 @@ type SiteSplicer
 			self.stats.callersCutOffFromAContinuation.note(self.funcIndex)
 		end 'theCalleeNeverReturns'
 
-		for local in calleeFunc.debugLocals 'eachCalleeBinding'
-			self.func.recordSplicedLocal(local.splicedCopy(subst, site: blocks.siteOf(local.inlineSite)))
-		end 'eachCalleeBinding'
+		if calleeFunc.debugLocals.count() > 0 'bindingsToCarry'
+			let calleeBlocks = self.module.blockIndexById(calleeFunc)
+
+			for local in calleeFunc.debugLocals 'eachCalleeBinding'
+				self.func.recordSplicedLocal(local.splicedCopy(subst, blockSubst: blocks.blockSubst, scopeExits: self.module.scopeExitsAfterSplits(local, func: calleeFunc, byId: calleeBlocks), site: blocks.siteOf(local.inlineSite)))
+			end 'eachCalleeBinding'
+		end 'bindingsToCarry'
 
 		self.project.valueOrigins.copyRows(self.origins, fromFunc: calleeIndex, toFunc: self.funcIndex, subst: subst, calleeParamCount: calleeFunc.paramCount)
 

@@ -1,0 +1,29 @@
+let PhiBorrowCaseLabel = "sidecar-a-local-rebound-after-an-inlined-call-opens-after-the-call"
+
+let ReboundLocalName = "best"
+
+test 'a var rebound to another name right after an inlined call is not shown as the new value inside the call'
+	let staged = builtFixture(PhiBorrowCaseLabel, fixture: PhiBorrowFixtureName)
+	let executable = builtExecutable(staged)
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	let endAt = anchorLine(staged.join(StagedProgramFileName), anchor: "end")
+	let endOffsets = statementOffsetsOfLine(executable, staged: staged, line: endAt)
+	let firstOfEnd = try endOffsets.get(0) otherwise panic("debug tests: the `end` line has no statement row, so this case cannot say where the call ends")
+	var rows = StringArray.create()
+	var tooEarly = StringArray.create()
+
+	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
+		if firstToken(row) == ReboundLocalName 'theLocal'
+			rows.push(row)
+			let (start, _) = requiredCodeRange(row, what: "a `{ReboundLocalName}` row")
+
+			if start < firstOfEnd 'early'
+				tooEarly.push(row)
+			end 'early'
+		end 'theLocal'
+	end 'eachLocal'
+
+	Expect.notEqual(rows.count(), expected: 0, message: "`{ReboundLocalName}` has no row in `{MainFunctionName}`, so this case no longer asks where the rebound version opens. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")
+	Expect.isEmpty(listedLines(tooEarly), message: "`{ReboundLocalName} = other` binds the name to a value that already exists, right after `pick(...)` was inlined. The inlined call's result is a block argument, so the binding opens where the code after the call begins ({firstOfEnd}), and a row that opens earlier shows the new value while the old one is current. These rows open earlier: {listedLines(tooEarly)}")
+end 'a var rebound to another name right after an inlined call is not shown as the new value inside the call'

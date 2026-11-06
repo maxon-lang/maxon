@@ -700,6 +700,7 @@ export union DebugVersionDef
 	merged
 	definedSomewhere
 	definedIn(let block BlockId)
+	definedAfter(let block BlockId, let anchor ValueId)
 end 'DebugVersionDef'
 
 // @generated library-cache begin
@@ -710,12 +711,18 @@ function cacheWriteDebugVersionDef(writer LibraryCacheWriter, value DebugVersion
 		merged then break
 		definedSomewhere then break
 		definedIn(a0) then cacheWriteDebugVersionDefDefinedIn(writer, a0: a0)
+		definedAfter(a0, a1) then cacheWriteDebugVersionDefDefinedAfter(writer, a0: a0, a1: a1)
 	end 'payload'
 end 'cacheWriteDebugVersionDef'
 
 function cacheWriteDebugVersionDefDefinedIn(writer LibraryCacheWriter, a0 BlockId)
 	writer.unsigned(a0 as CacheUnsigned)
 end 'cacheWriteDebugVersionDefDefinedIn'
+
+function cacheWriteDebugVersionDefDefinedAfter(writer LibraryCacheWriter, a0 BlockId, a1 ValueId)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+end 'cacheWriteDebugVersionDefDefinedAfter'
 
 function cacheReadDebugVersionDef(reader LibraryCacheReader) returns DebugVersionDef throws LibraryCacheDamage
 	let tag = try reader.unsigned()
@@ -724,6 +731,7 @@ function cacheReadDebugVersionDef(reader LibraryCacheReader) returns DebugVersio
 		0 gives DebugVersionDef.merged
 		1 gives DebugVersionDef.definedSomewhere
 		2 gives try cacheReadDebugVersionDefDefinedIn(reader)
+		3 gives try cacheReadDebugVersionDefDefinedAfter(reader)
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadDebugVersionDef'
@@ -734,7 +742,41 @@ function cacheReadDebugVersionDefDefinedIn(reader LibraryCacheReader) returns De
 	return DebugVersionDef.definedIn(a0)
 end 'cacheReadDebugVersionDefDefinedIn'
 
+function cacheReadDebugVersionDefDefinedAfter(reader LibraryCacheReader) returns DebugVersionDef throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as BlockId
+	let a1 = (try reader.unsigned()) as ValueId
+
+	return DebugVersionDef.definedAfter(a0, anchor: a1)
+end 'cacheReadDebugVersionDefDefinedAfter'
+
 // @generated library-cache end
+
+let UnmappedSpliceBlock = 0
+
+function splicedBlockOf(block BlockId, blockSubst BlockIdArray) returns BlockId throws AbsentError
+	let mapped = try blockSubst.get(block) otherwise throw AbsentError.absent
+
+	if mapped == UnmappedSpliceBlock 'neverCopied'
+		throw AbsentError.absent
+	end 'neverCopied'
+
+	return mapped
+end 'splicedBlockOf'
+
+function splicedDefinedIn(block BlockId, blockSubst BlockIdArray) returns DebugVersionDef
+	let mapped = try splicedBlockOf(block, blockSubst: blockSubst) otherwise return DebugVersionDef.definedSomewhere
+	return DebugVersionDef.definedIn(mapped)
+end 'splicedDefinedIn'
+
+function splicedDefinedAfter(block BlockId, anchor ValueId, subst ValueIdArray, blockSubst BlockIdArray) returns DebugVersionDef
+	let mapped = try splicedBlockOf(block, blockSubst: blockSubst) otherwise return DebugVersionDef.definedSomewhere
+
+	if anchor >= subst.count() as ValueId 'anchorNotCopied'
+		return DebugVersionDef.definedSomewhere
+	end 'anchorNotCopied'
+
+	return DebugVersionDef.definedAfter(mapped, anchor: try subst.get(anchor) otherwise panic("splicedDefinedAfter: subst.get OOB at {anchor} below the count just read"))
+end 'splicedDefinedAfter'
 
 export union DebugFoldedConstant
 	none
@@ -790,11 +832,12 @@ export type DebugLocalVersion
 		return Self{value: value, def: def}
 	end 'create'
 
-	export function splicedDef() returns DebugVersionDef
+	export function splicedDef(subst ValueIdArray, blockSubst BlockIdArray) returns DebugVersionDef
 		return match self.def 'def'
 			merged gives DebugVersionDef.merged
-			definedSomewhere or
-			definedIn gives DebugVersionDef.definedSomewhere
+			definedSomewhere gives DebugVersionDef.definedSomewhere
+			definedIn(block) gives splicedDefinedIn(block, blockSubst: blockSubst)
+			definedAfter(block, anchor) gives splicedDefinedAfter(block, anchor: anchor, subst: subst, blockSubst: blockSubst)
 		end 'def'
 	end 'splicedDef'
 
@@ -861,6 +904,18 @@ export type DebugLocalDecl
 
 	export var inlineSite = InlineSiteRef.none
 
+	export var scopeEnds = BlockIdArray.create()
+
+	export var scopeEndLost = false
+
+	export function noteScopeExit(block BlockId)
+		self.scopeEnds.push(block)
+	end 'noteScopeExit'
+
+	export function leavesItsScope() returns bool
+		return self.scopeEnds.count() > 0 or self.scopeEndLost
+	end 'leavesItsScope'
+
 	export static function create(name ByteArray, declaredType MaxonType, firstValue ValueId, firstDef DebugVersionDef, heldInACell bool) returns DebugLocalDecl
 		var versions = DebugLocalVersionArray.create()
 		versions.push(DebugLocalVersion.create(firstValue, def: firstDef))
@@ -868,7 +923,7 @@ export type DebugLocalDecl
 		return Self{name: name, declaredType: declaredType.clone(), versions: versions, heldInACell: heldInACell}
 	end 'create'
 
-	export function splicedCopy(subst ValueIdArray, site InlineSiteRef) returns DebugLocalDecl
+	export function splicedCopy(subst ValueIdArray, blockSubst BlockIdArray, scopeExits BlockIdArray, site InlineSiteRef) returns DebugLocalDecl
 		var splicedVersions = DebugLocalVersionArray.create()
 
 		for version in self.versions 'eachVersion'
@@ -876,10 +931,22 @@ export type DebugLocalDecl
 				continue
 			end 'definedByNoOp'
 
-			splicedVersions.push(DebugLocalVersion.create(try subst.get(version.value) otherwise panic("DebugLocalDecl.splicedCopy: value {version.value} of '{String.from(self.name)}' is past the {subst.count()} the splice's value column covers"), def: version.splicedDef()))
+			splicedVersions.push(DebugLocalVersion.create(try subst.get(version.value) otherwise panic("DebugLocalDecl.splicedCopy: value {version.value} of '{String.from(self.name)}' is past the {subst.count()} the splice's value column covers"), def: version.splicedDef(subst, blockSubst: blockSubst)))
 		end 'eachVersion'
 
-		return Self{name: self.name, declaredType: self.declaredType, versions: splicedVersions, heldInACell: self.heldInACell, foldedConstant: self.foldedConstant, foldedRecord: self.foldedRecord, inlineSite: site}
+		var copy = Self{name: self.name, declaredType: self.declaredType, versions: splicedVersions, heldInACell: self.heldInACell, foldedConstant: self.foldedConstant, foldedRecord: self.foldedRecord, inlineSite: site}
+
+		copy.scopeEndLost = self.scopeEndLost
+
+		for exit in scopeExits 'eachScopeExit'
+			if let copied = try splicedBlockOf(exit, blockSubst: blockSubst) 'copiedExit'
+				copy.noteScopeExit(copied)
+			end 'copiedExit' else 'exitNotCopied'
+				copy.scopeEndLost = true
+			end 'exitNotCopied'
+		end 'eachScopeExit'
+
+		return copy
 	end 'splicedCopy'
 
 	export function noteFoldedConstant(value ValueId, constant FullRangeInt)
@@ -926,6 +993,8 @@ export type DebugLocalDecl
 		cacheWriteDebugFoldedConstant(writer, value: self.foldedConstant)
 		cacheWriteFullRangeIntArray(writer, value: self.foldedRecord)
 		cacheWriteInlineSiteRef(writer, value: self.inlineSite)
+		cacheWriteBlockIdArray(writer, value: self.scopeEnds)
+		writer.flag(self.scopeEndLost)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns DebugLocalDecl throws LibraryCacheDamage
@@ -936,12 +1005,14 @@ export type DebugLocalDecl
 		let f_foldedConstant = try cacheReadDebugFoldedConstant(reader)
 		let f_foldedRecord = try cacheReadFullRangeIntArray(reader)
 		let f_inlineSite = try cacheReadInlineSiteRef(reader)
+		let f_scopeEnds = try cacheReadBlockIdArray(reader)
+		let f_scopeEndLost = try reader.flag()
 
-		return Self{name: f_name, declaredType: f_declaredType, versions: f_versions, heldInACell: f_heldInACell, foldedConstant: f_foldedConstant, foldedRecord: f_foldedRecord, inlineSite: f_inlineSite}
+		return Self{name: f_name, declaredType: f_declaredType, versions: f_versions, heldInACell: f_heldInACell, foldedConstant: f_foldedConstant, foldedRecord: f_foldedRecord, inlineSite: f_inlineSite, scopeEnds: f_scopeEnds, scopeEndLost: f_scopeEndLost}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize56
-		return sizeof(DebugLocalDecl) as CacheSize56
+	static function cacheLayoutBytes() returns CacheSize72
+		return sizeof(DebugLocalDecl) as CacheSize72
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1246,10 +1317,15 @@ export type DebugValueRange
 	export var first as DebugOpAnchor
 	export var last as DebugOpAnchor
 	export let fromBlockEntry as bool
+	export let opensAfterFirst as bool
 
 	export static function create(valueOrdinal ElementIndex, blockId BlockId, first DebugOpAnchor, last DebugOpAnchor, fromBlockEntry bool) returns DebugValueRange
-		return Self{valueOrdinal: valueOrdinal, blockId: blockId, first: first, last: last, fromBlockEntry: fromBlockEntry}
+		return Self{valueOrdinal: valueOrdinal, blockId: blockId, first: first, last: last, fromBlockEntry: fromBlockEntry, opensAfterFirst: false}
 	end 'create'
+
+	export static function createAfter(valueOrdinal ElementIndex, blockId BlockId, after DebugOpAnchor, last DebugOpAnchor) returns DebugValueRange
+		return Self{valueOrdinal: valueOrdinal, blockId: blockId, first: after, last: last, fromBlockEntry: false, opensAfterFirst: true}
+	end 'createAfter'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
@@ -1258,6 +1334,7 @@ export type DebugValueRange
 		writer.unsigned(self.first as CacheUnsigned)
 		writer.unsigned(self.last as CacheUnsigned)
 		writer.flag(self.fromBlockEntry)
+		writer.flag(self.opensAfterFirst)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns DebugValueRange throws LibraryCacheDamage
@@ -1266,12 +1343,13 @@ export type DebugValueRange
 		let f_first = (try reader.unsigned()) as DebugOpAnchor
 		let f_last = (try reader.unsigned()) as DebugOpAnchor
 		let f_fromBlockEntry = try reader.flag()
+		let f_opensAfterFirst = try reader.flag()
 
-		return Self{valueOrdinal: f_valueOrdinal, blockId: f_blockId, first: f_first, last: f_last, fromBlockEntry: f_fromBlockEntry}
+		return Self{valueOrdinal: f_valueOrdinal, blockId: f_blockId, first: f_first, last: f_last, fromBlockEntry: f_fromBlockEntry, opensAfterFirst: f_opensAfterFirst}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize40
-		return sizeof(DebugValueRange) as CacheSize40
+	static function cacheLayoutBytes() returns CacheSize48
+		return sizeof(DebugValueRange) as CacheSize48
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

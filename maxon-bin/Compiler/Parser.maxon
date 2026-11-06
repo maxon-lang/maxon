@@ -12309,11 +12309,14 @@ let WholeStatementTempFloor = 0 as ElementIndex
 type BlockMark
 	export let mutableCount as ElementIndex
 	export let ownedCount as ElementIndex
+	export let debugOpenCount as ElementIndex
 
-	static function create(mutableCount ElementIndex, ownedCount ElementIndex) returns BlockMark
-		return Self{mutableCount: mutableCount, ownedCount: ownedCount}
+	static function create(mutableCount ElementIndex, ownedCount ElementIndex, debugOpenCount ElementIndex) returns BlockMark
+		return Self{mutableCount: mutableCount, ownedCount: ownedCount, debugOpenCount: debugOpenCount}
 	end 'create'
 end 'BlockMark'
+
+typealias DebugLocalSlotArray = Array with DebugLocalSlot
 
 let FunctionEntryBlockId = 0
 
@@ -14315,9 +14318,10 @@ type LoopContext
 	// `BlockMark.ownedCount`, because nothing is pushed between recording it and opening the body.
 	export let ownedFloor as ElementIndex
 	export let scanIndex as ElementIndex
+	export let debugOpenFloor as ElementIndex
 
-	static function create(label ByteArray, continueTargetId BlockId, exitId BlockId, phiVars LoopPhiVarArray, ownedFloor ElementIndex, scanIndex ElementIndex) returns LoopContext
-		return Self{label: label, continueTargetId: continueTargetId, exitId: exitId, phiVars: phiVars, hasBreak: false, ownedFloor: ownedFloor, scanIndex: scanIndex}
+	static function create(label ByteArray, continueTargetId BlockId, exitId BlockId, phiVars LoopPhiVarArray, ownedFloor ElementIndex, scanIndex ElementIndex, debugOpenFloor ElementIndex) returns LoopContext
+		return Self{label: label, continueTargetId: continueTargetId, exitId: exitId, phiVars: phiVars, hasBreak: false, ownedFloor: ownedFloor, scanIndex: scanIndex, debugOpenFloor: debugOpenFloor}
 	end 'create'
 end 'LoopContext'
 
@@ -16122,9 +16126,10 @@ type MatchContext
 	// match whose every arm breaks has a non-empty reaching set and a live merge without any second signal to
 	// keep in step.
 	export var breakExits as MatchArmExitArray
+	export let debugOpenFloor as ElementIndex
 
-	static function create(label ByteArray, carried VarInfoArray, ownedFloor ElementIndex) returns MatchContext
-		return Self{label: label, carried: carried, ownedFloor: ownedFloor, breakExits: MatchArmExitArray.create()}
+	static function create(label ByteArray, carried VarInfoArray, ownedFloor ElementIndex, debugOpenFloor ElementIndex) returns MatchContext
+		return Self{label: label, carried: carried, ownedFloor: ownedFloor, breakExits: MatchArmExitArray.create(), debugOpenFloor: debugOpenFloor}
 	end 'create'
 end 'MatchContext'
 
@@ -18154,6 +18159,8 @@ type FunctionBodyState
 	// tail against the value its binding actually ended up holding.
 	export var debugBindings as VarInfoArray
 
+	export var debugOpenSlots as DebugLocalSlotArray
+
 	export var valueNameIds as TypeNameIdArray
 
 	// THE PARSER'S CONSTANT FOLDER — two more columns in lockstep with `valueTags`, holding the
@@ -19003,6 +19010,7 @@ type FunctionBodyState
 			valueTags: ValueTypeTagArray.create(),
 			debugLocals: DebugLocalDeclArray.create(),
 			debugBindings: VarInfoArray.create(),
+			debugOpenSlots: DebugLocalSlotArray.create(),
 			valueNameIds: TypeNameIdArray.create(),
 			valueConsts: FullRangeIntArray.create(),
 			valueConstDomains: ConstPayloadDomainArray.create(),
@@ -38954,7 +38962,7 @@ export type Parser
 	// list is drained to its own recorded height (see `BlockMark`).
 	function openBlock() returns BlockMark
 		self.bodyState.scope.pushScope()
-		return BlockMark.create(self.bodyState.mutableVars.count(), ownedCount: self.bodyState.ownedBindings.count())
+		return BlockMark.create(self.bodyState.mutableVars.count(), ownedCount: self.bodyState.ownedBindings.count(), debugOpenCount: self.bodyState.debugOpenSlots.count())
 	end 'openBlock'
 
 	// Close a lexical block: drop its declarations out of scope (restoring anything they
@@ -38969,7 +38977,7 @@ export type Parser
 	// placement is what avoids a double free or use-after-free: each edge that leaves the block alive
 	// drops exactly once, and a terminated
 	// edge has already dropped, so this routine only unwinds the TRACKING lists and emits nothing.
-	function closeBlock(mark BlockMark)
+	function closeBlock(mark BlockMark, endsIn IrBlock)
 		self.bodyState.scope.popScope()
 
 		while self.bodyState.mutableVars.count() > mark.mutableCount 'drainVars'
@@ -38977,7 +38985,28 @@ export type Parser
 		end 'drainVars'
 
 		self.truncateOwnedBindings(mark.ownedCount)
+		self.closeDebugScopes(mark, endsIn: endsIn)
 	end 'closeBlock'
+
+	function closeDebugScopes(mark BlockMark, endsIn IrBlock)
+		self.closeDebugScopesAbove(mark.debugOpenCount, endsIn: endsIn)
+	end 'closeDebugScopes'
+
+	function closeDebugScopesAbove(floor ElementIndex, endsIn IrBlock)
+		while self.bodyState.debugOpenSlots.count() > floor 'eachBindingAboveTheFloor'
+			let slot = try self.bodyState.debugOpenSlots.pop() otherwise panic("closeDebugScopesAbove: debugOpenSlots.pop failed above the height {floor}")
+			var record = try self.bodyState.debugLocals.get(slot) otherwise panic("closeDebugScopesAbove: debug-local slot {slot} is past the {self.bodyState.debugLocals.count()} this function has recorded")
+			record.noteScopeExit(endsIn.id)
+		end 'eachBindingAboveTheFloor'
+	end 'closeDebugScopesAbove'
+
+	function noteDebugScopeExits(floor ElementIndex, leavingFrom IrBlock)
+		for at in floor upto self.bodyState.debugOpenSlots.count() 'eachOpenBinding'
+			let slot = try self.bodyState.debugOpenSlots.get(at) otherwise panic("noteDebugScopeExits: debugOpenSlots.get OOB at {at}")
+			var record = try self.bodyState.debugLocals.get(slot) otherwise panic("noteDebugScopeExits: debug-local slot {slot} is past the {self.bodyState.debugLocals.count()} this function has recorded")
+			record.noteScopeExit(leavingFrom.id)
+		end 'eachOpenBinding'
+	end 'noteDebugScopeExits'
 
 	// Push a `var` onto the mutable-binding stack, and onto the two structures that index it.
 	// THE ONE PLACE ALL THREE GROW, so they cannot grow apart: the shadow column is written before
@@ -39088,7 +39117,7 @@ export type Parser
 		// which is the one place the block's closing token index is known.
 		self.lastBlockBodyEnd = self.pos
 		try self.consumeBlockEnd(label, labelIsRequired: false)
-		self.closeBlock(mark)
+		self.closeBlock(mark, endsIn: bodyEnd)
 		return bodyEnd
 	end 'parseBlockBody'
 
@@ -41221,9 +41250,30 @@ export type Parser
 
 		binding.debugLocalRecorded = true
 		binding.debugLocalSlot = self.bodyState.debugLocals.count() as DebugLocalSlot
-		self.bodyState.debugLocals.push(DebugLocalDecl.create(binding.name, declaredType: binding.varType, firstValue: binding.boundValue, firstDef: DebugVersionDef.definedIn(self.bodyState.currentBlock.id), heldInACell: binding.isCellBinding))
+		self.bodyState.debugLocals.push(DebugLocalDecl.create(binding.name, declaredType: binding.varType, firstValue: binding.boundValue, firstDef: self.debugDefinitionHere(), heldInACell: binding.isCellBinding))
 		self.bodyState.debugBindings.push(binding)
+		self.bodyState.debugOpenSlots.push(binding.debugLocalSlot)
 	end 'trackDebugLocal'
+
+	function debugDefinitionHere() returns DebugVersionDef
+		let block = self.bodyState.currentBlock
+		let ops = block.bodyOps()
+		var at = ops.count()
+
+		while at > 0 'eachOpBackwards'
+			at = at - 1
+			let opIdx = try ops.get(at) otherwise panic("debugDefinitionHere: bodyOps.get OOB at {at} below the count just read")
+			let op = try self.artifact.module.ops.get(opIdx) otherwise panic("debugDefinitionHere: ops.get OOB at {opIdx} — a block names only ops its module holds")
+
+			if let defined = try maxonOpDefinedValue(op) 'aValuedOp'
+				if self.tagOf(defined) != ValueTypeTag.void 'aValueTheCodeKeeps'
+					return DebugVersionDef.definedAfter(block.id, anchor: defined)
+				end 'aValueTheCodeKeeps'
+			end 'aValuedOp'
+		end 'eachOpBackwards'
+
+		return DebugVersionDef.definedIn(block.id)
+	end 'debugDefinitionHere'
 
 	// ⭐⭐ **RECORD A REBIND, AND EVERY SITE THAT WRITES `boundValue` CALLS THIS FIRST.** A name owns a
 	// SEQUENCE of values — the merge phis, the loop-header phis, the snapshot rewind and the source-level
@@ -41255,7 +41305,7 @@ export type Parser
 		end 'notCapturing'
 
 		view binding = self.bodyState.scope.getInfo(name)
-		self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: value, def: DebugVersionDef.definedIn(self.bodyState.currentBlock.id))
+		self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: value, def: self.debugDefinitionHere())
 	end 'recordDebugRebindByName'
 
 	function noteFoldedBinding(record DebugLocalDecl, binding VarInfo)
@@ -45917,6 +45967,7 @@ export type Parser
 		// twin of `openBlock`'s `ownedCount` (drained by `dropArmScopedOwned` below). A boxed error is an
 		// owned heap value this handler received ownership of; a scalar error owns no heap and adds none.
 		let ownedFloor = self.bodyState.ownedBindings.count()
+		let handlerDebugFloor = self.bodyState.debugOpenSlots.count()
 		self.bodyState.scope.pushScope()
 
 		try self.declareCaughtError(flag, errorType: errorType, binder: binder, form: form)
@@ -45937,6 +45988,7 @@ export type Parser
 
 		var errEnd = try self.parseBlockBody(func, block: errBlock, label: labelTok.value)
 		self.bodyState.scope.popScope()
+		self.closeDebugScopesAbove(handlerDebugFloor, endsIn: errEnd)
 
 		let matchedTheBinding = self.bodyState.tryBindingMatched
 		view requiredBindingName = self.bodyState.tryBindingName
@@ -46430,6 +46482,7 @@ export type Parser
 		let ownedFloor = self.bodyState.ownedBindings.count()
 		let unionBindingDepth = self.bodyState.errorUnionBindings.count()
 		let form = CaughtErrorForm.blockForm(errorUnion)
+		let handlerDebugFloor = self.bodyState.debugOpenSlots.count()
 		self.bodyState.scope.pushScope()
 		try self.declareCaughtError(flag, errorType: errorType, binder: binder, form: form)
 
@@ -46448,6 +46501,7 @@ export type Parser
 		try self.parseDivergingTerminalForm(func, block: self.bodyState.currentBlock)
 
 		self.bodyState.scope.popScope()
+		self.closeDebugScopesAbove(handlerDebugFloor, endsIn: self.bodyState.currentBlock)
 
 		while self.bodyState.errorUnionBindings.count() > unionBindingDepth 'closeUnionScope'
 			_ = try self.bodyState.errorUnionBindings.pop() otherwise panic("parseDivergentOtherwise: errorUnionBindings.pop failed above the depth this handler recorded")
@@ -51725,6 +51779,7 @@ export type Parser
 	function parseCatchingElseBody(func IrFunction, elseBlock IrBlock, flag ValueId, errorType MaxonType, form CaughtErrorForm, join SentLegJoin, ifTok Token, ifEnd ElementIndex) returns IrBlock throws SourceParseError
 		let elseWritten = self.at(TokenKind.else)
 		let ownedFloor = self.bodyState.ownedBindings.count()
+		let handlerDebugFloor = self.bodyState.debugOpenSlots.count()
 		self.bodyState.scope.pushScope()
 
 		// With no `else` written there is no token on this branch to anchor its release to, so the `if` that
@@ -51754,6 +51809,7 @@ export type Parser
 		end 'writtenBody'
 
 		self.bodyState.scope.popScope()
+		self.closeDebugScopesAbove(handlerDebugFloor, endsIn: elseEnd)
 		self.dropArmScopedOwned(ownedFloor, exitBlock: elseEnd, anchor: binder.anchor)
 
 		if errorUnionIsSynthesized(caughtErrorUnionMatch(form)) 'aCombinedError'
@@ -52014,7 +52070,7 @@ export type Parser
 
 		var thenEnd = try self.parseBlockBody(func, block: thenBlock, label: label)
 		self.dropArmScopedOwned(mark.ownedCount, exitBlock: thenEnd, anchor: nameTok)
-		self.closeBlock(mark)
+		self.closeBlock(mark, endsIn: thenEnd)
 		return thenEnd
 	end 'parseBoundThenBody'
 
@@ -52353,7 +52409,7 @@ export type Parser
 		// `break`/`continue` releases exactly what the body declares (see LoopContext.ownedFloor).
 		// A `while`'s continue target IS its header: the condition is re-evaluated on the back edge,
 		// so there is no increment to run first and no step block to run it in.
-		self.bodyState.loops.push(LoopContext.create(loopLabelTok.value, continueTargetId: header.id, exitId: exit.id, phiVars: phiVars, ownedFloor: self.bodyState.ownedBindings.count(), scanIndex: scanIndex))
+		self.bodyState.loops.push(LoopContext.create(loopLabelTok.value, continueTargetId: header.id, exitId: exit.id, phiVars: phiVars, ownedFloor: self.bodyState.ownedBindings.count(), scanIndex: scanIndex, debugOpenFloor: self.bodyState.debugOpenSlots.count()))
 
 		// The body is a lexical BLOCK: its declarations are gone — and its `var`s off
 		// `mutableVars` — before the back-edge args below are read, so those args name the
@@ -52962,7 +53018,7 @@ export type Parser
 		// `ownedFloor` is the per-trip frame's height — so a `break`/`continue` releases the body's
 		// declarations AND the trip's minted element, and leaves the iteration source (enrolled below this
 		// mark) for the exit.
-		self.bodyState.loops.push(LoopContext.create(loopLabelTok.value, continueTargetId: step.id, exitId: exit.id, phiVars: phiVars, ownedFloor: tripMark.ownedCount, scanIndex: scanIndex))
+		self.bodyState.loops.push(LoopContext.create(loopLabelTok.value, continueTargetId: step.id, exitId: exit.id, phiVars: phiVars, ownedFloor: tripMark.ownedCount, scanIndex: scanIndex, debugOpenFloor: self.bodyState.debugOpenSlots.count()))
 
 		// The loop variable: the index itself for a range, a BORROWED element read for an array, a MINTED
 		// grapheme cluster for a String. `_` is the discard (`DiscardBindingName`) and binds nothing at all
@@ -53106,7 +53162,7 @@ export type Parser
 		// The per-trip frame closes BEFORE the step/exit wiring: its element is dead past the body, and
 		// leaving it enrolled would let the exit block's own drain (`forMark`) name a value that the exit
 		// does not dominate.
-		self.closeBlock(tripMark)
+		self.closeBlock(tripMark, endsIn: bodyEnd)
 
 		// ⭐ **THE STEP BLOCK IS A MERGE, so it carries phis of its own.** Its predecessors are the
 		// body's fall-through AND every `continue`, and a carried `var` assigned before a `continue`
@@ -53170,7 +53226,7 @@ export type Parser
 		// is every loop in the corpus that does not read a field out of a call result.
 		self.bodyState.currentBlock = exit
 		self.emitScopeDrops(exit, floor: cursorMark.ownedCount, anchor: forTok)
-		self.closeBlock(cursorMark)
+		self.closeBlock(cursorMark, endsIn: self.bodyState.currentBlock)
 
 		// The empty-`Iterable` path rejoins at a JOIN, PAST the cursor's drop — see `emitEmptyIterableEntry`.
 		// EACH ARM LEAVES THE PARSER IN THE STATEMENT'S CONTINUATION and releases the source expression's
@@ -53182,7 +53238,7 @@ export type Parser
 		end 'emptied'
 
 		self.bodyState.loopHeldBindings.truncate(loopHeldMark)
-		self.closeBlock(forMark)
+		self.closeBlock(forMark, endsIn: self.bodyState.currentBlock)
 		return self.bodyState.currentBlock
 	end 'parseForStatement'
 
@@ -55937,6 +55993,7 @@ export type Parser
 	// thing that differs between the two keywords here — the exit for a `break`, the continue target for
 	// a `continue` — which is why they share this rather than each spelling the same three lines.
 	function jumpToLoopBlock(block IrBlock, ctx LoopContext, targetId BlockId, anchor Token)
+		self.noteDebugScopeExits(ctx.debugOpenFloor, leavingFrom: block)
 		self.dropTargetBodyOwned(block, floor: ctx.ownedFloor, anchor: anchor)
 		let mark = moveMarkPrefix(self.captureMoveMark(), height: ctx.ownedFloor)
 		var scan = try self.bodyState.loopScans.get(ctx.scanIndex) otherwise panic("jumpToLoopBlock: loop scan {ctx.scanIndex} is not on the stack while its loop's body is parsed")
@@ -55967,6 +56024,7 @@ export type Parser
 		// Release what the arm declared, exactly as a live arm exit's `dropArmScopedOwned` would — the
 		// break skips the arm's end, so this is the only drop its payload/`let` bindings get.
 		self.dropTargetBodyOwned(block, floor: ctx.ownedFloor, anchor: breakTok)
+		self.noteDebugScopeExits(ctx.debugOpenFloor, leavingFrom: block)
 
 		// A local `var` alias, not `ctx.breakExits.push(…)`: the mutating-parameter analysis reads a write
 		// through a parameter's FIELD as a write to the parameter itself, and a `match` arm's payload
@@ -56602,7 +56660,7 @@ export type Parser
 		// leave that phi an operand short. Pushed AFTER the temporary-scrutinee enrolment so `ownedFloor`
 		// sits ABOVE that box — the box outlives the match, and a break must not drop it.
 		if not isExpression 'pushBreakTarget'
-			self.bodyState.matches.push(MatchContext.create(matchLabel, carried: carried, ownedFloor: self.bodyState.ownedBindings.count()))
+			self.bodyState.matches.push(MatchContext.create(matchLabel, carried: carried, ownedFloor: self.bodyState.ownedBindings.count(), debugOpenFloor: self.bodyState.debugOpenSlots.count()))
 		end 'pushBreakTarget'
 
 		// ⭐ **DISPATCH STRATEGY.** An integer-like scrutinee builds a normalized
@@ -56924,6 +56982,8 @@ export type Parser
 				let opensArmScope = armOwnsMemberBox or hasPayloadBindings
 				var payloadBox = scrut
 
+				let armDebugFloor = self.bodyState.debugOpenSlots.count()
+
 				if opensArmScope 'openArmScope'
 					self.bodyState.currentBlock = bodyBlock
 					self.bodyState.scope.pushScope()
@@ -56966,6 +57026,7 @@ export type Parser
 
 				if opensArmScope 'closeArmScope'
 					self.bodyState.scope.popScope()
+					self.closeDebugScopesAbove(armDebugFloor, endsIn: armBody.exitBlock)
 				end 'closeArmScope'
 
 				if armOwnsMemberBox 'closeBoxedMemberArm'

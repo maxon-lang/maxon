@@ -1,0 +1,71 @@
+let SlotStartCaseLabel = "sidecar-a-slot-local-is-live-only-once-its-store-has-run"
+
+let SlotStartLocalNames = ["w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8"]
+let SlotStartLocalValues = ["15", "25", "35", "55", "65", "85", "95", "115"]
+let SlotStartLocationMark = "[rbp-"
+
+function earliestSlotRowStart(functionRows StringArray, name String) returns PrintedNumber
+	var earliest = 0 as PrintedNumber
+	var found = false
+
+	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
+		if firstToken(row) == name and row.contains(SlotStartLocationMark) 'aSlotRow'
+			let (start, _) = requiredCodeRange(row, what: "a `{name}` row")
+
+			if not found or start < earliest 'earlier'
+				earliest = start
+				found = true
+			end 'earlier'
+		end 'aSlotRow'
+	end 'eachLocal'
+
+	if not found 'noSlotRow'
+		panic("debug tests: `{name}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a slot-resident version. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")
+	end 'noSlotRow'
+
+	return earliest
+end 'earliestSlotRowStart'
+
+test 'a var held in a stack slot reads its value from the first byte its row covers'
+	let staged = builtFixture(SlotStartCaseLabel, fixture: DeadSplitFixtureName)
+	let executable = builtExecutable(staged)
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	var steps = StringArray.create()
+
+	for name in SlotStartLocalNames 'eachArmed'
+		steps.push("{BreakCommand} {exactOffsetTarget(earliestSlotRowStart(functionRows, name: name))}")
+	end 'eachArmed'
+
+	steps.push(RunCommand)
+
+	for (iter, name) in SlotStartLocalNames.withIterator() 'eachRead'
+		steps.push("{PrintCommand} {name}")
+
+		if iter.index() + 1 < SlotStartLocalNames.count() 'moreToReach'
+			steps.push(ContinueCommand)
+		end 'moreToReach'
+	end 'eachRead'
+
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(steps), extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(answers.count(), expected: SlotStartLocalNames.count(), message: "each of the {SlotStartLocalNames.count()} reads printed one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	var wrong = StringArray.create()
+
+	for (iter, name) in SlotStartLocalNames.withIterator() 'eachAnswer'
+		let answered = eventAt(answers, index: iter.index() as EventIndex)
+		let value = memberOf(answered, node: answered.root, key: ValueKey)
+		let shown = textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey)
+		let expected = try SlotStartLocalValues.get(iter.index()) otherwise panic("debug tests: no expected value for {name}")
+
+		if shown != expected 'aWrongValue'
+			wrong.push("{name} read {shown} at the first byte of its slot row, and holds {expected}")
+		end 'aWrongValue'
+	end 'eachAnswer'
+
+	Expect.isEmpty(listedLines(wrong), message: "a stack-slot row opens at the first instruction that runs after the store writes the slot, and not at the instruction that defines the value: a stop in between reads whatever the slot held before. {listedLines(wrong)}. {said}")
+end 'a var held in a stack slot reads its value from the first byte its row covers'

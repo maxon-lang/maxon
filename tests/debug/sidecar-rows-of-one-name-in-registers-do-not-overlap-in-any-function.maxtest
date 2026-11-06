@@ -1,0 +1,50 @@
+let RegisterOverlapCaseLabel = "sidecar-rows-of-one-name-in-registers-do-not-overlap-in-any-function"
+
+let InsertFunctionName = "Set.insert"
+let BorrowingLocalName = "firstDeleted"
+
+function overlappingPairsOf(rows StringArray, functionName String) returns StringArray
+	var pairs = StringArray.create()
+
+	for (leftAt, left) in rows.withIterator() 'eachRow'
+		for rightAt in leftAt.index() + 1 upto rows.count() 'eachLaterRow'
+			let right = try rows.get(rightAt) otherwise panic("debug tests: rows.get OOB at {rightAt}")
+
+			if firstToken(left) == firstToken(right) and inlineSiteOfRow(left) == inlineSiteOfRow(right) and overlapOfRowsInDifferentPlaces(left, right: right) > MostBytesOfOneInstruction 'shadows'
+				pairs.push("{functionName}: {left}   ///   {right}")
+			end 'shadows'
+		end 'eachLaterRow'
+	end 'eachRow'
+
+	return pairs
+end 'overlappingPairsOf'
+
+test 'no two rows of one name in different places overlap by more than one instruction, in any function of the program'
+	let staged = builtFixture(RegisterOverlapCaseLabel, fixture: BorrowedVarFixtureName)
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	var overlapping = StringArray.create()
+	var insertRows = 0 as Count
+	var functionName = ""
+	var rows = StringArray.create()
+
+	for row in functionRows 'eachRow'
+		if row.contains(FunctionRowColumn) 'aFunctionRow'
+			overlapping.append(overlappingPairsOf(rows, functionName: functionName))
+			functionName = firstToken(row)
+			rows = StringArray.create()
+			continue
+		end 'aFunctionRow'
+
+		rows.push(row)
+
+		if functionName == InsertFunctionName and firstToken(row) == BorrowingLocalName 'theBorrowingLocal'
+			insertRows = insertRows + 1
+		end 'theBorrowingLocal'
+	end 'eachRow'
+
+	overlapping.append(overlappingPairsOf(rows, functionName: functionName))
+
+	Expect.notEqual(insertRows, expected: 0, message: "`{InsertFunctionName}` has no `{BorrowingLocalName}` row, so this case no longer reaches the function whose var is rebound to another name's value. The program's functions were: {listedLines(declaredFunctionRows(functionRows))}")
+	Expect.isEmpty(listedLines(overlapping), message: "the debugger answers a name from the FIRST row that covers an offset, so two rows of one name in different places over the same code make one version read as the other. A var rebound to the value another name holds (`{BorrowingLocalName} = index`) has the borrowed value's whole live range, not the range after the rebind. These pairs overlap by more than one instruction: {listedLines(overlapping)}")
+end 'no two rows of one name in different places overlap by more than one instruction, in any function of the program'

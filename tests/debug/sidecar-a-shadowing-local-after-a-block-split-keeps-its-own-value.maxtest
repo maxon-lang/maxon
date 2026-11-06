@@ -1,0 +1,24 @@
+let SplitScopeCaseLabel = "sidecar-a-shadowing-local-after-a-block-split-keeps-its-own-value"
+
+let SplitScopeLocalName = "depth"
+let SplitScopeInnerValue = "157"
+let SplitScopeOuterValue = "146"
+
+test 'a let that shadows an outer let is its own value after an inlined call splits its block, and the outer one again past its block'
+	let staged = builtFixture(SplitScopeCaseLabel, fixture: ScopeSplitFixtureName)
+	let innerAt = anchorLine(staged.join(StagedProgramFileName), anchor: "inner")
+	let afterAt = anchorLine(staged.join(StagedProgramFileName), anchor: "after")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(innerAt)}", "{BreakCommand} {lineTarget(afterAt)}", RunCommand, "{PrintCommand} {SplitScopeLocalName}", ContinueCommand, "{PrintCommand} {SplitScopeLocalName}"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(answers.count(), expected: 2, message: "two `{PrintCommand} {SplitScopeLocalName}` commands printed {answers.count()} `{ValueEventName}` events. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let inner = eventAt(answers, index: 0)
+	let outer = eventAt(answers, index: 1)
+
+	Expect.equal(textOf(inner, node: nodeAt(memberOf(inner, node: inner.root, key: ValueKey), index: 0), key: DisplayKey), expected: SplitScopeInnerValue, message: "inside the block that declares the inner `{SplitScopeLocalName}` the name is the inner one, even on the lines after a call the inliner spliced into the block. The scope ends at the block's exit, which the splice moved onto a later block, so a scope end recorded as the head block hands the name to the outer one too early. {said}")
+	Expect.equal(textOf(outer, node: nodeAt(memberOf(outer, node: outer.root, key: ValueKey), index: 0), key: DisplayKey), expected: SplitScopeOuterValue, message: "past the block the name is the outer `{SplitScopeLocalName}` again. {said}")
+end 'a let that shadows an outer let is its own value after an inlined call splits its block, and the outer one again past its block'

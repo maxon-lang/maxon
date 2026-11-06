@@ -12833,26 +12833,6 @@ export union AliasCycleResult
 	end 'blamedIndex'
 end 'AliasCycleResult'
 
-function aliasDeclaredBefore(candidate GenericAliasEntry, held GenericAliasEntry) returns bool
-	let byFile = comparePathIdentity(candidate.filePath, other: held.filePath)
-
-	if byFile != Ordering.equalTo 'differentFiles'
-		return byFile == Ordering.lessThan
-	end 'differentFiles'
-
-	let candidateLine = try aliasNameLine(candidate) otherwise return false
-	let heldLine = try aliasNameLine(held) otherwise return true
-
-	return candidateLine < heldLine
-end 'aliasDeclaredBefore'
-
-function aliasNameLine(entry GenericAliasEntry) returns LineNumber throws AbsentError
-	match entry.anchor 'anchor'
-		unanchored then throw AbsentError.absent
-		declaredAt(nameLine, _, _, _) then return nameLine
-	end 'anchor'
-end 'aliasNameLine'
-
 // @generated library-cache begin
 function cacheWriteAliasCycleResult(writer LibraryCacheWriter, value AliasCycleResult)
 	writer.unsigned(value.ordinal as CacheUnsigned)
@@ -12884,6 +12864,26 @@ function cacheReadAliasCycleResultAt(reader LibraryCacheReader) returns AliasCyc
 end 'cacheReadAliasCycleResultAt'
 
 // @generated library-cache end
+
+function aliasDeclaredBefore(candidate GenericAliasEntry, held GenericAliasEntry) returns bool
+	let byFile = comparePathIdentity(candidate.filePath, other: held.filePath)
+
+	if byFile != Ordering.equalTo 'differentFiles'
+		return byFile == Ordering.lessThan
+	end 'differentFiles'
+
+	let candidateLine = try aliasNameLine(candidate) otherwise return false
+	let heldLine = try aliasNameLine(held) otherwise return true
+
+	return candidateLine < heldLine
+end 'aliasDeclaredBefore'
+
+function aliasNameLine(entry GenericAliasEntry) returns LineNumber throws AbsentError
+	match entry.anchor 'anchor'
+		unanchored then throw AbsentError.absent
+		declaredAt(nameLine, _, _, _) then return nameLine
+	end 'anchor'
+end 'aliasNameLine'
 
 // ⭐ **ONE `Base with Args` INSTANTIATION SITE** — an interned instance paired with the
 // source anchor of the `typealias X = Base with Args` that names it, for the where-constraint check (E3017)

@@ -1,0 +1,20 @@
+let ArmScopeCaseLabel = "sidecar-a-match-arm-binding-a-shadowing-name-ends-with-the-arm"
+
+let ArmScopeLocalName = "depth"
+let ArmScopeOuterValue = "146"
+
+test 'a let in a match arm that shadows an outer let is the outer one again after the match'
+	let staged = builtFixture(ArmScopeCaseLabel, fixture: ArmScopeFixtureName)
+	let afterAt = anchorLine(staged.join(StagedProgramFileName), anchor: "after")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(afterAt)}", RunCommand, "{PrintCommand} {ArmScopeLocalName}"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(answers.count(), expected: 1, message: "`{PrintCommand} {ArmScopeLocalName}` printed {answers.count()} `{ValueEventName}` events. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let answered = eventAt(answers, index: 0)
+
+	Expect.equal(textOf(answered, node: nodeAt(memberOf(answered, node: answered.root, key: ValueKey), index: 0), key: DisplayKey), expected: ArmScopeOuterValue, message: "the arm's `{ArmScopeLocalName}` goes out of scope with the arm, so after the match the name is the outer one. {said}")
+end 'a let in a match arm that shadows an outer let is the outer one again after the match'

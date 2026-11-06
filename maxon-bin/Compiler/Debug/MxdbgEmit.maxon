@@ -342,6 +342,8 @@ function writeFunctionLocals(project Project, signatures ProgramSignatures, writ
 
 	// Sorted stably, so two bindings a nested scope gave the same name keep their declaration order.
 	records.sortBy(function(left MxdbgLocalDraft, right MxdbgLocalDraft) gives compareBytesOrdinally(left.name, right: right.name))
+	resolveContestedPlaces(records)
+	requireDisjointPlacesPerName(records, functionName: func.name)
 
 	for record in records 'eachRecord'
 		for row in record.rows 'eachRow'
@@ -349,6 +351,392 @@ function writeFunctionLocals(project Project, signatures ProgramSignatures, writ
 		end 'eachRow'
 	end 'eachRecord'
 end 'writeFunctionLocals'
+
+let MxdbgMostBytesOfOneInstruction = 15
+
+type MxdbgSiteRow
+	export let site as MxdbgIndex
+	export let row as MxdbgLocalRow
+
+	static function create(site MxdbgIndex, row MxdbgLocalRow) returns MxdbgSiteRow
+		return Self{site: site, row: row}
+	end 'create'
+end 'MxdbgSiteRow'
+
+typealias MxdbgSiteRowArray = Array with MxdbgSiteRow
+
+type MxdbgPlaceEnds
+	var held as ElementIndex
+	var firstKind as MxdbgIndex
+	var firstValue as MxdbgRecordFigure
+	var firstEnd as CodeOffset
+	var secondKind as MxdbgIndex
+	var secondValue as MxdbgRecordFigure
+	var secondEnd as CodeOffset
+
+	static function empty() returns MxdbgPlaceEnds
+		return Self{held: 0, firstKind: 0, firstValue: 0, firstEnd: 0, secondKind: 0, secondValue: 0, secondEnd: 0}
+	end 'empty'
+
+	function endOfAnotherPlace(kind MxdbgIndex, value MxdbgRecordFigure) returns (bool, CodeOffset)
+		if self.held >= 1 and not (self.firstKind == kind and self.firstValue == value) 'theLongestIsElsewhere'
+			return (true, self.firstEnd)
+		end 'theLongestIsElsewhere'
+
+		if self.held >= 2 'aSecondPlace'
+			return (true, self.secondEnd)
+		end 'aSecondPlace'
+
+		return (false, 0)
+	end 'endOfAnotherPlace'
+
+	function note(kind MxdbgIndex, value MxdbgRecordFigure, reachesTo CodeOffset)
+		if self.held >= 1 and self.firstKind == kind and self.firstValue == value 'theLongestPlace'
+			self.firstEnd = reachesTo if reachesTo > self.firstEnd else self.firstEnd
+			return
+		end 'theLongestPlace'
+
+		if self.held >= 2 and self.secondKind == kind and self.secondValue == value 'theSecondPlace'
+			self.secondEnd = reachesTo if reachesTo > self.secondEnd else self.secondEnd
+			self.promoteTheSecondIfItReachesFurther()
+			return
+		end 'theSecondPlace'
+
+		if self.held == 0 'theFirstPlaceSeen'
+			self.firstKind = kind
+			self.firstValue = value
+			self.firstEnd = reachesTo
+			self.held = 1
+			return
+		end 'theFirstPlaceSeen'
+
+		if reachesTo > self.firstEnd 'reachesFurtherThanTheLongest'
+			self.secondKind = self.firstKind
+			self.secondValue = self.firstValue
+			self.secondEnd = self.firstEnd
+			self.firstKind = kind
+			self.firstValue = value
+			self.firstEnd = reachesTo
+			self.held = 2
+			return
+		end 'reachesFurtherThanTheLongest'
+
+		if self.held == 1 or reachesTo > self.secondEnd 'beatsTheSecond'
+			self.secondKind = kind
+			self.secondValue = value
+			self.secondEnd = reachesTo
+			self.held = 2
+		end 'beatsTheSecond'
+	end 'note'
+
+	function promoteTheSecondIfItReachesFurther()
+		if self.secondEnd <= self.firstEnd 'staysSecond'
+			return
+		end 'staysSecond'
+
+		let kind = self.firstKind
+		let value = self.firstValue
+		let firstReach = self.firstEnd
+		self.firstKind = self.secondKind
+		self.firstValue = self.secondValue
+		self.firstEnd = self.secondEnd
+		self.secondKind = kind
+		self.secondValue = value
+		self.secondEnd = firstReach
+	end 'promoteTheSecondIfItReachesFurther'
+end 'MxdbgPlaceEnds'
+
+function compareSiteRows(left MxdbgSiteRow, right MxdbgSiteRow) returns Ordering
+	let bySite = left.site.compare(right.site)
+
+	if bySite != Ordering.equalTo 'differentSites'
+		return bySite
+	end 'differentSites'
+
+	return left.row.codeStart.compare(right.row.codeStart)
+end 'compareSiteRows'
+
+type MxdbgPlaceOccupancy
+	var kinds as MxdbgIndexArray
+	var values as MxdbgRecordFigureArray
+	var counts as CfgIndexArray
+
+	static function empty() returns MxdbgPlaceOccupancy
+		return Self{kinds: MxdbgIndexArray.create(), values: MxdbgRecordFigureArray.create(), counts: CfgIndexArray.create()}
+	end 'empty'
+
+	function slotOf(kind MxdbgIndex, value MxdbgRecordFigure) returns ElementIndex
+		for at in 0 upto self.kinds.count() 'eachPlace'
+			if (try self.kinds.get(at) otherwise panic("MxdbgPlaceOccupancy.slotOf: kinds.get OOB at {at}")) == kind and (try self.values.get(at) otherwise panic("MxdbgPlaceOccupancy.slotOf: values.get OOB at {at}")) == value 'thePlace'
+				return at
+			end 'thePlace'
+		end 'eachPlace'
+
+		self.kinds.push(kind)
+		self.values.push(value)
+		self.counts.push(0)
+		return self.kinds.count() - 1
+	end 'slotOf'
+
+	function enter(kind MxdbgIndex, value MxdbgRecordFigure)
+		let at = self.slotOf(kind, value: value)
+		try self.counts.set(at, value: (try self.counts.get(at) otherwise panic("MxdbgPlaceOccupancy.enter: counts.get OOB at {at}")) + 1) otherwise panic("MxdbgPlaceOccupancy.enter: counts.set OOB at {at}")
+	end 'enter'
+
+	function leave(kind MxdbgIndex, value MxdbgRecordFigure)
+		let at = self.slotOf(kind, value: value)
+		try self.counts.set(at, value: (try self.counts.get(at) otherwise panic("MxdbgPlaceOccupancy.leave: counts.get OOB at {at}")) - 1) otherwise panic("MxdbgPlaceOccupancy.leave: counts.set OOB at {at}")
+	end 'leave'
+
+	function placesHeld() returns ElementIndex
+		var held = 0 as ElementIndex
+
+		for count in self.counts 'eachPlace'
+			held = held + 1 if count > 0 else held
+		end 'eachPlace'
+
+		return held
+	end 'placesHeld'
+end 'MxdbgPlaceOccupancy'
+
+type MxdbgContestedStretches
+	export var starts as CodeOffsetArray
+	export var ends as CodeOffsetArray
+
+	static function empty() returns MxdbgContestedStretches
+		return Self{starts: CodeOffsetArray.create(), ends: CodeOffsetArray.create()}
+	end 'empty'
+
+	function note(start CodeOffset, past CodeOffset)
+		let held = self.ends.count()
+
+		if held > 0 and (try self.ends.get(held - 1) otherwise panic("MxdbgContestedStretches.note: ends.get OOB at {held - 1}")) == start 'continuesTheLast'
+			try self.ends.set(held - 1, value: past) otherwise panic("MxdbgContestedStretches.note: ends.set OOB at {held - 1}")
+			return
+		end 'continuesTheLast'
+
+		self.starts.push(start)
+		self.ends.push(past)
+	end 'note'
+
+	function withoutShortOnes() returns MxdbgContestedStretches
+		var kept = MxdbgContestedStretches.empty()
+
+		for (iter, start) in self.starts.withIterator() 'eachStretch'
+			let past = try self.ends.get(iter.index()) otherwise panic("MxdbgContestedStretches.withoutShortOnes: ends.get OOB at {iter.index()}")
+
+			if past - start > MxdbgMostBytesOfOneInstruction 'longerThanTheHandover'
+				kept.starts.push(start)
+				kept.ends.push(past)
+			end 'longerThanTheHandover'
+		end 'eachStretch'
+
+		return kept
+	end 'withoutShortOnes'
+end 'MxdbgContestedStretches'
+
+function resolveContestedPlaces(records MxdbgLocalDraftArray)
+	var at = 0 as ElementIndex
+
+	while at < records.count() 'eachNameRun'
+		view leader = try records.get(at) otherwise panic("resolveContestedPlaces: records.get OOB at {at}")
+		var past = at
+
+		while past < records.count() 'eachRecordOfTheName'
+			if not (try records.get(past) otherwise panic("resolveContestedPlaces: records.get OOB at {past}")).name.equals(leader.name) 'aDifferentName'
+				break
+			end 'aDifferentName'
+
+			past = past + 1
+		end 'eachRecordOfTheName'
+
+		if past - at > 1 'severalRecords'
+			resolveContestedPlacesOfOneName(records, from: at, past: past)
+		end 'severalRecords'
+
+		at = past
+	end 'eachNameRun'
+end 'resolveContestedPlaces'
+
+function resolveContestedPlacesOfOneName(records MxdbgLocalDraftArray, from ElementIndex, past ElementIndex)
+	var handled = MxdbgIndexArray.create()
+
+	for first in from upto past 'eachRecord'
+		let site = (try records.get(first) otherwise panic("resolveContestedPlacesOfOneName: records.get OOB at {first}")).site
+
+		if handled.contains(site) 'siteAlreadySettled'
+			continue
+		end 'siteAlreadySettled'
+
+		handled.push(site)
+		let stretches = contestedStretchesOf(records, from: from, past: past, site: site).withoutShortOnes()
+
+		if stretches.starts.count() == 0 'nothingContested'
+			continue
+		end 'nothingContested'
+
+		for at in from upto past 'eachRecordOfTheSite'
+			var record = try records.get(at) otherwise panic("resolveContestedPlacesOfOneName: records.get OOB at {at}")
+
+			if record.site == site 'thisSite'
+				record.rows = rowsWithoutTheContested(record.rows, stretches: stretches)
+			end 'thisSite'
+		end 'eachRecordOfTheSite'
+	end 'eachRecord'
+end 'resolveContestedPlacesOfOneName'
+
+function contestedStretchesOf(records MxdbgLocalDraftArray, from ElementIndex, past ElementIndex, site MxdbgIndex) returns MxdbgContestedStretches
+	var byStart = MxdbgLocalRowArray.create()
+	var byEnd = MxdbgLocalRowArray.create()
+
+	for at in from upto past 'eachRecord'
+		let record = try records.get(at) otherwise panic("contestedStretchesOf: records.get OOB at {at}")
+
+		if record.site != site 'anotherSite'
+			continue
+		end 'anotherSite'
+
+		for row in record.rows 'eachRow'
+			if mxdbgRowHasALocation(row.locKind) 'placed'
+				byStart.push(MxdbgLocalRow.create(MxdbgPlacement.create(row.locKind, locValue: row.locValue), codeStart: row.codeStart, codeEnd: row.codeEnd))
+				byEnd.push(MxdbgLocalRow.create(MxdbgPlacement.create(row.locKind, locValue: row.locValue), codeStart: row.codeStart, codeEnd: row.codeEnd))
+			end 'placed'
+		end 'eachRow'
+	end 'eachRecord'
+
+	var stretches = MxdbgContestedStretches.empty()
+
+	if byStart.count() < 2 'nothingToContest'
+		return stretches
+	end 'nothingToContest'
+
+	byStart.sortBy(function(left MxdbgLocalRow, right MxdbgLocalRow) gives left.codeStart.compare(right.codeStart))
+	byEnd.sortBy(function(left MxdbgLocalRow, right MxdbgLocalRow) gives left.codeEnd.compare(right.codeEnd))
+	var occupancy = MxdbgPlaceOccupancy.empty()
+	var starting = 0 as ElementIndex
+	var ending = 0 as ElementIndex
+	var cursor = (try byStart.get(0) otherwise panic("contestedStretchesOf: byStart.get OOB at 0")).codeStart
+
+	while ending < byEnd.count() 'untilEveryRowHasEnded'
+		let nextEnd = (try byEnd.get(ending) otherwise panic("contestedStretchesOf: byEnd.get OOB at {ending}")).codeEnd
+		var boundary = nextEnd
+
+		if starting < byStart.count() and (try byStart.get(starting) otherwise panic("contestedStretchesOf: byStart.get OOB at {starting}")).codeStart < boundary 'aRowStartsFirst'
+			boundary = (try byStart.get(starting) otherwise panic("contestedStretchesOf: byStart.get OOB at {starting}")).codeStart
+		end 'aRowStartsFirst'
+
+		if boundary > cursor and occupancy.placesHeld() > 1 'contestedHere'
+			stretches.note(cursor, past: boundary)
+		end 'contestedHere'
+
+		cursor = boundary
+
+		while ending < byEnd.count() and (try byEnd.get(ending) otherwise panic("contestedStretchesOf: byEnd.get OOB at {ending}")).codeEnd == boundary 'rowsEndingHere'
+			view leaving = try byEnd.get(ending) otherwise panic("contestedStretchesOf: byEnd.get OOB at {ending}")
+			occupancy.leave(leaving.locKind, value: leaving.locValue)
+			ending = ending + 1
+		end 'rowsEndingHere'
+
+		while starting < byStart.count() and (try byStart.get(starting) otherwise panic("contestedStretchesOf: byStart.get OOB at {starting}")).codeStart == boundary 'rowsStartingHere'
+			view entering = try byStart.get(starting) otherwise panic("contestedStretchesOf: byStart.get OOB at {starting}")
+			occupancy.enter(entering.locKind, value: entering.locValue)
+			starting = starting + 1
+		end 'rowsStartingHere'
+	end 'untilEveryRowHasEnded'
+
+	return stretches
+end 'contestedStretchesOf'
+
+function rowsWithoutTheContested(rows MxdbgLocalRowArray, stretches MxdbgContestedStretches) returns MxdbgLocalRowArray
+	var kept = MxdbgLocalRowArray.create()
+
+	for row in rows 'eachRow'
+		if not mxdbgRowHasALocation(row.locKind) 'notPlaced'
+			kept.push(row)
+			continue
+		end 'notPlaced'
+
+		var cursor = row.codeStart
+
+		for (iter, start) in stretches.starts.withIterator() 'eachStretch'
+			let past = try stretches.ends.get(iter.index()) otherwise panic("rowsWithoutTheContested: ends.get OOB at {iter.index()}")
+
+			if past <= cursor or start >= row.codeEnd 'doesNotTouchWhatIsLeft'
+				continue
+			end 'doesNotTouchWhatIsLeft'
+
+			if start > cursor 'aPieceBefore'
+				kept.push(MxdbgLocalRow.create(MxdbgPlacement.create(row.locKind, locValue: row.locValue), codeStart: cursor, codeEnd: start))
+			end 'aPieceBefore'
+
+			cursor = past
+		end 'eachStretch'
+
+		if cursor < row.codeEnd 'aPieceAfter'
+			kept.push(MxdbgLocalRow.create(MxdbgPlacement.create(row.locKind, locValue: row.locValue), codeStart: cursor, codeEnd: row.codeEnd))
+		end 'aPieceAfter'
+	end 'eachRow'
+
+	kept.sortBy(function(left MxdbgLocalRow, right MxdbgLocalRow) gives left.codeStart.compare(right.codeStart))
+	return kept
+end 'rowsWithoutTheContested'
+
+function requireDisjointPlacesPerName(records MxdbgLocalDraftArray, functionName ByteArray)
+	var at = 0 as ElementIndex
+
+	while at < records.count() 'eachNameRun'
+		let leader = try records.get(at) otherwise panic("requireDisjointPlacesPerName: records.get OOB at {at}")
+		var rows = MxdbgSiteRowArray.create()
+		var past = at
+
+		while past < records.count() 'eachRecordOfTheName'
+			let record = try records.get(past) otherwise panic("requireDisjointPlacesPerName: records.get OOB at {past}")
+
+			if not record.name.equals(leader.name) 'aDifferentName'
+				break
+			end 'aDifferentName'
+
+			for row in record.rows 'eachRow'
+				if mxdbgRowHasALocation(row.locKind) 'placed'
+					rows.push(MxdbgSiteRow.create(record.site, row: row))
+				end 'placed'
+			end 'eachRow'
+
+			past = past + 1
+		end 'eachRecordOfTheName'
+
+		if rows.count() > 1 'severalRows'
+			requireNoPlaceShadows(rows, name: leader.name, functionName: functionName)
+		end 'severalRows'
+
+		at = past
+	end 'eachNameRun'
+end 'requireDisjointPlacesPerName'
+
+function requireNoPlaceShadows(rows MxdbgSiteRowArray, name ByteArray, functionName ByteArray)
+	rows.sortBy(function(left MxdbgSiteRow, right MxdbgSiteRow) gives compareSiteRows(left, right: right))
+	var ends = MxdbgPlaceEnds.empty()
+	var site = 0 as MxdbgIndex
+	var started = false
+
+	for entry in rows 'eachRow'
+		if not started or entry.site != site 'aNewSite'
+			ends = MxdbgPlaceEnds.empty()
+			site = entry.site
+			started = true
+		end 'aNewSite'
+
+		let row = entry.row
+		let (elsewhere, otherEnd) = ends.endOfAnotherPlace(row.locKind, value: row.locValue)
+		let overlapEnd = otherEnd if otherEnd < row.codeEnd else row.codeEnd
+
+		if elsewhere and overlapEnd > row.codeStart and overlapEnd - row.codeStart > MxdbgMostBytesOfOneInstruction 'shadows'
+			panic("internal compiler error: the debug-info rows of '{String.from(name)}' in '{String.from(functionName)}' still overlap in different places over [{row.codeStart}, {overlapEnd}) after every contested range was removed, so a debugger would read one value as the other. This is a compiler bug; please report it")
+		end 'shadows'
+
+		ends.note(row.locKind, value: row.locValue, reachesTo: row.codeEnd)
+	end 'eachRow'
+end 'requireNoPlaceShadows'
 
 function mxdbgRowHasALocation(locKind MxdbgIndex) returns bool
 	return locKind == MxdbgLocKindStackSlot or locKind == MxdbgLocKindRegister
@@ -535,6 +923,8 @@ type MxdbgLocalRow
 end 'MxdbgLocalRow'
 
 typealias MxdbgLocalRowArray = Array with MxdbgLocalRow
+
+typealias MxdbgRecordFigureArray = Array with MxdbgRecordFigure
 
 // One local record, before the roster is put in name order.
 type MxdbgLocalDraft

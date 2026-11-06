@@ -404,6 +404,34 @@ export type IrModule uses Op
 		return byId
 	end 'blockIndexById'
 
+	export function blockHoldingTheExitOf(func IrFunction, byId BlockIndexById, start BlockId) returns BlockId
+		var at = start
+
+		for _ in 0 upto func.nextBlockId 'eachMove'
+			let position = try byId.get(at) otherwise return at
+			let blockRef = try func.blockRefs.get(position) otherwise panic("blockHoldingTheExitOf: blockRefs.get OOB at {position}")
+			let block = try self.blocks.get(blockRef) otherwise panic("blockHoldingTheExitOf: blockRef {blockRef} from func.blockRefs not in blocks")
+
+			if not block.exitMoved 'holdsItsOwnExit'
+				return at
+			end 'holdsItsOwnExit'
+
+			at = block.exitMovedTo
+		end 'eachMove'
+
+		panic("blockHoldingTheExitOf: the exit of block {start} moved more often than '{String.from(func.name)}' has blocks")
+	end 'blockHoldingTheExitOf'
+
+	export function scopeExitsAfterSplits(local DebugLocalDecl, func IrFunction, byId BlockIndexById) returns BlockIdArray
+		var exits = BlockIdArray.create()
+
+		for exit in local.scopeEnds 'eachScopeExit'
+			exits.push(self.blockHoldingTheExitOf(func, byId: byId, start: exit))
+		end 'eachScopeExit'
+
+		return exits
+	end 'scopeExitsAfterSplits'
+
 	// `blockIndexById` into a table the caller keeps, for one that indexes one function after another.
 	export function refillBlockIndexById(func IrFunction, into BlockIndexById)
 		into.resetForBlockCount(func.nextBlockId)

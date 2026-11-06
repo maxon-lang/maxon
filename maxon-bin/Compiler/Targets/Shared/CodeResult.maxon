@@ -515,7 +515,7 @@ export type DebugRunOffsets
 		for range in func.debugLocalRanges 'eachRun'
 			let blockStart = try blockStarts.get(range.blockId) otherwise continue
 			let blockEnd = try blockEnds.get(range.blockId) otherwise continue
-			let codeStart = blockStart if range.fromBlockEntry else self.startOf(range.first, orElse: blockStart)
+			let codeStart = self.runStart(range, blockStart: blockStart, blockEnd: blockEnd)
 			let codeEnd = self.endOf(range.last, orElse: blockEnd)
 
 			if codeEnd <= codeStart 'coversNoCode'
@@ -527,6 +527,18 @@ export type DebugRunOffsets
 
 		return ranges
 	end 'resolve'
+
+	function runStart(range DebugValueRange, blockStart CodeOffset, blockEnd CodeOffset) returns CodeOffset
+		if range.fromBlockEntry 'fromTheBlocksFirstByte'
+			return blockStart
+		end 'fromTheBlocksFirstByte'
+
+		if range.opensAfterFirst 'behindAnOp'
+			return self.endOf(range.first, orElse: blockEnd)
+		end 'behindAnOp'
+
+		return self.startOf(range.first, orElse: blockStart)
+	end 'runStart'
 
 	function startOf(opIdx ElementIndex, orElse CodeOffset) returns CodeOffset
 		return try self.offsetOf(self.starts, opIdx: opIdx) otherwise orElse

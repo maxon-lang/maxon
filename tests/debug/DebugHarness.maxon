@@ -240,6 +240,13 @@ export let RivalLoopFixtureName = "rivalloop"
 export let DeadStoreFixtureName = "deadstore"
 export let DeadSplitFixtureName = "deadsplit"
 export let DeadPhiFixtureName = "deadphi"
+export let ScopeShadowFixtureName = "scopeshadow"
+export let BorrowedVarFixtureName = "borrowedvar"
+export let ScopeSplitFixtureName = "scopesplit"
+export let PhiBorrowFixtureName = "phiborrow"
+export let EqualBindsFixtureName = "equalbinds"
+export let LoopBreakFixtureName = "loopbreak"
+export let ArmScopeFixtureName = "armscope"
 export let LogicLineFixtureName = "logicline"
 export let VoidCallFixtureName = "voidcall"
 export let RecursionFixtureName = "recursion"
@@ -442,7 +449,7 @@ end 'stagedLinesContaining'
 
 // A function row carries the frame column; a local row nested under it does not, which is what tells
 // the two apart once `dumpSectionRows` has trimmed the indentation away.
-let FunctionRowColumn = "frame="
+export let FunctionRowColumn = "frame="
 let TypeFieldRowPrefix = "+0x"
 let TypeRowPrefix = "["
 
@@ -755,6 +762,51 @@ export function requiredCodeRange(row String, what String) returns (PrintedNumbe
 		range(start, limit) then return (start, limit)
 	end 'theRange'
 end 'requiredCodeRange'
+
+export let MostBytesOfOneInstruction = 15
+
+// The location column of a local row (`reg0`, `[rbp-0x70]`): the token after its code range.
+export function placeOfRow(row String) returns String
+	let tokens = whitespaceTokens(row)
+
+	for (iter, token) in tokens.withIterator() 'eachToken'
+		if token.endsWith(RangeClose) and iter.index() > 0 and (try tokens.get(iter.index() - 1) otherwise continue).startsWith(RangeOpen) 'theRangeLimit'
+			return try tokens.get(iter.index() + 1) otherwise panic("debug tests: a local row names a range and no place after it: {row}")
+		end 'theRangeLimit'
+	end 'eachToken'
+
+	panic("debug tests: a local row carries no code range: {row}")
+end 'placeOfRow'
+
+// The inline site a local row names (`in [1]`), or empty for a local of the function's own text.
+export function inlineSiteOfRow(row String) returns String
+	let tokens = whitespaceTokens(row)
+
+	for (iter, token) in tokens.withIterator() 'eachToken'
+		if token == InlineSiteWord 'theSiteWord'
+			return try tokens.get(iter.index() + 1) otherwise panic("debug tests: a local row names `{InlineSiteWord}` and no site after it: {row}")
+		end 'theSiteWord'
+	end 'eachToken'
+
+	return ""
+end 'inlineSiteOfRow'
+
+let InlineSiteWord = "in"
+
+// How far two rows of one name that sit in different places overlap, or 0 when they do not overlap or
+// share a place.
+export function overlapOfRowsInDifferentPlaces(left String, right String) returns PrintedNumber
+	if placeOfRow(left) == placeOfRow(right) 'thePlaceTheyShare'
+		return 0
+	end 'thePlaceTheyShare'
+
+	let (leftStart, leftLimit) = requiredCodeRange(left, what: "a local row")
+	let (rightStart, rightLimit) = requiredCodeRange(right, what: "a local row")
+	let overlapStart = leftStart if leftStart > rightStart else rightStart
+	let overlapLimit = leftLimit if leftLimit < rightLimit else rightLimit
+
+	return overlapLimit - overlapStart if overlapLimit > overlapStart else 0
+end 'overlapOfRowsInDifferentPlaces'
 
 export function functionCodeStart(executable FilePath, staged FilePath, name String) returns PrintedNumber
 	let (start, _) = requiredCodeRange(dumpedFunctionRow(executable, staged: staged, name: name), what: "`{name}`'s function row")

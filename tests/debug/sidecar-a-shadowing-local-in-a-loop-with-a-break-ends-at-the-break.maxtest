@@ -1,0 +1,20 @@
+let LoopBreakCaseLabel = "sidecar-a-shadowing-local-in-a-loop-with-a-break-ends-at-the-break"
+
+let LoopBreakLocalName = "depth"
+let LoopBreakOuterValue = "146"
+
+test 'a let that shadows an outer let inside a loop left by a break is the outer one again after the loop'
+	let staged = builtFixture(LoopBreakCaseLabel, fixture: LoopBreakFixtureName)
+	let afterAt = anchorLine(staged.join(StagedProgramFileName), anchor: "after")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(afterAt)}", RunCommand, "{PrintCommand} {LoopBreakLocalName}"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(answers.count(), expected: 1, message: "`{PrintCommand} {LoopBreakLocalName}` printed {answers.count()} `{ValueEventName}` events. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let answered = eventAt(answers, index: 0)
+
+	Expect.equal(textOf(answered, node: nodeAt(memberOf(answered, node: answered.root, key: ValueKey), index: 0), key: DisplayKey), expected: LoopBreakOuterValue, message: "the loop body's `{LoopBreakLocalName}` goes out of scope at the `break`, so after the loop the name is the outer one. A loop whose only exit is a `break` has no end-of-body block that leaves the scope. {said}")
+end 'a let that shadows an outer let inside a loop left by a break is the outer one again after the loop'

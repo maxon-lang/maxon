@@ -51,7 +51,7 @@ export type BackendUnitBody
 	export var encoding as FunctionEncodingFacts
 
 	export static function extract(module StdModule, func IrFunction, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns BackendUnitBody
-		return Self{unitModule: extractUnitModule(module, func: func), hasAuthor: not func.isCompilerBuilt(), debugValues: DebugValueRoster.of(func), encoding: FunctionEncodingFacts.of(func, blocks: module.blocks, spans: module.spans, runtimeTier: runtimeTier, spanTable: spanTable)}
+		return Self{unitModule: extractUnitModule(module, func: func), hasAuthor: not func.isCompilerBuilt(), debugValues: DebugValueRoster.of(func, module: module), encoding: FunctionEncodingFacts.of(func, blocks: module.blocks, spans: module.spans, runtimeTier: runtimeTier, spanTable: spanTable)}
 	end 'extract'
 end 'BackendUnitBody'
 
@@ -175,6 +175,7 @@ export typealias DebugSiteKeyColumn = Array with DebugSiteKey
 export typealias DebugNameGroup = int(0 to u32.max) implements ElementIndex
 
 let NoDebugVersionBlock = 0 as BlockId
+let NoDebugVersionAnchor = 0 as ValueId
 
 export typealias DebugNameGroupColumn = Array with DebugNameGroup
 typealias DebugNameGroupByKey = Map with String, DebugNameGroup
@@ -214,6 +215,8 @@ function requireSiteIndexRecordedEarlier(parent MxdbgIndex, site MxdbgIndex)
 	end 'notRecordedBeforeIt'
 end 'requireSiteIndexRecordedEarlier'
 
+export typealias DebugDeclColumn = Array with ElementIndex
+
 export type DebugValueRoster
 	export var valueIds as ValueIdArray
 	export var siteKeys as DebugSiteKeyColumn
@@ -221,8 +224,14 @@ export type DebugValueRoster
 	export var groups as DebugNameGroupColumn
 	export var versionKinds as DebugVersionKindArray
 	export var versionBlocks as BlockIdArray
+	export var versionAnchors as ValueIdArray
+	export var decls as DebugDeclColumn
+	export var scopeFirst as DebugDeclColumn
+	export var scopeCount as DebugDeclColumn
+	export var scopeLost as BoolArray
+	export var scopeEndBlocks as BlockIdArray
 
-	export static function of(func IrFunction) returns DebugValueRoster
+	export static function of(func IrFunction, module StdModule) returns DebugValueRoster
 		let tally = debugValueTallyOf(func)
 
 		if tally == 0 'nothingNamed'
@@ -234,14 +243,26 @@ export type DebugValueRoster
 		var groups = DebugNameGroupColumn.create()
 		var versionKinds = DebugVersionKindArray.create()
 		var versionBlocks = BlockIdArray.create()
+		var versionAnchors = ValueIdArray.create()
+		var decls = DebugDeclColumn.create()
+		var scopeFirst = DebugDeclColumn.create()
+		var scopeCount = DebugDeclColumn.create()
+		var scopeLost = BoolArray.create()
+		var scopeEndBlocks = BlockIdArray.create()
 		var groupByNameAndSite = DebugNameGroupByKey.create()
 		valueIds.reserve(tally)
 		siteKeys.reserve(tally)
 		groups.reserve(tally)
 		versionKinds.reserve(tally)
 		versionBlocks.reserve(tally)
+		versionAnchors.reserve(tally)
+		decls.reserve(tally)
+		scopeFirst.reserve(tally)
+		scopeCount.reserve(tally)
+		scopeLost.reserve(tally)
+		let byId = module.blockIndexById(func) if debugLocalsLeaveTheirScopes(func) else BlockIndexById.create()
 
-		for local in func.debugLocals 'eachBinding'
+		for (declAt, local) in func.debugLocals.withIterator() 'eachBinding'
 			let key = debugSiteKeyOf(local.inlineSite)
 			let groupKey = "{String.from(local.name)}:{key}"
 			var group = groupByNameAndSite.count() as DebugNameGroup
@@ -252,16 +273,29 @@ export type DebugValueRoster
 				groupByNameAndSite.upsert(groupKey, value: group)
 			end 'freshGroup'
 
+			let firstEnd = scopeEndBlocks.count()
+
+			for exit in module.scopeExitsAfterSplits(local, func: func, byId: byId) 'eachScopeExit'
+				scopeEndBlocks.push(exit)
+			end 'eachScopeExit'
+
+			let endCount = scopeEndBlocks.count() - firstEnd
+
 			for version in local.versions 'eachValue'
 				valueIds.push(version.value)
 				siteKeys.push(key)
 				groups.push(group)
 				versionKinds.push(debugVersionKindOf(version.def))
 				versionBlocks.push(debugVersionBlockOf(version.def))
+				versionAnchors.push(debugVersionAnchorOf(version.def))
+				decls.push(declAt.index())
+				scopeFirst.push(firstEnd)
+				scopeCount.push(endCount)
+				scopeLost.push(local.scopeEndLost)
 			end 'eachValue'
 		end 'eachBinding'
 
-		return Self{valueIds: valueIds, siteKeys: siteKeys, parentKeys: siteParentKeysOf(func), groups: groups, versionKinds: versionKinds, versionBlocks: versionBlocks}
+		return Self{valueIds: valueIds, siteKeys: siteKeys, parentKeys: siteParentKeysOf(func), groups: groups, versionKinds: versionKinds, versionBlocks: versionBlocks, versionAnchors: versionAnchors, decls: decls, scopeFirst: scopeFirst, scopeCount: scopeCount, scopeLost: scopeLost, scopeEndBlocks: scopeEndBlocks}
 	end 'of'
 
 	export function siteKeyCount() returns ElementIndex
@@ -269,9 +303,19 @@ export type DebugValueRoster
 	end 'siteKeyCount'
 
 	export static function empty() returns DebugValueRoster
-		return Self{valueIds: ValueIdArray.create(), siteKeys: DebugSiteKeyColumn.create(), parentKeys: DebugSiteKeyColumn.create(), groups: DebugNameGroupColumn.create(), versionKinds: DebugVersionKindArray.create(), versionBlocks: BlockIdArray.create()}
+		return Self{valueIds: ValueIdArray.create(), siteKeys: DebugSiteKeyColumn.create(), parentKeys: DebugSiteKeyColumn.create(), groups: DebugNameGroupColumn.create(), versionKinds: DebugVersionKindArray.create(), versionBlocks: BlockIdArray.create(), versionAnchors: ValueIdArray.create(), decls: DebugDeclColumn.create(), scopeFirst: DebugDeclColumn.create(), scopeCount: DebugDeclColumn.create(), scopeLost: BoolArray.create(), scopeEndBlocks: BlockIdArray.create()}
 	end 'empty'
 end 'DebugValueRoster'
+
+function debugLocalsLeaveTheirScopes(func IrFunction) returns bool
+	for local in func.debugLocals 'eachBinding'
+		if local.scopeEnds.count() > 0 'leaves'
+			return true
+		end 'leaves'
+	end 'eachBinding'
+
+	return false
+end 'debugLocalsLeaveTheirScopes'
 
 // THE MESSAGE ARGUMENT: which function, and its body in a one-slot holder the worker pops (see
 // `BackendUnitReply.afterRunning`).
@@ -292,6 +336,7 @@ export enum DebugVersionKind
 	merged
 	definedSomewhere
 	definedIn
+	definedAfter
 end 'DebugVersionKind'
 
 export typealias DebugVersionKindArray = Array with DebugVersionKind
@@ -301,6 +346,7 @@ function debugVersionKindOf(def DebugVersionDef) returns DebugVersionKind
 		merged gives DebugVersionKind.merged
 		definedSomewhere gives DebugVersionKind.definedSomewhere
 		definedIn gives DebugVersionKind.definedIn
+		definedAfter gives DebugVersionKind.definedAfter
 	end 'def'
 end 'debugVersionKindOf'
 
@@ -309,8 +355,18 @@ function debugVersionBlockOf(def DebugVersionDef) returns BlockId
 		merged or
 		definedSomewhere gives NoDebugVersionBlock
 		definedIn(block) gives block
+		definedAfter(block, _) gives block
 	end 'def'
 end 'debugVersionBlockOf'
+
+function debugVersionAnchorOf(def DebugVersionDef) returns ValueId
+	return match def 'def'
+		merged or
+		definedSomewhere or
+		definedIn gives NoDebugVersionAnchor
+		definedAfter(_, anchor) gives anchor
+	end 'def'
+end 'debugVersionAnchorOf'
 
 // How many values `DebugValueRoster.of` flattens. Its own walk because the splice asks it of every
 // function of every build, and building the roster to measure it would allocate per function for a

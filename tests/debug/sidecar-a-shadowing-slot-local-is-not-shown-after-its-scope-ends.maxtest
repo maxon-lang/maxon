@@ -1,0 +1,35 @@
+let ScopeEndCaseLabel = "sidecar-a-shadowing-slot-local-is-not-shown-after-its-scope-ends"
+
+let ShadowingLocalName = "depth"
+let OuterDepthValue = "146"
+let InnerDepthValue = "157"
+let SlotLocationMark = "[rbp-"
+
+test 'a let that shadows an outer let in a nested block is not read after the block ends'
+	let staged = builtFixture(ScopeEndCaseLabel, fixture: ScopeShadowFixtureName)
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	var slotPlaces = StringArray.create()
+
+	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
+		if firstToken(row) == ShadowingLocalName and row.contains(SlotLocationMark) and not slotPlaces.contains(placeOfRow(row)) 'anotherSlot'
+			slotPlaces.push(placeOfRow(row))
+		end 'anotherSlot'
+	end 'eachLocal'
+
+	Expect.atLeast(slotPlaces.count(), than: 2, message: "the outer and the inner `{ShadowingLocalName}` are not both held in stack slots of `{MainFunctionName}`, so this case no longer asks whether the inner one's row outlives its block. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")
+
+	let afterAt = anchorLine(staged.join(StagedProgramFileName), anchor: "after")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(afterAt)}", RunCommand, "{PrintCommand} {ShadowingLocalName}"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	Expect.equal(answers.count(), expected: 1, message: "`{PrintCommand} {ShadowingLocalName}` printed no `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
+
+	let answered = eventAt(answers, index: 0)
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+
+	Expect.equal(textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey), expected: OuterDepthValue, message: "after the `if` block that declared the inner `{ShadowingLocalName}` ({InnerDepthValue}) the name is the outer one again ({OuterDepthValue}). The inner version's row runs on past its block, because the block's else arm returns and so every block after it is dominated by the inner definition: the previous scope's value wearing the current name. {said}")
+end 'a let that shadows an outer let in a nested block is not read after the block ends'
