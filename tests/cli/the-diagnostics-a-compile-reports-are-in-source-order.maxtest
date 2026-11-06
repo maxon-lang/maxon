@@ -1,0 +1,40 @@
+let DiagnosticOrderCaseDirName = "the-diagnostics-a-compile-reports-are-in-source-order"
+let DiagnosticOrderVariableName = "MAXON_SOURCE_ORDER"
+let DiagnosticOrderReversed = "reversed"
+let DiagnosticOrderOutputStem = "program"
+let DiagnosticLinePrefix = "error "
+let DiagnosticOrderSource = "typealias Small = int(0 to 10)\n\nfunction main() returns ExitCode\n\tnothere()\n\treturn 0\nend 'main'\n\ntypealias Unused = int(0 to 10)\n\nfunction helper(n Small) returns Small\n\treturn n\nend 'helper'\n\nfunction helper(n Small) returns Small\n\treturn n\nend 'helper'\n"
+let UndefinedCallText = "call to undefined function 'nothere'"
+let UnusedAliasText = "unused typealias: 'Unused'"
+let DuplicateFunctionText = "duplicate definition of 'helper'"
+
+function compileDiagnostics(dir FilePath, order String) returns String
+	let output = dir.join("{DiagnosticOrderOutputStem}{order}")
+	let built = spawnCompiler([BuildCommandWord, dir.toString(), "--output={output.toString()}"], staged: dir, environment: Environment.inheritUpdating([DiagnosticOrderVariableName: order]))
+	var diagnostics = StringArray.create()
+
+	for line in built.stderr.split("\n") 'eachLine'
+		if line.startsWith(DiagnosticLinePrefix) 'aDiagnostic'
+			diagnostics.push(line)
+		end 'aDiagnostic'
+	end 'eachLine'
+
+	return listedLines(diagnostics)
+end 'compileDiagnostics'
+
+test 'a compile reports its diagnostics in source order whatever phase found each, and the same in any declaration order'
+	let dir = freshCaseDir(DiagnosticOrderCaseDirName)
+	writeStagedFile(dir.join(StagedProgramFileName), content: DiagnosticOrderSource)
+
+	let natural = compileDiagnostics(dir, order: "")
+	let reversed = compileDiagnostics(dir, order: DiagnosticOrderReversed)
+
+	Expect.isFalse(natural.isEmpty(), message: "the program holds three errors and compiled")
+	Expect.equal(natural, expected: reversed, message: "the diagnostics differ between the natural source order and {DiagnosticOrderVariableName}={DiagnosticOrderReversed}. Natural wrote: {natural}. Reversed wrote: {reversed}")
+
+	let undefinedAt = try natural.findFirst(UndefinedCallText) otherwise panic("the build wrote no undefined-call diagnostic: {natural}")
+	let unusedAt = try natural.findFirst(UnusedAliasText) otherwise panic("the build wrote no unused-alias diagnostic: {natural}")
+	let duplicateAt = try natural.findFirst(DuplicateFunctionText) otherwise panic("the build wrote no duplicate-function diagnostic: {natural}")
+
+	Expect.isTrue(undefinedAt < unusedAt and unusedAt < duplicateAt, message: "the diagnostics are not in the order their lines hold in the file (the call on line 4, the alias on line 8, the duplicate on line 14). The compile wrote: {natural}")
+end 'a compile reports its diagnostics in source order whatever phase found each, and the same in any declaration order'

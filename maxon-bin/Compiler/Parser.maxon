@@ -4386,9 +4386,11 @@ end 'DeclaredHeadForm'
 type MintedTest
 	export let symbol as ByteArray
 	export let prose as ByteArray
+	export let line as LineNumber
+	export let column as ColumnNumber
 
-	static function create(symbol ByteArray, prose ByteArray) returns MintedTest
-		return Self{symbol: symbol, prose: prose}
+	static function create(symbol ByteArray, prose ByteArray, line LineNumber, column ColumnNumber) returns MintedTest
+		return Self{symbol: symbol, prose: prose, line: line, column: column}
 	end 'create'
 end 'MintedTest'
 
@@ -19679,6 +19681,8 @@ export type Parser
 	// rather than re-derived.
 	var enclosingTypeBodyStart as ElementIndex
 
+	var enclosingBodyIsWalkable as bool
+
 	// ⭐ **THE INTERFACE WHOSE EXTENSION BODY IS BEING PARSED** — empty everywhere else. An extension body may
 	// call the interface's own REQUIREMENTS as bare sibling calls (`return inc(tag())`), and those methods are
 	// declared on the CONFORMER, in another declaration and possibly another file, so no token walk of this
@@ -20188,6 +20192,7 @@ export type Parser
 			siblingReceiverScanType: EnclosingTypeScope.fileScope,
 			siblingReceiverScanBody: 0,
 			enclosingTypeBodyStart: 0,
+			enclosingBodyIsWalkable: false,
 			extensionInterfaceName: InterfaceName.none,
 			extensionAssociated: ExtensionAssociatedScope.empty(),
 			genericAliasScratch: GenericAliasEntryArray.create(),
@@ -20295,6 +20300,7 @@ export type Parser
 		self.artifact.memberAccessedTypeNames = self.memberAccessedTypeNames
 
 		self.canonicalizeFunctionOrder()
+		self.canonicalizeSignatureOrder()
 
 		for position in 0 upto self.artifact.module.functions.count() 'eachFunction'
 			var published = try self.artifact.module.functions.get(position) otherwise panic("parseModule: functions.get OOB at {position}")
@@ -20342,6 +20348,12 @@ export type Parser
 		self.artifact.valueOrigins.remapFunctionIndices(live, newIndexOfOld: newIndexOfOld)
 		self.artifact.deferredChains.remapFunctionIndices(newIndexOfOld)
 	end 'canonicalizeFunctionOrder'
+
+	function canonicalizeSignatureOrder()
+		self.artifact.funcSignatures.sortBy(function(left FuncSignatureEntry, right FuncSignatureEntry) gives compareFuncSignatureEntries(left, right: right))
+		self.artifact.typeNameDecls.sortBy(function(left TypeNameDecl, right TypeNameDecl) gives compareTypeNameDecls(left, right: right))
+		self.artifact.conformances.sortBy(function(left ConformanceDecl, right ConformanceDecl) gives compareConformanceDecls(left, right: right))
+	end 'canonicalizeSignatureOrder'
 
 	function readTopLevelDeclaration() throws SourceParseError
 		let start = self.current()
@@ -26357,6 +26369,7 @@ export type Parser
 	// conformance relation rather than from any token in the extension's own file.
 	function enterTypeScope(name ByteArray, isEnum bool)
 		self.enclosingType = EnclosingTypeScope.typeBody(name)
+		self.enclosingBodyIsWalkable = false
 		self.enclosingBodySharesTheTypesFile = true
 		self.enclosingTypeIsEnum = isEnum
 		self.enclosingTypeParams = self.emptyTypeParams
@@ -26493,6 +26506,7 @@ export type Parser
 	// than a fresh one, so closing a type scope allocates nothing.
 	function closeTypeParamScope()
 		self.enclosingType = EnclosingTypeScope.fileScope
+		self.enclosingBodyIsWalkable = false
 
 		// Cleared with the name it belongs to (see `enterTypeScope`): a stale `true` at file scope would tell
 		// `enclosingSelfType` a `Self` it can no longer resolve at all is an enum's.
@@ -30300,6 +30314,7 @@ export type Parser
 		// here once a method body's bare call needs it. The memo is invalidated implicitly — its key still names
 		// the previous type, so the first call in this body rebuilds against this start.
 		self.enclosingTypeBodyStart = self.pos
+		self.enclosingBodyIsWalkable = true
 
 		var memberNames = TypeMemberNames.create()
 
@@ -30565,6 +30580,7 @@ export type Parser
 			// `ensureSiblingReceivers`, which is what makes a bare `tag()` resolve against a REQUIREMENT the
 			// index files under no conformer. See `extensionInterfaceName`.
 			self.enclosingTypeBodyStart = bodyStart
+			self.enclosingBodyIsWalkable = true
 			self.extensionInterfaceName = self.extendedInterfaceName(header)
 
 			while true 'members'
@@ -31573,6 +31589,7 @@ export type Parser
 		// not optional bookkeeping: left at the PREVIOUS declaration's body, a bare `isStop()` inside an enum
 		// method would resolve against another type's method list.
 		self.enclosingTypeBodyStart = self.pos
+		self.enclosingBodyIsWalkable = true
 
 		while true 'members'
 			self.skipNewlines()
@@ -33449,11 +33466,15 @@ export type Parser
 	function requireUnmintedTestName(symbol ByteArray, nameTok Token) throws SourceParseError
 		for minted in self.mintedTests 'eachMintedTest'
 			if minted.symbol.equals(symbol) 'collides'
+				if minted.line > nameTok.line or (minted.line == nameTok.line and minted.column > nameTok.column) 'theMintedOneIsLater'
+					throw SourceParseError.duplicateTestName(String.from(nameTok.value), second: String.from(minted.prose), symbol: String.from(symbol), line: minted.line, column: minted.column)
+				end 'theMintedOneIsLater'
+
 				throw SourceParseError.duplicateTestName(String.from(minted.prose), second: String.from(nameTok.value), symbol: String.from(symbol), line: nameTok.line, column: nameTok.column)
 			end 'collides'
 		end 'eachMintedTest'
 
-		self.mintedTests.push(MintedTest.create(symbol, prose: nameTok.value))
+		self.mintedTests.push(MintedTest.create(symbol, prose: nameTok.value, line: nameTok.line, column: nameTok.column))
 	end 'requireUnmintedTestName'
 
 	// ⭐ **A LABEL WRITTEN AFTER A BLOCK'S `end` MUST REPEAT THE LABEL ITS HEADER OPENED**, on every block the
@@ -33941,7 +33962,7 @@ export type Parser
 	end 'advancePastDeclarationEnd'
 
 	function beginsALineAt(index ElementIndex) returns bool
-		return index > 0 and self.kindAt(index) != TokenKind.newline and self.tokenAt(index).line > self.tokenAt(index - 1).line
+		return index > 0 and self.kindAt(index) != TokenKind.newline and self.tokenAt(index).line != self.tokenAt(index - 1).line
 	end 'beginsALineAt'
 
 	function opensADeclarationAt(index ElementIndex) returns bool
@@ -92916,6 +92937,10 @@ export type Parser
 	// `E3004 call to undefined function 'inner'`; a case named `while` does the opposite, running PAST the
 	// enum's own `end` and adopting a LATER type's `helper` as a sibling. Both are legal programs.
 	function ensureSiblingReceivers()
+		if not self.enclosingBodyIsWalkable 'noBodyToWalk'
+			return
+		end 'noBodyToWalk'
+
 		if self.siblingReceiverScanType.names(self.enclosingTypeName()) and self.siblingReceiverScanBody == self.enclosingTypeBodyStart 'memoHit'
 			return
 		end 'memoHit'

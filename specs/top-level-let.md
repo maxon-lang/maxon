@@ -1046,7 +1046,7 @@ end 'main'
 export let B = A + 1
 ```
 ```maxoncstderr
-error E2012: api/<fragment>:10:12: Circular dependency detected among global constants: A, B
+error E2012: app/<fragment>:3:12: Circular dependency detected among global constants: B, A
 ```
 
 <!-- test: error.file-private-constant-cross-file -->
@@ -1506,8 +1506,8 @@ end 'main'
 typealias Unused = int(0 to 5)
 ```
 ```maxoncstderr
-error E3062: <fragment>:10:11: unused typealias: 'Unused'
 error E3004: <fragment>:3:9: call to undefined function 'nothere'
+error E3062: <fragment>:10:11: unused typealias: 'Unused'
 ```
 
 <!-- test: error.a-refused-function-body-call-beside-an-unused-typealias-reports-both -->
@@ -1523,8 +1523,8 @@ end 'main'
 typealias Unused = int(0 to 5)
 ```
 ```maxoncstderr
-error E3062: <fragment>:9:11: unused typealias: 'Unused'
 error E3004: <fragment>:4:10: call to undefined function 'nothere'
+error E3062: <fragment>:9:11: unused typealias: 'Unused'
 ```
 
 <!-- test: error.a-non-constant-initializer-beside-an-undefined-call-in-another-function-reports-both -->
@@ -1548,8 +1548,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:11:9: call to undefined function 'nothere'
 error E2045: <fragment>:8:14: Function calls are not allowed in global variable initializers; 'compute()' is not a constant expression
+error E3004: <fragment>:11:9: call to undefined function 'nothere'
 ```
 
 <!-- test: error.the-uses-of-a-refused-local-binding-report-only-the-refusal -->
@@ -1591,8 +1591,8 @@ end 'main'
 typealias Unused = int(0 to 5)
 ```
 ```maxoncstderr
-error E3062: <fragment>:15:11: unused typealias: 'Unused'
 error E3005: <fragment>:11:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode' — cast the argument with 'as Small'
+error E3062: <fragment>:15:11: unused typealias: 'Unused'
 ```
 
 <!-- test: error.a-parse-error-in-one-file-beside-an-undefined-call-in-another-reports-both -->
@@ -1611,8 +1611,8 @@ function broken() returns ExitCode
 end 'broken'
 ```
 ```maxoncstderr
-error E2010: <fragment>:10:7: Expected '=' but got ':'
 error E3004: <fragment>:4:10: call to undefined function 'nothere'
+error E2010: <fragment>:10:7: Expected '=' but got ':'
 ```
 
 <!-- test: error.a-failed-file-beside-a-same-named-function-reports-the-healthy-files-argument-mistake -->
@@ -2357,8 +2357,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:3: Unsupported: a tuple-assignment target naming the module-scope binding 'G' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)
 error E3004: <fragment>:4:9: call to undefined function 'nothere'
+error E2015: <fragment>:12:3: Unsupported: a tuple-assignment target naming the module-scope binding 'G' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)
 ```
 
 <!-- test: error.a-tuple-assignment-to-a-module-var-beside-a-refused-call-in-another-function-body -->
@@ -2384,8 +2384,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:17:3: Unsupported: a tuple-assignment target naming the module-scope binding 'G' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)
 error E3004: <fragment>:11:10: call to undefined function 'nothere'
+error E2015: <fragment>:17:3: Unsupported: a tuple-assignment target naming the module-scope binding 'G' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)
 ```
 
 <!-- test: error.a-refused-call-inside-a-record-literal-reports-the-call-and-the-cast-before-it -->
@@ -2410,8 +2410,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:13:36: call to undefined function 'nothere'
 error E3010: <fragment>:13:23: unneeded cast: the literal 1 already fits in 'Small'
+error E3004: <fragment>:13:36: call to undefined function 'nothere'
 ```
 
 <!-- test: error.a-refused-call-inside-a-record-literal-in-a-function-body-reports-the-call-and-the-cast-before-it -->
@@ -2434,8 +2434,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:14:37: call to undefined function 'nothere'
 error E3010: <fragment>:14:24: unneeded cast: the literal 1 already fits in 'Small'
+error E3004: <fragment>:14:37: call to undefined function 'nothere'
 ```
 
 <!-- test: error.uses-of-a-refused-call-constant-report-the-call-once -->
@@ -3352,8 +3352,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:25:29: argument `seed` of `spawn Maker.create(…)` is a `MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
 error E3004: <fragment>:21:9: call to undefined function 'nothere'
+error E3138: <fragment>:25:29: argument `seed` of `spawn Maker.create(…)` is a `MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
 ```
 
 <!-- test: error.an-unclosed-bracket-ends-at-a-column-one-module-function -->
@@ -3780,8 +3780,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: <fragment>:9:11: Unknown type 'Nosuch'
 error E3011: <fragment>:4:20: Unknown type 'Bag'
+error E3011: <fragment>:9:11: Unknown type 'Nosuch'
 ```
 
 <!-- test: error.a-refused-extension-hides-a-call-to-its-own-member-on-the-extended-type -->

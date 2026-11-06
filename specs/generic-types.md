@@ -1861,8 +1861,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:9: Unsupported: a field access on 't': its type instantiates 'Nonexistent', which no file declares as a generic `type`, so it has no fields — the `with` that names it is the error
 error E2055: <fragment>:3:22: Type 'Nonexistent' has no associated types
+error E2015: <fragment>:6:9: Unsupported: a field access on 't': its type instantiates 'Nonexistent', which no file declares as a generic `type`, so it has no fields — the `with` that names it is the error
 ```
 
 <!-- test: error.undeclared-generic-base-reaches-no-layout-query -->
@@ -1973,8 +1973,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:9: Unsupported: sizeof of a type that instantiates 'Nonexistent', which no file declares as a generic `type`, so it has no box to size — the `with` that names it is the error
 error E2055: <fragment>:3:20: Type 'Nonexistent' has no associated types
+error E2015: <fragment>:6:9: Unsupported: sizeof of a type that instantiates 'Nonexistent', which no file declares as a generic `type`, so it has no box to size — the `with` that names it is the error
 ```
 
 <!-- test: error.bare-int-type-arg -->

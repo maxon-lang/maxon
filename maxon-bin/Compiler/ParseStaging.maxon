@@ -1921,7 +1921,8 @@ module function nominalNameCollisionsOf(decls TypeNameDeclArray, paths FilePathA
 
 	for entry in sourceFilesInPathOrder(paths) 'eachInPathOrder'
 		let path = try paths.get(entry.position) otherwise panic("nominalNameCollisionsOf: paths.get OOB at {entry.position} below count {paths.count()}")
-		view declared = try byFile.get(path.toString()) otherwise continue
+		var declared = (try byFile.get(path.toString()) otherwise continue).clone()
+		declared.sortBy(function(left TypeNameDecl, right TypeNameDecl) gives compareTypeNameDecls(left, right: right))
 
 		for collision in registry.recordAll(declared, roster: ShadowSpellingRoster.none(), directories: directories) 'eachCollisionHere'
 			if isTypeAliasDecl(collision.decl.claim.kind) or isTypeAliasDecl(collision.winner.claim.kind) 'anAliasIsInvolved'
@@ -2042,6 +2043,7 @@ export function checkTypeSymbolNamespace(project Project, signatures ProgramSign
 	// which instantiation of a colliding pair is the NEWCOMER is a property of the program rather than
 	// of a map's iteration.
 	var claimed = CompiledTypeNameClaimMap.create()
+	var contested = ContestedTypeNameMap.create()
 
 	for gid in 0 upto instantiationCount 'eachInstantiation'
 		if instanceNamesATypeFromAFailedFile(project, signatures: signatures, gid: gid) 'aTypeOfAFileThatFailedToParse'
@@ -2053,14 +2055,106 @@ export function checkTypeSymbolNamespace(project Project, signatures ProgramSign
 		// A rejected newcomer is deliberately NOT recorded: the incumbent stays the one every later
 		// instantiation is measured against, which is `TypeNameRegistry`'s own rule (a rejected
 		// declaration never displaces) applied to the compiled half.
-		if let incumbent = try claimed.get(compiled) 'earlierInstantiation'
-			reportInstantiationPairCollision(project, signatures: signatures, compiled: compiled, incumbent: incumbent, newcomer: gid)
+		if let first = try claimed.get(compiled) 'earlierInstantiation'
+			var members = try contested.get(compiled) otherwise GenericInstanceIdArray.create()
+
+			if members.isEmpty() 'firstCollision'
+				members.push(first)
+			end 'firstCollision'
+
+			members.push(gid)
+			contested.upsert(compiled.clone(), value: members)
 			continue
 		end 'earlierInstantiation'
 
 		claimed.upsert(compiled, value: gid)
 	end 'eachInstantiation'
+
+	reportContestedTypeNames(project, signatures: signatures, contested: contested)
 end 'checkTypeSymbolNamespace'
+
+typealias ContestedTypeNameMap = Map with (ByteArray, GenericInstanceIdArray)
+
+typealias InstantiationClaimArray = Array with InstantiationClaim
+
+union InstantiationPlace
+	written(let position DeclarationPosition)
+	unwritten
+
+	function isWritten() returns bool
+		return match self 'place'
+			written gives true
+			unwritten gives false
+		end 'place'
+	end 'isWritten'
+
+	function writtenPosition() returns DeclarationPosition throws AbsentError
+		match self 'place'
+			written(position) then return position
+			unwritten then throw AbsentError.absent
+		end 'place'
+	end 'writtenPosition'
+end 'InstantiationPlace'
+
+type InstantiationClaim
+	export let gid as GenericInstanceId
+	let place as InstantiationPlace
+	let rendered as ByteArray
+
+	static function of(project Project, signatures ProgramSignatures, gid GenericInstanceId) returns InstantiationClaim
+		let rendered = renderInstantiation(signatures, gid: gid).toByteArray()
+
+		match earliestInstantiationSite(project, signatures: signatures, gid: gid) 'anchor'
+			anchored(site) then return Self{gid: gid, place: InstantiationPlace.written(DeclarationPosition.of(project.emissionRanks, path: site.filePath, line: site.nameLine, column: site.nameColumn, kind: "the instantiation", name: rendered)), rendered: rendered}
+			unanchored then return Self{gid: gid, place: InstantiationPlace.unwritten, rendered: rendered}
+		end 'anchor'
+	end 'of'
+
+	function compare(other InstantiationClaim) returns Ordering
+		let mine = try self.place.writtenPosition() otherwise 'mineIsUnwritten'
+			return Ordering.greaterThan if other.place.isWritten() else compareBytesOrdinally(other.rendered, right: self.rendered)
+		end 'mineIsUnwritten'
+
+		let theirs = try other.place.writtenPosition() otherwise 'theirsIsUnwritten'
+			return Ordering.lessThan
+		end 'theirsIsUnwritten'
+
+		let byPosition = mine.compare(theirs)
+
+		if byPosition != Ordering.equalTo 'positionsDiffer'
+			return byPosition
+		end 'positionsDiffer'
+
+		return compareBytesOrdinally(other.rendered, right: self.rendered)
+	end 'compare'
+end 'InstantiationClaim'
+
+function reportContestedTypeNames(project Project, signatures ProgramSignatures, contested ContestedTypeNameMap)
+	var names = NameRoster.create()
+
+	for (compiled, _) in contested 'eachContestedName'
+		names.push(compiled.clone())
+	end 'eachContestedName'
+
+	names.sortBy(function(left ByteArray, right ByteArray) gives compareBytesOrdinally(left, right: right))
+
+	for compiled in names 'eachInOrder'
+		let members = try contested.get(compiled) otherwise panic("reportContestedTypeNames: '{String.from(compiled)}' was filed contested by the walk that built this map")
+		var claims = InstantiationClaimArray.create()
+
+		for gid in members 'eachMember'
+			claims.push(InstantiationClaim.of(project, signatures: signatures, gid: gid))
+		end 'eachMember'
+
+		claims.sortBy(function(left InstantiationClaim, right InstantiationClaim) gives left.compare(right))
+		let incumbent = try claims.get(0) otherwise panic("reportContestedTypeNames: '{String.from(compiled)}' is contested by fewer than two instantiations")
+
+		for position in 1 upto claims.count() 'eachNewcomer'
+			let newcomer = try claims.get(position) otherwise panic("reportContestedTypeNames: claims.get OOB at {position}")
+			reportInstantiationPairCollision(project, signatures: signatures, compiled: compiled, incumbent: incumbent.gid, newcomer: newcomer.gid)
+		end 'eachNewcomer'
+	end 'eachInOrder'
+end 'reportContestedTypeNames'
 
 // ⭐ **A GENERIC ALIAS WHOSE TYPE ARGUMENTS LEAD BACK TO IT IS REFUSED (E2012, or E3091 when no path is
 // provable).** `typealias A = Box with A`, and the mutual `A = Box with B` / `B = Box with A`, describe
@@ -2154,7 +2248,7 @@ end 'reportUnsettledAliasResolution'
 function reportInstantiationPairCollision(project Project, signatures ProgramSignatures, compiled ByteArray, incumbent GenericInstanceId, newcomer GenericInstanceId)
 	let message = "duplicate definition of '{String.from(compiled)}' — the generic instantiations `{renderInstantiation(signatures, gid: incumbent)}` and `{renderInstantiation(signatures, gid: newcomer)}` compile to that same name"
 
-	match instantiationAnchor(signatures, newcomer: newcomer, incumbent: incumbent) 'anchor'
+	match instantiationAnchor(project, signatures: signatures, newcomer: newcomer, incumbent: incumbent) 'anchor'
 		anchored(site) then reportPositioned(project, code: ErrorCode.duplicateDefinition, message: message, line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 
 		// No `typealias` names EITHER instantiation, so both are nested (`Box with (Pair with …)`) and
@@ -2171,21 +2265,36 @@ end 'reportInstantiationPairCollision'
 // been found — never on a program that compiles — so a gid⇒site index would cost every build to serve
 // none. One pass answers both halves: a newcomer hit returns at once, and an incumbent hit is retained
 // as the fallback.
-function instantiationAnchor(signatures ProgramSignatures, newcomer GenericInstanceId, incumbent GenericInstanceId) returns InstantiationAnchor
-	var fallback = InstantiationAnchor.unanchored
+function instantiationAnchor(project Project, signatures ProgramSignatures, newcomer GenericInstanceId, incumbent GenericInstanceId) returns InstantiationAnchor
+	match earliestInstantiationSite(project, signatures: signatures, gid: newcomer) 'newcomerSite'
+		anchored(site) then return InstantiationAnchor.anchored(site)
+		unanchored then return earliestInstantiationSite(project, signatures: signatures, gid: incumbent)
+	end 'newcomerSite'
+end 'instantiationAnchor'
+
+function earliestInstantiationSite(project Project, signatures ProgramSignatures, gid GenericInstanceId) returns InstantiationAnchor
+	var earliest = InstantiationAnchor.unanchored
+	var earliestPlace = InstantiationPlace.unwritten
 
 	for site in signatures.instantiationSites() 'eachSite'
-		if site.gid == newcomer 'namesTheNewcomer'
-			return InstantiationAnchor.anchored(site)
-		end 'namesTheNewcomer'
+		if site.gid != gid 'namesAnother'
+			continue
+		end 'namesAnother'
 
-		if site.gid == incumbent 'namesTheIncumbent'
-			fallback = InstantiationAnchor.anchored(site)
-		end 'namesTheIncumbent'
+		let position = DeclarationPosition.of(project.emissionRanks, path: site.filePath, line: site.nameLine, column: site.nameColumn, kind: "the instantiation", name: renderInstantiation(signatures, gid: gid).toByteArray())
+
+		if let held = try earliestPlace.writtenPosition() 'aSiteIsHeld'
+			if position.compare(held) != Ordering.lessThan 'notEarlier'
+				continue
+			end 'notEarlier'
+		end 'aSiteIsHeld'
+
+		earliest = InstantiationAnchor.anchored(site)
+		earliestPlace = InstantiationPlace.written(position)
 	end 'eachSite'
 
-	return fallback
-end 'instantiationAnchor'
+	return earliest
+end 'earliestInstantiationSite'
 
 // A colliding instantiation spelled back out the way its author wrote it — `Box with String`,
 // `Pair with (Box_Int, Str)`. A single argument takes no parentheses and a list does, matching the

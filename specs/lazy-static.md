@@ -355,6 +355,48 @@ end 'main'
 11 22
 ```
 
+<!-- test: lazy-static.a-free-function-declared-above-the-type-it-returns -->
+### A static initialized by a free function declared above the type it returns
+
+The free function precedes both the type that calls it and the type it returns. A bare call inside a type body
+names the free function, whatever the declarations around it are.
+
+```maxon
+typealias Count = int(0 to u64.max)
+
+function buildPair() returns Pair
+	return Pair.create(11, y: 22)
+end 'buildPair'
+
+type Registry
+	static let cachedPair = buildPair()
+
+	static function getX() returns Count
+		return Registry.cachedPair.x
+	end 'getX'
+end 'Registry'
+
+type Pair
+	export var x as Count
+	export var y as Count
+
+	static function create(x Count, y Count) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	print("{Registry.getX()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+11
+```
+
 <!-- test: lazy-static.two-loads-in-one-function -->
 ### Two loads of one static in the same function
 

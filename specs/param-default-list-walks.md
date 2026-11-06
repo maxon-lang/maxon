@@ -978,3 +978,50 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: a-bare-call-in-a-method-default-means-the-free-function-beside-a-later-types-method-of-that-name -->
+A default expression is parsed after every body of its file, in the scope of the type that declares it. A later type's method named like a free function must not become a sibling of this type.
+```maxon
+typealias Count = int(0 to 100)
+
+function helper() returns Count
+	return 7
+end 'helper'
+
+type First
+	export var seed as Count
+
+	static function create() returns Self
+		return Self{seed: 1}
+	end 'create'
+
+	function run(extra Count = helper()) returns Count
+		return self.seed + extra
+	end 'run'
+end 'First'
+
+type Last
+	export var seed as Count
+
+	static function create() returns Self
+		return Self{seed: 2}
+	end 'create'
+
+	static function helper() returns Count
+		return 50
+	end 'helper'
+end 'Last'
+
+function main() returns ExitCode
+	let first = First.create()
+	let last = Last.create()
+	print("{first.run()} {last.seed} {Last.helper()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 2 50
+```

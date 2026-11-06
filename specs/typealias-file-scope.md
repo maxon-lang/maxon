@@ -2375,8 +2375,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: lib/<fragment>:24:17: exported function 'lib.makeSource' names file-private typealias 'Items' in its return type
 error E3167: lib/<fragment>:22:18: exported typealias 'lib.ItemsSource' names file-private typealias 'Items' in its target
+error E3167: lib/<fragment>:24:17: exported function 'lib.makeSource' names file-private typealias 'Items' in its return type
 ```
 
 <!-- test: error.an-array-literal-stored-into-another-files-field-is-refused-at-the-field -->

@@ -7362,8 +7362,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:21:2: cannot pass the result of 'get', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
 error E3078: <fragment>:20:6: cannot store the result of 'get', which may share storage with immutable variable 'Origins', into mutable place 'an element of the container push writes'; use clone()
+error E3159: <fragment>:21:2: cannot pass the result of 'get', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
 ```
 
 <!-- test: error.a-module-let-element-returned-by-a-closure-handed-to-a-writing-callee-is-refused -->
@@ -7546,8 +7546,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:20:2: cannot pass the result of 'get', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
 error E3078: <fragment>:19:13: cannot store the result of 'get', which may share storage with immutable variable 'Origins', into mutable place 'an element of the array literal'; use clone()
+error E3159: <fragment>:20:2: cannot pass the result of 'get', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
 ```
 
 <!-- test: error.a-module-let-element-upserted-into-a-var-map-is-refused -->

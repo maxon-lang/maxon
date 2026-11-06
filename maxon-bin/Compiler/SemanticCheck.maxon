@@ -3075,8 +3075,10 @@ end 'refuseAtAFunctionValueLanding'
 
 function refuseAtEachWritingConformer(project Project, module MaxonModule, func IrFunction, bodies CallLandingBodies, argId ValueId, named WriteBlame, position ParamCount, requirement String, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath) returns bool
 	var reported = false
+	var writers = bodies.impls.clone()
+	writers.sort()
 
-	for index in bodies.impls 'eachConformer'
+	for index in writers 'eachWriterInDeclarationOrder'
 		let writer = try module.functions.get(index) otherwise panic("refuseAtEachWritingConformer: function index {index} is past the module's functions")
 		let (mask, recordWriteMask) = mutationSummary.writesOf(writer.name)
 
@@ -3086,7 +3088,7 @@ function refuseAtEachWritingConformer(project Project, module MaxonModule, func 
 
 		let blame = blameOfAWrittenArgument(named, rebindsIt: named.isRebindOnly() and programSignaturesIn(project, asker: "refuseAtEachWritingConformer").paramIsByRef(writer.name, index: position))
 		reported = refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blame, parameter: provenance.bodyParamName(index, position: position), asksWrittenArguments: false, provenance: provenance, callRange: callRange, filePath: filePath, report: ReportSite.dispatchedTo(functionSourceName(project, func: writer), via: requirement)) or reported
-	end 'eachConformer'
+	end 'eachWriterInDeclarationOrder'
 
 	return reported
 end 'refuseAtEachWritingConformer'

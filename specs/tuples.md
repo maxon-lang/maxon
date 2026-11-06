@@ -1639,8 +1639,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: pkg/<fragment>:6:13: exported field 'pkg.Holder.pair' names file-private typealias 'Bytes' in its type
 error E3005: app/<fragment>:25:9: argument type mismatch for 'p': expected '(Bytes, String)', got '(pkg.Bytes, String)'
+error E3167: pkg/<fragment>:6:13: exported field 'pkg.Holder.pair' names file-private typealias 'Bytes' in its type
 ```
 
 ### A tuple typealias as a GENERIC TYPE ARGUMENT — the RAW instance-argument doors
@@ -3136,8 +3136,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: pkg/<fragment>:8:13: exported field 'pkg.Holder.pair' names file-private typealias 'Xs' in its type
 error E3005: app/<fragment>:24:9: argument type mismatch for 'p': expected '(Xs, Item)', got '(pkg.Xs, Item)'
+error E3167: pkg/<fragment>:8:13: exported field 'pkg.Holder.pair' names file-private typealias 'Xs' in its type
 ```
 
 <!-- test: error.two-tuples-differing-only-by-brand-name-the-brands -->

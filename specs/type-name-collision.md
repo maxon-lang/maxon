@@ -828,8 +828,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3061: b/<fragment>:15:11: Duplicate typealias 'G'
 error E3062: a/<fragment>:10:11: unused typealias: 'G'
+error E3061: b/<fragment>:15:11: Duplicate typealias 'G'
 ```
 
 
@@ -1388,9 +1388,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
 error E3062: <fragment>:33:11: unused typealias: 'W1'
 error E3062: <fragment>:34:11: unused typealias: 'H1'
+error E3006: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
 ```
 
 
@@ -1440,9 +1440,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3062: <fragment>:33:11: unused typealias: 'Q1'
 error E3006: <fragment>:34:11: duplicate definition of 'Pair_A_B_C_D' — the generic instantiations `Pair with (A_B_C, D)` and `Pair with (A_B, C_D)` compile to that same name
 error E3006: <fragment>:35:11: duplicate definition of 'Pair_A_B_C_D' — the generic instantiations `Pair with (A_B_C, D)` and `Pair with (A, B_C_D)` compile to that same name
-error E3062: <fragment>:33:11: unused typealias: 'Q1'
 ```
 
 
@@ -1489,8 +1489,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:30:11: duplicate definition of '__Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
 error E3062: <fragment>:29:11: unused typealias: 'P1'
+error E3006: <fragment>:30:11: duplicate definition of '__Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
 ```
 
 

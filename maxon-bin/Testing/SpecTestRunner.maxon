@@ -692,6 +692,8 @@ module enum CompileVerdict
 	// what they leave in `CompileAnswer.diagnostics` is not `Diagnostic.render()` output and must
 	// never be read as though it were.
 	driverFailed
+
+	sourceOrderUnplaceable
 end 'CompileVerdict'
 
 // ⭐⭐ **WHAT ONE COMPILE ANSWERED — the shape that replaced `ProcessCapture` on this path.**
@@ -723,7 +725,8 @@ module type CompileAnswer
 		return match self.verdict 'v'
 			built gives true
 			reportedDiagnostics or
-			driverFailed gives false
+			driverFailed or
+			sourceOrderUnplaceable gives false
 		end 'v'
 	end 'isBuilt'
 end 'CompileAnswer'
@@ -1507,7 +1510,8 @@ end 'TargetRefusal'
 module function targetRefusalIn(compile CompileAnswer) returns TargetRefusal
 	let diagnosticsWereReported = match compile.verdict 'v'
 		built or
-		driverFailed gives false
+		driverFailed or
+		sourceOrderUnplaceable gives false
 		reportedDiagnostics gives true
 	end 'v'
 
@@ -1561,6 +1565,10 @@ end 'targetRefusalIn'
 // the diagnostics are the artifact under test and a disagreement is an assertion that did not hold. Only
 // a case that expected to BUILD AND RUN can be "not runnable here", and that is the one this converts.
 function refusalThatSkips(outcome TestOutcome, test SpecTest, compile CompileAnswer) returns TargetRefusal
+	if compile.verdict == CompileVerdict.sourceOrderUnplaceable 'theOrderCannotBeApplied'
+		return TargetRefusal.refused(compile.diagnostics)
+	end 'theOrderCannotBeApplied'
+
 	if outcome.isPass() 'itRanHere'
 		return TargetRefusal.notRefused
 	end 'itRanHere'
@@ -1659,7 +1667,7 @@ export function reportTargetSkips(results SpecTestResultArray, effectiveTarget T
 
 	// The blank-at-zero guard and the entry loop are `reportResultNote`'s, shared with every other trailer
 	// in this column — see `IndentedReport` for why the several are one shape.
-	let headline = "note: {entries.count()} case(s) SKIPPED on {targetToString(effectiveTarget)} — NOT RUN and NOT PASSED. The compiler refused a construct this target has no implementation for ({ErrorCode.targetUnsupportedConstruct.rawValue}), which is a fact about the TARGET and not about the case:\n"
+	let headline = "note: {entries.count()} case(s) SKIPPED on {targetToString(effectiveTarget)} — NOT RUN and NOT PASSED. The compiler refused them: a construct this target has no implementation for ({ErrorCode.targetUnsupportedConstruct.rawValue}), which is a fact about the TARGET, or source the {SourceOrderVariable} order cannot place, which is a fact about the TEXT. Neither is about the case:\n"
 	reportResultNote(entries, headline: headline)
 end 'reportTargetSkips'
 
@@ -2428,7 +2436,7 @@ end 'compileOneTest'
 module function compileVerdictOf(e CompileError) returns CompileVerdict
 	match e.failure() 'failure'
 		reportedDiagnostics then return CompileVerdict.reportedDiagnostics
-		driverFailed then return CompileVerdict.driverFailed
+		driverFailed then return CompileVerdict.sourceOrderUnplaceable if e.refusesTheSourceOrder() else CompileVerdict.driverFailed
 		abandoned then panic("compileVerdictOf: a spec case compiles under a session no interest can lapse on, so nothing abandons it")
 	end 'failure'
 end 'compileVerdictOf'

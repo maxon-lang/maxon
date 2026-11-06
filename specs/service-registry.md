@@ -1767,9 +1767,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3136: <fragment>:22:22: `interface Pinger` requires `ping`, but no service implementing it declares `ping` as an `export` instance method, so `Pinger.handle` has no such message to send. Implement it on the service
 error E3016: <fragment>:8:6: Partial interface implementation: type 'B' is missing 1 method(s):
   - ping() returns Count
+error E3136: <fragment>:22:22: `interface Pinger` requires `ping`, but no service implementing it declares `ping` as an `export` instance method, so `Pinger.handle` has no such message to send. Implement it on the service
 ```
 
 <!-- test: error.a-withheld-interface-message-is-refused -->

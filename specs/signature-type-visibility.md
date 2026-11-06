@@ -276,8 +276,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:11:17: exported function 'api.all' names file-private type 'Secret' in its return type
 error E3167: api/<fragment>:9:18: exported typealias 'api.SecretArray' names file-private type 'Secret' in its target
+error E3167: api/<fragment>:11:17: exported function 'api.all' names file-private type 'Secret' in its return type
 ```
 
 <!-- test: error.a-tuple-element-counts -->
@@ -333,8 +333,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:13:17: exported function 'api.wrap' names file-private type 'Box' in its return type
 error E3167: api/<fragment>:11:18: exported typealias 'api.IntBox' names file-private type 'Box' in its target
+error E3167: api/<fragment>:13:17: exported function 'api.wrap' names file-private type 'Box' in its return type
 ```
 
 <!-- test: error.a-method-outranks-its-parameter-type -->
@@ -474,8 +474,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:7:11: exported function 'api.Keeper.keep' names file-private typealias 'Secret' in the type of parameter 'xs'
 error E3167: api/<fragment>:4:18: exported typealias 'api.Secrets' names file-private typealias 'Secret' in its target
+error E3167: api/<fragment>:7:11: exported function 'api.Keeper.keep' names file-private typealias 'Secret' in the type of parameter 'xs'
 ```
 
 <!-- test: error.an-interface-inner-alias-over-a-file-private-type-is-refused -->
@@ -1081,9 +1081,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3167: pkg/<fragment>:12:18: exported typealias 'pkg.Handler' names file-private typealias 'StringArray' in its target
 error E3167: pkg/<fragment>:14:17: exported function 'pkg.apply' names file-private typealias 'StringArray' in the type of parameter 'h'
 error E3167: pkg/<fragment>:14:17: exported function 'pkg.apply' names file-private typealias 'StringArray' in the type of parameter 'b'
-error E3167: pkg/<fragment>:12:18: exported typealias 'pkg.Handler' names file-private typealias 'StringArray' in its target
 ```
 
 <!-- test: error.an-alias-walked-from-another-file-judges-its-components-in-its-own-file -->
@@ -1109,8 +1109,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: pkg/<fragment>:8:17: exported function 'pkg.apply' names file-private typealias 'StringArray' in the type of parameter 'h'
 error E3167: pkg/<fragment>:5:18: exported typealias 'pkg.Handler' names file-private typealias 'StringArray' in its target
+error E3167: pkg/<fragment>:8:17: exported function 'pkg.apply' names file-private typealias 'StringArray' in the type of parameter 'h'
 ```
 
 <!-- test: error.a-function-alias-over-a-file-private-instance-element-is-refused -->
@@ -1136,8 +1136,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:8:17: exported function 'api.f' names file-private typealias 'Secrets' in the type of parameter 'cb'
 error E3167: api/<fragment>:6:18: exported typealias 'api.Cb' names file-private typealias 'Secrets' in its target
+error E3167: api/<fragment>:8:17: exported function 'api.f' names file-private typealias 'Secrets' in the type of parameter 'cb'
 ```
 
 <!-- test: error.a-file-private-tuple-alias-in-an-exported-signature-is-refused -->

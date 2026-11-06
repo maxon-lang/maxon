@@ -517,8 +517,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3062: <fragment>:7:11: unused typealias: 'ThingArray'
 error E3008: <fragment>:11:11: typealias 'ThingArray' is not exported
+error E3062: <fragment>:7:11: unused typealias: 'ThingArray'
 ```
 
 <!-- test: error.generic-instance-consumer-alias-as-a-receiver-and-a-return-type -->
@@ -544,9 +544,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3062: <fragment>:7:11: unused typealias: 'ThingArray'
 error E3008: <fragment>:10:31: typealias 'ThingArray' is not exported
 error E3008: <fragment>:11:9: typealias 'ThingArray' is not exported
+error E3062: <fragment>:7:11: unused typealias: 'ThingArray'
 ```
 
 <!-- test: error.generic-instance-consumer-a-second-file-declares-the-alias -->

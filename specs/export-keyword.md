@@ -404,8 +404,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/export-keyword/error.non-exported-type-cross-file.maxon:16:11: type 'InternalPoint' is not exported
 error E3008: specs/export-keyword/error.non-exported-type-cross-file.maxon:15:10: type 'InternalPoint' is not exported
+error E3008: specs/export-keyword/error.non-exported-type-cross-file.maxon:16:11: type 'InternalPoint' is not exported
 ```
 
 <!-- test: error.a-non-exported-types-static-is-refused-across-files -->
@@ -458,9 +458,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:24:18: type 'Box' is not exported
 error E3167: <fragment>:11:18: exported typealias 'StrBox' names file-private type 'Box' in its target
 error E3167: <fragment>:14:22: exported field 'Holder.inner' names file-private type 'Box' in its type
+error E3008: <fragment>:24:18: type 'Box' is not exported
 ```
 
 <!-- test: error.a-hidden-types-field-write-is-refused-through-a-value -->
@@ -494,9 +494,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:24:10: type 'Box' is not exported
 error E3167: <fragment>:11:18: exported typealias 'StrBox' names file-private type 'Box' in its target
 error E3167: <fragment>:14:22: exported field 'Holder.inner' names file-private type 'Box' in its type
+error E3008: <fragment>:24:10: type 'Box' is not exported
 ```
 
 <!-- test: error.a-hidden-types-method-is-refused-through-a-value -->
@@ -533,9 +533,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:28:18: type 'Box' is not exported
 error E3167: <fragment>:15:18: exported typealias 'StrBox' names file-private type 'Box' in its target
 error E3167: <fragment>:18:22: exported field 'Holder.inner' names file-private type 'Box' in its type
+error E3008: <fragment>:28:18: type 'Box' is not exported
 ```
 
 <!-- test: error.a-hidden-types-extension-method-is-refused-through-a-value -->
@@ -574,8 +574,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:30:18: type 'Inner' is not exported
 error E3167: <fragment>:20:22: exported field 'Holder.inner' names file-private type 'Inner' in its type
+error E3008: <fragment>:30:18: type 'Inner' is not exported
 ```
 
 <!-- test: error.a-hidden-enums-method-is-refused-through-a-value -->
@@ -610,8 +610,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:24:12: type 'Mode' is not exported
 error E3167: <fragment>:13:21: exported field 'Settings.mode' names file-private enum 'Mode' in its type
+error E3008: <fragment>:24:12: type 'Mode' is not exported
 ```
 
 <!-- test: error.a-hidden-enums-accessor-is-refused-through-a-value -->
@@ -639,8 +639,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:19:17: type 'Mode' is not exported
 error E3167: <fragment>:9:21: exported field 'Settings.mode' names file-private enum 'Mode' in its type
+error E3008: <fragment>:19:17: type 'Mode' is not exported
 ```
 
 <!-- test: a-hidden-type-answers-through-an-exported-interface -->
@@ -719,8 +719,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:32:12: type 'Shape' is not exported
 error E3167: <fragment>:22:22: exported field 'Holder.shape' names file-private interface 'Shape' in its type
+error E3008: <fragment>:32:12: type 'Shape' is not exported
 ```
 
 <!-- test: error.a-hidden-types-to-string-is-refused-through-interpolation -->
@@ -757,8 +757,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:28:10: type 'Point' is not exported
 error E3167: <fragment>:18:22: exported field 'Holder.point' names file-private type 'Point' in its type
+error E3008: <fragment>:28:10: type 'Point' is not exported
 ```
 
 <!-- test: error.a-hidden-types-equals-is-refused-through-the-equality-operator -->
@@ -800,9 +800,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:30:16: type 'Point' is not exported
 error E3167: <fragment>:18:22: exported field 'Pair.first' names file-private type 'Point' in its type
 error E3167: <fragment>:19:23: exported field 'Pair.second' names file-private type 'Point' in its type
+error E3008: <fragment>:30:16: type 'Point' is not exported
 ```
 
 <!-- test: error.a-hidden-types-compare-is-refused-through-an-ordering-operator -->
@@ -852,9 +852,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:38:16: type 'Point' is not exported
 error E3167: <fragment>:26:22: exported field 'Pair.first' names file-private type 'Point' in its type
 error E3167: <fragment>:27:23: exported field 'Pair.second' names file-private type 'Point' in its type
+error E3008: <fragment>:38:16: type 'Point' is not exported
 ```
 
 <!-- test: error.a-hidden-types-iteration-is-refused-through-a-for-loop -->
@@ -922,8 +922,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:56:2: type 'Seq' is not exported
 error E3167: <fragment>:44:20: exported field 'Holder.seq' names file-private type 'Seq' in its type
+error E3008: <fragment>:56:2: type 'Seq' is not exported
 ```
 
 <!-- test: error.a-hidden-enum-is-refused-through-a-match -->
@@ -954,8 +954,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:20:2: type 'Mode' is not exported
 error E3167: <fragment>:9:21: exported field 'Settings.mode' names file-private enum 'Mode' in its type
+error E3008: <fragment>:20:2: type 'Mode' is not exported
 ```
 
 <!-- test: error.a-hidden-unions-payload-is-refused-through-a-match-binding -->
@@ -987,8 +987,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:22:2: type 'Reading' is not exported
 error E3167: <fragment>:11:24: exported field 'Sensor.reading' names file-private union 'Reading' in its type
+error E3008: <fragment>:22:2: type 'Reading' is not exported
 ```
 
 <!-- test: error.a-hidden-enum-is-refused-through-interpolation -->
@@ -1016,8 +1016,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:19:10: type 'Mode' is not exported
 error E3167: <fragment>:9:21: exported field 'Settings.mode' names file-private enum 'Mode' in its type
+error E3008: <fragment>:19:10: type 'Mode' is not exported
 ```
 
 <!-- test: a-hidden-types-values-sort-through-the-librarys-comparable-witness -->
@@ -1162,8 +1162,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/export-keyword/error.a-non-exported-unions-case-construction-across-files.maxon:14:2: type 'Shape' is not exported
 error E3008: specs/export-keyword/error.a-non-exported-unions-case-construction-across-files.maxon:12:10: type 'Shape' is not exported
+error E3008: specs/export-keyword/error.a-non-exported-unions-case-construction-across-files.maxon:14:2: type 'Shape' is not exported
 ```
 
 <!-- test: exported-typealias-cross-file -->
@@ -1193,8 +1193,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3062: specs/export-keyword/error.non-exported-typealias-cross-file.maxon:3:11: unused typealias: 'InternalScore'
 error E3008: specs/export-keyword/error.non-exported-typealias-cross-file.maxon:7:16: typealias 'InternalScore' is not exported
+error E3062: specs/export-keyword/error.non-exported-typealias-cross-file.maxon:3:11: unused typealias: 'InternalScore'
 ```
 
 <!-- test: error.duplicate-typealias-same-file -->
@@ -1368,8 +1368,8 @@ end 'main'
 ```
 ```maxoncstderr
 error E3008: <fragment>:6:14: typealias 'Dead' is not exported
-error E3062: <fragment>:3:11: unused typealias: 'Dead'
 error E3008: <fragment>:9:15: typealias 'Dead' is not exported
+error E3062: <fragment>:3:11: unused typealias: 'Dead'
 ```
 
 ### A hidden alias of every form is refused in every type position

@@ -1016,8 +1016,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:54:54: type 'BagIter' is not exported
 error E3008: <fragment>:53:10: type 'BagIter' is not exported
+error E3008: <fragment>:54:54: type 'BagIter' is not exported
 ```
 
 <!-- test: interface-extensions.a-conformers-own-declaration-still-shadows-an-extensions -->

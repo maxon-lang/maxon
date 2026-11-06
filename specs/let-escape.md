@@ -1659,8 +1659,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:31:9: cannot pass 'holder', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
 error E3078: <fragment>:30:6: cannot assign the result of 'grab', which may share storage with immutable variable 'holder', to mutable binding 'box'; use 'let' instead of 'var', or use clone()
+error E3159: <fragment>:31:9: cannot pass 'holder', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
 <!-- test: let-escape.error.a-let-minted-in-the-loop-kept-by-a-callee-and-read-again-is-refused -->

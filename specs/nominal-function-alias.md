@@ -651,8 +651,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: pkg/<fragment>:11:22: exported field 'pkg.Holder.grade' names file-private typealias 'Grader' in its type
 error E3005: app/<fragment>:27:9: argument type mismatch for 'g': expected 'app.Grader', got 'pkg.Grader'
+error E3167: pkg/<fragment>:11:22: exported field 'pkg.Holder.grade' names file-private typealias 'Grader' in its type
 ```
 
 <!-- test: a-closure-literal-decays-into-any-function-alias -->

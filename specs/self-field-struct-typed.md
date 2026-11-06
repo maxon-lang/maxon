@@ -112,8 +112,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:10: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)
 error E4014: <fragment>:5:6: type 'Node' contains a reference cycle (via Node → next: Node); recursive type references are not allowed
+error E2015: <fragment>:10:10: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)
 ```
 
 <!-- test: error.struct-typed-field-method-call -->
@@ -142,8 +142,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:10: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)
 error E4014: <fragment>:5:6: type 'Node' contains a reference cycle (via Node → next: Node); recursive type references are not allowed
+error E2015: <fragment>:10:10: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)
 ```
 
 <!-- test: error.struct-typed-field-write -->
@@ -169,8 +169,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:3: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)
 error E4014: <fragment>:5:6: type 'Node' contains a reference cycle (via Node → next: Node); recursive type references are not allowed
+error E2015: <fragment>:10:3: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)
 ```
 
 <!-- test: error.scalar-field-base-is-not-a-struct -->

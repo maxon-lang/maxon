@@ -2735,14 +2735,30 @@ module function compareParsedFunctions(left IrFunction, right IrFunction) return
 		return Ordering.greaterThan if leftIsHelper else Ordering.lessThan
 	end 'helpersFollowTheirFile'
 
-	let byPosition = compareSourcePositions(left.nameLine, leftColumn: left.nameColumn, rightLine: right.nameLine, rightColumn: right.nameColumn)
+	return compareNamedSourcePositions(left.name, leftLine: left.nameLine, leftColumn: left.nameColumn, right: right.name, rightLine: right.nameLine, rightColumn: right.nameColumn)
+end 'compareParsedFunctions'
+
+module function compareTypeNameDecls(left TypeNameDecl, right TypeNameDecl) returns Ordering
+	return compareNamedSourcePositions(left.name, leftLine: left.nameLine, leftColumn: left.nameColumn, right: right.name, rightLine: right.nameLine, rightColumn: right.nameColumn)
+end 'compareTypeNameDecls'
+
+module function compareConformanceDecls(left ConformanceDecl, right ConformanceDecl) returns Ordering
+	return compareNamedSourcePositions(left.typeName, leftLine: left.nameLine, leftColumn: left.nameColumn, right: right.typeName, rightLine: right.nameLine, rightColumn: right.nameColumn)
+end 'compareConformanceDecls'
+
+module function compareFuncSignatureEntries(left FuncSignatureEntry, right FuncSignatureEntry) returns Ordering
+	return compareNamedSourcePositions(left.name, leftLine: left.nameLine, leftColumn: left.nameColumn, right: right.name, rightLine: right.nameLine, rightColumn: right.nameColumn)
+end 'compareFuncSignatureEntries'
+
+function compareNamedSourcePositions(left ByteArray, leftLine LineNumber, leftColumn ColumnNumber, right ByteArray, rightLine LineNumber, rightColumn ColumnNumber) returns Ordering
+	let byPosition = compareSourcePositions(leftLine, leftColumn: leftColumn, rightLine: rightLine, rightColumn: rightColumn)
 
 	if byPosition != Ordering.equalTo 'positionsDiffer'
 		return byPosition
 	end 'positionsDiffer'
 
-	return compareBytesOrdinally(left.name, right: right.name)
-end 'compareParsedFunctions'
+	return compareBytesOrdinally(left, right: right)
+end 'compareNamedSourcePositions'
 
 export type DeclarationPosition
 	export let rank as ElementIndex

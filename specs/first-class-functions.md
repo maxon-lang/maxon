@@ -4950,8 +4950,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:12:10: 'Bin' expects 2 argument(s) but 1 were provided
 error E3009: <fragment>:11:14: function type mismatch in cast: expected 'fn(Integer, Integer) returns Integer', got 'fn(Integer) returns Integer'
+error E3036: <fragment>:12:10: 'Bin' expects 2 argument(s) but 1 were provided
 ```
 
 <!-- test: first-class-function.error.wrong-signature-into-function-param -->

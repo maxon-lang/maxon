@@ -12945,18 +12945,110 @@ end 'projectHasErrors'
 export function printDiagnostics(project Project)
 	var sink = project.session.diagnostics
 
-	for diagnostic in distinctDiagnostics(project.diagnostics) 'each'
+	for diagnostic in diagnosticsInSourceOrder(project) 'each'
 		sink.emit(diagnostic.render())
 	end 'each'
 end 'printDiagnostics'
 
 typealias DiagnosticIdentitySet = Set with String
 
-module function distinctDiagnostics(diagnostics DiagnosticArray) returns DiagnosticArray
+typealias AuthoredFileRankMap = Map with (String, ElementIndex)
+
+enum DiagnosticPlace
+	ranked
+	unranked
+	programWide
+end 'DiagnosticPlace'
+
+type DiagnosticSortRow
+	let place as DiagnosticPlace
+	let rank as ElementIndex
+	let file as ByteArray
+	let line as ElementIndex
+	let column as ElementIndex
+	let code as ByteArray
+	export let index as ElementIndex
+
+	static function of(diagnostic Diagnostic, index ElementIndex, ranks AuthoredFileRankMap) returns DiagnosticSortRow
+		let code = diagnostic.code.rawValue.toByteArray()
+
+		return match diagnostic.anchor 'anchor'
+			programWide gives Self{place: DiagnosticPlace.programWide, rank: 0, file: ByteArray.create(), line: 0, column: 0, code: code, index: index}
+			file(filePath) gives Self.placedIn(filePath, line: 0, column: 0, code: code, index: index, ranks: ranks)
+			at(filePath, line, column) gives Self.placedIn(filePath, line: line as ElementIndex, column: column as ElementIndex, code: code, index: index, ranks: ranks)
+		end 'anchor'
+	end 'of'
+
+	static function placedIn(filePath FilePath, line ElementIndex, column ElementIndex, code ByteArray, index ElementIndex, ranks AuthoredFileRankMap) returns DiagnosticSortRow
+		let file = filePath.toString()
+
+		if let rank = try ranks.get(file) 'aFileTheCompileRead'
+			return Self{place: DiagnosticPlace.ranked, rank: rank, file: ByteArray.create(), line: line, column: column, code: code, index: index}
+		end 'aFileTheCompileRead'
+
+		return Self{place: DiagnosticPlace.unranked, rank: 0, file: file.toByteArray(), line: line, column: column, code: code, index: index}
+	end 'placedIn'
+
+	function compare(other DiagnosticSortRow) returns Ordering
+		let byPlace = self.place.ordinal.compare(other.place.ordinal)
+
+		if byPlace != Ordering.equalTo 'placesDiffer'
+			return byPlace
+		end 'placesDiffer'
+
+		let byRank = self.rank.compare(other.rank)
+
+		if byRank != Ordering.equalTo 'ranksDiffer'
+			return byRank
+		end 'ranksDiffer'
+
+		let byFile = compareBytesOrdinally(self.file, right: other.file)
+
+		if byFile != Ordering.equalTo 'filesDiffer'
+			return byFile
+		end 'filesDiffer'
+
+		let byLine = self.line.compare(other.line)
+
+		if byLine != Ordering.equalTo 'linesDiffer'
+			return byLine
+		end 'linesDiffer'
+
+		let byColumn = self.column.compare(other.column)
+
+		if byColumn != Ordering.equalTo 'columnsDiffer'
+			return byColumn
+		end 'columnsDiffer'
+
+		let byCode = compareBytesOrdinally(self.code, right: other.code)
+
+		if byCode != Ordering.equalTo 'codesDiffer'
+			return byCode
+		end 'codesDiffer'
+
+		return self.index.compare(other.index)
+	end 'compare'
+end 'DiagnosticSortRow'
+
+typealias DiagnosticSortRowArray = Array with DiagnosticSortRow
+
+function authoredRanksOf(project Project) returns AuthoredFileRankMap
+	var authored = AuthoredFileRankMap.create()
+
+	for path in project.db.sourcePaths 'eachSourcePath'
+		if let rank = try project.emissionRanks.get(path.toString()) 'aRankedFile'
+			authored.upsert(project.stagedSourceOrigins.authoredPathOf(path).toString(), value: rank)
+		end 'aRankedFile'
+	end 'eachSourcePath'
+
+	return authored
+end 'authoredRanksOf'
+
+module function diagnosticsInSourceOrder(project Project) returns DiagnosticArray
 	var seen = DiagnosticIdentitySet.create()
 	var distinct = DiagnosticArray.create()
 
-	for diagnostic in diagnostics 'each'
+	for diagnostic in project.diagnostics 'each'
 		let identity = diagnostic.render()
 
 		if seen.contains(identity) 'reportedAlready'
@@ -12967,5 +13059,24 @@ module function distinctDiagnostics(diagnostics DiagnosticArray) returns Diagnos
 		distinct.push(diagnostic)
 	end 'each'
 
-	return distinct
-end 'distinctDiagnostics'
+	if distinct.count() < 2 'nothingToOrder'
+		return distinct
+	end 'nothingToOrder'
+
+	let ranks = authoredRanksOf(project)
+	var rows = DiagnosticSortRowArray.create()
+
+	for (iter, diagnostic) in distinct.withIterator() 'eachDistinct'
+		rows.push(DiagnosticSortRow.of(diagnostic, index: iter.index(), ranks: ranks))
+	end 'eachDistinct'
+
+	rows.sortBy(function(left DiagnosticSortRow, right DiagnosticSortRow) gives left.compare(right))
+
+	var ordered = DiagnosticArray.create()
+
+	for row in rows 'eachInOrder'
+		ordered.push(try distinct.get(row.index) otherwise panic("diagnosticsInSourceOrder: distinct.get OOB at {row.index}"))
+	end 'eachInOrder'
+
+	return ordered
+end 'diagnosticsInSourceOrder'

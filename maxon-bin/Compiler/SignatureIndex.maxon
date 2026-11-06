@@ -758,6 +758,56 @@ let FileScopedKeySeparator = "|"
 
 export typealias TopLevelDeclIndexArray = Array with ElementIndex
 
+type SourceSite
+	let filePath as FilePath
+	let line as LineNumber
+	let column as ColumnNumber
+
+	static function of(filePath FilePath, line LineNumber, column ColumnNumber) returns SourceSite
+		return Self{filePath: filePath.clone(), line: line, column: column}
+	end 'of'
+
+	function compare(other SourceSite) returns Ordering
+		let byFile = comparePathIdentity(self.filePath, other: other.filePath)
+
+		if byFile != Ordering.equalTo 'filesDiffer'
+			return byFile
+		end 'filesDiffer'
+
+		let byLine = self.line.compare(other.line)
+
+		if byLine != Ordering.equalTo 'linesDiffer'
+			return byLine
+		end 'linesDiffer'
+
+		return self.column.compare(other.column)
+	end 'compare'
+
+	function precedes(other SourceSite) returns bool
+		return self.compare(other) == Ordering.lessThan
+	end 'precedes'
+end 'SourceSite'
+
+type DeclarationSite
+	export let index as ElementIndex
+	export let name as ByteArray
+	export let site as SourceSite
+
+	static function of(decl TopLevelDecl, index ElementIndex) returns DeclarationSite
+		return Self{index: index, name: decl.name.clone(), site: SourceSite.of(decl.declFilePath, line: decl.nameLine, column: decl.nameColumn)}
+	end 'of'
+
+	function compare(other DeclarationSite) returns Ordering
+		return self.site.compare(other.site)
+	end 'compare'
+
+	function precedes(other DeclarationSite) returns bool
+		return self.site.precedes(other.site)
+	end 'precedes'
+end 'DeclarationSite'
+
+typealias DeclarationSiteArray = Array with DeclarationSite
+
 // ONE name and the file that spelled it — the shape of every trace `checkUnusedExports` replays, because
 // a reference is a name plus the reader that made it one. Two logs are kept in it, each recording a use
 // that survives nowhere else: a cross-file read of an inlined top-level constant (the IR keeps none — see
@@ -16147,7 +16197,7 @@ export type SettledDeclarations
 	// hash. Duplicates are dropped at the note — a program spawns one type from many sites — through
 	// `serviceSpawnCandidateKeys`, which holds `spawnCandidateKey` of every entry so membership is one lookup.
 	module var serviceSpawnCandidateList as ServiceSpawnCandidateArray
-	module var serviceSpawnCandidateKeys as ServiceSpawnCandidateKeySet
+	module var serviceSpawnCandidateKeys as ServiceSpawnCandidateKeyIndex
 
 	// ⭐⭐ **THE `<T>.handle` NAMES THIS SWEEP MINTED** — the exact set, filled by the one act
 	// that creates them (`recordServiceHandle`), so `isServiceHandle` answers by MEMBERSHIP rather than by
@@ -16286,7 +16336,7 @@ export type SettledDeclarations
 	export static function create(os Os) returns SettledDeclarations
 		let interfaces = IrInterfaceMap.create()
 
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(), structNamesInDeclOrder: NameRoster.create(), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, fixedArrayFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), scriptlibFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), extensionInnerAliasKeepers: ExtensionInnerAliasSiteMap.create(), typeBodyInnerAliasMembers: ExtensionInnerAliasNameSet.create(), libraryExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorShadowedInnerAliases: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), fixedElementCountNeeds: DescriptorNeedNameSet.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, conformerIndex: DeclaredConformerIndex.unbuilt(), extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), sawMutableMarker: false, sawMutableFunctionValue: false, byRefBareNames: BareNameSet.create(), opaqueByRefBareNames: BareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcReturnsReceiverField: DeclaredBodyFactNameSet.create(), funcReturnsParameter: DeclaredBodyFactNameSet.create(), funcFieldMoveOutForwards: FreshReturnForwardMap.create(), interfaceRequirementNames: MethodNameSet.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), sweptDeclarations: SweptDeclarationMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: NameRoster.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceSpawnCandidateKeys: ServiceSpawnCandidateKeySet.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), corpusArrayRecordName: ArrayRecordName.of(SynthesizedArrayRecordSeed), shadowRoster: ShadowSpellingRoster.none(), qualifiedTypeClaims: TypeNameClaimLog.create(), typeHeadClaims: TypeNameClaimLog.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: TypeNameClaimLog.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(), nominalNameCollisions: TypeNameCollisionArray.create(), fileModuleDirectories: ModuleDirectoryByFile.create(), namespaceQualifiers: DeclaredTypeNameSet.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionMap.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), functionDirectoryHolders: DirectoryHolderMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(), structNamesInDeclOrder: NameRoster.create(), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, fixedArrayFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), scriptlibFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), extensionInnerAliasKeepers: ExtensionInnerAliasSiteMap.create(), typeBodyInnerAliasMembers: ExtensionInnerAliasNameSet.create(), libraryExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorShadowedInnerAliases: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), fixedElementCountNeeds: DescriptorNeedNameSet.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, conformerIndex: DeclaredConformerIndex.unbuilt(), extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), sawMutableMarker: false, sawMutableFunctionValue: false, byRefBareNames: BareNameSet.create(), opaqueByRefBareNames: BareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcReturnsReceiverField: DeclaredBodyFactNameSet.create(), funcReturnsParameter: DeclaredBodyFactNameSet.create(), funcFieldMoveOutForwards: FreshReturnForwardMap.create(), interfaceRequirementNames: MethodNameSet.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), sweptDeclarations: SweptDeclarationMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: NameRoster.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceSpawnCandidateKeys: ServiceSpawnCandidateKeyIndex.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), corpusArrayRecordName: ArrayRecordName.of(SynthesizedArrayRecordSeed), shadowRoster: ShadowSpellingRoster.none(), qualifiedTypeClaims: TypeNameClaimLog.create(), typeHeadClaims: TypeNameClaimLog.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: TypeNameClaimLog.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(), nominalNameCollisions: TypeNameCollisionArray.create(), fileModuleDirectories: ModuleDirectoryByFile.create(), namespaceQualifiers: DeclaredTypeNameSet.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionMap.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), functionDirectoryHolders: DirectoryHolderMap.create()}
 	end 'create'
 
 	static function unused() returns SettledDeclarations
@@ -16409,7 +16459,7 @@ export type SettledDeclarations
 		cacheWriteDeclaredTypeNameSet(writer, value: self.stdlibDeclaredTypeNames)
 		cacheWriteNameRoster(writer, value: self.arrayLiteralConformers)
 		cacheWriteServiceSpawnCandidateArray(writer, value: self.serviceSpawnCandidateList)
-		cacheWriteServiceSpawnCandidateKeySet(writer, value: self.serviceSpawnCandidateKeys)
+		cacheWriteServiceSpawnCandidateKeyIndex(writer, value: self.serviceSpawnCandidateKeys)
 		cacheWriteServiceHandleOwnerMap(writer, value: self.serviceHandleOwners)
 		cacheWriteDefaultDeclarationArray(writer, value: self.defaultDeclarationList)
 		cacheWriteServiceMessageIndex(writer, value: self.serviceMessages)
@@ -16554,7 +16604,7 @@ export type SettledDeclarations
 		let f_stdlibDeclaredTypeNames = try cacheReadDeclaredTypeNameSet(reader)
 		let f_arrayLiteralConformers = try cacheReadNameRoster(reader)
 		let f_serviceSpawnCandidateList = try cacheReadServiceSpawnCandidateArray(reader)
-		let f_serviceSpawnCandidateKeys = try cacheReadServiceSpawnCandidateKeySet(reader)
+		let f_serviceSpawnCandidateKeys = try cacheReadServiceSpawnCandidateKeyIndex(reader)
 		let f_serviceHandleOwners = try cacheReadServiceHandleOwnerMap(reader)
 		let f_defaultDeclarationList = try cacheReadDefaultDeclarationArray(reader)
 		let f_serviceMessages = try cacheReadServiceMessageIndex(reader)
@@ -17547,12 +17597,14 @@ export type ProgramSignatures
 	// the key carries the reader's directory, so two directories spelling one contested type name stay two
 	// candidates.
 	function settleServiceSpawnTargets()
+		self.sortServiceSpawnCandidates()
+
 		if self.settledDeclarations().contestedNominalClaims.count() == 0 or self.settledDeclarations().serviceSpawnCandidateList.isEmpty() 'noSpawnNamesAContestedType'
 			return
 		end 'noSpawnNamesAContestedType'
 
 		var candidates = ServiceSpawnCandidateArray.create()
-		var keys = ServiceSpawnCandidateKeySet.create()
+		var keys = ServiceSpawnCandidateKeyIndex.create()
 
 		for candidate in self.settledDeclarations().serviceSpawnCandidateList 'eachCandidate'
 			let typeName = self.authorNominalNameMeantBy(candidate.typeName, readerFilePath: candidate.declFilePath)
@@ -17562,7 +17614,7 @@ export type ProgramSignatures
 				continue
 			end 'alreadyNoted'
 
-			keys.insert(key)
+			keys.upsert(key, value: candidates.count())
 			candidates.push(ServiceSpawnCandidate.create(typeName.clone(), member: candidate.member, gate: candidate.gate.clone(), declFilePath: candidate.declFilePath, line: candidate.line, column: candidate.column))
 		end 'eachCandidate'
 
@@ -18209,14 +18261,39 @@ export type ProgramSignatures
 	export function noteServiceSpawnCandidate(typeName ByteArray, member ByteArray, gate SpawnGate, declFilePath FilePath, line LineNumber, column ColumnNumber)
 		let key = spawnCandidateKey(typeName, member: member, gate: gate, directory: self.moduleDirectoryOf(declFilePath))
 
-		if self.mainThreadSettled().serviceSpawnCandidateKeys.contains(key) 'alreadyNoted'
+		if let position = try self.mainThreadSettled().serviceSpawnCandidateKeys.get(key) 'alreadyNoted'
+			self.keepEarliestSpawnSite(position, declFilePath: declFilePath, line: line, column: column)
 			return
 		end 'alreadyNoted'
 
-		self.mainThreadSettled().serviceSpawnCandidateKeys.insert(key)
+		self.mainThreadSettled().serviceSpawnCandidateKeys.upsert(key, value: self.mainThreadSettled().serviceSpawnCandidateList.count())
 		self.mainThreadSettled().serviceSpawnCandidateList.push(ServiceSpawnCandidate.create(typeName, member: member, gate: gate, declFilePath: declFilePath, line: line, column: column))
 		self.spawnsAnyServiceSettled = false
 	end 'noteServiceSpawnCandidate'
+
+	function keepEarliestSpawnSite(position ElementIndex, declFilePath FilePath, line LineNumber, column ColumnNumber)
+		let held = try self.settledDeclarations().serviceSpawnCandidateList.get(position) otherwise panic("ProgramSignatures.keepEarliestSpawnSite: serviceSpawnCandidateList.get OOB at {position}")
+
+		if not SourceSite.of(declFilePath, line: line, column: column).precedes(SourceSite.of(held.declFilePath, line: held.line, column: held.column)) 'heldIsEarlier'
+			return
+		end 'heldIsEarlier'
+
+		try self.mainThreadSettled().serviceSpawnCandidateList.set(position, value: ServiceSpawnCandidate.create(held.typeName.clone(), member: held.member.clone(), gate: held.gate.clone(), declFilePath: declFilePath, line: line, column: column)) otherwise panic("ProgramSignatures.keepEarliestSpawnSite: serviceSpawnCandidateList.set OOB at {position}")
+	end 'keepEarliestSpawnSite'
+
+	function sortServiceSpawnCandidates()
+		self.mainThreadSettled().serviceSpawnCandidateList.sortBy(function(left ServiceSpawnCandidate, right ServiceSpawnCandidate) gives SourceSite.of(left.declFilePath, line: left.line, column: left.column).compare(SourceSite.of(right.declFilePath, line: right.line, column: right.column)))
+
+		var positions = ServiceSpawnCandidateKeyIndex.create()
+
+		for position in 0 upto self.settledDeclarations().serviceSpawnCandidateList.count() 'eachCandidate'
+			view candidate = try self.settledDeclarations().serviceSpawnCandidateList.get(position) otherwise panic("ProgramSignatures.sortServiceSpawnCandidates: serviceSpawnCandidateList.get OOB at {position}")
+			positions.upsert(spawnCandidateKey(candidate.typeName, member: candidate.member, gate: candidate.gate, directory: self.moduleDirectoryOf(candidate.declFilePath)), value: position)
+		end 'eachCandidate'
+
+		var ownDeclarations = self.mainThreadSettled()
+		ownDeclarations.serviceSpawnCandidateKeys = positions
+	end 'sortServiceSpawnCandidates'
 
 	export function serviceSpawnCandidates() returns ServiceSpawnCandidateArray
 		return self.settledDeclarations().serviceSpawnCandidateList
@@ -19382,9 +19459,9 @@ export type ProgramSignatures
 
 		// An entry is another declaration's: a re-key strikes every fact from its source key (see
 		// `rekeyDeclarationSweepEntries`).
-		let secondDeclaration = self.mainThreadSettled().returnTypes.contains(key)
+		let isTheKeptDeclaration = not self.mainThreadSettled().returnTypes.contains(key) or self.precedesTheKeptSite(key, declFilePath: declFilePath, nameLine: nameLine, nameColumn: nameColumn)
 
-		if not secondDeclaration 'theFirstDeclarationAnswersTheReturnType'
+		if isTheKeptDeclaration 'theFirstDeclarationAnswersTheReturnType'
 			self.mainThreadSettled().returnTypes.upsert(key, value: returnType)
 		end 'theFirstDeclarationAnswersTheReturnType'
 
@@ -19392,7 +19469,7 @@ export type ProgramSignatures
 		// point in the sweep is what a generic alias looks like, since the alias is not resolved to its instance
 		// until later. ⛔ Gating on `genericInstance` instead is a WRONG ANSWER here and was measured as one: the
 		// clause has not been resolved yet, so the test is false for every function and the stamp never happens.
-		if not secondDeclaration and returnTypeNamesAType(returnType) 'theClauseNamedAType'
+		if isTheKeptDeclaration and returnTypeNamesAType(returnType) 'theClauseNamedAType'
 			match returnAliasName 'spelled'
 				named(aliasName) then self.mainThreadSettled().funcReturnAliasNames.upsert(key, value: aliasName)
 				none then break
@@ -19403,15 +19480,15 @@ export type ProgramSignatures
 			self.mainThreadSettled().declaredReturnSurfaces.upsert(key, value: declaredSurface)
 		end 'namesTheBufferAlias'
 
-		if not secondDeclaration and returnTypeNamesAType(returnType) 'aNameThisFileMustBeAbleToResolveLaterOn'
+		if isTheKeptDeclaration and returnTypeNamesAType(returnType) 'aNameThisFileMustBeAbleToResolveLaterOn'
 			self.mainThreadSettled().funcReturnDeclFiles.upsert(key, value: declFilePath)
 		end 'aNameThisFileMustBeAbleToResolveLaterOn'
 
-		if not secondDeclaration 'theFirstDeclarationIsTheSite'
+		if isTheKeptDeclaration 'theFirstDeclarationIsTheSite'
 			self.mainThreadSettled().funcDeclSites.upsert(key, value: FunctionDeclSite.create(visibility, declFilePath: declFilePath, takesReceiver: takesReceiver, nameLine: nameLine, nameColumn: nameColumn, enclosingTypeName: enclosingTypeName))
 		end 'theFirstDeclarationIsTheSite'
 
-		if not secondDeclaration 'theFirstDeclarationOfTheKeyIsTheOneKept'
+		if isTheKeptDeclaration 'theFirstDeclarationOfTheKeyIsTheOneKept'
 			self.mainThreadSettled().sweptDeclarations.upsert(key, value: SweptDeclaration.create(paramNames, paramTypes: paramTypes, paramSpellings: paramSpellings, paramDefaults: paramDefaults, takesReceiver: takesReceiver, returnType: returnType, visibility: visibility, declFilePath: declFilePath, site: declarationSiteKey(declFilePath, line: nameLine, column: nameColumn)))
 		end 'theFirstDeclarationOfTheKeyIsTheOneKept'
 
@@ -19425,7 +19502,7 @@ export type ProgramSignatures
 		// a reason of its own: a bare type-parameter parameter can only be declared inside a generic type's
 		// body, and a free function is by definition outside every one, so this map never holds an entry a
 		// NAMESPACE contest could be about.
-		if not secondDeclaration and opaqueParams.declaresATypeParameterParam() 'theKeptDeclarationTakesABareTypeParameter'
+		if isTheKeptDeclaration and opaqueParams.declaresATypeParameterParam() 'theKeptDeclarationTakesABareTypeParameter'
 			self.mainThreadSettled().funcOpaqueParams.upsert(key, value: opaqueParams)
 		end 'theKeptDeclarationTakesABareTypeParameter'
 
@@ -22488,7 +22565,7 @@ export type ProgramSignatures
 	// in another family is judged by the ledger in `TopLevelNameScope.maxon` rather than here.
 	function recordDecl(decl TopLevelDecl)
 		if let held = try self.mainThreadSettled().declIndex.get(decl.storageKey) 'duplicate'
-			if precedesInPathOrder(decl.declFilePath, other: self.declAt(held).declFilePath) 'declaredFirstInPathOrder'
+			if DeclarationSite.of(decl, index: held).precedes(DeclarationSite.of(self.declAt(held), index: held)) 'declaredFirstInPathOrder'
 				try self.mainThreadSettled().decls.set(held, value: decl) otherwise panic("ProgramSignatures.recordDecl: decls.set OOB at {held} — every index declIndex holds is one this arena minted")
 			end 'declaredFirstInPathOrder'
 
@@ -23641,23 +23718,29 @@ export type ProgramSignatures
 	function recordCycle(index ElementIndex, stack TopLevelDeclIndexArray) returns ConstEvalOutcome
 		let arcStart = self.stackPositionOf(index, stack: stack)
 
-		var names = ""
-		var owner = index
+		var arc = DeclarationSiteArray.create()
 
 		for i in arcStart upto stack.count() 'eachMember'
 			let member = try stack.get(i) otherwise panic("ProgramSignatures.recordCycle: stack.get OOB at {i}")
+			view memberDecl = self.declAt(member)
+			arc.push(DeclarationSite.of(memberDecl, index: member))
+		end 'eachMember'
 
-			if i > arcStart 'separator'
+		arc.sortBy(function(left DeclarationSite, right DeclarationSite) gives left.compare(right))
+
+		var names = ""
+		var owner = index
+
+		for position in 0 upto arc.count() 'eachInDeclarationOrder'
+			view member = try arc.get(position) otherwise panic("ProgramSignatures.recordCycle: arc.get OOB at {position}")
+
+			if position > 0 'separator'
 				names = "{names}, "
 			end 'separator'
 
-			view memberDecl = self.declAt(member)
-			names = "{names}{String.from(memberDecl.name)}"
-
-			if member > owner 'laterDeclaration'
-				owner = member
-			end 'laterDeclaration'
-		end 'eachMember'
+			names = "{names}{String.from(member.name)}"
+			owner = member.index
+		end 'eachInDeclarationOrder'
 
 		var ownerDecl = self.ownDeclAt(owner)
 		ownerDecl.outcome = TopLevelConstant.failed(SourceParseError.circularConstants(names, line: ownerDecl.nameLine, column: ownerDecl.nameColumn))
@@ -41830,6 +41913,12 @@ export type ProgramSignatures
 			undeclared gives false
 		end 'declaring'
 	end 'callBuildsTheInstanceOfItsOwnType'
+
+	function precedesTheKeptSite(key ByteArray, declFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber) returns bool
+		let kept = try self.declaredSiteOf(key) otherwise return false
+
+		return SourceSite.of(declFilePath, line: nameLine, column: nameColumn).precedes(SourceSite.of(kept.declFilePath, line: kept.nameLine, column: kept.nameColumn))
+	end 'precedesTheKeptSite'
 
 	export function declaredSiteOf(key ByteArray) returns FunctionDeclSite throws AbsentError
 		return try self.settledDeclarations().funcDeclSites.get(key) otherwise throw AbsentError.absent

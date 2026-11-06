@@ -263,9 +263,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3180: <fragment>:43:11: the arguments of 'larger' give type parameter 'T' no one type: 'a.Limit' and 'b.Limit' share no alias they both implement
 error E3167: a/<fragment>:6:18: exported field 'a.Ha.v' names file-private typealias 'Limit' in its type
 error E3167: b/<fragment>:17:18: exported field 'b.Hb.v' names file-private typealias 'Limit' in its type
+error E3180: <fragment>:43:11: the arguments of 'larger' give type parameter 'T' no one type: 'a.Limit' and 'b.Limit' share no alias they both implement
 ```
 
 <!-- test: error.a-record-that-is-not-equatable -->

@@ -915,8 +915,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: pkg/<fragment>:7:22: exported field 'pkg.Holder.items' names file-private typealias 'Bytes' in its type
 error E3005: app/<fragment>:25:9: argument type mismatch for 'b': expected 'app.Bytes', got 'pkg.Bytes'
+error E3167: pkg/<fragment>:7:22: exported field 'pkg.Holder.items' names file-private typealias 'Bytes' in its type
 ```
 
 <!-- test: error.a-returned-bytes-answers-to-the-declaring-file-not-the-caller -->

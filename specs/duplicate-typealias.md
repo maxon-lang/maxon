@@ -207,8 +207,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: pkg/<fragment>:7:19: exported field 'pkg.Holder.op' names file-private typealias 'Step' in its type
 error E3005: app/<fragment>:22:9: argument type mismatch for 'step': expected 'app.Step', got 'pkg.Step'
+error E3167: pkg/<fragment>:7:19: exported field 'pkg.Holder.op' names file-private typealias 'Step' in its type
 ```
 
 <!-- test: error.two-file-private-generic-aliases-of-one-instance-are-two-types -->
@@ -240,8 +240,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: pkg/<fragment>:7:22: exported field 'pkg.Holder.items' names file-private typealias 'Bag' in its type
 error E3005: app/<fragment>:24:9: argument type mismatch for 'b': expected 'app.Bag', got 'pkg.Bag'
+error E3167: pkg/<fragment>:7:22: exported field 'pkg.Holder.items' names file-private typealias 'Bag' in its type
 ```
 
 <!-- test: error.an-element-read-from-another-files-same-instance-alias-is-not-this-files -->
@@ -278,8 +278,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: pkg/<fragment>:8:21: exported field 'pkg.Holder.rows' names file-private typealias 'Rows' in its type
 error E3005: app/<fragment>:29:9: argument type mismatch for 'b': expected 'app.Bag', got 'pkg.Bag'
+error E3167: pkg/<fragment>:8:21: exported field 'pkg.Holder.rows' names file-private typealias 'Rows' in its type
 ```
 
 <!-- test: error.two-file-private-exit-code-aliases-are-two-types -->
@@ -308,8 +308,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: pkg/<fragment>:6:21: exported field 'pkg.Holder.code' names file-private typealias 'ExitCode' in its type
 error E3005: app/<fragment>:21:9: argument type mismatch for 'c': expected 'app.ExitCode', got 'pkg.ExitCode' — cast the argument with 'as app.ExitCode'
+error E3167: pkg/<fragment>:6:21: exported field 'pkg.Holder.code' names file-private typealias 'ExitCode' in its type
 ```
 
 <!-- test: error.two-same-directory-private-aliases-with-a-declared-in-note-are-not-offered-a-cast -->
@@ -333,8 +333,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3061: <fragment>:10:11: Duplicate typealias 'Small'
 error E3167: <fragment>:5:17: module function 'make' names file-private typealias 'Small' in its return type
+error E3061: <fragment>:10:11: Duplicate typealias 'Small'
 error E3005: <fragment>:17:9: argument type mismatch for 's': expected 'Small' (declared in b.maxon), got 'Small' (declared in a.maxon)
 ```
 

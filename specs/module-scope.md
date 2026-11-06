@@ -396,8 +396,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: other/<fragment>:28:16: type 'Box' is module-scoped and not visible from this directory
 error E3167: feature/<fragment>:18:20: exported field 'feature.Shelf.box' names module type 'Box' in its type
+error E3088: other/<fragment>:28:16: type 'Box' is module-scoped and not visible from this directory
 ```
 
 <!-- test: error.a-module-type-is-unreachable-through-a-field-outside-the-subtree -->
@@ -422,8 +422,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: other/<fragment>:16:11: type 'Box' is module-scoped and not visible from this directory
 error E3088: other/<fragment>:15:10: type 'Box' is module-scoped and not visible from this directory
+error E3088: other/<fragment>:16:11: type 'Box' is module-scoped and not visible from this directory
 ```
 
 <!-- test: a-module-type-is-reachable-from-a-subdirectory -->
