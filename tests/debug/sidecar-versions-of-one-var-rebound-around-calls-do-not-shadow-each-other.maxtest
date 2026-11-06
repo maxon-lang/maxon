@@ -1,0 +1,37 @@
+let ReboundTotalCaseLabel = "sidecar-versions-of-one-var-rebound-around-calls-do-not-shadow-each-other"
+
+let AroundCallsFunctionName = "work"
+let AroundCallsLocalName = "total"
+let AroundCallsFewestPlaces = 2
+
+test 'one var whose versions sit in different places is built and its rows overlap by no more than a handover'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ReboundTotalCaseLabel, fixture: ReboundTotalFixtureName)
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: staged.join(OutputFileStem), label: ReboundTotalCaseLabel, extraArguments: StringArray.create())
+
+	Expect.equal(build.exitCode(), expected: 0, message: "the build of a function holding one var `{AroundCallsLocalName}` that is rebound around calls did not finish. It wrote to stderr: {build.stderr}")
+
+	let executable = builtExecutable(staged)
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
+	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
+	var rows = StringArray.create()
+
+	for row in localRowsOf(functionRows, name: AroundCallsFunctionName) 'eachLocal'
+		if firstToken(row) == AroundCallsLocalName 'theLocal'
+			rows.push(row)
+		end 'theLocal'
+	end 'eachLocal'
+
+	var places = StringArray.create()
+
+	for row in rows 'eachRow'
+		if not places.contains(placeOfRow(row)) 'aNewPlace'
+			places.push(placeOfRow(row))
+		end 'aNewPlace'
+	end 'eachRow'
+
+	Expect.greaterThan(places.count(), than: AroundCallsFewestPlaces - 1, message: "`{AroundCallsLocalName}` in `{AroundCallsFunctionName}` has rows in {places.count()} place(s), so its versions no longer sit in different places and this case no longer reaches the rows that can shadow each other. Its rows were: {listedLines(rows)}")
+
+	let shadowing = pairsOfRowsThatShadow(rows)
+
+	Expect.isEmpty(listedLines(shadowing), message: "the debugger answers a name from the FIRST row that covers an offset, so two rows of one name in different places that cover the same code make one version read as the other. These pairs overlap by more than one instruction: {listedLines(shadowing)}")
+end 'one var whose versions sit in different places is built and its rows overlap by no more than a handover'

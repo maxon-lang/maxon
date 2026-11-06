@@ -244,6 +244,7 @@ export let ScopeShadowFixtureName = "scopeshadow"
 export let BorrowedVarFixtureName = "borrowedvar"
 export let ScopeSplitFixtureName = "scopesplit"
 export let PhiBorrowFixtureName = "phiborrow"
+export let ReboundTotalFixtureName = "reboundtotal"
 export let EqualBindsFixtureName = "equalbinds"
 export let LoopBreakFixtureName = "loopbreak"
 export let ArmScopeFixtureName = "armscope"
@@ -807,6 +808,22 @@ export function overlapOfRowsInDifferentPlaces(left String, right String) return
 
 	return overlapLimit - overlapStart if overlapLimit > overlapStart else 0
 end 'overlapOfRowsInDifferentPlaces'
+
+export function pairsOfRowsThatShadow(rows StringArray) returns StringArray
+	var shadowing = StringArray.create()
+
+	for (leftAt, left) in rows.withIterator() 'eachRow'
+		for rightAt in leftAt.index() + 1 upto rows.count() 'eachLaterRow'
+			let right = try rows.get(rightAt) otherwise panic("debug tests: rows.get OOB at {rightAt}")
+
+			if overlapOfRowsInDifferentPlaces(left, right: right) > MostBytesOfOneInstruction 'shadows'
+				shadowing.push("{left}   ///   {right}")
+			end 'shadows'
+		end 'eachLaterRow'
+	end 'eachRow'
+
+	return shadowing
+end 'pairsOfRowsThatShadow'
 
 export function functionCodeStart(executable FilePath, staged FilePath, name String) returns PrintedNumber
 	let (start, _) = requiredCodeRange(dumpedFunctionRow(executable, staged: staged, name: name), what: "`{name}`'s function row")

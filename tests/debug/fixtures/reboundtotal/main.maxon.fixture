@@ -1,0 +1,57 @@
+typealias Word = int(0 to u32.max)
+
+function opaque(x Word) returns Word
+	if x > 100 'big'
+		return (x - 100) and 0xFFFF
+	end 'big'
+
+	return x + 1
+end 'opaque'
+
+function noinline(x Word) returns Word
+	var y = x
+	var i = 0 as Word
+
+	while i < 3 'spin'
+		y = (y + 1) as Word
+
+		if y > 100 'big'
+			y = ((y - 100) and 0xFFFF) as Word
+		end 'big'
+
+		i = (i + 1) as Word
+	end 'spin'
+
+	return y
+end 'noinline'
+
+function work(seed Word) returns Word
+	var total = seed
+	let v0 = opaque(total + 0)
+	let v1 = opaque(total + 1)
+	let v2 = noinline(total + 2)
+	let v3 = noinline(total + 3)
+	let v4 = noinline(total + 4)
+	let v5 = opaque(total + 5)
+	let v6 = noinline(total + 6)
+	let v7 = opaque(total + 7)
+	let v8 = opaque(total + 8)
+	let v9 = noinline(total + 9)
+	let v10 = noinline(total + 10)
+	let v11 = opaque(total + 11)
+	let v12 = noinline(total + 12)
+	let v13 = opaque(total + 13)
+	for i0 in 0 upto 7 'loop0'
+		total = (total + i0) and 0xFFFF
+		total = ((total + v6 * (v5 and 7)) and 0xFFFF) as Word
+		total = noinline((total + v12) and 0xFFFF)
+	end 'loop0'
+	total = (total + v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13) and 0xFFFF
+	return total
+end 'work'
+
+function main() returns ExitCode
+	let spelled = try Process.environmentVariable("PATH") otherwise ""
+	print("{work((spelled.byteLength() and 0xFF) as Word)}")
+	return 0
+end 'main'

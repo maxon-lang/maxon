@@ -16,19 +16,12 @@ test 'two rows of one local in different places overlap by no more than the inst
 	end 'eachLocal'
 
 	var inASlot = 0 as Count
-	var shadowing = StringArray.create()
 
-	for (leftAt, left) in rows.withIterator() 'eachRow'
-		inASlot = inASlot + 1 if left.contains(StackSlotMark) else inASlot
-
-		for rightAt in leftAt.index() + 1 upto rows.count() 'eachLaterRow'
-			let right = try rows.get(rightAt) otherwise panic("debug tests: rows.get OOB at {rightAt}")
-
-			if overlapOfRowsInDifferentPlaces(left, right: right) > MostBytesOfOneInstruction 'shadows'
-				shadowing.push("{left}   ///   {right}")
-			end 'shadows'
-		end 'eachLaterRow'
+	for row in rows 'eachRow'
+		inASlot = inASlot + 1 if row.contains(StackSlotMark) else inASlot
 	end 'eachRow'
+
+	let shadowing = pairsOfRowsThatShadow(rows)
 
 	Expect.notEqual(inASlot, expected: 0, message: "`{ShadowedLocalName}` has no stack-slot row in `{MainFunctionName}`, so there is no slot-resident version whose row could shadow another's. Its rows were: {listedLines(rows)}")
 	Expect.isEmpty(listedLines(shadowing), message: "the debugger answers a name from the FIRST row that covers an offset, so two rows of one name in different places that cover the same code make one version read as the other. These pairs overlap by more than one instruction: {listedLines(shadowing)}")
