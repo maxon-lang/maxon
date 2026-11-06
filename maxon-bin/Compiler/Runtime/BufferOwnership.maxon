@@ -144,6 +144,8 @@ let ImmortalRecordCapacity = -4
 // every release step is null-guarded.
 let NoOwedAllocation = 0
 
+let CoAllocatedBufferMark = 1
+
 // `buffer@0` when an immortal record names NO blob — a module-level EMPTY `Array with T`, whose `length@8`
 // is 0 so no reader ever strides off the slot. It is the same null a `__managed_create` record is born
 // holding, which is what makes an imaged empty container and an allocated one the same object to every
@@ -625,8 +627,20 @@ end 'emitOwedAllocationBase'
 // plain record's separate buffer often sits at `record + 64`. `checkManagedGeometry` refuses an offset
 // that is 16-aligned or not word-aligned, the alignment of the widest element.
 export function coAllocatedBufferOffset() returns FullRangeInt
-	return (ManagedRecordBytes as FullRangeInt) + (CoAllocatedRefcountBytes as FullRangeInt)
+	let pastRefcount = (ManagedRecordBytes as FullRangeInt) + (CoAllocatedRefcountBytes as FullRangeInt)
+
+	return (pastRefcount + BoxSlotAlignment - 1) / BoxSlotAlignment * BoxSlotAlignment
 end 'coAllocatedBufferOffset'
+
+export function emitMarkBufferCoAllocated(module StdModule, block IrBlock, record ValueId, ids ValueMinter)
+	let mark = emitConst(module, block: block, value: CoAllocatedBufferMark, ids: ids)
+	emitStoreField(module, block: block, record: record, offset: ManagedRecordParentOffset, value: mark)
+end 'emitMarkBufferCoAllocated'
+
+export function emitClearBufferParent(module StdModule, block IrBlock, record ValueId, ids ValueMinter)
+	let noParent = emitConst(module, block: block, value: NoOwedAllocation, ids: ids)
+	emitStoreField(module, block: block, record: record, offset: ManagedRecordParentOffset, value: noParent)
+end 'emitClearBufferParent'
 
 // Exact only once `record` is known to be an owner (`emitBufferNotOwned` false): a non-owned record's
 // `buffer@0` points into bytes it does not allocate, such as an `.rdata` blob that may sit at exactly
@@ -637,9 +651,8 @@ export function emitRouteOnOwnedBuffer(module StdModule, func IrFunction, cur Ir
 	let isAbsent = emitBufferAbsent(module, block: cur, buffer: buffer, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(isAbsent, thenBlockId: absent.id, elseBlockId: probe.id))
 
-	let lead = emitConst(module, block: probe, value: coAllocatedBufferOffset(), ids: ids)
-	let coAddress = emitBin(module, block: probe, a: record, b: lead, opcode: StdBinOpcode.add, ids: ids)
-	emitBranchOnCompareValues(module, block: probe, a: buffer, pred: StdCmpPred.eq, b: coAddress, whenTrue: coAllocated, whenFalse: separate, ids: ids)
+	let mark = emitLoadField(module, block: probe, record: record, offset: ManagedRecordParentOffset, ids: ids)
+	emitBranchOnCompare(module, block: probe, value: mark, pred: StdCmpPred.eq, against: CoAllocatedBufferMark, whenTrue: coAllocated, whenFalse: separate, ids: ids)
 end 'emitRouteOnOwnedBuffer'
 
 export function emitCarryOwnedBufferBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, buffer ValueId, ids ValueMinter)
@@ -863,8 +876,7 @@ export function buildMmCowDetach(module StdModule)
 	// just copied its bytes into an allocation of its own owes nothing to anyone else.
 	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordBufferOffset, value: newBuf)
 	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordCapacityOffset, value: askElements)
-	let noParent = emitConst(module, block: afterCopy, value: NoOwedAllocation, ids: ids)
-	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordParentOffset, value: noParent)
+	emitClearBufferParent(module, block: afterCopy, record: record, ids: ids)
 	module.setTerminator(afterCopy, op: StdOp.ret(base))
 
 	module.functions.push(func)

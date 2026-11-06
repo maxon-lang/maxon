@@ -251,7 +251,7 @@ union AesGcmBacking
 	bitsliced(software AesGcmSoftware)
 
 	#if arch(x64) or arch(arm64)
-		hardware(keys ByteArray)
+		hardware(keys AesGcmKeyBlock)
 	#endif
 end 'AesGcmBacking'
 
@@ -342,7 +342,7 @@ public type AesGcm implements Aead
 	end 'open'
 
 	#if arch(x64) or arch(arm64)
-		function openHardware(keys ByteArray, nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
+		function openHardware(keys AesGcmKeyBlock, nonce ByteArray, sealed ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
 			let ciphertextBytes = try aeadCiphertextBytes(sealed, tagBytes: aesGcmTagBytes, plaintextLimit: aesGcmMaxPlaintextBytes)
 
 			return try aesGcmHardwareOpen(keys, nonce: nonce, sealed: sealed, additionalData: additionalData, ciphertextBytes: ciphertextBytes)

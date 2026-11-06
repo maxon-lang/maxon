@@ -5188,7 +5188,7 @@ end 'main'
 ```
 
 ```mm-trace
-mm_alloc ArrayRecord #1 size=72
+mm_alloc ArrayRecord #1 size=80
 mm_decref ArrayRecord #1 rc=0
 mm_free ArrayRecord #1
 ```
@@ -5212,7 +5212,7 @@ end 'main'
 ```
 
 ```mm-trace
-mm_alloc ArrayRecord #1 size=72
+mm_alloc ArrayRecord #1 size=80
 mm_decref ArrayRecord #1 rc=0
 mm_free ArrayRecord #1
 ```

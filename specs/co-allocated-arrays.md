@@ -465,7 +465,7 @@ end 'main'
 ```
 
 <!-- test: a-sized-byte-fixed-array-is-as-large-as-its-bytes -->
-A fixed array whose type states its length of 300 bytes is one record of 56 bytes of header and 300 bytes of elements,
+A fixed array whose type states its length of 300 bytes is one record of 64 bytes of header and 300 bytes of elements,
 the size a runtime-sized `create(300)` has. **If the sized form's `ArrayRecord` is larger than the runtime-sized
 one's, its elements are not one byte each.**
 <!-- MmTrace -->
@@ -504,16 +504,16 @@ end 'main'
 ```
 
 ```mm-trace
-mm_alloc ArrayRecord #1 size=356
+mm_alloc ArrayRecord #1 size=364
 mm_decref ArrayRecord #1 rc=0
 mm_free ArrayRecord #1
-mm_alloc ArrayRecord #2 size=356
+mm_alloc ArrayRecord #2 size=364
 mm_decref ArrayRecord #2 rc=0
 mm_free ArrayRecord #2
 ```
 
 <!-- test: a-sized-fixed-array-is-as-large-as-its-elements-at-every-width -->
-A sized fixed array's record is the 56-byte header and its elements at their own width: 200 bytes for a hundred 16-bit
+A sized fixed array's record is the 64-byte header and its elements at their own width: 200 bytes for a hundred 16-bit
 elements, 400 for a hundred 32-bit ones, and a hundred bools, 2-bit and 4-bit elements packed into 13, 25 and 50.
 <!-- MmTrace -->
 ```maxon
@@ -575,27 +575,27 @@ end 'main'
 ```
 
 ```mm-trace
-mm_alloc ArrayRecord #1 size=256
+mm_alloc ArrayRecord #1 size=264
 mm_decref ArrayRecord #1 rc=0
 mm_free ArrayRecord #1
-mm_alloc ArrayRecord #2 size=456
+mm_alloc ArrayRecord #2 size=464
 mm_decref ArrayRecord #2 rc=0
 mm_free ArrayRecord #2
-mm_alloc ArrayRecord #3 size=69
+mm_alloc ArrayRecord #3 size=77
 mm_decref ArrayRecord #3 rc=0
 mm_free ArrayRecord #3
-mm_alloc ArrayRecord #4 size=81
+mm_alloc ArrayRecord #4 size=89
 mm_decref ArrayRecord #4 rc=0
 mm_free ArrayRecord #4
-mm_alloc ArrayRecord #5 size=106
+mm_alloc ArrayRecord #5 size=114
 mm_decref ArrayRecord #5 rc=0
 mm_free ArrayRecord #5
 ```
 
 <!-- test: a-generic-born-array-is-as-large-as-its-elements-at-every-width -->
-An array a shared generic body creates with a known capacity is the 56-byte header and its elements at the width the
+An array a shared generic body creates with a known capacity is the 64-byte header and its elements at the width the
 instantiation binds, the size the same array has when a concrete body creates it: a hundred bytes, a hundred 16-bit
-elements, a hundred `bool`s and a hundred 2-bit elements take 156, 256, 69 and 81 bytes. **If a shared body stamps a
+elements, a hundred `bool`s and a hundred 2-bit elements take 164, 264, 77 and 89 bytes. **If a shared body stamps a
 machine word per element instead, each record is eight times as large in its elements and the buffer leaves the
 record's allocation.**
 <!-- MmTrace -->
@@ -654,25 +654,25 @@ end 'main'
 ```
 
 ```mm-trace
-mm_alloc ArrayRecord #1 size=156
+mm_alloc ArrayRecord #1 size=164
 mm_alloc Cells #2 size=8
 mm_decref Cells #2 rc=0
 mm_decref ArrayRecord #1 rc=0
 mm_free ArrayRecord #1
 mm_free Cells #2
-mm_alloc ArrayRecord #3 size=256
+mm_alloc ArrayRecord #3 size=264
 mm_alloc Cells #4 size=8
 mm_decref Cells #4 rc=0
 mm_decref ArrayRecord #3 rc=0
 mm_free ArrayRecord #3
 mm_free Cells #4
-mm_alloc ArrayRecord #5 size=69
+mm_alloc ArrayRecord #5 size=77
 mm_alloc Cells #6 size=8
 mm_decref Cells #6 rc=0
 mm_decref ArrayRecord #5 rc=0
 mm_free ArrayRecord #5
 mm_free Cells #6
-mm_alloc ArrayRecord #7 size=81
+mm_alloc ArrayRecord #7 size=89
 mm_alloc Cells #8 size=8
 mm_decref Cells #8 rc=0
 mm_decref ArrayRecord #7 rc=0
@@ -1420,6 +1420,43 @@ function main() returns ExitCode
 	if cleared != 0 'shrunk'
 		return 7
 	end 'shrunk'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-separate-buffer-allocated-right-behind-its-record-is-released-with-it -->
+A growable array whose buffer was allocated separately, in the same size class as its record and right behind it,
+is released as a separate buffer: the record tells a co-allocated buffer from a separate one by a field it carries, and
+never by where the buffer sits. **If the buffer behind a record is taken for a co-allocated one, dropping the array
+leaks it and the run exits 101.**
+```maxon
+typealias Word = bits(64)
+typealias Words = Array with Word
+typealias Rows = Array with Words
+
+function main() returns ExitCode
+	var rows = Rows.create()
+
+	for row in 0 upto 64 'eachRow'
+		var words = Words.create()
+		words.reserve(6)
+		words.push(row as Word)
+		rows.push(words)
+	end 'eachRow'
+
+	var total = 0 as Word
+
+	for words in rows 'eachWords'
+		total = total + (try words.get(0) otherwise return 1)
+	end 'eachWords'
+
+	if total != 2016 'total'
+		return 2
+	end 'total'
 
 	return 0
 end 'main'

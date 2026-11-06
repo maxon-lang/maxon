@@ -1027,8 +1027,8 @@ end 'main'
 ```
 
 ```mm-trace
-mm_alloc ArrayRecord #1 size=72
-mm_alloc ArrayRecord #2 size=408
+mm_alloc ArrayRecord #1 size=80
+mm_alloc ArrayRecord #2 size=416
 mm_alloc Aes #3 size=8
 mm_decref Aes #3 rc=0
 mm_decref ArrayRecord #2 rc=0

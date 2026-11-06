@@ -245,7 +245,7 @@ The `capacity` field says whether the record may write its buffer and release it
 
 A negative capacity means the record copies its elements into a private buffer before any in-place write; the specific value only records where the buffer came from. `capacity()` returns it to user code.
 
-The `parent` field is the address of the separate allocation the record owes a release to, or `0` when it owes none. A view stores the base of the allocation its bytes are in, and a view of a view stores that same base, so every view names the original allocation. Every other record stores `0`: an owner's debt is its own `buffer`, which the runtime reads where it would otherwise store the address twice.
+The `parent` field is the address of the separate allocation the record owes a release to, or `0` when it owes none. A view stores the base of the allocation its bytes are in, and a view of a view stores that same base, so every view names the original allocation. An owner whose buffer is a separate allocation stores `0`: its debt is its own `buffer`, which the runtime reads where it would otherwise store the address twice. A [co-allocated](#co-allocated-buffers) owner stores `1`, which marks its buffer as part of its own allocation.
 
 ### Co-allocated buffers
 
@@ -256,13 +256,14 @@ at every size, because its length is fixed. The deep copy of an array of managed
 that can grow; see [co-allocated-arrays](../specs/co-allocated-arrays.md).
 
 ```
-[48-byte record][8-byte refcount word][element bytes ...]
-                                      ^ buffer = record + 56
+[48-byte record][8 bytes unused][8-byte refcount word][element bytes ...]
+                                                     ^ buffer = record + 64
 ```
 
 The refcount word is a box refcount slot, so the checks that ask whether a buffer is shared or viewed read it as
-they read any buffer's. The record recognizes its own bytes by address alone: `buffer == record + 56`. Every
-allocation's payload is 16-byte aligned and 56 is 8 mod 16, so only a co-allocated buffer can sit at that address.
+they read any buffer's. The buffer starts at a 16-byte boundary, as a separate allocation's payload does. The
+record marks its own bytes with `parent = 1`; growing
+past the capacity or a copy-on-write detach clears the mark when the record takes a buffer of its own.
 
 - Dropping the record frees the elements with it; a separate buffer is released with `mm_decref`.
 - Growing past the capacity allocates a buffer of its own, copies the elements, and leaves the inline bytes

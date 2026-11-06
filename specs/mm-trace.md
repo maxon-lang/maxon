@@ -824,7 +824,7 @@ end 'main'
 
 <!-- test: a-runtime-sized-fixed-array-is-one-allocation -->
 A fixed array never grows, so its buffer sits in its record's allocation at any size: 352 bytes is the 48-byte
-record, the 8-byte refcount word of the buffer and 352 bytes of elements in ONE `mm_alloc`. **If an `ElementBuffer`
+record, the 16 bytes before the buffer that hold its refcount word, and 352 bytes of elements in ONE `mm_alloc`. **If an `ElementBuffer`
 line appears here, the buffer has an allocation of its own.**
 <!-- MmTrace -->
 ```maxon
@@ -848,7 +848,7 @@ end 'main'
 ```
 
 ```mm-trace
-mm_alloc ArrayRecord #1 size=408
+mm_alloc ArrayRecord #1 size=416
 mm_decref ArrayRecord #1 rc=0
 mm_free ArrayRecord #1
 ```
@@ -873,7 +873,7 @@ end 'main'
 ```
 
 ```mm-trace
-mm_alloc ArrayRecord #1 size=376
+mm_alloc ArrayRecord #1 size=384
 mm_decref ArrayRecord #1 rc=0
 mm_free ArrayRecord #1
 ```
@@ -1050,7 +1050,7 @@ mm_free ElementBuffer #2
 mm_alloc ElementBuffer #4 size=16
 mm_decref ElementBuffer #3 rc=0
 mm_free ElementBuffer #3
-mm_alloc ArrayRecord #5 size=408
+mm_alloc ArrayRecord #5 size=416
 mm_alloc Aes #6 size=8
 mm_alloc ArrayRecord #7 size=48
 mm_alloc ElementBuffer #8 size=4
@@ -1060,7 +1060,7 @@ mm_free ElementBuffer #8
 mm_alloc ElementBuffer #10 size=16
 mm_decref ElementBuffer #9 rc=0
 mm_free ElementBuffer #9
-mm_alloc ArrayRecord #11 size=72
+mm_alloc ArrayRecord #11 size=80
 mm_decref ArrayRecord #11 rc=0
 mm_free ArrayRecord #11
 mm_decref ArrayRecord #7 rc=0

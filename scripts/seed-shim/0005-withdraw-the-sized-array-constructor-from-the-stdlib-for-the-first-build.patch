@@ -1579,23 +1579,27 @@ index 51be7c007..e0caa76ad 100644
  
  		return output
 diff --git b/stdlib/helpers/crypto/AesGcmHardware.maxon a/stdlib/helpers/crypto/AesGcmHardware.maxon
-index 4b91e635f..7955792d7 100644
+index 6a6c6daa9..3df1f3f89 100644
 --- b/stdlib/helpers/crypto/AesGcmHardware.maxon
 +++ a/stdlib/helpers/crypto/AesGcmHardware.maxon
-@@ -10,7 +10,8 @@
- 	// 16-aligned. A FixedArray's buffer is co-allocated at record + 56, which is 8 mod 16, and this
- 	// block is larger than a ByteArray co-allocates, so its buffer has an allocation of its own.
- 	export function aesGcmHardwareKeys(schedule AesSchedule) returns ByteArray
--		var keys = ByteArray.create(aesGcmHardwareTableBytes + (schedule.count() shr aesGcmHardwareScheduleHalfShift))
-+		var keys = ByteArray.create()
+@@ -6,10 +6,11 @@
+ 	let aesGcmHardwareTagBytes = 16
+ 	let aesGcmHardwareScheduleHalfShift = 1
+ 
+-	export typealias AesGcmKeyBlock = FixedArray with Byte
++	export typealias AesGcmKeyBlock = Array with Byte
+ 
+ 	export function aesGcmHardwareKeys(schedule AesSchedule) returns AesGcmKeyBlock
+-		var keys = AesGcmKeyBlock.create(aesGcmHardwareTableBytes + (schedule.count() shr aesGcmHardwareScheduleHalfShift))
++		var keys = AesGcmKeyBlock.create()
 +		keys.resize(aesGcmHardwareTableBytes + (schedule.count() shr aesGcmHardwareScheduleHalfShift))
  		__Builtins.aesGcmInit(keys, schedule)
  
  		return keys
-@@ -27,7 +28,8 @@
+@@ -26,7 +27,8 @@
  	end 'aesGcmHardwareSealInto'
  
- 	export function aesGcmHardwareOpen(keys ByteArray, nonce ByteArray, sealed ByteArray, additionalData ByteArray, ciphertextBytes Count) returns ByteArray throws AeadError
+ 	export function aesGcmHardwareOpen(keys AesGcmKeyBlock, nonce ByteArray, sealed ByteArray, additionalData ByteArray, ciphertextBytes Count) returns ByteArray throws AeadError
 -		var plaintext = ByteArray.create(ciphertextBytes)
 +		var plaintext = ByteArray.create()
 +		plaintext.resize(ciphertextBytes)

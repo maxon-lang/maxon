@@ -80964,8 +80964,8 @@ func @__managed_grow {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, oldbase
   obufprobe:
-    x64.leaRegRegImm32 rax, rbx, 56
-    x64.cmpRegReg rcx, rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 32]
+    x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, oldbase
   obaseco:
     x64.movRegImm32 rcx, 0
@@ -80977,6 +80977,8 @@ func @__managed_grow {
   rccont:
     x64.storeBaseDispReg.word64 [rbx + 0], r14
     x64.storeBaseDispReg.word64 [rbx + 16], r12
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rbx + 32], rax
   done:
     x64.epilogue 48
     x64.popReg r14
@@ -81119,8 +81121,8 @@ func @__managed_mem_grow {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, oldbase
   obufprobe:
-    x64.leaRegRegImm32 rax, rbx, 56
-    x64.cmpRegReg rcx, rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 32]
+    x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, oldbase
   obaseco:
     x64.movRegImm32 rcx, 0
@@ -81132,6 +81134,8 @@ func @__managed_mem_grow {
   rccont:
     x64.storeBaseDispReg.word64 [rbx + 0], r14
     x64.storeBaseDispReg.word64 [rbx + 16], r12
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rbx + 32], rax
   done:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -81353,8 +81357,8 @@ func @__managed_grow {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, oldbase
   obufprobe:
-    x64.leaRegRegImm32 rax, rbx, 56
-    x64.cmpRegReg rcx, rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 32]
+    x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, oldbase
   obaseco:
     x64.movRegImm32 rcx, 0
@@ -81366,6 +81370,8 @@ func @__managed_grow {
   rccont:
     x64.storeBaseDispReg.word64 [rbx + 0], r14
     x64.storeBaseDispReg.word64 [rbx + 16], r12
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rbx + 32], rax
   done:
     x64.epilogue 48
     x64.popReg r14
@@ -81508,8 +81514,8 @@ func @__managed_mem_grow {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, oldbase
   obufprobe:
-    x64.leaRegRegImm32 rax, rbx, 56
-    x64.cmpRegReg rcx, rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 32]
+    x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, oldbase
   obaseco:
     x64.movRegImm32 rcx, 0
@@ -81521,6 +81527,8 @@ func @__managed_mem_grow {
   rccont:
     x64.storeBaseDispReg.word64 [rbx + 0], r14
     x64.storeBaseDispReg.word64 [rbx + 16], r12
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rbx + 32], rax
   done:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -81727,8 +81735,8 @@ func @__managed_grow {
     arm64.cmp x0, 0
     arm64.b.eq oldbase
   obufprobe:
-    arm64.add x1, x19, 56
-    arm64.cmp x0, x1
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, 1
     arm64.b.ne oldbase
   obaseco:
     arm64.movImm x0, 0
@@ -81740,6 +81748,8 @@ func @__managed_grow {
   rccont:
     arm64.storeBaseDispReg.word64 [x19 + 0], x22
     arm64.storeBaseDispReg.word64 [x19 + 16], x20
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x19 + 32], x0
   done:
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -81869,8 +81879,8 @@ func @__managed_mem_grow {
     arm64.cmp x0, 0
     arm64.b.eq oldbase
   obufprobe:
-    arm64.add x1, x19, 56
-    arm64.cmp x0, x1
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, 1
     arm64.b.ne oldbase
   obaseco:
     arm64.movImm x0, 0
@@ -81882,6 +81892,8 @@ func @__managed_mem_grow {
   rccont:
     arm64.storeBaseDispReg.word64 [x19 + 0], x22
     arm64.storeBaseDispReg.word64 [x19 + 16], x20
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x19 + 32], x0
   done:
     arm64.movImm x0, 0
     arm64.movImm x9, 0
@@ -82088,8 +82100,8 @@ func @__managed_grow {
     arm64.cmp x0, 0
     arm64.b.eq oldbase
   obufprobe:
-    arm64.add x1, x19, 56
-    arm64.cmp x0, x1
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, 1
     arm64.b.ne oldbase
   obaseco:
     arm64.movImm x0, 0
@@ -82101,6 +82113,8 @@ func @__managed_grow {
   rccont:
     arm64.storeBaseDispReg.word64 [x19 + 0], x22
     arm64.storeBaseDispReg.word64 [x19 + 16], x20
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x19 + 32], x0
   done:
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -82230,8 +82244,8 @@ func @__managed_mem_grow {
     arm64.cmp x0, 0
     arm64.b.eq oldbase
   obufprobe:
-    arm64.add x1, x19, 56
-    arm64.cmp x0, x1
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, 1
     arm64.b.ne oldbase
   obaseco:
     arm64.movImm x0, 0
@@ -82243,6 +82257,8 @@ func @__managed_mem_grow {
   rccont:
     arm64.storeBaseDispReg.word64 [x19 + 0], x22
     arm64.storeBaseDispReg.word64 [x19 + 16], x20
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x19 + 32], x0
   done:
     arm64.movImm x0, 0
     arm64.movImm x9, 0

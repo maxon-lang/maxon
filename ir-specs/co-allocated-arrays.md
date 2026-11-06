@@ -487,7 +487,7 @@ func @__managed_create_sized {
     x64.cmpRegImm32 rsi, 256
     x64.jcc greater, separm
   coarm:
-    x64.leaRegRegImm32 r13, rsi, 56
+    x64.leaRegRegImm32 r13, rsi, 64
     x64.movRegImm32 rax, 0
     x64.movRegReg r14, rcx
     x64.jmp alloc
@@ -505,9 +505,11 @@ func @__managed_create_sized {
     x64.cmpRegImm32 r13, 48
     x64.jcc lessEqual, chksep
   copublish:
-    x64.leaRegRegImm32 rax, r15, 56
+    x64.leaRegRegImm32 rax, r15, 64
     x64.storeBaseDispReg.word64 [r15 + 0], rax
     x64.storeBaseDispReg.word64 [r15 + 16], r14
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r15 + 32], rax
     x64.jmp done
   chksep:
     x64.loadRegSlot rax, slot1
@@ -691,7 +693,7 @@ func @__managed_create_sized {
     x64.cmpRegImm32 rsi, 256
     x64.jcc greater, separm
   coarm:
-    x64.leaRegRegImm32 r13, rsi, 56
+    x64.leaRegRegImm32 r13, rsi, 64
     x64.movRegImm32 rax, 0
     x64.movRegReg r14, rcx
     x64.jmp alloc
@@ -709,9 +711,11 @@ func @__managed_create_sized {
     x64.cmpRegImm32 r13, 48
     x64.jcc lessEqual, chksep
   copublish:
-    x64.leaRegRegImm32 rax, r15, 56
+    x64.leaRegRegImm32 rax, r15, 64
     x64.storeBaseDispReg.word64 [r15 + 0], rax
     x64.storeBaseDispReg.word64 [r15 + 16], r14
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r15 + 32], rax
     x64.jmp done
   chksep:
     x64.loadRegSlot rax, slot1
@@ -883,7 +887,7 @@ func @__managed_create_sized {
     arm64.cmp x23, 256
     arm64.b.gt separm
   coarm:
-    arm64.add x22, x23, 56
+    arm64.add x22, x23, 64
     arm64.movImm x23, 0
     arm64.movRegReg x24, x0
     arm64.b alloc
@@ -899,9 +903,11 @@ func @__managed_create_sized {
     arm64.cmp x22, 48
     arm64.b.le chksep
   copublish:
-    arm64.add x0, x25, 56
+    arm64.add x0, x25, 64
     arm64.storeBaseDispReg.word64 [x25 + 0], x0
     arm64.storeBaseDispReg.word64 [x25 + 16], x24
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 32], x0
     arm64.b done
   chksep:
     arm64.cmp x23, 0
@@ -1075,7 +1081,7 @@ func @__managed_create_sized {
     arm64.cmp x23, 256
     arm64.b.gt separm
   coarm:
-    arm64.add x22, x23, 56
+    arm64.add x22, x23, 64
     arm64.movImm x23, 0
     arm64.movRegReg x24, x0
     arm64.b alloc
@@ -1091,9 +1097,11 @@ func @__managed_create_sized {
     arm64.cmp x22, 48
     arm64.b.le chksep
   copublish:
-    arm64.add x0, x25, 56
+    arm64.add x0, x25, 64
     arm64.storeBaseDispReg.word64 [x25 + 0], x0
     arm64.storeBaseDispReg.word64 [x25 + 16], x24
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 32], x0
     arm64.b done
   chksep:
     arm64.cmp x23, 0
@@ -1286,7 +1294,7 @@ func @__managed_create_fixed {
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, wide
   coarm:
-    x64.leaRegRegImm32 r14, rsi, 56
+    x64.leaRegRegImm32 r14, rsi, 64
     x64.movRegReg r15, rcx
   alloc:
     x64.movRegImm32 rdx, 0
@@ -1297,9 +1305,11 @@ func @__managed_create_fixed {
     x64.cmpRegImm32 r14, 48
     x64.jcc lessEqual, done
   copublish:
-    x64.leaRegRegImm32 rax, r8, 56
+    x64.leaRegRegImm32 rax, r8, 64
     x64.storeBaseDispReg.word64 [r8 + 0], rax
     x64.storeBaseDispReg.word64 [r8 + 16], r15
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 32], rax
   done:
     x64.storeBaseDispReg.word64 [r8 + 8], r12
     x64.epilogue 40
@@ -1455,7 +1465,7 @@ func @__managed_create_fixed {
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, wide
   coarm:
-    x64.leaRegRegImm32 r14, rsi, 56
+    x64.leaRegRegImm32 r14, rsi, 64
     x64.movRegReg r15, rcx
   alloc:
     x64.movRegImm32 rdx, 0
@@ -1466,9 +1476,11 @@ func @__managed_create_fixed {
     x64.cmpRegImm32 r14, 48
     x64.jcc lessEqual, done
   copublish:
-    x64.leaRegRegImm32 rax, r8, 56
+    x64.leaRegRegImm32 rax, r8, 64
     x64.storeBaseDispReg.word64 [r8 + 0], rax
     x64.storeBaseDispReg.word64 [r8 + 16], r15
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 32], rax
   done:
     x64.storeBaseDispReg.word64 [r8 + 8], r12
     x64.epilogue 40
@@ -1609,7 +1621,7 @@ func @__managed_create_fixed {
     arm64.cmp x4, 0
     arm64.b.ne wide
   coarm:
-    arm64.add x22, x3, 56
+    arm64.add x22, x3, 64
     arm64.movRegReg x23, x0
   alloc:
     arm64.movImm x1, 0
@@ -1620,9 +1632,11 @@ func @__managed_create_fixed {
     arm64.cmp x22, 48
     arm64.b.le done
   copublish:
-    arm64.add x1, x0, 56
+    arm64.add x1, x0, 64
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.storeBaseDispReg.word64 [x0 + 16], x23
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 32], x1
   done:
     arm64.storeBaseDispReg.word64 [x0 + 8], x20
     arm64.loadRegSlot x19, slot0
@@ -1763,7 +1777,7 @@ func @__managed_create_fixed {
     arm64.cmp x4, 0
     arm64.b.ne wide
   coarm:
-    arm64.add x22, x3, 56
+    arm64.add x22, x3, 64
     arm64.movRegReg x23, x0
   alloc:
     arm64.movImm x1, 0
@@ -1774,9 +1788,11 @@ func @__managed_create_fixed {
     arm64.cmp x22, 48
     arm64.b.le done
   copublish:
-    arm64.add x1, x0, 56
+    arm64.add x1, x0, 64
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.storeBaseDispReg.word64 [x0 + 16], x23
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 32], x1
   done:
     arm64.storeBaseDispReg.word64 [x0 + 8], x20
     arm64.loadRegSlot x19, slot0
@@ -2356,8 +2372,8 @@ func @__managed_release {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, basejoin
   obufprobe:
-    x64.leaRegRegImm32 rax, rbx, 56
-    x64.cmpRegReg rcx, rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 32]
+    x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, basejoin
   obaseco:
     x64.movRegImm32 rcx, 0
@@ -2634,8 +2650,8 @@ func @__managed_release {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, basejoin
   obufprobe:
-    x64.leaRegRegImm32 rax, rbx, 56
-    x64.cmpRegReg rcx, rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 32]
+    x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, basejoin
   obaseco:
     x64.movRegImm32 rcx, 0
@@ -2901,8 +2917,8 @@ func @__managed_release {
     arm64.cmp x0, 0
     arm64.b.eq basejoin
   obufprobe:
-    arm64.add x1, x19, 56
-    arm64.cmp x0, x1
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, 1
     arm64.b.ne basejoin
   obaseco:
     arm64.movImm x0, 0
@@ -3156,8 +3172,8 @@ func @__managed_release {
     arm64.cmp x0, 0
     arm64.b.eq basejoin
   obufprobe:
-    arm64.add x1, x19, 56
-    arm64.cmp x0, x1
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, 1
     arm64.b.ne basejoin
   obaseco:
     arm64.movImm x0, 0

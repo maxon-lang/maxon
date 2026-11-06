@@ -6,17 +6,16 @@
 	let aesGcmHardwareTagBytes = 16
 	let aesGcmHardwareScheduleHalfShift = 1
 
-	// The key block is a ByteArray, not a FixedArray: its 256-byte product table must start
-	// 16-aligned. A FixedArray's buffer is co-allocated at record + 56, which is 8 mod 16, and this
-	// block is larger than a ByteArray co-allocates, so its buffer has an allocation of its own.
-	export function aesGcmHardwareKeys(schedule AesSchedule) returns ByteArray
-		var keys = ByteArray.create(aesGcmHardwareTableBytes + (schedule.count() shr aesGcmHardwareScheduleHalfShift))
+	export typealias AesGcmKeyBlock = FixedArray with Byte
+
+	export function aesGcmHardwareKeys(schedule AesSchedule) returns AesGcmKeyBlock
+		var keys = AesGcmKeyBlock.create(aesGcmHardwareTableBytes + (schedule.count() shr aesGcmHardwareScheduleHalfShift))
 		__Builtins.aesGcmInit(keys, schedule)
 
 		return keys
 	end 'aesGcmHardwareKeys'
 
-	export function aesGcmHardwareSealInto(output ByteArray, at ElementIndex, keys ByteArray, nonce ByteArray, plaintext ByteArray, additionalData ByteArray)
+	export function aesGcmHardwareSealInto(output ByteArray, at ElementIndex, keys AesGcmKeyBlock, nonce ByteArray, plaintext ByteArray, additionalData ByteArray)
 		let sealedEnd = at + plaintext.count() + aesGcmHardwareTagBytes
 
 		if output.count() != sealedEnd 'resizes'
@@ -26,7 +25,7 @@
 		__Builtins.aesGcmSeal(output, at, keys, nonce, additionalData, plaintext)
 	end 'aesGcmHardwareSealInto'
 
-	export function aesGcmHardwareOpen(keys ByteArray, nonce ByteArray, sealed ByteArray, additionalData ByteArray, ciphertextBytes Count) returns ByteArray throws AeadError
+	export function aesGcmHardwareOpen(keys AesGcmKeyBlock, nonce ByteArray, sealed ByteArray, additionalData ByteArray, ciphertextBytes Count) returns ByteArray throws AeadError
 		var plaintext = ByteArray.create(ciphertextBytes)
 
 		if not __Builtins.aesGcmOpen(plaintext, aesHardwareFirstByte, keys, nonce, additionalData, sealed) 'forged'

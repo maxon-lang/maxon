@@ -2209,13 +2209,13 @@ function checkManagedGeometry()
 		panic("managed geometry: a bit position becomes a byte index by shifting {BitPosToByteShift} and `runtime/ManagedGeometry.maxon` derives {TierBitPosToByteShift} — update `BitPosToByteShift` there, and this constant")
 	end 'bitPosShiftDisagrees'
 
-	if coAllocatedBufferOffset() mod (MachineWordBytes as FullRangeInt) != 0 'coAllocatedBufferIsMisaligned'
-		panic("managed geometry: a co-allocated buffer sits {coAllocatedBufferOffset()} bytes past its record, which is not a multiple of the {MachineWordBytes}-byte machine word, the widest element an array stores")
+	if coAllocatedBufferOffset() mod BoxSlotAlignment != 0 'coAllocatedBufferIsMisaligned'
+		panic("managed geometry: a co-allocated buffer sits {coAllocatedBufferOffset()} bytes past its record, which is not a multiple of the {BoxSlotAlignment}-byte payload alignment a separate buffer has")
 	end 'coAllocatedBufferIsMisaligned'
 
-	if coAllocatedBufferOffset() mod BoxSlotAlignment == 0 'coAllocatedBufferIsAPayloadAddress'
-		panic("managed geometry: a co-allocated buffer sits {coAllocatedBufferOffset()} bytes past its record, a multiple of the {BoxSlotAlignment}-byte payload alignment, so a separate buffer could be allocated at that address and be taken for it")
-	end 'coAllocatedBufferIsAPayloadAddress'
+	if coAllocatedBufferOffset() < (ManagedRecordBytes as FullRangeInt) + (CoAllocatedRefcountBytes as FullRangeInt) 'coAllocatedBufferOverlapsItsHeader'
+		panic("managed geometry: a co-allocated buffer sits {coAllocatedBufferOffset()} bytes past its record, which leaves no room for the {ManagedRecordBytes}-byte record and the {CoAllocatedRefcountBytes}-byte refcount word before it")
+	end 'coAllocatedBufferOverlapsItsHeader'
 end 'checkManagedGeometry'
 
 // Every bit set — the `-1` the mask derivations start from. `(1 << bits) - 1` is the obvious spelling of a
@@ -3963,6 +3963,7 @@ function emitReallocateToCapacity(module StdModule, func IrFunction, cur IrBlock
 
 	emitStoreField(module, block: afterRelease, record: arr, offset: ManagedRecordBufferOffset, value: newBuf)
 	emitStoreField(module, block: afterRelease, record: arr, offset: ManagedRecordCapacityOffset, value: newCap)
+	emitClearBufferParent(module, block: afterRelease, record: arr, ids: ids)
 	return afterRelease
 end 'emitReallocateToCapacity'
 
@@ -4164,6 +4165,7 @@ function emitCoAllocatedPublishAndReturn(module StdModule, frame SizedCreateFram
 	let coBuffer = emitBin(module, block: frame.coPublish, a: record, b: leadOffset, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: frame.coPublish, record: record, offset: ManagedRecordBufferOffset, value: coBuffer)
 	emitStoreField(module, block: frame.coPublish, record: record, offset: ManagedRecordCapacityOffset, value: frame.reservedRoom)
+	emitMarkBufferCoAllocated(module, block: frame.coPublish, record: record, ids: ids)
 	module.setTerminator(frame.coPublish, op: StdOp.branch(frame.done.id))
 
 	emitStoreField(module, block: frame.done, record: record, offset: ManagedRecordLengthOffset, value: frame.length)

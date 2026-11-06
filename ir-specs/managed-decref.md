@@ -198,8 +198,8 @@ func @__managed_release {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, basejoin
   obufprobe:
-    x64.leaRegRegImm32 rax, rbx, 56
-    x64.cmpRegReg rcx, rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 32]
+    x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, basejoin
   obaseco:
     x64.movRegImm32 rcx, 0
@@ -375,8 +375,8 @@ func @__managed_release {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, basejoin
   obufprobe:
-    x64.leaRegRegImm32 rax, rbx, 56
-    x64.cmpRegReg rcx, rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 32]
+    x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, basejoin
   obaseco:
     x64.movRegImm32 rcx, 0
@@ -546,8 +546,8 @@ func @__managed_release {
     arm64.cmp x0, 0
     arm64.b.eq basejoin
   obufprobe:
-    arm64.add x1, x19, 56
-    arm64.cmp x0, x1
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, 1
     arm64.b.ne basejoin
   obaseco:
     arm64.movImm x0, 0
@@ -719,8 +719,8 @@ func @__managed_release {
     arm64.cmp x0, 0
     arm64.b.eq basejoin
   obufprobe:
-    arm64.add x1, x19, 56
-    arm64.cmp x0, x1
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 32]
+    arm64.cmp x1, 1
     arm64.b.ne basejoin
   obaseco:
     arm64.movImm x0, 0
