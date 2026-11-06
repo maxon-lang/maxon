@@ -419,7 +419,7 @@ function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseInd
 	emitNameTestBranch(module, block: entry, name: name, caseName: layout.caseNameAt(caseIndex), globalData: project.globalData, hit: build, miss: miss, ids: ids)
 
 	if representation == UnionRepresentation.word 'aWord'
-		let tagBits = emitConst(module, block: build, value: layout.wordTagOfIndex(caseIndex), ids: ids)
+		let tagBits = emitConst(module, block: build, value: layout.wordKeyOfIndex(caseIndex), ids: ids)
 		let word = emitBin(module, block: build, a: 1, b: tagBits, opcode: StdBinOpcode.bitOr, ids: ids)
 		emitOkReturn(module, block: build, value: word, ids: ids)
 		emitErrorReturn(module, block: miss, flag: EnumLookupNoSuchCaseNameFlag, ids: ids)
@@ -468,13 +468,13 @@ function emitNameTestBranch(module StdModule, block IrBlock, name ValueId, caseN
 end 'emitNameTestBranch'
 
 // The ok return of a matched PAYLOAD-FREE case, by the declaration's representation: its bare tag;
-// for a word union, the stored tag (declaration index + `UnboxedTagBase`) as an empty word; for a
+// for a word union, its `payloadFreeWordOfIndex` word; for a
 // box union, where even a payload-free case takes the boxed form, a fresh box carrying that tag and
 // nothing else.
 function emitCaseValueReturn(module StdModule, block IrBlock, layout EnumLayout, caseIndex CaseIndex, project Project, representation UnionRepresentation, ids ValueMinter)
 	match representation 'representation'
 		bareTag then emitOkReturn(module, block: block, value: emitConst(module, block: block, value: layout.tagOfIndex(caseIndex), ids: ids), ids: ids)
-		word then emitOkReturn(module, block: block, value: emitConst(module, block: block, value: layout.wordTagOfIndex(caseIndex), ids: ids), ids: ids)
+		word then emitOkReturn(module, block: block, value: emitConst(module, block: block, value: layout.payloadFreeWordOfIndex(caseIndex), ids: ids), ids: ids)
 		box then emitBoxedCaseValueReturn(module, block: block, layout: layout, caseIndex: caseIndex, project: project, ids: ids)
 	end 'representation'
 end 'emitCaseValueReturn'

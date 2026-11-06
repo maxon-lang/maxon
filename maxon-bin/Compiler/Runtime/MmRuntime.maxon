@@ -3291,7 +3291,7 @@ end 'unboxedManagedCases'
 
 function emitUnboxedCaseTest(module StdModule, func IrFunction, from IrBlock, hit IrBlock, tag ValueId, layout EnumLayout, ci CaseIndex, ids ValueMinter) returns IrBlock
 	var nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
-	emitBranchOnCompare(module, block: from, value: tag, pred: StdCmpPred.eq, against: layout.wordTagOfIndex(ci), whenTrue: hit, whenFalse: nextTest, ids: ids)
+	emitBranchOnCompare(module, block: from, value: tag, pred: StdCmpPred.eq, against: layout.wordKeyOfIndex(ci), whenTrue: hit, whenFalse: nextTest, ids: ids)
 
 	return nextTest
 end 'emitUnboxedCaseTest'
@@ -3402,7 +3402,7 @@ function synthesizeUnboxedUnionCloner(module StdModule, layout EnumLayout, proje
 		let field = unboxedCasePayload(layout, ci: ci)
 		let strategy = managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: CascadeAction.clone)
 		let copy = emitCloneCall(module, block: visit, oldPtr: pointer, strategy: strategy, ids: ids)
-		let tagBits = emitConst(module, block: visit, value: layout.wordTagOfIndex(ci), ids: ids)
+		let tagBits = emitConst(module, block: visit, value: layout.wordKeyOfIndex(ci), ids: ids)
 		let cloned = emitBin(module, block: visit, a: copy, b: tagBits, opcode: StdBinOpcode.bitOr, ids: ids)
 		emitBranchCarrying(module, from: visit, to: done.block, values: argsOf(cloned))
 		emitBranchCarrying(module, from: vacant, to: done.block, values: argsOf(word))

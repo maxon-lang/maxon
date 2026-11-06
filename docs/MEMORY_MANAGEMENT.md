@@ -125,7 +125,7 @@ destructor_Result(ptr):
             if field_ptr != NULL: mm_decref(field_ptr)
 ```
 
-A union stored as one tagged word (see [Unboxed Unions](#unboxed-unions)) takes the word as its argument and switches on the stored tag. A case with no payload, and the empty word, match no case and release nothing:
+A union stored as one tagged word (see [Unboxed Unions](#unboxed-unions)) takes the word as its argument and switches on the key. A case with no payload, and the empty word, match no case and release nothing:
 
 ```
 destructor_Result(word):
@@ -164,27 +164,29 @@ Types that contain only primitives (e.g., `Point{x: int, y: int}`) have a NULL d
 
 A `union` is stored as one 8-byte word, with no box of its own, when all of these hold:
 
-- it has at most seven cases, tagged by declaration position;
+- it has at most seven cases that carry a payload and at most 32767 cases in all;
 - it declares no `implements` clause;
 - every case carries no payload, or exactly one managed record: a `String`, a `Character`, a struct, or an array, map or other generic-instance record;
 - it is declared in source (the compiler's own request and reply unions are boxes).
 
 Every other union with a payload is a heap box.
 
-The word holds the payload pointer with the stored tag in its low three bits. Payload records are 8-aligned, so those bits are free:
+The word holds the payload pointer with the case's key in its low three bits. Payload records are 8-aligned, so those bits are free:
 
 ```
-word    = payload_ptr | (case_index + 1)
-tag     = word & 7           // 1 to 7
+word    = payload_ptr | key
+key     = word & 7           // 1 to 7
 payload = word & -8
 ```
 
-- **A payload-free case** is the stored tag alone. Its pointer bits are zero, it allocates nothing, and there is nothing to free.
-- **Tag 0 is the empty word.** A zeroed slot (a fresh array element, an unwritten field) is a union that holds nothing: the destructor, retain, clone and share walk read it as vacant and touch nothing. Stored tags run from 1, so the three bits hold seven cases.
+A union of at most seven cases gives each case the key `declaration index + 1`. A larger union gives its payload cases the keys 1 to 7 in declaration order, then its payload-free cases the keys after them in declaration order.
+
+- **A payload-free case** is a word with no pointer bits and allocates nothing, so there is nothing to free. Its word is its key when the key is at most 7, and `key << 48` otherwise. Every real pointer is below 2^48 on every target, and a key of 8 or more shifted by 48 is at least 2^51, so no payload word equals a payload-free case's word.
+- **Key 0 is the empty word.** A zeroed slot (a fresh array element, an unwritten field) is a union that holds nothing: the destructor, retain, clone and share walk read it as vacant and touch nothing. Keys run from 1, so the three bits hold seven payload cases, and the largest key is 32767, which keeps the shifted word positive.
 - **Construction** allocates only the payload; the word owns the reference the payload arrived with.
 - **Drop and retain** go through `__destruct_<U>(word)` and `__uretain_<U>(word)`, synthesized per union. Both switch on the tag, mask the pointer out and skip a null payload.
-- **`match`** dispatches on the stored tag, `word & 7`. An arm that binds a payload covers exactly one case, so it takes the payload as `word - tag` with that case's tag. `.ordinal` answers the declaration index, `(word & 7) - 1`. A payload binding is a hold when the arm cannot write it or displace its source (the compiler lowers the hold to a reference only where an operation in its window may release the payload), and a retained reference when it can.
-- **Assigning a payload binding** builds a new word, `payload | tag`, and stores it where the union lives: a local `var`'s variable, the field or element slot that held it, or a `mutable` parameter's argument. The displaced payload is released. This is why the assignment must reach its union ([Mutable Match Bindings](LANGUAGE_REFERENCE.md#mutable-match-bindings)).
+- **`match`** dispatches on the key: `word & 7` for a union of at most seven cases, and `(word & 7) | (word >> 48)` (logical shift) for a larger one. An arm that binds a payload covers exactly one case, so it takes the payload as `word - key` with that case's key. `.ordinal` answers the declaration index of the case with that key. A payload binding is a hold when the arm cannot write it or displace its source (the compiler lowers the hold to a reference only where an operation in its window may release the payload), and a retained reference when it can.
+- **Assigning a payload binding** builds a new word, `payload | key`, and stores it where the union lives: a local `var`'s variable, the field or element slot that held it, or a `mutable` parameter's argument. The displaced payload is released. This is why the assignment must reach its union ([Mutable Match Bindings](LANGUAGE_REFERENCE.md#mutable-match-bindings)).
 
 ## Buffers (`__ManagedMemory`)
 

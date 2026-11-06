@@ -421,13 +421,20 @@ function mxdbgDescribeEnum(project Project, signatures ProgramSignatures, layout
 	var fields = MxdbgFieldDescArray.create(0)
 	fields.reserve(layout.caseCount())
 
+	let representation = unionRepresentationOf(signatures, typeNames: project.typeNames, layout: layout)
+
 	for i in 0 upto layout.caseCount() 'eachCase'
-		let tag = try layout.caseTags.get(i) otherwise panic("mxdbgDescribeEnum: caseTags.get OOB at {i} for `{String.from(layout.name)}`, whose columns are index-parallel")
+		let tag = match representation 'caseTag'
+			word gives layout.wordKeyOfIndex(i)
+			box or
+			bareTag gives try layout.caseTags.get(i) otherwise panic("mxdbgDescribeEnum: caseTags.get OOB at {i} for `{String.from(layout.name)}`, whose columns are index-parallel")
+		end 'caseTag'
+
 		let payload = try layout.casePayloads.get(i) otherwise panic("mxdbgDescribeEnum: casePayloads.get OOB at {i} for `{String.from(layout.name)}`, whose columns are index-parallel")
 		fields.push(MxdbgFieldDesc.create(layout.caseNameAt(i), offset: mxdbgTagWord(tag), typeName: mxdbgCasePayloadName(project, signatures: signatures, payload: payload)))
 	end 'eachCase'
 
-	match unionRepresentationOf(signatures, typeNames: project.typeNames, layout: layout) 'representation'
+	match representation 'representation'
 		word then return MxdbgTypeDesc.create(MxdbgTypeKindUnionWord, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: fields)
 		box or
 		bareTag then return MxdbgTypeDesc.create(MxdbgTypeKindUnion if layout.isUnion else MxdbgTypeKindEnum, size: layout.boxSizeBytes() as MxdbgIndex, align: MxdbgAggregateAlign, fields: fields)

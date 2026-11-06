@@ -5,9 +5,44 @@ union Parcel
 	named(label String)
 end 'Parcel'
 
+union Crate
+	a
+	b
+	c
+	d
+	e
+	f
+	g
+	h
+	named(label String)
+	last
+end 'Crate'
+
+function crateWeight(crate Crate) returns Amount
+	return match crate 'weight'
+		named(label) gives label.byteLength() as Amount
+		a or
+		b or
+		c or
+		d or
+		e or
+		f or
+		g or
+		h or
+		last gives 0
+	end 'weight'
+end 'crateWeight'
+
+function crateOf(seed Amount) returns Crate
+	return Crate.c if seed < 10 else Crate.last
+end 'crateOf'
+
 function render(seed Amount) returns Amount
 	let parcel = Parcel.named("parcel{seed}")
 	let nothing = Parcel.empty
+	let held = Crate.named("crate{seed}")
+	let near = crateOf(seed)
+	let far = crateOf(seed + 10)
 
 	let size = match parcel 'kind'
 		empty gives 0
@@ -16,7 +51,7 @@ function render(seed Amount) returns Amount
 
 	print("{size} {seed}\n") // anchor: rendered
 
-	return size + match nothing 'other'
+	return size + crateWeight(held) + crateWeight(near) + crateWeight(far) + match nothing 'other'
 		empty gives 0
 		named(label) gives label.byteLength() as Amount
 	end 'other'

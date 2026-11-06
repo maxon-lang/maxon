@@ -2661,10 +2661,10 @@ As with enums, a method carries its own visibility, and `static function` is not
 
 ### Representation
 
-A union with no payload is a bare tag. A union with at most seven cases, tagged by declaration position,
-whose every case carries no payload or exactly one heap record (a `String`, a `Character`, a struct, or an
-array, map or other generic-instance record), and that declares no `implements` clause, is one machine word:
-the payload's address with the case tag in its low three bits. Constructing one allocates nothing beyond the
+A union with no payload is a bare tag. A union with at most seven payload cases and at most 32767
+cases in all, whose every case carries no payload or exactly one heap record (a `String`, a `Character`, a
+struct, or an array, map or other generic-instance record), and that declares no `implements` clause, is one
+machine word: the payload's address with the case key in its low three bits. Constructing one allocates nothing beyond the
 payload, and dropping one releases the payload it holds. Every other union with a payload is a heap box
 holding the tag and one slot per payload field, and a union that declares `implements` is always a box. The
 two forms behave alike: the same ownership, the same `match`, the same diagnostics. The word layout is

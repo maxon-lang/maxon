@@ -430,13 +430,14 @@ end 'renderUnion'
 
 function renderUnionWord(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, source DebugValueSource) returns ElementIndex
 	let word = try readRaw(memory, source: source, width: UnionTagBytes) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
-	let storedTag = word and UnboxedTagMask
+	let tagBits = word and UnboxedTagMask
+	let key = tagBits or (word shr UnboxedInhabitantShift)
 
-	if storedTag < UnboxedTagBase 'neverFilled'
+	if key < UnboxedFirstKey 'neverFilled'
 		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: NullPointerDisplay))
 	end 'neverFilled'
 
-	return caseOf(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, tag: storedTag - UnboxedTagBase, payload: DebugValueSource.word(word - storedTag))
+	return caseOf(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, tag: key, payload: DebugValueSource.word(word - tagBits))
 end 'renderUnionWord'
 
 function renderFoldedUnion(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, first MxdbgIndex) returns ElementIndex

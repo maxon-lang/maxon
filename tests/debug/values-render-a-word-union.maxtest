@@ -6,6 +6,12 @@ let WordNothingLocalName = "nothing"
 let WordNamedCaseName = "named"
 let WordEmptyCaseName = "empty"
 let WordPayloadRendering = "named=\"parcel1\" (len=7)"
+let WordHeldLocalName = "held"
+let WordNearLocalName = "near"
+let WordFarLocalName = "far"
+let WordNearCaseName = "c"
+let WordFarCaseName = "last"
+let WordHeldPayloadRendering = "named=\"crate1\" (len=6)"
 
 test 'a union held in one tagged word renders the case its low bits name and the payload its high bits address'
 	let staged = builtFixture(WordUnionCaseLabel, fixture: WordUnionFixtureName)
@@ -31,4 +37,19 @@ test 'a union held in one tagged word renders the case its low bits name and the
 	let nothingValues = valueNamed(listed, node: listed.root, key: LocalsKey, name: WordNothingLocalName)
 	Expect.equal(nothingValues.count(), expected: 1, message: "the union local `{WordNothingLocalName}` is not in the listing. The locals were: {rows}. {said}")
 	Expect.equal(textOf(listed, node: nodeAt(nothingValues, index: 0), key: DisplayKey), expected: WordEmptyCaseName, message: "a payload-free case is the bare tag word, with no payload address behind it. The locals were: {rows}. {said}")
+
+	let heldValues = valueNamed(listed, node: listed.root, key: LocalsKey, name: WordHeldLocalName)
+	Expect.equal(heldValues.count(), expected: 1, message: "the union local `{WordHeldLocalName}` is not in the listing. The locals were: {rows}. {said}")
+	Expect.equal(textOf(listed, node: nodeAt(heldValues, index: 0), key: DisplayKey), expected: WordNamedCaseName, message: "a payload case of a union past seven cases keeps its key in the low three bits. The locals were: {rows}. {said}")
+
+	let heldChildren = listedLines(valueRows(listed, node: nodeAt(heldValues, index: 0), key: ChildrenKey))
+	Expect.contains(heldChildren, needle: WordHeldPayloadRendering, message: "the payload is the word with its tag bits cleared. `{WordHeldLocalName}`'s children were: {heldChildren}. {said}")
+
+	let nearValues = valueNamed(listed, node: listed.root, key: LocalsKey, name: WordNearLocalName)
+	Expect.equal(nearValues.count(), expected: 1, message: "the union local `{WordNearLocalName}` is not in the listing. The locals were: {rows}. {said}")
+	Expect.equal(textOf(listed, node: nodeAt(nearValues, index: 0), key: DisplayKey), expected: WordNearCaseName, message: "a payload-free case whose key fits the tag bits is that key alone. The locals were: {rows}. {said}")
+
+	let farValues = valueNamed(listed, node: listed.root, key: LocalsKey, name: WordFarLocalName)
+	Expect.equal(farValues.count(), expected: 1, message: "the union local `{WordFarLocalName}` is not in the listing. The locals were: {rows}. {said}")
+	Expect.equal(textOf(listed, node: nodeAt(farValues, index: 0), key: DisplayKey), expected: WordFarCaseName, message: "a payload-free case past the seventh key is its key shifted into the high bits, which names its case and holds no payload address. The locals were: {rows}. {said}")
 end 'a union held in one tagged word renders the case its low bits name and the payload its high bits address'

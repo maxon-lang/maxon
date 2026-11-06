@@ -2599,6 +2599,11 @@ function firstSummedCaseIndex(column EnumCaseConstant) returns CaseIndex
 	end 'c'
 end 'firstSummedCaseIndex'
 
+enum EnumSelectDomain
+	caseTag
+	wordKey
+end 'EnumSelectDomain'
+
 // ⭐ **WHAT AN INTERPOLATED ENUM VALUE RENDERS AS.** Three answers rather than a bool, because the two that
 // produce TEXT select from different columns (`caseNames` vs `caseRawValues`) and the third produces no text
 // at all — it hands the tag to the ordinary decimal renderer. See `enumInterpRendering`.
@@ -57446,7 +57451,7 @@ export type Parser
 		// place that answers where an enum value's tag lives (`.ordinal` reads the same door through
 		// `emitEnumTagOf`; see there for the wrong answer their separate copies of this decision produced).
 		// For a boxed union that is a load emitted ONCE here, into the first test block, which dominates
-		// every arm; for a word union it is the stored tag, `word & 7`; for a scalar enum it is the
+		// every arm; for a word union it is the word key (`emitUnboxedWordKey`); for a scalar enum it is the
 		// scrutinee itself and nothing is emitted. The scrutinee `scrut` stays the BOX (or word) either
 		// way, which is what a payload binding reads its payload out of.
 		//
@@ -60698,7 +60703,7 @@ export type Parser
 			// they could not disagree today, but nothing made that a property rather than a coincidence.
 			let offset = layout.payloadSlotOffset(binding.slot)
 			let storage = payloadStorageOf(class)
-			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, valueType: payloadValueTypeOf(class, declared: declared), source: PayloadSource.word(layout.wordTagOfIndex(binding.caseIndex)) if unboxed else PayloadSource.slot(offset, storage: storage), range: range)
+			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, valueType: payloadValueTypeOf(class, declared: declared), source: PayloadSource.word(layout.wordKeyOfIndex(binding.caseIndex)) if unboxed else PayloadSource.slot(offset, storage: storage), range: range)
 			self.wearIndexSpaceAlias(loaded, declared: binding.field.declaredType, scopeFilePath: layout.declFilePath)
 			self.brandValue(loaded, brand: self.payloadPlaceBrand(binding.field, layout: layout, resolved: declared))
 
@@ -74643,7 +74648,7 @@ export type Parser
 
 		view class = try classes.get(0) otherwise panic("emitUnboxedUnionWordConstruct: classes.get(0) OOB on a case with one payload")
 		let stored = try self.storedPayloadAt(fill, index: 0, class: class, args: args, argsBareLocal: argsBareLocal, holder: PayloadHolder.word, caseTok: caseTok, range: range)
-		let word = self.emitMachineWordBinOp(stored, rhs: self.emitLiteral(layout.wordTagOfIndex(caseIndex), valueType: MaxonType.integer, range: range), op: MaxonBinOp.bitOr, resultType: MaxonType.named(self.artifact.typeNames.intern(layout.name)), range: range)
+		let word = self.emitMachineWordBinOp(stored, rhs: self.emitLiteral(layout.wordKeyOfIndex(caseIndex), valueType: MaxonType.integer, range: range), op: MaxonBinOp.bitOr, resultType: MaxonType.named(self.artifact.typeNames.intern(layout.name)), range: range)
 		self.trackOwnedTemp(word, exclusivity: OwnedHeapExclusivity.sole)
 		return word
 	end 'emitUnboxedUnionWordConstruct'
@@ -75440,29 +75445,37 @@ export type Parser
 	end 'emitUnionTagLoad'
 
 	function emitUnboxedPayloadFreeWord(layout EnumLayout, caseIndex CaseIndex, range SourceRange) returns ValueId
-		let word = self.emitEnumTagLiteral(layout.name, tag: layout.wordTagOfIndex(caseIndex), range: range)
+		let word = self.emitEnumTagLiteral(layout.name, tag: layout.payloadFreeWordOfIndex(caseIndex), range: range)
 		self.markReadOnly(word, mark: ReadOnlyMark.imageRecord)
 		return word
 	end 'emitUnboxedPayloadFreeWord'
 
-	// A case's declaration index, read by `.ordinal` and the enum accessors: the dispatch key, less
-	// `UnboxedTagBase` for a word union (stored tags run from 1).
+	// A case's declaration index, read by `.ordinal` and the enum accessors: the dispatch key, mapped
+	// back from the word key for a word union.
 	function emitEnumTagOf(value ValueId, layout EnumLayout, anchor Token, range SourceRange) returns ValueId throws SourceParseError
 		let key = try self.emitEnumDispatchKey(value, layout: layout, anchor: anchor, range: range)
 
 		match self.signatures.unionRepresentation(layout) 'representation'
-			word then return self.emitMachineWordBinOp(key, rhs: self.emitLiteral(UnboxedTagBase, valueType: MaxonType.integer, range: range), op: MaxonBinOp.sub, resultType: MaxonType.integer, range: range)
+			word then return try self.emitDeclarationIndexOfWordKey(key, layout: layout, anchor: anchor, range: range)
 			bareTag or
 			box then return key
 		end 'representation'
 	end 'emitEnumTagOf'
 
+	function emitDeclarationIndexOfWordKey(key ValueId, layout EnumLayout, anchor Token, range SourceRange) returns ValueId throws SourceParseError
+		if not layout.wordKeysFollowDeclarationOrder() 'keysAreShuffled'
+			return try self.emitEnumCaseConstantSelect(layout, tag: key, column: EnumCaseConstant.declarationIndex, anchor: anchor, range: range, domain: EnumSelectDomain.wordKey)
+		end 'keysAreShuffled'
+
+		return self.emitMachineWordBinOp(key, rhs: self.emitLiteral(UnboxedFirstKey, valueType: MaxonType.integer, range: range), op: MaxonBinOp.sub, resultType: MaxonType.integer, range: range)
+	end 'emitDeclarationIndexOfWordKey'
+
 	// ⭐⭐ **WHERE AN ENUM VALUE'S TAG LIVES — THE ONE ANSWER, read by the `match` DISPATCH and, through
 	// `emitEnumTagOf`, by `.ordinal`.** A SCALAR enum's value IS its tag (`parseEnumLiteral` emits the tag
 	// as the value), so the tag is the value and this emits nothing. A BOXED union's value is a heap
 	// POINTER, so its i64 tag is LOADED from offset 0 through `emitUnionTagLoad` above. A WORD union's
-	// value carries its stored tag (declaration index + `UnboxedTagBase`) in the low bits, so the key is
-	// `word & 7`.
+	// value carries its key (`wordKeyOfIndex`) in the low bits, or from bit 48 up for a payload-free case
+	// of a union too large for the tag mask, so the key is read by `emitUnboxedWordKey`.
 	//
 	// ⚠⚠ **IT IS ONE FUNCTION BECAUSE THE DECISION DRIFTS, NOT ONLY THE OFFSET — AND THE DRIFT IS MEASURED.**
 	// Both readers already shared `emitUnionTagLoad`, so they could never disagree about WHERE in the box a
@@ -75505,17 +75518,29 @@ export type Parser
 
 		match self.signatures.unionRepresentation(layout) 'representation'
 			bareTag then return value
-			word then return self.emitMachineWordBinOp(value, rhs: self.emitLiteral(UnboxedTagMask, valueType: MaxonType.integer, range: range), op: MaxonBinOp.bitAnd, resultType: MaxonType.integer, range: range)
+			word then return self.emitUnboxedWordKey(value, layout: layout, range: range)
 			box then return self.emitUnionTagLoad(value, range: range)
 		end 'representation'
 	end 'emitEnumDispatchKey'
 
+	function emitUnboxedWordKey(word ValueId, layout EnumLayout, range SourceRange) returns ValueId
+		let tagBits = self.emitMachineWordBinOp(word, rhs: self.emitLiteral(UnboxedTagMask, valueType: MaxonType.integer, range: range), op: MaxonBinOp.bitAnd, resultType: MaxonType.integer, range: range)
+
+		if not layout.wordKeysNeedInhabitants() 'tagBitsAreTheKey'
+			return tagBits
+		end 'tagBitsAreTheKey'
+
+		let inhabitantKey = self.emitMachineWordBinOp(word, rhs: self.emitLiteral(UnboxedInhabitantShift, valueType: MaxonType.integer, range: range), op: MaxonBinOp.shrLogical, resultType: MaxonType.integer, range: range)
+
+		return self.emitMachineWordBinOp(tagBits, rhs: inhabitantKey, op: MaxonBinOp.bitOr, resultType: MaxonType.integer, range: range)
+	end 'emitUnboxedWordKey'
+
 	// The tag a dispatch plan holds for a case, which is what `emitEnumDispatchKey` yields for a value of
-	// that case: a word union's stored tag, never its declaration index, or the arm would be keyed off by
-	// `UnboxedTagBase`.
+	// that case: a word union's key (`wordKeyOfIndex`), never its declaration index, or the arm would be
+	// keyed off.
 	function dispatchTagOfIndex(layout EnumLayout, index CaseIndex) returns FullRangeInt
 		return match self.signatures.unionRepresentation(layout) 'representation'
-			word gives layout.wordTagOfIndex(index)
+			word gives layout.wordKeyOfIndex(index)
 			bareTag or
 			box gives layout.tagOfIndex(index)
 		end 'representation'
@@ -75617,7 +75642,7 @@ export type Parser
 		// can reach `foldIntBinOp` through this door. A BOXED union never arrives:
 		// `emitEnumCaseTagConstant` sends it to `emitLiteral` at `integer`, because its value is a box
 		// pointer and its tag is not it. A payload-free case of a WORD union does arrive, with its stored
-		// tag (`wordTagOfIndex`), which is the whole of that value.
+		// word (`payloadFreeWordOfIndex`), which is the whole of that value.
 		self.recordConst(result, folded: tag)
 
 		return result
@@ -105759,7 +105784,7 @@ export type Parser
 	// declarable cases here (`EnumCaseLedger.rawValueIsClaimed` compares tags, so it admits both) —
 	// under an f64 compare `low = 0.0 negLow = -0.0` answers ordinal 1 for BOTH, and under the tag
 	// compare each answers its own index.
-	function emitEnumCaseConstantSelect(layout EnumLayout, tag ValueId, column EnumCaseConstant, anchor Token, range SourceRange) returns ValueId throws SourceParseError
+	function emitEnumCaseConstantSelect(layout EnumLayout, tag ValueId, column EnumCaseConstant, anchor Token, range SourceRange, domain EnumSelectDomain = EnumSelectDomain.caseTag) returns ValueId throws SourceParseError
 		var selected = self.emitLiteral(FirstCaseOrdinal, valueType: MaxonType.integer, range: range)
 
 		for i in firstSummedCaseIndex(column) upto layout.caseCount() 'eachSummedCase'
@@ -105772,7 +105797,12 @@ export type Parser
 			// (`TypeRules.BoolTrueValue` is 1), it is minted one line above so no other reader can hold the
 			// old claim, and the three backends each hand back a zero-extended machine word (see the header),
 			// so the widened claim is one they already satisfy.
-			let isThisCase = self.emitCompareAgainstLiteral(tag, literal: layout.tagOfIndex(i), op: MaxonCmpOp.eq, opTok: anchor)
+			let caseSubject = match domain 'subject'
+				caseTag gives layout.tagOfIndex(i)
+				wordKey gives layout.wordKeyOfIndex(i)
+			end 'subject'
+
+			let isThisCase = self.emitCompareAgainstLiteral(tag, literal: caseSubject, op: MaxonCmpOp.eq, opTok: anchor)
 			self.retypeValue(isThisCase, valueType: MaxonType.integer)
 
 			let caseConstant = try self.emitEnumCaseConstant(layout, index: i, column: column, anchor: anchor, range: range)

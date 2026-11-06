@@ -8530,9 +8530,11 @@ export let sharedEmptyEnumBackingFields = EnumBackingFieldArray.create(0)
 export let UnionTagOffset = 0 as ByteOffset
 let UnionTagBytes = 8
 
-// A word union keeps `payload pointer | (declaration index + UnboxedTagBase)` in one i64, the tag
-// in the low `UnboxedTagBits` bits of an 8-aligned pointer. Stored tag 0 is the empty word a zeroed
-// slot holds, so `UnboxedMaxCases` is the mask value and not one more.
+// A word union keeps `payload pointer | key` in one i64, the key in the low `UnboxedTagBits` bits of
+// an 8-aligned pointer. Key 0 is the empty word a zeroed slot holds, so `UnboxedMaxPayloadCases` is
+// the mask value and not one more. A payload-free case whose key exceeds the mask is the word
+// `key shl UnboxedInhabitantShift`: every real pointer is below 2^48 on every target, so no payload
+// word equals one. `UnboxedMaxKey` keeps that shifted word positive.
 let UnboxedTagBits = 3
 export let UnboxedTagMask = (1 shl UnboxedTagBits) - 1
 module let UnboxedPointerMask = -(1 shl UnboxedTagBits)
@@ -8543,8 +8545,10 @@ export enum UnionRepresentation
 	word
 end 'UnionRepresentation'
 
-export let UnboxedTagBase = 1
-export let UnboxedMaxCases = UnboxedTagMask
+export let UnboxedFirstKey = 1
+export let UnboxedMaxPayloadCases = UnboxedTagMask
+export let UnboxedInhabitantShift = 48
+export let UnboxedMaxKey = (1 shl 15) - 1
 export let UnboxedPayloadSlotOffset = UnionTagBytes as ByteOffset
 
 export let sharedEmptyDeclaredConformances = NameRoster.create(0)
@@ -9506,9 +9510,66 @@ export type EnumLayout
 		return try self.caseTags.get(index) otherwise panic("EnumLayout.tagOfIndex: caseTags.get OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
 	end 'tagOfIndex'
 
-	export function wordTagOfIndex(index CaseIndex) returns FullRangeInt
-		return self.tagOfIndex(index) + UnboxedTagBase
-	end 'wordTagOfIndex'
+	export function payloadCasesBefore(limit CaseIndex) returns CaseIndex
+		var count = 0 as CaseIndex
+
+		for i in 0 upto limit 'eachCase'
+			if self.payloadArityAt(i) > 0 'carriesAPayload'
+				count = count + 1
+			end 'carriesAPayload'
+		end 'eachCase'
+
+		return count
+	end 'payloadCasesBefore'
+
+	// Declaration index + 1 while the union fits the tag mask, so a small union's words are what they
+	// would be with no inhabitants; otherwise payload cases take the first keys and payload-free cases
+	// the rest, each group in declaration order.
+	export function wordKeyOfIndex(index CaseIndex) returns FullRangeInt
+		if not self.wordKeysNeedInhabitants() 'declarationOrderFits'
+			return (index as FullRangeInt) + UnboxedFirstKey
+		end 'declarationOrderFits'
+
+		let payloadsBefore = self.payloadCasesBefore(index)
+
+		if self.payloadArityAt(index) > 0 'aPayloadCase'
+			return (payloadsBefore as FullRangeInt) + UnboxedFirstKey
+		end 'aPayloadCase'
+
+		return (self.payloadCasesBefore(self.caseCount()) as FullRangeInt) + ((index - payloadsBefore) as FullRangeInt) + UnboxedFirstKey
+	end 'wordKeyOfIndex'
+
+	export function wordKeysFollowDeclarationOrder() returns bool
+		if not self.wordKeysNeedInhabitants() 'declarationOrderFits'
+			return true
+		end 'declarationOrderFits'
+
+		var sawAPayloadFreeCase = false
+
+		for i in 0 upto self.caseCount() 'eachCase'
+			if self.payloadArityAt(i) == 0 'payloadFree'
+				sawAPayloadFreeCase = true
+			end 'payloadFree' else if sawAPayloadFreeCase 'aPayloadCaseAfterIt'
+				return false
+			end 'aPayloadCaseAfterIt'
+		end 'eachCase'
+
+		return true
+	end 'wordKeysFollowDeclarationOrder'
+
+	export function wordKeysNeedInhabitants() returns bool
+		return (self.caseCount() as FullRangeInt) > UnboxedMaxPayloadCases
+	end 'wordKeysNeedInhabitants'
+
+	export function payloadFreeWordOfIndex(index CaseIndex) returns FullRangeInt
+		let key = self.wordKeyOfIndex(index)
+
+		if key <= UnboxedTagMask 'storedInTheTagBits'
+			return key
+		end 'storedInTheTagBits'
+
+		return key shl UnboxedInhabitantShift
+	end 'payloadFreeWordOfIndex'
 
 	// ⭐⭐ **DOES THIS DECLARATION'S TAG COLUMN CARRY THE RAW VALUES, OR ONLY DECLARATION INDICES?** — ONE
 	// fact, needed by two readers with nothing else in common: E3031's collision test

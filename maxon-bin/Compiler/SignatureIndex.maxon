@@ -3699,23 +3699,25 @@ end 'unboxedPayloadShapeOfEntry'
 // classifies, which varies with the reader's file and the signatures, so a stored answer would go
 // stale.
 module function unionRepresentationOf(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout) returns UnionRepresentation
-	if not layout.carriesPayloads() 'noPayloads'
+	let payloadCases = layout.payloadCasesBefore(layout.caseCount())
+
+	if payloadCases == 0 'noPayloads'
 		return UnionRepresentation.bareTag
 	end 'noPayloads'
 
-	if unionIsUnboxed(signatures, typeNames: typeNames, layout: layout) 'aWord'
+	if unionIsUnboxed(signatures, typeNames: typeNames, layout: layout, payloadCases: payloadCases) 'aWord'
 		return UnionRepresentation.word
 	end 'aWord'
 
 	return UnionRepresentation.box
 end 'unionRepresentationOf'
 
-// A word needs every stored tag (declaration index + 1) to fit the mask with 0 left for the empty
-// word, no `implements` clause (a conformer, every error union included, stays a box), a union the
+// A word needs at most `UnboxedMaxPayloadCases` payload cases (their keys fit the tag mask, with 0
+// left for the empty word), at most `UnboxedMaxKey` cases in all, no `implements` clause (a conformer, every error union included, stays a box), a union the
 // author wrote, and per case no payload or one managed record payload that `unboxedPayloadShapeOf`
 // can walk.
-function unionIsUnboxed(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout) returns bool
-	if not layout.carriesPayloads() or layout.conformsTo.count() > 0 or layout.caseCount() > UnboxedMaxCases or not layout.tagsAreDeclarationIndices() 'notEligible'
+function unionIsUnboxed(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout, payloadCases CaseIndex) returns bool
+	if layout.conformsTo.count() > 0 or payloadCases > UnboxedMaxPayloadCases or (layout.caseCount() as FullRangeInt) > UnboxedMaxKey or not layout.tagsAreDeclarationIndices() 'notEligible'
 		return false
 	end 'notEligible'
 
