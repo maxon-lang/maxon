@@ -199,8 +199,8 @@ end 'ParseAttempt'
 // abandoned fails the file (`recoverableRegionOf`), so every retry abandons a region none before it
 // did.
 export function parseFile(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, signatures ProgramSignatures) returns FileParseOutcome
-	var recovered = AbandonedRegionArray.create()
-	var salvages = FileParseArtifactArray.create()
+	var recovered = AbandonedRegionArray.create(0)
+	var salvages = FileParseArtifactArray.create(0)
 
 	while true 'eachAttempt'
 		let attempt = parseAttempt(job, tokens: tokens, overrides: overrides, signatures: signatures, recovered: recovered, salvages: salvages)
@@ -627,7 +627,7 @@ export type FuncReturnTypeEntry
 	// ⚠ **THE THREE EMPTY DEFAULTS ARE FRESH, NOT SHARED ANCHORS.** A default naming a module-level `let`
 	// makes that anchor an export nothing calls, which `checkUnusedExports` reports as E3092. An empty
 	// container costs a record; the anchor costs a build.
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames NameRoster = NameRoster.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), paramSpellings NameRoster = NameRoster.create(), paramDefaults ParamPositionMask = NoParamPositions, returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, enclosingTypeName ByteArray = EmptySourceText) returns FuncReturnTypeEntry
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames NameRoster = NameRoster.create(0), paramTypes MaxonTypeArray = MaxonTypeArray.create(0), paramSpellings NameRoster = NameRoster.create(0), paramDefaults ParamPositionMask = NoParamPositions, returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, enclosingTypeName ByteArray = EmptySourceText) returns FuncReturnTypeEntry
 		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, paramSpellings: paramSpellings, paramDefaults: paramDefaults, returnAliasName: returnAliasName, nameLine: nameLine, nameColumn: nameColumn, enclosingTypeName: enclosingTypeName}
 	end 'create'
 end 'FuncReturnTypeEntry'
@@ -706,7 +706,7 @@ end 'cacheWriteFuncSignatureEntryArray'
 
 function cacheReadFuncSignatureEntryArray(reader LibraryCacheReader) returns FuncSignatureEntryArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FuncSignatureEntryArray.create()
+	var result = FuncSignatureEntryArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -767,7 +767,7 @@ end 'cacheWriteFunctionRangeCheckEntryArray'
 
 function cacheReadFunctionRangeCheckEntryArray(reader LibraryCacheReader) returns FunctionRangeCheckEntryArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FunctionRangeCheckEntryArray.create()
+	var result = FunctionRangeCheckEntryArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -821,7 +821,7 @@ end 'cacheWriteUnbuiltBodyArray'
 
 function cacheReadUnbuiltBodyArray(reader LibraryCacheReader) returns UnbuiltBodyArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = UnbuiltBodyArray.create()
+	var result = UnbuiltBodyArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -979,7 +979,7 @@ export type FileParseArtifact
 	// declaration.
 	export var typeNameDecls as TypeNameDeclArray
 
-	export var genericInstanceRequests = GenericFunctionInstanceArray.create()
+	export var genericInstanceRequests = GenericFunctionInstanceArray.create(0)
 
 	// Every type NAME this file wrote in a TYPE POSITION — the set `Parser.recordTypeNameUse` builds for
 	// E3062, kept past the parse because `checkUnusedExports` asks the same question one scope wider:
@@ -1087,7 +1087,7 @@ export type FileParseArtifact
 			typeIdsAreProjectGlobal: false,
 			module: MaxonModule.create(),
 			opRanges: SourceRangeTable.create(),
-			covPoints: CovPointArray.create(),
+			covPoints: CovPointArray.create(0),
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
 			serviceAwaitSites: ServiceAwaitSiteMap.create(),
 			registryUseSites: noRegistryUseSites,
@@ -1097,40 +1097,40 @@ export type FileParseArtifact
 			provenFixedArrayAccesses: ProvenFixedArrayAccessMap.create(),
 			valueOrigins: ValueOriginTable.create(),
 			deferredChains: DeferredChainTable.create(),
-			funcSignatures: FuncSignatureEntryArray.create(),
-			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
-			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
-			pendingBrandRecords: PendingBrandRecordArray.create(),
-			pendingDiscardedResults: PendingDiscardedResultArray.create(),
-			rangeChecks: FunctionRangeCheckEntryArray.create(),
-			typeAliases: RangedTypeAliasArray.create(),
-			functionTypeAliases: FunctionTypeAliasArray.create(),
-			structTypes: StructLayoutArray.create(),
-			writtenTupleTypes: WrittenTupleTypeArray.create(),
-			enumTypes: EnumLayoutArray.create(),
-			interfaces: IrInterfaceArray.create(),
-			typeNameDecls: TypeNameDeclArray.create(),
+			funcSignatures: FuncSignatureEntryArray.create(0),
+			pendingFnMergeChecks: PendingFnMergeCheckArray.create(0),
+			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(0),
+			pendingBrandRecords: PendingBrandRecordArray.create(0),
+			pendingDiscardedResults: PendingDiscardedResultArray.create(0),
+			rangeChecks: FunctionRangeCheckEntryArray.create(0),
+			typeAliases: RangedTypeAliasArray.create(0),
+			functionTypeAliases: FunctionTypeAliasArray.create(0),
+			structTypes: StructLayoutArray.create(0),
+			writtenTupleTypes: WrittenTupleTypeArray.create(0),
+			enumTypes: EnumLayoutArray.create(0),
+			interfaces: IrInterfaceArray.create(0),
+			typeNameDecls: TypeNameDeclArray.create(0),
 			usedTypeNames: noUsedTypeNames,
 			memberAccessedTypeNames: noUsedTypeNames,
-			unbuiltBodies: UnbuiltBodyArray.create(),
-			conformances: ConformanceDeclArray.create(),
-			literalInitSites: LiteralInitSiteArray.create(),
-			inferredInstantiationSites: GenericInstantiationSiteArray.create(),
+			unbuiltBodies: UnbuiltBodyArray.create(0),
+			conformances: ConformanceDeclArray.create(0),
+			literalInitSites: LiteralInitSiteArray.create(0),
+			inferredInstantiationSites: GenericInstantiationSiteArray.create(0),
 			typeNames: TypeNameInterner.createForSource(sourceBytes),
 			currentFuncIndex: 0,
-			diagnostics: DiagnosticArray.create(),
+			diagnostics: DiagnosticArray.create(0),
 			unusedTypeAliases: noDeferredNameDiagnostics,
 			hiddenTypeNames: noDeferredDiagnostics,
-			bindingHygieneDiagnostics: DiagnosticArray.create(),
+			bindingHygieneDiagnostics: DiagnosticArray.create(0),
 			parseMints: ParseMints.none,
-			instanceIdsInUse: GenericInstanceIdArray.create()
+			instanceIdsInUse: GenericInstanceIdArray.create(0)
 		}
 	end 'create'
 
 	// File what the parse that built this artifact wrote into the signature index, with each instance row known
 	// by the band id the parse handed it.
 	export function recordParseMints(mints LocalInstanceMints)
-		var bandIds = GenericInstanceIdArray.create()
+		var bandIds = GenericInstanceIdArray.create(0)
 
 		for position in 0 upto mints.rows.count() 'eachRow'
 			bandIds.push(BandInstanceIdBase + position)
@@ -1330,7 +1330,7 @@ export type FileParseArtifact
 			entries(recorded) then return recorded
 		end 'state'
 
-		let fresh = DeferredNameDiagnosticArray.create()
+		let fresh = DeferredNameDiagnosticArray.create(0)
 		self.unusedTypeAliases = DeferredNameDiagnosticRoster.entries(fresh)
 		return fresh
 	end 'unusedTypeAliasesForWrite'
@@ -1342,7 +1342,7 @@ export type FileParseArtifact
 			entries(recorded) then return recorded
 		end 'state'
 
-		let fresh = DiagnosticArray.create()
+		let fresh = DiagnosticArray.create(0)
 		self.hiddenTypeNames = DeferredDiagnosticRoster.entries(fresh)
 		return fresh
 	end 'hiddenTypeNamesForWrite'
@@ -1902,7 +1902,7 @@ end 'commitTypeNameDeclsInPathOrder'
 typealias TypeNameDeclsByFile = Map with (String, TypeNameDeclArray)
 
 module function nominalNameCollisionsOf(decls TypeNameDeclArray, paths FilePathArray, directories ModuleDirectoryByFile) returns TypeNameCollisionArray
-	var collisions = TypeNameCollisionArray.create()
+	var collisions = TypeNameCollisionArray.create(0)
 
 	if decls.isEmpty() 'nothingDeclared'
 		return collisions
@@ -1912,7 +1912,7 @@ module function nominalNameCollisionsOf(decls TypeNameDeclArray, paths FilePathA
 
 	for decl in decls 'eachDecl'
 		let file = decl.claim.declFilePath.toString()
-		var declared = try byFile.get(file) otherwise TypeNameDeclArray.create()
+		var declared = try byFile.get(file) otherwise TypeNameDeclArray.create(0)
 		declared.push(decl)
 		byFile.upsert(file, value: declared)
 	end 'eachDecl'
@@ -1943,7 +1943,7 @@ module function reportTypeNameCollisions(project Project, collisions TypeNameCol
 end 'reportTypeNameCollisions'
 
 module function sourceFilesInPathOrder(paths FilePathArray) returns SourceFileInPathOrderArray
-	var ordered = SourceFileInPathOrderArray.create()
+	var ordered = SourceFileInPathOrderArray.create(0)
 	let workingDirectory = Directory.currentPath()
 
 	for (iter, path) in paths.withIterator() 'eachSourcePath'
@@ -2056,7 +2056,7 @@ export function checkTypeSymbolNamespace(project Project, signatures ProgramSign
 		// instantiation is measured against, which is `TypeNameRegistry`'s own rule (a rejected
 		// declaration never displaces) applied to the compiled half.
 		if let first = try claimed.get(compiled) 'earlierInstantiation'
-			var members = try contested.get(compiled) otherwise GenericInstanceIdArray.create()
+			var members = try contested.get(compiled) otherwise GenericInstanceIdArray.create(0)
 
 			if members.isEmpty() 'firstCollision'
 				members.push(first)
@@ -2130,7 +2130,7 @@ type InstantiationClaim
 end 'InstantiationClaim'
 
 function reportContestedTypeNames(project Project, signatures ProgramSignatures, contested ContestedTypeNameMap)
-	var names = NameRoster.create()
+	var names = NameRoster.create(0)
 
 	for (compiled, _) in contested 'eachContestedName'
 		names.push(compiled.clone())
@@ -2140,7 +2140,7 @@ function reportContestedTypeNames(project Project, signatures ProgramSignatures,
 
 	for compiled in names 'eachInOrder'
 		let members = try contested.get(compiled) otherwise panic("reportContestedTypeNames: '{String.from(compiled)}' was filed contested by the walk that built this map")
-		var claims = InstantiationClaimArray.create()
+		var claims = InstantiationClaimArray.create(0)
 
 		for gid in members 'eachMember'
 			claims.push(InstantiationClaim.of(project, signatures: signatures, gid: gid))
@@ -2549,7 +2549,7 @@ end 'rebaseArtifact'
 // has none.
 function adoptedInstanceIds(artifact FileParseArtifact, signatures ProgramSignatures) returns GenericInstanceIdArray
 	return match artifact.parseMints 'mints'
-		none gives GenericInstanceIdArray.create()
+		none gives GenericInstanceIdArray.create(0)
 		minted(mints) gives signatures.adoptParseMints(mints)
 	end 'mints'
 end 'adoptedInstanceIds'
@@ -2581,7 +2581,7 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 		entry.returnType = remapMaxonReturnType(entry.returnType, remap: remap)
 	end 'eachSignatureEntry'
 
-	var aliases = FunctionTypeAliasArray.create()
+	var aliases = FunctionTypeAliasArray.create(0)
 
 	for alias in artifact.functionTypeAliases 'eachFunctionAlias'
 		aliases.push(alias.withInstancesRenumbered(remap))
@@ -2589,7 +2589,7 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 
 	artifact.functionTypeAliases = aliases
 
-	var renumberedInterfaces = IrInterfaceArray.create()
+	var renumberedInterfaces = IrInterfaceArray.create(0)
 
 	for iface in artifact.interfaces 'eachInterface'
 		renumberedInterfaces.push(iface.withInstancesRenumbered(remap))
@@ -2597,7 +2597,7 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 
 	artifact.interfaces = renumberedInterfaces
 
-	var renumberedConformances = ConformanceDeclArray.create()
+	var renumberedConformances = ConformanceDeclArray.create(0)
 
 	for decl in artifact.conformances 'eachConformance'
 		renumberedConformances.push(decl.withInstancesRenumbered(remap))
@@ -2613,7 +2613,7 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 		remapEnumLayoutPayloadTypes(layout, remap: remap)
 	end 'eachEnum'
 
-	var sites = GenericInstantiationSiteArray.create()
+	var sites = GenericInstantiationSiteArray.create(0)
 
 	for site in artifact.inferredInstantiationSites 'eachInferredSite'
 		sites.push(GenericInstantiationSite.create(remap.applyInstance(site.gid), nameLine: site.nameLine, nameColumn: site.nameColumn, filePath: site.filePath))

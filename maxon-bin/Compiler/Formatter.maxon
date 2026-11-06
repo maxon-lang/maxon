@@ -284,8 +284,8 @@ type SourceLines
 	// empty. The emit paths index comments
 	// by line number, so a line that exists and holds nothing still has to exist here.
 	static function of(bytes ByteArray) returns SourceLines
-		var starts = ByteOffsetArray.create()
-		var ends = ByteOffsetArray.create()
+		var starts = ByteOffsetArray.create(0)
+		var ends = ByteOffsetArray.create(0)
 		var lineStart = 0 as ByteOffset
 		var i = 0 as ByteOffset
 
@@ -808,7 +808,7 @@ type FormatState
 	var blankDecisionPending as bool
 
 	static function create(tokens TokenArray, options FormatOptions, lines SourceLines, comments SourceComments, keywords KeywordTable) returns FormatState
-		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), lineStartedAt: BlockPosition.unstarted(), recorded: RecordedRefusal.none, groupFrames: GroupFrameArray.create(), raisedGroups: RaisedGroupArray.create(), groupsRaisedOnThisLine: 0, bracketDepth: 0, indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, brackets: BracketTracker.create(), inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, labelFollowsACloser: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
+		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(0), lineStartedAt: BlockPosition.unstarted(), recorded: RecordedRefusal.none, groupFrames: GroupFrameArray.create(0), raisedGroups: RaisedGroupArray.create(0), groupsRaisedOnThisLine: 0, bracketDepth: 0, indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, brackets: BracketTracker.create(), inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, labelFollowsACloser: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
 	end 'create'
 
 	// Walk every token, then hand over the built text. A formatted file with content ends with
@@ -2114,10 +2114,10 @@ end 'sliceOf'
 /// spelling the walk reaches, so a link back to an ancestor ends the walk there. It throws when a
 /// directory cannot be listed or an entry cannot be identified.
 export function collectFormattableFiles(root FilePath) returns FilePathArray throws CompileError
-	var files = FilePathArray.create()
+	var files = FilePathArray.create(0)
 	var ledger = PhysicalEntryLedger.create()
 
-	var pending = FilePathArray.create()
+	var pending = FilePathArray.create(0)
 	pending.push(root)
 
 	while pending.count() > 0 'walk'
@@ -2131,8 +2131,8 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray thr
 
 		let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
 
-		var subdirectories = FilePathArray.create()
-		var here = FilePathArray.create()
+		var subdirectories = FilePathArray.create(0)
+		var here = FilePathArray.create(0)
 
 		for entry in entries 'eachEntry'
 			if Directory.isDirectory(entry) 'isSubdirectory'

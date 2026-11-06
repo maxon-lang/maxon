@@ -68,7 +68,7 @@ function describePoll(poll ExitPoll) returns String
 end 'describePoll'
 
 function gatedChildArguments() returns StringArray
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("set")
 	argv.push("/p")
@@ -119,7 +119,7 @@ typealias PollTally = int(0 to 1000)
 typealias SeenCode = int(-1 to i64.max)
 
 function gatedChildArguments() returns StringArray
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("set")
 	argv.push("/p")
@@ -175,7 +175,7 @@ could exhaust.
 typealias SpinTally = int(0 to 100000)
 
 function gatedChildArguments() returns StringArray
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("set")
 	argv.push("/p")
@@ -241,7 +241,7 @@ function describePoll(poll LinePoll) returns String
 end 'describePoll'
 
 function partialThenRestArguments() returns StringArray
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("set")
 	argv.push("/p=abc<nul&")
@@ -309,7 +309,7 @@ function describePoll(poll LinePoll) returns String
 end 'describePoll'
 
 function bothStreamsArguments() returns StringArray
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("echo")
 	argv.push("errline>&2&")
@@ -378,7 +378,7 @@ function describeLine(poll LinePoll) returns String
 end 'describeLine'
 
 function echoChildArguments() returns StringArray
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("echo")
 	argv.push("hello")
@@ -432,7 +432,7 @@ function hasExited(poll ExitPoll) returns bool
 end 'hasExited'
 
 function blankBetweenArguments() returns StringArray
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("echo")
 	argv.push("first&")

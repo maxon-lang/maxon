@@ -88,16 +88,16 @@ end 'Widget'
 typealias Widgets = Array with Widget
 
 function main() returns ExitCode
-	var holder = Widgets.create()
+	var holder = Widgets.create(0)
 	holder.reserve(Population)
 
-	var beforeCounts = CountSnapshot.create()
+	var beforeCounts = CountSnapshot.create(0)
 	beforeCounts.reserve(TallyBuckets)
 	for _ in 0 upto TallyBuckets 'sizeTheCountSnapshot'
 		beforeCounts.push(0)
 	end 'sizeTheCountSnapshot'
 
-	var beforeBytes = ByteSnapshot.create()
+	var beforeBytes = ByteSnapshot.create(0)
 	beforeBytes.reserve(TallyBuckets)
 	for _ in 0 upto TallyBuckets 'sizeTheByteSnapshot'
 		beforeBytes.push(0)
@@ -385,7 +385,7 @@ end 'Widget'
 typealias Widgets = Array with Widget
 
 function main() returns ExitCode
-	var holder = Widgets.create()
+	var holder = Widgets.create(0)
 	holder.reserve(Population)
 
 	let totalBefore = HeapStats.allocationsMade()
@@ -644,10 +644,10 @@ end 'Widget'
 typealias Widgets = Array with Widget
 
 function main() returns ExitCode
-	var holder = Widgets.create()
+	var holder = Widgets.create(0)
 	holder.reserve(Population)
 
-	var beforeCounts = CountSnapshot.create()
+	var beforeCounts = CountSnapshot.create(0)
 	beforeCounts.reserve(TallyBuckets)
 	for _ in 0 upto TallyBuckets 'sizeTheSnapshot'
 		beforeCounts.push(0)
@@ -676,7 +676,7 @@ function main() returns ExitCode
 	let heldCount = HeapStats.allocationsTagged(biggestIndex)
 	let liveHolding = HeapStats.allocationsLive()
 
-	holder = Widgets.create()
+	holder = Widgets.create(0)
 
 	if HeapStats.allocationsTagged(biggestIndex) != heldCount 'theCumulativeBucketMoved'
 		return 1
@@ -925,7 +925,7 @@ end 'Widget'
 typealias Widgets = Array with Widget
 
 function main() returns ExitCode
-	var holder = Widgets.create()
+	var holder = Widgets.create(0)
 	holder.reserve(Population)
 
 	let totalBefore = HeapStats.allocationsMade()
@@ -1007,7 +1007,7 @@ end 'Widget'
 typealias Widgets = Array with Widget
 
 function main() returns ExitCode
-	var holder = Widgets.create()
+	var holder = Widgets.create(0)
 	holder.reserve(Population)
 
 	let bytesBefore = HeapStats.bytesAllocated()
@@ -1020,7 +1020,7 @@ function main() returns ExitCode
 	let bytesAfter = HeapStats.bytesAllocated()
 	let threadHolding = HeapStats.thread()
 
-	holder = Widgets.create()
+	holder = Widgets.create(0)
 
 	let threadAfter = HeapStats.thread()
 	let widgetBytes = (Population * sizeof(Widget)) as HeapBytes

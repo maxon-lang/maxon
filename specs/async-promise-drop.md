@@ -544,7 +544,7 @@ end 'fast'
 
 function psCount(condition String) returns String
 	let shell = Executable.path(try FilePath.from("/bin/sh") otherwise panic("/bin/sh is a valid path"))
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("ps -A -o ppid=,stat=,args= | awk -v me=$PPID '$1 == me && ({condition}) \{ n++ \} END \{ print n + 0 \}'")
 	let result = try Subprocess.run(shell, arguments: argv) otherwise panic("ps could not run")
@@ -605,7 +605,7 @@ end 'shortProc'
 
 function psCount(condition String) returns String
 	let shell = Executable.path(try FilePath.from("/bin/sh") otherwise panic("/bin/sh is a valid path"))
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("ps -A -o ppid=,stat=,args= | awk -v me=$PPID '$1 == me && ({condition}) \{ n++ \} END \{ print n + 0 \}'")
 	let result = try Subprocess.run(shell, arguments: argv) otherwise panic("ps could not run")
@@ -931,7 +931,7 @@ function completesUnderTheDrive(slots IntPromiseArray) returns bool
 end 'completesUnderTheDrive'
 
 function main() returns ExitCode
-	var slots = IntPromiseArray.create()
+	var slots = IntPromiseArray.create(0)
 
 	arm(slots, slot: 0, n: 11)
 	if not completesUnderTheDrive(slots) 'pushedThreadCancelled'
@@ -994,7 +994,7 @@ function completesUnderTheDrive(slots IntPromiseArray) returns bool
 end 'completesUnderTheDrive'
 
 function main() returns ExitCode
-	var slots = IntPromiseArray.create()
+	var slots = IntPromiseArray.create(0)
 
 	arm(slots, slot: 0, n: 11)
 	if not completesUnderTheDrive(slots) 'pushedThreadCancelled'
@@ -1034,7 +1034,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-		var s = IntPromiseArray.create()
+		var s = IntPromiseArray.create(0)
 		s.push(async plain())
 		return 0
 end 'main'
@@ -1060,7 +1060,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-		var s = IntPromiseArray.create()
+		var s = IntPromiseArray.create(0)
 		s.push(async plain())
 		let p = try s.pop() otherwise panic("just pushed one")
 		print("popped a thread complete={p.isComplete()}, array now {s.count()}")
@@ -1220,7 +1220,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-		var s = IntPromiseArray.create()
+		var s = IntPromiseArray.create(0)
 		s.push(async plain())
 		let l = try s.last() otherwise panic("has one")
 		return (await l) as ExitCode
@@ -1355,7 +1355,7 @@ type Box uses T
 	end 'create'
 
 	static function peers(v T) returns Peers
-		var out = Peers.create()
+		var out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -1435,9 +1435,9 @@ type Box uses T
 	end 'create'
 
 	static function rows(v T) returns Rows
-		var inner = Inner.create()
+		var inner = Inner.create(0)
 		inner.push(v)
-		var out = Rows.create()
+		var out = Rows.create(0)
 		out.push(inner)
 		return out
 	end 'rows'
@@ -1657,7 +1657,7 @@ type Stack uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function push(v T)
@@ -1699,7 +1699,7 @@ type Stack uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function push(v T)
@@ -1741,7 +1741,7 @@ type Inner uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function push(v T)
@@ -1801,7 +1801,7 @@ type Inner uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function push(v T)
@@ -1975,7 +1975,7 @@ type Stack uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function push(v T)
@@ -2018,7 +2018,7 @@ type Stack uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function push(v T)
@@ -2091,7 +2091,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-		var s = IntPromiseArray.create()
+		var s = IntPromiseArray.create(0)
 		s.push(async plain())
 		view c = try s.cursor() otherwise panic("has one")
 		let p = c.current()
@@ -2117,7 +2117,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-		var s = IntPromiseArray.create()
+		var s = IntPromiseArray.create(0)
 		s.push(async plain())
 		let p = try s.pop() otherwise panic("has one")
 		return (await p) as ExitCode
@@ -2152,7 +2152,7 @@ function pick() returns bool
 end 'pick'
 
 function main() returns ExitCode
-		var s = IntPromiseArray.create()
+		var s = IntPromiseArray.create(0)
 		s.push(async plain())
 		s.push(async plain())
 		var p = try s.get(0) otherwise panic("has two")
@@ -2373,7 +2373,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var s = IntPromiseArray.create()
+	var s = IntPromiseArray.create(0)
 	s.push(async plain(5))
 	s.push(async plain(37))
 	view c = try s.cursor() otherwise panic("has two")
@@ -2401,7 +2401,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var s = IntPromiseArray.create()
+	var s = IntPromiseArray.create(0)
 	s.push(async plain(7))
 	var total = 0 as Integer
 	for pair in s.withIterator() 'each'
@@ -2457,7 +2457,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var s = IntPromiseArray.create()
+	var s = IntPromiseArray.create(0)
 	s.push(async plain(4))
 	view c = try s.cursor() otherwise panic("has one")
 	let a = c.current()
@@ -2486,7 +2486,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var s = IntPromiseArray.create()
+	var s = IntPromiseArray.create(0)
 	s.push(async plain(4))
 	let a = try s.get(0) otherwise panic("has one")
 	view c = try s.cursor() otherwise panic("has one")
@@ -2520,7 +2520,7 @@ function zero() returns Integer
 end 'zero'
 
 function main() returns ExitCode
-	var s = IntPromiseArray.create()
+	var s = IntPromiseArray.create(0)
 	s.push(async plain(4))
 	let a = try s.get(zero() as ElementIndex) otherwise panic("has one")
 	let b = try s.get(zero() as ElementIndex) otherwise panic("has one")
@@ -2650,10 +2650,10 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
-	var b = IntPromiseArray.create()
+	var b = IntPromiseArray.create(0)
 	b.push(try a.get(0) otherwise panic("has one"))
 
 	let p = try b.get(0) otherwise panic("has one")
@@ -2679,15 +2679,15 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
 	let p = try a.get(0) otherwise panic("has one")
 
-	var b = IntPromiseArray.create()
+	var b = IntPromiseArray.create(0)
 	b.push(p)
 
-	var c = IntPromiseArray.create()
+	var c = IntPromiseArray.create(0)
 	c.push(p)
 
 	return 0 as ExitCode
@@ -2714,16 +2714,16 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
 	let p = try a.get(0) otherwise panic("has one")
 	let q = try a.get(0) otherwise panic("has one")
 
-	var b = IntPromiseArray.create()
+	var b = IntPromiseArray.create(0)
 	b.push(p)
 
-	var c = IntPromiseArray.create()
+	var c = IntPromiseArray.create(0)
 	c.push(q)
 
 	return 0 as ExitCode
@@ -2753,13 +2753,13 @@ function pick() returns bool
 end 'pick'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
 	let p = try a.get(0) otherwise panic("has one")
 
-	var b = IntPromiseArray.create()
-	var c = IntPromiseArray.create()
+	var b = IntPromiseArray.create(0)
+	var c = IntPromiseArray.create(0)
 
 	if pick() 'x'
 		b.push(p)
@@ -2799,13 +2799,13 @@ function pick() returns bool
 end 'pick'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
 	let p = try a.get(0) otherwise panic("has one")
 
-	var b = IntPromiseArray.create()
-	var c = IntPromiseArray.create()
+	var b = IntPromiseArray.create(0)
+	var c = IntPromiseArray.create(0)
 
 	if pick() 'x'
 		b.push(p)
@@ -2836,12 +2836,12 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
 	let p = try a.get(0) otherwise panic("has one")
 
-	var b = IntPromiseArray.create()
+	var b = IntPromiseArray.create(0)
 	var i = 0 as Integer
 
 	while i < 2 'loop'
@@ -2872,7 +2872,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
 	let p = try a.get(0) otherwise panic("has one")
@@ -2908,7 +2908,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
 	let p = try a.get(0) otherwise panic("has one")
@@ -2944,7 +2944,7 @@ function takes(p IntPromise) returns bool
 end 'takes'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
 	let p = try a.get(0) otherwise panic("has one")
@@ -2974,7 +2974,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 	a.push(async plain(8))
 
@@ -3014,11 +3014,11 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 	a.push(async plain(8))
 
-	var b = IntPromiseArray.create()
+	var b = IntPromiseArray.create(0)
 	var i = 0 as Integer
 
 	while i < 2 'outer'
@@ -3055,7 +3055,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
 	var acc = 0 as Integer
@@ -3091,10 +3091,10 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
-	var b = IntPromiseArray.create()
+	var b = IntPromiseArray.create(0)
 	var i = 0 as Integer
 
 	while i < 2 'loop'
@@ -3176,7 +3176,7 @@ end 'Holder'
 function main() returns ExitCode
 	let h = Holder.of(async plain(7))
 
-	var b = IntPromiseArray.create()
+	var b = IntPromiseArray.create(0)
 	var i = 0 as Integer
 
 	while i < 2 'loop'
@@ -3217,7 +3217,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async plain(1))
 
 	var h = Holder.of(async plain(10))
@@ -3257,7 +3257,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	var seed = 0 as Integer
 
 	while seed < 8 'fill'
@@ -3265,7 +3265,7 @@ function main() returns ExitCode
 		seed = seed + 1
 	end 'fill'
 
-	var b = IntPromiseArray.create()
+	var b = IntPromiseArray.create(0)
 	var acc = 0 as Integer
 	var i = 0 as Integer
 
@@ -3862,7 +3862,7 @@ function both(p IntPromise, q IntPromise) returns Integer
 end 'both'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async work(1))
 	let p = try a.get(0) otherwise panic("one")
 	let r = async both(p, q: p)
@@ -3939,7 +3939,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async work(1))
 	let first = try a.get(0) otherwise panic("one")
 	let v = await first
@@ -4053,7 +4053,7 @@ function launch(a IntPromiseArray) returns bool
 end 'launch'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async work(1))
 	_ = launch(a)
 	let p = try a.get(0) otherwise panic("none")
@@ -4106,7 +4106,7 @@ function both(p IntPromise, q IntPromise) returns Integer
 end 'both'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async work(1))
 	let x = try a.get(0) otherwise panic("one")
 	let z = x
@@ -4137,7 +4137,7 @@ function both(p IntPromise, q IntPromise) returns Integer
 end 'both'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create()
+	var a = IntPromiseArray.create(0)
 	a.push(async work(1))
 	let x = try a.get(0) otherwise panic("one")
 	let z = x
@@ -4268,7 +4268,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = PairArray.create()
+	var held = PairArray.create(0)
 	held.push((1, async work(1)))
 	let (tag, p) = try held.pop() otherwise panic("one pushed")
 	let v = await p
@@ -4302,7 +4302,7 @@ function entryFor(n Integer) returns Pair
 end 'entryFor'
 
 function main() returns ExitCode
-	var held = PairArray.create()
+	var held = PairArray.create(0)
 	let entry = entryFor(2)
 	held.push(entry)
 	let (tag, p) = try held.pop() otherwise panic("one pushed")
@@ -4333,7 +4333,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = PairArray.create()
+	var held = PairArray.create(0)
 	held.push((1, async work(1)))
 	try held.set(0, value: (5, async work(5))) otherwise panic("index 0 exists")
 	let (tag, p) = try held.pop() otherwise panic("one held")
@@ -4395,7 +4395,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = TwinArray.create()
+	var held = TwinArray.create(0)
 	held.push((async work(1), async work(10)))
 	let (a, b) = try held.pop() otherwise panic("one pushed")
 	let x = await a

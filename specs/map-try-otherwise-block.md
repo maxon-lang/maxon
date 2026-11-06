@@ -99,7 +99,7 @@ function bump(a CodeArray)
 end 'bump'
 
 function main() returns ExitCode
-		var a = CodeArray.create()
+		var a = CodeArray.create(0)
 		a.push(41)
 		bump(a)
 		return try a.get(0) otherwise 99

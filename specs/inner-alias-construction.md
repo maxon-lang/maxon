@@ -59,7 +59,7 @@ end 'main'
 
 The generic form `stdlib/Set.maxon` and `stdlib/Map.maxon` are written in: `typealias ElementArray = Array
 with Element` inside `type Holder uses Element`, constructed by `Holder`'s own `create`. The value is the
-OPAQUE-element array `ElementArray.create()` builds, so it resizes and counts exactly as that one does.
+OPAQUE-element array `ElementArray.create(0)` builds, so it resizes and counts exactly as that one does.
 
 <!-- test: generic-inner-array-alias -->
 ```maxon
@@ -860,7 +860,7 @@ type Holder uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function sized() returns Count
@@ -897,11 +897,11 @@ type Holder uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function sized() returns Count
-		let make = function() gives ElementArray.create().count()
+		let make = function() gives ElementArray.create(0).count()
 		return make()
 	end 'sized'
 end 'Holder'

@@ -649,7 +649,7 @@ end 'Hub'
 
 function main() returns ExitCode
 	var hub = Hub.create()
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	hub.relay(sink: keep, pending: pending, p: async work())
 
 	var sum = 0 as Integer

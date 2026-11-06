@@ -139,7 +139,7 @@ let DetailLoggingName = "detail logging"
 // A re-emitter passes the resolved directory, never a default the far side would re-derive from its
 // own working directory. Each flag is emitted only when set.
 module function specSelectionArgv(specDir String, filterPatterns FilterPatternArray, mode SpecRunMode, includeNetwork bool) returns StringArray
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push(specDir)
 
 	for pattern in filterPatterns 'eachPattern'
@@ -617,7 +617,7 @@ end 'runBuild'
 // Every positional is compiled as one program, in the order given: `Compiler.loadSourceFiles`
 // registers them in that order and roots the project at their common ancestor.
 function runBuildPaths(args MaxonArgs) returns ExitCode
-	var inputPaths = MaxonSourcePathArray.create()
+	var inputPaths = MaxonSourcePathArray.create(0)
 
 	for spelling in args.paths 'eachPositional'
 		let path = try FilePath.from(spelling) otherwise 'badPath'
@@ -633,7 +633,7 @@ function runBuildPaths(args MaxonArgs) returns ExitCode
 	let outputOverride = args.outputOverride
 	var defines = args.defines
 
-	return match buildAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: args.debugInfo, productVersion: VersionComponentArray.create(), defines: defines) 'outcome'
+	return match buildAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: args.debugInfo, productVersion: VersionComponentArray.create(0), defines: defines) 'outcome'
 		built gives SucceededExit
 		failed(code) gives code
 	end 'outcome'
@@ -1213,7 +1213,7 @@ function fmtSelection(spelling String) returns FmtSelection
 	end 'aDirectory'
 
 	if File.exists(target) 'aFile'
-		var only = FilePathArray.create()
+		var only = FilePathArray.create(0)
 		only.push(target)
 		return FmtSelection.files(only)
 	end 'aFile'
@@ -1294,7 +1294,7 @@ module function joinedWith(values StringArray, separator String) returns String
 end 'joinedWith'
 
 module function backQuoted(words StringArray) returns StringArray
-	var quoted = StringArray.create()
+	var quoted = StringArray.create(0)
 
 	for word in words 'eachWord'
 		quoted.push("`{word}`")
@@ -1390,7 +1390,7 @@ function filterSuffix(unmatchedPatterns FilterPatternArray) returns String
 		return ""
 	end 'noFilter'
 
-	var flags = StringArray.create()
+	var flags = StringArray.create(0)
 
 	for pattern in unmatchedPatterns 'eachPattern'
 		flags.push("{FilterFlagPrefix}{pattern}")
@@ -1580,7 +1580,7 @@ function refusedAnOptionOfAnotherCommand(args MaxonArgs) returns bool
 end 'refusedAnOptionOfAnotherCommand'
 
 function commandsTaking(spelling String, args MaxonArgs) returns MaxonCommandArray
-	var takers = MaxonCommandArray.create()
+	var takers = MaxonCommandArray.create(0)
 	var admitted = false
 
 	for option in HelpOption.allCases 'eachOption'
@@ -1608,7 +1608,7 @@ function commandsTaking(spelling String, args MaxonArgs) returns MaxonCommandArr
 end 'commandsTaking'
 
 function commandWordsOf(commands MaxonCommandArray) returns String
-	var words = StringArray.create()
+	var words = StringArray.create(0)
 
 	for command in commands 'eachCommand'
 		words.push((try commandReference(command) otherwise panic("commandWordsOf: an option reference names `unknown`, which is no command")).word)
@@ -2106,7 +2106,7 @@ end 'optionReference'
 
 // Every roster walk comes through here, so `unknown` is skipped in one place.
 function namedCommands() returns MaxonCommandArray
-	var named = MaxonCommandArray.create()
+	var named = MaxonCommandArray.create(0)
 
 	for command in MaxonCommand.allCases 'eachCase'
 		if command != MaxonCommand.unknown 'itNamesACommand'
@@ -2118,7 +2118,7 @@ function namedCommands() returns MaxonCommandArray
 end 'namedCommands'
 
 function namedCommandsExcept(excluded MaxonCommandArray) returns MaxonCommandArray
-	var kept = MaxonCommandArray.create()
+	var kept = MaxonCommandArray.create(0)
 
 	for command in namedCommands() 'eachCommand'
 		if not excluded.contains(command) 'notExcluded'
@@ -2131,7 +2131,7 @@ end 'namedCommandsExcept'
 
 // Declaration order is alphabetical, so a filtered run needs no sort.
 function commandsFor(audience CommandAudience) returns MaxonCommandArray
-	var selected = MaxonCommandArray.create()
+	var selected = MaxonCommandArray.create(0)
 
 	for command in namedCommands() 'eachCommand'
 		let reference = try commandReference(command) otherwise panic("commandsFor: `namedCommands` leaves `unknown` out, so every command reaching here has a reference")
@@ -2499,7 +2499,7 @@ export type MaxonArgs
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	module static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metrics: StatedText.unstated, defines: DefineArray.create(), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(0), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, runtimeIrNames: RuntimeFunctionNameArray.create(0), filterPatterns: FilterPatternArray.create(0), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metrics: StatedText.unstated, defines: DefineArray.create(0), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(0), refusedOptions: OptionRefusalArray.create(0), dryRun: false, devMode: false}
 	end 'create'
 
 	// `runFmt` refuses by this, `fmt` being exempt from `main`'s unknown-option gate.
@@ -2854,7 +2854,7 @@ end 'MaxonArgs'
 // No arm of the parser consumes the child's command line and nothing rewrites it. A function rather
 // than a loop in `parse`, whose loop is register-bound (see its note).
 function monitorTail(args StringArray, from ElementIndex) returns SourcePathSpellingArray
-	var tail = SourcePathSpellingArray.create()
+	var tail = SourcePathSpellingArray.create(0)
 
 	for position in from upto args.count() 'eachTailArgument'
 		tail.push(try args.get(position) otherwise panic("monitorTail: index {position} is past args.count() despite the upto bound"))
@@ -2864,7 +2864,7 @@ function monitorTail(args StringArray, from ElementIndex) returns SourcePathSpel
 end 'monitorTail'
 
 function splitRuntimeNames(value String) returns RuntimeFunctionNameArray
-	var names = RuntimeFunctionNameArray.create()
+	var names = RuntimeFunctionNameArray.create(0)
 
 	for part in value.split(RuntimeNameSeparator) 'eachName'
 		let trimmed = part.trim()

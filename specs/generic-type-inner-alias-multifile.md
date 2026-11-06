@@ -38,8 +38,8 @@ export type GenericModule uses Op
 
 	export static function create() returns Self
 		return Self{
-			ops: OpArray.create(),
-			items: ItemArray.create()
+			ops: OpArray.create(0),
+			items: ItemArray.create(0)
 		}
 	end 'create'
 
@@ -107,8 +107,8 @@ export type GenericModule uses Op
 
 	export static function create() returns Self
 		return Self{
-			ops: OpArray.create(),
-			items: ItemArray.create()
+			ops: OpArray.create(0),
+			items: ItemArray.create(0)
 		}
 	end 'create'
 

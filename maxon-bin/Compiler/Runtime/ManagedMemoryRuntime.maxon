@@ -252,7 +252,7 @@ export function registerImmortalStringTableRecord(globalData GlobalDataTable, te
 		panic("registerImmortalStringTableRecord: a table of addresses is being registered at element stride {elementSize}, not the {ManagedArrayElementBytes}-byte pointer slot a managed element occupies — the buffer this lays down and the stride the record is stamped with would describe different geometry")
 	end 'notAPointerSlot'
 
-	var elementLabels = StringArray.create()
+	var elementLabels = StringArray.create(0)
 
 	for text in texts 'eachElement'
 		elementLabels.push(registerStringLiteralRecord(globalData, bytes: text, debugStream: debugStream))
@@ -268,7 +268,7 @@ end 'registerImmortalStringTableRecord'
 // The element buffer's bytes: one pointer slot per element, seeded with that element's record offset — see
 // the dedup argument at the door above. Every slot is OVERWRITTEN with a real address by the writers.
 function stringTableBufferBytes(globalData GlobalDataTable, elementLabels StringArray) returns ByteArray
-	var buffer = ByteArray.create()
+	var buffer = ByteArray.create(0)
 
 	for label in elementLabels 'eachSlot'
 		buffer.append(scalarImage(globalData.rdataOffsetOf(label) as FullRangeInt, byteCount: ManagedArrayElementBytes as BytePos))
@@ -1556,7 +1556,7 @@ end 'RecordGatedAction'
 // `doact` answers what the word handed back.
 module function buildRecordGatedAction(module StdModule, symbolName ByteArray, wordOffset ByteOffset, action RecordGatedAction)
 	let paramCount = recordGatedParamCount(action)
-	var paramTypes = StdTypeArray.create()
+	var paramTypes = StdTypeArray.create(0)
 
 	for _ in 0 upto paramCount 'eachParam'
 		paramTypes.push(StdType.i64)
@@ -1724,7 +1724,7 @@ function emitCopyRun(module StdModule, func IrFunction, cur IrBlock, dest ValueI
 	var loop = openCountedLoop(module, func: func, cur: cur, from: run.lower, to: run.upper, label: run.label, ids: ids)
 
 	let srcAddr = emitBin(module, block: loop.body, a: srcAnchor, b: loop.index, opcode: addrOpcode, ids: ids)
-	var moved = ValueIdArray.create()
+	var moved = ValueIdArray.create(0)
 	var offset = 0 as ByteOffset
 
 	for _ in 1 to shape.accesses() 'eachLoad'
@@ -2462,7 +2462,7 @@ function singleOpStrideLabelSuffix(stride SingleOpStride) returns ByteArray
 end 'singleOpStrideLabelSuffix'
 
 function strideArmLabel(prefix ByteArray, stride SingleOpStride) returns ByteArray
-	var label = ByteArray.create()
+	var label = ByteArray.create(0)
 	label.append(prefix)
 	label.append(singleOpStrideLabelSuffix(stride))
 
@@ -2501,7 +2501,7 @@ end 'strideChainArmFor'
 // minted instead of minting one: a store writes the same low bytes either way, and only a load must extend.
 // The roster therefore lists an unsigned width before its signed one (`strideChainArmFor` panics otherwise).
 export function emitStrideChain(module StdModule, func IrFunction, cur IrBlock, stamp ValueId, strides SingleOpStrideArray, signedSharesUnsignedArm bool, other BlockId, armLabelPrefix ByteArray, checkLabel ByteArray, ids ValueMinter) returns StrideChainArmArray
-	var arms = StrideChainArmArray.create()
+	var arms = StrideChainArmArray.create(0)
 	var test = cur
 
 	for position in 0 upto strides.count() 'eachStride'
@@ -2928,7 +2928,7 @@ end 'emitPackedElementZero'
 // Call `__managed_move_elems`. The callee is void, so the minted result is unread; it exists because a `call` op
 // always defines a value — the shape `emitCowDetach` already uses.
 function emitMoveElems(module StdModule, block IrBlock, destBuffer ValueId, destIndex ValueId, srcBuffer ValueId, srcIndex ValueId, count ValueId, es ValueId, ids ValueMinter)
-	var args = ValueIdArray.create()
+	var args = ValueIdArray.create(0)
 	args.push(destBuffer)
 	args.push(destIndex)
 	args.push(srcBuffer)
@@ -3498,7 +3498,7 @@ end 'emitOobReturn'
 // is what a view over an immortal `.rdata` blob has, and what an OWNER that never allocated a buffer has.
 // ⛔ **THAT SECOND ONE IS NOT A CURIOSITY — GIVING IT THE RECORD INSTEAD LEAKS.** An
 // `otherwise ⇒ the record` residual in the host answer puts a count on the ARRAY's record for
-// `slice(0, endIndex: 0)` of a fresh `ByteArray.create()`; the array then grows a buffer and its
+// `slice(0, endIndex: 0)` of a fresh `ByteArray.create(0)`; the array then grows a buffer and its
 // `__managed_decref` is no longer the last owner, so it lowers the count and returns without releasing
 // that buffer (exit 101). See `BufferOwnership.emitBufferHostAllocation`.
 //
@@ -6108,7 +6108,7 @@ end 'buildManagedRelease'
 // Threads `cur` (sets its terminator) and returns the continuation block.
 function emitElementCloneRange(module StdModule, func IrFunction, cur IrBlock, srcBase ValueId, destBase ValueId, count ValueId, elementSize ValueId, cloneFn ValueId, ids ValueMinter) returns IrBlock
 	var visit = module.addBlock(func, label: b"clndo", heat: BlockHeat.normal)
-	var loop = emitElementRange(module, func: func, cur: cur, base: srcBase, count: count, elementSize: elementSize, visit: visit, carried: ValueIdArray.create(), labels: elementRangeLabels(CascadeAction.clone), ids: ids)
+	var loop = emitElementRange(module, func: func, cur: cur, base: srcBase, count: count, elementSize: elementSize, visit: visit, carried: ValueIdArray.create(0), labels: elementRangeLabels(CascadeAction.clone), ids: ids)
 
 	let cloned = ids.mint()
 

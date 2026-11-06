@@ -17,7 +17,7 @@ typealias Score = int(i64.min to i64.max)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var a = ScoreArray.create()
+	var a = ScoreArray.create(0)
 	a.push(5)
 	a.push(1)
 	a.push(4)
@@ -44,7 +44,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `Array.create()` | `Array` | An empty array; `Array.create(0)` is the same array. |
+| `Array.create(0)` | `Array` | An empty array. A call with no argument is refused at compile time ([E3195](/docs/cli/error-codes/#e3195--arraycreatewithoutcapacity)): every array states its capacity. |
 | `Array.create(n)` | `Array` | `n` zero-valued elements, in one allocation when they take at most 256 bytes. `n` is an `ElementIndex`. Refused at compile time (E3106) for an element type with no zero value — a struct, a `String`, a nested container, a ranged alias that excludes 0, or an enum or union whose raw values include no 0; create those with `create(n, zeroed: false)`. `create(n, zeroed: true)` follows the same rule. |
 | `Array.create(n, zeroed: false)` | `Array` | An empty array with room for `n` elements, in one allocation when they take at most 256 bytes; append with `push`. `n` is an `ElementIndex` and `zeroed:` is a literal `true` or `false`. Available for every element type. |
 | `[a, b, c]` | `Array` | A literal; its element type is inferred from context or from the first element. |
@@ -420,7 +420,7 @@ typealias Score = int(i64.min to i64.max)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var values = ScoreArray.create()
+	var values = ScoreArray.create(0)
 
 	for i in 1 to 5 'fill'
 		values.push(i * 10)

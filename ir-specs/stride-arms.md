@@ -32,7 +32,7 @@ var reader = read as Reader
 var writer = write as Writer
 
 function main() returns ExitCode
-	var cells = Cells.create()
+	var cells = Cells.create(0)
 	cells.push(40000)
 	cells.push(40000)
 	writer(cells, 1, 40000)
@@ -769,7 +769,7 @@ var reader = read as Reader
 var writer = write as Writer
 
 function main() returns ExitCode
-	var cells = Cells.create()
+	var cells = Cells.create(0)
 	cells.push(3000000000)
 	cells.push(3000000000)
 	writer(cells, 1, 3000000000)
@@ -1510,7 +1510,7 @@ var reader = read as Reader
 var writer = write as Writer
 
 function main() returns ExitCode
-	var cells = Cells.create()
+	var cells = Cells.create(0)
 	cells.push(true)
 	cells.push(true)
 	writer(cells, 1, true)
@@ -2275,7 +2275,7 @@ var reader = read as Reader
 var writer = write as Writer
 
 function main() returns ExitCode
-	var cells = Cells.create()
+	var cells = Cells.create(0)
 	cells.push(2)
 	cells.push(2)
 	writer(cells, 1, 2)
@@ -3094,7 +3094,7 @@ var reader = read as Reader
 var writer = write as Writer
 
 function main() returns ExitCode
-	var cells = Cells.create()
+	var cells = Cells.create(0)
 	cells.push(9)
 	cells.push(9)
 	writer(cells, 1, 9)
@@ -3903,7 +3903,7 @@ type Bag uses Element
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function add(value Element)

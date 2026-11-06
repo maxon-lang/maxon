@@ -75,7 +75,7 @@ type ServiceBlockingGraph
 	var edgeSites as ServiceAwaitSiteArray
 
 	static function create(serviceNames NameRoster) returns ServiceBlockingGraph
-		return Self{serviceNames: serviceNames, edgeOwners: CsrColumn.create(), edgeAwaited: CsrColumn.create(), edgeMessages: NameRoster.create(), edgeSites: ServiceAwaitSiteArray.create()}
+		return Self{serviceNames: serviceNames, edgeOwners: CsrColumn.create(0), edgeAwaited: CsrColumn.create(0), edgeMessages: NameRoster.create(0), edgeSites: ServiceAwaitSiteArray.create(0)}
 	end 'create'
 
 	function nodeCount() returns CsrIndex
@@ -212,7 +212,7 @@ end 'serviceFactoryOwnerOf'
 // statement of one idea, and because the seed column has to be rebuilt per service anyway.
 function addBlockingEdgesTo(graph ServiceBlockingGraph, awaited CsrIndex, funcNames FunctionNameIndex, survey ServiceProgramSurvey)
 	view awaitedName = graph.serviceNameOf(awaited)
-	var seeds = BoolArray.create()
+	var seeds = BoolArray.create(0)
 
 	for funcIndex in 0 upto survey.funcCount() 'eachFunc'
 		seeds.push(false)

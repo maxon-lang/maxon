@@ -163,7 +163,7 @@ function main() returns ExitCode
 		panic("the two spellings did not normalize to the same path, so the two changeExtension rows below are not comparable and this host's FilePath does not normalize separators")
 	end 'notSameText'
 
-	var payload = ByteArray.create()
+	var payload = ByteArray.create(0)
 	var b = 0 as Count
 	while b < 64 'fill'
 		payload.push(65)

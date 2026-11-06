@@ -19,10 +19,10 @@ type BuildAFileSeesScriptlib implements OutsideCheckoutCase
 		writeScriptlibPackageFile(dir, package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(ScriptlibGreeting))
 		writeStagedFile(dir.join(ScriptFileName), content: GreetingScriptSource)
 
-		try requireBuilt(runRecordedBuild(dir, program: ScriptFileName, output: OutputStem, options: StringArray.create(), binary: installedCompilerIn(dir)), which: "a build of `{ScriptFileName}`, which calls `greeting()` from `scriptlib/{GreetingPackageName}/{GreetingPackageFileName}`")
+		try requireBuilt(runRecordedBuild(dir, program: ScriptFileName, output: OutputStem, options: StringArray.create(0), binary: installedCompilerIn(dir)), which: "a build of `{ScriptFileName}`, which calls `greeting()` from `scriptlib/{GreetingPackageName}/{GreetingPackageFileName}`")
 
 		let executable = dir.join("{OutputStem}{executableSuffix()}")
-		let run = spawnCompiler(StringArray.create(), binary: executable, staged: dir)
+		let run = spawnCompiler(StringArray.create(0), binary: executable, staged: dir)
 		let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
 
 		try Expect.equal(run.exitCode(), expected: 0, message: "the built script did not exit 0. {said}")

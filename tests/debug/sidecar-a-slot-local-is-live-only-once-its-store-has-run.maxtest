@@ -29,9 +29,9 @@ end 'earliestSlotRowStart'
 test 'a var held in a stack slot reads its value from the first byte its row covers'
 	let staged = builtFixture(SlotStartCaseLabel, fixture: DeadSplitFixtureName)
 	let executable = builtExecutable(staged)
-	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create(0))
 	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
-	var steps = StringArray.create()
+	var steps = StringArray.create(0)
 
 	for name in SlotStartLocalNames 'eachArmed'
 		steps.push("{BreakCommand} {exactOffsetTarget(earliestSlotRowStart(functionRows, name: name))}")
@@ -47,14 +47,14 @@ test 'a var held in a stack slot reads its value from the first byte its row cov
 		end 'moreToReach'
 	end 'eachRead'
 
-	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(steps), extraOptions: StringArray.create())
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(steps), extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let answers = eventsOfKind(events, kind: ValueEventName)
 
 	Expect.equal(answers.count(), expected: SlotStartLocalNames.count(), message: "each of the {SlotStartLocalNames.count()} reads printed one `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
-	var wrong = StringArray.create()
+	var wrong = StringArray.create(0)
 
 	for (iter, name) in SlotStartLocalNames.withIterator() 'eachAnswer'
 		let answered = eventAt(answers, index: iter.index() as EventIndex)

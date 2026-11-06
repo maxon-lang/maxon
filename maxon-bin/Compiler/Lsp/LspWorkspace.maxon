@@ -124,7 +124,7 @@ module type ReaderDocument
 
 	module static function of(path FilePath, folders LspFolderArray) returns ReaderDocument throws RunCacheError
 		match directoryHolding(path) 'directory'
-			none then return Self.create(path, identity: path, ancestry: RootNameArray.create(), climbCeiling: ProjectClimbCeiling.none)
+			none then return Self.create(path, identity: path, ancestry: RootNameArray.create(0), climbCeiling: ProjectClimbCeiling.none)
 			at(dir) then return try placedDocument(path, dir: dir, folders: folders)
 		end 'directory'
 	end 'of'
@@ -138,7 +138,7 @@ function placedDocument(path FilePath, dir FilePath, folders LspFolderArray) ret
 end 'placedDocument'
 
 function ancestryAbove(dir FilePath, folders LspFolderArray) returns DocumentAncestry throws RunCacheError
-	var names = RootNameArray.create()
+	var names = RootNameArray.create(0)
 	var current = dir.resolve(Directory.currentPath())
 
 	while true 'ascend'
@@ -433,7 +433,7 @@ module type LspWorkspaceState
 	module var tiersMemo as LibraryTiersMemo
 
 	module static function create(writer LspStdoutWriter.handle) returns LspWorkspaceState
-		return Self{held: RecentHeldRoots.create(), trusted: true, folders: LspFolderArray.create(), fileMemos: SharedFileMemoMap.create(), writer: writer, arrivals: LspArrivalPromiseArray.create(), recordWatches: RecordWatchMap.create(), nextResolutionTicket: 0, tiersMemo: LibraryTiersMemo.unlocated}
+		return Self{held: RecentHeldRoots.create(), trusted: true, folders: LspFolderArray.create(0), fileMemos: SharedFileMemoMap.create(), writer: writer, arrivals: LspArrivalPromiseArray.create(0), recordWatches: RecordWatchMap.create(), nextResolutionTicket: 0, tiersMemo: LibraryTiersMemo.unlocated}
 	end 'create'
 
 	module function projectInputsOf(name RootName) returns ProjectInputsAnswer
@@ -485,7 +485,7 @@ module function lspLibraryTiers(workspace LspWorkspaceState) returns LibraryTier
 end 'lspLibraryTiers'
 
 module function lspRememberClientRoots(workspace LspWorkspaceState, roots LspClientRootArray)
-	workspace.folders = LspFolderArray.create()
+	workspace.folders = LspFolderArray.create(0)
 
 	for root in roots 'eachRoot'
 		rememberOneClientRoot(workspace, root: root)
@@ -554,8 +554,8 @@ end 'folderIdentifiedAs'
 
 function forgetClientRoot(workspace LspWorkspaceState, root FilePath)
 	let spelled = root.normalize()
-	var kept = LspFolderArray.create()
-	var closed = LspFolderArray.create()
+	var kept = LspFolderArray.create(0)
+	var closed = LspFolderArray.create(0)
 
 	for folder in workspace.folders 'eachFolder'
 		if folder.name.spelled.equals(spelled) 'closesNow'
@@ -758,7 +758,7 @@ type HeldService uses Handle
 	var held as HandleColumn
 
 	static function create() returns Self
-		return Self{held: HandleColumn.create()}
+		return Self{held: HandleColumn.create(0)}
 	end 'create'
 
 	function obtained(spawner Spawner) returns Handle
@@ -841,7 +841,7 @@ module type RecentHeldRoots
 	var order as HeldProjectKeyArray
 
 	static function create() returns RecentHeldRoots
-		return Self{roots: HeldRootMap.create(), order: HeldProjectKeyArray.create()}
+		return Self{roots: HeldRootMap.create(), order: HeldProjectKeyArray.create(0)}
 	end 'create'
 
 	function rootAt(name RootName) returns HeldRoot
@@ -907,7 +907,7 @@ module type RecentHeldRoots
 	end 'peek'
 
 	function use(key String)
-		var kept = HeldProjectKeyArray.create()
+		var kept = HeldProjectKeyArray.create(0)
 
 		for existing in self.order 'eachKey'
 			if existing != key 'staysInOrder'
@@ -949,7 +949,7 @@ module type RecentHeldRoots
 
 	// Walks the map, not the order: a demoted root is in the map alone, and goes with its folder too.
 	function dropUnder(folder FilePath)
-		var gone = HeldProjectKeyArray.create()
+		var gone = HeldProjectKeyArray.create(0)
 
 		for (key, held) in self.roots 'eachRoot'
 			if held.name.identity.isInside(folder) 'goesWithTheFolder'
@@ -961,7 +961,7 @@ module type RecentHeldRoots
 			_ = self.roots.remove(key)
 		end 'eachGone'
 
-		var kept = HeldProjectKeyArray.create()
+		var kept = HeldProjectKeyArray.create(0)
 
 		for key in self.order 'eachKey'
 			if self.roots.contains(key) 'staysHeld'
@@ -1016,7 +1016,7 @@ module type EditorSources
 	module let refusal as StringArray
 
 	module static function walked(sweep SourceSweep, root FilePath) returns EditorSources
-		return Self{sweep: sweep, root: root, refusal: StringArray.create()}
+		return Self{sweep: sweep, root: root, refusal: StringArray.create(0)}
 	end 'walked'
 
 	module static function refused(root FilePath, lines StringArray) returns EditorSources
@@ -1028,7 +1028,7 @@ function sourcesUnder(root WorkspaceRoot, selection SourceSelection, workspace L
 	return match root 'root'
 		projectDirectory(name) gives projectSourcesIn(name.spelled, selection: selection, answer: workspace.projectInputsOf(name))
 		libraryTier(name) gives EditorSources.walked(maxonSourcesIn(name.spelled, selection: selection), root: buildRootOf(root))
-		singleFile gives EditorSources.walked(SourceSweep.swept(MaxonSourcePathArray.create()), root: buildRootOf(root))
+		singleFile gives EditorSources.walked(SourceSweep.swept(MaxonSourcePathArray.create(0)), root: buildRootOf(root))
 	end 'root'
 end 'sourcesUnder'
 
@@ -1338,12 +1338,12 @@ function decisionFor(dir FilePath, stamp ProjectFileStamp, trusted bool) returns
 	let need = projectNeedsARun(dir, voice: voice)
 
 	if not trusted 'neverRunsTheProjectFile'
-		return InputsDecision.settled(ProjectInputsAnswer.create(ProjectInputs.walked, refusal: StringArray.create(), notice: untrustedNoticeFor(need), trusted: false, resolved: true, stamp: stamp, askedAtMs: Clock.nowMs()))
+		return InputsDecision.settled(ProjectInputsAnswer.create(ProjectInputs.walked, refusal: StringArray.create(0), notice: untrustedNoticeFor(need), trusted: false, resolved: true, stamp: stamp, askedAtMs: Clock.nowMs()))
 	end 'neverRunsTheProjectFile'
 
 	match need 'need'
 		settled(inputs) then return InputsDecision.settled(answerFrom(inputs.clone(), voice: voice, stamp: stamp))
-		needsARun then return InputsDecision.needsARun(ProjectInputsAnswer.create(ProjectInputs.walked, refusal: StringArray.create(), notice: StringArray.create(), trusted: true, resolved: false, stamp: stamp, askedAtMs: Clock.nowMs()))
+		needsARun then return InputsDecision.needsARun(ProjectInputsAnswer.create(ProjectInputs.walked, refusal: StringArray.create(0), notice: StringArray.create(0), trusted: true, resolved: false, stamp: stamp, askedAtMs: Clock.nowMs()))
 	end 'need'
 end 'decisionFor'
 
@@ -1365,11 +1365,11 @@ module function resolvedProjectInputs(dir FilePath, previous DeclaredInputStamps
 end 'resolvedProjectInputs'
 
 function answerFrom(inputs ProjectInputs, voice ManifestVoice, stamp ProjectFileStamp) returns ProjectInputsAnswer
-	return ProjectInputsAnswer.create(inputs, refusal: refusalOf(inputs, voice: voice), notice: StringArray.create(), trusted: true, resolved: true, stamp: stamp, askedAtMs: Clock.nowMs())
+	return ProjectInputsAnswer.create(inputs, refusal: refusalOf(inputs, voice: voice), notice: StringArray.create(0), trusted: true, resolved: true, stamp: stamp, askedAtMs: Clock.nowMs())
 end 'answerFrom'
 
 function untrustedNoticeFor(need RunNeed) returns StringArray
-	var notice = StringArray.create()
+	var notice = StringArray.create(0)
 
 	match need 'need'
 		needsARun then notice.push(UntrustedProjectNotice)
@@ -1385,12 +1385,12 @@ function refusalOf(inputs ProjectInputs, voice ManifestVoice) returns StringArra
 		walked or
 		listed or
 		ambiguous or
-		unbuilt gives StringArray.create()
+		unbuilt gives StringArray.create(0)
 	end 'inputs'
 end 'refusalOf'
 
 function maxonSourcesIn(dir FilePath, selection SourceSelection) returns SourceSweep
-	var sources = MaxonSourcePathArray.create()
+	var sources = MaxonSourcePathArray.create(0)
 
 	_ = try collectMaxonSources(dir, into: sources, selection: selection, nestedProjects: NestedProjectRule.pruned) otherwise return SourceSweep.walkFailed
 
@@ -1644,7 +1644,7 @@ end 'refuseWhen'
 function sweptSourcesOf(walk SourceSweep) returns MaxonSourcePathArray
 	return match walk 'walk'
 		swept(sources) gives sources
-		walkFailed gives MaxonSourcePathArray.create()
+		walkFailed gives MaxonSourcePathArray.create(0)
 	end 'walk'
 end 'sweptSourcesOf'
 

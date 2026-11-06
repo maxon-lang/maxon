@@ -40,7 +40,7 @@ type Holder
 	var items as IntArray
 
 	static function create() returns Self
-		return Self{items: IntArray.create()}
+		return Self{items: IntArray.create(0)}
 	end 'create'
 
 	function fill(n Integer)
@@ -51,7 +51,7 @@ type Holder
 
 	function swapAndRead() returns Integer
 		view old = items
-		var fresh = IntArray.create()
+		var fresh = IntArray.create(0)
 		fresh.push(99)
 		items = fresh
 
@@ -84,14 +84,14 @@ type Holder
 	var items as IntArray
 
 	static function create() returns Self
-		return Self{items: IntArray.create()}
+		return Self{items: IntArray.create(0)}
 	end 'create'
 
 	function swapAndRead() returns Integer
 		items.push(3)
 		items.push(4)
 		var old = items
-		items = IntArray.create()
+		items = IntArray.create(0)
 
 		var sum = 0 as Integer
 		for i in 0 upto old.count() 'walk'
@@ -148,13 +148,13 @@ releases the old occupant, and `old` holds its own reference.
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-var G = IntArray.create()
+var G = IntArray.create(0)
 
 function main() returns ExitCode
 	G.push(1)
 	G.push(2)
 	view old = G
-	var fresh = IntArray.create()
+	var fresh = IntArray.create(0)
 	fresh.push(99)
 	G = fresh
 
@@ -181,7 +181,7 @@ type Frozen
 	let items as IntArray
 
 	static function create() returns Self
-		var a = IntArray.create()
+		var a = IntArray.create(0)
 		a.push(4)
 		a.push(5)
 		return Self{items: a}

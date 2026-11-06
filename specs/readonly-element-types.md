@@ -48,7 +48,7 @@ end 'Counter'
 typealias Roster = Array with readonly Counter
 
 function main() returns ExitCode
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	let shared = Counter.create(4)
 	roster.push(shared)
 	roster.push(Counter.create(5))
@@ -190,7 +190,7 @@ end 'Counter'
 typealias Counters = Array with readonly Counter
 
 function main() returns ExitCode
-	var counters = Counters.create()
+	var counters = Counters.create(0)
 	counters.push(Counter.create(3))
 	counters.push(Counter.create(1))
 	counters.push(Counter.create(2))
@@ -229,7 +229,7 @@ end 'Counter'
 typealias Roster = Array with readonly Counter
 
 function main() returns ExitCode
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	var counter = Counter.create(1)
 	roster.push(counter)
 	counter.n = 2
@@ -287,7 +287,7 @@ end 'Counter'
 typealias Roster = Array with readonly Counter
 
 function main() returns ExitCode
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	roster.push(Counter.create(1))
 	let first = try roster.get(0) otherwise return 1
 	first.n = 5
@@ -316,7 +316,7 @@ end 'Counter'
 typealias Roster = Array with readonly Counter
 
 function main() returns ExitCode
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	roster.push(Counter.create(1))
 
 	for entry in roster 'each'
@@ -347,7 +347,7 @@ end 'Counter'
 typealias Roster = Array with readonly Counter
 
 function main() returns ExitCode
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	roster.push(Counter.create(1))
 	var mine = try roster.get(0) otherwise return 1
 	mine.n = 3
@@ -377,9 +377,9 @@ typealias Roster = Array with readonly Counter
 typealias Plain = Array with Counter
 
 function main() returns ExitCode
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	roster.push(Counter.create(1))
-	var plain = Plain.create()
+	var plain = Plain.create(0)
 	let first = try roster.get(0) otherwise return 1
 	plain.push(first)
 
@@ -412,7 +412,7 @@ function takesPlain(items Plain) returns Count
 end 'takesPlain'
 
 function main() returns ExitCode
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 
 	return takesPlain(roster) as ExitCode
 end 'main'
@@ -443,7 +443,7 @@ function takesRoster(items Roster) returns Count
 end 'takesRoster'
 
 function main() returns ExitCode
-	var plain = Plain.create()
+	var plain = Plain.create(0)
 
 	return takesRoster(plain) as ExitCode
 end 'main'
@@ -648,7 +648,7 @@ end 'Counter'
 typealias Roster = Array with readonly Counter
 
 function main() returns ExitCode
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	roster.push(Counter.create(1))
 
 	for (_, item) in roster.withIterator() 'each'
@@ -679,7 +679,7 @@ end 'Counter'
 typealias Roster = Array with readonly Counter
 
 function main() returns ExitCode
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	roster.push(Counter.create(1))
 	var cursor = try roster.createIterator() otherwise return 1
 	var current = cursor.current()
@@ -712,7 +712,7 @@ type Catalog
 	var names as Roster
 
 	static function create() returns Self
-		return Self{names: Roster.create()}
+		return Self{names: Roster.create(0)}
 	end 'create'
 
 	function add(name ByteArray)
@@ -761,7 +761,7 @@ type Catalog
 	var names as Roster
 
 	static function create() returns Self
-		return Self{names: Roster.create()}
+		return Self{names: Roster.create(0)}
 	end 'create'
 
 	function add(name ByteArray)
@@ -812,7 +812,7 @@ end 'note'
 function main() returns ExitCode
 	var reached = NameSet.create()
 	reached.insert(b"a")
-	var credits = CreditArray.create()
+	var credits = CreditArray.create(0)
 
 	for name in reached 'eachReached'
 		note(credits, name: name)
@@ -838,7 +838,7 @@ type Tally
 	export var last as ByteArray
 
 	static function create() returns Self
-		return Self{counts: CountMap.create(), last: ByteArray.create()}
+		return Self{counts: CountMap.create(), last: ByteArray.create(0)}
 	end 'create'
 
 	function record(name ByteArray)
@@ -876,7 +876,7 @@ type Tally
 	export var last as ByteArray
 
 	static function create() returns Self
-		return Self{names: NameSet.create(), last: ByteArray.create()}
+		return Self{names: NameSet.create(), last: ByteArray.create(0)}
 	end 'create'
 
 	function record(name ByteArray)
@@ -923,9 +923,9 @@ type ro_Counter
 	export var extra as Label
 
 	static function create() returns Self
-		var label = Label.create()
+		var label = Label.create(0)
 		label.push(7)
-		var extra = Label.create()
+		var extra = Label.create(0)
 		extra.push(8)
 		return Self{label: label, extra: extra}
 	end 'create'
@@ -935,9 +935,9 @@ typealias Roster = Array with readonly Counter
 typealias Others = Array with ro_Counter
 
 function main() returns ExitCode
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	roster.push(Counter.create(4))
-	var others = Others.create()
+	var others = Others.create(0)
 	others.push(ro_Counter.create())
 	let a = try roster.get(0) otherwise return 1
 	view b = try others.get(0) otherwise return 1
@@ -983,7 +983,7 @@ typealias Roster = Array with readonly Counter
 typealias Wrapped = Array_ with _ro_Counter
 
 function main() returns ExitCode
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	roster.push(Counter.create(4))
 	let wrapped = Wrapped.create(_ro_Counter.create(5))
 	let a = try roster.get(0) otherwise return 1
@@ -1034,7 +1034,7 @@ end 'Array'
 typealias Roster = Array with readonly Counter
 
 function main() returns ExitCode
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	roster.push(Counter.create(7))
 	let nine = try roster.wide() otherwise return 1
 	return nine.item().n as ExitCode
@@ -1083,7 +1083,7 @@ end 'Array'
 typealias Roster = Array with readonly Counter
 
 function main() returns ExitCode
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	roster.push(Counter.create(9))
 	let wide = try roster.widest() otherwise return 1
 	return wide.item().n as ExitCode

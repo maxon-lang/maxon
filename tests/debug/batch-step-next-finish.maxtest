@@ -5,12 +5,12 @@ test 'step enters the callee, next steps over it, and finish returns to the call
 	let callLine = anchorLine(staged.join(StagedProgramFileName), anchor: "outer-call")
 	let afterLine = anchorLine(staged.join(StagedProgramFileName), anchor: "outer-after")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, StepCommand, FinishCommand, NextCommand])
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	var walked = StringArray.create()
+	var walked = StringArray.create(0)
 
 	for stop in stops 'eachStop'
 		walked.push("{textOf(stop, node: stop.root, key: ReasonKey)} {textOf(stop, node: stop.root, key: FunctionKey)}:{numberOf(stop, node: stop.root, key: LineKey)}")

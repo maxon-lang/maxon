@@ -9,7 +9,7 @@ test 'a program carrying no agent stops at a breakpoint, ends with its own code,
 	let hotLine = anchorLine(staged.join(StagedProgramFileName), anchor: HotAnchorName)
 
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(hotLine)}", RunCommand, "{ClearCommand} {lineTarget(hotLine)}", ContinueCommand])
-	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
@@ -27,13 +27,13 @@ test 'a program carrying no agent stops at a breakpoint, ends with its own code,
 	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: undebugged.exitCode() as EventNumber, message: "⭐ THE PROGRAM'S OWN CODE, NOT THE DEBUGGER'S. The debugged run answered a different code than the same image run with nothing attached, so being debugged changed what the program reported. {said}")
 	Expect.equal(session.exitCode(), expected: CompletedSessionExitCode, message: "a session that ran its script and saw the program end is a successful one. {said}")
 
-	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create(0))
 
 	if dump.exitCode() != 0 'noSidecar'
 		panic("{NoAgentInImageCaseLabel}: the gate could not run — `{DebugSubcommandName} {DumpInfoOptionName} <exe>` exited {dump.exitCode()}, so there is no function table to read. It wrote to stderr: {dump.stderr}")
 	end 'noSidecar'
 
-	var agentFunctions = StringArray.create()
+	var agentFunctions = StringArray.create(0)
 
 	for row in dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading) 'eachRow'
 		if firstToken(row).startsWith(AgentSymbolPrefix) 'anAgentFunction'

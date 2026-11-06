@@ -212,7 +212,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(1)
 	let s = String.from(a)
 	return s.byteLength()
@@ -503,7 +503,7 @@ function readBack(bytes OctetArray) returns OctetSum
 end 'readBack'
 
 function main() returns ExitCode
-	var a = OctetArray.create()
+	var a = OctetArray.create(0)
 	a.push(72)
 	a.push(105)
 	let x = try a.get(0) otherwise 0
@@ -534,7 +534,7 @@ typealias Octet = int(0 to u8.max)
 typealias OctetArray = Array with Octet
 
 function main() returns ExitCode
-	var a = OctetArray.create()
+	var a = OctetArray.create(0)
 	a.push(72)
 	a.push(105)
 	let x = try a.get(0) otherwise 0
@@ -556,7 +556,7 @@ A pushed `ByteArray` and a literal of its elements both reach `String.from`, and
 stride: `Hi`, two bytes.
 ```maxon
 function main() returns ExitCode
-	var a = ByteArray.create()
+	var a = ByteArray.create(0)
 	a.push(72)
 	a.push(105)
 	let x = try a.get(0) otherwise 0
@@ -583,7 +583,7 @@ array must be a `ByteArray`.
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var a = Bytes.create()
+	var a = Bytes.create(0)
 	a.push(72)
 	a.push(105)
 	let pushed = String.from(a)

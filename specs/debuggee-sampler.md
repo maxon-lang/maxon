@@ -227,13 +227,13 @@ function main() returns ExitCode
 	print("ready {trace.isReady()}\n")
 	print("{readOutcome(trace, count: 0)} {readOutcome(trace, count: 513)} {readOutcome(trace, count: 1000000)}\n")
 
-	var big = ByteArray.create()
+	var big = ByteArray.create(0)
 
 	for _ in 0 upto 513 'fill'
 		big.push(0)
 	end 'fill'
 
-	print("{writeOutcome(trace, content: ByteArray.create())} {writeOutcome(trace, content: big)}\n")
+	print("{writeOutcome(trace, content: ByteArray.create(0))} {writeOutcome(trace, content: big)}\n")
 	trace.close()
 	trace.close()
 	print("ready {trace.isReady()}\n")
@@ -509,7 +509,7 @@ function main() returns ExitCode
 	end 'asTheChild'
 
 	let me = try Process.executablePath() otherwise return 1
-	var childArguments = StringArray.create()
+	var childArguments = StringArray.create(0)
 	childArguments.push("child")
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
 	_ = try child.readStdoutLine() otherwise return 7
@@ -585,7 +585,7 @@ function main() returns ExitCode
 	end 'asTheChild'
 
 	let me = try Process.executablePath() otherwise return 1
-	var childArguments = StringArray.create()
+	var childArguments = StringArray.create(0)
 	childArguments.push("child")
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
 	_ = try child.readStdoutLine() otherwise return 7
@@ -667,12 +667,12 @@ function main() returns ExitCode
 	end 'asTheTarget'
 
 	let me = try Process.executablePath() otherwise return 1
-	var targetArguments = StringArray.create()
+	var targetArguments = StringArray.create(0)
 	targetArguments.push("target")
 	var target = try StreamingSubprocess.spawn(Executable.path(me), arguments: targetArguments) otherwise return 2
 	_ = try target.readStdoutLine() otherwise return 7
 	let pid = try target.processId() otherwise return 3
-	var samplerArguments = StringArray.create()
+	var samplerArguments = StringArray.create(0)
 	samplerArguments.push("sampler")
 	samplerArguments.push("{pid}")
 	let sampler = try Subprocess.run(Executable.path(me), arguments: samplerArguments) otherwise return 4
@@ -983,7 +983,7 @@ function main() returns ExitCode
 	end 'asTheChild'
 
 	let me = try Process.executablePath() otherwise return 1
-	var childArguments = StringArray.create()
+	var childArguments = StringArray.create(0)
 	childArguments.push("child")
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
 	_ = try child.readStdoutLine() otherwise return 7
@@ -1029,7 +1029,7 @@ function main() returns ExitCode
 	end 'asTheChild'
 
 	let me = try Process.executablePath() otherwise return 1
-	var childArguments = StringArray.create()
+	var childArguments = StringArray.create(0)
 	childArguments.push("child")
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
 	_ = try child.readStdoutLine() otherwise return 7
@@ -1077,7 +1077,7 @@ function main() returns ExitCode
 	end 'asTheChild'
 
 	let me = try Process.executablePath() otherwise return 1
-	var childArguments = StringArray.create()
+	var childArguments = StringArray.create(0)
 	childArguments.push("child")
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
 	_ = try child.readStdoutLine() otherwise return 7

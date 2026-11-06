@@ -55,7 +55,7 @@ end 'Opaque'
 typealias OpaqueArr = Array with Opaque
 
 function main() returns ExitCode
-	var a = OpaqueArr.create()
+	var a = OpaqueArr.create(0)
 	a.push(Opaque.create(1))
 	let h = a.hash()
 	return h
@@ -81,9 +81,9 @@ end 'Opaque'
 typealias OpaqueArr = Array with Opaque
 
 function main() returns ExitCode
-	var a = OpaqueArr.create()
+	var a = OpaqueArr.create(0)
 	a.push(Opaque.create(1))
-	var b = OpaqueArr.create()
+	var b = OpaqueArr.create(0)
 	b.push(Opaque.create(1))
 	if a == b 'same'
 		return 1
@@ -151,8 +151,8 @@ function copyIt(c Cloneable) returns Cloneable
 end 'copyIt'
 
 function main() returns ExitCode
-	var src = Nested.create()
-	var inner = StrArr.create()
+	var src = Nested.create(0)
+	var inner = StrArr.create(0)
 	inner.push("ab")
 	src.push(inner)
 	_ = copyIt(src)
@@ -235,7 +235,7 @@ type Container uses Element where Element is Sizer
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -407,7 +407,7 @@ typealias OpaqueArr = Array with Opaque
 typealias OpaqueArrArr = Array with OpaqueArr
 
 function main() returns ExitCode
-	var outer = OpaqueArrArr.create()
+	var outer = OpaqueArrArr.create(0)
 	let h = outer.hash()
 	return h
 end 'main'
@@ -424,12 +424,12 @@ typealias IntArr = Array with Val
 typealias IntArrArr = Array with IntArr
 
 function main() returns ExitCode
-	var outer = IntArrArr.create()
-	var inner = IntArr.create()
+	var outer = IntArrArr.create(0)
+	var inner = IntArr.create(0)
 	inner.push(3)
 	outer.push(inner)
-	var other = IntArrArr.create()
-	var innerOther = IntArr.create()
+	var other = IntArrArr.create(0)
+	var innerOther = IntArr.create(0)
 	innerOther.push(3)
 	other.push(innerOther)
 	let h = outer.hash()

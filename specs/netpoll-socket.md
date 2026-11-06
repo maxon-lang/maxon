@@ -465,7 +465,7 @@ let dialCap = 1000
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	var held = HeldClients.create()
+	var held = HeldClients.create(0)
 	var dialled = 0 as Tally
 
 	while dialled < dialCap 'fill'
@@ -1691,7 +1691,7 @@ let AcceptRounds = 8 as AcceptRound
 let Greeting = "hello"
 
 function resetBeforeAccept(port NetworkPort) returns bool
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 
 	#if os(Windows)
 		argv.push("-NoProfile")
@@ -1819,7 +1819,7 @@ function main() returns ExitCode
 	end 'theChild'
 
 	let exe = try Process.executablePath() otherwise return 2
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push(DescriptorLimit)
 	argv.push(exe.path)

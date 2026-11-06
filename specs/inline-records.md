@@ -88,7 +88,7 @@ end 'Pair'
 typealias PairArray = Array with Pair
 
 function main() returns ExitCode
-	var holder = PairArray.create()
+	var holder = PairArray.create(0)
 	holder.reserve(100)
 
 	let before = HeapStats.allocationsLive()
@@ -206,7 +206,7 @@ end 'Pair'
 typealias PairArray = Array with Pair
 
 function main() returns ExitCode
-	var arr = PairArray.create()
+	var arr = PairArray.create(0)
 	arr.reserve(500)
 
 	let before = HeapStats.allocationsLive()
@@ -268,7 +268,7 @@ typealias PointArray = Array with Point
 typealias PointMap = Map with (Point, Coord)
 
 function main() returns ExitCode
-	var keys = PointArray.create()
+	var keys = PointArray.create(0)
 	keys.reserve(500)
 
 	let before = HeapStats.allocationsLive()
@@ -648,7 +648,7 @@ typealias HalfBox = Box with Half
 typealias HalfBoxArray = Array with HalfBox
 
 function main() returns ExitCode
-	var holder = HalfBoxArray.create()
+	var holder = HalfBoxArray.create(0)
 	holder.reserve(4)
 
 	let before = HeapStats.allocationsLive()

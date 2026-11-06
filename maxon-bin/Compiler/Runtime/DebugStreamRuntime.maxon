@@ -513,7 +513,7 @@ end 'DebugStreamNameTable'
 // type name for an allocation that has none. The rule is the CONSUMER's (`resolveInternedName`
 // skips index 0), asked here rather than restated as a second convention.
 export function mmTagRosterNames() returns StringArray
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 
 	for tag in MmTag.allCases 'each'
 		names.push("" if tag == MmTag.Untagged else tag.name)
@@ -526,7 +526,7 @@ end 'mmTagRosterNames'
 // Stated beside the tag roster because it is the same rule read the other way: that one reserves index 0 by
 // giving `MmTag.Untagged` an empty spelling, this one by having nothing else at 0 to give.
 export function debugStreamNameRosterSeed() returns StringArray
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 	names.push("")
 	return names
 end 'debugStreamNameRosterSeed'
@@ -540,7 +540,7 @@ end 'debugStreamNameRosterSeed'
 // would be that fact written twice, and the failure mode of a drift between them is not a build error: it
 // would slide the monitor's parse one byte and turn every name after the first into garbage.
 function debugStreamNameBlob(magic ByteArray, names StringArray) returns ByteArray
-	var blob = ByteArray.create()
+	var blob = ByteArray.create(0)
 	blob.append(magic)
 	appendNameBlobField(blob, value: names.count(), what: "the name count")
 
@@ -700,7 +700,7 @@ function dsAllocTallyImage() returns ByteArray
 		panic("DebugStream allocation tally: the byte column sits at {DsAllocTallyBytesOffset} of a {DsAllocTallyBucketBytes}-byte bucket")
 	end 'byteColumnOutsideTheBucket'
 
-	var image = ByteArray.create()
+	var image = ByteArray.create(0)
 	image.growFilled(DsAllocTallyTableBytes as ElementIndex, value: DsAllocTallyZeroByte)
 	return image
 end 'dsAllocTallyImage'
@@ -717,7 +717,7 @@ let DsEnvBufferBytes = 512
 // unchanged. Ordinary i64 slots in every respect, exactly like `SlabRuntime.slabRuntimeGlobals` and
 // `GtRuntime.gtRuntimeGlobals`.
 export function debugStreamRuntimeGlobals() returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create()
+	var out = DataSectionEntryArray.create(0)
 
 	// The first four are written by `__ds_init` alone, which the ENTRY STUB runs before `main` and
 	// therefore before any green thread, let alone any worker M. The ring itself is not among them: it
@@ -817,7 +817,7 @@ end 'installDebugStreamRuntime'
 // the exact torn read the commit bit closes. An empty trace is a visibly missing instrument; a wrong one
 // is not.
 function buildDsInit(module StdModule, envNameLabel ByteArray)
-	var func = IrFunction.createFromStd(DsInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(DsInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -885,7 +885,7 @@ end 'buildDsInit'
 // still needs to know how to parse what it left. The view is dropped by process exit, which is the only
 // thing that happens after this call.
 function buildDsShutdown(module StdModule)
-	var func = IrFunction.createFromStd(DsShutdownName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(DsShutdownName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

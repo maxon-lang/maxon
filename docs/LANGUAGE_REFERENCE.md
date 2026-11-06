@@ -812,7 +812,7 @@ function takesBlock(b BlockId) returns BlockId
 end 'takesBlock'
 
 function main() returns ExitCode
-	var rows = RowArray.create()
+	var rows = RowArray.create(0)
 	rows.push(4)
 	rows.push(9)
 	let head = 1 as LoopHead
@@ -1191,7 +1191,7 @@ Every field must have a value when a record is constructed. A field is initializ
    comes from the default, which takes one of three shapes:
    - a `true`/`false` literal (`bool`) or a string literal (`String`): `var enabled = true`;
    - `Type.member` or `Type.member(...)` — an enum case or a static factory — typed `Type` and checked
-     against it: `var level = Priority.low`, `var items = IntArray.create()`;
+     against it: `var level = Priority.low`, `var items = IntArray.create(0)`;
    - an expression whose outermost node is a cast, typed by the cast: `var count = 0 as Tally`,
      `var span = NoSpan as SpanId`, `var total = (1 + 2) as Tally`.
 
@@ -2429,7 +2429,7 @@ enum JsonByte
 end 'JsonByte'
 
 function main() returns ExitCode
-	var out = ByteArray.create()
+	var out = ByteArray.create(0)
 	out.push(JsonByte.lBracket)                     // pushes 0x5B
 	out.push(JsonByte.space)
 	let first = try out.get(0) otherwise 0
@@ -2809,9 +2809,9 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var items = TallyArray.create()
+	var items = TallyArray.create(0)
 	items.push(1)                    // fine: items is a var
-	// let fixed = TallyArray.create()
+	// let fixed = TallyArray.create(0)
 	// fixed.push(1)                 // E3159: cannot write through 'fixed': 'fixed' is read-only (a `let` binding)
 	print("{items.count()}\n")
 	return 0
@@ -3720,7 +3720,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var values = TallyArray.create()
+	var values = TallyArray.create(0)
 	values.push(10)
 	values.push(20)
 
@@ -3732,7 +3732,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-**Sizing an array.** `create()` and `create(0)` make an empty array. `create(n)` makes `n` zero elements and
+**Sizing an array.** An `Array` or `ByteArray` states its capacity when it is created: `create()` with no
+argument is **E3195**. `create(0)` makes an empty array. `create(n)` makes `n` zero elements and
 `create(n, zeroed: false)` an empty array with room for `n`, each in one allocation when the elements take at
 most 256 bytes; `n` is an `ElementIndex` and `zeroed:` a literal `true` or `false`. `push(value)` appends; `reserve(n)` grows the capacity of an existing
 array without changing `count()`. `resize(n)` changes the length and fills new slots with zero, so `resize` and
@@ -3747,7 +3748,7 @@ range excludes 0 (`int(1 to 100)`), or of an enum or union whose raw values (tag
 typealias Names = Array with String
 
 function main() returns ExitCode
-	var names = Names.create()
+	var names = Names.create(0)
 	names.growFilled(3, value: "")    // three empty strings
 	names.push("ada")
 	names.truncate(2)
@@ -5232,7 +5233,7 @@ function nap(delay Milliseconds, tag Tag) returns Tag
 end 'nap'
 
 function main() returns ExitCode
-	var naps = TagPromiseArray.create()
+	var naps = TagPromiseArray.create(0)
 	naps.push(async nap(200, tag: 1))
 	naps.push(async nap(20, tag: 2))
 	naps.push(async nap(100, tag: 3))
@@ -5930,7 +5931,7 @@ describes **one** build; describing a second in the same run is an error.
 
 ```maxon
 export function build() returns ExitCode
-	var sources = StringArray.create()
+	var sources = StringArray.create(0)
 	sources.push("src")
 	sources.push("vendor/thirdparty")
 
@@ -6049,7 +6050,7 @@ typealias PointArray = Array with Point
 
 function main() returns ExitCode
 	var a = Point.create(1, y: 2)
-	var points = PointArray.create()
+	var points = PointArray.create(0)
 	points.push(a)                                        // the array shares a's record
 	var b = try points.get(0) otherwise panic("pushed")
 	b.x = 99
@@ -6171,7 +6172,7 @@ function main() returns ExitCode
 	var b = frozen.clone()               // an independent, mutable record
 	b.x = 5
 
-	var points = PointArray.create()
+	var points = PointArray.create(0)
 	points.push(b)                       // the array shares b's record
 	var first = try points.get(0) otherwise panic("pushed")
 	first.x = 9                          // an element follows its container
@@ -6684,7 +6685,7 @@ parseDigit("7")               // E3057: throwing function requires try: 'parseDi
 **Mutating through an immutable name**
 
 ```maxon
-let items = TallyArray.create()
+let items = TallyArray.create(0)
 items.push(1)                 // E3159: cannot write through 'items': 'items' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 

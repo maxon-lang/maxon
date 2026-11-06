@@ -349,7 +349,7 @@ passing them on:
 
 ```maxon
 extension Log
-	public static function audit(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public static function audit(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		Log.log(LogLevel.named("AUDIT", rank: 2), message: message, attrs: attrs, file: file, line: line)
 	end 'audit'
 end 'Log'
@@ -572,7 +572,7 @@ E3074.
 
 ```maxon
 function main() returns ExitCode
-	var args = StringArray.create()
+	var args = StringArray.create(0)
 	args.push("--version")
 
 	let result = try Subprocess.run(Executable.name("git"), arguments: args) otherwise (e) 'failed'
@@ -839,7 +839,7 @@ terminator is removed. `none` says nothing about whether the stream has ended; a
 
 ```maxon
 function main() returns ExitCode
-	var args = StringArray.create()
+	var args = StringArray.create(0)
 	args.push("--version")
 
 	var child = try StreamingSubprocess.spawn(Executable.name("git"), arguments: args) otherwise (e) 'spawn'

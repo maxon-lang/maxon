@@ -61,7 +61,7 @@ export function readLspMessage(stdin Stdin) returns LspIncoming
 
 	let contentLength = (try statedLength.count() otherwise return LspIncoming.framingError("message header carries no Content-Length")) as ElementIndex
 
-	var body = ByteArray.create()
+	var body = ByteArray.create(0)
 
 	while body.count() < contentLength 'fill'
 		let chunk = stdin.readBytes((contentLength - body.count()) as BytePos)
@@ -86,7 +86,7 @@ end 'writeLspMessage'
 // The only CR a header line may carry is the first half of its CRLF terminator, so a CR is never
 // content; skipping it here also reads a client that sends bare LF.
 function readHeaderLine(stdin Stdin) returns String throws LspFramingError
-	var line = ByteArray.create()
+	var line = ByteArray.create(0)
 	var complete = false
 
 	while not complete 'scan'

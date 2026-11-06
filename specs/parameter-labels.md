@@ -487,12 +487,12 @@ width
 <!-- test: multi-line-call-empty-list-container-create -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
+typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var xs = IntArray.create(
+	var xs = IntList.create(
 	)
-	xs.push(5)
+	xs.append(5)
 	return xs.count() as ExitCode
 end 'main'
 ```
@@ -506,7 +506,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var xs = IntArray.create()
+	var xs = IntArray.create(0)
 	xs.push(5)
 	xs.push(6)
 	let n = xs.count(
@@ -528,7 +528,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var xs = IntArray.create()
+	var xs = IntArray.create(0)
 	xs.push(
 		7
 	)
@@ -853,7 +853,7 @@ A managed argument on a line of its own is moved into the container exactly as o
 typealias NameArray = Array with String
 
 function main() returns ExitCode
-	var names = NameArray.create()
+	var names = NameArray.create(0)
 	var name = "ada"
 	names.push(
 		name
@@ -945,7 +945,7 @@ enum Mode
 end 'Mode'
 
 function main() returns ExitCode
-	var xs = IntArray.create()
+	var xs = IntArray.create(0)
 	xs.push(4)
 	let mode = Mode.loud
 	let r = pair(try xs.get(5) otherwise 'missing'

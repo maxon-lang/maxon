@@ -364,7 +364,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(7)
 	let a = arr.get(2)
 	let w = try (a) otherwise 99
@@ -878,7 +878,7 @@ function ident(v Offset) returns Offset
 end 'ident'
 
 function main() returns ExitCode
-	var xs = NonZeroArray.create()
+	var xs = NonZeroArray.create(0)
 	xs.push(-ident(0))
 	let d = try xs.get(0) otherwise 1
 	print("before\n")
@@ -908,7 +908,7 @@ typealias NonZero = int(1 to i64.max)
 typealias NonZeroArray = Array with NonZero
 
 function main() returns ExitCode
-	var xs = NonZeroArray.create()
+	var xs = NonZeroArray.create(0)
 	xs.resize(1)
 	let d = try xs.get(0) otherwise 1
 	print("before\n")
@@ -1692,7 +1692,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let one = ident(1) as NonZero
-	var xs = NonZeroArray.create()
+	var xs = NonZeroArray.create(0)
 	xs.push(one)
 	try xs.set(0, value: one - one) otherwise ignore
 	let d = try xs.get(0) otherwise 1
@@ -1723,7 +1723,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let one = ident(1) as NonZero
-	var xs = NonZeroArray.create()
+	var xs = NonZeroArray.create(0)
 	xs.push(one)
 	xs.insert(0, value: one - one)
 	let d = try xs.get(0) otherwise 1
@@ -1754,7 +1754,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let one = ident(1) as NonZero
-	var xs = NonZeroArray.create()
+	var xs = NonZeroArray.create(0)
 	xs.growFilled(2, value: one - one)
 	let d = try xs.get(1) otherwise 1
 	print("before\n")
@@ -1784,7 +1784,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let one = ident(1) as NonZero
-	var xs = NonZeroArray.create()
+	var xs = NonZeroArray.create(0)
 	xs.push(one)
 	xs.refill(2, value: one - one)
 	let d = try xs.get(1) otherwise 1

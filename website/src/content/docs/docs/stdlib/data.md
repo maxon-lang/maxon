@@ -78,8 +78,8 @@ function main() returns ExitCode
 	print("{doc.rootKind()} {name} {stars} {doc.get(second).stringValue}\n")
 
 	var built = JsonDoc.create()
-	var keys = StringArray.create()
-	var children = JsonNodeIdArray.create()
+	var keys = StringArray.create(0)
+	var children = JsonNodeIdArray.create(0)
 	keys.push("ok")
 	children.push(built.add(JsonNode.boolNode(true)))
 	keys.push("score")
@@ -375,10 +375,10 @@ both.
 ```maxon
 function main() returns ExitCode
 	let secret = "shared secret".toByteArray()
-	let key = try hkdf(HashAlgorithm.sha256, salt: ByteArray.create(), inputKeyMaterial: secret, info: "client key".toByteArray(), length: 16) otherwise return 1
+	let key = try hkdf(HashAlgorithm.sha256, salt: ByteArray.create(0), inputKeyMaterial: secret, info: "client key".toByteArray(), length: 16) otherwise return 1
 	print("{key.count()}\n")
 
-	_ = try hkdf(HashAlgorithm.sha256, salt: ByteArray.create(), inputKeyMaterial: secret, info: ByteArray.create(), length: 8161) otherwise (e) 'refused'
+	_ = try hkdf(HashAlgorithm.sha256, salt: ByteArray.create(0), inputKeyMaterial: secret, info: ByteArray.create(0), length: 8161) otherwise (e) 'refused'
 		print("{e}\n")
 		return 0
 	end 'refused'
@@ -431,7 +431,7 @@ supply random bytes, `signPkcs1v15` and `signPss` panic.
 function main() returns ExitCode
 	let message = "hello".toByteArray()
 
-	_ = try Rsa.verifyPss(ByteArray.create(), hash: HashAlgorithm.sha256, message: message, signature: ByteArray.create()) otherwise (e) 'refused'
+	_ = try Rsa.verifyPss(ByteArray.create(0), hash: HashAlgorithm.sha256, message: message, signature: ByteArray.create(0)) otherwise (e) 'refused'
 		print("{e}\n")
 		return 0
 	end 'refused'
@@ -591,9 +591,9 @@ Both calls run in time independent of the private key. Derive keys from the shar
 
 ```maxon
 function main() returns ExitCode
-	var alice = ByteArray.create()
+	var alice = ByteArray.create(0)
 	alice.growFilled(32, value: 1)
-	var bob = ByteArray.create()
+	var bob = ByteArray.create(0)
 	bob.growFilled(32, value: 2)
 
 	try 'agree'
@@ -771,7 +771,7 @@ bits it shares. A CA with only dNSName subtrees leaves addresses unconstrained, 
 
 ```maxon
 function main() returns ExitCode
-	let chain = try X509.verify(ByteArray.create(), intermediates: ByteArrays.create(), roots: ByteArrays.create(), host: X509VerifyHost.named("example.com"), now: 1767225600) otherwise (e) 'refused'
+	let chain = try X509.verify(ByteArray.create(0), intermediates: ByteArrays.create(0), roots: ByteArrays.create(0), host: X509VerifyHost.named("example.com"), now: 1767225600) otherwise (e) 'refused'
 		print("{e}\n")
 		return 0
 	end 'refused'

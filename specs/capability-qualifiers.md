@@ -45,7 +45,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -88,7 +88,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -135,7 +135,7 @@ type Shelf implements Taker
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 
 	function take(b Box)
@@ -180,7 +180,7 @@ type Shelf implements Taker
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 
 	function take(b Box)
@@ -291,7 +291,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -592,7 +592,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -634,7 +634,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -677,7 +677,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -722,7 +722,7 @@ type Shelf implements Taker
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 
 	function take(b Box)
@@ -762,7 +762,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b keep Box)
 	kept.push(b)
@@ -794,7 +794,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -833,7 +833,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -873,7 +873,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -922,7 +922,7 @@ type Holder
 	end 'create'
 end 'Holder'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -961,7 +961,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1007,7 +1007,7 @@ type Shelf implements Taker
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 
 	function take(b Box)
@@ -1048,7 +1048,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1093,7 +1093,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1147,7 +1147,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1187,7 +1187,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1233,7 +1233,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1275,14 +1275,14 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
 end 'stash'
 
 function feed(sink Sink) returns Count
-	var boxes = Boxes.create()
+	var boxes = Boxes.create(0)
 	boxes.push(Box.create(1))
 	var spare = Box.create(0)
 	spare.n = 2
@@ -1317,7 +1317,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1373,7 +1373,7 @@ type Picker
 	end 'pick'
 end 'Picker'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1419,7 +1419,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1466,7 +1466,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1506,7 +1506,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1564,7 +1564,7 @@ type Relay implements Taker
 	end 'take'
 end 'Relay'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1596,7 +1596,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)

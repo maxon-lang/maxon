@@ -50,7 +50,7 @@ module type RdataSlotIndex
 				continue
 			end 'sharedLabel'
 
-			var targets = RdataSlotTargetArray.create()
+			var targets = RdataSlotTargetArray.create(0)
 			targets.push(target)
 			self.byLabel.upsert(reloc.rdataLabel, value: targets)
 		end 'eachSlot'
@@ -72,7 +72,7 @@ module type RdataSlotIndex
 			return
 		end 'sharedLabel'
 
-		var offsets = ByteOffsetArray.create()
+		var offsets = ByteOffsetArray.create(0)
 		offsets.push(offset)
 		self.dataWordsByLabel.upsert(label, value: offsets)
 	end 'noteDataWord'
@@ -203,7 +203,7 @@ module type TableCallProbe
 	export var reads as TableUseArray
 
 	module static function create(project Project) returns TableCallProbe
-		return Self{project: project, call: StdCallOperands.create(), witness: StdWitnessOperands.create(), arith: StdArithOperands.create(), defs: StdValueDefs.create(), defsBuilt: false, forwarder: false, forwardedCalls: 0, allocations: 0, admitsPairBoxes: false, pairBoxesKnown: false, allocationSizes: ConstValueMap.create(), allocationSizesBuilt: false, liveOps: OpIndexArray.create(), reads: TableUseArray.create()}
+		return Self{project: project, call: StdCallOperands.create(), witness: StdWitnessOperands.create(), arith: StdArithOperands.create(), defs: StdValueDefs.create(), defsBuilt: false, forwarder: false, forwardedCalls: 0, allocations: 0, admitsPairBoxes: false, pairBoxesKnown: false, allocationSizes: ConstValueMap.create(), allocationSizesBuilt: false, liveOps: OpIndexArray.create(0), reads: TableUseArray.create(0)}
 	end 'create'
 
 	module function begin(func IrFunction)
@@ -213,7 +213,7 @@ module type TableCallProbe
 		self.allocations = 0
 		self.pairBoxesKnown = false
 		self.allocationSizesBuilt = false
-		self.reads = TableUseArray.create()
+		self.reads = TableUseArray.create(0)
 	end 'begin'
 
 	module function isForwarder() returns bool
@@ -432,7 +432,7 @@ end 'reclaimOutcome'
 
 module function devirtualizeTableCalls(project Project, module StdModule, func IrFunction, byName FunctionNameIndex, meta StdOpMetaMemo, slots RdataSlotIndex) returns OfferedOpSet
 	var rewritten = OfferedOpSet.create()
-	var candidates = OpIndexArray.create()
+	var candidates = OpIndexArray.create(0)
 	var call = StdCallOperands.create()
 	var witness = StdWitnessOperands.create()
 
@@ -514,7 +514,7 @@ function descriptorActionOf(callee ByteArray) returns DescriptorAction
 end 'descriptorActionOf'
 
 function devirtualizeWitnessDispatch(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, byName FunctionNameIndex, witness StdWitnessOperands, opIdx ElementIndex) returns bool
-	var target = ByteArray.create()
+	var target = ByteArray.create(0)
 
 	match resolveRdataWord(project, module: module, defs: defs, arith: arith, slots: slots, value: witness.witnessAddr, kind: RdataPayloadKind.witnessTable, wordOffset: witnessMethodSlotOffset(witness.methodIndex)) 'word'
 		callee(name) then target = name.clone()

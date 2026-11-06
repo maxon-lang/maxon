@@ -541,7 +541,7 @@ function show(w Weight)
 end 'show'
 
 function main() returns ExitCode
-	var rs = RatioArray.create()
+	var rs = RatioArray.create(0)
 	rs.push(0.5)
 	let first = try rs.get(0) otherwise return 1
 	show(first)

@@ -12,7 +12,7 @@ test 'a stop after a green-thread callee passed its stack guard and pushed its f
 
 	let afterThePush = exactOffsetTarget(prologueStart + PushedFramePointerBytes)
 	let commands = debugCommandLine(["{BreakCommand} {afterThePush}", RunCommand, BacktraceCommand])
-	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let walks = eventsOfKind(events, kind: BacktraceEventName)
@@ -20,7 +20,7 @@ test 'a stop after a green-thread callee passed its stack guard and pushed its f
 	try Expect.equal(walks.count(), expected: 1, message: "the `{BacktraceCommand}` at `{afterThePush}` printed no walk. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let walked = eventAt(walks, index: 0)
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 
 	for frame in childrenOf(walked, node: walked.root, key: FramesKey) 'eachFrame'
 		names.push(textOf(walked, node: frame, key: FunctionKey))

@@ -70,7 +70,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -133,7 +133,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -184,7 +184,7 @@ function printLines(text String)
 end 'printLines'
 
 function main() returns ExitCode
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -219,7 +219,7 @@ function printLines(text String)
 end 'printLines'
 
 function main() returns ExitCode
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -253,7 +253,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -309,7 +309,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -386,7 +386,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -467,7 +467,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -535,7 +535,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String, workingDirectory FilePath) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -599,7 +599,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -663,7 +663,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -721,7 +721,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -782,7 +782,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -822,7 +822,7 @@ function main() returns ExitCode
 			return 0
 		end 'probe'
 
-		var argv = StringArray.create()
+		var argv = StringArray.create(0)
 		argv.push("probe")
 		var probe = Configuration.create(Executable.name("maxon-wide-probe"))
 		probe.arguments = argv
@@ -839,7 +839,7 @@ function main() returns ExitCode
 	let inheritedPath = try Process.environmentVariable("PATH") otherwise return 4
 	var overrides = EnvMap.create()
 	overrides.upsert("PATH", value: "{directory.path};{inheritedPath}")
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("resolve")
 	var resolver = Configuration.create(Executable.path(me))
 	resolver.arguments = argv
@@ -875,7 +875,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershellConfiguration(script String) returns Configuration
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -949,7 +949,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershellConfiguration(script String) returns Configuration
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -1021,7 +1021,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")

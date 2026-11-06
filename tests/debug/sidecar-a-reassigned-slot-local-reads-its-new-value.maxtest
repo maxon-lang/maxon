@@ -6,7 +6,7 @@ let StackSlotLocationMark = "[rbp-"
 
 test 'a var the allocator keeps in a stack slot reads its new value after it is assigned again'
 	let staged = builtFixture(ReassignedSlotCaseLabel, fixture: SpilledVarFixtureName)
-	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create(0))
 	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
 	var slotRows = 0 as Count
 
@@ -18,7 +18,7 @@ test 'a var the allocator keeps in a stack slot reads its new value after it is 
 
 	let shownAt = anchorLine(staged.join(StagedProgramFileName), anchor: "shown")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(shownAt)}", RunCommand, "{PrintCommand} {ReassignedLocalName}"])
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let answers = eventsOfKind(events, kind: ValueEventName)

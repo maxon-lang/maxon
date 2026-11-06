@@ -29,7 +29,7 @@ type Container uses Element
 
 	static function create(name String) returns Self
 		return Self{
-			items: ElementArray.create(),
+			items: ElementArray.create(0),
 			name: name
 		}
 	end 'create'
@@ -74,7 +74,7 @@ type Container uses Element
 
 	static function create() returns Self
 		return Self{
-			items: ElementArray.create()
+			items: ElementArray.create(0)
 		}
 	end 'create'
 
@@ -118,7 +118,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function store(item Element)
@@ -157,7 +157,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function c(item Element)
@@ -201,7 +201,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function count() returns Count
@@ -253,7 +253,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function pushTwice(item Element)
@@ -291,7 +291,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function pushIf(item Element, flag bool)
@@ -328,7 +328,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function pushIf(item Element, flag bool)
@@ -368,7 +368,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function pushIf(item Element, flag bool)
@@ -410,7 +410,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -459,7 +459,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -510,7 +510,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -555,7 +555,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -611,7 +611,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -670,7 +670,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -723,7 +723,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -766,7 +766,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -811,7 +811,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -863,7 +863,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -908,7 +908,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -960,7 +960,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -1016,7 +1016,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -1071,7 +1071,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -1130,7 +1130,7 @@ type Container uses Element
 	export var extra as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create(), extra: ElementArray.create() }
+		return Self{ items: ElementArray.create(0), extra: ElementArray.create(0) }
 	end 'create'
 
 	function pushItem(item Element)
@@ -1200,7 +1200,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -1257,7 +1257,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -1323,7 +1323,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -1342,7 +1342,7 @@ end 'Container'
 typealias NestedContainer = Container with StringArray
 
 function makeDuplicate() returns NestedContainer
-	var sa = StringArray.create()
+	var sa = StringArray.create(0)
 	sa.push("a string long enough to force a heap allocation")
 	sa.push("a second string, also long enough to allocate")
 	var nc = NestedContainer.create()
@@ -1406,7 +1406,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -1455,7 +1455,7 @@ type Item
 	export var rows as RowGrid
 
 	static function create() returns Self
-		return Self{ rows: RowGrid.create() }
+		return Self{ rows: RowGrid.create(0) }
 	end 'create'
 end 'Item'
 
@@ -1465,7 +1465,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -1505,7 +1505,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function count() returns Count
@@ -1552,7 +1552,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function count() returns Count
@@ -1602,7 +1602,7 @@ type Holder uses Element
 	export var items as ElementArray
 
 	static function of(first Element) returns Self
-		var xs = ElementArray.create()
+		var xs = ElementArray.create(0)
 		xs.push(first)
 		return Self{ items: xs }
 	end 'of'
@@ -1643,7 +1643,7 @@ type Holder uses Element
 	export var items as ElementArray
 
 	static function of(first Element) returns Self
-		var xs = ElementArray.create()
+		var xs = ElementArray.create(0)
 		xs.push(first)
 		return Self{ items: xs }
 	end 'of'
@@ -1688,7 +1688,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function count() returns Count
@@ -1744,7 +1744,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function count() returns Count
@@ -1801,7 +1801,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function addMaybe(item Element, flag bool)
@@ -1851,7 +1851,7 @@ type Holder uses Element
 	export var items as ElementArray
 
 	static function ofMaybe(first Element, flag bool) returns Self
-		var xs = ElementArray.create()
+		var xs = ElementArray.create(0)
 		if flag 'maybe'
 			xs.push(first)
 		end 'maybe'
@@ -1907,7 +1907,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function count() returns Count
@@ -2052,7 +2052,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function count() returns Count
@@ -2116,7 +2116,7 @@ type Holder uses Element
 	end 'fill'
 
 	static function of(first Element, single Element) returns Self
-		var xs = ElementArray.create()
+		var xs = ElementArray.create(0)
 		fill(xs, first: first)
 		return Self{ items: xs, single: single }
 	end 'of'
@@ -2163,7 +2163,7 @@ type Holder uses Element
 	export var single as Element
 
 	static function of(first Element, single Element) returns Self
-		var xs = ElementArray.create()
+		var xs = ElementArray.create(0)
 		xs.push(first)
 		return Self{ items: xs, single: single }
 	end 'of'
@@ -2605,7 +2605,7 @@ type Bag uses Op implements Appendable with Integer
 	export var ops as OpArray
 
 	static function create() returns Self
-		return Self{ops: OpArray.create()}
+		return Self{ops: OpArray.create(0)}
 	end 'create'
 
 	function opsCount() returns Count
@@ -2656,7 +2656,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function count() returns Count
@@ -2722,7 +2722,7 @@ export type Vault uses Element
 	export var items as ElementArray
 
 	export static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	export function count() returns Count
@@ -2870,7 +2870,7 @@ type GHolder uses T
 	export var spare as TArray
 
 	static function create() returns Self
-		return Self{ items: TArray.create(), spare: TArray.create() }
+		return Self{ items: TArray.create(0), spare: TArray.create(0) }
 	end 'create'
 
 	function seed(s T)
@@ -2921,7 +2921,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function count() returns Count
@@ -2975,7 +2975,7 @@ type Inner uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function stash(item T) returns Count
@@ -3033,7 +3033,7 @@ type Box uses T
 	end 'create'
 
 	static function widths() returns Widths
-		var out = Widths.create()
+		var out = Widths.create(0)
 		out.push(sizeof(T))
 		return out
 	end 'widths'
@@ -3205,7 +3205,7 @@ type Box uses T
 	end 'size'
 
 	function viaClosure() returns Count
-		var items = Items.create()
+		var items = Items.create(0)
 		items.push(1)
 		let f = function() gives self.size(items)
 		return f()
@@ -3333,11 +3333,11 @@ type Gauge uses T
 		return Self{item: item}
 	end 'create'
 
-	function width(n Level, held Held = Held.create()) returns Level
+	function width(n Level, held Held = Held.create(0)) returns Level
 		return n + (held.count() as Level)
 	end 'width'
 
-	function widthText(n String, held Held = Held.create()) returns Level
+	function widthText(n String, held Held = Held.create(0)) returns Level
 		return (n.count() as Level) + (held.count() as Level)
 	end 'widthText'
 
@@ -4335,9 +4335,9 @@ typealias Words = Array with String
 typealias Nums = Array with Count
 
 function main() returns ExitCode
-	var words = Words.create()
+	var words = Words.create(0)
 	words.push("ab")
-	var nums = Nums.create()
+	var nums = Nums.create(0)
 	nums.push(4)
 	let shouted = words.map(function(w) gives "{w}!")
 	let doubled = nums.map(function(n) gives n * 2)
@@ -4420,7 +4420,7 @@ type Box uses T
 	end 'create'
 
 	static function peers(v T) returns Peers
-		var out = Peers.create()
+		var out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -4458,7 +4458,7 @@ type Box uses T
 	end 'create'
 
 	static function peers(v T) returns Peers
-		var out = Peers.create()
+		var out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -4497,7 +4497,7 @@ type Box uses T
 	typealias Peers = Array with Self
 
 	static function peers(v T) returns Peers
-		var out = Peers.create()
+		var out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -4527,7 +4527,7 @@ type Box uses T
 	typealias Peers = Array with Box
 
 	static function peers(v T) returns Peers
-		var out = Peers.create()
+		var out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -4557,7 +4557,7 @@ type Box uses T
 	typealias Peers = Array with Self
 
 	static function peers(v T) returns Peers
-		var out = Peers.create()
+		var out = Peers.create(0)
 		out.push(Self{v: v})
 		out.push(Self{v: v})
 		return out
@@ -4599,7 +4599,7 @@ type Box
 	typealias Peers = Array with Self
 
 	static function peers(v Integer) returns Peers
-		var out = Peers.create()
+		var out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -4630,7 +4630,7 @@ type Box uses T
 	typealias Peers = Array with Self
 
 	static function peers(v T) returns Peers
-		var out = Peers.create()
+		var out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -4662,7 +4662,7 @@ type Holder uses E
 	var items as Items
 
 	static function of(e E) returns Self
-		var items = Items.create()
+		var items = Items.create(0)
 		items.push(e)
 		return Self{items: items}
 	end 'of'
@@ -4765,7 +4765,7 @@ type Node uses T
 	var kids as Kids
 
 	static function leaf(v T) returns Self
-		return Self{v: v, kids: Kids.create()}
+		return Self{v: v, kids: Kids.create(0)}
 	end 'leaf'
 
 	function add(k Self)
@@ -4810,9 +4810,9 @@ type Box uses T
 	typealias Grid = Array with (Array with Self)
 
 	static function grid(v T) returns Grid
-		var row = Row.create()
+		var row = Row.create(0)
 		row.push(Self{v: v})
-		var out = Grid.create()
+		var out = Grid.create(0)
 		out.push(row)
 		return out
 	end 'grid'
@@ -4852,7 +4852,7 @@ extension Box
 	typealias Peers = Array with Self
 
 	static function peers(v T) returns Peers
-		var out = Peers.create()
+		var out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -4925,7 +4925,7 @@ type Pair uses K, V
 	typealias Peers = Array with Self
 
 	static function peers(k K, v V) returns Peers
-		var out = Peers.create()
+		var out = Peers.create(0)
 		out.push(Self{k: k, v: v})
 		return out
 	end 'peers'

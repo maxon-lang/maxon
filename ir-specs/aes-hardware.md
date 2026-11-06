@@ -19,10 +19,10 @@ tests the schedule's size and both blocks' spans once and makes one call to the 
 The entry's body is the Target IR below; the routine is a hex dump of the assembler's own bytes, still unlinked.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create()
-	var schedule = ByteArray.create()
-	var block = ByteArray.create()
-	var sealed = ByteArray.create()
+	var key = ByteArray.create(0)
+	var schedule = ByteArray.create(0)
+	var block = ByteArray.create(0)
+	var sealed = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(352)
 	block.resize(16)
@@ -1064,9 +1064,9 @@ register. A block the output cannot hold takes one call off that path, which rep
 operation.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create()
-	var wideKey = ByteArray.create()
-	var block = ByteArray.create()
+	var key = ByteArray.create(0)
+	var wideKey = ByteArray.create(0)
+	var block = ByteArray.create(0)
 	key.resize(16)
 	wideKey.resize(32)
 	block.resize(16)
@@ -2766,8 +2766,8 @@ into `Aes.encryptBlockInto` would make that function save callee registers on ev
 software arm stays a call: the frame below saves no register.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create()
-	var block = ByteArray.create()
+	var key = ByteArray.create(0)
+	var block = ByteArray.create(0)
 	key.resize(16)
 	block.resize(16)
 	let aes = try Aes.create(key) otherwise panic("key")
@@ -5012,10 +5012,10 @@ buffer. The entry's body is the Target IR below; the four-block routine is a hex
 still unlinked.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create()
-	var schedule = ByteArray.create()
-	var buffer = ByteArray.create()
-	var counterBlock = ByteArray.create()
+	var key = ByteArray.create(0)
+	var schedule = ByteArray.create(0)
+	var buffer = ByteArray.create(0)
+	var counterBlock = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(352)
 	buffer.resize(64)
@@ -6838,13 +6838,13 @@ routines with the control word or length, the key block, the message block and t
 below; the routines are hex dumps of the assembler's own bytes, still unlinked.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create()
-	var schedule = ByteArray.create()
-	var keyBlock = ByteArray.create()
-	var nonce = ByteArray.create()
-	var additional = ByteArray.create()
-	var plain = ByteArray.create()
-	var sealed = ByteArray.create()
+	var key = ByteArray.create(0)
+	var schedule = ByteArray.create(0)
+	var keyBlock = ByteArray.create(0)
+	var nonce = ByteArray.create(0)
+	var additional = ByteArray.create(0)
+	var plain = ByteArray.create(0)
+	var sealed = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(352)
 	keyBlock.resize(432)

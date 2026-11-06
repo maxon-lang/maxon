@@ -234,20 +234,20 @@ type Holder
 	export var nums as IntArray
 
 	static function create() returns Holder
-		var a = IntArray.create()
+		var a = IntArray.create(0)
 		a.push(12)
 		return Self{nums: a}
 	end 'create'
 
 	function more() returns IntArray
-		var a = IntArray.create()
+		var a = IntArray.create(0)
 		a.push(14)
 		return a
 	end 'more'
 end 'Holder'
 
 function make() returns IntArray
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(16)
 	return a
 end 'make'
@@ -278,20 +278,20 @@ type Holder
 	export var nums as IntArray
 
 	static function create() returns Holder
-		var a = IntArray.create()
+		var a = IntArray.create(0)
 		a.push(12)
 		return Self{nums: a}
 	end 'create'
 
 	function more() returns IntArray
-		var a = IntArray.create()
+		var a = IntArray.create(0)
 		a.push(14)
 		return a
 	end 'more'
 end 'Holder'
 
 function make() returns IntArray
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(16)
 	return a
 end 'make'
@@ -402,7 +402,7 @@ export typealias Small = int(0 to 10)
 typealias SmallArray = Array with Small
 
 export function smallCount() returns Small
-	var s = SmallArray.create()
+	var s = SmallArray.create(0)
 	s.push(3)
 	return s.count()
 end 'smallCount'
@@ -425,7 +425,7 @@ export typealias Count = int(i64.min to i64.max)
 typealias FieldsBuilder = function(Count) returns FieldArray
 
 function buildFields(n Count) returns FieldArray
-	var out = FieldArray.create()
+	var out = FieldArray.create(0)
 	out.push(Field.create(n as Integer))
 	return out
 end 'buildFields'
@@ -475,7 +475,7 @@ export typealias Count = int(i64.min to i64.max)
 typealias FieldsBuilder = function(Count) returns FieldArray
 
 function buildFields(n Count) returns FieldArray
-	var out = FieldArray.create()
+	var out = FieldArray.create(0)
 	out.push(Field.create(n as Integer))
 	return out
 end 'buildFields'
@@ -495,7 +495,7 @@ export typealias Small = int(0 to 10)
 typealias SmallArray = Array with Small
 
 export function smallCount() returns Small
-	var s = SmallArray.create()
+	var s = SmallArray.create(0)
 	s.push(3)
 	return s.count()
 end 'smallCount'
@@ -537,7 +537,7 @@ typealias HiddenArray = Array with Hidden
 
 function main() returns ExitCode
 	var b = brokeHidden("x")
-	var xs = HiddenArray.create()
+	var xs = HiddenArray.create(0)
 	xs.push(b)
 	return 0
 end 'main'
@@ -587,7 +587,7 @@ end 'Hidden'
 typealias HiddenArray = Array with Hidden
 
 function main() returns ExitCode
-	var xs = HiddenArray.create()
+	var xs = HiddenArray.create(0)
 	xs.append(brokeHidden("x"))
 	return 0
 end 'main'
@@ -633,7 +633,7 @@ export typealias Integer = int(0 to 100000)
 export typealias IntArray = Array with Integer
 
 export type Bag
-	export var items = IntArray.create()
+	export var items = IntArray.create(0)
 	export var tag as Integer
 
 	export static function create(tag Integer) returns Self

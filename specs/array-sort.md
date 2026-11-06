@@ -29,7 +29,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.sort()
 	print("count={a.count()}\n")
 	return 0
@@ -49,7 +49,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(42)
 	a.sort()
 	let x = try a.get(0) otherwise return 99
@@ -71,7 +71,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(1)
 	a.push(2)
 	a.push(3)
@@ -99,7 +99,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(5)
 	a.push(4)
 	a.push(3)
@@ -127,7 +127,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(7)
 	a.push(7)
 	a.push(7)
@@ -154,7 +154,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(3)
 	a.push(1)
 	a.push(4)
@@ -192,7 +192,7 @@ function byLength(a String, b String) returns Ordering
 end 'byLength'
 
 function main() returns ExitCode
-	var a = StringArray.create()
+	var a = StringArray.create(0)
 	a.push("banana")
 	a.push("fig")
 	a.push("apple")
@@ -227,7 +227,7 @@ function descending(x Integer, y Integer) returns Ordering
 end 'descending'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(2)
 	a.push(7)
 	a.push(1)
@@ -260,7 +260,7 @@ function ascending(x Integer, y Integer) returns Ordering
 end 'ascending'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(4)
 	a.push(2)
 	a.push(5)
@@ -289,7 +289,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(9)
 	a.push(2)
 	a.push(7)
@@ -332,7 +332,7 @@ end 'KeyTag'
 typealias KeyTagArray = Array with KeyTag
 
 function main() returns ExitCode
-	var a = KeyTagArray.create()
+	var a = KeyTagArray.create(0)
 	a.push(KeyTag.init(2, tag: 0))
 	a.push(KeyTag.init(1, tag: 1))
 	a.push(KeyTag.init(2, tag: 2))
@@ -372,7 +372,7 @@ function ascending(x Integer, y Integer) returns Ordering
 end 'ascending'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	for v in [50, 40, 30, 20, 10, 45, 35, 25, 15, 5, 48, 38, 28, 18, 8, 46, 36, 26, 16, 6, 44, 34, 24, 14, 4, 42, 32, 22, 12, 2, 49, 39, 29, 19, 9, 47, 37, 27, 17, 7, 43, 33, 23, 13, 3, 41, 31, 21, 11, 1] 'fill'
 		a.push(v)
 	end 'fill'
@@ -411,7 +411,7 @@ function ascending(x Integer, y Integer) returns Ordering
 end 'ascending'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	for i in 0 upto 100 'fill'
 		a.push((i * 31) + 7)
 	end 'fill'
@@ -441,7 +441,7 @@ function ascending(x Integer, y Integer) returns Ordering
 end 'ascending'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	for i in 0 upto 35 'fill'
 		a.push(i + 1)
 	end 'fill'
@@ -490,12 +490,12 @@ end 'isSorted'
 
 // Build the k-th permutation of [0,1,2,3] using factoriadic decomposition.
 function nthPerm4(k Integer) returns IntArray
-	var pool = IntArray.create()
+	var pool = IntArray.create(0)
 	pool.push(0)
 	pool.push(1)
 	pool.push(2)
 	pool.push(3)
-	var result = IntArray.create()
+	var result = IntArray.create(0)
 	var remaining = k
 	let divs = [6, 2, 1, 1]
 	for i in 0 upto 4 'pick'
@@ -549,7 +549,7 @@ function ascending(x Integer, y Integer) returns Ordering
 end 'ascending'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(50)
 	a.push(40)
 	a.push(30)
@@ -642,7 +642,7 @@ function byKey(a KeyTag, b KeyTag) returns Ordering
 end 'byKey'
 
 function main() returns ExitCode
-	var a = KeyTagArray.create()
+	var a = KeyTagArray.create(0)
 	a.push(KeyTag.init(2, tag: 0))
 	a.push(KeyTag.init(1, tag: 1))
 	a.push(KeyTag.init(2, tag: 2))
@@ -748,7 +748,7 @@ function ascending(x Integer, y Integer) returns Ordering
 end 'ascending'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(11)
 	a.push(7)
 	a.push(3)
@@ -857,7 +857,7 @@ function ascending(x Integer, y Integer) returns Ordering
 end 'ascending'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	// 50 descending then 50 ascending — two large runs after findRun.
 	a.push(100)
 	a.push(99)
@@ -1017,7 +1017,7 @@ function ascending(x Integer, y Integer) returns Ordering
 end 'ascending'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(40)
 	a.push(20)
 	a.push(60)
@@ -1118,7 +1118,7 @@ function ascending(x Integer, y Integer) returns Ordering
 end 'ascending'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	var r = 2463534242 as Integer
 
 	for i in 0 upto 5000 'fill'
@@ -1197,7 +1197,7 @@ function sortCounting(a IntArray, tally CompareTally)
 end 'sortCounting'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	var r = 2463534242 as Integer
 
 	for i in 0 upto 65536 'fill'
@@ -1252,7 +1252,7 @@ type Adversary
 	export var calls as Integer
 
 	static function create(items Integer) returns Adversary
-		var values = IntArray.create()
+		var values = IntArray.create(0)
 		var solid = 0 as Integer
 
 		for i in 0 upto items 'fill'
@@ -1306,7 +1306,7 @@ function sortAgainst(items IntArray, adversary Adversary)
 end 'sortAgainst'
 
 function main() returns ExitCode
-	var items = IntArray.create()
+	var items = IntArray.create(0)
 
 	for i in 0 upto Items 'fill'
 		items.push(i)
@@ -1363,7 +1363,7 @@ type Adversary
 	export var calls as Integer
 
 	static function create(items Integer) returns Adversary
-		var values = IntArray.create()
+		var values = IntArray.create(0)
 		var solid = 0 as Integer
 
 		for i in 0 upto items 'fill'
@@ -1417,7 +1417,7 @@ function sortAgainst(items IntArray, adversary Adversary)
 end 'sortAgainst'
 
 function main() returns ExitCode
-	var items = IntArray.create()
+	var items = IntArray.create(0)
 
 	for i in 0 upto Items 'fill'
 		items.push(i)
@@ -1472,7 +1472,7 @@ function nextSeed(seed Tally) returns Tally
 end 'nextSeed'
 
 function main() returns ExitCode
-	var spreads = SpreadArray.create()
+	var spreads = SpreadArray.create(0)
 
 	for spread in [2, 3, 4, 8, 16, 40] 'spreads'
 		spreads.push(spread)
@@ -1483,7 +1483,7 @@ function main() returns ExitCode
 
 	for spread in spreads 'eachSpread'
 		for n in ShortestLength to LongestLength 'eachLength'
-			var values = SortKeyArray.create()
+			var values = SortKeyArray.create(0)
 			var sum = 0 as Tally
 			var squares = 0 as Tally
 
@@ -1560,7 +1560,7 @@ function nextSeed(seed Tally) returns Tally
 end 'nextSeed'
 
 function main() returns ExitCode
-	var spreads = SpreadArray.create()
+	var spreads = SpreadArray.create(0)
 
 	for spread in [2, 3, 4, 8, 16, 40] 'spreads'
 		spreads.push(spread)
@@ -1572,7 +1572,7 @@ function main() returns ExitCode
 
 	for spread in spreads 'eachSpread'
 		for n in ShortestLength to LongestLength 'eachLength'
-			var entries = TicketArray.create()
+			var entries = TicketArray.create(0)
 
 			for arrival in 0 upto n 'fill'
 				seed = nextSeed(seed)
@@ -1664,7 +1664,7 @@ function main() returns ExitCode
 
 	for n in 2 to LongestLength 'eachLength'
 		for _ in 0 upto ArraysPerLength 'eachArray'
-			var entries = TicketArray.create()
+			var entries = TicketArray.create(0)
 
 			for arrival in 0 upto n 'fill'
 				seed = nextSeed(seed)

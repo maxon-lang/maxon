@@ -75,7 +75,7 @@ type FusionState
 	export var skippedAsMoved as bool
 
 	static function create(func IrFunction) returns Self
-		return Self{func: func, ready: false, refPlusOneById: ValueIdArray.create(), predecessors: PredecessorCounts.create(), minter: ValueMinter.resuming(0), subst: ValueIdArray.create(), substChanged: false, doomed: StdValueUseSet.create(), consumed: ConsumedOpSet.create(), vacated: VacatedOpSet.create(), vacatedBlocks: VacatedBlockSet.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), partner: FusionPartner.create(), knownBlockRefs: 0, changed: false, skippedAsMoved: false}
+		return Self{func: func, ready: false, refPlusOneById: ValueIdArray.create(0), predecessors: PredecessorCounts.create(0), minter: ValueMinter.resuming(0), subst: ValueIdArray.create(0), substChanged: false, doomed: StdValueUseSet.create(), consumed: ConsumedOpSet.create(), vacated: VacatedOpSet.create(), vacatedBlocks: VacatedBlockSet.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), partner: FusionPartner.create(), knownBlockRefs: 0, changed: false, skippedAsMoved: false}
 	end 'create'
 
 	function ensureReady(module StdModule)
@@ -211,7 +211,7 @@ function applyVacated(module StdModule, state FusionState)
 			continue
 		end 'untouched'
 
-		var kept = OpIndexArray.create()
+		var kept = OpIndexArray.create(0)
 
 		for opIdx in block.bodyOps() 'eachOp'
 			if not state.isVacated(block.id, opIdx: opIdx) 'stays'
@@ -457,7 +457,7 @@ function adoptInPlace(module StdModule, state FusionState)
 end 'adoptInPlace'
 
 function edgeCarrying(target BlockId, value ValueId) returns BranchEdgeArray
-	var edges = BranchEdgeArray.create()
+	var edges = BranchEdgeArray.create(0)
 	edges.push(BranchEdge.create(target, argIds: argsOf(value)))
 	return edges
 end 'edgeCarrying'
@@ -480,7 +480,7 @@ function moveReleaseToTheFrontOf(module StdModule, state FusionState, joinId Blo
 	var releaseBlock = state.blockOf(module, id: state.partner.releaseBlockId)
 
 	if releaseBlock.id == joinId 'insideTheJoin'
-		var kept = OpIndexArray.create()
+		var kept = OpIndexArray.create(0)
 
 		for candidate in releaseBlock.bodyOps() 'eachOp'
 			if candidate != state.partner.releaseOpIdx 'stays'
@@ -502,7 +502,7 @@ function retargetPastTheRelease(module StdModule, state FusionState, join IrBloc
 	view targetBlock = state.blockOf(module, id: target)
 	view passedToTarget = edgeArgsTo(join, targetId: target, takesArgs: targetBlock.blockArgs.count() != 0)
 	view passedToJoin = edgeArgsTo(incoming, targetId: join.id, takesArgs: join.blockArgs.count() != 0)
-	var mapped = ValueIdArray.create()
+	var mapped = ValueIdArray.create(0)
 
 	for passed in passedToTarget 'eachPassedArg'
 		mapped.push(argumentOrItself(join, value: passed, supplied: passedToJoin))
@@ -521,8 +521,8 @@ function splitAfterTheRelease(module StdModule, state FusionState, joinId BlockI
 	var join = state.blockOf(module, id: joinId)
 	var incoming = state.blockOf(module, id: state.partner.incomingBlockId)
 	var originalArgs = join.blockArgs
-	var freshArgs = IrBlockArgArray.create()
-	var passed = ValueIdArray.create()
+	var freshArgs = IrBlockArgArray.create(0)
+	var passed = ValueIdArray.create(0)
 
 	for arg in originalArgs 'eachArg'
 		let id = state.minter.mint()
@@ -534,7 +534,7 @@ function splitAfterTheRelease(module StdModule, state FusionState, joinId BlockI
 	tail.blockArgs = originalArgs
 	join.blockArgs = freshArgs
 	module.setTerminator(join, op: StdOp.branch(tail.id))
-	join.branchEdges = BranchEdgeArray.create()
+	join.branchEdges = BranchEdgeArray.create(0)
 
 	if passed.count() > 0 'theJoinCarriesArgs'
 		join.branchEdges.push(BranchEdge.create(tail.id, argIds: passed))

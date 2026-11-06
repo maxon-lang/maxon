@@ -42,7 +42,7 @@ end 'Counter'
 typealias Plain = Array with Counter
 
 function main() returns ExitCode
-	var items = Plain.create()
+	var items = Plain.create(0)
 	items.push(Counter.create(4))
 	let frozen = items
 
@@ -75,7 +75,7 @@ end 'Counter'
 typealias Plain = Array with Counter
 
 function build() returns Plain
-	var items = Plain.create()
+	var items = Plain.create(0)
 	items.push(Counter.create(4))
 	return items
 end 'build'
@@ -126,7 +126,7 @@ function bumpAll(bag Bag)
 end 'bumpAll'
 
 function main() returns ExitCode
-	var items = Plain.create()
+	var items = Plain.create(0)
 	items.push(Counter.create(4))
 	let bag = Bag.create(items)
 	bumpAll(bag)
@@ -155,7 +155,7 @@ end 'Counter'
 typealias Plain = Array with Counter
 
 function main() returns ExitCode
-	var items = Plain.create()
+	var items = Plain.create(0)
 	items.push(Counter.create(4))
 	let frozen = items
 
@@ -192,7 +192,7 @@ function bump(c Counter)
 end 'bump'
 
 function main() returns ExitCode
-	var items = Plain.create()
+	var items = Plain.create(0)
 	items.push(Counter.create(4))
 	let frozen = items
 
@@ -224,7 +224,7 @@ end 'Counter'
 typealias Plain = Array with Counter
 
 function main() returns ExitCode
-	var items = Plain.create()
+	var items = Plain.create(0)
 	items.push(Counter.create(4))
 	let frozen = items
 
@@ -257,7 +257,7 @@ end 'Counter'
 typealias Plain = Array with Counter
 
 function main() returns ExitCode
-	var items = Plain.create()
+	var items = Plain.create(0)
 	items.push(Counter.create(4))
 	items.push(Counter.create(5))
 
@@ -303,7 +303,7 @@ function read(c Counter) returns Integer
 end 'read'
 
 function main() returns ExitCode
-	var items = Plain.create()
+	var items = Plain.create(0)
 	items.push(Counter.create(4))
 	items.push(Counter.create(5))
 	let frozen = items

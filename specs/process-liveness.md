@@ -97,7 +97,7 @@ end 'main'
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-Command")
 	argv.push("$PID")
@@ -125,13 +125,13 @@ end 'main'
 function main() returns ExitCode
 	#if os(Windows)
 	let exe = Executable.name("cmd")
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("exit")
 	argv.push("0")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("exit 0")
 	#endif

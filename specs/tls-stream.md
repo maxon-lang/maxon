@@ -47,7 +47,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -250,7 +250,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -456,7 +456,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -661,7 +661,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -884,7 +884,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1102,7 +1102,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1326,7 +1326,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1549,7 +1549,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1774,7 +1774,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1993,7 +1993,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2213,7 +2213,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2469,7 +2469,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2650,7 +2650,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2810,7 +2810,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2999,8 +2999,8 @@ end 'line'
 function main() returns ExitCode
 	print("{line("server order wins", serverProtocols: ["h2", "http/1.1"], clientProtocols: ["http/1.1", "h2"])}\n")
 	print("{line("single match", serverProtocols: ["h2", "http/1.1"], clientProtocols: ["http/1.1"])}\n")
-	print("{line("server offers none", serverProtocols: StringArray.create(), clientProtocols: ["h2"])}\n")
-	print("{line("client offers none", serverProtocols: ["h2"], clientProtocols: StringArray.create())}\n")
+	print("{line("server offers none", serverProtocols: StringArray.create(0), clientProtocols: ["h2"])}\n")
+	print("{line("client offers none", serverProtocols: ["h2"], clientProtocols: StringArray.create(0))}\n")
 	print("{line("no overlap", serverProtocols: ["spdy"], clientProtocols: ["h2"])}\n")
 
 	return 0
@@ -3029,7 +3029,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -3237,7 +3237,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -3453,7 +3453,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -3626,7 +3626,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -3725,7 +3725,7 @@ let smallWrites = 2000
 let smallWriteBytes = 50
 
 function pattern(count Count, seed Count) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	bytes.reserve(count)
 
@@ -3737,7 +3737,7 @@ function pattern(count Count, seed Count) returns ByteArray
 end 'pattern'
 
 function receiveAll(stream TlsStream, total Count) returns ByteArray throws TlsError
-	var received = ByteArray.create()
+	var received = ByteArray.create(0)
 	var reads = 0 as Count
 
 	while received.count() < total 'receiving'
@@ -3835,7 +3835,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -3992,7 +3992,7 @@ function main() returns ExitCode
 	let damaged = try whole.slice(0, endIndex: whole.count() - 1) otherwise return 1
 
 	print("{reportDer("truncated key", chain: ByteArrays from [fromHex(leafP256Hex)], key: damaged)}\n")
-	print("{reportDer("empty chain", chain: ByteArrays.create(), key: whole)}\n")
+	print("{reportDer("empty chain", chain: ByteArrays.create(0), key: whole)}\n")
 	print("{reportDer("certificate that is not X.509", chain: ByteArrays from [fromHex(keyP256Hex)], key: whole)}\n")
 	print("{reportDer("DER", chain: ByteArrays from [fromHex(leafP256Hex), fromHex(rootHex)], key: whole)}\n")
 
@@ -4032,7 +4032,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -4107,7 +4107,7 @@ function element(tag Byte, body ByteArray) returns ByteArray
 		panic("the case builds short elements only")
 	end 'tooLong'
 
-	var encoded = ByteArray.create()
+	var encoded = ByteArray.create(0)
 	encoded.push(tag)
 	encoded.push(body.count() as Byte)
 	encoded.append(body)
@@ -4136,7 +4136,7 @@ function otherScalar(scalar ByteArray) returns ByteArray
 end 'otherScalar'
 
 function zeros(count Count) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	bytes.growFilled(count, value: 0)
 
 	return bytes
@@ -4182,7 +4182,7 @@ function main() returns ExitCode
 	let ed25519Seed = lastBytes(fromHex(keyEd25519Hex), count: ed25519Bytes)
 	let p256Public = try EcdhP256.publicKey(p256Scalar) otherwise return 1
 	let trailing = fromHex(nullElement)
-	var publicKeyBits = ByteArray.create()
+	var publicKeyBits = ByteArray.create(0)
 
 	publicKeyBits.push(0)
 	publicKeyBits.append(p256Public)
@@ -4191,25 +4191,25 @@ function main() returns ExitCode
 	let rsaWithoutKey = fromHex("3012020100300d06092a864886f70d0101010500")
 	let rsaShell = fromHex("3006020100020105")
 
-	print("{reportDer("PKCS8 P-256 with agreeing parameters", leafHex: leafP256Hex, key: pkcs8(ecAlgorithm(oidP256), privateKey: sec1(p256Scalar, tail: parametersOf(oidP256)), tail: ByteArray.create()))}\n")
+	print("{reportDer("PKCS8 P-256 with agreeing parameters", leafHex: leafP256Hex, key: pkcs8(ecAlgorithm(oidP256), privateKey: sec1(p256Scalar, tail: parametersOf(oidP256)), tail: ByteArray.create(0)))}\n")
 	print("{reportDer("SEC1 P-256 with parameters and public key", leafHex: leafP256Hex, key: sec1(p256Scalar, tail: join(parametersOf(oidP256), second: publicKeyField)))}\n")
 	print("{reportDer("PKCS1 holding two integers", leafHex: leafRsaHex, key: rsaShell)}\n")
 	print("{reportDer("PKCS8 RSA without a private key", leafHex: leafRsaHex, key: rsaWithoutKey)}\n")
 	print("{reportDer("1024-bit RSA", leafHex: leafRsaHex, key: fromHex(rsa1024Hex))}\n")
 	print("{reportDer("RSA key of another certificate", leafHex: leafRsaHex, key: fromHex(rsaOtherHex))}\n")
-	print("{reportDer("P-256 scalar zero", leafHex: leafP256Hex, key: sec1(zeros(p256Bytes), tail: ByteArray.create()))}\n")
-	print("{reportDer("P-256 scalar n", leafHex: leafP256Hex, key: sec1(fromHex(p256Order), tail: ByteArray.create()))}\n")
-	print("{reportDer("P-256 scalar above n", leafHex: leafP256Hex, key: sec1(fromHex("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), tail: ByteArray.create()))}\n")
-	print("{reportDer("P-384 scalar zero", leafHex: leafP384Hex, key: sec1(zeros(p384Bytes), tail: ByteArray.create()))}\n")
-	print("{reportDer("P-256 key of another certificate", leafHex: leafP256Hex, key: sec1(otherScalar(p256Scalar), tail: ByteArray.create()))}\n")
-	print("{reportDer("P-384 key of another certificate", leafHex: leafP384Hex, key: sec1(otherScalar(p384Scalar), tail: ByteArray.create()))}\n")
-	print("{reportDer("Ed25519 key of another certificate", leafHex: leafEd25519Hex, key: pkcs8(fromHex("06032b6570"), privateKey: element(derOctetString, body: otherScalar(ed25519Seed)), tail: ByteArray.create()))}\n")
+	print("{reportDer("P-256 scalar zero", leafHex: leafP256Hex, key: sec1(zeros(p256Bytes), tail: ByteArray.create(0)))}\n")
+	print("{reportDer("P-256 scalar n", leafHex: leafP256Hex, key: sec1(fromHex(p256Order), tail: ByteArray.create(0)))}\n")
+	print("{reportDer("P-256 scalar above n", leafHex: leafP256Hex, key: sec1(fromHex("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), tail: ByteArray.create(0)))}\n")
+	print("{reportDer("P-384 scalar zero", leafHex: leafP384Hex, key: sec1(zeros(p384Bytes), tail: ByteArray.create(0)))}\n")
+	print("{reportDer("P-256 key of another certificate", leafHex: leafP256Hex, key: sec1(otherScalar(p256Scalar), tail: ByteArray.create(0)))}\n")
+	print("{reportDer("P-384 key of another certificate", leafHex: leafP384Hex, key: sec1(otherScalar(p384Scalar), tail: ByteArray.create(0)))}\n")
+	print("{reportDer("Ed25519 key of another certificate", leafHex: leafEd25519Hex, key: pkcs8(fromHex("06032b6570"), privateKey: element(derOctetString, body: otherScalar(ed25519Seed)), tail: ByteArray.create(0)))}\n")
 	print("{reportDer("SEC1 with an element after the parameters", leafHex: leafP256Hex, key: sec1(p256Scalar, tail: join(parametersOf(oidP256), second: trailing)))}\n")
 	print("{reportDer("SEC1 with an element after the public key", leafHex: leafP256Hex, key: sec1(p256Scalar, tail: join(publicKeyField, second: trailing)))}\n")
-	print("{reportDer("PKCS8 P-256 with an element after the key", leafHex: leafP256Hex, key: pkcs8(ecAlgorithm(oidP256), privateKey: sec1(p256Scalar, tail: ByteArray.create()), tail: trailing))}\n")
+	print("{reportDer("PKCS8 P-256 with an element after the key", leafHex: leafP256Hex, key: pkcs8(ecAlgorithm(oidP256), privateKey: sec1(p256Scalar, tail: ByteArray.create(0)), tail: trailing))}\n")
 	print("{reportDer("PKCS8 Ed25519 with an element after the key", leafHex: leafEd25519Hex, key: pkcs8(fromHex("06032b6570"), privateKey: element(derOctetString, body: ed25519Seed), tail: trailing))}\n")
-	print("{reportDer("PKCS8 P-256 whose SEC1 names P-384", leafHex: leafP384Hex, key: pkcs8(ecAlgorithm(oidP256), privateKey: sec1(p384Scalar, tail: parametersOf(oidP384)), tail: ByteArray.create()))}\n")
-	print("{reportDer("PKCS8 P-384 whose SEC1 names P-256", leafHex: leafP256Hex, key: pkcs8(ecAlgorithm(oidP384), privateKey: sec1(p256Scalar, tail: parametersOf(oidP256)), tail: ByteArray.create()))}\n")
+	print("{reportDer("PKCS8 P-256 whose SEC1 names P-384", leafHex: leafP384Hex, key: pkcs8(ecAlgorithm(oidP256), privateKey: sec1(p384Scalar, tail: parametersOf(oidP384)), tail: ByteArray.create(0)))}\n")
+	print("{reportDer("PKCS8 P-384 whose SEC1 names P-256", leafHex: leafP256Hex, key: pkcs8(ecAlgorithm(oidP384), privateKey: sec1(p256Scalar, tail: parametersOf(oidP256)), tail: ByteArray.create(0)))}\n")
 
 	return 0
 end 'main'
@@ -4251,7 +4251,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -4441,7 +4441,7 @@ function line(label String, certificates String, key String) returns String
 	end 'refused'
 
 	let blocks = try Pem.decode(pemOf("CERTIFICATE", hex: rootHex)) otherwise return "root PEM refused"
-	var roots = RootCertificates.create()
+	var roots = RootCertificates.create(0)
 
 	for block in blocks 'eachBlock'
 		roots.push(block.bytes.clone())
@@ -4485,7 +4485,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -4690,7 +4690,7 @@ function main() returns ExitCode
 		longName.append("a")
 	end 'eachLetter'
 
-	try client.setProtocols(TlsProtocolArray.create()) otherwise (error) 'noProtocols'
+	try client.setProtocols(TlsProtocolArray.create(0)) otherwise (error) 'noProtocols'
 		print("{refused("client no protocols", failure: error)}\n")
 	end 'noProtocols'
 
@@ -4702,7 +4702,7 @@ function main() returns ExitCode
 		print("{refused("client 256-byte protocol name", failure: error)}\n")
 	end 'longName'
 
-	try client.setTrustedRoots(RootCertificates.create()) otherwise (error) 'noRoots'
+	try client.setTrustedRoots(RootCertificates.create(0)) otherwise (error) 'noRoots'
 		print("{refused("client no roots", failure: error)}\n")
 	end 'noRoots'
 
@@ -4710,15 +4710,15 @@ function main() returns ExitCode
 		print("{refused("client empty server name", failure: error)}\n")
 	end 'noName'
 
-	try server.setProtocols(TlsProtocolArray.create()) otherwise (error) 'serverNoProtocols'
+	try server.setProtocols(TlsProtocolArray.create(0)) otherwise (error) 'serverNoProtocols'
 		print("{refused("server no protocols", failure: error)}\n")
 	end 'serverNoProtocols'
 
-	try server.requireClientCertificates(RootCertificates.create()) otherwise (error) 'requireNone'
+	try server.requireClientCertificates(RootCertificates.create(0)) otherwise (error) 'requireNone'
 		print("{refused("server require with no roots", failure: error)}\n")
 	end 'requireNone'
 
-	try server.requestClientCertificates(RootCertificates.create()) otherwise (error) 'requestNone'
+	try server.requestClientCertificates(RootCertificates.create(0)) otherwise (error) 'requestNone'
 		print("{refused("server request with no roots", failure: error)}\n")
 	end 'requestNone'
 
@@ -4768,7 +4768,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -5023,7 +5023,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -5266,7 +5266,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -5541,7 +5541,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -5869,7 +5869,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -6090,7 +6090,7 @@ function filler() returns String
 end 'filler'
 
 function hearAll(raw TcpClient) returns String
-	var heard = ByteArray.create()
+	var heard = ByteArray.create(0)
 
 	while true 'reading'
 		let chunk = try raw.recv(1024) otherwise break
@@ -6158,7 +6158,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -6347,7 +6347,7 @@ let MostChunks = 256
 let StalledWriteMs = 300
 
 function chunk() returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	bytes.resize(ChunkBytes)
 
@@ -6441,7 +6441,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -6716,7 +6716,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -6873,7 +6873,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -7035,7 +7035,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -7161,7 +7161,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 

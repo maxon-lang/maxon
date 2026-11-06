@@ -69,7 +69,7 @@ type Registry uses Key where Key is Hashable and Equatable
 end 'Registry'
 
 function main() returns ExitCode
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 	names.push("a")
 	names.push("b")
 	var registry = StringRegistry.create()
@@ -128,7 +128,7 @@ type Registry uses Key where Key is Hashable and Equatable
 end 'Registry'
 
 function main() returns ExitCode
-	var counters = CounterArray.create()
+	var counters = CounterArray.create(0)
 	counters.push(Counter.create(1))
 	var registry = CounterRegistry.create()
 	registry.remember(counters)
@@ -165,7 +165,7 @@ type Counter implements Hashable, Equatable
 end 'Counter'
 
 function main() returns ExitCode
-	var counters = CounterArray.create()
+	var counters = CounterArray.create(0)
 	counters.push(Counter.create(1))
 	var members = CounterSet.create()
 
@@ -275,7 +275,7 @@ type Box uses Item
 end 'Box'
 
 function main() returns ExitCode
-	var counters = CounterArray.create()
+	var counters = CounterArray.create(0)
 	counters.push(Counter.create(1))
 	var box = CounterBox.create(try counters.get(0) otherwise panic("empty"))
 
@@ -309,7 +309,7 @@ type Box uses Item
 end 'Box'
 
 function main() returns ExitCode
-	var items = StringArray.create()
+	var items = StringArray.create(0)
 	items.push("abc")
 	let box = StringBox.first(items)
 
@@ -352,7 +352,7 @@ type Box uses Item
 end 'Box'
 
 function main() returns ExitCode
-	var items = CounterArray.create()
+	var items = CounterArray.create(0)
 	items.push(Counter.create(1))
 	var box = CounterBox.first(items)
 

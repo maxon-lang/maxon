@@ -460,7 +460,7 @@ error E3088: app/specs/namespace-qualified-resolution/error.module-tier-alias-is
 
 
 <!-- test: error.hidden-alias-as-a-qualified-static-call-head -->
-A typealias named through its directory as the HEAD of a static call, `lib.ScoreArray.create()`, is refused
+A typealias named through its directory as the HEAD of a static call, `lib.ScoreArray.create(0)`, is refused
 like the same name in any other type position: the declaration is file-private to `lib/scores.maxon`, and
 the qualified spelling reaches it without making it visible.
 ```maxon
@@ -469,14 +469,14 @@ typealias Score = int(0 to 100)
 typealias ScoreArray = Array with Score
 
 export function probeScores() returns ExitCode
-	var held = ScoreArray.create()
+	var held = ScoreArray.create(0)
 	held.push(3)
 	return 0 if held.isEmpty() else 3
 end 'probeScores'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	let made = lib.ScoreArray.create()
+	let made = lib.ScoreArray.create(0)
 
 	if made.isEmpty() 'nothingHeld'
 		return lib.probeScores()
@@ -969,7 +969,7 @@ function total(cells Cells) returns Count
 end 'total'
 
 function main() returns ExitCode
-	var cells = Cells.create()
+	var cells = Cells.create(0)
 	cells.push(Cell.create("hello"))
 	return (useAlpha() as Count + total(cells)) as ExitCode
 end 'main'
@@ -1726,7 +1726,7 @@ end 'pick'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var ps = IntPromises.create()
+	var ps = IntPromises.create(0)
 	ps.push(async pick())
 	let p = try ps.pop() otherwise return 8
 	let v = try await p otherwise 9

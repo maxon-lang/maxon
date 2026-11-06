@@ -38,7 +38,7 @@ compiles and runs — so it excludes the four native lanes.
 ```maxon
 function main() returns ExitCode
 	let exe = Executable.name("cmd")
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("echo")
 	let result = try Subprocess.run(exe, arguments: argv) otherwise return 1

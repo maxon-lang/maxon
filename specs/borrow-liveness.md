@@ -38,7 +38,7 @@ typealias StringArray = Array with String
 function main() returns ExitCode
 	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let s = try arr.get(0) otherwise ""
-	arr = StringArray.create()
+	arr = StringArray.create(0)
 	print("[{s}] {arr.count()}\n")
 	return 0
 end 'main'
@@ -55,7 +55,7 @@ end 'main'
 the first trip's `clear()` and `push`. It reads the element it was bound to.
 ```maxon
 function main() returns ExitCode
-	var arr = StringArray.create()
+	var arr = StringArray.create(0)
 	arr.push("first {3} long enough for the heap")
 	arr.push("second {4} long enough for the heap")
 	let first = try arr.get(0) otherwise "none"
@@ -159,7 +159,7 @@ type Bag
 
 	function peek() returns ExitCode
 		let s = try items.get(0) otherwise ""
-		items = StringArray.create()
+		items = StringArray.create(0)
 		print("[{s}] {items.count()}\n")
 		return 0
 	end 'peek'
@@ -241,7 +241,7 @@ end 'grow'
 
 function main() returns ExitCode
 	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
-	let spare = StringArray.create()
+	let spare = StringArray.create(0)
 	let s = try arr.get(0) otherwise ""
 	let k = grow(1, dest: arr, other: spare)
 	print("[{s}] {k} {arr.count()}\n")
@@ -291,7 +291,7 @@ function main() returns ExitCode
 	var arr = ["hello world this is a long string for heap allocation"]
 	let s = try arr.get(0) otherwise ""
 	if s.byteLength() > 0 'inner'
-		var arr = StringArray.create()
+		var arr = StringArray.create(0)
 		arr.push("a wholly different array that shares only the name")
 		print("{arr.count()}\n")
 	end 'inner'
@@ -400,7 +400,7 @@ On the handler's path the get FAILED and `s` was never bound; the handler writes
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create()
+	var arr = StringArray.create(0)
 	let s = try arr.get(0) otherwise 'empty'
 		arr.push("a replacement long string for the heap allocation path")
 		return 7
@@ -887,7 +887,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 
 	function wipe()
@@ -920,7 +920,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 
 	function wipe()
@@ -954,11 +954,11 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 
 	function wipe()
-		items = StringArray.create()
+		items = StringArray.create(0)
 	end 'wipe'
 end 'Bag'
 
@@ -989,7 +989,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 
 	function wipe()
@@ -1028,7 +1028,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 
 	function reset()
@@ -1065,7 +1065,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 
 	function wipe()
@@ -1098,7 +1098,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 end 'Bag'
 
@@ -1132,7 +1132,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 
 	function room() returns Integer
@@ -1166,7 +1166,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 
 	function size() returns Integer
@@ -1204,7 +1204,7 @@ type Bag
 	export var total as Integer
 
 	static function create() returns Self
-		return Self{items: StringArray.create(), total: 0}
+		return Self{items: StringArray.create(0), total: 0}
 	end 'create'
 
 	function wipe()
@@ -1241,7 +1241,7 @@ type Bag
 	export var total as Integer
 
 	static function create() returns Self
-		return Self{items: StringArray.create(), total: 0}
+		return Self{items: StringArray.create(0), total: 0}
 	end 'create'
 
 	function wipe()
@@ -1280,7 +1280,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 
 	function reset()
@@ -1320,7 +1320,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 
 	function reset()
@@ -1360,7 +1360,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 
 	function size() returns Integer
@@ -1399,7 +1399,7 @@ type Bag
 	export var total as Integer
 
 	static function create() returns Self
-		return Self{items: StringArray.create(), total: 0}
+		return Self{items: StringArray.create(0), total: 0}
 	end 'create'
 
 	function add(v Integer)
@@ -1429,7 +1429,7 @@ Module storage counts exactly as a local does.
 ```maxon
 typealias StringArray = Array with String
 
-var g = StringArray.create()
+var g = StringArray.create(0)
 
 function main() returns ExitCode
 	g.push("hello world this is a long string for heap allocation {40 + 2}")
@@ -1452,12 +1452,12 @@ The global store releases the slot's reference to the old array; `s` holds its o
 ```maxon
 typealias StringArray = Array with String
 
-var g = StringArray.create()
+var g = StringArray.create(0)
 
 function main() returns ExitCode
 	g.push("hello world this is a long string for heap allocation {40 + 2}")
 	let s = try g.get(0) otherwise ""
-	g = StringArray.create()
+	g = StringArray.create(0)
 	print("[{s}] {g.count()}\n")
 	return 0
 end 'main'
@@ -1474,7 +1474,7 @@ end 'main'
 ```maxon
 typealias StringArray = Array with String
 
-var g = StringArray.create()
+var g = StringArray.create(0)
 
 function grow(dest StringArray)
 	dest.clear()
@@ -1502,7 +1502,7 @@ The element survives the clear, and the clear ends the loop.
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
 
-var g = StringArray.create()
+var g = StringArray.create(0)
 
 function main() returns ExitCode
 	g.push("hello world this is a long string for heap allocation {40 + 2}")
@@ -1567,7 +1567,7 @@ type Bag
 	export var seen as IntSet
 
 	static function create() returns Self
-		return Self{items: StringArray.create(), name: "tag", seen: IntSet.create()}
+		return Self{items: StringArray.create(0), name: "tag", seen: IntSet.create()}
 	end 'create'
 
 	function mark()
@@ -1611,12 +1611,12 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 end 'Bag'
 
 function wipe(b Bag)
-	b.items = StringArray.create()
+	b.items = StringArray.create(0)
 end 'wipe'
 
 function main() returns ExitCode
@@ -1646,7 +1646,7 @@ type Bag
 	export var n as Integer
 
 	static function create() returns Self
-		return Self{items: StringArray.create(), n: 0}
+		return Self{items: StringArray.create(0), n: 0}
 	end 'create'
 end 'Bag'
 
@@ -1723,7 +1723,7 @@ end 'Holder'
 typealias HolderArray = Array with Holder
 
 function main() returns ExitCode
-	var arr = HolderArray.create()
+	var arr = HolderArray.create(0)
 	arr.push(Holder.create())
 	var p = try arr.get(0) otherwise Holder.create()
 	let s = try p.items.get(0) otherwise ""
@@ -1880,7 +1880,7 @@ type Inner
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self { items: StringArray.create() }
+		return Self { items: StringArray.create(0) }
 	end 'create'
 end 'Inner'
 
@@ -1923,7 +1923,7 @@ type Bag
 	export var name as String
 
 	static function create() returns Self
-		return Self { items: StringArray.create(), name: "tag" }
+		return Self { items: StringArray.create(0), name: "tag" }
 	end 'create'
 
 	function retag()
@@ -2061,7 +2061,7 @@ function build(n Count) returns String
 end 'build'
 
 function main() returns ExitCode
-	var a = StringArray.create()
+	var a = StringArray.create(0)
 	a.push(build(10))
 	let out = clobber(a, borrowed: try a.get(0) otherwise "")
 	print("{out} {a.count()}\n")
@@ -2266,8 +2266,8 @@ function build(n Count) returns String
 end 'build'
 
 function main() returns ExitCode
-	var a = StringArray.create()
-	var b = StringArray.create()
+	var a = StringArray.create(0)
+	var b = StringArray.create(0)
 	a.push(build(4))
 	b.push(build(10))
 	let m = Mode.second
@@ -2304,7 +2304,7 @@ end 'Decl'
 typealias DeclArray = Array with Decl
 
 type Holder
-	export var items = DeclArray.create()
+	export var items = DeclArray.create(0)
 
 	static function create() returns Holder
 		return Holder{}
@@ -2327,7 +2327,7 @@ type Driver
 
 
 	function churn()
-		var junk = DeclArray.create()
+		var junk = DeclArray.create(0)
 
 		for i in 0 upto 50 'each'
 			junk.push(Decl.create("garbage-garbage-garbage {i}", weight: 99))
@@ -2341,7 +2341,7 @@ type Driver
 	end 'weigh'
 
 	function deeper(w Tally) returns Tally
-		self.holder.items = DeclArray.create()
+		self.holder.items = DeclArray.create(0)
 		self.churn()
 		return w + 1
 	end 'deeper'
@@ -2395,7 +2395,7 @@ end 'Decl'
 typealias DeclArray = Array with Decl
 
 type Holder
-	export var items = DeclArray.create()
+	export var items = DeclArray.create(0)
 
 	static function create() returns Holder
 		return Holder{}
@@ -2419,7 +2419,7 @@ type Driver
 	end 'theHolder'
 
 	function churn()
-		var junk = DeclArray.create()
+		var junk = DeclArray.create(0)
 
 		for i in 0 upto 50 'each'
 			junk.push(Decl.create("garbage-garbage-garbage {i}", weight: 99))
@@ -2433,7 +2433,7 @@ type Driver
 	end 'weigh'
 
 	function deeper(w Tally) returns Tally
-		self.holder.items = DeclArray.create()
+		self.holder.items = DeclArray.create(0)
 		self.churn()
 		return w + 1
 	end 'deeper'
@@ -2635,7 +2635,7 @@ typealias Outers = Array with Outer
 function main() returns ExitCode
 	var b = Outer.create(1)
 	let inner = b.inner
-	var xs = Outers.create()
+	var xs = Outers.create(0)
 	xs.push(b)
 	xs.clear()
 	print("{inner.label.byteLength()} {xs.count()} {b.inner.label.byteLength()}\n")
@@ -2872,7 +2872,7 @@ end 'main'
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create()
+	var xs = Words.create(0)
 	xs.push("a word padded out long enough to heap allocate {1}")
 	let s = try xs.get(0) otherwise ""
 
@@ -2910,12 +2910,12 @@ function choose(n Integer) returns Pick
 end 'choose'
 
 function main() returns ExitCode
-	var xs = Words.create()
+	var xs = Words.create(0)
 	xs.push("a word padded out long enough to heap allocate {1}")
 	let s = try xs.get(0) otherwise ""
 	var r = match choose(1) 'pick'
 		first gives xs
-		second gives Words.create()
+		second gives Words.create(0)
 	end 'pick'
 	r.clear()
 	print("{s.byteLength()} {r.count()} [{s}]\n")
@@ -2937,10 +2937,10 @@ holds its own.
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create()
+	var xs = Words.create(0)
 	xs.push("a word padded out long enough to heap allocate {1}")
 	let s = try xs.get(0) otherwise ""
-	var c = Words.create()
+	var c = Words.create(0)
 	c = xs
 	c.clear()
 	print("{s.byteLength()} {c.count()} [{s}]\n")
@@ -3291,7 +3291,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var x = StringArray.create()
+	var x = StringArray.create(0)
 	x.push("hello {40 + 2} world, long enough for the heap")
 	var h = Holder.create(x)
 	let s = try x.get(0) otherwise ""
@@ -3460,7 +3460,7 @@ function replaceFirst(items Boxes, cb Hook)
 end 'replaceFirst'
 
 function main() returns ExitCode
-	var xs = Boxes.create()
+	var xs = Boxes.create(0)
 	xs.push(Box.create("original {40 + 2} padded out long enough for the heap"))
 	replaceFirst(xs, cb: announce)
 	return 0
@@ -4160,13 +4160,13 @@ type Holder
 	export var items as StringArray
 
 	static function create() returns Self
-		var items = StringArray.create()
+		var items = StringArray.create(0)
 		items.push("original {40 + 2} padded out long enough for the heap")
 		return Self{items: items}
 	end 'create'
 
 	function reset() returns String
-		var fresh = StringArray.create()
+		var fresh = StringArray.create(0)
 		fresh.push("replacement {7} padded out long enough for the heap")
 		self.items = fresh
 		return "pushed {5} padded out long enough for the heap"
@@ -4176,7 +4176,7 @@ end 'Holder'
 function main() returns ExitCode
 	var x = Holder.create()
 	x.items.push(x.reset())
-	var filler = StringArray.create()
+	var filler = StringArray.create(0)
 	filler.push("filler {1} padded out long enough for the heap")
 	filler.push("filler {2} padded out long enough for the heap")
 	print("{x.items.count()} [{try x.items.get(0) otherwise "none"}] [{try filler.get(0) otherwise "none"}]\n")
@@ -4782,7 +4782,7 @@ type Holder
 	export var items as StringArray
 
 	static function create(label String) returns Self
-		var items = StringArray.create()
+		var items = StringArray.create(0)
 		items.push(label)
 		return Self{items: items}
 	end 'create'
@@ -4807,7 +4807,7 @@ function main() returns ExitCode
 	g = Holder.create("original {40 + 2} padded out long enough for the heap")
 	let probe = Probe.create("pushed {5} padded out long enough for the heap")
 	g.items.push("{probe}")
-	var filler = StringArray.create()
+	var filler = StringArray.create(0)
 	filler.push("filler {1} padded out long enough for the heap")
 	filler.push("filler {2} padded out long enough for the heap")
 	print("{g.items.count()} [{try g.items.get(0) otherwise "none"}] [{try g.items.get(1) otherwise "none"}] [{try filler.get(0) otherwise "none"}]\n")
@@ -4936,7 +4936,7 @@ type Registry
 	static var current = Registry.create("placeholder")
 
 	static function create(label String) returns Self
-		var items = StringArray.create()
+		var items = StringArray.create(0)
 		items.push(label)
 		return Self{items: items}
 	end 'create'
@@ -4963,7 +4963,7 @@ function main() returns ExitCode
 	Registry.current = Registry.create("original {40 + 2} padded out long enough for the heap")
 	let probe = Probe.create("pushed {5} padded out long enough for the heap")
 	Registry.current.add("{probe}")
-	var filler = StringArray.create()
+	var filler = StringArray.create(0)
 	filler.push("filler {1} padded out long enough for the heap")
 	filler.push("filler {2} padded out long enough for the heap")
 	print("{Registry.current.items.count()} [{try Registry.current.items.get(0) otherwise "none"}] [{try Registry.current.items.get(1) otherwise "none"}] [{try filler.get(0) otherwise "none"}]\n")
@@ -5412,7 +5412,7 @@ end 'grow'
 
 function main() returns ExitCode
 	let h = Holder.create()
-	var other = CountArray.create()
+	var other = CountArray.create(0)
 	let c = h.items.count() == 1
 	grow(h.items if c else other)
 	print("{h.items.count()}\n")
@@ -6618,7 +6618,7 @@ type Shelf uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function get(index ElementIndex) returns T throws ArrayError
@@ -6725,7 +6725,7 @@ end 'Array'
 typealias Points = Array with readonly Point
 
 function main() returns ExitCode
-	let ps = Points.create()
+	let ps = Points.create(0)
 	var q = ps.echo(Point.create(2))
 	q.n = 9
 	print("{q.n}\n")
@@ -6796,7 +6796,7 @@ end 'Array'
 typealias Points = Array with readonly Point
 
 function main() returns ExitCode
-	var ps = Points.create()
+	var ps = Points.create(0)
 	ps.push(Point.create(1))
 	var q = try ps.head() otherwise panic("one point")
 	q.n = 9
@@ -6854,7 +6854,7 @@ type Shelf uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function pick(fallback T) returns T
@@ -6908,7 +6908,7 @@ end 'Array'
 typealias Points = Array with readonly Point
 
 function main() returns ExitCode
-	var ps = Points.create()
+	var ps = Points.create(0)
 	ps.push(Point.create(1))
 	var q = try ps.front() otherwise panic("one point")
 	q.n = 9
@@ -6939,7 +6939,7 @@ type Shelf uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function getOr(index ElementIndex, fallback T) returns T
@@ -7226,7 +7226,7 @@ end 'Point'
 
 typealias Pts = Array with Point
 
-let Arr = Pts.create()
+let Arr = Pts.create(0)
 
 function bump(p Point)
 	p.n = 9

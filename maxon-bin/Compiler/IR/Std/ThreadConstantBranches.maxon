@@ -83,7 +83,7 @@ module type ThreadScratch
 	export var tally as StdPassTally
 
 	module static function create(tally StdPassTally) returns ThreadScratch
-		return Self{candidates: ThreadCandidateArray.create(), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), tally: tally}
+		return Self{candidates: ThreadCandidateArray.create(0), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), tally: tally}
 	end 'create'
 end 'ThreadScratch'
 
@@ -139,9 +139,9 @@ module function threadConstantBranchesInFunc(module StdModule, func IrFunction, 
 
 	var analysis = FunctionAnalysis.gather(module, func: func, scratch: scratch)
 	let bound = blockArgIdBound(module, func: func)
-	var argOwner = ValueIdArray.create()
+	var argOwner = ValueIdArray.create(0)
 	argOwner.resize(bound)
-	var argSlot = ValueIdArray.create()
+	var argSlot = ValueIdArray.create(0)
 	argSlot.resize(bound)
 
 	var admittedCount = 0 as ThreadedSiteCount
@@ -530,7 +530,7 @@ module function edgeArgsTo(join IrBlock, targetId BlockId, takesArgs bool) retur
 		panic("threadConstantBranches: block_{join.id} branches to block_{targetId}, which takes block args, but carries no edge to it")
 	end 'missingEdge'
 
-	return ValueIdArray.create()
+	return ValueIdArray.create(0)
 end 'edgeArgsTo'
 
 // Give one non-constant predecessor P the test: the compare on its own incoming value, a `condBranch`
@@ -551,7 +551,7 @@ function duplicateTestInto(module StdModule, pred IrBlock, candidate ThreadCandi
 	let elseId = candidate.droppedTarget if keptIsThen else candidate.blockId
 	try module.ops.set(predBlock.terminatorIndex(), value: StdOp.condBranch(condId, thenBlockId: thenId, elseBlockId: elseId)) otherwise panic("threadConstantBranches: ops.set OOB at terminator index {predBlock.terminatorIndex()}")
 
-	var edges = BranchEdgeArray.create()
+	var edges = BranchEdgeArray.create(0)
 	edges.push(BranchEdge.create(candidate.blockId, argIds: argsToJoin))
 
 	if droppedTakesArgs 'droppedTakesArgs'
@@ -565,7 +565,7 @@ end 'duplicateTestInto'
 // to that slot; anything else — including another join's block arg — is defined in a block dominating
 // C, hence P, and passes through.
 function substituteJoinArgs(argsToDropped ValueIdArray, incoming ValueIdArray, index ElementIndex, argOwner ValueIdArray, argSlot ValueIdArray) returns ValueIdArray
-	var substituted = ValueIdArray.create()
+	var substituted = ValueIdArray.create(0)
 
 	for argId in argsToDropped 'eachArg'
 		if not isOwnedByACandidate(argId, argOwner: argOwner) or candidateOwning(argId, argOwner: argOwner) != index 'definedAboveTheJoin'

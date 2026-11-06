@@ -59,7 +59,7 @@ end 'WorkspaceFolderDocument'
 export typealias WorkspaceFolderDocumentArray = Array with WorkspaceFolderDocument
 
 export function projectRootsFolders(first FilePath) returns WorkspaceFolderRootArray
-	var folders = WorkspaceFolderRootArray.create()
+	var folders = WorkspaceFolderRootArray.create(0)
 	folders.push(first)
 
 	return folders
@@ -73,7 +73,7 @@ export function projectRootsFolderPair(first FilePath, second FilePath) returns 
 end 'projectRootsFolderPair'
 
 export function projectRootsDocument(uri String, content String) returns WorkspaceFolderDocumentArray
-	var documents = WorkspaceFolderDocumentArray.create()
+	var documents = WorkspaceFolderDocumentArray.create(0)
 	documents.push(WorkspaceFolderDocument.create(uri, content: content))
 
 	return documents
@@ -205,8 +205,8 @@ end 'openProjectRootsSession'
 
 function removeTheSessionsFolders(client LspClient, session ProjectRootsSession) throws LspClientError
 	match session 'session'
-		atFoldersThenRemoved(folders) then try client.changeWorkspaceFolders(WorkspaceFolderRootArray.create(), removed: folders)
-		atFoldersThenSomeRemoved(_, removed) then try client.changeWorkspaceFolders(WorkspaceFolderRootArray.create(), removed: removed)
+		atFoldersThenRemoved(folders) then try client.changeWorkspaceFolders(WorkspaceFolderRootArray.create(0), removed: folders)
+		atFoldersThenSomeRemoved(_, removed) then try client.changeWorkspaceFolders(WorkspaceFolderRootArray.create(0), removed: removed)
 		atFolders or
 		unrooted then return
 	end 'session'
@@ -220,7 +220,7 @@ function followUpTheOpen(client LspClient, document WorkspaceFolderDocument) thr
 end 'followUpTheOpen'
 
 export function projectRootsPosition(position CorpusProbePoint) returns CorpusProbePointArray
-	var positions = CorpusProbePointArray.create()
+	var positions = CorpusProbePointArray.create(0)
 	positions.push(position)
 
 	return positions
@@ -252,13 +252,13 @@ function collectWorkspaceFolderDefinitions(client LspClient, initialFolders Work
 end 'collectWorkspaceFolderDefinitions'
 
 function workspaceFolderDefinitionsSession(client LspClient, initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions CorpusProbePointArray) returns CorpusDefinitionProbeArray throws LspClientError
-	var probes = CorpusDefinitionProbeArray.create()
+	var probes = CorpusDefinitionProbeArray.create(0)
 
 	_ = try client.initializeAtWorkspaceFolders(initialFolders)
 	try client.initialized()
 
 	if addedFolders.count() > 0 'announceTheAddition'
-		try client.changeWorkspaceFolders(addedFolders, removed: WorkspaceFolderRootArray.create())
+		try client.changeWorkspaceFolders(addedFolders, removed: WorkspaceFolderRootArray.create(0))
 	end 'announceTheAddition'
 
 	for document in documents 'eachDocument'
@@ -269,7 +269,7 @@ function workspaceFolderDefinitionsSession(client LspClient, initialFolders Work
 	probes.append(beforeTheRemoval)
 
 	if removedFolders.count() > 0 'announceTheRemoval'
-		try client.changeWorkspaceFolders(WorkspaceFolderRootArray.create(), removed: removedFolders)
+		try client.changeWorkspaceFolders(WorkspaceFolderRootArray.create(0), removed: removedFolders)
 
 		let afterTheRemoval = try corpusProbesAt(client, points: positions)
 		probes.append(afterTheRemoval)

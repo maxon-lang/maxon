@@ -199,8 +199,8 @@ end 'readPeSectionData'
 // `u16`/`u32` serve `enum-narrow-storage`'s ladder (`u16[] 100, 1000, 10000`); `f64` is the gate on the
 // eight bytes `3.14` actually lays down (`data-section-f64-*`).
 export function parseTypedSectionValues(block String) returns SectionPinExpectation throws TypedValueError
-	var out = ByteArray.create()
-	var payloads = ByteBlobArray.create()
+	var out = ByteArray.create(0)
+	var payloads = ByteBlobArray.create(0)
 
 	// Tracked rather than inferred from `out.count()`: an array line with no elements contributes zero
 	// bytes, and "a scalar line was written" is the question the mixed-form refusal asks.
@@ -374,7 +374,7 @@ function utf8PinBytes(valueText String) returns ByteArray throws TypedValueError
 
 	let raw = valueText.toByteArray()
 	let bodyEnd = raw.count() - 1
-	var out = ByteArray.create()
+	var out = ByteArray.create(0)
 	var i = 1 as ByteOffset
 
 	while i < bodyEnd as ByteOffset 'eachByte'
@@ -431,7 +431,7 @@ end 'pinEscapeByte'
 
 // How an escape reads back in a diagnostic — the backslash plus what followed it.
 function pinEscapeText(marker Byte) returns String
-	var text = ByteArray.create()
+	var text = ByteArray.create(0)
 	text.push(PinBackslash)
 	text.push(marker)
 	return String.from(text)
@@ -519,7 +519,7 @@ typealias TypedValueTypeArray = Array with TypedValueType
 
 // The roster itself, in the order the message lists it: narrowest first, signed before unsigned.
 function typedValueTypes() returns TypedValueTypeArray
-	var rows = TypedValueTypeArray.create()
+	var rows = TypedValueTypeArray.create(0)
 	rows.push(TypedValueType.create("i8", byteCount: 1))
 	rows.push(TypedValueType.create("u8", byteCount: 1))
 	rows.push(TypedValueType.create("i16", byteCount: 2))
@@ -535,7 +535,7 @@ end 'typedValueTypes'
 // The roster's names as the `unknownType` message lists them — the SECOND reader of the table, and the
 // reason the table exists at all.
 function typedValueTypeRoster() returns String
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 
 	for row in typedValueTypes() 'eachRow'
 		names.push(row.name)
@@ -576,7 +576,7 @@ end 'appendLittleEndian'
 // call out here, so the one spelling sits on the lower side.
 
 export function formatHexBytes(bytes ByteArray) returns String
-	var hexes = StringArray.create()
+	var hexes = StringArray.create(0)
 
 	for b in bytes 'each'
 		hexes.push(hexByte(b as MachineWord))

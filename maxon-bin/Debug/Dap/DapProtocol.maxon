@@ -109,7 +109,7 @@ export type DapObject
 	end 'object'
 
 	export function objects(key String) returns DapObjectArray throws DapArgumentError
-		var found = DapObjectArray.create()
+		var found = DapObjectArray.create(0)
 
 		for element in try self.elements(key) 'eachElement'
 			if self.doc.get(element).kind != JsonKind.jsonObject 'notAnObject'
@@ -123,7 +123,7 @@ export type DapObject
 	end 'objects'
 
 	export function texts(key String) returns StringArray throws DapArgumentError
-		var found = StringArray.create()
+		var found = StringArray.create(0)
 
 		for element in try self.elements(key) 'eachElement'
 			let value = self.doc.get(element)
@@ -167,7 +167,7 @@ export type DapObject
 
 	function elements(key String) returns JsonNodeIdArray throws DapArgumentError
 		if not self.has(key) 'absent'
-			return JsonNodeIdArray.create()
+			return JsonNodeIdArray.create(0)
 		end 'absent'
 
 		let child = try self.doc.getChild(self.node, key: key) otherwise throw DapArgumentError.missing(key)
@@ -206,7 +206,7 @@ export type DapRequest
 			throw DapProtocolError.notARequest
 		end 'notASequenceNumber'
 
-		let arguments = try doc.getChild(doc.root, key: ArgumentsKey) otherwise doc.add(JsonNode.objectNode(StringArray.create(), children: JsonNodeIdArray.create()))
+		let arguments = try doc.getChild(doc.root, key: ArgumentsKey) otherwise doc.add(JsonNode.objectNode(StringArray.create(0), children: JsonNodeIdArray.create(0)))
 
 		if doc.get(arguments).kind != JsonKind.jsonObject 'argumentsNotAnObject'
 			throw DapProtocolError.notARequest

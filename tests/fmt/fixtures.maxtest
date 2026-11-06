@@ -143,7 +143,7 @@ typealias RelativePathSet = Set with String
 test 'every fixture case is invoked by name'
 	let source = fileText(readableFile("{ProjectDirName}/{SharedHelperFileName}"))
 
-	var uninvoked = StringArray.create()
+	var uninvoked = StringArray.create(0)
 
 	for caseName in fixtureCaseNames() 'eachCase'
 		if not source.contains("checkFixture(\"{caseName}\")") 'neverInvoked'
@@ -174,7 +174,7 @@ end 'every fixture case is invoked by name'
 test 'no fixture is stored as a source maxon fmt would rewrite'
 	let corpus = fixtureDir(ProjectDirName)
 	let marker = corpus.join(CorpusProjectFileName).toString()
-	var offending = StringArray.create()
+	var offending = StringArray.create(0)
 
 	for source in sourcePathsEndingWith(corpus, suffixes: [MaxonSourceSuffix, ProjectFileSuffix, TaskFileSuffix]) 'eachLive'
 		if source != marker 'notTheMarker'
@@ -210,7 +210,7 @@ test 'an option ahead of the command word is still refused'
 
 	let before = fileText(staged.join("Ugly.maxon"))
 
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 	arguments.push("--emit-ir")
 	arguments.push(TestedCommandName)
 	let run = spawnCompiler(arguments, staged: staged, what: "the option-ahead-of-command probe")
@@ -357,7 +357,7 @@ type FixtureCase
 	// that is not a half-written fixture: `no-argument-defaults-to-cwd` is precisely the case where
 	// `fmt` is given nothing and must fall back to the working directory.
 	function argv() returns StringArray
-		var extras = StringArray.create()
+		var extras = StringArray.create(0)
 
 		let path = self.dir.join("{ExtraArgvFileName}")
 
@@ -387,7 +387,7 @@ type FixtureCase
 	// is `fmt` answering wrongly, and a report that made them read alike would send a reader looking
 	// for a defect in the thing that never ran.
 	function spawn() returns CollectedOutput
-		var arguments = StringArray.create()
+		var arguments = StringArray.create(0)
 		arguments.push(TestedCommandName)
 
 		for extra in argv() 'eachExtra'
@@ -459,8 +459,8 @@ type FixtureCase
 	function checkTree(runLabel String) throws TestFailure
 		let expectedTree = fixtureDir("{self.dir.toString()}/{ExpectedTreeDirName}")
 
-		var missing = StringArray.create()
-		var different = StringArray.create()
+		var missing = StringArray.create(0)
+		var different = StringArray.create(0)
 		var expectedPaths = RelativePathSet.create()
 
 		for storedRelative in relativeFilePathsUnder(expectedTree, prefix: "") 'eachExpected'
@@ -482,7 +482,7 @@ type FixtureCase
 			end 'differentBytes'
 		end 'eachExpected'
 
-		var unexpected = StringArray.create()
+		var unexpected = StringArray.create(0)
 
 		for relative in relativeFilePathsUnder(self.staged, prefix: "") 'eachStaged'
 			if not expectedPaths.contains(relative) 'notInTheOracle'
@@ -653,7 +653,7 @@ end 'listedUnder'
 // Directories are descended into unconditionally — `.git` and `.maxonignore` included, since
 // whether `fmt` respected those is exactly what the tree is being compared to find out.
 function relativeFilePathsUnder(root FilePath, prefix String) returns StringArray
-	var found = StringArray.create()
+	var found = StringArray.create(0)
 
 	for entry in listing(root) 'eachEntry'
 		let name = entry.filename()
@@ -696,7 +696,7 @@ end 'joinRelative'
 // Files sitting at the corpus root are not cases and are not listed: a note beside the directories
 // (`census-sources.txt`) is not a fixture.
 function fixtureCaseNames() returns StringArray
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 
 	for entry in listing(fixtureDir(FixturesDirName)) 'eachEntry'
 		if Directory.isDirectory(entry) 'aCase'
@@ -1084,7 +1084,7 @@ end 'formatting real sources keeps every comment, every doc comment and every li
 function stageEveryCensusSource() returns CensusSourceArray
 	let stagingRoot = freshStagingDir(CensusStagingDirName)
 
-	var staged = CensusSourceArray.create()
+	var staged = CensusSourceArray.create(0)
 
 	for origin in censusRosterPaths() 'eachOrigin'
 		let body = fileText(censusSourcePath(origin))
@@ -1107,7 +1107,7 @@ function censusRosterPaths() returns StringArray
 	let path = try FilePath.from(CensusSourceListFileName) otherwise panic("fmt-fixtures.test: the gate could not run — '{CensusSourceListFileName}' is not a spellable path")
 	let text = fileText(path)
 
-	var paths = StringArray.create()
+	var paths = StringArray.create(0)
 
 	for line in text.split(LineFeed) 'eachLine'
 		let entry = line.trim()
@@ -1141,7 +1141,7 @@ function stagedCensusNameFor(origin String) returns String
 end 'stagedCensusNameFor'
 
 export function spawnFmtOverStagedTree(stagingDirName String, what String) returns CollectedOutput
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 	arguments.push(TestedCommandName)
 	arguments.push(StagedTreeArgument)
 

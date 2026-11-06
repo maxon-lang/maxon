@@ -62,7 +62,7 @@ export type Arm64RuntimeAsm
 	//
 	// AAPCS64 puts the first eight arguments in registers, and every chunk opened here stays inside them.
 	export static function beginFunction(slots StackSize) returns Arm64RuntimeAsm
-		return Self.openFrame(ByteArray.create(), callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), slots: slots, outgoingArgBytes: NoOutgoingArgRegion)
+		return Self.openFrame(ByteArray.create(0), callFixups: CallFixupArray.create(0), rdataRelocs: RdataRelocationArray.create(0), slots: slots, outgoingArgBytes: NoOutgoingArgRegion)
 	end 'beginFunction'
 
 	// Open a function whose first bytes, `entry`, run BEFORE its frame record exists — x64's
@@ -77,7 +77,7 @@ export type Arm64RuntimeAsm
 	// up by exactly that region, which is the shape `Arm64PrologueEpilogue`'s `recordOffset` already gives a
 	// compiled function.
 	export static function beginVariadicCallerFunction(slots StackSize) returns Arm64RuntimeAsm
-		return Self.openFrame(ByteArray.create(), callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), slots: slots, outgoingArgBytes: OneOutgoingArgWord)
+		return Self.openFrame(ByteArray.create(0), callFixups: CallFixupArray.create(0), rdataRelocs: RdataRelocationArray.create(0), slots: slots, outgoingArgBytes: OneOutgoingArgWord)
 	end 'beginVariadicCallerFunction'
 
 	static function openFrame(entry ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, slots StackSize, outgoingArgBytes StackSize) returns Arm64RuntimeAsm
@@ -89,9 +89,9 @@ export type Arm64RuntimeAsm
 		return Self{
 			code: code,
 			callFixups: callFixups,
-			iatRelocs: RelocationArray.create(),
+			iatRelocs: RelocationArray.create(0),
 			rdataRelocs: rdataRelocs,
-			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
+			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(0),
 			labelOffsets: BlockOffsetTable.create(),
 			branches: Arm64BlockBranches.create(),
 			nextLabel: 0,
@@ -121,11 +121,11 @@ export type Arm64RuntimeAsm
 	// morestack runs off the chain entirely. `mrt_start` is frameless for the same class of reason.
 	export static function beginRawFunction() returns Arm64RuntimeAsm
 		return Self{
-			code: ByteArray.create(),
-			callFixups: CallFixupArray.create(),
-			iatRelocs: RelocationArray.create(),
-			rdataRelocs: RdataRelocationArray.create(),
-			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
+			code: ByteArray.create(0),
+			callFixups: CallFixupArray.create(0),
+			iatRelocs: RelocationArray.create(0),
+			rdataRelocs: RdataRelocationArray.create(0),
+			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(0),
 			labelOffsets: BlockOffsetTable.create(),
 			branches: Arm64BlockBranches.create(),
 			nextLabel: 0,

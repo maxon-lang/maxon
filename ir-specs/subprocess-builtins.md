@@ -45,7 +45,7 @@ let quietWakes = 16
 let pollerParks = 1
 
 function main() returns ExitCode
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("sleep 1; echo hi")
 	let before = Scheduler.counters()

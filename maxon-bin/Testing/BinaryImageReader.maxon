@@ -60,7 +60,7 @@ end 'spanFitsWithin'
 // against the file's real length first and reports a `truncated` error naming the image, so a bad
 // range here is a bug in the reader, not a malformed input.
 export function imageSlice(image ByteArray, start ByteOffset, count BytePos) returns ByteArray
-	var out = ByteArray.create()
+	var out = ByteArray.create(0)
 
 	for i in 0 upto count 'each'
 		out.push(try image.get(start + i) otherwise panic("imageSlice: get OOB at {start + i} — the caller is required to have checked spanFitsWithin(start, count) first"))
@@ -80,7 +80,7 @@ end 'imageSlice'
 // a name that does not fit in the file is not a name, and every caller is comparing against a
 // known section name, so "" simply never matches and the walk moves on.
 export function imageNameIs(image ByteArray, at ByteOffset, maxBytes BytePos, name String) returns bool
-	var read = ByteArray.create()
+	var read = ByteArray.create(0)
 
 	for i in 0 upto maxBytes 'each'
 		let b = try image.get(at + i) otherwise return false

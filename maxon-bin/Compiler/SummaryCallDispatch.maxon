@@ -104,9 +104,9 @@ end 'functionValueBodiesKey'
 module function callSiteWalkOrder(ir MaxonModule, func IrFunction) returns BlockPositionColumn
 	let blockCount = func.blockRefs.count()
 	let byId = ir.blockIndexById(func)
-	var edgeFrom = CsrColumn.create()
-	var edgeTo = CsrColumn.create()
-	var successors = BlockIdArray.create()
+	var edgeFrom = CsrColumn.create(0)
+	var edgeTo = CsrColumn.create(0)
+	var successors = BlockIdArray.create(0)
 
 	for position in 0 upto blockCount 'eachBlock'
 		let block = ir.blockAtPosition(func, position: position)
@@ -120,7 +120,7 @@ module function callSiteWalkOrder(ir MaxonModule, func IrFunction) returns Block
 	end 'eachBlock'
 
 	var order = StdDominatorTree.reversePostorder(buildCsr(edgeFrom, to: edgeTo, nodeCount: blockCount as CsrIndex), blockCount: blockCount)
-	var reached = BoolArray.create()
+	var reached = BoolArray.create(0)
 	reached.growFilled(blockCount, value: false)
 
 	for position in order 'eachReached'
@@ -168,7 +168,7 @@ end 'dispatchNamedCall'
 
 module function dispatchLandingCall(walker SummaryCallWalker, func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, bodies CallLandingBodies)
 	var cursor = walker.callSiteCursor()
-	let noRanges = SourceRangeArray.create()
+	let noRanges = SourceRangeArray.create(0)
 
 	if bodies.unresolvedMayStore 'aBodyMayStoreAnything'
 		storeThroughRuntimeShape(walker, func: func, args: args, shape: RuntimeStoreShape.intoAnyOperand, opIdx: opIdx)
@@ -223,8 +223,8 @@ end 'storeThroughRuntimeShape'
 module function settleSummaries(project Project, order CsrColumn, bodies SummarizedBodies, dependencies CallDependencies) throws CompileError
 	let funcCount = order.count()
 	let ranks = ranksOf(order)
-	var worklist = FuncIndexArray.create()
-	var queued = BoolArray.create()
+	var worklist = FuncIndexArray.create(0)
+	var queued = BoolArray.create(0)
 	queued.refill(funcCount, value: false)
 
 	for i in order 'firstTrace'
@@ -245,7 +245,7 @@ module function settleSummaries(project Project, order CsrColumn, bodies Summari
 	end 'firstTrace'
 
 	let callersByCallee = buildCsr(dependencies.callees, to: dependencies.callers, nodeCount: funcCount as CsrIndex)
-	var stale = BoolArray.create()
+	var stale = BoolArray.create(0)
 	stale.refill(funcCount, value: false)
 
 	for calleeIndex in worklist 'eachFirstPassGrowth'
@@ -296,7 +296,7 @@ function markCallersStale(callersByCallee CsrGraph, calleeIndex ElementIndex, th
 end 'markCallersStale'
 
 function ranksOf(order CsrColumn) returns CsrColumn
-	var ranks = CsrColumn.create()
+	var ranks = CsrColumn.create(0)
 	ranks.resize(order.count())
 
 	for (iter, index) in order.withIterator() 'eachPosition'
@@ -313,8 +313,8 @@ end 'rankAt'
 // A postorder of the call graph, so the first pass traces a callee before its callers and leaves a
 // caller stale only across a call cycle's back edge.
 module function calleesFirstOrder(module MaxonModule, funcNames FunctionNameIndex) returns CsrColumn
-	var callers = CsrColumn.create()
-	var callees = CsrColumn.create()
+	var callers = CsrColumn.create(0)
+	var callees = CsrColumn.create(0)
 
 	for (iter, func) in module.functions.withIterator() 'eachFunction'
 		for blockRef in func.blockRefs 'eachBlock'
@@ -345,7 +345,7 @@ module type CallDependencies
 	export var callers as CsrColumn
 
 	module static function create() returns CallDependencies
-		return Self{recording: false, caller: 0, callees: CsrColumn.create(), callers: CsrColumn.create()}
+		return Self{recording: false, caller: 0, callees: CsrColumn.create(0), callers: CsrColumn.create(0)}
 	end 'create'
 
 	module function recordFor(callerIndex ElementIndex)
@@ -438,7 +438,7 @@ module type CallSummaryIndex
 	var instanceSharesFunctions as InstanceRecordMemo
 
 	module static function create(project Project, module MaxonModule, signatures ProgramSignatures, funcIndexByName FuncIndexByName, funcCount ElementIndex) returns CallSummaryIndex
-		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, sites: CallSites.create(funcCount), conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: CallLandingBodies.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), callbackFlows: CallbackFlows.create(), functionRefBodiless: NameRoster.create(), functionRefNames: FunctionRefNamesByFunc.create(), instanceHoldsARecord: InstanceRecordMemo.create(), instanceSharesFunctions: InstanceRecordMemo.create()}
+		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, sites: CallSites.create(funcCount), conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: CallLandingBodies.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), callbackFlows: CallbackFlows.create(), functionRefBodiless: NameRoster.create(0), functionRefNames: FunctionRefNamesByFunc.create(), instanceHoldsARecord: InstanceRecordMemo.create(), instanceSharesFunctions: InstanceRecordMemo.create()}
 	end 'create'
 
 	module function classifyCallee(func IrFunction, callee ByteArray) returns CalleeClass
@@ -499,7 +499,7 @@ module type CallSummaryIndex
 
 		if let aliasShape = try registry.aliasShapes.get(typeName) 'aDeclaredBoundary'
 			let alias = try self.project.functionTypeAliases.get(typeName) otherwise panic("CallSummaryIndex.functionValueKeeps: '{String.from(typeName)}' has a shape but no alias")
-			var names = NameRoster.create()
+			var names = NameRoster.create(0)
 
 			for param in alias.paramTypes 'eachParameter'
 				names.push(param.name)
@@ -664,7 +664,7 @@ module type CallSummaryIndex
 
 		self.functionRefBodiesGathered = true
 		var bodies = CallLandingBodies.create()
-		var named = BoolArray.create()
+		var named = BoolArray.create(0)
 		named.refill(self.module.functions.count(), value: false)
 
 		for op in self.module.ops 'eachOp'
@@ -744,7 +744,7 @@ module type CallSiteCursor
 	var argFills as BoolArray
 
 	module static function create(resolution CallSummaryIndex) returns CallSiteCursor
-		return Self{resolution: resolution, dependencies: CallDependencies.create(), firstRow: 0, cursor: 0, resolving: false, argPositions: ParamCountArray.create(), argFills: BoolArray.create()}
+		return Self{resolution: resolution, dependencies: CallDependencies.create(), firstRow: 0, cursor: 0, resolving: false, argPositions: ParamCountArray.create(0), argFills: BoolArray.create(0)}
 	end 'create'
 
 	module function beginWalk(index ElementIndex)

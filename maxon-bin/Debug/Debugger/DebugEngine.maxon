@@ -338,7 +338,7 @@ export type DebugEngine implements DebugMemory
 		end 'adopted'
 
 		var contract = DebugRuntimeContract.readFrom(reader, textBytes: textBytes, placement: placement)
-		var engine = Self{pin: pin, launched: launched, backend: backend, target: target, contract: contract, stopTimeoutMs: stopTimeoutMs, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), returnPoints: DebugReturnPointArray.create(), textBase: contract.textBase(), textSize: contract.textSize(), cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace, routing: routing, registers: DebugRegisterFile.create(), stopThread: 0, stopped: false, answeredUnder: 0, liftedTraps: EngineLiftedTrapArray.create(), attachment: EngineAttachment.attached, closed: false, holdArmed: false, lastReason: 0, lastFault: 0, lastPc: 0, lastConditionMissed: false, pausePending: false, readerStep: EngineReaderStep.none}
+		var engine = Self{pin: pin, launched: launched, backend: backend, target: target, contract: contract, stopTimeoutMs: stopTimeoutMs, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(0), returnPoints: DebugReturnPointArray.create(0), textBase: contract.textBase(), textSize: contract.textSize(), cacheBase: 0, cacheBytes: ByteArray.create(0), cacheFilled: false, trace: trace, routing: routing, registers: DebugRegisterFile.create(), stopThread: 0, stopped: false, answeredUnder: 0, liftedTraps: EngineLiftedTrapArray.create(0), attachment: EngineAttachment.attached, closed: false, holdArmed: false, lastReason: 0, lastFault: 0, lastPc: 0, lastConditionMissed: false, pausePending: false, readerStep: EngineReaderStep.none}
 
 		return engine.awaitEntryStop()
 	end 'start'
@@ -573,7 +573,7 @@ export type DebugEngine implements DebugMemory
 
 	function readDebuggeeBytes(address DebugAddress, length EngineReadLength) returns ByteArray throws DebugMemoryError
 		if length == 0 'nothingAsked'
-			return ByteArray.create()
+			return ByteArray.create(0)
 		end 'nothingAsked'
 
 		if not self.cacheCovers(address, length: length) 'notHeld'
@@ -592,7 +592,7 @@ export type DebugEngine implements DebugMemory
 	end 'cacheCovers'
 
 	function slicedCache(address DebugAddress, length EngineReadLength) returns ByteArray
-		var taken = ByteArray.create()
+		var taken = ByteArray.create(0)
 		let start = address - self.cacheBase
 
 		for i in 0 upto length 'eachByte'
@@ -764,7 +764,7 @@ export type DebugEngine implements DebugMemory
 	end 'breakpointAt'
 
 	export function standingBreakpointOffsets() returns DebugAddressArray
-		var standing = DebugAddressArray.create()
+		var standing = DebugAddressArray.create(0)
 
 		for breakpoint in self.breakpoints 'eachBreakpoint'
 			standing.push(breakpoint.offset)
@@ -779,7 +779,7 @@ export type DebugEngine implements DebugMemory
 	end 'recordBreakpoint'
 
 	function forgetBreakpoint(offset DebugAddress)
-		var kept = EngineBreakpointArray.create()
+		var kept = EngineBreakpointArray.create(0)
 
 		for breakpoint in self.breakpoints 'eachBreakpoint'
 			if breakpoint.offset != offset 'anotherOne'
@@ -813,7 +813,7 @@ export type DebugEngine implements DebugMemory
 	end 'plantReturnPoint'
 
 	module function rebaseReturnPoint(greenThread DebugAddress, from DebugAddress, to DebugAddress)
-		var kept = DebugReturnPointArray.create()
+		var kept = DebugReturnPointArray.create(0)
 
 		for standing in self.returnPoints 'eachPoint'
 			kept.push(standing.movedWith(greenThread, from: from, to: to))
@@ -841,7 +841,7 @@ export type DebugEngine implements DebugMemory
 	// roster that still names the point leaves a live `int3` in the debuggee.
 	export function liftReturnPoint() returns CommandOutcome
 		view standing = self.returnPoints
-		self.returnPoints = DebugReturnPointArray.create()
+		self.returnPoints = DebugReturnPointArray.create(0)
 		var outcome = CommandOutcome.done
 
 		for point in standing 'eachPoint'
@@ -974,7 +974,7 @@ export type DebugEngine implements DebugMemory
 	end 'liftedTrapOn'
 
 	function forgetLiftedTrap(thread BackendThreadId)
-		var kept = EngineLiftedTrapArray.create()
+		var kept = EngineLiftedTrapArray.create(0)
 
 		for lifted in self.liftedTraps 'eachLifted'
 			if lifted.thread != thread 'anotherThread'
@@ -1343,7 +1343,7 @@ export type DebugEngine implements DebugMemory
 	// resume lets the threads its step held run past the address.
 	function departedSteppersReconciled()
 		let live = self.backend.listThreads()
-		var departed = EngineLiftedTrapArray.create()
+		var departed = EngineLiftedTrapArray.create(0)
 
 		for lifted in self.liftedTraps 'eachLifted'
 			if not backendRosterHolds(live, thread: lifted.thread) 'itsStepperLeft'
@@ -1477,8 +1477,8 @@ export type DebugEngine implements DebugMemory
 	// --- the frame-pointer walk, host-side ---
 
 	function walkedFrom(frame DebugAddress) returns EngineWalk
-		var returnPcs = DebugAddressArray.create()
-		var cursors = DebugAddressArray.create()
+		var returnPcs = DebugAddressArray.create(0)
+		var cursors = DebugAddressArray.create(0)
 		var cursor = frame
 		var truncated = false
 		var outer = 0 as DebugAddress
@@ -1617,10 +1617,10 @@ export type DebugEngine implements DebugMemory
 		let length = self.contractWord(String.from(GtAllGLenLabel))
 
 		if roster <= 0 or length <= 0 'noRosterYet'
-			return GreenThreadListing.listed(DebugGreenThreadArray.create(), truncated: false)
+			return GreenThreadListing.listed(DebugGreenThreadArray.create(0), truncated: false)
 		end 'noRosterYet'
 
-		var records = DebugGreenThreadArray.create()
+		var records = DebugGreenThreadArray.create(0)
 
 		for index in 0 upto length 'eachSlot'
 			let gt = debugAddressOrZero(self.wordAt((roster as DebugAddress) + (index as DebugAddress) * (DebuggeeWordBytes as DebugAddress)))
@@ -1819,7 +1819,7 @@ end 'wordIn'
 // The walk records one (return address, frame pointer) pair per frame; a frame's CALLER frame pointer is
 // the next frame's own, and the outermost one is the link the walk did not take.
 function callersOf(cursors DebugAddressArray, outer DebugAddress) returns DebugAddressArray
-	var callers = DebugAddressArray.create()
+	var callers = DebugAddressArray.create(0)
 
 	for (iter, _) in cursors.withIterator() 'eachFrame'
 		if iter.index() + 1 < cursors.count() 'hasAnOuterFrame'

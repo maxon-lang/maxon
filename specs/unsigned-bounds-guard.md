@@ -147,7 +147,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(10)
 	a.push(20)
 	a.push(30)
@@ -209,7 +209,7 @@ function readAt(a IntArray, i Int) returns Int
 end 'readAt'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(11)
 	a.push(22)
 	a.push(33)
@@ -252,7 +252,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(1)
 	a.push(2)
 
@@ -308,12 +308,12 @@ function probe(a IntArray) returns Int
 end 'probe'
 
 function main() returns ExitCode
-	var fresh = IntArray.create()
+	var fresh = IntArray.create(0)
 	if probe(fresh) != 0 'freshAdmittedSomething'
 		return 1
 	end 'freshAdmittedSomething'
 
-	var emptied = IntArray.create()
+	var emptied = IntArray.create(0)
 	emptied.push(7)
 	emptied.push(8)
 	emptied.clear()
@@ -344,7 +344,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	for i in 0 upto 5 'seed'
 		a.push(i * 10)
 	end 'seed'
@@ -407,7 +407,7 @@ function launder(n Int) returns Int
 end 'launder'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(10)
 	a.push(20)
 	a.push(30)
@@ -444,7 +444,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	for _ in 0 upto 4 'seed'
 		a.push(0)
 	end 'seed'
@@ -490,7 +490,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(1)
 	a.push(1)
 	a.push(1)
@@ -533,7 +533,7 @@ typealias Byte = int(0 to 255)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(1)
 	b.push(2)
 	b.push(3)

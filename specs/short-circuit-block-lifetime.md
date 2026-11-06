@@ -81,7 +81,7 @@ type Module
 	var blocks as BlkArray
 
 	static function create() returns Module
-		return Module{blocks: BlkArray.create()}
+		return Module{blocks: BlkArray.create(0)}
 	end 'create'
 
 	function addBlock(i Num) returns Blk

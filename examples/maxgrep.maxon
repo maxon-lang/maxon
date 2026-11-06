@@ -78,7 +78,7 @@ end 'UsageError'
 
 type Options
 	var pattern = ""
-	export var paths = PathArray.create()
+	export var paths = PathArray.create(0)
 	var jobs = fewestWorkers as WorkerCount
 	var ignoreCase = false
 	var invertMatch = false
@@ -366,7 +366,7 @@ type FixedMatcher implements Matcher
 	var fold as ByteFold
 
 	static function create(patternText String, fold ByteFold) returns Self
-		var needle = ByteArray.create()
+		var needle = ByteArray.create(0)
 
 		for b in patternText.bytes() 'eachByte'
 			needle.push(fold.apply(b))
@@ -410,7 +410,7 @@ type RegexMatcher implements Matcher
 
 	static function compile(patternText String, fold ByteFold) returns Self throws PatternError
 		let source = patternText.toByteArray()
-		var pieces = PieceArray.create()
+		var pieces = PieceArray.create(0)
 		let anchoredAtStart = not source.isEmpty() and byteAt(source, position: 0) == '^'
 		var anchoredAtEnd = false
 		var cursor = (1 if anchoredAtStart else 0) as BufferPos
@@ -508,7 +508,7 @@ end 'LineMatch'
 type FileReport
 	export var isBinary as bool
 	export var selectedCount = 0 as MatchCount
-	export var lines = LineMatchArray.create()
+	export var lines = LineMatchArray.create(0)
 
 	static function create(isBinary bool) returns Self
 		return Self{isBinary: isBinary}
@@ -588,7 +588,7 @@ enum WalkError implements Error
 end 'WalkError'
 
 function walkTree(root FilePath) returns PathArray throws WalkError
-	var files = PathArray.create()
+	var files = PathArray.create(0)
 
 	if Directory.isDirectory(root) 'directory'
 		collectFiles(root, files: files)
@@ -698,7 +698,7 @@ end 'printUsage'
 
 function searchStandardInput(searcher Searcher, style OutputStyle, summary RunSummary)
 	var stdin = Console.stdin()
-	var buffer = ByteArray.create()
+	var buffer = ByteArray.create(0)
 
 	while true 'eachLine'
 		let line = try stdin.readLine() otherwise break
@@ -712,13 +712,13 @@ function searchStandardInput(searcher Searcher, style OutputStyle, summary RunSu
 end 'searchStandardInput'
 
 function findFiles(options Options, summary RunSummary) returns PathArray
-	var walks = WalkPromiseArray.create()
+	var walks = WalkPromiseArray.create(0)
 
 	for root in options.paths 'startWalks'
 		walks.push(async walkTree(root))
 	end 'startWalks'
 
-	var files = PathArray.create()
+	var files = PathArray.create(0)
 
 	for (walk, found) in walks.withIterator() 'finishWalks'
 		view tree = try await found otherwise 'unreadable'
@@ -744,13 +744,13 @@ function submitSearch(replies ReportPromiseArray, searcher Searcher.handle, path
 end 'submitSearch'
 
 function searchFiles(files PathArray, request SearchRequest, style OutputStyle, workers WorkerCount, summary RunSummary)
-	var searchers = SearcherArray.create()
+	var searchers = SearcherArray.create(0)
 
 	for _ in 1 to workers 'spawnWorkers'
 		searchers.push(spawn Searcher.create(request.clone()))
 	end 'spawnWorkers'
 
-	var replies = ReportPromiseArray.create()
+	var replies = ReportPromiseArray.create(0)
 	var nextWorker = 0 as ElementIndex
 
 	for path in files 'sendFiles'

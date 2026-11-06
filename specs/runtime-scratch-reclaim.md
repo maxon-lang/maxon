@@ -177,7 +177,7 @@ function shell() returns Executable
 end 'shell'
 
 function exitZero() returns StringArray
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	#if os(Windows)
 	argv.push("/c")
 	#else
@@ -193,7 +193,7 @@ function childRuns() returns bool
 end 'childRuns'
 
 function executableMissing() returns bool
-	_ = try Subprocess.run(Executable.path(Directory.currentPath().join("maxon-spec-no-such-executable-xyzzy")), arguments: StringArray.create()) otherwise return true
+	_ = try Subprocess.run(Executable.path(Directory.currentPath().join("maxon-spec-no-such-executable-xyzzy")), arguments: StringArray.create(0)) otherwise return true
 	return false
 end 'executableMissing'
 

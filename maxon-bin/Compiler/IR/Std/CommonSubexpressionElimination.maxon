@@ -103,7 +103,7 @@ end 'commonSubexpressionEliminationHeadline'
 // no rewrite, no block rebuild and no prune. `recordValueSubstitution` always extends the column by at
 // least the slot it writes, so an empty column is an exact test for "found nothing".
 module function eliminateInFunc(module StdModule, func IrFunction, scratch CseScratch)
-	var subst = ValueIdArray.create()
+	var subst = ValueIdArray.create(0)
 
 	// ⛔⛔ **THE FUNCTION BOUNDARY IS ITSELF A TABLE SCOPE, AND IT IS NOT BELT-AND-BRACES — IT IS WHAT
 	// KEEPS A MISCOMPILE OUT.** A `ValueId` is FUNCTION-LOCAL, so an entry left in the table by the previous function
@@ -190,7 +190,7 @@ type CseScopeStack
 	var callsOnEntry as CallBarrierCountColumn
 
 	static function create() returns CseScopeStack
-		return Self{entryMark: CseEntryIndexColumn.create(), callsOnEntry: CallBarrierCountColumn.create()}
+		return Self{entryMark: CseEntryIndexColumn.create(0), callsOnEntry: CallBarrierCountColumn.create(0)}
 	end 'create'
 
 	// Open a scope for one block: remember what leaving it must restore, then analyse it. Both marks
@@ -494,7 +494,7 @@ module type CseExpressionTable
 	export var callsOnPath as CallBarrierCount
 
 	static function create() returns CseExpressionTable
-		return Self{bucketHasEntry: BoolArray.create(), bucketHead: CseEntryIndexColumn.create(), entryBucket: CseBucketIndexColumn.create(), entryOpIndex: OpIndexArray.create(), entryNext: CseEntryIndexColumn.create(), entryCalls: CallBarrierCountColumn.create(), bucketCount: SmallestUsefulBucketCount, callsOnPath: 0}
+		return Self{bucketHasEntry: BoolArray.create(0), bucketHead: CseEntryIndexColumn.create(0), entryBucket: CseBucketIndexColumn.create(0), entryOpIndex: OpIndexArray.create(0), entryNext: CseEntryIndexColumn.create(0), entryCalls: CallBarrierCountColumn.create(0), bucketCount: SmallestUsefulBucketCount, callsOnPath: 0}
 	end 'create'
 
 	// ⭐⭐ **A CALL IS A BARRIER TO REUSE, AND THIS IS THE RULE THAT KEEPS CROSS-BLOCK CSE FROM TURNING A

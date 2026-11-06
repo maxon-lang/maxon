@@ -96,7 +96,7 @@ type Sleeper
 	var held as HeldArray
 
 	static function create() returns Self
-		return Self{held: HeldArray.create()}
+		return Self{held: HeldArray.create(0)}
 	end 'create'
 
 	export function arm() returns Integer
@@ -163,7 +163,7 @@ type Holder
 	var held as HeldArray
 
 	static function create() returns Self
-		return Self{held: HeldArray.create()}
+		return Self{held: HeldArray.create(0)}
 	end 'create'
 
 	export function arm() returns Integer
@@ -282,7 +282,7 @@ type Holder
 
 	static function create() returns Self
 		let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise panic("a loopback bind on an ephemeral port succeeds")
-		return Self{pending: IntPromiseArray.create(), listener: listener}
+		return Self{pending: IntPromiseArray.create(0), listener: listener}
 	end 'create'
 
 	export function arm()

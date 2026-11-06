@@ -7,9 +7,9 @@ let SlotLocationMark = "[rbp-"
 
 test 'a let that shadows an outer let in a nested block is not read after the block ends'
 	let staged = builtFixture(ScopeEndCaseLabel, fixture: ScopeShadowFixtureName)
-	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create(0))
 	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
-	var slotPlaces = StringArray.create()
+	var slotPlaces = StringArray.create(0)
 
 	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
 		if firstToken(row) == ShadowingLocalName and row.contains(SlotLocationMark) and not slotPlaces.contains(placeOfRow(row)) 'anotherSlot'
@@ -21,7 +21,7 @@ test 'a let that shadows an outer let in a nested block is not read after the bl
 
 	let afterAt = anchorLine(staged.join(StagedProgramFileName), anchor: "after")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(afterAt)}", RunCommand, "{PrintCommand} {ShadowingLocalName}"])
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let answers = eventsOfKind(events, kind: ValueEventName)

@@ -140,7 +140,7 @@ export type StdPassWorker
 	var probe as PhaseProbe
 
 	static function create(cpu CpuArch, os Os, steps StdFanOutStepArray) returns Self
-		return Self{reducesDivision: targetLowersMulHigh(cpu), budget: hoistPressureBudgetFor(Target.create(cpu, os: os)), schedule: steps, steps: StepWorkspaceArray.create(), tallies: StdPassTallyArray.create(), costs: PoolPhaseCosts.create(steps.count()), probe: PhaseProbe.beginCounters()}
+		return Self{reducesDivision: targetLowersMulHigh(cpu), budget: hoistPressureBudgetFor(Target.create(cpu, os: os)), schedule: steps, steps: StepWorkspaceArray.create(0), tallies: StdPassTallyArray.create(0), costs: PoolPhaseCosts.create(steps.count()), probe: PhaseProbe.beginCounters()}
 	end 'create'
 
 	function prepareWorkspaces()
@@ -252,7 +252,7 @@ export type StdPassWorkerReport
 	export var tallies as StdPassTallyArray
 
 	module static function of(costs PoolPhaseCosts, tallies StdPassTallyArray) returns StdPassWorkerReport
-		var copies = StdPassTallyArray.create()
+		var copies = StdPassTallyArray.create(0)
 
 		for tally in tallies 'eachStep'
 			copies.push(StdPassTally.copyOf(tally))
@@ -275,18 +275,18 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 		compilerLogger(CompilerLogGroup.codegen).debug(sizing.line(PoolKind.stdFanOut))
 	end 'debugging'
 
-	var tallies = StdPassTallyArray.create()
+	var tallies = StdPassTallyArray.create(0)
 
 	for _ in members 'eachStep'
 		tallies.push(StdPassTally.create())
 	end 'eachStep'
 
-	var landedOrigins = DerivedOriginsArray.create()
+	var landedOrigins = DerivedOriginsArray.create(0)
 	var slots = LandingSlots.create(funcCount)
 
 	if funcCount > 0 'somethingToRun'
 		let poolSize = workerCount as PoolSize
-		var workers = StdPassWorkerHandleArray.create()
+		var workers = StdPassWorkerHandleArray.create(0)
 
 		for _ in 0 upto workerCount 'eachWorker'
 			workers.push(spawn StdPassWorker.create(project.target.cpu, os: project.target.os, steps: members.clone()))
@@ -445,7 +445,7 @@ function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, wor
 	// A static share: a worker keeps its step workspaces across the functions it is handed
 	// (`StdPassWorker`), and rebuilding them per function costs more than this pool's tail.
 	var dispatch = PoolDispatch.create(functionOpTallies(module.functions, blocks: module.blocks), workerCount: workerCount, assignment: PoolAssignment.staticShare)
-	var replies = StdPassReplyArray.create()
+	var replies = StdPassReplyArray.create(0)
 	replies.reserve(dispatch.pipelineDepth())
 	var arrivedUnits = StdArrivedUnits.create(module.funcCount(), spent: StdModule.create())
 

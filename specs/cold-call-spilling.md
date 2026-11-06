@@ -93,8 +93,8 @@ function rotateAll(current WordArray, count WordArray, n Count) returns Word
 end 'rotateAll'
 
 function main() returns ExitCode
-	var current = WordArray.create()
-	var count = WordArray.create()
+	var current = WordArray.create(0)
+	var count = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		current.push(i + 10)
 		count.push(i)
@@ -133,7 +133,7 @@ function walk(a WordArray, n Word) returns Word
 end 'walk'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 5 'seed'
 		a.push(i)
 	end 'seed'
@@ -166,7 +166,7 @@ function halves(a WordArray, n Count) returns Real
 end 'halves'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 4 'seed'
 		a.push(i)
 	end 'seed'
@@ -200,7 +200,7 @@ function pairs(a WordArray, n Count) returns Word
 end 'pairs'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 4 'seed'
 		a.push(i)
 	end 'seed'
@@ -232,7 +232,7 @@ function relabel(a Names, n Count) returns Count
 end 'relabel'
 
 function main() returns ExitCode
-	var a = Names.create()
+	var a = Names.create(0)
 	for i in 0 upto 4 'seed'
 		a.push("original-{i}")
 	end 'seed'
@@ -272,7 +272,7 @@ function total(a WordArray, n Word) returns Word
 end 'total'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 5 'seed'
 		a.push(i)
 	end 'seed'
@@ -356,7 +356,7 @@ function reference(n Word) returns Word
 end 'reference'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		a.push(i)
 	end 'seed'
@@ -437,7 +437,7 @@ function reference(n Word) returns Word
 end 'reference'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		a.push(i)
 	end 'seed'
@@ -516,7 +516,7 @@ function reference(n Word) returns Word
 end 'reference'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		a.push(i)
 	end 'seed'
@@ -551,7 +551,7 @@ function walk(a WordArray, n Count, f Real) returns Word
 end 'walk'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 5 'seed'
 		a.push(i)
 	end 'seed'
@@ -582,7 +582,7 @@ function walk(a WordArray, n Count, m Scale, d Scale) returns Word
 end 'walk'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 5 'seed'
 		a.push(i + 3)
 	end 'seed'
@@ -616,7 +616,7 @@ function walk(a WordArray, n Count, m Scale, d Scale) returns Word
 end 'walk'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 5 'seed'
 		a.push(i + 3)
 	end 'seed'
@@ -657,7 +657,7 @@ function walk(a WordArray, n Count, m Word) returns Word
 end 'walk'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 5 'seed'
 		a.push(i + 3)
 	end 'seed'

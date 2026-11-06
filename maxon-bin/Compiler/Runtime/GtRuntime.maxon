@@ -1713,7 +1713,7 @@ end 'registerGtTraceTag'
 // list of pushes beside a hand-written enum can. Adding an operation is one case plus one arm of
 // `ioOperationSuffixText`; nothing here has to be remembered as well.
 function registerIoOperationTags(globalData GlobalDataTable) returns GtTraceTagArray
-	var tags = GtTraceTagArray.create()
+	var tags = GtTraceTagArray.create(0)
 
 	for operation in GtIoOperation.allCases 'eachOperation'
 		tags.push(registerGtTraceTag(globalData, text: ioOperationSuffixText(operation)))
@@ -2382,7 +2382,7 @@ end 'requireQuotableSharedSpellings'
 // which `gtSeedStackBytes` refuses to compute where the facility is denied, and no body there can name
 // a slot anyway.
 export function gtRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create()
+	var out = DataSectionEntryArray.create(0)
 
 	if not targetProvidesFacility(target, facility: HostFacility.greenThreads) 'noGreenThreadStack'
 		return out
@@ -2423,7 +2423,7 @@ end 'gtRuntimeGlobals'
 // The pipe substrate's one `.data` slot — the pipe-name uniquifier counter, 0 until the first pipe is
 // created. It is read only by Std bodies, so it is laid out exactly where a surviving body names it.
 export function ioRuntimeGlobals() returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create()
+	var out = DataSectionEntryArray.create(0)
 	pushRuntimeGlobal(out, label: IoPipeSeqLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 	return out
 end 'ioRuntimeGlobals'
@@ -2497,7 +2497,7 @@ end 'GtField'
 typealias GtFieldArray = Array with GtField
 
 function gtFieldRoster() returns GtFieldArray
-	var fields = GtFieldArray.create()
+	var fields = GtFieldArray.create(0)
 
 	fields.push(GtField.create("GtOffRecordLock", offset: GtOffRecordLock, width: GtRecordLockBytes, rule: GtFieldRule.keptAcrossReuse))
 	fields.push(GtField.create("GtOffStackBase", offset: GtOffStackBase, width: PointerFieldBytes, rule: GtFieldRule.setByFreeGet))
@@ -2783,7 +2783,7 @@ end 'installGtRuntime'
 // before `main`'s green thread exists. Every later scheduler call can therefore take the P/M structure, the
 // stores and the run-queue lock as given.
 function buildGtInit(module StdModule)
-	var func = IrFunction.createFromStd(GtInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2791,7 +2791,7 @@ function buildGtInit(module StdModule)
 	// The P/M half first: the TLS slot, every P, and this OS thread made M0 holding P[0], with its own
 	// syscall stack and its own inline scheduler GT.
 	let schedInitResult = ids.mint()
-	module.appendOp(entry, op: StdOp.call(schedInitResult, callee: SchedInitProcsName, args: ValueIdArray.create()))
+	module.appendOp(entry, op: StdOp.call(schedInitResult, callee: SchedInitProcsName, args: ValueIdArray.create(0)))
 
 	// The timer store's heap region: one slab allocation of TimerHeapBytes (slab-zeroed, so count starts at 0
 	// entries), its base published to `__gt_timer_heap_base`. Done here rather than lazily in `__gt_timer_add`
@@ -2869,7 +2869,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	let funcPtr = 0 as ValueId
 
 	let gt = ids.mint()
-	module.appendOp(initBlock, op: StdOp.call(gt, callee: GtFreeGetName, args: ValueIdArray.create()))
+	module.appendOp(initBlock, op: StdOp.call(gt, callee: GtFreeGetName, args: ValueIdArray.create(0)))
 
 	emitGtSpawnZeroing(module, block: initBlock, gt: gt, kind: kind, ids: ids)
 
@@ -3337,7 +3337,7 @@ end 'emitQueueStoreTail'
 // and under the queue's lock (`emitQueueLockEnter`) the pop and the peek name the same GT.
 function emitQueuePopCall(module StdModule, block IrBlock, ends GtQueueEnds, ids ValueMinter)
 	match ends 'ends'
-		globalLabels then module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtDequeueName, args: ValueIdArray.create()))
+		globalLabels then module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtDequeueName, args: ValueIdArray.create(0)))
 		ownerFields(owner) then module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtCoroDequeueName, args: argsOf(owner)))
 	end 'ends'
 end 'emitQueuePopCall'
@@ -3639,7 +3639,7 @@ export let GtPinDepthName = b"__gt_pin_depth"
 export let GtCurrentMachineName = b"__gt_current_m"
 
 function buildGtCurrentMachine(module StdModule)
-	var func = IrFunction.createFromStd(GtCurrentMachineName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtCurrentMachineName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3647,7 +3647,7 @@ function buildGtCurrentMachine(module StdModule)
 	var haveMachine = module.addBlock(func, label: b"curmmachine", heat: BlockHeat.normal)
 	var noMachine = module.addBlock(func, label: b"curmnone", heat: BlockHeat.normal)
 
-	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(), ids: ids)
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(0), ids: ids)
 	module.setTerminator(haveMachine, op: StdOp.ret(m))
 
 	emitConstReturn(module, block: noMachine, value: 0, ids: ids)
@@ -3667,7 +3667,7 @@ end 'emitGtReleasePin'
 // A driver asks for it from a coroutine, and `__sched_find_runnable` hands the gate an owner token, so a pin
 // on the member would be invisible there and the session's thread would migrate anyway.
 function buildGtPinMachine(module StdModule)
-	var func = IrFunction.createFromStd(GtPinMachineName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtPinMachineName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3676,7 +3676,7 @@ function buildGtPinMachine(module StdModule)
 	var haveThread = module.addBlock(func, label: b"pinthread", heat: BlockHeat.normal)
 	var refused = module.addBlock(func, label: b"pinrefused", heat: BlockHeat.normal)
 
-	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: refused, bailValues: FullRangeIntArray.create(), ids: ids)
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: refused, bailValues: FullRangeIntArray.create(0), ids: ids)
 	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
 	emitBranchOnCompare(module, block: haveMachine, value: running, pred: StdCmpPred.eq, against: 0, whenTrue: refused, whenFalse: haveThread, ids: ids)
 
@@ -3701,7 +3701,7 @@ function buildGtPinMachine(module StdModule)
 end 'buildGtPinMachine'
 
 function buildGtUnpinMachine(module StdModule)
-	var func = IrFunction.createFromStd(GtUnpinMachineName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtUnpinMachineName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3710,7 +3710,7 @@ function buildGtUnpinMachine(module StdModule)
 	var haveThread = module.addBlock(func, label: b"unpinthread", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"unpindone", heat: BlockHeat.normal)
 
-	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: doneBlock, bailValues: FullRangeIntArray.create(), ids: ids)
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: doneBlock, bailValues: FullRangeIntArray.create(0), ids: ids)
 	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
 	emitBranchOnCompare(module, block: haveMachine, value: running, pred: StdCmpPred.eq, against: 0, whenTrue: doneBlock, whenFalse: haveThread, ids: ids)
 
@@ -3743,7 +3743,7 @@ function buildGtUnpinOwner(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let gt = 0
 
-	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(), ids: ids)
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(0), ids: ids)
 	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
 	emitBranchOnCompare(module, block: haveMachine, value: running, pred: StdCmpPred.eq, against: 0, whenTrue: noMachine, whenFalse: haveThread, ids: ids)
 
@@ -3771,7 +3771,7 @@ function buildGtUnpinOwner(module StdModule)
 end 'buildGtUnpinOwner'
 
 function buildGtPinDepth(module StdModule)
-	var func = IrFunction.createFromStd(GtPinDepthName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtPinDepthName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3780,7 +3780,7 @@ function buildGtPinDepth(module StdModule)
 	var haveThread = module.addBlock(func, label: b"depththread", heat: BlockHeat.normal)
 	var noThread = module.addBlock(func, label: b"depthnone", heat: BlockHeat.normal)
 
-	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noThread, bailValues: FullRangeIntArray.create(), ids: ids)
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noThread, bailValues: FullRangeIntArray.create(0), ids: ids)
 	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
 	emitBranchOnCompare(module, block: haveMachine, value: running, pred: StdCmpPred.eq, against: 0, whenTrue: noThread, whenFalse: haveThread, ids: ids)
 
@@ -3819,13 +3819,13 @@ function buildGtPinHandle(module StdModule)
 end 'buildGtPinHandle'
 
 function buildGtPinAcquire(module StdModule)
-	var func = IrFunction.createFromStd(GtPinAcquireName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtPinAcquireName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	let token = ids.mint()
-	module.appendOp(entry, op: StdOp.call(token, callee: GtPinMachineName, args: ValueIdArray.create()))
+	module.appendOp(entry, op: StdOp.call(token, callee: GtPinMachineName, args: ValueIdArray.create(0)))
 	let boxBytes = emitConst(module, block: entry, value: ManagedPinBoxBytes, ids: ids)
 	let box = emitRawAlloc(module, block: entry, byteCount: boxBytes, ids: ids)
 	emitStoreField(module, block: entry, record: box, offset: ManagedPinTokenOffset, value: token)
@@ -3953,7 +3953,7 @@ end 'buildGtEnqueue'
 // `__gt_dequeue() -> g` — pop the head token off the global FIFO run queue, or 0 if empty. The caller holds
 // `__sched_lock`. The count comes down on the arm that really popped, which `popBlock` is.
 function buildGtDequeue(module StdModule)
-	var func = IrFunction.createFromStd(GtDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
 	var ids = ValueMinter.create(0)
 
@@ -4152,7 +4152,7 @@ end 'buildGtCoroSweepDropped'
 // `__gt_now_ns()`, into a fresh value.
 export function emitGtNowNs(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let now = ids.mint()
-	module.appendOp(block, op: StdOp.call(now, callee: GtNowNsName, args: ValueIdArray.create()))
+	module.appendOp(block, op: StdOp.call(now, callee: GtNowNsName, args: ValueIdArray.create(0)))
 	return now
 end 'emitGtNowNs'
 
@@ -4162,7 +4162,7 @@ end 'emitGtNowNs'
 // inside i64 for any realistic QPF (Windows fixes it at 10 MHz; even a TSC-derived few-GHz value keeps
 // `(freq-1)*1e9 < 2^63`) and centuries of uptime — so no 128-bit MUL/DIV, and no new Target op, is needed.
 export function buildGtNowNs(module StdModule)
-	var func = IrFunction.createFromStd(GtNowNsName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtNowNsName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5069,7 +5069,7 @@ function buildGtDrainAtExit(module StdModule, releasesRegistry bool, releasesGlo
 	emitSchedMainLoop(module, block: entry, until: SchedMainLoopUntil.drained, ids: ids)
 	var drained = emitReleaseOwnersAfterDrain(module, func: func, cur: entry, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals, code: code, ids: ids)
 
-	module.appendOp(drained, op: StdOp.call(ids.mint(), callee: SchedStopWorkersName, args: ValueIdArray.create()))
+	module.appendOp(drained, op: StdOp.call(ids.mint(), callee: SchedStopWorkersName, args: ValueIdArray.create(0)))
 	module.setTerminator(drained, op: StdOp.ret(code))
 	module.functions.push(func)
 end 'buildGtDrainAtExit'
@@ -5080,7 +5080,7 @@ end 'buildGtDrainAtExit'
 // its sum is taken unlocked, so steps in flight on other machines can leave it transiently negative,
 // and it is clamped to 0.
 function buildGtQuiesce(module StdModule)
-	var func = IrFunction.createFromStd(GtQuiesceName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtQuiesceName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5123,7 +5123,7 @@ function emitReleaseOwnersAfterDrain(module StdModule, func IrFunction, cur IrBl
 	var entered = emitSchedEnterPhaseLocked(module, func: func, cur: release, phase: SchedPhase.draining, ids: ids)
 	emitSchedLockLeave(module, block: entered, ids: ids)
 
-	module.appendOp(entered, op: StdOp.call(ids.mint(), callee: SchedMainTakeProcName, args: ValueIdArray.create()))
+	module.appendOp(entered, op: StdOp.call(ids.mint(), callee: SchedMainTakeProcName, args: ValueIdArray.create(0)))
 	emitOwnerReleaseCalls(module, block: entered, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals, code: code, ids: ids)
 	emitSchedMainLoop(module, block: entered, until: SchedMainLoopUntil.drained, ids: ids)
 	return entered
@@ -5160,7 +5160,7 @@ function buildGtRunMain(module StdModule, target Target)
 	emitParams(module, block: entry, count: 1)
 	let mainEntry = 0
 
-	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtInitName, args: ValueIdArray.create()))
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtInitName, args: ValueIdArray.create(0)))
 	let mainGt = ids.mint()
 	module.appendOp(entry, op: StdOp.call(mainGt, callee: GtSpawnMainName, args: argsOf(mainEntry)))
 	_ = emitGtReady(module, block: entry, gt: mainGt, gate: GtReadyGate.alreadyRunnable, hold: SchedLockHold.free, ids: ids)
@@ -5695,8 +5695,8 @@ end 'assertCompletedPublicationIsOrdered'
 // no `switch` at all.
 function assertOneFuncPublishesInOrder(module StdModule, func IrFunction)
 	let opIndices = module.liveOpIndices(func)
-	var completedConsts = ValueIdArray.create()
-	var plainStatusLoads = ValueIdArray.create()
+	var completedConsts = ValueIdArray.create(0)
+	var plainStatusLoads = ValueIdArray.create(0)
 	var access = StdAccessOperands.create()
 	var arith = StdArithOperands.create()
 
@@ -5947,7 +5947,7 @@ function buildGtCellAlloc(module StdModule)
 	let releaser = 0
 
 	let cell = ids.mint()
-	module.appendOp(entry, op: StdOp.call(cell, callee: GtCellGetName, args: ValueIdArray.create()))
+	module.appendOp(entry, op: StdOp.call(cell, callee: GtCellGetName, args: ValueIdArray.create(0)))
 
 	emitGtMarkWaiting(module, block: entry, gt: cell, ids: ids)
 	let owner = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffOwner, ids: ids)
@@ -6214,7 +6214,7 @@ function buildGtPromiseDrop(module StdModule)
 	module.appendOp(queuedArm, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(gt)))
 	module.setTerminator(queuedArm, op: StdOp.condBranch(dropIsGreen, thenBlockId: sweepGreen.id, elseBlockId: sweepCoro.id))
 
-	module.appendOp(sweepGreen, op: StdOp.call(ids.mint(), callee: SchedSweepDroppedName, args: ValueIdArray.create()))
+	module.appendOp(sweepGreen, op: StdOp.call(ids.mint(), callee: SchedSweepDroppedName, args: ValueIdArray.create(0)))
 	module.setTerminator(sweepGreen, op: StdOp.branch(dropDone.id))
 
 	module.appendOp(sweepCoro, op: StdOp.call(ids.mint(), callee: GtCoroSweepDroppedName, args: argsOf(dropOwner)))
@@ -6413,10 +6413,10 @@ function buildGtRunnerDone(module StdModule, target Target)
 	emitBranchOnCompareValues(module, block: quietRoster, a: quiet, pred: StdCmpPred.ge, b: scanDue, whenTrue: scanSeed, whenFalse: keepStack, ids: ids)
 
 	emitStoreField(module, block: scanSeed, record: p, offset: POffStackQuietFinishes, value: zero)
-	module.appendOp(scanSeed, op: StdOp.call(ids.mint(), callee: GtSeedScanName, args: ValueIdArray.create()))
+	module.appendOp(scanSeed, op: StdOp.call(ids.mint(), callee: GtSeedScanName, args: ValueIdArray.create(0)))
 	module.setTerminator(scanSeed, op: StdOp.branch(freeSeedStacks.id))
 
-	module.appendOp(closeSeedWindow, op: StdOp.call(ids.mint(), callee: GtSeedAdaptName, args: ValueIdArray.create()))
+	module.appendOp(closeSeedWindow, op: StdOp.call(ids.mint(), callee: GtSeedAdaptName, args: ValueIdArray.create(0)))
 	module.setTerminator(closeSeedWindow, op: StdOp.branch(freeSeedStacks.id))
 
 	emitGtFreeStacks(module, func: func, cur: freeSeedStacks, cont: keepStack, ids: ids)
@@ -6691,10 +6691,10 @@ function emitGtSwitchAway(module StdModule, func IrFunction, cur IrBlock, selfGt
 	module.setTerminator(switchOnly, op: StdOp.retVoid)
 
 	let before = ids.mint()
-	module.appendOp(clockKept, op: StdOp.call(before, callee: ThreadCpuTicksName, args: ValueIdArray.create()))
+	module.appendOp(clockKept, op: StdOp.call(before, callee: ThreadCpuTicksName, args: ValueIdArray.create(0)))
 	module.appendOp(clockKept, op: StdOp.call(ids.mint(), callee: GtContextSwitchName, args: twoArgs(selfGt, second: to)))
 	let after = ids.mint()
-	module.appendOp(clockKept, op: StdOp.call(after, callee: ThreadCpuTicksName, args: ValueIdArray.create()))
+	module.appendOp(clockKept, op: StdOp.call(after, callee: ThreadCpuTicksName, args: ValueIdArray.create(0)))
 	let gap = emitBin(module, block: clockKept, a: before, b: after, opcode: StdBinOpcode.sub, ids: ids)
 	let offset = emitLoadField(module, block: clockKept, record: selfGt, offset: GtOffCpuOffset, ids: ids)
 	emitStoreField(module, block: clockKept, record: selfGt, offset: GtOffCpuOffset, value: emitBin(module, block: clockKept, a: offset, b: gap, opcode: StdBinOpcode.add, ids: ids))
@@ -7638,7 +7638,7 @@ function buildGtSeedAdapt(module StdModule, target Target)
 		panic("buildGtSeedAdapt: GtSeedMaxBytes ({GtSeedMaxBytes}) is below this target's seed floor ({gtSeedStackBytes(target)}) — the adaptive seed would have no size to choose")
 	end 'ceilingBelowFloor'
 
-	var func = IrFunction.createFromStd(GtSeedAdaptName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtSeedAdaptName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7732,7 +7732,7 @@ end 'emitGtSeedPublishAverage'
 // skipped when its sp lies outside its stack. A completed record holds no live stack and is skipped.
 // The roster length is read before its base, so the base covers every slot the length names.
 function buildGtSeedScan(module StdModule, target Target)
-	var func = IrFunction.createFromStd(GtSeedScanName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtSeedScanName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7813,7 +7813,7 @@ end 'buildGtSeedScan'
 // implementation of a solved problem, in the runtime, where a wrong answer is hardest to see. An untraced
 // build never reaches this function at all.
 function buildGtTraceEmit(module StdModule, tags GtTraceTags)
-	var paramTypes = StdTypeArray.create()
+	var paramTypes = StdTypeArray.create(0)
 
 	for _ in 0 upto GtTraceEmitArity 'eachParam'
 		paramTypes.push(StdType.i64)
@@ -7902,7 +7902,7 @@ function emitGtTraceLineOfSuffix(module StdModule, block IrBlock, tag GtTraceTag
 	module.appendOp(block, op: StdOp.rdataAddr(tagAddr, label: tag.label))
 	let tagLen = ids.mint()
 	module.appendOp(block, op: StdOp.const(tagLen, value: tag.length, valueType: StdType.i64))
-	var callArgs = ValueIdArray.create()
+	var callArgs = ValueIdArray.create(0)
 	callArgs.push(tagAddr)
 	callArgs.push(tagLen)
 	callArgs.push(gtId)
@@ -7978,7 +7978,7 @@ function buildGtIoPark(module StdModule)
 	// The arity IS the gating: a traced park is handed its operation's suffix by the site that called it, an
 	// untraced one takes nothing and is byte-identical to the park built before the suffix existed.
 	var paramCount = 0 as ParamCount
-	var paramTypes = StdTypeArray.create()
+	var paramTypes = StdTypeArray.create(0)
 
 	if traced 'suffixParams'
 		paramCount = IoParkSuffixArity
@@ -8151,7 +8151,7 @@ function emitIoParkCall(module StdModule, block IrBlock, operation GtIoOperation
 	// ⛔ **THE ARITY IS DECIDED BY `module.asyncTracing` AT BOTH ENDS — THE SAME QUESTION, NOT MERELY THE
 	// SAME FIELD.** A different question here than the one `buildGtIoPark` asks could put an argument-less
 	// call into a two-parameter park — a wrong FRAME, not a wrong trace.
-	var args = ValueIdArray.create()
+	var args = ValueIdArray.create(0)
 
 	if let tags = try module.asyncTracing.tags() 'tracedBuild'
 		let tag = tags.ioTag(operation)
@@ -8171,7 +8171,7 @@ end 'emitIoParkCall'
 // `__gt_resched()` — the cooperative yield: a park the strand runner places rather than registers. See
 // `GtReschedName`.
 function buildGtResched(module StdModule)
-	var func = IrFunction.createFromStd(GtReschedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtReschedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8920,7 +8920,7 @@ end 'isSubprocessRuntimeCallee'
 // (`DataReach.walked`). Just the table pointer and the last error; the table itself and every buffer are
 // slab-allocated lazily.
 export function subpRuntimeGlobals() returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create()
+	var out = DataSectionEntryArray.create(0)
 
 	// The table POINTER is published once, by a CAS from 0, read with an acquire, and never
 	// republished or freed; the per-SLOT claim is the CAS in `buildSubpSpawnCore`.
@@ -10399,7 +10399,7 @@ function emitSubpCloseStdinWriteOwned(module StdModule, func IrFunction, ids Val
 
 	module.setTerminator(cur, op: StdOp.branch(attempt.id))
 	var closed = emitSubpCloseStdinIfIdle(module, func: func, ids: ids, cur: attempt, slot: slot, whenLost: contended)
-	module.appendOp(contended, op: StdOp.call(ids.mint(), callee: GtReschedName, args: ValueIdArray.create()))
+	module.appendOp(contended, op: StdOp.call(ids.mint(), callee: GtReschedName, args: ValueIdArray.create(0)))
 	module.setTerminator(contended, op: StdOp.branch(attempt.id))
 
 	return closed

@@ -214,7 +214,7 @@ type InstanceBucket
 	export var ids as GenericInstanceIdArray
 
 	static function create() returns Self
-		return Self{ids: GenericInstanceIdArray.create()}
+		return Self{ids: GenericInstanceIdArray.create(0)}
 	end 'create'
 end 'InstanceBucket'
 
@@ -243,7 +243,7 @@ type ConstrainedOwnerLedger
 			instancesByBase.upsert(baseName, value: first)
 		end 'eachInstance'
 
-		return Self{seen: ConstrainedOwnerSet.create(), pending: NameRoster.create(), instancesByBase: instancesByBase}
+		return Self{seen: ConstrainedOwnerSet.create(), pending: NameRoster.create(0), instancesByBase: instancesByBase}
 	end 'over'
 
 	function noteOwnerOf(funcName ByteArray)
@@ -333,7 +333,7 @@ export type LibraryFacts
 	// at all: no function is stdlib, nothing is unreachable-stdlib, nothing is in the runtime tier and
 	// nothing needs the substrate.
 	export static function empty() returns LibraryFacts
-		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create(), unreachedRuntimeTier: FunctionNameSet.create(), compilerCalledTier: FunctionNameSet.create(), substrateNodes: NameRoster.create())
+		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create(), unreachedRuntimeTier: FunctionNameSet.create(), compilerCalledTier: FunctionNameSet.create(), substrateNodes: NameRoster.create(0))
 	end 'empty'
 
 	// ⭐⭐ **THE ONE QUESTION EVERY PRE-ELIMINATION PASS ASKS OF A LIBRARY BODY: WILL DEAD-FUNCTION
@@ -400,7 +400,7 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 
 	return match reach 'reach'
 		noLibrarySource gives LibraryFacts.empty()
-		unreferenced(roster, stdlib) gives libraryFactsOf(roster, stdlib: stdlib, split: classifyLibraryReach(roster, reachable: FunctionNameSet.create()), substrateNodes: NameRoster.create())
+		unreferenced(roster, stdlib) gives libraryFactsOf(roster, stdlib: stdlib, split: classifyLibraryReach(roster, reachable: FunctionNameSet.create()), substrateNodes: NameRoster.create(0))
 		walked(roster, stdlib, reachable) gives libraryFactsOf(roster, stdlib: stdlib, split: classifyLibraryReach(roster, reachable: reachable), substrateNodes: roster.names)
 	end 'reach'
 end 'deriveLibraryFacts'
@@ -552,10 +552,10 @@ end 'LibraryFunctionRoster'
 // Read back from each library file's PARSE ARTIFACT — a memo HIT, since `queryAllModule` has already
 // parsed it — so the cost is O(library functions) and touches nothing the user wrote.
 function libraryFunctionRoster(project Project) returns LibraryFunctionRoster throws CompileError
-	var names = NameRoster.create()
+	var names = NameRoster.create(0)
 	var runtimeTier = FunctionNameSet.create()
 	var compilerReached = FunctionNameSet.create()
-	var auditedLibrary = NameRoster.create()
+	var auditedLibrary = NameRoster.create(0)
 
 	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
 		try collectOneLibraryFile(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("libraryFunctionRoster: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), names: names, runtimeTier: runtimeTier, compilerReached: compilerReached, auditedLibrary: auditedLibrary)
@@ -808,9 +808,9 @@ end 'classifyLibraryReach'
 function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster) returns FunctionNameSet throws CompileError
 	let byName = (try FunctionNameIndex.create(module.functions, project: project)).byName
 
-	var reached = BoolArray.create()
+	var reached = BoolArray.create(0)
 	reached.resize(module.funcCount())
-	var worklist = FuncIndexArray.create()
+	var worklist = FuncIndexArray.create(0)
 	var names = FunctionNameSet.create()
 
 	markOneReachable(project.entryFunctionName, byName: byName, reached: reached, worklist: worklist, names: names)
@@ -865,7 +865,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	let seedConformers = conformersMintedWithoutTheirOwnMethods(signatures)
 	let enumConformers = enumConformersByInterface(project)
 	var witnessInterfaces = InterfaceNameSet.create()
-	var witnessInterfaceOrder = NameRoster.create()
+	var witnessInterfaceOrder = NameRoster.create(0)
 	var interfacesSeeded = 0 as ElementIndex
 	var creditedServices = CreditedServiceSet.create()
 	var ownerLedger = ConstrainedOwnerLedger.over(signatures)
@@ -943,7 +943,7 @@ end 'reachableMaxonFunctionNames'
 // this walk reads. The other two names are uncontestable (`TypeResolution.isCompilerOwnedTypeName`), so
 // only this one moves.
 function conformersMintedWithoutTheirOwnMethods(signatures ProgramSignatures) returns NameRoster
-	var names = NameRoster.create()
+	var names = NameRoster.create(0)
 	names.push(StringConformerName)
 	names.push(CharacterConformerName)
 	names.push(signatures.arrayRecordBaseName())
@@ -997,7 +997,7 @@ function recordEnumWitnessCredit(byInterface EnumConformersByInterface, project 
 		return
 	end 'noSlotToCredit'
 
-	var conformers = try byInterface.get(interfaceName) otherwise NameRoster.create()
+	var conformers = try byInterface.get(interfaceName) otherwise NameRoster.create(0)
 	conformers.push(enumName)
 	byInterface.upsert(interfaceName, value: conformers)
 end 'recordEnumWitnessCredit'
@@ -1392,7 +1392,7 @@ function markConstraintArgumentImpls(ledger ConstrainedOwnerLedger, project Proj
 		end 'eachInstance'
 	end 'eachNewlyReachedOwner'
 
-	ledger.pending = NameRoster.create()
+	ledger.pending = NameRoster.create(0)
 end 'markConstraintArgumentImpls'
 
 // Credit every requirement implementation `typeName`'s witness tables can name. A type that declares no
@@ -1776,11 +1776,11 @@ type SubstrateFixpoint
 	let target as Target
 
 	static function overNodes(nodeCount CsrIndex, target Target) returns SubstrateFixpoint
-		var marked = BoolArray.create()
+		var marked = BoolArray.create(0)
 		marked.resize(nodeCount)
-		var seedOf = CsrColumn.create()
+		var seedOf = CsrColumn.create(0)
 		seedOf.resize(nodeCount)
-		return Self{marked: marked, seedOf: seedOf, seedEntries: NameRoster.create(), worklist: CsrColumn.create(), edgeCallee: CsrColumn.create(), edgeCaller: CsrColumn.create(), target: target}
+		return Self{marked: marked, seedOf: seedOf, seedEntries: NameRoster.create(0), worklist: CsrColumn.create(0), edgeCallee: CsrColumn.create(0), edgeCaller: CsrColumn.create(0), target: target}
 	end 'overNodes'
 
 	// `node` names `entry` directly — a SEED.

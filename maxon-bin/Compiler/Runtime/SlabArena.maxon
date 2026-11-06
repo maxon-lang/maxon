@@ -439,7 +439,7 @@ export let SlabArenaMapL1Label = b"__slab_arena_map_l1"
 // `pushRuntimeGlobal` because their discipline is `__slab_lock`, held by the caller
 // (`runtime/SlabArena.maxon`'s header), which is no `MultiMSharing` class.
 export function slabArenaRuntimeGlobals() returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create()
+	var out = DataSectionEntryArray.create(0)
 	out.push(DataSectionEntry.create(String.from(SlabArenaListLabel), valueType: StdType.i64, value: 0, reach: DataReach.walked))
 	out.push(DataSectionEntry.create(String.from(SlabArenaMapL1Label), valueType: StdType.i64, value: 0, reach: DataReach.walked))
 	return out
@@ -548,7 +548,7 @@ end 'checkSlabArenaGeometry'
 // The derivation over them is still asserted for both lanes, by `checkArenaGeometryForLane`.
 function arenaTierPins(target Target) returns TierGeometryPinArray
 	let lane = SlabArenaGeometry.forReservation(targetHasPageReservation(target))
-	var out = TierGeometryPinArray.create()
+	var out = TierGeometryPinArray.create(0)
 
 	out.push(TierGeometryPin.create("this lane's arena in chunks", here: lane.chunkCount as FullRangeInt, named: "ArenaChunkCount"))
 	out.push(TierGeometryPin.create("this lane's align-up slack", here: arenaAlignSlackBytes(targetHasPageReservation(target)), named: "ArenaAlignSlackBytes"))

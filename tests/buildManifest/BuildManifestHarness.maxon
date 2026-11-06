@@ -219,7 +219,7 @@ end 'emptyCaseProject'
 
 // `maxon build <options>` in the staged project.
 export function spawnManifestBuild(staged FilePath, options StringArray, environment EnvMap = EnvMap.create()) returns CollectedOutput
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 	arguments.push(BuildCommandName)
 
 	for option in options 'eachOption'
@@ -268,7 +268,7 @@ end 'filesInProjectProducts'
 // Every build of the manifest program in the case's private run cache, named for a report. Found by the
 // stem the cache names a build after, which is the manifest's own file name.
 export function manifestProgramsCached(staged FilePath) returns String
-	var builds = FilePathArray.create()
+	var builds = FilePathArray.create(0)
 
 	for file in filesUnder(privateCacheRoot(staged)) 'eachFile'
 		let name = file.filename()
@@ -304,7 +304,7 @@ end 'ageTreeLock'
 
 export function plantTreeLockOfThisHostWithout(staged FilePath, dropped HostIdentityPart)
 	let fields = hostFieldsOf(staged)
-	var kept = StringArray.create()
+	var kept = StringArray.create(0)
 
 	for named in thisHostParts(fields) 'eachPart'
 		keepUnlessNaming(kept, named: named, dropped: dropped)
@@ -430,7 +430,7 @@ export function spawnSpecTest(staged FilePath) returns CollectedOutput
 end 'spawnSpecTest'
 
 function leftoverTreeLockFiles(staged FilePath) returns StringArray
-	var leftovers = StringArray.create()
+	var leftovers = StringArray.create(0)
 	let entries = listing(caseRootOf(staged))
 
 	for entry in entries 'eachEntry'
@@ -483,7 +483,7 @@ end 'recordOf'
 		stageStoredTree(fixtureDir("{FixturesDirName}{PortablePathSeparator}{DefaultFixtureName}"), into: staged)
 
 		changeMode(caseRoot, mode: ReadOnlyDirectoryMode)
-		let build = spawnManifestBuild(staged, options: StringArray.create())
+		let build = spawnManifestBuild(staged, options: StringArray.create(0))
 		changeMode(caseRoot, mode: WritableDirectoryMode)
 		return build
 	end 'spawnManifestBuildInAReadOnlyCheckout'
@@ -540,11 +540,11 @@ end 'hostField'
 
 function thisHostParts(fields StringArray) returns NamedPartArray
 	#if os(Windows)
-		return [NamedPart.create(hostField(fields, at: 1), names: HostIdentityParts.create()), NamedPart.create(hostField(fields, at: 2), names: [HostIdentityPart.machine, HostIdentityPart.pidSpace])]
+		return [NamedPart.create(hostField(fields, at: 1), names: HostIdentityParts.create(0)), NamedPart.create(hostField(fields, at: 2), names: [HostIdentityPart.machine, HostIdentityPart.pidSpace])]
 	#endif
 
 	#if os(Linux)
-		return [NamedPart.create(hostField(fields, at: 1), names: HostIdentityParts.create()), NamedPart.create(hostField(fields, at: 2), names: [HostIdentityPart.machine]), NamedPart.create(hostField(fields, at: 3), names: [HostIdentityPart.pidSpace])]
+		return [NamedPart.create(hostField(fields, at: 1), names: HostIdentityParts.create(0)), NamedPart.create(hostField(fields, at: 2), names: [HostIdentityPart.machine]), NamedPart.create(hostField(fields, at: 3), names: [HostIdentityPart.pidSpace])]
 	#endif
 
 	#if os(Macos)
@@ -616,7 +616,7 @@ end 'requireRepeatedWithOutput'
 // Every file in the staged project named for the manifest's output, whatever suffix a target gives it, named
 // for a report: a refusal over a pinned target writes no host-suffixed executable either way.
 function builtProductsIn(staged FilePath) returns String
-	var found = FilePathArray.create()
+	var found = FilePathArray.create(0)
 
 	for entry in listing(staged) 'eachEntry'
 		if entry.filename().startsWith(BuiltStem) and not Directory.isDirectory(entry) 'aProduct'

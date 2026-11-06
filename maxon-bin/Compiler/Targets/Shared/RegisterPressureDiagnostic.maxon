@@ -244,7 +244,7 @@ function pressureAnchorLine(module TargetModule, project Project, funcIndex Elem
 	if peakInLoop 'loop'
 		scanned = regionAnchorLine(module, project: project, funcIndex: funcIndex, regionOps: regionOps)
 	end 'loop' else 'straightLine'
-		var buf = OperandList.create()
+		var buf = OperandList.create(0)
 		let peakOp = try module.ops.get(peak.peakOpIdx) otherwise panic("pressureAnchorLine: peak op {peak.peakOpIdx} not in module.ops")
 		scanned = firstOriginLineOfOp(project, funcIndex: funcIndex, op: peakOp, buf: buf)
 	end 'straightLine'
@@ -293,7 +293,7 @@ end 'earliestCandidateLine'
 function regionAnchorLine(module TargetModule, project Project, funcIndex ElementIndex, regionOps OpIndexArray) returns LineNumber
 	var best = 0 as LineNumber
 	var found = false
-	var buf = OperandList.create()
+	var buf = OperandList.create(0)
 
 	for opIdx in regionOps 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("regionAnchorLine: op {opIdx} not in module.ops")
@@ -332,7 +332,7 @@ end 'regionAnchorLine'
 // the only thing that says WHICH loop, and `enclosingLoopBlocks` is what turns it into one.
 function collectRegionOps(module TargetModule, cfg FuncCfg, peak PressurePeak, peakInLoop bool) returns OpIndexArray
 	let region = regionBlocks(cfg, peak: peak, peakInLoop: peakInLoop)
-	var ops = OpIndexArray.create()
+	var ops = OpIndexArray.create(0)
 
 	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
 		let inRegion = try region.get(i) otherwise panic("collectRegionOps: region.get OOB at block {i}")
@@ -355,7 +355,7 @@ function regionBlocks(cfg FuncCfg, peak PressurePeak, peakInLoop bool) returns B
 		return enclosingLoopBlocks(cfg.topo, blockLocal: peak.blockLocal)
 	end 'inLoop'
 
-	var everyBlock = BoolArray.create()
+	var everyBlock = BoolArray.create(0)
 	everyBlock.refill(cfg.topo.numBlocks, value: true)
 	return everyBlock
 end 'regionBlocks'
@@ -394,7 +394,7 @@ end 'firstOriginLineOfOp'
 // `let` and collecting writes the row's own counter. This runs once, on the E5001 refusal path.
 function collectCandidates(project Project, module TargetModule, func IrFunction, cfg FuncCfg, funcIndex ElementIndex, peak PressurePeak, lineage SplitLineage, regionOps OpIndexArray) returns PressureCandidateArray
 	let wordsPerRow = bitsetWordsFor(cfg.valueCount as BitIndex)
-	var candidates = PressureCandidateArray.create()
+	var candidates = PressureCandidateArray.create(0)
 
 	for v in 0 upto cfg.valueCount 'eachValue'
 		if not peak.liveBefore.test(v as BitIndex) 'notLive'
@@ -415,7 +415,7 @@ end 'collectCandidates'
 // leaving the reference-typed `candidates` untouched: the blocking set is tiny (bounded by the
 // register file), so O(n^2) is fine, and there is no Map/hash iteration to introduce drift.
 function sortedOrder(candidates PressureCandidateArray) returns CandidateOrder
-	var order = CandidateOrder.create()
+	var order = CandidateOrder.create(0)
 
 	for i in 0 upto candidates.count() 'seed'
 		order.push(i)
@@ -470,7 +470,7 @@ end 'candidateAtGreater'
 // author's array rewrite the phi web is gone and only the reads come back as loads.
 function readsInRegion(module TargetModule, regionOps OpIndexArray, valueId ValueId) returns RegionReadCount
 	var count = 0 as RegionReadCount
-	var buf = OperandList.create()
+	var buf = OperandList.create(0)
 
 	for opIdx in regionOps 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("readsInRegion: op {opIdx} not in module.ops")
@@ -551,7 +551,7 @@ end 'classifyValue'
 // unreached is the CALLER's guarantee that no source-less function ever raises E5001 — not a
 // property of the four routes, which cannot answer for such a function at all (see the file header).
 function defRangeOf(project Project, module TargetModule, func IrFunction, topo FuncTopology, funcIndex ElementIndex, valueId ValueId, wordsPerRow ElementIndex, lineage SplitLineage) returns SourceRange
-	var ranges = SourceRangeArray.create()
+	var ranges = SourceRangeArray.create(0)
 	var visited = BitRow.create()
 	visited.widen(wordsPerRow)
 	collectReachableRanges(project, module: module, topo: topo, funcIndex: funcIndex, valueId: valueId, lineage: lineage, visited: visited, out: ranges)
@@ -596,7 +596,7 @@ end 'chasePhiIncomings'
 // and its position there, then gather the positionally-corresponding arg from every edge that
 // targets that block. Empty when `phiValueId` is not a block-arg of any block.
 function phiIncomingValues(module TargetModule, topo FuncTopology, phiValueId ValueId) returns ValueIdArray
-	var result = ValueIdArray.create()
+	var result = ValueIdArray.create(0)
 
 	for i in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: i)

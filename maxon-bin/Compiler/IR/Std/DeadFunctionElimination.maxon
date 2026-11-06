@@ -92,9 +92,9 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 	view index = try FunctionNameIndex.create(module.functions, project: project)
 	view byName = index.byName
 
-	var reached = BoolArray.create()
+	var reached = BoolArray.create(0)
 	reached.resize(module.funcCount())
-	var worklist = FuncIndexArray.create()
+	var worklist = FuncIndexArray.create(0)
 
 	var reference = StdFunctionReference.create()
 	var referencedGlobals = ReferencedGlobalLabelSet.create()
@@ -372,7 +372,7 @@ end 'functionRecordCodesOf'
 // floor this program carries — E4015's ruling), and only a name called HERE is rooted or kept out of the
 // called-once rule. A second, ungated list would be the same roster spelled twice.
 module function compilerOwnedRoots(target Target, stub EntryStubCalls) returns CompilerOwnedRootArray
-	var roots = CompilerOwnedRootArray.create()
+	var roots = CompilerOwnedRootArray.create(0)
 	roots.push(CompilerOwnedRoot.create(ModuleInitName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(GlobalCleanupName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(RegistryReleaseName, isCalledHere: stub.releasesRegistry and not stub.runsMainOnAGreenThread))
@@ -758,7 +758,7 @@ end 'stdFunctionReferenceOf'
 // below is part of the sweep, not a courtesy after it — see `ValueOriginTable.remapFunctionIndices`.
 function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Project)
 	let total = module.funcCount()
-	var live = FuncIndexArray.create()
+	var live = FuncIndexArray.create(0)
 
 	for i in 0 upto total 'eachFunc'
 		let isLive = try reached.get(i) otherwise panic("eliminateDeadFunctions: reached.get OOB at function index {i}")
@@ -770,11 +770,11 @@ function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Pr
 
 	canonicalizeEmissionOrder(module, live: live)
 
-	var kept = IrFunctionArray.create()
+	var kept = IrFunctionArray.create(0)
 
 	// Old index → new index, filled for EVERY old index so the remap can index it directly; the entries
 	// for dropped functions are never read (the remap consults `reached` first).
-	var newIndexOfOld = FuncIndexArray.create()
+	var newIndexOfOld = FuncIndexArray.create(0)
 	newIndexOfOld.resize(total)
 
 	// Did the sweep renumber any function that SURVIVES? Only a survivor whose index moved has an origin
@@ -815,7 +815,7 @@ function canonicalizeEmissionOrder(module StdModule, live FuncIndexArray)
 		end 'extendRun'
 
 		if runEnd - runStart > 1 and not runIsOrdered(module, live: live, from: runStart, upto: runEnd) 'worthSorting'
-			var run = FuncIndexArray.create()
+			var run = FuncIndexArray.create(0)
 
 			for position in runStart upto runEnd 'eachMember'
 				run.push(try live.get(position) otherwise panic("canonicalizeEmissionOrder: live.get OOB at {position}"))

@@ -51,7 +51,7 @@ module function queryTokens(project Project, path FilePath, lexing LexSource = L
 
 		// A failed tokenize is NOT cached — the diagnostic gates the build, and the next attempt must
 		// re-run against corrected source.
-		return TokenArray.create()
+		return TokenArray.create(0)
 	end 'lexFail'
 
 	project.db.tokenCache.upsert(path, value: TokenMemo.create(tokens, keyHash: entry.contentHash))
@@ -218,7 +218,7 @@ function activeTokensOrReported(project Project, path FilePath, tokens TokenArra
 	let active = try filteredTokens(project, tokens: tokens, lexing: lexing) otherwise (directiveErr) 'directiveFail'
 		reportDirectiveError(project, path: path, error: directiveErr)
 		noteUnreadableSource(project, path: path)
-		return FilteredTokens.create(TokenArray.create(), filtered: false)
+		return FilteredTokens.create(TokenArray.create(0), filtered: false)
 	end 'directiveFail'
 
 	return FilteredTokens.create(active, filtered: true)
@@ -237,7 +237,7 @@ function declarationsInSourceOrder(path FilePath, tokens TokenArray, order Sourc
 		return tokens
 	end 'nothingToReorder'
 
-	var reordered = TokenArray.create()
+	var reordered = TokenArray.create(0)
 	let lastToken = try tokens.get(tokens.count() - 1) otherwise panic("declarationsInSourceOrder: a stream holding declarations is not empty")
 	var chunkEnd = ((tokens.count() - 1) if lastToken.kind == TokenKind.eof else tokens.count()) as ElementIndex
 	let firstStart = try starts.get(0) otherwise panic("declarationsInSourceOrder: starts is not empty")
@@ -276,7 +276,7 @@ end 'declarationsInSourceOrder'
 // top-level line that starts no declaration, or a block never so closed, throws `sourceNotReorderable`:
 // a guessed split would move tokens between declarations without any diagnostic.
 function topLevelDeclarationStarts(path FilePath, tokens TokenArray) returns DeclarationStartArray throws CompileError
-	var starts = DeclarationStartArray.create()
+	var starts = DeclarationStartArray.create(0)
 	var bracketDepth = 0 as NestingDepth
 	var openBlockColumn = 0 as ColumnNumber
 	var lastLine = 0 as LineNumber
@@ -463,13 +463,13 @@ function foldedUserFilesOf(project Project, recordingClaims bool) returns UserFi
 		signatures.recordTypeClaims()
 	end 'aClaimsFold'
 
-	var userPaths = MaxonSourcePathArray.create()
+	var userPaths = MaxonSourcePathArray.create(0)
 
 	for path in project.db.sourcePaths 'eachFile'
 		userPaths.push(path)
 	end 'eachFile'
 
-	try foldDeclarationsOf(project, signatures: signatures, leadingPaths: userPaths, stdlibPaths: MaxonSourcePathArray.create(), handedOver: DiscoveredTokenFacts.none())
+	try foldDeclarationsOf(project, signatures: signatures, leadingPaths: userPaths, stdlibPaths: MaxonSourcePathArray.create(0), handedOver: DiscoveredTokenFacts.none())
 	closeDeclarationFold(signatures)
 	return UserFileFold.create(signatures, paths: userPaths)
 end 'foldedUserFilesOf'
@@ -484,7 +484,7 @@ function extensionMethodKeysWritten(project Project, signatures ProgramSignature
 
 	for site in signatures.settledDeclarations().extensionDeclSites 'eachExtensionSite'
 		var reader = try siteFileReader(project, signatures: signatures, path: site.path, buildsBodies: false)
-		var written = NameRoster.create()
+		var written = NameRoster.create(0)
 		reader.methodKeysOfAnUndeclaredExtension(site, into: written)
 
 		for key in written 'eachWrittenKey'
@@ -536,9 +536,9 @@ end 'claimsOfUserFiles'
 
 function libraryExtensionMethodsOnConformers(project Project, signatures ProgramSignatures) returns StringArray throws CompileError
 	let interfaces = (try libraryRoster(project)).interfaces
-	var pending = StringArray.create()
+	var pending = StringArray.create(0)
 	var reached = SourceNameSet.create()
-	var methods = StringArray.create()
+	var methods = StringArray.create(0)
 
 	for (name, _) in interfaces 'eachInterface'
 		if not signatures.declaredConformerIndex().structConformersOf(name.toByteArray()).isEmpty() 'anAuthorsConformer'
@@ -577,7 +577,7 @@ type WrittenTokens
 	export var usesFunctionValues as bool
 
 	static function create() returns WrittenTokens
-		return Self{names: StringArray.create(), usesFunctionValues: false}
+		return Self{names: StringArray.create(0), usesFunctionValues: false}
 	end 'create'
 end 'WrittenTokens'
 
@@ -646,7 +646,7 @@ function tokensWritten(project Project, paths MaxonSourcePathArray) returns Writ
 end 'tokensWritten'
 
 function namesTheLibraryAlsoDeclares(project Project, nominals StringArray, aliases StringArray) returns StringArray throws CompileError
-	var shadowed = StringArray.create()
+	var shadowed = StringArray.create(0)
 
 	if nominals.isEmpty() and aliases.isEmpty() 'nothingToShadowWith'
 		return shadowed
@@ -781,8 +781,8 @@ function declarationsFoldedUserFirst(project Project, handedOver DiscoveredToken
 	// and a `runtime/` file holds none of them. What it does need is its OWN namespace anchor, which
 	// is a fact about the PATH and not about the contest, so `discoveredTokenFactsOf` asks for
 	// it separately rather than reading it off this partition.
-	var userPaths = MaxonSourcePathArray.create()
-	var stdlibPaths = MaxonSourcePathArray.create()
+	var userPaths = MaxonSourcePathArray.create(0)
+	var stdlibPaths = MaxonSourcePathArray.create(0)
 
 	for path in project.db.sourcePaths 'eachFile'
 		if isStdlibTierSourceFile(project, path: path) 'stdlibSource'
@@ -810,7 +810,7 @@ module type ProgramPartition
 	end 'create'
 
 	module function stdlibTierPaths() returns MaxonSourcePathArray
-		var paths = MaxonSourcePathArray.create()
+		var paths = MaxonSourcePathArray.create(0)
 		paths.append(self.stdlibPaths)
 		paths.append(self.scriptlibPaths)
 
@@ -819,10 +819,10 @@ module type ProgramPartition
 end 'ProgramPartition'
 
 module function partitionedByTier(project Project, paths FilePathArray) returns ProgramPartition
-	var userPaths = MaxonSourcePathArray.create()
-	var runtimePaths = MaxonSourcePathArray.create()
-	var stdlibPaths = MaxonSourcePathArray.create()
-	var scriptlibPaths = MaxonSourcePathArray.create()
+	var userPaths = MaxonSourcePathArray.create(0)
+	var runtimePaths = MaxonSourcePathArray.create(0)
+	var stdlibPaths = MaxonSourcePathArray.create(0)
+	var scriptlibPaths = MaxonSourcePathArray.create(0)
 
 	for path in paths 'eachFile'
 		view provenance = fileProvenanceOf(project, path: path)
@@ -917,7 +917,7 @@ function declarationsFoldedOntoTheLibraryBaseline(project Project) returns Basel
 
 	// Scriptlib packages fold here and are never in the baseline: that is cached per compiler and
 	// target, and the user edits a package under it.
-	var deferred = FilePathArray.create()
+	var deferred = FilePathArray.create(0)
 	deferred.append(start.remainder)
 	deferred.append(partition.scriptlibPaths)
 	try foldLibraryRemainder(project, signatures: signatures, deferred: deferred)
@@ -948,7 +948,7 @@ function declarationsFoldedOntoTheLibraryBaseline(project Project) returns Basel
 
 	// With no contested name this settles only the alias-family spellings, which
 	// `closeTokenFactDiscovery` has just settled again with the user's claims in.
-	signatures.settleStdlibShadowSpellings(NameRoster.create(), declaringFiles: FilePathArray.create())
+	signatures.settleStdlibShadowSpellings(NameRoster.create(0), declaringFiles: FilePathArray.create(0))
 	adoptShadowSpellings(project, roster: signatures.shadowRoster())
 	signatures.settleNominalNameCollisions(project.db.sourcePaths)
 
@@ -1439,7 +1439,7 @@ function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, p
 	let outsideADefault = SpawnGate.libraryBody if isStdlibSource else SpawnGate.always
 	var gate = outsideADefault.clone()
 	var gateEnd = 0 as ElementIndex
-	var events = TokenFactEventArray.create()
+	var events = TokenFactEventArray.create(0)
 	let isRuntimeSource = not isStdlibSource and isRuntimeSourceFile(project, path: path)
 	let livesUnderTheLibrary = fileLivesUnderStdlibDirectory(project, signatures: signatures, path: path)
 
@@ -1612,8 +1612,8 @@ type StdlibDeclarations
 end 'StdlibDeclarations'
 
 function stdlibDeclarationsIn(project Project, stdlibPaths MaxonSourcePathArray) returns StdlibDeclarations throws CompileError
-	var declaredNames = NameRoster.create()
-	var declaringFiles = FilePathArray.create()
+	var declaredNames = NameRoster.create(0)
+	var declaringFiles = FilePathArray.create(0)
 
 	for path in stdlibPaths 'eachStdlibFile'
 		view tokens = try queryActiveTokens(project, path: path)
@@ -1678,7 +1678,7 @@ typealias NamespaceDirectorySet = Set with String
 
 function reportUnnameableNamespaceDirectories(project Project, signatures ProgramSignatures) returns bool
 	var checked = NamespaceDirectorySet.create()
-	var refusals = DiagnosticArray.create()
+	var refusals = DiagnosticArray.create(0)
 	let reservedHeads = reservedNamespaceHeads()
 	let cwd = Directory.currentPath()
 
@@ -1747,7 +1747,7 @@ end 'ReservedNamespaceHead'
 typealias ReservedNamespaceHeadArray = Array with ReservedNamespaceHead
 
 function reservedNamespaceHeads() returns ReservedNamespaceHeadArray
-	var heads = ReservedNamespaceHeadArray.create()
+	var heads = ReservedNamespaceHeadArray.create(0)
 	heads.push(ReservedNamespaceHead.create(RootNamespaceQualifier, reason: NamespacePieceReason.qualifiesTheRoot))
 	heads.push(ReservedNamespaceHead.create(StdlibDirName, reason: NamespacePieceReason.namesTheLibrary))
 	heads.push(ReservedNamespaceHead.create(RuntimeDirName, reason: NamespacePieceReason.namesTheRuntimeTier))
@@ -2029,7 +2029,7 @@ function foldFixedElementCountNeeds(project Project, signatures ProgramSignature
 		return
 	end 'noSizedContainerInThisProgram'
 
-	var methodNames = NameRoster.create()
+	var methodNames = NameRoster.create(0)
 	var countSeeds = DescriptorNeedMap.create()
 	var countCallees = SelfCalleesMap.create()
 	var i = 0 as ElementIndex
@@ -2179,7 +2179,7 @@ module function dropExplainedParseConsequences(project Project, signatures Progr
 		return
 	end 'nothingIsHeld'
 
-	var explained = BoolArray.create()
+	var explained = BoolArray.create(0)
 	explained.growFilled(held.count(), value: false)
 	var progressed = true
 	var anyExplained = false
@@ -2214,7 +2214,7 @@ module function dropExplainedParseConsequences(project Project, signatures Progr
 		return
 	end 'everyConsequenceStaysReported'
 
-	var kept = DiagnosticArray.create()
+	var kept = DiagnosticArray.create(0)
 	var cursor = 0 as ElementIndex
 
 	for position in 0 upto held.count() 'eachHeldOnceMore'
@@ -2239,7 +2239,7 @@ module enum ConsequenceDropStage
 end 'ConsequenceDropStage'
 
 function unexplainedAfterTheDrop(held PendingConsequenceArray, explained BoolArray) returns PendingConsequenceArray
-	var remaining = PendingConsequenceArray.create()
+	var remaining = PendingConsequenceArray.create(0)
 	var removed = 0 as ElementIndex
 
 	for position in 0 upto held.count() 'eachHeld'
@@ -2666,7 +2666,7 @@ function emissionComponentsOf(project Project, path FilePath, tier SourceTier, c
 	let resolved = path.resolve(cwd)
 	let anchor = namespaceAnchorFor(project, cwd: cwd, tier: tier)
 	let relative = try resolved.relativeTo(anchor) otherwise resolved
-	var components = NameRoster.create()
+	var components = NameRoster.create(0)
 
 	for component in relative.toString().replace(FilePath.separator(), with: EmissionPathSeparator).split(EmissionPathSeparator) 'eachComponent'
 		components.push(component.toByteArray())
@@ -2683,7 +2683,7 @@ end 'emissionComponentsOf'
 // order.
 function sourceFilesInEmissionOrder(project Project) returns EmissionSlotArray
 	let cwd = Directory.currentPath()
-	var slots = EmissionSlotArray.create()
+	var slots = EmissionSlotArray.create(0)
 
 	for (iter, path) in project.db.sourcePaths.withIterator() 'eachSourcePath'
 		let tier = sourceTierOf(project, path: path)
@@ -2786,7 +2786,7 @@ export typealias DeclarationPositionArray = Array with DeclarationPosition
 export typealias DeclarationOrder = Array with ElementIndex
 
 export function declarationsInPositionOrder(positions DeclarationPositionArray) returns DeclarationOrder
-	var order = DeclarationOrder.create()
+	var order = DeclarationOrder.create(0)
 	var ascending = true
 
 	for i in 0 upto positions.count() 'eachPosition'
@@ -2836,7 +2836,7 @@ type FoldLedger
 	module var reMerged as ElementIndex
 
 	static function create() returns FoldLedger
-		return Self{foldedAgainst: FoldedIndex.none, artifacts: FileParseArtifactArray.create(), marks: MergeMarkArray.create(), tables: OpKeyedTable.allCases, tablesHeld: TableHeldColumn.create(), reMerged: 0}
+		return Self{foldedAgainst: FoldedIndex.none, artifacts: FileParseArtifactArray.create(0), marks: MergeMarkArray.create(0), tables: OpKeyedTable.allCases, tablesHeld: TableHeldColumn.create(0), reMerged: 0}
 	end 'create'
 
 	// Sound only against the index the kept files were merged under: a memo hit hands back the same
@@ -2999,7 +2999,7 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 		return FoldVerdict.stands
 	end 'refused'
 
-	var needlessInstances = NameRoster.create()
+	var needlessInstances = NameRoster.create(0)
 
 	for (name, _) in project.db.genericInstances.byName 'eachFiled'
 		if not requested.contains(name) 'noParseRequestsIt'
@@ -3031,7 +3031,7 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 end 'foldVerdict'
 
 function requestedTupleTypesOf(project Project, signatures ProgramSignatures, instance GenericFunctionInstance) returns RequestedTupleTypes
-	var layouts = StructLayoutArray.create()
+	var layouts = StructLayoutArray.create(0)
 
 	for argument in instance.arguments 'eachArgument'
 		if argument.kind == GenericArgumentKind.record and isTupleTypeName(argument.name) 'aTupleArgument'
@@ -3270,7 +3270,7 @@ function armFnTypeDisplay(project Project, name ByteArray) returns String
 
 	let alias = try project.functionTypeAliases.get(name) otherwise panic("armFnTypeDisplay: '{String.from(name)}' is armFnTypeResolvable but in neither registry — this and armFnTypeResolvable disagree")
 
-	var paramTypes = MaxonTypeArray.create()
+	var paramTypes = MaxonTypeArray.create(0)
 
 	for param in alias.paramTypes 'eachParam'
 		paramTypes.push(maxonTypeOfStoredAliasParam(param, typeNames: project.typeNames))
@@ -3613,37 +3613,37 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.funcSignatures = FuncSignatureMap.create()
 	project.funcSignatureFloors = FuncSignatureFloorMap.create()
 
-	project.pendingFnMergeChecks = PendingFnMergeCheckArray.create()
-	project.pendingFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
-	project.pendingBrandRecords = PendingBrandRecordArray.create()
-	project.pendingDiscardedResults = PendingDiscardedResultArray.create()
+	project.pendingFnMergeChecks = PendingFnMergeCheckArray.create(0)
+	project.pendingFunctionTypeDoors = PendingFunctionTypeDoorArray.create(0)
+	project.pendingBrandRecords = PendingBrandRecordArray.create(0)
+	project.pendingDiscardedResults = PendingDiscardedResultArray.create(0)
 
 	// The two deferred name-diagnostic lists and the collision set they are suppressed by are all
 	// PUSH/INSERT targets of the merge, so a warm rebuild that re-merged the same files would double
 	// every entry.
-	project.unusedTypeAliasDiagnostics = DeferredNameDiagnosticArray.create()
-	project.hiddenTypeNameDiagnostics = DiagnosticArray.create()
+	project.unusedTypeAliasDiagnostics = DeferredNameDiagnosticArray.create(0)
+	project.hiddenTypeNameDiagnostics = DiagnosticArray.create(0)
 
 	project.genericAliasNamesWrittenByAFile = UsedTypeNameSet.create()
 
 	// The binding-hygiene list (E3012/E3077) is a push target of the same merge, and doubles the same
 	// way.
-	project.bindingHygieneDiagnostics = DiagnosticArray.create()
+	project.bindingHygieneDiagnostics = DiagnosticArray.create(0)
 	project.collidedTypeNames = CollidedTypeNameSet.create()
 
 	// `conformances` is a PUSH array: a warm rebuild that re-merges the same files would double it
 	// without this reset. `interfaces` is an upsert map, reset with it for consistency.
-	project.conformances = ConformanceDeclArray.create()
+	project.conformances = ConformanceDeclArray.create(0)
 
 	// The index derived from it, reset in lockstep — see `Project.declaredConformances`.
 	project.declaredConformances = DeclaredConformanceMap.create()
 	project.declaredConformanceIndexBuilt = false
 
 	// The `<Type> from "…"` construction sites, a PUSH array for `conformances`' reason.
-	project.literalInitSites = LiteralInitSiteArray.create()
+	project.literalInitSites = LiteralInitSiteArray.create(0)
 
 	// The literal-inferred instantiation sites, a PUSH array for the same reason.
-	project.inferredInstantiationSites = GenericInstantiationSiteArray.create()
+	project.inferredInstantiationSites = GenericInstantiationSiteArray.create(0)
 
 	// Carries the settled contest table, which `createEnumRegistry` below spells its seeds through, so it
 	// is reset first.
@@ -3666,7 +3666,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.rangeChecks = RangeCheckPlanMap.create()
 	project.rangeSiteFacts = RangeSiteFacts.create()
 	project.structTypes = StructLayoutMap.create()
-	project.writtenTupleTypes = WrittenTupleTypeArray.create()
+	project.writtenTupleTypes = WrittenTupleTypeArray.create(0)
 	project.enumTypes = createEnumRegistry(project.interfaces)
 	project.functionTypeAliases = FunctionTypeAliasMap.create()
 

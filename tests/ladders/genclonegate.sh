@@ -76,7 +76,7 @@ esac
   f=0
   while [ "$f" -lt "$FIELDS" ]; do
     if [ "$f" -gt 0 ]; then printf ', '; fi
-    printf 'f%d: Ints.create()' "$f"
+    printf 'f%d: Ints.create(0)' "$f"
     f=$(( f + 1 ))
   done
   if [ "$MODE" = "control" ]; then
@@ -102,7 +102,7 @@ esac
 
   echo "function main() returns ExitCode"
   echo -e "\tvar src = Cell.create(Node.create())"
-  echo -e "\tvar out = Cells.create()"
+  echo -e "\tvar out = Cells.create(0)"
   echo -e "\tvar acc = scaleOpaque(1)"
   s=0
   while [ "$s" -lt "$SITES" ]; do

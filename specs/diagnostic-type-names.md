@@ -345,9 +345,9 @@ typealias Xs = Array with Count
 typealias Ys = Array with Count
 
 function main() returns ExitCode
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(1)
-	var ys = Ys.create()
+	var ys = Ys.create(0)
 	ys.push(2)
 	let a = ys + 1
 	return 0
@@ -364,9 +364,9 @@ typealias Xs = Array with Count
 typealias Ys = Array with Count
 
 function main() returns ExitCode
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(1)
-	var ys = Ys.create()
+	var ys = Ys.create(0)
 	ys.push(2)
 	if ys < 1 'lt'
 		return 1
@@ -385,9 +385,9 @@ typealias Xs = Array with Count
 typealias Ys = Array with Count
 
 function main() returns ExitCode
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(1)
-	var ys = Ys.create()
+	var ys = Ys.create(0)
 	ys.push(2)
 	let a = -ys
 	return 0
@@ -438,9 +438,9 @@ typealias Xs = Array with Count
 typealias Ys = Array with Count
 
 function main() returns ExitCode
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(1)
-	var ys = Ys.create()
+	var ys = Ys.create(0)
 	ys.push(2)
 	match ys 'm'
 		1 then return 1
@@ -559,7 +559,7 @@ function ident(a T) uses T returns T
 end 'ident'
 
 function main() returns ExitCode
-	var counts = Counts.create()
+	var counts = Counts.create(0)
 	counts.push(1)
 	let c = ident(counts)
 	return 0
@@ -867,7 +867,7 @@ typealias Digit = int(0 to 9)
 typealias Digits = Array with Digit
 
 function main() returns ExitCode
-	var digits = Digits.create()
+	var digits = Digits.create(0)
 	digits.push(true)
 	return 0
 end 'main'
@@ -1100,7 +1100,7 @@ typealias Ratio = float(0.0 to 1.0)
 typealias Ratios = Array with Ratio
 
 function main() returns ExitCode
-	var ratios = Ratios.create()
+	var ratios = Ratios.create(0)
 	ratios.push(true)
 	return 0
 end 'main'

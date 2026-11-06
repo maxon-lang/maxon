@@ -199,7 +199,7 @@ end 'assertGtFrameConsistent'
 // slot on Linux.
 function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	assertGtFrameConsistent(target)
-	var code = ByteArray.create()
+	var code = ByteArray.create(0)
 
 	encodePopReg(code, reg: GtSwitchPcScratchReg)
 	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffSavedPc as Imm32, srcReg: GtSwitchPcScratchReg, wide: true)
@@ -239,7 +239,7 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(code, destReg: GtSwitchPcScratchReg, base: GtSwitchToReg, disp: GtOffSavedPc as Imm32, wide: true)
 	encodeJmpReg(code, reg: GtSwitchPcScratchReg)
 
-	var chunk = FunctionCodeChunk.createWith(GtContextSwitchName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	var chunk = FunctionCodeChunk.createWith(GtContextSwitchName, code: code, callFixups: CallFixupArray.create(0), rdataRelocs: RdataRelocationArray.create(0), iatRelocs: RelocationArray.create(0))
 	chunk.leavesCallerStack(StackWordBytes as StackSize)
 	return chunk
 end 'buildGtContextSwitchChunk'
@@ -257,8 +257,8 @@ end 'buildGtContextSwitchChunk'
 // user call may clobber. The stack arguments then sit just above that reservation, where a callee
 // reads an ordinary call's.
 function buildGtTrampolineChunk() returns FunctionCodeChunk
-	var code = ByteArray.create()
-	var callFixups = CallFixupArray.create()
+	var code = ByteArray.create(0)
+	var callFixups = CallFixupArray.create(0)
 
 	// gt = rdx (the context switch's `to`, unmodified). Held in a callee-saved register across the user call.
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtTrampGtReg, src: GtSwitchToReg, wide: true)
@@ -311,7 +311,7 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtSwitchFromReg, src: GtTrampGtReg, wide: true)
 	encodeCallDirect(code, callFixups: callFixups, targetName: GtContextSwitchName)
 
-	var chunk = FunctionCodeChunk.createWith(GtTrampolineName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	var chunk = FunctionCodeChunk.createWith(GtTrampolineName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(0), iatRelocs: RelocationArray.create(0))
 	chunk.leavesCallerStack(0)
 	return chunk
 end 'buildGtTrampolineChunk'
@@ -1041,9 +1041,9 @@ module let GtDispatchBelowStackBottomFatalName = b"mrt_fatal_dispatch_below_gt_s
 // Both fatals are reached on a stack with no room the runtime can vouch for — under a green thread's
 // bottom, or on no stack it knows — so the report is printed from the system stack.
 module function buildGtSystemStackFatalChunk(name ByteArray, fatal RuntimeFatal, exitRoute X64OsCallKind, target Target) returns FunctionCodeChunk
-	var entry = ByteArray.create()
-	var callFixups = CallFixupArray.create()
-	var rdataRelocs = RdataRelocationArray.create()
+	var entry = ByteArray.create(0)
+	var callFixups = CallFixupArray.create(0)
+	var rdataRelocs = RdataRelocationArray.create(0)
 
 	emitSwitchToTheSystemStack(entry, rdataRelocs: rdataRelocs, rspBelowTop: -StackWordBytes as Imm32)
 
@@ -1109,14 +1109,14 @@ end 'emitShimLockDepthStep'
 // ⚠ **ITS RETURN ADDRESS IS THE ONLY THING IT PUTS ON THE GREEN THREAD'S STACK, AND IT IS GONE BEFORE THE
 // SHIM PUSHES ANYTHING** — so the peak `x64ShimmedImportStep` reports is unchanged.
 function buildGtShimEnterChunk(target Target) returns FunctionCodeChunk
-	var code = ByteArray.create()
-	var rdataRelocs = RdataRelocationArray.create()
+	var code = ByteArray.create(0)
+	var rdataRelocs = RdataRelocationArray.create(0)
 
 	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, os: target.os)
 	emitShimLockDepthStep(code, m: X64Register.rax, delta: OneMore)
 	code.push(OpcodeRet)
 
-	var chunk = FunctionCodeChunk.createWith(GtShimEnterName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: rdataRelocs, iatRelocs: RelocationArray.create())
+	var chunk = FunctionCodeChunk.createWith(GtShimEnterName, code: code, callFixups: CallFixupArray.create(0), rdataRelocs: rdataRelocs, iatRelocs: RelocationArray.create(0))
 	chunk.spendsCallerStack(StackWordBytes as StackSize, checks: false)
 	return chunk
 end 'buildGtShimEnterChunk'
@@ -1143,7 +1143,7 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	let frameSize = alignUpStack(ShadowSpaceBytes + (stackArgWords * SpillSlotBytes), alignment: StackFrameAlignment)
 	let reserve = frameSize + ShimPushedWordBytes
 
-	var shimFixups = ChunkRel32FixupArray.create()
+	var shimFixups = ChunkRel32FixupArray.create(0)
 	var shimLabels = BlockOffsetTable.create()
 
 	// Guard: no M (no scheduler yet, or an OS thread that is not one), no current GT, or a current GT on a real
@@ -1323,7 +1323,7 @@ end 'emitGtShimmedIatCall'
 // The GPRs `__gt_morestack` pushes on the system stack, in push order. rbp is FIRST: its saved slot receives the
 // rebased live rbp at a displacement derived from that position.
 function morestackSavedGprs() returns X64RegisterArray
-	var gprs = X64RegisterArray.create()
+	var gprs = X64RegisterArray.create(0)
 	gprs.push(X64Register.rbp)
 
 	for reg in calleeSavedOrder 'calleeSaved'
@@ -1414,9 +1414,9 @@ function emitGtRegisterBlock(code ByteArray, gprs X64RegisterArray, stackedBytes
 
 		// Far inside a page, so it never probes; every caller holds the GT in r11.
 		encodePrologue(code, stackSize: frameBytes, probeScratchIsFree: false)
-		emitRegisterSlots(code, base: X64Register.rsp, firstSlot: ShadowSpaceBytes, gprs: X64RegisterArray.create(), xmms: argFpRegisters, direction: direction)
+		emitRegisterSlots(code, base: X64Register.rsp, firstSlot: ShadowSpaceBytes, gprs: X64RegisterArray.create(0), xmms: argFpRegisters, direction: direction)
 	end 'save' else 'restore'
-		emitRegisterSlots(code, base: X64Register.rsp, firstSlot: ShadowSpaceBytes, gprs: X64RegisterArray.create(), xmms: argFpRegisters, direction: direction)
+		emitRegisterSlots(code, base: X64Register.rsp, firstSlot: ShadowSpaceBytes, gprs: X64RegisterArray.create(0), xmms: argFpRegisters, direction: direction)
 		encodeEpilogue(code, stackSize: frameBytes)
 
 		for i in 0 upto gprs.count() 'pop'
@@ -1460,11 +1460,11 @@ end 'emitRegisterSlots'
 // compute phase to `GtMaxStackBytes` and panic. A frame that fits returns with the request still in
 // the guard word, for the next function-entry guard to honour.
 function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
-	var code = ByteArray.create()
-	var iatRelocs = RelocationArray.create()
-	var rdataRelocs = RdataRelocationArray.create()
-	var callFixups = CallFixupArray.create()
-	var growFixups = ChunkRel32FixupArray.create()
+	var code = ByteArray.create(0)
+	var iatRelocs = RelocationArray.create(0)
+	var rdataRelocs = RdataRelocationArray.create(0)
+	var callFixups = CallFixupArray.create(0)
+	var growFixups = ChunkRel32FixupArray.create(0)
 	var growLabels = BlockOffsetTable.create()
 	let savedGprs = morestackSavedGprs()
 
@@ -1616,8 +1616,8 @@ let RelocLinkReg = X64Register.r11
 // It copies `[gt.sp, old_top)` — only what is live — so the same routine can move a thread onto a SMALLER stack;
 // the caller has established that the live region plus the guard height fits.
 function buildGtStackRelocateChunk(target Target) returns FunctionCodeChunk
-	var code = ByteArray.create()
-	var callFixups = CallFixupArray.create()
+	var code = ByteArray.create(0)
+	var callFixups = CallFixupArray.create(0)
 
 	// rsp ≡ 8 on entry, so the pushes plus the shadow space must be a whole number of 16-byte units for the
 	// release call to find rsp aligned.
@@ -1696,7 +1696,7 @@ function buildGtStackRelocateChunk(target Target) returns FunctionCodeChunk
 
 	code.push(OpcodeRet)
 
-	var chunk = FunctionCodeChunk.createWith(GtStackRelocateName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	var chunk = FunctionCodeChunk.createWith(GtStackRelocateName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(0), iatRelocs: RelocationArray.create(0))
 	chunk.spendsCallerStack((stackedBytes as StackSize) + ShadowSpaceBytes, checks: false)
 	return chunk
 end 'buildGtStackRelocateChunk'
@@ -1713,7 +1713,7 @@ end 'emitGtGuardWordRestore'
 // `gt.fp` and for every chain link, as `Arm64GtRuntime.emitArm64RelocateRebase` is on the other lane. UNSIGNED
 // compares: these are addresses.
 function emitGtRelocateRebase(code ByteArray, reg X64Register)
-	var fixups = ChunkRel32FixupArray.create()
+	var fixups = ChunkRel32FixupArray.create(0)
 	var labels = BlockOffsetTable.create()
 
 	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: reg, src: RelocOldBaseReg, wide: true)
@@ -1739,7 +1739,7 @@ end 'emitGtRelocateRebaseWord'
 // `[new_low, new_high)` — which a null link does too: a green thread's outermost frame is the
 // trampoline's, whose saved rbp is the zero `__gt_spawn` leaves in `gt.fp`.
 function emitGtRelocateChainWalk(code ByteArray)
-	var walkFixups = ChunkRel32FixupArray.create()
+	var walkFixups = ChunkRel32FixupArray.create(0)
 	var walkLabels = BlockOffsetTable.create()
 
 	walkLabels.place(WalkHeadLabel, value: codeHere(code))
@@ -1782,7 +1782,7 @@ let LargestGuardProjection = i32.max as FullRangeInt
 // grower makes the frame fit in one call. A request `__sysmon` stores after the withdrawal reaches
 // the grower, which leaves it in place when the frame fits.
 export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin FullRangeInt, site GtGuardSite, target Target)
-	var guardFixups = ChunkRel32FixupArray.create()
+	var guardFixups = ChunkRel32FixupArray.create(0)
 	var guardLabels = BlockOffsetTable.create()
 	let guardTop = code.count()
 
@@ -1831,9 +1831,9 @@ end 'emitGtBranchUnlessPreemptRequest'
 // `__gt_guard_tripped` — see `GtRuntime.GtGuardTrippedName`. Entered with `__gt_morestack`'s ENTRY CONTRACT, which
 // it hands on untouched by jumping when the guard word holds no request.
 function buildGtGuardTrippedChunk() returns FunctionCodeChunk
-	var code = ByteArray.create()
-	var callFixups = CallFixupArray.create()
-	var fixups = ChunkRel32FixupArray.create()
+	var code = ByteArray.create(0)
+	var callFixups = CallFixupArray.create(0)
+	var fixups = ChunkRel32FixupArray.create(0)
 	var labels = BlockOffsetTable.create()
 
 	emitGtBranchUnlessPreemptRequest(code, fixups: fixups, unlessRequested: TrippedGrowLabel)
@@ -1843,7 +1843,7 @@ function buildGtGuardTrippedChunk() returns FunctionCodeChunk
 	encodeJmpDirect(code, callFixups: callFixups, targetName: GtMorestackName)
 	resolveChunkRel32Fixups(code, labelOffsets: labels, rel32Fixups: fixups)
 
-	var chunk = FunctionCodeChunk.createWith(GtGuardTrippedName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	var chunk = FunctionCodeChunk.createWith(GtGuardTrippedName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(0), iatRelocs: RelocationArray.create(0))
 	chunk.spendsCallerStack(x64GtPreemptArmStackBytes(), checks: false)
 	return chunk
 end 'buildGtGuardTrippedChunk'
@@ -1886,7 +1886,7 @@ end 'emitGtPreemptArm'
 // emitter. `UnguardedChains.requireUnguardedChainsFitTheGuardMargin` adds `__gt_preempt`'s tree to
 // it.
 function x64GtPreemptArmStackBytes() returns StackSize
-	return StackWordBytes as StackSize + emitGtPreemptArm(ByteArray.create(), callFixups: CallFixupArray.create())
+	return StackWordBytes as StackSize + emitGtPreemptArm(ByteArray.create(0), callFixups: CallFixupArray.create(0))
 end 'x64GtPreemptArmStackBytes'
 
 // What a shimmed import call adds below its caller's frame on a green thread's own stack. The kernel call
@@ -2179,12 +2179,12 @@ end 'emitPreemptReleaseExtLock'
 // safe-point predicate demanded (`PreemptionDepth.requireAsyncPreemptionFitsItsMargin`).
 function buildGtAsyncPreemptChunk() returns FunctionCodeChunk
 	assertAsyncPreemptGprOrder()
-	var code = ByteArray.create()
-	var callFixups = CallFixupArray.create()
+	var code = ByteArray.create(0)
+	var callFixups = CallFixupArray.create(0)
 
 	_ = emitAsyncPreemptBody(code, callFixups: callFixups)
 
-	var chunk = FunctionCodeChunk.createWith(AsyncPreemptName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	var chunk = FunctionCodeChunk.createWith(AsyncPreemptName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(0), iatRelocs: RelocationArray.create(0))
 	chunk.spendsCallerStack(x64GtAsyncPreemptStackBytes(), checks: false)
 	return chunk
 end 'buildGtAsyncPreemptChunk'
@@ -2222,7 +2222,7 @@ end 'emitAsyncPreemptBody'
 // caller-saved half) and the callee-saved half — rather than a third list of sixteen names that could drift
 // from either. The count is asserted because the partition is what makes the derivation total.
 function asyncPreemptXmmOrder() returns X64RegisterArray
-	var all = X64RegisterArray.create()
+	var all = X64RegisterArray.create(0)
 
 	for reg in argFpRegisters 'callerSaved'
 		all.push(reg)
@@ -2249,7 +2249,7 @@ end 'asyncPreemptBlockBytes'
 // `__gt_async_preempt_park` RUNS**: the injected return address, the trampoline's frame read off its own
 // emitter, and the `call` that enters the park.
 export function x64GtAsyncPreemptStackBytes() returns StackSize
-	return (2 * StackWordBytes) as StackSize + emitAsyncPreemptBody(ByteArray.create(), callFixups: CallFixupArray.create())
+	return (2 * StackWordBytes) as StackSize + emitAsyncPreemptBody(ByteArray.create(0), callFixups: CallFixupArray.create(0))
 end 'x64GtAsyncPreemptStackBytes'
 
 // `__gt_exit_process(rcx = exitCode)`; see `SchedRuntime.ExitProcessGateName`.
@@ -2416,12 +2416,12 @@ end 'buildLinuxPreemptHandlerChunk'
 // ==========================================================================
 
 function buildGtSpinPauseChunk() returns FunctionCodeChunk
-	var code = ByteArray.create()
+	var code = ByteArray.create(0)
 
 	encodeX64Procyield(code, count: X64Register.rcx)
 	code.push(OpcodeRet)
 
-	var chunk = FunctionCodeChunk.createWith(HostSpinPauseName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	var chunk = FunctionCodeChunk.createWith(HostSpinPauseName, code: code, callFixups: CallFixupArray.create(0), rdataRelocs: RdataRelocationArray.create(0), iatRelocs: RelocationArray.create(0))
 	chunk.spendsCallerStack(StackWordBytes as StackSize, checks: false)
 	return chunk
 end 'buildGtSpinPauseChunk'

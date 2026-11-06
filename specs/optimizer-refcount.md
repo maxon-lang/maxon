@@ -136,20 +136,20 @@ function main() returns ExitCode
 	total = total + sum_point(Point.create(5, y: 6))
 
 	// --- section 3: loop-carried container pushes ---
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 	for i in 0 upto 5 'names_loop'
 		names.push("name_{i}")
 	end 'names_loop'
 	total = total + names_total(names)
 
 	// --- section 4: nested container ---
-	var row1 = IntArray.create()
+	var row1 = IntArray.create(0)
 	row1.push(1)
 	row1.push(2)
-	var row2 = IntArray.create()
+	var row2 = IntArray.create(0)
 	row2.push(3)
 	row2.push(4)
-	var matrix = Matrix.create()
+	var matrix = Matrix.create(0)
 	matrix.push(row1)
 	matrix.push(row2)
 	total = total + matrix_total(matrix)
@@ -185,7 +185,7 @@ function main() returns ExitCode
 
 	// --- section 10: for-in over managed elements, primitive body ---
 	// exercises the for-in lowering pattern (__forin_result + user var alias)
-	var points = PointArray.create()
+	var points = PointArray.create(0)
 	points.push(Point.create(1, y: 2))
 	points.push(Point.create(3, y: 4))
 	points.push(Point.create(5, y: 6))
@@ -198,7 +198,7 @@ function main() returns ExitCode
 	// elimination collapses the bracket: the try-result owns the rc=1
 	// transferred reference and the direct call is borrow-only, so the
 	// extra +1/-1 is pure overhead.
-	var triplet = PointArray.create()
+	var triplet = PointArray.create(0)
 	triplet.push(Point.create(7, y: 8))
 	triplet.push(Point.create(9, y: 10))
 	triplet.push(Point.create(11, y: 12))
@@ -425,7 +425,7 @@ function stash(arr BoxArray, b Box) returns Integer throws BoxError
 end 'stash'
 
 function main() returns ExitCode
-	var arr = BoxArray.create()
+	var arr = BoxArray.create(0)
 	@heap let a = Box.create(42)
 	let b = a
 	let n = try stash(arr, b: b) otherwise 0

@@ -50,7 +50,7 @@ type State
 		end 'create'
 end 'State'
 
-var state = State.create(ByteArray.create())
+var state = State.create(ByteArray.create(0))
 
 function main() returns ExitCode
 		state.items.push(10)
@@ -111,8 +111,8 @@ typealias CountArray = Array with Count
 typealias NameArray = Array with String
 
 type Facts
-	export var counts = CountArray.create()
-	export var names = NameArray.create()
+	export var counts = CountArray.create(0)
+	export var names = NameArray.create(0)
 	static function create() returns Facts
 		return Self{}
 	end 'create'
@@ -202,7 +202,7 @@ typealias Count = int(0 to 1000)
 typealias CountArray = Array with Count
 
 type Facts
-	export var counts = CountArray.create()
+	export var counts = CountArray.create(0)
 
 	static function create() returns Facts
 		return Self{}
@@ -214,7 +214,7 @@ typealias FactsArray = Array with Facts
 let SharedFacts = Facts.create()
 
 function main() returns ExitCode
-	var xs = FactsArray.create()
+	var xs = FactsArray.create(0)
 	xs.push(SharedFacts.clone())
 	var stored = try xs.get(0) otherwise panic("the push just landed")
 	stored.counts.push(7)
@@ -239,7 +239,7 @@ typealias Count = int(0 to 1000)
 typealias CountArray = Array with Count
 
 type Facts
-	export var counts = CountArray.create()
+	export var counts = CountArray.create(0)
 
 	static function create() returns Facts
 		return Self{}
@@ -251,7 +251,7 @@ typealias FactsArray = Array with Facts
 let SharedFacts = Facts.create()
 
 function main() returns ExitCode
-	var xs = FactsArray.create()
+	var xs = FactsArray.create(0)
 	xs.push(SharedFacts)
 	return xs.count() as ExitCode
 end 'main'

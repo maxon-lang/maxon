@@ -36,7 +36,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function appendFromHelper(dest ItemArray)
-		var src = ItemArray.create()
+		var src = ItemArray.create(0)
 		src.push(Item.create("hello from source that is long enough", value: 10))
 		src.push(Item.create("second item from source long enough", value: 20))
 		src.push(Item.create("third item from source long enough", value: 30))
@@ -45,7 +45,7 @@ function appendFromHelper(dest ItemArray)
 end 'appendFromHelper'
 
 function main() returns ExitCode
-		var dest = ItemArray.create()
+		var dest = ItemArray.create(0)
 		dest.push(Item.create("dest item that is long enough for heap", value: 1))
 		appendFromHelper(dest)
 
@@ -76,7 +76,7 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function appendOps(dest OpArray)
-		var src = OpArray.create()
+		var src = OpArray.create(0)
 		src.push(Op.add(10))
 		src.push(Op.sub(20))
 		src.push(Op.add(30))
@@ -84,7 +84,7 @@ function appendOps(dest OpArray)
 end 'appendOps'
 
 function main() returns ExitCode
-		var dest = OpArray.create()
+		var dest = OpArray.create(0)
 		dest.push(Op.nop)
 		appendOps(dest)
 
@@ -132,12 +132,12 @@ type Module
 end 'Module'
 
 function createModule() returns Module
-		return Module.create(FuncArray.create())
+		return Module.create(FuncArray.create(0))
 end 'createModule'
 
 function parseAndMerge(dest Module, name String)
 		var source = createModule()
-		source.functions.push(Func.create(name, body: IntArray.create()))
+		source.functions.push(Func.create(name, body: IntArray.create(0)))
 		dest.functions.append(source.functions)
 		// source is freed when this function returns
 end 'parseAndMerge'
@@ -151,7 +151,7 @@ function main() returns ExitCode
 				return 99
 		end 'badCount'
 
-		view first = try allModule.functions.get(0) otherwise Func.create("", body: IntArray.create())
+		view first = try allModule.functions.get(0) otherwise Func.create("", body: IntArray.create(0))
 		if first.name == "func_a_with_long_name_for_heap" 'correct'
 				return 0
 		end 'correct'
@@ -183,21 +183,21 @@ end 'Record'
 typealias RecordArray = Array with Record
 
 function buildLines() returns StringArray
-		var ls = StringArray.create()
+		var ls = StringArray.create(0)
 		ls.push("line one long enough for heap allocation")
 		ls.push("line two long enough for heap allocation")
 		return ls
 end 'buildLines'
 
 function appendRecords(dest RecordArray)
-		var src = RecordArray.create()
+		var src = RecordArray.create(0)
 		src.push(Record.create("source tag long enough for the heap", lines: buildLines()))
 		dest.append(src)
 		// src is freed when this function returns
 end 'appendRecords'
 
 function main() returns ExitCode
-		var dest = RecordArray.create()
+		var dest = RecordArray.create(0)
 		dest.push(Record.create("dest tag long enough for the heapp", lines: buildLines()))
 		appendRecords(dest)
 
@@ -205,7 +205,7 @@ function main() returns ExitCode
 				return 99
 		end 'badCount'
 
-		view rec = try dest.get(1) otherwise Record.create("", lines: StringArray.create())
+		view rec = try dest.get(1) otherwise Record.create("", lines: StringArray.create(0))
 		if rec.lines.count() != 2 'badLines'
 				return 98
 		end 'badLines'

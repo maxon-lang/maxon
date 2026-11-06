@@ -707,7 +707,7 @@ type Lookup
 	var names as StringArray
 
 	static function make() returns Lookup
-		var a = StringArray.create()
+		var a = StringArray.create(0)
 		a.push("alpha")
 		return Lookup{names: a}
 	end 'make'
@@ -767,7 +767,7 @@ function nameOf(op Op) returns Idx
 end 'nameOf'
 
 function main() returns ExitCode
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.push(65)
 	return nameOf(Op.alloc(b))
 end 'main'

@@ -22,9 +22,9 @@ end 'BlockRefLookupError'
 export type IrModule uses Op
 	export typealias OpArray = Array with Op
 
-	export var functions = IrFunctionArray.create()
-	export var blocks = IrBlockArray.create()
-	export var ops = OpArray.create()
+	export var functions = IrFunctionArray.create(0)
+	export var blocks = IrBlockArray.create(0)
+	export var ops = OpArray.create(0)
 
 	// Parallel to `ops`: entry i is the SOURCE SPAN of ops[i], as an id into `Project.debugSpanTable`.
 	// Filled through the cursor on the column rather than at each append site — see `DebugSpanColumn`.
@@ -230,12 +230,12 @@ export type IrModule uses Op
 
 	export var hostText = HostTextEncoding.utf8
 
-	export var runtimeAbortSites = RuntimeAbortSiteArray.create()
+	export var runtimeAbortSites = RuntimeAbortSiteArray.create(0)
 	export var runtimeAbortDoorBuilt = false
 	export var tierAbortDoors = FunctionNameSet.create()
 
-	export var runtimeLockSites = RuntimeLockSiteArray.create()
-	export var runtimeLockRequirements = RuntimeLockRequirementArray.create()
+	export var runtimeLockSites = RuntimeLockSiteArray.create(0)
+	export var runtimeLockRequirements = RuntimeLockRequirementArray.create(0)
 
 	export var serviceStartThunks = FunctionNameSet.create()
 
@@ -266,7 +266,7 @@ export type IrModule uses Op
 	// indices into this array, so closing the gap would invalidate them). So a
 	// Maxon-tier consumer must reach ops through a block like every other.
 	export function liveOpIndices(func IrFunction) returns OpIndexArray
-		var indices = OpIndexArray.create()
+		var indices = OpIndexArray.create(0)
 		self.collectLiveOpIndices(func, into: indices)
 		return indices
 	end 'liveOpIndices'
@@ -340,7 +340,7 @@ export type IrModule uses Op
 					continue
 				end 'leavesTheChain'
 
-				var arrivals = try incoming.get(edge.targetBlockId) otherwise ExitIncomingArray.create()
+				var arrivals = try incoming.get(edge.targetBlockId) otherwise ExitIncomingArray.create(0)
 				arrivals.push(ExitIncoming.create(source, args: edge.argIds))
 				incoming.upsert(edge.targetBlockId, value: arrivals)
 			end 'eachEdge'
@@ -350,9 +350,9 @@ export type IrModule uses Op
 	end 'incomingIntoExitChain'
 
 	function exitChainFrom(start ExitWebBlock, incoming ExitIncomingByTarget, webOfPhi ExitWebByPhi) returns ExitChain
-		var web = ExitWebBlockArray.create()
-		var leaves = ExitArrivalArray.create()
-		var joins = ExitArrivalArray.create()
+		var web = ExitWebBlockArray.create(0)
+		var leaves = ExitArrivalArray.create(0)
+		var joins = ExitArrivalArray.create(0)
 		var visited = BlockIdSet.create()
 		var next = 0 as ElementIndex
 		web.push(start)
@@ -426,7 +426,7 @@ export type IrModule uses Op
 	end 'blockHoldingTheExitOf'
 
 	export function scopeExitsAfterSplits(local DebugLocalDecl, func IrFunction, byId BlockIndexById) returns BlockIdArray
-		var exits = BlockIdArray.create()
+		var exits = BlockIdArray.create(0)
 
 		for exit in local.scopeEnds 'eachScopeExit'
 			exits.push(self.blockHoldingTheExitOf(func, byId: byId, start: exit))
@@ -846,13 +846,13 @@ export type IrModule uses Op
 	// The module's SHELL survives: its function list and the dozen or so flags `PeWriter` and the link step
 	// read after the encode. Only what the ops, blocks and spans hold goes.
 	export function releaseBody()
-		self.ops = OpArray.create()
-		self.blocks = IrBlockArray.create()
+		self.ops = OpArray.create(0)
+		self.blocks = IrBlockArray.create(0)
 		self.spans.releaseRows()
 	end 'releaseBody'
 
 	export function releaseWholly()
-		self.functions = IrFunctionArray.create()
+		self.functions = IrFunctionArray.create(0)
 		self.releaseBody()
 	end 'releaseWholly'
 end 'IrModule'
@@ -866,7 +866,7 @@ module type OpSlotSupply
 	export var taken as ElementIndex
 
 	module static function create() returns OpSlotSupply
-		return Self{recycled: OpIndexArray.create(), taken: 0}
+		return Self{recycled: OpIndexArray.create(0), taken: 0}
 	end 'create'
 end 'OpSlotSupply'
 
@@ -883,7 +883,7 @@ module type SpliceScratch
 	export var absent as ElementIndex
 
 	module static function create() returns SpliceScratch
-		return Self{slots: OpSlotSupply.create(), blockRefById: BlockRefArray.create(), absent: 0}
+		return Self{slots: OpSlotSupply.create(), blockRefById: BlockRefArray.create(0), absent: 0}
 	end 'create'
 
 	// The function's ref for block `id`, or `absent`.
@@ -924,7 +924,7 @@ end 'OpCompactionPlan'
 // (entries with `live[i] == false`) are left at `deadMarker` (= `count`).
 function assignCompactionSlots(live BoolArray, count ElementIndex) returns OpCompactionPlan
 	let deadMarker = count
-	var forward = OpIndexArray.create()
+	var forward = OpIndexArray.create(0)
 	forward.resize(count)
 	var nextSlot = 0 as ElementIndex
 
@@ -949,7 +949,7 @@ end 'assignCompactionSlots'
 // forwarding) are the only allocations and are dwarfed by the orphan bytes
 // reclaimed.
 function computeOpCompaction(functions IrFunctionArray, blocks IrBlockArray, opCount ElementIndex) returns OpCompactionPlan
-	var live = BoolArray.create()
+	var live = BoolArray.create(0)
 	live.resize(opCount)
 
 	for func in functions 'markFunc'
@@ -1030,7 +1030,7 @@ end 'rewriteBlockOpRefs'
 // the shared `assignCompactionSlots`. O(total blockRefs); the two blockCount-
 // sized arrays (live flags + forwarding) are the only allocations.
 function computeBlockCompaction(functions IrFunctionArray, blockCount ElementIndex) returns OpCompactionPlan
-	var live = BoolArray.create()
+	var live = BoolArray.create(0)
 	live.resize(blockCount)
 
 	for func in functions 'markFunc'

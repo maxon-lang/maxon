@@ -96,7 +96,7 @@ type PhiIncomings
 	end 'incomingOf'
 
 	function noteIncoming(phi ValueId, incoming ValueId)
-		var known = try self.byPhi.get(phi) otherwise ValueIdArray.create()
+		var known = try self.byPhi.get(phi) otherwise ValueIdArray.create(0)
 		known.push(incoming)
 		self.byPhi.upsert(phi, value: known)
 	end 'noteIncoming'
@@ -108,7 +108,7 @@ module type CallbackSites
 	var writers as FuncIndexArray
 
 	module static function create() returns CallbackSites
-		return Self{ops: FuncIndexArray.create(), callers: FuncIndexArray.create(), writers: FuncIndexArray.create()}
+		return Self{ops: FuncIndexArray.create(0), callers: FuncIndexArray.create(0), writers: FuncIndexArray.create(0)}
 	end 'create'
 
 	module function count() returns ElementIndex
@@ -149,7 +149,7 @@ module type CallbackFlows
 	var sites as FlowSiteMemo
 
 	module static function create() returns CallbackFlows
-		return Self{built: false, kinds: FlowContributionKindArray.create(), firsts: FuncIndexArray.create(), seconds: FuncIndexArray.create(), siteCallers: FuncIndexArray.create(), siteOps: FuncIndexArray.create(), targetFuncs: CsrColumn.create(), targetPositions: FuncIndexArray.create(), byTargetFunc: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create()), unions: LandingBodiesArray.create(), landings: FlowLandingMemo.create(), sites: FlowSiteMemo.create()}
+		return Self{built: false, kinds: FlowContributionKindArray.create(0), firsts: FuncIndexArray.create(0), seconds: FuncIndexArray.create(0), siteCallers: FuncIndexArray.create(0), siteOps: FuncIndexArray.create(0), targetFuncs: CsrColumn.create(0), targetPositions: FuncIndexArray.create(0), byTargetFunc: CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0)), unions: LandingBodiesArray.create(0), landings: FlowLandingMemo.create(), sites: FlowSiteMemo.create()}
 	end 'create'
 
 	module function settle(project Project, module MaxonModule, calls CallSummaryIndex)
@@ -167,7 +167,7 @@ module type CallbackFlows
 			end 'aReadableBody'
 		end 'eachCaller'
 
-		var rows = CsrColumn.create()
+		var rows = CsrColumn.create(0)
 
 		for k in 0 upto self.kinds.count() 'eachContribution'
 			rows.push(k as CsrIndex)
@@ -242,7 +242,7 @@ module type CallbackFlows
 	end 'noteWitnessCall'
 
 	function functionValuePositions(caller IrFunction, args ValueIdArray, count ParamCount) returns ParamCountArray
-		var found = ParamCountArray.create()
+		var found = ParamCountArray.create(0)
 
 		for i in 0 upto count 'eachArg'
 			if self.holdsAFunctionValue(caller, value: try args.get(i) otherwise panic("CallbackFlows.functionValuePositions: args.get OOB at {i}")) 'aFunctionValue'
@@ -375,7 +375,7 @@ module type CallbackFlows
 	end 'markForeign'
 
 	function contributionsTo(funcIndex ElementIndex, position ParamCount) returns FuncIndexArray
-		var found = FuncIndexArray.create()
+		var found = FuncIndexArray.create(0)
 
 		for slot in 0 upto self.byTargetFunc.degree(funcIndex as CsrIndex) 'eachContribution'
 			let k = self.byTargetFunc.neighbour(funcIndex as CsrIndex, k: slot)

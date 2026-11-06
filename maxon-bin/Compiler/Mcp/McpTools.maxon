@@ -323,7 +323,7 @@ module function executeBuildToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args O
 		return toolErrorText(reqDoc, idNode: idNode, message: "build: {target.error}", repoRoot: ctx.repoRootLabel)
 	end 'badSource'
 
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push(BuildSubcommandName)
 
 	// Naming nothing is legal here: it builds the working directory's manifest.
@@ -368,7 +368,7 @@ module function executeExecuteToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args
 		return toolErrorText(reqDoc, idNode: idNode, message: "execute: give either `path` or `source`.", repoRoot: ctx.repoRootLabel)
 	end 'nothingToRun'
 
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push(ExecuteCommandName)
 	argv.push(target.file.path)
 
@@ -401,7 +401,7 @@ function boundSecondsOf(parse TargetSecondsParse) returns TargetSeconds
 end 'boundSecondsOf'
 
 module function executeTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push(TestCommandName)
 
 	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: ".")
@@ -416,13 +416,13 @@ module function executeTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args Op
 end 'executeTestToolWithin'
 
 function valuedOptionOf(reqDoc JsonDoc, args OptionalNode, key String, prefix String) returns StringArray
-	let value = try statedStringArg(reqDoc, args: args, key: key) otherwise return StringArray.create()
+	let value = try statedStringArg(reqDoc, args: args, key: key) otherwise return StringArray.create(0)
 	return ["{prefix}{value}"]
 end 'valuedOptionOf'
 
 function wholeOptionOf(reqDoc JsonDoc, args OptionalNode, key String, prefix String) returns StringArray
 	return match optionalWholeArg(reqDoc, args: args, key: key) 'whole'
-		absent gives StringArray.create()
+		absent gives StringArray.create(0)
 		given(value) gives ["{prefix}{value}"]
 	end 'whole'
 end 'wholeOptionOf'
@@ -434,7 +434,7 @@ module function executeFmtToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args Opt
 		return toolErrorText(reqDoc, idNode: idNode, message: "fmt: {target.error}", repoRoot: ctx.repoRootLabel)
 	end 'badSource'
 
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push(FmtCommandName)
 
 	// ⚠ With no path `fmt` formats the whole working directory. That is its documented default.
@@ -496,7 +496,7 @@ function compileInProcess(reqDoc JsonDoc, args OptionalNode, rendersTargetIr boo
 		return InProcessCompile.refused(session.diagnostics.text())
 	end 'badPath'
 
-	var paths = MaxonSourcePathArray.create()
+	var paths = MaxonSourcePathArray.create(0)
 	paths.push(path)
 
 	var project = try loadProject(paths, target: detectHostTarget(), session: session) otherwise (e) 'notLoaded'
@@ -636,7 +636,7 @@ function breakingChangesReply(reqDoc JsonDoc, idNode JsonNodeId, recorded Record
 end 'breakingChangesReply'
 
 function breakingChangeArray(doc JsonDoc, changes BreakingChangeArray) returns JsonNodeId
-	var ids = JsonNodeIdArray.create()
+	var ids = JsonNodeIdArray.create(0)
 
 	for change in changes 'eachChange'
 		var entry = JsonObjectBuilder.create()
@@ -748,7 +748,7 @@ function specFilterVerdict(patterns FilterPatternArray) returns SpecFilterVerdic
 end 'specFilterVerdict'
 
 function specTestArgv(reqDoc JsonDoc, args OptionalNode, directory String, filterPatterns FilterPatternArray) returns StringArray
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push(SpecTestCommandName)
 
 	let updateRequired = getOptionalBoolArg(reqDoc, args: args, key: "updateRequired", defaultVal: false)
@@ -787,7 +787,7 @@ function runWithResultDocument(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContex
 
 	sweepLeftoversOfEndedOwners(resultDir, livenessOf: function(entry) gives family.livenessOf(entry), keyOf: function(entry) gives entry, discardKeyed: removeOwnedFile)
 
-	var ranArgv = StringArray.create()
+	var ranArgv = StringArray.create(0)
 	ranArgv.append(argv)
 	ranArgv.push("{ResultJsonFlagPrefix}{resultPath.path}")
 
@@ -877,7 +877,7 @@ function specTestReply(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx
 end 'specTestReply'
 
 function caseArrayNode(doc JsonDoc, tests SpecTestEntryArray) returns JsonNodeId
-	var nodeIds = JsonNodeIdArray.create()
+	var nodeIds = JsonNodeIdArray.create(0)
 
 	for t in tests 'eachTest'
 		var entry = JsonObjectBuilder.create()
@@ -906,7 +906,7 @@ function listedFailureCount(failures SpecFailureSummaryArray, limit Count) retur
 end 'listedFailureCount'
 
 function failureArrayNode(doc JsonDoc, failures SpecFailureSummaryArray, listed Count) returns JsonNodeId
-	var nodeIds = JsonNodeIdArray.create()
+	var nodeIds = JsonNodeIdArray.create(0)
 
 	for (iter, f) in failures.withIterator() 'eachFailure'
 		if iter.index() >= listed 'pastWhatIsListed'
@@ -924,7 +924,7 @@ function failureArrayNode(doc JsonDoc, failures SpecFailureSummaryArray, listed 
 end 'failureArrayNode'
 
 module function executeScaleTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push(ScaleTestCommandName)
 
 	argv.append(wholeOptionOf(reqDoc, args: args, key: RungsOption, prefix: RungsFlagPrefix))

@@ -111,8 +111,8 @@ if [ "$MODE" = "array" ]; then ARR_PARAM="arr"; fi
   done
 
   echo "function main() returns ExitCode"
-  echo -e "\tvar arr = IntArray.create()"
-  echo -e "\tvar other = IntArray.create()"
+  echo -e "\tvar arr = IntArray.create(0)"
+  echo -e "\tvar other = IntArray.create(0)"
   echo -e "\tarr.push(1)"
   echo -e "\tvar s = 0 as Int"
   f=0

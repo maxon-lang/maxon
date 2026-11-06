@@ -97,7 +97,7 @@ export function runDapServer() returns ExitCode
 
 	var adapter = DapAdapter.create()
 	let reader = spawn DapFrameReader.create()
-	var wakes = DapWakePromiseArray.create()
+	var wakes = DapWakePromiseArray.create(0)
 	wakes.push(async dapNextFrame(reader.clone()))
 
 	while adapter.isServing() 'pump'
@@ -175,7 +175,7 @@ type DapAdapter
 	var sliceArmed as bool
 
 	static function create() returns DapAdapter
-		return Self{writer: DapWriter.create(), debuggee: DebugSessionSlot.create(), lifecycle: DapLifecycle.idle, stopOnEntry: false, stoppedThread: DapMainThreadId, sourceBreakpoints: DapSourceBreakpointsArray.create(), functionBreakpoints: DapBreakpointAskArray.create(), frameRefs: DapFrameRefArray.create(), variableRefs: DapVariableRefArray.create(), renderedTrees: DebugValueTreeArray.create(), numbering: DapNumbering.countingFromOne(), serving: true, broken: false, sliceArmed: false}
+		return Self{writer: DapWriter.create(), debuggee: DebugSessionSlot.create(), lifecycle: DapLifecycle.idle, stopOnEntry: false, stoppedThread: DapMainThreadId, sourceBreakpoints: DapSourceBreakpointsArray.create(0), functionBreakpoints: DapBreakpointAskArray.create(0), frameRefs: DapFrameRefArray.create(0), variableRefs: DapVariableRefArray.create(0), renderedTrees: DebugValueTreeArray.create(0), numbering: DapNumbering.countingFromOne(), serving: true, broken: false, sliceArmed: false}
 	end 'create'
 
 	function programState() returns DebugProgramState
@@ -431,7 +431,7 @@ type DapAdapter
 	function setSourceBreakpoints(request DapRequest, session DebugToolSession) throws DapArgumentError
 		let spelled = try (try request.arguments.object(SourceArgument)).text(PathArgument)
 		let path = try FilePath.from(spelled) otherwise throw DapArgumentError.wrongType(PathArgument)
-		var asked = DapBreakpointRequestArray.create()
+		var asked = DapBreakpointRequestArray.create(0)
 
 		for breakpoint in try request.arguments.objects(BreakpointsArgument) 'eachBreakpoint'
 			let clientLine = try breakpoint.number(LineArgument)
@@ -456,11 +456,11 @@ type DapAdapter
 			end 'thisSource'
 		end 'eachSource'
 
-		return DapBreakpointAskArray.create()
+		return DapBreakpointAskArray.create(0)
 	end 'sourceBreakpointsAt'
 
 	function holdSourceBreakpoints(path FilePath, armed DapBreakpointAskArray)
-		var kept = DapSourceBreakpointsArray.create()
+		var kept = DapSourceBreakpointsArray.create(0)
 
 		for source in self.sourceBreakpoints 'eachSource'
 			if not source.path.equals(path) 'anotherSource'
@@ -473,7 +473,7 @@ type DapAdapter
 	end 'holdSourceBreakpoints'
 
 	function setFunctionBreakpoints(request DapRequest, session DebugToolSession) throws DapArgumentError
-		var asked = DapBreakpointRequestArray.create()
+		var asked = DapBreakpointRequestArray.create(0)
 
 		for breakpoint in try request.arguments.objects(BreakpointsArgument) 'eachBreakpoint'
 			asked.push(DapBreakpointRequest.ask(DapBreakpointAsk.create(DebugBreakTarget.named(try breakpoint.text(NameArgument)), condition: try dapBreakCondition(breakpoint), requested: DapRequestedLine.none)))
@@ -488,8 +488,8 @@ type DapAdapter
 		end 'eachPrevious'
 
 		var doc = JsonDoc.create()
-		var nodes = JsonNodeIdArray.create()
-		var armed = DapBreakpointAskArray.create()
+		var nodes = JsonNodeIdArray.create(0)
+		var armed = DapBreakpointAskArray.create(0)
 
 		for requested in asked 'eachBreakpoint'
 			match requested 'placeable'
@@ -542,7 +542,7 @@ type DapAdapter
 		var doc = JsonDoc.create()
 
 		view rows = match answers.roster 'listed'
-			none gives DebugThreadRowArray.create()
+			none gives DebugThreadRowArray.create(0)
 			listed(roster) gives roster.rows
 		end 'listed'
 
@@ -555,7 +555,7 @@ type DapAdapter
 		let levels = try request.arguments.numberOr(LevelsArgument, fallback: 0)
 
 		if self.lifecycle == DapLifecycle.configuring or self.lifecycle == DapLifecycle.parkedAtEntry 'beforeMain'
-			self.respondFrames(request, frames: DebugFrameArray.create(), onTheStoppedThread: true, startFrame: startFrame, levels: levels)
+			self.respondFrames(request, frames: DebugFrameArray.create(0), onTheStoppedThread: true, startFrame: startFrame, levels: levels)
 
 			return
 		end 'beforeMain'
@@ -583,7 +583,7 @@ type DapAdapter
 
 	function respondFrames(request DapRequest, frames DebugFrameArray, onTheStoppedThread bool, startFrame DapNumber, levels DapNumber)
 		var doc = JsonDoc.create()
-		var nodes = JsonNodeIdArray.create()
+		var nodes = JsonNodeIdArray.create(0)
 
 		for (iter, frame) in frames.withIterator() 'eachFrame'
 			let position = iter.index() as DapNumber
@@ -658,7 +658,7 @@ type DapAdapter
 
 	function respondValues(request DapRequest, tree ElementIndex, indices DebugValueIndexArray)
 		var doc = JsonDoc.create()
-		var nodes = JsonNodeIdArray.create()
+		var nodes = JsonNodeIdArray.create(0)
 
 		for index in indices 'eachValue'
 			view value = (try self.renderedTrees.get(tree) otherwise panic("DapAdapter.respondValues: the tree was registered before its values were asked for")).nodeAt(index)
@@ -755,7 +755,7 @@ type DapAdapter
 		end 'noThreads'
 
 		if request.command == StackTraceCommand 'noStack'
-			self.writer.respond(request, doc: doc, body: DapBody.object(dapStackTraceBody(doc, frames: JsonNodeIdArray.create(), total: NoFramesAtAll)))
+			self.writer.respond(request, doc: doc, body: DapBody.object(dapStackTraceBody(doc, frames: JsonNodeIdArray.create(0), total: NoFramesAtAll)))
 
 			return true
 		end 'noStack'
@@ -767,7 +767,7 @@ type DapAdapter
 		end 'noScopes'
 
 		if request.command == VariablesCommand 'noVariables'
-			self.writer.respond(request, doc: doc, body: DapBody.object(dapVariablesBody(doc, nodes: JsonNodeIdArray.create())))
+			self.writer.respond(request, doc: doc, body: DapBody.object(dapVariablesBody(doc, nodes: JsonNodeIdArray.create(0))))
 
 			return true
 		end 'noVariables'
@@ -859,13 +859,13 @@ type DapAdapter
 			self.emitText(ConsoleCategory, text: droppedOutputNotice(output.dropped))
 		end 'someWereDropped'
 
-		var run = StringArray.create()
+		var run = StringArray.create(0)
 		var runStream = ChildStream.stdout
 
 		for line in output.lines 'eachLine'
 			if line.stream != runStream 'anotherStream'
 				self.emitLines(dapCategoryOf(runStream), lines: run)
-				run = StringArray.create()
+				run = StringArray.create(0)
 				runStream = line.stream
 			end 'anotherStream'
 
@@ -876,7 +876,7 @@ type DapAdapter
 	end 'emitProgramOutput'
 
 	function emitText(category String, text String)
-		var lines = StringArray.create()
+		var lines = StringArray.create(0)
 		lines.push(text)
 		self.emitLines(category, lines: lines)
 	end 'emitText'

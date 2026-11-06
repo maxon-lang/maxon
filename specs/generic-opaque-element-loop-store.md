@@ -59,7 +59,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -120,7 +120,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -173,7 +173,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -230,7 +230,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -282,7 +282,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -338,7 +338,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function copyFrom(other Items, upTo Idx)
@@ -365,7 +365,7 @@ typealias StrBag = Bag with String
 
 function main() returns ExitCode
 	var b = StrBag.create()
-	var source = Strs.create()
+	var source = Strs.create(0)
 	source.push("a source string long enough to force a heap allocation")
 	source.push("a second source string, also long enough to force a heap allocation")
 	b.copyFrom(source, upTo: 2)
@@ -412,7 +412,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function store(v Element)
@@ -472,7 +472,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function store(v Element)
@@ -525,7 +525,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -580,7 +580,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -627,7 +627,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -678,7 +678,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -726,7 +726,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function copyFrom(other Items, upTo Idx, seed Element)
@@ -753,7 +753,7 @@ typealias StrBag = Bag with String
 
 function main() returns ExitCode
 	var b = StrBag.create()
-	var source = Strs.create()
+	var source = Strs.create(0)
 	source.push("a source string long enough to force a heap allocation")
 	source.push("a second source string, also long enough to force a heap allocation")
 	b.copyFrom(source, upTo: 2, seed: "a seed string long enough to force a heap allocation")

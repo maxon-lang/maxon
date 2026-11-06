@@ -258,7 +258,7 @@ let maxRetries = 3               // constant, never changes
 let userName = getUserName()     // assigned once from a function
 
 var retryCount = 0 as Count      // needs to be incremented
-var buffer = ByteArray.create()         // needs push/set operations
+var buffer = ByteArray.create(0)         // needs push/set operations
 ```
 
 ### Keep Variable Scope Narrow
@@ -591,7 +591,7 @@ let first = try list.first() otherwise emptyItem
 
 ```maxon
 // Array: ordered data with index access
-var scores = ScoreArray.create()
+var scores = ScoreArray.create(0)
 
 // Map: fast lookup by key
 var userCache = UserMap.create()

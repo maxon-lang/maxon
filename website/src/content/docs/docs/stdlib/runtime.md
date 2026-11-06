@@ -228,7 +228,7 @@ typealias Payload = Array with Byte
 
 function main() returns ExitCode
 	let before = HeapStats.processAllocations()
-	var kept = Payload.create()
+	var kept = Payload.create(0)
 	kept.push(1)
 	let after = HeapStats.processAllocations()
 	print("{after > before} {HeapStats.slab().live > 0} {kept.count()}\n")

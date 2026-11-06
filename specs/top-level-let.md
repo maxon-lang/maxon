@@ -641,7 +641,7 @@ A column that is an empty container built by its alias keeps the alias in the tu
 typealias Item = int(0 to 1000)
 typealias Items = Array with Item
 
-let held = (Items.create(), "held")
+let held = (Items.create(0), "held")
 
 function main() returns ExitCode
 	print("{held.0.count()} {held.1}\n")
@@ -3185,7 +3185,7 @@ function settle(text ByteArray) returns Pair
 end 'settle'
 
 function main() returns ExitCode
-	let settled = settle(ByteArray.create())
+	let settled = settle(ByteArray.create(0))
 	return 0
 end 'main'
 ```
@@ -3293,14 +3293,14 @@ type Maker uses T
 	var seen as Integer
 
 	static function create(seed T) returns Self
-		var first = Items.create()
+		var first = Items.create(0)
 		first.push(seed)
 		return Self{seen: first.count() as Integer}
 	end 'create'
 
 	export function make() returns Items
 		self.seen = self.seen + 1
-		return Items.create()
+		return Items.create(0)
 	end 'make'
 
 	export function other() returns Integer
@@ -3329,14 +3329,14 @@ type Maker uses T
 	var seen as Integer
 
 	static function create(seed T) returns Self
-		var first = Items.create()
+		var first = Items.create(0)
 		first.push(seed)
 		return Self{seen: first.count() as Integer}
 	end 'create'
 
 	export function make() returns Items
 		self.seen = self.seen + 1
-		return Items.create()
+		return Items.create(0)
 	end 'make'
 end 'Maker'
 

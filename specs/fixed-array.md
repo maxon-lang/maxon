@@ -1951,7 +1951,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Ints = Array with Int
 
 function main() returns ExitCode
-	var a = Ints.create()
+	var a = Ints.create(0)
 	a.push(1)
 	a.push(2)
 	a.push(3)
@@ -2075,7 +2075,7 @@ extension FixedArray
 	typealias Bufs = Array with ElementMemory
 
 	function bust() returns Int
-		var b = Bufs.create()
+		var b = Bufs.create(0)
 		b.push(managed)
 		var got = try b.get(0) otherwise panic("no element")
 		got.clear()
@@ -2129,7 +2129,7 @@ extension FixedArray
 	typealias Arr = Array with Element
 
 	function bust() returns Int
-		var a = Arr.create()
+		var a = Arr.create(0)
 		a.managed = managed
 		a.managed.clear()
 		return managed.length() as Int
@@ -2212,7 +2212,7 @@ extension FixedArray
 	typealias BufBox = Box with ElementMemory
 
 	function survey() returns Int
-		var b = Bufs.create()
+		var b = Bufs.create(0)
 		b.push(try managed.slice(0, 2) otherwise panic("slice"))
 		var fromContainer = try b.get(0) otherwise panic("no element")
 		fromContainer.clear()
@@ -2315,7 +2315,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Ints = Array with Int
 
 function main() returns ExitCode
-	var a = Ints.create()
+	var a = Ints.create(0)
 	a.push(1)
 	a.push(2)
 	let flag = a.count() > 0
@@ -2393,7 +2393,7 @@ function main() returns ExitCode
 	var flags = Flags.create()
 	flags.set(0, value: true)
 
-	var cells = CellArray.create()
+	var cells = CellArray.create(0)
 	cells.push(Cell.create(Content.marked(flags)))
 
 	for cell in cells 'each'
@@ -2448,7 +2448,7 @@ function main() returns ExitCode
 	var flags = Flags.create()
 	flags.set(0, value: true)
 
-	var cells = CellArray.create()
+	var cells = CellArray.create(0)
 	cells.push(Cell.create(Content.marked(flags)))
 	cells.push(Cell.create(Content.marked(flags)))
 
@@ -2660,7 +2660,7 @@ typealias Nodes = Array with Node
 typealias Marks = FixedArray with 2 Tally
 
 function main() returns ExitCode
-	var nodes = Nodes.create()
+	var nodes = Nodes.create(0)
 	nodes.push(Node.create(7))
 	var marks = Marks.create()
 	var held = try nodes.get(0) otherwise panic("get")
@@ -2700,7 +2700,7 @@ type Ledger
 	export var marks as Marks
 
 	static function create() returns Ledger
-		return Ledger{nodes: Nodes.create(), marks: Marks.create()}
+		return Ledger{nodes: Nodes.create(0), marks: Marks.create()}
 	end 'create'
 end 'Ledger'
 
@@ -3589,7 +3589,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function main() returns ExitCode
-	var bufs = Bufs.create()
+	var bufs = Bufs.create(0)
 	bufs.push(Buf.create(launder(2)))
 	bufs.push(Buf.create(4))
 

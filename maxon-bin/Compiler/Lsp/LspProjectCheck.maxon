@@ -88,9 +88,9 @@ module type LspProjectChecker
 
 	function publish(request LspProjectCheckRequest, check ProjectCheck)
 		match check 'check'
-			checked(diagnostics) then self.publishDiagnostics(request, diagnostics: diagnostics, unbuilt: StringArray.create(), outcome: ProjectCheckOutcome.published)
+			checked(diagnostics) then self.publishDiagnostics(request, diagnostics: diagnostics, unbuilt: StringArray.create(0), outcome: ProjectCheckOutcome.published)
 			unbuilt(failures) then self.publishDiagnostics(request, diagnostics: request.alone, unbuilt: failures, outcome: ProjectCheckOutcome.unloadable)
-			unlisted then self.publishDiagnostics(request, diagnostics: request.alone, unbuilt: StringArray.create(), outcome: ProjectCheckOutcome.unlisted)
+			unlisted then self.publishDiagnostics(request, diagnostics: request.alone, unbuilt: StringArray.create(0), outcome: ProjectCheckOutcome.unlisted)
 			abandoned then self.report(request, outcome: ProjectCheckOutcome.abandoned)
 			rerooted then panic("LspProjectChecker.publish: a cold build roots its project at the sources it checks against, and a warm check that moved the root rebuilds cold before it publishes")
 		end 'check'
@@ -98,7 +98,7 @@ module type LspProjectChecker
 
 	function publishDiagnostics(request LspProjectCheckRequest, diagnostics DiagnosticArray, unbuilt StringArray, outcome ProjectCheckOutcome)
 		let tokens = lspDocumentTokens(request.text, keywords: KeywordTable.create())
-		let body = documentDiagnosticsText(request.uri, text: request.text, tokens: tokens, diagnostics: diagnostics, path: request.path, unbuilt: unbuilt, notices: StringArray.create())
+		let body = documentDiagnosticsText(request.uri, text: request.text, tokens: tokens, diagnostics: diagnostics, path: request.path, unbuilt: unbuilt, notices: StringArray.create(0))
 
 		submitToLspWriter(self.writer, command: LspWriterCommand.publishIfCurrent(request.uri.clone(), version: request.version, clientVersion: request.clientVersion.clone(), outcome: outcome, body: body))
 	end 'publishDiagnostics'

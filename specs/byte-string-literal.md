@@ -656,7 +656,7 @@ typealias ByteArrayArray = Array with ByteArray
 let Keyword = b"critsplit"
 
 function main() returns ExitCode
-		var a = ByteArrayArray.create()
+		var a = ByteArrayArray.create(0)
 		a.push(Keyword)
 		var e = try a.get(0) otherwise b""
 		e.push(88)

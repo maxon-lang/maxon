@@ -15,6 +15,10 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- An `Array` or `ByteArray` is created with a capacity: `Items.create()` with no argument is E3195.
+  Fix: write `create(0)` for an empty array, `create(n)` for `n` zero elements in one allocation, or
+  `create(n, zeroed: false)` for an empty array with room for `n`; a collection whose length is fixed after the
+  fill is a `FixedArray`.
 - Creating a `FixedArray` is a pure call, as creating an `Array` is, so discarding the result of
   `Vec3.create()`, or of a static that returns `Self{}`, with `_ =` is E3064.
   Fix: use the value, or delete the call.

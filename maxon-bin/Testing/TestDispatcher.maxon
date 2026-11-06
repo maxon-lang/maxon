@@ -189,7 +189,7 @@ export function groupTestsByFile(tests DiscoveredTestArray) returns TestFileGrou
 		throw TestStagingError.refused("{tests.count()} tests exceeds the {MaxTestsPerRun} a single run is numbered for")
 	end 'moreTestsThanTheRunIsNumberedFor'
 
-	var groups = TestFileGroupArray.create()
+	var groups = TestFileGroupArray.create(0)
 
 	// The group the PREVIOUS test landed in. 0 before there is one, which names no group and so takes the
 	// scan — see `groupHoldsFile`, which answers FALSE for an ordinal nothing occupies.
@@ -229,7 +229,7 @@ function groupOrdinalFor(groups TestFileGroupArray, file FilePath, recent Elemen
 	// The ORDINAL is the group's position, which is what makes the runner name unique — see
 	// `MaxonTestFileRunnerPrefix`.
 	let ordinal = groups.count()
-	groups.push(TestFileGroup.create(file, runnerName: "{MaxonTestFileRunnerPrefix}{ordinal}", tests: IndexedTestArray.create()))
+	groups.push(TestFileGroup.create(file, runnerName: "{MaxonTestFileRunnerPrefix}{ordinal}", tests: IndexedTestArray.create(0)))
 	return ordinal
 end 'groupOrdinalFor'
 
@@ -313,7 +313,7 @@ function stageOneSource(build GeneratedBuild, source FilePath, stagedPath FilePa
 	// runner, so a group always mints exactly the one name.
 	match groupOfFile(groups, file: source) 'holdsTests'
 		found(group) then try build.addSource(stagedPath, content: "{content}{fileDispatcherSource(group)}", mintedNames: mintedNamesForDispatcher(group))
-		absent then try build.addSource(stagedPath, content: content, mintedNames: NameRoster.create())
+		absent then try build.addSource(stagedPath, content: content, mintedNames: NameRoster.create(0))
 	end 'holdsTests'
 
 	build.recordOrigin(StagedSourceOrigin.create(stagedPath, reportedPath: source))
@@ -324,7 +324,7 @@ end 'stageOneSource'
 // also what `fileDispatcherSource` declares and what `entrySource` calls, so the declaration door cannot
 // come to admit a spelling the generator has stopped producing.
 function mintedNamesForDispatcher(group TestFileGroup) returns NameRoster
-	var names = NameRoster.create()
+	var names = NameRoster.create(0)
 	names.push(group.runnerName.toByteArray())
 	return names
 end 'mintedNamesForDispatcher'
@@ -336,7 +336,7 @@ end 'mintedNamesForDispatcher'
 // list answers ONE question — which `__` names the declaration door must admit — and a name no rule refuses
 // has nothing to be admitted from.
 function mintedNamesForEntry() returns NameRoster
-	var names = NameRoster.create()
+	var names = NameRoster.create(0)
 	names.push(MaxonTestIndexAlias.toByteArray())
 	names.push(MaxonTestHelperType.toByteArray())
 	names.push(MaxonTestEntrySymbol.toByteArray())

@@ -9,7 +9,7 @@ category: language
 ## Documentation
 
 A top-level binding may be initialized by a **user static factory call** —
-`var db = Database.create(EntryMap.create(), sourcePaths: StringArray.create())`. The initializer is
+`var db = Database.create(EntryMap.create(), sourcePaths: StringArray.create(0))`. The initializer is
 parsed by the body's expression parser into an initializer function, and — unless the record is decided at
 compile time and laid down as image data — `__module_init` calls it before `main` and stores its result in
 the binding's slot, so the call, its arguments and their drops are the
@@ -307,7 +307,7 @@ type Counter
 	end 'create'
 end 'Counter'
 
-var c = Counter.create(Bytes.create())
+var c = Counter.create(Bytes.create(0))
 
 function main() returns ExitCode
 	return c.n
@@ -393,7 +393,7 @@ type Mixed
 	end 'create'
 end 'Mixed'
 
-var m = Mixed.create(Bytes.create(), seen: Bytes.create(), tag: "hi")
+var m = Mixed.create(Bytes.create(0), seen: Bytes.create(0), tag: "hi")
 
 function main() returns ExitCode
 	print("{m.tag}\n")
@@ -885,7 +885,7 @@ this initializer, and the `StringArray` built for `sources` is materialized, bor
 inside `__module_init` — so the exit-101 gate is asserting the argument cleanup on a callee whose body
 the compiler had to be told to lower.
 ```maxon
-var cfg = BuildConfig.create(StringArray.create(), output: "app.exe", debug_info: false)
+var cfg = BuildConfig.create(StringArray.create(0), output: "app.exe", debug_info: false)
 
 function main() returns ExitCode
 	return cfg.sources.count() as ExitCode

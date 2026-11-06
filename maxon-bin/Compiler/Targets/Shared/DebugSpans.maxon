@@ -47,7 +47,7 @@ end 'cacheWriteDebugValueSpanArray'
 
 function cacheReadDebugValueSpanArray(reader LibraryCacheReader) returns DebugValueSpanArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DebugValueSpanArray.create()
+	var result = DebugValueSpanArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -67,9 +67,9 @@ export type DebugSpanRows
 	export var lastAnchors as CfgIndexArray
 
 	export static function create() returns DebugSpanRows
-		var viewStarts = CfgIndexArray.create()
+		var viewStarts = CfgIndexArray.create(0)
 		viewStarts.push(0)
-		return Self{spans: DebugValueSpanArray.create(), viewStarts: viewStarts, blocks: BlockIdArray.create(), lastAnchors: CfgIndexArray.create()}
+		return Self{spans: DebugValueSpanArray.create(0), viewStarts: viewStarts, blocks: BlockIdArray.create(0), lastAnchors: CfgIndexArray.create(0)}
 	end 'create'
 
 	export function viewCount() returns ElementIndex
@@ -120,9 +120,9 @@ type ExtremeTree
 	var nodes as CfgIndexArray
 
 	static function create(count ElementIndex, wantsMax bool) returns ExtremeTree
-		var keys = CfgIndexArray.create()
+		var keys = CfgIndexArray.create(0)
 		keys.refill(count, value: 0)
-		var nodes = CfgIndexArray.create()
+		var nodes = CfgIndexArray.create(0)
 		nodes.refill(count * 2, value: 0)
 		return Self{count: count, wantsMax: wantsMax, keys: keys, nodes: nodes}
 	end 'create'
@@ -206,13 +206,13 @@ export type DebugSpanResolver
 	var endsHigh as ExtremeTree
 
 	export static function create(positionCount ElementIndex) returns DebugSpanResolver
-		var starts = CodeOffsetArray.create()
+		var starts = CodeOffsetArray.create(0)
 		starts.refill(positionCount, value: 0)
-		var ends = CodeOffsetArray.create()
+		var ends = CodeOffsetArray.create(0)
 		ends.refill(positionCount, value: 0)
-		var finalIndex = CfgIndexArray.create()
+		var finalIndex = CfgIndexArray.create(0)
 		finalIndex.refill(positionCount, value: 0)
-		return Self{positionCount: positionCount, starts: starts, ends: ends, order: CfgIndexArray.create(), finalIndex: finalIndex, startsLow: ExtremeTree.create(positionCount, wantsMax: false), startsHigh: ExtremeTree.create(positionCount, wantsMax: true), endsLow: ExtremeTree.create(positionCount, wantsMax: false), endsHigh: ExtremeTree.create(positionCount, wantsMax: true)}
+		return Self{positionCount: positionCount, starts: starts, ends: ends, order: CfgIndexArray.create(0), finalIndex: finalIndex, startsLow: ExtremeTree.create(positionCount, wantsMax: false), startsHigh: ExtremeTree.create(positionCount, wantsMax: true), endsLow: ExtremeTree.create(positionCount, wantsMax: false), endsHigh: ExtremeTree.create(positionCount, wantsMax: true)}
 	end 'create'
 
 	export function place(position ElementIndex, codeStart CodeOffset, codeEnd CodeOffset)
@@ -222,7 +222,7 @@ export type DebugSpanResolver
 	end 'place'
 
 	export function seal()
-		var keyed = CfgIndexArray.create()
+		var keyed = CfgIndexArray.create(0)
 		keyed.reserve(self.order.count())
 
 		for position in self.order 'eachPlaced'
@@ -284,8 +284,8 @@ export type DebugSpanResolver
 	end 'endOf'
 
 	export function pieces(first ElementIndex, past ElementIndex, into DebugLocalCodeRangeArray, valueOrdinal ElementIndex)
-		var runStarts = CfgIndexArray.create()
-		var runEnds = CfgIndexArray.create()
+		var runStarts = CfgIndexArray.create(0)
+		var runEnds = CfgIndexArray.create(0)
 		self.collectRunBoundaries(self.startsLow, wantsMax: false, first: first, past: past, into: runStarts)
 		self.collectRunBoundaries(self.startsHigh, wantsMax: true, first: first, past: past, into: runStarts)
 		self.collectRunBoundaries(self.endsLow, wantsMax: false, first: first, past: past, into: runEnds)
@@ -306,7 +306,7 @@ export type DebugSpanResolver
 	end 'pieces'
 
 	function collectRunBoundaries(tree ExtremeTree, wantsMax bool, first ElementIndex, past ElementIndex, into CfgIndexArray)
-		var pending = CfgIndexArray.create()
+		var pending = CfgIndexArray.create(0)
 		pending.push(first)
 		pending.push(past)
 
@@ -336,7 +336,7 @@ export type DebugSpanResolver
 	end 'collectRunBoundaries'
 
 	function sortInFinalOrder(positions CfgIndexArray)
-		var keyed = CfgIndexArray.create()
+		var keyed = CfgIndexArray.create(0)
 		keyed.reserve(positions.count())
 
 		for position in positions 'eachPosition'

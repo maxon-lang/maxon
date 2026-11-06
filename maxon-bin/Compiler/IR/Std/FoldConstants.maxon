@@ -735,7 +735,7 @@ module let ConditionIsFalse = 0 as FullRangeInt
 // case, where it could have two, is refused by `foldCondBranch` and by `threadConstantBranches` alike,
 // which is the other pass that turns a `condBranch` into a `branch` and drops the arm's edge through here).
 module function edgesWithoutTarget(edges BranchEdgeArray, droppedTarget BlockId) returns BranchEdgeArray
-	var kept = BranchEdgeArray.create()
+	var kept = BranchEdgeArray.create(0)
 	var alreadyDropped = false
 
 	for edge in edges 'eachEdge'
@@ -785,7 +785,7 @@ module function dropUnreachableBlocks(module StdModule, func IrFunction)
 	end 'noBlocks'
 
 	let reachable = reachableBlockPositions(module, func: func)
-	var kept = BlockRefArray.create()
+	var kept = BlockRefArray.create(0)
 
 	for position in 0 upto blockCount 'eachBlock'
 		let survives = try reachable.get(position) otherwise panic("dropUnreachableBlocks: reachable.get OOB at {position}")
@@ -804,10 +804,10 @@ end 'dropUnreachableBlocks'
 module function reachableBlockPositions(module StdModule, func IrFunction) returns BoolArray
 	let blockCount = func.blockRefs.count()
 	let byId = module.blockIndexById(func)
-	var reachable = BoolArray.create()
+	var reachable = BoolArray.create(0)
 	reachable.growFilled(blockCount, value: false)
-	var stack = BlockRefIndexArray.create()
-	var successors = BlockIdArray.create()
+	var stack = BlockRefIndexArray.create(0)
+	var successors = BlockIdArray.create(0)
 
 	try reachable.set(0, value: true) otherwise panic("reachableBlockPositions: reachable.set OOB at the entry block")
 	stack.push(0)

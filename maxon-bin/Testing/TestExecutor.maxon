@@ -115,7 +115,7 @@ end 'TestRunProgress'
 // runs it by hand. Nothing in this command changes directory. `tests/testCommand/` locates its
 // fixtures relative to the checkout root and breaks silently if this changes.
 function launchTests(plan TestLaunchPlan, indices TestRunIndexArray) returns SelectedLaunch
-	return launchSelected(Executable.path(plan.binary), leadingArguments: StringArray.create(), indices: indices, timeoutMs: plan.timeoutMs, workingDirectory: inheritedWorkingDirectory())
+	return launchSelected(Executable.path(plan.binary), leadingArguments: StringArray.create(0), indices: indices, timeoutMs: plan.timeoutMs, workingDirectory: inheritedWorkingDirectory())
 end 'launchTests'
 
 // The two facts attribution reads off a launch that actually produced a stream.
@@ -270,7 +270,7 @@ type StreamLines
 	var lines as StringArray
 
 	static function create() returns StreamLines
-		return Self{lines: StringArray.create()}
+		return Self{lines: StringArray.create(0)}
 	end 'create'
 
 	function add(line String)
@@ -337,7 +337,7 @@ function attributeLaunch(plan TestLaunchPlan, group TestFileGroup, expected Test
 	let attributable = attributableLaunch(launch)
 
 	var walk = TestStreamWalk.create()
-	var reportedTests = ObservedTestArray.create()
+	var reportedTests = ObservedTestArray.create(0)
 
 	for event in parseTestEvents(attributable.stderr) 'eachEvent'
 		match event 'shape'
@@ -357,8 +357,8 @@ function attributeLaunch(plan TestLaunchPlan, group TestFileGroup, expected Test
 		stated(problem) gives problem
 	end 'launch'
 
-	var settled = UnitTestResultArray.create()
-	var unobserved = TestRunIndexArray.create()
+	var settled = UnitTestResultArray.create(0)
+	var unobserved = TestRunIndexArray.create(0)
 
 	for index in expected 'eachExpectedTest'
 		match observedAt(observed.observed, index: index) 'wasItSeen'
@@ -397,7 +397,7 @@ end 'resultFor'
 function withLeakAttribution(plan TestLaunchPlan, results UnitTestResultArray, leaked bool) returns UnitTestResultArray
 	let onlyCandidate = results.count() == 1
 
-	var updated = UnitTestResultArray.create()
+	var updated = UnitTestResultArray.create(0)
 
 	for result in results 'eachResult'
 		if not leaked or result.outcome != UnitTestOutcome.passed 'keepsItsVerdict'
@@ -444,8 +444,8 @@ end 'leakedAlone'
 typealias TestShardArray = Array with TestRunIndexArray
 
 function shardsOf(group TestFileGroup, selected TestSelection, isolate bool) returns TestShardArray
-	var shards = TestShardArray.create()
-	var wholeFile = TestRunIndexArray.create()
+	var shards = TestShardArray.create(0)
+	var wholeFile = TestRunIndexArray.create(0)
 
 	for member in group.tests 'eachTest'
 		if not testIsSelected(selected, index: member.index) 'notInThisRun'
@@ -473,7 +473,7 @@ end 'shardsOf'
 // they do is to run them. It terminates because every iteration either produces a result for at least
 // one test or gives up on the rest BY NAME.
 function executeShard(plan TestLaunchPlan, group TestFileGroup, indices TestRunIndexArray) returns UnitTestResultArray
-	var results = UnitTestResultArray.create()
+	var results = UnitTestResultArray.create(0)
 	var remaining = indices.clone()
 
 	while not remaining.isEmpty() 'untilEveryTestIsAnswered'
@@ -506,7 +506,7 @@ end 'executeShard'
 // same move a leak needs and for the same reason. The recursion is one level deep: a shard of one takes
 // the branch above.
 function deadlineVerdicts(plan TestLaunchPlan, group TestFileGroup, indices TestRunIndexArray) returns UnitTestResultArray
-	var verdicts = UnitTestResultArray.create()
+	var verdicts = UnitTestResultArray.create(0)
 
 	if indices.count() == 1 'exactlyOneCandidate'
 		let index = try indices.get(0) otherwise panic("deadlineVerdicts: index 0 exists — the count is exactly 1 one line above")
@@ -526,7 +526,7 @@ end 'deadlineVerdicts'
 function unobservedVerdicts(group TestFileGroup, indices TestRunIndexArray, reason String) returns UnitTestResultArray
 	let output = reason if not reason.isEmpty() else NothingStartedText
 
-	var verdicts = UnitTestResultArray.create()
+	var verdicts = UnitTestResultArray.create(0)
 
 	for index in indices 'eachTest'
 		verdicts.push(UnitTestResult.create(index, test: testOf(group, index: index), outcome: UnitTestOutcome.didNotRun, nanos: 0, thrown: ThrownReport.absent, output: output))
@@ -567,7 +567,7 @@ end 'appendResults'
 // append is in index order already. The reference has to sort here because its shards finish on
 // whichever thread wins; with no pool there is no race to undo.
 export function runFileTests(plan TestLaunchPlan, group TestFileGroup, selected TestSelection, isolate bool, bail BailPolicy, progress TestRunProgress) returns UnitTestResultArray
-	var results = UnitTestResultArray.create()
+	var results = UnitTestResultArray.create(0)
 
 	for shard in shardsOf(group, selected: selected, isolate: isolate) 'eachShard'
 		// ⚠ **CHECKED BEFORE CLAIMING, NEVER DURING.** A shard already running finishes and reports —

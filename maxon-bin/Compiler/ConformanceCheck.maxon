@@ -91,7 +91,7 @@ end 'checkConformance'
 // `FunctionNameIndex.create` would be one more O(functions) map build per compile for an answer already in
 // hand.
 function checkGrantedEnumConformance(project Project, functionsByName FunctionNameIndex, signatures ProgramSignatures)
-	var enumNames = NameRoster.create()
+	var enumNames = NameRoster.create(0)
 
 	for (enumName, _) in project.enumTypes 'eachDeclaredEnum'
 		enumNames.push(enumName)
@@ -163,7 +163,7 @@ end 'reportGrantedEnumMemberMismatch'
 // An `enum` declares no `uses` names, so the renderer that re-spells a member's declared types has none to
 // re-spell against. Shared rather than built per member: it is read on a cold path, and an empty
 // array per call is an allocation with no content.
-let grantedEnumTypeParamNames = NameRoster.create()
+let grantedEnumTypeParamNames = NameRoster.create(0)
 
 // ⭐⭐ **AN ASSOCIATED TYPE A DISPATCHED REQUIREMENT WRITES IN AN ABI POSITION HAS EXACTLY ONE LEGAL BINDING
 // *WHERE NO DISPATCH SITE SAYS OTHERWISE* (E3119), AND MUST NOT BE MANAGED WHEN IT IS THE RESULT (E3120).**
@@ -1542,7 +1542,7 @@ end 'checkOneConformance'
 
 function conformerTypeParamNames(project Project, conformance ConformanceDecl) returns NameRoster
 	if primitiveTagOfTypeName(conformance.typeName) != ValueTypeTag.unresolved or project.enumTypes.contains(conformance.typeName) 'declaresNoUses'
-		return NameRoster.create()
+		return NameRoster.create(0)
 	end 'declaresNoUses'
 
 	let layout = try project.structTypes.get(conformance.typeName) otherwise panic("conformerTypeParamNames: conforming type '{String.from(conformance.typeName)}' declares `implements` but is in no struct registry — a ConformanceDecl comes from a declared `type` (which commits a StructLayout), from a declared `enum`/`union` (which commits an EnumLayout and was admitted above) or from an `extension` over a primitive (which is not a declared type and was admitted above)")
@@ -1621,8 +1621,8 @@ end 'checkOneInterfaceConformance'
 function checkInterfaceMethods(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames NameRoster, signatures ProgramSignatures)
 	let collected = collectInterfaceMethods(project, signatures: signatures, conformance: conformance, entry: entry, iface: iface, typeParamNames: typeParamNames)
 
-	var missing = StringArray.create()
-	var wrongSignature = StringArray.create()
+	var missing = StringArray.create(0)
+	var wrongSignature = StringArray.create(0)
 
 	for i in 0 upto collected.count() 'eachMethod'
 		let collectedMethod = try collected.get(i) otherwise panic("checkInterfaceMethods: collected.get OOB at {i}")
@@ -1725,7 +1725,7 @@ function collectInterfaceMethods(project Project, signatures ProgramSignatures, 
 	end 'nothingToSubstituteOrExpand'
 
 	let clauseNames = pairableAssociatedTypeNames(iface.associatedTypeNames, boundTypeNames: entry.withArgs)
-	var substituted = CollectedInterfaceMethodArray.create()
+	var substituted = CollectedInterfaceMethodArray.create(0)
 
 	for i in 0 upto slots.count() 'eachSlot'
 		let slot = try slots.get(i) otherwise panic("collectInterfaceMethods: slots.get OOB at {i} below count {slots.count()}")
@@ -1863,8 +1863,8 @@ end 'pairableAssociatedTypeNames'
 // positionally, so a concatenation would have to be two arrays anyway, and it would allocate a pair per
 // requirement of every binding conformance to say what four already-built lists say.
 function substituteAssociatedTypes(method InterfaceMethodSig, under RequirementSubstitution) returns InterfaceMethodSig
-	var paramTypeNames = NameRoster.create()
-	var paramTypes = RequirementTypeArray.create()
+	var paramTypeNames = NameRoster.create(0)
+	var paramTypes = RequirementTypeArray.create(0)
 
 	for i in 0 upto method.paramTypes.count() 'eachParam'
 		view display = try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i} — an InterfaceMethodSig's type columns are parallel")
@@ -1911,7 +1911,7 @@ function expandedAliasRequirement(requirement RequirementType, name ByteArray, d
 		return (requirement.clone(), display.clone())
 	end 'theComparedCopy'
 
-	var boundSpellings = NameRoster.create()
+	var boundSpellings = NameRoster.create(0)
 
 	for ownerName in under.ownerNames 'eachAssociatedType'
 		boundSpellings.push(boundAssociatedTypeName(ownerName, under: under))
@@ -1926,7 +1926,7 @@ function aliasExpansionScope(under RequirementSubstitution) returns AliasExpansi
 		return sharedNoAliasExpansion
 	end 'declaresNoAlias'
 
-	var bound = RequirementTypeArray.create()
+	var bound = RequirementTypeArray.create(0)
 
 	for ownerName in under.ownerNames 'eachAssociatedType'
 		bound.push(boundOwnerType(ownerName, under: under))
@@ -2506,8 +2506,8 @@ end 'builtinMeetsType'
 function formatActualSignature(project Project, methodName ByteArray, conformingType ByteArray, implFunc IrFunction, implSig FuncSignature, typeParamNames NameRoster, signatures ProgramSignatures) returns String
 	let implIsStatic = not implSig.takesReceiver()
 	let selfOffset = 0 if implIsStatic else 1
-	var paramNames = NameRoster.create()
-	var paramTypes = NameRoster.create()
+	var paramNames = NameRoster.create(0)
+	var paramTypes = NameRoster.create(0)
 
 	for i in selfOffset upto implFunc.maxonParamTypes.count() 'eachParam'
 		paramNames.push(try implSig.paramNames.get(i) otherwise panic("formatActualSignature: paramNames.get OOB at {i}"))
@@ -2553,7 +2553,7 @@ function interfaceParamDisplays(method InterfaceMethodSig) returns NameRoster
 		return method.paramTypeNames
 	end 'nothingIsMarked'
 
-	var shown = NameRoster.create()
+	var shown = NameRoster.create(0)
 
 	for i in 0 upto method.paramTypeNames.count() 'eachParam'
 		shown.push(markedTypeDisplay(try method.paramTypeNames.get(i) otherwise panic("interfaceParamDisplays: paramTypeNames.get OOB at {i}"), marked: maskHasParam(method.byRefParams, param: i as ParamCount)))

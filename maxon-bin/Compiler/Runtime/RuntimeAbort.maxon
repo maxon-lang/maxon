@@ -679,7 +679,7 @@ export function ensureTierAbortDoor(module StdModule, abort RuntimeAbort) return
 
 	module.tierAbortDoors.insert(name.clone())
 
-	var func = IrFunction.createFromStd(name.clone(), returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(name.clone(), returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	func.keepsItsOwnFrame = true
 	var ids = ValueMinter.create(0)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.cold)
@@ -729,7 +729,7 @@ function runtimeFatalReason(fatal RuntimeFatal) returns String
 end 'runtimeFatalReason'
 
 function allRuntimeAbortReasons() returns RuntimeAbortReasonArray
-	var reasons = RuntimeAbortReasonArray.create()
+	var reasons = RuntimeAbortReasonArray.create(0)
 
 	for abort in RuntimeAbort.allCases 'eachAbort'
 		reasons.push(RuntimeAbortReason.abort(abort))
@@ -747,7 +747,7 @@ end 'allRuntimeAbortReasons'
 // deterministic.
 export function registerReachedRuntimeAbortMessages(module StdModule, globalData GlobalDataTable, survivors FunctionNameIndex)
 	let reasons = allRuntimeAbortReasons()
-	var reached = BoolArray.create()
+	var reached = BoolArray.create(0)
 	reached.refill(reasons.count(), value: false)
 
 	for site in module.runtimeAbortSites 'eachSite'

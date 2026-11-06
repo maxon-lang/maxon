@@ -78,7 +78,7 @@ Empty array yields zero iterations, no error.
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 function main() returns ExitCode
-	let arr = IntArray.create()
+	let arr = IntArray.create(0)
 	var total = 0 as Integer
 	for v in arr 'loop'
 		total = total + v
@@ -196,7 +196,7 @@ function slowTally(n Tally) returns Tally throws WaitError
 end 'slowTally'
 
 function main() returns ExitCode
-	var promises = TallyPromiseArray.create()
+	var promises = TallyPromiseArray.create(0)
 	promises.push(async slowTally(1))
 	promises.push(async slowTally(2))
 
@@ -248,7 +248,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let calc = spawn Calc.create()
-	var replies = ReplyPromiseArray.create()
+	var replies = ReplyPromiseArray.create(0)
 	replies.push(try calc.divide(10, by: 2) otherwise panic("an open mailbox with room takes the send"))
 	replies.push(try calc.divide(10, by: 0) otherwise panic("an open mailbox with room takes the send"))
 
@@ -283,7 +283,7 @@ function slowTally(n Tally) returns Tally
 end 'slowTally'
 
 function main() returns ExitCode
-	var promises = TallyPromiseArray.create()
+	var promises = TallyPromiseArray.create(0)
 	promises.push(async slowTally(1))
 	promises.push(async slowTally(2))
 	var seen = 0 as Tally
@@ -313,7 +313,7 @@ function slowTally(n Tally) returns Tally
 end 'slowTally'
 
 function main() returns ExitCode
-	var promises = TallyPromiseArray.create()
+	var promises = TallyPromiseArray.create(0)
 	promises.push(async slowTally(1))
 	promises.push(async slowTally(2))
 	promises.push(async slowTally(4))
@@ -344,7 +344,7 @@ function slowTally(n Tally) returns Tally
 end 'slowTally'
 
 function main() returns ExitCode
-	var promises = TallyPromiseArray.create()
+	var promises = TallyPromiseArray.create(0)
 	promises.push(async slowTally(1))
 	promises.push(async slowTally(2))
 	var total = 0 as Tally
@@ -376,10 +376,10 @@ function slowTally(n Tally) returns Tally
 end 'slowTally'
 
 function main() returns ExitCode
-	var outer = TallyPromiseArray.create()
+	var outer = TallyPromiseArray.create(0)
 	outer.push(async slowTally(1))
 	outer.push(async slowTally(2))
-	var inner = TallyPromiseArray.create()
+	var inner = TallyPromiseArray.create(0)
 	inner.push(async slowTally(10))
 	inner.push(async slowTally(20))
 	var total = 0 as Tally

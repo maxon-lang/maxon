@@ -262,7 +262,7 @@ typealias Num = int(0 to 1000)
 typealias NumArray = Array with Num
 
 let Literal = [7, 9, 11]
-let Empty = NumArray.create()
+let Empty = NumArray.create(0)
 
 function main() returns ExitCode
 	let a = try Literal.get(0) otherwise 0
@@ -535,8 +535,8 @@ typealias CountArray = Array with Count
 typealias NameArray = Array with String
 
 type Facts
-	export var counts = CountArray.create()
-	export var names = NameArray.create()
+	export var counts = CountArray.create(0)
+	export var names = NameArray.create(0)
 	static function create() returns Facts
 		return Self{}
 	end 'create'
@@ -573,8 +573,8 @@ typealias CountArray = Array with Count
 typealias NameArray = Array with String
 
 type Facts
-	export var counts = CountArray.create()
-	export var names = NameArray.create()
+	export var counts = CountArray.create(0)
+	export var names = NameArray.create(0)
 	static function create() returns Facts
 		return Self{}
 	end 'create'
@@ -615,7 +615,7 @@ typealias Key = int(0 to 1000)
 typealias Items = Array with Key
 typealias ItemIndex = Map with (Key, Items)
 
-let EmptyItems = Items.create()
+let EmptyItems = Items.create(0)
 let NoItems = ItemIndex.create()
 let Misses = 8 as Key
 
@@ -798,7 +798,7 @@ typealias Key = int(0 to 1000)
 typealias Items = Array with Key
 
 type Bag
-	var items = Items.create()
+	var items = Items.create(0)
 
 	static function create() returns Bag
 		return Self{}
@@ -987,7 +987,7 @@ end 'Holder'
 typealias HolderArray = Array with Holder
 
 function main() returns ExitCode
-	var all = HolderArray.create()
+	var all = HolderArray.create(0)
 	all.push(Holder.holding(Body.create(7)))
 	all.push(Holder.empty)
 
@@ -1020,14 +1020,14 @@ out of the trace.
 <!-- MmTrace -->
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create()
+	var key = ByteArray.create(0)
 
 	for i in 0 upto 16 'eachByte'
 		key.push(i as Byte)
 	end 'eachByte'
 
 	let aes = try Aes.create(key) otherwise return 99
-	var block = ByteArray.create()
+	var block = ByteArray.create(0)
 
 	for _ in 0 upto 16 'eachBlockByte'
 		block.push(0)

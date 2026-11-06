@@ -538,14 +538,14 @@ public type LspClient
 	// ⛔ Everything that would stop the session happening at all PANICS rather than throwing: neither a
 	// missing binary nor a refused spawn is the server answering wrongly.
 	public static function start(binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit) returns LspClient
-		var argv = StringArray.create()
+		var argv = StringArray.create(0)
 		argv.push(LspServerCommandName)
 
 		let spawned = try StreamingSubprocess.spawnWithEnvironment(Executable.path(binary), arguments: argv, workingDirectory: Directory.currentPath(), environment: environment) otherwise (e) 'spawnFailed'
 			panic("LspClient: the test could not run — `{binary.toString()} {LspServerCommandName}` did not spawn ({e.displayReason()}).")
 		end 'spawnFailed'
 
-		return Self{server: spawned, nextRequestId: FirstRequestId, notifications: StringArray.create()}
+		return Self{server: spawned, nextRequestId: FirstRequestId, notifications: StringArray.create(0)}
 	end 'start'
 
 	// End the session and free the OS handle. MUST be called on every path — a dropped
@@ -588,7 +588,7 @@ public type LspClient
 	end 'initializeAtRootUri'
 
 	public function initializeAtRootUriOnly(root FilePath) returns InitializeResult throws LspClientError
-		return try self.initializeRooted(StringArray.create(), rootUri: InitializeRootUri.named(fileUriOf(root)), declaresWorkspaceFolders: false, trust: WorkspaceTrustOption.unstated)
+		return try self.initializeRooted(StringArray.create(0), rootUri: InitializeRootUri.named(fileUriOf(root)), declaresWorkspaceFolders: false, trust: WorkspaceTrustOption.unstated)
 	end 'initializeAtRootUriOnly'
 
 	public function initializeAtWorkspaceFolder(root FilePath) returns InitializeResult throws LspClientError
@@ -723,7 +723,7 @@ public type LspClient
 		var change = JsonObjectBuilder.create(doc)
 		change.putString(TextKey, value: content)
 
-		var changes = JsonNodeIdArray.create()
+		var changes = JsonNodeIdArray.create(0)
 		changes.push(change.finish())
 
 		var params = JsonObjectBuilder.create(doc)
@@ -806,7 +806,7 @@ public type LspClient
 	function awaitPublishesOfThisVersion(uri String, still VersionPublishTally, within DurationMs) returns PublishedDiagnostics throws LspClientError
 		let started = Clock.nowMs()
 		var arrived = 0 as VersionPublishTally
-		var latest = PublishedDiagnostics.of(uri.clone(), items: PublishedDiagnosticArray.create())
+		var latest = PublishedDiagnostics.of(uri.clone(), items: PublishedDiagnosticArray.create(0))
 
 		while Clock.elapsedMs(started) < within 'untilChecked'
 			// A request is what reads the wire: every notification that arrives ahead of its reply is stashed.
@@ -846,7 +846,7 @@ public type LspClient
 	// to the request that caused it, and a held project sends none, so a read off the wire would wait
 	// for nothing.
 	public function takeProjectLoadingNotices() returns ProjectLoadingNoticeArray throws LspClientError
-		var notices = ProjectLoadingNoticeArray.create()
+		var notices = ProjectLoadingNoticeArray.create(0)
 
 		for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives isNotificationOf(candidate, method: MethodProjectLoading), take: StashTake.every) 'eachNotice'
 			notices.push(try readProjectLoadingNotice(doc))
@@ -866,7 +866,7 @@ public type LspClient
 	public function awaitSettledProjectCheckSet(uri String) returns PublishedDiagnostics throws LspClientError
 		let started = Clock.nowMs()
 		let prefix = projectCheckReportPrefix(uri)
-		var latest = PublishedDiagnostics.of(uri.clone(), items: PublishedDiagnosticArray.create())
+		var latest = PublishedDiagnostics.of(uri.clone(), items: PublishedDiagnosticArray.create(0))
 
 		while Clock.elapsedMs(started) < ProjectCheckPublishFailureBoundMs 'untilChecked'
 			_ = try self.documentSymbols(uri)
@@ -889,7 +889,7 @@ public type LspClient
 
 	public function awaitPublishOfSize(uri String, size ElementIndex) returns PublishedDiagnostics throws LspClientError
 		let started = Clock.nowMs()
-		var latest = PublishedDiagnostics.of(uri.clone(), items: PublishedDiagnosticArray.create())
+		var latest = PublishedDiagnostics.of(uri.clone(), items: PublishedDiagnosticArray.create(0))
 
 		while Clock.elapsedMs(started) < ProjectCheckPublishFailureBoundMs 'untilPublished'
 			_ = try self.documentSymbols(uri)
@@ -912,7 +912,7 @@ public type LspClient
 		let started = Clock.nowMs()
 		let prefix = projectCheckReportPrefix(uri)
 		let last = "{through}"
-		var reports = ProjectCheckReportArray.create()
+		var reports = ProjectCheckReportArray.create(0)
 
 		while Clock.elapsedMs(started) < ProjectCheckPublishFailureBoundMs 'untilReported'
 			_ = try self.documentSymbols(uri)
@@ -934,7 +934,7 @@ public type LspClient
 	end 'awaitProjectCheckReports'
 
 	function takeProjectCheckReports(prefix String) returns ProjectCheckReportArray throws LspClientError
-		var reports = ProjectCheckReportArray.create()
+		var reports = ProjectCheckReportArray.create(0)
 
 		for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives isProjectCheckReport(candidate, prefix: prefix), take: StashTake.every) 'eachReport'
 			reports.push(try readProjectCheckReport(doc, prefix: prefix))
@@ -944,8 +944,8 @@ public type LspClient
 	end 'takeProjectCheckReports'
 
 	function takeStashedWhere(wanted StashedNotificationTest, take StashTake) returns StashedNotificationArray throws LspClientError
-		var kept = StringArray.create()
-		var taken = StashedNotificationArray.create()
+		var kept = StringArray.create(0)
+		var taken = StashedNotificationArray.create(0)
 
 		for body in self.notifications 'eachStashed'
 			let doc = try Json.parse(body) otherwise 'notJson'
@@ -1059,7 +1059,7 @@ public type LspClient
 
 	public function documentSymbols(uri String) returns DocumentSymbolsResult throws LspClientError
 		let (doc, result) = try self.documentRequest(MethodDocumentSymbol, uri: uri)
-		var symbols = DocumentSymbolArray.create()
+		var symbols = DocumentSymbolArray.create(0)
 
 		for element in try optionalElements(doc, id: result) 'eachSymbol'
 			symbols.push(DocumentSymbol.create(try stringMember(doc, of: element, key: NameKey), kind: optionalKind(doc, of: element) as SymbolKindCode))
@@ -1070,7 +1070,7 @@ public type LspClient
 
 	public function foldingRange(uri String) returns FoldingRangesResult throws LspClientError
 		let (doc, result) = try self.documentRequest(MethodFoldingRange, uri: uri)
-		var ranges = FoldingRangeArray.create()
+		var ranges = FoldingRangeArray.create(0)
 
 		for element in try optionalElements(doc, id: result) 'eachRange'
 			let startLine = try coordinateMember(doc, of: element, key: StartLineKey)
@@ -1082,7 +1082,7 @@ public type LspClient
 
 	public function linkedEditingRange(uri String, line LspCoordinate, character LspCoordinate) returns LinkedEditingRangesResult throws LspClientError
 		let (doc, result) = try self.positionRequest(MethodLinkedEditingRange, uri: uri, line: line, character: character)
-		var ranges = LspRangeArray.create()
+		var ranges = LspRangeArray.create(0)
 
 		if isNull(doc, id: result) 'nothingHere'
 			return LinkedEditingRangesResult.of(ranges)
@@ -1113,7 +1113,7 @@ public type LspClient
 
 		// The context is required by LSP even when the client knows of no diagnostics at the range.
 		var context = JsonObjectBuilder.create(doc)
-		context.putNode(DiagnosticsKey, value: doc.add(JsonNode.arrayNode(JsonNodeIdArray.create())))
+		context.putNode(DiagnosticsKey, value: doc.add(JsonNode.arrayNode(JsonNodeIdArray.create(0))))
 
 		var params = JsonObjectBuilder.create(doc)
 		params.putNode(TextDocumentKey, value: textDocumentIdentifier(doc, uri: uri))
@@ -1122,7 +1122,7 @@ public type LspClient
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
 		let (replyDoc, result) = try self.sendRequest(doc, message: message)
-		var actions = CodeActionItemArray.create()
+		var actions = CodeActionItemArray.create(0)
 
 		for element in try optionalElements(replyDoc, id: result) 'eachAction'
 			actions.push(CodeActionItem.create(try stringMember(replyDoc, of: element, key: TitleKey)))
@@ -1133,7 +1133,7 @@ public type LspClient
 
 	public function semanticTokensFull(uri String) returns SemanticTokensResult throws LspClientError
 		let (doc, result) = try self.documentRequest(MethodSemanticTokensFull, uri: uri)
-		var data = SemanticTokenValueArray.create()
+		var data = SemanticTokenValueArray.create(0)
 
 		if isNull(doc, id: result) 'noTokens'
 			return SemanticTokensResult.of(data)
@@ -1158,7 +1158,7 @@ public type LspClient
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
 		let (replyDoc, result) = try self.sendRequest(doc, message: message)
-		var errors = GenerateIrErrorArray.create()
+		var errors = GenerateIrErrorArray.create(0)
 
 		for element in try elementsOf(replyDoc, id: try memberNode(replyDoc, of: result, key: ErrorsKey)) 'eachError'
 			let line = try integerMember(replyDoc, of: element, key: LineKey)
@@ -1176,7 +1176,7 @@ public type LspClient
 		message.putNode(JsonRpcParamsKey, value: JsonObjectBuilder.create(doc).finish())
 
 		let (replyDoc, result) = try self.sendRequest(doc, message: message)
-		var projects = ProjectEntryArray.create()
+		var projects = ProjectEntryArray.create(0)
 
 		for element in try elementsOf(replyDoc, id: try memberNode(replyDoc, of: result, key: ProjectsKey)) 'eachProject'
 			let rootPath = try stringMember(replyDoc, of: element, key: RootPathKey)
@@ -1370,7 +1370,7 @@ type JsonObjectBuilder
 	var children as JsonNodeIdArray
 
 	static function create(doc JsonDoc) returns JsonObjectBuilder
-		return Self{doc: doc, keys: StringArray.create(), children: JsonNodeIdArray.create()}
+		return Self{doc: doc, keys: StringArray.create(0), children: JsonNodeIdArray.create(0)}
 	end 'create'
 
 	function putString(key String, value String)
@@ -1434,7 +1434,7 @@ function trustOptionsNode(doc JsonDoc, trusted bool) returns JsonNodeId
 end 'trustOptionsNode'
 
 function workspaceFolderNodes(doc JsonDoc, uris StringArray) returns JsonNodeIdArray
-	var folders = JsonNodeIdArray.create()
+	var folders = JsonNodeIdArray.create(0)
 
 	for uri in uris 'eachFolder'
 		var folder = JsonObjectBuilder.create(doc)
@@ -1447,7 +1447,7 @@ function workspaceFolderNodes(doc JsonDoc, uris StringArray) returns JsonNodeIdA
 end 'workspaceFolderNodes'
 
 function folderUrisOf(roots WorkspaceFolderRootArray) returns StringArray
-	var uris = StringArray.create()
+	var uris = StringArray.create(0)
 
 	for root in roots 'eachRoot'
 		uris.push(fileUriOf(root))
@@ -1667,7 +1667,7 @@ function elementsOf(doc JsonDoc, id JsonNodeId) returns JsonNodeIdArray throws L
 		throw LspClientError.malformedResponse("a member this reply must answer with an array is not one")
 	end 'notAnArray'
 
-	var elements = JsonNodeIdArray.create()
+	var elements = JsonNodeIdArray.create(0)
 
 	for index in 0 upto count 'eachElement'
 		elements.push(try doc.arrayAt(id, index: index) otherwise panic("LspClient.elementsOf: index below the length just measured"))
@@ -1680,7 +1680,7 @@ end 'elementsOf'
 // share exactly this shape: LSP lets each of them return `null` instead of an empty array.
 function optionalElements(doc JsonDoc, id JsonNodeId) returns JsonNodeIdArray throws LspClientError
 	if isNull(doc, id: id) 'nothingHere'
-		return JsonNodeIdArray.create()
+		return JsonNodeIdArray.create(0)
 	end 'nothingHere'
 
 	return try elementsOf(doc, id: id)
@@ -1747,7 +1747,7 @@ end 'readProjectLoadingNotice'
 
 function readPublishedDiagnostics(doc JsonDoc, uri String) returns PublishedDiagnostics throws LspClientError
 	let params = try memberNode(doc, of: doc.root, key: JsonRpcParamsKey)
-	var items = PublishedDiagnosticArray.create()
+	var items = PublishedDiagnosticArray.create(0)
 
 	for element in try elementsOf(doc, id: try memberNode(doc, of: params, key: DiagnosticsKey)) 'eachDiagnostic'
 		let range = try readRange(doc, id: try memberNode(doc, of: element, key: RangeKey))
@@ -1770,7 +1770,7 @@ function readDiagnosticCode(doc JsonDoc, of JsonNodeId) returns PublishedDiagnos
 end 'readDiagnosticCode'
 
 function readTextEdits(doc JsonDoc, id JsonNodeId) returns TextEditArray throws LspClientError
-	var edits = TextEditArray.create()
+	var edits = TextEditArray.create(0)
 
 	for element in try optionalElements(doc, id: id) 'eachEdit'
 		let range = try readRange(doc, id: try memberNode(doc, of: element, key: RangeKey))
@@ -1834,7 +1834,7 @@ end 'readDefinition'
 
 // A completion answer as either a bare list of items or a `CompletionList` wrapping one.
 function readCompletion(doc JsonDoc, id JsonNodeId) returns CompletionResult throws LspClientError
-	var items = CompletionItemArray.create()
+	var items = CompletionItemArray.create(0)
 
 	if isNull(doc, id: id) 'nothingHere'
 		return CompletionResult.of(items)
@@ -1853,20 +1853,20 @@ end 'readCompletion'
 // which is the only document a rename test opened.
 function readWorkspaceEdit(doc JsonDoc, id JsonNodeId, uri String) returns TextEditArray throws LspClientError
 	if isNull(doc, id: id) 'noEdit'
-		return TextEditArray.create()
+		return TextEditArray.create(0)
 	end 'noEdit'
 
 	if hasMember(doc, of: id, key: ChangesKey) 'byUri'
 		let changes = try memberNode(doc, of: id, key: ChangesKey)
 
 		if not hasMember(doc, of: changes, key: uri) 'untouched'
-			return TextEditArray.create()
+			return TextEditArray.create(0)
 		end 'untouched'
 
 		return try readTextEdits(doc, id: try memberNode(doc, of: changes, key: uri))
 	end 'byUri'
 
-	var edits = TextEditArray.create()
+	var edits = TextEditArray.create(0)
 
 	for element in try optionalElements(doc, id: try memberNode(doc, of: id, key: DocumentChangesKey)) 'eachDocument'
 		let identifier = try memberNode(doc, of: element, key: TextDocumentKey)
@@ -2106,7 +2106,7 @@ export function recordedManifestDiagnostics(client LspClient, project FilePath) 
 end 'recordedManifestDiagnostics'
 
 export function expectBreakingChangeNotices(items PublishedDiagnosticArray) throws TestFailure
-	var notices = StringArray.create()
+	var notices = StringArray.create(0)
 
 	for item in items 'eachItem'
 		try Expect.notEqual(item.severity, expected: PublishedErrorSeverity, message: "a record of an older release is not an error: {item.message}")
@@ -2117,7 +2117,7 @@ export function expectBreakingChangeNotices(items PublishedDiagnosticArray) thro
 	end 'eachItem'
 
 	let lastBuilt = "{LastBuiltWording} {OlderRelease}."
-	var expected = StringArray.create()
+	var expected = StringArray.create(0)
 
 	for change in try expectedBreakingChangesSince(OlderRelease) 'eachChange'
 		expected.push("{lastBuilt} {change.headline()} {change.fixLine()}")

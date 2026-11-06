@@ -107,7 +107,7 @@ function refModNeg(n Word, d NegDivisor) returns Word
 end 'refModNeg'
 
 function edgeDividends() returns WordArray
-	var ns = WordArray.create()
+	var ns = WordArray.create(0)
 	ns.push(0)
 	ns.push(1)
 	ns.push(-1)
@@ -225,7 +225,7 @@ end 'hardestDividend'
 
 function neighbourhood(d PosDivisor) returns WordArray
 	let anc = hardestDividend(d)
-	var ns = WordArray.create()
+	var ns = WordArray.create(0)
 	ns.push(anc)
 	ns.push(anc - 1)
 	ns.push(anc + 1)
@@ -353,7 +353,7 @@ function refUMod(n Unsigned, d UPosDivisor) returns Unsigned
 end 'refUMod'
 
 function main() returns ExitCode
-	var ns = UnsignedArray.create()
+	var ns = UnsignedArray.create(0)
 	ns.push(0)
 	ns.push(1)
 	ns.push(31)
@@ -537,7 +537,7 @@ function refUMod(n Unsigned, d UPosDivisor) returns Unsigned
 end 'refUMod'
 
 function edgeDividends() returns UnsignedArray
-	var ns = UnsignedArray.create()
+	var ns = UnsignedArray.create(0)
 	ns.push(0)
 	ns.push(1)
 	ns.push(31)
@@ -651,7 +651,7 @@ end 'hardestDividend'
 function neighbourhood(d UPosDivisor) returns UnsignedArray
 	let umax = u64.max as Unsigned
 	let nc = hardestDividend(d)
-	var ns = UnsignedArray.create()
+	var ns = UnsignedArray.create(0)
 	ns.push(nc)
 	ns.push(nc - 1)
 

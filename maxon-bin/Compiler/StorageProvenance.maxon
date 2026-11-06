@@ -120,7 +120,7 @@ export type StoreSlotTable
 	var nexts as OptionalElementIndexColumn
 
 	export static function create() returns StoreSlotTable
-		return Self{buckets: OptionalElementIndexColumn.create(), keys: StoreSlotKeyArray.create(), slots: RootSetIdArray.create(), nexts: OptionalElementIndexColumn.create()}
+		return Self{buckets: OptionalElementIndexColumn.create(), keys: StoreSlotKeyArray.create(0), slots: RootSetIdArray.create(0), nexts: OptionalElementIndexColumn.create()}
 	end 'create'
 
 	export function reset()
@@ -536,8 +536,8 @@ export type TracedSummaryRow
 	export var otherKeeps = NoParamPositions as ParamPositionMask
 	export var recordKeeps = NoParamPositions as ParamPositionMask
 	export var moduleLets = NoParamPositions as ParamPositionMask
-	export var stores = ParamPositionMaskArray.create()
-	export var deepStores = ParamPositionMaskArray.create()
+	export var stores = ParamPositionMaskArray.create(0)
+	export var deepStores = ParamPositionMaskArray.create(0)
 
 	static function create() returns TracedSummaryRow
 		return Self{}
@@ -562,7 +562,7 @@ type RootSets
 	var grew as bool
 
 	static function create() returns RootSets
-		return Self{heads: EntryIndexArray.create(), headStates: RootLinkStateArray.create(), words: ParamPositionMaskArray.create(), wordIndices: MaskWordCountArray.create(), links: EntryIndexArray.create(), linkStates: RootLinkStateArray.create(), grew: false}
+		return Self{heads: EntryIndexArray.create(0), headStates: RootLinkStateArray.create(0), words: ParamPositionMaskArray.create(0), wordIndices: MaskWordCountArray.create(0), links: EntryIndexArray.create(0), linkStates: RootLinkStateArray.create(0), grew: false}
 	end 'create'
 
 	// `setCount` empty sets, and nothing else: the pool keeps its storage, never its chunks.
@@ -796,7 +796,7 @@ export type ProvenanceSummary
 	var noStoredParameters as ParamPositionMaskArray
 
 	export static function create(funcCount ElementIndex) returns ProvenanceSummary
-		var noStoredParameters = ParamPositionMaskArray.create()
+		var noStoredParameters = ParamPositionMaskArray.create(0)
 
 		return Self{shares: emptySummaryColumn(funcCount), identity: emptySummaryColumn(funcCount), holds: emptySummaryColumn(funcCount), inside: emptySummaryColumn(funcCount), holdsWithin: emptySummaryColumn(funcCount), placedWithin: emptySummaryColumn(funcCount), escapes: emptySummaryColumn(funcCount), binds: emptySummaryColumn(funcCount), letKeeps: emptySummaryColumn(funcCount), payloadKeeps: emptySummaryColumn(funcCount), elementKeeps: emptySummaryColumn(funcCount), keeps: emptySummaryColumn(funcCount), otherKeeps: emptySummaryColumn(funcCount), recordKeeps: emptySummaryColumn(funcCount), moduleLets: emptySummaryColumn(funcCount), storesInto: emptyStoreRows(funcCount, sharedEmptyRow: noStoredParameters), storesDeep: emptyStoreRows(funcCount, sharedEmptyRow: noStoredParameters), noStoredParameters: noStoredParameters}
 	end 'create'
@@ -904,7 +904,7 @@ export type ProvenanceSummary
 end 'ProvenanceSummary'
 
 module function emptyStoreRows(funcCount ElementIndex, sharedEmptyRow ParamPositionMaskArray) returns ParamMaskRows
-	var rows = ParamMaskRows.create()
+	var rows = ParamMaskRows.create(0)
 	rows.refill(funcCount, value: sharedEmptyRow)
 	return rows
 end 'emptyStoreRows'
@@ -927,7 +927,7 @@ module function widenStoreRow(rows ParamMaskRows, index ElementIndex, by ParamPo
 		end 'nothingStoredHere'
 
 		if row is sharedEmptyRow 'firstStore'
-			row = ParamPositionMaskArray.create()
+			row = ParamPositionMaskArray.create(0)
 			row.refill(by.count(), value: NoParamPositions)
 			try rows.set(index, value: row) otherwise panic("widenStoreRow: rows.set OOB at {index}")
 		end 'firstStore'
@@ -944,7 +944,7 @@ module function widenStoreRow(rows ParamMaskRows, index ElementIndex, by ParamPo
 end 'widenStoreRow'
 
 module function emptySummaryColumn(funcCount ElementIndex) returns ParamPositionMaskArray
-	var column = ParamPositionMaskArray.create()
+	var column = ParamPositionMaskArray.create(0)
 	column.refill(funcCount, value: NoParamPositions)
 	return column
 end 'emptySummaryColumn'
@@ -1071,7 +1071,7 @@ export type CallSites
 	var linksANewNode as BoolArray
 
 	export static function create(funcCount ElementIndex) returns CallSites
-		return Self{ranges: FunctionRows.create(funcCount), described: BoolArray.create(), entries: EntryIndexArray.create(), callees: FuncIndexArray.create(), argStarts: EntryIndexArray.create(), argPositions: ParamCountArray.create(), argFills: BoolArray.create(), shapes: RuntimeStoreShapeArray.create(), bookkeeping: BoolArray.create(), linksANewNode: BoolArray.create()}
+		return Self{ranges: FunctionRows.create(funcCount), described: BoolArray.create(0), entries: EntryIndexArray.create(0), callees: FuncIndexArray.create(0), argStarts: EntryIndexArray.create(0), argPositions: ParamCountArray.create(0), argFills: BoolArray.create(0), shapes: RuntimeStoreShapeArray.create(0), bookkeeping: BoolArray.create(0), linksANewNode: BoolArray.create(0)}
 	end 'create'
 
 	export function nextRow() returns ElementIndex
@@ -1539,7 +1539,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	static function create(project Project, module MaxonModule, signatures ProgramSignatures, calls CallSiteCursor, funcCount ElementIndex) returns ProvenanceTracer
 		var noSites = ProvenanceSites.create(ProvenanceColumns.create())
-		return Self{project: project, module: module, signatures: signatures, calls: calls, stagedEdges: StagedParamEdges.create(funcCount), summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count(), setsPerColumn: 0, storeSlots: StoreSlotTable.create(), deepSlots: StoreSlotTable.create(), loadOrigins: StoreSlotKeyArray.create(), hasLoadOrigin: BoolArray.create(), tracked: BoolArray.create(), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), unboxedWords: UnboxedWordMemo.create(), kindWritability: RecordKindWritability.of(signatures), rootValues: ValueIdArray.create(), rootNames: NameRoster.create(), rootRecordKinds: HeldRecordKindsArray.create(), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: OptionalElementIndexColumn.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(), isImmutableBindingValue: BoolArray.create(), rootIsModuleLet: BoolArray.create(), rootAliasLastUse: TokenIndexArray.create(), rootAliased: BoolArray.create(), rootInfos: VarInfoArray.create(), rootDeclTokens: TokenIndexArray.create(), rootLiveUntil: TokenIndexArray.create(), rootSoleBase: BoolArray.create(), rootMovedAt: TokenIndexArray.create(), rootCaptured: BoolArray.create(), writableRankOfValue: OptionalElementIndexColumn.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(), callWrittenPlaceWords: ParamPositionMaskArray.create(), parameterRankWords: ParamPositionMaskArray.create(), doorToken: NoDoorToken, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: moduleLetKindsOf(project, signatures: signatures), escapedSet: 0, operands: ValueIdArray.create(), refusals: PendingRefusalArray.create(), argIdentityReach: ParamPositionMaskArray.create(), argWithinReach: ParamPositionMaskArray.create(), changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedLetKeeps: NoParamPositions, returnedPayloadKeeps: NoParamPositions, returnedElementKeeps: NoParamPositions, returnedKeeps: NoParamPositions, returnedOtherKeeps: NoParamPositions, returnedRecordKeeps: NoParamPositions, writtenMasks: ParamPositionMaskArray.create(), recordWrittenMasks: ParamPositionMaskArray.create(), letRefused: BoolArray.create(), keptRefusedValues: ValueIdArray.create(), keptRefusedAt: PositionKeyArray.create(), keptSiteHeads: KeptSiteHeadsByCall.create(), keptSiteNext: OptionalElementIndexColumn.create(), keptSitesValid: false, keptSitesIndex: 0, landingKeeps: LandingKeeps.fromBodies, callStartIndex: StartByPosition.create(), letCheckedValid: false, letCheckedIndex: 0, opaqueBoundBodies: BoolArray.create(), returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(), storedRow: ParamPositionMaskArray.create(), storedDeepRow: ParamPositionMaskArray.create(), capturedPositions: CapturedLoadMap.create(), rankCount: 0, enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(), writtenArgValues: ValueIdArray.create(), writtenArgCalls: SourceRangeArray.create(), writtenArgParams: ArgumentParameterArray.create(), writtenArgJudged: BoolArray.create(), writtenArgsHere: EntryIndexArray.create(), landingNotedPositions: ParamCountArray.create(), landingNotedRows: EntryIndexArray.create(), keptArgFuncs: FuncIndexArray.create(), keptArgValues: ValueIdArray.create(), keptArgCalls: SourceRangeArray.create(), keptArgParams: ArgumentParameterArray.create(), keptArgCallees: NameRoster.create(), keptArgCursor: 0, refusedDoorRanks: 0, refusedBodies: BoolArray.create(), pendingKeeps: PendingKeepArray.create(), returnedValues: ValueIdArray.create(), keptEscapes: BoolArray.create(), keptReturned: BoolArray.create(), functionHoldings: FunctionHoldingAnswers.create(), keptEverythingEscapes: false, varMovedAt: TokenIndexArray.create(), varDeadFrom: TokenIndexArray.create(), keptRefusedRanks: 0, rootReadStarts: EntryIndexArray.create(), rootReads: TokenIndexArray.create(), tracedSites: noSites, noSites: noSites, refusedDoorValues: BoolArray.create(), indexedDefinitionsOf: IndexedFunctionBody.none, definingOps: OptionalElementIndexColumn.create(), mergingBlocks: MergingBlockColumn.create(), hopKinds: AccessHopKindArray.create(), hopBases: ValueIdArray.create(), hopSteps: AccessStepColumn.create(), soleIncomings: ValueIdArray.create(), soleIncomingSeen: BoolArray.create(), incomingStart: EntryIndexArray.create(), incomingLength: EntryIndexArray.create(), incomingComplete: BoolArray.create(), incomingValues: ValueIdArray.create(), pairMerge: ValueIdArray.create(), pairIncoming: ValueIdArray.create(), pairHanded: BoolArray.create(), blockPairStart: EntryIndexArray.create(), useCounts: EntryIndexArray.create(), pathSteps: PathStepArray.create(), rootReadFill: EntryIndexArray.create(), reachWorklist: BlockIdArray.create(), reachVisited: BoolArray.create(), writtenArgCursor: 0, writtenRanks: 0, writtenWithinRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: OptionalElementIndexColumn.create(), hygieneWithdrawn: BoolArray.create(), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), freshReturns: BoolArray.create(), freshMember: BoolArray.create(), freshRequired: BoolArray.create(), freshChecked: BoolArray.create(), freshChanged: false, freshNeeds: FuncIndexArray.create(), letFieldSlots: LetFieldSlotMemo.create(), letPayloadKinds: LetPayloadKindsMemo.create(), keptArgKinds: ArgumentKeepArray.create(), viewSinks: ViewSinkMap.create(), permanentReturns: BoolArray.create(), permanentOrFreshReturns: BoolArray.create(), permanentNeeds: FuncIndexArray.create(), permanentSettling: PermanenceSettling.none, permanentGivenReturns: BoolArray.create(), permanentOrFreshGivenReturns: BoolArray.create(), permanentGivenParams: ParamPositionMaskArray.create(), permanentOrFreshGivenParams: ParamPositionMaskArray.create(), permanentParamsNeeded: NoParamPositions, permanentUsedGiven: false, slotExclusivity: SlotExclusivityMemo.create(), slotAccessHeads: SlotAccessHeadMap.create(), slotAccessPacked: StoreSlotKeyArray.create(), slotAccessNext: StoreSlotKeyArray.create(), slotAccessesIndexed: false, slotAccessedThroughAnUnkeyedAddress: false, moduleVarKinds: signatures.recordKindsOfTypes(moduleGlobalTypesOf(project.managedGlobals, vars: true)), swapOperands: ValueIdArray.create(), aliasesGrew: false, swappedOutReturns: SwappedOutReturnMemo.create(), valueHandedOut: BoolArray.create(), handedOutComputed: false, readOnlyKeptBases: ValueIdArray.create(), readOnlyKeptAt: PositionKeyArray.create(), doorAcceptsParameters: false}
+		return Self{project: project, module: module, signatures: signatures, calls: calls, stagedEdges: StagedParamEdges.create(funcCount), summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count(), setsPerColumn: 0, storeSlots: StoreSlotTable.create(), deepSlots: StoreSlotTable.create(), loadOrigins: StoreSlotKeyArray.create(0), hasLoadOrigin: BoolArray.create(0), tracked: BoolArray.create(0), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), unboxedWords: UnboxedWordMemo.create(), kindWritability: RecordKindWritability.of(signatures), rootValues: ValueIdArray.create(0), rootNames: NameRoster.create(0), rootRecordKinds: HeldRecordKindsArray.create(0), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: OptionalElementIndexColumn.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(0), isImmutableBindingValue: BoolArray.create(0), rootIsModuleLet: BoolArray.create(0), rootAliasLastUse: TokenIndexArray.create(0), rootAliased: BoolArray.create(0), rootInfos: VarInfoArray.create(0), rootDeclTokens: TokenIndexArray.create(0), rootLiveUntil: TokenIndexArray.create(0), rootSoleBase: BoolArray.create(0), rootMovedAt: TokenIndexArray.create(0), rootCaptured: BoolArray.create(0), writableRankOfValue: OptionalElementIndexColumn.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(0), callWrittenPlaceWords: ParamPositionMaskArray.create(0), parameterRankWords: ParamPositionMaskArray.create(0), doorToken: NoDoorToken, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: moduleLetKindsOf(project, signatures: signatures), escapedSet: 0, operands: ValueIdArray.create(0), refusals: PendingRefusalArray.create(0), argIdentityReach: ParamPositionMaskArray.create(0), argWithinReach: ParamPositionMaskArray.create(0), changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedLetKeeps: NoParamPositions, returnedPayloadKeeps: NoParamPositions, returnedElementKeeps: NoParamPositions, returnedKeeps: NoParamPositions, returnedOtherKeeps: NoParamPositions, returnedRecordKeeps: NoParamPositions, writtenMasks: ParamPositionMaskArray.create(0), recordWrittenMasks: ParamPositionMaskArray.create(0), letRefused: BoolArray.create(0), keptRefusedValues: ValueIdArray.create(0), keptRefusedAt: PositionKeyArray.create(0), keptSiteHeads: KeptSiteHeadsByCall.create(), keptSiteNext: OptionalElementIndexColumn.create(), keptSitesValid: false, keptSitesIndex: 0, landingKeeps: LandingKeeps.fromBodies, callStartIndex: StartByPosition.create(), letCheckedValid: false, letCheckedIndex: 0, opaqueBoundBodies: BoolArray.create(0), returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(0), storedRow: ParamPositionMaskArray.create(0), storedDeepRow: ParamPositionMaskArray.create(0), capturedPositions: CapturedLoadMap.create(), rankCount: 0, enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(0), writtenArgValues: ValueIdArray.create(0), writtenArgCalls: SourceRangeArray.create(0), writtenArgParams: ArgumentParameterArray.create(0), writtenArgJudged: BoolArray.create(0), writtenArgsHere: EntryIndexArray.create(0), landingNotedPositions: ParamCountArray.create(0), landingNotedRows: EntryIndexArray.create(0), keptArgFuncs: FuncIndexArray.create(0), keptArgValues: ValueIdArray.create(0), keptArgCalls: SourceRangeArray.create(0), keptArgParams: ArgumentParameterArray.create(0), keptArgCallees: NameRoster.create(0), keptArgCursor: 0, refusedDoorRanks: 0, refusedBodies: BoolArray.create(0), pendingKeeps: PendingKeepArray.create(0), returnedValues: ValueIdArray.create(0), keptEscapes: BoolArray.create(0), keptReturned: BoolArray.create(0), functionHoldings: FunctionHoldingAnswers.create(), keptEverythingEscapes: false, varMovedAt: TokenIndexArray.create(0), varDeadFrom: TokenIndexArray.create(0), keptRefusedRanks: 0, rootReadStarts: EntryIndexArray.create(0), rootReads: TokenIndexArray.create(0), tracedSites: noSites, noSites: noSites, refusedDoorValues: BoolArray.create(0), indexedDefinitionsOf: IndexedFunctionBody.none, definingOps: OptionalElementIndexColumn.create(), mergingBlocks: MergingBlockColumn.create(), hopKinds: AccessHopKindArray.create(0), hopBases: ValueIdArray.create(0), hopSteps: AccessStepColumn.create(), soleIncomings: ValueIdArray.create(0), soleIncomingSeen: BoolArray.create(0), incomingStart: EntryIndexArray.create(0), incomingLength: EntryIndexArray.create(0), incomingComplete: BoolArray.create(0), incomingValues: ValueIdArray.create(0), pairMerge: ValueIdArray.create(0), pairIncoming: ValueIdArray.create(0), pairHanded: BoolArray.create(0), blockPairStart: EntryIndexArray.create(0), useCounts: EntryIndexArray.create(0), pathSteps: PathStepArray.create(0), rootReadFill: EntryIndexArray.create(0), reachWorklist: BlockIdArray.create(0), reachVisited: BoolArray.create(0), writtenArgCursor: 0, writtenRanks: 0, writtenWithinRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: OptionalElementIndexColumn.create(), hygieneWithdrawn: BoolArray.create(0), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), freshReturns: BoolArray.create(0), freshMember: BoolArray.create(0), freshRequired: BoolArray.create(0), freshChecked: BoolArray.create(0), freshChanged: false, freshNeeds: FuncIndexArray.create(0), letFieldSlots: LetFieldSlotMemo.create(), letPayloadKinds: LetPayloadKindsMemo.create(), keptArgKinds: ArgumentKeepArray.create(0), viewSinks: ViewSinkMap.create(), permanentReturns: BoolArray.create(0), permanentOrFreshReturns: BoolArray.create(0), permanentNeeds: FuncIndexArray.create(0), permanentSettling: PermanenceSettling.none, permanentGivenReturns: BoolArray.create(0), permanentOrFreshGivenReturns: BoolArray.create(0), permanentGivenParams: ParamPositionMaskArray.create(0), permanentOrFreshGivenParams: ParamPositionMaskArray.create(0), permanentParamsNeeded: NoParamPositions, permanentUsedGiven: false, slotExclusivity: SlotExclusivityMemo.create(), slotAccessHeads: SlotAccessHeadMap.create(), slotAccessPacked: StoreSlotKeyArray.create(0), slotAccessNext: StoreSlotKeyArray.create(0), slotAccessesIndexed: false, slotAccessedThroughAnUnkeyedAddress: false, moduleVarKinds: signatures.recordKindsOfTypes(moduleGlobalTypesOf(project.managedGlobals, vars: true)), swapOperands: ValueIdArray.create(0), aliasesGrew: false, swappedOutReturns: SwappedOutReturnMemo.create(), valueHandedOut: BoolArray.create(0), handedOutComputed: false, readOnlyKeptBases: ValueIdArray.create(0), readOnlyKeptAt: PositionKeyArray.create(0), doorAcceptsParameters: false}
 	end 'create'
 
 	function tracesFirst(index ElementIndex) returns bool
@@ -1877,7 +1877,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return
 		end 'noVars'
 
-		var order = VarDeathArray.create()
+		var order = VarDeathArray.create(0)
 
 		for rank in self.firstWritableValueRank upto self.writableRank 'eachVar'
 			order.push(VarDeath.create(rank, until: try self.varDeadFrom.get(rank) otherwise panic("ProvenanceTracer.settleVarLiveness: varDeadFrom.get OOB at {rank}")))
@@ -1885,9 +1885,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		order.sortBy(function(left VarDeath, right VarDeath) gives right.until.compare(left.until))
 
-		var settled = BoolArray.create()
+		var settled = BoolArray.create(0)
 		settled.refill(self.writableRank, value: false)
-		var frontier = EntryIndexArray.create()
+		var frontier = EntryIndexArray.create(0)
 
 		for death in order 'eachVarLatestDyingFirst'
 			let source = death.rank
@@ -2704,7 +2704,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'refuseAnImmutableWrittenArgument'
 
 	module function landingParamNames(bodies CallLandingBodies, position ParamCount, mutationSummary ParamMutationSummary) returns ArgumentParameterArray
-		var names = ArgumentParameterArray.create()
+		var names = ArgumentParameterArray.create(0)
 
 		for index in bodies.impls 'eachWriter'
 			let (mask, recordWriteMask) = mutationSummary.writesOf(self.functionAt(index).name)
@@ -3920,7 +3920,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'setKeptMark'
 
 	function carryKeptMark(mark KeptMark, records ValueIdArray, starts EntryIndexArray, byDestination EntryIndexArray)
-		var worklist = ValueIdArray.create()
+		var worklist = ValueIdArray.create(0)
 
 		for destination in 0 upto starts.count() - 1 'eachDestination'
 			let first = try starts.get(destination) otherwise panic("ProvenanceTracer.carryKeptMark: starts.get OOB at {destination}")
@@ -3966,8 +3966,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'eachSeed'
 
 		let valueCount = func.valueTags.count()
-		var records = ValueIdArray.create()
-		var starts = EntryIndexArray.create()
+		var records = ValueIdArray.create(0)
+		var starts = EntryIndexArray.create(0)
 		starts.refill(valueCount + 1, value: 0)
 
 		for pending in self.pendingKeeps 'eachStoreRecord'
@@ -3982,7 +3982,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'eachRunningTotal'
 
 		var filled = starts.clone()
-		var byDestination = EntryIndexArray.create()
+		var byDestination = EntryIndexArray.create(0)
 		byDestination.refill(self.pendingKeeps.count(), value: 0)
 
 		for (iter, pending) in self.pendingKeeps.withIterator() 'eachStoreByDestination'
@@ -7238,7 +7238,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return
 		end 'noneWithdrawn'
 
-		var kept = DiagnosticArray.create()
+		var kept = DiagnosticArray.create(0)
 
 		for i in 0 upto self.project.bindingHygieneDiagnostics.count() 'eachDiagnostic'
 			if not (try self.hygieneWithdrawn.get(i) otherwise panic("ProvenanceTracer.dropWithdrawnHygiene: hygieneWithdrawn.get OOB at {i}")) 'kept'
@@ -8101,8 +8101,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	module function settleFreshReturns(funcNames FunctionNameIndex)
 		let funcCount = funcNames.functions.count()
-		var needCallers = FuncIndexArray.create()
-		var needCallees = FuncIndexArray.create()
+		var needCallers = FuncIndexArray.create(0)
+		var needCallees = FuncIndexArray.create(0)
 		self.freshReturns.refill(funcCount, value: false)
 
 		for index in 0 upto funcCount 'eachFunction'
@@ -8571,7 +8571,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'valueIsAFreshOccupantOfALocalCell'
 
 	function cellHoldsOnlyFreshRecords(func IrFunction, cell ValueId, except ValueIdArray, depth ElementIndex) returns bool
-		var occupants = BoolArray.create()
+		var occupants = BoolArray.create(0)
 		occupants.refill(func.valueTags.count(), value: false)
 
 		if not self.cellIsFilledOnlyWithFreshRecords(func, cell: cell, aliases: occupants, except: except, depth: depth) 'aForeignRecordMayLandInIt'
@@ -8735,11 +8735,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return false
 		end 'notFilledThroughACell'
 
-		return self.cellHoldsOnlyFreshRecords(callee, cell: valueIdAtParamPosition(position), except: ValueIdArray.create(), depth: depth)
+		return self.cellHoldsOnlyFreshRecords(callee, cell: valueIdAtParamPosition(position), except: ValueIdArray.create(0), depth: depth)
 	end 'calleeFillsItsReferenceParameterOnlyWithFreshRecords'
 
 	function opNamesTheRecord(func IrFunction, op MaxonOp, record ValueId) returns bool
-		var opOperands = ValueIdArray.create()
+		var opOperands = ValueIdArray.create(0)
 		maxonOpOperandValues(op, into: opOperands)
 
 		for operand in opOperands 'eachOperand'
@@ -8861,8 +8861,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function ownerIsUntouchedFrom(func IrFunction, byId BlockIndexById, loadOp ElementIndex, mint ElementIndex, ownerBase ValueId, key StoreSlotKey) returns bool
 		view ir = self.module
-		var worklist = BlockIdArray.create()
-		var visited = BoolArray.create()
+		var worklist = BlockIdArray.create(0)
+		var visited = BoolArray.create(0)
 		visited.refill(func.nextBlockId, value: false)
 
 		for blockRef in func.blockRefs 'findTheLoad'
@@ -8993,7 +8993,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'ownerRecordIsOwned'
 
 	function varsOwnValues(func IrFunction) returns BoolArray
-		var varsOwn = BoolArray.create()
+		var varsOwn = BoolArray.create(0)
 		varsOwn.refill(func.valueTags.count(), value: false)
 		ProvenanceTracer.markVarsOwn(func, sites: func.provenanceSites(self.noSites), into: varsOwn)
 		return varsOwn
@@ -9004,7 +9004,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.indexDefinitions(func, ir: ir)
 		let ownerBase = self.sameRecordBase(func, ir: ir, value: addr)
 		view ownerKind = try self.heldKindOfValue(func, value: ownerBase) otherwise return false
-		var aliases = BoolArray.create()
+		var aliases = BoolArray.create(0)
 		aliases.refill(func.valueTags.count(), value: false)
 		self.addAlias(aliases, value: result)
 
@@ -9357,7 +9357,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'storeKeepsSlotExclusive'
 
 	function recordUseOf(func IrFunction, root ValueId) returns RecordUse
-		var aliases = BoolArray.create()
+		var aliases = BoolArray.create(0)
 		aliases.refill(func.valueTags.count(), value: false)
 		self.addAlias(aliases, value: root)
 		return self.recordUseOfAliases(func, aliases: aliases)
@@ -9844,7 +9844,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		let allowFresh = mode == PermanenceSettling.orFreshGivenArguments
 		var answers = self.permanentOrFreshGivenReturns if allowFresh else self.permanentGivenReturns
 		var wanted = self.permanentOrFreshGivenParams if allowFresh else self.permanentGivenParams
-		var pending = FuncIndexArray.create()
+		var pending = FuncIndexArray.create(0)
 		answers.refill(funcCount, value: false)
 		wanted.refill(funcCount, value: NoParamPositions)
 
@@ -9860,11 +9860,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'eachFunction'
 
 		self.permanentSettling = mode
-		var dependent = FuncIndexArray.create()
+		var dependent = FuncIndexArray.create(0)
 		var anAnswerMoved = self.judgeGivenAnswers(pending, allowFresh: allowFresh, answers: answers, wanted: wanted, dependent: dependent)
 
 		while anAnswerMoved 'untilNothingMoves'
-			var next = FuncIndexArray.create()
+			var next = FuncIndexArray.create(0)
 			anAnswerMoved = self.judgeGivenAnswers(dependent, allowFresh: allowFresh, answers: answers, wanted: wanted, dependent: next)
 			dependent = next
 		end 'untilNothingMoves'
@@ -9907,8 +9907,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function settlePermanence(funcNames FunctionNameIndex, mode PermanenceSettling)
 		let funcCount = funcNames.functions.count()
-		var needCallers = FuncIndexArray.create()
-		var needCallees = FuncIndexArray.create()
+		var needCallers = FuncIndexArray.create(0)
+		var needCallees = FuncIndexArray.create(0)
 		var column = self.permanentOrFreshReturns if mode == PermanenceSettling.orFresh else self.permanentReturns
 		column.refill(funcCount, value: false)
 		self.permanentSettling = mode
@@ -10518,12 +10518,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		view required = match lookupInterface(self.project.interfaces, name: interfaceName) 'lookup'
 			found(iface) gives iface.methods
-			notFound gives InterfaceMethodSigArray.create()
+			notFound gives InterfaceMethodSigArray.create(0)
 		end 'lookup'
 
-		var filled = ValueIdArray.create()
+		var filled = ValueIdArray.create(0)
 		filled.push(conformer)
-		var positions = ParamCountArray.create()
+		var positions = ParamCountArray.create(0)
 		positions.push(0 as ParamCount)
 		var grew = false
 
@@ -10584,8 +10584,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'itself'
 
 		view signature = self.calls.resolution.signatureOf(called)
-		var filled = ValueIdArray.create()
-		var positions = ParamCountArray.create()
+		var filled = ValueIdArray.create(0)
+		var positions = ParamCountArray.create(0)
 
 		for i in 0 upto args.count() 'eachArg'
 			let label = try argLabels.get(i) otherwise panic("ProvenanceTracer.judgeNamedInstantiation: argLabels.get OOB at {i} — a call's argument columns are parallel by construction")
@@ -10614,7 +10614,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'ownerIsGeneric'
 
 	function judgeLandingInstantiation(caller IrFunction, callerIndex ElementIndex, opIdx ElementIndex, result ValueId, args ValueIdArray, bodies CallLandingBodies, reporting bool) returns bool
-		var positions = ParamCountArray.create()
+		var positions = ParamCountArray.create(0)
 
 		for i in 0 upto args.count() 'eachArg'
 			positions.push(i as ParamCount)
@@ -10785,7 +10785,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return OpaqueBoundClass.opaque
 		end 'stillOpaque'
 
-		var types = MaxonTypeArray.create()
+		var types = MaxonTypeArray.create(0)
 		types.push(argument)
 		let within = self.signatures.recordKindsOfTypes(types)
 
@@ -11080,7 +11080,7 @@ function moduleLetKindsOf(project Project, signatures ProgramSignatures) returns
 end 'moduleLetKindsOf'
 
 function moduleGlobalTypesOf(globals ManagedGlobalArray, vars bool) returns MaxonTypeArray
-	var types = MaxonTypeArray.create()
+	var types = MaxonTypeArray.create(0)
 
 	for global in globals 'eachGlobal'
 		if global.isAVar() == vars 'ofTheAskedKind'
@@ -11150,7 +11150,7 @@ end 'varInitializerTakesALetRecordMessage'
 
 // The indices of `sites` in token order, and in recorded order among equal tokens.
 function moveSitesInTokenOrder(sites MoveSiteArray) returns MoveSiteIndexArray
-	var order = MoveSiteIndexArray.create()
+	var order = MoveSiteIndexArray.create(0)
 
 	for k in 0 upto sites.count() 'eachSite'
 		let token = (try sites.get(k) otherwise panic("moveSitesInTokenOrder: sites.get OOB at {k}")).token
@@ -11600,7 +11600,7 @@ function worseRecordUse(held RecordUse, next RecordUse) returns RecordUse
 end 'worseRecordUse'
 
 function singletonValue(value ValueId) returns ValueIdArray
-	var values = ValueIdArray.create()
+	var values = ValueIdArray.create(0)
 	values.push(value)
 	return values
 end 'singletonValue'

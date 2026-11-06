@@ -320,7 +320,7 @@ type Value implements Parsable
 	export var n as Integer
 
 	static function fromString(input String) returns Self throws ArrayError
-		var digits = IntegerArray.create()
+		var digits = IntegerArray.create(0)
 		digits.push((input.byteLength() + 4) as Integer)
 		let first = try digits.get(0)
 		return Value{n: first}

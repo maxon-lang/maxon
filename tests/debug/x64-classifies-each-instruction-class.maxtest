@@ -15,7 +15,7 @@ let X64ClassifiesEachInstructionClassLessThanCondition = 12
 test 'the x64 classifier answers a length and a class for every instruction class the step planner and the stack unwinder read'
 	let staged = builtFixture(ClassifierCaseLabel, fixture: HeaplessFixtureName)
 
-	var probes = ProbeArray.create()
+	var probes = ProbeArray.create(0)
 	probes.push(Probe.create("4d8d0400", expected: "len=4 class={PlainClass} cond=0 disp=4 target=0x0", what: "`lea r8, [r8+rax]` — a REX-prefixed ModRM with a SIB and no displacement"))
 	probes.push(Probe.create("488d4001", expected: "len=4 class={PlainClass} cond=0 disp=3 target=0x0", what: "`lea rax, [rax+1]` — a one-byte displacement"))
 	probes.push(Probe.create("4c89e1", expected: "len=3 class={PlainClass} cond=0 disp=0 target=0x0", what: "`mov rcx, r12` — a register-to-register ModRM"))
@@ -54,7 +54,7 @@ test 'the x64 classifier answers a length and a class for every instruction clas
 	probes.push(Probe.create("f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f390", expected: UnclassifiedAnswer, what: "sixteen `rep` prefixes ahead of a `nop` — a run longer than the fifteen bytes any x64 instruction may occupy, which must be REFUSED rather than measured: the length and the displacement position are each a figure bounded at fifteen, so a decoder that answered here would abort the driver on a range check for a token a caller simply mistyped"))
 
 	var spelled = ""
-	var wanted = StringArray.create()
+	var wanted = StringArray.create(0)
 
 	for probe in probes 'eachProbe'
 		spelled = probe.bytes if spelled.isEmpty() else "{spelled}{ClassifySeparator}{probe.bytes}"
@@ -63,7 +63,7 @@ test 'the x64 classifier answers a length and a class for every instruction clas
 
 	let run = spawnCompiler([DebugSubcommandName, "{ClassifyOptionPrefix}{spelled}"], staged: staged, what: "`{DebugSubcommandName} {ClassifyOptionPrefix}`")
 	let said = renderedEvents(run.stdout, stderr: run.stderr)
-	var answered = StringArray.create()
+	var answered = StringArray.create(0)
 
 	for rawLine in withoutCarriageReturns(run.stdout).split(LineFeed) 'eachLine'
 		if not rawLine.trim().isEmpty() 'anAnswer'
@@ -74,7 +74,7 @@ test 'the x64 classifier answers a length and a class for every instruction clas
 	Expect.equal(run.exitCode(), expected: 0, message: "`{ClassifyOptionPrefix}` reads no program and runs nothing, so it cannot fail. {said}")
 	Expect.equal(answered.count(), expected: probes.count(), message: "{probes.count()} byte sequences are {probes.count()} answers, one per line. It answered: {listedLines(answered)}. {said}")
 
-	var wrong = StringArray.create()
+	var wrong = StringArray.create(0)
 
 	for (iter, probe) in probes.withIterator() 'eachAnswer'
 		let got = try answered.get(iter.index()) otherwise AbsentEventText

@@ -6,12 +6,12 @@ test 'a session that detaches leaves no attachable copy of the program beside it
 	let staged = builtFixture(DetachRemovesCopyCaseLabel, fixture: HeaplessFixtureName)
 	let hotLine = anchorLine(staged.join(StagedProgramFileName), anchor: DetachRemovesCopyAnchorName)
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(hotLine)}", RunCommand, "detach"])
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	Expect.equal(session.exitCode(), expected: 0, message: "a session that detached on purpose exits 0. {said}")
 
-	var copies = StringArray.create()
+	var copies = StringArray.create(0)
 
 	for entry in listing(staged) 'eachEntry'
 		if entry.filename().endsWith(AttachedCopySuffix) 'aCopy'

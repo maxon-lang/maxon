@@ -13,14 +13,14 @@ test 'the profiler refuses a macOS program that is not a Mach-O this compiler wr
 	Expect.isFalse(carriesBlob(macos, magic: CodeDirectoryMagic), message: "the arm64-macos image {macos.toString()} still holds a CodeDirectory after the harness spoiled it.")
 
 	#if os(Macos)
-		let elfRun = runProfiler(foreign, extraArguments: StringArray.create())
+		let elfRun = runProfiler(foreign, extraArguments: StringArray.create(0))
 		Expect.notEqual(elfRun.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` completed a measurement of an x64-linux image on a macOS host. It printed:{LineFeed}{elfRun.stdout}")
 		Expect.isTrue(elfRun.stderr.contains(NotMachOWord), message: "the refusal of an ELF image does not say it is not a {NotMachOWord} image. It wrote to stderr: {elfRun.stderr}")
 
 		let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: HotWarmFixtureName)
 		spoilBlobMagic(executable, magic: CodeDirectoryMagic, what: "CodeDirectory")
 
-		let spoiledRun = runProfiler(staged, extraArguments: StringArray.create())
+		let spoiledRun = runProfiler(staged, extraArguments: StringArray.create(0))
 		Expect.notEqual(spoiledRun.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` completed a measurement of a program whose signature holds no CodeDirectory. It printed:{LineFeed}{spoiledRun.stdout}")
 		Expect.isTrue(spoiledRun.stderr.contains(CodeDirectoryWord), message: "the refusal does not name the {CodeDirectoryWord} the signature lacks. It wrote to stderr: {spoiledRun.stderr}")
 	#endif

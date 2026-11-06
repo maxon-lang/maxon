@@ -470,7 +470,7 @@ end 'Xs'
 typealias Ys = Array with lib.Integer
 
 function main() returns ExitCode
-	var ys = Ys.create()
+	var ys = Ys.create(0)
 	ys.push(3)
 	return total(ys) + shapes.Xs.make().n
 end 'main'
@@ -932,7 +932,7 @@ it actually has, and 7 comes back.
 ```maxon
 // --- file: a.maxon
 export function makeA() returns ByteArray
-	var xs = ByteArray.create()
+	var xs = ByteArray.create(0)
 	xs.push(7)
 	return xs
 end 'makeA'
@@ -945,7 +945,7 @@ end 'take'
 typealias ByteArray = Array with String
 
 export function fromB() returns ExitCode
-	var own = ByteArray.create()
+	var own = ByteArray.create(0)
 	own.push("ab")
 	print("{try own.get(0) otherwise ""}\n")
 

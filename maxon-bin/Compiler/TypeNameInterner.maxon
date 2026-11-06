@@ -52,7 +52,7 @@ export type TypeNameInterner
 	// Copies, because they cross a thread: a record the worker's own table also holds would give the reply
 	// a second owner.
 	export function namesSinceBaseline() returns NameRoster
-		var added = NameRoster.create()
+		var added = NameRoster.create(0)
 
 		for id in (self.baselineCount as NameId) upto table.count() 'eachAdded'
 			added.push(table.ownedCopyOf(id))
@@ -141,7 +141,7 @@ export type TypeNameInterner
 	// Fold every name of `source` (a file-local interner) into `self` (the project interner) in id order,
 	// returning the renumbering from each source id to the id it was assigned in `self`.
 	export function foldInto(source TypeNameInterner) returns TypeIdRemap
-		var mapping = TypeNameIdArray.create()
+		var mapping = TypeNameIdArray.create(0)
 		mapping.reserve(source.table.count())
 
 		for srcId in 0 upto source.table.count() 'each'
@@ -178,12 +178,12 @@ export type TypeIdRemap
 	end 'create'
 
 	export static function watching(namesBase TypeNameId) returns TypeIdRemap
-		return Self{names: TypeNameIdArray.create(), namesBase: namesBase, instances: GenericInstanceIdMap.create(), observing: true}
+		return Self{names: TypeNameIdArray.create(0), namesBase: namesBase, instances: GenericInstanceIdMap.create(), observing: true}
 	end 'watching'
 
 	// Moves no id. Its name renumbering starts past every id an interner can hand out.
 	export static function unmoved() returns TypeIdRemap
-		return Self{names: TypeNameIdArray.create(), namesBase: i64.max, instances: GenericInstanceIdMap.create()}
+		return Self{names: TypeNameIdArray.create(0), namesBase: i64.max, instances: GenericInstanceIdMap.create()}
 	end 'unmoved'
 
 	// This remap's name renumbering with `moved` as its instance renumbering.
@@ -302,7 +302,7 @@ end 'remapMaxonType'
 // once. ⚠ THE COUNT IS THE CALLER COUNT AND NOTHING ELSE CHECKS IT — the `PayloadField` walk below is a
 // LOOK-ALIKE, not a fourth caller: it rebuilds a different element type and cannot come through here.
 export function remapMaxonTypes(types MaxonTypeArray, remap TypeIdRemap) returns MaxonTypeArray
-	var remapped = MaxonTypeArray.create()
+	var remapped = MaxonTypeArray.create(0)
 
 	for t in types 'each'
 		remapped.push(remapMaxonType(t, remap: remap))
@@ -383,10 +383,10 @@ end 'remapStructLayoutFieldTypes'
 // (`remapArtifact` into `Project`, `ProgramSignatures.foldFile` into the index) go through here, so
 // the two cannot disagree about what a payload's declared type means.
 export function remapEnumLayoutPayloadTypes(layout EnumLayout, remap TypeIdRemap)
-	var remappedCases = PayloadFieldArrayArray.create()
+	var remappedCases = PayloadFieldArrayArray.create(0)
 
 	for casePayloads in layout.casePayloads 'eachCase'
-		var remappedFields = PayloadFieldArray.create()
+		var remappedFields = PayloadFieldArray.create(0)
 
 		for field in casePayloads 'eachField'
 			remappedFields.push(PayloadField.create(field.name, declaredType: remapMaxonType(field.declaredType, remap: remap), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand, isLet: field.isLet, typeSite: field.typeSite))

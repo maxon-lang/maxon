@@ -124,7 +124,7 @@ function withX64(items ItemArray) returns Integer
 end 'withX64'
 
 function main() returns ExitCode
-	var items = ItemArray.create()
+	var items = ItemArray.create(0)
 	items.push(1)
 	items.push(2)
 	items.push(3)

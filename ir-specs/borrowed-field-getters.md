@@ -23,7 +23,7 @@ typealias CountArray = Array with Count
 typealias CountMap = Map with (Count, Count)
 
 type Big
-	module var items = CountArray.create()
+	module var items = CountArray.create(0)
 	module var lookup = CountMap.create()
 	module var flag = false
 

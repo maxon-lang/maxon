@@ -591,7 +591,7 @@ function mayFail(succeed bool) returns MultiManaged throws MyError
 	if not succeed 'check'
 		throw MyError.failed
 	end 'check'
-	var nums = IntArray.create()
+	var nums = IntArray.create(0)
 	nums.push(10)
 	nums.push(20)
 	return MultiManaged.create(nums, text: "hello", tag: "world")
@@ -645,10 +645,10 @@ type Outer
 end 'Outer'
 
 function createOuter() returns Outer
-	var inner = Inner.create("test", values: IntArray.create())
+	var inner = Inner.create("test", values: IntArray.create(0))
 	inner.values.push(1)
 	inner.values.push(2)
-	var outer = Outer.create("outer", inner: inner, tags: StringArray.create())
+	var outer = Outer.create("outer", inner: inner, tags: StringArray.create(0))
 	outer.tags.push("tag1")
 	outer.tags.push("tag2")
 	return outer

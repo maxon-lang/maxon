@@ -55,7 +55,7 @@ if [ "$K" -lt 1 ]; then echo "genborrow.sh: K must be >= 1" >&2; exit 2; fi
     pending)
       # An ASSIGNMENT, not a binding: every read replaces the value the previous one left in `s`, and the
       # `try … otherwise <value>` merges the read with its fallback at each.
-      echo -e "\tvar arr = StringArray.create()"
+      echo -e "\tvar arr = StringArray.create(0)"
       echo -e "\tvar s = \"\""
       echo -e "\tvar total = 0 as BytePos"
       n=0
@@ -78,7 +78,7 @@ if [ "$K" -lt 1 ]; then echo "genborrow.sh: K must be >= 1" >&2; exit 2; fi
       n=0
       while [ "$n" -lt "$K" ]; do
         echo -e "\tif seed > 0 'b${n}'"
-        echo -e "\t\tvar a${n} = StringArray.create()"
+        echo -e "\t\tvar a${n} = StringArray.create(0)"
         echo -e "\t\tlet s${n} = try a${n}.get(0) otherwise \"\""
         echo -e "\t\tseed = seed + s${n}.byteLength()"
         echo -e "\t\ta${n}.clear()"
@@ -89,7 +89,7 @@ if [ "$K" -lt 1 ]; then echo "genborrow.sh: K must be >= 1" >&2; exit 2; fi
       ;;
     dead)
       # ONE storage, K reads and K writes. Every read's binding is last used before the first write.
-      echo -e "\tvar arr = StringArray.create()"
+      echo -e "\tvar arr = StringArray.create(0)"
       n=0
       while [ "$n" -lt "$K" ]; do echo -e "\tlet s${n} = try arr.get(0) otherwise \"\""; echo -e "\t_ = s${n}"; n=$(( n + 1 )); done
       n=0
@@ -99,7 +99,7 @@ if [ "$K" -lt 1 ]; then echo "genborrow.sh: K must be >= 1" >&2; exit 2; fi
     trivial)
       # THE CONTROL. A TRIVIAL element type takes no counted reference whatever the method, while the
       # receiver still travels all the doors `parseArrayMethodCall` has.
-      echo -e "\tvar arr = IntArray.create()"
+      echo -e "\tvar arr = IntArray.create(0)"
       echo -e "\tvar total = 0 as Count"
       n=0
       while [ "$n" -lt "$K" ]; do

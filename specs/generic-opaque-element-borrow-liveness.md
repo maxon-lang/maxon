@@ -58,7 +58,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create()
+	var a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
 	a.push("beta {40 + 2} value long enough for a heap record")
 	a.rotateFirstTwo()
@@ -105,7 +105,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create()
+	var a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
 	a.push("beta {40 + 2} value long enough for a heap record")
 	a.push("gamma {40 + 2} value long enough for a heap record")
@@ -154,9 +154,9 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create()
+	var a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
-	var b = StrArray.create()
+	var b = StrArray.create(0)
 	b.push("beta {40 + 2} value long enough for a heap record")
 	print("{a.readThenDisplace(b)}\n")
 	print("{try a.get(0) otherwise "?"}\n")
@@ -200,7 +200,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create()
+	var a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
 	a.push("beta {40 + 2} value long enough for a heap record")
 	a.rotateBare()
@@ -248,7 +248,7 @@ end 'Array'
 typealias SmallArray = Array with Small
 
 function main() returns ExitCode
-	var a = SmallArray.create()
+	var a = SmallArray.create(0)
 	a.push(7)
 	a.push(9)
 	a.rotateFirstTwo()
@@ -289,9 +289,9 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create()
+	var a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
-	var b = StrArray.create()
+	var b = StrArray.create(0)
 	b.push("beta {40 + 2} value long enough for a heap record")
 	a.setFrom(b)
 	print("{try a.get(0) otherwise "?"}\n")
@@ -333,9 +333,9 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create()
+	var a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
-	var b = StrArray.create()
+	var b = StrArray.create(0)
 	b.push("beta {40 + 2} value long enough for a heap record")
 	a.moveFirstInto(b)
 	print("{a.count()} {try b.get(0) otherwise "?"}\n")
@@ -385,7 +385,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create()
+	var a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
 	a.push("beta {40 + 2} value long enough for a heap record")
 	a.compactDown(2)
@@ -427,7 +427,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create()
+	var a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
 	a.copyFirst()
 	print("{a.count()} {try a.get(1) otherwise "?"}\n")
@@ -488,7 +488,7 @@ end 'Array'
 typealias SmallArray = Array with Small
 
 function main() returns ExitCode
-	var a = SmallArray.create()
+	var a = SmallArray.create(0)
 	a.push(7)
 	a.push(9)
 	let x = try a.get(0) otherwise 0
@@ -516,7 +516,7 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function add(item T)
@@ -564,7 +564,7 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function add(item T)
@@ -580,7 +580,7 @@ type Box uses T
 	end 'wipe'
 
 	function collectWhileWiping() returns Items
-		var seen = Items.create()
+		var seen = Items.create(0)
 
 		for item in self.items 'scan'
 			wipe()
@@ -621,7 +621,7 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	static function moveWhileClearing(items Items, into Items) returns Count
@@ -638,10 +638,10 @@ typealias StrBox = Box with String
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create()
+	var xs = Words.create(0)
 	xs.push("alpha {40 + 2} value long enough for a heap record")
 	xs.push("beta {40 + 2} value long enough for a heap record")
-	var ys = Words.create()
+	var ys = Words.create(0)
 	let moved = StrBox.moveWhileClearing(xs, into: ys)
 	print("{moved} [{try ys.get(0) otherwise "?"}] {xs.count()}\n")
 	return 0
@@ -664,7 +664,7 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	static function keepFirst(items Items, into Items)
@@ -678,9 +678,9 @@ typealias StrBox = Box with String
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create()
+	var xs = Words.create(0)
 	xs.push("alpha {40 + 2} value long enough for a heap record")
-	var ys = Words.create()
+	var ys = Words.create(0)
 	StrBox.keepFirst(xs, into: ys)
 	print("[{try ys.get(0) otherwise "?"}] {xs.count()}\n")
 	return 0
@@ -703,7 +703,7 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	static function moveWhileClearing(items Items, into Items) returns Count
@@ -726,10 +726,10 @@ typealias StrBox = Box with String
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create()
+	var xs = Words.create(0)
 	xs.push("alpha {40 + 2} value long enough for a heap record")
 	xs.push("beta {40 + 2} value long enough for a heap record")
-	var ys = Words.create()
+	var ys = Words.create(0)
 	let counted = StrBox.drainAndCount(xs, into: ys)
 	print("{counted} [{try ys.get(0) otherwise "?"}] {xs.count()}\n")
 	return 0
@@ -752,7 +752,7 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	static function moveWhileClearing(items Items, into Items) returns Count
@@ -784,7 +784,7 @@ function main() returns ExitCode
 	var b = StrBox.create()
 	b.add("alpha {40 + 2} value long enough for a heap record")
 	b.add("beta {40 + 2} value long enough for a heap record")
-	var ys = Words.create()
+	var ys = Words.create(0)
 	let moved = b.relocate(ys)
 	print("{moved} [{try ys.get(0) otherwise "?"}] {b.size()}\n")
 	return 0
@@ -822,7 +822,7 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	static function moveWhileClearing(items Items, into Items) returns Count
@@ -839,10 +839,10 @@ typealias TagBox = Box with Tag
 typealias Tags = Array with Tag
 
 function main() returns ExitCode
-	var xs = Tags.create()
+	var xs = Tags.create(0)
 	xs.push(Tag.make("alpha {40 + 2} label long enough for a heap record", weight: 7))
 	xs.push(Tag.make("beta {40 + 2} label long enough for a heap record", weight: 9))
-	var ys = Tags.create()
+	var ys = Tags.create(0)
 	let moved = TagBox.moveWhileClearing(xs, into: ys)
 	view first = try ys.get(0) otherwise panic("empty")
 	print("{moved} [{first.describe()}] {xs.count()}\n")
@@ -868,7 +868,7 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	static function moveWhileClearing(items Items, into Items) returns Count
@@ -885,10 +885,10 @@ typealias SmallBox = Box with Count8
 typealias Smalls = Array with Count8
 
 function main() returns ExitCode
-	var xs = Smalls.create()
+	var xs = Smalls.create(0)
 	xs.push(7)
 	xs.push(9)
-	var ys = Smalls.create()
+	var ys = Smalls.create(0)
 	let moved = SmallBox.moveWhileClearing(xs, into: ys)
 	print("{moved} [{try ys.get(0) otherwise 0}] {xs.count()}\n")
 	return 0
@@ -923,7 +923,7 @@ type Outer uses U
 	var us as Us
 
 	static function create() returns Self
-		return Self{us: Us.create()}
+		return Self{us: Us.create(0)}
 	end 'create'
 
 	function add(u U)
@@ -944,7 +944,7 @@ function main() returns ExitCode
 	var o = StrOuter.create()
 	o.add("alpha {40 + 2} value long enough for a heap record")
 	o.add("beta {40 + 2} value long enough for a heap record")
-	var ys = Words.create()
+	var ys = Words.create(0)
 	let n = o.relocate(ys)
 	print("{n} [{try ys.get(0) otherwise "?"}]\n")
 	return 0
@@ -971,7 +971,7 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	static function keepFirst(items Items, into Items) throws BoxError
@@ -989,9 +989,9 @@ typealias StrBox = Box with String
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create()
+	var xs = Words.create(0)
 	xs.push("alpha {40 + 2} value long enough for a heap record")
-	var ys = Words.create()
+	var ys = Words.create(0)
 	try StrBox.keepFirst(xs, into: ys) otherwise return 3
 	try StrBox.keepFirst(xs, into: ys) otherwise 'second'
 		print("second call refused\n")
@@ -1018,7 +1018,7 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	static function moveWhileClearing(items Items, into Items) returns Count
@@ -1035,9 +1035,9 @@ typealias StrBox = Box with String
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create()
+	var xs = Words.create(0)
 	xs.push("alpha {40 + 2} value long enough for a heap record")
-	var ys = Words.create()
+	var ys = Words.create(0)
 	let moved = Box.moveWhileClearing(xs, into: ys)
 	let named = StrBox.moveWhileClearing(xs, into: ys)
 	print("{moved} {named} {xs.count()} {try ys.get(0) otherwise "?"}\n")
@@ -1070,7 +1070,7 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	static function moveWhileClearing(items Items, into Items) returns Count
@@ -1086,9 +1086,9 @@ end 'Box'
 typealias Entries = Array with Entry
 
 function main() returns ExitCode
-	var xs = Entries.create()
+	var xs = Entries.create(0)
 	xs.push(Entry.create("alpha {40 + 2} value long enough for a heap record", n: 5))
-	var ys = Entries.create()
+	var ys = Entries.create(0)
 	let moved = Box.moveWhileClearing(xs, into: ys)
 	view first = try ys.get(0) otherwise panic("empty")
 	print("{moved} {xs.count()} {first.name} {first.n}\n")
@@ -1110,7 +1110,7 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	static function moveWhileClearing(items Items, into Items) returns Count
@@ -1143,11 +1143,11 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	static function emptyCount(n Count) returns Count
-		var scratch = Items.create()
+		var scratch = Items.create(0)
 		return scratch.count() + n
 	end 'emptyCount'
 end 'Box'
@@ -1175,11 +1175,11 @@ type Box uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	static function emptyCount(n Count) returns Count
-		var scratch = Items.create()
+		var scratch = Items.create(0)
 		return scratch.count() + n
 	end 'emptyCount'
 end 'Box'
@@ -1383,7 +1383,7 @@ type Bag uses T where T is Equatable
 	var seen as Count
 
 	static function create() returns Self
-		return Self{items: Items.create(), scrub: "", seen: 0}
+		return Self{items: Items.create(0), scrub: "", seen: 0}
 	end 'create'
 
 	function add(item T)
@@ -1442,7 +1442,7 @@ type Bag uses T where T is Equatable
 	var scrub as String
 
 	static function create() returns Self
-		return Self{items: Items.create(), scrub: ""}
+		return Self{items: Items.create(0), scrub: ""}
 	end 'create'
 
 	function add(item T)
@@ -1517,9 +1517,9 @@ typealias Row = Array with Count
 typealias Rows = Array with Row
 
 function main() returns ExitCode
-	var rows = Rows.create()
-	rows.push(Row.create())
-	view first = try rows.get(0) otherwise Row.create()
+	var rows = Rows.create(0)
+	rows.push(Row.create(0))
+	view first = try rows.get(0) otherwise Row.create(0)
 	first.push(1)
 	return rows.count() as ExitCode
 end 'main'
@@ -1856,7 +1856,7 @@ type Bag uses T where T is Equatable
 	var seen as Count
 
 	static function create() returns Self
-		return Self{items: Items.create(), seen: 0}
+		return Self{items: Items.create(0), seen: 0}
 	end 'create'
 
 	function add(item T)

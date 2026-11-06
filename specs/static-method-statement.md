@@ -266,7 +266,7 @@ type Registry
 	static var current = Registry.create()
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 end 'Registry'
 
@@ -294,7 +294,7 @@ type Registry
 	static let current = Registry.create()
 
 	static function create() returns Self
-		return Self{items: StringArray.create()}
+		return Self{items: StringArray.create(0)}
 	end 'create'
 end 'Registry'
 

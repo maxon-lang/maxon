@@ -725,7 +725,7 @@ end 'Point'
 typealias PointArray = Array with Point
 
 function launder(p Point) returns Point
-	var arr = PointArray.create()
+	var arr = PointArray.create(0)
 	arr.push(p)
 	return try arr.get(0) otherwise panic("an element was pushed")
 end 'launder'
@@ -991,7 +991,7 @@ typealias PointArray = Array with Point
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var arr = PointArray.create()
+	var arr = PointArray.create(0)
 	arr.push(a)
 	var e = try arr.get(0) otherwise panic("an element was pushed")
 	e.x = 99
@@ -1081,7 +1081,7 @@ typealias PointArray = Array with Point
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var arr = PointArray.create()
+	var arr = PointArray.create(0)
 	arr.push(a)
 	var e = try arr.pop() otherwise panic("one element was pushed")
 	e.x = 99
@@ -1111,7 +1111,7 @@ end 'Point'
 typealias PointArray = Array with Point
 
 function main() returns ExitCode
-	var arr = PointArray.create()
+	var arr = PointArray.create(0)
 	arr.push(Point.create(1))
 	let s = try arr.get(0) otherwise panic("an element was pushed")
 	var e = try arr.get(0) otherwise panic("an element was pushed")
@@ -1247,7 +1247,7 @@ end 'Point'
 typealias PointArray = Array with Point
 
 function main() returns ExitCode
-	var arr = PointArray.create()
+	var arr = PointArray.create(0)
 	arr.push(Point.create(1))
 	var e = try arr.get(0) otherwise panic("an element was pushed")
 	let s = try arr.get(0) otherwise panic("an element was pushed")
@@ -1281,7 +1281,7 @@ type Pair
 	export var right as PointArray
 
 	static function create() returns Self
-		return Self{left: PointArray.create(), right: PointArray.create()}
+		return Self{left: PointArray.create(0), right: PointArray.create(0)}
 	end 'create'
 end 'Pair'
 
@@ -1318,7 +1318,7 @@ typealias PointArray = Array with Point
 
 function main() returns ExitCode
 	let s = Point.create(1)
-	var arr = PointArray.create()
+	var arr = PointArray.create(0)
 
 	if arr.count() == 0 'writes'
 		arr.push(s)
@@ -1432,7 +1432,7 @@ typealias PointArray = Array with Point
 function main() returns ExitCode
 	let s = Point.create(1)
 	let f = function() gives s.x
-	var arr = PointArray.create()
+	var arr = PointArray.create(0)
 	arr.push(s)
 	var e = try arr.get(0) otherwise panic("an element was pushed")
 	e.x = 9
@@ -1455,7 +1455,7 @@ type Bag
 	export var items as IntArray
 
 	static function create() returns Bag
-		return Bag{items: IntArray.create()}
+		return Bag{items: IntArray.create(0)}
 	end 'create'
 end 'Bag'
 
@@ -1492,7 +1492,7 @@ type Bag
 	export var items as IntArray
 
 	static function create() returns Bag
-		return Bag{items: IntArray.create()}
+		return Bag{items: IntArray.create(0)}
 	end 'create'
 end 'Bag'
 
@@ -1529,14 +1529,14 @@ type Bag
 	export var items as IntArray
 
 	static function create() returns Bag
-		return Bag{items: IntArray.create()}
+		return Bag{items: IntArray.create(0)}
 	end 'create'
 end 'Bag'
 
 typealias BagArray = Array with Bag
 
 function makeBags() returns BagArray
-	var bags = BagArray.create()
+	var bags = BagArray.create(0)
 	bags.push(Bag.create())
 	bags.push(Bag.create())
 	return bags
@@ -1573,14 +1573,14 @@ type Bag
 	export var items as IntArray
 
 	static function create() returns Bag
-		return Bag{items: IntArray.create()}
+		return Bag{items: IntArray.create(0)}
 	end 'create'
 end 'Bag'
 
 typealias BagArray = Array with Bag
 
 function makeBags() returns BagArray
-	var bags = BagArray.create()
+	var bags = BagArray.create(0)
 	bags.push(Bag.create())
 	bags.push(Bag.create())
 	return bags

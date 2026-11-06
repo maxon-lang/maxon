@@ -8,7 +8,7 @@ let RangeSiteColumn = 1
 test 'an address inside an authored handler inlined into a synthesized loop is armed and stops as the handler'
 	let staged = builtFixture(InlinedHandlerCaseLabel, fixture: ServiceHandlerFixtureName)
 	let executable = builtExecutable(staged)
-	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create(0))
 
 	try Expect.equal(dump.exitCode(), expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
 
@@ -26,7 +26,7 @@ test 'an address inside an authored handler inlined into a synthesized loop is a
 	end 'noControlOffset'
 
 	let commands = debugCommandLine(["{BreakCommand} {exactOffsetTarget(handlerOffset)}", "{BreakCommand} {exactOffsetTarget(loopStart)}", RunCommand])
-	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let answers = eventsOfKind(events, kind: BreakpointEventName)

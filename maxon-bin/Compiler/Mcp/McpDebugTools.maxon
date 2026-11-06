@@ -133,7 +133,7 @@ end 'refusedStartReply'
 function placedSessionReply(reqDoc JsonDoc, idNode JsonNodeId, session DebugToolSession, debug DebugSessionSlot, replaced CollectedLines) returns String
 	debug.place(session)
 
-	return debugToolReply(reqDoc, idNode: idNode, state: session.currentState(), replies: DebugReplyArray.create(), output: replaced.followedBy(session.engine.takeOutput()))
+	return debugToolReply(reqDoc, idNode: idNode, state: session.currentState(), replies: DebugReplyArray.create(0), output: replaced.followedBy(session.engine.takeOutput()))
 end 'placedSessionReply'
 
 function runDebugTool(reqDoc JsonDoc, idNode JsonNodeId, name String, args OptionalNode, session DebugToolSession, debug DebugSessionSlot) returns String
@@ -154,7 +154,7 @@ end 'ranDebugCommand'
 function stopDebugSession(reqDoc JsonDoc, idNode JsonNodeId, debug DebugSessionSlot) returns String
 	let output = debug.reap(DebugSessionEnding.terminateTheProgram)
 
-	return debugToolReply(reqDoc, idNode: idNode, state: DebugToolState.ended, replies: DebugReplyArray.create(), output: output)
+	return debugToolReply(reqDoc, idNode: idNode, state: DebugToolState.ended, replies: DebugReplyArray.create(0), output: output)
 end 'stopDebugSession'
 
 function debugCommandFor(name String, reqDoc JsonDoc, args OptionalNode) returns DebugToolCommand
@@ -298,7 +298,7 @@ function debugToolReply(reqDoc JsonDoc, idNode JsonNodeId, state DebugToolState,
 end 'debugToolReply'
 
 function eventArray(doc JsonDoc, replies DebugReplyArray) returns JsonNodeId
-	var ids = JsonNodeIdArray.create()
+	var ids = JsonNodeIdArray.create(0)
 
 	for reply in replies 'eachReply'
 		match debugEventLineFor(reply) 'rendered'
@@ -317,7 +317,7 @@ function parsedEventNode(doc JsonDoc, text String) returns JsonNodeId
 end 'parsedEventNode'
 
 function outputArray(doc JsonDoc, output CollectedLines) returns JsonNodeId
-	var ids = JsonNodeIdArray.create()
+	var ids = JsonNodeIdArray.create(0)
 
 	if output.dropped > 0 'someWereDropped'
 		ids.push(doc.add(JsonNode.stringNode(droppedOutputNotice(output.dropped))))

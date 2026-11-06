@@ -134,7 +134,7 @@ typealias O = Outer with Integer
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(7)
 	var o = O.create(a)
 	view w = o.wrap()
@@ -510,7 +510,7 @@ typealias StrHolder = Holder with String
 typealias HolderArray = Array with StrHolder
 
 function main() returns ExitCode
-	var a = HolderArray.create()
+	var a = HolderArray.create(0)
 	a.push(StrHolder.create(StrCell.make("a string long enough to force a heap allocation")))
 	a.push(StrHolder.create(StrCell.make("another string long enough to force a heap allocation")))
 	return a.count() as ExitCode
@@ -555,7 +555,7 @@ typealias StrHolder = Holder with String
 typealias HolderArray = Array with StrHolder
 
 function detached() returns HolderArray
-	var a = HolderArray.create()
+	var a = HolderArray.create(0)
 	a.push(StrHolder.create(StrCell.make("a string long enough to force a heap allocation")))
 	return a.clone()
 	// a, its Holder box, its Cell box and their String are freed when this function returns
@@ -702,7 +702,7 @@ function takes(_ Inner) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(7)
 	let o = O.create(a)
 	return takes(o.wrap())
@@ -958,7 +958,7 @@ type Outer uses T
 	export var inner as Box
 
 	static function create(first T) returns Self
-		var items = TArr.create()
+		var items = TArr.create(0)
 		items.push(first)
 		return Self{inner: Box.create(items)}
 	end 'create'
@@ -1213,7 +1213,7 @@ typealias IntArray = Array with Integer
 typealias IntWalker = Walker with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(3)
 	a.push(4)
 	var w = IntWalker.create(a)
@@ -1274,7 +1274,7 @@ end 'Holder'
 typealias IntHolder = Holder with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(11)
 	a.push(31)
 	var h = IntHolder.create(a)
@@ -1313,7 +1313,7 @@ end 'Labeller'
 typealias IntLabeller = Labeller with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(39)
 	var l = IntLabeller.create(a)
 	let (name, v) = l.tagged()
@@ -1370,7 +1370,7 @@ typealias IntArray = Array with Integer
 typealias B = Box with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(3)
 	a.push(4)
 	view b = B.create(a)

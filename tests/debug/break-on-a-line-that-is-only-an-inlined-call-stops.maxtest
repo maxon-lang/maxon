@@ -7,7 +7,7 @@ test 'a line whose whole statement is an inlined call arms, stops at the call li
 	let bodyLine = anchorLine(staged.join(StagedProgramFileName), anchor: "double-body")
 	let executable = builtExecutable(staged)
 
-	let overSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, NextCommand]), extraOptions: StringArray.create())
+	let overSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, NextCommand]), extraOptions: StringArray.create(0))
 	let overEvents = batchEvents(overSession.stdout)
 	let overSaid = renderedEvents(overSession.stdout, stderr: overSession.stderr)
 	let answers = eventsOfKind(overEvents, kind: BreakpointEventName)
@@ -34,7 +34,7 @@ test 'a line whose whole statement is an inlined call arms, stops at the call li
 	try Expect.equal(textOf(over, node: over.root, key: FunctionKey), expected: CallerFunctionName, message: "`{NextCommand}` runs over the inlined body and stays in the caller. {overSaid}")
 	try Expect.equal(numberOf(over, node: over.root, key: LineKey), expected: followingLine as EventNumber, message: "`{NextCommand}` from the call line lands on the caller's next line. {overSaid}")
 
-	let intoSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, StepCommand]), extraOptions: StringArray.create())
+	let intoSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, StepCommand]), extraOptions: StringArray.create(0))
 	let intoEvents = batchEvents(intoSession.stdout)
 	let intoSaid = renderedEvents(intoSession.stdout, stderr: intoSession.stderr)
 	let intoStops = eventsOfKind(intoEvents, kind: StopEventName)

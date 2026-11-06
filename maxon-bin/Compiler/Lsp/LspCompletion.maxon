@@ -43,7 +43,7 @@ let EnumMemberCompletionKind = 20
 let CompletionMemberSeparator = "."
 
 module function completionServedMethods() returns LspMethodArray
-	var served = LspMethodArray.create()
+	var served = LspMethodArray.create(0)
 	served.push(LspMethod.completion)
 	return served
 end 'completionServedMethods'
@@ -51,7 +51,7 @@ end 'completionServedMethods'
 // This server's `CompletionOptions`. Declaring the trigger character is what makes an editor ask the
 // moment a `.` is typed rather than only when the user asks for the list by hand.
 module function completionCapabilityOptions(doc JsonDoc) returns JsonNodeId
-	var triggers = JsonNodeIdArray.create()
+	var triggers = JsonNodeIdArray.create(0)
 	triggers.push(doc.add(JsonNode.stringNode(MemberAccessTrigger)))
 
 	var options = LspJsonObject.create(doc)
@@ -69,7 +69,7 @@ module function completionAnswer(request LspRequest) returns LspAnswer throws Ls
 	let offset = index.offsetOf(request.text, position: try lspPositionMember(request.incoming, of: request.params, key: LspPositionKey))
 
 	var doc = JsonDoc.create()
-	var items = JsonNodeIdArray.create()
+	var items = JsonNodeIdArray.create(0)
 
 	for offer in offersAt(request.text, tokens: tokens, keywords: request.keywords, blocks: lspDocumentBlocks(tokens), offset: offset, uri: request.uri, workspace: request.workspace) 'eachOffer'
 		var item = LspJsonObject.create(doc)
@@ -103,7 +103,7 @@ typealias OfferedLabelSet = Set with String
 // reaching a corpus build to answer an empty list puts a project sweep on every keystroke.
 function offersAt(text String, tokens TokenArray, keywords KeywordTable, blocks LspDocumentBlockArray, offset ByteOffset, uri String, workspace LspWorkspaceState) returns CompletionOfferArray
 	if not lspCursorFollowsAMemberAccess(tokens, offset: offset) 'nothingToComplete'
-		return CompletionOfferArray.create()
+		return CompletionOfferArray.create(0)
 	end 'nothingToComplete'
 
 	let inTheBuffer = lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset, corpus: LspCorpus.unavailable)
@@ -124,7 +124,7 @@ end 'offersAt'
 // A type the buffer declares is answered from the buffer, whatever a compiled `stdlib/` says about a
 // type of the same name: the author is looking at the declaration in front of them.
 function offersFor(subject LspSubject, tokens TokenArray, blocks LspDocumentBlockArray, corpus LspCorpus) returns CompletionOfferArray
-	let typeName = try lspSubjectTypeName(subject) otherwise return CompletionOfferArray.create()
+	let typeName = try lspSubjectTypeName(subject) otherwise return CompletionOfferArray.create(0)
 
 	let declaring = lspBlocksDeclaring(blocks, typeName: typeName)
 
@@ -132,7 +132,7 @@ function offersFor(subject LspSubject, tokens TokenArray, blocks LspDocumentBloc
 		return bufferOffers(subject, tokens: tokens, blocks: blocks, declaring: declaring)
 	end 'aTypeThisBufferDeclares'
 
-	var offers = CompletionOfferArray.create()
+	var offers = CompletionOfferArray.create(0)
 	var offered = OfferedLabelSet.create()
 	addCorpusMembers(offers, offered: offered, typeName: typeName, corpus: corpus, subject: subject)
 
@@ -140,7 +140,7 @@ function offersFor(subject LspSubject, tokens TokenArray, blocks LspDocumentBloc
 end 'offersFor'
 
 function bufferOffers(subject LspSubject, tokens TokenArray, blocks LspDocumentBlockArray, declaring LspDocumentBlockArray) returns CompletionOfferArray
-	var offers = CompletionOfferArray.create()
+	var offers = CompletionOfferArray.create(0)
 	var offered = OfferedLabelSet.create()
 
 	for block in declaring 'eachDeclaringBody'

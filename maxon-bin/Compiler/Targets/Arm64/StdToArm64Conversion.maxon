@@ -937,7 +937,7 @@ export type StdToArm64Lowering
 			osReadOverlapped(resultId, handleId, bufId, capId, bytesOutPtrId, _) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostReadFileName), args: fourArgs(handleId, second: bufId, third: capId, fourth: bytesOutPtrId), dstRef: dstRef)
 			osReadFile(resultId, handleId, bufId, capId, bytesOutPtrId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostReadFileName), args: fourArgs(handleId, second: bufId, third: capId, fourth: bytesOutPtrId), dstRef: dstRef)
 
-			osLastError(resultId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostLastErrorName), args: ValueIdArray.create(), dstRef: dstRef)
+			osLastError(resultId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostLastErrorName), args: ValueIdArray.create(0), dstRef: dstRef)
 
 			// ⚠ `osCancelIo` is statically reachable and dynamically unreachable here, so it is a runtime
 			// abort rather than a compile-time one. `__gt_promise_drop`'s cancelling arm is built into every
@@ -1026,7 +1026,7 @@ export type StdToArm64Lowering
 			// `GetTickCount64` — the same `CLOCK_UPTIME_RAW` the scheduler's own clock reads, in
 			// milliseconds. It sits in the DebugStream band by declaration order and belongs to the subprocess
 			// family, whose deadlines are the only thing that measures with it.
-			osTickCountMs(resultId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostTickMsName), args: ValueIdArray.create(), dstRef: dstRef)
+			osTickCountMs(resultId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostTickMsName), args: ValueIdArray.create(0), dstRef: dstRef)
 
 			// The consumer's half. The open only names, so the create sizes what it opened with `ftruncate` and
 			// the adopt reads the size back with `fstat` — which is why each is a chunk here and one call on Win32.
@@ -2189,7 +2189,7 @@ export type StdToArm64Lowering
 	function lowerOsCpuCount(resultId ValueId, dstRef ElementIndex)
 		match arm64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsCpuCountDarwin(resultId, dstRef: dstRef)
-			syscall then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostCpuCountName), args: ValueIdArray.create(), dstRef: dstRef)
+			syscall then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostCpuCountName), args: ValueIdArray.create(0), dstRef: dstRef)
 		end 'route'
 	end 'lowerOsCpuCount'
 
@@ -2197,7 +2197,7 @@ export type StdToArm64Lowering
 	// arm because a `match` arm is one expression and this is two.
 	function lowerOsCpuCountDarwin(resultId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: DarwinScNprocessorsOnln))
-		self.lowerHostValue(resultId, callee: Arm64HostCallee.import(OsImportSlot.sysconf), args: ValueIdArray.create(), dstRef: dstRef)
+		self.lowerHostValue(resultId, callee: Arm64HostCallee.import(OsImportSlot.sysconf), args: ValueIdArray.create(0), dstRef: dstRef)
 	end 'lowerOsCpuCountDarwin'
 
 	// Both lanes have the primitive — libSystem's `getpid` through the GOT and AArch64's syscall 172 —
@@ -2210,7 +2210,7 @@ export type StdToArm64Lowering
 	// the id lands under 2^32, which a stale high word would break. The Linux syscall answers a full
 	// `long`.
 	function lowerOsGetPid(resultId ValueId, dstRef ElementIndex)
-		self.lowerHostValue(resultId, callee: self.hostCalleeOn(OsImportSlot.getpid, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallGetPid)), args: ValueIdArray.create(), dstRef: dstRef)
+		self.lowerHostValue(resultId, callee: self.hostCalleeOn(OsImportSlot.getpid, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallGetPid)), args: ValueIdArray.create(0), dstRef: dstRef)
 	end 'lowerOsGetPid'
 
 	// ⭐⭐ **`osEnterBackgroundPriority(result)` ⇒ `setpriority(PRIO_PROCESS, 0, 10)` THEN
@@ -2264,14 +2264,14 @@ export type StdToArm64Lowering
 	function lowerOsEnterBackgroundPriorityLinux(resultId ValueId, dstRef ElementIndex)
 		self.emitPriorityScopeArgs(dstRef)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: PosixBackgroundNiceValue))
-		self.emitHostCall(dstRef, callee: Arm64HostCallee.syscall(Arm64LinuxSyscallSetPriority), args: ValueIdArray.create())
+		self.emitHostCall(dstRef, callee: Arm64HostCallee.syscall(Arm64LinuxSyscallSetPriority), args: ValueIdArray.create(0))
 
 		self.emitPriorityScopeArgs(dstRef)
 
 		// The answer is captured before the fold, and the fold runs on virtuals: a physical op on x0/x1
 		// after the syscall would read or clobber a register a cold-call bracket restores (`mintVirtual`).
 		let answer = self.fresh.mint()
-		self.lowerHostValue(answer, callee: Arm64HostCallee.syscall(Arm64LinuxSyscallGetPriority), args: ValueIdArray.create(), dstRef: dstRef)
+		self.lowerHostValue(answer, callee: Arm64HostCallee.syscall(Arm64LinuxSyscallGetPriority), args: ValueIdArray.create(0), dstRef: dstRef)
 		let bias = self.mintVirtual()
 		self.emit(dstRef, op: TargetOp.arm64MovImm(bias, value: LinuxGetPriorityBias))
 		self.emit(dstRef, op: TargetOp.arm64Sub(TargetVReg.virtual(resultId), lhs: bias, rhs: TargetVReg.virtual(answer)))
@@ -2280,10 +2280,10 @@ export type StdToArm64Lowering
 	function lowerOsEnterBackgroundPriorityDarwin(resultId ValueId, dstRef ElementIndex)
 		self.emitPriorityScopeArgs(dstRef)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: PosixBackgroundNiceValue))
-		self.emitHostCall(dstRef, callee: Arm64HostCallee.import(OsImportSlot.setpriority), args: ValueIdArray.create())
+		self.emitHostCall(dstRef, callee: Arm64HostCallee.import(OsImportSlot.setpriority), args: ValueIdArray.create(0))
 
 		self.emitPriorityScopeArgs(dstRef)
-		self.lowerHostValue(resultId, callee: Arm64HostCallee.import(OsImportSlot.getpriority), args: ValueIdArray.create(), dstRef: dstRef)
+		self.lowerHostValue(resultId, callee: Arm64HostCallee.import(OsImportSlot.getpriority), args: ValueIdArray.create(0), dstRef: dstRef)
 	end 'lowerOsEnterBackgroundPriorityDarwin'
 
 	// The `(which, who)` pair BOTH priority calls open with — `setpriority` then adds its value in x2. One
@@ -2435,7 +2435,7 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(pathPtrId)))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: flags))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: mode))
-		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostFileOpenName), args: ValueIdArray.create(), dstRef: dstRef)
+		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostFileOpenName), args: ValueIdArray.create(0), dstRef: dstRef)
 	end 'lowerOsFileOpen'
 
 	function lowerOsPathQuery(resultId ValueId, verb PathQueryVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, dstRef ElementIndex)
@@ -2492,7 +2492,7 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: SocketNoServiceName))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(hintsPtrId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x3), srcReg: TargetVReg.virtual(outPtrId)))
-		self.lowerHostValue(resultId, callee: Arm64HostCallee.import(OsImportSlot.getaddrinfo), args: ValueIdArray.create(), dstRef: dstRef)
+		self.lowerHostValue(resultId, callee: Arm64HostCallee.import(OsImportSlot.getaddrinfo), args: ValueIdArray.create(0), dstRef: dstRef)
 	end 'lowerOsSocketResolveDarwin'
 
 	// `freeaddrinfo(list)` — one register argument, nothing captured (the call returns void). Refused on the
@@ -2570,7 +2570,7 @@ export type StdToArm64Lowering
 	function lowerLinuxSocketTransfer(resultId ValueId, syscallNumber MachineWord, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x4), value: LinuxSocketNoPeerAddress))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x5), value: LinuxSocketNoPeerAddress))
-		self.lowerHostValue(resultId, callee: Arm64HostCallee.syscall(syscallNumber), args: ValueIdArray.create(), dstRef: dstRef)
+		self.lowerHostValue(resultId, callee: Arm64HostCallee.syscall(syscallNumber), args: ValueIdArray.create(0), dstRef: dstRef)
 	end 'lowerLinuxSocketTransfer'
 
 	// The flag word a transfer is given. ⚠ **`MSG_NOSIGNAL` IS A SEND-ONLY FLAG AND ITS VALUE IS PER-OS**
@@ -2676,13 +2676,13 @@ export type StdToArm64Lowering
 		match callee 'route'
 			import then self.lowerFoldedImportAnswer(resultId, callee: callee, fold: darwinFold, dstRef: dstRef)
 			chunk(name) then panic("lowerStatusAnswer: a socket call reaches the OS through an import or a syscall, and `{String.from(name)}` is a chunk — its answer would skip the Darwin fold on one lane and the raw `-errno` on the other")
-			syscall then self.lowerHostValue(resultId, callee: callee, args: ValueIdArray.create(), dstRef: dstRef)
+			syscall then self.lowerHostValue(resultId, callee: callee, args: ValueIdArray.create(0), dstRef: dstRef)
 		end 'route'
 	end 'lowerStatusAnswer'
 
 	function lowerFoldedImportAnswer(resultId ValueId, callee Arm64HostCallee, fold ByteArray, dstRef ElementIndex)
 		let answer = self.fresh.mint()
-		self.lowerHostValue(answer, callee: callee, args: ValueIdArray.create(), dstRef: dstRef)
+		self.lowerHostValue(answer, callee: callee, args: ValueIdArray.create(0), dstRef: dstRef)
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(fold), args: argsOf(answer), dstRef: dstRef)
 	end 'lowerFoldedImportAnswer'
 
@@ -2727,7 +2727,7 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(addrId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(sizeId)))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: madviseDecommitAdvice(self.target.os)))
-		self.emitHostCall(dstRef, callee: self.hostCalleeOn(OsImportSlot.madvise, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallMadvise)), args: ValueIdArray.create())
+		self.emitHostCall(dstRef, callee: self.hostCalleeOn(OsImportSlot.madvise, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallMadvise)), args: ValueIdArray.create(0))
 	end 'lowerOsDecommitPages'
 
 	// `mmap(NULL, size, PROT_NONE, MAP_ANON|MAP_PRIVATE, -1, 0)`. `PROT_NONE` is what makes it a
@@ -2768,7 +2768,7 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x3), value: flags))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x4), value: MmapAnonFd))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x5), value: MmapNoOffset))
-		self.lowerHostValue(resultId, callee: self.hostCalleeOn(OsImportSlot.mmap, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallMmap)), args: ValueIdArray.create(), dstRef: dstRef)
+		self.lowerHostValue(resultId, callee: self.hostCalleeOn(OsImportSlot.mmap, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallMmap)), args: ValueIdArray.create(0), dstRef: dstRef)
 	end 'lowerMmap'
 
 	// Lower `memFill(dest, byteCount, value)` — the destination and the length into the two registers the size
@@ -2833,7 +2833,7 @@ export type StdToArm64Lowering
 	// isel has no frame to give the pointer. The chunk also carries the two assertions that keep a key of 0
 	// from becoming a scheduler that silently never runs.
 	function lowerTlsAlloc(resultId ValueId, dstRef ElementIndex)
-		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostTlsAllocName), args: ValueIdArray.create(), dstRef: dstRef)
+		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostTlsAllocName), args: ValueIdArray.create(0), dstRef: dstRef)
 	end 'lowerTlsAlloc'
 
 	// An import on macOS and a chunk on Linux: `pthread_setspecific` works on any thread, while the
@@ -2895,7 +2895,7 @@ export type StdToArm64Lowering
 	// there, `mrt_host_wait_new(kind: event)` here.
 	function lowerOsEventCreate(resultId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: PosixWaitKindEvent))
-		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostWaitNewName), args: ValueIdArray.create(), dstRef: dstRef)
+		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostWaitNewName), args: ValueIdArray.create(0), dstRef: dstRef)
 	end 'lowerOsEventCreate'
 
 	// `osSetEvent(handle)` ⇒ signal it and wake one waiter.
@@ -2996,7 +2996,7 @@ export type StdToArm64Lowering
 	// `_NSGetEnviron()` answers the address of `environ` in the return register; the register holding it.
 	function lowerEnvironSlotAddrDarwin(dstRef ElementIndex) returns TargetVReg
 		let slotAddr = self.fresh.mint()
-		self.lowerHostValue(slotAddr, callee: Arm64HostCallee.import(OsImportSlot.nsGetEnviron), args: ValueIdArray.create(), dstRef: dstRef)
+		self.lowerHostValue(slotAddr, callee: Arm64HostCallee.import(OsImportSlot.nsGetEnviron), args: ValueIdArray.create(0), dstRef: dstRef)
 		return TargetVReg.virtual(slotAddr)
 	end 'lowerEnvironSlotAddrDarwin'
 

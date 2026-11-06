@@ -177,7 +177,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "echo")
@@ -229,7 +229,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/echo")
 	appendToken(argv, token: "hello")
 	let empty = ""
@@ -293,7 +293,7 @@ end 'appendToken'
 
 // One attached run, collected: whether the child exited 0 having written a line.
 function collectOne() returns bool
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	#if os(Macos)
 	appendToken(argv, token: "/usr/bin/git")
 	appendToken(argv, token: "--version")
@@ -360,7 +360,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "printf '[%s]' \"$@\"")
@@ -498,7 +498,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "echo hi")
@@ -541,7 +541,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more & echo oops 1>&2")
@@ -590,7 +590,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/cat")
 	let empty = ""
 	let payload = "fed-in\n"
@@ -635,7 +635,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "printf sout; printf err 1>&2")
@@ -683,7 +683,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "exit 7")
@@ -729,7 +729,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "ping -n 20 127.0.0.1 > nul")
@@ -776,7 +776,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sleep")
 	appendToken(argv, token: "5")
 	let empty = ""
@@ -834,7 +834,7 @@ function main() returns ExitCode
 		try File.delete(marker) otherwise panic("a marker left by an earlier run must not decide this case")
 	end 'stale'
 
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "cmd")
@@ -891,7 +891,7 @@ function main() returns ExitCode
 		try File.delete(marker) otherwise panic("a marker left by an earlier run must not decide this case")
 	end 'stale'
 
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "/bin/sh -c 'sleep 3; echo x > {markerName}'")
@@ -941,7 +941,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "start /b ping -n 5 127.0.0.1 & exit 3")
@@ -989,7 +989,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "sleep 3 & exit 3")
@@ -1044,7 +1044,7 @@ function isZombie(pid Pid) returns bool
 end 'isZombie'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "sleep 3 & exit 3")
@@ -1144,7 +1144,7 @@ function collector(h FullRangeInt) returns ExitCode
 end 'collector'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	#if os(Windows)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
@@ -1238,7 +1238,7 @@ function collector(h FullRangeInt) returns ExitCode
 end 'collector'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	#if os(Windows)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
@@ -1293,7 +1293,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "exit")
@@ -1335,7 +1335,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/usr/bin/true")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
@@ -1375,7 +1375,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "exit")
@@ -1424,7 +1424,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/usr/bin/true")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
@@ -1490,7 +1490,7 @@ function main() returns ExitCode
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 
-	var cleanup = ByteArray.create()
+	var cleanup = ByteArray.create(0)
 	appendToken(cleanup, token: "/bin/sh")
 	appendToken(cleanup, token: "-c")
 	appendToken(cleanup, token: "rm -f posix-detach-session-probe.txt")
@@ -1499,13 +1499,13 @@ function main() returns ExitCode
 	__Builtins.subprocessResultRelease(cleanupResult)
 	__Builtins.subprocessReleaseHandle(cleanupHandle)
 
-	var probe = ByteArray.create()
+	var probe = ByteArray.create(0)
 	appendToken(probe, token: "/bin/sh")
 	appendToken(probe, token: "-c")
 	appendToken(probe, token: "mine=$(python3 -c 'import os;print(os.getsid(0))'); theirs=$(python3 -c 'import os,sys;print(os.getsid(int(sys.argv[1])))' $PPID); if [ x$mine != x ] && [ x$mine != x$theirs ]; then echo differs; else echo same; fi > posix-detach-session-probe.txt")
 	let pid = __Builtins.subprocessDetach(probe, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 
-	var reader = ByteArray.create()
+	var reader = ByteArray.create(0)
 	appendToken(reader, token: "/bin/sh")
 	appendToken(reader, token: "-c")
 	appendToken(reader, token: "i=0; while [ $i -lt 100 ]; do if [ -s posix-detach-session-probe.txt ]; then cat posix-detach-session-probe.txt; rm -f posix-detach-session-probe.txt; exit 0; fi; sleep 0.1; i=$((i+1)); done; echo timeout")
@@ -1553,7 +1553,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function runEcho(word String, outKind Integer) returns Integer
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: word)
@@ -1612,7 +1612,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function runEcho(word String, outKind Integer) returns Integer
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/echo")
 	appendToken(argv, token: "-n")
 	appendToken(argv, token: word)
@@ -1665,7 +1665,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "echo")
@@ -1712,7 +1712,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "for /L %i in (1,1,200) do @echo 0123456789012345678901234567890123456789")
@@ -1764,7 +1764,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "i=0; while [ $i -lt 1200 ]; do echo 0123456789012345678901234567890123456789012345678; echo 0123456789012345678901234567890123456789012345678 1>&2; i=$((i+1)); done")
@@ -1807,7 +1807,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "for /L %i in (1,1,200) do @echo 0123456789012345678901234567890123456789")
@@ -1854,12 +1854,12 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	var envBlock = ByteArray.create()
+	var envBlock = ByteArray.create(0)
 	envBlock.push(0)
 	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "ping\n"
@@ -1914,12 +1914,12 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	var envBlock = ByteArray.create()
+	var envBlock = ByteArray.create(0)
 	envBlock.push(0)
 	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "abcdefghij\n"
@@ -1968,12 +1968,12 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	var envBlock = ByteArray.create()
+	var envBlock = ByteArray.create(0)
 	envBlock.push(0)
 	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "first\nabcdefghij\n"
@@ -2027,12 +2027,12 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	var envBlock = ByteArray.create()
+	var envBlock = ByteArray.create(0)
 	envBlock.push(0)
 	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "abcdefghij\n"
@@ -2081,12 +2081,12 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	var envBlock = ByteArray.create()
+	var envBlock = ByteArray.create(0)
 	envBlock.push(0)
 	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "abc\n"
@@ -2167,7 +2167,7 @@ function waitAfterRelease(child StreamingSubprocess) returns String
 end 'waitAfterRelease'
 
 function main() returns ExitCode
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("more")
 	var child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: argv) otherwise return 3
@@ -2253,7 +2253,7 @@ end 'appendToken'
 
 function main() returns ExitCode
 	let clean = String.init(__Builtins.subprocessLastErrorMessage())
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "definitely-not-a-real-executable-xyz.exe")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
@@ -2304,13 +2304,13 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "echo")
 	appendToken(argv, token: "%MAXON_ENV_PROBE%")
 
-	var env = ByteArray.create()
+	var env = ByteArray.create(0)
 	appendToken(env, token: "MAXON_ENV_PROBE=seen")
 	env.push(0)
 
@@ -2364,12 +2364,12 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "echo probe=$MAXON_ENV_PROBE home=$HOME")
 
-	var env = ByteArray.create()
+	var env = ByteArray.create(0)
 	appendToken(env, token: "MAXON_ENV_PROBE=seen")
 	env.push(0)
 
@@ -2408,7 +2408,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let argv = ByteArray.create()
+	let argv = ByteArray.create(0)
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let h = __Builtins.subprocessSpawn(argv, 0, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
@@ -2546,7 +2546,7 @@ type FifoReader
 	end 'create'
 
 	export function catFrom(fifo String)
-		var argv = ByteArray.create()
+		var argv = ByteArray.create(0)
 		appendToken(argv, token: "/bin/cat")
 		let empty = ""
 		let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
@@ -2564,7 +2564,7 @@ type FifoReader
 end 'FifoReader'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "d=$(mktemp -d) && mkfifo \"$d/f\" && printf %s \"$d\"")
@@ -2628,7 +2628,7 @@ type FifoReader
 	end 'create'
 
 	export function countFrom(fifo String)
-		var argv = ByteArray.create()
+		var argv = ByteArray.create(0)
 		appendToken(argv, token: "/bin/sh")
 		appendToken(argv, token: "-c")
 		appendToken(argv, token: "head -c {payloadBytes} >/dev/null; t=$(readlink /proc/$$/fd/0); n=0; for f in /proc/$$/fd/*; do if [ \"$(readlink \"$f\")\" = \"$t\" ]; then n=$((n+1)); fi; done; echo $n")
@@ -2648,7 +2648,7 @@ type FifoReader
 end 'FifoReader'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "d=$(mktemp -d) && mkfifo \"$d/f\" && printf %s \"$d\"")

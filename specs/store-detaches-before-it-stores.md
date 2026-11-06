@@ -204,7 +204,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	var refused = false
 
 	try arr.set(0, value: 5) otherwise 'outOfRange'
@@ -357,7 +357,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	var refused = false
 
 	try arr.managed.set(0, value: 5) otherwise 'outOfRange'
@@ -384,7 +384,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	var sub = try arr.slice(0, endIndex: 0) otherwise panic("slice: 0..0 of an empty array")
 	var refused = false
 

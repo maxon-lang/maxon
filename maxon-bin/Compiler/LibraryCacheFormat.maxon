@@ -53,7 +53,7 @@ export type LibraryCacheWriter
 	var refusal as bool
 
 	export static function create() returns LibraryCacheWriter
-		return Self{buffer: ByteArray.create(), refusal: false}
+		return Self{buffer: ByteArray.create(0), refusal: false}
 	end 'create'
 
 	export function refuse()
@@ -116,7 +116,7 @@ export type LibraryCacheWriter
 
 	export function payload() returns ByteArray
 		var taken = self.buffer
-		self.buffer = ByteArray.create()
+		self.buffer = ByteArray.create(0)
 		return taken
 	end 'payload'
 
@@ -131,7 +131,7 @@ export type LibraryCacheWriter
 end 'LibraryCacheWriter'
 
 function headerWordBytes(word CacheWord) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	for position in 0 upto HeaderWordByteCount 'eachByte'
 		bytes.push(((word shr (position * ByteBitWidth)) and ByteMask) as Byte)
@@ -381,7 +381,7 @@ export type LibraryPackBuilder
 	var sections as ByteBlobArray
 
 	export static function create() returns LibraryPackBuilder
-		return Self{rows: PackRowKeyArray.create(), sections: ByteBlobArray.create()}
+		return Self{rows: PackRowKeyArray.create(0), sections: ByteBlobArray.create(0)}
 	end 'create'
 
 	export function add(first HashDigest, second HashDigest, third HashDigest, payload ByteArray)
@@ -443,8 +443,8 @@ export type LibraryPack
 	export static function open(image ByteArray) returns LibraryPack throws LibraryCacheDamage
 		var reader = try LibraryCacheReader.open(image)
 		let count = try reader.count()
-		var rows = PackRowKeyArray.create()
-		var lengths = PackOffsetArray.create()
+		var rows = PackRowKeyArray.create(0)
+		var lengths = PackOffsetArray.create(0)
 		rows.reserve(count)
 		lengths.reserve(count)
 
@@ -456,8 +456,8 @@ export type LibraryPack
 			lengths.push(try reader.count())
 		end 'eachRow'
 
-		var starts = PackOffsetArray.create()
-		var ends = PackOffsetArray.create()
+		var starts = PackOffsetArray.create(0)
+		var ends = PackOffsetArray.create(0)
 		starts.reserve(count)
 		ends.reserve(count)
 		var at = reader.offset()

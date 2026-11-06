@@ -53,8 +53,8 @@ type Container uses Op implements Mergeable with Wrapper
 
 	static function create() returns Self
 		return Self{
-			ops: OpArray.create(),
-			items: WrapperArray.create()
+			ops: OpArray.create(0),
+			items: WrapperArray.create(0)
 		}
 	end 'create'
 

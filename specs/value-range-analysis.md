@@ -80,7 +80,7 @@ function total(a WordArray, n Count) returns Word
 end 'total'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		a.push(i * i)
 	end 'seed'
@@ -109,7 +109,7 @@ function bump(a WordArray, i Word) returns Word
 end 'bump'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.push(5)
 	if bump(a, i: 0) != 6 'first'
 		return 1
@@ -147,7 +147,7 @@ function reverseMiddle(a WordArray, first Word)
 end 'reverseMiddle'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 8 'seed'
 		a.push(i)
 	end 'seed'
@@ -211,7 +211,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.push(1)
 	a.push(2)
 	a.push(3)
@@ -247,7 +247,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.push(9223372036854775807)
 	let big = try a.get(0) otherwise 0
 	if big <= 0 'small'
@@ -277,7 +277,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.push(-1)
 	a.push(7)
 	let v = try a.get(0) otherwise 0
@@ -312,7 +312,7 @@ function weigh(x Small) returns Word
 end 'weigh'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.push(150)
 	let n = try a.get(0) otherwise 0
 	var t = 0 as Word

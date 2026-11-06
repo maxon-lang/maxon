@@ -402,7 +402,7 @@ type Bag
 	export var items as Counts
 
 	static function create() returns Self
-		return Self{items: Counts.create()}
+		return Self{items: Counts.create(0)}
 	end 'create'
 
 	function equals(other Self) returns bool
@@ -489,7 +489,7 @@ type Bag
 	export var items as Counts
 
 	static function create() returns Self
-		return Self{items: Counts.create()}
+		return Self{items: Counts.create(0)}
 	end 'create'
 
 	function equals(other Self) returns bool
@@ -811,7 +811,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -837,7 +837,7 @@ end 'zeroBox'
 
 typealias Tags = Array with Tagged
 
-var seen = Tags.create()
+var seen = Tags.create(0)
 
 type Tagged
 	export var tag as Count

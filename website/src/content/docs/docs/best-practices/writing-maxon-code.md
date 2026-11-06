@@ -312,7 +312,7 @@ A struct literal must supply a value for every field, unless the field:
 1. has a default on its declaration, re-evaluated at every literal that omits the field. The default
    gives the field its type, so it takes one of three shapes:
    - a `bool` or string literal: `var enabled = true`, `var name = "anon"`;
-   - `Type.member` or `Type.member(...)`, typed `Type`: `var items = IntArray.create()`, `var level = Priority.low`;
+   - `Type.member` or `Type.member(...)`, typed `Type`: `var items = IntArray.create(0)`, `var level = Priority.low`;
    - an expression cast with `as`, typed by the cast: `var count = 0 as Tally`.
 
    A bare number default (`var count = 0`) is E2004 — cast it. `var count as Tally = 0` is E2010.
@@ -345,7 +345,7 @@ end 'Counter'
 
 // CORRECT — declaration default (a factory call gives the type)
 type Bag
-	export var items = IntArray.create()
+	export var items = IntArray.create(0)
 
 	export static function create() returns Self
 		return Self{}           // OK — items gets a fresh empty array per construction
@@ -440,7 +440,7 @@ Use `var` for any variable you call mutating methods on (`push`, `set`, `remove`
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
-var items = IntArray.create()   // var because we call push
+var items = IntArray.create(0)   // var because we call push
 items.push(1)
 ```
 `Array with Integer{}` at a use site is E2004 — a generic container needs a typealias before use.
@@ -801,7 +801,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 var arr = [1, 2, 3]
-var empty = IntArray.create()
+var empty = IntArray.create(0)
 
 arr.push(42)                              // append
 let n = arr.count()                       // length

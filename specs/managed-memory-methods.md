@@ -49,7 +49,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -68,7 +68,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -89,7 +89,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -109,7 +109,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(30)
 	arr.insert(1, value: 20)
@@ -209,7 +209,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	var i = 0 as Int
 	while i < 100 'fill'
 		arr.push(i)
@@ -231,7 +231,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -251,7 +251,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -273,7 +273,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	try arr.managed.setLength(100) otherwise 'overlen'
 		return 7
@@ -292,7 +292,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	let b = try arr.managed.byteAt(100) otherwise 7
@@ -310,7 +310,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -332,7 +332,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	try arr.managed.grow(8) otherwise panic("grow OOB")
 	try arr.managed.setLength(4) otherwise panic("setLength OOB")
 	try arr.managed.set(0, 10) otherwise panic("set OOB")
@@ -358,7 +358,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -384,7 +384,7 @@ Push three heap strings, then `resize(1)`. The two dropped strings must be freed
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("first heap string long enough to require an allocation")
 	xs.push("second heap string long enough to require an allocation")
 	xs.push("third heap string long enough to require an allocation")
@@ -404,7 +404,7 @@ Shrink directly through the `__ManagedMemory.setLength` builtin (the path
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("alpha string payload long enough to need a heap allocation")
 	xs.push("beta string payload long enough to need a heap allocation")
 	xs.push("gamma string payload long enough to need a heap allocation")
@@ -431,7 +431,7 @@ end 'Box'
 typealias BoxArray = Array with Box
 
 function main() returns ExitCode
-	var boxes = BoxArray.create()
+	var boxes = BoxArray.create(0)
 	boxes.push(Box.create("box one with a heap string payload long enough"))
 	boxes.push(Box.create("box two with a heap string payload long enough"))
 	boxes.push(Box.create("box three with a heap string payload long enough"))
@@ -450,7 +450,7 @@ Shrinking all the way to zero frees every element (equivalent to `clear`).
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("only string payload long enough to need a heap allocation")
 	xs.push("other string payload long enough to need a heap allocation")
 	xs.truncate(0)
@@ -469,7 +469,7 @@ the regrow must not double-free or leak.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("first string payload long enough to need a heap allocation")
 	xs.push("second string payload long enough to need a heap allocation")
 	xs.push("third string payload long enough to need a heap allocation")
@@ -509,7 +509,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	var i = 0 as Count
 	while i < 8 'fill'
 		a.push(77)
@@ -559,7 +559,7 @@ that still offers the operation and owns the invariant being tested.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create()
+	var a = StrArray.create(0)
 	for i in 0 upto 4 'fill'
 		a.push("value-{i} padded out so this string needs a heap allocation")
 	end 'fill'
@@ -589,7 +589,7 @@ must not reappear.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create()
+	var a = StrArray.create(0)
 	a.push("alpha payload long enough to need a heap allocation here")
 	a.push("beta payload long enough to need a heap allocation here")
 	a.push("gamma payload long enough to need a heap allocation here")
@@ -624,7 +624,7 @@ caller owns, or it is freed twice.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create()
+	var a = StrArray.create(0)
 	a.push("one payload long enough to need a heap allocation here")
 	a.push("two payload long enough to need a heap allocation here")
 	let popped = try a.pop() otherwise ""
@@ -650,7 +650,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(11)
 	a.push(22)
 	a.push(33)
@@ -682,7 +682,7 @@ cleared, so regrown slots read `false`.
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var b = BoolArray.create()
+	var b = BoolArray.create(0)
 	b.push(true)
 	b.push(true)
 	b.push(true)
@@ -818,7 +818,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(11)
 	arr.push(22)
 	arr.push(33)
@@ -915,7 +915,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	try a.setLength(2) otherwise ignore
 	return 0
 end 'main'
@@ -1127,7 +1127,7 @@ what the ARRAY surface's length-bounded `set` covers, and the message says so.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("first published string, long enough to require an allocation")
 	xs.push("second published string, long enough to require an allocation")
 	try xs.managed.set(2, value: "staged heap string number one, long enough to require an allocation") otherwise return 2
@@ -1160,7 +1160,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var xs = SlotArray.create()
+	var xs = SlotArray.create(0)
 	xs.push(Slot.create(7))
 	xs.reserve(4)
 	try xs.managed.set(1, value: Slot.create(9)) otherwise return 1
@@ -1181,7 +1181,7 @@ without the refusal it exits **101**. It is the shortest program in the family a
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var a = StringArray.create()
+	var a = StringArray.create(0)
 	a.reserve(4)
 	try a.managed.set(0, value: "staged") otherwise return 1
 	return 42
@@ -1251,7 +1251,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	if arr.capacity() < 4 'needsASlotPastTheLength'
@@ -1279,7 +1279,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(11)
 	arr.push(22)
 	arr.push(33)
@@ -1324,7 +1324,7 @@ typealias StrArray = Array with String
 
 function main() returns ExitCode
 	var refused = 0 as Count
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("a published string, long enough to require an allocation")
 	try xs.set(99, value: "a string the array setter refuses, long enough to allocate") otherwise 'arraySurface'
 		refused = refused + 1
@@ -1345,7 +1345,7 @@ The literal half: refused where it is written, and the element type has nothing 
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("a published string, long enough to require an allocation")
 	try xs.set(-1, value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
 		return 42
@@ -1370,7 +1370,7 @@ function launder(n Signed) returns Signed
 end 'launder'
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("a published string, long enough to require an allocation")
 	try xs.set(launder(-1) as ElementIndex, value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
 		return 42
@@ -1402,7 +1402,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(11)
 	arr.push(22)
 	arr.push(33)
@@ -1431,7 +1431,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(11)
 	arr.push(22)
 	arr.push(33)
@@ -1464,7 +1464,7 @@ which the element it names is unreachable and unreleasable.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("a published string, long enough to require an allocation")
 	try xs.managed.setByte(0, value: 65) otherwise return 1
 	return 42
@@ -1486,7 +1486,7 @@ information disclosure. It is pinned separately so a narrowing of the rule to wr
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("a published string, long enough to require an allocation")
 	let b = try xs.managed.byteAt(0) otherwise return 1
 	return b as ExitCode
@@ -1521,7 +1521,7 @@ function main() returns ExitCode
 	try words.setByte(0, value: 9) otherwise return 7
 	try words.setLength(1) otherwise return 8
 	total = total + (try words.byteAt(0) otherwise return 9)
-	var xs = IntArray.create()
+	var xs = IntArray.create(0)
 	xs.push(7)
 	try xs.managed.setByte(0, value: 3) otherwise return 10
 	total = total + (try xs.managed.byteAt(0) otherwise return 11)
@@ -1548,7 +1548,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	_ = arr.managed.byteAt(100)
 	return 0
@@ -1685,9 +1685,9 @@ here and `a`'s second element must survive it.
 typealias Strings = Array with String
 
 function main() returns ExitCode
-	var a = Strings.create()
+	var a = Strings.create(0)
 	a.push("alpha is long enough to be heap allocated")
-	var b = Strings.create()
+	var b = Strings.create(0)
 	b.push("beta is also long enough to be heap allocated")
 	a.managed.append(b.managed)
 	if a.count() != 2 'badCount'
@@ -2003,7 +2003,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	try arr.managed.set(0, value: 12) otherwise return 1
@@ -2197,7 +2197,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	return arr.frobnicate() as ExitCode
 end 'main'
@@ -2243,7 +2243,7 @@ type P
 end 'P'
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	_ = arr.create()
 	var p = P.make()
@@ -2375,7 +2375,7 @@ NOT forked: an ordinary `Array with Byte` still goes into it.
 typealias BufArray = Array with __ManagedMemory
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	view m = try a.get(0) otherwise return 1
 	return m.length() as ExitCode
@@ -2403,7 +2403,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	let h = Holder.create(a)
 	let m = try h.bufs.get(0) otherwise return 1
@@ -2443,7 +2443,7 @@ The refusal half of the array element, which without its carrier likewise runs (
 typealias BufArray = Array with __ManagedMemory
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	let m = try a.get(0) otherwise return 1
 	return m.count() as ExitCode
@@ -2505,7 +2505,7 @@ instance. It is keyed on the ALIAS NAME the declaration wrote, and this alias di
 typealias BufArray = Array with ByteArray
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	let m = try a.get(0) otherwise return 1
 	return m.length() as ExitCode
@@ -2522,7 +2522,7 @@ The array control's positive half, for the reason its tuple twin has one.
 typealias BufArray = Array with ByteArray
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	view m = try a.get(0) otherwise return 1
 	return m.count() as ExitCode
@@ -2585,7 +2585,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	return arr.managed.length() as ExitCode
@@ -2605,7 +2605,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	let n = arr.managed.length()
@@ -2638,7 +2638,7 @@ function bufferOf(a ByteArray) returns __ManagedMemory
 end 'bufferOf'
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	view m = arr.managed
@@ -2672,7 +2672,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(1 as Byte)
 	let m = arr.managed
 	return (m.length() + arr.length()) as ExitCode
@@ -2711,7 +2711,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(1 as Byte)
 	arr.managed
 	return 0
@@ -2739,7 +2739,7 @@ function bufLength(m __ManagedMemory) returns Integer
 end 'bufLength'
 
 function main() returns ExitCode
-	var a = ByteArray.create()
+	var a = ByteArray.create(0)
 	a.push(1 as Byte)
 	a.push(2 as Byte)
 	var total = 0 as Integer
@@ -2823,7 +2823,7 @@ mark is made there rather than per arm.
 typealias BufArray = Array with __ManagedMemory
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	a.push("ab".toByteArray())
 	view g = try a.get(0) otherwise return 1
@@ -2845,7 +2845,7 @@ roster AND still be dropped exactly once — the exit code proves the first, the
 typealias BufArray = Array with __ManagedMemory
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	view p = try a.pop() otherwise return 1
 	return p.length() as ExitCode
@@ -2865,7 +2865,7 @@ it — so nothing here is dropped twice or leaked.
 typealias BufArray = Array with __ManagedMemory
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	a.push("ab".toByteArray())
 	var total = 0 as Count
@@ -2890,7 +2890,7 @@ refused as an unknown `Array` method while `a.get(0).length()` answers, on the s
 typealias BufArray = Array with __ManagedMemory
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	let b = a.clone()
 	let m = try b.get(0) otherwise return 1
@@ -2910,7 +2910,7 @@ reason `clone` does — one container out from the rule that already made a slic
 typealias BufArray = Array with __ManagedMemory
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	a.push("ab".toByteArray())
 	let b = try a.slice(1, endIndex: 2) otherwise return 1
@@ -3018,7 +3018,7 @@ function slotted(t (BufArray, Int)) returns Int
 end 'slotted'
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	return slotted((a, 7)) as ExitCode
 end 'main'
@@ -3043,7 +3043,7 @@ function slotted(t (BufList, Int)) returns Int
 end 'slotted'
 
 function main() returns ExitCode
-	var a = BufList.create()
+	var a = BufList.create(0)
 	a.push("hello".toByteArray())
 	return slotted((a, 7)) as ExitCode
 end 'main'
@@ -3065,7 +3065,7 @@ function slotted(t (BufList, Int)) returns Int
 end 'slotted'
 
 function main() returns ExitCode
-	var a = BufList.create()
+	var a = BufList.create(0)
 	a.push("hello".toByteArray())
 	return slotted((a, 7)) as ExitCode
 end 'main'
@@ -3148,7 +3148,7 @@ type Holder
 	export var bufs as BufArray
 
 	static function create() returns Holder
-		var a = BufArray.create()
+		var a = BufArray.create(0)
 		a.push("hello".toByteArray())
 		return Self{bufs: a}
 	end 'create'
@@ -3157,7 +3157,7 @@ end 'Holder'
 function main() returns ExitCode
 	let h = Holder.create()
 	let m = try h.bufs.get(0) otherwise return 1
-	return ((m.length() as Int) + seed(BufArray.create())) as ExitCode
+	return ((m.length() as Int) + seed(BufArray.create(0))) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -3177,7 +3177,7 @@ type Holder
 	export var bufs as BufArray
 
 	static function create() returns Holder
-		var a = BufArray.create()
+		var a = BufArray.create(0)
 		a.push("hello".toByteArray())
 		return Self{bufs: a}
 	end 'create'
@@ -3186,7 +3186,7 @@ end 'Holder'
 function main() returns ExitCode
 	let h = Holder.create()
 	let m = try h.bufs.get(0) otherwise return 1
-	return ((m.length() as Int) + seed(BufArray.create())) as ExitCode
+	return ((m.length() as Int) + seed(BufArray.create(0))) as ExitCode
 end 'main'
 
 // --- file: alias.maxon
@@ -3222,7 +3222,7 @@ end 'seed'
 
 // --- file: main.maxon
 function make() returns (BufArray, Int)
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	return (a, 7)
 end 'make'
@@ -3230,7 +3230,7 @@ end 'make'
 function main() returns ExitCode
 	let t = make()
 	let m = try t.0.get(0) otherwise return 0
-	return (m.length() + seed(BufArray.create())) as ExitCode
+	return (m.length() + seed(BufArray.create(0))) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -3246,7 +3246,7 @@ the answer that happened to be right.
 ```maxon
 // --- file: main.maxon
 function make() returns (BufArray, Int)
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	return (a, 7)
 end 'make'
@@ -3254,7 +3254,7 @@ end 'make'
 function main() returns ExitCode
 	let t = make()
 	let m = try t.0.get(0) otherwise return 0
-	return (m.length() + seed(BufArray.create())) as ExitCode
+	return (m.length() + seed(BufArray.create(0))) as ExitCode
 end 'main'
 
 // --- file: alias.maxon
@@ -3553,7 +3553,7 @@ union Held
 end 'Held'
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	let h = Held.bufs(a)
 	match h 'k'
@@ -3634,11 +3634,11 @@ union Held
 end 'Held'
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	let h = Held.bufs(a)
 	match h 'k'
-		bufs(x) then return (((try x.get(0) otherwise return 1).length() as Int) + seed(BufArray.create())) as ExitCode
+		bufs(x) then return (((try x.get(0) otherwise return 1).length() as Int) + seed(BufArray.create(0))) as ExitCode
 		nothing then return 0
 	end 'k'
 end 'main'
@@ -3662,11 +3662,11 @@ union Held
 end 'Held'
 
 function main() returns ExitCode
-	var a = BufArray.create()
+	var a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	let h = Held.bufs(a)
 	match h 'k'
-		bufs(x) then return (((try x.get(0) otherwise return 1).length() as Int) + seed(BufArray.create())) as ExitCode
+		bufs(x) then return (((try x.get(0) otherwise return 1).length() as Int) + seed(BufArray.create(0))) as ExitCode
 		nothing then return 0
 	end 'k'
 end 'main'
@@ -4072,7 +4072,7 @@ function arrayWidth(xs B) returns Int2
 end 'arrayWidth'
 
 function main() returns ExitCode
-	var xs = B.create()
+	var xs = B.create(0)
 	xs.push(7 as Int2)
 	return ((textWidth("hello") as Int2) + arrayWidth(xs)) as ExitCode
 end 'main'
@@ -4123,7 +4123,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var xs = Nums.create()
+	var xs = Nums.create(0)
 	xs.push(7 as Int2)
 	let b = Bag.create(xs)
 	return (seed() + (b.items.count() as Int)) as ExitCode
@@ -4642,7 +4642,7 @@ extension Array
 end 'Array'
 
 function main() returns ExitCode
-	var a = Ints.create()
+	var a = Ints.create(0)
 	a.push(1)
 	a.push(2)
 	return a.doubled() as ExitCode
@@ -4670,7 +4670,7 @@ extension Array
 end 'Array'
 
 function main() returns ExitCode
-	var a = Ints.create()
+	var a = Ints.create(0)
 	a.push(1)
 	a.push(2)
 	return a.doubled() as ExitCode
@@ -4709,7 +4709,7 @@ extension Array
 end 'Array'
 
 function main() returns ExitCode
-	var a = Ints.create()
+	var a = Ints.create(0)
 	a.push(7)
 	a.push(9)
 	return a.survey() as ExitCode

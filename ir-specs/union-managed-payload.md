@@ -43,10 +43,10 @@ type Reader
 end 'Reader'
 
 function main() returns ExitCode
-	var payload = ByteArray.create()
+	var payload = ByteArray.create(0)
 	payload.resize(9)
 	let reader = Reader.create(Backing.large(payload))
-	var output = ByteArray.create()
+	var output = ByteArray.create(0)
 	output.resize(1)
 	reader.stampInto(output)
 
@@ -776,7 +776,7 @@ function replaceThenCount(bytes ByteArray) returns Count
 end 'replaceThenCount'
 
 function main() returns ExitCode
-	var payload = ByteArray.create()
+	var payload = ByteArray.create(0)
 	payload.resize(9)
 	theHolder = Holder.create(Slot.filled(payload))
 
@@ -1336,7 +1336,7 @@ function overwriteThenCount(holder Holder, bytes ByteArray) returns Count
 end 'overwriteThenCount'
 
 function main() returns ExitCode
-	var payload = ByteArray.create()
+	var payload = ByteArray.create(0)
 	payload.resize(9)
 	var holder = Holder.create(Slot.filled(payload))
 

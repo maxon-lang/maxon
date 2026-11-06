@@ -54,7 +54,7 @@ type Database
 end 'Database'
 
 function clearDepsFor(db Database)
-		var newDeps = DependencyArray.create()
+		var newDeps = DependencyArray.create(0)
 		for dep in db.dependencies 'scan'
 				match dep.dependent 'check'
 						sourceFile then newDeps.push(dep)
@@ -67,7 +67,7 @@ function clearDepsFor(db Database)
 end 'clearDepsFor'
 
 function main() returns ExitCode
-		var deps = DependencyArray.create()
+		var deps = DependencyArray.create(0)
 		deps.push(Dependency.create(QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon")))
 		deps.push(Dependency.create(QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon")))
 		deps.push(Dependency.create(QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon")))
@@ -107,7 +107,7 @@ type Container
 end 'Container'
 
 function keepBigValues(c Container)
-		var newItems = ItemArray.create()
+		var newItems = ItemArray.create(0)
 		for item in c.items 'scan'
 				if item.value > 3 'big'
 						newItems.push(item)
@@ -117,7 +117,7 @@ function keepBigValues(c Container)
 end 'keepBigValues'
 
 function main() returns ExitCode
-		var items = ItemArray.create()
+		var items = ItemArray.create(0)
 		items.push(Item.create("alpha string long enough for heap allocation", value: 1))
 		items.push(Item.create("beta string long enough for heap allocation", value: 2))
 		items.push(Item.create("gamma string long enough for heap allocation", value: 3))
@@ -163,7 +163,7 @@ type Store
 end 'Store'
 
 function removeNone(store Store)
-		var kept = EntryArray.create()
+		var kept = EntryArray.create(0)
 		for e in store.entries 'scan'
 				match e.tag 'check'
 						none then continue
@@ -175,7 +175,7 @@ function removeNone(store Store)
 end 'removeNone'
 
 function main() returns ExitCode
-		var entries = EntryArray.create()
+		var entries = EntryArray.create(0)
 		entries.push(Entry.create(Tag.name("first long string for heap allocation purposes")))
 		entries.push(Entry.create(Tag.none))
 		entries.push(Entry.create(Tag.id(42)))
@@ -222,11 +222,11 @@ type State
 end 'State'
 
 function clearAll(state State)
-		state.deps = DepArray.create()
+		state.deps = DepArray.create(0)
 end 'clearAll'
 
 function main() returns ExitCode
-		var deps = DepArray.create()
+		var deps = DepArray.create(0)
 		deps.push(Dep.create(Key.module, target: Key.file("a.maxon long enough for heap")))
 		deps.push(Dep.create(Key.module, target: Key.file("b.maxon long enough for heap")))
 		deps.push(Dep.create(Key.file("c.maxon long enough for heap"), target: Key.module))

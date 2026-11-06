@@ -166,7 +166,7 @@ type GdbStopReport
 	var values as GdbStopRegisterValueArray
 
 	static function create() returns GdbStopReport
-		return Self{signal: 0, thread: "", threads: StringArray.create(), threadPcs: StringArray.create(), stopInfo: "", numbers: GdbStopRegisterNumberArray.create(), values: GdbStopRegisterValueArray.create()}
+		return Self{signal: 0, thread: "", threads: StringArray.create(0), threadPcs: StringArray.create(0), stopInfo: "", numbers: GdbStopRegisterNumberArray.create(0), values: GdbStopRegisterValueArray.create(0)}
 	end 'create'
 
 	module function setRegister(number GdbRegisterNumber, value DebuggeeWord)
@@ -233,7 +233,7 @@ export type GdbRemoteBackend
 	end 'create'
 
 	static function listeningOn(stub FilePath, listener GdbListenerHold, port NetworkPort, unmasks bool) returns GdbRemoteBackend
-		return Self{stub: stub, stubProcess: GdbStubProcess.none, stubSaid: StringArray.create(), listener: listener, port: port, link: GdbRemoteLink.unconnected, registers: GdbRegisterInfoArray.create(), slotted: GdbSlottedRegisterArray.create(), threads: StringArray.create(), reporter: "", lastStop: GdbStopReport.create(), stopHeld: false, entryTaken: false, stopOutstanding: false, stepping: BackendStepRoster.create(), armed: DebugAddressArray.create(), withheld: GdbWithheldStopArray.create(), threadStopInfoServed: true, unmasksSignals: unmasks, stopRequested: false, pendingSignal: 0, signalled: "", status: BackendExitStatus.running}
+		return Self{stub: stub, stubProcess: GdbStubProcess.none, stubSaid: StringArray.create(0), listener: listener, port: port, link: GdbRemoteLink.unconnected, registers: GdbRegisterInfoArray.create(0), slotted: GdbSlottedRegisterArray.create(0), threads: StringArray.create(0), reporter: "", lastStop: GdbStopReport.create(), stopHeld: false, entryTaken: false, stopOutstanding: false, stepping: BackendStepRoster.create(), armed: DebugAddressArray.create(0), withheld: GdbWithheldStopArray.create(0), threadStopInfoServed: true, unmasksSignals: unmasks, stopRequested: false, pendingSignal: 0, signalled: "", status: BackendExitStatus.running}
 	end 'listeningOn'
 
 	export function holdsItsScratch() returns bool
@@ -295,7 +295,7 @@ export type GdbRemoteBackend
 	// The driver spawns the program suspended and the stub attaches to it, so the program is the driver's
 	// child here as on every lane, and a program left running after a detach reports its own exit code.
 	function attachedThrough(door TcpListener, program Pid) returns BackendAdoption
-		var argv = StringArray.create()
+		var argv = StringArray.create(0)
 		argv.push(GdbReverseConnectOption)
 		argv.push("{GdbListenHost}:{self.port}")
 		argv.push("{GdbAttachOption}{program}")
@@ -456,7 +456,7 @@ export type GdbRemoteBackend
 	// --- the stop loop ---
 
 	export function listThreads() returns BackendThreadIdArray
-		var ids = BackendThreadIdArray.create()
+		var ids = BackendThreadIdArray.create(0)
 
 		for spelled in self.threads 'eachThread'
 			match gdbHexValueOf(spelled) 'read'
@@ -648,7 +648,7 @@ export type GdbRemoteBackend
 			return
 		end 'theStubDoesNotAnswerIt'
 
-		var asked = StringArray.create()
+		var asked = StringArray.create(0)
 
 		for spelled in self.threads 'eachThread'
 			if spelled != self.reporter 'anotherThread'
@@ -721,7 +721,7 @@ export type GdbRemoteBackend
 		end 'nothingIsQueued'
 
 		var taken = GdbWithheldStopLookup.none
-		var kept = GdbWithheldStopArray.create()
+		var kept = GdbWithheldStopArray.create(0)
 
 		for stop in self.withheld 'eachWithheld'
 			match taken 'already'
@@ -736,7 +736,7 @@ export type GdbRemoteBackend
 	end 'takeWithheldStop'
 
 	function dropTheWithheldQueue()
-		self.withheld = GdbWithheldStopArray.create()
+		self.withheld = GdbWithheldStopArray.create(0)
 	end 'dropTheWithheldQueue'
 
 	function withheldStopReported(stop GdbWithheldStop) returns DebugStopEvent
@@ -772,7 +772,7 @@ export type GdbRemoteBackend
 	end 'holdEndedWithItsStepper'
 
 	function threadsWithout(departed BackendThreadId) returns StringArray
-		var kept = StringArray.create()
+		var kept = StringArray.create(0)
 
 		for known in self.threads 'eachKnown'
 			if self.threadIdOf(known) != departed 'anotherThread'
@@ -1172,7 +1172,7 @@ export type GdbRemoteBackend
 	// below is the only thing that takes a breakpoint out of the program.
 	export function plantTrap(address DebugAddress) returns BackendTrapPlant
 		if backendAddressRosterHolds(self.armed, address: address) 'itIsAlreadyArmed'
-			return BackendTrapPlant.planted(ByteArray.create())
+			return BackendTrapPlant.planted(ByteArray.create(0))
 		end 'itIsAlreadyArmed'
 
 		let borrowed = self.borrowedStop()
@@ -1189,7 +1189,7 @@ export type GdbRemoteBackend
 
 		self.armed.push(address)
 
-		return BackendTrapPlant.planted(ByteArray.create())
+		return BackendTrapPlant.planted(ByteArray.create(0))
 	end 'plantTrap'
 
 	export function liftTrap(address DebugAddress, original ByteArray) returns bool
@@ -1219,7 +1219,7 @@ export type GdbRemoteBackend
 	end 'liftTrap'
 
 	function forgetArmed(address DebugAddress)
-		var kept = DebugAddressArray.create()
+		var kept = DebugAddressArray.create(0)
 
 		for armedAt in self.armed 'eachArmed'
 			if armedAt != address 'anotherAddress'
@@ -1234,7 +1234,7 @@ export type GdbRemoteBackend
 
 	export function readMemory(address DebugAddress, bytes BackendByteCount) returns BackendMemoryRead
 		match transferSizeOf(bytes as TransferByteCount) 'size'
-			nothing then return BackendMemoryRead.read(ByteArray.create())
+			nothing then return BackendMemoryRead.read(ByteArray.create(0))
 			pastTheWindow then return BackendMemoryRead.unreadable
 			withinTheWindow then break
 		end 'size'
@@ -1453,7 +1453,7 @@ function gdbStubEnded(child StreamingSubprocess)
 end 'gdbStubEnded'
 
 function gdbSlottedAmong(registers GdbRegisterInfoArray) returns GdbSlottedRegisterArray
-	var slotted = GdbSlottedRegisterArray.create()
+	var slotted = GdbSlottedRegisterArray.create(0)
 
 	for info in registers 'eachRegister'
 		match gdbSlotForRegister(info.name) 'slot'
@@ -1503,7 +1503,7 @@ end 'gdbStopIsATrap'
 // exception mask and answers each as handled, so the faulting thread re-executes its instruction
 // forever and the program's own handler never runs.
 function gdbStubTakesUnmaskSignals(stub FilePath) returns bool
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 	arguments.push(GdbUnmaskSignalsOption)
 
 	let asked = try Subprocess.run(Executable.path(stub), arguments: arguments, workingDirectory: Directory.currentPath(), timeoutMs: GdbUnmaskProbeMs) otherwise 'theProbeCouldNotRun'

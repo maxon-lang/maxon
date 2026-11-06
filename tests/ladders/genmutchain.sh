@@ -27,14 +27,14 @@ CHAINS="$1"; DEPTH="$2"; PARAMS="$3"; OUT="$4"
 PARAM_DECL="p0 IntArray"
 ARG_LIST="p0"
 MAIN_ARGS="a0"
-MAIN_DECLS=$'\tvar a0 = IntArray.create()'
+MAIN_DECLS=$'\tvar a0 = IntArray.create(0)'
 LEAF_WRITES=$'\tp0.push(0)'
 i=1
 while [ "$i" -lt "$PARAMS" ]; do
   PARAM_DECL="$PARAM_DECL, p$i IntArray"
   ARG_LIST="$ARG_LIST, p$i: p$i"
   MAIN_ARGS="$MAIN_ARGS, p$i: a$i"
-  MAIN_DECLS="$MAIN_DECLS"$'\n\t'"var a$i = IntArray.create()"
+  MAIN_DECLS="$MAIN_DECLS"$'\n\t'"var a$i = IntArray.create(0)"
   LEAF_WRITES="$LEAF_WRITES"$'\n\t'"p$i.push($i)"
   i=$(( i + 1 ))
 done

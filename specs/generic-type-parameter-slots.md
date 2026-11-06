@@ -33,7 +33,7 @@ end 'double'
 
 type Holder uses Element
 	typealias EArray = Array with Element
-	var items = EArray.create()
+	var items = EArray.create(0)
 
 	static function create() returns Self
 		return Self{}
@@ -76,7 +76,7 @@ end 'double'
 
 type Holder uses Element
 	typealias EArray = Array with Element
-	var items = EArray.create()
+	var items = EArray.create(0)
 
 	static function create() returns Self
 		return Self{}

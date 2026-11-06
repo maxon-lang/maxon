@@ -43,7 +43,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -67,7 +67,7 @@ function zeroBox(w Box)
 	w.n = 0
 end 'zeroBox'
 
-var registry = Boxes.create()
+var registry = Boxes.create(0)
 
 function register(b Box)
 	registry.push(b)
@@ -110,7 +110,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -144,8 +144,8 @@ end 'Tag'
 
 typealias Tags = Array with Tag
 
-var registry = Boxes.create()
-var tags = Tags.create()
+var registry = Boxes.create(0)
+var tags = Tags.create(0)
 
 function register(b Box)
 	registry.push(b)
@@ -188,7 +188,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -217,7 +217,7 @@ type Pair
 	export var right as Boxes
 
 	static function create() returns Self
-		return Self{left: Boxes.create(), right: Boxes.create()}
+		return Self{left: Boxes.create(0), right: Boxes.create(0)}
 	end 'create'
 end 'Pair'
 
@@ -261,7 +261,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -335,7 +335,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -398,7 +398,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -462,7 +462,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -604,7 +604,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -628,7 +628,7 @@ function zeroBox(w Box)
 	w.n = 0
 end 'zeroBox'
 
-var registry = Boxes.create()
+var registry = Boxes.create(0)
 
 function register(b Box)
 	registry.push(b)
@@ -671,7 +671,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 
 	function add(n Count) returns Box
@@ -714,7 +714,7 @@ type Box
 end 'Box'
 
 let shared = Box.create(7)
-var registry = Boxes.create()
+var registry = Boxes.create(0)
 
 function register()
 	registry.push(shared)
@@ -760,7 +760,7 @@ type Holder
 end 'Holder'
 
 let shared = Box.create(7)
-var registry = Boxes.create()
+var registry = Boxes.create(0)
 var holder = Holder.create(Box.create(0))
 
 function stash(b Box)
@@ -838,7 +838,7 @@ end 'Box'
 let shared = Box.create(7)
 
 function main() returns ExitCode
-	var local = Boxes.create()
+	var local = Boxes.create(0)
 	local.push(shared)
 	var w = try local.get(0) otherwise return 1
 	w.n = 99
@@ -963,7 +963,7 @@ type Reg
 	export var show as Show
 
 	static function create() returns Self
-		return Self{items: Boxes.create(), show: function() gives 0}
+		return Self{items: Boxes.create(0), show: function() gives 0}
 	end 'create'
 end 'Reg'
 
@@ -1049,9 +1049,9 @@ type Other
 	end 'create'
 end 'Other'
 
-var others = OtherBoxes.create()
+var others = OtherBoxes.create(0)
 
-var registry = Boxes.create()
+var registry = Boxes.create(0)
 
 function register(b Box)
 	registry.push(b)
@@ -1151,7 +1151,7 @@ type Holder
 	var seen as Seen
 
 	static function create() returns Holder
-		return Holder{items: Layouts.create(), seen: Seen.create()}
+		return Holder{items: Layouts.create(0), seen: Seen.create()}
 	end 'create'
 
 	function add(layout Layout)
@@ -1202,7 +1202,7 @@ type Holder
 	var seen as Seen
 
 	static function create() returns Holder
-		return Holder{items: Layouts.create(), seen: Seen.create()}
+		return Holder{items: Layouts.create(0), seen: Seen.create()}
 	end 'create'
 
 	function add(layout Layout)
@@ -1253,7 +1253,7 @@ type Holder
 	export var seen as Seen
 
 	static function create() returns Holder
-		return Holder{items: Layouts.create(), seen: Seen.create()}
+		return Holder{items: Layouts.create(0), seen: Seen.create()}
 	end 'create'
 end 'Holder'
 
@@ -1370,7 +1370,7 @@ type Holder
 	var other as Names
 
 	static function create() returns Holder
-		return Holder{names: Names.create(), other: Names.create()}
+		return Holder{names: Names.create(0), other: Names.create(0)}
 	end 'create'
 
 	function grab() returns Names
@@ -1415,7 +1415,7 @@ type Holder
 	var extra as Layout
 
 	static function create(extra Layout) returns Holder
-		return Holder{items: Layouts.create(), extra: extra}
+		return Holder{items: Layouts.create(0), extra: extra}
 	end 'create'
 
 	function add(layout Layout)
@@ -1553,7 +1553,7 @@ type Block
 	export var edges as Edges
 
 	static function create() returns Self
-		return Self{edges: Edges.create()}
+		return Self{edges: Edges.create(0)}
 	end 'create'
 end 'Block'
 
@@ -1561,7 +1561,7 @@ type Book
 	export var blocks as Blocks
 
 	static function create() returns Self
-		return Self{blocks: Blocks.create()}
+		return Self{blocks: Blocks.create(0)}
 	end 'create'
 end 'Book'
 
@@ -1569,7 +1569,7 @@ type Routed
 	export var args as Args
 
 	static function create() returns Self
-		return Self{args: Args.create()}
+		return Self{args: Args.create(0)}
 	end 'create'
 end 'Routed'
 
@@ -1601,7 +1601,7 @@ function wire(world World, block Block)
 end 'wire'
 
 function run(world World) returns Count
-	let carried = Args.create()
+	let carried = Args.create(0)
 	var block = world.open()
 	world.scribble()
 	attach(block, args: carried)
@@ -1678,7 +1678,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var registry = Boxes.create()
+var registry = Boxes.create(0)
 
 function register(b Box)
 	registry.push(b)
@@ -1730,7 +1730,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -1952,7 +1952,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create()
+		var made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -1962,7 +1962,7 @@ type Sigs
 	export var decls as Decls
 
 	static function create() returns Self
-		return Self{decls: Decls.create()}
+		return Self{decls: Decls.create(0)}
 	end 'create'
 end 'Sigs'
 
@@ -2081,7 +2081,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create()
+		var made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -2091,7 +2091,7 @@ type Sigs
 	export var decls as Decls
 
 	static function create() returns Self
-		return Self{decls: Decls.create()}
+		return Self{decls: Decls.create(0)}
 	end 'create'
 end 'Sigs'
 
@@ -2160,7 +2160,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -2184,7 +2184,7 @@ function zeroBox(w Box)
 	w.n = 0
 end 'zeroBox'
 
-var registry = Boxes.create()
+var registry = Boxes.create(0)
 
 function register(b Box)
 	registry.push(b)
@@ -2226,7 +2226,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -2291,7 +2291,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -2356,7 +2356,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -2422,7 +2422,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -2491,7 +2491,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -2563,7 +2563,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -2595,7 +2595,7 @@ type ListSink implements Sink
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 
 	function take(b Box)
@@ -2644,7 +2644,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -2717,7 +2717,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -2741,7 +2741,7 @@ function zeroBox(w Box)
 	w.n = 0
 end 'zeroBox'
 
-var registry = Boxes.create()
+var registry = Boxes.create(0)
 
 function register(b Box)
 	registry.push(b)
@@ -2785,7 +2785,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 
 	function add(n Count) returns Box
@@ -2831,7 +2831,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 
 	function add(n Count) returns Box
@@ -2951,7 +2951,7 @@ type Box
 end 'Box'
 
 function fill(rows Rows, b Box)
-	var inner = Boxes.create()
+	var inner = Boxes.create(0)
 	inner.push(b)
 	rows.push(inner)
 end 'fill'
@@ -2963,7 +2963,7 @@ function wipe(rows Rows)
 end 'wipe'
 
 function main() returns ExitCode
-	var rows = Rows.create()
+	var rows = Rows.create(0)
 	let a = Box.create(2)
 	fill(rows, b: a)
 	wipe(rows)
@@ -3000,7 +3000,7 @@ type Table
 end 'Table'
 
 function fill(t Table, b Box)
-	var inner = Boxes.create()
+	var inner = Boxes.create(0)
 	inner.push(b)
 	t.rows.upsert(7, value: inner)
 end 'fill'
@@ -3045,14 +3045,14 @@ type Board
 	export var grid as Grid
 
 	static function create() returns Self
-		return Self{grid: Grid.create()}
+		return Self{grid: Grid.create(0)}
 	end 'create'
 end 'Board'
 
 function place(board Board, b Box)
-	var inner = Boxes.create()
+	var inner = Boxes.create(0)
 	inner.push(b)
-	var rows = Rows.create()
+	var rows = Rows.create(0)
 	rows.push(inner)
 	board.grid.push(rows)
 end 'place'
@@ -3163,7 +3163,7 @@ type Reg
 	export var show as Show
 
 	static function create() returns Self
-		return Self{items: Boxes.create(), show: function() gives 0}
+		return Self{items: Boxes.create(0), show: function() gives 0}
 	end 'create'
 end 'Reg'
 
@@ -3206,7 +3206,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -3293,7 +3293,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var registry = Boxes.create()
+var registry = Boxes.create(0)
 
 function register(b Box)
 	registry.push(b)
@@ -3386,7 +3386,7 @@ type Holder
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Holder'
 
@@ -3439,7 +3439,7 @@ typealias N0 = Box with S0
 typealias ViaAlias = Box with N0
 typealias Holder = Array with ViaAlias
 
-var holder = Holder.create()
+var holder = Holder.create(0)
 
 function keep(b ViaAlias) returns ViaAlias
 	return b
@@ -3489,7 +3489,7 @@ typealias N0 = Box with S0
 typealias ViaAlias = Box with N0
 typealias Holder = Array with ViaAlias
 
-var holder = Holder.create()
+var holder = Holder.create(0)
 
 function clobber()
 	var w = try holder.get(0) otherwise return
@@ -3531,7 +3531,7 @@ type Holder
 	var seen as Seen
 
 	static function create() returns Holder
-		return Holder{items: Layouts.create(), seen: Seen.create()}
+		return Holder{items: Layouts.create(0), seen: Seen.create()}
 	end 'create'
 
 	function add(layout Layout)
@@ -3587,7 +3587,7 @@ type Holder
 	var seen as Seen
 
 	static function create() returns Holder
-		return Holder{items: Layouts.create(), seen: Seen.create()}
+		return Holder{items: Layouts.create(0), seen: Seen.create()}
 	end 'create'
 
 	function add(layout Layout)
@@ -3663,7 +3663,7 @@ type Holder
 	var seen as Seen
 
 	static function create() returns Holder
-		return Holder{items: Layouts.create(), seen: Seen.create()}
+		return Holder{items: Layouts.create(0), seen: Seen.create()}
 	end 'create'
 
 	function add(layout Layout)
@@ -3715,7 +3715,7 @@ type Holder
 	export var seen as Seen
 
 	static function create() returns Holder
-		return Holder{items: Layouts.create(), seen: Seen.create()}
+		return Holder{items: Layouts.create(0), seen: Seen.create()}
 	end 'create'
 end 'Holder'
 
@@ -3791,7 +3791,7 @@ type Holder
 	var names as Names
 
 	static function create() returns Holder
-		return Holder{names: Names.create()}
+		return Holder{names: Names.create(0)}
 	end 'create'
 
 	function grab() returns Names
@@ -3873,7 +3873,7 @@ type Holder
 	var extra as Layout
 
 	static function create(extra Layout) returns Holder
-		return Holder{items: Layouts.create(), extra: extra}
+		return Holder{items: Layouts.create(0), extra: extra}
 	end 'create'
 
 	function add(layout Layout)
@@ -4059,7 +4059,7 @@ type Block
 	export var edges as Edges
 
 	static function create() returns Self
-		return Self{edges: Edges.create()}
+		return Self{edges: Edges.create(0)}
 	end 'create'
 end 'Block'
 
@@ -4067,7 +4067,7 @@ type Book
 	export var blocks as Blocks
 
 	static function create() returns Self
-		return Self{blocks: Blocks.create()}
+		return Self{blocks: Blocks.create(0)}
 	end 'create'
 end 'Book'
 
@@ -4075,7 +4075,7 @@ type Routed
 	export var args as Args
 
 	static function create() returns Self
-		return Self{args: Args.create()}
+		return Self{args: Args.create(0)}
 	end 'create'
 end 'Routed'
 
@@ -4107,7 +4107,7 @@ function wire(world World, block Block)
 end 'wire'
 
 function run(world World) returns Count
-	let carried = Args.create()
+	let carried = Args.create(0)
 	var block = world.open()
 	attach(block, args: carried)
 	world.scribble()
@@ -4183,7 +4183,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var registry = Boxes.create()
+var registry = Boxes.create(0)
 
 function register(b Box)
 	registry.push(b)
@@ -4226,7 +4226,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var registry = Boxes.create()
+var registry = Boxes.create(0)
 
 function register(b Box)
 	registry.push(b)
@@ -4283,7 +4283,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -4409,7 +4409,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create()
+		var made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -4419,7 +4419,7 @@ type Sigs
 	export var decls as Decls
 
 	static function create() returns Self
-		return Self{decls: Decls.create()}
+		return Self{decls: Decls.create(0)}
 	end 'create'
 end 'Sigs'
 
@@ -4506,7 +4506,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create()
+		var made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -4516,7 +4516,7 @@ type Sigs
 	export var decls as Decls
 
 	static function create() returns Self
-		return Self{decls: Decls.create()}
+		return Self{decls: Decls.create(0)}
 	end 'create'
 end 'Sigs'
 
@@ -4601,7 +4601,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create()
+		var made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -4659,7 +4659,7 @@ type Sigs
 	export var decls as Decls
 
 	static function create() returns Self
-		return Self{decls: Decls.create()}
+		return Self{decls: Decls.create(0)}
 	end 'create'
 end 'Sigs'
 
@@ -4744,7 +4744,7 @@ type Sigs
 	export var decls as Decls
 
 	static function create() returns Self
-		return Self{decls: Decls.create()}
+		return Self{decls: Decls.create(0)}
 	end 'create'
 end 'Sigs'
 
@@ -4756,7 +4756,7 @@ type Memo
 	end 'create'
 end 'Memo'
 
-var layouts = Layouts.create()
+var layouts = Layouts.create(0)
 
 function sigsOf(memo Memo) returns Sigs
 	var made = Sigs.create()
@@ -4823,7 +4823,7 @@ type Sigs
 	export var decls as Decls
 
 	static function create() returns Self
-		return Self{decls: Decls.create()}
+		return Self{decls: Decls.create(0)}
 	end 'create'
 end 'Sigs'
 
@@ -4835,7 +4835,7 @@ type Memo
 	end 'create'
 end 'Memo'
 
-var layouts = Layouts.create()
+var layouts = Layouts.create(0)
 
 function sigsOf(memo Memo) returns Sigs
 	var made = Sigs.create()
@@ -4904,7 +4904,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create()
+		var made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -4914,7 +4914,7 @@ type Sigs
 	export var decls as Decls
 
 	static function create() returns Self
-		return Self{decls: Decls.create()}
+		return Self{decls: Decls.create(0)}
 	end 'create'
 end 'Sigs'
 
@@ -5149,7 +5149,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create()
+		var made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -5167,7 +5167,7 @@ type Sigs implements Counted
 	end 'count'
 
 	static function create() returns Self
-		return Self{decls: Decls.create()}
+		return Self{decls: Decls.create(0)}
 	end 'create'
 end 'Sigs'
 
@@ -5259,7 +5259,7 @@ type Keeper uses T
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function keep(item T, world World)
@@ -5296,7 +5296,7 @@ type Stack uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function push(v T)
@@ -5345,7 +5345,7 @@ type Stack uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function push(v T)
@@ -5404,7 +5404,7 @@ type Stack uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function push(v T)
@@ -5456,7 +5456,7 @@ type Stack
 	var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 
 	function push(v Box)
@@ -5504,7 +5504,7 @@ type Stack uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function push(v T)
@@ -5553,7 +5553,7 @@ type Stack
 	var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 
 	function push(v Box)

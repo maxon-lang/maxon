@@ -885,6 +885,10 @@ An instance method is called with no value to call it on: a bare call to a sibli
 
 A fixed array's 'create' is called with the wrong arguments for the form of its type. A type that states its length ('Vec3' for 'FixedArray with 3 Int') takes none: write 'Vec3.create()'. A runtime-sized type ('Buf' for 'FixedArray with Int') needs its length and only that: write 'Buf.create(n)'. A second argument is refused, because a fixed array is always zeroed and never grows; for a growable buffer write 'Array.create(n, zeroed: false)'.
 
+### E3195 — `arrayCreateWithoutCapacity`
+
+An `Array` or `ByteArray` is created with no capacity: `Items.create()`. Every array states how much it holds when it is built, so write `create(0)` for an empty array, `create(n)` for `n` zero elements in one allocation, or `create(n, zeroed: false)` for an empty array with room for `n`. A collection whose length is fixed once it is filled is a `FixedArray`.
+
 ## Intermediate Representation (E4xxx)
 
 IR generation.

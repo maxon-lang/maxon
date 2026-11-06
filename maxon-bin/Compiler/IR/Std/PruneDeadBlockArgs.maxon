@@ -134,7 +134,7 @@ export function blockArgIdBound(module StdModule, func IrFunction) returns Value
 end 'blockArgIdBound'
 
 export function flagColumn(count ValueId) returns ValueFlagColumn
-	var col = ValueFlagColumn.create()
+	var col = ValueFlagColumn.create(0)
 	col.resize(count)
 	return col
 end 'flagColumn'
@@ -187,8 +187,8 @@ end 'PhiOperandPairs'
 
 // Collect them. One walk over every edge of every block, in O(edge slots).
 export function collectPhiOperands(module StdModule, func IrFunction, refByBlockId ValueIdArray) returns PhiOperandPairs
-	var args = CsrColumn.create()
-	var incoming = CsrColumn.create()
+	var args = CsrColumn.create(0)
+	var incoming = CsrColumn.create(0)
 
 	for blockRef in func.blockRefs 'eachPred'
 		let pred = try module.blocks.get(blockRef) otherwise panic("collectPhiOperands: blockRef from func.blockRefs not in module.blocks")
@@ -225,7 +225,7 @@ end 'incomingArgAt'
 // Exported, and used by `elimTrivialBlockArgs` too: it is the same index over the same id space,
 // and two copies of it were two chances to resolve an edge onto the wrong block.
 export function buildBlockIdIndex(module StdModule, func IrFunction) returns ValueIdArray
-	var refByBlockId = ValueIdArray.create()
+	var refByBlockId = ValueIdArray.create(0)
 	refByBlockId.resize(func.nextBlockId)
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -263,7 +263,7 @@ function computeUsefulBlockArgs(module StdModule, func IrFunction, isBlockArg Va
 	end 'eachOp'
 
 	var useful = flagColumn(bound)
-	var worklist = ValueIdArray.create()
+	var worklist = ValueIdArray.create(0)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
@@ -323,7 +323,7 @@ end 'markUseful'
 export function dropBlockArgs(module StdModule, func IrFunction, refByBlockId ValueIdArray, kept ValueFlagColumn) returns ValueId
 	for blockRef in func.blockRefs 'eachPred'
 		var pred = try module.blocks.get(blockRef) otherwise panic("dropBlockArgs: blockRef from func.blockRefs not in module.blocks")
-		var newEdges = BranchEdgeArray.create()
+		var newEdges = BranchEdgeArray.create(0)
 
 		for edge in pred.branchEdges 'eachEdge'
 			view target = blockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
@@ -337,7 +337,7 @@ export function dropBlockArgs(module StdModule, func IrFunction, refByBlockId Va
 
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("dropBlockArgs: blockRef from func.blockRefs not in module.blocks")
-		var newArgs = IrBlockArgArray.create()
+		var newArgs = IrBlockArgArray.create(0)
 
 		for arg in block.blockArgs 'eachArg'
 			if flagOf(kept, v: arg.valueId) 'keep'
@@ -357,7 +357,7 @@ end 'dropBlockArgs'
 // same drop, and the reason it reads the TARGET's block-arg list rather than its own `argIds`: the
 // slot is what the two are aligned by.
 function keptArgIds(edge BranchEdge, pred IrBlock, target IrBlock, kept ValueFlagColumn) returns ValueIdArray
-	var survivors = ValueIdArray.create()
+	var survivors = ValueIdArray.create(0)
 
 	for k in 0 upto target.blockArgs.count() 'eachSlot'
 		let arg = try target.blockArgs.get(k) otherwise panic("dropBlockArgs: blockArgs.get({k}) OOB on '{String.from(target.label)}'")

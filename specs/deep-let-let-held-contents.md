@@ -49,7 +49,7 @@ type Registry
 	var entries as EntryArray
 
 	static function create() returns Self
-		return Self{entries: EntryArray.create()}
+		return Self{entries: EntryArray.create(0)}
 	end 'create'
 
 	function add(name ByteArray)
@@ -102,7 +102,7 @@ type Registry
 	var entries as EntryArray
 
 	static function create() returns Self
-		return Self{entries: EntryArray.create()}
+		return Self{entries: EntryArray.create(0)}
 	end 'create'
 
 	function add(name ByteArray)
@@ -154,7 +154,7 @@ type Registry
 	var entries as EntryArray
 
 	static function create() returns Self
-		return Self{entries: EntryArray.create()}
+		return Self{entries: EntryArray.create(0)}
 	end 'create'
 
 	function add(name ByteArray)
@@ -302,7 +302,7 @@ end 'Route'
 
 function main() returns ExitCode
 	let route = Route.create()
-	var steps = StepArray.create()
+	var steps = StepArray.create(0)
 	steps.push(route.first)
 
 	return steps.count() as ExitCode
@@ -335,7 +335,7 @@ end 'Route'
 
 function main() returns ExitCode
 	let route = Route.create()
-	var steps = StepArray.create()
+	var steps = StepArray.create(0)
 	steps.push(route.first)
 
 	return steps.count() as ExitCode

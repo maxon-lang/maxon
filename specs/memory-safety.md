@@ -180,7 +180,7 @@ end 'Leaf'
 typealias Leaves = Array with Leaf
 
 function main() returns ExitCode
-	var a = Leaves.create()
+	var a = Leaves.create(0)
 	a.push(Leaf.create("original label long enough for a heap record", value: 10))
 
 	var b = a.clone()
@@ -214,8 +214,8 @@ typealias Row = Array with Integer
 typealias Grid = Array with Row
 
 function main() returns ExitCode
-	var a = Grid.create()
-	var row = Row.create()
+	var a = Grid.create(0)
+	var row = Row.create(0)
 	row.push(1)
 	a.push(row)
 
@@ -256,7 +256,7 @@ end 'Leaf'
 typealias Leaves = Array with Leaf
 
 function main() returns ExitCode
-	var a = Leaves.create()
+	var a = Leaves.create(0)
 	a.push(Leaf.create("original label long enough for a heap record", value: 10))
 
 	let b = a.clone()
@@ -287,7 +287,7 @@ points at — so sharing it makes the clone and the original one string.
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var a = Words.create()
+	var a = Words.create(0)
 	a.push("original word long enough for a heap record")
 
 	let b = a.clone()
@@ -333,7 +333,7 @@ end 'Op'
 typealias Ops = Array with Op
 
 function main() returns ExitCode
-	var a = Ops.create()
+	var a = Ops.create(0)
 	a.push(Op.holds(Item.create("original label long enough for a heap record")))
 
 	var b = a.clone()
@@ -379,7 +379,7 @@ function payloadOf(w Word) returns String
 end 'payloadOf'
 
 function main() returns ExitCode
-	var a = Words.create()
+	var a = Words.create(0)
 	a.push(Word.spelled("original word long enough for a heap record"))
 
 	let b = a.clone()
@@ -421,7 +421,7 @@ function textOf(s Slot) returns String
 end 'textOf'
 
 function main() returns ExitCode
-	var a = Slots.create()
+	var a = Slots.create(0)
 	a.push(Slot.filled("filled with a heap record"))
 	a.push(Slot.empty)
 
@@ -580,7 +580,7 @@ end 'Holder'
 typealias Holders = Array with Holder
 
 function main() returns ExitCode
-	var a = Holders.create()
+	var a = Holders.create(0)
 	a.push(Holder.create(Square.create(2)))
 	var b = a.clone()
 	var grown = try b.get(0) otherwise panic("no holder")
@@ -1062,10 +1062,10 @@ function nestedTextOf(o Outer) returns String
 end 'nestedTextOf'
 
 function main() returns ExitCode
-	var w = Words.create()
+	var w = Words.create(0)
 	w.push("inner element long enough for a heap record")
 
-	var a = Outers.create()
+	var a = Outers.create(0)
 	a.push(Outer.wraps(Inner.text("nested payload long enough for a heap record")))
 	a.push(Outer.holds(w))
 	a.push(Outer.pair(true, n: 3))
@@ -1224,7 +1224,7 @@ type Holder
 	export var sites as IntArray
 
 	static function create() returns Self
-		return Self{sites: IntArray.create()}
+		return Self{sites: IntArray.create(0)}
 	end 'create'
 
 	function add(x Integer)
@@ -1259,7 +1259,7 @@ type Holder
 	export var sites as IntArray
 
 	static function create() returns Self
-		return Self{sites: IntArray.create()}
+		return Self{sites: IntArray.create(0)}
 	end 'create'
 
 	function add(x Integer)

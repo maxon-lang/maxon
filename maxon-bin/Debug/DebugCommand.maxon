@@ -167,7 +167,7 @@ type DebuggerRequest
 	export var traced as bool
 
 	static function create() returns DebuggerRequest
-		return Self{exe: StatedText.unstated, batch: false, script: StatedText.unstated, face: DebuggerFaceRequest.session, stopTimeoutMs: stopTimeoutMsOf(DefaultStopTimeoutSeconds), targetEnv: EnvMap.create(), programArguments: StringArray.create(), traced: false}
+		return Self{exe: StatedText.unstated, batch: false, script: StatedText.unstated, face: DebuggerFaceRequest.session, stopTimeoutMs: stopTimeoutMsOf(DefaultStopTimeoutSeconds), targetEnv: EnvMap.create(), programArguments: StringArray.create(0), traced: false}
 	end 'create'
 end 'DebuggerRequest'
 
@@ -236,7 +236,7 @@ module function hexBytesOf(digits String) returns HexBytesRead
 		return HexBytesRead.notHex
 	end 'notWholeBytes'
 
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var pending = 0 as Byte
 	var half = 0 as Count
 
@@ -502,7 +502,7 @@ function runDumpInfo(args MaxonArgs) returns ExitCode
 
 	// Section names are read before the sidecar, so a misspelled one is refused by name whatever the
 	// file holds, rather than by whichever failure the path happens to produce first.
-	var sections = BoolArray.create()
+	var sections = BoolArray.create(0)
 
 	match parseDumpSections(args) 'request'
 		notASection(name) then return refuseUnknownSection(name)
@@ -519,7 +519,7 @@ end 'runDumpInfo'
 // keeps printing the whole sidecar, which is the documented default and what every other reader of this
 // dump relies on.
 function parseDumpSections(args MaxonArgs) returns DumpSectionRequest
-	var sections = BoolArray.create()
+	var sections = BoolArray.create(0)
 	sections.refill(dumpSectionRoster().count(), value: args.paths.count() <= FirstSectionArgument)
 
 	for i in FirstSectionArgument upto args.paths.count() 'eachName'
@@ -550,7 +550,7 @@ function dumpSectionIndexOf(spelled String) returns DumpSectionLookup
 end 'dumpSectionIndexOf'
 
 function dumpSectionRoster() returns StringArray
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 	names.push(HeaderSection)
 	names.push(FilesSection)
 	names.push(FunctionsSection)
@@ -727,7 +727,7 @@ end 'dumpInlineFrames'
 // Every range's start, read back through the same lookup the profiler uses so the dump shows what a
 // sample there would be named.
 function inlineRangeStarts(reader MxdbgReader) returns MxdbgCodeOffsetArray
-	var starts = MxdbgCodeOffsetArray.create()
+	var starts = MxdbgCodeOffsetArray.create(0)
 
 	for i in 0 upto reader.inlineRangeCount() 'eachRange'
 		starts.push(reader.inlineRangeStart(i as MxdbgIndex))

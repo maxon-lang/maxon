@@ -441,7 +441,7 @@ module type BatchGroup
 	var claims as BatchClaimArray
 
 	module static function create() returns BatchGroup
-		return Self{members: BatchMemberArray.create(), claims: BatchClaimArray.create()}
+		return Self{members: BatchMemberArray.create(0), claims: BatchClaimArray.create(0)}
 	end 'create'
 
 	module function admits(claim BatchClaim) returns bool
@@ -463,7 +463,7 @@ end 'BatchGroup'
 module typealias BatchGroupArray = Array with BatchGroup
 
 module function partitionedByClaims(candidates ClaimedMemberArray) returns BatchGroupArray
-	var groups = BatchGroupArray.create()
+	var groups = BatchGroupArray.create(0)
 
 	for claimed in candidates 'eachMember'
 		var placed = false
@@ -572,7 +572,7 @@ end 'batchCaseName'
 
 function batchCaseSource(test SpecTest, caseIndex ElementIndex) returns String
 	let name = batchCaseName(caseIndex)
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	for rawLine in test.source.split(SourceLineBreak) 'eachLine'
 		let line = rawLine.trimEnd(CharacterSet.newlines())
@@ -671,7 +671,7 @@ function batchEntrySource(members BatchMemberArray, facilities EntryFacilities) 
 end 'batchEntrySource'
 
 function mintedNamesForBatchEntry() returns NameRoster
-	var names = NameRoster.create()
+	var names = NameRoster.create(0)
 	names.push(BatchIndexAlias.toByteArray())
 	names.push(BatchLeftAlias.toByteArray())
 	names.push(BatchRunType.toByteArray())
@@ -692,7 +692,7 @@ module type BatchProgram
 	end 'create'
 
 	module function allCases() returns TestRunIndexArray
-		var cases = TestRunIndexArray.create()
+		var cases = TestRunIndexArray.create(0)
 
 		for index in 0 upto self.members.count() 'eachMember'
 			cases.push(index)
@@ -726,7 +726,7 @@ function stageBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 		let test = try tests.get(member.testIndex) otherwise panic("SpecBatch: batch member {iter.index()} names test {member.testIndex}, past the {tests.count()} the spec selected")
 		let caseIndex = iter.index()
 		let path = build.root.join("{BatchCaseDirPrefix}{caseIndex}").join(BatchCaseFileName)
-		var names = NameRoster.create()
+		var names = NameRoster.create(0)
 		names.push(batchCaseName(caseIndex).toByteArray())
 		try build.addSource(path, content: batchCaseSource(test, caseIndex: caseIndex), mintedNames: names)
 	end 'eachMember'
@@ -754,17 +754,17 @@ module function batchBuildsWithFreedBoxPoison(tests SpecTestArray, members Batch
 end 'batchBuildsWithFreedBoxPoison'
 
 function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchBuild
-	let stdlibDir = try locateStdlibDir() otherwise return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: missingStdlibReason()), refused: TestRunIndexArray.create())
-	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: missingRuntimeReason()), refused: TestRunIndexArray.create())
+	let stdlibDir = try locateStdlibDir() otherwise return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: missingStdlibReason()), refused: TestRunIndexArray.create(0))
+	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: missingRuntimeReason()), refused: TestRunIndexArray.create(0))
 	let facilities = EntryFacilities.of(effectiveTarget)
 	let staged = try stageBatch(tempDir, ordinal: ordinal, tests: tests, members: members, facilities: facilities) otherwise (e) 'notStaged'
-		return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: stagingRefusalReason(e)), refused: TestRunIndexArray.create())
+		return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: stagingRefusalReason(e)), refused: TestRunIndexArray.create(0))
 	end 'notStaged'
 
 	let exePath = batchExePath(tempDir, ordinal: ordinal, exeExtension: exeExtension)
 
 	var session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
-	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exePath.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(), poisonFreed: batchBuildsWithFreedBoxPoison(tests, members: members), stdlibDirOverride: StatedText.stated(stdlibDir.toString()), runtimeDirOverride: StatedText.stated(runtimeDir.toString()), scriptlib: ScriptlibLoad.omitted, entryFunction: BatchEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, session: session) otherwise (e) 'didNotCompile'
+	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exePath.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(0), poisonFreed: batchBuildsWithFreedBoxPoison(tests, members: members), stdlibDirOverride: StatedText.stated(stdlibDir.toString()), runtimeDirOverride: StatedText.stated(runtimeDir.toString()), scriptlib: ScriptlibLoad.omitted, entryFunction: BatchEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, session: session) otherwise (e) 'didNotCompile'
 		reportCompileError(e, sink: session.diagnostics)
 		let answer = CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text())
 		return BatchBuild.notBuilt(answer, refused: membersNamedIn(answer.diagnostics, ordinal: ordinal, count: members.count()))
@@ -773,10 +773,10 @@ function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 	if product.drivesOtherProcesses 'aGapInPlacement'
 		try File.delete(exePath) otherwise ignore
 
-		return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: DrivesOtherProcessesGap), refused: TestRunIndexArray.create())
+		return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: DrivesOtherProcessesGap), refused: TestRunIndexArray.create(0))
 	end 'aGapInPlacement'
 
-	var written = FilePathArray.create()
+	var written = FilePathArray.create(0)
 
 	for path in staged.buildTargets 'eachTarget'
 		if not path.equals(staged.root) 'aStagedFile'
@@ -799,7 +799,7 @@ module type BatchOutcome
 end 'BatchOutcome'
 
 function diagnosticsNaming(diagnostics String, ordinal ElementIndex, caseIndex ElementIndex) returns String
-	var named = StringArray.create()
+	var named = StringArray.create(0)
 
 	for line in diagnostics.split(SourceLineBreak) 'eachLine'
 		if namesCase(line, ordinal: ordinal, caseIndex: caseIndex) 'namesIt'
@@ -811,7 +811,7 @@ function diagnosticsNaming(diagnostics String, ordinal ElementIndex, caseIndex E
 end 'diagnosticsNaming'
 
 function membersNamedIn(diagnostics String, ordinal ElementIndex, count ElementIndex) returns TestRunIndexArray
-	var named = TestRunIndexArray.create()
+	var named = TestRunIndexArray.create(0)
 
 	for index in 0 upto count 'eachMember'
 		if namesCase(diagnostics, ordinal: ordinal, caseIndex: index) 'namesIt'
@@ -833,7 +833,7 @@ function namesCase(text String, ordinal ElementIndex, caseIndex ElementIndex) re
 end 'namesCase'
 
 function membersWithout(members BatchMemberArray, positions TestRunIndexArray) returns BatchMemberArray
-	var kept = BatchMemberArray.create()
+	var kept = BatchMemberArray.create(0)
 
 	for (iter, member) in members.withIterator() 'eachMember'
 		if not positions.contains(iter.index()) 'stays'
@@ -847,7 +847,7 @@ end 'membersWithout'
 module function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchOutcome
 	var remaining = members.clone()
 	var refusals = BatchRefusalMap.create()
-	var last = BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: "no batch compile was attempted"), refused: TestRunIndexArray.create())
+	var last = BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: "no batch compile was attempted"), refused: TestRunIndexArray.create(0))
 
 	for _ in 0 upto MaxBatchCompileAttempts 'eachAttempt'
 		if remaining.isEmpty() 'noneLeft'
@@ -928,7 +928,7 @@ type MarkedStream
 	var firstEndedAt as RegionPositionMap
 
 	static function create() returns MarkedStream
-		return Self{regions: MarkedRegionArray.create(), clean: true, firstBegunAt: RegionPositionMap.create(), firstEndedAt: RegionPositionMap.create()}
+		return Self{regions: MarkedRegionArray.create(0), clean: true, firstBegunAt: RegionPositionMap.create(), firstEndedAt: RegionPositionMap.create()}
 	end 'create'
 
 	function open(region MarkedRegion)
@@ -1125,7 +1125,7 @@ module function isUnisolatedBatchMember(observation RunObservation) returns bool
 end 'isUnisolatedBatchMember'
 
 module function readBatch(batch ProcessCapture, caseCount ElementIndex, selects bool) returns BatchReadingArray
-	var readings = BatchReadingArray.create()
+	var readings = BatchReadingArray.create(0)
 	let unreadable = unreadableReading(selects)
 	let process = batchProcessTrusted(batch)
 	var stdout = parseMarkedStream(batch.stdout)
@@ -1155,7 +1155,7 @@ module function readBatch(batch ProcessCapture, caseCount ElementIndex, selects 
 end 'readBatch'
 
 module function unreadBatch(caseCount ElementIndex, selects bool) returns BatchReadingArray
-	var readings = BatchReadingArray.create()
+	var readings = BatchReadingArray.create(0)
 	readings.refill(caseCount, value: unreadableReading(selects))
 	return readings
 end 'unreadBatch'

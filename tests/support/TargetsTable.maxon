@@ -12,7 +12,7 @@ end 'tableTargets'
 public function nativeTargets() returns StringArray
 	let targets = tableTargets()
 	let runners = targetsTableColumn(RunnerColumnName)
-	var natives = StringArray.create()
+	var natives = StringArray.create(0)
 
 	for (iter, target) in targets.withIterator() 'eachTarget'
 		let runner = try runners.get(iter.index()) otherwise panic("the gate could not run — {TargetsTablePath} read {targets.count()} targets but only {runners.count()} runners.")
@@ -32,7 +32,7 @@ function targetsTableRows() returns StringArray
 		panic("the gate could not run — there is no {TargetsTablePath}, the table every target of the compiler is read from. Every path here is relative to the CHECKOUT ROOT; run it from there.")
 	end 'missing'
 
-	var rows = StringArray.create()
+	var rows = StringArray.create(0)
 
 	for line in outputLines(fileText(path)) 'eachLine'
 		if not line.isEmpty() 'aRow'
@@ -47,7 +47,7 @@ function targetsTableColumn(name String) returns StringArray
 	let rows = targetsTableRows()
 	let header = try rows.first() otherwise panic("the gate could not run — {TargetsTablePath} is empty: it has no header row.")
 	let column = columnIndex(header.split(Tab), name: name)
-	var values = StringArray.create()
+	var values = StringArray.create(0)
 
 	for (iter, row) in rows.withIterator() 'eachRow'
 		if iter.index() == HeaderRowIndex 'theHeader'

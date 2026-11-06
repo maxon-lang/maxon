@@ -55,7 +55,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create()
+	var arr = SlotArray.create(0)
 	arr.push(Slot.create(10))
 	arr.resize(3)
 	return arr.count()
@@ -73,7 +73,7 @@ it being a struct.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create()
+	var arr = StringArray.create(0)
 	arr.resize(3)
 	return arr.count()
 end 'main'
@@ -98,7 +98,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create()
+	var arr = SlotArray.create(0)
 	arr.growFilled(3, value: Slot.create(14))
 	var total = 0 as Integer
 	for s in arr 'sum'
@@ -128,7 +128,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create()
+	var arr = SlotArray.create(0)
 	arr.push(Slot.create(42))
 	view result = try arr.get(0) otherwise Slot.create(0)
 	return result.value
@@ -147,7 +147,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(0)
 	arr.push(5)
 	arr.resize(4)
@@ -176,7 +176,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create()
+	var arr = SlotArray.create(0)
 	arr.reserve(2)
 	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
 	try arr.get(0) otherwise (e) 'handler'
@@ -200,7 +200,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntegerArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntegerArray.create()
+	var arr = IntegerArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	try arr.get(5) otherwise (e) 'handler'
@@ -227,7 +227,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntegerArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntegerArray.create()
+	var arr = IntegerArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	try arr.get(-1) otherwise (e) 'handler'
@@ -256,7 +256,7 @@ function launder(n Integer) returns Integer
 end 'launder'
 
 function main() returns ExitCode
-	var arr = IntegerArray.create()
+	var arr = IntegerArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	try arr.get(launder(-1) as ElementIndex) otherwise (e) 'handler'
@@ -295,7 +295,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create()
+	var arr = SlotArray.create(0)
 	arr.reserve(3)
 	try arr.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
 	view result = try arr.first() otherwise Slot.create(77)
@@ -323,7 +323,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create()
+	var arr = SlotArray.create(0)
 	arr.push(Slot.create(1))
 	arr.reserve(3)
 	try arr.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
@@ -357,7 +357,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create()
+	var arr = SlotArray.create(0)
 	arr.push(Slot.create(5))
 	arr.reserve(3)
 	try arr.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
@@ -396,7 +396,7 @@ type Bag uses Element
 	var items as ElementArray
 
 	static function create() returns Self
-		return Self{items: ElementArray.create()}
+		return Self{items: ElementArray.create(0)}
 	end 'create'
 
 	function pad(n Integer)
@@ -404,7 +404,7 @@ type Bag uses Element
 	end 'pad'
 
 	function visit() returns Integer
-		var kept = ElementArray.create()
+		var kept = ElementArray.create(0)
 
 		for e in self.items 'each'
 			kept.push(e)
@@ -446,7 +446,7 @@ type Bag uses Element
 	var items as ElementArray
 
 	static function create() returns Self
-		return Self{items: ElementArray.create()}
+		return Self{items: ElementArray.create(0)}
 	end 'create'
 
 	function pad(n Integer)
@@ -454,7 +454,7 @@ type Bag uses Element
 	end 'pad'
 
 	function visit() returns Integer
-		var kept = ElementArray.create()
+		var kept = ElementArray.create(0)
 
 		for e in self.items 'each'
 			kept.push(e)
@@ -493,7 +493,7 @@ type Bag uses Element
 	var items as ElementArray
 
 	static function create() returns Self
-		return Self{items: ElementArray.create()}
+		return Self{items: ElementArray.create(0)}
 	end 'create'
 
 	static function keepFirstAfterClear(items ElementArray) returns Integer
@@ -513,7 +513,7 @@ typealias NameBag = Bag with String
 typealias NameArray = Array with String
 
 function main() returns ExitCode
-	var names = NameArray.create()
+	var names = NameArray.create(0)
 	names.push("a {names.count()}")
 	let seen = NameBag.keepFirstAfterClear(names)
 	print("{seen} {names.count()}\n")
@@ -562,7 +562,7 @@ end 'Level'
 typealias LevelArray = Array with Level
 
 function main() returns ExitCode
-	var levels = LevelArray.create()
+	var levels = LevelArray.create(0)
 	levels.reserve(1)
 	try levels.managed.setLength(1) otherwise panic("setLength: capacity just reserved for 1")
 
@@ -581,7 +581,7 @@ typealias NonZero = int(1 to i64.max)
 typealias NonZeroArray = Array with NonZero
 
 function main() returns ExitCode
-	var xs = NonZeroArray.create()
+	var xs = NonZeroArray.create(0)
 	xs.reserve(1)
 	try xs.managed.setLength(1) otherwise panic("setLength: capacity just reserved for 1")
 	let d = try xs.get(0) otherwise 1

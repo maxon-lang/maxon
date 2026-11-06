@@ -66,7 +66,7 @@ export function borrowReturnedParameters(project Project, module StdModule, sign
 end 'borrowReturnedParameters'
 
 function collectReturnedParameters(module StdModule, signatures ProgramSignatures) returns ReturnedParameterArray
-	var candidates = ReturnedParameterArray.create()
+	var candidates = ReturnedParameterArray.create(0)
 	var census = RetainCensus.create()
 	var call = StdCallOperands.create()
 
@@ -120,9 +120,9 @@ function analyseReturnedParameter(module StdModule, func IrFunction, funcIndex E
 	let defs = StdValueDefs.build(module, func: func)
 	let bound = defs.valueBound()
 	let flows = valueFlowsOf(module, func: func)
-	var seeds = BoolArray.create()
+	var seeds = BoolArray.create(0)
 	seeds.growFilled(bound, value: false)
-	var carriers = BoolArray.create()
+	var carriers = BoolArray.create(0)
 	carriers.growFilled(bound, value: false)
 
 	for flow in flows 'eachFlow'
@@ -190,7 +190,7 @@ function opReadsAWantedValue(op StdOp, wanted BoolArray, reads StdValueUseSet) r
 end 'opReadsAWantedValue'
 
 function judgeLeaves(module StdModule, func IrFunction, funcIndex ElementIndex, defs StdValueDefs, wanted BoolArray, carriers BoolArray, call StdCallOperands) returns ReturnedParameterVerdict
-	var leaves = ValueIdArray.create()
+	var leaves = ValueIdArray.create(0)
 	var retainDoor = OwnershipDoor.managedRetain
 	var position = 0 as ParamCount
 
@@ -286,7 +286,7 @@ function candidateIndexByName(module StdModule, candidates ReturnedParameterArra
 end 'candidateIndexByName'
 
 function collectBorrowedReturnSites(module StdModule, candidates ReturnedParameterArray, byCallee FuncIndexByName) returns ReturnedParameterSiteArray
-	var sites = ReturnedParameterSiteArray.create()
+	var sites = ReturnedParameterSiteArray.create(0)
 	var call = StdCallOperands.create()
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
@@ -363,7 +363,7 @@ function rewriteFunction(module StdModule, funcIndex ElementIndex, candidates Re
 	var func = module.getFunc(funcIndex)
 	let bound = nextFreeValueId(module, func: func)
 	var minter = ValueMinter.resuming(bound)
-	var subst = ValueIdArray.create()
+	var subst = ValueIdArray.create(0)
 
 	for id in 0 upto bound 'identity'
 		subst.push(id)

@@ -136,11 +136,11 @@ export type MxdbgTypeTable
 	var closureEnvs as MxdbgClosureEnvMap
 
 	export static function create() returns MxdbgTypeTable
-		return Self{entries: MxdbgTypeEntryArray.create(), positionByName: MxdbgTypePositionMap.create(), sealed: false, arrayElements: MxdbgArrayElementMap.create(), closureEnvs: MxdbgClosureEnvMap.create()}
+		return Self{entries: MxdbgTypeEntryArray.create(0), positionByName: MxdbgTypePositionMap.create(), sealed: false, arrayElements: MxdbgArrayElementMap.create(), closureEnvs: MxdbgClosureEnvMap.create()}
 	end 'create'
 
 	export function closeClosureEnv(project Project, signatures ProgramSignatures, closure IrFunction)
-		var fields = MxdbgFieldDescArray.create()
+		var fields = MxdbgFieldDescArray.create(0)
 		fields.reserve(closure.closureEnvFields.count())
 
 		for field in closure.closureEnvFields 'eachCapture'
@@ -195,7 +195,7 @@ export type MxdbgTypeTable
 			return
 		end 'alreadyDescribed'
 
-		var pending = NameRoster.create()
+		var pending = NameRoster.create(0)
 		pending.push(name)
 
 		var at = 0 as ElementIndex
@@ -209,7 +209,7 @@ export type MxdbgTypeTable
 			end 'alreadyDescribed'
 
 			var desc = try self.closureEnvDescOf(next) otherwise mxdbgDescribeType(project, signatures: signatures, name: next, element: self.arrayElementOf(next))
-			var referenced = NameRoster.create()
+			var referenced = NameRoster.create(0)
 			referenced.reserve(desc.fields.count())
 
 			for field in desc.fields 'eachFieldType'
@@ -290,7 +290,7 @@ export type MxdbgTypeTable
 
 		// The names are lifted out before the map is refilled: an entry read from `entries` is an element
 		// borrow of it, and the map being rebuilt lives on the same record.
-		var names = NameRoster.create()
+		var names = NameRoster.create(0)
 		names.reserve(self.entries.count())
 
 		for entry in self.entries 'eachName'
@@ -362,11 +362,11 @@ end 'mxdbgInternedName'
 // entry to point at instead of landing on an unrelated one.
 function mxdbgDescribeType(project Project, signatures ProgramSignatures, name ByteArray, element MxdbgElementType) returns MxdbgTypeDesc
 	if element.isOf() 'aFusedArrayRecord'
-		return MxdbgTypeDesc.create(MxdbgTypeKindArray, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create(), element: element)
+		return MxdbgTypeDesc.create(MxdbgTypeKindArray, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create(0), element: element)
 	end 'aFusedArrayRecord'
 
 	if name.equals(MxdbgStringName) or name.equals(MxdbgCharacterName) 'aFusedByteRecord'
-		return MxdbgTypeDesc.create(MxdbgTypeKindString, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create())
+		return MxdbgTypeDesc.create(MxdbgTypeKindString, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create(0))
 	end 'aFusedByteRecord'
 
 	if let layout = try project.structTypes.get(name) 'aDeclaredStruct'
@@ -384,14 +384,14 @@ function mxdbgDescribeType(project Project, signatures ProgramSignatures, name B
 
 	match mxdbgPrimitiveSpellingOf(name) 'primitive'
 		notAPrimitive then break
-		width(bytes, signed) then return MxdbgTypeDesc.create(MxdbgTypeKindPrimitive, size: bytes as MxdbgIndex, align: mxdbgPrimitiveAlign(bytes), fields: MxdbgFieldDescArray.create(), flags: MxdbgTypeFlagSigned if signed else 0)
+		width(bytes, signed) then return MxdbgTypeDesc.create(MxdbgTypeKindPrimitive, size: bytes as MxdbgIndex, align: mxdbgPrimitiveAlign(bytes), fields: MxdbgFieldDescArray.create(0), flags: MxdbgTypeFlagSigned if signed else 0)
 	end 'primitive'
 
 	if project.funcSignatures.contains(name) or signatures.isFunctionAliasInAnyFile(name) 'aFunctionValue'
-		return mxdbgFunctionRecordDesc(MxdbgFieldDescArray.create())
+		return mxdbgFunctionRecordDesc(MxdbgFieldDescArray.create(0))
 	end 'aFunctionValue'
 
-	return MxdbgTypeDesc.create(MxdbgTypeKindManagedRecord, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create())
+	return MxdbgTypeDesc.create(MxdbgTypeKindManagedRecord, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create(0))
 end 'mxdbgDescribeType'
 
 function mxdbgFunctionRecordDesc(captures MxdbgFieldDescArray) returns MxdbgTypeDesc
@@ -400,7 +400,7 @@ end 'mxdbgFunctionRecordDesc'
 
 // A struct's fields in DECLARATION order, at the very offsets codegen laid them out at.
 function mxdbgDescribeStruct(project Project, signatures ProgramSignatures, layout StructLayout) returns MxdbgTypeDesc
-	var fields = MxdbgFieldDescArray.create()
+	var fields = MxdbgFieldDescArray.create(0)
 	fields.reserve(layout.fieldCount())
 
 	for i in 0 upto layout.fieldCount() 'eachField'
@@ -418,7 +418,7 @@ end 'mxdbgDescribeStruct'
 // A case's "type" is its payload: `void` for a payload-free case, that type for a single value, and the
 // managed-record placeholder for a multi-value payload, which has no single type in this model.
 function mxdbgDescribeEnum(project Project, signatures ProgramSignatures, layout EnumLayout) returns MxdbgTypeDesc
-	var fields = MxdbgFieldDescArray.create()
+	var fields = MxdbgFieldDescArray.create(0)
 	fields.reserve(layout.caseCount())
 
 	for i in 0 upto layout.caseCount() 'eachCase'
@@ -476,7 +476,7 @@ function mxdbgDescribeRangedAlias(alias RangedTypeAlias) returns MxdbgTypeDesc
 	// every such alias all 8 bytes — so no reader has to sign-extend a narrow one.
 	let signed = kind == MxdbgTypeKindIntRanged and alias.low < 0
 
-	return MxdbgTypeDesc.create(kind, size: bytes, align: bytes, fields: MxdbgFieldDescArray.create(), flags: MxdbgTypeFlagSigned if signed else 0)
+	return MxdbgTypeDesc.create(kind, size: bytes, align: bytes, fields: MxdbgFieldDescArray.create(0), flags: MxdbgTypeFlagSigned if signed else 0)
 end 'mxdbgDescribeRangedAlias'
 
 function mxdbgPrimitiveAlign(bytes MxdbgPrimitiveWidth) returns MxdbgIndex

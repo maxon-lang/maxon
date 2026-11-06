@@ -215,7 +215,7 @@ type Told
 	export var names as NameList
 
 	static function create() returns Self
-		return Self{names: NameList.create()}
+		return Self{names: NameList.create(0)}
 	end 'create'
 
 	function note(name ByteArray)
@@ -282,7 +282,7 @@ type Told
 	export var names as NameList
 
 	static function create() returns Self
-		return Self{names: NameList.create()}
+		return Self{names: NameList.create(0)}
 	end 'create'
 
 	function note(name ByteArray)
@@ -352,7 +352,7 @@ type Told
 	export var names as NameList
 
 	static function create() returns Self
-		return Self{names: NameList.create()}
+		return Self{names: NameList.create(0)}
 	end 'create'
 
 	function note(name ByteArray)
@@ -420,7 +420,7 @@ type Told
 	export var names as NameList
 
 	static function create() returns Self
-		return Self{names: NameList.create()}
+		return Self{names: NameList.create(0)}
 	end 'create'
 
 	function note(name ByteArray)
@@ -486,7 +486,7 @@ type Told
 	export var names as NameList
 
 	static function create() returns Self
-		return Self{names: NameList.create()}
+		return Self{names: NameList.create(0)}
 	end 'create'
 
 	function note(name ByteArray)

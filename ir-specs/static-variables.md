@@ -1812,7 +1812,7 @@ end 'churn'
 
 function main() returns ExitCode
 	let q = try Origins.get(0) otherwise panic("one point")
-	var words = Names.create()
+	var words = Names.create(0)
 	words.push("alpha")
 	let spent = churn(words)
 	return (q.n + spent) as ExitCode

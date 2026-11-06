@@ -19,7 +19,7 @@ not use, and `__managed_release` is the function that carries the guard and the 
 its one reference to the record on its way out, which reaches the last owner. Prints `2`.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	bytes.push(7)
 	bytes.push(9)
 	let alias = bytes

@@ -163,7 +163,7 @@ function nap(delay Milliseconds, tag Tag) returns Tag
 end 'nap'
 
 function main() returns ExitCode
-	var naps = TagPromiseArray.create()
+	var naps = TagPromiseArray.create(0)
 	naps.push(async nap(200, tag: 1))
 	naps.push(async nap(20, tag: 2))
 	naps.push(async nap(100, tag: 3))

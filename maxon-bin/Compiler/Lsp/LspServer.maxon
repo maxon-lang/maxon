@@ -464,7 +464,7 @@ end 'serverInfoNode'
 // folders settle it alone where there are any: `rootUri` carries one root and a multi-root window has
 // several, so consulting it first would leave the rest of the window out of the workspace entirely.
 function clientRootsOf(doc JsonDoc) returns LspClientRootArray
-	var roots = LspClientRootArray.create()
+	var roots = LspClientRootArray.create(0)
 	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return roots
 
 	pushWorkspaceFolderRoots(doc, container: params, key: WorkspaceFoldersKey, into: roots)
@@ -484,8 +484,8 @@ function changeWorkspaceFolders(workspace LspWorkspaceState, doc JsonDoc) throws
 	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey)
 	let event = try lspMember(doc, of: params, key: FolderEventKey)
 
-	var added = LspClientRootArray.create()
-	var removed = LspClientRootArray.create()
+	var added = LspClientRootArray.create(0)
+	var removed = LspClientRootArray.create(0)
 
 	pushWorkspaceFolderRoots(doc, container: event, key: FoldersAddedKey, into: added)
 	pushWorkspaceFolderRoots(doc, container: event, key: FoldersRemovedKey, into: removed)
@@ -571,7 +571,7 @@ end 'answerExtension'
 // from the roster while `answerFor` routes to it: both halves are a `match` over the same enum, and
 // neither compiles with an arm absent.
 function servedMethods() returns LspMethodArray
-	var served = LspMethodArray.create()
+	var served = LspMethodArray.create(0)
 
 	for area in LspArea.allCases 'eachArea'
 		for method in areaServedMethods(area) 'eachMethod'

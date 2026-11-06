@@ -10,7 +10,7 @@ let BreakNamesAFileByItsMostSpecificSpellingContinuesPastEveryStop = 5
 
 test 'a break target names a file by the most specific spelling it was given'
 	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: FileSpellingCaseLabel, fixture: TwoDirsFixtureName)
-	let build = spawnBuild(staged, staged: staged, output: staged.join(OutputFileStem), label: TwoDirsFixtureName, extraArguments: StringArray.create())
+	let build = spawnBuild(staged, staged: staged, output: staged.join(OutputFileStem), label: TwoDirsFixtureName, extraArguments: StringArray.create(0))
 
 	if build.exitCode() != 0 'didNotBuild'
 		panic("break-names-a-file-by-its-most-specific-spelling: the gate could not run — the staged two-directory project exited {build.exitCode()}. It wrote to stderr: {build.stderr}")
@@ -47,13 +47,13 @@ test 'a break target names a file by the most specific spelling it was given'
 end 'a break target names a file by the most specific spelling it was given'
 
 function runSession(executable FilePath, staged FilePath, commands StringArray) returns JsonDocArray
-	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create())
+	let session = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(commands), extraOptions: StringArray.create(0))
 
 	return batchEvents(session.stdout)
 end 'runSession'
 
 function stopsOutside(events JsonDocArray, expected String) returns StringArray
-	var outside = StringArray.create()
+	var outside = StringArray.create(0)
 
 	for stop in eventsOfKind(events, kind: StopEventName) 'eachStop'
 		let named = textOf(stop, node: stop.root, key: FunctionKey)

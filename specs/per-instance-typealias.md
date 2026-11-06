@@ -522,7 +522,7 @@ extension Holder
 	export typealias Bag = Array with Num
 
 	export function fill() returns Bag
-		var b = Bag.create()
+		var b = Bag.create(0)
 		b.push(self.v)
 		b.push(self.v)
 		return b
@@ -838,7 +838,7 @@ export extension Seq
 	export typealias Items = Array with Item
 
 	export function all() returns Items
-		return Items.create()
+		return Items.create(0)
 	end 'all'
 end 'Seq'
 
@@ -847,7 +847,7 @@ export extension Seq
 	export typealias Items = Array with Item
 
 	export function again() returns Items
-		return Items.create()
+		return Items.create(0)
 	end 'again'
 end 'Seq'
 
@@ -1134,7 +1134,7 @@ export extension Seq
 	export typealias Items = Array with Item
 
 	export function all() returns Items
-		return Items.create()
+		return Items.create(0)
 	end 'all'
 end 'Seq'
 
@@ -1223,7 +1223,7 @@ export extension Seq where Item is Hashable
 	export typealias Items = Array with Item
 
 	export function hashedItems() returns Items
-		return Items.create()
+		return Items.create(0)
 	end 'hashedItems'
 end 'Seq'
 
@@ -1427,7 +1427,7 @@ type Crate
 	end 'create'
 
 	function items() returns Items
-		return Items.create()
+		return Items.create(0)
 	end 'items'
 end 'Crate'
 
@@ -1717,7 +1717,7 @@ export extension Seq
 	export typealias Wrapped = Array with Item
 
 	export function wrapped() returns Wrapped
-		return Wrapped.create()
+		return Wrapped.create(0)
 	end 'wrapped'
 end 'Seq'
 
@@ -1856,13 +1856,14 @@ error E3005: <fragment>:31:13: Value 50 is outside the range of 'Idx' (int(0 to 
 The control: `Plain` declares no `Items`, so it receives the extension's `Array`.
 ```maxon
 typealias Digit = int(0 to 9)
+typealias Wide = int(0 to 99)
 
 interface Seq uses Item
 	function first() returns Item
 end 'Seq'
 
 type Box implements Seq with Digit
-	typealias Items = List with Digit
+	typealias Items = Array with Wide
 	export var n as Digit
 
 	static function create(n Digit) returns Self
@@ -1890,7 +1891,7 @@ extension Seq
 	typealias Items = Array with Item
 
 	function items() returns Items
-		return Items.create()
+		return Items.create(0)
 	end 'items'
 end 'Seq'
 
@@ -1898,7 +1899,7 @@ function main() returns ExitCode
 	let box = Box.create(3)
 	let plain = Plain.create(4)
 	var listed = box.items()
-	listed.prepend(box.first())
+	listed.push(box.first() as Wide)
 	var arrayed = plain.items()
 	arrayed.push(plain.first())
 	return (listed.count() + arrayed.count()) as ExitCode
@@ -1952,7 +1953,7 @@ typealias Number = int(0 to 99)
 typealias Numbers = Array with Number
 
 function main() returns ExitCode
-	var xs = Numbers.create()
+	var xs = Numbers.create(0)
 	xs.push(3)
 	xs.push(1)
 
@@ -2029,7 +2030,7 @@ typealias Number = int(0 to 99)
 typealias Numbers = Array with Number
 
 function main() returns ExitCode
-	var xs = Numbers.create()
+	var xs = Numbers.create(0)
 	let marker = 7 as Byte
 
 	for i in 0 upto 100 'fill'
@@ -2073,7 +2074,7 @@ typealias Number = int(0 to 99)
 typealias Numbers = Array with Number
 
 function main() returns ExitCode
-	var xs = Numbers.create()
+	var xs = Numbers.create(0)
 	xs.push(1)
 	return xs.narrow(50) as ExitCode
 end 'main'
@@ -2106,7 +2107,7 @@ typealias Number = int(0 to 99)
 typealias Numbers = Array with Number
 
 function main() returns ExitCode
-	var xs = Numbers.create()
+	var xs = Numbers.create(0)
 	xs.push(3)
 	xs.push(1)
 
@@ -2154,7 +2155,7 @@ type Zebra uses Item implements Iterable with (Item, ZebraCursor)
 	var items as ZebraItems
 
 	static function make() returns Self
-		return Self{items: ZebraItems.create()}
+		return Self{items: ZebraItems.create(0)}
 	end 'make'
 
 	function add(item Item)
@@ -2217,7 +2218,7 @@ type Zebra uses Item implements Iterable with (Item, ZebraCursor)
 	var items as ZebraItems
 
 	static function make() returns Self
-		return Self{items: ZebraItems.create()}
+		return Self{items: ZebraItems.create(0)}
 	end 'make'
 
 	function add(item Item)
@@ -2235,7 +2236,7 @@ function main() returns ExitCode
 	var zebra = QuantumZebra.make()
 	zebra.add(2)
 
-	var xs = Quantums.create()
+	var xs = Quantums.create(0)
 	xs.push(3)
 	xs.push(1)
 
@@ -2261,7 +2262,7 @@ library's, an `Array`.
 ```maxon
 extension Array
 	function spare() returns ElementArray
-		return ElementArray.create()
+		return ElementArray.create(0)
 	end 'spare'
 end 'Array'
 
@@ -2269,7 +2270,7 @@ typealias Number = int(0 to 99)
 typealias Numbers = Array with Number
 
 function main() returns ExitCode
-	var xs = Numbers.create()
+	var xs = Numbers.create(0)
 	var zs = xs.spare()
 	zs.push(4)
 	return zs.count() as ExitCode
@@ -2352,7 +2353,7 @@ export type Holder
 	end 'create'
 
 	export function fill() returns Bag
-		var b = Bag.create()
+		var b = Bag.create(0)
 		b.push(self.v)
 		return b
 	end 'fill'
@@ -2360,7 +2361,7 @@ end 'Holder'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var b = Bag.create()
+	var b = Bag.create(0)
 	b.push(20)
 	b.push(22)
 	let h = Holder.create(1)
@@ -2396,7 +2397,7 @@ export type Holder
 	end 'create'
 
 	export function fill() returns Bag
-		var b = Bag.create()
+		var b = Bag.create(0)
 		b.push(self.v)
 		return b
 	end 'fill'
@@ -2416,7 +2417,7 @@ type Keeper
 end 'Keeper'
 
 function makeBag() returns Bag
-	var b = Bag.create()
+	var b = Bag.create(0)
 	b.push(20)
 	b.push(22)
 	return b
@@ -2450,7 +2451,7 @@ end 'main'
 whole program, so a user file writes it bare. The compiler's own spec harness spells it exactly this way.
 ```maxon
 function main() returns ExitCode
-	var paths = FilePathArray.create()
+	var paths = FilePathArray.create(0)
 	paths.push(try FilePath.from("a") otherwise panic("unreachable: 'a' is a valid path"))
 	paths.push(try FilePath.from("b") otherwise panic("unreachable: 'b' is a valid path"))
 	return paths.count() as ExitCode
@@ -2481,7 +2482,7 @@ export type Holder uses T
 	end 'create'
 
 	export function fill() returns Bag
-		var b = Bag.create()
+		var b = Bag.create(0)
 		b.push(self.v)
 		return b
 	end 'fill'
@@ -2524,7 +2525,7 @@ export type HolderA
 end 'HolderA'
 
 export function fromA() returns Num
-	var b = Bag.create()
+	var b = Bag.create(0)
 	b.push(20)
 	return try b.get(0) otherwise 0
 end 'fromA'
@@ -2541,7 +2542,7 @@ export type HolderB
 end 'HolderB'
 
 export function fromB() returns Num
-	var b = Bag.create()
+	var b = Bag.create(0)
 	b.push("xx")
 	let first = try b.get(0) otherwise ""
 	return first.count() as Num

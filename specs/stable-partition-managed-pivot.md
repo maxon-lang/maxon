@@ -162,7 +162,7 @@ function pad(n Small) returns String
 end 'pad'
 
 function lensOf(a Small, b Small, c Small, d Small, e Small, f Small) returns LenArray
-	var out = LenArray.create()
+	var out = LenArray.create(0)
 	out.push(a)
 	out.push(b)
 	out.push(c)
@@ -173,13 +173,13 @@ function lensOf(a Small, b Small, c Small, d Small, e Small, f Small) returns Le
 end 'lensOf'
 
 function run(label String, lens LenArray, pivotIndex Small) returns String
-	var a = StrArray.create()
-	var scratch = StrArray.create()
+	var a = StrArray.create(0)
+	var scratch = StrArray.create(0)
 	for i in 0 upto lens.count() 'build'
 		a.push(pad(try lens.get(i) otherwise 1))
 		scratch.push(pad(1))
 	end 'build'
-	var hold = StrArray.create()
+	var hold = StrArray.create(0)
 	let p = a.stablePartition(0, hi: lens.count() as Small, pivotIndex: pivotIndex, scratch: scratch, pivotHold: hold, cmp: function(x String, y String) gives x.byteLength().compare(y.byteLength()))
 	var out = "{label} p={p} lens="
 	for j in 0 upto lens.count() 'show'
@@ -320,8 +320,8 @@ function tagged(key Small, tag Small) returns String
 end 'tagged'
 
 function main() returns ExitCode
-	var a = StrArray.create()
-	var scratch = StrArray.create()
+	var a = StrArray.create(0)
+	var scratch = StrArray.create(0)
 	a.push(tagged(10, tag: 0))
 	a.push(tagged(5, tag: 1))
 	a.push(tagged(10, tag: 2))
@@ -331,7 +331,7 @@ function main() returns ExitCode
 	for f in 0 upto 6 'fillScratch'
 		scratch.push(tagged(3, tag: f))
 	end 'fillScratch'
-	var hold = StrArray.create()
+	var hold = StrArray.create(0)
 	let p = a.stablePartition(0, hi: 6, pivotIndex: 0, scratch: scratch, pivotHold: hold, cmp: function(x String, y String) gives x.byteLength().compare(y.byteLength()))
 	var tags = ""
 	var lens = ""

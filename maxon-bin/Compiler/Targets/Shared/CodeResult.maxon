@@ -277,10 +277,10 @@ export typealias JumpTablePendingArray = Array with JumpTablePending
 // crux note asked to expose to concat: the chunk's own `BlockOffsetTable`, read per slot. Shared by the x64 and
 // arm64 chunk emitters.
 export function resolveJumpTableRelocs(jumpTables JumpTablePendingArray, blockOffsets BlockOffsetTable) returns JumpTableRelocArray
-	var out = JumpTableRelocArray.create()
+	var out = JumpTableRelocArray.create(0)
 
 	for pending in jumpTables 'eachTable'
-		var targetOffsets = CodeOffsetArray.create()
+		var targetOffsets = CodeOffsetArray.create(0)
 
 		for target in pending.caseTargets 'eachSlot'
 			targetOffsets.push(try blockOffsets.get(target) otherwise panic("resolveJumpTableRelocs: jump-table slot targets block {target}, which was never laid out in this chunk — every case target is a block in this function"))
@@ -295,7 +295,7 @@ end 'resolveJumpTableRelocs'
 // One jump-table reloc with its per-slot target offsets shifted from chunk-local to whole-`.text` by the
 // chunk's start. Shared by the x64 and arm64 concat passes (the reloc format is target-neutral).
 export function rebaseJumpTableReloc(reloc JumpTableReloc, funcStart CodeOffset) returns JumpTableReloc
-	var rebased = CodeOffsetArray.create()
+	var rebased = CodeOffsetArray.create(0)
 
 	for off in reloc.targetTextOffsets 'each'
 		rebased.push(funcStart + off)
@@ -415,7 +415,7 @@ export type DebugLineRowBuilder
 	var lines as SpanLineTable
 
 	export static function forFunction(module TargetModule, func IrFunction, armed bool, encoding FunctionEncodingFacts) returns DebugLineRowBuilder
-		return Self{rows: DebugLineRowArray.create(), last: NoSpanId, lastSite: InlineSiteRef.none, openSite: InlineSiteRef.none, armed: armed, entering: false, atBlockStart: false, branchTargets: lineEntryColumn(module, func: func, encoding: encoding) if armed else BoolArray.create(), lines: encoding.lines}
+		return Self{rows: DebugLineRowArray.create(0), last: NoSpanId, lastSite: InlineSiteRef.none, openSite: InlineSiteRef.none, armed: armed, entering: false, atBlockStart: false, branchTargets: lineEntryColumn(module, func: func, encoding: encoding) if armed else BoolArray.create(0), lines: encoding.lines}
 	end 'forFunction'
 
 	export function openBlock(blockId BlockId, site InlineSiteRef)
@@ -506,7 +506,7 @@ export type DebugRunOffsets
 	end 'note'
 
 	export function resolve(func IrFunction, blockStarts BlockOffsetTable, blockEnds BlockOffsetTable) returns DebugLocalCodeRangeArray
-		var ranges = DebugLocalCodeRangeArray.create()
+		var ranges = DebugLocalCodeRangeArray.create(0)
 
 		if not self.armed 'nothingToResolve'
 			return ranges
@@ -531,8 +531,8 @@ export type DebugRunOffsets
 
 	function resolveSpans(func IrFunction, blockStarts BlockOffsetTable, blockEnds BlockOffsetTable, into DebugLocalCodeRangeArray)
 		let rows = func.debugLocalSpans
-		var viewOfSpan = CsrColumn.create()
-		var spanIndices = CsrColumn.create()
+		var viewOfSpan = CsrColumn.create(0)
+		var spanIndices = CsrColumn.create(0)
 
 		for (iter, span) in rows.spans.withIterator() 'eachSpan'
 			viewOfSpan.push(span.view as CsrIndex)
@@ -795,22 +795,22 @@ export type FunctionCodeChunk
 	export static function create(funcName ByteArray) returns FunctionCodeChunk
 		return Self{
 			funcName: funcName,
-			code: ByteArray.create(),
+			code: ByteArray.create(0),
 			entryOffset: 0,
-			callFixups: CallFixupArray.create(),
-			rdataRelocs: RdataRelocationArray.create(),
-			iatRelocs: RelocationArray.create(),
-			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
-			jumpTableRelocs: JumpTableRelocArray.create(),
-			lineRows: DebugLineRowArray.create(),
-			localRanges: DebugLocalCodeRangeArray.create(),
-			covPointOffsets: CovPointOffsetArray.create(),
+			callFixups: CallFixupArray.create(0),
+			rdataRelocs: RdataRelocationArray.create(0),
+			iatRelocs: RelocationArray.create(0),
+			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(0),
+			jumpTableRelocs: JumpTableRelocArray.create(0),
+			lineRows: DebugLineRowArray.create(0),
+			localRanges: DebugLocalCodeRangeArray.create(0),
+			covPointOffsets: CovPointOffsetArray.create(0),
 			frameSize: 0,
 			spillSlotBase: 0,
 			frameLinkBytes: 0,
 			paramCount: 0,
-			inlineSites: InlineSiteArray.create(),
-			inlineRanges: InlineRangeArray.create(),
+			inlineSites: InlineSiteArray.create(0),
+			inlineRanges: InlineRangeArray.create(0),
 			asyncPreemptible: false,
 			asyncUnsafePrefixBytes: 0,
 			compilerScaffolding: true,
@@ -832,17 +832,17 @@ export type FunctionCodeChunk
 			callFixups: callFixups,
 			rdataRelocs: rdataRelocs,
 			iatRelocs: iatRelocs,
-			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
-			jumpTableRelocs: JumpTableRelocArray.create(),
-			lineRows: DebugLineRowArray.create(),
-			localRanges: DebugLocalCodeRangeArray.create(),
-			covPointOffsets: CovPointOffsetArray.create(),
+			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(0),
+			jumpTableRelocs: JumpTableRelocArray.create(0),
+			lineRows: DebugLineRowArray.create(0),
+			localRanges: DebugLocalCodeRangeArray.create(0),
+			covPointOffsets: CovPointOffsetArray.create(0),
 			frameSize: 0,
 			spillSlotBase: 0,
 			frameLinkBytes: 0,
 			paramCount: 0,
-			inlineSites: InlineSiteArray.create(),
-			inlineRanges: InlineRangeArray.create(),
+			inlineSites: InlineSiteArray.create(0),
+			inlineRanges: InlineRangeArray.create(0),
 			asyncPreemptible: false,
 			asyncUnsafePrefixBytes: 0,
 			compilerScaffolding: true,
@@ -953,17 +953,17 @@ export type CodeResult
 			rdata: rdata,
 			rdataRelocations: rdataRelocations,
 			symdata: symdata,
-			dataPrelude: ByteArray.create(),
-			debugSymbols: DebugSymbolArray.create(),
-			wasmCoreModule: ByteArray.create(),
-			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
-			jumpTableRelocs: JumpTableRelocArray.create(),
-			codeChunks: FunctionCodeChunkArray.create(),
-			debugFunctions: DebugFunctionRangeArray.create(),
-			debugLineRows: DebugLineRowArray.create(),
-			covPointOffsets: CovPointOffsetArray.create(),
-			inlineSites: InlineSiteArray.create(),
-			inlineRanges: InlineRangeArray.create()
+			dataPrelude: ByteArray.create(0),
+			debugSymbols: DebugSymbolArray.create(0),
+			wasmCoreModule: ByteArray.create(0),
+			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create(0),
+			jumpTableRelocs: JumpTableRelocArray.create(0),
+			codeChunks: FunctionCodeChunkArray.create(0),
+			debugFunctions: DebugFunctionRangeArray.create(0),
+			debugLineRows: DebugLineRowArray.create(0),
+			covPointOffsets: CovPointOffsetArray.create(0),
+			inlineSites: InlineSiteArray.create(0),
+			inlineRanges: InlineRangeArray.create(0)
 		}
 	end 'create'
 
@@ -974,26 +974,26 @@ export type CodeResult
 	// retains it. `writeWasm` reads `wasmCoreModule` and wraps it into a Preview2 component.
 	export static function forWasm(stdModule StdModule, wasmCoreModule ByteArray) returns CodeResult
 		return Self{
-			code: ByteArray.create(),
+			code: ByteArray.create(0),
 			mainCallFixupOffset: 0,
-			relocations: RelocationArray.create(),
+			relocations: RelocationArray.create(0),
 			globalData: GlobalDataTable.create(),
 			targetModule: TargetModule.create(),
 			stdModule: stdModule,
-			rdata: ByteArray.create(),
-			rdataRelocations: RdataRelocationArray.create(),
-			symdata: ByteArray.create(),
-			dataPrelude: ByteArray.create(),
-			debugSymbols: DebugSymbolArray.create(),
+			rdata: ByteArray.create(0),
+			rdataRelocations: RdataRelocationArray.create(0),
+			symdata: ByteArray.create(0),
+			dataPrelude: ByteArray.create(0),
+			debugSymbols: DebugSymbolArray.create(0),
 			wasmCoreModule: wasmCoreModule,
-			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
-			jumpTableRelocs: JumpTableRelocArray.create(),
-			codeChunks: FunctionCodeChunkArray.create(),
-			debugFunctions: DebugFunctionRangeArray.create(),
-			debugLineRows: DebugLineRowArray.create(),
-			covPointOffsets: CovPointOffsetArray.create(),
-			inlineSites: InlineSiteArray.create(),
-			inlineRanges: InlineRangeArray.create()
+			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create(0),
+			jumpTableRelocs: JumpTableRelocArray.create(0),
+			codeChunks: FunctionCodeChunkArray.create(0),
+			debugFunctions: DebugFunctionRangeArray.create(0),
+			debugLineRows: DebugLineRowArray.create(0),
+			covPointOffsets: CovPointOffsetArray.create(0),
+			inlineSites: InlineSiteArray.create(0),
+			inlineRanges: InlineRangeArray.create(0)
 		}
 	end 'forWasm'
 

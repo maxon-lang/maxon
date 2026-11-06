@@ -30,7 +30,7 @@ end 'CharClass'
 typealias Regs = Array with Reg
 
 function main() returns ExitCode
-	var pushed = Regs.create()
+	var pushed = Regs.create(0)
 	pushed.push(CharClass.tab)
 	return pushed.count() as ExitCode
 end 'main'

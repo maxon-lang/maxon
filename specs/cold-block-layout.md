@@ -56,8 +56,8 @@ function copyTail(source WordArray, scratch WordArray, n Count)
 end 'copyTail'
 
 function main() returns ExitCode
-	var source = WordArray.create()
-	var scratch = WordArray.create()
+	var source = WordArray.create(0)
+	var scratch = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		source.push(i * 3)
 		scratch.push(0)
@@ -90,7 +90,7 @@ function clampedSum(a WordArray, n Count) returns Word
 end 'clampedSum'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 1 to 5 'seed'
 		a.push(i)
 	end 'seed'
@@ -121,7 +121,7 @@ function grid(a WordArray, rows Word, width Word) returns Word
 end 'grid'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 7 'seed'
 		a.push(i)
 	end 'seed'
@@ -149,7 +149,7 @@ function walkDown(a WordArray, start Word) returns Word
 end 'walkDown'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 1 to 3 'seed'
 		a.push(i)
 	end 'seed'
@@ -182,7 +182,7 @@ function total(a WordArray, n Count) returns Word
 end 'total'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 1 to 5 'seed'
 		a.push(i)
 	end 'seed'

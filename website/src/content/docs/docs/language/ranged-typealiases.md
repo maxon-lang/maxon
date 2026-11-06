@@ -128,7 +128,7 @@ function takesBlock(b BlockId) returns BlockId
 end 'takesBlock'
 
 function main() returns ExitCode
-	var rows = RowArray.create()
+	var rows = RowArray.create(0)
 	rows.push(4)
 	rows.push(9)
 	let head = 1 as LoopHead

@@ -58,7 +58,7 @@ Every field must have a value when a record is constructed. A field is initializ
    comes from the default, which takes one of three shapes:
    - a `true`/`false` literal (`bool`) or a string literal (`String`): `var enabled = true`;
    - `Type.member` or `Type.member(...)` — an enum case or a static factory — typed `Type` and checked
-     against it: `var level = Priority.low`, `var items = IntArray.create()`;
+     against it: `var level = Priority.low`, `var items = IntArray.create(0)`;
    - an expression whose outermost node is a cast, typed by the cast: `var count = 0 as Tally`,
      `var span = NoSpan as SpanId`, `var total = (1 + 2) as Tally`.
 

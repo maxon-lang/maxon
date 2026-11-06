@@ -85,7 +85,7 @@ export type DapAnswers
 	export var text as StringArray
 
 	export static function of(replies DebugReplyArray) returns DapAnswers
-		var answers = Self{movements: DapMovementArray.create(), failures: StringArray.create(), breakpoints: DebugBreakpointAnswerArray.create(), frames: DapFrameListing.none, roster: DapRosterAnswer.none, trees: DebugValueTreeArray.create(), text: StringArray.create()}
+		var answers = Self{movements: DapMovementArray.create(0), failures: StringArray.create(0), breakpoints: DebugBreakpointAnswerArray.create(0), frames: DapFrameListing.none, roster: DapRosterAnswer.none, trees: DebugValueTreeArray.create(0), text: StringArray.create(0)}
 
 		for reply in replies 'eachReply'
 			answers.note(reply)
@@ -346,7 +346,7 @@ export function dapLocalsScopesBody(doc JsonDoc, reference DapNumber) returns Js
 	scope.addNumber(doc, key: VariablesReferenceKey, value: reference as JsonFloat)
 	scope.addBool(doc, key: ExpensiveKey, value: false)
 
-	var scopes = JsonNodeIdArray.create()
+	var scopes = JsonNodeIdArray.create(0)
 	scopes.push(scope.build(doc))
 
 	var body = JsonObjectBuilder.create()
@@ -378,7 +378,7 @@ export function dapEvaluateBody(doc JsonDoc, result String, reference DapNumber)
 end 'dapEvaluateBody'
 
 export function dapThreadsBody(doc JsonDoc, rows DebugThreadRowArray) returns JsonNodeId
-	var threads = JsonNodeIdArray.create()
+	var threads = JsonNodeIdArray.create(0)
 
 	for row in rows 'eachRow'
 		threads.push(threadNode(doc, id: dapGreenThreadId(row.id), name: threadName(row)))
@@ -392,11 +392,11 @@ export function dapThreadsBody(doc JsonDoc, rows DebugThreadRowArray) returns Js
 end 'dapThreadsBody'
 
 export function dapNoThreadsBody(doc JsonDoc) returns JsonNodeId
-	return listBody(doc, key: ThreadsKey, nodes: JsonNodeIdArray.create())
+	return listBody(doc, key: ThreadsKey, nodes: JsonNodeIdArray.create(0))
 end 'dapNoThreadsBody'
 
 export function dapNoScopesBody(doc JsonDoc) returns JsonNodeId
-	return listBody(doc, key: ScopesKey, nodes: JsonNodeIdArray.create())
+	return listBody(doc, key: ScopesKey, nodes: JsonNodeIdArray.create(0))
 end 'dapNoScopesBody'
 
 function listBody(doc JsonDoc, key String, nodes JsonNodeIdArray) returns JsonNodeId

@@ -433,7 +433,7 @@ function ownClamp(i ElementIndex) returns ElementIndex
 end 'ownClamp'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.resize(20)
 	try a.set(9, value: 42) otherwise ignore
 	print("{try a.get(9) otherwise 0} {ownClamp(3)} {libClamp()}\n")
@@ -458,7 +458,7 @@ typealias IntArray = Array with Integer
 typealias ElementIndex = int(0 to 3)
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.resize(20)
 	try a.set(9, value: 42) otherwise ignore
 	let mine = 9 as ElementIndex
@@ -486,7 +486,7 @@ export typealias High = int(1000 to 2000)
 typealias Slots = Array with High
 
 export function fromHigh() returns High
-	var w = Slots.create()
+	var w = Slots.create(0)
 	w.push(1500)
 	return try w.get(0) otherwise 1000
 end 'fromHigh'
@@ -496,7 +496,7 @@ typealias Low = int(0 to 100)
 typealias Slots = Array with Low
 
 function main() returns ExitCode
-	var w = Slots.create()
+	var w = Slots.create(0)
 	w.push(40)
 	return (((fromHigh() / 100) as Low) + (try w.get(0) otherwise 0)) as ExitCode
 end 'main'
@@ -521,7 +521,7 @@ typealias Byte = int(300 to 1000)
 typealias Bytes = Array with Byte
 
 export function wide(v Integer) returns Integer
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(v as Byte)
 	return try b.get(0) otherwise 300
 end 'wide'
@@ -533,7 +533,7 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	let two = 200 as Byte
 	b.push(two)
 	return (try b.get(0) otherwise 0) + ((wide(900) / 100) as Byte)
@@ -559,7 +559,7 @@ type Words
 	export var items as Bag
 
 	static function create() returns Words
-		var b = Bag.create()
+		var b = Bag.create(0)
 		b.push("hi")
 		return Words{items: b}
 	end 'create'
@@ -578,7 +578,7 @@ type Nums
 	export var items as Bag
 
 	static function create() returns Nums
-		var b = Bag.create()
+		var b = Bag.create(0)
 		b.push(7)
 		return Nums{items: b}
 	end 'create'
@@ -605,7 +605,7 @@ export typealias Tally = int(0 to 1000)
 typealias Counts = Array with Tally
 
 export function fromA() returns Tally
-	var c = Counts.create()
+	var c = Counts.create(0)
 	c.push(40)
 	return try c.get(0) otherwise 0
 end 'fromA'
@@ -614,7 +614,7 @@ end 'fromA'
 typealias Counts = Array with Tally
 
 function main() returns ExitCode
-	var c = Counts.create()
+	var c = Counts.create(0)
 	c.push(2)
 	return fromA() + (try c.get(0) otherwise 0)
 end 'main'
@@ -637,11 +637,11 @@ typealias Slots = Array with High
 typealias Grid = Array with Slots
 
 export function fromHigh() returns High
-	var g = Grid.create()
-	var row = Slots.create()
+	var g = Grid.create(0)
+	var row = Slots.create(0)
 	row.push(1500)
 	g.push(row)
-	view back = try g.get(0) otherwise Slots.create()
+	view back = try g.get(0) otherwise Slots.create(0)
 	return try back.get(0) otherwise 1000
 end 'fromHigh'
 
@@ -651,11 +651,11 @@ typealias Slots = Array with Low
 typealias Grid = Array with Slots
 
 function main() returns ExitCode
-	var g = Grid.create()
-	var row = Slots.create()
+	var g = Grid.create(0)
+	var row = Slots.create(0)
 	row.push(40)
 	g.push(row)
-	view back = try g.get(0) otherwise Slots.create()
+	view back = try g.get(0) otherwise Slots.create(0)
 	return (((fromHigh() / 100) as Low) + (try back.get(0) otherwise 0)) as ExitCode
 end 'main'
 ```
@@ -683,7 +683,7 @@ typealias Byte = int(300 to 1000)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	let v = 500 as Byte
 	b.push(v)
 	let r = (try b.get(0) otherwise 0) / 100
@@ -717,7 +717,7 @@ union WordBox
 end 'WordBox'
 
 export function words() returns ExitCode
-	var b = Bag.create()
+	var b = Bag.create(0)
 	b.push("hi")
 	let w = WordBox.filled(b)
 	return match w 'm'
@@ -736,7 +736,7 @@ union NumBox
 end 'NumBox'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	var b = Bag.create(0)
 	b.push(7)
 	let n = NumBox.filled(b)
 	let mine = match n 'm'
@@ -767,14 +767,14 @@ typealias Elem = int(0 to 100)
 typealias Slots = Array with Elem
 
 module function fromPriv() returns ExitCode
-	var w = Slots.create()
+	var w = Slots.create(0)
 	w.push(40)
 	return try w.get(0) otherwise 0
 end 'fromPriv'
 
 // --- file: lib/main.maxon
 function main() returns ExitCode
-	var w = Slots.create()
+	var w = Slots.create(0)
 	w.push(1500)
 	let high = (try w.get(0) otherwise 1000) / 100
 	return (high as ExitCode) + fromPriv()
@@ -810,7 +810,7 @@ typealias P = Array with High
 typealias Q = Array with P
 
 function main() returns ExitCode
-	var q = Q.create()
+	var q = Q.create(0)
 	return fromA() + (q.count() as ExitCode)
 end 'main'
 ```
@@ -836,7 +836,7 @@ typealias High = int(1000 to 2000)
 typealias B = Array with High
 
 function main() returns ExitCode
-	var b = B.create()
+	var b = B.create(0)
 	return fromA() + (b.count() as ExitCode)
 end 'main'
 ```
@@ -921,7 +921,7 @@ typealias Bag = Array with High
 typealias BB = Box with Bag
 
 export function fromHigh() returns Integer
-	var b = Bag.create()
+	var b = Bag.create(0)
 	b.push(1500)
 	let box = BB.create(b)
 	return 1 if box.value.count() == 1 else 0
@@ -934,10 +934,10 @@ typealias Bag = Array with Low
 typealias BB = Box with Bag
 
 function main() returns ExitCode
-	var b = Bag.create()
+	var b = Bag.create(0)
 	b.push(40)
 	var box = BB.create(b)
-	box.swap(Bag.create())
+	box.swap(Bag.create(0))
 	return fromHigh() - 1
 end 'main'
 ```
@@ -972,7 +972,7 @@ export type Container uses Element
 	export var items as ElementArray
 
 	export static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	export function push(item Element)
@@ -997,7 +997,7 @@ typealias Bag = Array with Handle
 typealias NestedContainer = Container with Bag
 
 export function useHandles() returns Integer
-	var sa = Bag.create()
+	var sa = Bag.create(0)
 	sa.push(Handle.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 0))
 	var nc = NestedContainer.create()
 	nc.push(sa)
@@ -1011,7 +1011,7 @@ typealias Bag = Array with Low
 typealias NestedContainer = Container with Bag
 
 function main() returns ExitCode
-	var sa = Bag.create()
+	var sa = Bag.create(0)
 	sa.push(7)
 	var nc = NestedContainer.create()
 	nc.push(sa)
@@ -1160,7 +1160,7 @@ public type Keeper
 	var p as Pair
 
 	export static function make() returns Self
-		var b = Bag.create()
+		var b = Bag.create(0)
 		b.push(7)
 		return Self{p: (b, 1)}
 	end 'make'
@@ -1178,7 +1178,7 @@ end 'useA'
 typealias Bag = Array with String
 
 export function useB() returns Integer
-	var b = Bag.create()
+	var b = Bag.create(0)
 	b.push("x")
 	return b.count()
 end 'useB'
@@ -1209,7 +1209,7 @@ neither the `otherwise ""` nor the `byteLength()` would compile.
 ```maxon
 // --- file: adef.maxon
 export function makeBag() returns StringArray
-	var b = StringArray.create()
+	var b = StringArray.create(0)
 	b.push("four")
 	b.push("nine")
 	return b
@@ -1220,7 +1220,7 @@ typealias Num = int(0 to 125)
 typealias StringArray = Array with Num
 
 function main() returns ExitCode
-	var mine = StringArray.create()
+	var mine = StringArray.create(0)
 	mine.push(4)
 	var theirs = makeBag()
 	let word = try theirs.get(1) otherwise ""
@@ -1240,7 +1240,7 @@ export typealias Num = int(0 to 125)
 export typealias Bag = Array with Num
 
 export function makeBag() returns Bag
-	var b = Bag.create()
+	var b = Bag.create(0)
 	b.push(4)
 	b.push(9)
 	return b
@@ -1250,7 +1250,7 @@ end 'makeBag'
 typealias Bag = Array with String
 
 function main() returns ExitCode
-	var mine = Bag.create()
+	var mine = Bag.create(0)
 	mine.push("x")
 	var theirs = makeBag()
 	return ((try theirs.get(1) otherwise 0) * 10 + (mine.count() as Num)) as ExitCode
@@ -1285,7 +1285,7 @@ public type Holder
 	var q as Pair
 
 	export static function make() returns Self
-		var b = Bag.create()
+		var b = Bag.create(0)
 		b.push("xy")
 		return Self{q: (b, 1)}
 	end 'make'
@@ -1314,7 +1314,7 @@ public type Keeper
 	var p as Pair
 
 	export static function make() returns Self
-		var b = Bag.create()
+		var b = Bag.create(0)
 		b.push(7)
 		return Self{p: (b, 1)}
 	end 'make'
@@ -1562,7 +1562,7 @@ end 'SlotA'
 
 export function alphaSide()
 	let h = HolderA.create()
-	var xs = PairsA.create()
+	var xs = PairsA.create(0)
 	xs.push((4, 1))
 	view e = try xs.get(0) otherwise return
 	let b = BoxA.create((6, 3))
@@ -1599,7 +1599,7 @@ end 'SlotG'
 
 export function gammaSide()
 	let h = HolderG.create()
-	var xs = PairsG.create()
+	var xs = PairsG.create(0)
 	xs.push(("c", "d"))
 	view e = try xs.get(0) otherwise return
 	let b = BoxG.create(("e", "f"))
@@ -1670,7 +1670,7 @@ end 'SlotG'
 
 export function gammaSide()
 	let h = HolderG.create()
-	var xs = PairsG.create()
+	var xs = PairsG.create(0)
 	xs.push(("c", "d"))
 	view e = try xs.get(0) otherwise return
 	let b = BoxG.create(("e", "f"))
@@ -1707,7 +1707,7 @@ end 'SlotA'
 
 export function alphaSide()
 	let h = HolderA.create()
-	var xs = PairsA.create()
+	var xs = PairsA.create(0)
 	xs.push((4, 1))
 	view e = try xs.get(0) otherwise return
 	let b = BoxA.create((6, 3))
@@ -2101,7 +2101,7 @@ typealias Measure = int(0 to 100)
 typealias IntMeasures = Array with Measure
 
 export function sumA() returns ExitCode
-	var xs = IntMeasures.create()
+	var xs = IntMeasures.create(0)
 	xs.push(40 as Measure)
 	xs.push(2 as Measure)
 	var total = 0 as Measure
@@ -2116,7 +2116,7 @@ typealias Measure = float(0.0 to 1.0)
 typealias FloatMeasures = Array with Measure
 
 export function sumB() returns ExitCode
-	var xs = FloatMeasures.create()
+	var xs = FloatMeasures.create(0)
 	xs.push(0.25 as Measure)
 	xs.push(0.25 as Measure)
 	var total = 0.0 as Measure
@@ -2356,7 +2356,7 @@ end 'Cell'
 export typealias ItemsSource = Source with Items
 
 export function makeSource() returns ItemsSource
-	var items = Items.create()
+	var items = Items.create(0)
 	items.push(500)
 	return Cell.of(items)
 end 'makeSource'
@@ -2366,7 +2366,7 @@ typealias Measure = int(0 to 100)
 typealias Items = Array with Measure
 
 function main() returns ExitCode
-	var local = Items.create()
+	var local = Items.create(0)
 	local.push(1)
 	let one = try local.get(0) otherwise 0
 	let s = makeSource()
@@ -2390,7 +2390,7 @@ export type Bag
 	export var items as Items
 
 	export static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	export function second() returns ExitCode
@@ -2404,7 +2404,7 @@ typealias Measure = int(0 to 10)
 typealias Items = Array with Measure
 
 function main() returns ExitCode
-	var local = Items.create()
+	var local = Items.create(0)
 	local.push(1)
 	var b = Bag.create()
 	b.items = [400, 500]
@@ -2802,7 +2802,7 @@ end 'countAll'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var xs = StringArray.create()
+	var xs = StringArray.create(0)
 	xs.push("a")
 	xs.push("b")
 	print("{countAll(xs)}\n")
@@ -2836,7 +2836,7 @@ end 'countB'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var xs = StringArray.create()
+	var xs = StringArray.create(0)
 	xs.push("a")
 	return countA(xs) + countB(xs)
 end 'main'

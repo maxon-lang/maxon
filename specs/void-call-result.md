@@ -213,7 +213,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	let x = arr.frobnicate()
 	return x
@@ -270,7 +270,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	let x = arr.grow(8)
 	return x
@@ -290,7 +290,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr = arr.push(1)
 	return arr.count()
 end 'main'
@@ -361,7 +361,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	let x = arr.reserve(4)
 	return 0
@@ -377,7 +377,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	let x = arr.resize(4)
 	return 0
@@ -393,7 +393,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	let x = arr.clear()
 	return 0
@@ -409,7 +409,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	let x = arr.insert(0, value: 1)
 	return 0
@@ -425,8 +425,8 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
-	let other = IntArray.create()
+	var arr = IntArray.create(0)
+	let other = IntArray.create(0)
 	let x = arr.append(other)
 	return 0
 end 'main'
@@ -527,7 +527,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	let x = try arr.set(0, value: 7) otherwise return 1
 	return x
@@ -567,7 +567,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	let x = arr.set(0, value: 7)
 	return x

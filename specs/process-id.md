@@ -132,13 +132,13 @@ and answers `E3074`, which no skip counts, so the case is pinned on the other la
 function main() returns ExitCode
 	#if os(Windows)
 	let exe = Executable.name("cmd")
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("exit")
 	argv.push("0")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 20)
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("exit 0")
 	#endif

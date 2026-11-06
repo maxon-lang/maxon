@@ -22,8 +22,8 @@ esac
 {
   printf 'typealias Tally = int(0 to u64.max)\ntypealias TallyArray = Array with Tally\n\n'
   printf 'function grow(cells TallyArray) returns TallyArray\n\tcells.push(1)\n\n\treturn cells\nend %s\n\n' "'grow'"
-  printf 'function fresh() returns TallyArray\n\tvar cells = TallyArray.create()\n\tcells.push(2)\n\n\treturn cells\nend %s\n\n' "'fresh'"
-  printf 'function chain(seed Tally) returns Tally\n\tvar cells = TallyArray.create()\n'
+  printf 'function fresh() returns TallyArray\n\tvar cells = TallyArray.create(0)\n\tcells.push(2)\n\n\treturn cells\nend %s\n\n' "'fresh'"
+  printf 'function chain(seed Tally) returns Tally\n\tvar cells = TallyArray.create(0)\n'
 
   if [ "$MODE" = "scalar" ]; then
     printf '\tvar total = 0 as Tally\n'

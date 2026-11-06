@@ -159,7 +159,7 @@ module function emitErrnoOfAnswer(module StdModule, block IrBlock, answer ValueI
 end 'emitErrnoOfAnswer'
 
 module function emitCodeIsOneOf(module StdModule, block IrBlock, code ValueId, codes FullRangeIntArray, ids ValueMinter) returns ValueId
-	var matches = ValueIdArray.create()
+	var matches = ValueIdArray.create(0)
 
 	for candidate in codes 'eachCode'
 		matches.push(emitCompareWithConstant(module, block: block, value: code, pred: StdCmpPred.eq, against: candidate, ids: ids))
@@ -281,7 +281,7 @@ let WinsockStarted = 1
 // This family's one `.data` word, laid out where a surviving body names it (`DataReach.walked`).
 // `lastWriterWins`: every writer stores the same `WinsockStarted` — `emitWinsockStartup` argues the race.
 export function managedSocketRuntimeGlobals() returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create()
+	var out = DataSectionEntryArray.create(0)
 	pushRuntimeGlobal(out, label: WinsockStartedLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked, seed: WinsockNotStarted)
 	return out
 end 'managedSocketRuntimeGlobals'

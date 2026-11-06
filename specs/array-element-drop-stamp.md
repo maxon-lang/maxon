@@ -29,7 +29,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
-var held = IntPromiseArray.create()
+var held = IntPromiseArray.create(0)
 
 function work(n Integer) returns Integer
 	Scheduler.yield()
@@ -58,7 +58,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = IntPromiseArray.create()
+	var held = IntPromiseArray.create(0)
 	held.push(async work(1))
 	held.clear()
 	return 0
@@ -78,7 +78,7 @@ enum WorkError implements Error
 	failed
 end 'WorkError'
 
-var held = CheckedPromiseArray.create()
+var held = CheckedPromiseArray.create(0)
 
 function work(n Integer) returns Integer throws WorkError
 	Scheduler.yield()
@@ -121,7 +121,7 @@ function work(n Integer) returns Integer throws WorkError
 end 'work'
 
 function main() returns ExitCode
-	var held = CheckedPromiseArray.create()
+	var held = CheckedPromiseArray.create(0)
 	held.push(async work(1))
 	held.clear()
 	return 0
@@ -146,7 +146,7 @@ end 'Job'
 
 typealias JobArray = Array with Job
 
-var held = JobArray.create()
+var held = JobArray.create(0)
 
 function work(n Integer) returns Integer
 	Scheduler.yield()
@@ -184,7 +184,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = JobArray.create()
+	var held = JobArray.create(0)
 	held.push(Job.start(async work(1)))
 	held.clear()
 	return 0
@@ -210,7 +210,7 @@ end 'Box'
 typealias PromiseBox = Box with IntPromise
 typealias PromiseBoxArray = Array with PromiseBox
 
-var held = PromiseBoxArray.create()
+var held = PromiseBoxArray.create(0)
 
 function work(n Integer) returns Integer
 	Scheduler.yield()
@@ -249,7 +249,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = PromiseBoxArray.create()
+	var held = PromiseBoxArray.create(0)
 	held.push(PromiseBox.wrap(async work(1)))
 	held.clear()
 	return 0
@@ -271,7 +271,7 @@ end 'Slot'
 
 typealias SlotArray = Array with Slot
 
-var held = SlotArray.create()
+var held = SlotArray.create(0)
 
 function work(n Integer) returns Integer
 	Scheduler.yield()
@@ -306,7 +306,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = SlotArray.create()
+	var held = SlotArray.create(0)
 	held.push(Slot.running(async work(1)))
 	held.clear()
 	return 0
@@ -323,7 +323,7 @@ typealias IntPromise = Promise with Integer
 typealias Entry = (Integer, IntPromise)
 typealias EntryArray = Array with Entry
 
-var held = EntryArray.create()
+var held = EntryArray.create(0)
 
 function work(n Integer) returns Integer
 	Scheduler.yield()
@@ -353,7 +353,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = EntryArray.create()
+	var held = EntryArray.create(0)
 	held.push((1, async work(1)))
 	held.clear()
 	return 0
@@ -375,7 +375,7 @@ end 'Label'
 
 typealias LabelArray = Array with Label
 
-var held = LabelArray.create()
+var held = LabelArray.create(0)
 
 function main() returns ExitCode
 	held.push(Label.named("held {1 + 1}"))
@@ -399,7 +399,7 @@ end 'Label'
 typealias LabelArray = Array with Label
 
 function main() returns ExitCode
-	var held = LabelArray.create()
+	var held = LabelArray.create(0)
 	held.push(Label.named("held {1 + 1}"))
 	return 0
 end 'main'
@@ -427,7 +427,7 @@ end 'Cell'
 
 typealias CellArray = Array with Cell
 
-var held = CellArray.create()
+var held = CellArray.create(0)
 
 function main() returns ExitCode
 	held.push(Cell.of(3, high: 4))
@@ -460,7 +460,7 @@ end 'Cell'
 typealias CellArray = Array with Cell
 
 function main() returns ExitCode
-	var held = CellArray.create()
+	var held = CellArray.create(0)
 	held.push(Cell.of(3, high: 4))
 
 	let cell = try held.get(0) otherwise panic("one was pushed")

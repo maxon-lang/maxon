@@ -2907,7 +2907,7 @@ function tyLen(ty Ty) returns Integer
 end 'tyLen'
 
 function main() returns ExitCode
-	var arr = TyArray.create()
+	var arr = TyArray.create(0)
 	arr.push(Ty.concrete("an array element payload, long enough to be a real heap allocation"))
 	var borrowed = try arr.get(0) otherwise panic("get failed")
 	let first = match borrowed 'b'
@@ -3281,7 +3281,7 @@ union Ty
 end 'Ty'
 
 function steal(ty Ty) returns Integer
-	var arr = TyArray.create()
+	var arr = TyArray.create(0)
 	arr.push(ty)
 	view got = try arr.remove(0) otherwise panic("remove failed")
 	return match got 'm'

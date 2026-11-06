@@ -43,9 +43,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function build(n Integer) returns Integer
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	if n > 1 'grow'
-		arr = IntArray.create()
+		arr = IntArray.create(0)
 	end 'grow'
 	arr.reserve(4)
 	return arr.count()
@@ -171,7 +171,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function build(n Integer) returns Integer
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	var i = 0 as Integer
 	while i < n 'loop'
 		i = i + 1
@@ -179,7 +179,7 @@ function build(n Integer) returns Integer
 			continue
 		end 'skip'
 		if n > 1 'grow'
-			arr = IntArray.create()
+			arr = IntArray.create(0)
 		end 'grow'
 		arr.reserve(4)
 	end 'loop'
@@ -208,9 +208,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function build(n Integer) returns Integer
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	if n > 1 'grow'
-		arr = IntArray.create()
+		arr = IntArray.create(0)
 	end 'grow'
 	return arr.count()
 end 'build'
@@ -259,7 +259,7 @@ typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	if 2 > 1 'grow'
-		var arr = IntArray.create()
+		var arr = IntArray.create(0)
 		arr.reserve(4)
 	end 'grow'
 	arr.reserve(8)

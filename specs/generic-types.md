@@ -1834,7 +1834,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	return arr.value
 end 'main'
@@ -1908,7 +1908,7 @@ end 'Array'
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(1)
 	a.value = 4242
 	return 0
@@ -2107,7 +2107,7 @@ typealias Reals = Array with Real
 typealias Vec2 = FixedArray with 2 Real
 
 function main() returns ExitCode
-	var a = Reals.create()
+	var a = Reals.create(0)
 	a.push(1.5)
 	var v = Vec2.create()
 	v.set(0, value: 3.5)
@@ -2192,7 +2192,7 @@ typealias BoolSizer = Sizer with bool
 typealias BoolArray = Array with bool
 function main() returns ExitCode
 	let s = BoolSizer.create(true)
-	var a = BoolArray.create()
+	var a = BoolArray.create(0)
 	a.push(s.get())
 	return a.count() - 1
 end 'main'
@@ -2261,7 +2261,7 @@ typealias IntBox = Box with Integer
 typealias IntArray = Array with Integer
 function main() returns ExitCode
 	let b = IntBox.create(42)
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(b.get())
 	return (try a.get(0) otherwise 0) - 42
 end 'main'
@@ -2729,7 +2729,7 @@ union Payload
 	empty
 end 'Payload'
 function main() returns ExitCode
-	var a = Nums.create()
+	var a = Nums.create(0)
 	a.push(4)
 	a.push(5)
 	view p = Payload.list(a)
@@ -3778,7 +3778,7 @@ type HoldA uses U
 	export var items as Items
 
 	static function of(first U) returns HoldA
-		var xs = Items.create()
+		var xs = Items.create(0)
 		xs.push(first)
 		return HoldA{items: xs}
 	end 'of'
@@ -3793,7 +3793,7 @@ type HoldB uses V
 	export var items as Items
 
 	static function of(first V) returns HoldB
-		var xs = Items.create()
+		var xs = Items.create(0)
 		xs.push(first)
 		return HoldB{items: xs}
 	end 'of'
@@ -3805,7 +3805,7 @@ typealias HoldBStr = HoldB with String
 function main() returns ExitCode
 	let a = HoldANum.of(42)
 	let b = HoldBStr.of("hello")
-	var s = Strs.create()
+	var s = Strs.create(0)
 	s.push("names the type the refusal quotes")
 	return a.total(b.items)
 end 'main'
@@ -3829,7 +3829,7 @@ type HoldB uses V
 	export var items as Items
 
 	static function of(first V) returns HoldB
-		var xs = Items.create()
+		var xs = Items.create(0)
 		xs.push(first)
 		return HoldB{items: xs}
 	end 'of'
@@ -3840,7 +3840,7 @@ type HoldA uses U
 	export var items as Items
 
 	static function of(first U) returns HoldA
-		var xs = Items.create()
+		var xs = Items.create(0)
 		xs.push(first)
 		return HoldA{items: xs}
 	end 'of'
@@ -3856,7 +3856,7 @@ typealias HoldBStr = HoldB with String
 function main() returns ExitCode
 	let a = HoldANum.of(42)
 	let b = HoldBStr.of("hello")
-	var s = Strs.create()
+	var s = Strs.create(0)
 	s.push("names the type the refusal quotes")
 	return a.total(b.items)
 end 'main'
@@ -3887,7 +3887,7 @@ type HoldA uses T
 	export typealias Items = Array with T
 	export var items as Items
 	static function create(seed T) returns Self
-		var arr = Items.create()
+		var arr = Items.create(0)
 		arr.resize(1)
 		try arr.set(0, value: seed) otherwise panic("seeded slot 0 must exist after resize(1)")
 		return Self{items: arr}
@@ -3931,7 +3931,7 @@ typealias NumArray = Array with Num
 type HoldConcrete
 	export var items as NumArray
 	static function create(seed Num) returns Self
-		var arr = NumArray.create()
+		var arr = NumArray.create(0)
 		arr.resize(1)
 		try arr.set(0, value: seed) otherwise panic("seeded slot 0 must exist after resize(1)")
 		return Self{items: arr}
@@ -4509,7 +4509,7 @@ type Box uses T
 	typealias Peers = Array with Self
 
 	static function twice(v T) returns Peers
-		var out = Peers.create()
+		var out = Peers.create(0)
 		out.push(Self{v: v})
 		out.push(Self{v: v})
 		return out
@@ -4781,7 +4781,7 @@ type Hold uses U
 	export var items as Items
 
 	static function of(first U, replacement U, swap bool) returns Hold
-		var xs = Items.create()
+		var xs = Items.create(0)
 		var chosen = first
 
 		if swap 'swapped'
@@ -4836,7 +4836,7 @@ type Hold
 	export var items as Items
 
 	static function of(first mutable String, replacement String, swap bool) returns Hold
-		var xs = Items.create()
+		var xs = Items.create(0)
 
 		if swap 'swapped'
 			first = replacement
@@ -4903,7 +4903,7 @@ type Holder uses T
 	typealias Pieces = Array with Self
 
 	static function create(item T, spare T, keep bool, refuse bool) returns Self throws KeepError
-		var pieces = Pieces.create()
+		var pieces = Pieces.create(0)
 		var made = 2 as Whole
 
 		if keep 'kept'

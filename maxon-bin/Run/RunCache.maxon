@@ -140,7 +140,7 @@ end 'publishDebugSidecar'
 function discardSupersededBuilds(slot RunSlot)
 	let current = slot.executable.filename()
 
-	var kept = BuildNameArray.create()
+	var kept = BuildNameArray.create(0)
 	kept.push(current)
 	kept.push(sidecarNameOf(current))
 
@@ -159,7 +159,7 @@ end 'discardSupersededBuilds'
 // it.
 function discardOlderCacheFormats(slot RunSlot)
 	let entries = try Directory.list(slot.formatsRoot) otherwise return
-	let nothingKept = BuildNameArray.create()
+	let nothingKept = BuildNameArray.create(0)
 
 	for entry in entries 'eachEntry'
 		let name = entry.filename()
@@ -344,7 +344,7 @@ export function discardRunSlotOf(program FilePath, entryFunction ByteArray) retu
 	let formatsRoot = try runCacheRoot() otherwise return RunSlotDiscard.gone
 	let identity = try projectIdentityPathOf(program)
 	let slot = slotPathOf(identity, entryFunction: entryFunction, formatsRoot: formatsRoot)
-	discardSlotBuilds(slot, binarySuffix: executableExtension(detectHostTarget().os), kept: BuildNameArray.create(), pending: PendingBuilds.discarded)
+	discardSlotBuilds(slot, binarySuffix: executableExtension(detectHostTarget().os), kept: BuildNameArray.create(0), pending: PendingBuilds.discarded)
 
 	return RunSlotDiscard.keptInPlace if Directory.isDirectory(slot) else RunSlotDiscard.gone
 end 'discardRunSlotOf'
@@ -400,7 +400,7 @@ function freshnessKey(program FilePath, target Target, entryFunction ByteArray) 
 end 'freshnessKey'
 
 function cacheFormatLine() returns String
-	var fields = StringArray.create()
+	var fields = StringArray.create(0)
 	fields.push(cacheFormatName())
 
 	return manifestLine(VersionFieldLabel, fields: fields)
@@ -446,7 +446,7 @@ export type CompilerIdentity
 	end 'fields'
 
 	export function lineage() returns String
-		var fields = StringArray.create()
+		var fields = StringArray.create(0)
 		fields.push(self.path.toString())
 		fields.push(targetToString(self.target))
 
@@ -454,7 +454,7 @@ export type CompilerIdentity
 	end 'lineage'
 
 	export function build() returns String
-		var fields = StringArray.create()
+		var fields = StringArray.create(0)
 		fields.push("{self.size}")
 		fields.push("{self.modifiedTime}")
 
@@ -493,7 +493,7 @@ end 'digestLines'
 function sourceLine(label String, path FilePath) returns String throws RunCacheError
 	let digest = try fileDigestOf(path) otherwise throw RunCacheError.unavailable("could not read {path.toString()}, which the build cache key is computed over")
 
-	var fields = StringArray.create()
+	var fields = StringArray.create(0)
 	fields.push(path.toString())
 	fields.push(hexOfLeadingBytes(digest, count: CacheNameDigestBytes))
 
@@ -520,7 +520,7 @@ module function libraryInputs(programPaths MaxonSourcePathArray) returns Compile
 	let stdlibDir = try locateStdlibDir() otherwise throw RunCacheError.unavailable("could not locate the stdlib/ directory, which the build cache key is computed over")
 	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise throw RunCacheError.unavailable("could not locate the runtime/ directory beside stdlib/, which the build cache key is computed over")
 
-	var walked = MaxonSourcePathArray.create()
+	var walked = MaxonSourcePathArray.create(0)
 	try walkLibraryRoot(stdlibDir, into: walked)
 	try walkLibraryRoot(runtimeDir, into: walked)
 	walked.append(try scriptlibInputs(programPaths, stdlibDir: stdlibDir))

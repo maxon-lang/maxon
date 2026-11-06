@@ -1301,7 +1301,7 @@ typealias Count = int(0 to 1000)
 typealias Items = Array with Count
 typealias ItemIndex = Map with (Count, Items)
 
-let Empty = Items.create()
+let Empty = Items.create(0)
 
 function pick(index ItemIndex, k Count) returns Items
 	return try index.get(k) otherwise Empty
@@ -1309,7 +1309,7 @@ end 'pick'
 
 function main() returns ExitCode
 	var index = ItemIndex.create()
-	var stored = Items.create()
+	var stored = Items.create(0)
 	stored.push(7)
 	index.upsert(1, value: stored)
 	var mine = pick(index, k: 9)
@@ -1620,7 +1620,7 @@ type Holder
 	export var items as CountArray
 
 	static function make() returns Holder
-		return Holder{items: CountArray.create()}
+		return Holder{items: CountArray.create(0)}
 	end 'make'
 end 'Holder'
 
@@ -1654,7 +1654,7 @@ type Inner
 	export var items as CountArray
 
 	static function make() returns Inner
-		return Inner{items: CountArray.create()}
+		return Inner{items: CountArray.create(0)}
 	end 'make'
 end 'Inner'
 
@@ -1669,7 +1669,7 @@ end 'Holder'
 let G = Holder.make()
 
 function poke(t Holder, deep bool)
-	var list = CountArray.create()
+	var list = CountArray.create(0)
 
 	if deep 'fromInner'
 		list = t.inner.items
@@ -1698,7 +1698,7 @@ type Guards
 	export var cols as CountArray
 
 	static function make() returns Guards
-		return Guards{cols: CountArray.create()}
+		return Guards{cols: CountArray.create(0)}
 	end 'make'
 end 'Guards'
 
@@ -1709,7 +1709,7 @@ type Blocks
 	export var guards as Guards
 
 	static function create(guards Guards) returns Blocks
-		return Blocks{subst: CountArray.create(), guards: guards}
+		return Blocks{subst: CountArray.create(0), guards: guards}
 	end 'create'
 end 'Blocks'
 
@@ -2815,7 +2815,7 @@ typealias IntArray = Array with Integer
 let IntArray = "shadow"
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(1)
 	return a.count() as ExitCode
 end 'main'
@@ -2980,7 +2980,7 @@ typealias Names = Array with String
 let A = ["ab", "cde"]
 
 function fresh() returns Names
-	var n = Names.create()
+	var n = Names.create(0)
 	n.push("zz")
 	return n
 end 'fresh'
@@ -3021,16 +3021,16 @@ other takes the parameter.
 typealias Integer = int(i64.min to i64.max)
 typealias Names = Array with Integer
 
-let sharedEmptyNames = Names.create()
+let sharedEmptyNames = Names.create(0)
 
 function pairable(bound Names, wanted Names) returns Names
 	return sharedEmptyNames if bound.count() < wanted.count() else wanted
 end 'pairable'
 
 function main() returns ExitCode
-	var a = Names.create()
+	var a = Names.create(0)
 	a.push(1)
-	var b = Names.create()
+	var b = Names.create(0)
 	b.push(2)
 	b.push(3)
 	view short = pairable(a, wanted: b)
@@ -3073,10 +3073,10 @@ next line. Both paths are exercised.
 typealias Integer = int(i64.min to i64.max)
 typealias Bits = Array with Integer
 
-let sharedEmptyBits = Bits.create()
+let sharedEmptyBits = Bits.create(0)
 
 function withRootBits(base Bits, bits Integer) returns Bits
-	var out = Bits.create()
+	var out = Bits.create(0)
 	out.push((base.count() as Integer) + bits)
 	return out
 end 'withRootBits'
@@ -3115,10 +3115,10 @@ have proved nothing.
 typealias Integer = int(i64.min to i64.max)
 typealias Bits = Array with Integer
 
-let bits = Bits.create()
+let bits = Bits.create(0)
 
 function localWins() returns Bits
-	var bits = Bits.create()
+	var bits = Bits.create(0)
 	bits.push(7)
 	bits.push(9)
 	return bits
@@ -3167,14 +3167,14 @@ written-out argument" is the property, not "the default compiles".
 typealias Integer = int(i64.min to i64.max)
 typealias Names = Array with Integer
 
-let sharedEmptyNames = Names.create()
+let sharedEmptyNames = Names.create(0)
 
 function describe(names Names = sharedEmptyNames) returns Integer
 	return names.count()
 end 'describe'
 
 function main() returns ExitCode
-	var given = Names.create()
+	var given = Names.create(0)
 	given.push(7)
 	given.push(9)
 	print("omitted={describe()} written={describe(sharedEmptyNames)} given={describe(given)}")
@@ -3195,7 +3195,7 @@ forwarding edge rather than through a seed of its own.
 typealias Integer = int(i64.min to i64.max)
 typealias Names = Array with Integer
 
-let sharedEmptyNames = Names.create()
+let sharedEmptyNames = Names.create(0)
 
 function shared() returns Names
 	return sharedEmptyNames
@@ -3227,7 +3227,7 @@ binding name**, because a filled default names nothing the author wrote.
 typealias Integer = int(i64.min to i64.max)
 typealias Names = Array with Integer
 
-let sharedEmptyNames = Names.create()
+let sharedEmptyNames = Names.create(0)
 
 function grow(names Names = sharedEmptyNames) returns Integer
 	names.push(1)
@@ -3255,7 +3255,7 @@ spelling that reached it.
 typealias Integer = int(i64.min to i64.max)
 typealias Names = Array with Integer
 
-let sharedEmptyNames = Names.create()
+let sharedEmptyNames = Names.create(0)
 
 function shared() returns Names
 	return sharedEmptyNames
@@ -3296,7 +3296,7 @@ carries the mark.
 typealias Integer = int(i64.min to i64.max)
 typealias Names = Array with Integer
 
-let sharedEmptyNames = Names.create()
+let sharedEmptyNames = Names.create(0)
 
 type Holder
 	export var names = sharedEmptyNames as Names
@@ -3614,7 +3614,7 @@ function tagOf(b Boxed) returns Integer
 end 'tagOf'
 
 function main() returns ExitCode
-	var xs = BoxedArray.create()
+	var xs = BoxedArray.create(0)
 	var i = 0 as Integer
 	var sum = 0 as Integer
 	while i < 4 'each'
@@ -3666,7 +3666,7 @@ function tagOf(b Boxed) returns Integer
 end 'tagOf'
 
 function main() returns ExitCode
-	var xs = BoxedArray.create()
+	var xs = BoxedArray.create(0)
 	var i = 0 as Integer
 	var sum = 0 as Integer
 	while i < 4 'each'
@@ -3977,7 +3977,7 @@ var keywordMap = [
 ]
 
 function main() returns ExitCode
-	var ops = OpArray.create()
+	var ops = OpArray.create(0)
 	ops.push(Op.add(1))
 	ops.push(Op.nop)
 
@@ -4046,7 +4046,7 @@ var keywordMap = [
 	b"else": KeywordInfo.create(2, helpText: describe(2))
 ]
 
-var unusedNames = StringArray.create()
+var unusedNames = StringArray.create(0)
 
 function main() returns ExitCode
 	view info = try keywordMap.get(b"else") otherwise KeywordInfo.create(0, helpText: "")
@@ -4410,7 +4410,7 @@ type Holder
 	export var items as CountArray
 
 	static function make() returns Holder
-		return Holder{items: CountArray.create()}
+		return Holder{items: CountArray.create(0)}
 	end 'make'
 end 'Holder'
 
@@ -4583,7 +4583,7 @@ type Holder
 	export var items as CountArray
 
 	static function make() returns Holder
-		return Holder{items: CountArray.create()}
+		return Holder{items: CountArray.create(0)}
 	end 'make'
 end 'Holder'
 
@@ -4612,7 +4612,7 @@ type Holder
 	export var items as CountArray
 
 	static function make() returns Holder
-		return Holder{items: CountArray.create()}
+		return Holder{items: CountArray.create(0)}
 	end 'make'
 end 'Holder'
 
@@ -4951,8 +4951,8 @@ type Registry
 end 'Registry'
 
 function main() returns ExitCode
-	Registry.items = Xs.create()
-	Registry.items = Ys.create()
+	Registry.items = Xs.create(0)
+	Registry.items = Ys.create(0)
 	print("{Registry.items.count()}\n")
 	return 0
 end 'main'
@@ -4975,7 +4975,7 @@ function takeYs(ys Ys)
 end 'takeYs'
 
 function main() returns ExitCode
-	Registry.items = Xs.create()
+	Registry.items = Xs.create(0)
 	takeYs(Registry.items)
 	return 0
 end 'main'

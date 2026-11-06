@@ -73,7 +73,7 @@ extension Iterable
 
 typealias FnTypeAlias1 = function(Element) returns Element
 	function map(transform FnTypeAlias1) returns ElementArray
-		var result = ElementArray.create()
+		var result = ElementArray.create(0)
 		for item in self 'loop'
 			result.push(transform(item))
 		end 'loop'
@@ -859,7 +859,7 @@ public type BagIter uses E, F implements Iterator with Int
 	var i as Int
 
 	public static function create() returns Self
-		return Self{items: EArray.create(), more: FArray.create(), i: 3}
+		return Self{items: EArray.create(0), more: FArray.create(0), i: 3}
 	end 'create'
 
 	public function current() returns Int
@@ -910,7 +910,7 @@ type BagIter uses E implements Iterator with Int
 	var i as Int
 
 	static function create() returns Self
-		return Self{items: EArray.create(), i: 3}
+		return Self{items: EArray.create(0), i: 3}
 	end 'create'
 
 	function current() returns Int

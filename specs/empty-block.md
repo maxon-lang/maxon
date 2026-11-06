@@ -94,7 +94,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(1)
 	var n = 0 as Int
 	n = try a.get(0) otherwise 'oops'

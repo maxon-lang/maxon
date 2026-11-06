@@ -36,7 +36,7 @@ Create an array with preallocated capacity and length using `.resize()`:
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-var buffer = IntArray.create()
+var buffer = IntArray.create(0)
 buffer.resize(10)   // Length is now 10, elements are zero-initialized
 buffer.set(0, value: 42)
 ```
@@ -47,7 +47,7 @@ Use `.reserve()` to allocate capacity without changing length (for performance w
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-var buffer = IntArray.create()
+var buffer = IntArray.create(0)
 buffer.reserve(100)  // Capacity is 100, length is still 0
 buffer.push(42)      // Now length is 1
 ```
@@ -250,7 +250,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.reserve(5)
 	arr.push(42)
 	return try arr.get(0) otherwise 0
@@ -267,7 +267,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-		var arr = IntArray.create()
+		var arr = IntArray.create(0)
 		arr.resize(5)
 		try arr.set(0, value: 99) otherwise panic("test invariant: set OOB")
 		return try arr.get(0) otherwise 0
@@ -284,7 +284,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-		var arr = IntArray.create()
+		var arr = IntArray.create(0)
 		var i = 0 as Integer
 		while i < 100 'loop'
 				arr.push(i)
@@ -307,7 +307,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10 as Byte)
 	arr.push(20 as Byte)
 	arr.push(30 as Byte)
@@ -333,7 +333,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	arr.push(3 as Byte)
@@ -359,7 +359,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10 as Byte)
 	arr.push(20 as Byte)
 	arr.push(30 as Byte)
@@ -384,7 +384,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(255 as Byte)
 	arr.push(0 as Byte)
 	arr.push(128 as Byte)
@@ -420,7 +420,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	arr.push(3 as Byte)
@@ -511,7 +511,7 @@ typealias ThingArray = Array with Thing
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var xs = ThingArray.create()
+	var xs = ThingArray.create(0)
 	xs.push(Thing.made("x"))
 	return 0
 end 'main'
@@ -534,7 +534,7 @@ typealias ThingArray = Array with Thing
 
 // --- file: main.maxon
 function makeThings() returns ThingArray
-	return ThingArray.create()
+	return ThingArray.create(0)
 end 'makeThings'
 
 function main() returns ExitCode
@@ -569,7 +569,7 @@ typealias ThingArray = Array with Thing
 typealias ThingArray = Array with Thing
 
 function main() returns ExitCode
-	var xs = ThingArray.create()
+	var xs = ThingArray.create(0)
 	xs.push(Thing.made("x"))
 	return 0
 end 'main'
@@ -958,7 +958,7 @@ typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	var a = IntArray from [1, 2, 3]
-	var b = IntArray.create()
+	var b = IntArray.create(0)
 	a.append(b)
 	return a.count()
 end 'main'
@@ -973,7 +973,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	let b = [10, 20]
 	a.append(b)
 	let first = try a.get(0) otherwise 0
@@ -1024,7 +1024,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var a = ByteArray.create()
+	var a = ByteArray.create(0)
 	a.push(7)
 	var piece = try __ManagedMemory.create(4, 1) otherwise return 9
 	try piece.set(0, 20) otherwise return 8
@@ -1080,9 +1080,9 @@ typealias Bytes = Array with Byte
 typealias Smalls = Array with Small
 
 function main() returns ExitCode
-	var s = Smalls.create()
+	var s = Smalls.create(0)
 	s.push(150)
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.appendMemory(s.managed)
 	return try b.get(0) otherwise 1
 end 'main'
@@ -1453,7 +1453,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function makeParent() returns IntArray
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(10)
 	a.push(20)
 	a.push(30)
@@ -1462,7 +1462,7 @@ function makeParent() returns IntArray
 end 'makeParent'
 
 function tail(v IntArray) returns IntArray
-	return try v.slice(1, endIndex: 4) otherwise IntArray.create()
+	return try v.slice(1, endIndex: 4) otherwise IntArray.create(0)
 end 'tail'
 
 function main() returns ExitCode
@@ -1553,7 +1553,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function build() returns IntArray
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	var i = 0 as Integer
 	while i < 10 'fill'
 		a.push(i * 10)
@@ -1563,8 +1563,8 @@ function build() returns IntArray
 end 'build'
 
 function innerOf(a IntArray) returns IntArray
-	let mid = try a.slice(2, endIndex: 8) otherwise IntArray.create()
-	return try mid.slice(1, endIndex: 4) otherwise IntArray.create()
+	let mid = try a.slice(2, endIndex: 8) otherwise IntArray.create(0)
+	return try mid.slice(1, endIndex: 4) otherwise IntArray.create(0)
 end 'innerOf'
 
 function main() returns ExitCode
@@ -1678,7 +1678,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let empty = IntArray.create()
+	let empty = IntArray.create(0)
 	var e = try empty.slice(0, endIndex: 0) otherwise return 1
 	e.push(5)
 	let v = try e.get(0) otherwise 0
@@ -1704,7 +1704,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function emptyViewOfAnArrayThatGrew() returns IntArray
-	var src = IntArray.create()
+	var src = IntArray.create(0)
 	let view = try src.slice(0, endIndex: 0) otherwise panic("an empty slice of an empty array is in bounds")
 	src.push(1)
 	src.push(2)
@@ -1806,7 +1806,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function make() returns IntArray
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	var i = 0 as Integer
 	while i < 8 'fill'
 		a.push(i)
@@ -1878,7 +1878,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function makeNumbers() returns IntArray
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -1903,7 +1903,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function makeNumbers(a Integer, b Integer) returns IntArray
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(a)
 	arr.push(b)
 	arr.push(a + b)
@@ -2113,7 +2113,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(42)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -2128,7 +2128,7 @@ end 'main'
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create()
+	var arr = StringArray.create(0)
 	arr.push("hi")
 	let s = try arr.get(0) otherwise ""
 	if s == "hi" 'match'
@@ -2157,7 +2157,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push(Item.create(9))
 	view first = try arr.get(0) otherwise Item.create(0)
 	return first.value
@@ -2174,7 +2174,7 @@ typealias Byte = int(0 to 255)
 typealias ByteSlots = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteSlots.create()
+	var arr = ByteSlots.create(0)
 	arr.push(65)
 	arr.insert(0, value: 12)
 	try arr.set(1, value: 77) otherwise panic("test invariant: set OOB")
@@ -2193,7 +2193,7 @@ pointer — a wild free (0xC0000005), not a diagnostic.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create()
+	var arr = StringArray.create(0)
 	arr.push(42)
 	return arr.count()
 end 'main'
@@ -2210,7 +2210,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push("hello")
 	return arr.count()
 end 'main'
@@ -2226,7 +2226,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1.5)
 	return arr.count()
 end 'main'
@@ -2253,7 +2253,7 @@ end 'Item'
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create()
+	var arr = StringArray.create(0)
 	arr.push(Item.create(1))
 	return arr.count()
 end 'main'
@@ -2278,7 +2278,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push("hello")
 	return arr.count()
 end 'main'
@@ -2313,7 +2313,7 @@ end 'Other'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push(Other.create(1))
 	return arr.count()
 end 'main'
@@ -2328,7 +2328,7 @@ error E3005: <fragment>:24:6: argument type mismatch for 'value': expected 'Item
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create()
+	var arr = StringArray.create(0)
 	arr.push("hi")
 	arr.insert(0, value: 42)
 	return arr.count()
@@ -2344,7 +2344,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	arr.insert(0, value: "hello")
 	return arr.count()
@@ -2360,7 +2360,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	arr.insert(0, value: 1.5)
 	return arr.count()
@@ -2376,7 +2376,7 @@ error E3009: <fragment>:8:6: argument 'value': cannot implicitly convert 'float'
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create()
+	var arr = StringArray.create(0)
 	arr.push("hi")
 	try arr.set(0, value: 42) otherwise panic("test invariant: set OOB")
 	return arr.count()
@@ -2392,7 +2392,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	try arr.set(0, value: "hello") otherwise panic("test invariant: set OOB")
 	return arr.count()
@@ -2408,7 +2408,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	try arr.set(0, value: 1.5) otherwise panic("test invariant: set OOB")
 	return arr.count()
@@ -2452,9 +2452,9 @@ typealias Bytes = Array with Byte
 typealias Smalls = Array with Small
 
 function main() returns ExitCode
-	var s = Smalls.create()
+	var s = Smalls.create(0)
 	s.push(150)
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.append(s)
 	return try b.get(0) otherwise 1
 end 'main'
@@ -2479,9 +2479,9 @@ typealias Bytes = Array with Byte
 typealias Smalls = Array with Small
 
 function main() returns ExitCode
-	var s = Smalls.create()
+	var s = Smalls.create(0)
 	s.push(150)
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.managed.append(s)
 	return try b.get(0) otherwise 1
 end 'main'
@@ -2500,9 +2500,9 @@ typealias Bytes = Array with Byte
 typealias Bools = Array with bool
 
 function main() returns ExitCode
-	var f = Bools.create()
+	var f = Bools.create(0)
 	f.push(true)
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.append(f)
 	return b.count()
 end 'main'
@@ -2528,9 +2528,9 @@ typealias Colours = Array with Colour
 typealias Shapes = Array with Shape
 
 function main() returns ExitCode
-	var sh = Shapes.create()
+	var sh = Shapes.create(0)
 	sh.push(Shape.square)
-	var c = Colours.create()
+	var c = Colours.create(0)
 	c.append(sh)
 	return c.count()
 end 'main'
@@ -2564,9 +2564,9 @@ typealias Bytes = Array with Byte
 typealias Smalls = Array with Small
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(99)
-	var s = Smalls.create()
+	var s = Smalls.create(0)
 	s.push(150)
 	s.append(b)
 	let first = try s.get(0) otherwise 0
@@ -2592,9 +2592,9 @@ typealias Bytes = Array with Byte
 typealias Smalls = Array with Small
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(99)
-	var s = Smalls.create()
+	var s = Smalls.create(0)
 	s.push(150)
 	s.appendMemory(b.managed)
 	let first = try s.get(0) otherwise 0
@@ -2614,9 +2614,9 @@ typealias Byte = int(0 to 100)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var a = Bytes.create()
+	var a = Bytes.create(0)
 	a.push(7)
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(9)
 	a.append(b)
 	let first = try a.get(0) otherwise 0
@@ -2641,9 +2641,9 @@ typealias Bytes = Array with Byte
 typealias Wides = Array with Wide
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(9)
-	var w = Wides.create()
+	var w = Wides.create(0)
 	w.push(5)
 	w.append(b)
 	return w.count()
@@ -2665,9 +2665,9 @@ typealias As = Array with A
 typealias Bs = Array with B
 
 function main() returns ExitCode
-	var a = As.create()
+	var a = As.create(0)
 	a.push(7)
-	var b = Bs.create()
+	var b = Bs.create(0)
 	b.push(9)
 	a.append(b)
 	print("{a.count()}")
@@ -2686,9 +2686,9 @@ typealias As = Array with A
 typealias Bs = Array with A
 
 function main() returns ExitCode
-	var a = As.create()
+	var a = As.create(0)
 	a.push(7)
-	var b = Bs.create()
+	var b = Bs.create(0)
 	b.push(9)
 	a.append(b as As)
 	return ((try a.get(0) otherwise 0) + (try a.get(1) otherwise 0)) as ExitCode
@@ -2851,7 +2851,7 @@ typealias Real = float(f64.min to f64.max)
 typealias Reals = Array with Real
 
 function main() returns ExitCode
-	var a = Reals.create()
+	var a = Reals.create(0)
 	a.push(1.5)
 	a.push(2.5)
 	return trunc((try a.get(0) otherwise 0.0) + (try a.get(1) otherwise 0.0))
@@ -2874,7 +2874,7 @@ type Samples
 	export var values as Reals
 
 	static function create() returns Self
-		var v = Reals.create()
+		var v = Reals.create(0)
 		v.push(2.5)
 		return Self{values: v}
 	end 'create'
@@ -2927,7 +2927,7 @@ typealias Real = float(f64.min to f64.max)
 typealias Reals = Array with Real
 
 function main() returns ExitCode
-	var a = Reals.create()
+	var a = Reals.create(0)
 	a.push(1.5)
 	try a.managed.setByte(0, value: 223) otherwise panic("test invariant: setByte OOB")
 	return 0
@@ -2987,7 +2987,7 @@ type Bag
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 end 'Bag'
 
@@ -3031,7 +3031,7 @@ typealias Measure = int(0 to 100)
 typealias Items = Array with Measure
 
 function fresh() returns Items
-	return Items.create()
+	return Items.create(0)
 end 'fresh'
 
 function main() returns ExitCode
@@ -3100,7 +3100,7 @@ typealias Items = Array with Measure
 function pick(flag bool) returns Items
 	return match flag 'f'
 		true gives [19, 20]
-		default gives Items.create()
+		default gives Items.create(0)
 	end 'f'
 end 'pick'
 
@@ -3119,7 +3119,7 @@ typealias Measure = int(0 to 100)
 typealias Items = Array with Measure
 
 function pick(flag bool) returns Items
-	return [21, 22] if flag else Items.create()
+	return [21, 22] if flag else Items.create(0)
 end 'pick'
 
 function main() returns ExitCode
@@ -3138,9 +3138,9 @@ typealias Items = Array with Measure
 typealias Grid = Array with Items
 
 function main() returns ExitCode
-	var g = Grid.create()
+	var g = Grid.create(0)
 	g.push([23, 24])
-	view row = try g.get(0) otherwise Items.create()
+	view row = try g.get(0) otherwise Items.create(0)
 	return try row.get(1) otherwise 0
 end 'main'
 ```
@@ -3189,7 +3189,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var ps = IntPromiseArray.create()
+	var ps = IntPromiseArray.create(0)
 	ps.push(async plain(4))
 	ps.push(async plain(5))
 	let first = try ps.get(0) otherwise panic("two were pushed")
@@ -3229,7 +3229,7 @@ function at(n Integer) returns ElementIndex
 end 'at'
 
 function main() returns ExitCode
-	var ps = IntPromiseArray.create()
+	var ps = IntPromiseArray.create(0)
 	ps.push(async plain(4))
 	ps.push(async plain(5))
 	let first = try ps.get(0) otherwise panic("two were pushed")
@@ -3258,7 +3258,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var ps = IntPromiseArray.create()
+	var ps = IntPromiseArray.create(0)
 	ps.push(async plain(4))
 	ps.push(async plain(5))
 	let first = try ps.get(0) otherwise panic("two were pushed")
@@ -3575,7 +3575,7 @@ Stack trace:
 The refusal is on the capacity times the element's BITS, so a one-byte element wraps at `1 shl 60` (eight bits each, `2^63` in all) long before the byte count itself would overflow. That is the first count the signed bit total cannot hold, and it is refused the way `reserve(1 shl 62)` of a word-sized element is.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	bytes.reserve(1 shl 60)
 	return bytes.count() as ExitCode
 end 'main'
@@ -3615,7 +3615,7 @@ Stack trace:
 Growth below the wrap bound takes the allocation road with no overflow refusal: a byte array and a word array pushed through many reallocations keep every element and agree on their counts.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var words = [0 as Count]
 	var wrong = 0 as Count
 
@@ -3865,7 +3865,7 @@ typealias Percent = int(1 to 100)
 typealias PercentArray = Array with Percent
 
 function main() returns ExitCode
-	var xs = PercentArray.create()
+	var xs = PercentArray.create(0)
 	xs.resize(1)
 	return xs.count() as ExitCode
 end 'main'
@@ -3881,7 +3881,7 @@ typealias Percent = int(1 to 100)
 typealias PercentArray = Array with Percent
 
 function main() returns ExitCode
-	var xs = PercentArray.create()
+	var xs = PercentArray.create(0)
 	xs.growFilled(3, value: 7)
 	return (try xs.get(2) otherwise 1) as ExitCode
 end 'main'
@@ -4415,7 +4415,7 @@ end 'Level'
 typealias LevelArray = Array with Level
 
 function main() returns ExitCode
-	var levels = LevelArray.create()
+	var levels = LevelArray.create(0)
 	levels.resize(2)
 
 	return levels.count() as ExitCode
@@ -4490,7 +4490,7 @@ typealias MimeArray = Array with Mime
 function main() returns ExitCode
 	let plain = PlainArray.create(2)
 	let gauges = GaugeArray.create(2, zeroed: true)
-	var mimes = MimeArray.create()
+	var mimes = MimeArray.create(0)
 	mimes.resize(2)
 
 	let first = try plain.get(1) otherwise Plain.second
@@ -4523,7 +4523,7 @@ function main() returns ExitCode
 	let none = LevelArray.create(0)
 	var roomy = LevelArray.create(4, zeroed: false)
 	roomy.push(Level.high)
-	var filled = LevelArray.create()
+	var filled = LevelArray.create(0)
 	filled.growFilled(3, value: Level.low)
 
 	let tail = try filled.get(2) otherwise Level.high
@@ -4808,7 +4808,7 @@ type Pool uses Element
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function fill()
@@ -4846,7 +4846,7 @@ type Pool uses Element
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function fill()
@@ -4881,7 +4881,7 @@ type Pool uses Element
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function fill()
@@ -4920,7 +4920,7 @@ type Pool uses Element
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function fill()
@@ -5013,7 +5013,7 @@ type Pool uses Element
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function fill(head Element, tail Element)
@@ -5303,7 +5303,7 @@ error E3005: <fragment>:5:14: argument type mismatch for 'newLength': expected '
 A length that may be negative is refused with the cast that crosses it.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var wanted = 5 as FullRangeInt
 	wanted = wanted - 10
 	bytes.resize(wanted)
@@ -5319,7 +5319,7 @@ error E3005: <fragment>:6:8: argument type mismatch for 'newLength': expected 'E
 `reserve` shares `resize`'s refusal and its cast.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var wanted = 5 as FullRangeInt
 	wanted = wanted - 10
 	bytes.reserve(wanted)
@@ -5346,4 +5346,34 @@ end 'main'
 ```
 ```exitcode
 12
+```
+
+<!-- test: error.create-without-a-capacity-is-refused -->
+### An array created with no capacity is refused
+Every array states its capacity when it is built: `create(0)` for an empty one, `create(n)` for `n` zeros, `create(n, zeroed: false)` for room for `n`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3195: <fragment>:6:12: 'IntArray.create()' needs a capacity: write 'create(0)' for an empty array, 'create(n)' for n zero elements, or 'create(n, zeroed: false)' for an empty array with room for n
+```
+
+<!-- test: error.byte-array-create-without-a-capacity-is-refused -->
+```maxon
+function main() returns ExitCode
+	let bytes = ByteArray.create()
+
+	return bytes.count()
+end 'main'
+```
+```maxoncstderr
+error E3195: <fragment>:3:14: 'ByteArray.create()' needs a capacity: write 'create(0)' for an empty array, 'create(n)' for n zero elements, or 'create(n, zeroed: false)' for an empty array with room for n
 ```

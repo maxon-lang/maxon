@@ -52,7 +52,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -171,7 +171,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -302,7 +302,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -412,7 +412,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -567,7 +567,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -699,7 +699,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -845,7 +845,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 

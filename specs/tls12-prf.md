@@ -49,7 +49,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -142,7 +142,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -225,7 +225,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -318,7 +318,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -435,7 +435,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -508,7 +508,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -560,7 +560,7 @@ handshake-hash-gen-3 71c3c14e7d38c7c296e8528cd24ace39d9a8460c5e0c32d1fdf6434afe0
 A TLS 1.3 suite is not a `Tls12CipherSuite`: the compiler refuses the call, so no call can name a suite the TLS 1.2 PRF does not define.
 ```maxon
 function main() returns ExitCode
-	var secret = ByteArray.create()
+	var secret = ByteArray.create(0)
 	secret.resize(48)
 
 	let master = try Tls12Prf.extendedMasterSecret(Tls13CipherSuite.aes128GcmSha256, preMasterSecret: secret, sessionHash: secret) otherwise return 1

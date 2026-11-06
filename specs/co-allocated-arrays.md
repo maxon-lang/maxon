@@ -950,7 +950,7 @@ once.
 typealias Names = Array with String
 
 function build() returns Names
-	var names = Names.create()
+	var names = Names.create(0)
 	var index = 0 as ElementIndex
 
 	while index < 6 'each'
@@ -1008,7 +1008,7 @@ end 'main'
 typealias Names = Array with String
 
 function build() returns Names
-	var names = Names.create()
+	var names = Names.create(0)
 	var index = 0 as ElementIndex
 
 	while index < 6 'each'
@@ -1439,10 +1439,10 @@ typealias Words = Array with Word
 typealias Rows = Array with Words
 
 function main() returns ExitCode
-	var rows = Rows.create()
+	var rows = Rows.create(0)
 
 	for row in 0 upto 64 'eachRow'
-		var words = Words.create()
+		var words = Words.create(0)
 		words.reserve(6)
 		words.push(row as Word)
 		rows.push(words)

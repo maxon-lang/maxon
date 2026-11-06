@@ -90,10 +90,10 @@
 		var fileTypes as ProfileWordArray
 
 		static function over(modules SampledModuleArray) returns ProfileModuleMap
-			var starts = ProfileWordArray.create()
-			var ends = ProfileWordArray.create()
-			var names = ProfileStringArray.create()
-			var fileTypes = ProfileWordArray.create()
+			var starts = ProfileWordArray.create(0)
+			var ends = ProfileWordArray.create(0)
+			var names = ProfileStringArray.create(0)
+			var fileTypes = ProfileWordArray.create(0)
 
 			for loaded in modules 'eachModule'
 				starts.push(loaded.base)
@@ -382,7 +382,7 @@
 		export var ticks as ProfileTally
 
 		export static function create(process SampledProcess, cyclesPerTick ProfileCyclesPerTick) returns ProfileSession
-			return Self{process: process, cyclesPerTick: cyclesPerTick, threads: SampledThreadArray.create(), threadCycles: ProfileWordArray.create(), threadCredit: ProfileWordArray.create(), ticks: 0}
+			return Self{process: process, cyclesPerTick: cyclesPerTick, threads: SampledThreadArray.create(0), threadCycles: ProfileWordArray.create(0), threadCredit: ProfileWordArray.create(0), ticks: 0}
 		end 'create'
 
 		function loadedModules() returns ProfileModuleMap throws SamplerError
@@ -409,7 +409,7 @@
 		// two refreshes is charged nothing meanwhile — its count reads zero, below its baseline — unless a charge
 		// was already due, in which case the suspend that refuses drops it sooner.
 		export function refreshThreads()
-			var seen = ProfileThreadIdArray.create()
+			var seen = ProfileThreadIdArray.create(0)
 
 			for thread in self.process.threads() 'eachThread'
 				seen.push(thread.id)
@@ -580,7 +580,7 @@
 	end 'profileThreadIdsContain'
 
 	module function profileImageFor(session ProfileSession, sidecar MxdbgReader, textBytes DebugAddress) returns ProfileImageLoad
-		let modules = try session.loadedModules() otherwise ProfileModuleMap.over(SampledModuleArray.create())
+		let modules = try session.loadedModules() otherwise ProfileModuleMap.over(SampledModuleArray.create(0))
 
 		return match executablePlacementOf(sidecar.target, loadedAt: modules.executableBase(sidecar.target) as DebugAddress) 'placed'
 			refused(reason) gives ProfileImageLoad.refused(reason)

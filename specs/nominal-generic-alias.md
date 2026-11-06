@@ -59,7 +59,7 @@ function sumYs(ys Ys) returns Integer
 end 'sumYs'
 
 function main() returns ExitCode
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(1)
 	let r = sumYs(xs)
 	print("{r}")
@@ -78,7 +78,7 @@ typealias Xs = Array with Integer
 typealias Ys = Array with Integer
 
 function makeYs() returns Ys
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(1)
 	return xs
 end 'makeYs'
@@ -106,7 +106,7 @@ typealias WideCol = Array with Wide
 typealias NarrowCol = Array with Narrow
 
 function makeNarrow() returns NarrowCol
-	var w = WideCol.create()
+	var w = WideCol.create(0)
 	w.push(5)
 	return w
 end 'makeNarrow'
@@ -127,9 +127,9 @@ typealias Xs = Array with Integer
 typealias Ys = Array with Integer
 
 function main() returns ExitCode
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(1)
-	var ys = Ys.create()
+	var ys = Ys.create(0)
 	ys.push(2)
 	ys = xs
 	print("{ys.count()}")
@@ -148,9 +148,9 @@ typealias Xs = Array with Integer
 typealias Ys = Array with Integer
 
 function main() returns ExitCode
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(1)
-	var ys = Ys.create()
+	var ys = Ys.create(0)
 	ys.push(2)
 	var a = [3 as Integer]
 	a = xs
@@ -179,7 +179,7 @@ function sumXs(xs Xs) returns Integer
 end 'sumXs'
 
 function main() returns ExitCode
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(4)
 	var a = [3 as Integer]
 	a = xs
@@ -211,7 +211,7 @@ function sumYs(ys Ys) returns Integer
 end 'sumYs'
 
 function main() returns ExitCode
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(4)
 	var a = [3 as Integer]
 	a = xs
@@ -232,9 +232,9 @@ typealias Ys = Array with Integer
 
 function main() returns ExitCode
 	let k = 3 as Integer
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(1)
-	var ys = Ys.create()
+	var ys = Ys.create(0)
 	ys.push(2)
 	var a = [3 as Integer]
 
@@ -261,8 +261,8 @@ typealias Ys = Array with String
 var shared = ["a"]
 
 function main() returns ExitCode
-	shared = Xs.create()
-	shared = Ys.create()
+	shared = Xs.create(0)
+	shared = Ys.create(0)
 	print("{shared.count()}\n")
 	return 0
 end 'main'
@@ -276,12 +276,12 @@ The first store in the program's canonical file order fixes the brand, so the st
 ```maxon
 // --- file: a.maxon
 export function storeFirst()
-	shared = Xs.create()
+	shared = Xs.create(0)
 end 'storeFirst'
 
 // --- file: b.maxon
 export function storeSecond()
-	shared = Ys.create()
+	shared = Ys.create(0)
 end 'storeSecond'
 
 // --- file: main.maxon
@@ -305,12 +305,12 @@ Naming the files the other way round moves the refusal to the other store: the o
 ```maxon
 // --- file: a.maxon
 export function storeSecond()
-	shared = Ys.create()
+	shared = Ys.create(0)
 end 'storeSecond'
 
 // --- file: b.maxon
 export function storeFirst()
-	shared = Xs.create()
+	shared = Xs.create(0)
 end 'storeFirst'
 
 // --- file: main.maxon
@@ -345,7 +345,7 @@ function takeYs(ys Ys)
 end 'takeYs'
 
 function main() returns ExitCode
-	shared = Xs.create()
+	shared = Xs.create(0)
 	takeXs(shared)
 	takeYs(shared)
 	return 0
@@ -366,7 +366,7 @@ function takeXs(xs Xs)
 end 'takeXs'
 
 function main() returns ExitCode
-	shared = Xs.create()
+	shared = Xs.create(0)
 	takeXs(shared)
 	return 0
 end 'main'
@@ -396,7 +396,7 @@ end 'early'
 
 function main() returns ExitCode
 	early()
-	shared = Xs.create()
+	shared = Xs.create(0)
 	return 0
 end 'main'
 ```
@@ -413,8 +413,8 @@ typealias Ys = Array with String
 var shared = ["a"]
 
 function main() returns ExitCode
-	shared = Xs.create()
-	var ys = Ys.create()
+	shared = Xs.create(0)
+	var ys = Ys.create(0)
 	ys = shared
 	print("{ys.count()}\n")
 	return 0
@@ -431,8 +431,8 @@ typealias Xs = Array with String
 typealias Ys = Array with String
 
 function main() returns ExitCode
-	let xs = Xs.create()
-	let ys = Ys.create()
+	let xs = Xs.create(0)
+	let ys = Ys.create(0)
 
 	if xs == ys 'same'
 		print("same\n")
@@ -451,8 +451,8 @@ typealias Xs = Array with String
 typealias Ys = Array with String
 
 function main() returns ExitCode
-	let xs = Xs.create()
-	let ys = Ys.create()
+	let xs = Xs.create(0)
+	let ys = Ys.create(0)
 	print("{xs.equals(ys)}\n")
 	return 0
 end 'main'
@@ -496,7 +496,7 @@ error E3005: <fragment>:22:12: argument type mismatch for 'other': expected 'Cou
 typealias Xs = Array with String
 
 function main() returns ExitCode
-	let xs = Xs.create()
+	let xs = Xs.create(0)
 	print("{xs.equals(["b"])}\n")
 	print("{xs == xs}\n")
 	return 0
@@ -520,13 +520,13 @@ type Holder
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 end 'Holder'
 
 function main() returns ExitCode
 	var h = Holder.create()
-	h.items = Xs.create()
+	h.items = Xs.create(0)
 	print("{h.items.count()}\n")
 	return 0
 end 'main'
@@ -550,7 +550,7 @@ function mayFail() returns Ys throws Fault
 end 'mayFail'
 
 function main() returns ExitCode
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(1)
 	let ys = try mayFail() otherwise xs
 	print("{ys.count()}")
@@ -646,7 +646,7 @@ union Slot
 end 'Slot'
 
 function main() returns ExitCode
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(1)
 	let s = Slot.held(xs)
 	match s 'go'
@@ -665,10 +665,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias Xs = Array with Integer
 typealias Ys = Array with Integer
 
-var shared = Xs.create()
+var shared = Xs.create(0)
 
 function main() returns ExitCode
-	var ys = Ys.create()
+	var ys = Ys.create(0)
 	ys.push(1)
 	shared = ys
 	print("{shared.count()}")
@@ -694,7 +694,7 @@ function total(rows Rows) returns ExitCode
 end 'total'
 
 function main() returns ExitCode
-	var m = Mine.create()
+	var m = Mine.create(0)
 	m.push("a")
 	return total(m)
 end 'main'
@@ -718,7 +718,7 @@ function total(rows alpha.Rows) returns ExitCode
 end 'total'
 
 function main() returns ExitCode
-	var m = Mine.create()
+	var m = Mine.create(0)
 	m.push("a")
 	return total(m)
 end 'main'
@@ -742,7 +742,7 @@ function total(xs lib.inner.Xs) returns ExitCode
 end 'total'
 
 function main() returns ExitCode
-	var ys = Ys.create()
+	var ys = Ys.create(0)
 	ys.push("a")
 	return total(ys)
 end 'main'
@@ -759,7 +759,7 @@ parameter declared `Mine`.
 export typealias Rows = Array with String
 
 export function makeRows() returns Rows
-	var rows = Rows.create()
+	var rows = Rows.create(0)
 	rows.push("a")
 	return rows
 end 'makeRows'
@@ -792,7 +792,7 @@ export typealias Integer = int(0 to 1000)
 export typealias Rows = Array with Integer
 
 export function makeRows() returns Rows
-	var rows = Rows.create()
+	var rows = Rows.create(0)
 	rows.push(7)
 	return rows
 end 'makeRows'
@@ -833,7 +833,7 @@ type Holder
 	var seeds as Wide
 
 	static function create() returns Self
-		var xs = Wide.create()
+		var xs = Wide.create(0)
 		xs.push(7)
 		return Self{xs: xs, seeds: [8]}
 	end 'create'
@@ -880,7 +880,7 @@ function addOne(n Integer) returns Integer
 end 'addOne'
 
 export function makeScores() returns Scores
-	var scores = Scores.create()
+	var scores = Scores.create(0)
 	scores.push(addOne)
 	return scores
 end 'makeScores'
@@ -932,7 +932,7 @@ type Holder
 	end 'create'
 end 'Holder'
 
-var shared = Xs.create()
+var shared = Xs.create(0)
 
 function sumXs(xs Xs) returns Integer
 	var t = 0 as Integer
@@ -1008,7 +1008,7 @@ function sumCol(c Col) returns Integer
 end 'sumCol'
 
 function main() returns ExitCode
-	var rows = Rows.create()
+	var rows = Rows.create(0)
 	rows.push([1, 2])
 	var total = 0 as Integer
 	for row in rows 'each'
@@ -1044,7 +1044,7 @@ function total(ys Ys) returns Integer
 end 'total'
 
 function main() returns ExitCode
-	var rows = Inline.create()
+	var rows = Inline.create(0)
 	rows.push([1, 2])
 	rows.push([3])
 	var acc = 0 as Integer
@@ -1194,7 +1194,7 @@ end 'Sack'
 
 function main() returns ExitCode
 	let s = Sack.create()
-	var f = Ys.create()
+	var f = Ys.create(0)
 	f.push(1)
 	print("{s.take(f)}")
 	return 0
@@ -1231,7 +1231,7 @@ function sumYs(ys Ys) returns Integer
 end 'sumYs'
 
 function main() returns ExitCode
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(20)
 	xs.push(22)
 	view ys = xs as Ys
@@ -1257,7 +1257,7 @@ export typealias Integer = int(0 to 1000)
 export typealias Grid = Array with (Array with Integer)
 
 export function makeGrid() returns Grid
-	var grid = Grid.create()
+	var grid = Grid.create(0)
 	grid.push([7])
 	return grid
 end 'makeGrid'
@@ -1293,7 +1293,7 @@ function widthOf(c NarrowCol) returns ExitCode
 end 'widthOf'
 
 function main() returns ExitCode
-	var w = WideCol.create()
+	var w = WideCol.create(0)
 	w.push(5)
 	let n = w as NarrowCol
 	return widthOf(n)
@@ -1349,7 +1349,7 @@ function firstOf(xs Counts) returns Count
 end 'firstOf'
 
 function main() returns ExitCode
-	var theirs = LibCounts.create()
+	var theirs = LibCounts.create(0)
 	theirs.push(3)
 	theirs.push(4)
 	let mine = theirs as Counts
@@ -1378,7 +1378,7 @@ export type Holder
 	export var slots as Lows
 
 	export static function make() returns Holder
-		return Holder{slots: Lows.create()}
+		return Holder{slots: Lows.create(0)}
 	end 'make'
 end 'Holder'
 
@@ -1409,7 +1409,7 @@ function first(x Xs) returns ExitCode
 end 'first'
 
 function main() returns ExitCode
-	var ys = Ys.create()
+	var ys = Ys.create(0)
 	ys.push(7)
 	return first(ys.managed)
 end 'main'
@@ -1430,7 +1430,7 @@ function first(b Bytes) returns ExitCode
 end 'first'
 
 function main() returns ExitCode
-	var a = Bytes.create()
+	var a = Bytes.create(0)
 	a.push(7)
 	return first(a.managed)
 end 'main'
@@ -1449,9 +1449,9 @@ typealias Bytes = Array with Byte
 typealias Other = Array with Byte
 
 function main() returns ExitCode
-	var bytes = Bytes.create()
+	var bytes = Bytes.create(0)
 	bytes.push(7)
-	var other = Other.create()
+	var other = Other.create(0)
 	other.push(9)
 	var m = bytes.managed
 	m = other.managed
@@ -1499,7 +1499,7 @@ function first(b Bytes) returns ExitCode
 end 'first'
 
 function main() returns ExitCode
-	var rows = Rows.create()
+	var rows = Rows.create(0)
 	rows.push([7, 9])
 	view row = try rows.get(0) otherwise panic("no row")
 	print("{first(row.managed)}\n")
@@ -1566,7 +1566,7 @@ function main() returns ExitCode
 	let viaOtherBrand = totalYs([1, 2, 3])
 	let viaScalar = one(3)
 
-	var built = Xs.create()
+	var built = Xs.create(0)
 	built.push(1)
 	built.push(2)
 	let viaPush = totalXs(built)
@@ -1772,8 +1772,8 @@ function main() returns ExitCode
 	var b = ["b"]
 	b = a
 	a = b
-	a = Xs.create()
-	b = Ys.create()
+	a = Xs.create(0)
+	b = Ys.create(0)
 	print("{a.count()}{b.count()}\n")
 	return 0
 end 'main'
@@ -1789,7 +1789,7 @@ typealias Xs = Array with String
 typealias Ys = Array with String
 
 function main() returns ExitCode
-	let a = Xs.create()
+	let a = Xs.create(0)
 	let f = takeYs
 	f(a)
 	return 0
@@ -1815,12 +1815,12 @@ function total(p Pair) returns Count
 end 'total'
 
 function main() returns ExitCode
-	var x = Xs.create()
+	var x = Xs.create(0)
 	x.push("a")
 	x.push("b")
 	let p = make(x)
 	print("{total(p)}\n")
-	var y = Xs.create()
+	var y = Xs.create(0)
 	y.push("c")
 	let q = (y, 2 as Count)
 	print("{total(q)}\n")
@@ -1861,7 +1861,7 @@ end 'Sink'
 
 function main() returns ExitCode
 	let h = spawn Sink.create()
-	let a = Xs.create()
+	let a = Xs.create(0)
 	try h.take(a) otherwise panic("send take")
 	return 0
 end 'main'
@@ -1878,7 +1878,7 @@ export typealias Integer = int(i64.min to i64.max)
 export typealias Numbers = Array with Integer
 
 export function makeA() returns alpha.Numbers
-	var xs = alpha.Numbers.create()
+	var xs = alpha.Numbers.create(0)
 	xs.push(3)
 	return xs
 end 'makeA'
@@ -1907,7 +1907,7 @@ export typealias Integer = int(i64.min to i64.max)
 export typealias Numbers = Array with Integer
 
 export function makeA() returns Numbers
-	var xs = Numbers.create()
+	var xs = Numbers.create(0)
 	xs.push(3)
 	return xs
 end 'makeA'
@@ -1991,7 +1991,7 @@ export type Box
 	export var xs as Numbers
 
 	export static function create() returns Self
-		var xs = Numbers.create()
+		var xs = Numbers.create(0)
 		xs.push(3)
 		return Self{xs: xs}
 	end 'create'
@@ -2026,7 +2026,7 @@ export union Slot
 end 'Slot'
 
 export function makeSlot() returns Slot
-	var xs = Numbers.create()
+	var xs = Numbers.create(0)
 	xs.push(3)
 	return Slot.held(xs)
 end 'makeSlot'
@@ -2058,7 +2058,7 @@ error E3005: p/<fragment>:28:24: argument type mismatch for 'xs': expected 'p.Nu
 export typealias Integer = int(i64.min to i64.max)
 export typealias Numbers = Array with Integer
 
-export var shared = Numbers.create()
+export var shared = Numbers.create(0)
 
 // --- file: p/c.maxon
 typealias Numbers = Array with a.Integer
@@ -2086,7 +2086,7 @@ export type Box
 	export var xs as Numbers
 
 	export static function create() returns Self
-		var xs = Numbers.create()
+		var xs = Numbers.create(0)
 		xs.push(3)
 		return Self{xs: xs}
 	end 'create'
@@ -2097,7 +2097,7 @@ typealias Numbers = Array with a.Integer
 
 function main() returns ExitCode
 	var b = Box.create()
-	var mine = p.Numbers.create()
+	var mine = p.Numbers.create(0)
 	mine.push(4)
 	b.xs = mine
 	return b.xs.count() as ExitCode
@@ -2128,7 +2128,7 @@ export type Box
 	export var xs as alpha.Numbers
 
 	export static function create() returns Self
-		var xs = alpha.Numbers.create()
+		var xs = alpha.Numbers.create(0)
 		xs.push(3)
 		return Self{xs: xs}
 	end 'create'
@@ -2158,7 +2158,7 @@ export type Box
 	export var xs as alpha.Numbers
 
 	export static function create() returns Self
-		var xs = alpha.Numbers.create()
+		var xs = alpha.Numbers.create(0)
 		xs.push(3)
 		return Self{xs: xs}
 	end 'create'
@@ -2197,7 +2197,7 @@ function sumYs(ys Ys) returns Integer
 end 'sumYs'
 
 function main() returns ExitCode
-	var xs = Xs.create()
+	var xs = Xs.create(0)
 	xs.push(1)
 	let s = Slot.held(xs)
 	match s 'go'

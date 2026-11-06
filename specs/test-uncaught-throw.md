@@ -716,7 +716,7 @@ function items(hit bool) returns TallyArray throws ApiError
 		throw ApiError.notFound
 	end 'miss'
 
-	var found = TallyArray.create()
+	var found = TallyArray.create(0)
 	found.push(1)
 	found.push(2)
 	return found
@@ -795,7 +795,7 @@ end 'Level'
 typealias LevelArray = Array with Level
 
 test 'counts up from a stored level'
-	var levels = LevelArray.create()
+	var levels = LevelArray.create(0)
 	levels.push(Level.high)
 	var total = 0 as FullRangeInt
 
@@ -826,7 +826,7 @@ typealias IntArray = Array with Integer
 test 'an empty traversal runs no trips'
 	var total = 0 as Integer
 
-	for (_, value) in IntArray.create().withIterator() 'each'
+	for (_, value) in IntArray.create(0).withIterator() 'each'
 		total = total + value
 	end 'each'
 
@@ -853,7 +853,7 @@ typealias IntArray = Array with Integer
 test 'an empty parenthesized traversal runs no trips'
 	var total = 0 as Integer
 
-	for (_, value) in (IntArray.create().withIterator()) 'each'
+	for (_, value) in (IntArray.create(0).withIterator()) 'each'
 		total = total + value
 	end 'each'
 
@@ -1006,14 +1006,14 @@ function items(hit bool) returns IntArray throws ApiError
 		throw ApiError.notFound
 	end 'miss'
 
-	var found = IntArray.create()
+	var found = IntArray.create(0)
 	found.push(4)
 	found.push(5)
 	return found
 end 'items'
 
 test 'rebrands the fetched items'
-	let s = try (items(true) as Scores) otherwise Scores.create()
+	let s = try (items(true) as Scores) otherwise Scores.create(0)
 	Expect.equal(s.count(), expected: 2)
 end 'rebrands the fetched items'
 
@@ -1037,7 +1037,7 @@ typealias IntArray = Array with Integer
 typealias Wide = int(-1000000000000 to 1000000000000)
 
 test 'divides by a counted value'
-	let d = IntArray.create().count()
+	let d = IntArray.create(0).count()
 	let n = try ((8 / d) as Wide) otherwise 5
 	Expect.equal(n, expected: 5)
 end 'divides by a counted value'
@@ -1063,7 +1063,7 @@ typealias Walk = ArrayIterator with Integer
 test 'an empty rebranded traversal runs no trips'
 	var total = 0 as Integer
 
-	for x in IntArray.create().cursor() as Walk 'each'
+	for x in IntArray.create(0).cursor() as Walk 'each'
 		total = total + x
 	end 'each'
 

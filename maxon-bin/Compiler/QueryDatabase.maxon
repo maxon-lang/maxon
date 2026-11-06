@@ -165,7 +165,7 @@ end 'cacheWriteFootprintNameIdArray'
 
 function cacheReadFootprintNameIdArray(reader LibraryCacheReader) returns FootprintNameIdArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FootprintNameIdArray.create()
+	var result = FootprintNameIdArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -233,7 +233,7 @@ end 'cacheWriteFootprintRowArray'
 
 function cacheReadFootprintRowArray(reader LibraryCacheReader) returns FootprintRowArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FootprintRowArray.create()
+	var result = FootprintRowArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -287,7 +287,7 @@ end 'cacheWriteFootprintInterfaceArray'
 
 function cacheReadFootprintInterfaceArray(reader LibraryCacheReader) returns FootprintInterfaceArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FootprintInterfaceArray.create()
+	var result = FootprintInterfaceArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -307,7 +307,7 @@ export type ParseFootprint
 	export var interfaces as FootprintInterfaceArray
 
 	export static function create() returns ParseFootprint
-		return Self{rows: FootprintRowArray.create(), nameIds: FootprintNameIdArray.create(), nameBytes: NameRoster.create(), interfaces: FootprintInterfaceArray.create()}
+		return Self{rows: FootprintRowArray.create(0), nameIds: FootprintNameIdArray.create(0), nameBytes: NameRoster.create(0), interfaces: FootprintInterfaceArray.create(0)}
 	end 'create'
 
 	// @generated library-cache begin
@@ -453,7 +453,7 @@ export type RawStreamFacts
 	end 'create'
 
 	export static function nothing() returns RawStreamFacts
-		return Self{declaredTypeNames: NameRoster.create(), reservedSpellings: NameRoster.create(), conditionalSpellings: NameRoster.create()}
+		return Self{declaredTypeNames: NameRoster.create(0), reservedSpellings: NameRoster.create(0), conditionalSpellings: NameRoster.create(0)}
 	end 'nothing'
 
 	export static function of(tokens TokenArray) returns RawStreamFacts
@@ -484,11 +484,11 @@ export type SharedFileMemo
 	end 'parseCount'
 
 	export static function create(tokens TokenArray) returns SharedFileMemo
-		return Self{raw: RawTokensHold.held(tokens), facts: RawStreamFacts.of(tokens), factsKnown: true, views: SharedBuildViewArray.create(), parses: SharedLibraryParseArray.create()}
+		return Self{raw: RawTokensHold.held(tokens), facts: RawStreamFacts.of(tokens), factsKnown: true, views: SharedBuildViewArray.create(0), parses: SharedLibraryParseArray.create(0)}
 	end 'create'
 
 	export static function holdingNothingYet() returns SharedFileMemo
-		return Self{raw: RawTokensHold.absent, facts: RawStreamFacts.nothing(), factsKnown: false, views: SharedBuildViewArray.create(), parses: SharedLibraryParseArray.create()}
+		return Self{raw: RawTokensHold.absent, facts: RawStreamFacts.nothing(), factsKnown: false, views: SharedBuildViewArray.create(0), parses: SharedLibraryParseArray.create(0)}
 	end 'holdingNothingYet'
 
 	export function holdsRawTokens() returns bool
@@ -695,7 +695,7 @@ export type LibraryInterface
 	export var methods as StringArray
 
 	export static function create() returns LibraryInterface
-		return Self{declared: false, parents: StringArray.create(), methods: StringArray.create()}
+		return Self{declared: false, parents: StringArray.create(0), methods: StringArray.create(0)}
 	end 'create'
 end 'LibraryInterface'
 
@@ -927,7 +927,7 @@ export type QueryDatabase
 	export static function create(os Os) returns QueryDatabase
 		return Self{
 			sourceFiles: SourceFileMap.create(),
-			sourcePaths: FilePathArray.create(),
+			sourcePaths: FilePathArray.create(0),
 			sourceStamps: SourceFileStampMap.create(),
 			compositeHash: 0, compositeHashValid: false,
 			fileProvenance: FileProvenanceMemo.create(),
@@ -944,7 +944,7 @@ export type QueryDatabase
 			tokenHits: 0, tokenMisses: 0,
 			sharedTokenHits: 0, sharedActiveTokenHits: 0, sharedProducerMaskHits: 0, sharedParseHits: 0, sharedParseMisses: 0, sharedParsePublishes: 0, sharedParseDrifts: 0, sharedParseReusedFiles: HashDigestSet.create(), pendingSharedParses: PendingSharedParseMap.create(), stashedParsePacks: StashedParsePackMap.create(), libraryTally: LibraryCacheTally.create(), libraryBaseline: LibraryBaselineState.unused, libraryStateKey: 0, libraryStateKeySources: 0, libraryStateKeyComputed: false,
 			activeTokenHits: 0, activeTokenMisses: 0,
-			parseHits: 0, parseMisses: 0, parseMissPaths: ParseMissPathRoster.create(), recordParseMissPaths: false,
+			parseHits: 0, parseMisses: 0, parseMissPaths: ParseMissPathRoster.create(0), recordParseMissPaths: false,
 			signatureHits: 0, signatureMisses: 0,
 			allModuleHits: 0, allModuleMisses: 0
 		}
@@ -959,7 +959,7 @@ export type QueryDatabase
 end 'QueryDatabase'
 
 function declaredTypeNamesIn(tokens TokenArray) returns NameRoster
-	var names = NameRoster.create()
+	var names = NameRoster.create(0)
 
 	for i in 0 upto tokens.count() 'eachToken'
 		let token = try tokens.get(i) otherwise panic("declaredTypeNamesIn: tokens.get OOB at {i} below count {tokens.count()}")
@@ -979,7 +979,7 @@ function declaredTypeNamesIn(tokens TokenArray) returns NameRoster
 end 'declaredTypeNamesIn'
 
 module function reservedSpellingsIn(tokens TokenArray) returns NameRoster
-	var spellings = NameRoster.create()
+	var spellings = NameRoster.create(0)
 
 	for token in tokens 'eachToken'
 		if token.kind == TokenKind.identifier and isCompilerReservedName(token.value) 'aReservedSpelling'
@@ -996,7 +996,7 @@ typealias ConditionalDepth = int(0 to u64.max)
 // so it is taken from every arm, which also keeps the fact independent of the target. A directive's
 // own condition is not a spelling.
 module function conditionalSpellingsIn(tokens TokenArray) returns NameRoster
-	var spellings = NameRoster.create()
+	var spellings = NameRoster.create(0)
 	var seen = UsedTypeNameSet.create()
 	var depth = 0 as ConditionalDepth
 	var onDirectiveLine = false

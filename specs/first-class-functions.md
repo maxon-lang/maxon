@@ -1064,7 +1064,7 @@ function narrow(x Integer)
 end 'narrow'
 
 function main() returns ExitCode
-	var passes = PassArray.create()
+	var passes = PassArray.create(0)
 	passes.push(PassEntry.create(widen))
 	passes.push(PassEntry.create(narrow))
 
@@ -4137,7 +4137,7 @@ type Widget implements Maker
 end 'Widget'
 
 function build(x T) uses T returns Integer where T is Maker
-	return T.create()
+	return T.create(0)
 end 'build'
 
 function main() returns ExitCode
@@ -4733,7 +4733,7 @@ typealias OpArray = Array with UnaryOp
 
 function main() returns ExitCode
 	let bump = 20
-	var a = OpArray.create()
+	var a = OpArray.create(0)
 	a.push(function(n Integer) gives n + bump)
 	var total = 0 as Integer
 
@@ -6057,7 +6057,7 @@ function nine() returns ExitCode
 end 'nine'
 
 function main() returns ExitCode
-	var a = ThunkArray.create()
+	var a = ThunkArray.create(0)
 	a.push(nine)
 	let f = try a.get(0) otherwise panic("a.get(0) on a one-element array")
 	return f()
@@ -6100,7 +6100,7 @@ typealias FieldArray = Array with Field
 typealias FieldsBuilder = function(Integer) returns FieldArray
 
 function buildFields(n Integer) returns FieldArray
-	var out = FieldArray.create()
+	var out = FieldArray.create(0)
 	out.push(Field.create(n))
 	return out
 end 'buildFields'
@@ -6112,7 +6112,7 @@ function apply(f FieldsBuilder) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var s = SmallArray.create()
+	var s = SmallArray.create(0)
 	s.push(3)
 	return (apply(buildFields) + (s.count() as Integer)) as ExitCode
 end 'main'
@@ -6149,13 +6149,13 @@ function countFields(fields FieldArray) returns Integer
 end 'countFields'
 
 function apply(f FieldConsumer) returns Integer
-	var fields = FieldArray.create()
+	var fields = FieldArray.create(0)
 	fields.push(Field.create(5))
 	return f(fields)
 end 'apply'
 
 function main() returns ExitCode
-	var s = SmallArray.create()
+	var s = SmallArray.create(0)
 	s.push(3)
 	return (apply(countFields) + (s.count() as Integer)) as ExitCode
 end 'main'
@@ -6194,7 +6194,7 @@ typealias FieldArray = Array with Field
 typealias FieldsBuilder = function(Integer) returns FieldArray
 
 function buildSmalls(_ Integer) returns SmallArray
-	var out = SmallArray.create()
+	var out = SmallArray.create(0)
 	out.push(3)
 	return out
 end 'buildSmalls'
@@ -6242,7 +6242,7 @@ typealias SmallArray = Array with Small
 typealias FieldsBuilder = function(Integer) returns FieldArray
 
 function buildSmalls(_ Integer) returns SmallArray
-	var out = SmallArray.create()
+	var out = SmallArray.create(0)
 	out.push(3)
 	return out
 end 'buildSmalls'
@@ -6312,13 +6312,13 @@ extension Field
 end 'Field'
 
 function buildFields(n Integer) returns FieldArray
-	var out = FieldArray.create()
+	var out = FieldArray.create(0)
 	out.push(Field.create(n))
 	return out
 end 'buildFields'
 
 function main() returns ExitCode
-	var s = SmallArray.create()
+	var s = SmallArray.create(0)
 	s.push(3)
 	let f = Field.create(1)
 	return (f.runIt(buildFields) + (s.count() as Integer)) as ExitCode
@@ -6361,7 +6361,7 @@ extension Field
 end 'Field'
 
 function buildSmalls(_ Integer) returns SmallArray
-	var out = SmallArray.create()
+	var out = SmallArray.create(0)
 	out.push(3)
 	return out
 end 'buildSmalls'
@@ -7048,7 +7048,7 @@ function add(a Integer) returns Integer
 end 'add'
 
 function main() returns ExitCode
-	var xs = ThunkArray.create()
+	var xs = ThunkArray.create(0)
 	xs.push(seven)
 	xs.push(add)
 	return 0
@@ -7074,7 +7074,7 @@ function add(a Integer) returns Integer
 end 'add'
 
 function main() returns ExitCode
-	var xs = ThunkArray.create()
+	var xs = ThunkArray.create(0)
 	xs.push(seven)
 	try xs.set(0, value: add) otherwise ignore
 	return 0
@@ -7124,7 +7124,7 @@ function add(a Integer) returns Integer
 end 'add'
 
 function main() returns ExitCode
-	var xs = ThunkArray.create()
+	var xs = ThunkArray.create(0)
 	xs.push(seven)
 	xs.insert(0, value: add)
 	return 0

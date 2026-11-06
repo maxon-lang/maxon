@@ -22,7 +22,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -51,7 +51,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -86,7 +86,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -113,7 +113,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -141,7 +141,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -168,7 +168,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -193,7 +193,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 
@@ -219,7 +219,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 
@@ -252,7 +252,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 
 	let cursor = try arr.cursor() otherwise 'fail'
@@ -279,7 +279,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -307,7 +307,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -337,7 +337,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let arr = ByteArray.create()
+	let arr = ByteArray.create(0)
 
 	try arr.cursor() otherwise 'caught'
 		return 1
@@ -357,7 +357,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 
@@ -386,7 +386,7 @@ Cursor over a bit-packed `Array with bool` must extract individual bits rather t
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create()
+	var arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
@@ -531,7 +531,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -562,7 +562,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -594,7 +594,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)

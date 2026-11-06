@@ -827,7 +827,7 @@ end 'buildSlabFreeDoor'
 // process's first allocation, which precedes any scheduler, so it is sealed before a worker M can
 // exist.
 export function slabRuntimeGlobals() returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create()
+	var out = DataSectionEntryArray.create(0)
 	pushRuntimeGlobal(out, label: SlabStateLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	return out
 end 'slabRuntimeGlobals'
@@ -920,7 +920,7 @@ function requireMarkTableCoversTheWidestSpan(widestSpanChunks FullRangeInt)
 end 'requireMarkTableCoversTheWidestSpan'
 
 function slabTierPins() returns TierGeometryPinArray
-	var out = TierGeometryPinArray.create()
+	var out = TierGeometryPinArray.create(0)
 
 	out.push(TierGeometryPin.create("the chunk granularity", here: SlabChunkBytes, named: "SlabPageBytes"))
 	out.push(TierGeometryPin.create("an OS-direct mapping's prefix", here: OsDirectPrefixBytes, named: "OsDirectPrefixBytes"))
@@ -990,7 +990,7 @@ end 'slabTierPins'
 export let HeapStatsStdlibFileName = "HeapStats.maxon"
 
 export function checkHeapStatsBuckets(signatures ProgramSignatures, stdlibPath FilePath)
-	var pins = TierGeometryPinArray.create()
+	var pins = TierGeometryPinArray.create(0)
 	pins.push(TierGeometryPin.create("the census tag-bucket count", here: SlabCensusTagBuckets, named: "HeapBucketCount"))
 	requireTierGeometryAgrees(pins, signatures: signatures, tierPath: stdlibPath, emitterFile: "Compiler/Runtime/SlabRuntime.maxon", layer: "checkHeapStatsBuckets")
 end 'checkHeapStatsBuckets'
@@ -1181,7 +1181,7 @@ end 'emitSlabSchedulerExists'
 // because this runs once and the call is the one spelling of the commit.
 export function emitSlabPublishScheduler(module StdModule, block IrBlock, tebOffset ValueId, ids ValueMinter)
 	let state = ids.mint()
-	module.appendOp(block, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
+	module.appendOp(block, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create(0)))
 	emitStoreField(module, block: block, record: state, offset: SlabStateSchedulerOffset, value: tebOffset)
 end 'emitSlabPublishScheduler'
 
@@ -1397,7 +1397,7 @@ end 'serialRoutes'
 // lock where it takes it emits nothing for it at all.
 function serialEdgeArgs(module StdModule, block IrBlock, p ValueId, depthRecord ValueId, depthOffset ByteOffset, need SlabShardNeed, ids ValueMinter) returns ValueIdArray
 	return match need 'need'
-		creditsOnly gives ValueIdArray.create()
+		creditsOnly gives ValueIdArray.create(0)
 		holdsProc gives argsOf(p)
 		routed gives twoArgs(p, second: emitFieldAddr(module, block: block, record: depthRecord, offset: depthOffset, ids: ids))
 	end 'need'
@@ -1568,8 +1568,8 @@ function emitSlabRowDecision(module StdModule, func IrFunction, cur IrBlock, sta
 	var clamped = module.addBlock(func, label: label, heat: heat)
 	var ownRow = module.addBlock(func, label: label, heat: heat)
 
-	var rawRowUnlocked = SlabBailEdge.create(unscheduled, args: ValueIdArray.create())
-	var rawRowSerialised = SlabBailEdge.create(noMachine, args: ValueIdArray.create())
+	var rawRowUnlocked = SlabBailEdge.create(unscheduled, args: ValueIdArray.create(0))
+	var rawRowSerialised = SlabBailEdge.create(noMachine, args: ValueIdArray.create(0))
 	let m = emitSlabMachineOrBail(module, func: func, cur: cur, schedulerWord: schedulerWord, haveMachine: haveMachine, noScheduler: rawRowUnlocked, noMachine: rawRowSerialised, ids: ids, label: label, heat: heat)
 
 	var procTest = emitThreadTrafficStep(module, func: func, cur: haveMachine, m: m, traffic: traffic, ids: ids, label: label, heat: heat)
@@ -1595,7 +1595,7 @@ function emitThreadTrafficStep(module StdModule, func IrFunction, cur IrBlock, m
 	var haveThread = module.addBlock(func, label: label, heat: heat)
 	var done = module.addBlock(func, label: label, heat: heat)
 
-	let owner = emitSlabOwnerThreadOrBail(module, cur: cur, m: m, haveOwner: haveThread, noThread: SlabBailEdge.create(done, args: ValueIdArray.create()), ids: ids)
+	let owner = emitSlabOwnerThreadOrBail(module, cur: cur, m: m, haveOwner: haveThread, noThread: SlabBailEdge.create(done, args: ValueIdArray.create(0)), ids: ids)
 
 	match traffic 'columns'
 		alloc(bytes) then emitThreadAllocColumns(module, block: haveThread, owner: owner, bytes: bytes, ids: ids)
@@ -1960,7 +1960,7 @@ function emitSlabStateCommitRoad(module StdModule, func IrFunction, merge IrBloc
 	var commit = module.addBlock(func, label: label, heat: BlockHeat.cold)
 
 	let committed = ids.mint()
-	module.appendOp(commit, op: StdOp.call(committed, callee: SlabStateName, args: ValueIdArray.create()))
+	module.appendOp(commit, op: StdOp.call(committed, callee: SlabStateName, args: ValueIdArray.create(0)))
 	emitBranchCarrying(module, from: commit, to: merge, values: argsOf(committed))
 
 	return commit.id
@@ -2136,7 +2136,7 @@ function buildSlabRefill(module StdModule, model MachineModel)
 	let mcacheRow = 2
 
 	let state = ids.mint()
-	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
+	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create(0)))
 	let depthAddr = ids.mint()
 	var locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
 	emitSlabLockEnter(module, block: locked, state: state, depthAddr: depthAddr, ids: ids)
@@ -2175,7 +2175,7 @@ function buildSlabRefill(module StdModule, model MachineModel)
 	module.appendOp(cut, op: StdOp.call(pageBase, callee: SlabArenaAllocChunksName, args: argsOf(numChunks)))
 
 	let span = ids.mint()
-	module.appendOp(cut, op: StdOp.call(span, callee: SlabMetaAllocName, args: ValueIdArray.create()))
+	module.appendOp(cut, op: StdOp.call(span, callee: SlabMetaAllocName, args: ValueIdArray.create(0)))
 	emitStoreField(module, block: cut, record: span, offset: MspanBaseAddrOffset, value: pageBase)
 	emitStoreField(module, block: cut, record: span, offset: MspanFreeListOffset, value: none)
 	emitStoreField(module, block: cut, record: span, offset: MspanFreeCountOffset, value: totalSlots)
@@ -2616,7 +2616,7 @@ function emitSlabFastProbe(module StdModule, func IrFunction, cur IrBlock, rowBa
 
 	let slotAddr = emitWordSlotAddr(module, block: cur, base: rowBase, index: classIdx, ids: ids)
 	module.appendOp(cur, op: StdOp.loadIndirect(spanId, addrId: slotAddr, offset: rowDisp, valueType: StdType.i64))
-	emitSlabProbe(module, func: func, cur: cur, span: spanId, owner: owner, hit: hit, hitArgs: ValueIdArray.create(), miss: bail, ids: ids, label: label)
+	emitSlabProbe(module, func: func, cur: cur, span: spanId, owner: owner, hit: hit, hitArgs: ValueIdArray.create(0), miss: bail, ids: ids, label: label)
 
 	return hit
 end 'emitSlabFastProbe'
@@ -2919,7 +2919,7 @@ end 'buildSlabSpanDestroy'
 // written by every claim and every chunk release, each of which already runs inside this lock, so an
 // unlocked walk would read a granule mid-transition and decommit one a claim had just taken.
 function buildSlabScavenge(module StdModule, model MachineModel)
-	var func = IrFunction.createFromStd(SlabScavengeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SlabScavengeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2933,7 +2933,7 @@ function buildSlabScavenge(module StdModule, model MachineModel)
 	var classDone = module.addBlock(func, label: b"classdone", heat: BlockHeat.normal)
 
 	let state = ids.mint()
-	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
+	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create(0)))
 	let depthAddr = ids.mint()
 	var locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
 	emitSlabLockEnter(module, block: locked, state: state, depthAddr: depthAddr, ids: ids)
@@ -2946,7 +2946,7 @@ function buildSlabScavenge(module StdModule, model MachineModel)
 	emitBranchOnCompare(module, block: classLoop, value: classIdx, pred: StdCmpPred.ge, against: slabClassCount() as FullRangeInt, whenTrue: arenas, whenFalse: classStart, ids: ids)
 
 	let decommitted = ids.mint()
-	module.appendOp(arenas, op: StdOp.call(decommitted, callee: SlabArenaScavengeName, args: ValueIdArray.create()))
+	module.appendOp(arenas, op: StdOp.call(decommitted, callee: SlabArenaScavengeName, args: ValueIdArray.create(0)))
 	emitSlabLockLeave(module, block: arenas, state: state, depthAddr: depthAddr, ids: ids)
 	module.setTerminator(arenas, op: StdOp.ret(decommitted))
 
@@ -3024,7 +3024,7 @@ function buildSlabCensusEntry(module StdModule, name ByteArray, callee ByteArray
 	end 'arity'
 
 	let paramTypes = match argument 'paramTypes'
-		constant gives StdTypeArray.create()
+		constant gives StdTypeArray.create(0)
 		forwarded gives oneI64Param()
 	end 'paramTypes'
 
@@ -3035,7 +3035,7 @@ function buildSlabCensusEntry(module StdModule, name ByteArray, callee ByteArray
 	emitParams(module, block: entry, count: paramCount)
 
 	let state = ids.mint()
-	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
+	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create(0)))
 
 	let depthAddr = ids.mint()
 	var locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
@@ -3606,7 +3606,7 @@ end 'SpanOwnerAccessCensus'
 // walk — `__slab_meta_free`'s `Freed` stamp and the census walk's read of the word among them.
 function assertSpanOwnerAccessIsOrdered(module StdModule, firstFuncIndex ElementIndex)
 	var census = SpanOwnerAccessCensus.create()
-	var opIndices = OpIndexArray.create()
+	var opIndices = OpIndexArray.create(0)
 	var access = StdAccessOperands.create()
 
 	for index in 0 upto firstFuncIndex 'eachEarlierFunc'

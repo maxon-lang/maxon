@@ -51,9 +51,9 @@ export type PhaseMemoryColumns
 	export var bytes as ByteCountArray
 
 	export static function create(phaseCount PhaseIndex) returns PhaseMemoryColumns
-		var allocs = AllocCountArray.create()
-		var frees = AllocCountArray.create()
-		var bytes = ByteCountArray.create()
+		var allocs = AllocCountArray.create(0)
+		var frees = AllocCountArray.create(0)
+		var bytes = ByteCountArray.create(0)
 		allocs.resize(phaseCount)
 		frees.resize(phaseCount)
 		bytes.resize(phaseCount)
@@ -241,7 +241,7 @@ export type PhaseResidencyColumns
 end 'PhaseResidencyColumns'
 
 function phaseColumn(cells ElementIndex) returns PhaseColumnArray
-	var column = PhaseColumnArray.create()
+	var column = PhaseColumnArray.create(0)
 	column.resize(cells)
 	return column
 end 'phaseColumn'
@@ -342,7 +342,7 @@ export type PhaseTagCensus
 	export var rawLiveSlots as AllocCount
 
 	export static function empty() returns PhaseTagCensus
-		return Self{counts: PhaseColumnArray.create(), bytes: PhaseColumnArray.create(), tallyBytes: 0, liveBytes: 0, rawLiveSlots: 0}
+		return Self{counts: PhaseColumnArray.create(0), bytes: PhaseColumnArray.create(0), tallyBytes: 0, liveBytes: 0, rawLiveSlots: 0}
 	end 'empty'
 
 	export static function sized() returns PhaseTagCensus
@@ -377,7 +377,7 @@ export type TagBucketColumns
 	export var names as StringArray
 
 	export static function off() returns TagBucketColumns
-		return Self{mode: SlabCensusClassMode, counts: PhaseColumnArray.create(), bytes: PhaseColumnArray.create(), sampled: BoolArray.create(), names: StringArray.create()}
+		return Self{mode: SlabCensusClassMode, counts: PhaseColumnArray.create(0), bytes: PhaseColumnArray.create(0), sampled: BoolArray.create(0), names: StringArray.create(0)}
 	end 'off'
 
 	export function size(phaseCount PhaseIndex, tallyMode TagCensusMode)
@@ -452,7 +452,7 @@ export type PhaseTagCensusColumns
 	var scratchIsCurrent as bool
 
 	export static function off() returns PhaseTagCensusColumns
-		return Self{enabled: false, requested: TagCensusPhases.everyPhase, buckets: TagBucketColumns.off(), liveBytes: PhaseColumnArray.create(), rawLiveSlots: PhaseColumnArray.create(), tallyBytes: PhaseColumnArray.create(), scratch: PhaseTagCensus.empty(), scratchIsCurrent: false}
+		return Self{enabled: false, requested: TagCensusPhases.everyPhase, buckets: TagBucketColumns.off(), liveBytes: PhaseColumnArray.create(0), rawLiveSlots: PhaseColumnArray.create(0), tallyBytes: PhaseColumnArray.create(0), scratch: PhaseTagCensus.empty(), scratchIsCurrent: false}
 	end 'off'
 
 	export function enable(phaseCount PhaseIndex, tallyMode TagCensusMode, wanted TagCensusPhases)
@@ -526,7 +526,7 @@ export type PhaseAllocTally
 	export var runTotal as AllocCount
 
 	export static function empty() returns PhaseAllocTally
-		return Self{counts: PhaseColumnArray.create(), bytes: PhaseColumnArray.create(), runTotal: 0}
+		return Self{counts: PhaseColumnArray.create(0), bytes: PhaseColumnArray.create(0), runTotal: 0}
 	end 'empty'
 
 	export static function sized() returns PhaseAllocTally
@@ -885,7 +885,7 @@ function tagCensusReport(memory CompileMemory, peakLivePhase CompilePhase, timin
 	end 'noNameTable'
 
 	let peakSampled = census.buckets.sampledAt(tablePhase.ordinal as PhaseIndex)
-	var peakRows = TagCensusRowArray.create()
+	var peakRows = TagCensusRowArray.create(0)
 
 	if peakSampled 'rankThePeakOnce'
 		peakRows = tagRowsRanked(census.buckets, index: tablePhase.ordinal as PhaseIndex, wholeTable: true, style: style)
@@ -942,7 +942,7 @@ function allocTallyReport(memory CompileMemory, timings CompileTimings) returns 
 	end 'findThePeak'
 
 	let peakRanked = peakAllocs > 0
-	var peakRows = TagCensusRowArray.create()
+	var peakRows = TagCensusRowArray.create(0)
 
 	if peakRanked 'rankThePeakOnce'
 		peakRows = tagRowsRanked(tally.buckets, index: peakPhase.ordinal as PhaseIndex, wholeTable: true, style: style)
@@ -1132,7 +1132,7 @@ end 'tagRowIsShownSeparately'
 
 function tagRowsRanked(columns TagBucketColumns, index PhaseIndex, wholeTable bool, style TagRowStyle) returns TagCensusRowArray
 	let order = style.order
-	var rows = TagCensusRowArray.create()
+	var rows = TagCensusRowArray.create(0)
 
 	for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
 		if tagRowIsShownSeparately(bucket, skip: style.skip) 'itsOwnRow'
@@ -1286,15 +1286,15 @@ end 'tagCensusAgainstTheLevel'
 
 function tagCensusNames(mode TagCensusMode) returns StringArray
 	if mode != SlabCensusTagMode 'sizeClassesAreNotNamed'
-		return StringArray.create()
+		return StringArray.create(0)
 	end 'sizeClassesAreNotNamed'
 
 	let exe = try Process.executablePath() otherwise 'noIntrospection'
-		return StringArray.create()
+		return StringArray.create(0)
 	end 'noIntrospection'
 
 	let symdata = try readLinkedSection(exe, target: detectHostTarget(), section: LinkedSectionKind.internedNames) otherwise 'noSection'
-		return StringArray.create()
+		return StringArray.create(0)
 	end 'noSection'
 
 	return nameBlobIn(symdata, magic: DsTagBlobMagic)

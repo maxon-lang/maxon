@@ -17,8 +17,8 @@ type EngineCorpus
 	export let expectations as StringArray
 
 	static function read() returns EngineCorpus
-		var sources = StringArray.create()
-		var expectations = StringArray.create()
+		var sources = StringArray.create(0)
+		var expectations = StringArray.create(0)
 
 		for entry in listing(fixtureDir(EngineCasesDirName)) 'eachEntry'
 			let storedExtension = entry.fileExtension()
@@ -34,7 +34,7 @@ type EngineCorpus
 	end 'read'
 
 	function pairedCases() returns StringArray
-		var paired = StringArray.create()
+		var paired = StringArray.create(0)
 
 		for caseName in self.sources 'eachSource'
 			if self.expectations.contains(caseName) 'paired'
@@ -64,7 +64,7 @@ typealias StagedEngineCaseArray = Array with StagedEngineCase
 
 test 'every engine case has both its source and its oracle'
 	let corpus = EngineCorpus.read()
-	var halfStored = StringArray.create()
+	var halfStored = StringArray.create(0)
 
 	for caseName in corpus.sources 'eachSource'
 		if not corpus.expectations.contains(caseName) 'noOracle'
@@ -88,7 +88,7 @@ end 'the engine corpus holds a paired case'
 
 test 'the engine corpus keeps its three negative controls'
 	let corpus = EngineCorpus.read()
-	var absent = StringArray.create()
+	var absent = StringArray.create(0)
 
 	for control in negativeControlCases() 'eachControl'
 		if not corpus.sources.contains(control) 'missing'
@@ -109,8 +109,8 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 	requireFmtRunSucceeded(firstRun, runLabel: FirstRunLabel, over: EngineTreeDescription)
 
 	var firstPass = FormattedTextMap.create()
-	var diverged = StringArray.create()
-	var changedContent = StringArray.create()
+	var diverged = StringArray.create(0)
+	var changedContent = StringArray.create(0)
 
 	for engineCase in staged 'eachCase'
 		let formatted = fileText(engineCase.path)
@@ -133,7 +133,7 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 	let secondRun = spawnFmtOverStagedTree(EngineStagingDirName, what: EngineSpawnName)
 	requireFmtRunSucceeded(secondRun, runLabel: SecondRunLabel, over: EngineTreeDescription)
 
-	var movedAgain = StringArray.create()
+	var movedAgain = StringArray.create(0)
 
 	for engineCase in staged 'eachCase'
 		let once = try firstPass.get(engineCase.name) otherwise panic("engine-cases.test: the gate could not run — '{engineCase.name}' was staged and has no first-run text, though every staged case recorded one.")
@@ -184,7 +184,7 @@ end 'quotedLine'
 
 function stageEngineCases(corpus EngineCorpus) returns StagedEngineCaseArray
 	let stagingDir = freshStagingDir(EngineStagingDirName)
-	var staged = StagedEngineCaseArray.create()
+	var staged = StagedEngineCaseArray.create(0)
 
 	for caseName in corpus.sources 'eachSource'
 		let source = corpus.caseText(caseName, storedExtension: CaseSourceExtension)

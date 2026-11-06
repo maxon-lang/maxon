@@ -72,7 +72,7 @@ type Lex
 	var counter as Integer
 
 	static function create() returns Self throws IterErr
-		var toks = TokBuf.create()
+		var toks = TokBuf.create(0)
 		for i in 0 upto 200 'fill'
 			toks.push(Tok.make(i))
 		end 'fill'

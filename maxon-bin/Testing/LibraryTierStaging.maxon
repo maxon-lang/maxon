@@ -60,7 +60,7 @@ end 'copiedTiers'
 // whether the name is in THIS copy. A file copied here but not loaded by the compiler would pass the
 // first and trip the second, either way delivering an answer about a file nothing reads.
 function copySourceTier(from FilePath, into FilePath, written FilePathArray) throws TierStagingError
-	var sources = MaxonSourcePathArray.create()
+	var sources = MaxonSourcePathArray.create(0)
 	_ = try collectMaxonSources(from, into: sources) otherwise throw TierStagingError.refused("could not walk {from.toString()} to stage a private copy of it")
 
 	for source in sources 'eachSource'
@@ -110,6 +110,6 @@ function copyCompilerInto(compiler FilePath, binDir FilePath) throws TierStaging
 end 'copyCompilerInto'
 
 export function stageLibraryTierWithCompiler(tierRoot FilePath, sourceStdlib FilePath, sourceRuntime FilePath, compiler FilePath) throws TierStagingError
-	_ = try copiedTiers(tierRoot, sourceStdlib: sourceStdlib, sourceRuntime: sourceRuntime, written: FilePathArray.create())
+	_ = try copiedTiers(tierRoot, sourceStdlib: sourceStdlib, sourceRuntime: sourceRuntime, written: FilePathArray.create(0))
 	try copyCompilerInto(compiler, binDir: tierRoot.join(LibraryTierBinDirName))
 end 'stageLibraryTierWithCompiler'

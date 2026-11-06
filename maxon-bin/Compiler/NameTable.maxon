@@ -55,7 +55,7 @@ export type NameTable
 	export static function create(nameHint NameId, byteHint NameByteCount) returns NameTable
 		let names = NameTableMinimumReservedNames if nameHint < NameTableMinimumReservedNames else nameHint
 		let arena = NameTableMinimumReservedBytes if byteHint < NameTableMinimumReservedBytes else byteHint
-		var table = Self{bytes: ByteArray.create(), spans: NameSpanArray.create(), hashes: NameDigestArray.create(), slotIds: NameIdArray.create(), slotStates: SlotStateArray.create(), views: NameViewColumn.create(), tombstones: 0, reservedNames: names, reservedBytes: arena, regrown: 0, rehashed: 0}
+		var table = Self{bytes: ByteArray.create(0), spans: NameSpanArray.create(0), hashes: NameDigestArray.create(0), slotIds: NameIdArray.create(0), slotStates: SlotStateArray.create(0), views: NameViewColumn.create(0), tombstones: 0, reservedNames: names, reservedBytes: arena, regrown: 0, rehashed: 0}
 		table.bytes.reserve(arena as ElementIndex)
 		table.reserveColumns(names)
 		table.rebuildIndex(slotsForNames(names))
@@ -65,7 +65,7 @@ export type NameTable
 	// A table nothing else holds, with `source`'s names under `source`'s ids: five array clones whatever
 	// the name count. The view cache is not carried — a copy materializes only what it is itself asked for.
 	export static function copyOf(source NameTable) returns NameTable
-		return Self{bytes: source.bytes.clone(), spans: source.spans.clone(), hashes: source.hashes.clone(), slotIds: source.slotIds.clone(), slotStates: source.slotStates.clone(), views: NameViewColumn.create(), tombstones: source.tombstones, reservedNames: source.reservedNames, reservedBytes: source.reservedBytes, regrown: source.regrown, rehashed: source.rehashed}
+		return Self{bytes: source.bytes.clone(), spans: source.spans.clone(), hashes: source.hashes.clone(), slotIds: source.slotIds.clone(), slotStates: source.slotStates.clone(), views: NameViewColumn.create(0), tombstones: source.tombstones, reservedNames: source.reservedNames, reservedBytes: source.reservedBytes, regrown: source.regrown, rehashed: source.rehashed}
 	end 'copyOf'
 
 	export function releaseViewCache()
@@ -146,7 +146,7 @@ export type NameTable
 	// A copy nothing else holds — what a caller handing the name to another thread needs.
 	export function ownedCopyOf(id NameId) returns ByteArray
 		let span = self.spanAt(id)
-		var copy = ByteArray.create()
+		var copy = ByteArray.create(0)
 		copy.reserve(span.size as ElementIndex)
 		appendArenaWindow(copy, source: self.bytes, start: span.offset, size: span.size)
 		return copy

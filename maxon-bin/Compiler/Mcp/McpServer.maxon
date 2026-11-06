@@ -35,7 +35,7 @@ function propertySchema(doc JsonDoc, prop McpProperty) returns JsonNodeId
 	if types.count() == 1 'oneType'
 		addTypeFields(schema, doc: doc, jsonType: try types.get(0) otherwise panic("propertySchema: a one-type property has its type"))
 	end 'oneType' else 'eitherType'
-		var alternatives = JsonNodeIdArray.create()
+		var alternatives = JsonNodeIdArray.create(0)
 
 		for jsonType in types 'eachType'
 			alternatives.push(typeSchema(doc, jsonType: jsonType))
@@ -81,7 +81,7 @@ end 'addTypeFields'
 
 function toolDescriptor(doc JsonDoc, spec McpToolSpec, devMode bool) returns JsonNodeId
 	var properties = JsonObjectBuilder.create()
-	var requiredNames = JsonNodeIdArray.create()
+	var requiredNames = JsonNodeIdArray.create(0)
 	var anyRequired = false
 
 	for prop in spec.properties 'each'
@@ -115,7 +115,7 @@ end 'toolDescriptor'
 
 function handleToolsList(reqDoc JsonDoc, idNode JsonNodeId, devMode bool) returns String
 	var doc = JsonDoc.create()
-	var descriptors = JsonNodeIdArray.create()
+	var descriptors = JsonNodeIdArray.create(0)
 
 	for spec in mcpToolRoster() 'each'
 		if not spec.visibleIn(devMode) 'hidden'

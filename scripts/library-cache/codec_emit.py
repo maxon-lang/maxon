@@ -268,7 +268,7 @@ class Emitter:
         out.append("")
         out.append("%sfunction %s(reader LibraryCacheReader) returns %s throws LibraryCacheDamage" % (visibility, read_name, name))
         out.append("\tlet count = try reader.count()")
-        out.append("\tvar result = %s.create()" % name)
+        out.append("\tvar result = %s.create(%s)" % (name, "0" if node.kind == "array" else ""))
 
         if node.kind == "array":
             out.append("\tresult.reserve(count)")

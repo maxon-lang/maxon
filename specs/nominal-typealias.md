@@ -143,7 +143,7 @@ typealias Row = int(0 to 1000)
 typealias RowArray = Array with Row
 
 function main() returns ExitCode
-	var rows = RowArray.create()
+	var rows = RowArray.create(0)
 	rows.push(4)
 	let o = 0 as Offset
 	let r = try rows.get(o) otherwise 0
@@ -162,7 +162,7 @@ typealias Row = int(0 to 1000)
 typealias RowArray = Array with Row
 
 function main() returns ExitCode
-	var rows = RowArray.create()
+	var rows = RowArray.create(0)
 	rows.push(4)
 	let o = 0 as Offset
 	try rows.set(o, value: 7) otherwise panic("the row exists")
@@ -181,7 +181,7 @@ typealias Row = int(0 to 1000)
 typealias RowArray = Array with Row
 
 function main() returns ExitCode
-	var rows = RowArray.create()
+	var rows = RowArray.create(0)
 	let o = 3 as Offset
 	rows.resize(o)
 	print("{rows.count()}")
@@ -203,7 +203,7 @@ function takesNarrow(n Narrow) returns Narrow
 end 'takesNarrow'
 
 function main() returns ExitCode
-	var arr = NarrowArray.create()
+	var arr = NarrowArray.create(0)
 	arr.push(4)
 	let a = takesNarrow(arr.count())
 	print("{a}")
@@ -220,7 +220,7 @@ typealias Narrow = int(0 to 1000)
 typealias NarrowArray = Array with Narrow
 
 function main() returns ExitCode
-	var arr = NarrowArray.create()
+	var arr = NarrowArray.create(0)
 	arr.push(4)
 	let n = arr.count() as Count
 	print("{n}")
@@ -244,7 +244,7 @@ function firstIndex() returns ElementIndex
 end 'firstIndex'
 
 function main() returns ExitCode
-	var arr = NarrowArray.create()
+	var arr = NarrowArray.create(0)
 	arr.push(4)
 	var n = arr.count() as ElementIndex
 	print("{n}")
@@ -268,7 +268,7 @@ function takesCount(n Count) returns Count
 end 'takesCount'
 
 function main() returns ExitCode
-	var arr = NarrowArray.create()
+	var arr = NarrowArray.create(0)
 	arr.push(4)
 	let list = List from [10, 20]
 	let map = [1: 10, 2: 20, 3: 30]
@@ -318,7 +318,7 @@ function takesCount(n Count) returns Count
 end 'takesCount'
 
 function main() returns ExitCode
-	var arr = NarrowArray.create()
+	var arr = NarrowArray.create(0)
 	arr.push(4)
 
 	for (position, _) in arr.withIterator() 'eachElement'
@@ -339,7 +339,7 @@ typealias Narrow = int(0 to 1000)
 typealias NarrowArray = Array with Narrow
 
 function main() returns ExitCode
-	var arr = NarrowArray.create()
+	var arr = NarrowArray.create(0)
 	arr.push(4)
 	arr.push(9)
 	let text = "a😀"
@@ -365,7 +365,7 @@ typealias Narrow = int(0 to 1000)
 typealias NarrowArray = Array with Narrow
 
 function main() returns ExitCode
-	let arr = NarrowArray.create()
+	let arr = NarrowArray.create(0)
 	let procs = Scheduler.processorCount()
 	if arr.count() < procs and procs > arr.count() 'moreProcessorsThanElements'
 		return 7
@@ -386,7 +386,7 @@ typealias Row = int(0 to 1000)
 typealias RowArray = Array with Row
 
 function main() returns ExitCode
-	var rows = RowArray.create()
+	var rows = RowArray.create(0)
 	rows.push(4)
 	rows.push(9)
 	let last = 1 as BlockId
@@ -783,7 +783,7 @@ function takesIndex(i ElementIndex) returns ElementIndex
 end 'takesIndex'
 
 function main() returns ExitCode
-	var rows = RowArray.create()
+	var rows = RowArray.create(0)
 	rows.push(4)
 	rows.push(9)
 	let foo = 1 as FooId
@@ -1149,7 +1149,7 @@ typealias Row = int(0 to 1000)
 typealias RowArray = Array with Row
 
 function main() returns ExitCode
-	var rows = RowArray.create()
+	var rows = RowArray.create(0)
 	rows.push(4)
 	let p = 0 as Position
 	let r = try rows.get(p) otherwise 0
@@ -2015,7 +2015,7 @@ function takesWide(w Wide) returns Wide
 end 'takesWide'
 
 function main() returns ExitCode
-	var col = NarrowCol.create()
+	var col = NarrowCol.create(0)
 	col.push(4)
 	var acc = 0 as Wide
 	for x in col 'each'

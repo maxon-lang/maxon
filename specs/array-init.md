@@ -438,7 +438,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var src = ByteArray.create()
+	var src = ByteArray.create(0)
 	src.push(1)
 	src.push(2)
 	var b = ByteArray.init(src)
@@ -498,7 +498,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{items: ElementArray.create()}
+		return Self{items: ElementArray.create(0)}
 	end 'create'
 
 	function push(item Element)
@@ -507,7 +507,7 @@ type Container uses Element
 
 	function drain() returns Count
 		view t = ElementArray.init(self.items)
-		self.items = ElementArray.create()
+		self.items = ElementArray.create(0)
 		return t.count()
 	end 'drain'
 end 'Container'

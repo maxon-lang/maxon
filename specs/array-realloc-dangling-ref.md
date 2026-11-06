@@ -65,7 +65,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push(Item.create("first item {40 + 2} with a long name for heap allocation", value: 42))
 
 	view item = try arr.get(0) otherwise Item.create("", value: 0)

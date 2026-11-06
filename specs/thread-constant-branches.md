@@ -80,7 +80,7 @@ function pick(a WordArray, i Idx) returns Word
 end 'pick'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		a.push(i * 2)
 	end 'seed'
@@ -112,7 +112,7 @@ function pickOr(a WordArray, i Idx) returns Word
 end 'pickOr'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 5 'seed'
 		a.push(i)
 	end 'seed'
@@ -146,7 +146,7 @@ function probe(a WordArray, i Idx) returns Word
 end 'probe'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.push(5)
 	if probe(a, i: 0) != 5 'present'
 		return 1
@@ -176,7 +176,7 @@ function put(a WordArray, i Idx, v Word) returns bool
 end 'put'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.resize(4)
 	var stored = 0 as FullRangeInt
 	for i in 0 upto 5 'each'
@@ -209,7 +209,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.push(3)
 	a.push(2)
 	a.push(1)
@@ -249,7 +249,7 @@ function classify(a WordArray, i Idx) returns Word
 end 'classify'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.push(8)
 	if classify(a, i: 0) != 8 'present'
 		return 1
@@ -279,7 +279,7 @@ function twice(a WordArray, i Idx) returns Word throws ArrayError
 end 'twice'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.push(21)
 	let present = try twice(a, i: 0) otherwise 0
 	let absent = try twice(a, i: 5) otherwise 100

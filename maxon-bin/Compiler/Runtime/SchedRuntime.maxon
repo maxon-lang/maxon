@@ -2140,7 +2140,7 @@ end 'emitLoadCurrentMOrBail'
 // because a caller that wants a processor's per-P state has none to use in any of them. The blocks are the
 // caller's, for `emitLoadCurrentMOrBail`'s reason.
 export function emitLoadCurrentPOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, haveProc IrBlock, noProc IrBlock, ids ValueMinter) returns ValueId
-	let m = emitLoadCurrentMOrBail(module, cur: cur, haveOffset: haveOffset, haveMachine: haveMachine, bail: noProc, bailValues: FullRangeIntArray.create(), ids: ids)
+	let m = emitLoadCurrentMOrBail(module, cur: cur, haveOffset: haveOffset, haveMachine: haveMachine, bail: noProc, bailValues: FullRangeIntArray.create(0), ids: ids)
 
 	let p = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentP, ids: ids)
 	emitBranchOnCompare(module, block: haveMachine, value: p, pred: StdCmpPred.eq, against: 0, whenTrue: noProc, whenFalse: haveProc, ids: ids)
@@ -2152,7 +2152,7 @@ end 'emitLoadCurrentPOrBail'
 function emitBailIfZero(module StdModule, block IrBlock, tested ValueId, bail IrBlock, bailValues FullRangeIntArray, otherwise IrBlock, ids ValueMinter)
 	let isZero = emitCompareWithConstant(module, block: block, value: tested, pred: StdCmpPred.eq, against: 0, ids: ids)
 
-	var edgeArgs = ValueIdArray.create()
+	var edgeArgs = ValueIdArray.create(0)
 
 	for value in bailValues 'eachBailValue'
 		edgeArgs.push(emitConst(module, block: block, value: value, ids: ids))
@@ -2234,7 +2234,7 @@ export function emitLoadCurrentGtAndProcIdOrZero(module StdModule, func IrFuncti
 	merge.blockArgs.push(IrBlockArg.create(procIdId, argType: StdType.i64))
 
 	// The first two zeros are the shared walk's, and both answer 0 for BOTH halves.
-	var bothHalvesZero = FullRangeIntArray.create()
+	var bothHalvesZero = FullRangeIntArray.create(0)
 	bothHalvesZero.push(0)
 	bothHalvesZero.push(0)
 	let m = emitLoadCurrentMOrBail(module, cur: cur, haveOffset: haveOffset, haveMachine: haveMachine, bail: merge, bailValues: bothHalvesZero, ids: ids)
@@ -2392,7 +2392,7 @@ let LinuxThreadPointerBase = 0 as FullRangeInt
 // (`SchedTlsTebOffsetLabel`, `SchedLockLabel` and the two preemption words) are `declared` on `usesGt`, the
 // gate the chunks ride, because a chunk's relocation needs the word whether or not any body survived.
 export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create()
+	var out = DataSectionEntryArray.create(0)
 
 	// ⭐ **SEEDED TO 1 IN `.data`, NOT BY AN INITIALIZER.** A program with no scheduler runs on exactly one M
 	// — its own — and never runs `__gt_init`, so the true answer must already be in the slot, and costs no code.
@@ -3042,7 +3042,7 @@ end 'emitSchedEnqueueLocked'
 // Pay a wake — `__sched_wake_or_spawn`, the door every wake debt is paid through. `__sched_lock` released.
 // EXPORTED for the strand runner, whose global puts owe one unconditionally.
 export function emitSchedWakeAnIdleM(module StdModule, block IrBlock, ids ValueMinter)
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedWakeOrSpawnName, args: ValueIdArray.create()))
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedWakeOrSpawnName, args: ValueIdArray.create(0)))
 end 'emitSchedWakeAnIdleM'
 
 // ⭐ **PUT A STRAND TOKEN IN THIS PROCESSOR'S `runnext` SLOT, WITHOUT THE WAKE.** The put itself takes
@@ -3069,7 +3069,7 @@ end 'emitSchedFindRunnable'
 function emitSchedDequeueLocked(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	emitSchedLockEnter(module, block: block, ids: ids)
 	let g = ids.mint()
-	module.appendOp(block, op: StdOp.call(g, callee: GtDequeueName, args: ValueIdArray.create()))
+	module.appendOp(block, op: StdOp.call(g, callee: GtDequeueName, args: ValueIdArray.create(0)))
 	emitSchedLockLeave(module, block: block, ids: ids)
 	return g
 end 'emitSchedDequeueLocked'
@@ -3085,7 +3085,7 @@ end 'emitSchedDequeueLocked'
 // The run-queue lock is allocated here because it guards the queue for every M, so a green-thread
 // program that never touches a pipe still needs it. See `SchedLockLabel`.
 function buildSchedInitProcs(module StdModule, target Target)
-	var func = IrFunction.createFromStd(SchedInitProcsName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SchedInitProcsName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3209,7 +3209,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 
 	// The poller, before any machine can go idle and claim it, and a last poll of "now": 0 would read as a
 	// machine blocked in it. Single-threaded, like the rest of bring-up.
-	module.appendOp(adopt, op: StdOp.call(ids.mint(), callee: NetpollInitName, args: ValueIdArray.create()))
+	module.appendOp(adopt, op: StdOp.call(ids.mint(), callee: NetpollInitName, args: ValueIdArray.create(0)))
 	emitStoreReleaseGlobalWord(module, block: adopt, label: SchedLastPollLabel, value: emitGtNowNs(module, block: adopt, ids: ids), ids: ids)
 	module.setTerminator(adopt, op: StdOp.retVoid)
 
@@ -4187,7 +4187,7 @@ end 'runqWordNameOf'
 let RunQueueCheckName = "assertRunQueueObservationIsOrdered"
 
 function pushNameCopy(column NameRoster, name ByteArray)
-	var copied = ByteArray.create()
+	var copied = ByteArray.create(0)
 	copied.append(name)
 	column.push(copied)
 end 'pushNameCopy'
@@ -4216,7 +4216,7 @@ type RunqTaintChannel
 	export var crossedAFunction as bool
 
 	static function create() returns Self
-		return Self{values: StdValueUseSet.createRecordingIds(), argCallees: NameRoster.create(), argIndices: FullRangeIntArray.create(), returningCallees: NameRoster.create(), crossedAFunction: false}
+		return Self{values: StdValueUseSet.createRecordingIds(), argCallees: NameRoster.create(0), argIndices: FullRangeIntArray.create(0), returningCallees: NameRoster.create(0), crossedAFunction: false}
 	end 'create'
 
 	// A value id means something only inside the function that minted it, so the ids go at each function.
@@ -4341,7 +4341,7 @@ end 'runqTaintCarriesValue'
 export function assertRunQueueObservationIsOrdered(module StdModule, firstFuncIndex ElementIndex)
 	var taint = RunqRingTaint.create()
 	let funcLimit = module.funcCount()
-	var opIndices = OpIndexArray.create()
+	var opIndices = OpIndexArray.create(0)
 	var settling = true
 
 	while settling 'toAFixedPoint'
@@ -4738,9 +4738,9 @@ export function assertPublishedWordAccessIsOrdered(module StdModule, entries Dat
 		return
 	end 'noSlotClaimsTheClass'
 
-	var present = BoolArray.create()
-	var releases = BoolArray.create()
-	var acquires = BoolArray.create()
+	var present = BoolArray.create(0)
+	var releases = BoolArray.create(0)
+	var acquires = BoolArray.create(0)
 
 	for _ in labels 'eachWord'
 		present.push(false)
@@ -4748,7 +4748,7 @@ export function assertPublishedWordAccessIsOrdered(module StdModule, entries Dat
 		acquires.push(false)
 	end 'eachWord'
 
-	var opIndices = OpIndexArray.create()
+	var opIndices = OpIndexArray.create(0)
 	var access = StdAccessOperands.create()
 	var opUses = StdValueUseSet.createTrackingRepeats()
 
@@ -4760,11 +4760,11 @@ export function assertPublishedWordAccessIsOrdered(module StdModule, entries Dat
 end 'assertPublishedWordAccessIsOrdered'
 
 function publishedFromTheLockLabels(entries DataSectionEntryArray) returns NameRoster
-	var out = NameRoster.create()
+	var out = NameRoster.create(0)
 
 	for entry in entries 'eachSlot'
 		if entryIsPublishedFromTheLock(entry) 'itClaimsTheClass'
-			var label = ByteArray.create()
+			var label = ByteArray.create(0)
 
 			for labelByte in entry.label.bytes() 'eachByte'
 				label.push(labelByte)
@@ -4794,8 +4794,8 @@ end 'entryIsPublishedFromTheLock'
 function requireOrderedPublishedAccessIn(module StdModule, func IrFunction, labels NameRoster, present BoolArray, releases BoolArray, acquires BoolArray, opIndices OpIndexArray, access StdAccessOperands, opUses StdValueUseSet)
 	module.collectLiveOpIndices(func, into: opIndices)
 
-	var addrValues = ValueIdArray.create()
-	var addrWords = NameRoster.create()
+	var addrValues = ValueIdArray.create(0)
+	var addrWords = NameRoster.create(0)
 
 	for opIdx in opIndices 'eachAddress'
 		classifyAccessOperands(liveRuntimeOpAt(module, opIdx: opIdx, reader: PublishedWordCheckName), access: access)
@@ -5138,7 +5138,7 @@ function buildSchedFindRunnable(module StdModule)
 
 	let batchBase = emitLoadAcquireField(module, block: batchSized, record: p, offset: POffRunqTail, ids: ids)
 	let batchFirst = ids.mint()
-	module.appendOp(batchSized, op: StdOp.call(batchFirst, callee: GtDequeueName, args: ValueIdArray.create()))
+	module.appendOp(batchSized, op: StdOp.call(batchFirst, callee: GtDequeueName, args: ValueIdArray.create(0)))
 
 	// The ring takes one short of the quota, because the first thread was taken above and is the answer.
 	let batchCap = emitBin(module, block: batchSized, a: batchQuota, b: emitConst(module, block: batchSized, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
@@ -5156,7 +5156,7 @@ function buildSchedFindRunnable(module StdModule)
 	pushBranchEdge(batchHdr, to: batchPublish, values: argsOf(batchCount))
 
 	let batchGt = ids.mint()
-	module.appendOp(batchTake, op: StdOp.call(batchGt, callee: GtDequeueName, args: ValueIdArray.create()))
+	module.appendOp(batchTake, op: StdOp.call(batchGt, callee: GtDequeueName, args: ValueIdArray.create(0)))
 	let batchDrained = emitCompareWithConstant(module, block: batchTake, value: batchGt, pred: StdCmpPred.eq, against: 0, ids: ids)
 	var batchStore = module.addBlock(func, label: b"frbatchstore", heat: BlockHeat.normal)
 	module.setTerminator(batchTake, op: StdOp.condBranch(batchDrained, thenBlockId: batchPublish.id, elseBlockId: batchStore.id))
@@ -5294,7 +5294,7 @@ end 'buildSchedFindRunnable'
 // the work already taken — one extra lap — or a publish too late for this read, which read the count after
 // the step and woke somebody itself.
 function buildSchedAnyWork(module StdModule)
-	var func = IrFunction.createFromStd(SchedAnyWorkName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SchedAnyWorkName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5336,7 +5336,7 @@ let SchedNoWorkFound = 0
 
 function emitSchedFindsNoWork(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let anyWork = ids.mint()
-	module.appendOp(block, op: StdOp.call(anyWork, callee: SchedAnyWorkName, args: ValueIdArray.create()))
+	module.appendOp(block, op: StdOp.call(anyWork, callee: SchedAnyWorkName, args: ValueIdArray.create(0)))
 
 	return emitCompareWithConstant(module, block: block, value: anyWork, pred: StdCmpPred.eq, against: SchedNoWorkFound, ids: ids)
 end 'emitSchedFindsNoWork'
@@ -5400,7 +5400,7 @@ end 'emitSchedBranchOnNoWork'
 // is what puts one there.
 
 function buildSchedSweepDropped(module StdModule)
-	var func = IrFunction.createFromStd(SchedSweepDroppedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SchedSweepDroppedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var globalStart = module.addBlock(func, label: b"swglobalstart", heat: BlockHeat.normal)
@@ -5688,7 +5688,7 @@ end 'emitGtFreeAcquire'
 
 // See `GtFreeGetName`.
 function buildGtFreeGet(module StdModule)
-	var func = IrFunction.createFromStd(GtFreeGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtFreeGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5743,7 +5743,7 @@ function buildGtCellGet(module StdModule)
 		panic("buildGtCellGet: GtCellCarveBatch {GtCellCarveBatch} must be at least {GtCellCarveBatchMin} (the spare chain's loop ends at the last spare, which a one-cell batch never reaches) and at most GtFreeLocalHigh {GtFreeLocalHigh} (its spares land on an empty local list, which stays below the high mark)")
 	end 'batchBounds'
 
-	var func = IrFunction.createFromStd(GtCellGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(GtCellGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5871,7 +5871,7 @@ function buildSchedPerProcSum(module StdModule, name ByteArray, offset ByteOffse
 		panic("buildSchedPerProcSum: '{String.from(name)}' is built as a per-P sum but is not on `isSchedPerProcSumCallee`'s roster — add it there, which is how it reaches `isSchedSubstrateQueryCallee`, the ONE membership `RuntimeUsage.recordCallUsage` (install the scheduler) and `TargetFacilities.calleeHostFacility` (E3104 off its substrate) both read")
 	end 'offRoster'
 
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5928,7 +5928,7 @@ end 'emitSchedProcCountOne'
 // unlocked reads. `__gt_run_main` brings the scheduler up before `main`, so
 // each word has been counted before any program code can read it.
 function buildSchedLockedCountQuery(module StdModule, name ByteArray, label ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5939,7 +5939,7 @@ end 'buildSchedLockedCountQuery'
 
 // `__sched_gt_stack_bytes() -> i64` — see `SchedGtStackBytesName`.
 function buildSchedGtStackBytes(module StdModule)
-	var func = IrFunction.createFromStd(SchedGtStackBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SchedGtStackBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5953,7 +5953,7 @@ end 'buildSchedGtStackBytes'
 // `offset`; see `SchedParkWakeCountName` and `MOffGtLive`. The walk is unlocked, for `SchedAllMLabel`'s reason,
 // and each read is one aligned word some machine really stored, for `buildSchedPerProcSum`'s.
 function buildSchedPerMachineSum(module StdModule, name ByteArray, offset ByteOffset)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5992,7 +5992,7 @@ end 'emitSchedStepGtLive'
 
 export function emitSchedGtLiveSum(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let sum = ids.mint()
-	module.appendOp(block, op: StdOp.call(sum, callee: SchedGtLiveSumName, args: ValueIdArray.create()))
+	module.appendOp(block, op: StdOp.call(sum, callee: SchedGtLiveSumName, args: ValueIdArray.create(0)))
 	return sum
 end 'emitSchedGtLiveSum'
 
@@ -6302,7 +6302,7 @@ export function emitSchedHandProcessorToOwner(module StdModule, func IrFunction,
 	var released = emitSchedReleaseProcLocked(module, func: func, cur: releaseIt, m: m, p: p, holdsWorkLabel: b"hpheldwork", emptyLabel: b"hpidled", ids: ids)
 	emitSchedLockLeave(module, block: released, ids: ids)
 	emitSchedWakeMachine(module, block: released, m: owner, ids: ids)
-	module.appendOp(released, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create()))
+	module.appendOp(released, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create(0)))
 	module.setTerminator(released, op: StdOp.branch(handedOff.id))
 
 	var keepSignalled = emitSchedSignalMachineLocked(module, func: func, cur: keepIt, m: owner, labelPrefix: "hpkeep", ids: ids)
@@ -6358,7 +6358,7 @@ end 'emitSchedMainLoop'
 function emitSchedSignalMainMachine(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter) returns IrBlock
 	let mainMachine = emitLoadGlobalWord(module, block: cur, label: SchedMainMLabel, ids: ids)
 	var signalled = emitSchedSignalMachineLocked(module, func: func, cur: cur, m: mainMachine, labelPrefix: "signalmain", ids: ids)
-	module.appendOp(signalled, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create()))
+	module.appendOp(signalled, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create(0)))
 	return signalled
 end 'emitSchedSignalMainMachine'
 
@@ -6894,7 +6894,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	let pollerLate = emitSchedPollerLate(module, block: compareDeadline, pollUntil: pollUntil, when: otherDeadline, ids: ids)
 	module.setTerminator(compareDeadline, op: StdOp.condBranch(pollerLate, thenBlockId: breakPoller.id, elseBlockId: parkJoin.id))
 
-	module.appendOp(breakPoller, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create()))
+	module.appendOp(breakPoller, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create(0)))
 	module.setTerminator(breakPoller, op: StdOp.branch(parkJoin.id))
 
 	// Go's `stopm`: `mput`, then Go's `checkdead`. This is the instant the machine becomes findable as idle, and
@@ -6993,7 +6993,7 @@ function emitSchedWakeForWhatRemains(module StdModule, func IrFunction, check Ir
 	emitSchedWakeAnIdleM(module, block: wake, ids: ids)
 	module.setTerminator(wake, op: StdOp.branch(cont.id))
 
-	module.appendOp(poller, op: StdOp.call(ids.mint(), callee: SchedWakePollerName, args: ValueIdArray.create()))
+	module.appendOp(poller, op: StdOp.call(ids.mint(), callee: SchedWakePollerName, args: ValueIdArray.create(0)))
 	module.setTerminator(poller, op: StdOp.branch(cont.id))
 end 'emitSchedWakeForWhatRemains'
 
@@ -7002,7 +7002,7 @@ function emitSchedNobodyPolls(module StdModule, block IrBlock, ids ValueMinter) 
 end 'emitSchedNobodyPolls'
 
 export function emitSchedBreakIdlePoller(module StdModule, block IrBlock, ids ValueMinter)
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedBreakIdlePollerName, args: ValueIdArray.create()))
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedBreakIdlePollerName, args: ValueIdArray.create(0)))
 end 'emitSchedBreakIdlePoller'
 
 // `__sched_lock` held. A machine blocked in the poller waits for the earliest deadline as it was when it
@@ -7011,7 +7011,7 @@ end 'emitSchedBreakIdlePoller'
 // under it; the exit drain then cannot end until that wait's deadline passes, never for a wait with no
 // timer. The break makes the poller re-read the empty set and go idle.
 function buildSchedBreakIdlePoller(module StdModule)
-	var func = IrFunction.createFromStd(SchedBreakIdlePollerName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SchedBreakIdlePollerName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
 	var ids = ValueMinter.create(0)
 
@@ -7023,7 +7023,7 @@ function buildSchedBreakIdlePoller(module StdModule)
 	module.setTerminator(entry, op: StdOp.condBranch(emitGtStoresPending(module, block: entry, ids: ids), thenBlockId: doneBlock.id, elseBlockId: pollerBlocked.id))
 	module.setTerminator(pollerBlocked, op: StdOp.condBranch(emitSchedNobodyPolls(module, block: pollerBlocked, ids: ids), thenBlockId: doneBlock.id, elseBlockId: breakIt.id))
 
-	module.appendOp(breakIt, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create()))
+	module.appendOp(breakIt, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create(0)))
 	module.setTerminator(breakIt, op: StdOp.branch(doneBlock.id))
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -7062,7 +7062,7 @@ function emitSchedWorkerBirth(module StdModule, func IrFunction, entry IrBlock, 
 	// kilobytes it interrupted — a fault's, or an asynchronous preemption's. The main thread's is
 	// `mrt_runtime_init`'s, which every program on such a lane runs.
 	if targetInstallsSignalStack(target) 'signalStack'
-		module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SignalStackInstallName, args: ValueIdArray.create()))
+		module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SignalStackInstallName, args: ValueIdArray.create(0)))
 	end 'signalStack'
 
 	let bornProc = emitLoadField(module, block: entry, record: m, offset: MOffNextP, ids: ids)
@@ -7367,7 +7367,7 @@ end 'emitSchedRaiseHighWater'
 //
 // Unguarded, so an owed wake pays no prologue guard; E5004 proves its chain fits the margin.
 function buildSchedWakeOrSpawn(module StdModule)
-	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7459,10 +7459,10 @@ function buildSchedWakeNetpoller(module StdModule)
 	let pollerLate = emitSchedPollerLate(module, block: polling, pollUntil: pollUntil, when: when, ids: ids)
 	module.setTerminator(polling, op: StdOp.condBranch(pollerLate, thenBlockId: breakIt.id, elseBlockId: doneBlock.id))
 
-	module.appendOp(breakIt, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create()))
+	module.appendOp(breakIt, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create(0)))
 	module.setTerminator(breakIt, op: StdOp.branch(doneBlock.id))
 
-	module.appendOp(wakeOne, op: StdOp.call(ids.mint(), callee: SchedWakePollerName, args: ValueIdArray.create()))
+	module.appendOp(wakeOne, op: StdOp.call(ids.mint(), callee: SchedWakePollerName, args: ValueIdArray.create(0)))
 	module.setTerminator(wakeOne, op: StdOp.branch(doneBlock.id))
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -7489,7 +7489,7 @@ end 'emitSchedPollerLate'
 // after it reaches the idle tail with the deadline pending and nobody polling, and claims the poller itself
 // rather than joining the list.
 function buildSchedWakePoller(module StdModule)
-	var func = IrFunction.createFromStd(SchedWakePollerName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SchedWakePollerName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8046,7 +8046,7 @@ function arm64LookbackBlockLabel(wordsBack FullRangeInt) returns ByteArray
 		panic("arm64LookbackBlockLabel: the lookback walks {Arm64ExclusiveLookbackWords} words and this label carries one ASCII digit — widen it, or blocks {SingleDigitLimit + 1} and up would collide with earlier ones under one name")
 	end 'twoDigits'
 
-	var label = ByteArray.create()
+	var label = ByteArray.create(0)
 	label.append(b"psnollsc")
 	label.push((AsciiZeroDigit + wordsBack) as Byte)
 	return label
@@ -8077,7 +8077,7 @@ end 'emitLoadInstructionWord'
 // declines, because this thread's PC is inside `__gt_preempt` and, a moment later, its lock depth is not
 // zero.
 function buildGtAsyncPreemptPark(module StdModule)
-	var func = IrFunction.createFromStd(AsyncPreemptParkName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(AsyncPreemptParkName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8255,7 +8255,7 @@ function buildSysmon(module StdModule, target Target)
 	// the idle processor fires it at once. The due test is every schedule's (`GtRuntime.emitGtBranchOnTimerDue`);
 	// the idle count and the poller's claim are read, and a start counted (`SchedTimerStartsLabel`), under the lock
 	// their writers hold, and the start takes the lock itself, after the release.
-	_ = emitGtBranchOnTimerDue(module, func: func, cur: timerArm, due: timerOverdue, notDue: retakeBlock, notDueArgs: ValueIdArray.create(), ids: ids)
+	_ = emitGtBranchOnTimerDue(module, func: func, cur: timerArm, due: timerOverdue, notDue: retakeBlock, notDueArgs: ValueIdArray.create(0), ids: ids)
 
 	emitSchedLockEnter(module, block: timerOverdue, ids: ids)
 	let anyIdle = emitCompareWithConstant(module, block: timerOverdue, value: emitLoadGlobalWord(module, block: timerOverdue, label: SchedNpidleLabel, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
@@ -8347,7 +8347,7 @@ let WordSignShift = 63
 // which may hold none, and such a call has no processor for a retake to take. `POffSyscallCount` carries why the
 // count must precede the announcement.
 function buildSchedEnterSyscall(module StdModule)
-	var func = IrFunction.createFromStd(SchedEnterSyscallName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SchedEnterSyscallName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8357,10 +8357,10 @@ function buildSchedEnterSyscall(module StdModule)
 	var announce = module.addBlock(func, label: b"esann", heat: BlockHeat.normal)
 	var noMachine = module.addBlock(func, label: b"esnone", heat: BlockHeat.normal)
 
-	let machine = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(), ids: ids)
+	let machine = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(0), ids: ids)
 
 	let p = emitLoadField(module, block: haveMachine, record: machine, offset: MOffCurrentP, ids: ids)
-	emitBailIfZero(module, block: haveMachine, tested: p, bail: announce, bailValues: FullRangeIntArray.create(), otherwise: haveProc, ids: ids)
+	emitBailIfZero(module, block: haveMachine, tested: p, bail: announce, bailValues: FullRangeIntArray.create(0), otherwise: haveProc, ids: ids)
 
 	emitSchedProcCountOne(module, block: haveProc, p: p, offset: POffSyscallCount, ids: ids)
 	module.setTerminator(haveProc, op: StdOp.branch(announce.id))
@@ -8391,7 +8391,7 @@ end 'buildSchedEnterSyscall'
 // is on — a handoff moves the PROCESSOR, never the machine — so the exit's guarded walk answers the same M
 // the entry's did, and a bail on one side is a bail on the other.
 function buildSchedExitSyscall(module StdModule)
-	var func = IrFunction.createFromStd(SchedExitSyscallName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SchedExitSyscallName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8400,7 +8400,7 @@ function buildSchedExitSyscall(module StdModule)
 	var regainProc = module.addBlock(func, label: b"xsregain", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"xsdone", heat: BlockHeat.normal)
 
-	let machine = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: doneBlock, bailValues: FullRangeIntArray.create(), ids: ids)
+	let machine = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: doneBlock, bailValues: FullRangeIntArray.create(0), ids: ids)
 
 	let delta = emitConst(module, block: haveMachine, value: 0 - MSyscallInCall, ids: ids)
 	let prior = emitFieldAccumulate(module, block: haveMachine, record: machine, offset: MOffSyscallState, delta: delta, multiM: true, ids: ids)
@@ -8408,7 +8408,7 @@ function buildSchedExitSyscall(module StdModule)
 	let stolenBit = emitBin(module, block: haveMachine, a: prior, b: stolenMask, opcode: StdBinOpcode.bitAnd, ids: ids)
 	emitBranchOnCompare(module, block: haveMachine, value: stolenBit, pred: StdCmpPred.ne, against: 0, whenTrue: regainProc, whenFalse: doneBlock, ids: ids)
 
-	module.appendOp(regainProc, op: StdOp.call(ids.mint(), callee: SchedSyscallRegainName, args: ValueIdArray.create()))
+	module.appendOp(regainProc, op: StdOp.call(ids.mint(), callee: SchedSyscallRegainName, args: ValueIdArray.create(0)))
 	module.setTerminator(regainProc, op: StdOp.retVoid)
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -8486,7 +8486,7 @@ end 'buildSchedExitSyscall'
 // ⚠ **IT DOES NOT JOIN `__sched_midle`**, so `__sched_checkdead` counts it as running, which it is: it holds a
 // green thread it will run once it has a processor.
 function buildSchedSyscallRegain(module StdModule)
-	var func = IrFunction.createFromStd(SchedSyscallRegainName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SchedSyscallRegainName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8634,7 +8634,7 @@ end 'emitSchedRegainUnlinkLocked'
 // even at one processor. Holding the processor, the readied thread waits on this machine's ring until the
 // drain loop is next entered. With no idle processor the machine goes on as it was.
 function buildSchedMainTakeProc(module StdModule, target Target)
-	var func = IrFunction.createFromStd(SchedMainTakeProcName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SchedMainTakeProcName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8701,7 +8701,7 @@ end 'buildSchedMainTakeProc'
 // ⚠ **M0's HANDLE IS ZERO AND IS SKIPPED BY THE SAME TEST ANY UNSTARTED MACHINE IS.** The main OS thread was
 // never created by this runtime, so there is no handle for it and joining it would be joining ourselves.
 function buildSchedStopWorkers(module StdModule)
-	var func = IrFunction.createFromStd(SchedStopWorkersName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SchedStopWorkersName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8734,7 +8734,7 @@ function buildSchedStopWorkers(module StdModule)
 	// before we block on any one of them, or a machine signalled late would be joined while it was still
 	// parked on an event nobody had set. The lock is released between the two for the reason step 3 gives.
 	// ⚠ A machine blocked in the poller is not on its event, so the poller is broken as well.
-	module.appendOp(joinStart, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create()))
+	module.appendOp(joinStart, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create(0)))
 	emitSchedLockLeave(module, block: joinStart, ids: ids)
 	let joinFirst = emitLoadGlobalWord(module, block: joinStart, label: SchedAllMLabel, ids: ids)
 	let joinCursor = ids.mint()

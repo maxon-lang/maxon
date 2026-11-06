@@ -23,7 +23,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	let arr = IntArray.create(0)
 	arr.push(42)
 	return 0
 end 'main'
@@ -83,7 +83,7 @@ function grow(p IntArray) returns Integer
 end 'grow'
 
 function main() returns ExitCode
-	var v = IntArray.create()
+	var v = IntArray.create(0)
 	return grow(v) as ExitCode
 end 'main'
 ```
@@ -198,7 +198,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	let arr = IntArray.create(0)
 	try arr.set(0, value: 99) otherwise panic("test invariant: set OOB")
 	return 0
 end 'main'
@@ -216,7 +216,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	let arr = IntArray.create(0)
 	let n = arr.count()
 	return n
 end 'main'
@@ -234,7 +234,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(42)
 	let x = try arr.get(0) otherwise 0
 	return x
@@ -258,7 +258,7 @@ type Bag
 	export var items as IntArray
 
 	static function create() returns Bag
-		return Self{items: IntArray.create()}
+		return Self{items: IntArray.create(0)}
 	end 'create'
 
 	function size() returns Integer
@@ -289,7 +289,7 @@ type Bag
 	export var items as IntArray
 
 	static function create() returns Bag
-		return Self{items: IntArray.create()}
+		return Self{items: IntArray.create(0)}
 	end 'create'
 
 	function add(v Integer)
@@ -354,7 +354,7 @@ type Bag
 	export let items as IntArray
 
 	static function create() returns Bag
-		return Self{items: IntArray.create()}
+		return Self{items: IntArray.create(0)}
 	end 'create'
 
 	function add(v Integer)
@@ -399,7 +399,7 @@ typealias Count = int(0 to 1000)
 typealias CountArray = Array with Count
 
 type Facts
-	export var counts = CountArray.create()
+	export var counts = CountArray.create(0)
 
 	static function create() returns Facts
 		return Self{}
@@ -424,7 +424,7 @@ typealias Count = int(0 to 1000)
 typealias CountArray = Array with Count
 
 type Facts
-	export var counts = CountArray.create()
+	export var counts = CountArray.create(0)
 
 	static function create() returns Facts
 		return Self{}
@@ -450,7 +450,7 @@ typealias Count = int(0 to 1000)
 typealias CountArray = Array with Count
 
 type Facts
-	export var counts = CountArray.create()
+	export var counts = CountArray.create(0)
 
 	static function create() returns Facts
 		return Self{}
@@ -481,7 +481,7 @@ function pass(s IntArray) returns IntArray
 end 'pass'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	pass(a).push(9)
 	return a.count() as ExitCode
 end 'main'

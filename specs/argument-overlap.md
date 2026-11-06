@@ -50,7 +50,7 @@ function look(a StringArray, b StringArray)
 end 'look'
 
 function main() returns ExitCode
-	var x = StringArray.create()
+	var x = StringArray.create(0)
 	x.push("hello {40 + 2} world, long enough for the heap")
 	look(x, b: x)
 	print("{x.count()}\n")
@@ -86,7 +86,7 @@ type Rec
 	export var log as InnerArray
 
 	static function create() returns Rec
-		return Rec{ids: InnerArray.create(), log: InnerArray.create()}
+		return Rec{ids: InnerArray.create(0), log: InnerArray.create(0)}
 	end 'create'
 end 'Rec'
 
@@ -123,7 +123,7 @@ type Blk
 	export var args as NumArray
 
 	static function create() returns Blk
-		return Self{args: NumArray.create()}
+		return Self{args: NumArray.create(0)}
 	end 'create'
 end 'Blk'
 
@@ -157,7 +157,7 @@ type Blk
 	export var args as NumArray
 
 	static function create() returns Blk
-		return Self{args: NumArray.create()}
+		return Self{args: NumArray.create(0)}
 	end 'create'
 
 	function absorb(other Blk)
@@ -191,7 +191,7 @@ function areSame(a StringArray, b StringArray) returns bool
 end 'areSame'
 
 function main() returns ExitCode
-	var x = StringArray.create()
+	var x = StringArray.create(0)
 	x.push("hello {40 + 2} world, long enough for the heap")
 	print("{areSame(x, b: x)} {x.count()}\n")
 	return 0

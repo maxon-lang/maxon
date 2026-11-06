@@ -72,11 +72,11 @@ export type DebugThreadTable
 	var nextId as DebugThreadId
 
 	export static function create() returns DebugThreadTable
-		return Self{identities: DebugThreadIdentityArray.create(), rows: DebugThreadRowArray.create(), truncated: false, nextId: 1}
+		return Self{identities: DebugThreadIdentityArray.create(0), rows: DebugThreadRowArray.create(0), truncated: false, nextId: 1}
 	end 'create'
 
 	export function refresh(records DebugGreenThreadArray, wasTruncated bool, symbols DebugSymbols, textBase DebugAddress)
-		var listed = DebugThreadRowArray.create()
+		var listed = DebugThreadRowArray.create(0)
 		self.identities = self.identitiesOutliving(records, wasTruncated: wasTruncated)
 
 		for record in records 'eachRecord'
@@ -88,7 +88,7 @@ export type DebugThreadTable
 	end 'refresh'
 
 	function identitiesOutliving(records DebugGreenThreadArray, wasTruncated bool) returns DebugThreadIdentityArray
-		var carried = DebugThreadIdentityArray.create()
+		var carried = DebugThreadIdentityArray.create(0)
 
 		for identity in self.identities 'eachIdentity'
 			if identityOutlives(identity, records: records, wasTruncated: wasTruncated) 'stillItsOwnThread'
@@ -100,7 +100,7 @@ export type DebugThreadTable
 	end 'identitiesOutliving'
 
 	export function forgetTheListing()
-		self.rows = DebugThreadRowArray.create()
+		self.rows = DebugThreadRowArray.create(0)
 		self.truncated = false
 	end 'forgetTheListing'
 

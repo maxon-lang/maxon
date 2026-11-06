@@ -209,7 +209,7 @@ parseDigit("7")               // E3057: throwing function requires try: 'parseDi
 **Mutating through an immutable name**
 
 ```maxon
-let items = TallyArray.create()
+let items = TallyArray.create(0)
 items.push(1)                 // E3159: cannot write through 'items': 'items' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 

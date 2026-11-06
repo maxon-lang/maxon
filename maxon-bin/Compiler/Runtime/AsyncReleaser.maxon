@@ -261,16 +261,16 @@ end 'serviceReplyNeedsReleaser'
 //
 // ⚠ **AN UNDECLARED MESSAGE ANSWERS THE INERT PLAN**, on `asyncReleasePlanFor`'s reason.
 function serviceReplyReleasePlanFor(messageName ByteArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncReleasePlan
-	var noSlots = AsyncManagedSlotArray.create()
-	let sig = try funcSignatures.get(messageName) otherwise return AsyncReleasePlan.create(noSlots, consumedArgSlots: AsyncManagedSlotArray.create(), cellSlots: AsyncCellSlotArray.create(), resultSlots: AsyncManagedSlotArray.create(), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: true, ownsImage: false)
-	return AsyncReleasePlan.create(noSlots, consumedArgSlots: AsyncManagedSlotArray.create(), cellSlots: AsyncCellSlotArray.create(), resultSlots: asyncResultSlotsOf(messageName, sig: sig, signatures: signatures, typeNames: typeNames), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: true, ownsImage: false)
+	var noSlots = AsyncManagedSlotArray.create(0)
+	let sig = try funcSignatures.get(messageName) otherwise return AsyncReleasePlan.create(noSlots, consumedArgSlots: AsyncManagedSlotArray.create(0), cellSlots: AsyncCellSlotArray.create(0), resultSlots: AsyncManagedSlotArray.create(0), errorSlots: AsyncManagedSlotArray.create(0), calleeThrows: true, ownsImage: false)
+	return AsyncReleasePlan.create(noSlots, consumedArgSlots: AsyncManagedSlotArray.create(0), cellSlots: AsyncCellSlotArray.create(0), resultSlots: asyncResultSlotsOf(messageName, sig: sig, signatures: signatures, typeNames: typeNames), errorSlots: AsyncManagedSlotArray.create(0), calleeThrows: true, ownsImage: false)
 end 'serviceReplyReleasePlanFor'
 
 // Every MESSAGE a reply cell is minted for anywhere in the module, in first-seen source order, deduped —
 // `collectAsyncSpawnTargets`' twin, over the op that mints a cell rather than the one that spawns a thread.
 export function collectServiceReplyTargets(module MaxonModule) returns NameRoster
 	var seen = AsyncReleaserSet.create()
-	var targets = NameRoster.create()
+	var targets = NameRoster.create(0)
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
@@ -360,12 +360,12 @@ end 'installServiceReplyReleasers'
 // by SemanticCheck's E3004, but the collect walk below runs over the module regardless of whether the
 // program is doomed, and a panic here would replace a positioned diagnostic with a compiler crash.
 function asyncReleasePlanFor(target AsyncSpawnTarget, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncReleasePlan
-	let sig = try funcSignatures.get(target.callee) otherwise return AsyncReleasePlan.create(AsyncManagedSlotArray.create(), consumedArgSlots: AsyncManagedSlotArray.create(), cellSlots: AsyncCellSlotArray.create(), resultSlots: AsyncManagedSlotArray.create(), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: false, ownsImage: false)
+	let sig = try funcSignatures.get(target.callee) otherwise return AsyncReleasePlan.create(AsyncManagedSlotArray.create(0), consumedArgSlots: AsyncManagedSlotArray.create(0), cellSlots: AsyncCellSlotArray.create(0), resultSlots: AsyncManagedSlotArray.create(0), errorSlots: AsyncManagedSlotArray.create(0), calleeThrows: false, ownsImage: false)
 	let callee = target.callee
 	let placement = AsyncArgumentSlots.recorded(sig.paramTypes, byReference: target.byReference) if target.startsService else AsyncArgumentSlots.of(sig.paramTypes, byReference: target.byReference, capacity: asyncRegisterCapacityOf(target.target))
-	var argSlots = AsyncManagedSlotArray.create()
-	var consumedArgSlots = AsyncManagedSlotArray.create()
-	var cellSlots = AsyncCellSlotArray.create()
+	var argSlots = AsyncManagedSlotArray.create(0)
+	var consumedArgSlots = AsyncManagedSlotArray.create(0)
+	var cellSlots = AsyncCellSlotArray.create(0)
 	let consume = signatures.consumeOf(genericTemplateName(callee))
 
 	// The ARGUMENTS, in PARAMETER order, each at the offset `placement` gives it — the order the spawn
@@ -418,7 +418,7 @@ end 'asyncCellContentOf'
 // of `paramAggregateNames`, and needed for the same reason: a boxed union RETURN resolves to bare
 // `integer` too.
 function asyncResultSlotsOf(callee ByteArray, sig FuncSignature, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncManagedSlotArray
-	let resultType = try signatures.declaredValueReturnOf(callee, into: typeNames) otherwise return AsyncManagedSlotArray.create()
+	let resultType = try signatures.declaredValueReturnOf(callee, into: typeNames) otherwise return AsyncManagedSlotArray.create(0)
 
 	return asyncResultSlotsOfType(resultType, signatures: signatures, typeNames: typeNames, aggregateName: sig.returnAggregateName)
 end 'asyncResultSlotsOf'
@@ -430,7 +430,7 @@ function asyncResultSlotsOfType(resultType MaxonType, signatures ProgramSignatur
 		return asyncSlotsAt(GtOffResult, signatures: signatures, typeNames: typeNames, slotType: resultType, aggregateName: aggregateName)
 	end 'aSingleWord'
 
-	var slots = AsyncManagedSlotArray.create()
+	var slots = AsyncManagedSlotArray.create(0)
 	slots.push(AsyncManagedSlot.create(GtOffResult, drop: FieldDropKind.existential(GtOffReplyWitness - GtOffResult)))
 	return slots
 end 'asyncResultSlotsOfType'
@@ -443,7 +443,7 @@ function asyncParamSlots(placement AsyncArgumentSlots, param ParamCount, signatu
 	end 'aSingleWord'
 
 	let witnessOffset = try placement.witnessOffsetOf(param) otherwise panic("asyncParamSlots: parameter {param} is held at an interface type by value and the placement carries no witness slot for it")
-	var slots = AsyncManagedSlotArray.create()
+	var slots = AsyncManagedSlotArray.create(0)
 	slots.push(AsyncManagedSlot.create(offset, drop: FieldDropKind.existential(witnessOffset - offset)))
 	return slots
 end 'asyncParamSlots'
@@ -451,7 +451,7 @@ end 'asyncParamSlots'
 // The 0-or-1 slot list for ONE single-word slot of the GT struct, so "a managed slot is an (offset, drop)
 // pair decided by `asyncSlotOwnsHeap`" is written once for the arguments and the result.
 function asyncSlotsAt(offset ByteOffset, signatures ProgramSignatures, typeNames TypeNameInterner, slotType MaxonType, aggregateName ByteArray) returns AsyncManagedSlotArray
-	var slots = AsyncManagedSlotArray.create()
+	var slots = AsyncManagedSlotArray.create(0)
 
 	if asyncSlotOwnsHeap(signatures, typeNames: typeNames, slotType: slotType, aggregateName: aggregateName) 'ownsHeap'
 		slots.push(AsyncManagedSlot.create(offset, drop: FieldDropKind.direct(asyncSlotDropCallee(signatures, typeNames: typeNames, slotType: slotType, aggregateName: aggregateName))))
@@ -472,10 +472,10 @@ end 'asyncSlotsAt'
 // A boxed union with no managed payload still owes a `__mm_decref` — the box itself is heap — which is
 // exactly what `unionBoxDropCallee` hands back for it.
 function asyncErrorSlotsOf(callee ByteArray, signatures ProgramSignatures) returns AsyncManagedSlotArray
-	let errorName = try throwsClauseName(signatures.throwsOf(callee)) otherwise return AsyncManagedSlotArray.create()
+	let errorName = try throwsClauseName(signatures.throwsOf(callee)) otherwise return AsyncManagedSlotArray.create(0)
 	return match signatures.enumInAnyFile(errorName.toByteArray()) 'e'
 		declared(layout) gives asyncBoxedErrorSlots(layout, signatures: signatures, errorName: errorName.toByteArray())
-		undeclared gives AsyncManagedSlotArray.create()
+		undeclared gives AsyncManagedSlotArray.create(0)
 	end 'e'
 end 'asyncErrorSlotsOf'
 
@@ -483,7 +483,7 @@ end 'asyncErrorSlotsOf'
 // `ordinal + ErrorFlagOrdinalBias`, a small integer that owns nothing, and handing it to a drop callee is a
 // wild free.
 function asyncBoxedErrorSlots(layout EnumLayout, signatures ProgramSignatures, errorName ByteArray) returns AsyncManagedSlotArray
-	var slots = AsyncManagedSlotArray.create()
+	var slots = AsyncManagedSlotArray.create(0)
 
 	if layout.carriesPayloads() 'boxedError'
 		slots.push(AsyncManagedSlot.create(GtOffThrew, drop: FieldDropKind.direct(signatures.unionBoxDropCallee(errorName))))
@@ -555,9 +555,9 @@ end 'asyncErasedUnionIsBoxed'
 // installer applies `asyncCalleeNeedsReleaser`.
 export function collectAsyncSpawnTargets(module MaxonModule, funcNames FunctionNameIndex, target Target) returns AsyncSpawnTargetArray
 	var seen = AsyncReleaserSet.create()
-	var callees = NameRoster.create()
+	var callees = NameRoster.create(0)
 	var seenFactories = AsyncReleaserSet.create()
-	var factories = NameRoster.create()
+	var factories = NameRoster.create(0)
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
@@ -569,7 +569,7 @@ export function collectAsyncSpawnTargets(module MaxonModule, funcNames FunctionN
 		end 'eachBlock'
 	end 'eachFunc'
 
-	var targets = AsyncSpawnTargetArray.create()
+	var targets = AsyncSpawnTargetArray.create(0)
 
 	for callee in callees 'eachCallee'
 		targets.push(asyncSpawnTargetOf(callee, funcNames: funcNames, target: target))

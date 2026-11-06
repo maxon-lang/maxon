@@ -352,7 +352,7 @@ enum JsonByte
 end 'JsonByte'
 
 function main() returns ExitCode
-	var out = ByteArray.create()
+	var out = ByteArray.create(0)
 	out.push(JsonByte.lBracket)                     // pushes 0x5B
 	out.push(JsonByte.space)
 	let first = try out.get(0) otherwise 0

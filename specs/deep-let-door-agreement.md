@@ -55,7 +55,7 @@ type Hub
 	var b as CounterArray
 
 	static function create() returns Self
-		return Self{a: CounterArray.create(), b: CounterArray.create()}
+		return Self{a: CounterArray.create(0), b: CounterArray.create(0)}
 	end 'create'
 
 	function seed(counter Counter)
@@ -65,7 +65,7 @@ type Hub
 
 	function orphan() returns Keeper
 		view old = self.a
-		self.a = CounterArray.create()
+		self.a = CounterArray.create(0)
 		return Keeper.create(try old.get(0) otherwise panic("seeded before"))
 	end 'orphan'
 end 'Hub'
@@ -321,7 +321,7 @@ type Layout
 end 'Layout'
 
 function register() returns (Layout, ByteArray)
-	let name = ByteArray.create()
+	let name = ByteArray.create(0)
 	let layout = Layout.create(name)
 	return (layout, name)
 end 'register'

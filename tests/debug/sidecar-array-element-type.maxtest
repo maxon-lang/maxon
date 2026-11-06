@@ -7,7 +7,7 @@ let ElementUnderlyingName = "i64"
 
 test 'an Array local is described as an array, under a type row that names its element'
 	let staged = builtFixture(ArrayElementCaseLabel, fixture: ValuesFixtureName)
-	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create(0))
 
 	Expect.equal(dump.exitCode(), expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
 
@@ -28,7 +28,7 @@ test 'an Array local is described as an array, under a type row that names its e
 	Expect.notEqual(described, expected: AbsentEventText, message: "`{ArrayLocalName}` is described under the type `{describedAs}`, which the type table does not hold — so a debugger asked to render it has nothing to render it AS. The types section held: {listedLines(typeRows)}")
 	Expect.equal(typeKindIn(described), expected: ArrayTypeKindName, message: "an Array is not a struct with one field; rendering it as one prints a pointer where the reader asked for elements. Its type row is: {described}")
 
-	var namedElements = StringArray.create()
+	var namedElements = StringArray.create(0)
 
 	for fieldRow in typeFieldRowsOf(typeRows, name: describedAs) 'eachField'
 		namedElements.push(describedTypeIn(fieldRow))

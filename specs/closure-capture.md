@@ -299,7 +299,7 @@ function allocate(ranges LRArray) returns ExitCode
 end 'allocate'
 
 function main() returns ExitCode
-	var arr = LRArray.create()
+	var arr = LRArray.create(0)
 	arr.push(LiveRange.create(7))
 	arr.push(LiveRange.create(10))
 	return allocate(arr)
@@ -803,7 +803,7 @@ end 'Holder'
 typealias WH = Holder with W
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(1)
 	a.push(2)
 	var total = 0 as Integer
@@ -845,7 +845,7 @@ type Held
 	export var names as NameArray
 
 	static function create() returns Self
-		return Self{names: NameArray.create()}
+		return Self{names: NameArray.create(0)}
 	end 'create'
 
 	function hold(key String) returns bool
@@ -896,7 +896,7 @@ type Held
 	export var names as NameArray
 
 	static function create() returns Self
-		return Self{names: NameArray.create()}
+		return Self{names: NameArray.create(0)}
 	end 'create'
 
 	function hold(key String) returns bool
@@ -942,7 +942,7 @@ type Held
 	export var names as NameArray
 
 	static function create() returns Self
-		return Self{names: NameArray.create()}
+		return Self{names: NameArray.create(0)}
 	end 'create'
 
 	function hold(key String) returns bool
@@ -1163,7 +1163,7 @@ function main() returns ExitCode
 	let label = "a label padded long enough to heap allocate {3}"
 	let f = function(n Integer) gives n + (label.byteLength() as Integer)
 	let p = Pair.create(f, second: f)
-	var ops = OpArray.create()
+	var ops = OpArray.create(0)
 	ops.push(f)
 	let h = Held.one(f)
 	var total = p.first(1) + p.second(2)
@@ -1357,7 +1357,7 @@ typealias Thunks = Array with Thunk
 
 function main() returns ExitCode
 	let word = "a word padded long enough to heap allocate {1}"
-	var thunks = Thunks.create()
+	var thunks = Thunks.create(0)
 
 	for i in 0 upto 2 'each'
 		thunks.push(function() gives word.byteLength() as Integer)
@@ -2182,7 +2182,7 @@ typealias OpArray = Array with Op
 
 function main() returns ExitCode
 	let label = "a label padded long enough to heap allocate {3}"
-	var ops = OpArray.create()
+	var ops = OpArray.create(0)
 	ops.push(function(n Integer) gives n + (label.byteLength() as Integer))
 	try ops.set(0, value: function(n Integer) gives n * 2) otherwise panic("one element")
 	let op = try ops.get(0) otherwise panic("one element")
@@ -2298,7 +2298,7 @@ typealias Thunk = function() returns Integer
 typealias Thunks = Array with Thunk
 
 function main() returns ExitCode
-	var thunks = Thunks.create()
+	var thunks = Thunks.create(0)
 	thunks.push(function() gives thunks.count() as Integer)
 	return 0
 end 'main'
@@ -2631,7 +2631,7 @@ type Counter
 	export var reads as Thunks
 
 	static function create() returns Self
-		return Self{n: 1, reads: Thunks.create()}
+		return Self{n: 1, reads: Thunks.create(0)}
 	end 'create'
 
 	export function arm()
@@ -2660,7 +2660,7 @@ type Counter
 	export var reads as Thunks
 
 	static function create() returns Self
-		var reads = Thunks.create()
+		var reads = Thunks.create(0)
 		reads.push(function() gives 0)
 		return Self{n: 1, reads: reads}
 	end 'create'
@@ -2826,7 +2826,7 @@ type Counter
 	export var reads as Thunks
 
 	static function create() returns Self
-		return Self{n: 1, reads: Thunks.create()}
+		return Self{n: 1, reads: Thunks.create(0)}
 	end 'create'
 
 	export function arm()
@@ -2856,11 +2856,11 @@ type Counter
 	export var reads as Thunks
 
 	static function create() returns Self
-		return Self{n: 1, reads: Thunks.create()}
+		return Self{n: 1, reads: Thunks.create(0)}
 	end 'create'
 
 	export function arm()
-		var fresh = Thunks.create()
+		var fresh = Thunks.create(0)
 		fresh.push(function() gives self.n)
 		self.reads = fresh
 	end 'arm'
@@ -3588,12 +3588,12 @@ type Counter
 	export var reads as Thunks
 
 	static function create() returns Self
-		return Self{n: 1, reads: Thunks.create()}
+		return Self{n: 1, reads: Thunks.create(0)}
 	end 'create'
 end 'Counter'
 
 function arm(h Counter)
-	var fresh = Thunks.create()
+	var fresh = Thunks.create(0)
 	fresh.push(function() gives h.n)
 	h.reads.append(fresh)
 end 'arm'
@@ -4257,7 +4257,7 @@ type Slot
 	end 'create'
 end 'Slot'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 var slot = Slot.create()
 
 function stash(b Box) returns Count
@@ -4307,7 +4307,7 @@ type Slot
 	end 'create'
 end 'Slot'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 var slot = Slot.create()
 
 function arm(b Box, depth Count)
@@ -4449,7 +4449,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var shows = Reads.create()
+var shows = Reads.create(0)
 
 function arm(b Box)
 	shows = [function() gives b.n]
@@ -4486,7 +4486,7 @@ type Shelf
 	export var shows as Reads
 
 	static function create() returns Self
-		return Self{shows: Reads.create()}
+		return Self{shows: Reads.create(0)}
 	end 'create'
 end 'Shelf'
 
@@ -4524,7 +4524,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var groups = Groups.create()
+var groups = Groups.create(0)
 
 function arm(b Box)
 	groups.push([function() gives b.n])
@@ -4554,7 +4554,7 @@ type Counter
 	export var groups as Groups
 
 	static function create() returns Self
-		return Self{n: 1, groups: Groups.create()}
+		return Self{n: 1, groups: Groups.create(0)}
 	end 'create'
 
 	export function arm()
@@ -4584,7 +4584,7 @@ type Counter
 	export var reads as Thunks
 
 	static function create() returns Self
-		return Self{n: 1, reads: Thunks.create()}
+		return Self{n: 1, reads: Thunks.create(0)}
 	end 'create'
 end 'Counter'
 
@@ -4618,11 +4618,11 @@ type Counter
 	export var reads as Thunks
 
 	static function create() returns Self
-		return Self{n: 1, reads: Thunks.create()}
+		return Self{n: 1, reads: Thunks.create(0)}
 	end 'create'
 end 'Counter'
 
-var stash = Thunks.create()
+var stash = Thunks.create(0)
 
 function arm(h Counter)
 	stash = [function() gives h.n]

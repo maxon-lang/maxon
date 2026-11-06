@@ -107,9 +107,9 @@ export type CalleeWalk
 	export var worklist as FuncIndexArray
 
 	static function create(funcCount CsrIndex) returns CalleeWalk
-		var reached = BoolArray.create()
+		var reached = BoolArray.create(0)
 		reached.resize(funcCount)
-		return Self{reached: reached, worklist: FuncIndexArray.create()}
+		return Self{reached: reached, worklist: FuncIndexArray.create(0)}
 	end 'create'
 
 	export function reach(funcIndex ElementIndex)
@@ -150,7 +150,7 @@ function callersReaching(survey ServiceProgramSurvey, funcIndex ElementIndex) re
 end 'callersReaching'
 
 function oneHotSeeds(survey ServiceProgramSurvey, funcIndex ElementIndex) returns BoolArray
-	var one = FuncIndexArray.create()
+	var one = FuncIndexArray.create(0)
 	one.push(funcIndex)
 	return seedsAt(survey, funcIndices: one)
 end 'oneHotSeeds'
@@ -237,7 +237,7 @@ end 'sharedGlobalAccessSubject'
 module typealias ModuleVarRoster = Array with readonly TopLevelDecl
 
 module function moduleVarDeclarationsOf(signatures ProgramSignatures, spawnsAService bool) returns ModuleVarRoster
-	var moduleVars = ModuleVarRoster.create()
+	var moduleVars = ModuleVarRoster.create(0)
 
 	if not spawnsAService 'nothingIsShared'
 		return moduleVars
@@ -255,7 +255,7 @@ module function moduleVarDeclarationsOf(signatures ProgramSignatures, spawnsASer
 end 'moduleVarDeclarationsOf'
 
 module function checkServiceGlobalAccesses(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, moduleVars ModuleVarRoster, reached BoolArray)
-	var reported = BoolArray.create()
+	var reported = BoolArray.create(0)
 	reported.resize(moduleVars.count())
 
 	for row in 0 upto survey.moduleVarUses.sites.rowCount() 'eachAccess'
@@ -387,7 +387,7 @@ end 'initializerReaching'
 // ⚡ One closure over every `let` initializer at once, which is all a program that compiles pays. The closure is
 // distributive over its seeds, so some `let` alone reaches the use the joint closure found.
 module function checkLetInitializersReachNoVar(project Project, funcNames FunctionNameIndex, survey ServiceProgramSurvey, dispatch WitnessDispatchTargets, initializers FuncIndexRows)
-	var everyLetsCallees = FuncIndexArray.create()
+	var everyLetsCallees = FuncIndexArray.create(0)
 
 	for (position, row) in initializers.withIterator() 'eachGlobal'
 		if not managedGlobalAt(project, index: position.index()).isAVar() 'aLet'
@@ -442,14 +442,14 @@ end 'reportLetInitializerReachingAVar'
 // store. The walk stops at that store, so the `default`s built after the marks belong to no initializer.
 module function initializerCallees(project Project, module MaxonModule, funcNames FunctionNameIndex) returns FuncIndexRows
 	let globalCount = project.managedGlobals.count()
-	var rows = FuncIndexRows.create()
+	var rows = FuncIndexRows.create(0)
 
 	if globalCount == 0 'noManagedGlobal'
 		return rows
 	end 'noManagedGlobal'
 
 	let initIndex = try funcNames.byName.get(ModuleInitName) otherwise panic("initializerCallees: a program with a managed global holds `__module_init`")
-	var callees = FuncIndexArray.create()
+	var callees = FuncIndexArray.create(0)
 
 	for blockRef in functionAt(funcNames, index: initIndex).blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("initializerCallees: blockRef from `__module_init`'s blockRefs not in module.blocks")
@@ -469,7 +469,7 @@ module function initializerCallees(project Project, module MaxonModule, funcName
 				end 'outOfOrder'
 
 				rows.push(callees)
-				callees = FuncIndexArray.create()
+				callees = FuncIndexArray.create(0)
 			end 'theSlotItFills' else if opIsACallGraphEdge(op) 'aCall'
 				if let calleeIndex = try funcNames.byName.get(maxonOpCalleeName(op)) 'aDeclaredCallee'
 					callees.push(calleeIndex)
@@ -530,7 +530,7 @@ end 'RegistryUseInFunction'
 typealias RegistryUseInFunctionArray = Array with RegistryUseInFunction
 
 function registryUsesByFunction(project Project, module MaxonModule, funcNames FunctionNameIndex, survey ServiceProgramSurvey) returns RegistryUseInFunctionArray
-	var registryUses = RegistryUseInFunctionArray.create()
+	var registryUses = RegistryUseInFunctionArray.create(0)
 
 	for funcIndex in 0 upto survey.funcCount() 'eachFunc'
 		if let opIndex = try firstRegistryUseIn(project, module: module, func: functionAt(funcNames, index: funcIndex)) 'holdsOne'
@@ -566,7 +566,7 @@ function someRegistryUseIsReached(registryUses RegistryUseInFunctionArray, reach
 end 'someRegistryUseIsReached'
 
 function everyInitializerCallee(initializers FuncIndexRows) returns FuncIndexArray
-	var callees = FuncIndexArray.create()
+	var callees = FuncIndexArray.create(0)
 
 	for row in initializers 'eachGlobal'
 		callees.append(row)
@@ -581,7 +581,7 @@ end 'managedGlobalAt'
 
 // A seed column holding exactly `funcIndices`.
 function seedsAt(survey ServiceProgramSurvey, funcIndices FuncIndexArray) returns BoolArray
-	var seeds = BoolArray.create()
+	var seeds = BoolArray.create(0)
 	seeds.resize(survey.funcCount())
 
 	for funcIndex in funcIndices 'eachSeed'

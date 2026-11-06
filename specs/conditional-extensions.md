@@ -416,7 +416,7 @@ type Loose implements Holder with Bag
 	end 'create'
 
 	function get() returns Bag
-		return Bag.create()
+		return Bag.create(0)
 	end 'get'
 
 	function size() returns ExitCode
@@ -456,7 +456,7 @@ end 'Holder'
 
 extension Holder where Item is Equatable
 	export function weigh(other Item) returns ExitCode
-		let names = Bag.create()
+		let names = Bag.create(0)
 		return (other.count() as ExitCode) + (names.count() as ExitCode)
 	end 'weigh'
 end 'Holder'
@@ -495,7 +495,7 @@ type Loose implements Holder with Bag
 	end 'create'
 
 	function get() returns Bag
-		return Bag.create()
+		return Bag.create(0)
 	end 'get'
 
 	function size() returns ExitCode

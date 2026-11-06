@@ -3,19 +3,19 @@ let PinnedSelfTestLane = "x64-linux"
 let PinnedSelfTestSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
 function selfTestCase(name String, pinsTargetIr bool, poisonFreed bool) returns SpecTest
-	let expectation = SpecExpectation.run(SpecExitCode.unpinned, stderr: SpecStderr.unpinned, stdout: SpecStdout.unpinned, sectionPins: SpecSectionPinArray.create())
+	let expectation = SpecExpectation.run(SpecExitCode.unpinned, stderr: SpecStderr.unpinned, stdout: SpecStdout.unpinned, sectionPins: SpecSectionPinArray.create(0))
 	let targetIr = SpecTargetIr.pinned("", span: TraceSlice.create(0, blockEnd: 0)) if pinsTargetIr else SpecTargetIr.unpinned(TraceSlice.create(0, blockEnd: 0))
-	var pinnedLanes = TargetKeyArray.create()
+	var pinnedLanes = TargetKeyArray.create(0)
 
 	if pinsTargetIr 'pinsALane'
 		pinnedLanes.push(PinnedSelfTestLane)
 	end 'pinsALane'
 
-	return SpecTest.create(name, source: PinnedSelfTestSource, expectation: expectation, unsupportedTargets: TargetKeyArray.create(), runtimeNames: RuntimeFunctionNameArray.create(), programArgs: ProgramArgArray.create(), asyncTrace: false, debugInfo: false, poisonFreed: poisonFreed, traceCapture: SpecTraceCapture.off, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, tier: SpecTier.user, targetIr: targetIr, pinnedLanes: pinnedLanes)
+	return SpecTest.create(name, source: PinnedSelfTestSource, expectation: expectation, unsupportedTargets: TargetKeyArray.create(0), runtimeNames: RuntimeFunctionNameArray.create(0), programArgs: ProgramArgArray.create(0), asyncTrace: false, debugInfo: false, poisonFreed: poisonFreed, traceCapture: SpecTraceCapture.off, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, tier: SpecTier.user, targetIr: targetIr, pinnedLanes: pinnedLanes)
 end 'selfTestCase'
 
 export function requireFreedBoxPoisonDecision()
-	var broken = StringArray.create()
+	var broken = StringArray.create(0)
 
 	let plain = selfTestCase("plain", pinsTargetIr: false, poisonFreed: false)
 	let pinned = selfTestCase("pinned", pinsTargetIr: true, poisonFreed: false)
@@ -33,11 +33,11 @@ export function requireFreedBoxPoisonDecision()
 		broken.push("a pinned case carrying the poison marker is built without the freed-box fill")
 	end 'markedUnpoisoned'
 
-	var tests = SpecTestArray.create()
+	var tests = SpecTestArray.create(0)
 	tests.push(plain)
 	tests.push(selfTestCase("second", pinsTargetIr: false, poisonFreed: false))
 
-	var members = BatchMemberArray.create()
+	var members = BatchMemberArray.create(0)
 	members.push(BatchMember.create(0, shape: MainShape.returnsExitCode))
 	members.push(BatchMember.create(1, shape: MainShape.returnsExitCode))
 

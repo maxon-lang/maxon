@@ -18,7 +18,7 @@ typealias Score = int(0 to 100)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var scores = ScoreArray.create()
+	var scores = ScoreArray.create(0)
 	scores.push(90)
 	print("{scores.count()}\n")
 	return 0
@@ -628,7 +628,7 @@ typealias Score = int(i64.min to i64.max)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var a = ScoreArray.create()
+	var a = ScoreArray.create(0)
 	a.push(5)
 	a.push(1)
 	a.push(4)
@@ -655,7 +655,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `Array.create()` | `Array` | An empty array; `Array.create(0)` is the same array. |
+| `Array.create(0)` | `Array` | An empty array. A call with no argument is refused at compile time ([E3195](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3195)): every array states its capacity. |
 | `Array.create(n)` | `Array` | `n` zero-valued elements, in one allocation when they take at most 256 bytes. `n` is an `ElementIndex`. Refused at compile time (E3106) for an element type with no zero value — a struct, a `String`, a nested container, a ranged alias that excludes 0, or an enum or union whose raw values include no 0; create those with `create(n, zeroed: false)`. `create(n, zeroed: true)` follows the same rule. |
 | `Array.create(n, zeroed: false)` | `Array` | An empty array with room for `n` elements, in one allocation when they take at most 256 bytes; append with `push`. `n` is an `ElementIndex` and `zeroed:` is a literal `true` or `false`. Available for every element type. |
 | `[a, b, c]` | `Array` | A literal; its element type is inferred from context or from the first element. |
@@ -1031,7 +1031,7 @@ typealias Score = int(i64.min to i64.max)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var values = ScoreArray.create()
+	var values = ScoreArray.create(0)
 
 	for i in 1 to 5 'fill'
 		values.push(i * 10)
@@ -1512,7 +1512,7 @@ passing them on:
 
 ```maxon
 extension Log
-	public static function audit(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public static function audit(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		Log.log(LogLevel.named("AUDIT", rank: 2), message: message, attrs: attrs, file: file, line: line)
 	end 'audit'
 end 'Log'
@@ -1735,7 +1735,7 @@ E3074.
 
 ```maxon
 function main() returns ExitCode
-	var args = StringArray.create()
+	var args = StringArray.create(0)
 	args.push("--version")
 
 	let result = try Subprocess.run(Executable.name("git"), arguments: args) otherwise (e) 'failed'
@@ -2002,7 +2002,7 @@ terminator is removed. `none` says nothing about whether the stream has ended; a
 
 ```maxon
 function main() returns ExitCode
-	var args = StringArray.create()
+	var args = StringArray.create(0)
 	args.push("--version")
 
 	var child = try StreamingSubprocess.spawn(Executable.name("git"), arguments: args) otherwise (e) 'spawn'
@@ -3275,8 +3275,8 @@ function main() returns ExitCode
 	print("{doc.rootKind()} {name} {stars} {doc.get(second).stringValue}\n")
 
 	var built = JsonDoc.create()
-	var keys = StringArray.create()
-	var children = JsonNodeIdArray.create()
+	var keys = StringArray.create(0)
+	var children = JsonNodeIdArray.create(0)
 	keys.push("ok")
 	children.push(built.add(JsonNode.boolNode(true)))
 	keys.push("score")
@@ -3572,10 +3572,10 @@ both.
 ```maxon
 function main() returns ExitCode
 	let secret = "shared secret".toByteArray()
-	let key = try hkdf(HashAlgorithm.sha256, salt: ByteArray.create(), inputKeyMaterial: secret, info: "client key".toByteArray(), length: 16) otherwise return 1
+	let key = try hkdf(HashAlgorithm.sha256, salt: ByteArray.create(0), inputKeyMaterial: secret, info: "client key".toByteArray(), length: 16) otherwise return 1
 	print("{key.count()}\n")
 
-	_ = try hkdf(HashAlgorithm.sha256, salt: ByteArray.create(), inputKeyMaterial: secret, info: ByteArray.create(), length: 8161) otherwise (e) 'refused'
+	_ = try hkdf(HashAlgorithm.sha256, salt: ByteArray.create(0), inputKeyMaterial: secret, info: ByteArray.create(0), length: 8161) otherwise (e) 'refused'
 		print("{e}\n")
 		return 0
 	end 'refused'
@@ -3628,7 +3628,7 @@ supply random bytes, `signPkcs1v15` and `signPss` panic.
 function main() returns ExitCode
 	let message = "hello".toByteArray()
 
-	_ = try Rsa.verifyPss(ByteArray.create(), hash: HashAlgorithm.sha256, message: message, signature: ByteArray.create()) otherwise (e) 'refused'
+	_ = try Rsa.verifyPss(ByteArray.create(0), hash: HashAlgorithm.sha256, message: message, signature: ByteArray.create(0)) otherwise (e) 'refused'
 		print("{e}\n")
 		return 0
 	end 'refused'
@@ -3788,9 +3788,9 @@ Both calls run in time independent of the private key. Derive keys from the shar
 
 ```maxon
 function main() returns ExitCode
-	var alice = ByteArray.create()
+	var alice = ByteArray.create(0)
 	alice.growFilled(32, value: 1)
-	var bob = ByteArray.create()
+	var bob = ByteArray.create(0)
 	bob.growFilled(32, value: 2)
 
 	try 'agree'
@@ -3968,7 +3968,7 @@ bits it shares. A CA with only dNSName subtrees leaves addresses unconstrained, 
 
 ```maxon
 function main() returns ExitCode
-	let chain = try X509.verify(ByteArray.create(), intermediates: ByteArrays.create(), roots: ByteArrays.create(), host: X509VerifyHost.named("example.com"), now: 1767225600) otherwise (e) 'refused'
+	let chain = try X509.verify(ByteArray.create(0), intermediates: ByteArrays.create(0), roots: ByteArrays.create(0), host: X509VerifyHost.named("example.com"), now: 1767225600) otherwise (e) 'refused'
 		print("{e}\n")
 		return 0
 	end 'refused'
@@ -4236,7 +4236,7 @@ typealias Payload = Array with Byte
 
 function main() returns ExitCode
 	let before = HeapStats.processAllocations()
-	var kept = Payload.create()
+	var kept = Payload.create(0)
 	kept.push(1)
 	let after = HeapStats.processAllocations()
 	print("{after > before} {HeapStats.slab().live > 0} {kept.count()}\n")

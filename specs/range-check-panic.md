@@ -724,7 +724,7 @@ extension Array
 end 'Array'
 
 function main() returns ExitCode
-  let values = IntegerArray.create()
+  let values = IntegerArray.create(0)
   return values.topLevel()
 end 'main'
 ```
@@ -843,7 +843,7 @@ end 'Array'
 typealias NumArray = Array with Num
 
 function main() returns ExitCode
-  var a = NumArray.create()
+  var a = NumArray.create(0)
   a.push(7)
   let v = try a.get(-1) otherwise 0
   return v
@@ -1455,7 +1455,7 @@ function fieldStore() returns Wide
 end 'fieldStore'
 
 function elementStore() returns Wide
-  var a = Wides.create()
+  var a = Wides.create(0)
   a.push(small() as Wide)
   return try a.get(0) otherwise panic("no slot")
 end 'elementStore'
@@ -1532,7 +1532,7 @@ function loose() returns Loose
 end 'loose'
 
 function main() returns ExitCode
-  var a = Wides.create()
+  var a = Wides.create(0)
   a.push(-loose())
   let v = try a.get(0) otherwise panic("no slot")
   print("v={v}\n")
@@ -1741,7 +1741,7 @@ typealias NonNeg = int(0 to i64.max)
 typealias Ints = Array with Integer
 
 function main() returns ExitCode
-  var xs = Ints.create()
+  var xs = Ints.create(0)
   xs.push(10)
   xs.push(20)
   xs.push(30)
@@ -1921,7 +1921,7 @@ typealias NonNeg = int(0 to i64.max)
 typealias Ints = Array with Integer
 
 function main() returns ExitCode
-  var xs = Ints.create()
+  var xs = Ints.create(0)
   xs.push(10)
   xs.push(20)
   xs.push(30)

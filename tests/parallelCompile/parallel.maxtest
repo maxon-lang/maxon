@@ -124,7 +124,7 @@ export typealias MetricsRowArray = Array with MetricsRow
 test 'every fixture program is staged by name from a case file'
 	let cases = caseFileSources()
 
-	var unstaged = StringArray.create()
+	var unstaged = StringArray.create(0)
 
 	for fixtureName in fixtureNames() 'eachFixture'
 		if not cases.contains("fixture: \"{fixtureName}\"") 'neverStaged'
@@ -186,7 +186,7 @@ end 'pinnedEnvironment'
 	// counted allocations follow its environment block, and `sh` changes it.
 	export function pausedBuildMetricsTable(staged FilePath, label String, pauseSeconds String) returns MetricsTable throws TestFailure
 		let shell = try FilePath.from(PosixShellPath) otherwise panic("parallel-compile.test: {PosixShellPath} is a spellable path")
-		let build = buildArguments(staged.join(StagedProgramFileName), output: executableIn(staged, stem: OutputFileStem), extraArguments: metricsArguments(staged, extraArguments: StringArray.create()))
+		let build = buildArguments(staged.join(StagedProgramFileName), output: executableIn(staged, stem: OutputFileStem), extraArguments: metricsArguments(staged, extraArguments: StringArray.create(0)))
 
 		var arguments = [PauseShellCommandFlag, PauseScript, PauseShellName, staged.join(PrivateRunCacheDirName).toString(), pauseSeconds, testedCompilerPath().toString()]
 
@@ -342,7 +342,7 @@ end 'withoutCompileTime'
 // count is the only difference between the two builds compared. `programName` names the program in
 // failure reports.
 export function requireIdenticalImagesAcrossProcessorCounts(staged FilePath, programName String, wholeDirectory bool = false) throws TestFailure
-	let noArguments = StringArray.create()
+	let noArguments = StringArray.create(0)
 
 	let pinnedRun = spawnPinnedBuild(staged, label: "single-processor", extraArguments: noArguments, processors: ProcessorPin.pinned(SingleProcessor), wholeDirectory: wholeDirectory)
 	let pinnedExit = pinnedRun.exitCode()
@@ -377,7 +377,7 @@ function requireIdenticalBytes(first FilePath, second FilePath) throws TestFailu
 end 'requireIdenticalBytes'
 
 export function builtMetricsTable(staged FilePath, label String, runCacheDirName String = PrivateRunCacheDirName) returns MetricsTable throws TestFailure
-	_ = try meteredBuild(staged, label: label, extraArguments: StringArray.create(), processors: ProcessorPin.machine, wholeDirectory: false, runCacheDirName: runCacheDirName)
+	_ = try meteredBuild(staged, label: label, extraArguments: StringArray.create(0), processors: ProcessorPin.machine, wholeDirectory: false, runCacheDirName: runCacheDirName)
 	return metricsTableOf(staged, label: label)
 end 'builtMetricsTable'
 
@@ -389,7 +389,7 @@ export function meteredBuild(staged FilePath, label String, extraArguments Strin
 end 'meteredBuild'
 
 function metricsArguments(staged FilePath, extraArguments StringArray) returns StringArray
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 	arguments.push("{MetricsOptionPrefix}{staged.join(MetricsFileName).toString()}")
 
 	for extra in extraArguments 'eachExtra'
@@ -413,8 +413,8 @@ export function metricsTableOf(staged FilePath, label String) returns MetricsTab
 end 'metricsTableOf'
 
 function metricsTableFrom(text String, label String) returns MetricsTable
-	var columns = StringArray.create()
-	var rows = MetricsRowArray.create()
+	var columns = StringArray.create(0)
+	var rows = MetricsRowArray.create(0)
 
 	for raw in text.split(LineFeed) 'eachLine'
 		let line = raw.trimEnd()
@@ -452,7 +452,7 @@ function metricsTableFrom(text String, label String) returns MetricsTable
 end 'metricsTableFrom'
 
 function metricsColumnsFrom(headerFields StringArray) returns StringArray
-	var columns = StringArray.create()
+	var columns = StringArray.create(0)
 	columns.push(MetricsKindColumn)
 
 	for (iter, heading) in headerFields.withIterator() 'eachHeading'
@@ -517,7 +517,7 @@ end 'MetricsTable'
 // The fixture programs, read from the filesystem rather than from a constant, so a fixture added without
 // a case is one the guard above sees.
 function fixtureNames() returns StringArray
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 
 	for entry in listing(fixtureDir(FixturesDirName)) 'eachEntry'
 		if Directory.isDirectory(entry) 'aProgram'

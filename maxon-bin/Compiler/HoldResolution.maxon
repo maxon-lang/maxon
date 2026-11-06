@@ -103,7 +103,7 @@ type HoldJudge
 	let columnContainers as NameRoster
 
 	static function create(signatures ProgramSignatures, typeNames TypeNameInterner, byName FuncIndexByName, functions IrFunctionArray, columnContainers NameRoster) returns HoldJudge
-		return Self{instKind: Instantiation.displaces, instKeys: HoldKeyColumn.create(), columnContainers: columnContainers, signatures: signatures, typeNames: typeNames, byName: byName, effectCandidates: NameRoster.create(), dispatch: WitnessDispatchTargets.create(signatures, functions: functions), filePath: FilePath from "", unboxedWords: UnboxedWordMemo.create(), valueTags: ValueTypeTagArray.create(), valueNameIds: TypeNameIdArray.create(), operands: ValueIdArray.create(), paramCount: 0, byRefParams: NoParamPositions, effectKey: UnknownRecord, effectCallee: 0}
+		return Self{instKind: Instantiation.displaces, instKeys: HoldKeyColumn.create(0), columnContainers: columnContainers, signatures: signatures, typeNames: typeNames, byName: byName, effectCandidates: NameRoster.create(0), dispatch: WitnessDispatchTargets.create(signatures, functions: functions), filePath: FilePath from "", unboxedWords: UnboxedWordMemo.create(), valueTags: ValueTypeTagArray.create(0), valueNameIds: TypeNameIdArray.create(0), operands: ValueIdArray.create(0), paramCount: 0, byRefParams: NoParamPositions, effectKey: UnknownRecord, effectCallee: 0}
 	end 'create'
 
 	function beginFunction(func IrFunction)
@@ -651,17 +651,17 @@ type HoldEventSummary
 	var reachQueue as HoldIndexColumn
 
 	static function create(eventIds HoldEventIds, flags HoldWordColumn, callers CsrGraph, ranks CsrColumn, storers CsrGraph) returns HoldEventSummary
-		var reachStates = HoldReachStateColumn.create()
+		var reachStates = HoldReachStateColumn.create(0)
 		reachStates.growFilled(eventIds.count(), value: HoldReachState.uncomputed)
-		var reachFloors = HoldIndexColumn.create()
+		var reachFloors = HoldIndexColumn.create(0)
 		reachFloors.growFilled(eventIds.count(), value: 0)
-		var reachBegin = HoldIndexColumn.create()
+		var reachBegin = HoldIndexColumn.create(0)
 		reachBegin.growFilled(eventIds.count(), value: 0)
-		var reachEnd = HoldIndexColumn.create()
+		var reachEnd = HoldIndexColumn.create(0)
 		reachEnd.growFilled(eventIds.count(), value: 0)
-		var reachStamps = HoldIndexColumn.create()
+		var reachStamps = HoldIndexColumn.create(0)
 		reachStamps.growFilled(flags.count(), value: 0)
-		return Self{eventIds: eventIds, flags: flags, callers: callers, ranks: ranks, storers: storers, reachStates: reachStates, reachFloors: reachFloors, reachBegin: reachBegin, reachEnd: reachEnd, reachNodes: HoldIndexColumn.create(), reachStamps: reachStamps, reachStamp: 0, reachQueue: HoldIndexColumn.create()}
+		return Self{eventIds: eventIds, flags: flags, callers: callers, ranks: ranks, storers: storers, reachStates: reachStates, reachFloors: reachFloors, reachBegin: reachBegin, reachEnd: reachEnd, reachNodes: HoldIndexColumn.create(0), reachStamps: reachStamps, reachStamp: 0, reachQueue: HoldIndexColumn.create(0)}
 	end 'create'
 
 	function rowFlags(row ElementIndex) returns HoldWord
@@ -809,7 +809,7 @@ type HoldEventBuilder
 	var edgeEvents as HoldIndexColumn
 
 	static function create() returns HoldEventBuilder
-		return Self{directBegin: HoldIndexColumn.create(), directEvents: HoldIndexColumn.create(), topFlags: BoolArray.create(), callers: CsrColumn.create(), callees: CsrColumn.create(), edgeIds: CsrColumn.create(), edgeOps: HoldIndexColumn.create(), edgeDispatch: BoolArray.create(), edgeModes: HoldEdgeModeColumn.create(), edgeEventBegin: HoldIndexColumn.create(), edgeEventEnd: HoldIndexColumn.create(), edgeEvents: HoldIndexColumn.create()}
+		return Self{directBegin: HoldIndexColumn.create(0), directEvents: HoldIndexColumn.create(0), topFlags: BoolArray.create(0), callers: CsrColumn.create(0), callees: CsrColumn.create(0), edgeIds: CsrColumn.create(0), edgeOps: HoldIndexColumn.create(0), edgeDispatch: BoolArray.create(0), edgeModes: HoldEdgeModeColumn.create(0), edgeEventBegin: HoldIndexColumn.create(0), edgeEventEnd: HoldIndexColumn.create(0), edgeEvents: HoldIndexColumn.create(0)}
 	end 'create'
 
 	function internEvent(eventIds HoldEventIds, key HoldKey) returns ElementIndex
@@ -919,7 +919,7 @@ type HoldEventBuilder
 
 		self.directBegin.push(self.directEvents.count())
 
-		var flags = HoldWordColumn.create()
+		var flags = HoldWordColumn.create(0)
 		flags.growFilled(functionCount, value: 0)
 
 		for i in 0 upto functionCount 'eachRow'
@@ -948,8 +948,8 @@ type HoldEventBuilder
 	end 'seedRow'
 
 	function eventStorers(eventIds HoldEventIds) returns CsrGraph
-		var events = CsrColumn.create()
-		var nodes = CsrColumn.create()
+		var events = CsrColumn.create(0)
+		var nodes = CsrColumn.create(0)
 		let rowCount = self.directBegin.count() - 1
 
 		for node in 0 upto rowCount 'eachNode'
@@ -1099,7 +1099,7 @@ type HoldStampedIndex
 	var values as HoldIndexColumn
 
 	static function create() returns HoldStampedIndex
-		return Self{stamps: HoldIndexColumn.create(), values: HoldIndexColumn.create()}
+		return Self{stamps: HoldIndexColumn.create(0), values: HoldIndexColumn.create(0)}
 	end 'create'
 
 	function valueAt(index ElementIndex, stamp ElementIndex) returns ElementIndex throws AbsentError
@@ -1207,13 +1207,13 @@ type HoldResolver
 	var receiverLoadOffsets as HoldIndexColumn
 
 	static function create(project Project, module MaxonModule, judge HoldJudge, events HoldEventSummary, functions IrFunctionArray) returns HoldResolver
-		var projectionRead = BoolArray.create()
+		var projectionRead = BoolArray.create(0)
 		projectionRead.growFilled(functions.count(), value: false)
-		var projectionBegin = HoldIndexColumn.create()
+		var projectionBegin = HoldIndexColumn.create(0)
 		projectionBegin.growFilled(functions.count(), value: 0)
-		var projectionEnd = HoldIndexColumn.create()
+		var projectionEnd = HoldIndexColumn.create(0)
 		projectionEnd.growFilled(functions.count(), value: 0)
-		return Self{functions: functions, projectionRead: projectionRead, projectionBegin: projectionBegin, projectionEnd: projectionEnd, projectionOffsets: HoldIndexColumn.create(), receiverLoadResults: ValueIdArray.create(), receiverLoadOffsets: HoldIndexColumn.create(), project: project, module: module, judge: judge, events: events, tally: HoldTally.create(), entryOps: HoldIndexColumn.create(), entryBlocks: HoldIndexColumn.create(), entryPositions: HoldIndexColumn.create(), entryHelds: ValueIdArray.create(), entryIsEnd: BoolArray.create(), siteEntries: HoldIndexColumn.create(), siteSources: ValueIdArray.create(), siteReplacing: BoolArray.create(), siteKinds: HoldKindArray.create(), siteVerdicts: HoldVerdictColumn.create(), siteOfHeld: HoldIndexColumn.create(), isSiteResult: BoolArray.create(), defKnown: BoolArray.create(), defOps: HoldIndexColumn.create(), isBlockArg: BoolArray.create(), chainCursor: 0, chainTop: false, chainHasElement: false, chainHasWildElement: false, hopEvents: HoldIndexColumn.create(), nodeKeys: HoldKeyColumn.create(), visited: HoldIndexColumn.create(), stack: HoldIndexColumn.create(), stackFroms: HoldIndexColumn.create(), successors: BlockIdArray.create(), blockIndex: BlockIndexById.create(), deletedKeys: HoldKeyColumn.create(), siteMasks: HoldWordColumn.create(), siteTokenBegin: HoldIndexColumn.create(), siteTokens: HoldIndexColumn.create(), chainStamp: 0, hopLocals: HoldStampedIndex.create(), nodeSlots: HoldEventIds.create(), nodeLocals: HoldStampedIndex.create(), hopLocalEvents: HoldIndexColumn.create(), hopLocalBits: HoldIndexColumn.create(), localCount: 0, wordsPerSummary: 0, summaryWords: HoldWordColumn.create(), summaryFlags: HoldWordColumn.create(), summaryEarlierEnds: HoldIndexColumn.create(), summaryEndBegin: HoldIndexColumn.create(), summaryEndStop: HoldIndexColumn.create(), jumpedStamps: HoldIndexColumn.create(), endBlocks: HoldIndexColumn.create(), endPositions: HoldIndexColumn.create(), calleeTokenSlots: HoldStampedIndex.create(), calleeTokenBegin: HoldIndexColumn.create(), calleeTokenStop: HoldIndexColumn.create(), calleeTokens: HoldIndexColumn.create(), accWords: HoldWordColumn.create(), accFlags: 0, accEarlierEnds: 0, prober: 0, rangePositions: RangeSitePositionArray.create()}
+		return Self{functions: functions, projectionRead: projectionRead, projectionBegin: projectionBegin, projectionEnd: projectionEnd, projectionOffsets: HoldIndexColumn.create(0), receiverLoadResults: ValueIdArray.create(0), receiverLoadOffsets: HoldIndexColumn.create(0), project: project, module: module, judge: judge, events: events, tally: HoldTally.create(), entryOps: HoldIndexColumn.create(0), entryBlocks: HoldIndexColumn.create(0), entryPositions: HoldIndexColumn.create(0), entryHelds: ValueIdArray.create(0), entryIsEnd: BoolArray.create(0), siteEntries: HoldIndexColumn.create(0), siteSources: ValueIdArray.create(0), siteReplacing: BoolArray.create(0), siteKinds: HoldKindArray.create(0), siteVerdicts: HoldVerdictColumn.create(0), siteOfHeld: HoldIndexColumn.create(0), isSiteResult: BoolArray.create(0), defKnown: BoolArray.create(0), defOps: HoldIndexColumn.create(0), isBlockArg: BoolArray.create(0), chainCursor: 0, chainTop: false, chainHasElement: false, chainHasWildElement: false, hopEvents: HoldIndexColumn.create(0), nodeKeys: HoldKeyColumn.create(0), visited: HoldIndexColumn.create(0), stack: HoldIndexColumn.create(0), stackFroms: HoldIndexColumn.create(0), successors: BlockIdArray.create(0), blockIndex: BlockIndexById.create(), deletedKeys: HoldKeyColumn.create(0), siteMasks: HoldWordColumn.create(0), siteTokenBegin: HoldIndexColumn.create(0), siteTokens: HoldIndexColumn.create(0), chainStamp: 0, hopLocals: HoldStampedIndex.create(), nodeSlots: HoldEventIds.create(), nodeLocals: HoldStampedIndex.create(), hopLocalEvents: HoldIndexColumn.create(0), hopLocalBits: HoldIndexColumn.create(0), localCount: 0, wordsPerSummary: 0, summaryWords: HoldWordColumn.create(0), summaryFlags: HoldWordColumn.create(0), summaryEarlierEnds: HoldIndexColumn.create(0), summaryEndBegin: HoldIndexColumn.create(0), summaryEndStop: HoldIndexColumn.create(0), jumpedStamps: HoldIndexColumn.create(0), endBlocks: HoldIndexColumn.create(0), endPositions: HoldIndexColumn.create(0), calleeTokenSlots: HoldStampedIndex.create(), calleeTokenBegin: HoldIndexColumn.create(0), calleeTokenStop: HoldIndexColumn.create(0), calleeTokens: HoldIndexColumn.create(0), accWords: HoldWordColumn.create(0), accFlags: 0, accEarlierEnds: 0, prober: 0, rangePositions: RangeSitePositionArray.create(0)}
 	end 'create'
 
 	function resolveFunction(func IrFunction, index ElementIndex)
@@ -2204,7 +2204,7 @@ type HoldResolver
 			let first = try self.deletedKeys.get(cursor) otherwise panic("HoldResolver.removeDeletedOps: deletedKeys.get OOB at {cursor}")
 			let blockPosition = holdKeyBlock(first)
 			var block = self.module.blockAtPosition(func, position: blockPosition)
-			var kept = OpIndexArray.create()
+			var kept = OpIndexArray.create(0)
 			var next = cursor
 
 			for position in 0 upto block.bodyOpCount() 'eachOp'
@@ -2330,7 +2330,7 @@ function holdCallOp(result ValueId, callee ByteArray, args ValueIdArray, range S
 end 'holdCallOp'
 
 function libraryColumnContainers(project Project, signatures ProgramSignatures) returns NameRoster
-	var bases = NameRoster.create()
+	var bases = NameRoster.create(0)
 
 	if declaredInTheLibrary(project, signatures: signatures, name: MapBuiltinBaseName) 'theLibrarysMap'
 		bases.push(MapBuiltinBaseName)

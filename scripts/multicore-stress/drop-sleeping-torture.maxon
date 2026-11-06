@@ -54,7 +54,7 @@ function sweepWithinStepNs(round Integer) returns Integer
 end 'sweepWithinStepNs'
 
 function sleepRound(round Integer) returns Integer
-	var held = HeldNaps.create()
+	var held = HeldNaps.create(0)
 	var k = 0 as Integer
 
 	while k < NapsPerRound 'spawnEach'
@@ -75,7 +75,7 @@ end 'sleepRound'
 // The reader's drop lands near both its read deadline and the readiness the send delivers, so the
 // poller arm races the deadline's expiry and the readiness walk.
 function raceReader(client TcpClient, conn TcpClient, round Integer) returns Integer
-	var held = HeldNaps.create()
+	var held = HeldNaps.create(0)
 	held.push(async readOnce(conn, idx: round))
 	Scheduler.yield()
 	spinFor((SocketDeadlineBaseMs + round mod SocketDeadlineLengths) * NanosPerMilli + sweepOffsetNs(round))

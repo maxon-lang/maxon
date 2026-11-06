@@ -42,7 +42,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create()
+		var a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -51,7 +51,7 @@ type Bag
 	function sum() returns Tally
 		var total = 0 as Tally
 		for it in items 'scan'
-			items = Labels.create()
+			items = Labels.create(0)
 			print("{it}\n")
 			total = total + (it.byteLength() as Tally)
 		end 'scan'
@@ -82,7 +82,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create()
+		var a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -91,7 +91,7 @@ type Bag
 	function sum() returns Tally
 		var total = 0 as Tally
 		for it in items 'scan'
-			self.items = Labels.create()
+			self.items = Labels.create(0)
 			print("{it}\n")
 			total = total + (it.byteLength() as Tally)
 		end 'scan'
@@ -122,7 +122,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create()
+		var a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -131,7 +131,7 @@ type Bag
 	function sum() returns Tally
 		var total = 0 as Tally
 		for it in self.items 'scan'
-			items = Labels.create()
+			items = Labels.create(0)
 			print("{it}\n")
 			total = total + (it.byteLength() as Tally)
 		end 'scan'
@@ -162,7 +162,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create()
+		var a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -171,7 +171,7 @@ type Bag
 	function sum() returns Tally
 		var total = 0 as Tally
 		for it in self.items 'scan'
-			self.items = Labels.create()
+			self.items = Labels.create(0)
 			print("{it}\n")
 			total = total + (it.byteLength() as Tally)
 		end 'scan'
@@ -203,7 +203,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create()
+		var a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -242,7 +242,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create()
+		var a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -281,7 +281,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create()
+		var a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -320,7 +320,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create()
+		var a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -360,7 +360,7 @@ type Bag
 	export var seen as Int
 
 	static function create() returns Self
-		var a = IntArray.create()
+		var a = IntArray.create(0)
 		a.push(5)
 		a.push(7)
 		return Self{items: a, seen: 0}
@@ -396,7 +396,7 @@ type Bag
 	export var items as IntArray
 
 	static function create() returns Self
-		var a = IntArray.create()
+		var a = IntArray.create(0)
 		a.push(5)
 		a.push(7)
 		return Self{items: a}

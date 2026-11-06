@@ -85,7 +85,7 @@ export type StdDominatorTree
 		// counting sort does not care which way round the relation is read.
 		var pred = buildCsr(succ.list, to: startsRepeatedPerNode(succ), nodeCount: blockCount as CsrIndex)
 
-		var tree = Self{blockCount: blockCount, reachable: BoolArray.create(), idom: BlockPositionColumn.create(), children: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create()), succ: succ, pred: pred, reverseOrder: BlockPositionColumn.create()}
+		var tree = Self{blockCount: blockCount, reachable: BoolArray.create(0), idom: BlockPositionColumn.create(0), children: CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0)), succ: succ, pred: pred, reverseOrder: BlockPositionColumn.create(0)}
 		tree.reachable.growFilled(blockCount, value: false)
 		tree.idom.resize(blockCount)
 
@@ -130,14 +130,14 @@ export type StdDominatorTree
 	// register allocator's own liveness note measures a 19,200-block function), and a recursive DFS over
 	// one is a host stack overflow rather than a compiler diagnostic.
 	static function buildReversePostorder(graph CsrGraph, blockCount ElementIndex, reachable BoolArray) returns RpoOrder
-		var postorder = BlockPositionColumn.create()
+		var postorder = BlockPositionColumn.create(0)
 
 		if blockCount == 0 'noBlocks'
-			return RpoOrder.create(postorder, rpoIndex: BlockPositionColumn.create())
+			return RpoOrder.create(postorder, rpoIndex: BlockPositionColumn.create(0))
 		end 'noBlocks'
 
-		var stackNode = BlockPositionColumn.create()
-		var stackNextChild = CsrColumn.create()
+		var stackNode = BlockPositionColumn.create(0)
+		var stackNextChild = CsrColumn.create(0)
 
 		try reachable.set(StdEntryBlockPosition, value: true) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.set OOB at the entry")
 		stackNode.push(StdEntryBlockPosition)
@@ -171,7 +171,7 @@ export type StdDominatorTree
 	end 'buildReversePostorder'
 
 	export static function reversePostorder(succ CsrGraph, blockCount ElementIndex) returns BlockPositionColumn
-		var reachable = BoolArray.create()
+		var reachable = BoolArray.create(0)
 		reachable.growFilled(blockCount, value: false)
 		return Self.buildReversePostorder(succ, blockCount: blockCount, reachable: reachable).order
 	end 'reversePostorder'
@@ -193,7 +193,7 @@ export type StdDominatorTree
 		end 'noBlocks'
 
 		try self.idom.set(StdEntryBlockPosition, value: StdEntryBlockPosition) otherwise panic("StdDominatorTree.solveImmediateDominators: idom.set OOB at the entry")
-		var solved = BoolArray.create()
+		var solved = BoolArray.create(0)
 		solved.growFilled(self.blockCount, value: false)
 		try solved.set(StdEntryBlockPosition, value: true) otherwise panic("StdDominatorTree.solveImmediateDominators: solved.set OOB at the entry")
 
@@ -273,7 +273,7 @@ export type StdDominatorTree
 	// holding that block's immediate dominator. Paired with `RpoOrder.copyOfReachableNonEntryBlocks`,
 	// which walks the same order and so produces the matching `to` column.
 	function idomOfEachNonEntryReachableBlock(rpo RpoOrder) returns CsrColumn
-		var parents = CsrColumn.create()
+		var parents = CsrColumn.create(0)
 
 		for position in rpo.order 'eachReachableBlock'
 			if position == StdEntryBlockPosition 'theEntryHasNoParent'
@@ -297,7 +297,7 @@ export type DominatorStamps
 	var leaveAt as BlockPositionColumn
 
 	export static function build(tree StdDominatorTree) returns DominatorStamps
-		var stamps = Self{enterAt: BlockPositionColumn.create(), leaveAt: BlockPositionColumn.create()}
+		var stamps = Self{enterAt: BlockPositionColumn.create(0), leaveAt: BlockPositionColumn.create(0)}
 		stamps.enterAt.resize(tree.blockCount)
 		stamps.leaveAt.resize(tree.blockCount)
 
@@ -366,7 +366,7 @@ export type StdDominatorWalk
 	export var position as ElementIndex
 
 	export static function create() returns StdDominatorWalk
-		return Self{open: BlockPositionColumn.create(), nextChild: CsrColumn.create(), rpoIndex: BlockPositionColumn.create(), entryPending: false, step: StdDominatorStep.enter, position: StdEntryBlockPosition}
+		return Self{open: BlockPositionColumn.create(0), nextChild: CsrColumn.create(0), rpoIndex: BlockPositionColumn.create(0), entryPending: false, step: StdDominatorStep.enter, position: StdEntryBlockPosition}
 	end 'create'
 
 	// Start over `tree`, keeping the columns' capacity; the first `advance` enters the entry block. An
@@ -457,8 +457,8 @@ type RpoOrder
 
 	// Reverse a DFS postorder into a reverse postorder, recording each block's place as it goes.
 	static function fromPostorder(postorder BlockPositionColumn, blockCount ElementIndex) returns RpoOrder
-		var order = BlockPositionColumn.create()
-		var rpoIndex = BlockPositionColumn.create()
+		var order = BlockPositionColumn.create(0)
+		var rpoIndex = BlockPositionColumn.create(0)
 		rpoIndex.resize(blockCount)
 
 		var remaining = postorder.count()
@@ -480,7 +480,7 @@ type RpoOrder
 	// Every reachable block except the entry, in reverse postorder — the `to` column of the dominator
 	// tree's edge list.
 	function copyOfReachableNonEntryBlocks() returns CsrColumn
-		var blocks = CsrColumn.create()
+		var blocks = CsrColumn.create(0)
 
 		for position in self.order 'eachReachableBlock'
 			if position == StdEntryBlockPosition 'theEntryIsNobodysChild'
@@ -508,10 +508,10 @@ end 'RpoOrder'
 // which `NaturalLoops` reads as a back edge, and the member set of that phantom loop is everything from
 // the dispatch to the block before it — one walk of the function per `match`.
 module function buildStdSuccessorGraph(module StdModule, func IrFunction, blockCount ElementIndex) returns CsrGraph
-	var edgeFrom = CsrColumn.create()
-	var edgeTo = CsrColumn.create()
+	var edgeFrom = CsrColumn.create(0)
+	var edgeTo = CsrColumn.create(0)
 	let byId = module.blockIndexById(func)
-	var successorIds = BlockIdArray.create()
+	var successorIds = BlockIdArray.create(0)
 
 	for position in 0 upto blockCount 'eachBlock'
 		let block = module.blockAtPosition(func, position: position)
@@ -538,7 +538,7 @@ end 'buildStdSuccessorGraph'
 // neighbour it has. Paired with `graph.list` (already the `to` column, in the same order), it is the
 // edge list `buildCsr` needs to build the REVERSED relation, with no second walk of the IR.
 function startsRepeatedPerNode(graph CsrGraph) returns CsrColumn
-	var sources = CsrColumn.create()
+	var sources = CsrColumn.create(0)
 
 	for node in 0 upto graph.nodeCount() 'eachNode'
 		for _ in 0 upto graph.degree(node) 'eachNeighbour'

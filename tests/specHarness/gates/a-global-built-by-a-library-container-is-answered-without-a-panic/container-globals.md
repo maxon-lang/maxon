@@ -54,7 +54,7 @@ fixed-array 3
 typealias Count = int(0 to 1000)
 typealias CountArray = Array with Count
 
-var counts = CountArray.create()
+var counts = CountArray.create(0)
 
 function main() returns ExitCode
 	counts.push(5)

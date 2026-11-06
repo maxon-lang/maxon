@@ -56,7 +56,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -205,7 +205,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -234,7 +234,7 @@ end 'toHex'
 
 function fill(byteHex String, count Count) returns ByteArray
 	let byte = try fromHex(byteHex).get(0) otherwise panic("a fill byte")
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	for _ in 0 upto count 'eachCopy'
 		bytes.push(byte)
@@ -270,7 +270,7 @@ function content(headHex String, byteHex String, count Count, tailHex String) re
 end 'content'
 
 function bigEndian(value Sequence) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	for index in 0 upto 8 'eachByte'
 		bytes.push(((value shr ((7 - index) * 8)) and 255) as Byte)
@@ -281,7 +281,7 @@ end 'bigEndian'
 
 function xorNonce(iv ByteArray, sequenceNumber Sequence) returns ByteArray
 	let sequenceBytes = bigEndian(sequenceNumber)
-	var nonce = ByteArray.create()
+	var nonce = ByteArray.create(0)
 
 	for (iter, byte) in iv.withIterator() 'eachByte'
 		if iter.index() < 4 'prefix'
@@ -409,7 +409,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -438,7 +438,7 @@ end 'toHex'
 
 function fill(byteHex String, count Count) returns ByteArray
 	let byte = try fromHex(byteHex).get(0) otherwise panic("a fill byte")
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	for _ in 0 upto count 'eachCopy'
 		bytes.push(byte)
@@ -474,7 +474,7 @@ function content(headHex String, byteHex String, count Count, tailHex String) re
 end 'content'
 
 function bigEndian(value Sequence) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	for index in 0 upto 8 'eachByte'
 		bytes.push(((value shr ((7 - index) * 8)) and 255) as Byte)
@@ -485,7 +485,7 @@ end 'bigEndian'
 
 function xorNonce(iv ByteArray, sequenceNumber Sequence) returns ByteArray
 	let sequenceBytes = bigEndian(sequenceNumber)
-	var nonce = ByteArray.create()
+	var nonce = ByteArray.create(0)
 
 	for (iter, byte) in iv.withIterator() 'eachByte'
 		if iter.index() < 4 'prefix'
@@ -510,7 +510,7 @@ function sealed12(sealer Sealer, ivHex String, sequenceNumber Sequence, typeByte
 	var additionalData = bigEndian(sequenceNumber)
 	additionalData.append(header(typeByte, length: plaintext.count()))
 
-	var body = ByteArray.create()
+	var body = ByteArray.create(0)
 	var nonce = xorNonce(fromHex(ivHex), sequenceNumber: sequenceNumber)
 
 	if explicitNonce 'explicit'
@@ -608,7 +608,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -637,7 +637,7 @@ end 'toHex'
 
 function fill(byteHex String, count Count) returns ByteArray
 	let byte = try fromHex(byteHex).get(0) otherwise panic("a fill byte")
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	for _ in 0 upto count 'eachCopy'
 		bytes.push(byte)
@@ -756,7 +756,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -785,7 +785,7 @@ end 'toHex'
 
 function fill(byteHex String, count Count) returns ByteArray
 	let byte = try fromHex(byteHex).get(0) otherwise panic("a fill byte")
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	for _ in 0 upto count 'eachCopy'
 		bytes.push(byte)
@@ -872,9 +872,9 @@ function sealed(label String, protection Tls13RecordProtection, contentType TlsC
 end 'sealed'
 
 function main() returns ExitCode
-	var key = ByteArray.create()
+	var key = ByteArray.create(0)
 	key.resize(16)
-	var iv = ByteArray.create()
+	var iv = ByteArray.create(0)
 	iv.resize(12)
 	let suite = Tls13CipherSuite.aes128GcmSha256
 	let message = "ping".toByteArray()
@@ -964,9 +964,9 @@ function sealed(label String, protection Tls12RecordProtection, contentType TlsC
 end 'sealed'
 
 function main() returns ExitCode
-	var key = ByteArray.create()
+	var key = ByteArray.create(0)
 	key.resize(16)
-	var iv = ByteArray.create()
+	var iv = ByteArray.create(0)
 	iv.resize(4)
 	let suite = Tls12CipherSuite.ecdheRsaAes128GcmSha256
 	let message = "ping".toByteArray()
@@ -1030,9 +1030,9 @@ beyond sequenceNumberExhausted
 A TLS 1.3 suite is not a `Tls12CipherSuite`: the compiler refuses a `Tls12RecordProtection` created with one.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create()
+	var key = ByteArray.create(0)
 	key.resize(16)
-	var iv = ByteArray.create()
+	var iv = ByteArray.create(0)
 	iv.resize(4)
 
 	var protection = try Tls12RecordProtection.create(Tls13CipherSuite.aes128GcmSha256, key: key, iv: iv) otherwise return 1

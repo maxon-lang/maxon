@@ -77,7 +77,7 @@ typealias PointArray = Array with Point
 
 function main() returns ExitCode
 	var a = Point.create(1, y: 2)
-	var points = PointArray.create()
+	var points = PointArray.create(0)
 	points.push(a)                                        // the array shares a's record
 	var b = try points.get(0) otherwise panic("pushed")
 	b.x = 99
@@ -199,7 +199,7 @@ function main() returns ExitCode
 	var b = frozen.clone()               // an independent, mutable record
 	b.x = 5
 
-	var points = PointArray.create()
+	var points = PointArray.create(0)
 	points.push(b)                       // the array shares b's record
 	var first = try points.get(0) otherwise panic("pushed")
 	first.x = 9                          // an element follows its container

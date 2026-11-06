@@ -23,7 +23,7 @@ The self-hosted compiler corrects this in `ConstantArrayLiteralRdata`'s
 type from the surviving `mm.set(i, value:)` call's backfilled argument type and
 rewrites the create's `elementSize` operand to the resolved width (only narrow
 widths `< 8`; pointer/managed elements are untouched). This is the array-literal
-twin of the `ByteArray.create() + push` grow-site stamp in
+twin of the `ByteArray.create(0) + push` grow-site stamp in
 `bytearray-element-size.md`.
 
 **Why the width cannot be settled at PARSE time.** The first element's VALUE

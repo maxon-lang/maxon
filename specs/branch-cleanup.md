@@ -188,7 +188,7 @@ typealias Cell = int(0 to u8.max)
 typealias CellArray = Array with Cell
 
 function main() returns ExitCode
-	var xs = CellArray.create()
+	var xs = CellArray.create(0)
 	xs.push(4)
 	xs.push(5)
 	let a = try xs.get(0) otherwise 200

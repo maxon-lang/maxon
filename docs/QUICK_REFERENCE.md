@@ -164,7 +164,7 @@ end 'Origin'
 
 // Reference-by-default for structs
 var a = Point.create(1, y: 2)
-var points = PointArray.create()
+var points = PointArray.create(0)
 points.push(a)          // the array shares a's record
 var b = try points.get(0) otherwise panic("pushed")
 b.x = 99                // a.x is now 99: a and b are one record
@@ -591,7 +591,7 @@ calls a factory. A field either names its type or takes it from its default:
   via `self.field = expr` in a factory.
 - `var x = true` / `var x = "text"` — a `bool` or `String` field with that default.
 - `var x = Type.member` / `var x = Type.member(...)` — an enum case or static
-  factory, typed `Type` (e.g. `var items = IntArray.create()`).
+  factory, typed `Type` (e.g. `var items = IntArray.create(0)`).
 - `var x = expression as Type` — any default whose outermost node is a cast,
   typed `Type` (e.g. `var count = 0 as Tally`). A bare number default
   (`var x = 0`) is **E2004**, and `var x as Type = expression` is **E2010**.
@@ -982,7 +982,7 @@ p.cancel()
 typealias Tally = int(0 to u64.max)
 typealias IntPromise = Promise with Tally
 typealias IntPromiseArray = Array with IntPromise
-var arr = IntPromiseArray.create()
+var arr = IntPromiseArray.create(0)
 arr.push(async compute(1))
 arr.push(async compute(2))
 for q in arr 'each'
@@ -1010,7 +1010,7 @@ typealias Tally = int(0 to u64.max)
 typealias IntArray = Array with Tally
 
 var arr = [1, 2, 3]                    // array literal
-var empty = IntArray.create()                 // typed empty array
+var empty = IntArray.create(0)                 // typed empty array
 
 let n = arr.count()                    // length
 try arr.get(0) otherwise 0             // access (throws ArrayError)

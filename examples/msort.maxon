@@ -79,7 +79,7 @@ enum UsageError implements Error
 end 'UsageError'
 
 type Options
-	export var paths = PathArray.create()
+	export var paths = PathArray.create(0)
 	var jobs = fewestWorkers as WorkerCount
 	var field = wholeLine as FieldNumber
 	var numeric = false
@@ -287,7 +287,7 @@ type TextKey implements KeyReader
 	end 'create'
 
 	function read(text ByteArray) returns SortKey
-		var folded = ByteArray.create()
+		var folded = ByteArray.create(0)
 		folded.reserve(text.count())
 
 		for b in text 'eachByte'
@@ -406,7 +406,7 @@ type Row
 end 'Row'
 
 function rowsFrom(lines LineArray, maker KeyMaker) returns RowArray
-	var rows = RowArray.create()
+	var rows = RowArray.create(0)
 	rows.reserve(lines.count())
 
 	for line in lines 'eachLine'
@@ -425,7 +425,7 @@ type Sorter
 
 	export function sortLines(lines LineArray) returns LineArray
 		var rows = sortRows(lines)
-		var sorted = LineArray.create()
+		var sorted = LineArray.create(0)
 		sorted.reserve(rows.count())
 
 		for row in rows 'eachRow'
@@ -469,7 +469,7 @@ end 'splitLines'
 
 function standardInputLines() returns LineArray
 	var stdin = Console.stdin()
-	var lines = LineArray.create()
+	var lines = LineArray.create(0)
 
 	while true 'eachLine'
 		let line = try stdin.readLine() otherwise break
@@ -484,13 +484,13 @@ function readInput(options Options, summary RunSummary) returns LineArray
 		return standardInputLines()
 	end 'standardInput'
 
-	var reads = ReadPromiseArray.create()
+	var reads = ReadPromiseArray.create(0)
 
 	for path in options.paths 'startReads'
 		reads.push(async readLines(path))
 	end 'startReads'
 
-	var lines = LineArray.create()
+	var lines = LineArray.create(0)
 
 	for (read, pending) in reads.withIterator() 'finishReads'
 		view fileLines = try await pending otherwise 'unreadable'
@@ -507,13 +507,13 @@ function readInput(options Options, summary RunSummary) returns LineArray
 end 'readInput'
 
 function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCount, maker KeyMaker) returns ChunkArray
-	var sorters = SorterArray.create()
+	var sorters = SorterArray.create(0)
 
 	for _ in 1 to workers 'spawnWorkers'
 		sorters.push(spawn Sorter.create(settings.clone()))
 	end 'spawnWorkers'
 
-	var replies = SortedPromiseArray.create()
+	var replies = SortedPromiseArray.create(0)
 	var first = 0 as ElementIndex
 
 	for slot in 0 upto (workers as ElementIndex) 'sendChunks'
@@ -521,7 +521,7 @@ function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCoun
 		let remaining = (workers - slot) as WorkerCount
 		let share = (lines.count() - first) / remaining
 		let stop = first + share
-		var chunk = LineArray.create()
+		var chunk = LineArray.create(0)
 		chunk.reserve(share)
 
 		for position in first upto stop 'eachLine'
@@ -533,7 +533,7 @@ function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCoun
 		first = stop
 	end 'sendChunks'
 
-	var chunks = ChunkArray.create()
+	var chunks = ChunkArray.create(0)
 
 	for reply in replies 'receiveChunks'
 		chunks.push(rowsFrom(await reply, maker: maker))
@@ -551,7 +551,7 @@ function rowAt(rows RowArray, position LineCount) returns Row
 end 'rowAt'
 
 function mergedPair(left RowArray, right RowArray, compare RowComparator) returns RowArray
-	var merged = RowArray.create()
+	var merged = RowArray.create(0)
 	merged.reserve(left.count() + right.count())
 	var nextLeft = 0 as LineCount
 	var nextRight = 0 as LineCount
@@ -583,7 +583,7 @@ function mergeChunks(chunks ChunkArray, compare RowComparator) returns RowArray
 	var round = chunks
 
 	while round.count() > 1 'eachRound'
-		var joined = ChunkArray.create()
+		var joined = ChunkArray.create(0)
 		var slot = 0 as ChunkPosition
 
 		while slot < round.count() 'eachPair'
@@ -602,7 +602,7 @@ function mergeChunks(chunks ChunkArray, compare RowComparator) returns RowArray
 	end 'eachRound'
 
 	if round.isEmpty() 'nothingToMerge'
-		return RowArray.create()
+		return RowArray.create(0)
 	end 'nothingToMerge'
 
 	return chunkAt(round, position: 0)
@@ -617,7 +617,7 @@ function sortedRows(lines LineArray, settings SortSettings, workers WorkerCount,
 end 'sortedRows'
 
 function withoutDuplicates(rows RowArray, compare RowComparator) returns RowArray
-	var kept = RowArray.create()
+	var kept = RowArray.create(0)
 
 	for row in rows 'eachRow'
 		if not kept.isEmpty() 'hasPrevious'

@@ -34,7 +34,7 @@ function touch(cells TallyArray) returns TallyArray
 end 'touch'
 
 function main() returns ExitCode
-	var last = TallyArray.create()
+	var last = TallyArray.create(0)
 	last.push(0)
 
 	for _ in 0 upto 1000 'each'
@@ -64,7 +64,7 @@ function touch(cells TallyArray) returns TallyArray
 end 'touch'
 
 function main() returns ExitCode
-	var a = TallyArray.create()
+	var a = TallyArray.create(0)
 	a.push(1)
 	var b = touch(a)
 	var c = touch(b)
@@ -92,7 +92,7 @@ type Shelf
 	export var held as TallyArray
 
 	static function create() returns Shelf
-		return Self{held: TallyArray.create()}
+		return Self{held: TallyArray.create(0)}
 	end 'create'
 
 	function keep(cells TallyArray) returns TallyArray
@@ -103,11 +103,11 @@ end 'Shelf'
 
 function main() returns ExitCode
 	var shelf = Shelf.create()
-	var cells = TallyArray.create()
+	var cells = TallyArray.create(0)
 	cells.push(5)
 	var again = shelf.keep(cells)
 	again.push(6)
-	cells = TallyArray.create()
+	cells = TallyArray.create(0)
 
 	print("{shelf.held.count()} {again.count()} {cells.count()}\n")
 	return 0
@@ -132,13 +132,13 @@ function pick(cells TallyArray, keepIt bool) returns TallyArray
 		return cells
 	end 'keep'
 
-	var fresh = TallyArray.create()
+	var fresh = TallyArray.create(0)
 	fresh.push(9)
 	return fresh
 end 'pick'
 
 function main() returns ExitCode
-	var last = TallyArray.create()
+	var last = TallyArray.create(0)
 	last.push(1)
 
 	for round in 0 upto 6 'each'
@@ -175,7 +175,7 @@ function apply(step Step, cells TallyArray) returns TallyArray
 end 'apply'
 
 function main() returns ExitCode
-	var last = TallyArray.create()
+	var last = TallyArray.create(0)
 
 	for _ in 0 upto 4 'each'
 		last = touch(last)
@@ -224,7 +224,7 @@ end 'throughTheInterface'
 
 function main() returns ExitCode
 	let stepper = Stepper.create()
-	var last = TallyArray.create()
+	var last = TallyArray.create(0)
 
 	for _ in 0 upto 5 'each'
 		last = stepper.advance(last)
@@ -253,13 +253,13 @@ type Shelf
 	export var held as TallyArray
 
 	static function create() returns Shelf
-		var held = TallyArray.create()
+		var held = TallyArray.create(0)
 		held.push(7)
 		return Self{held: held}
 	end 'create'
 
 	function reset()
-		self.held = TallyArray.create()
+		self.held = TallyArray.create(0)
 	end 'reset'
 end 'Shelf'
 
@@ -297,7 +297,7 @@ function first(a TallyArray, b TallyArray) returns TallyArray
 end 'first'
 
 function main() returns ExitCode
-	var cells = TallyArray.create()
+	var cells = TallyArray.create(0)
 	cells.push(4)
 	var out = first(cells, b: cells)
 	out = first(out, b: out)
@@ -333,7 +333,7 @@ function touch(cells TallyArray) returns TallyArray throws Refused
 end 'touch'
 
 function main() returns ExitCode
-	var last = TallyArray.create()
+	var last = TallyArray.create(0)
 	last.push(1)
 	last.push(2)
 
@@ -342,7 +342,7 @@ function main() returns ExitCode
 	end 'each'
 
 	last.push(3)
-	last = try touch(last) otherwise TallyArray.create()
+	last = try touch(last) otherwise TallyArray.create(0)
 	print("{last.count()}\n")
 	return 0
 end 'main'
@@ -367,10 +367,10 @@ function touch(cells TallyArray) returns TallyArray
 end 'touch'
 
 function main() returns ExitCode
-	var a = TallyArray.create()
+	var a = TallyArray.create(0)
 	a.push(3)
 	var b = touch(a)
-	a = TallyArray.create()
+	a = TallyArray.create(0)
 	b.push(4)
 
 	print("{a.count()} {b.count()} {try b.get(0) otherwise 0}\n")
@@ -396,12 +396,12 @@ function touch(cells TallyArray) returns TallyArray
 end 'touch'
 
 function main() returns ExitCode
-	var a = TallyArray.create()
+	var a = TallyArray.create(0)
 	a.push(3)
 	var b = touch(a)
 	b.push(4)
 	b.push(5)
-	a = TallyArray.create()
+	a = TallyArray.create(0)
 
 	print("{a.count()} {b.count()}\n")
 	return 0
@@ -427,15 +427,15 @@ function touch(cells TallyArray) returns TallyArray
 end 'touch'
 
 function main() returns ExitCode
-	var holder = TallyArrays.create()
-	var a = TallyArray.create()
+	var holder = TallyArrays.create(0)
+	var a = TallyArray.create(0)
 	a.push(8)
 	holder.push(touch(a))
-	a = TallyArray.create()
+	a = TallyArray.create(0)
 	a.push(1)
 	a.push(2)
 
-	view kept = try holder.get(0) otherwise TallyArray.create()
+	view kept = try holder.get(0) otherwise TallyArray.create(0)
 	print("{kept.count()} {try kept.get(0) otherwise 0} {a.count()}\n")
 	return 0
 end 'main'
@@ -467,8 +467,8 @@ function touch(cells TallyArray) returns TallyArray
 end 'touch'
 
 function main() returns ExitCode
-	var last = TallyArray.create()
-	var other = TallyArray.create()
+	var last = TallyArray.create(0)
+	var other = TallyArray.create(0)
 
 	for _ in 0 upto 5 'each'
 		last = touch(touch(last))
@@ -605,7 +605,7 @@ end 'touch'
 function main() returns ExitCode
 	let viaClosure = function(cells TallyArray) gives touch(cells)
 	let viaValue = touch as Step
-	var last = TallyArray.create()
+	var last = TallyArray.create(0)
 
 	for _ in 0 upto 4 'each'
 		last = viaClosure(last)
@@ -638,7 +638,7 @@ function touch(cells TallyArray) returns TallyArray
 end 'touch'
 
 function main() returns ExitCode
-	var last = TallyArray.create()
+	var last = TallyArray.create(0)
 
 	for _ in 0 upto 3 'each'
 		let pending = async touch(last.clone())
@@ -679,7 +679,7 @@ typealias CellsPass = Pass with TallyArray
 
 function main() returns ExitCode
 	let pass = CellsPass.create()
-	var last = TallyArray.create()
+	var last = TallyArray.create(0)
 	last.push(0)
 
 	for _ in 0 upto 6 'each'
@@ -710,11 +710,11 @@ function touch(cells TallyArray) returns TallyArray
 end 'touch'
 
 function main() returns ExitCode
-	var parent = TallyArray.create()
+	var parent = TallyArray.create(0)
 	parent.push(1)
 	parent.push(2)
 	parent.push(3)
-	var part = touch(try parent.slice(0, endIndex: 2) otherwise TallyArray.create())
+	var part = touch(try parent.slice(0, endIndex: 2) otherwise TallyArray.create(0))
 	part.push(9)
 
 	for _ in 0 upto 2 'each'
@@ -759,7 +759,7 @@ function pick(flag bool, cells TallyArray) returns TallyArray
 end 'pick'
 
 function main() returns ExitCode
-	var cells = TallyArray.create()
+	var cells = TallyArray.create(0)
 	cells.push(2)
 	cells = pick(true, cells: cells)
 	cells = pick(false, cells: cells)
@@ -785,7 +785,7 @@ function touch(bytes ByteArray) returns ByteArray
 end 'touch'
 
 function route(flag bool) returns ByteArray
-	var last = ByteArray.create()
+	var last = ByteArray.create(0)
 	last.push(1)
 
 	if flag 'again'
@@ -824,7 +824,7 @@ type Counter
 	export var log as TallyArray
 
 	static function create() returns Counter
-		return Self{hits: 0, log: TallyArray.create()}
+		return Self{hits: 0, log: TallyArray.create(0)}
 	end 'create'
 
 	function bump() returns Counter
@@ -886,15 +886,15 @@ function stash(holder TallyArrays, cells TallyArray) returns TallyArray
 end 'stash'
 
 function main() returns ExitCode
-	var holder = TallyArrays.create()
-	var last = TallyArray.create()
+	var holder = TallyArrays.create(0)
+	var last = TallyArray.create(0)
 
 	for _ in 0 upto 3 'each'
 		last = stash(holder, cells: last)
 		last.push(1)
 	end 'each'
 
-	view kept = try holder.get(2) otherwise TallyArray.create()
+	view kept = try holder.get(2) otherwise TallyArray.create(0)
 	print("{holder.count()} {last.count()} {kept.count()}\n")
 	return 0
 end 'main'
@@ -944,7 +944,7 @@ typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
 	let same = function(cells TallyArray) gives cells
-	var last = TallyArray.create()
+	var last = TallyArray.create(0)
 
 	for _ in 0 upto 9 'each'
 		last = same(last)
@@ -981,7 +981,7 @@ function descend(cells TallyArray, depth Tally) returns TallyArray
 end 'descend'
 
 function main() returns ExitCode
-	var cells = TallyArray.create()
+	var cells = TallyArray.create(0)
 	cells = descend(cells, depth: 5)
 
 	print("{cells.count()}\n")

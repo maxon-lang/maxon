@@ -403,7 +403,7 @@ end 'buildProfileSample'
 // back to the ordinary one on a host that predates the flag. Even the ordinary waitable timer beats a sleep,
 // whose resolution is the system tick.
 function buildProfileTimerCreate(module StdModule)
-	var func = IrFunction.createFromStd(ProfileTimerCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(ProfileTimerCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -677,13 +677,13 @@ function buildProfileHandleAdopt(module StdModule)
 end 'buildProfileHandleAdopt'
 
 function buildProfileTimerOpen(module StdModule)
-	var func = IrFunction.createFromStd(ProfileTimerOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(ProfileTimerOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	let handle = ids.mint()
-	module.appendOp(entry, op: StdOp.call(handle, callee: ProfileTimerCreateName, args: ValueIdArray.create()))
+	module.appendOp(entry, op: StdOp.call(handle, callee: ProfileTimerCreateName, args: ValueIdArray.create(0)))
 	let box = ids.mint()
 	module.appendOp(entry, op: StdOp.call(box, callee: ProfileHandleAdoptName, args: argsOf(handle)))
 	module.setTerminator(entry, op: StdOp.ret(box))

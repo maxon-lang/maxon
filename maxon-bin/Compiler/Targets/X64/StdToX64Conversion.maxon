@@ -718,7 +718,7 @@ type OrderedBlockRoster
 	var ids as BlockIdArray
 
 	static function create() returns OrderedBlockRoster
-		return Self{refs: BlockRefArray.create(), ids: BlockIdArray.create()}
+		return Self{refs: BlockRefArray.create(0), ids: BlockIdArray.create(0)}
 	end 'create'
 
 	function record(blockRef ElementIndex, id BlockId)
@@ -4072,7 +4072,7 @@ export type StdToX64Lowering
 	function lowerOsCpuCount(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsCpuCountWin64(resultId, dstBlock: dstBlock)
-			syscall then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(HostCpuCountName), args: ValueIdArray.create(), dstBlock: dstBlock)
+			syscall then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(HostCpuCountName), args: ValueIdArray.create(0), dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsCpuCount'
 
@@ -4777,7 +4777,7 @@ export type StdToX64Lowering
 	// The Linux chunk asks `mrt_host_monotonic_clock` rather than reading a clock of its own, so a
 	// subprocess deadline and a scheduler deadline cannot drift apart on two different clocks.
 	function lowerOsTickCountMs(resultId ValueId, dstBlock IrBlock)
-		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.GetTickCount64, chunk: HostTickMsName), args: ValueIdArray.create(), dstBlock: dstBlock)
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.GetTickCount64, chunk: HostTickMsName), args: ValueIdArray.create(0), dstBlock: dstBlock)
 	end 'lowerOsTickCountMs'
 
 	// `GetModuleFileNameW(NULL, bufPtr, bufLen)`, the character count captured, which tells the
@@ -4872,7 +4872,7 @@ export type StdToX64Lowering
 
 	// Lower `tlsAlloc(result)` to `TlsAlloc()` — no arguments, the slot INDEX captured out of RAX.
 	function lowerTlsAlloc(resultId ValueId, dstBlock IrBlock)
-		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.TlsAlloc, chunk: HostTlsAllocName), args: ValueIdArray.create(), dstBlock: dstBlock)
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.TlsAlloc, chunk: HostTlsAllocName), args: ValueIdArray.create(0), dstBlock: dstBlock)
 	end 'lowerTlsAlloc'
 
 	// Lower `tlsSetValue(index, value)` to `TlsSetValue(index, value)` — args rcx/rdx, the BOOL result ignored.
@@ -4940,7 +4940,7 @@ export type StdToX64Lowering
 	// Lower `osLastError` to `GetLastError()` — no arguments, the DWORD result captured into `resultId`. Called
 	// IMMEDIATELY after a failing `osReadOverlapped` (no intervening call clobbers the thread's last-error).
 	function lowerOsLastError(resultId ValueId, dstBlock IrBlock)
-		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.GetLastError, chunk: HostLastErrorName), args: ValueIdArray.create(), dstBlock: dstBlock)
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.GetLastError, chunk: HostLastErrorName), args: ValueIdArray.create(0), dstBlock: dstBlock)
 	end 'lowerOsLastError'
 
 	// Lower `osCancelIo(handle, ovl)` to `CancelIoEx(handle, ovl)` — args rcx/rdx. The result is ignored because
@@ -5227,7 +5227,7 @@ export type StdToX64Lowering
 
 	// Drop every branch edge of `block` except the one to `keepTarget` — see the caller.
 	function keepOnlyBranchEdgeIn(block IrBlock, keepTarget BlockId)
-		var kept = BranchEdgeArray.create()
+		var kept = BranchEdgeArray.create(0)
 
 		for edge in block.branchEdges 'each'
 			if edge.targetBlockId == keepTarget 'keep'
@@ -5320,7 +5320,7 @@ export type StdToX64Lowering
 	// before `reserveFloatEqualityBlocks` mints anything.
 	function blocksNeedingFloatEqualitySplit(funcIdx ElementIndex) returns BlockRefArray
 		view srcFunc = self.stdModule.getFunc(funcIdx)
-		var toSplit = BlockRefArray.create()
+		var toSplit = BlockRefArray.create(0)
 
 		for blockRef in srcFunc.blockRefs 'eachBlock'
 			if self.settleFloatEqualityBranch(blockRef) 'needsSplit'
@@ -5581,7 +5581,7 @@ export type StdToX64Lowering
 	// IS shared, and that is correct — nothing mutates it in place (see `prepareSkeleton`).
 	function cloneBranchEdgesOf(blockRef ElementIndex) returns BranchEdgeArray
 		var block = try self.targetModule.blocks.get(blockRef) otherwise panic("cloneBranchEdgesOf: blockRef {blockRef} not in targetModule.blocks")
-		var copied = BranchEdgeArray.create()
+		var copied = BranchEdgeArray.create(0)
 
 		for edge in block.branchEdges 'each'
 			copied.push(BranchEdge.create(edge.targetBlockId, argIds: edge.argIds))

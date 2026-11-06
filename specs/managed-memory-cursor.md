@@ -52,7 +52,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -71,7 +71,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -95,7 +95,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -118,7 +118,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	var cursor = try arr.managed.createCursor() otherwise return 99
@@ -140,7 +140,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -162,7 +162,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	var cursor = try arr.managed.createCursor() otherwise return 99
@@ -181,7 +181,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -202,7 +202,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	var cursor = try arr.managed.createCursor() otherwise return 99
@@ -221,7 +221,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -241,7 +241,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	let cursor = try arr.managed.createCursor() otherwise return 99
@@ -261,7 +261,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	let cursor = try arr.managed.createCursor() otherwise return 5
 	return cursor.current()
 end 'main'
@@ -284,7 +284,7 @@ typealias ByteArray = Array with Byte
 function main() returns ExitCode
 	var refusals = 0 as Count
 	for _ in 0 upto 100 'many'
-		var arr = ByteArray.create()
+		var arr = ByteArray.create(0)
 		let cursor = try arr.managed.createCursor() otherwise 'empty'
 			refusals = refusals + 1
 			continue
@@ -307,7 +307,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1000)
 	arr.push(2000)
 	arr.push(3000)
@@ -328,7 +328,7 @@ is dropped. The buffer still owns every element, and the run is leak-gated.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("alpha heap string long enough to require an allocation")
 	xs.push("beta heap string long enough to require an allocation")
 	var cursor = try xs.managed.createCursor() otherwise return 99
@@ -358,7 +358,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function makeBuffer() returns ByteArray
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(4)
 	arr.push(9)
 	return arr
@@ -368,7 +368,7 @@ function main() returns ExitCode
 	let cursor = try makeBuffer().managed.createCursor() otherwise return 99
 	var churn = 0 as Count
 	for _ in 0 upto 500 'churn'
-		var scratch = ByteArray.create()
+		var scratch = ByteArray.create(0)
 		scratch.push(200)
 		churn = churn + scratch.count()
 	end 'churn'
@@ -391,7 +391,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	let cursor = try arr.managed.createCursor() otherwise return 99
 	return cursor.frobnicate()
@@ -411,7 +411,7 @@ reads the released slot.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("alpha heap string long enough to require an allocation")
 	xs.push("beta heap string long enough to require an allocation")
 	view cursor = try xs.managed.createCursor() otherwise return 99
@@ -443,7 +443,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	var cursor = try arr.managed.createCursor() otherwise return 99
 	for _ in 0 upto 64 'grow'
@@ -468,7 +468,7 @@ read through a freed record.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	for i in 0 upto 2 'fill'
 		xs.push("element {i} of the source, long enough to need a heap record")
 	end 'fill'
@@ -496,7 +496,7 @@ position and the line of the `current()` call, exactly as a `for` element read o
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("alpha heap string long enough to require an allocation")
 	xs.reserve(3)
 	try xs.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
@@ -557,7 +557,7 @@ end 'SeqIterator'
 typealias ByteIter = SeqIterator with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -606,7 +606,7 @@ end 'SeqIterator'
 typealias StrIter = SeqIterator with String
 
 function main() returns ExitCode
-	var xs = StrArray.create()
+	var xs = StrArray.create(0)
 	xs.push("alpha heap string long enough to require an allocation")
 	xs.push("beta heap string long enough to require an allocation")
 	var it = try StrIter.create(xs.managed) otherwise return 99
@@ -633,7 +633,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	var total = 0 as Count

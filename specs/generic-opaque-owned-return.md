@@ -129,7 +129,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function push(item Element)
@@ -354,7 +354,7 @@ route the retirement of the synthesized `Array` will eventually send them down.
 typealias Strings = Array with String
 
 function main() returns ExitCode
-	var xs = Strings.create()
+	var xs = Strings.create(0)
 	xs.push("alpha string long enough to force a heap allocation")
 	xs.push("beta string long enough to force a heap allocation")
 	let ys = xs.map(function(s) gives s)

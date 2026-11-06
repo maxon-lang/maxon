@@ -49,7 +49,7 @@ end 'publishBufferDiagnostics'
 function refusedDocument(workspace LspWorkspaceState, uri String, path FilePath, text String, reason String) returns BufferPublish
 	let tokens = lspDocumentTokens(text, keywords: KeywordTable.create())
 
-	submitToLspWriter(workspace.writer, command: LspWriterCommand.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: DiagnosticArray.create(), path: path, unbuilt: [reason], notices: StringArray.create())))
+	submitToLspWriter(workspace.writer, command: LspWriterCommand.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: DiagnosticArray.create(0), path: path, unbuilt: [reason], notices: StringArray.create(0))))
 
 	return BufferPublish.unchecked
 end 'refusedDocument'
@@ -103,7 +103,7 @@ typealias SiblingVerdictMap = Map with (ByteArray, bool)
 
 // Tell the editor this document has nothing on it — the notification a closed document is owed.
 module function clearPublishedDiagnostics(writer LspStdoutWriter.handle, uri String)
-	submitToLspWriter(writer, command: LspWriterCommand.write(diagnosticsNotificationText(uri, items: JsonNodeIdArray.create(), doc: JsonDoc.create())))
+	submitToLspWriter(writer, command: LspWriterCommand.write(diagnosticsNotificationText(uri, items: JsonNodeIdArray.create(0), doc: JsonDoc.create())))
 end 'clearPublishedDiagnostics'
 
 extension Project
@@ -243,7 +243,7 @@ extension Project
 		var own = try queryProgramSignatures(self) otherwise return reported
 		let document = HoverDocument.ofTokens(text, tokens: tokens, keywords: self.keywords, corpus: LspCorpus.unavailable)
 		var verdicts = SiblingVerdictMap.create()
-		var kept = DiagnosticArray.create()
+		var kept = DiagnosticArray.create(0)
 
 		for diagnostic in reported 'eachRefusal'
 			if theProjectDeclaresTheSubject(diagnosticSubject(diagnostic, tokens: tokens), verdicts: verdicts, buffer: buffer, document: document, corpus: signatures, reader: reader, own: own) 'blindToASibling'
@@ -259,15 +259,15 @@ end 'Project'
 
 function projectFileSaid(reader LspReaderSearch, path FilePath) returns (StringArray, StringArray)
 	if not isProjectFileName(path.filename()) 'notAProjectFile'
-		return (StringArray.create(), StringArray.create())
+		return (StringArray.create(0), StringArray.create(0))
 	end 'notAProjectFile'
 
 	match projectLayoutOf(reader) 'layout'
-		nestedIn then return (StringArray.create(), StringArray.create())
+		nestedIn then return (StringArray.create(0), StringArray.create(0))
 		standsAlone then break
 	end 'layout'
 
-	let projectDir = try reader.document.ancestry.get(0) otherwise return (StringArray.create(), StringArray.create())
+	let projectDir = try reader.document.ancestry.get(0) otherwise return (StringArray.create(0), StringArray.create(0))
 	let dir = projectDir.spelled
 
 	// Observed before `breakingChangeNotices` reads the record: a rewrite landing between the two then
@@ -294,7 +294,7 @@ end 'projectFileSaid'
 module function documentDiagnosticsText(uri String, text String, tokens TokenArray, diagnostics DiagnosticArray, path FilePath, unbuilt StringArray, notices StringArray) returns String
 	var doc = JsonDoc.create()
 	let index = LspLineIndex.build(text)
-	var items = JsonNodeIdArray.create()
+	var items = JsonNodeIdArray.create(0)
 
 	for diagnostic in thisDocumentsOwn(diagnostics, path: path) 'each'
 		items.push(diagnosticNode(doc, diagnostic: diagnostic, source: text, index: index, tokens: tokens))
@@ -312,7 +312,7 @@ module function documentDiagnosticsText(uri String, text String, tokens TokenArr
 end 'documentDiagnosticsText'
 
 function thisDocumentsOwn(diagnostics DiagnosticArray, path FilePath) returns DiagnosticArray
-	var kept = DiagnosticArray.create()
+	var kept = DiagnosticArray.create(0)
 
 	for diagnostic in diagnostics 'each'
 		if claimsAboutTheWholeProgram(diagnostic.code) or not reportsOn(diagnostic, path: path) 'notThisDocuments'
@@ -326,7 +326,7 @@ function thisDocumentsOwn(diagnostics DiagnosticArray, path FilePath) returns Di
 end 'thisDocumentsOwn'
 
 module function attributedTo(diagnostics DiagnosticArray, path FilePath, alone DiagnosticArray) returns DiagnosticArray
-	var kept = DiagnosticArray.create()
+	var kept = DiagnosticArray.create(0)
 
 	for diagnostic in thisDocumentsOwn(diagnostics, path: path) 'each'
 		if diagnostic.anchor.isProgramWide() and not raisedAmong(diagnostic, others: alone) 'reportedOverTheWholeProject'

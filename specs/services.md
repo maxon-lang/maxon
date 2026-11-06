@@ -705,7 +705,7 @@ end 'Sink'
 
 function main() returns ExitCode
 	let h = spawn Sink.create()
-	var ps = PromiseArray.create()
+	var ps = PromiseArray.create(0)
 	ps.push(async forever())
 	try h.take(ps) otherwise panic("an open mailbox with room takes the send")
 	h.shutdown()
@@ -737,7 +737,7 @@ end 'Sink'
 
 function main() returns ExitCode
 	let h = spawn Sink.create()
-	let ps = PromiseArray.create()
+	let ps = PromiseArray.create(0)
 	try h.take(ps) otherwise panic("an open mailbox with room takes the send")
 	h.shutdown()
 	return 0
@@ -2173,7 +2173,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var ps = ValuePromiseArray.create()
+	var ps = ValuePromiseArray.create(0)
 	ps.push(try h.value() otherwise panic("an open mailbox with room takes the send"))
 	try h.add(5) otherwise panic("an open mailbox with room takes the send")
 	ps.push(try h.value() otherwise panic("an open mailbox with room takes the send"))
@@ -4158,7 +4158,7 @@ end 'Counter'
 typealias CounterHandleArray = Array with Counter.handle
 
 function main() returns ExitCode
-	var hs = CounterHandleArray.create()
+	var hs = CounterHandleArray.create(0)
 	hs.push(spawn Counter.create())
 	hs.push(spawn Counter.create())
 	return hs.count() as ExitCode
@@ -4201,10 +4201,10 @@ typealias CounterHandleArray = Array with Counter.handle
 typealias BumpReplyArray = Array with Promise with Integer
 
 function main() returns ExitCode
-	var hs = CounterHandleArray.create()
+	var hs = CounterHandleArray.create(0)
 	hs.push(spawn Counter.create())
 
-	var replies = BumpReplyArray.create()
+	var replies = BumpReplyArray.create(0)
 	for step in 1 to 3 'eachSend'
 		var h = try hs.get(0) otherwise panic("hs.get(0)")
 		replies.push(try h.bump(step) otherwise panic("an open mailbox with room takes the send"))
@@ -4694,7 +4694,7 @@ end 'Store'
 function main() returns ExitCode
 	let h = spawn Store.create()
 	let buf = "hello {1}"
-	var held = Strings.create()
+	var held = Strings.create(0)
 	held.push(buf)
 	try h.keep(buf) otherwise panic("an open mailbox with room takes the send")
 	return held.count() as ExitCode
@@ -5197,7 +5197,7 @@ type Holder
 	export var cells as CellArray
 
 	static function create(k Integer) returns Self
-		var cells = CellArray.create()
+		var cells = CellArray.create(0)
 		cells.push(Cell.create())
 		cells.push(Cell.create())
 		return Self{tag: "literal", label: "heap {k}", cells: cells}
@@ -5245,7 +5245,7 @@ type Source
 	end 'create'
 
 	export function values() returns IntegerArray
-		var xs = IntegerArray.create()
+		var xs = IntegerArray.create(0)
 		xs.push(1)
 		xs.push(2)
 		xs.push(3)
@@ -5255,7 +5255,7 @@ end 'Source'
 
 function main() returns ExitCode
 	let h = spawn Source.create()
-	let xs = try await h.values() otherwise IntegerArray.create()
+	let xs = try await h.values() otherwise IntegerArray.create(0)
 	var sum = 0 as Integer
 	for x in xs 'each'
 		sum = sum + x
@@ -5328,14 +5328,14 @@ type Store
 	var cells as CellArray
 
 	static function create() returns Self
-		var cells = CellArray.create()
+		var cells = CellArray.create(0)
 		cells.push(Cell.create())
 		cells.push(Cell.create())
 		return Self{cells: cells}
 	end 'create'
 
 	export function snapshot() returns CellArray
-		var out = CellArray.create()
+		var out = CellArray.create(0)
 		let first = try self.cells.get(0) otherwise Cell.create()
 		out.push(first)
 		return out
@@ -5344,7 +5344,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	let got = try await h.snapshot() otherwise CellArray.create()
+	let got = try await h.snapshot() otherwise CellArray.create(0)
 	return got.count() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -5391,7 +5391,7 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var cs = CellArray.create()
+	var cs = CellArray.create(0)
 	cs.push(Cell.create())
 	cs.push(Cell.create())
 	let h = spawn Svc.create()
@@ -5440,7 +5440,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	var cell = Cell.create()
-	var cs = CellArray.create()
+	var cs = CellArray.create(0)
 	cs.push(cell)
 	let h = spawn Svc.create()
 	try h.take(cs) otherwise panic("an open mailbox with room takes the send")
@@ -5480,7 +5480,7 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var a = IntegerArray.create()
+	var a = IntegerArray.create(0)
 	a.push(1)
 	a.push(2)
 	a.push(3)
@@ -5653,7 +5653,7 @@ end 'Reader'
 typealias ReaderHandles = Array with Reader.handle
 
 function main() returns ExitCode
-	var readers = ReaderHandles.create()
+	var readers = ReaderHandles.create(0)
 	for _ in 1 to serviceCount 'spawnEach'
 		readers.push(spawn(capacity: rounds) Reader.create())
 	end 'spawnEach'
@@ -6800,7 +6800,7 @@ type Bag
 	export var cells as CellArray
 
 	static function create() returns Self
-		var cells = CellArray.create()
+		var cells = CellArray.create(0)
 		cells.push(Cell.create())
 		cells.push(Cell.create())
 		return Self{n: 1, cells: cells}
@@ -6859,7 +6859,7 @@ end 'Cell'
 typealias CellArray = Array with Cell
 
 function oneCellTwice() returns CellArray
-	var cs = CellArray.create()
+	var cs = CellArray.create(0)
 	var c = Cell.create()
 	cs.push(c)
 	cs.push(c)
@@ -6972,7 +6972,7 @@ type Bag
 	export var cells as CellArray
 
 	static function create() returns Self
-		var cells = CellArray.create()
+		var cells = CellArray.create(0)
 		cells.push(Cell.create())
 		cells.push(Cell.create())
 		return Self{n: 1, cells: cells}
@@ -7037,7 +7037,7 @@ type Bag
 	export var cells as CellArray
 
 	static function create() returns Self
-		var cells = CellArray.create()
+		var cells = CellArray.create(0)
 		cells.push(Cell.create())
 		cells.push(Cell.create())
 		return Self{n: 1, cells: cells}
@@ -7240,7 +7240,7 @@ end 'Cell'
 typealias CellArray = Array with Cell
 
 function pairedCells(pairs Integer) returns CellArray
-	var cs = CellArray.create()
+	var cs = CellArray.create(0)
 
 	for _ in 1 to pairs 'each'
 		var c = Cell.create()
@@ -7298,7 +7298,7 @@ end 'Cell'
 typealias CellArray = Array with Cell
 
 function pairedCellsAround(kept Cell, pairs Integer) returns CellArray
-	var cs = CellArray.create()
+	var cs = CellArray.create(0)
 
 	for _ in 1 to pairs 'each'
 		var c = Cell.create()
@@ -7455,7 +7455,7 @@ type Keeper
 end 'Keeper'
 
 function shelf(indexed bool) returns Shelf
-	var leaves = Leaves.create()
+	var leaves = Leaves.create(0)
 	var byName = LeafIndex.create()
 	leaves.push(Leaf.create("a", weight: 1))
 	leaves.push(Leaf.create("bb", weight: 2))
@@ -7550,7 +7550,7 @@ type Doc
 	export var note as Note
 
 	static function create(k Integer) returns Self
-		var tags = Tags.create()
+		var tags = Tags.create(0)
 		tags.push(Tag.create("red {k}"))
 		tags.push(Tag.create("green {k}"))
 		tags.push(Tag.create("blue {k}"))
@@ -7629,7 +7629,7 @@ type Tree
 	export var leaves as Leaves
 
 	static function create(size Integer) returns Self
-		var leaves = Leaves.create()
+		var leaves = Leaves.create(0)
 		for i in 1 to size 'grow'
 			leaves.push(Leaf.create("leaf {i}"))
 		end 'grow'
@@ -7703,7 +7703,7 @@ type Tree
 	export var leaves as Leaves
 
 	static function create(size Integer) returns Self
-		var leaves = Leaves.create()
+		var leaves = Leaves.create(0)
 		for i in 1 to size 'grow'
 			leaves.push(Leaf.create("leaf {i}"))
 		end 'grow'
@@ -7822,7 +7822,7 @@ type Bag
 	export var cells as CellArray
 
 	static function create() returns Self
-		var cells = CellArray.create()
+		var cells = CellArray.create(0)
 		cells.push(Cell.create())
 		cells.push(Cell.create())
 		return Self{n: 3, cells: cells}
@@ -7887,7 +7887,7 @@ type Bag
 	export var cells as CellArray
 
 	static function create() returns Self
-		var cells = CellArray.create()
+		var cells = CellArray.create(0)
 		cells.push(Cell.create())
 		cells.push(Cell.create())
 		return Self{n: 3, cells: cells}
@@ -7953,7 +7953,7 @@ type Shelf
 	export var cells as CellArray
 
 	static function create() returns Self
-		var cells = CellArray.create()
+		var cells = CellArray.create(0)
 		var c = Cell.create()
 		cells.push(c)
 		cells.push(c)
@@ -8009,7 +8009,7 @@ type Bag
 	export var cells as CellArray
 
 	static function create() returns Self
-		var cells = CellArray.create()
+		var cells = CellArray.create(0)
 		cells.push(Cell.create())
 		return Self{n: 3, cells: cells}
 	end 'create'
@@ -8122,7 +8122,7 @@ end 'Reader'
 function main() returns ExitCode
 	let r = spawn Reader.create()
 	let holder = Holder.around("payload {42}")
-	var kept = TextArray.create()
+	var kept = TextArray.create(0)
 	kept.push(holder.text)
 	let n = try await r.read(holder) otherwise 0
 	print("n={n} kept={kept.count()}\n")
@@ -8167,7 +8167,7 @@ end 'Reader'
 function main() returns ExitCode
 	let r = spawn Reader.create()
 	let holder = Holder.around("payload {42}")
-	var kept = TextArray.create()
+	var kept = TextArray.create(0)
 	kept.push(holder.text)
 	let n = try await r.read(holder) otherwise 0
 	print("n={n} kept={kept.count()}\n")
@@ -8207,7 +8207,7 @@ type Relay
 	var peers as CounterHandles
 
 	static function create() returns Self
-		return Self{peers: CounterHandles.create()}
+		return Self{peers: CounterHandles.create(0)}
 	end 'create'
 
 	export function adopt(peer Counter.handle)
@@ -8292,7 +8292,7 @@ end 'route'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	var xs = Boxes.create()
+	var xs = Boxes.create(0)
 	route(h, xs: xs, n: 2, way: Route.toService)
 	route(h, xs: xs, n: 5, way: Route.toArray)
 	let seen = try await h.total() otherwise 0
@@ -8357,7 +8357,7 @@ end 'route'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	var xs = Boxes.create()
+	var xs = Boxes.create(0)
 	route(h, xs: xs, n: 2, way: Route.toService)
 	return xs.count() as ExitCode
 end 'main'
@@ -8408,7 +8408,7 @@ end 'routeFor'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	var xs = Boxes.create()
+	var xs = Boxes.create(0)
 	let b = Box.create(3)
 	var trip = 0 as Integer
 	while trip < 2 'twice'
@@ -8471,7 +8471,7 @@ end 'routeFor'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	var xs = Boxes.create()
+	var xs = Boxes.create(0)
 	var trip = 0 as Integer
 	while trip < 4 'eachTrip'
 		let b = Box.create(trip + 1)
@@ -8737,7 +8737,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	var xs = Boxes.create()
+	var xs = Boxes.create(0)
 	let b = Box.create()
 	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	xs.push(b)
@@ -8842,7 +8842,7 @@ type Svc
 	var kept as Boxes
 
 	static function create() returns Self
-		return Self{kept: Boxes.create()}
+		return Self{kept: Boxes.create(0)}
 	end 'create'
 
 	export function keep(given Box)
@@ -8887,7 +8887,7 @@ type Svc
 	var kept as Boxes
 
 	static function create() returns Self
-		return Self{kept: Boxes.create()}
+		return Self{kept: Boxes.create(0)}
 	end 'create'
 
 	export function keep(p Pair)
@@ -9089,7 +9089,7 @@ type Holder
 	export var items as Counts
 
 	static function create() returns Self
-		return Self{items: Counts.create()}
+		return Self{items: Counts.create(0)}
 	end 'create'
 end 'Holder'
 
@@ -9408,7 +9408,7 @@ type Store
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	export function put(n Integer)
@@ -9417,7 +9417,7 @@ type Store
 
 	export function take() returns Items
 		var old = self.items
-		self.items = Items.create()
+		self.items = Items.create(0)
 		return old
 	end 'take'
 end 'Store'
@@ -9448,7 +9448,7 @@ type Store
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	export function put(n Integer)
@@ -9458,7 +9458,7 @@ type Store
 	export function take() returns Items
 		var old = self.items
 		let seen = self.items.count()
-		self.items = Items.create()
+		self.items = Items.create(0)
 		return old
 	end 'take'
 end 'Store'
@@ -9487,7 +9487,7 @@ type Store
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	export function put(n Integer)
@@ -9500,7 +9500,7 @@ type Store
 
 	export function take() returns Items
 		var old = self.items
-		self.items = Items.create()
+		self.items = Items.create(0)
 		return old
 	end 'take'
 end 'Store'
@@ -10436,7 +10436,7 @@ end 'Slow'
 
 function main() returns ExitCode
 	let h = spawn Slow.create()
-	var ps = ReplyPromiseArray.create()
+	var ps = ReplyPromiseArray.create(0)
 	ps.push(try h.value() otherwise panic("a running service with room takes the send"))
 	let ready = ps.awaitAny()
 	let p = try ps.get(ready) otherwise panic("awaitAny named a slot that is in range")
@@ -10479,7 +10479,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	var ps = DivideReplyArray.create()
+	var ps = DivideReplyArray.create(0)
 	ps.push(try h.divide(10, by: 0) otherwise panic("a running service with room takes the send"))
 	let p = try ps.get(0) otherwise panic("the reply was pushed into slot 0")
 	try await p otherwise (e) 'oops'
@@ -10530,7 +10530,7 @@ typealias TallyReplyArray = Array with TallyReply
 
 function main() returns ExitCode
 	let h = spawn Counter.create()
-	var ps = TallyReplyArray.create()
+	var ps = TallyReplyArray.create(0)
 	ps.push(try h.bumped(4) otherwise panic("a running service with room takes the send"))
 	let p = try ps.remove(0) otherwise panic("the reply was pushed into slot 0")
 	view tally = await p
@@ -10575,7 +10575,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	var ps = ReplyPromiseArray.create()
+	var ps = ReplyPromiseArray.create(0)
 	ps.push(try h.divide(10, by: 2) otherwise panic("a running service with room takes the send"))
 	return 0
 end 'main'
@@ -10610,7 +10610,7 @@ function main() returns ExitCode
 	var stops = 0 as Integer
 	let h = spawn Slow.create()
 	h.shutdown()
-	var ps = ReplyPromiseArray.create()
+	var ps = ReplyPromiseArray.create(0)
 	if let reply = try h.value() 'sent'
 		ps.push(reply)
 	end 'sent' else (e) 'gone'
@@ -10657,7 +10657,7 @@ end 'Slow'
 
 function main() returns ExitCode
 	let h = spawn Slow.create()
-	var ps = BarePromiseArray.create()
+	var ps = BarePromiseArray.create(0)
 	ps.push(try h.value() otherwise panic("a running service with room takes the send"))
 	return 0
 end 'main'
@@ -10926,7 +10926,7 @@ typealias SmallBoxHandle = Box.handle with Small
 typealias HandleArray = Array with SmallBoxHandle
 
 function main() returns ExitCode
-	var hs = HandleArray.create()
+	var hs = HandleArray.create(0)
 	hs.push(spawn Box.create(6 as Small))
 	view h = try hs.get(0) otherwise return 1
 	let s = try await h.peek() otherwise 0
@@ -11277,7 +11277,7 @@ type Holder
 	var current as Job
 
 	static function create() returns Self
-		return Self{queue: Jobs.create(), current: Job.create(1)}
+		return Self{queue: Jobs.create(0), current: Job.create(1)}
 	end 'create'
 
 	function stash()
@@ -11334,7 +11334,7 @@ type Stack uses T
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function push(v T)
@@ -11859,7 +11859,7 @@ type Worker
 	var probe as Probe
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create(), probe: Probe.create()}
+		return Self{pending: IntPromiseArray.create(0), probe: Probe.create()}
 	end 'create'
 
 	// The yield hands the strand to the coroutine, which runs until its sleep parks it. The promise then lives
@@ -11932,7 +11932,7 @@ type Worker
 	var probe as Probe
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create(), probe: Probe.create()}
+		return Self{pending: IntPromiseArray.create(0), probe: Probe.create()}
 	end 'create'
 
 	export function fire() returns Integer
@@ -12009,7 +12009,7 @@ type Worker
 
 	static function create() returns Self
 		let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise panic("a loopback bind on an ephemeral port succeeds")
-		return Self{pending: IntPromiseArray.create(), probe: Probe.create(), listener: listener}
+		return Self{pending: IntPromiseArray.create(0), probe: Probe.create(), listener: listener}
 	end 'create'
 
 	export function fire() returns Integer
@@ -12069,7 +12069,7 @@ type Svc
 	var pending as IntPromiseArray
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create()}
+		return Self{pending: IntPromiseArray.create(0)}
 	end 'create'
 
 	export function start() returns Integer
@@ -12111,7 +12111,7 @@ type Svc
 	var pending as IntPromiseArray
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create()}
+		return Self{pending: IntPromiseArray.create(0)}
 	end 'create'
 
 	export function start() returns Integer
@@ -12189,7 +12189,7 @@ type Svc
 	var probe as Probe
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create(), probe: Probe.create()}
+		return Self{pending: IntPromiseArray.create(0), probe: Probe.create()}
 	end 'create'
 
 	export function start() returns Integer
@@ -12248,7 +12248,7 @@ type Svc
 	var probe as Probe
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create(), probe: Probe.create()}
+		return Self{pending: IntPromiseArray.create(0), probe: Probe.create()}
 	end 'create'
 
 	export function start() returns Integer
@@ -12688,7 +12688,7 @@ type Worker
 	var history as ReportArray
 
 	static function create() returns Self
-		return Self{history: ReportArray.create()}
+		return Self{history: ReportArray.create(0)}
 	end 'create'
 
 	export function measure(n Tally) returns Report
@@ -13158,7 +13158,7 @@ type Worker
 
 	export function report() returns Cell
 		self.calls = self.calls + 1
-		var flags = Flags.create()
+		var flags = Flags.create(0)
 		flags.push(false)
 		flags.push(true)
 		return Cell.create(flags)
@@ -13210,7 +13210,7 @@ end 'Worker'
 
 function main() returns ExitCode
 	let worker = spawn Worker.create()
-	var flags = Flags.create()
+	var flags = Flags.create(0)
 	flags.push(true)
 	let cell = try await worker.wrap(flags) otherwise panic("the worker is running")
 	print("{cell.flags.count()}\n")
@@ -13244,7 +13244,7 @@ type Box uses T
 end 'Box'
 
 function main() returns ExitCode
-	var flags = Flags.create()
+	var flags = Flags.create(0)
 	flags.push(true)
 	let h = spawn Box.create(flags)
 	let got = try await h.peek() otherwise panic("the box is running")
@@ -13338,14 +13338,14 @@ type Maker uses T
 	var seen as Integer
 
 	static function create(seed T) returns Self
-		var first = Items.create()
+		var first = Items.create(0)
 		first.push(seed)
 		return Self{seen: first.count() as Integer}
 	end 'create'
 
 	export function make() returns Items
 		self.seen = self.seen + 1
-		return Items.create()
+		return Items.create(0)
 	end 'make'
 end 'Maker'
 
@@ -13415,7 +13415,7 @@ type Report
 	export var lines as LineArray
 
 	static function create() returns Self
-		return Self{total: 0, lines: LineArray.create()}
+		return Self{total: 0, lines: LineArray.create(0)}
 	end 'create'
 end 'Report'
 
@@ -13469,7 +13469,7 @@ type Worker
 	var history as ReportArray
 
 	static function create() returns Self
-		return Self{history: ReportArray.create()}
+		return Self{history: ReportArray.create(0)}
 	end 'create'
 
 	export function measure(n Tally) returns Report
@@ -13503,7 +13503,7 @@ registry that `main` reads: one word two threads share.
 typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
-var registry = TallyArray.create()
+var registry = TallyArray.create(0)
 
 function remember(scale Tally)
 	registry.push(scale)
@@ -13603,7 +13603,7 @@ type Worker
 	var history as ReportArray
 
 	static function create() returns Self
-		return Self{history: ReportArray.create()}
+		return Self{history: ReportArray.create(0)}
 	end 'create'
 
 	export function measure(n Tally) returns Report
@@ -15369,7 +15369,7 @@ end 'Summer'
 
 function main() returns ExitCode
 	let h = spawn Summer.create()
-	var items = Words.create()
+	var items = Words.create(0)
 	items.push("first padded out long enough to heap allocate {1}")
 	items.push("second padded out long enough to heap allocate {2}")
 
@@ -15410,7 +15410,7 @@ end 'Summer'
 
 function main() returns ExitCode
 	let h = spawn Summer.create()
-	var items = Words.create()
+	var items = Words.create(0)
 	items.push("first padded out long enough to heap allocate {1}")
 	items.push("second padded out long enough to heap allocate {2}")
 	var seen = 0 as Integer
@@ -15568,7 +15568,7 @@ type Worker
 end 'Worker'
 
 function main() returns ExitCode
-	var workers = WorkerHandleArray.create()
+	var workers = WorkerHandleArray.create(0)
 
 	for _ in 1 to 4 'spawnThem'
 		let w = spawn Worker.create()
@@ -15610,7 +15610,7 @@ type Worker
 end 'Worker'
 
 function main() returns ExitCode
-	var workers = WorkerHandleArray.create()
+	var workers = WorkerHandleArray.create(0)
 
 	for _ in 1 to 4 'spawnThem'
 		workers.push(spawn Worker.create())
@@ -15935,7 +15935,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var boxes = Boxes.create()
+	var boxes = Boxes.create(0)
 	boxes.push(Box.create(1))
 	var spare = Box.create(0)
 	spare.n = 2
@@ -16132,7 +16132,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var boxes = Boxes.create()
+	var boxes = Boxes.create(0)
 	boxes.push(Box.create(1))
 	view e = try boxes.get(0) otherwise return 1
 	let r = try await h.keepAll(boxes) otherwise 0
@@ -16174,7 +16174,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var boxes = Boxes.create()
+	var boxes = Boxes.create(0)
 	boxes.push(Box.create(1))
 
 	if view e = try boxes.get(0) 'first'
@@ -16496,7 +16496,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var boxes = Boxes.create()
+	var boxes = Boxes.create(0)
 	var b = Box.create(1)
 	boxes.push(b)
 	view w = boxes
@@ -16662,7 +16662,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var tags = lib.Names.create()
+	var tags = lib.Names.create(0)
 	tags.push("a")
 	let got = try await h.keep(tags) otherwise panic("the store is open")
 	return got as ExitCode
@@ -17032,7 +17032,7 @@ function main() returns ExitCode
 	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	var out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
 	var accepted = try listener.accept() otherwise return 3
-	var kept = Clients.create()
+	var kept = Clients.create(0)
 
 	kept.push(accepted)
 
@@ -17420,7 +17420,7 @@ type Sleepers
 	var held as NapArray
 
 	static function create(naps Count) returns Self
-		var napping = NapArray.create()
+		var napping = NapArray.create(0)
 
 		for _ in 0 upto naps 'eachNap'
 			napping.push(async forever())
@@ -18174,7 +18174,7 @@ type Ledger
 end 'Ledger'
 
 function main() returns ExitCode
-	let ids = WholeArray.create()
+	let ids = WholeArray.create(0)
 
 	try spawn Ledger.create("a label long enough to be a heap string", ids: ids) otherwise (e) 'failed'
 		match e 'which'
@@ -18275,7 +18275,7 @@ type Worker uses T
 	var extra as Whole
 
 	static function create(seed T, extra Whole) returns Self
-		var items = Items.create()
+		var items = Items.create(0)
 		items.push(seed)
 		return Self{items: items, extra: extra}
 	end 'create'
@@ -18291,7 +18291,7 @@ type Pool uses T
 	var jobs as Items
 
 	static function create() returns Self
-		return Self{jobs: Items.create()}
+		return Self{jobs: Items.create(0)}
 	end 'create'
 
 	function add(job T)

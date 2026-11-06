@@ -27,7 +27,7 @@ type LetCastVerdictBook
 	export var verdicts as LetCastVerdictArray
 
 	static function create() returns LetCastVerdictBook
-		return Self{index: LetCastIndexMap.create(), verdicts: LetCastVerdictArray.create()}
+		return Self{index: LetCastIndexMap.create(), verdicts: LetCastVerdictArray.create(0)}
 	end 'create'
 
 	function file(reads LetCastReadArray, readerFile FilePath)
@@ -81,7 +81,7 @@ end 'checkUnneededLetCasts'
 function everyMentionIsARead(project Project, verdict LetCastVerdict, mentions MentionIndexMap) returns bool throws CompileError
 	let subject = verdict.subject
 	view inFile = try mentionIndexOf(project, file: subject.declFile, mentions: mentions)
-	view lines = try inFile.get(subject.name) otherwise LineNumberArray.create()
+	view lines = try inFile.get(subject.name) otherwise LineNumberArray.create(0)
 	return mentionsWithin(lines, scope: subject.scope) == verdict.sites.count()
 end 'everyMentionIsARead'
 
@@ -100,7 +100,7 @@ function mentionIndexOf(project Project, file FilePath, mentions MentionIndexMap
 			continue
 		end 'notAMention'
 
-		var lines = try built.get(tok.value) otherwise LineNumberArray.create()
+		var lines = try built.get(tok.value) otherwise LineNumberArray.create(0)
 		lines.push(tok.line)
 		built.upsert(tok.value, value: lines)
 	end 'eachToken'

@@ -29,7 +29,7 @@ module function coldThenWarmRunFailures(specName String, caseName String, caller
 	let warm = runGateFixtureOnce([LibraryCacheWorkersFlag], environment: environment, caller: caller)
 	discardOutsideCheckoutDir(cacheRoot)
 
-	var broken = StringArray.create()
+	var broken = StringArray.create(0)
 
 	collectRunFailures(cold, which: ColdRunName, specName: specName, caseName: caseName, broken: broken)
 	collectRunFailures(warm, which: WarmRunName, specName: specName, caseName: caseName, broken: broken)
@@ -72,8 +72,8 @@ function collectRunFailures(run CollectedOutput, which String, specName String, 
 end 'collectRunFailures'
 
 function libraryCacheSummaryOf(run CollectedOutput, which String, broken StringArray) returns LibraryCacheTallyArray
-	var counts = LibraryCacheTallyArray.create()
-	var lines = StringArray.create()
+	var counts = LibraryCacheTallyArray.create(0)
+	var lines = StringArray.create(0)
 
 	for line in run.stderr.split("\n") 'eachLine'
 		if line.trim().startsWith(LibraryCacheSummaryPrefix) 'aSummary'
@@ -100,12 +100,12 @@ function libraryCacheSummaryOf(run CollectedOutput, which String, broken StringA
 		let word = try text.split(LibraryCacheSummaryCountSeparator).get(0) otherwise panic("spec-harness tests: a split always yields a first part")
 		let count = try int.fromString(word) otherwise 'notACount'
 			broken.push("{which}'s library cache line holds '{word}' where a count belongs, against `{LibraryCacheSummaryShape}`. It wrote: {line}\n")
-			return LibraryCacheTallyArray.create()
+			return LibraryCacheTallyArray.create(0)
 		end 'notACount'
 
 		if text != "{count}{LibraryCacheSummaryCountSeparator}{field.name}" 'mislabelled'
 			broken.push("{which}'s library cache line does not state `<n> {field.name}` where `{LibraryCacheSummaryShape}` does. It wrote: {line}\n")
-			return LibraryCacheTallyArray.create()
+			return LibraryCacheTallyArray.create(0)
 		end 'mislabelled'
 
 		counts.push(count as LibraryCacheTally)

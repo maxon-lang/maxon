@@ -45,7 +45,7 @@ function sleeper(n Integer) returns Integer
 end 'sleeper'
 
 function main() returns ExitCode
-	var arr = IntPromiseArray.create()
+	var arr = IntPromiseArray.create(0)
 	var i = 0 as Integer
 	while i < 5000 'spawn'
 		arr.push(async sleeper(i))

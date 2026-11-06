@@ -19,7 +19,7 @@ end 'cacheWriteLineNumberArray'
 
 module function cacheReadLineNumberArray(reader LibraryCacheReader) returns LineNumberArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = LineNumberArray.create()
+	var result = LineNumberArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -45,7 +45,7 @@ end 'cacheWriteColumnNumberArray'
 
 module function cacheReadColumnNumberArray(reader LibraryCacheReader) returns ColumnNumberArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ColumnNumberArray.create()
+	var result = ColumnNumberArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -562,9 +562,9 @@ export type ParenGroups
 			panic("ParenGroups.scanFrom: token {open} is not a `(` — a group's facts are meaningful only at its opener")
 		end 'notAGroup'
 
-		var opens = OpenParenStack.create()
-		var commas = OpenParenCommaFlags.create()
-		var brackets = OpenParenBracketDepths.create()
+		var opens = OpenParenStack.create(0)
+		var commas = OpenParenCommaFlags.create(0)
+		var brackets = OpenParenBracketDepths.create(0)
 		var i = open
 
 		while i < tokens.count() and tokenKindAt(tokens, index: i) != TokenKind.eof 'scan'
@@ -1021,7 +1021,7 @@ end 'cacheWriteTokenArray'
 
 module function cacheReadTokenArray(reader LibraryCacheReader) returns TokenArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = TokenArray.create()
+	var result = TokenArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -1189,7 +1189,7 @@ type Lexer
 	var interpolationDepth as InterpolationDepth
 
 	static function create(source String, bytes ByteArray, cursor ByteCursor, keywords KeywordTable, recording bool) returns Lexer
-		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count() as ByteOffset, line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false, keywords: keywords, comments: CommentLog.recorded(CommentSpanArray.create()) if recording else CommentLog.discarded, interpolationDepth: 0}
+		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(0), len: bytes.count() as ByteOffset, line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false, keywords: keywords, comments: CommentLog.recorded(CommentSpanArray.create(0)) if recording else CommentLog.discarded, interpolationDepth: 0}
 	end 'create'
 
 	function takeComments() returns CommentLog
@@ -2449,7 +2449,7 @@ type Lexer
 		markViewBindings(self.tokens)
 
 		var finished = self.tokens
-		self.tokens = TokenArray.create()
+		self.tokens = TokenArray.create(0)
 
 		return finished
 	end 'run'
@@ -2485,7 +2485,7 @@ export function tokenize(source String, keywords KeywordTable) returns TokenArra
 	let bytes = source.toByteArray()
 	let cursor = try bytes.cursor() otherwise 'emptySource'
 		// Empty or whitespace-only source yields an empty token stream.
-		return TokenArray.create()
+		return TokenArray.create(0)
 	end 'emptySource'
 
 	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, recording: false)
@@ -2647,9 +2647,9 @@ end 'restoreLineEndBefore'
 // line breaks of every declaration after it. `tokenizeWithComments` keeps every layout token:
 // `maxon fmt` reads where the author broke lines.
 function dropBracketedLayout(tokens TokenArray) returns TokenArray
-	var frames = LayoutFrameStack.create()
+	var frames = LayoutFrameStack.create(0)
 	var groups = ParenGroups.create()
-	var kept = TokenArray.create()
+	var kept = TokenArray.create(0)
 	var dropped = false
 	var inDirectiveCondition = false
 
@@ -2712,7 +2712,7 @@ end 'dropBracketedLayout'
 export function tokenizeWithComments(source String, keywords KeywordTable) returns LexedSource throws LexerError
 	let bytes = source.toByteArray()
 	let cursor = try bytes.cursor() otherwise 'emptySource'
-		return LexedSource.create(TokenArray.create(), comments: CommentLog.recorded(CommentSpanArray.create()))
+		return LexedSource.create(TokenArray.create(0), comments: CommentLog.recorded(CommentSpanArray.create(0)))
 	end 'emptySource'
 
 	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, recording: true)

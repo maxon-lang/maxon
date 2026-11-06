@@ -36,7 +36,7 @@ type Counter
 	var enabled = true
 	var name = "default"
 	var level = Priority.low
-	export var items = IntArray.create()
+	export var items = IntArray.create(0)
 end 'Counter'
 ```
 
@@ -53,7 +53,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export var items = IntArray.create()
+	export var items = IntArray.create(0)
 
 	static function create() returns Self
 		return Self{}
@@ -86,7 +86,7 @@ type Bag
 		return Self{}
 	end 'create'
 
-	export var items = IntArray.create()
+	export var items = IntArray.create(0)
 end 'Bag'
 
 function main() returns ExitCode
@@ -106,7 +106,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export var items = IntArray.create()
+	export var items = IntArray.create(0)
 
 	static function createWith(items IntArray) returns Self
 		return Self{items: items}
@@ -114,7 +114,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var pre = IntArray.create()
+	var pre = IntArray.create(0)
 	pre.push(7)
 	let b = Bag.createWith(pre)
 	let v = try b.items.get(0) otherwise 0
@@ -131,7 +131,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export var items = IntArray.create()
+	export var items = IntArray.create(0)
 
 	static function create() returns Self
 		return Self{}
@@ -333,7 +333,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export var items = IntArray.create()
+	export var items = IntArray.create(0)
 	export var total = 0 as Integer
 
 	static function createWithTotal(t Integer) returns Self
@@ -357,7 +357,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export var items = IntArray.create()
+	export var items = IntArray.create(0)
 
 	static function create() returns Self
 		return Self{}
@@ -562,7 +562,7 @@ typealias Count = int(0 to u64.max)
 
 type Bag uses Element
 	typealias ElementArray = Array with Element
-	var items = ElementArray.create()
+	var items = ElementArray.create(0)
 	var seen = 0 as Count
 
 	static function create() returns Self
@@ -604,8 +604,8 @@ typealias Count = int(0 to u64.max)
 type Pairs uses Key, Value
 	typealias KeyArray = Array with Key
 	typealias ValueArray = Array with Value
-	var keys = KeyArray.create()
-	var values = ValueArray.create()
+	var keys = KeyArray.create(0)
+	var values = ValueArray.create(0)
 	var seen = 0 as Count
 
 	static function create() returns Self
@@ -650,7 +650,7 @@ typealias Integer = int(i64.min to i64.max)
 
 type Basket uses Element
 	typealias ElementArray = Array with Element
-	var items = ElementArray.create()
+	var items = ElementArray.create(0)
 	var seen = 0 as Count
 
 	static function create() returns Self
@@ -699,8 +699,8 @@ typealias Integer = int(i64.min to i64.max)
 type Pairs uses Key, Value
 	typealias KeyArray = Array with Key
 	typealias ValueArray = Array with Value
-	var keys = KeyArray.create()
-	var values = ValueArray.create()
+	var keys = KeyArray.create(0)
+	var values = ValueArray.create(0)
 
 	static function create() returns Self
 		return Self{}
@@ -741,8 +741,8 @@ typealias Integer = int(i64.min to i64.max)
 type Pairs uses Key, Value
 	typealias KeyArray = Array with Key
 	typealias ValueArray = Array with Value
-	var keys = KeyArray.create()
-	var values = ValueArray.create()
+	var keys = KeyArray.create(0)
+	var values = ValueArray.create(0)
 
 	static function create() returns Self
 		return Self{}
@@ -783,8 +783,8 @@ typealias Count = int(0 to u64.max)
 type Pairs uses Key, Value
 	typealias KeyArray = Array with Key
 	typealias ValueArray = Array with Value
-	var keys = KeyArray.create()
-	var values = ValueArray.create()
+	var keys = KeyArray.create(0)
+	var values = ValueArray.create(0)
 
 	static function create() returns Self
 		return Self{}

@@ -57,12 +57,12 @@ export type NaturalLoops
 
 	// The one finder: a DFS from node 0 recording every retreating edge, then the buckets.
 	export static function find(succ CsrGraph, nodeCount CsrIndex) returns NaturalLoops
-		var tails = CsrColumn.create()
-		var heads = CsrColumn.create()
+		var tails = CsrColumn.create(0)
+		var heads = CsrColumn.create(0)
 		findRetreatingEdges(succ, nodeCount: nodeCount, tails: tails, heads: heads)
 
-		var headers = CsrColumn.create()
-		var seen = BoolArray.create()
+		var headers = CsrColumn.create(0)
+		var seen = BoolArray.create(0)
 		seen.resize(nodeCount)
 
 		for h in heads 'eachBackEdge'
@@ -120,10 +120,10 @@ function findRetreatingEdges(succ CsrGraph, nodeCount CsrIndex, tails CsrColumn,
 		return
 	end 'noNodes'
 
-	var colors = DfsColorArray.create()
+	var colors = DfsColorArray.create(0)
 	colors.resize(nodeCount)
-	var stackNode = CsrColumn.create()
-	var stackNextSucc = CsrColumn.create()
+	var stackNode = CsrColumn.create(0)
+	var stackNextSucc = CsrColumn.create(0)
 
 	let root = 0 as CsrIndex
 	try colors.set(root, value: DfsGray) otherwise panic("findRetreatingEdges: colors.set(root) OOB")
@@ -187,7 +187,7 @@ export type LoopMembership
 	export var worklist as CsrColumn
 
 	export static function create() returns LoopMembership
-		return Self{inLoop: BoolArray.create(), blocks: CsrColumn.create(), worklist: CsrColumn.create()}
+		return Self{inLoop: BoolArray.create(0), blocks: CsrColumn.create(0), worklist: CsrColumn.create(0)}
 	end 'create'
 
 	export function contains(node CsrIndex) returns bool

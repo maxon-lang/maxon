@@ -1046,7 +1046,7 @@ end 'record'
 
 function main() returns ExitCode
 	let e = Entry.create(Kind.value(3))
-	var out = KindArray.create()
+	var out = KindArray.create(0)
 	let identity = true
 	out.push(e.kind if identity else remapKind(e.kind))
 	print("{record(try out.get(0) otherwise Kind.none)}")

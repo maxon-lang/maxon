@@ -167,7 +167,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	print("{arr.count()}\n")
 	return 0
 end 'main'
@@ -403,7 +403,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(1)
 	a.push(2)
 	let t = a.map(function(x Integer) gives x + 1)
@@ -491,7 +491,7 @@ end 'Point'
 typealias PointArray = Array with Point
 
 function main() returns ExitCode
-	var a = PointArray.create()
+	var a = PointArray.create(0)
 	a.push(Point.create(7))
 	view out = a.map(function(p Point) gives p)
 	view first = try out.get(0) otherwise Point.create(0)
@@ -532,7 +532,7 @@ function good(c Color) returns Color
 end 'good'
 
 function main() returns ExitCode
-	var a = ColorArray.create()
+	var a = ColorArray.create(0)
 	a.push(Color.blue)
 	let b = a.map(good)
 	print("n={b.count()}\n")
@@ -577,7 +577,7 @@ function bad(s Shade) returns Color
 end 'bad'
 
 function main() returns ExitCode
-	var a = ColorArray.create()
+	var a = ColorArray.create(0)
 	a.push(Color.blue)
 	let b = a.map(bad)
 	print("n={b.count()}\n")

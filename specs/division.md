@@ -585,7 +585,7 @@ function refUMod(n Unsigned, d UBigDivisor) returns Unsigned
 end 'refUMod'
 
 function dividendsAround(d UBigDivisor) returns UnsignedArray
-	var ns = UnsignedArray.create()
+	var ns = UnsignedArray.create(0)
 	let top = (9223372036854775807 as Unsigned) + 1
 	let dw = d as Unsigned
 	ns.push(0)
@@ -707,7 +707,7 @@ function refModNeg(n Word, d NegDivisor) returns Word
 end 'refModNeg'
 
 function dividends(d Word) returns WordArray
-	var ns = WordArray.create()
+	var ns = WordArray.create(0)
 	let m = i64.min as Word
 	let x = i64.max as Word
 	ns.push(0)

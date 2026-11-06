@@ -1077,7 +1077,7 @@ function putElement(values IntArray, index ElementIndex, value Integer)
 end 'putElement'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	values.push(20)
 	values.push(0)
 	putElement(values, index: 1, value: 1)
@@ -1564,7 +1564,7 @@ function fill(output ByteArray, count ByteCount, value Byte)
 end 'fill'
 
 function main() returns ExitCode
-	var output = ByteArray.create()
+	var output = ByteArray.create(0)
 	fill(output, count: 42, value: 7)
 	return output.count() as ExitCode
 end 'main'
@@ -2950,12 +2950,12 @@ function walk(values ByteArray) returns Total
 end 'walk'
 
 function main() returns ExitCode
-	var first = ByteArray.create()
+	var first = ByteArray.create(0)
 	first.push(10)
 	first.push(20)
 	first.push(9)
 
-	var second = ByteArray.create()
+	var second = ByteArray.create(0)
 	second.push(1)
 	second.push(2)
 

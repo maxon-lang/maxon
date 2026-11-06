@@ -455,7 +455,7 @@ end 'InvalidationMeasurement'
 typealias InvalidationMeasurementArray = Array with InvalidationMeasurement
 
 function visibilityFlipProbes() returns VisibilityFlipProbeArray
-	var probes = VisibilityFlipProbeArray.create()
+	var probes = VisibilityFlipProbeArray.create(0)
 	probes.push(VisibilityFlipProbe.create("a ranged typealias", lead: TopLevelDeclarationLead, declaration: "typealias WarmRebuildProbeRange = int(0 to 9)"))
 	probes.push(VisibilityFlipProbe.create("a function typealias", lead: TopLevelDeclarationLead, declaration: "typealias WarmRebuildProbeCallback = function() returns bool"))
 	probes.push(VisibilityFlipProbe.create("a generic-instance typealias", lead: TopLevelDeclarationLead, declaration: "typealias WarmRebuildProbeFlags = Array with bool"))
@@ -469,7 +469,7 @@ function visibilityFlipProbes() returns VisibilityFlipProbeArray
 end 'visibilityFlipProbes'
 
 function measureVisibilityFlips(project Project, editedPath FilePath, original String) returns InvalidationMeasurementArray throws CompileError
-	var measurements = InvalidationMeasurementArray.create()
+	var measurements = InvalidationMeasurementArray.create(0)
 
 	for flip in visibilityFlipProbes() 'eachFlip'
 		// Discarded: adding the declaration moves a name, so only the steps after it isolate a modifier.
@@ -490,7 +490,7 @@ function measureVisibilityFlips(project Project, editedPath FilePath, original S
 end 'measureVisibilityFlips'
 
 function measureDeclarationMoves(project Project, editedPath FilePath, original String, receiver EditableSource) returns InvalidationMeasurementArray throws CompileError
-	var measurements = InvalidationMeasurementArray.create()
+	var measurements = InvalidationMeasurementArray.create(0)
 	measurements.push(InvalidationMeasurement.create("a typealias MOVED to another file", probe: try measureDeclarationMove(project, editedPath: editedPath, editedBase: original, receiverPath: receiver.path, receiverBase: receiver.content, moving: MovedDeclarationText)))
 	measurements.push(InvalidationMeasurement.create("a method MOVED to another file", probe: try measureDeclarationMove(project, editedPath: editedPath, editedBase: "{original}\n{MethodHostDeclarationText}", receiverPath: receiver.path, receiverBase: receiver.content, moving: MovedMethodText)))
 
@@ -807,10 +807,10 @@ function digestOf(bytes ByteArray) returns HashDigest
 end 'digestOf'
 
 function partDigests(artifact FileParseArtifact) returns PartDigestArray
-	var digests = PartDigestArray.create()
+	var digests = PartDigestArray.create(0)
 
 	for func in artifact.module.functions 'eachFunction'
-		var one = IrFunctionArray.create()
+		var one = IrFunctionArray.create(0)
 		one.push(func)
 		var writer = LibraryCacheWriter.create()
 		cacheWriteIrFunctionArray(writer, value: one)
@@ -824,7 +824,7 @@ function partDigests(artifact FileParseArtifact) returns PartDigestArray
 	end 'eachRangeCheckEntry'
 
 	for layout in artifact.structTypes 'eachStructLayout'
-		var one = StructLayoutArray.create()
+		var one = StructLayoutArray.create(0)
 		one.push(layout)
 		var writer = LibraryCacheWriter.create()
 		cacheWriteStructLayoutArray(writer, value: one)
@@ -834,7 +834,7 @@ function partDigests(artifact FileParseArtifact) returns PartDigestArray
 	var first = 0 as ElementIndex
 
 	while first < artifact.module.blocks.count() 'eachBlockChunk'
-		var chunk = IrBlockArray.create()
+		var chunk = IrBlockArray.create(0)
 
 		for position in first upto chunkLimit(first, size: BlocksPerDigest, total: artifact.module.blocks.count()) 'eachBlock'
 			chunk.push(try artifact.module.blocks.get(position) otherwise panic("partDigests: blocks.get OOB at {position}"))
@@ -956,7 +956,7 @@ let SecondPipelineStage = "was written by the second pipeline"
 function reusedParsesStayAsMerged(merged ParseSnapshotMap, piped ParseSnapshotMap, remerged ParseSnapshotMap, repiped ParseSnapshotMap, editedPath FilePath) returns bool
 	var compared = 0 as Count
 	var digested = 0 as Count
-	var changes = ParseChangeArray.create()
+	var changes = ParseChangeArray.create(0)
 
 	for (path, first) in merged 'eachParse'
 		if path.equals(editedPath) 'theEditedFile'

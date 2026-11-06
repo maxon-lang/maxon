@@ -387,7 +387,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	var xs = StringSeq.create()
+	var xs = StringSeq.create(0)
 	xs.push(build(1))
 	xs.push(build(2))
 	var last = build(0)
@@ -1084,15 +1084,15 @@ type Holder
 	var list as Counts
 
 	static function create() returns Self
-		return Self{list: Counts.create()}
+		return Self{list: Counts.create(0)}
 	end 'create'
 
 	function refresh(n Count)
 		view before = self.list
-		var sink = Counts.create()
+		var sink = Counts.create(0)
 
 		for i in 0 upto n 'each'
-			var fresh = Counts.create()
+			var fresh = Counts.create(0)
 			sink = fresh
 			print("{before.count()} {i}\n")
 		end 'each'
@@ -1122,7 +1122,7 @@ it is still readable after the clear.
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var items = Words.create()
+	var items = Words.create(0)
 	items.push("first padded out long enough to heap allocate {1}")
 	items.push("second padded out long enough to heap allocate {2}")
 
@@ -1159,7 +1159,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1197,7 +1197,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1240,7 +1240,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)

@@ -169,7 +169,7 @@ typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
 	let before = __Builtins.mmAllocTotal()
-	var buf = ByteArray.create()
+	var buf = ByteArray.create(0)
 	buf.push(1)
 	let after = __Builtins.mmAllocTotal()
 	var score = 0 as Count
@@ -198,7 +198,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function fill()
-	var buf = ByteArray.create()
+	var buf = ByteArray.create(0)
 	for _ in 0 upto 64 'push'
 		buf.push(3)
 	end 'push'
@@ -241,7 +241,7 @@ function volume() returns BytePos
 end 'volume'
 
 function fill(n PushCount)
-	var buf = ByteArray.create()
+	var buf = ByteArray.create(0)
 	for _ in 0 upto n 'push'
 		buf.push(3)
 	end 'push'
@@ -279,7 +279,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var buf = ByteArray.create()
+	var buf = ByteArray.create(0)
 	buf.push(1)
 	let total = __Builtins.mmAllocTotal()
 	let live = __Builtins.mmAllocLive()
@@ -317,7 +317,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var buf = ByteArray.create()
+	var buf = ByteArray.create(0)
 	for _ in 0 upto 512 'push'
 		buf.push(3)
 	end 'push'
@@ -362,7 +362,7 @@ function churn(rounds Count) returns Count
 	var seen = 0 as Count
 
 	for _ in 0 upto rounds 'each'
-		let empty = ByteArray.create()
+		let empty = ByteArray.create(0)
 		seen = seen + empty.count() + 1
 	end 'each'
 
@@ -435,7 +435,7 @@ typealias ByteArray = Array with Byte
 #endif
 
 function reserveAndDrop(bytes Count) returns Count
-	var big = ByteArray.create()
+	var big = ByteArray.create(0)
 	big.reserve(bytes)
 
 	return big.count() + 1
@@ -502,7 +502,7 @@ function churn(rounds Count) returns Count
 	var seen = 0 as Count
 
 	for _ in 0 upto rounds 'each'
-		let empty = ByteArray.create()
+		let empty = ByteArray.create(0)
 		seen = seen + empty.count() + 1
 	end 'each'
 
@@ -849,7 +849,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var buf = ByteArray.create()
+	var buf = ByteArray.create(0)
 	buf.push(1)
 	var score = 0 as Count
 	if __Builtins.mmAllocTotal() > 0 'total'
@@ -915,7 +915,7 @@ type Churn
 	end 'ready'
 
 	export function churn(n Integer) returns Integer
-		var buf = Bytes.create()
+		var buf = Bytes.create(0)
 		for _ in 0 upto n 'push'
 			buf.push(3)
 		end 'push'
@@ -934,7 +934,7 @@ function main() returns ExitCode
 
 	let serialThreadBefore = __Builtins.threadAllocTotal()
 	let serialProcessBefore = processWide()
-	var warm = Bytes.create()
+	var warm = Bytes.create(0)
 	for _ in 0 upto 4096 'warm'
 		warm.push(1)
 	end 'warm'
@@ -982,7 +982,7 @@ typealias ByteArray = Array with Byte
 typealias BoxCount = int(1 to i64.max)
 
 function fillAndDrop()
-	var buf = ByteArray.create()
+	var buf = ByteArray.create(0)
 	for _ in 0 upto 64 'push'
 		buf.push(3)
 	end 'push'
@@ -1045,7 +1045,7 @@ type Idle
 end 'Idle'
 
 function fillAndDrop()
-	var buf = Bytes.create()
+	var buf = Bytes.create(0)
 	for _ in 0 upto 4096 'push'
 		buf.push(1)
 	end 'push'
@@ -1110,7 +1110,7 @@ type Churn
 
 	export function churn(n Integer) returns Integer
 		for _ in 0 upto n 'round'
-			var buf = Bytes.create()
+			var buf = Bytes.create(0)
 			buf.push(3)
 		end 'round'
 		self.rounds = self.rounds + 1

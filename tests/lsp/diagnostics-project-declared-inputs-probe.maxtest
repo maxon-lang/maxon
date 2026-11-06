@@ -19,7 +19,7 @@ let DeclaredInputsProjectDirName = "proj"
 let DeclaredInputsSharedDirName = "shared"
 let DeclaredInputsMainFileName = "main.maxon"
 let DeclaredInputsSharedFileName = "answer.maxon"
-let DeclaredInputsReadingBody = "\tlet plan = try FilePath.from(\"sources.txt\") otherwise return 1\n\tvar sources = StringArray.create()\n\tsources.push(\".\")\n\n\tif File.exists(plan) 'planned'\n\t\tlet text = try File.readText(plan) otherwise return 1\n\n\t\tfor line in text.split(\"\\n\") 'eachLine'\n\t\t\tif not line.isEmpty() 'aSource'\n\t\t\t\tsources.push(line)\n\t\t\tend 'aSource'\n\t\tend 'eachLine'\n\tend 'planned'\n\n"
+let DeclaredInputsReadingBody = "\tlet plan = try FilePath.from(\"sources.txt\") otherwise return 1\n\tvar sources = StringArray.create(0)\n\tsources.push(\".\")\n\n\tif File.exists(plan) 'planned'\n\t\tlet text = try File.readText(plan) otherwise return 1\n\n\t\tfor line in text.split(\"\\n\") 'eachLine'\n\t\t\tif not line.isEmpty() 'aSource'\n\t\t\t\tsources.push(line)\n\t\t\tend 'aSource'\n\t\tend 'eachLine'\n\tend 'planned'\n\n"
 let DeclaredInputsGate = "\tlet runs = try FilePath.from(\"runs.txt\") otherwise return 1\n\tvar earlier = \"\"\n\n\tif File.exists(runs) 'ranBefore'\n\t\tearlier = try File.readText(runs) otherwise return 1\n\tend 'ranBefore'\n\n\ttry File.writeText(runs, content: \"\{earlier\}ran\\n\") otherwise return 1\n\n\tlet hold = try FilePath.from(\"hold.txt\") otherwise return 1\n\tvar number = 1 as Count\n\n\tfor line in earlier.split(\"\\n\") 'eachRun'\n\t\tif not line.isEmpty() 'aRun'\n\t\t\tnumber = number + 1\n\t\tend 'aRun'\n\tend 'eachRun'\n\n\tlet release = try FilePath.from(\"release-\{number\}.txt\") otherwise return 1\n\tvar polls = 0 as Count\n\n\twhile File.exists(hold) and not File.exists(release) and polls < 1200 'untilReleased'\n\t\tsleep(50)\n\t\tpolls = polls + 1\n\tend 'untilReleased'\n\n"
 let DeclaredInputsBuilding = "\tBuild.buildWithConfig(BuildConfig.create(sources, output: \"program\""
 let DeclaredInputsDeclaration = ", inputs: [\"sources.txt\"]"
@@ -148,28 +148,28 @@ export function stagedDelegatingInputsProject(outer OuterDelegation, plan String
 end 'stagedDelegatingInputsProject'
 
 export function planWrittenAs(staged DeclaredInputsProject, text String) returns CorpusDiskEditArray
-	var edits = CorpusDiskEditArray.create()
+	var edits = CorpusDiskEditArray.create(0)
 	edits.push(CorpusDiskEdit.wrote(staged.project, fileName: DeclaredInputsPlanFileName, content: text))
 
 	return edits
 end 'planWrittenAs'
 
 export function planDeleted(staged DeclaredInputsProject) returns CorpusDiskEditArray
-	var edits = CorpusDiskEditArray.create()
+	var edits = CorpusDiskEditArray.create(0)
 	edits.push(CorpusDiskEdit.deleted(staged.project, fileName: DeclaredInputsPlanFileName))
 
 	return edits
 end 'planDeleted'
 
 export function readingProjectPlanWrittenAs(staged DeclaredInputsProject, text String) returns CorpusDiskEditArray
-	var edits = CorpusDiskEditArray.create()
+	var edits = CorpusDiskEditArray.create(0)
 	edits.push(CorpusDiskEdit.wrote(staged.root.join(DeclaredInputsReadingDirName), fileName: DeclaredInputsPlanFileName, content: text))
 
 	return edits
 end 'readingProjectPlanWrittenAs'
 
 export function lonelyProjectFileWidened(staged DeclaredInputsProject) returns CorpusDiskEditArray
-	var edits = CorpusDiskEditArray.create()
+	var edits = CorpusDiskEditArray.create(0)
 	edits.push(CorpusDiskEdit.wrote(staged.root.join(DeclaredInputsLonelyDirName), fileName: DeclaredInputsManifestFileName, content: DeclaredInputsSharingManifest))
 
 	return edits

@@ -287,7 +287,7 @@ export type InlineRangeBuilder
 	export var ranges as InlineRangeArray
 
 	export static function create() returns InlineRangeBuilder
-		return Self{ranges: InlineRangeArray.create()}
+		return Self{ranges: InlineRangeArray.create(0)}
 	end 'create'
 
 	export function note(inlineSite InlineSiteRef, codeStart CodeOffset, codeEnd CodeOffset)
@@ -342,7 +342,7 @@ export type InlineFrameTables
 	export var ranges as InlineRangeArray
 
 	export static function create() returns InlineFrameTables
-		return Self{sites: InlineSiteArray.create(), ranges: InlineRangeArray.create()}
+		return Self{sites: InlineSiteArray.create(0), ranges: InlineRangeArray.create(0)}
 	end 'create'
 
 	export function appendChunk(chunk FunctionCodeChunk, funcStart CodeOffset) returns ElementIndex
@@ -375,8 +375,8 @@ end 'InlineFrameTables'
 // order, so the order is a fact of the layout — asserted rather than re-established by a sort.
 export function buildInlineFrameTableBytes(tables InlineFrameTables, roster ShadowSpellingRoster) returns ByteArray
 	assertInlineTableStrides()
-	var table = ByteArray.create()
-	var names = ByteArray.create()
+	var table = ByteArray.create(0)
+	var names = ByteArray.create(0)
 	let namesStart = (InlineTableOffSites as FullRangeInt) + InlineSiteEntryBytes * tables.sites.count() as FullRangeInt + InlineRangeEntryBytes * tables.ranges.count() as FullRangeInt
 	writeDword(table, value: tables.sites.count() as MachineWord)
 	writeDword(table, value: tables.ranges.count() as MachineWord)
@@ -492,7 +492,7 @@ end 'faultPanicLinePrefix'
 
 // A fresh buffer: `faultWords` answers an immortal literal, which is never appended to in place.
 export function faultLineOf(kind HardwareFaultKind, tail ByteArray) returns ByteArray
-	var line = ByteArray.create()
+	var line = ByteArray.create(0)
 	line.append(FaultPanicPrefix)
 	line.append(faultWords(kind))
 	line.append(tail)
@@ -629,9 +629,9 @@ end 'symbolFlagsByte'
 export function buildSymbolTableBytes(symbols DebugSymbolArray, target Target, roster ShadowSpellingRoster) returns ByteArray
 	let granule = safePointGranuleOf(target)
 	let headerSize = SymbolTableHeaderBytes + SymbolTableEntryBytes * symbols.count()
-	var names = ByteArray.create()
-	var flags = ByteArray.create()
-	var table = ByteArray.create()
+	var names = ByteArray.create(0)
+	var flags = ByteArray.create(0)
+	var table = ByteArray.create(0)
 	table.reserve(headerSize)
 	writeDword(table, value: symbols.count() as MachineWord)
 

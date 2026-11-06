@@ -309,7 +309,7 @@ function renderSequence(tree DebugValueTree, memory DebugMemory, symbols DebugSy
 		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugLayoutNotDescribedReason))
 	end 'noElementLayout'
 
-	var children = DebugValueIndexArray.create()
+	var children = DebugValueIndexArray.create(0)
 	let shown = length if length < MaxRenderedChildren else MaxRenderedChildren
 
 	for i in 0 upto shown 'eachElement'
@@ -337,7 +337,7 @@ function renderStruct(tree DebugValueTree, memory DebugMemory, symbols DebugSymb
 end 'renderStruct'
 
 function fieldsAt(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, record MxdbgTypeInfo, base DebugAddress) returns DebugValueIndexArray
-	var children = DebugValueIndexArray.create()
+	var children = DebugValueIndexArray.create(0)
 
 	for k in record.fieldFirst upto record.fieldFirst + record.fieldCount 'eachField'
 		let field = symbols.fieldRecordOf(k as MxdbgIndex)
@@ -378,11 +378,11 @@ function renderFunctionValue(tree DebugValueTree, memory DebugMemory, symbols De
 end 'renderFunctionValue'
 
 function capturesAt(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, closure String, functionRecord DebugAddress) returns DebugValueIndexArray
-	let envType = try symbols.typeIdNamed(closure) otherwise return DebugValueIndexArray.create()
+	let envType = try symbols.typeIdNamed(closure) otherwise return DebugValueIndexArray.create(0)
 	let record = symbols.typeRecordOf(envType)
 
 	if record.kind != MxdbgTypeKindFunction 'notAnEnvironment'
-		return DebugValueIndexArray.create()
+		return DebugValueIndexArray.create(0)
 	end 'notAnEnvironment'
 
 	return fieldsAt(tree, memory: memory, symbols: symbols, record: record, base: functionRecord)
@@ -399,7 +399,7 @@ function renderFoldedStruct(tree DebugValueTree, memory DebugMemory, symbols Deb
 		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugLayoutNotDescribedReason))
 	end 'theWindowDoesNotHoldTheFields'
 
-	var children = DebugValueIndexArray.create()
+	var children = DebugValueIndexArray.create(0)
 
 	for (iter, word) in words.withIterator() 'eachWord'
 		let field = symbols.fieldRecordOf(record.fieldFirst + (iter.index() as MxdbgIndex))
@@ -467,7 +467,7 @@ function caseOf(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, n
 end 'caseOf'
 
 function payloadOf(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, caseRecord MxdbgFieldInfo, payload DebugValueSource) returns DebugValueIndexArray
-	var children = DebugValueIndexArray.create()
+	var children = DebugValueIndexArray.create(0)
 
 	if symbols.typeIsDescribed(caseRecord.typeId) and symbols.typeNameOf(caseRecord.typeId) != VoidPayloadName 'aPayload'
 		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: caseRecord.name, typeId: caseRecord.typeId, source: payload) as DebugValueIndex)

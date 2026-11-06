@@ -546,7 +546,7 @@ typealias NodeBag = Array with StrNode
 function main() returns ExitCode
 	var chain = StrChain.create()
 	let n = chain.insertLast("a heap string long enough to be a real allocation")
-	var bag = NodeBag.create()
+	var bag = NodeBag.create(0)
 	bag.push(n)
 	let got = chain.remove(try bag.get(0) otherwise panic("bag.get: index 0 of a one-element bag"))
 	print("[{got}]\n")

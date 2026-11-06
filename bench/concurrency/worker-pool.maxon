@@ -48,13 +48,13 @@ function main() returns ExitCode
 	let workerCount = Scheduler.processorCount() as Count
 	let tasksPerWorker = try ((taskCount + workerCount - 1) / workerCount) otherwise panic("worker-pool: the processor count is at least 1")
 	let mailboxCapacity = (tasksPerWorker if tasksPerWorker > minimumMailboxCapacity else minimumMailboxCapacity) as MailboxCapacity
-	var workers = WorkerArray.create()
+	var workers = WorkerArray.create(0)
 
 	for _ in 0 upto workerCount 'spawnWorkers'
 		workers.push(spawn(capacity: mailboxCapacity) Worker.create())
 	end 'spawnWorkers'
 
-	var results = KernelPromiseArray.create()
+	var results = KernelPromiseArray.create(0)
 	results.reserve(taskCount)
 
 	for task in 0 upto taskCount 'sendTasks'

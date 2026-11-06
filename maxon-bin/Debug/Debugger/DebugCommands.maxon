@@ -88,34 +88,34 @@ end 'DebugCommandRow'
 export typealias DebugCommandRowArray = Array with DebugCommandRow
 
 export function debugCommandRows() returns DebugCommandRowArray
-	var rows = DebugCommandRowArray.create()
+	var rows = DebugCommandRowArray.create(0)
 	rows.push(DebugCommandRow.create(BreakCommandWord, aliases: ["b"], completesAFunctionName: true))
-	rows.push(DebugCommandRow.create(ClearCommandWord, aliases: StringArray.create(), completesAFunctionName: true))
+	rows.push(DebugCommandRow.create(ClearCommandWord, aliases: StringArray.create(0), completesAFunctionName: true))
 	rows.push(DebugCommandRow.create(RunCommandWord, aliases: ["r"], completesAFunctionName: false))
 	rows.push(DebugCommandRow.create(ContinueCommandWord, aliases: ["c"], completesAFunctionName: false))
 	rows.push(DebugCommandRow.create(StepCommandWord, aliases: ["s"], completesAFunctionName: false))
 	rows.push(DebugCommandRow.create(NextCommandWord, aliases: ["n"], completesAFunctionName: false))
-	rows.push(DebugCommandRow.create(FinishCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
+	rows.push(DebugCommandRow.create(FinishCommandWord, aliases: StringArray.create(0), completesAFunctionName: false))
 	rows.push(DebugCommandRow.create(UntilCommandWord, aliases: ["u"], completesAFunctionName: true))
 	rows.push(DebugCommandRow.create(BacktraceCommandWord, aliases: ["bt", "where"], completesAFunctionName: false))
 	rows.push(DebugCommandRow.create(PrintCommandWord, aliases: ["p"], completesAFunctionName: false))
-	rows.push(DebugCommandRow.create(LocalsCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
-	rows.push(DebugCommandRow.create(PauseCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
-	rows.push(DebugCommandRow.create(DetachCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
+	rows.push(DebugCommandRow.create(LocalsCommandWord, aliases: StringArray.create(0), completesAFunctionName: false))
+	rows.push(DebugCommandRow.create(PauseCommandWord, aliases: StringArray.create(0), completesAFunctionName: false))
+	rows.push(DebugCommandRow.create(DetachCommandWord, aliases: StringArray.create(0), completesAFunctionName: false))
 	rows.push(DebugCommandRow.create(HelpCommandWord, aliases: ["?", "commands"], completesAFunctionName: false))
 	rows.push(DebugCommandRow.create(QuitCommandWord, aliases: ["q", "exit"], completesAFunctionName: false))
-	rows.push(DebugCommandRow.create(ThreadsCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
-	rows.push(DebugCommandRow.create(GreenBacktraceCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
-	rows.push(DebugCommandRow.create(GreenSelectCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
-	rows.push(DebugCommandRow.create(GreenParkCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
-	rows.push(DebugCommandRow.create(GreenResumeCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
-	rows.push(DebugCommandRow.create(TraceCommandWord, aliases: StringArray.create(), completesAFunctionName: false))
+	rows.push(DebugCommandRow.create(ThreadsCommandWord, aliases: StringArray.create(0), completesAFunctionName: false))
+	rows.push(DebugCommandRow.create(GreenBacktraceCommandWord, aliases: StringArray.create(0), completesAFunctionName: false))
+	rows.push(DebugCommandRow.create(GreenSelectCommandWord, aliases: StringArray.create(0), completesAFunctionName: false))
+	rows.push(DebugCommandRow.create(GreenParkCommandWord, aliases: StringArray.create(0), completesAFunctionName: false))
+	rows.push(DebugCommandRow.create(GreenResumeCommandWord, aliases: StringArray.create(0), completesAFunctionName: false))
+	rows.push(DebugCommandRow.create(TraceCommandWord, aliases: StringArray.create(0), completesAFunctionName: false))
 
 	return rows
 end 'debugCommandRows'
 
 export function debugCommandVocabulary() returns StringArray
-	var words = StringArray.create()
+	var words = StringArray.create(0)
 
 	for row in debugCommandRows() 'eachRow'
 		words.push(row.canonical)
@@ -129,7 +129,7 @@ export function debugCommandVocabulary() returns StringArray
 end 'debugCommandVocabulary'
 
 function debugHelpLines() returns StringArray
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	for row in debugCommandRows() 'eachRow'
 		var spelling = "{row.canonical}"
@@ -366,7 +366,7 @@ function debugWalkModeWord(mode DebugWalkMode) returns String
 end 'debugWalkModeWord'
 
 export function debugWalkModeWords() returns StringArray
-	var words = StringArray.create()
+	var words = StringArray.create(0)
 
 	for mode in DebugWalkMode.allCases 'eachMode'
 		words.push(debugWalkModeWord(mode))
@@ -376,7 +376,7 @@ export function debugWalkModeWords() returns StringArray
 end 'debugWalkModeWords'
 
 export function debugWalkModePhrases() returns StringArray
-	var phrases = StringArray.create()
+	var phrases = StringArray.create(0)
 
 	for mode in DebugWalkMode.allCases 'eachMode'
 		phrases.push("`{debugWalkModeWord(mode)}` {debugWalkModeMeaning(mode)}")
@@ -510,7 +510,7 @@ function traceLimitOf(spelling String) returns DebugTraceTally
 end 'traceLimitOf'
 
 function repliedWith(reply DebugReply) returns DebugReplyArray
-	var replies = DebugReplyArray.create()
+	var replies = DebugReplyArray.create(0)
 	replies.push(reply)
 
 	return replies
@@ -712,7 +712,7 @@ export type DebugConversation
 
 	export function run(line String) returns DebugReplyArray
 		let words = wordsOf(line)
-		let word = try words.get(0) otherwise return DebugReplyArray.create()
+		let word = try words.get(0) otherwise return DebugReplyArray.create(0)
 
 		match commandNamed(word) 'known'
 			none then return repliedWith(DebugReply.failed("'{word}' is not a debugger command", suggestion: nearestName(word, pool: debugCommandVocabulary())))
@@ -728,7 +728,7 @@ export type DebugConversation
 	end 'performParsed'
 
 	export function perform(command DebugCommand) returns DebugReplyArray
-		var replies = DebugReplyArray.create()
+		var replies = DebugReplyArray.create(0)
 
 		match command 'which'
 			quit then self.leave(replies)
@@ -771,7 +771,7 @@ export type DebugConversation
 			return
 		end 'noStopToNotice'
 
-		var answered = DebugReplyArray.create()
+		var answered = DebugReplyArray.create(0)
 		self.performLive(answered, command: command)
 
 		// A stop this command was answered under is reported before the answer. One that landed
@@ -831,7 +831,7 @@ export type DebugConversation
 	end 'noticeAPendingStop'
 
 	export function pollForStop(sliceMs StopTimeoutMs) returns DebugReplyArray
-		var replies = DebugReplyArray.create()
+		var replies = DebugReplyArray.create(0)
 
 		if not targetIsRunning(self.outcome) 'nothingLeftToWatch'
 			return replies
@@ -991,7 +991,7 @@ export type DebugConversation
 	end 'reportExpiry'
 
 	export function localsOfFrame(frame DebugFrame, onTheStoppedThread bool) returns DebugReplyArray
-		var replies = DebugReplyArray.create()
+		var replies = DebugReplyArray.create(0)
 
 		if not targetIsRunning(self.outcome) 'nothingLeftToAsk'
 			replies.push(DebugReply.failed(ProgramGoneMessage, suggestion: StatedText.unstated))
@@ -1046,7 +1046,7 @@ export type DebugConversation
 			refused(file, line, functionName, offset, reason) gives DebugBreakTargetAnswer.answered(breakpointAnswer(BreakpointRefusedAction, spelling: spelling, file: file, line: line, functionName: functionName, offsets: [offset], reason: StatedText.stated(reason)))
 			noMatch(suggestion) gives DebugBreakTargetAnswer.answered(unmatchedTarget(spelling, suggestion: suggestion))
 			ambiguous(candidates) gives DebugBreakTargetAnswer.answered(ambiguousTarget(spelling, candidates: candidates))
-			noCode(file, line) gives DebugBreakTargetAnswer.answered(breakpointAnswer(BreakpointNoCodeAction, spelling: spelling, file: file, line: line, functionName: DebugFunctionNameLookup.none, offsets: DebugAddressArray.create(), reason: StatedText.unstated))
+			noCode(file, line) gives DebugBreakTargetAnswer.answered(breakpointAnswer(BreakpointNoCodeAction, spelling: spelling, file: file, line: line, functionName: DebugFunctionNameLookup.none, offsets: DebugAddressArray.create(0), reason: StatedText.unstated))
 			atLine(file, line, bodies, functionName, breakpoint) gives DebugBreakTargetAnswer.atLine(file, line: line, bodies: bodies, functionName: functionName, breakpoint: breakpoint)
 		end 'resolved'
 	end 'breakTargetOf'
@@ -1162,7 +1162,7 @@ export type DebugConversation
 	end 'rearmedHeldByte'
 
 	function notedRearmed(attempt DebugArmingAttempt, candidate DebugLineCandidate) returns bool
-		var reconditioned = DebugArmPurposes.create()
+		var reconditioned = DebugArmPurposes.create(0)
 
 		for purpose in try self.armPurposes.get(candidate.offset) otherwise panic("DebugConversation.notedRearmed: offset 0x{candidate.offset:x} carried a condition a moment ago") 'eachPurpose'
 			reconditioned.push(DebugArmPurpose.create(purpose.hidden, identity: purpose.identity, condition: attempt.condition))
@@ -1202,9 +1202,9 @@ export type DebugConversation
 	end 'notePurpose'
 
 	function purposesOtherThan(offset DebugAddress, hidden DebugTally, identity DebugBreakIdentity) returns DebugArmPurposes
-		var kept = DebugArmPurposes.create()
+		var kept = DebugArmPurposes.create(0)
 
-		for purpose in try self.armPurposes.get(offset) otherwise DebugArmPurposes.create() 'eachPurpose'
+		for purpose in try self.armPurposes.get(offset) otherwise DebugArmPurposes.create(0) 'eachPurpose'
 			if not purpose.names(hidden, asked: identity) 'anotherPurpose'
 				kept.push(purpose)
 			end 'anotherPurpose'
@@ -1262,8 +1262,8 @@ export type DebugConversation
 	end 'disarmTarget'
 
 	function disarmBodies(spelling String, file DebugFileName, line DebugLineLookup, bodies DebugLineBodyArray, functionName DebugFunctionNameLookup, identity DebugBreakIdentity) returns DebugReply
-		var cleared = DebugAddressArray.create()
-		var refusals = DebugRefusals.create()
+		var cleared = DebugAddressArray.create(0)
+		var refusals = DebugRefusals.create(0)
 
 		for body in bodies 'eachBody'
 			for candidate in body 'eachCandidate'
@@ -1276,7 +1276,7 @@ export type DebugConversation
 		end 'someCleared'
 
 		match reportedRefusal(refusals) 'reported'
-			none then return breakpointAnswer(BreakpointNotSetAction, spelling: spelling, file: file, line: line, functionName: functionName, offsets: DebugAddressArray.create(), reason: StatedText.unstated)
+			none then return breakpointAnswer(BreakpointNotSetAction, spelling: spelling, file: file, line: line, functionName: functionName, offsets: DebugAddressArray.create(0), reason: StatedText.unstated)
 			reported(reason, offsets) then return breakpointAnswer(BreakpointRefusedAction, spelling: spelling, file: file, line: line, functionName: functionName, offsets: offsets, reason: StatedText.stated(reason))
 		end 'reported'
 	end 'disarmBodies'
@@ -1784,7 +1784,7 @@ export type DebugConversation
 			return ReturnPlanting.declined
 		end 'walkedAnInstructionAtATime'
 
-		var points = DebugReturnPointArray.create()
+		var points = DebugReturnPointArray.create(0)
 		points.push(leaving)
 
 		// Each indirect call site gets a point: its target is known only when the call is reached, and a
@@ -2179,7 +2179,7 @@ export type DebugConversation
 	end 'letItFinish'
 
 	function refuseToFinish(replies DebugReplyArray)
-		var spelled = StringArray.create()
+		var spelled = StringArray.create(0)
 
 		for offset in self.engine.standingBreakpointOffsets() 'eachStanding'
 			spelled.push("0x{offset:x}")
@@ -2318,7 +2318,7 @@ type DebugArmingAttempt
 	export var reachedArming as bool
 
 	static function create(identity DebugBreakIdentity, condition DebugBreakCondition) returns DebugArmingAttempt
-		return Self{identity: identity, condition: condition, armed: DebugAddressArray.create(), armRefusals: DebugRefusals.create(), conditionRefusals: DebugRefusals.create(), reachedArming: false}
+		return Self{identity: identity, condition: condition, armed: DebugAddressArray.create(0), armRefusals: DebugRefusals.create(0), conditionRefusals: DebugRefusals.create(0), reachedArming: false}
 	end 'create'
 
 	function noteRefusal(reason String, offset DebugAddress)
@@ -2356,7 +2356,7 @@ end 'DebugRefusal'
 typealias DebugRefusals = Array with DebugRefusal
 
 function offsetsRefusedFor(refusals DebugRefusals, reason String) returns DebugAddressArray
-	var offsets = DebugAddressArray.create()
+	var offsets = DebugAddressArray.create(0)
 
 	for refusal in refusals 'eachRefusal'
 		if refusal.reason == reason 'thisReason'
@@ -2379,18 +2379,18 @@ function reportedRefusal(refusals DebugRefusals) returns DebugReportedRefusal
 end 'reportedRefusal'
 
 function breakpointAnswer(action String, spelling String, file DebugFileName, line DebugLineLookup, functionName DebugFunctionNameLookup, offsets DebugAddressArray, reason StatedText, condition DebugBreakCondition = DebugBreakCondition.unconditional) returns DebugReply
-	return DebugReply.breakpoint(DebugBreakpointAnswer.create(action, target: spelling, functionName: functionName, file: file, line: line, offsets: offsets, candidates: StringArray.create(), suggestion: StatedText.unstated, reason: reason, condition: condition))
+	return DebugReply.breakpoint(DebugBreakpointAnswer.create(action, target: spelling, functionName: functionName, file: file, line: line, offsets: offsets, candidates: StringArray.create(0), suggestion: StatedText.unstated, reason: reason, condition: condition))
 end 'breakpointAnswer'
 
 // A leading row that starts a call opens an entry even when a later row enters the line, so a stop
 // there precedes the call and `step` can still enter it.
 function entriesOf(candidates DebugLineCandidateArray) returns DebugLineBodyArray
-	var entries = DebugLineBodyArray.create()
+	var entries = DebugLineBodyArray.create(0)
 	let noRowEntersTheLine = not someCandidateEntersTheLine(candidates)
 
 	for candidate in candidates 'eachCandidate'
 		if candidate.entersTheLine or (entries.isEmpty() and (noRowEntersTheLine or candidate.startsACall)) 'controlEntersTheLineHere'
-			entries.push(DebugLineCandidateArray.create())
+			entries.push(DebugLineCandidateArray.create(0))
 		end 'controlEntersTheLineHere'
 
 		if entries.isEmpty() 'beforeTheFirstEntry'
@@ -2415,7 +2415,7 @@ function someCandidateEntersTheLine(candidates DebugLineCandidateArray) returns 
 end 'someCandidateEntersTheLine'
 
 function unmatchedTarget(spelling String, suggestion StatedText) returns DebugReply
-	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointNoMatchAction, target: spelling, functionName: DebugFunctionNameLookup.none, file: DebugFileName.unknown, line: DebugLineLookup.unknown, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: suggestion, reason: StatedText.unstated))
+	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointNoMatchAction, target: spelling, functionName: DebugFunctionNameLookup.none, file: DebugFileName.unknown, line: DebugLineLookup.unknown, offsets: DebugAddressArray.create(0), candidates: StringArray.create(0), suggestion: suggestion, reason: StatedText.unstated))
 end 'unmatchedTarget'
 
 function frameRegisters(frame DebugFrame, held DebugPosition, onTheStoppedThread bool) returns DebugRegisterAccess
@@ -2441,7 +2441,7 @@ function innermostPhysicalFrame(frames DebugFrameArray) returns DebugFrameLookup
 end 'innermostPhysicalFrame'
 
 function ambiguousTarget(spelling String, candidates StringArray) returns DebugReply
-	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointAmbiguousAction, target: spelling, functionName: DebugFunctionNameLookup.none, file: DebugFileName.unknown, line: DebugLineLookup.unknown, offsets: DebugAddressArray.create(), candidates: candidates, suggestion: StatedText.unstated, reason: StatedText.unstated))
+	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointAmbiguousAction, target: spelling, functionName: DebugFunctionNameLookup.none, file: DebugFileName.unknown, line: DebugLineLookup.unknown, offsets: DebugAddressArray.create(0), candidates: candidates, suggestion: StatedText.unstated, reason: StatedText.unstated))
 end 'ambiguousTarget'
 
 function hasACallerFrame(stop DebugStop) returns bool
@@ -2512,7 +2512,7 @@ function motionRefused(verb String, reason String, afterwards String = "") retur
 end 'motionRefused'
 
 function wordsOf(line String) returns StringArray
-	var words = StringArray.create()
+	var words = StringArray.create(0)
 
 	for piece in line.trim().split(WordGap) 'eachPiece'
 		if not piece.isEmpty() 'aWord'

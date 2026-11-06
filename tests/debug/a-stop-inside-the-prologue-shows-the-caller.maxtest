@@ -5,7 +5,7 @@ test 'a stop after the callee pushed its frame pointer and before it set the new
 	let executable = builtExecutable(staged)
 	let afterThePush = exactOffsetTarget(functionCodeStart(executable, staged: staged, name: CalleeFunctionName) + PushedFramePointerBytes)
 	let commands = debugCommandLine(["{BreakCommand} {afterThePush}", RunCommand, BacktraceCommand])
-	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let walks = eventsOfKind(events, kind: BacktraceEventName)
@@ -14,7 +14,7 @@ test 'a stop after the callee pushed its frame pointer and before it set the new
 
 	let walked = eventAt(walks, index: 0)
 	let frames = childrenOf(walked, node: walked.root, key: FramesKey)
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 
 	for frame in frames 'eachFrame'
 		names.push(textOf(walked, node: frame, key: FunctionKey))

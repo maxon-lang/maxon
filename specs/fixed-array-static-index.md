@@ -598,7 +598,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var xs = IntArray.create()
+	var xs = IntArray.create(0)
 	let result = try xs.get(0) otherwise -3
 	print("{result}\n")
 	return 0

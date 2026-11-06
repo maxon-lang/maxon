@@ -222,7 +222,7 @@ export type Holder
 	export var items as Bag
 
 	export static function make() returns Holder
-		var b = Bag.create()
+		var b = Bag.create(0)
 		b.push(3)
 		return Holder{items: b}
 	end 'make'
@@ -256,9 +256,9 @@ export type Holder
 	export var rows as Rows
 
 	export static function make() returns Holder
-		var b = Bag.create()
+		var b = Bag.create(0)
 		b.push(3)
-		var rows = Rows.create()
+		var rows = Rows.create(0)
 		rows.push(b)
 		return Holder{rows: rows}
 	end 'make'
@@ -347,7 +347,7 @@ typealias Step = function(Tally, Tally) returns Tally
 typealias Steps = Array with Step
 
 function runA(start Tally) returns Tally
-	var steps = Steps.create()
+	var steps = Steps.create(0)
 	steps.push(function(acc Tally, more Tally) gives acc + more)
 	let step = try steps.get(0) otherwise panic("no step")
 	return step(start, 3)
@@ -362,7 +362,7 @@ typealias Step = function(String) returns String
 typealias Steps = Array with Step
 
 export function runB(label String) returns String
-	var steps = Steps.create()
+	var steps = Steps.create(0)
 	steps.push(function(text String) gives "{text}!")
 	let step = try steps.get(0) otherwise panic("no step")
 	return step(label)
@@ -652,7 +652,7 @@ typealias Tallies = Array with Tally
 typealias Step = function(Tallies) returns Tally
 
 function foldA(step Step) returns Tally
-	var xs = Tallies.create()
+	var xs = Tallies.create(0)
 	xs.push(700)
 	return step(xs)
 end 'foldA'
@@ -667,7 +667,7 @@ typealias Tallies = Array with Tally
 typealias Step = function(Tallies) returns Tally
 
 function foldB(step Step) returns Tally
-	var xs = Tallies.create()
+	var xs = Tallies.create(0)
 	xs.push(3)
 	return step(xs)
 end 'foldB'
@@ -728,7 +728,7 @@ typealias Tallies = Array with Integer
 typealias Step = function(Tallies) returns Integer
 
 function foldA(step Step) returns Integer
-	var xs = Tallies.create()
+	var xs = Tallies.create(0)
 	xs.push(700)
 	return step(xs)
 end 'foldA'
@@ -788,7 +788,7 @@ end 'goB'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var xs = alpha.Tallies.create()
+	var xs = alpha.Tallies.create(0)
 	xs.push(1)
 
 	return goB() + (countA(xs) as ExitCode)

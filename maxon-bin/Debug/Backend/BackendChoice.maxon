@@ -111,7 +111,7 @@ function locatedDebugStub() returns DebugStubSearch
 end 'locatedDebugStub'
 
 function debugStubCandidates() returns CandidatePathArray
-	var candidates = CandidatePathArray.create()
+	var candidates = CandidatePathArray.create(0)
 
 	for entry in (try Process.environmentVariable(PathVariableName) otherwise "").split(PathEntrySeparator) 'eachPathEntry'
 		if entry.isEmpty() 'noDirectory'
@@ -144,7 +144,7 @@ enum DeveloperDirectoryError implements Error
 end 'DeveloperDirectoryError'
 
 function developerDirectory() returns String throws DeveloperDirectoryError
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 	arguments.push(DeveloperDirectoryOption)
 
 	let asked = try Subprocess.run(Executable.name(DeveloperDirectoryCommand), arguments: arguments, workingDirectory: Directory.currentPath(), timeoutMs: DeveloperDirectoryProbeMs) otherwise throw DeveloperDirectoryError.unavailable

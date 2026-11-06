@@ -982,7 +982,7 @@ function trickle(port NetworkPort) returns String
 	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect-failed"
 
 	for b in TrickledHead.toByteArray() 'eachByte'
-		var one = ByteArray.create()
+		var one = ByteArray.create(0)
 		one.push(b)
 		_ = try client.send(String.from(one)) otherwise return "send-failed"
 		Scheduler.yield()
@@ -1686,7 +1686,7 @@ function awaitFlag(name String)
 end 'awaitFlag'
 
 function sendThenReset(port NetworkPort) returns bool
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 
 	#if os(Windows)
 		argv.push("-NoProfile")

@@ -928,7 +928,7 @@ typealias Codes = Array with Code
 typealias CodeList = List with Code
 
 function main() returns ExitCode
-	var codes = Codes.create()
+	var codes = Codes.create(0)
 	codes.push(30)
 	codes.push(10)
 	codes.push(30)
@@ -957,7 +957,7 @@ typealias Code = int(0 to 100)
 typealias Codes = Array with Code
 
 function makeCodes() returns Codes
-	var codes = Codes.create()
+	var codes = Codes.create(0)
 	codes.push(8)
 	codes.push(4)
 	return codes
@@ -1001,7 +1001,7 @@ typealias Names = Array with String
 typealias NameList = List with String
 
 function main() returns ExitCode
-	var names = Names.create()
+	var names = Names.create(0)
 	names.push("a{2}")
 	names.push("b")
 	let list = NameList from names
@@ -1040,7 +1040,7 @@ function main() returns ExitCode
 end 'main'
 
 function laterNames() returns Names
-	var names = Names.create()
+	var names = Names.create(0)
 	names.push("p")
 	names.push("q")
 	return names
@@ -1061,7 +1061,7 @@ typealias Names = Array with String
 typealias NameList = List with String
 
 function main() returns ExitCode
-	var names = Names.create()
+	var names = Names.create(0)
 	names.push("a")
 	names.push("b")
 	let list = NameList from names
@@ -1085,9 +1085,9 @@ typealias Buffers = Array with Buffer
 typealias BufferList = List with Buffer
 
 function main() returns ExitCode
-	var buffer = Buffer.create()
+	var buffer = Buffer.create(0)
 	buffer.push(1)
-	var buffers = Buffers.create()
+	var buffers = Buffers.create(0)
 	buffers.push(buffer)
 	let list = BufferList from buffers
 	buffer.push(2)
@@ -1106,7 +1106,7 @@ typealias NameList = List with String
 
 function main() returns ExitCode
 	var name = "a{1}"
-	var names = Names.create()
+	var names = Names.create(0)
 	names.push(name)
 	let list = NameList from names
 	name.append("z")

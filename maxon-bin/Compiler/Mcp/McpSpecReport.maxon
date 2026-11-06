@@ -60,7 +60,7 @@ function failureEntry(doc JsonDoc, caseId JsonNodeId, spec String, test String) 
 end 'failureEntry'
 
 function tallyOfEntries(tests SpecTestEntryArray) returns ResultTally
-	var verdicts = VerdictTokenArray.create()
+	var verdicts = VerdictTokenArray.create(0)
 
 	for t in tests 'eachEntry'
 		verdicts.push(t.verdict)
@@ -84,8 +84,8 @@ export function readSpecReport(doc JsonDoc) returns SpecReport throws SpecDocume
 	let casesId = try doc.getChild(doc.root, key: SpecResultKey.cases.rawValue) otherwise throw SpecDocumentError.malformed
 	let caseCount = try doc.arrayLength(casesId) otherwise throw SpecDocumentError.malformed
 
-	var tests = SpecTestEntryArray.create()
-	var failures = SpecFailureSummaryArray.create()
+	var tests = SpecTestEntryArray.create(0)
+	var failures = SpecFailureSummaryArray.create(0)
 
 	for i in 0 upto caseCount 'eachCase'
 		let caseId = try doc.arrayAt(casesId, index: i) otherwise throw SpecDocumentError.malformed

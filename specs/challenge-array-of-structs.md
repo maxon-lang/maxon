@@ -87,7 +87,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var items = ItemArray.create()
+	var items = ItemArray.create(0)
 	items.push(Item.create(Color.red))
 	items.push(Item.create(Color.green))
 	items.push(Item.create(Color.blue))
@@ -125,7 +125,7 @@ end 'Task'
 typealias TaskArray = Array with Task
 
 function main() returns ExitCode
-	var tasks = TaskArray.create()
+	var tasks = TaskArray.create(0)
 	tasks.push(Task.create(Status.pending))
 	tasks.push(Task.create(Status.active))
 	tasks.push(Task.create(Status.done))

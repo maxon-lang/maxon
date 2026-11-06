@@ -88,7 +88,7 @@ EXPECTED=$(( N * TRIPS * (TRIPS - 1) / 2 + TRIPS * N * (N - 1) / 2 + PAD * (PAD 
 	echo "end 'work'"
 	echo ""
 	echo "function main() returns ExitCode"
-	echo "	var a = WordArray.create()"
+	echo "	var a = WordArray.create(0)"
 	echo "	a.resize($TRIPS)"
 	echo "	let r = work(a, n: $TRIPS)"
 	echo "	print(\"{r}\\n\")"

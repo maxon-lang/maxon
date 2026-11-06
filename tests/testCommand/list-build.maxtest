@@ -55,7 +55,7 @@ test 'list-build builds a binary with its sidecar, each select runs one test, an
 		try Expect.equal(ran.exitCode(), expected: selectedExitFor(name), message: "the binary exits {BinaryPassedExit} when every selected test passed and {BinaryFailedExit} when one failed; `{name}` alone exited {ran.exitCode()}")
 	end 'eachListed'
 
-	let everything = runBinary(binary, arguments: StringArray.create())
+	let everything = runBinary(binary, arguments: StringArray.create(0))
 	try Expect.equal(everything.exitCode(), expected: BinaryFailedExit, message: "run with no selection the binary runs both tests, one of which fails; it exited {everything.exitCode()}")
 
 	try checkFixture(ListBuildCase)
@@ -74,7 +74,7 @@ function selectedExitFor(name String) returns ExitInt
 end 'selectedExitFor'
 
 function fileRowsNaming(dump String, file String) returns StringArray
-	var rows = StringArray.create()
+	var rows = StringArray.create(0)
 
 	for line in withoutCarriageReturns(dump).split(LineBreak) 'eachLine'
 		if line.trim().endsWith(file) 'namesTheFile'

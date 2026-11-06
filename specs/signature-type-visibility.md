@@ -261,7 +261,7 @@ end 'Secret'
 export typealias SecretArray = Array with Secret
 
 export function all() returns SecretArray
-	var xs = SecretArray.create()
+	var xs = SecretArray.create(0)
 	xs.push(Secret.create())
 	return xs
 end 'all'
@@ -416,7 +416,7 @@ end 'Stocked'
 
 type Shelf implements Stocked
 	function items() returns Tallies
-		var xs = Tallies.create()
+		var xs = Tallies.create(0)
 		xs.push(7)
 		return xs
 	end 'items'
@@ -463,7 +463,7 @@ type Vault implements Keeper
 end 'Vault'
 
 export function hold() returns ExitCode
-	var xs = Secrets.create()
+	var xs = Secrets.create(0)
 	xs.push(4)
 	return Vault.create().keep(xs)
 end 'hold'
@@ -499,7 +499,7 @@ type Vault implements Keeper
 	end 'create'
 
 	static function sample() returns ElementArray
-		var xs = ElementArray.create()
+		var xs = ElementArray.create(0)
 		xs.push(4)
 		return xs
 	end 'sample'
@@ -1005,7 +1005,7 @@ end 'widest'
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let digest = sha256("hi".toByteArray())
-	var tallies = api.ByteArray.create()
+	var tallies = api.ByteArray.create(0)
 	tallies.push(900)
 
 	return ((widest(tallies) - 900) + (digest.count() as Tally)) as ExitCode
@@ -1074,7 +1074,7 @@ end 'apply'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var b = StringArray.create()
+	var b = StringArray.create(0)
 	b.push("x")
 
 	return count(b) as ExitCode
@@ -1125,7 +1125,7 @@ typealias Secrets = Array with Secret
 export typealias Cb = function(Secrets) returns ExitCode
 
 export function f(cb Cb) returns ExitCode
-	var xs = Secrets.create()
+	var xs = Secrets.create(0)
 	xs.push(4)
 	return cb(xs)
 end 'f'
@@ -1437,7 +1437,7 @@ nameable by anyone, `Tallies` is not, and the binding is read under that name.
 // --- file: api/lib.maxon
 typealias Tallies = Array with ExitCode
 
-export let EMPTY = Tallies.create()
+export let EMPTY = Tallies.create(0)
 
 // --- file: app/main.maxon
 function main() returns ExitCode
@@ -1718,7 +1718,7 @@ export type Holder
 	export var pair as (Scores, ExitCode)
 
 	export static function create() returns Holder
-		return Holder{pair: (Scores.create(), 7)}
+		return Holder{pair: (Scores.create(0), 7)}
 	end 'create'
 end 'Holder'
 
@@ -1741,7 +1741,7 @@ export type Holder
 	export var pair as (Scores, ExitCode)
 
 	export static function create() returns Holder
-		return Holder{pair: (Scores.create(), 7)}
+		return Holder{pair: (Scores.create(0), 7)}
 	end 'create'
 end 'Holder'
 
@@ -1753,7 +1753,7 @@ function tally(scores Scores) returns ExitCode
 end 'tally'
 
 function main() returns ExitCode
-	return tally(Scores.create()) + Holder.create().pair.1
+	return tally(Scores.create(0)) + Holder.create().pair.1
 end 'main'
 ```
 ```maxoncstderr
@@ -1770,7 +1770,7 @@ export type Holder
 	export var scores as Scores
 
 	export static function create() returns Holder
-		return Holder{scores: Scores.create()}
+		return Holder{scores: Scores.create(0)}
 	end 'create'
 end 'Holder'
 
@@ -1782,7 +1782,7 @@ function tally(scores Scores) returns ExitCode
 end 'tally'
 
 function main() returns ExitCode
-	return tally(Scores.create()) + Holder.create().scores.count() as ExitCode
+	return tally(Scores.create(0)) + Holder.create().scores.count() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -2203,7 +2203,7 @@ export typealias ModeArray = Array with Mode
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var modes = ModeArray.create()
+	var modes = ModeArray.create(0)
 	return (modes.count() as ExitCode) + 7
 end 'main'
 ```
@@ -2223,7 +2223,7 @@ module typealias ModeArray = Array with Mode
 
 // --- file: api/main.maxon
 function main() returns ExitCode
-	var modes = ModeArray.create()
+	var modes = ModeArray.create(0)
 	return (modes.count() as ExitCode) + 7
 end 'main'
 ```
@@ -2242,7 +2242,7 @@ end 'Mode'
 typealias ModeArray = Array with Mode
 
 export function code() returns ExitCode
-	var modes = ModeArray.create()
+	var modes = ModeArray.create(0)
 	return (modes.count() as ExitCode) + 7
 end 'code'
 
@@ -2706,7 +2706,7 @@ end 'start'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var workers = WorkerArray.create()
+	var workers = WorkerArray.create(0)
 	return start() + (workers.count() as ExitCode)
 end 'main'
 ```
@@ -2737,7 +2737,7 @@ end 'seed'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var rows = ItemRows.create()
+	var rows = ItemRows.create(0)
 	return seed() + (rows.count() as ExitCode)
 end 'main'
 ```

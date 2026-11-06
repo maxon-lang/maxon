@@ -68,7 +68,7 @@ export type MoveSlots
 	export let height as ElementIndex
 
 	export static function empty() returns MoveSlots
-		return Self{chunks: MoveChunkColumn.create(), height: 0}
+		return Self{chunks: MoveChunkColumn.create(0), height: 0}
 	end 'empty'
 
 	static function create(chunks MoveChunkColumn, height ElementIndex) returns MoveSlots
@@ -108,7 +108,7 @@ export type MoveSlots
 	end 'truncated'
 
 	export function differences(other MoveSlots) returns MoveSlotIndexColumn
-		var found = MoveSlotIndexColumn.create()
+		var found = MoveSlotIndexColumn.create(0)
 		let shared = self.height if self.height < other.height else other.height
 
 		for index in 0 upto chunksHolding(shared) 'eachChunk'
@@ -160,7 +160,7 @@ export type MoveSlots
 	// is visited anyway: a waiting move site is noted as read in a later iteration even when no slot
 	// changed.
 	export function unsettledPositions(edges MoveSlotsColumn, enclosing MoveSlotsColumn) returns MoveSlotIndexColumn
-		var found = MoveSlotIndexColumn.create()
+		var found = MoveSlotIndexColumn.create(0)
 
 		for index in 0 upto self.chunkCount() 'eachChunk'
 			if self.chunkIsQuiet(index, edges: edges, enclosing: enclosing) 'quiet'
@@ -183,7 +183,7 @@ type PositionSet
 	var flags as BoolArray
 
 	static function create() returns PositionSet
-		return Self{members: MoveSlotIndexColumn.create(), flags: BoolArray.create()}
+		return Self{members: MoveSlotIndexColumn.create(0), flags: BoolArray.create(0)}
 	end 'create'
 
 	function note(position ElementIndex)
@@ -197,7 +197,7 @@ type PositionSet
 	end 'note'
 
 	function drain(limit ElementIndex) returns MoveSlotIndexColumn
-		var taken = MoveSlotIndexColumn.create()
+		var taken = MoveSlotIndexColumn.create(0)
 
 		for position in self.members 'eachMember'
 			if position < limit 'withinTheLimit'
@@ -231,7 +231,7 @@ export type OwnedBindingIndex
 	var cells as MoveSlotIndexColumn
 
 	export static function create() returns OwnedBindingIndex
-		return Self{heldLive: BoolArray.create(), heldValue: ValueIdArray.create(), heldCell: BoolArray.create(), owners: OwnerPositionByValue.create(), cells: MoveSlotIndexColumn.create()}
+		return Self{heldLive: BoolArray.create(0), heldValue: ValueIdArray.create(0), heldCell: BoolArray.create(0), owners: OwnerPositionByValue.create(), cells: MoveSlotIndexColumn.create(0)}
 	end 'create'
 
 	function refresh(bindings VarInfoArray, pending PositionSet)
@@ -257,7 +257,7 @@ export type OwnedBindingIndex
 	end 'ownerOf'
 
 	export function cellPositions() returns MoveSlotIndexColumn
-		var positions = MoveSlotIndexColumn.create()
+		var positions = MoveSlotIndexColumn.create(0)
 		positions.append(self.cells)
 		positions.sort()
 		return positions
@@ -428,7 +428,7 @@ export type MoveLedger
 			return base
 		end 'nothingToOverlay'
 
-		var chunks = MoveChunkColumn.create()
+		var chunks = MoveChunkColumn.create(0)
 		var next = 0 as ElementIndex
 
 		for index in 0 upto chunksHolding(height) 'eachChunk'
@@ -437,9 +437,9 @@ export type MoveLedger
 				continue
 			end 'untouched'
 
-			var chunkMoved = BoolArray.create()
-			var chunkValues = ValueIdArray.create()
-			var chunkAwaiting = MoveSlotIndexColumn.create()
+			var chunkMoved = BoolArray.create(0)
+			var chunkValues = ValueIdArray.create(0)
+			var chunkAwaiting = MoveSlotIndexColumn.create(0)
 
 			for position in chunkFirst(index) upto chunkStop(index, height: height) 'eachPosition'
 				if next < positions.count() and (try positions.get(next) otherwise panic("MoveLedger.overlay: positions.get OOB at {next}")) == position 'overlaid'

@@ -95,7 +95,7 @@ type Store
 	end 'create'
 
 	function populate(maker ChunkMaker)
-		var transient = ChunkArray.create()
+		var transient = ChunkArray.create(0)
 		var chunk = maker.makeChunk()
 		self.saved = chunk
 		transient.push(chunk)

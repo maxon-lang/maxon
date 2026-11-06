@@ -736,7 +736,7 @@ function kick(promises IntPromiseArray)
 end 'kick'
 
 function main() returns ExitCode
-	var promises = IntPromiseArray.create()
+	var promises = IntPromiseArray.create(0)
 	kick(promises)
 
 	for p in promises 'each'
@@ -783,7 +783,7 @@ function spray(k Integer) returns Integer
 end 'spray'
 
 function main() returns ExitCode
-	var promises = IntPromiseArray.create()
+	var promises = IntPromiseArray.create(0)
 	kick(promises)
 	_ = spray(1)
 	for p in promises 'each'
@@ -1345,7 +1345,7 @@ function isBig(n mutable Count) returns bool
 end 'isBig'
 
 function main() returns ExitCode
-	var xs = Counts.create()
+	var xs = Counts.create(0)
 	xs.push(4)
 	xs.push(10)
 	var big = 0 as Count

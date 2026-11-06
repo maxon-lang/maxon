@@ -702,7 +702,7 @@ function firstOf(from IntArray) returns Integer
 end 'firstOf'
 
 function main() returns ExitCode
-	var xs = IntArray.create()
+	var xs = IntArray.create(0)
 	xs.push(7)
 	let a = firstOf(xs)
 	let b = try int.fromString("5") otherwise panic("parse")

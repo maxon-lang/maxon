@@ -217,7 +217,7 @@ function getFirst(arr ItemArray) returns Item
 end 'getFirst'
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push(Item.create(99))
 	view result = getFirst(arr)
 	print("{result.value}\n")
@@ -251,7 +251,7 @@ function popFirst(arr ItemArray) returns Item throws ArrayError
 end 'popFirst'
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push(Item.create(77))
 	arr.push(Item.create(88))
 	view first = try popFirst(arr) otherwise 'err'
@@ -366,7 +366,7 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	var arr = NodeArray.create()
+	var arr = NodeArray.create(0)
 	var count = 0 as Count
 	if true 'scope'
 		let n = Node.create(10)
@@ -403,7 +403,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push(Item.create(1))
 	arr.push(Item.create(2))
 	arr.push(Item.create(3))
@@ -439,7 +439,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	var i = 0 as Integer
 	while i < 10 'push'
 		arr.push(Item.create(i))
@@ -479,7 +479,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push(Item.create(100))
 	try arr.set(0, value: Item.create(200)) otherwise panic("test invariant: set OOB")
 	view elem = try arr.get(0) otherwise Item.create(-1)
@@ -510,7 +510,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function fillArray() returns Integer
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push(Item.create(1))
 	arr.push(Item.create(2))
 	arr.push(Item.create(3))
@@ -714,7 +714,7 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-var globalArr = ItemArray.create()
+var globalArr = ItemArray.create(0)
 
 function pushLocal()
 	let item = Item.create(123)
@@ -750,7 +750,7 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-var globalArr = ItemArray.create()
+var globalArr = ItemArray.create(0)
 
 function main() returns ExitCode
 	globalArr.push(Item.create(10))
@@ -786,7 +786,7 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-var globalArr = ItemArray.create()
+var globalArr = ItemArray.create(0)
 
 function main() returns ExitCode
 	var i = 0 as Integer
@@ -928,7 +928,7 @@ end 'Score'
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var scores = ScoreArray.create()
+	var scores = ScoreArray.create(0)
 	scores.push(Score.create(10))
 	scores.push(Score.create(20))
 	scores.push(Score.create(30))
@@ -1173,12 +1173,12 @@ end 'Table'
 typealias TableArray = Array with Table
 
 function main() returns ExitCode
-	var tables = TableArray.create()
-	var rows1 = RowArray.create()
+	var tables = TableArray.create(0)
+	var rows1 = RowArray.create(0)
 	rows1.push(Row.create(1))
 	rows1.push(Row.create(2))
 	tables.push(Table.create(rows1))
-	var rows2 = RowArray.create()
+	var rows2 = RowArray.create(0)
 	rows2.push(Row.create(3))
 	tables.push(Table.create(rows2))
 	print("{tables.count()}\n")

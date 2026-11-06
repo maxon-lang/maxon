@@ -5,7 +5,7 @@ test 'a stop in a function the library calls back still shows main below the lib
 	let staged = builtFixture(LibraryCallbackCaseLabel, fixture: LibraryCallbackFixtureName)
 	let rankLine = anchorLine(staged.join(StagedProgramFileName), anchor: "rank-body")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(rankLine)}", RunCommand, BacktraceCommand])
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let walks = eventsOfKind(events, kind: BacktraceEventName)
@@ -19,7 +19,7 @@ test 'a stop in a function the library calls back still shows main below the lib
 end 'a stop in a function the library calls back still shows main below the library frames'
 
 function framesNamed(walked JsonDoc) returns StringArray
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 
 	for frame in childrenOf(walked, node: walked.root, key: FramesKey) 'eachFrame'
 		names.push(textOf(walked, node: frame, key: FunctionKey))

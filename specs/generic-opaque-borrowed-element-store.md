@@ -59,7 +59,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -82,7 +82,7 @@ typealias StrBag = Bag with String
 
 function main() returns ExitCode
 	var b = StrBag.create()
-	var source = Strs.create()
+	var source = Strs.create(0)
 	source.push("a borrowed string long enough to force a heap allocation")
 	b.takeFirstOf(source)
 	let stored = try b.at(0) otherwise return 1
@@ -115,7 +115,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -141,7 +141,7 @@ typealias StrBag = Bag with String
 
 function main() returns ExitCode
 	var b = StrBag.create()
-	var source = Strs.create()
+	var source = Strs.create(0)
 	source.push("the first copied string, long enough to force a heap allocation")
 	source.push("the second copied string, long enough to force a heap allocation")
 	source.push("the third copied string, long enough to force a heap allocation")
@@ -177,7 +177,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -204,7 +204,7 @@ typealias StrBag = Bag with String
 
 function main() returns ExitCode
 	var b = StrBag.create()
-	var source = Strs.create()
+	var source = Strs.create(0)
 	source.push("a repeated borrowed string long enough to force a heap allocation")
 	b.fillFrom(source, times: 100)
 	let middle = try b.at(50) otherwise return 1
@@ -235,13 +235,13 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	// The scratch container never leaves this frame: it takes a reference at the store and releases it
 	// at the method's exit, so the count it reports is the only thing that survives.
 	function scratchCountOf(other Items) returns Idx
-		var scratch = Items.create()
+		var scratch = Items.create(0)
 		let borrowed = try other.get(0) otherwise 'getErr'
 			panic("Bag.scratchCountOf: get(0) OOB — the caller passed a non-empty container")
 		end 'getErr'
@@ -254,7 +254,7 @@ typealias StrBag = Bag with String
 
 function main() returns ExitCode
 	var b = StrBag.create()
-	var source = Strs.create()
+	var source = Strs.create(0)
 	source.push("a scratch-stored string long enough to force a heap allocation")
 	let n = b.scratchCountOf(source)
 	let survivor = try source.get(0) otherwise return 1
@@ -284,7 +284,7 @@ type Bag uses Element
 	export var saved as Element
 
 	static function of(value Element) returns Self
-		return Self{items: Items.create(), saved: value}
+		return Self{items: Items.create(0), saved: value}
 	end 'of'
 
 	function count() returns Idx
@@ -335,7 +335,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -361,7 +361,7 @@ typealias NumBag = Bag with Num
 
 function main() returns ExitCode
 	var b = NumBag.create()
-	var source = Nums.create()
+	var source = Nums.create(0)
 	source.push(4 as Num)
 	source.push(7 as Num)
 	b.copyFrom(source)
@@ -388,7 +388,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx
@@ -411,7 +411,7 @@ typealias StrBag = Bag with String
 
 function filled() returns StrBag
 	var b = StrBag.create()
-	var source = Strs.create()
+	var source = Strs.create(0)
 	source.push("an outliving string long enough to force a heap allocation")
 	b.takeFirstOf(source)
 	return b
@@ -448,7 +448,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function count() returns Idx

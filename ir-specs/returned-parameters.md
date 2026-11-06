@@ -33,8 +33,8 @@ function step(cells TallyArray) returns TallyArray
 end 'step'
 
 function main() returns ExitCode
-	var first = TallyArray.create()
-	var second = TallyArray.create()
+	var first = TallyArray.create(0)
+	var second = TallyArray.create(0)
 
 	for _ in 0 upto 10 'eachFirst'
 		first = step(first)
@@ -930,7 +930,7 @@ function touch(cells TallyArray) returns TallyArray
 end 'touch'
 
 function main() returns ExitCode
-	var last = TallyArray.create()
+	var last = TallyArray.create(0)
 	last.push(0)
 
 	for _ in 0 upto 1000 'each'
@@ -1771,7 +1771,7 @@ function keepCells(cells TallyArray) returns TallyArray
 end 'keepCells'
 
 function freshCells() returns TallyArray
-	var cells = TallyArray.create()
+	var cells = TallyArray.create(0)
 	fill(cells, count: 3)
 
 	return cells
@@ -1786,7 +1786,7 @@ function pick(move Move, cells TallyArray) returns TallyArray
 end 'pick'
 
 function main() returns ExitCode
-	var last = TallyArray.create()
+	var last = TallyArray.create(0)
 
 	for move in Move.allCases 'each'
 		last = pick(move, cells: last)
@@ -2769,8 +2769,8 @@ function apply(run Step, cells TallyArray) returns TallyArray
 end 'apply'
 
 function main() returns ExitCode
-	var first = TallyArray.create()
-	var second = TallyArray.create()
+	var first = TallyArray.create(0)
+	var second = TallyArray.create(0)
 
 	for _ in 0 upto 3 'eachFirst'
 		first = step(first)

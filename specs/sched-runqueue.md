@@ -299,7 +299,7 @@ function main() returns ExitCode
 	let a = spawn Marker.create(1)
 	let b = spawn Marker.create(2)
 	let c = spawn Marker.create(3)
-	var replies = ReplyPromiseArray.create()
+	var replies = ReplyPromiseArray.create(0)
 	replies.push(try a.rank() otherwise panic("an open mailbox with room takes the send"))
 	replies.push(try b.rank() otherwise panic("an open mailbox with room takes the send"))
 	replies.push(try c.rank() otherwise panic("an open mailbox with room takes the send"))
@@ -1003,7 +1003,7 @@ type Sink
 end 'Sink'
 
 function main() returns ExitCode
-	var sinks = SinkHandleArray.create()
+	var sinks = SinkHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < 300 'spawnEach'
@@ -1220,7 +1220,7 @@ type Leaf
 end 'Leaf'
 
 function main() returns ExitCode
-	var leaves = LeafHandleArray.create()
+	var leaves = LeafHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < leafCount 'spawnEach'
@@ -1461,7 +1461,7 @@ type Work
 end 'Work'
 
 function main() returns ExitCode
-	var workers = WorkHandleArray.create()
+	var workers = WorkHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < 12 'spawnEach'

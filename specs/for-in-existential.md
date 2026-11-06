@@ -419,14 +419,14 @@ function total(source Bag) returns Integer
 end 'total'
 
 function main() returns ExitCode
-	var filled = IntArray.create()
+	var filled = IntArray.create(0)
 	filled.push(4)
 	filled.push(5)
 	filled.push(6)
 	let some = Numbers.create(filled)
 	print("{total(some)}\n")
 
-	let none = Numbers.create(IntArray.create())
+	let none = Numbers.create(IntArray.create(0))
 	print("{total(none)}\n")
 	return 0
 end 'main'

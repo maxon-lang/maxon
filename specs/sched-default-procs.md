@@ -176,7 +176,7 @@ type Adder
 end 'Adder'
 
 function main() returns ExitCode
-	var hs = AdderHandleArray.create()
+	var hs = AdderHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < serviceCount 'spawnEach'
@@ -257,7 +257,7 @@ type Adder
 end 'Adder'
 
 function main() returns ExitCode
-	var hs = AdderHandleArray.create()
+	var hs = AdderHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < serviceCount 'spawnEach'
@@ -335,7 +335,7 @@ type Adder
 end 'Adder'
 
 function main() returns ExitCode
-	var hs = AdderHandleArray.create()
+	var hs = AdderHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < serviceCount 'spawnEach'
@@ -407,7 +407,7 @@ type Adder
 end 'Adder'
 
 function main() returns ExitCode
-	var hs = AdderHandleArray.create()
+	var hs = AdderHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < serviceCount 'spawnEach'

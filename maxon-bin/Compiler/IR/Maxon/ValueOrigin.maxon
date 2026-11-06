@@ -50,7 +50,7 @@ end 'cacheWriteFuncIndexArray'
 
 function cacheReadFuncIndexArray(reader LibraryCacheReader) returns FuncIndexArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FuncIndexArray.create()
+	var result = FuncIndexArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -294,7 +294,7 @@ export type ParamOriginTable
 	var columns as ColumnNumberArray
 
 	export static function create() returns ParamOriginTable
-		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), startBytes: ByteOffsetArray.create(), endBytes: ByteOffsetArray.create(), lines: LineNumberArray.create(), columns: ColumnNumberArray.create()}
+		return Self{funcIndices: FuncIndexArray.create(0), valueIds: ValueIdArray.create(0), startBytes: ByteOffsetArray.create(0), endBytes: ByteOffsetArray.create(0), lines: LineNumberArray.create(0), columns: ColumnNumberArray.create(0)}
 	end 'create'
 
 	export function count() returns Count
@@ -419,7 +419,7 @@ type RowCompaction
 	var oldRows as OpIndexArray
 
 	static function of(funcIndices FuncIndexArray, reached BoolArray, newIndexOfOld FuncIndexArray, table String) returns RowCompaction
-		var oldRows = OpIndexArray.create()
+		var oldRows = OpIndexArray.create(0)
 
 		for read in 0 upto funcIndices.count() 'each'
 			let f = try funcIndices.get(read) otherwise panic("{table}.remapFunctionIndices: funcIndices.get OOB at {read}")
@@ -517,7 +517,7 @@ export type ValueOriginTable
 	var derivedSourceIds as ValueIdArray
 
 	export static function create() returns ValueOriginTable
-		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), opIndices: OpIndexArray.create(), paramOrigins: ParamOriginTable.create(), derivedFuncIndices: FuncIndexArray.create(), derivedFirstIds: ValueIdArray.create(), derivedEndIds: ValueIdArray.create(), derivedSourceIds: ValueIdArray.create()}
+		return Self{funcIndices: FuncIndexArray.create(0), valueIds: ValueIdArray.create(0), opIndices: OpIndexArray.create(0), paramOrigins: ParamOriginTable.create(), derivedFuncIndices: FuncIndexArray.create(0), derivedFirstIds: ValueIdArray.create(0), derivedEndIds: ValueIdArray.create(0), derivedSourceIds: ValueIdArray.create(0)}
 	end 'create'
 
 	export function count() returns Count
@@ -849,7 +849,7 @@ export type DerivedOrigins
 	var sourceIds as ValueIdArray
 
 	export static function create() returns DerivedOrigins
-		return Self{valueIds: ValueIdArray.create(), sourceIds: ValueIdArray.create()}
+		return Self{valueIds: ValueIdArray.create(0), sourceIds: ValueIdArray.create(0)}
 	end 'create'
 
 	// File `valueId` as standing in for `sourceId`.
@@ -890,7 +890,7 @@ export type ValueOriginRowIndex
 	var noAppendedRows as OriginRowRangeArray
 
 	export static function create(ops FunctionRowCsr, derived FunctionRowCsr) returns ValueOriginRowIndex
-		return Self{ops: ops, derived: derived, appendedOps: AppendedRowsByFunction.create(), appendedDerived: AppendedRowsByFunction.create(), noAppendedRows: OriginRowRangeArray.create()}
+		return Self{ops: ops, derived: derived, appendedOps: AppendedRowsByFunction.create(), appendedDerived: AppendedRowsByFunction.create(), noAppendedRows: OriginRowRangeArray.create(0)}
 	end 'create'
 
 	function appendedOpsOf(funcIndex ElementIndex) returns OriginRowRangeArray
@@ -931,7 +931,7 @@ function noteAppendedRange(appended AppendedRowsByFunction, funcIndex ElementInd
 		return
 	end 'alreadyListed'
 
-	var ranges = OriginRowRangeArray.create()
+	var ranges = OriginRowRangeArray.create(0)
 	ranges.push(range)
 	appended.upsert(funcIndex, value: ranges)
 end 'noteAppendedRange'
@@ -963,7 +963,7 @@ end 'FunctionRowCsr'
 // a prefix sum that turns the counts into starts in place, then a scatter through a SEPARATE cursor per
 // function so `rowStarts` survives intact.
 function indexRowsByFunction(funcIndices FuncIndexArray, selected BoolArray, funcCount ElementIndex) returns FunctionRowCsr
-	var rowStarts = OpIndexArray.create()
+	var rowStarts = OpIndexArray.create(0)
 	rowStarts.resize(funcCount + 1)
 
 	for i in 0 upto funcIndices.count() 'countEach'
@@ -985,9 +985,9 @@ function indexRowsByFunction(funcIndices FuncIndexArray, selected BoolArray, fun
 		try rowStarts.set(f, value: total) otherwise panic("indexRowsByFunction: rowStarts.set OOB at {f}")
 	end 'prefixSum'
 
-	var rows = OpIndexArray.create()
+	var rows = OpIndexArray.create(0)
 	rows.resize(total)
-	var cursor = OpIndexArray.create()
+	var cursor = OpIndexArray.create(0)
 	cursor.resize(funcCount)
 
 	for f in 0 upto funcCount 'seedCursor'
@@ -1068,7 +1068,7 @@ end 'cacheWriteDeferredChainCallsArray'
 
 function cacheReadDeferredChainCallsArray(reader LibraryCacheReader) returns DeferredChainCallsArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DeferredChainCallsArray.create()
+	var result = DeferredChainCallsArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -1092,7 +1092,7 @@ export type DeferredChainTable
 	var chainCallKinds as DeferredChainCallsArray
 
 	export static function create() returns DeferredChainTable
-		return Self{funcIndices: FuncIndexArray.create(), valueIds: ValueIdArray.create(), chainCallKinds: DeferredChainCallsArray.create()}
+		return Self{funcIndices: FuncIndexArray.create(0), valueIds: ValueIdArray.create(0), chainCallKinds: DeferredChainCallsArray.create(0)}
 	end 'create'
 
 	export function count() returns Count

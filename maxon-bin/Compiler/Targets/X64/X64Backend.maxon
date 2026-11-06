@@ -3067,18 +3067,18 @@ end 'emitUnit'
 // function; it gates the syscall shim on every `iatCall` (`emitGtGatedIatCall`) and the stack guard
 // below.
 export function emitFunctionChunk(module TargetModule, func IrFunction, frame X64PrologueFrame, encoding FunctionEncodingFacts, usesGt bool, target Target) returns FunctionCodeChunk
-	var code = ByteArray.create()
-	var callFixups = CallFixupArray.create()
-	var iatRelocs = RelocationArray.create()
+	var code = ByteArray.create(0)
+	var callFixups = CallFixupArray.create(0)
+	var iatRelocs = RelocationArray.create(0)
 
 	// The chunk's code -> .data references, filed by `encodeLeaRegGlobal` with CHUNK-LOCAL offsets;
 	// `concatX64FunctionChunks` rebases them exactly as it rebases `callFixups` and `iatRelocs`.
-	var rdataRelocs = RdataRelocationArray.create()
-	var rel32Fixups = ChunkRel32FixupArray.create()
+	var rdataRelocs = RdataRelocationArray.create(0)
+	var rel32Fixups = ChunkRel32FixupArray.create(0)
 
 	// Dense-match jump tables encoded in this chunk, awaiting their per-slot block-address relocations —
 	// resolved after the block loop, when `chunkLabelOffsets` holds every block's chunk-local offset.
-	var jumpTables = JumpTablePendingArray.create()
+	var jumpTables = JumpTablePendingArray.create(0)
 
 	// Sized from `func.nextBlockId` — the function's ids run 0..nextBlockId-1 — so the table is two
 	// allocations and `place` never reallocates. See BlockKeyedTable for why this is an array and not a Map.
@@ -3109,7 +3109,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 
 	// Where this chunk's coverage counters land. Filled by the encoder itself, which is the only thing that
 	// knows where an instruction begins; empty for every build that emits none.
-	var covOffsets = CovPointOffsetArray.create()
+	var covOffsets = CovPointOffsetArray.create(0)
 
 	// The code range of every run of blocks under one inline site, read off the block loop itself: the
 	// only thing that knows where a block's code starts and ends.
@@ -3219,17 +3219,17 @@ export let EntryPointName = b"mrt_start"
 // reads the identical table. Concat below appends it to close `.text`.
 
 export function concatX64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex) returns CodeResult throws CompileError
-	var code = ByteArray.create()
-	var relocations = RelocationArray.create()
-	var callFixups = CallFixupArray.create()
+	var code = ByteArray.create(0)
+	var relocations = RelocationArray.create(0)
+	var callFixups = CallFixupArray.create(0)
 	var labelOffsets = FuncLabelOffsetMap.create()
-	var debugSymbols = DebugSymbolArray.create()
-	var rdataRelocations = RdataRelocationArray.create()
-	var jumpTableRelocs = JumpTableRelocArray.create()
+	var debugSymbols = DebugSymbolArray.create(0)
+	var rdataRelocations = RdataRelocationArray.create(0)
+	var jumpTableRelocs = JumpTableRelocArray.create(0)
 	let captureSpans = targetModule.spans.armed
-	var debugFunctions = DebugFunctionRangeArray.create()
-	var debugLineRows = DebugLineRowArray.create()
-	var covPointOffsets = CovPointOffsetArray.create()
+	var debugFunctions = DebugFunctionRangeArray.create(0)
+	var debugLineRows = DebugLineRowArray.create(0)
+	var covPointOffsets = CovPointOffsetArray.create(0)
 	var inlineFrames = InlineFrameTables.create()
 
 	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which

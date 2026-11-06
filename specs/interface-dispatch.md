@@ -1424,7 +1424,7 @@ end 'SumWorker'
 
 // Level 3: leaf function that uses the interface and creates temporaries
 function processOne(w Worker, value Integer) returns Integer
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(value)
 	return w.process(arr)
 end 'processOne'
@@ -1703,7 +1703,7 @@ type Allocator
 	export var f5 as StrArray
 
 	static function create(query Query) returns Allocator
-		return Self{query: query, f0: StrArray.create(), f1: StrArray.create(), f2: StrArray.create(), f3: StrArray.create(), f4: StrArray.create(), f5: StrArray.create()}
+		return Self{query: query, f0: StrArray.create(0), f1: StrArray.create(0), f2: StrArray.create(0), f3: StrArray.create(0), f4: StrArray.create(0), f5: StrArray.create(0)}
 	end 'create'
 
 	function run() returns bool
@@ -3747,7 +3747,7 @@ type Doubler implements Transform
 			throw ProbeError.refused
 		end 'big'
 
-		var out = ByteArray.create()
+		var out = ByteArray.create(0)
 
 		for b in data 'each'
 			out.push(b)
@@ -3770,7 +3770,7 @@ type Reverser implements Transform
 			throw ProbeError.refused
 		end 'big'
 
-		var out = ByteArray.create()
+		var out = ByteArray.create(0)
 
 		for b in data 'each'
 			out.insert(0, value: b)
@@ -3786,7 +3786,7 @@ function apply(t Transform, data ByteArray) returns ByteArray throws ProbeError
 end 'apply'
 
 function orEmpty(t Transform, data ByteArray) returns ByteArray
-	let r = try t.run(data) otherwise ByteArray.create()
+	let r = try t.run(data) otherwise ByteArray.create(0)
 	return r
 end 'orEmpty'
 
@@ -3803,13 +3803,13 @@ end 'show'
 function main() returns ExitCode
 	let data = ByteArray from [1, 2, 3]
 
-	let doubled = try apply(Doubler.create(8), data: data) otherwise ByteArray.create()
+	let doubled = try apply(Doubler.create(8), data: data) otherwise ByteArray.create(0)
 	show(doubled)
 
-	let reversed = try apply(Reverser.create(8), data: data) otherwise ByteArray.create()
+	let reversed = try apply(Reverser.create(8), data: data) otherwise ByteArray.create(0)
 	show(reversed)
 
-	let refused = try apply(Doubler.create(2), data: data) otherwise ByteArray.create()
+	let refused = try apply(Doubler.create(2), data: data) otherwise ByteArray.create(0)
 	show(refused)
 
 	show(orEmpty(Reverser.create(8), data: data))
@@ -3847,7 +3847,7 @@ type Counting implements Source
 	end 'create'
 
 	function nums(n Integer) returns Numbers
-		var out = Numbers.create()
+		var out = Numbers.create(0)
 
 		for i in 0 upto n 'each'
 			out.push(self.start + i)
@@ -3865,7 +3865,7 @@ type Squares implements Source
 	end 'create'
 
 	function nums(n Integer) returns Numbers
-		var out = Numbers.create()
+		var out = Numbers.create(0)
 
 		for i in 0 upto n 'each'
 			out.push(i * i * self.scale)
@@ -3940,7 +3940,7 @@ type Large implements Survey
 	end 'create'
 
 	function packed() returns ByteArray
-		var out = ByteArray.create()
+		var out = ByteArray.create(0)
 
 		for i in 0 upto 4 'each'
 			out.push((200 + i) as Byte)
@@ -4006,7 +4006,7 @@ type Builder implements Maker
 	end 'create'
 
 	function make() returns IntArray
-		var xs = IntArray.create()
+		var xs = IntArray.create(0)
 		xs.push(self.seed)
 		return xs
 	end 'make'
@@ -4057,7 +4057,7 @@ type Adder implements Summer
 end 'Adder'
 
 function viaInterface(s Summer) returns Integer
-	return s.total(Strings.create())
+	return s.total(Strings.create(0))
 end 'viaInterface'
 
 function main() returns ExitCode
@@ -4097,7 +4097,7 @@ type Adder implements Summer
 end 'Adder'
 
 function viaInterface(s Summer) returns Integer
-	return s.total(Other.create())
+	return s.total(Other.create(0))
 end 'viaInterface'
 
 function main() returns ExitCode

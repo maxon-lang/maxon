@@ -248,7 +248,7 @@ typealias Arm64GtSavedPairArray = Array with Arm64GtSavedPair
 // The encoding FIELD is the register's own number in both files (x19's GPR field is 19; d8's SIMD field is
 // 8, `Arm64FirstVectorRegister` having already been subtracted out of the bounds the prologue pass states).
 function arm64GtSavedPairs() returns Arm64GtSavedPairArray
-	var pairs = Arm64GtSavedPairArray.create()
+	var pairs = Arm64GtSavedPairArray.create(0)
 	arm64GtAppendPairs(pairs, file: Arm64GtRegisterFile.gpr, first: Arm64CalleeSavedGprLow, limit: Arm64CalleeSavedGprEnd)
 	arm64GtAppendPairs(pairs, file: Arm64GtRegisterFile.simd, first: Arm64CalleeSavedFpFirst, limit: Arm64CalleeSavedFpEnd)
 	return pairs
@@ -493,7 +493,7 @@ typealias Arm64RegisterArray = Array with Arm64Register
 
 // The GPRs `__gt_morestack` saves, in slot order: the argument registers, the callee-saved file, then x29 and x30.
 function arm64MorestackSavedGprs() returns Arm64RegisterArray
-	var gprs = Arm64RegisterArray.create()
+	var gprs = Arm64RegisterArray.create(0)
 
 	for reg in arm64ArgRegisters 'arguments'
 		gprs.push(reg)
@@ -1234,7 +1234,7 @@ end 'arm64AppendResolvedFragment'
 // allocatable pool on both lanes, and restoring it would be the one way this chunk could corrupt it.
 // ⛔ **x15 IS ABSENT BECAUSE IT IS THE RESUME REGISTER** — see `Arm64AsyncPreemptScratch`.
 function arm64AsyncPreemptGprs() returns Arm64RegisterArray
-	var gprs = Arm64RegisterArray.create()
+	var gprs = Arm64RegisterArray.create(0)
 
 	for reg in 0 upto Arm64AsyncPreemptScratch 'callerSaved'
 		gprs.push(try Arm64Register.fromRawValue(reg) otherwise panic("arm64AsyncPreemptGprs: {reg} is below the GPR/vector boundary and so names a general register"))
@@ -1253,11 +1253,11 @@ end 'arm64AsyncPreemptGprs'
 
 // The trampoline's block, in slots: every general register above, the flags, then the whole SIMD file.
 function arm64AsyncPreemptFlagsSlot() returns MachineWord
-	return arm64RegisterBlockBytes(arm64AsyncPreemptGprs(), fps: Arm64RegisterArray.create()) as MachineWord
+	return arm64RegisterBlockBytes(arm64AsyncPreemptGprs(), fps: Arm64RegisterArray.create(0)) as MachineWord
 end 'arm64AsyncPreemptFlagsSlot'
 
 function arm64AsyncPreemptVectors() returns Arm64RegisterArray
-	var vectors = Arm64RegisterArray.create()
+	var vectors = Arm64RegisterArray.create(0)
 
 	for k in 0 upto vectorRegisterCount(arm64RegisterFile()) 'vectors'
 		vectors.push(try Arm64Register.fromRawValue((Arm64FirstVectorRegister + k) as RegNum) otherwise panic("arm64AsyncPreemptVectors: {k} vector registers past the boundary is inside a file of {vectorRegisterCount(arm64RegisterFile())}"))
@@ -1275,7 +1275,7 @@ end 'arm64AsyncPreemptVectorBase'
 // every argument and the context switch's own callee-saved block are 8-byte `d` stores and loads — so no
 // upper half is ever live and a `d`-width save is the whole of what an interrupted function can lose.
 function arm64AsyncPreemptBlockBytes() returns StackSize
-	return alignUpStack((arm64AsyncPreemptVectorBase() as StackSize) + arm64RegisterBlockBytes(Arm64RegisterArray.create(), fps: arm64AsyncPreemptVectors()), alignment: StackFrameAlignment)
+	return alignUpStack((arm64AsyncPreemptVectorBase() as StackSize) + arm64RegisterBlockBytes(Arm64RegisterArray.create(0), fps: arm64AsyncPreemptVectors()), alignment: StackFrameAlignment)
 end 'arm64AsyncPreemptBlockBytes'
 
 // ⭐ **WHAT AN ASYNCHRONOUS STOP COSTS THE GREEN THREAD's STACK BELOW THE INTERRUPTED SP, BEFORE
@@ -1343,7 +1343,7 @@ function emitArm64AsyncPreemptBlock(asm Arm64RuntimeAsm, direction Arm64GtBlockD
 		pop then emitArm64AsyncPreemptFlags(asm, direction: direction)
 	end 'flagsFirst'
 
-	emitArm64RegisterBlock(asm, gprs: Arm64RegisterArray.create(), fps: arm64AsyncPreemptVectors(), base: arm64AsyncPreemptVectorBase(), direction: direction)
+	emitArm64RegisterBlock(asm, gprs: Arm64RegisterArray.create(0), fps: arm64AsyncPreemptVectors(), base: arm64AsyncPreemptVectorBase(), direction: direction)
 
 	match direction 'flagsLast'
 		push then emitArm64AsyncPreemptFlags(asm, direction: direction)
@@ -1371,13 +1371,13 @@ function emitArm64AsyncPreemptGprs(asm Arm64RuntimeAsm, gprs Arm64RegisterArray,
 		pop gives gprs.count() - 1
 	end 'count'
 
-	var moved = Arm64RegisterArray.create()
+	var moved = Arm64RegisterArray.create(0)
 
 	for k in 0 upto restored 'gprs'
 		moved.push(try gprs.get(k) otherwise panic("emitArm64AsyncPreemptGprs: index derived from count is in range"))
 	end 'gprs'
 
-	emitArm64RegisterBlock(asm, gprs: moved, fps: Arm64RegisterArray.create(), base: 0, direction: direction)
+	emitArm64RegisterBlock(asm, gprs: moved, fps: Arm64RegisterArray.create(0), base: 0, direction: direction)
 end 'emitArm64AsyncPreemptGprs'
 
 // `__gt_preempt_self_register(x0 = m)` — see `SchedRuntime.PreemptSelfRegisterName`. Run by the thread that

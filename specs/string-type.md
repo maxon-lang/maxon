@@ -1034,7 +1034,7 @@ end 'main'
 <!-- test: split-result-crosses-a-user-function-and-a-struct-field -->
 ### An owned `Array with String` survives being returned out of the corpus body
 `split` is the only corpus `String` member that CONSTRUCTS a container. The corpus builds it through
-`StringArray.create()` (`stdlib/String.maxon:621-625`), so the corpus decides that array's element size
+`StringArray.create(0)` (`stdlib/String.maxon:621-625`), so the corpus decides that array's element size
 and its `element_destroy@40` stamp.
 
 ⚠ **A WRONG STAMP ANNOUNCES ITSELF IN NEITHER DIRECTION**: too small and the segments leak, too eager and

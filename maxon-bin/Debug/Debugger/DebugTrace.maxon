@@ -19,7 +19,7 @@ export type DebugTraceCollector
 	var open as bool
 
 	module static function create(decoder DebugStreamDecoder) returns DebugTraceCollector
-		return Self{decoder: decoder, held: DebugTraceEventArray.create(), attached: false, open: true}
+		return Self{decoder: decoder, held: DebugTraceEventArray.create(0), attached: false, open: true}
 	end 'create'
 
 	export function segmentName() returns String
@@ -58,7 +58,7 @@ export type DebugTraceCollector
 			return DebugTraceSlice.missing(DebugTraceNoProducerReason)
 		end 'theProgramNeverAttached'
 
-		var before = DebugTraceEventArray.create()
+		var before = DebugTraceEventArray.create(0)
 
 		for event in self.held 'eachEvent'
 			if mark == 0 or event.seq < mark 'committedBeforeTheStop'
@@ -95,7 +95,7 @@ function lastOf(events DebugTraceEventArray, limit DebugTraceTally) returns Debu
 		return events
 	end 'shorterThanTheWindow'
 
-	var kept = DebugTraceEventArray.create()
+	var kept = DebugTraceEventArray.create(0)
 	let first = events.count() as DebugAddress - (limit as DebugAddress)
 
 	for (iter, event) in events.withIterator() 'eachEvent'

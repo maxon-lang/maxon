@@ -44,7 +44,7 @@ let KeywordNote = "Maxon language keyword."
 let TopLevelColumn = 1
 
 module function hoverServedMethods() returns LspMethodArray
-	var served = LspMethodArray.create()
+	var served = LspMethodArray.create(0)
 	served.push(LspMethod.hover)
 	return served
 end 'hoverServedMethods'
@@ -141,7 +141,7 @@ function reservedWordRendering(tok Token) returns HoverRendering
 end 'reservedWordRendering'
 
 function keywordRendering(tok Token) returns HoverRendering
-	var prose = StringArray.create()
+	var prose = StringArray.create(0)
 	prose.push(KeywordNote)
 
 	return HoverRendering.present(hoverMarkdown(String.from(tok.value), prose: prose))
@@ -406,7 +406,7 @@ module type HoverDocument
 		end 'shownAsWritten'
 
 		let respellings = libraryNameRespellings(self.naming.roster.spellings)
-		var respelled = StringArray.create()
+		var respelled = StringArray.create(0)
 
 		for paragraph in prose 'eachParagraph'
 			respelled.push(respellings.respell(paragraph))
@@ -707,7 +707,7 @@ module type HoverDocument
 	// description of a declaration there is.
 	function declarationHeadRendering(keyword ElementIndex) returns HoverRendering
 		let start = declarationStart(keyword)
-		var prose = StringArray.create()
+		var prose = StringArray.create(0)
 		appendDocComment(prose, above: start)
 		return HoverRendering.present(self.hoverMarkdownHere(headText(start), prose: prose))
 	end 'declarationHeadRendering'
@@ -718,7 +718,7 @@ module type HoverDocument
 	function bindingRendering(keyword ElementIndex) returns HoverRendering
 		let start = declarationStart(keyword)
 		let inferred = bindingType(keyword, reach: HoverDeclarationHopBudget)
-		var prose = StringArray.create()
+		var prose = StringArray.create(0)
 		appendDocComment(prose, above: start)
 		prose.push(bindingNote(keyword, inferred: inferred))
 
@@ -731,7 +731,7 @@ module type HoverDocument
 	end 'bindingRendering'
 
 	function parameterRendering(functionIndex ElementIndex, nameIndex ElementIndex) returns HoverRendering
-		var prose = StringArray.create()
+		var prose = StringArray.create(0)
 		prose.push("Parameter of {routineNamePhrase(functionIndex)}.")
 		return HoverRendering.present(self.hoverMarkdownHere(parameterText(nameIndex), prose: prose))
 	end 'parameterRendering'
@@ -2019,7 +2019,7 @@ end 'hoverMarkdown'
 // user what they can already see from the call they are looking at; `Truncates \`value\` toward zero` is
 // the part they came for. `tests/lsp/hover-values.maxtest` pins both halves for `sqrt` and `trunc`.
 function mathBuiltinMarkdown(builtin MathBuiltin) returns String
-	var prose = StringArray.create()
+	var prose = StringArray.create(0)
 	prose.push(mathBuiltinHelp(builtin))
 	return hoverMarkdown(mathBuiltinSignature(builtin), prose: prose)
 end 'mathBuiltinMarkdown'

@@ -6,7 +6,7 @@ let DeadSplitSlotMark = "[rbp-"
 
 test 'a var held in a stack slot whose dead store lies beyond a split block is not read as its older value'
 	let staged = builtFixture(DeadSplitCaseLabel, fixture: DeadSplitFixtureName)
-	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create(0))
 	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
 	var slotRows = 0 as Count
 
@@ -18,7 +18,7 @@ test 'a var held in a stack slot whose dead store lies beyond a split block is n
 
 	let tailAt = anchorLine(staged.join(StagedProgramFileName), anchor: "tail")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(tailAt)}", RunCommand, "{PrintCommand} {DeadSplitLocalName}"])
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let answers = eventsOfKind(events, kind: ValueEventName)

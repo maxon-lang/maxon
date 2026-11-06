@@ -1976,7 +1976,7 @@ type Keeper
 	var kept as KeptArray
 
 	static function create() returns Keeper
-		return Keeper{kept: KeptArray.create()}
+		return Keeper{kept: KeptArray.create(0)}
 	end 'create'
 
 	function keepUnlessLate(fault Fault, at Tally) throws Fault
@@ -2064,7 +2064,7 @@ function keptBytes(kept FaultArray) returns Tally
 end 'keptBytes'
 
 function main() returns ExitCode
-	var kept = FaultArray.create()
+	var kept = FaultArray.create(0)
 	try Holder.keepInto(kept, at: 3) otherwise return 1
 	try Holder.keepInto(kept, at: 40) otherwise return 2
 	try Holder.keepInto(kept, at: 900) otherwise (e) 'late'

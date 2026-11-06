@@ -150,7 +150,7 @@ export type FrontEndJob
 	// sending statement, so the holder would share it with the sender's frame at the send's walk (exit 96); one
 	// built in this statement has died by the time the record is returned.
 	static function lexing(content String) returns FrontEndJob
-		var holder = FrontEndWorkArray.create()
+		var holder = FrontEndWorkArray.create(0)
 		holder.push(FrontEndWork.lex(content.clone()))
 		return Self{holder: holder}
 	end 'lexing'
@@ -158,7 +158,7 @@ export type FrontEndJob
 	// The job's strings are the project's and the index's, the row-set answers are the database's, and the tokens
 	// are the memo's.
 	static function parsing(query ParseQuery) returns FrontEndJob
-		var holder = FrontEndWorkArray.create()
+		var holder = FrontEndWorkArray.create(0)
 
 		match query 'query'
 			memoized then panic("FrontEndJob.parsing: a memoized parse was dispatched — only a `needed` query is noted as a job")
@@ -241,7 +241,7 @@ type FrontEndWorkerState implements PhaseEdges
 	var probe as PhaseProbe
 
 	static function create(cpu CpuArch, os Os, debugStream bool) returns FrontEndWorkerState
-		return Self{keywords: KeywordTable.create(), facts: ConditionFacts.create(Target.create(cpu, os: os), debugStream: debugStream), ownIndex: HeldIndexArray.create(), costs: PoolPhaseCosts.create(FrontEndStage.allCases.count()), probe: PhaseProbe.beginCounters()}
+		return Self{keywords: KeywordTable.create(), facts: ConditionFacts.create(Target.create(cpu, os: os), debugStream: debugStream), ownIndex: HeldIndexArray.create(0), costs: PoolPhaseCosts.create(FrontEndStage.allCases.count()), probe: PhaseProbe.beginCounters()}
 	end 'create'
 
 	// The index every later parse reads, replacing any this worker held.
@@ -380,7 +380,7 @@ module type FrontEndPool
 	var parsed as bool
 
 	module static function create() returns FrontEndPool
-		return Self{workers: FrontEndWorkerHandleArray.create(), inProcess: FrontEndWorkerStateArray.create(), mostFilesDispatched: 0, baseline: HeldIndexArray.create(), handoffs: WorkerHandoffArray.create(), adopted: BoolArray.create(), adoptions: 0, indexCopyAllocations: 0, baselineRevision: 0, heldRevisions: LiveKeysRevisionArray.create(), lexed: false, parsed: false}
+		return Self{workers: FrontEndWorkerHandleArray.create(0), inProcess: FrontEndWorkerStateArray.create(0), mostFilesDispatched: 0, baseline: HeldIndexArray.create(0), handoffs: WorkerHandoffArray.create(0), adopted: BoolArray.create(0), adoptions: 0, indexCopyAllocations: 0, baselineRevision: 0, heldRevisions: LiveKeysRevisionArray.create(0), lexed: false, parsed: false}
 	end 'create'
 
 	static function placement(project Project) returns FrontEndPlacement
@@ -428,8 +428,8 @@ module type FrontEndPool
 	// `queryActiveTokens` in source-path order — so the token queries the signature sweep asks next are all hits.
 	module function lexEveryFile(project Project) throws CompileError
 		let buildKey = buildKeyOf(project)
-		var files = PoolJobArray.create()
-		var sizes = PoolJobSizeArray.create()
+		var files = PoolJobArray.create(0)
+		var sizes = PoolJobSizeArray.create(0)
 
 		for fileIndex in 0 upto project.db.sourcePaths.count() 'eachFile'
 			let held = try activeTokensAreHeld(project, path: sourcePathAt(project, fileIndex: fileIndex), buildKey: buildKey)
@@ -448,7 +448,7 @@ module type FrontEndPool
 		let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.frontEndPool)
 		self.noteDrain(FrontEndDrainKind.lexing)
 
-		var outcomes = FrontEndOutcomeArray.create()
+		var outcomes = FrontEndOutcomeArray.create(0)
 		var slots = LandingSlots.create(project.db.sourcePaths.count())
 		try self.drainEveryJob(project, input: FrontEndDrainInput.lexing(project), files: files, sizes: sizes, outcomes: outcomes, slots: slots)
 
@@ -463,9 +463,9 @@ module type FrontEndPool
 	// ⭐ **EVERY FILE'S PARSE, IN SOURCE-PATH ORDER** — the memoized ones from the memo, the rest parsed on the
 	// workers against `signatures`, which is at its settled baseline.
 	module function parseEveryFile(project Project, signatures ProgramSignatures) returns FileParseArtifactArray throws CompileError
-		var queries = ParseQueryArray.create()
-		var files = PoolJobArray.create()
-		var sizes = PoolJobSizeArray.create()
+		var queries = ParseQueryArray.create(0)
+		var files = PoolJobArray.create(0)
+		var sizes = PoolJobSizeArray.create(0)
 
 		for fileIndex in 0 upto project.db.sourcePaths.count() 'eachFile'
 			try requireStillWanted(project)
@@ -474,7 +474,7 @@ module type FrontEndPool
 			queries.push(query)
 		end 'eachFile'
 
-		var outcomes = FrontEndOutcomeArray.create()
+		var outcomes = FrontEndOutcomeArray.create(0)
 		var slots = LandingSlots.create(project.db.sourcePaths.count())
 
 		if files.count() == 0 'everyParseIsMemoized'
@@ -545,7 +545,7 @@ module type FrontEndPool
 		end 'ranInProcess'
 
 		project.retiredWorkers.frontEnd.keep(self.workers)
-		self.workers = FrontEndWorkerHandleArray.create()
+		self.workers = FrontEndWorkerHandleArray.create(0)
 		self.inProcess.clear()
 		self.baseline.clear()
 		self.handoffs.clear()
@@ -704,7 +704,7 @@ module type FrontEndPool
 		// A static share: a worker parses into its own copy of what a parse writes in the signature
 		// index, kept across the files it is handed, and that copy is too costly to rebuild per file.
 		var dispatch = PoolDispatch.create(sizes, workerCount: workerCount, assignment: PoolAssignment.staticShare)
-		var replies = FrontEndReplyPromiseArray.create()
+		var replies = FrontEndReplyPromiseArray.create(0)
 		replies.reserve(dispatch.pipelineDepth())
 
 		for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'
@@ -855,7 +855,7 @@ end 'parseOutcomeOf'
 
 // Every file's artifact in source-path order: a memoized one as the memo holds it, a parsed one landed now.
 function landParses(project Project, queries ParseQueryArray, outcomes FrontEndOutcomeArray, slots LandingSlots) returns FileParseArtifactArray
-	var artifacts = FileParseArtifactArray.create()
+	var artifacts = FileParseArtifactArray.create(0)
 
 	for fileIndex in 0 upto queries.count() 'eachFileInSourcePathOrder'
 		artifacts.push(landedArtifact(project, query: queryAt(queries, fileIndex: fileIndex), fileIndex: fileIndex, outcomes: outcomes, slots: slots))

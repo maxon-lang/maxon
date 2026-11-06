@@ -348,7 +348,7 @@ typealias Names = Array with String
 typealias NameSet = Set with String
 
 function main() returns ExitCode
-	var names = Names.create()
+	var names = Names.create(0)
 	names.push("alice")
 	names.push("bob")
 	names.push("alice")
@@ -378,7 +378,7 @@ A bare `Set` head over a call's `String` array owns the keys and drops the tempo
 typealias Names = Array with String
 
 function makeNames() returns Names
-	var names = Names.create()
+	var names = Names.create(0)
 	names.push("x{1}")
 	names.push("y")
 	names.push("x{1}")
@@ -405,7 +405,7 @@ typealias Names = Array with String
 typealias NameSet = Set with String
 
 function main() returns ExitCode
-	var names = Names.create()
+	var names = Names.create(0)
 	names.push("alice")
 	let s = NameSet from names
 	names.push("bob")

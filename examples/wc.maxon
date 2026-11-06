@@ -61,12 +61,12 @@ enum UsageError implements Error
 end 'UsageError'
 
 type Options
-	export var paths = PathArray.create()
-	export var columns = ColumnArray.create()
+	export var paths = PathArray.create(0)
+	export var columns = ColumnArray.create(0)
 
 	static function parse(args StringArray) returns Options throws UsageError
 		var options = Self{}
-		var chosen = FlagArray.create()
+		var chosen = FlagArray.create(0)
 
 		for (argument, text) in args.withIterator() 'eachArgument'
 			if argument.index() == programPathArgument 'programPath'
@@ -209,13 +209,13 @@ end 'submitCount'
 
 function countFiles(paths PathArray, report Report)
 	let workerCount = workersFor(paths)
-	var counters = CounterArray.create()
+	var counters = CounterArray.create(0)
 
 	for _ in 1 to workerCount 'spawnWorkers'
 		counters.push(spawn Counter.create())
 	end 'spawnWorkers'
 
-	var replies = CountPromiseArray.create()
+	var replies = CountPromiseArray.create(0)
 	var nextWorker = 0 as ElementIndex
 
 	for path in paths 'sendFiles'

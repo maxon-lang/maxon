@@ -32,7 +32,7 @@ the map/array still points at it, and teardown then decrefs a freed object
 follow every field incref, so the escaping fields are retained before the root
 frees.
 
-This test borrows a map-owned array via `try m.get(k) otherwise ClauseArray.create()`
+This test borrows a map-owned array via `try m.get(k) otherwise ClauseArray.create(0)`
 (a phi merging the borrowed value with a fresh empty array), iterates it, and on
 a conditional `break` reads three managed fields of the borrowed element into
 three outer `var`s that then escape as the return value. The map owns the array
@@ -74,7 +74,7 @@ function firstFailing(m ClauseMap, key String) returns Count
 	var failedParam = ""
 	var failedTrait = ""
 	var failedType = ""
-	let clauses = try m.get(key) otherwise ClauseArray.create()
+	let clauses = try m.get(key) otherwise ClauseArray.create(0)
 	for i in 0 upto clauses.count() 'each'
 		let c = try clauses.get(i) otherwise panic("firstFailing: get OOB")
 		if not satisfied(c.traitName) 'fail'
@@ -89,7 +89,7 @@ end 'firstFailing'
 
 function main() returns ExitCode
 	var m = ClauseMap.create()
-	var arr = ClauseArray.create()
+	var arr = ClauseArray.create(0)
 	arr.push(Clause.create("Item", traitName: "Comparable", typeName: "NotComparable"))
 	try m.insert("MyHolder.isGreater", value: arr) otherwise return 1
 	// "Item"(4) + "Comparable"(10) + "NotComparable"(13) = 27

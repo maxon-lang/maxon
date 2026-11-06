@@ -9,7 +9,7 @@ test 'a stop carries a window of the source around the line it is on, with that 
 	let staged = builtFixture(SourceWindowCaseLabel, fixture: HeaplessFixtureName)
 	let hotLine = anchorLine(staged.join(StagedProgramFileName), anchor: "hot")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(hotLine)}", RunCommand])
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
@@ -21,8 +21,8 @@ test 'a stop carries a window of the source around the line it is on, with that 
 
 	Expect.atLeast(window.count(), than: 2, message: "a stop that names a line and shows none of the source around it makes a reader open an editor to learn what they stopped on. The `{SourceKey}` window held {window.count()} rows. {said}")
 
-	var marked = StringArray.create()
-	var outOfOrder = StringArray.create()
+	var marked = StringArray.create(0)
+	var outOfOrder = StringArray.create(0)
 	var previous = 0 as EventNumber
 
 	for row in window 'eachRow'

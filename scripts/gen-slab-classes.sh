@@ -129,7 +129,7 @@ DECL
 # `FullRangeIntArray`, which is E3005 against a ranged typealias return — and widening the return type to
 # match the literal would throw away the domain bound that keeps an out-of-table size unstorable.
 emit_table() {
-	printf '\tvar out = %s.create()\n' "$2"
+	printf '\tvar out = %s.create(0)\n' "$2"
 	printf '	out.reserve(%s)
 ' "$(printf '%s' "$1" | awk -F, '{print NF}')"
 	printf '%s' "$1" | tr ',' '\n' | awk '{ printf "\tout.push(%s)\n", $0 }'

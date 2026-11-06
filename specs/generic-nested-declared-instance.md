@@ -59,7 +59,7 @@ type Inner uses T
 	var items as TArray
 
 	static function create() returns Self
-		return Self{items: TArray.create()}
+		return Self{items: TArray.create(0)}
 	end 'create'
 
 	function count() returns Int
@@ -151,7 +151,7 @@ type Inner uses T
 	var items as TArray
 
 	static function create() returns Self
-		return Self{items: TArray.create()}
+		return Self{items: TArray.create(0)}
 	end 'create'
 
 	function count() returns Int
@@ -200,7 +200,7 @@ type Inner uses T
 	var items as TArray
 
 	static function create() returns Self
-		return Self{items: TArray.create()}
+		return Self{items: TArray.create(0)}
 	end 'create'
 
 	function add(v T)
@@ -316,7 +316,7 @@ type BagIter uses E implements Iterator with Int
 	var i as Int
 
 	static function create() returns Self
-		return Self{items: EArray.create(), i: 3}
+		return Self{items: EArray.create(0), i: 3}
 	end 'create'
 
 	function current() returns Int
@@ -598,7 +598,7 @@ typealias StrItems = Array with String
 
 function main() returns ExitCode
 	var b = StrBag.create("alpha {40 + 2} value long enough for a heap record")
-	var xs = StrItems.create()
+	var xs = StrItems.create(0)
 	xs.push("beta {40 + 2} value long enough for a heap record")
 	print("{b.probe(xs)} {b.value()}\n")
 	return 0

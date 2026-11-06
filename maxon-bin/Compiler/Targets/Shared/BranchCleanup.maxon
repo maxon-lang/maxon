@@ -142,9 +142,9 @@ function resolveJumpChains(module TargetModule, topo FuncTopology, returnOf CfgI
 	let blockCount = topo.numBlocks
 
 	// Classified in ONE pass over the blocks, so the chain walk below dereferences no block at all.
-	var forwards = BoolArray.create()
+	var forwards = BoolArray.create(0)
 	forwards.resize(blockCount)
-	var forwardTargetOf = CfgIndexArray.create()
+	var forwardTargetOf = CfgIndexArray.create(0)
 	forwardTargetOf.resize(blockCount)
 
 	// ⭐ LOCAL 0 — THE ENTRY — IS NEVER FORWARDED THROUGH, whatever its ops. It is the block the frame
@@ -163,11 +163,11 @@ function resolveJumpChains(module TargetModule, topo FuncTopology, returnOf CfgI
 	end 'eachBlock'
 
 	let unresolved = noSuchLocal(topo)
-	var resolved = CfgIndexArray.create()
+	var resolved = CfgIndexArray.create(0)
 	resolved.refill(blockCount, value: unresolved)
-	var onPath = BoolArray.create()
+	var onPath = BoolArray.create(0)
 	onPath.resize(blockCount)
-	var path = CfgIndexArray.create()
+	var path = CfgIndexArray.create(0)
 
 	for start in 0 upto blockCount 'eachStart'
 		if (try resolved.get(start) otherwise panic("resolveJumpChains: resolved.get OOB at {start}")) != unresolved 'alreadyAnswered'
@@ -242,9 +242,9 @@ end 'emptyJumpTargetOf'
 // COLLECT FIRST, THEN WRITE, `splitCriticalEdgesInFunc`'s discipline: the reads classify against
 // ONE consistent CFG, and each redirect is independent of the others.
 function threadResolvedEdges(module TargetModule, topo FuncTopology, resolved CfgIndexArray)
-	var predRefs = BlockRefArray.create()
-	var oldTargets = BlockIdArray.create()
-	var newTargets = BlockIdArray.create()
+	var predRefs = BlockRefArray.create(0)
+	var oldTargets = BlockIdArray.create(0)
+	var newTargets = BlockIdArray.create(0)
 
 	// ⚠ A SUCCESSOR MAY APPEAR TWICE IN ONE BLOCK'S LIST. `collectBlockSuccessorIds` pushes the
 	// conditional branch's then-target and the terminator's else-target without deduping, so a two-way
@@ -252,7 +252,7 @@ function threadResolvedEdges(module TargetModule, topo FuncTopology, resolved Cf
 	// left to move and hit `retargetControlOp`'s no-match panic. Marked and cleared per block rather
 	// than scanned: a dense jump table's successor list is long, and a membership scan over it would
 	// make this quadratic in the arm count.
-	var seen = BoolArray.create()
+	var seen = BoolArray.create(0)
 	seen.resize(topo.numBlocks)
 
 	for localIndex in 0 upto topo.numBlocks 'eachPred'
@@ -323,7 +323,7 @@ function returnTailsOf(module TargetModule, func IrFunction) returns ReturnTails
 end 'returnTailsOf'
 
 function noReturnTails(topo FuncTopology) returns CfgIndexArray
-	var returnOf = CfgIndexArray.create()
+	var returnOf = CfgIndexArray.create(0)
 	returnOf.refill(topo.numBlocks, value: noSuchLocal(topo))
 	return returnOf
 end 'noReturnTails'
@@ -408,9 +408,9 @@ end 'replaceJumpsWithReturnTails'
 // physical edge, and it is added WITHOUT going through `resolved`: a fall-through is not a branch,
 // threading never moved it, and the block it names must survive verbatim.
 function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTopology, resolved CfgIndexArray, returnOf CfgIndexArray) returns BoolArray
-	var reachable = BoolArray.create()
+	var reachable = BoolArray.create(0)
 	reachable.resize(topo.numBlocks)
-	var stack = CfgIndexArray.create()
+	var stack = CfgIndexArray.create(0)
 
 	// The entry is local 0 and is reachable by definition — it is also the block that must stay first
 	// (the prologue goes in it), which the ascending rebuild below preserves.
@@ -434,7 +434,7 @@ function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTo
 		end 'fallsThroughPhysically'
 	end 'walk'
 
-	var kept = BlockRefArray.create()
+	var kept = BlockRefArray.create(0)
 
 	for local in 0 upto topo.numBlocks 'eachBlock'
 		let survives = try reachable.get(local) otherwise panic("dropUnreachableBlocks: reachable.get OOB at {local}")
@@ -474,8 +474,8 @@ end 'markLocalReachable'
 // and its physical successor move as ONE UNIT, cold only when every block in it is. The entry's unit
 // stays first: the prologue goes there.
 function sinkColdBlocks(module TargetModule, func IrFunction)
-	var hot = BlockRefArray.create()
-	var cold = BlockRefArray.create()
+	var hot = BlockRefArray.create(0)
+	var cold = BlockRefArray.create(0)
 	let blockCount = func.blockRefs.count()
 	var unitStart = 0 as ElementIndex
 	var unitIsCold = true
@@ -756,11 +756,11 @@ type RotationPlan
 
 	static function create(topo FuncTopology) returns RotationPlan
 		let noChain = noSuchLocal(topo)
-		var chainStartAfter = CfgIndexArray.create()
+		var chainStartAfter = CfgIndexArray.create(0)
 		chainStartAfter.refill(topo.numBlocks, value: noChain)
-		var chainEndAfter = CfgIndexArray.create()
+		var chainEndAfter = CfgIndexArray.create(0)
 		chainEndAfter.refill(topo.numBlocks, value: noChain)
-		var claimed = BoolArray.create()
+		var claimed = BoolArray.create(0)
 		claimed.resize(topo.numBlocks)
 		return Self{chainStartAfter: chainStartAfter, chainEndAfter: chainEndAfter, claimed: claimed, noChain: noChain}
 	end 'create'
@@ -793,9 +793,9 @@ type RotationPlan
 	// header whose exit edge is the outer back edge — so the chains pending behind the current block
 	// form a stack of ranges rather than one range.
 	function layout(topo FuncTopology) returns BlockRefArray
-		var laid = BlockRefArray.create()
-		var pendingNext = CfgIndexArray.create()
-		var pendingEnd = CfgIndexArray.create()
+		var laid = BlockRefArray.create(0)
+		var pendingNext = CfgIndexArray.create(0)
+		var pendingEnd = CfgIndexArray.create(0)
 
 		for local in 0 upto topo.numBlocks 'eachBlock'
 			if self.isClaimed(local) 'laidAfterItsLatch'

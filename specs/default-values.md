@@ -421,7 +421,7 @@ end 'main'
 ### A defaulted container at module scope is materialized, and freed
 
 ⚠ **A DEFAULT MAY BE MANAGED, AND THE SLOT THEN OWNS WHAT THE CALL BORROWED.** `tags StringArray =
-StringArray.create()` fills with a call to the parameter's synthesized helper, and `__module_init` is
+StringArray.create(0)` fills with a call to the parameter's synthesized helper, and `__module_init` is
 sole owner of the array that helper returns — so the exit-101 leak gate is what this case is really
 asserting, over and above the count it prints.
 
@@ -432,7 +432,7 @@ typealias Names = Array with String
 type Roster
 	export let names as Names
 
-	static function of(names Names = Names.create()) returns Roster
+	static function of(names Names = Names.create(0)) returns Roster
 		return Self{names: names}
 	end 'of'
 end 'Roster'

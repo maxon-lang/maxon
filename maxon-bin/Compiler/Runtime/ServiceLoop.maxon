@@ -83,14 +83,14 @@ export function installServiceLoops(module MaxonModule, project Project, signatu
 end 'installServiceLoops'
 
 function servicesInDeclarationOrder(discovered NameRoster, signatures ProgramSignatures, fileRanks FileEmissionRankMap) returns NameRoster
-	var positions = DeclarationPositionArray.create()
+	var positions = DeclarationPositionArray.create(0)
 
 	for typeName in discovered 'eachService'
 		view layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 		positions.push(DeclarationPosition.of(fileRanks, path: layout.declFilePath, line: layout.declLine, column: layout.declColumn, kind: "the service type", name: typeName))
 	end 'eachService'
 
-	var ordered = NameRoster.create()
+	var ordered = NameRoster.create(0)
 
 	for slot in declarationsInPositionOrder(positions) 'eachInDeclarationOrder'
 		ordered.push(try discovered.get(slot) otherwise panic("servicesInDeclarationOrder: discovered.get OOB at {slot}"))
@@ -115,8 +115,8 @@ function buildServiceLoops(module MaxonModule, project Project, signatures Progr
 	// built from the discovery walk's raw token candidates, so a type can be on it with not one
 	// `serviceSpawn` op behind it. There is nothing to build a loop for and nothing that could call
 	// one.
-	var mangledInstances = NameRoster.create()
-	var instanceOrder = DeclarationOrder.create()
+	var mangledInstances = NameRoster.create(0)
+	var instanceOrder = DeclarationOrder.create(0)
 
 	for gid in instances 'eachMangled'
 		instanceOrder.push(mangledInstances.count())
@@ -149,10 +149,10 @@ typealias SpawnedInstanceSet = Set with GenericInstanceId
 // by hand (`serviceTypeRoster`'s own bound) — unlike the INSTANTIATIONS, which grow with the program and are
 // therefore deduped through a set rather than a scan.
 function spawnedInstancesByService(module MaxonModule, services NameRoster) returns SpawnedInstanceBuckets
-	var buckets = SpawnedInstanceBuckets.create()
+	var buckets = SpawnedInstanceBuckets.create(0)
 
 	for _ in services 'eachService'
-		buckets.push(GenericInstanceIdArray.create())
+		buckets.push(GenericInstanceIdArray.create(0))
 	end 'eachService'
 
 	var seen = SpawnedInstanceSet.create()
@@ -253,7 +253,7 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 		at(id) gives MaxonType.genericInstance(id)
 	end 'i'
 
-	var paramTypes = MaxonTypeArray.create()
+	var paramTypes = MaxonTypeArray.create(0)
 	paramTypes.push(stateType)
 	paramTypes.push(MaxonType.integer)
 	var fn = SynthesizedFunction.open(module, project: project, name: serviceLoopSymbolFor(signatures, typeName: typeName, instance: instance), returnType: MaxonReturnType.void, paramTypes: paramTypes)
@@ -278,7 +278,7 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 	view exit = buildServiceExit(fn, project: project, signatures: signatures, stateType: stateType, site: site)
 	view unknownTag = buildUnknownTagBlock(fn, site: site)
 
-	var armIds = BlockIdArray.create()
+	var armIds = BlockIdArray.create(0)
 
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
 		armIds.push(buildMessageArm(fn, signatures: signatures, funcNames: funcNames, callee: qualifiedMethodName(typeName, methodName: request.caseNameAt(caseIndex)), instance: instance, request: request, caseIndex: caseIndex, req: req, receive: receive, site: site))
@@ -302,7 +302,7 @@ end 'buildServiceExit'
 function buildUnknownTagBlock(fn SynthesizedFunction, site SynthesizedSite) returns IrBlock
 	var unknownTag = fn.openBlock(b"unknowntag")
 
-	fn.emitPositionalCallDiscarding(MboxUnknownTagName, args: ValueIdArray.create(), site: site)
+	fn.emitPositionalCallDiscarding(MboxUnknownTagName, args: ValueIdArray.create(0), site: site)
 	fn.terminate(MaxonOp.retVoid, site: site)
 	return unknownTag
 end 'buildUnknownTagBlock'
@@ -329,10 +329,10 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	// ⚠ **ONLY THE DECLARED PARAMETERS ARE LOADED, AND THE `__reply` SLOT IS NOT ONE.** A message with a
 	// reply carries its cell in a trailing slot; loading it would hand the handler an argument its declaration
 	// does not have.
-	var args = ValueIdArray.create()
+	var args = ValueIdArray.create(0)
 	args.push(ServiceStateParam)
-	var payloadClasses = LoadedPayloadClassArray.create()
-	var payloadTypes = MaxonTypeArray.create()
+	var payloadClasses = LoadedPayloadClassArray.create(0)
+	var payloadTypes = MaxonTypeArray.create(0)
 
 	for param in 0 upto decl.paramTypes.count() 'eachParam'
 		let slot = serviceParamPayloadSlot(payloads, paramIndex: param as ParamCount)
@@ -400,7 +400,7 @@ typealias LoadedPayloadClassArray = Array with readonly PayloadClass
 // `dropUnconsumedPayloads` runs: the handler may have replaced the value, and the drop must release
 // what the cell holds, not what the message carried.
 function spillReassignedPayloads(fn SynthesizedFunction, byReference ParamPositionMask, classes LoadedPayloadClassArray, types MaxonTypeArray, args ValueIdArray, site SynthesizedSite) returns ReassignedPayloadCellArray
-	var cells = ReassignedPayloadCellArray.create()
+	var cells = ReassignedPayloadCellArray.create(0)
 
 	if byReference == NoParamPositions 'everyParameterByValue'
 		return cells
@@ -417,7 +417,7 @@ function spillReassignedPayloads(fn SynthesizedFunction, byReference ParamPositi
 
 		let class = try classes.get(param) otherwise panic("spillReassignedPayloads: classes.get OOB at {param} — one class is pushed per loaded parameter")
 		let loaded = try args.get(position) otherwise panic("spillReassignedPayloads: args.get OOB at {position} — `args` holds the receiver followed by one value per parameter")
-		let cell = fn.emitPositionalCall(ParameterCellAllocName, args: ValueIdArray.create(), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
+		let cell = fn.emitPositionalCall(ParameterCellAllocName, args: ValueIdArray.create(0), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
 		fn.emit(MaxonOp.storeIndirect(cell, offset: ParameterCellValueOffset, value: loaded, valueType: payloadStorageOf(class)), site: site)
 
 		if parameterCellHoldsAWitness(valueType) 'andItsWitnessHalf'
@@ -435,7 +435,7 @@ function handlerArgsOf(args ValueIdArray, cells ReassignedPayloadCellArray) retu
 		return args
 	end 'nothingSpilled'
 
-	var handed = ValueIdArray.create()
+	var handed = ValueIdArray.create(0)
 	handed.append(args)
 
 	for spilled in cells 'eachCell'
@@ -643,7 +643,7 @@ end 'publishReplyValue'
 // reach is walked once, and `__mm_walk_settle` then aborts on an owner the graph does not hold and frees the table.
 // `walked` is the reply, preceded by its witness half when the walk reads one.
 function emitReplyGraphWalk(fn SynthesizedFunction, walk ByteArray, walked ValueIdArray, site SynthesizedSite)
-	var args = ValueIdArray.create()
+	var args = ValueIdArray.create(0)
 
 	for value in walked 'eachWalked'
 		args.push(value)

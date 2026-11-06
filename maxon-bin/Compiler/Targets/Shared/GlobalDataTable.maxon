@@ -333,7 +333,7 @@ end 'cacheWriteByteBlobArray'
 
 export function cacheReadByteBlobArray(reader LibraryCacheReader) returns ByteBlobArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ByteBlobArray.create()
+	var result = ByteBlobArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -602,7 +602,7 @@ export type GlobalDataTable
 	export var debugStreamNames as DebugStreamNameTable
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), nameBytes: NameRoster.create(), values: ByteBlobArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), payloadKinds: RdataPayloadKindArray.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), dataBlobs: DataBlobEntryArray.create(), dataBlobIndex: DataSectionIndexMap.create(), dataLaidOut: false, rdataOffsets: RdataOffsetMap.create(), rdataLabelOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, pendingRdataAbsRelocs: PendingRdataAbsRelocArray.create(), recordBlobLabels: RecordBlobLabelMap.create(), floatConstantLabels: FloatConstantLabelMap.create(), pendingRdataRelocs: PendingRdataRelocArray.create(), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create(), symdataImage: ByteArray.create(), debugStreamTags: DebugStreamNameTable.create(mmTagRosterNames()), debugStreamNames: DebugStreamNameTable.create(debugStreamNameRosterSeed())}
+		return Self{names: StringArray.create(0), nameBytes: NameRoster.create(0), values: ByteBlobArray.create(0), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), payloadKinds: RdataPayloadKindArray.create(0), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(0), dataIndex: DataSectionIndexMap.create(), dataBlobs: DataBlobEntryArray.create(0), dataBlobIndex: DataSectionIndexMap.create(), dataLaidOut: false, rdataOffsets: RdataOffsetMap.create(), rdataLabelOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, pendingRdataAbsRelocs: PendingRdataAbsRelocArray.create(0), recordBlobLabels: RecordBlobLabelMap.create(), floatConstantLabels: FloatConstantLabelMap.create(), pendingRdataRelocs: PendingRdataRelocArray.create(0), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create(0), symdataImage: ByteArray.create(0), debugStreamTags: DebugStreamNameTable.create(mmTagRosterNames()), debugStreamNames: DebugStreamNameTable.create(debugStreamNameRosterSeed())}
 	end 'create'
 
 	// ⭐ REGISTER a read-only constant payload, returning the label that names it — the `.rdata`
@@ -705,7 +705,7 @@ export type GlobalDataTable
 	export function registerJumpTable(slotCount ElementIndex) returns String
 		let label = "{JumpTableLabelPrefix}{self.nextStringId}"
 		self.nextStringId = self.nextStringId + 1
-		var bytes = ByteArray.create()
+		var bytes = ByteArray.create(0)
 		bytes.growFilled(slotCount * JumpTableSlotBytes, value: 0)
 		self.appendRdataPayload(label, bytes: bytes, kind: RdataPayloadKind.jumpTable, labelAt: 0)
 		return label
@@ -850,7 +850,7 @@ export type GlobalDataTable
 	// A function record nothing surviving names stays in `.rdata` with its code slot unbaked: the
 	// function it names may have been swept, and `bakeFuncAbs64Relocs` panics on a reloc to one.
 	export function dropFunctionRecordRelocsExcept(referenced ReferencedGlobalLabelSet)
-		var kept = PendingRdataRelocArray.create()
+		var kept = PendingRdataRelocArray.create(0)
 
 		for reloc in self.pendingRdataRelocs 'eachRdataSlot'
 			if not isFunctionRecordLabel(reloc.rdataLabel) or referenced.contains(reloc.rdataLabel.toByteArray()) 'stillFilled'
@@ -862,7 +862,7 @@ export type GlobalDataTable
 	end 'dropFunctionRecordRelocsExcept'
 
 	export function functionNamesInRdata() returns NameRoster
-		var roster = NameRoster.create()
+		var roster = NameRoster.create(0)
 
 		for reloc in self.pendingRdataRelocs 'eachSlot'
 			roster.push(reloc.funcName)
@@ -872,7 +872,7 @@ export type GlobalDataTable
 	end 'functionNamesInRdata'
 
 	export function functionRecordLabelsNamedInRdata() returns StringArray
-		var named = StringArray.create()
+		var named = StringArray.create(0)
 
 		for reloc in self.pendingRdataAbsRelocs 'eachAbsoluteSlot'
 			if isFunctionRecordLabel(reloc.targetLabel) 'namesAFunctionRecord'
@@ -918,7 +918,7 @@ export type GlobalDataTable
 	export function rdataImage() returns ByteArray
 		self.requireColumnsAgree()
 
-		var image = ByteArray.create()
+		var image = ByteArray.create(0)
 
 		for (iter, payload) in self.values.withIterator() 'each'
 			let label = try self.names.get(iter.index()) otherwise panic("GlobalDataTable.rdataImage: values has {self.values.count()} payloads but names has {self.names.count()} — the two columns are pushed together and cannot disagree")
@@ -1118,7 +1118,7 @@ export type GlobalDataTable
 	// a disagreement with `layOut` panics instead of emitting a global at an address its relocations
 	// do not name.
 	export function dataSectionImage() returns ByteArray
-		var image = ByteArray.create()
+		var image = ByteArray.create(0)
 
 		for blob in self.dataBlobs 'eachRun'
 			if image.count() as ByteOffset != blob.offset 'runDrift'
@@ -1185,7 +1185,7 @@ let MaxDataSlotBytes = 8 as BytePos
 // The roster minus every `walked` slot no surviving function names; `declared` slots pass untouched. Order
 // is preserved, which is what keeps every kept slot at the offset it has in a program that drops nothing.
 function retainReachedSlots(roster DataSectionEntryArray, referenced ReferencedGlobalLabelSet) returns DataSectionEntryArray
-	var kept = DataSectionEntryArray.create()
+	var kept = DataSectionEntryArray.create(0)
 
 	for entry in roster 'each'
 		let isKept = match entry.reach 'reach'
@@ -1202,7 +1202,7 @@ function retainReachedSlots(roster DataSectionEntryArray, referenced ReferencedG
 end 'retainReachedSlots'
 
 function rosterSegment(roster DataSectionEntryArray, from ElementIndex, upto ElementIndex) returns DataSectionEntryArray
-	var segment = DataSectionEntryArray.create()
+	var segment = DataSectionEntryArray.create(0)
 
 	for index in from upto upto 'eachEntry'
 		segment.push(try roster.get(index) otherwise panic("rosterSegment: entry {index} is not below the roster's {roster.count()}"))
@@ -1226,7 +1226,7 @@ end 'rosterSegment'
 // — every global an `int`, the commonest program there is — and rescans the whole placed list for
 // every entry.
 function sortBySizeDescendingStable(declared DataSectionEntryArray) returns DataSectionEntryArray
-	var sorted = DataSectionEntryArray.create()
+	var sorted = DataSectionEntryArray.create(0)
 	var size = MaxDataSlotBytes
 
 	while size > 0 'eachSizeClass'
@@ -1272,7 +1272,7 @@ function paddedTo(bytes ByteArray, alignment BytePos) returns ByteArray
 		return bytes
 	end 'alreadyAligned'
 
-	var padded = ByteArray.create()
+	var padded = ByteArray.create(0)
 	padded.append(bytes)
 	padded.growFilled(storedCount, value: PadByte)
 	return padded
@@ -1288,7 +1288,7 @@ end 'paddedTo'
 // one fact written twice — with the two free to disagree about what `3.14` is.
 
 export function scalarImage(value FullRangeInt, byteCount BytePos) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	appendLittleEndianScalar(bytes, value: value, byteCount: byteCount)
 	return bytes
 end 'scalarImage'

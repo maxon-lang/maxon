@@ -19,8 +19,8 @@ N="$1"; MODE="$2"; OUT="$3"
   printf 'typealias Tally = int(0 to u64.max)\ntypealias TallyArray = Array with Tally\n\n'
   printf 'function fill(cells TallyArray, count Tally)\n\tfor i in 0 upto count %s\n\t\tcells.push(i)\n\tend %s\nend %s\n\n' "'each'" "'each'" "'fill'"
   printf 'function touch(cells TallyArray) returns TallyArray\n\tfill(cells, count: 1)\n\n\treturn cells\nend %s\n\n' "'touch'"
-  printf 'function fresh() returns TallyArray\n\tvar cells = TallyArray.create()\n\tfill(cells, count: 2)\n\n\treturn cells\nend %s\n\n' "'fresh'"
-  printf 'function ladder(seed Tally) returns Tally\n\tvar cells = TallyArray.create()\n\n'
+  printf 'function fresh() returns TallyArray\n\tvar cells = TallyArray.create(0)\n\tfill(cells, count: 2)\n\n\treturn cells\nend %s\n\n' "'fresh'"
+  printf 'function ladder(seed Tally) returns Tally\n\tvar cells = TallyArray.create(0)\n\n'
   for ((i = 0; i < N; i++)); do
     if [ "$MODE" = "straight" ]; then
       printf '\tcells = touch(cells)\n'

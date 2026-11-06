@@ -197,7 +197,7 @@ end 'Holder'
 function main() returns ExitCode
 	var h = Holder.create(Box.create(1))
 	var other = Holder.create(Box.create(2))
-	var boxes = Boxes.create()
+	var boxes = Boxes.create(0)
 	h.box.n = 3
 	view v = h.box
 	other.box = v
@@ -234,7 +234,7 @@ type Holder
 	end 'create'
 end 'Holder'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)

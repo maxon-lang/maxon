@@ -6,7 +6,7 @@ let LoopRivalSlotMark = "[rbp-"
 
 test 'a var held in a stack slot that a later loop assigns again is not read as its old value after the loop'
 	let staged = builtFixture(LoopRivalCaseLabel, fixture: RivalLoopFixtureName)
-	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create(0))
 	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
 	var slotRows = 0 as Count
 
@@ -18,7 +18,7 @@ test 'a var held in a stack slot that a later loop assigns again is not read as 
 
 	let afterLoopAt = anchorLine(staged.join(StagedProgramFileName), anchor: "after-loop")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(afterLoopAt)}", RunCommand, "{PrintCommand} {LoopRivalLocalName}"])
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let answers = eventsOfKind(events, kind: ValueEventName)

@@ -70,11 +70,11 @@ export type ManifestVoice
 	var fileBroken as bool
 
 	export static function forCommandLine(speaker String, announce bool, logOverridden bool) returns ManifestVoice
-		return Self{speaker: speaker, announce: announce, audience: ManifestAudience.commandLine, logOverridden: logOverridden, said: StringArray.create(), fileBroken: false}
+		return Self{speaker: speaker, announce: announce, audience: ManifestAudience.commandLine, logOverridden: logOverridden, said: StringArray.create(0), fileBroken: false}
 	end 'forCommandLine'
 
 	export static function forEditor(speaker String) returns ManifestVoice
-		return Self{speaker: speaker, announce: false, audience: ManifestAudience.editor, logOverridden: false, said: StringArray.create(), fileBroken: false}
+		return Self{speaker: speaker, announce: false, audience: ManifestAudience.editor, logOverridden: false, said: StringArray.create(0), fileBroken: false}
 	end 'forEditor'
 
 	export function say(line String)
@@ -92,7 +92,7 @@ export type ManifestVoice
 	end 'sayEntryWords'
 
 	export function asOneMessage() returns StringArray
-		var message = StringArray.create()
+		var message = StringArray.create(0)
 		message.push(joinedWith(self.said, separator: "\n"))
 		return message
 	end 'asOneMessage'
@@ -221,7 +221,7 @@ export type DescribedBuild
 	end 'create'
 
 	export function declaringAlso(outer MaxonSourcePathArray) returns DescribedBuild
-		var merged = MaxonSourcePathArray.create()
+		var merged = MaxonSourcePathArray.create(0)
 		var held = MaxonSourcePathSet.create()
 
 		holdNew(outer, into: merged, held: held)
@@ -250,7 +250,7 @@ export function declaredInputsOf(inputs ProjectInputs) returns MaxonSourcePathAr
 		walked or
 		ambiguous or
 		unbuilt or
-		refused gives MaxonSourcePathArray.create()
+		refused gives MaxonSourcePathArray.create(0)
 	end 'inputs'
 end 'declaredInputsOf'
 
@@ -429,7 +429,7 @@ type HeldListing
 	var heldInputs as MaxonSourcePathSet
 
 	static function create() returns HeldListing
-		return Self{roots: MaxonSourcePathArray.create(), heldRoots: MaxonSourcePathSet.create(), inputs: MaxonSourcePathArray.create(), heldInputs: MaxonSourcePathSet.create()}
+		return Self{roots: MaxonSourcePathArray.create(0), heldRoots: MaxonSourcePathSet.create(), inputs: MaxonSourcePathArray.create(0), heldInputs: MaxonSourcePathSet.create()}
 	end 'create'
 
 	function hold(paths MaxonSourcePathArray, declared MaxonSourcePathArray)
@@ -461,7 +461,7 @@ function targetInputs(projectFile FilePath, projectDir FilePath, target String, 
 end 'targetInputs'
 
 function absolutePaths(paths MaxonSourcePathArray) returns MaxonSourcePathArray
-	var absolute = MaxonSourcePathArray.create()
+	var absolute = MaxonSourcePathArray.create(0)
 
 	for path in paths 'eachPath'
 		absolute.push(path.resolve(Directory.currentPath()))
@@ -471,7 +471,7 @@ function absolutePaths(paths MaxonSourcePathArray) returns MaxonSourcePathArray
 end 'absolutePaths'
 
 export function describedThroughProject(projectFile FilePath, target String, base ManifestBase, depth DelegationDepth, voice ManifestVoice) returns DescriptionResolution
-	let outcome = runManifestProgram(projectFile, entry: target.toByteArray(), base: base, arguments: StringArray.create(), voice: voice)
+	let outcome = runManifestProgram(projectFile, entry: target.toByteArray(), base: base, arguments: StringArray.create(0), voice: voice)
 
 	return match outcome 'outcome'
 		described(text) gives resolveDescription(text, manifest: projectFile, base: base, depth: depth, voice: voice)
@@ -725,7 +725,7 @@ function manifestSources(doc JsonDoc, build JsonNodeId, base ManifestBase) retur
 end 'manifestSources'
 
 function manifestInputs(doc JsonDoc, build JsonNodeId, base ManifestBase) returns MaxonSourcePathArray throws ManifestFieldError
-	let listId = try doc.getChild(build, key: ManifestInputsKey) otherwise return MaxonSourcePathArray.create()
+	let listId = try doc.getChild(build, key: ManifestInputsKey) otherwise return MaxonSourcePathArray.create(0)
 	let inputs = try manifestPaths(doc, list: listId, base: base)
 
 	for input in inputs 'eachInput'
@@ -738,7 +738,7 @@ function manifestInputs(doc JsonDoc, build JsonNodeId, base ManifestBase) return
 end 'manifestInputs'
 
 function manifestPaths(doc JsonDoc, list JsonNodeId, base ManifestBase) returns MaxonSourcePathArray throws ManifestFieldError
-	var paths = MaxonSourcePathArray.create()
+	var paths = MaxonSourcePathArray.create(0)
 
 	for spelling in try manifestStrings(doc, list: doc.get(list)) 'eachPath'
 		let stated = rebasedOnManifest(spelling, base: base)
@@ -851,7 +851,7 @@ end 'manifestBool'
 // Absent reads as "unversioned". Checked against the target's version field here, before the build, so a
 // version the binary cannot carry refuses the build rather than being stamped as something else.
 export function manifestVersion(doc JsonDoc, build JsonNodeId, target Target) returns VersionComponentArray throws ManifestFieldError
-	let valueId = try doc.getChild(build, key: ManifestVersionKey) otherwise return VersionComponentArray.create()
+	let valueId = try doc.getChild(build, key: ManifestVersionKey) otherwise return VersionComponentArray.create(0)
 	let dotted = try manifestString(doc.get(valueId))
 	return try productVersionFor(dotted, target: target) otherwise (e) 'unstampable'
 		throw ManifestFieldError.notStampable(e)
@@ -861,7 +861,7 @@ end 'manifestVersion'
 // Refused whole on the first bad entry: a build missing a define its manifest computed is a binary
 // claiming the constant's written-out default, and nothing would say so.
 export function manifestDefines(doc JsonDoc, build JsonNodeId) returns DefineArray throws ManifestFieldError
-	var defines = DefineArray.create()
+	var defines = DefineArray.create(0)
 	let listId = try doc.getChild(build, key: ManifestDefinesKey) otherwise return defines
 
 	for pair in try manifestStrings(doc, list: doc.get(listId)) 'eachDefine'
@@ -884,7 +884,7 @@ function manifestStrings(doc JsonDoc, list JsonNode) returns ManifestStringArray
 		throw ManifestFieldError.notAListOfStrings
 	end 'notAList'
 
-	var strings = ManifestStringArray.create()
+	var strings = ManifestStringArray.create(0)
 
 	for entryId in list.children 'eachEntry'
 		let entry = doc.get(entryId)

@@ -1248,7 +1248,7 @@ so a released key or value is a wrong answer here rather than a lucky one.
 var m = [b"alpha": "one", b"beta": "two"]
 
 function main() returns ExitCode
-	var churn = ByteArray.create()
+	var churn = ByteArray.create(0)
 	var i = 0 as Count
 	while i < 64 'allocate'
 		churn.push(65)

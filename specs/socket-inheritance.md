@@ -52,7 +52,7 @@ function main() returns ExitCode
 	let reader = async readsItsEnd(listener.port())
 	let conn = try listener.accept() otherwise return 4
 
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("child")
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise return 5
 	conn.close()
@@ -117,7 +117,7 @@ function main() returns ExitCode
 	let closer = async closesOnSignal(listener.port())
 	let conn = try listener.accept() otherwise return 4
 
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("child")
 	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise return 5
 	_ = try conn.send("!") otherwise return 6

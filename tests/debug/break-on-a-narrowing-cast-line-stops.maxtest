@@ -6,7 +6,7 @@ test 'a line whose only code is a narrowing cast arms and stops there, and a wal
 	let castLine = anchorLine(staged.join(StagedProgramFileName), anchor: "narrowing")
 	let executable = builtExecutable(staged)
 
-	let breakSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(["{BreakCommand} {lineTarget(castLine)}", RunCommand]), extraOptions: StringArray.create())
+	let breakSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(["{BreakCommand} {lineTarget(castLine)}", RunCommand]), extraOptions: StringArray.create(0))
 	let breakEvents = batchEvents(breakSession.stdout)
 	let breakSaid = renderedEvents(breakSession.stdout, stderr: breakSession.stderr)
 	let answers = eventsOfKind(breakEvents, kind: BreakpointEventName)
@@ -20,7 +20,7 @@ test 'a line whose only code is a narrowing cast arms and stops there, and a wal
 	try Expect.equal(breakStops.count(), expected: 1, message: "the cast line runs once, so it stops once. It printed: {listedLines(eventKinds(breakEvents))}. {breakSaid}")
 	try Expect.equal(numberOf(eventAt(breakStops, index: 0), node: eventAt(breakStops, index: 0).root, key: LineKey), expected: castLine as EventNumber, message: "the stop is on the cast line. {breakSaid}")
 
-	let walkSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(["{BreakCommand} {lineTarget(plannedLine)}", RunCommand, NextCommand]), extraOptions: StringArray.create())
+	let walkSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(["{BreakCommand} {lineTarget(plannedLine)}", RunCommand, NextCommand]), extraOptions: StringArray.create(0))
 	let walkEvents = batchEvents(walkSession.stdout)
 	let walkSaid = renderedEvents(walkSession.stdout, stderr: walkSession.stderr)
 	let walkStops = eventsOfKind(walkEvents, kind: StopEventName)

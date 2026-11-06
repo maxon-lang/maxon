@@ -7,7 +7,7 @@ test 'receiver type: a chained field offers its members'
 
 	Expect.isTrue(completionOffersLabel(labels, label: "ring"), message: "completion after `o.inner.` did not offer `ring`, the one method `type Inner` declares. The receiver of the second dot is `o.inner` — a FIELD of the type `o` names — and resolving the bare token `inner` against the document's declarations instead answers about whatever else happens to carry that name.")
 
-	Expect.isFalse(completionOffersLabel(labels, label: "push"), message: "completion after `o.inner.` offered `push`, which `Inner` does not declare and `StringArray` does. The buffer's nearest `inner` above the cursor is the local `let inner = StringArray.create()`, which is not what `o.inner` reaches — an editor offering it writes code that does not compile.")
+	Expect.isFalse(completionOffersLabel(labels, label: "push"), message: "completion after `o.inner.` offered `push`, which `Inner` does not declare and `StringArray` does. The buffer's nearest `inner` above the cursor is the local `let inner = StringArray.create(0)`, which is not what `o.inner` reaches — an editor offering it writes code that does not compile.")
 end 'receiver type: a chained field offers its members'
 
 test 'receiver type: a member through a chained field hovers'
@@ -27,7 +27,7 @@ function chainedFieldFixture() returns String
     end 'ring'
 
     static function create() returns Inner
-        return Inner{tag: StringArray.create()}
+        return Inner{tag: StringArray.create(0)}
     end 'create'
 end 'Inner'
 
@@ -40,7 +40,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-    let inner = StringArray.create()
+    let inner = StringArray.create(0)
     let o = Outer.create()
     return 0 if o.inner.ring() and inner.isEmpty() else 1
 end 'main'")

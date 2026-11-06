@@ -77,7 +77,7 @@ export function requireExampleBuild(example String, directory String = ExamplesD
 end 'requireExampleBuild'
 
 // Run what `requireExampleBuild` produced, with `arguments` as its command line.
-export function runBuiltExample(example String, arguments StringArray = StringArray.create(), directory String = ExamplesDirName, environment EnvMap = EnvMap.create()) returns ExampleRun
+export function runBuiltExample(example String, arguments StringArray = StringArray.create(0), directory String = ExamplesDirName, environment EnvMap = EnvMap.create()) returns ExampleRun
 	return runBuilt(exampleStagingDir(example, directory: directory), stem: exampleStem(example), spelling: exampleSpelling(example, directory: directory), arguments: arguments, environment: environment)
 end 'runBuiltExample'
 
@@ -108,7 +108,7 @@ export function stageExampleFile(example String, relativePath String, content St
 end 'stageExampleFile'
 
 // Build an example and run it once.
-export function runExample(example String, arguments StringArray = StringArray.create()) returns ExampleRun throws TestFailure
+export function runExample(example String, arguments StringArray = StringArray.create(0)) returns ExampleRun throws TestFailure
 	try requireExampleBuild(example)
 
 	return runBuiltExample(example, arguments: arguments)
@@ -128,14 +128,14 @@ export function runDocumentProgram(document String, marker String, name String) 
 	let spelling = "{document} ({name})"
 	try requireBuild(source, staging: staged, stem: name, spelling: spelling)
 
-	return runBuilt(staged, stem: name, spelling: spelling, arguments: StringArray.create(), environment: EnvMap.create())
+	return runBuilt(staged, stem: name, spelling: spelling, arguments: StringArray.create(0), environment: EnvMap.create())
 end 'runDocumentProgram'
 
 // Build `source` into `staging` as `stem`; `spelling` is how every report names the program.
 function requireBuild(source FilePath, staging FilePath, stem String, spelling String) throws TestFailure
 	let output = executableIn(staging, stem: stem)
 
-	let build = spawnBuild(source, staged: staging, output: output, label: spelling, extraArguments: StringArray.create())
+	let build = spawnBuild(source, staged: staging, output: output, label: spelling, extraArguments: StringArray.create(0))
 
 	try requireBuiltExecutable(build, output: output, what: "{BuildCommandName} {spelling}", reason: "Every program the examples directory or a document shows must build.")
 end 'requireBuild'
@@ -167,7 +167,7 @@ function documentProgram(document String, marker String) returns String
 	let text = fileText(path)
 	let lines = withoutCarriageReturns(text).split(LineFeed)
 
-	var marked = StringArray.create()
+	var marked = StringArray.create(0)
 
 	for block in programBlocks(document, lines: lines) 'eachBlock'
 		if block.contains(marker) 'hasMarker'
@@ -196,7 +196,7 @@ end 'programBlocks'
 
 // The text of every ```maxon fence, one line per source line.
 function markdownFences(lines StringArray) returns StringArray
-	var blocks = StringArray.create()
+	var blocks = StringArray.create(0)
 	var inFence = false
 	var block = ""
 
@@ -224,7 +224,7 @@ end 'markdownFences'
 // The text of every `const` template literal, its escaped backslashes undone. The opening line carries the
 // literal's first line after the backtick, and the closing line its last before the `` `; ``.
 function templateLiterals(lines StringArray) returns StringArray
-	var blocks = StringArray.create()
+	var blocks = StringArray.create(0)
 	var inLiteral = false
 	var block = ""
 

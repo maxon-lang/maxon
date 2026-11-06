@@ -595,11 +595,11 @@ export type CompileTimings
 	// array without giving the slots storage, so `count()` answers while `get` reports OOB.
 	// That is a trap worth knowing about; it is not one this type falls into any more.)
 	export static function create() returns CompileTimings
-		var phaseNanos = DurationNanosArray.create()
+		var phaseNanos = DurationNanosArray.create(0)
 		phaseNanos.resize(CompilePhase.allCases.count())
-		var phaseCpuTicks = CpuTicksArray.create()
+		var phaseCpuTicks = CpuTicksArray.create(0)
 		phaseCpuTicks.resize(CompilePhase.allCases.count())
-		var rowKinds = PhaseRowKindArray.create()
+		var rowKinds = PhaseRowKindArray.create(0)
 
 		for _ in CompilePhase.allCases 'eachPhase'
 			rowKinds.push(PhaseRowKind.bracketedOnTheMainThread)
@@ -669,7 +669,7 @@ export type CompileTimings
 	// The pool rows as the mask the memory table selects by (`PhaseMemoryColumns.totalDeltaWhere`): every
 	// one, or those breaking `driver` down.
 	export function poolRowMask() returns BoolArray
-		var mask = BoolArray.create()
+		var mask = BoolArray.create(0)
 
 		for phase in CompilePhase.allCases 'eachPhase'
 			mask.push(self.isMeasuredOnAPool(phase))
@@ -679,7 +679,7 @@ export type CompileTimings
 	end 'poolRowMask'
 
 	export function poolRowsUnder(driver CompilePhase) returns BoolArray
-		var mask = BoolArray.create()
+		var mask = BoolArray.create(0)
 
 		for phase in CompilePhase.allCases 'eachPhase'
 			mask.push(self.isPoolBreakdownOf(phase, driver: driver))

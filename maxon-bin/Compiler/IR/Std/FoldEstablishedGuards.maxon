@@ -144,7 +144,7 @@ type EstablishedFunction
 	static function build(module StdModule, func IrFunction, scratch EstablishedScratch) returns EstablishedFunction
 		var tree = StdDominatorTree.build(module, func: func)
 		var reader = StdShapeReader.create(module, func: func)
-		var analysis = Self{tree: tree, stamps: DominatorStamps.build(tree), reader: reader, byId: module.blockIndexById(func), records: RecordIndex.sized(reader.defs.valueBound()), boundHead: OptionalElementIndexColumn.absent(reader.defs.valueBound()), boundNext: OptionalElementIndexColumn.create(), boundRecord: ValueIdArray.create(), boundElsePosition: BlockPositionColumn.create()}
+		var analysis = Self{tree: tree, stamps: DominatorStamps.build(tree), reader: reader, byId: module.blockIndexById(func), records: RecordIndex.sized(reader.defs.valueBound()), boundHead: OptionalElementIndexColumn.absent(reader.defs.valueBound()), boundNext: OptionalElementIndexColumn.create(), boundRecord: ValueIdArray.create(0), boundElsePosition: BlockPositionColumn.create(0)}
 		analysis.gather(module, func: func, scratch: scratch)
 		return analysis
 	end 'build'
@@ -229,9 +229,9 @@ type RecordIndex
 	export var count = 0 as RecordSlot
 
 	static function sized(valueBound ValueId) returns RecordIndex
-		var slotOf = RecordSlotColumn.create()
+		var slotOf = RecordSlotColumn.create(0)
 		slotOf.resize(valueBound)
-		var tracked = BoolArray.create()
+		var tracked = BoolArray.create(0)
 		tracked.resize(valueBound)
 		return Self{slotOf: slotOf, tracked: tracked}
 	end 'sized'
@@ -612,7 +612,7 @@ module type EstablishedState
 	var rowLive as RecordSlotColumn
 
 	static function create() returns EstablishedState
-		return Self{reached: BoolArray.create(), runStart: FactIndexColumn.create(), runCount: FactIndexColumn.create(), factSlot: RecordSlotColumn.create(), factBits: ShapeFacts.create(), factFloor: LengthFloors.create(), rowShape: ShapeFacts.create(), rowFloor: LengthFloors.create(), rowLive: RecordSlotColumn.create()}
+		return Self{reached: BoolArray.create(0), runStart: FactIndexColumn.create(0), runCount: FactIndexColumn.create(0), factSlot: RecordSlotColumn.create(0), factBits: ShapeFacts.create(0), factFloor: LengthFloors.create(0), rowShape: ShapeFacts.create(0), rowFloor: LengthFloors.create(0), rowLive: RecordSlotColumn.create(0)}
 	end 'create'
 
 	function begin(blockCount ElementIndex, recordCount RecordSlot)
@@ -823,6 +823,6 @@ module type EstablishedScratch
 	export var tally as StdPassTally
 
 	module static function create(tally StdPassTally) returns EstablishedScratch
-		return Self{state: EstablishedState.create(), edge: EdgeFacts.create(), plainEdge: EdgeFacts.create(), success: RememberedSuccess.create(), call: StdCallOperands.create(), store: StdStoreOperands.create(), slot: ElementSlotOperands.create(), branch: StdBranchOperands.create(), guard: ManagedGuardOperands.create(), def: StdFoldableDef.create(), decisions: CompareDecisionArray.create(), readers: StdValueUseSet.createTrackingRepeats(), seeds: StdValueUseSet.createRecordingIds(), tally: tally}
+		return Self{state: EstablishedState.create(), edge: EdgeFacts.create(), plainEdge: EdgeFacts.create(), success: RememberedSuccess.create(), call: StdCallOperands.create(), store: StdStoreOperands.create(), slot: ElementSlotOperands.create(), branch: StdBranchOperands.create(), guard: ManagedGuardOperands.create(), def: StdFoldableDef.create(), decisions: CompareDecisionArray.create(0), readers: StdValueUseSet.createTrackingRepeats(), seeds: StdValueUseSet.createRecordingIds(), tally: tally}
 	end 'create'
 end 'EstablishedScratch'

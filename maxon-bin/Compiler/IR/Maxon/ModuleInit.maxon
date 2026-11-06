@@ -120,8 +120,8 @@ end 'LetShareWalks'
 // spawns none marks nothing. An unmarkable `let` stays a plain count: `ServiceGlobalAccessCheck` refuses it where a
 // message can read it.
 export function letShareWalksOf(globals ManagedGlobalArray, spawnsAService bool) returns LetShareWalks
-	var marked = SharedLetArray.create()
-	var unmarkable = ManagedGlobalArray.create()
+	var marked = SharedLetArray.create(0)
+	var unmarkable = ManagedGlobalArray.create(0)
 
 	if spawnsAService 'aSecondGreenThreadMayCount'
 		for global in globals 'eachGlobal'
@@ -154,7 +154,7 @@ end 'letShareWalksOf'
 // it is the caller's to apply: this function emits the array it is handed, in the order it is handed. A
 // cycle has no such order and is refused there rather than reaching this loop.
 function buildModuleInit(module MaxonModule, project Project, globals ManagedGlobalArray, sharedLets SharedLetArray, defaults DefaultSlotArray, site SynthesizedSite)
-	var fn = SynthesizedFunction.open(module, project: project, name: ModuleInitName, returnType: MaxonReturnType.void, paramTypes: MaxonTypeArray.create())
+	var fn = SynthesizedFunction.open(module, project: project, name: ModuleInitName, returnType: MaxonReturnType.void, paramTypes: MaxonTypeArray.create(0))
 
 	for global in globals 'eachGlobal'
 		let record = initialRecordOf(fn, global: global)
@@ -177,7 +177,7 @@ end 'buildModuleInit'
 
 function buildDefault(fn SynthesizedFunction, slot DefaultSlot)
 	let site = defaultSite(slot)
-	let value = fn.emitPositionalCall(slot.initializer, args: ValueIdArray.create(), resultTag: maxonTypeTag(slot.valueType), resultNameId: typeNameIdOf(slot.valueType), site: site)
+	let value = fn.emitPositionalCall(slot.initializer, args: ValueIdArray.create(0), resultTag: maxonTypeTag(slot.valueType), resultNameId: typeNameIdOf(slot.valueType), site: site)
 	let slotAddr = fn.emitLabelAddr(slot.label, site: site)
 
 	match slot.kind 'kind'
@@ -190,7 +190,7 @@ function buildDefaultValue(fn SynthesizedFunction, value ValueId, slotAddr Value
 	// Marked before the install publishes it: from then on any thread may retain it.
 	emitDefaultShareWalk(fn, value: value, shareWalk: shareWalk, site: site)
 
-	var installArgs = ValueIdArray.create()
+	var installArgs = ValueIdArray.create(0)
 	installArgs.push(slotAddr)
 	installArgs.push(value)
 	installArgs.push(runtimeFunctionOrNone(fn, callee: dropCallee, site: site))
@@ -251,7 +251,7 @@ end 'markLetsShared'
 function initialRecordOf(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
 	return match global.initializer 'initializer'
 		literal(build) gives builtRecord(fn, build: build, valueType: global.valueType, site: globalSite(global))
-		initializerFunction(callee) gives fn.emitPositionalCall(callee, args: ValueIdArray.create(), resultTag: maxonTypeTag(global.valueType), resultNameId: typeNameIdOf(global.valueType), site: globalSite(global))
+		initializerFunction(callee) gives fn.emitPositionalCall(callee, args: ValueIdArray.create(0), resultTag: maxonTypeTag(global.valueType), resultNameId: typeNameIdOf(global.valueType), site: globalSite(global))
 	end 'initializer'
 end 'initialRecordOf'
 
@@ -336,7 +336,7 @@ function emitGlobalCleanupDrop(fn SynthesizedFunction, global ManagedGlobal, dro
 end 'emitGlobalCleanupDrop'
 
 function openExitCodePassThrough(module MaxonModule, project Project, name ByteArray) returns SynthesizedFunction
-	var paramTypes = MaxonTypeArray.create()
+	var paramTypes = MaxonTypeArray.create(0)
 	paramTypes.push(MaxonType.integer)
 	return SynthesizedFunction.open(module, project: project, name: name, returnType: MaxonReturnType.value(MaxonType.integer), paramTypes: paramTypes)
 end 'openExitCodePassThrough'
@@ -430,10 +430,10 @@ export type SynthesizedFunction
 	// columns with the parameters — whose ids (`0..paramCount-1`) the value numbering RESERVES rather than
 	// mints, exactly as `Parser.recordValueType` does for a parsed function's parameters.
 	export static function open(module MaxonModule, project Project, name ByteArray, returnType MaxonReturnType, paramTypes MaxonTypeArray) returns SynthesizedFunction
-		var valueTags = ValueTypeTagArray.create()
-		var valueNameIds = TypeNameIdArray.create()
-		var valueBrandIds = TypeNameIdArray.create()
-		var valueMintedSole = BoolArray.create()
+		var valueTags = ValueTypeTagArray.create(0)
+		var valueNameIds = TypeNameIdArray.create(0)
+		var valueBrandIds = TypeNameIdArray.create(0)
+		var valueMintedSole = BoolArray.create(0)
 
 		for paramType in paramTypes 'eachParam'
 			valueTags.push(maxonTypeTag(paramType))
@@ -448,7 +448,7 @@ export type SynthesizedFunction
 		// `DeadFunctionElimination.markCompilerOwnedRoot` (E4015 again, for a program that installs neither and
 		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`. Both functions run on `main`'s green
 		// thread in a program with green threads, so both carry its stack guard (`IrFunction.needsGreenThreadStackGuard`).
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count() as ParamCount, maxonParamTypes: paramTypes, typeSites: project.readerAnchors.functions.noTypeSites, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole, valueWitnessIds: ValueIdArray.create(), declaredAt: SourcePosition.synthesized(), placeholders: project.readerAnchors.functions, needsGreenThreadStackGuard: true)
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count() as ParamCount, maxonParamTypes: paramTypes, typeSites: project.readerAnchors.functions.noTypeSites, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole, valueWitnessIds: ValueIdArray.create(0), declaredAt: SourcePosition.synthesized(), placeholders: project.readerAnchors.functions, needsGreenThreadStackGuard: true)
 		let funcIndex = module.funcCount()
 		module.pushFunc(func)
 
@@ -637,7 +637,7 @@ export type SynthesizedFunction
 	// through `__maxon_global_cleanup` or through a destructor cascade. That difference is why the two are
 	// twins rather than one function on a shared carrier.
 	function emitBoxAlloc(sizeBytes FullRangeInt, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
-		var allocArgs = ValueIdArray.create()
+		var allocArgs = ValueIdArray.create(0)
 		allocArgs.push(self.emitTypedLiteral(sizeBytes, valueType: MaxonType.integer, site: site))
 		allocArgs.push(self.emitTypedLiteral(TrivialDestructor, valueType: MaxonType.integer, site: site))
 		return self.emitPositionalCall(MmAllocName, args: allocArgs, resultTag: resultTag, resultNameId: resultNameId, site: site)

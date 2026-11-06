@@ -187,7 +187,7 @@ type Row
 	export var items as CountArray
 
 	static function create(n Count) returns Row
-		return Row{n: n, items: CountArray.create()}
+		return Row{n: n, items: CountArray.create(0)}
 	end 'create'
 end 'Row'
 

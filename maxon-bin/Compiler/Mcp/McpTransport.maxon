@@ -45,7 +45,7 @@ export type JsonObjectBuilder
 	var children as JsonNodeIdArray
 
 	export static function create() returns JsonObjectBuilder
-		return Self{keys: StringArray.create(), children: JsonNodeIdArray.create()}
+		return Self{keys: StringArray.create(0), children: JsonNodeIdArray.create(0)}
 	end 'create'
 
 	export function addString(doc JsonDoc, key String, value String)
@@ -98,7 +98,7 @@ export function copyJsonNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns
 end 'copyJsonNode'
 
 function copyJsonArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
-	var ids = JsonNodeIdArray.create()
+	var ids = JsonNodeIdArray.create(0)
 
 	for childId in node.children 'each'
 		ids.push(copyJsonNode(src, srcId: childId, dst: dst))
@@ -216,20 +216,20 @@ end 'getOptionalBoolArg'
 
 export function getOptionalStringListArg(doc JsonDoc, args OptionalNode, key String) returns StringArray
 	match args 'a'
-		none then return StringArray.create()
+		none then return StringArray.create(0)
 		some(argsId) then return stringListArgIn(doc, argsId: argsId, key: key)
 	end 'a'
 end 'getOptionalStringListArg'
 
 function stringListArgIn(doc JsonDoc, argsId JsonNodeId, key String) returns StringArray
 	match resolveChildKey(doc, parent: argsId, key: key) 'cr'
-		none then return StringArray.create()
+		none then return StringArray.create(0)
 		some(valueId) then return stringListAt(doc, valueId: valueId, key: key)
 	end 'cr'
 end 'stringListArgIn'
 
 function stringListAt(doc JsonDoc, valueId JsonNodeId, key String) returns StringArray
-	var result = StringArray.create()
+	var result = StringArray.create(0)
 	let value = doc.get(valueId)
 
 	if value.kind == JsonKind.jsonString 'oneString'
@@ -292,7 +292,7 @@ export function toolResultText(reqDoc JsonDoc, idNode JsonNodeId, payloadText St
 	item.addString(envelope, key: "type", value: "text")
 	item.addString(envelope, key: "text", value: payloadText)
 
-	var contentArr = JsonNodeIdArray.create()
+	var contentArr = JsonNodeIdArray.create(0)
 	contentArr.push(item.build(envelope))
 
 	var result = JsonObjectBuilder.create()
@@ -371,7 +371,7 @@ function byteAt(bytes ByteArray, at BytePos) returns Byte
 end 'byteAt'
 
 export function sliceBytes(bytes ByteArray, from BytePos, until BytePos) returns String
-	var out = ByteArray.create()
+	var out = ByteArray.create(0)
 
 	for i in from upto until 'copy'
 		out.push(byteAt(bytes, at: i))

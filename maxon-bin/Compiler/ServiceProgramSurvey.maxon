@@ -41,7 +41,7 @@ module type ServiceAwaitRoster
 	var sites as ServiceAwaitSiteArray
 
 	static function create() returns ServiceAwaitRoster
-		return Self{funcIndices: FuncIndexArray.create(), sites: ServiceAwaitSiteArray.create()}
+		return Self{funcIndices: FuncIndexArray.create(0), sites: ServiceAwaitSiteArray.create(0)}
 	end 'create'
 
 	// ⚠ An await through `I.handle` may be answered by any live implementer of `I`, so it is an edge
@@ -125,7 +125,7 @@ module type OpRoster
 	var ops as OpIndexArray
 
 	static function create() returns OpRoster
-		return Self{funcs: FuncIndexArray.create(), ops: OpIndexArray.create()}
+		return Self{funcs: FuncIndexArray.create(0), ops: OpIndexArray.create(0)}
 	end 'create'
 
 	function note(funcIndex ElementIndex, opIndex ElementIndex)
@@ -153,7 +153,7 @@ module type SlotRoster
 	var subjects as SlotSubjectIndexArray
 
 	static function create() returns SlotRoster
-		return Self{sites: OpRoster.create(), subjects: SlotSubjectIndexArray.create()}
+		return Self{sites: OpRoster.create(), subjects: SlotSubjectIndexArray.create(0)}
 	end 'create'
 
 	function noteIfListed(label ByteArray, listed SlotSubjectByLabel, funcIndex ElementIndex, opIndex ElementIndex)
@@ -224,7 +224,7 @@ module type ServiceProgramSurvey
 	export var spawns as OpRoster
 
 	static function create() returns ServiceProgramSurvey
-		return Self{edges: CallGraphEdges.create(), ownerPerFunc: MessageOwnerArray.create(), awaits: ServiceAwaitRoster.create(), callsAClosure: BoolArray.create(), dispatchesThroughAWitness: BoolArray.create(), witnessDispatchFuncs: FuncIndexArray.create(), witnessDispatchRequirements: NameRoster.create(), witnessDispatchStarts: EntryIndexArray.create(), calleeGraph: buildCsr(CsrColumn.create(), to: CsrColumn.create(), nodeCount: 0), addressTaken: CsrColumn.create(), globalUses: SlotRoster.create(), moduleVarUses: SlotRoster.create(), spawns: OpRoster.create()}
+		return Self{edges: CallGraphEdges.create(), ownerPerFunc: MessageOwnerArray.create(0), awaits: ServiceAwaitRoster.create(), callsAClosure: BoolArray.create(0), dispatchesThroughAWitness: BoolArray.create(0), witnessDispatchFuncs: FuncIndexArray.create(0), witnessDispatchRequirements: NameRoster.create(0), witnessDispatchStarts: EntryIndexArray.create(0), calleeGraph: buildCsr(CsrColumn.create(0), to: CsrColumn.create(0), nodeCount: 0), addressTaken: CsrColumn.create(0), globalUses: SlotRoster.create(), moduleVarUses: SlotRoster.create(), spawns: OpRoster.create()}
 	end 'create'
 
 	module function funcCount() returns CsrIndex
@@ -248,7 +248,7 @@ module type ServiceProgramSurvey
 	end 'isAFactory'
 
 	module function messageSeeds() returns BoolArray
-		var seeds = BoolArray.create()
+		var seeds = BoolArray.create(0)
 
 		for funcIndex in 0 upto self.funcCount() 'eachFunction'
 			seeds.push(self.isAMessage(funcIndex))

@@ -2204,7 +2204,7 @@ typealias Percent = int(0 to 100)
 typealias PA = Array with Percent
 
 function main() returns ExitCode
-	var a = PA.create()
+	var a = PA.create(0)
 	a.push(500)
 	return a.count()
 end 'main'
@@ -2271,7 +2271,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var a = PA.create()
+	var a = PA.create(0)
 	a.push(-grow(5))
 	return a.count()
 end 'main'
@@ -2297,7 +2297,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var a = PA.create()
+	var a = PA.create(0)
 	a.push(grow(5) as Percent)
 	return a.count()
 end 'main'
@@ -2328,7 +2328,7 @@ typealias Percent = int(0 to 100)
 typealias PA = Array with Percent
 
 function main() returns ExitCode
-	var a = PA.create()
+	var a = PA.create(0)
 	a.push(3)
 	try a.set(0, value: 500) otherwise 'oob'
 		return 9
@@ -2351,7 +2351,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var a = PA.create()
+	var a = PA.create(0)
 	a.push(3)
 	try a.set(0, value: -grow(5)) otherwise 'oob'
 		return 9
@@ -2380,7 +2380,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var a = PA.create()
+	var a = PA.create(0)
 	a.push(3)
 	try a.set(0, value: grow(5) as Percent) otherwise 'oob'
 		return 9
@@ -2414,7 +2414,7 @@ typealias Percent = int(0 to 100)
 typealias PA = Array with Percent
 
 function main() returns ExitCode
-	var a = PA.create()
+	var a = PA.create(0)
 	a.push(3)
 	a.insert(0, value: 500)
 	return a.count()
@@ -2435,7 +2435,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var a = PA.create()
+	var a = PA.create(0)
 	a.push(3)
 	a.insert(0, value: grow(5) as Percent)
 	return a.count()
@@ -2462,7 +2462,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var a = PA.create()
+	var a = PA.create(0)
 	a.push(3)
 	a.insert(0, value: -grow(5))
 	return a.count()
@@ -2789,7 +2789,7 @@ export extension Array
 end 'Array'
 
 function main() returns ExitCode
-	var a = BA.create()
+	var a = BA.create(0)
 	a.pushTwice(300)
 	return a.count()
 end 'main'
@@ -2933,7 +2933,7 @@ end 'take'
 function main() returns ExitCode
 	var b = Box.create()
 	b.v = 42
-	var a = PA.create()
+	var a = PA.create(0)
 	a.push(3)
 	let s = Box.make(5)
 	return take(b.v) + (a.count() as Percent) + s.v
@@ -3775,7 +3775,7 @@ function widthOf(c RegCountColumn) returns DenseInt
 end 'widthOf'
 
 function main() returns ExitCode
-	var d = DenseColumn.create()
+	var d = DenseColumn.create(0)
 	d.push(7)
 	d.push(9)
 	let w = widthOf(d)
@@ -3801,7 +3801,7 @@ function takesNarrow(c NarrowColumn) returns Wide
 end 'takesNarrow'
 
 function main() returns ExitCode
-	var w = WideColumn.create()
+	var w = WideColumn.create(0)
 	w.push(7)
 	return takesNarrow(w) as ExitCode
 end 'main'
@@ -3833,10 +3833,10 @@ function takesNarrow(c NarrowCol) returns ExitCode
 end 'takesNarrow'
 
 function main() returns ExitCode
-	var w = WideCol.create()
+	var w = WideCol.create(0)
 	w.push(1)
 	let a = widthOf(w)
-	var o = OtherCol.create()
+	var o = OtherCol.create(0)
 	o.push(2)
 	return takesNarrow(o) + a
 end 'main'
@@ -3863,7 +3863,7 @@ typealias Narrow = int(0 to 63)
 typealias NarrowCol = Array with Narrow
 
 function makeOther() returns OtherCol
-	return OtherCol.create()
+	return OtherCol.create(0)
 end 'makeOther'
 
 function widthOf(c WideCol) returns ExitCode
@@ -3875,7 +3875,7 @@ function takesNarrow(c NarrowCol) returns ExitCode
 end 'takesNarrow'
 
 function main() returns ExitCode
-	let w = widthOf(WideCol.create())
+	let w = widthOf(WideCol.create(0))
 	return takesNarrow(makeOther()) + w
 end 'main'
 ```

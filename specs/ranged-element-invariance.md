@@ -60,7 +60,7 @@ function writeThrough(col WideCol, value Wide)
 end 'writeThrough'
 
 function main() returns ExitCode
-	var narrow = NarrowCol.create()
+	var narrow = NarrowCol.create(0)
 	narrow.push(1)
 	writeThrough(narrow, value: 300)
 	return 0
@@ -83,7 +83,7 @@ function readNarrow(col NarrowCol) returns Narrow
 end 'readNarrow'
 
 function main() returns ExitCode
-	var wide = WideCol.create()
+	var wide = WideCol.create(0)
 	wide.push(7)
 	return readNarrow(wide)
 end 'main'
@@ -104,7 +104,7 @@ function bump(col SmallCol, by Small)
 end 'bump'
 
 function main() returns ExitCode
-	var a = SmallCol.create()
+	var a = SmallCol.create(0)
 	a.push(40)
 	bump(a, by: 2)
 	return try a.get(0) otherwise panic("get")

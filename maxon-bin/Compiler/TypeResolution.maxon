@@ -338,7 +338,7 @@ module function resolveTypes(project Project, module MaxonModule)
 		var func = try module.functions.get(i) otherwise panic("resolveTypes: functions.get OOB at {i}")
 		func.maxonReturnType = resolveReturnType(project, signatures: signatures, ret: func.maxonReturnType, readerFilePath: func.sourceFilePath, site: func.typeSites.returnTypeSite(), declaration: func.name)
 
-		var resolvedParams = MaxonTypeArray.create()
+		var resolvedParams = MaxonTypeArray.create(0)
 
 		for position in 0 upto func.maxonParamTypes.count() 'eachParam'
 			let pt = try func.maxonParamTypes.get(position) otherwise panic("resolveTypes: maxonParamTypes.get OOB at {position} below its own count")
@@ -488,7 +488,7 @@ end 'reportedAtTheDeclaration'
 // declaration (`FunctionTypeAlias.typeSites`). `resolveType`'s recovery answer for it is what lands in a
 // resolved shape, and the pipeline's error gate stops the build before anything reads it.
 function functionAliasShapesIn(project Project, signatures ProgramSignatures, form FunctionAliasShapeForm) returns FunctionShapeMap
-	var names = NameRoster.create()
+	var names = NameRoster.create(0)
 
 	for (name, _) in project.functionTypeAliases 'eachDeclaredAlias'
 		names.push(name)
@@ -498,10 +498,10 @@ function functionAliasShapesIn(project Project, signatures ProgramSignatures, fo
 
 	for name in names 'eachAlias'
 		var alias = try project.functionTypeAliases.get(name) otherwise panic("functionAliasShapesIn: '{String.from(name)}' was read out of the alias registry and is no longer in it")
-		var params = MaxonTypeArray.create()
-		var preErasedNames = NameRoster.create()
-		var spellings = NameRoster.create()
-		var capabilities = ParamCapabilityArray.create()
+		var params = MaxonTypeArray.create(0)
+		var preErasedNames = NameRoster.create(0)
+		var spellings = NameRoster.create(0)
+		var capabilities = ParamCapabilityArray.create(0)
 
 		for position in 0 upto alias.paramTypes.count() 'eachParam'
 			let param = try alias.paramTypes.get(position) otherwise panic("functionAliasShapesIn: paramTypes.get OOB at {position} below its own count")
@@ -821,7 +821,7 @@ end 'shapesAgreeUnder'
 // only local work is putting each erased position's identity back as the `named` type it was before
 // resolution, which is precisely what the shared renderer already knows how to print.
 export function formatFunctionShapeDisplay(shape FunctionShape, typeNames TypeNameInterner, signatures ProgramSignatures) returns String
-	var unerasedParams = MaxonTypeArray.create()
+	var unerasedParams = MaxonTypeArray.create(0)
 
 	for i in 0 upto shape.paramTypes.count() 'eachParam'
 		unerasedParams.push(unerasedType(try shape.paramTypes.get(i) otherwise panic("formatFunctionShapeDisplay: paramTypes.get OOB at {i} — the count was just read from the same array"), identity: shapeParamIdentity(shape, index: i as ParamCount), typeNames: typeNames))
@@ -865,7 +865,7 @@ end 'shapeParamSpelling'
 
 // The pending list a top-level comparison starts from. ONE object for the whole compile and NEVER mutated
 // (`pendingWithPair` builds a fresh array): a nested function type is rare, so the overwhelming majority of comparisons must allocate nothing at all.
-let sharedEmptyFunctionTypePairs = FunctionTypePairArray.create()
+let sharedEmptyFunctionTypePairs = FunctionTypePairArray.create(0)
 
 // Two resolved RETURN slots are the same slot: both return nothing, or both return the same type. A `void`
 // meeting a value (or the reverse) is a real disagreement — a call site that expects a result register from
@@ -1033,7 +1033,7 @@ end 'pairIsUnderComparison'
 // `pending` plus this pair, as a FRESH array — `sharedEmptyFunctionTypePairs` and every list above this one
 // in the descent must stay untouched, because a sibling parameter compared after this one is not under it.
 function pendingWithPair(pending FunctionTypePairArray, declaredName ByteArray, gotName ByteArray) returns FunctionTypePairArray
-	var extended = FunctionTypePairArray.create()
+	var extended = FunctionTypePairArray.create(0)
 
 	for pair in pending 'eachPending'
 		extended.push(pair)
@@ -1072,7 +1072,7 @@ end 'pendingWithPair'
 // hashes the same names into the same slots), which is what the byte-identical-output gate needs;
 // and a program with two undeclared field types has two independent bugs, not an ordering.
 function checkStructFieldTypes(project Project, signatures ProgramSignatures)
-	var layouts = StructLayoutArray.create()
+	var layouts = StructLayoutArray.create(0)
 
 	for (_, layout) in project.structTypes 'eachDeclaredStruct'
 		layouts.push(layout)
@@ -1100,7 +1100,7 @@ function checkLayoutFieldTypes(project Project, signatures ProgramSignatures, la
 end 'checkLayoutFieldTypes'
 
 function checkEnumPayloadTypes(project Project, signatures ProgramSignatures)
-	var layouts = EnumLayoutArray.create()
+	var layouts = EnumLayoutArray.create(0)
 
 	for (_, layout) in project.enumTypes 'eachDeclaredEnum'
 		layouts.push(layout)
@@ -1163,7 +1163,7 @@ function sourceParamTypesOf(func IrFunction, declaredCount ParamCount) returns M
 		return func.maxonParamTypes
 	end 'alreadyExact'
 
-	var sourceParams = MaxonTypeArray.create()
+	var sourceParams = MaxonTypeArray.create(0)
 
 	for i in 0 upto declaredCount 'eachDeclared'
 		sourceParams.push(try func.maxonParamTypes.get(i) otherwise panic("sourceParamTypesOf: '{String.from(func.name)}' declares {declaredCount} parameter names but its type column holds only {func.maxonParamTypes.count()} — the compiler may APPEND a hidden parameter (a lifted closure's `__env`), never omit a declared one"))

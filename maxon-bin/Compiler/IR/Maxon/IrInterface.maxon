@@ -548,7 +548,7 @@ end 'cacheWriteParamCapabilityArray'
 
 function cacheReadParamCapabilityArray(reader LibraryCacheReader) returns ParamCapabilityArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ParamCapabilityArray.create()
+	var result = ParamCapabilityArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -562,7 +562,7 @@ end 'cacheReadParamCapabilityArray'
 // @generated library-cache end
 
 export function lentParams(count ParamCount) returns ParamCapabilityArray
-	var out = ParamCapabilityArray.create()
+	var out = ParamCapabilityArray.create(0)
 	out.refill(count as ElementIndex, value: ParamCapability.lent)
 	return out
 end 'lentParams'
@@ -784,7 +784,7 @@ end 'cacheWriteRequirementTypeArray'
 
 export function cacheReadRequirementTypeArray(reader LibraryCacheReader) returns RequirementTypeArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = RequirementTypeArray.create()
+	var result = RequirementTypeArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -1013,7 +1013,7 @@ export type InterfaceMethodSig
 	// synthesized interfaces build one of these rather than passing an empty array, because a column that
 	// is SHORTER than `paramNames` would make "absent" and "false" two different things at every reader.
 	export static function noBufferParams(count ParamCount) returns BoolArray
-		var out = BoolArray.create()
+		var out = BoolArray.create(0)
 		var filled = 0 as ParamCount
 
 		while filled < count 'each'
@@ -1096,7 +1096,7 @@ end 'cacheWriteInterfaceMethodSigArray'
 
 function cacheReadInterfaceMethodSigArray(reader LibraryCacheReader) returns InterfaceMethodSigArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = InterfaceMethodSigArray.create()
+	var result = InterfaceMethodSigArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -1227,7 +1227,7 @@ export type IrInterface
 	end 'create'
 
 	export function withInstancesRenumbered(remap TypeIdRemap) returns IrInterface
-		var renumbered = InterfaceMethodSigArray.create()
+		var renumbered = InterfaceMethodSigArray.create(0)
 
 		for method in self.methods 'eachMethod'
 			renumbered.push(method.withInstancesRenumbered(remap))
@@ -1625,7 +1625,7 @@ end 'cacheWriteIrInterfaceArray'
 
 export function cacheReadIrInterfaceArray(reader LibraryCacheReader) returns IrInterfaceArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = IrInterfaceArray.create()
+	var result = IrInterfaceArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -1643,18 +1643,18 @@ end 'cacheReadIrInterfaceArray'
 // binds it with `let` and the substitution only READS it, so one allocation serves them all, the
 // discipline `Parser.sharedEmptyWhereConstraints` states in full. It is the reason
 // `withoutBindings` exists as a second constructor rather than each caller spelling
-// `NameRoster.create()`: a caller that allocated its own empty list would pay one heap object per
+// `NameRoster.create(0)`: a caller that allocated its own empty list would pay one heap object per
 // declared conformance and nothing would notice.
-let sharedEmptyWithArgs = NameRoster.create()
+let sharedEmptyWithArgs = NameRoster.create(0)
 
-export let sharedEmptyRequirementTypes = RequirementTypeArray.create()
+export let sharedEmptyRequirementTypes = RequirementTypeArray.create(0)
 
 export function renumberedRequirements(requirements RequirementTypeArray, remap TypeIdRemap) returns RequirementTypeArray
 	if requirements.isEmpty() 'nothingToRenumber'
 		return requirements
 	end 'nothingToRenumber'
 
-	var renumbered = RequirementTypeArray.create()
+	var renumbered = RequirementTypeArray.create(0)
 
 	for requirement in requirements 'eachRequirement'
 		renumbered.push(requirement.withInstancesRenumbered(remap))
@@ -1727,7 +1727,7 @@ end 'cacheWriteInterfaceConformanceArray'
 
 function cacheReadInterfaceConformanceArray(reader LibraryCacheReader) returns InterfaceConformanceArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = InterfaceConformanceArray.create()
+	var result = InterfaceConformanceArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -1754,7 +1754,7 @@ export type ConformanceDecl
 	end 'create'
 
 	export function withInstancesRenumbered(remap TypeIdRemap) returns ConformanceDecl
-		var renumbered = InterfaceConformanceArray.create()
+		var renumbered = InterfaceConformanceArray.create(0)
 
 		for entry in self.interfaces 'eachEntry'
 			renumbered.push(entry.withInstancesRenumbered(remap))
@@ -1802,7 +1802,7 @@ end 'cacheWriteConformanceDeclArray'
 
 export function cacheReadConformanceDeclArray(reader LibraryCacheReader) returns ConformanceDeclArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ConformanceDeclArray.create()
+	var result = ConformanceDeclArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -1883,7 +1883,7 @@ end 'cacheWriteLiteralInitSiteArray'
 
 export function cacheReadLiteralInitSiteArray(reader LibraryCacheReader) returns LiteralInitSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = LiteralInitSiteArray.create()
+	var result = LiteralInitSiteArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -2087,7 +2087,7 @@ export type AliasExpansionScope
 	end 'create'
 end 'AliasExpansionScope'
 
-export let sharedNoAliasExpansion = AliasExpansionScope.create(b"", associatedNames: NameRoster.create(), bound: RequirementTypeArray.create())
+export let sharedNoAliasExpansion = AliasExpansionScope.create(b"", associatedNames: NameRoster.create(0), bound: RequirementTypeArray.create(0))
 
 // One requirement of an interface paired with the interface that DECLARED it — the source interface, so a
 // method inherited via `extends` can be tagged `(from BaseInterface)` in a missing-method report and so a
@@ -2186,7 +2186,7 @@ end 'witnessSlotsRequireMethod'
 // must not disagree: `visited` (which decides the diamond) and `sourceInterfaceName` (which becomes the
 // interface half of `witnessSlotImplKey`, and so which member a slot's relocation names).
 export function interfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterface) returns CollectedInterfaceMethodArray
-	var slots = CollectedInterfaceMethodArray.create()
+	var slots = CollectedInterfaceMethodArray.create(0)
 	var visited = InterfaceNameSet.create()
 	appendInterfaceWitnessSlots(interfaces, iface: iface, slots: slots, visited: visited)
 	return slots
@@ -2381,16 +2381,16 @@ end 'witnessTargetIsProtocol'
 // non-throwing — the builtin conformances (`int.hash()`, `String.equals(other)`) are compiler-emitted
 // runtime chunks with no error channel — so the throws clause is `none` at both helpers.
 function nullaryInterfaceMethod(name ByteArray, returnTypeName ByteArray, returnType RequirementType) returns InterfaceMethodSig
-	return InterfaceMethodSig.create(name, paramNames: NameRoster.create(), paramTypeNames: NameRoster.create(), paramTypes: RequirementTypeArray.create(), returnTypeName: returnTypeName, returnType: returnType, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0), paramCapabilities: lentParams(0), returnCapability: ResultCapability.unqualified, byRefParams: NoParamPositions, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
+	return InterfaceMethodSig.create(name, paramNames: NameRoster.create(0), paramTypeNames: NameRoster.create(0), paramTypes: RequirementTypeArray.create(0), returnTypeName: returnTypeName, returnType: returnType, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0), paramCapabilities: lentParams(0), returnCapability: ResultCapability.unqualified, byRefParams: NoParamPositions, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
 end 'nullaryInterfaceMethod'
 
 // A one-parameter interface method (`equals(other Self)`, `toString(format String)`).
 function unaryInterfaceMethod(name ByteArray, paramName ByteArray, paramTypeName ByteArray, paramType RequirementType, returnTypeName ByteArray, returnType RequirementType) returns InterfaceMethodSig
-	var paramNames = NameRoster.create()
+	var paramNames = NameRoster.create(0)
 	paramNames.push(paramName)
-	var paramTypeNames = NameRoster.create()
+	var paramTypeNames = NameRoster.create(0)
 	paramTypeNames.push(paramTypeName)
-	var paramTypes = RequirementTypeArray.create()
+	var paramTypes = RequirementTypeArray.create(0)
 	paramTypes.push(paramType)
 	let paramIsBuffer = InterfaceMethodSig.noBufferParams(paramNames.count() as ParamCount)
 	let paramCapabilities = lentParams(paramNames.count() as ParamCount)
@@ -2400,15 +2400,15 @@ end 'unaryInterfaceMethod'
 // An interface with exactly one method and no `extends`/`uses` — every synthesized
 // protocol interface but `Error`.
 function singleMethodInterface(name ByteArray, method InterfaceMethodSig) returns IrInterface
-	var methods = InterfaceMethodSigArray.create()
+	var methods = InterfaceMethodSigArray.create(0)
 	methods.push(method)
-	return IrInterface.create(name, methods: methods, extendsInterfaces: NameRoster.create(), associatedTypeNames: NameRoster.create(), declFilePath: CompilerOwnedDeclFilePath)
+	return IrInterface.create(name, methods: methods, extendsInterfaces: NameRoster.create(0), associatedTypeNames: NameRoster.create(0), declFilePath: CompilerOwnedDeclFilePath)
 end 'singleMethodInterface'
 
 // A marker interface with NO methods (`Error`). A type conforms to it by declaring
 // `implements Error` alone; there is nothing to check.
 function markerInterface(name ByteArray) returns IrInterface
-	return IrInterface.create(name, methods: InterfaceMethodSigArray.create(), extendsInterfaces: NameRoster.create(), associatedTypeNames: NameRoster.create(), declFilePath: CompilerOwnedDeclFilePath)
+	return IrInterface.create(name, methods: InterfaceMethodSigArray.create(0), extendsInterfaces: NameRoster.create(0), associatedTypeNames: NameRoster.create(0), declFilePath: CompilerOwnedDeclFilePath)
 end 'markerInterface'
 
 // ⭐⭐ **THE Std RESULT TYPE OF A SYNTHESIZED PROTOCOL METHOD — ONE FACT, READ BY EVERY BUILDER THAT MUST
@@ -2516,7 +2516,7 @@ end 'canonicalProtocolName'
 // `builtinInterfaceKind` disagreeing fails at the first `ProgramSignatures.create` rather than silently
 // giving one protocol no index.
 export function builtinInterfaceNames() returns NameRoster
-	var names = NameRoster.create()
+	var names = NameRoster.create(0)
 
 	for protocol in BuiltinInterfaceKind.allCases 'eachKind'
 		if protocol == BuiltinInterfaceKind.notABuiltin 'classifiesRatherThanNames'
@@ -3258,7 +3258,7 @@ export typealias BuiltinInterfaceKindArray = Array with BuiltinInterfaceKind
 // the sentence a withheld method is refused with, and this predicate's answer are one list. Written out as
 // `[Hashable, Equatable]` at those doors it would be the copy that stops matching the day the row moves.
 export function intrinsicConformanceProtocols(typeName ByteArray, discovered DiscoveredConformer) returns BuiltinInterfaceKindArray
-	var protocols = BuiltinInterfaceKindArray.create()
+	var protocols = BuiltinInterfaceKindArray.create(0)
 
 	for protocol in IntrinsicConformableProtocols 'eachProtocol'
 		if conformsIntrinsically(typeName, protocol: protocol, discovered: discovered) 'conforms'
@@ -3340,7 +3340,7 @@ end 'supplyingProtocol'
 // ⚠ It carries no array row for the reason `builtinConformerMethod` states in full — the walk it is derived
 // from serves the four reserved direct-dispatch conformers and nothing else.
 export function builtinConformerMethodNameList(typeName ByteArray) returns NameRoster
-	var names = NameRoster.create()
+	var names = NameRoster.create(0)
 
 	for protocol in intrinsicConformanceProtocols(typeName, discovered: DiscoveredConformer.none) 'eachProtocol'
 		names.push(try synthesizedProtocolMethodName(protocol) otherwise continue)
@@ -3371,7 +3371,7 @@ end 'builtinConformerMethodNameList'
 // It is a LIST rather than two appended lines so that the advertisement and the arms grow together: a third
 // lowering joins here and is named by the refusal in the same edit.
 function builtinConformerLoweredMethodNames() returns NameRoster
-	var names = NameRoster.create()
+	var names = NameRoster.create(0)
 	names.push(ToStringMethodName)
 	names.push(CloneMethodName)
 	return names
@@ -3388,7 +3388,7 @@ export function builtinConformerDispatchMethodNames(typeName ByteArray) returns 
 		names.push(loweredName)
 	end 'eachLowered'
 
-	var phrases = StringArray.create()
+	var phrases = StringArray.create(0)
 
 	for methodName in names 'eachMethod'
 		phrases.push("`{String.from(methodName)}`")

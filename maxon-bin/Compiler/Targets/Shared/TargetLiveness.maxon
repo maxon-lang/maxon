@@ -51,7 +51,7 @@ end 'cacheWriteCfgIndexArray'
 
 module function cacheReadCfgIndexArray(reader LibraryCacheReader) returns CfgIndexArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = CfgIndexArray.create()
+	var result = CfgIndexArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -257,14 +257,14 @@ end 'classRowIndex'
 
 // A zeroed per-CLASS row: one entry per register file, indexed by `RegClass.ordinal`.
 export function zeroClassRow() returns RegCountColumn
-	var row = RegCountColumn.create()
+	var row = RegCountColumn.create(0)
 	row.resize(RegClassCount)
 	return row
 end 'zeroClassRow'
 
 // One zeroed class row per block — the per-block pressure tables' shape (`classRowIndex`).
 function zeroClassRows(numBlocks ElementIndex) returns RegCountColumn
-	var rows = RegCountColumn.create()
+	var rows = RegCountColumn.create(0)
 	rows.resize(numBlocks * RegClassCount)
 	return rows
 end 'zeroClassRows'
@@ -384,7 +384,7 @@ end 'seedClassLive'
 // zeroing on the way out), so a fill would store zeroes over zeroes. Reach for `refill` when every entry
 // must hold a NON-zero value (a sentinel) or the length must shrink too.
 function zeroColumn(count ElementIndex) returns DenseColumn
-	var col = DenseColumn.create()
+	var col = DenseColumn.create(0)
 	col.resize(count)
 	return col
 end 'zeroColumn'
@@ -484,10 +484,10 @@ export typealias ValueIdListColumn = Array with ValueIdArray
 // never grows afterwards: blocks are fixed by the time liveness runs, and it is the VALUE space a
 // split extends, which is not keyed here (see the alias).
 function emptyListColumn(count ElementIndex) returns ValueIdListColumn
-	var lists = ValueIdListColumn.create()
+	var lists = ValueIdListColumn.create(0)
 
 	for _ in 0 upto count 'eachKey'
-		lists.push(ValueIdArray.create())
+		lists.push(ValueIdArray.create(0))
 	end 'eachKey'
 
 	return lists
@@ -644,9 +644,9 @@ export type LiveSets
 		cover.begin(numBlocks)
 		var clobbers = BlockClobbers.create()
 		clobbers.begin(numBlocks)
-		var firstEntry = CfgIndexArray.create()
+		var firstEntry = CfgIndexArray.create(0)
 		firstEntry.refill(valueCount, value: 0)
-		return Self{inSets: emptyListColumn(numBlocks), outSets: emptyListColumn(numBlocks), ledger: LiveOutLedger.create(), high: CfgIndexArray.create(), runs: runs, cover: cover, clobbers: clobbers, entryBlock: CfgIndexArray.create(), entryIsOut: BoolArray.create(), entryNext: CfgIndexArray.create(), firstEntry: firstEntry, freeEntries: CfgIndexArray.create()}
+		return Self{inSets: emptyListColumn(numBlocks), outSets: emptyListColumn(numBlocks), ledger: LiveOutLedger.create(), high: CfgIndexArray.create(0), runs: runs, cover: cover, clobbers: clobbers, entryBlock: CfgIndexArray.create(0), entryIsOut: BoolArray.create(0), entryNext: CfgIndexArray.create(0), firstEntry: firstEntry, freeEntries: CfgIndexArray.create(0)}
 	end 'create'
 
 	export function growValues(valueCount ValueId)
@@ -837,7 +837,7 @@ export type LiveOutLedger
 	export var gained as BoolArray
 
 	static function create() returns LiveOutLedger
-		return Self{recording: false, blocks: CfgIndexArray.create(), values: ValueIdArray.create(), gained: BoolArray.create()}
+		return Self{recording: false, blocks: CfgIndexArray.create(0), values: ValueIdArray.create(0), gained: BoolArray.create(0)}
 	end 'create'
 
 	export function begin()
@@ -1319,7 +1319,7 @@ end 'computeLivenessOn'
 
 // A zeroed per-value register-mask column.
 module function makeRegMaskColumn(valueCount ValueId) returns RegMaskColumn
-	var col = RegMaskColumn.create()
+	var col = RegMaskColumn.create(0)
 	col.resize(valueCount)
 	return col
 end 'makeRegMaskColumn'
@@ -1382,9 +1382,9 @@ export function reorderFuncBlocksRpo(module TargetModule, func IrFunction) retur
 		return topo
 	end 'empty'
 
-	var visited = BoolArray.create()
+	var visited = BoolArray.create(0)
 	visited.resize(topo.numBlocks)
-	var postorder = CfgIndexArray.create()
+	var postorder = CfgIndexArray.create(0)
 	postorder.reserve(topo.numBlocks)
 	rpoDfs(topo, root: 0, visited: visited, postorder: postorder)
 
@@ -1424,9 +1424,9 @@ type BlockLayout
 	var newRefs as BlockRefArray
 
 	static function create(topo FuncTopology) returns BlockLayout
-		var oldByNew = CfgIndexArray.create()
+		var oldByNew = CfgIndexArray.create(0)
 		oldByNew.reserve(topo.numBlocks)
-		var newRefs = BlockRefArray.create()
+		var newRefs = BlockRefArray.create(0)
 		newRefs.reserve(topo.numBlocks)
 		return Self{topo: topo, oldByNew: oldByNew, newRefs: newRefs}
 	end 'create'
@@ -1462,7 +1462,7 @@ type EdgeRiders
 end 'EdgeRiders'
 
 function coldDeadEndBlocks(module TargetModule, topo FuncTopology) returns BoolArray
-	var sunk = BoolArray.create()
+	var sunk = BoolArray.create(0)
 	sunk.resize(topo.numBlocks)
 	var anyCold = false
 
@@ -1479,7 +1479,7 @@ function coldDeadEndBlocks(module TargetModule, topo FuncTopology) returns BoolA
 		return sunk
 	end 'nothingToSink'
 
-	var pending = CfgIndexArray.create()
+	var pending = CfgIndexArray.create(0)
 
 	for kept in 0 upto topo.numBlocks 'eachKept'
 		if not (try sunk.get(kept) otherwise panic("coldDeadEndBlocks: sunk.get OOB")) 'staysInPlace'
@@ -1506,17 +1506,17 @@ function unsinkPredecessors(topo FuncTopology, block ElementIndex, sunk BoolArra
 end 'unsinkPredecessors'
 
 function edgeBlocksBeforeTheirTarget(module TargetModule, topo FuncTopology, postorder CfgIndexArray) returns EdgeRiders
-	var rank = CfgIndexArray.create()
+	var rank = CfgIndexArray.create(0)
 	rank.refill(topo.numBlocks, value: 0)
 
 	for ri in 0 upto postorder.count() 'eachRanked'
 		try rank.set(try postorder.get(postorder.count() - 1 - ri) otherwise panic("edgeBlocksBeforeTheirTarget: postorder.get OOB"), value: ri) otherwise panic("edgeBlocksBeforeTheirTarget: rank.set OOB")
 	end 'eachRanked'
 
-	var rider = BoolArray.create()
+	var rider = BoolArray.create(0)
 	rider.resize(topo.numBlocks)
-	var targets = CsrColumn.create()
-	var riders = CsrColumn.create()
+	var targets = CsrColumn.create(0)
+	var riders = CsrColumn.create(0)
 
 	for ri in 0 upto postorder.count() 'eachBlock'
 		let local = try postorder.get(postorder.count() - 1 - ri) otherwise panic("edgeBlocksBeforeTheirTarget: postorder.get OOB")
@@ -1562,7 +1562,7 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
 		try newByOld.set(o, value: i as DenseInt) otherwise panic("permuteTopology: newByOld.set OOB")
 	end 'invert'
 
-	var blockRefByLocal = BlockRefArray.create()
+	var blockRefByLocal = BlockRefArray.create(0)
 	blockRefByLocal.reserve(numBlocks)
 
 	for i in 0 upto numBlocks 'permuteColumns'
@@ -1573,7 +1573,7 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
 	// BlockId -> new local. The id space is unchanged (the same blocks are present), and
 	// `numBlocks` stays the "not in this function" sentinel, so only real entries are remapped.
 	let idSpace = old.localByBlockId.count()
-	var localByBlockId = CfgIndexArray.create()
+	var localByBlockId = CfgIndexArray.create(0)
 	localByBlockId.refill(idSpace, value: numBlocks)
 
 	for bid in 0 upto idSpace 'remapIds'
@@ -1587,9 +1587,9 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
 		try localByBlockId.set(bid, value: newLocal as ElementIndex) otherwise panic("permuteTopology: localByBlockId.set OOB")
 	end 'remapIds'
 
-	var edgeFrom = CsrColumn.create()
+	var edgeFrom = CsrColumn.create(0)
 	edgeFrom.reserve(old.succ.list.count())
-	var edgeTo = CsrColumn.create()
+	var edgeTo = CsrColumn.create(0)
 	edgeTo.reserve(old.succ.list.count())
 
 	for u in 0 upto numBlocks 'eachNewBlock'
@@ -1618,9 +1618,9 @@ end 'permuteTopology'
 // (node, next-successor-index) pair per open node — the explicit form of a recursive call's resume
 // point — so a node is emitted to the postorder only once its whole subtree is done.
 module function rpoDfs(topo FuncTopology, root ElementIndex, visited BoolArray, postorder CfgIndexArray)
-	var stackNode = CfgIndexArray.create()
+	var stackNode = CfgIndexArray.create(0)
 	stackNode.reserve(topo.numBlocks)
-	var stackNextSucc = CsrColumn.create()
+	var stackNextSucc = CsrColumn.create(0)
 	stackNextSucc.reserve(topo.numBlocks)
 
 	try visited.set(root, value: true) otherwise panic("rpoDfs: visited.set(root) OOB")
@@ -1656,9 +1656,9 @@ end 'rpoDfs'
 // RPO reorder and the critical-edge split need, and it is deliberately all they can get — see
 // `FuncTopology`. The allocator's `buildFuncCfg` adds the two analyses on top.
 export function buildFuncTopology(module TargetModule, func IrFunction) returns FuncTopology
-	var blockRefByLocal = BlockRefArray.create()
+	var blockRefByLocal = BlockRefArray.create(0)
 	blockRefByLocal.reserve(func.blockRefs.count())
-	var blockIdByLocal = CfgIndexArray.create()
+	var blockIdByLocal = CfgIndexArray.create(0)
 	blockIdByLocal.reserve(func.blockRefs.count())
 	var maxBlockId = 0 as BlockId
 
@@ -1682,7 +1682,7 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns 
 	// program has. Liveness, loop depth and pressure all follow it off a cliff, so the failure
 	// surfaces far away (values from one loop appearing live inside another) and looks like an
 	// allocator bug. Assert it here, at the one place the collision would be absorbed.
-	var localByBlockId = CfgIndexArray.create()
+	var localByBlockId = CfgIndexArray.create(0)
 	localByBlockId.refill(((maxBlockId + 1) as ElementIndex), value: numBlocks)
 
 	for i in 0 upto numBlocks 'mapIds'
@@ -1700,7 +1700,7 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns 
 	// block of every function — and the skeleton is built twice per function (the critical-edge
 	// split, then the RPO reorder), so two per block per compile for a buffer that never
 	// outlives its iteration. Same hoist-and-clear the pressure sweep's `ordered` uses.
-	var succIds = BlockIdArray.create()
+	var succIds = BlockIdArray.create(0)
 	var edgeCount = 0 as ElementIndex
 
 	for i in 0 upto numBlocks 'countEdges'
@@ -1711,9 +1711,9 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns 
 	end 'countEdges'
 
 	// Edge list (fromLocal, toLocal), then CSR for succ and its inverse for pred.
-	var edgeFrom = CsrColumn.create()
+	var edgeFrom = CsrColumn.create(0)
 	edgeFrom.reserve(edgeCount)
-	var edgeTo = CsrColumn.create()
+	var edgeTo = CsrColumn.create(0)
 	edgeTo.reserve(edgeCount)
 
 	for i in 0 upto numBlocks 'eachBlock'
@@ -2223,9 +2223,9 @@ end 'collectBlockSuccessorIds'
 // armed at its rows and a loop header armed only where control falls into it stops once rather
 // than on every iteration.
 module function lineEntryColumn(module TargetModule, func IrFunction, encoding FunctionEncodingFacts) returns BoolArray
-	var firstSpans = SpanIdArray.create()
+	var firstSpans = SpanIdArray.create(0)
 	firstSpans.refill(func.nextBlockId, value: NoSpanId)
-	var openingSites = InlineSiteRefArray.create()
+	var openingSites = InlineSiteRefArray.create(0)
 	openingSites.refill(func.nextBlockId, value: InlineSiteRef.none)
 
 	for blockRef in func.blockRefs 'eachBlockOpening'
@@ -2236,7 +2236,7 @@ module function lineEntryColumn(module TargetModule, func IrFunction, encoding F
 
 	let blockSites = openingSites
 
-	var entered = BoolArray.create()
+	var entered = BoolArray.create(0)
 	entered.refill(func.nextBlockId, value: false)
 
 	if not someSpanIn(firstSpans) 'noLineToEnter'
@@ -2302,16 +2302,16 @@ type LineWays
 	var joinGeneration as JoinGeneration
 
 	static function of(module TargetModule, func IrFunction, sites InlineSiteRefArray, encoding FunctionEncodingFacts) returns LineWays
-		var leaving = CsrColumn.create()
-		var entering = CsrColumn.create()
-		var lineClasses = BlockLineClassArray.create()
+		var leaving = CsrColumn.create(0)
+		var entering = CsrColumn.create(0)
+		var lineClasses = BlockLineClassArray.create(0)
 		lineClasses.refill(func.nextBlockId, value: BlockLineClass.positionless)
 		var sourceLineOrdinals = LineClassMap.create()
 		var classIds = LineClassMap.create()
 		let siteSlots = encoding.siteCount as LineClassKey + FirstSplicedSiteSlot
-		var successors = BlockIdArray.create()
+		var successors = BlockIdArray.create(0)
 		var entry = 0 as BlockId
-		var layout = BlockIdArray.create()
+		var layout = BlockIdArray.create(0)
 
 		for (iter, blockRef) in func.blockRefs.withIterator() 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("LineWays.of: blockRef from func.blockRefs not in module.blocks")
@@ -2334,11 +2334,11 @@ type LineWays
 			end 'eachTarget'
 		end 'eachBlock'
 
-		var frontiers = LineFrontierArray.create()
-		frontiers.refill(func.nextBlockId, value: BlockIdArray.create())
-		var reachesEntry = BoolArray.create()
+		var frontiers = LineFrontierArray.create(0)
+		frontiers.refill(func.nextBlockId, value: BlockIdArray.create(0))
+		var reachesEntry = BoolArray.create(0)
 		reachesEntry.refill(func.nextBlockId, value: false)
-		var classStamps = JoinGenerationArray.create()
+		var classStamps = JoinGenerationArray.create(0)
 		classStamps.refill(classIds.count(), value: 0)
 
 		var ways = Self{successors: buildCsr(leaving, to: entering, nodeCount: func.nextBlockId as CsrIndex), predecessors: buildCsr(entering, to: leaving, nodeCount: func.nextBlockId as CsrIndex), sites: sites, lineClasses: lineClasses, encoding: encoding, entry: entry, frontiers: frontiers, reachesEntry: reachesEntry, classStamps: classStamps, joinGeneration: 0}
@@ -2348,9 +2348,9 @@ type LineWays
 	end 'of'
 
 	function settleFrontiers(func IrFunction, layout BlockIdArray)
-		var queued = BoolArray.create()
+		var queued = BoolArray.create(0)
 		queued.refill(func.nextBlockId, value: false)
-		var pending = CsrColumn.create()
+		var pending = CsrColumn.create(0)
 
 		// Seeded in layout order: BlockIds are creation order, so an edge-split block sits far from its
 		// flow neighbours and an id-order seed refreshes a wide join many times over.
@@ -2403,7 +2403,7 @@ type LineWays
 	end 'queueIfTransparent'
 
 	function refreshedFrontier(block CsrIndex) returns bool
-		var frontier = BlockIdArray.create()
+		var frontier = BlockIdArray.create(0)
 		var owned = true
 		var fromEntry = block == (self.entry as CsrIndex)
 		self.joinGeneration = self.joinGeneration + 1
@@ -2671,7 +2671,7 @@ end 'condBranchTargetOf'
 // class rather than read past the end of the column.
 export function scanFunctionValueCount(module TargetModule, func IrFunction) returns ValueId
 	var maxId = 0 as ValueId
-	var buf = OperandList.create()
+	var buf = OperandList.create(0)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("scanFunctionValueCount: blockRef not in module.blocks")
@@ -2710,7 +2710,7 @@ end 'scanFunctionValueCount'
 // header states the reducibility premise both rest on. What is this function's own is the DEPTH: one
 // increment per natural loop a block belongs to.
 function computeLoopDepth(succ CsrGraph, pred CsrGraph, numBlocks ElementIndex) returns LoopDepthArray
-	var depth = LoopDepthArray.create()
+	var depth = LoopDepthArray.create(0)
 	depth.resize(numBlocks)
 
 	if numBlocks == 0 'empty'
@@ -2766,7 +2766,7 @@ end 'computeLoopDepth'
 export function enclosingLoopBlocks(topo FuncTopology, blockLocal ElementIndex) returns BoolArray
 	let loops = NaturalLoops.find(topo.succ, nodeCount: topo.numBlocks as CsrIndex)
 
-	var nest = BoolArray.create()
+	var nest = BoolArray.create(0)
 	nest.resize(topo.numBlocks)
 	var found = false
 	var member = LoopMembership.create()
@@ -3011,26 +3011,26 @@ export type UseIndex
 	// An EMPTY index over a `valueCount`-value, `numBlocks`-block function — the shape `buildUseIndex`
 	// fills in place, through the very same mutators a split edits it with.
 	static function create(valueCount ValueId, numBlocks ElementIndex) returns UseIndex
-		var useCountOfValue = UseOrdinalArray.create()
+		var useCountOfValue = UseOrdinalArray.create(0)
 		useCountOfValue.resize(valueCount)
-		var lastUseOfValue = UseRecordIndexArray.create()
+		var lastUseOfValue = UseRecordIndexArray.create(0)
 		lastUseOfValue.resize(valueCount)
-		var useCountInBlock = UseOrdinalArray.create()
+		var useCountInBlock = UseOrdinalArray.create(0)
 		useCountInBlock.resize(numBlocks)
-		var firstUseInBlock = UseRecordIndexArray.create()
+		var firstUseInBlock = UseRecordIndexArray.create(0)
 		firstUseInBlock.resize(numBlocks)
-		var defOpIdx = OpIndexArray.create()
+		var defOpIdx = OpIndexArray.create(0)
 		defOpIdx.resize(valueCount)
-		var defOpBlock = CfgIndexArray.create()
+		var defOpBlock = CfgIndexArray.create(0)
 		defOpBlock.resize(valueCount)
-		var phiBlock = CfgIndexArray.create()
+		var phiBlock = CfgIndexArray.create(0)
 		phiBlock.resize(valueCount)
-		var spillSlot = SpillSlotArray.create()
-		var unrolledSlotOf = CfgIndexArray.create()
+		var spillSlot = SpillSlotArray.create(0)
+		var unrolledSlotOf = CfgIndexArray.create(0)
 		unrolledSlotOf.resize(valueCount)
 		spillSlot.resize(valueCount)
 
-		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount), constDef: falseColumn(valueCount), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn(valueCount), phiBlock: phiBlock, edgePassed: falseColumn(valueCount), spillStored: falseColumn(valueCount), slotResident: falseColumn(valueCount), spillSlot: spillSlot, touchesHotLoop: falseColumn(valueCount), unrolledSlotOf: unrolledSlotOf, unrolledChains: UnrolledChainArray.create()}
+		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(0), useSeq: OpSeqArray.create(0), useOnEdge: BoolArray.create(0), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(0), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(0), hasOpDef: falseColumn(valueCount), constDef: falseColumn(valueCount), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn(valueCount), phiBlock: phiBlock, edgePassed: falseColumn(valueCount), spillStored: falseColumn(valueCount), slotResident: falseColumn(valueCount), spillSlot: spillSlot, touchesHotLoop: falseColumn(valueCount), unrolledSlotOf: unrolledSlotOf, unrolledChains: UnrolledChainArray.create(0)}
 	end 'create'
 
 	// How many use sites `valueId` has — the BOUND of the walk below, and the only thing that says a
@@ -3359,7 +3359,7 @@ export type UseIndex
 
 		if slot == 0 'noChainUnrolledYet'
 			slot = self.unrolledChains.count() + 1
-			self.unrolledChains.push(UseRecordIndexArray.create())
+			self.unrolledChains.push(UseRecordIndexArray.create(0))
 			try self.unrolledSlotOf.set(valueId, value: slot) otherwise panic("UseIndex.unrollChain: unrolledSlotOf.set OOB for value {valueId}")
 		end 'noChainUnrolledYet'
 
@@ -3580,7 +3580,7 @@ end 'UseIndex'
 
 // A fresh BoolArray of `count` false entries (`resize` zero-fills).
 function falseColumn(count ElementIndex) returns BoolArray
-	var col = BoolArray.create()
+	var col = BoolArray.create(0)
 	col.resize(count)
 	return col
 end 'falseColumn'
@@ -3785,8 +3785,8 @@ end 'requireNoEdgeArgs'
 function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount ValueId, opFacts OpVariantFacts) returns UseIndex
 	var index = UseIndex.create(valueCount, numBlocks: cfg.topo.numBlocks)
 
-	var buf = OperandList.create()
-	var ordered = OpIndexArray.create()
+	var buf = OperandList.create(0)
+	var ordered = OpIndexArray.create(0)
 
 	// Hoisted for the reason `computeLivenessOn` hoists its own: a union value is a heap object, and one
 	// built inside this loop is one allocation per block of every function the allocator sees.
@@ -4004,7 +4004,7 @@ export type BlockSet
 	var sortBuf as DenseColumn
 
 	export static function create() returns BlockSet
-		return Self{members: DenseColumn.create(), stamp: VersionStampColumn.create(), generation: 0, sortBuf: DenseColumn.create()}
+		return Self{members: DenseColumn.create(0), stamp: VersionStampColumn.create(0), generation: 0, sortBuf: DenseColumn.create(0)}
 	end 'create'
 
 	// Size the stamp column for a function. Deferred until the function turns out to need a SPLIT at
@@ -4056,7 +4056,7 @@ type BlockHeap
 	var items as CfgIndexArray
 
 	static function create() returns BlockHeap
-		return Self{items: CfgIndexArray.create()}
+		return Self{items: CfgIndexArray.create(0)}
 	end 'create'
 
 	function clear()
@@ -4162,7 +4162,7 @@ export type LivenessMarkScratch
 	var coveredNodes as CfgIndexArray
 
 	export static function create() returns LivenessMarkScratch
-		return Self{liveInStamp: VersionStampColumn.create(), liveOutStamp: VersionStampColumn.create(), touchStamp: VersionStampColumn.create(), generation: 0, worklist: BlockHeap.create(), inVisited: CfgIndexArray.create(), outVisited: CfgIndexArray.create(), transparent: DenseColumn.create(), sortBuf: DenseColumn.create(), expandRuns: false, candStamp: VersionStampColumn.create(), candidates: DenseColumn.create(), intervals: DenseColumn.create(), mergedLo: CfgIndexArray.create(), mergedHi: CfgIndexArray.create(), pieces: DenseColumn.create(), cuts: CfgIndexArray.create(), cutCursor: 0, coveredStamp: VersionStampColumn.create(), coveredBase: 1, coveredNodes: CfgIndexArray.create()}
+		return Self{liveInStamp: VersionStampColumn.create(0), liveOutStamp: VersionStampColumn.create(0), touchStamp: VersionStampColumn.create(0), generation: 0, worklist: BlockHeap.create(), inVisited: CfgIndexArray.create(0), outVisited: CfgIndexArray.create(0), transparent: DenseColumn.create(0), sortBuf: DenseColumn.create(0), expandRuns: false, candStamp: VersionStampColumn.create(0), candidates: DenseColumn.create(0), intervals: DenseColumn.create(0), mergedLo: CfgIndexArray.create(0), mergedHi: CfgIndexArray.create(0), pieces: DenseColumn.create(0), cuts: CfgIndexArray.create(0), cutCursor: 0, coveredStamp: VersionStampColumn.create(0), coveredBase: 1, coveredNodes: CfgIndexArray.create(0)}
 	end 'create'
 
 	export function begin(numBlocks ElementIndex)
@@ -4685,7 +4685,7 @@ export type PressureSweepScratch
 	export var pendingBefore as RegMaskColumn
 
 	export static function create() returns PressureSweepScratch
-		return Self{liveRow: BitRow.create(), buf: OperandList.create(), liveBuf: ValueIdArray.create(), seedList: ValueIdArray.create(), events: ClobberEvents.create(), ordered: OpIndexArray.create(), liveByClass: zeroClassRow(), opPressure: zeroClassRow(), blockMax: zeroClassRow(), coldRun: ColdRunSweep.create(), physLiveAfter: RegMaskColumn.create(), pendingBefore: RegMaskColumn.create()}
+		return Self{liveRow: BitRow.create(), buf: OperandList.create(0), liveBuf: ValueIdArray.create(0), seedList: ValueIdArray.create(0), events: ClobberEvents.create(), ordered: OpIndexArray.create(0), liveByClass: zeroClassRow(), opPressure: zeroClassRow(), blockMax: zeroClassRow(), coldRun: ColdRunSweep.create(), physLiveAfter: RegMaskColumn.create(0), pendingBefore: RegMaskColumn.create(0)}
 	end 'create'
 
 	// Widen the working rows to `wordsPerRow`, ZEROING only the words the growth added — the rest of
@@ -4971,7 +4971,7 @@ export typealias ParamCaptureArray = Array with ParamCapture
 // idiv-result `mov`s (whose destinations are >= paramCount). The incoming register is read
 // straight from the IR — the copy's physical source — so this needs no target ABI table.
 function collectEntryParamCaptures(module TargetModule, topo FuncTopology, paramCount ParamCount) returns ParamCaptureArray
-	var captures = ParamCaptureArray.create()
+	var captures = ParamCaptureArray.create(0)
 
 	if paramCount == 0 'noParams'
 		return captures
@@ -5475,7 +5475,7 @@ export type ColdBlockRuns
 	var last as BlockOpPosArray
 
 	export static function create() returns ColdBlockRuns
-		return Self{inRun: BoolArray.create(), runIdOfPos: ColdRunIdColumn.create(), first: BlockOpPosArray.create(), last: BlockOpPosArray.create()}
+		return Self{inRun: BoolArray.create(0), runIdOfPos: ColdRunIdColumn.create(0), first: BlockOpPosArray.create(0), last: BlockOpPosArray.create(0)}
 	end 'create'
 
 	export function runCount() returns ElementIndex
@@ -5548,7 +5548,7 @@ export type ColdBlockRuns
 			return
 		end 'answeredByACall'
 
-		var sources = RegNumColumn.create()
+		var sources = RegNumColumn.create(0)
 
 		for o in buf 'eachOperand'
 			if (not operandIsDef(o)) and not operandIsVirtual(o) 'physicalRead'
@@ -5592,7 +5592,7 @@ export type ColdRunTable
 	var blocks as ColdBlockRunsArray
 
 	export static function build(module TargetModule, topo FuncTopology, buf OperandList, opFacts OpVariantFacts) returns ColdRunTable
-		var blocks = ColdBlockRunsArray.create()
+		var blocks = ColdBlockRunsArray.create(0)
 		var noRuns = ColdBlockRuns.create()
 
 		for local in 0 upto topo.numBlocks 'eachBlock'
@@ -6248,7 +6248,7 @@ export type OpVariantFacts
 	var known as BoolArray
 
 	export static function create() returns OpVariantFacts
-		var facts = Self{implicitDefs: RegMaskColumn.create(), implicitUses: RegMaskColumn.create(), slotRole: OpSlotRoleColumn.create(), isCall: BoolArray.create(), endsBlock: BoolArray.create(), known: BoolArray.create()}
+		var facts = Self{implicitDefs: RegMaskColumn.create(0), implicitUses: RegMaskColumn.create(0), slotRole: OpSlotRoleColumn.create(0), isCall: BoolArray.create(0), endsBlock: BoolArray.create(0), known: BoolArray.create(0)}
 		let variantCount = TargetOp.unionCases.allCases.count()
 		facts.implicitDefs.growFilled(variantCount, value: 0)
 		facts.implicitUses.growFilled(variantCount, value: 0)

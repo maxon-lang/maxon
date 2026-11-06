@@ -247,7 +247,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var values = TallyArray.create()
+	var values = TallyArray.create(0)
 	values.push(10)
 	values.push(20)
 
@@ -259,7 +259,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-**Sizing an array.** `create()` and `create(0)` make an empty array. `create(n)` makes `n` zero elements and
+**Sizing an array.** An `Array` or `ByteArray` states its capacity when it is created: `create()` with no
+argument is **E3195**. `create(0)` makes an empty array. `create(n)` makes `n` zero elements and
 `create(n, zeroed: false)` an empty array with room for `n`, each in one allocation when the elements take at
 most 256 bytes; `n` is an `ElementIndex` and `zeroed:` a literal `true` or `false`. `push(value)` appends; `reserve(n)` grows the capacity of an existing
 array without changing `count()`. `resize(n)` changes the length and fills new slots with zero, so `resize` and
@@ -274,7 +275,7 @@ range excludes 0 (`int(1 to 100)`), or of an enum or union whose raw values (tag
 typealias Names = Array with String
 
 function main() returns ExitCode
-	var names = Names.create()
+	var names = Names.create(0)
 	names.growFilled(3, value: "")    // three empty strings
 	names.push("ada")
 	names.truncate(2)

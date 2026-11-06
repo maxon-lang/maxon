@@ -314,7 +314,7 @@ function fill(arr ItemArray)
 end 'fill'
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	fill(arr)
 	let noise = churn(1000)
 	view got = try arr.get(0) otherwise Item.create(0)

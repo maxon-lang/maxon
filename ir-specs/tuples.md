@@ -5288,7 +5288,7 @@ function xorKeyStream(output ByteArray, data ByteArray, keystream ByteArray, off
 end 'xorKeyStream'
 
 function main() returns ExitCode
-	var output = ByteArray.create()
+	var output = ByteArray.create(0)
 	let data = [1 as Byte, 2, 3, 4]
 	let keystream = [9 as Byte, 8, 7, 6, 5]
 
@@ -7398,7 +7398,7 @@ function sumWithPositions(values ByteArray) returns ByteSum
 end 'sumWithPositions'
 
 function main() returns ExitCode
-	var output = ByteArray.create()
+	var output = ByteArray.create(0)
 	let data = [1 as Byte, 2, 3, 4]
 	let keystream = [9 as Byte, 8, 7, 6, 5]
 

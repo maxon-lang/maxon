@@ -202,7 +202,7 @@ end 'emittedCoveragePointOffsets'
 // one row: an arm's counter and its first statement's counter are adjacent, and the line really is counted
 // by both.
 function coverageCountedRows(codeResult CodeResult, emitted CovPointOffsetMap) returns BoolArray
-	var counted = BoolArray.create()
+	var counted = BoolArray.create(0)
 	counted.refill(codeResult.debugLineRows.count(), value: false)
 
 	for (_, codeOffset) in emitted 'eachEmittedPoint'
@@ -311,7 +311,7 @@ function writeFunctionLocals(project Project, signatures ProgramSignatures, writ
 		return
 	end 'noBindings'
 
-	var records = MxdbgLocalDraftArray.create()
+	var records = MxdbgLocalDraftArray.create(0)
 	records.reserve(func.debugLocals.count())
 
 	let runs = DebugRunsByOrdinal.over(range.localRanges, ordinalCount: func.debugLocalLocations.count())
@@ -321,7 +321,7 @@ function writeFunctionLocals(project Project, signatures ProgramSignatures, writ
 		let past = at + local.versions.count()
 		view typeName = mxdbgTypeNameOf(project.typeNames, signatures: signatures, ref: local.declaredType)
 		let typeId = types.idOf(typeName)
-		var rows = MxdbgLocalRowArray.create()
+		var rows = MxdbgLocalRowArray.create(0)
 
 		if not local.heldInACell 'placeable'
 			collectPlacedRows(rows, project: project, func: func, range: range, runs: runs, first: at, past: past)
@@ -462,7 +462,7 @@ type MxdbgPlaceOccupancy
 	var counts as CfgIndexArray
 
 	static function empty() returns MxdbgPlaceOccupancy
-		return Self{kinds: MxdbgIndexArray.create(), values: MxdbgRecordFigureArray.create(), counts: CfgIndexArray.create()}
+		return Self{kinds: MxdbgIndexArray.create(0), values: MxdbgRecordFigureArray.create(0), counts: CfgIndexArray.create(0)}
 	end 'empty'
 
 	function slotOf(kind MxdbgIndex, value MxdbgRecordFigure) returns ElementIndex
@@ -504,7 +504,7 @@ type MxdbgContestedStretches
 	export var ends as CodeOffsetArray
 
 	static function empty() returns MxdbgContestedStretches
-		return Self{starts: CodeOffsetArray.create(), ends: CodeOffsetArray.create()}
+		return Self{starts: CodeOffsetArray.create(0), ends: CodeOffsetArray.create(0)}
 	end 'empty'
 
 	function note(start CodeOffset, past CodeOffset)
@@ -556,7 +556,7 @@ function resolveContestedPlaces(records MxdbgLocalDraftArray)
 end 'resolveContestedPlaces'
 
 function resolveContestedPlacesOfOneName(records MxdbgLocalDraftArray, from ElementIndex, past ElementIndex)
-	var order = CfgIndexArray.create()
+	var order = CfgIndexArray.create(0)
 
 	for at in from upto past 'eachRecord'
 		order.push(at)
@@ -601,8 +601,8 @@ function compareRecordsBySite(records MxdbgLocalDraftArray, left ElementIndex, r
 end 'compareRecordsBySite'
 
 function contestedStretchesOf(records MxdbgLocalDraftArray, order CfgIndexArray, from ElementIndex, past ElementIndex) returns MxdbgContestedStretches
-	var byStart = MxdbgLocalRowArray.create()
-	var byEnd = MxdbgLocalRowArray.create()
+	var byStart = MxdbgLocalRowArray.create(0)
+	var byEnd = MxdbgLocalRowArray.create(0)
 
 	for k in from upto past 'eachRecord'
 		let record = try records.get(try order.get(k) otherwise panic("contestedStretchesOf: order.get OOB at {k}")) otherwise panic("contestedStretchesOf: records.get OOB")
@@ -659,7 +659,7 @@ function contestedStretchesOf(records MxdbgLocalDraftArray, order CfgIndexArray,
 end 'contestedStretchesOf'
 
 function rowsWithoutTheContested(rows MxdbgLocalRowArray, stretches MxdbgContestedStretches) returns MxdbgLocalRowArray
-	var kept = MxdbgLocalRowArray.create()
+	var kept = MxdbgLocalRowArray.create(0)
 
 	for row in rows 'eachRow'
 		if not mxdbgRowHasALocation(row.locKind) 'notPlaced'
@@ -697,7 +697,7 @@ function requireDisjointPlacesPerName(records MxdbgLocalDraftArray, functionName
 
 	while at < records.count() 'eachNameRun'
 		let leader = try records.get(at) otherwise panic("requireDisjointPlacesPerName: records.get OOB at {at}")
-		var rows = MxdbgSiteRowArray.create()
+		var rows = MxdbgSiteRowArray.create(0)
 		var past = at
 
 		while past < records.count() 'eachRecordOfTheName'
@@ -839,8 +839,8 @@ type DebugRunsByOrdinal
 	var ranges as DebugLocalCodeRangeArray
 
 	static function over(localRanges DebugLocalCodeRangeArray, ordinalCount ElementIndex) returns DebugRunsByOrdinal
-		var ordinals = CsrColumn.create()
-		var runs = CsrColumn.create()
+		var ordinals = CsrColumn.create(0)
+		var runs = CsrColumn.create(0)
 		ordinals.reserve(localRanges.count())
 		runs.reserve(localRanges.count())
 
@@ -875,7 +875,7 @@ end 'runOrdinalOf'
 // `BranchCleanup` reorders blocks, so two runs that abut in the emitted code need not abut in that
 // order, and merging by it would leave a hole a reader reports as "not live here".
 function mergedLiveRanges(range DebugFunctionRange, runs DebugRunsByOrdinal, ordinal ElementIndex) returns DebugLocalCodeRangeArray
-	var mine = DebugLocalCodeRangeArray.create()
+	var mine = DebugLocalCodeRangeArray.create(0)
 
 	for k in 0 upto runs.count(ordinal) 'eachRange'
 		let span = runs.at(ordinal, k: k)
@@ -892,7 +892,7 @@ function mergedLiveRanges(range DebugFunctionRange, runs DebugRunsByOrdinal, ord
 
 	mine.sortBy(function(left DebugLocalCodeRange, right DebugLocalCodeRange) gives left.codeStart.compare(right.codeStart))
 
-	var merged = DebugLocalCodeRangeArray.create()
+	var merged = DebugLocalCodeRangeArray.create(0)
 	var openStart = 0 as CodeOffset
 	var openEnd = 0 as CodeOffset
 	var open = false

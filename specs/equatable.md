@@ -299,7 +299,7 @@ type Cell uses T implements Equatable
 	end 'create'
 
 	function equals(other Self) returns bool
-		let scratch = Items.create()
+		let scratch = Items.create(0)
 		return n == other.n and scratch.count() == 0
 	end 'equals'
 end 'Cell'

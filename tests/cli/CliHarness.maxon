@@ -263,7 +263,7 @@ export function buildAProgramBesideALibraryFile(caseDirName String, libraryFile 
 	let main = dir.join(StagedProgramFileName)
 	writeStagedFile(main, content: BesideAProgramMainSource)
 
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 	arguments.push(BuildCommandWord)
 	arguments.push(main.toString())
 	arguments.push(libraryFile)
@@ -278,7 +278,7 @@ export function buildAProgramBesideALibraryFile(caseDirName String, libraryFile 
 end 'buildAProgramBesideALibraryFile'
 
 export function expectALibraryFileBesideAProgramIsReadOnce(caseDirName String, libraryFile String, whoseFile String) throws TestFailure
-	let built = buildAProgramBesideALibraryFile(caseDirName, libraryFile: libraryFile, options: StringArray.create())
+	let built = buildAProgramBesideALibraryFile(caseDirName, libraryFile: libraryFile, options: StringArray.create(0))
 	let build = built.build
 	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 
@@ -477,7 +477,7 @@ export function confinableCacheVariables() returns StringArray
 end 'confinableCacheVariables'
 
 function variablesACallerCanSet() returns StringArray
-	var variables = StringArray.create()
+	var variables = StringArray.create(0)
 
 	for variable in confinableCacheVariables() 'eachCandidate'
 		variables.push(variable)
@@ -682,7 +682,7 @@ end 'caseDirectoryName'
 // wrapped prose — which starts far to the right — is never mistaken for one. In the short list these are
 // the COMMANDS; in a reference section they are that command's OPTIONS.
 export function labelledWordsIn(listing String) returns StringArray
-	var words = StringArray.create()
+	var words = StringArray.create(0)
 
 	for label in labelsIn(listing) 'eachLabel'
 		words.push(firstWordOf(label))
@@ -694,7 +694,7 @@ end 'labelledWordsIn'
 // Each label whole — every spelling an option line gives, such as `--bail, --bail=N` — which
 // ends where the gap before the description column starts.
 function labelsIn(listing String) returns StringArray
-	var labels = StringArray.create()
+	var labels = StringArray.create(0)
 
 	for line in listing.split("\n") 'eachLine'
 		if not line.startsWith(LabelIndent) 'notALabel'
@@ -716,7 +716,7 @@ end 'labelsIn'
 // comma-separated alternatives each give their flag, and a flag taking a value keeps its `=` and drops the
 // placeholder — `--output=<path>` gives `--output=`, `--bail, --bail=N` gives both.
 export function optionSpellingsIn(listing String) returns StringArray
-	var spellings = StringArray.create()
+	var spellings = StringArray.create(0)
 
 	for label in labelsIn(listing) 'eachLabel'
 		if not label.startsWith(OptionPrefix) 'aCommand'
@@ -760,7 +760,7 @@ end 'spellingOfAlternative'
 // `_`, each carrying an `=` that directly follows it. Membership in this list is what "the text names
 // `--output=`" means, so `--output-dir` and `x--output=` never count as naming it.
 export function spellingsIn(text String) returns StringArray
-	var spellings = StringArray.create()
+	var spellings = StringArray.create(0)
 	var current = ""
 
 	for c in text 'eachCharacter'
@@ -791,7 +791,7 @@ export function spellingsIn(text String) returns StringArray
 end 'spellingsIn'
 
 export function linesOpeningIn(text String, prefix String) returns StringArray
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	for line in text.split("\n") 'eachLine'
 		if line.startsWith(prefix) 'opensWithIt'
@@ -813,7 +813,7 @@ end 'cliReferenceText'
 // ⭐ **THE COMMANDS THE FULL REFERENCE HAS A SECTION FOR**, read off ITS layout: a section label is the
 // only thing at the left margin apart from the `Usage:` line.
 export function sectionedCommandsIn(reference String) returns StringArray
-	var words = StringArray.create()
+	var words = StringArray.create(0)
 
 	for line in reference.split("\n") 'eachLine'
 		if line.trim().isEmpty() 'blank'
@@ -838,7 +838,7 @@ end 'sectionedCommandsIn'
 // apart from the reference without either being pinned to the byte. ONE selector taking the answer it
 // wants, because the two questions are one question and its negation.
 export function labelsWhereOptionhoodIs(words StringArray, isOption bool) returns StringArray
-	var selected = StringArray.create()
+	var selected = StringArray.create(0)
 
 	for word in words 'eachWord'
 		if word.startsWith(OptionPrefix) == isOption 'wanted'
@@ -867,7 +867,7 @@ end 'anchorsMissingFrom'
 // empty and the hidden run one asserts is not, so it returns the words rather than a count or a
 // rendering — `listed` is what turns it into a report.
 export function wordsNotIn(left StringArray, right StringArray) returns StringArray
-	var missing = StringArray.create()
+	var missing = StringArray.create(0)
 
 	for word in left 'eachWord'
 		if not right.contains(word) 'absent'
@@ -880,7 +880,7 @@ end 'wordsNotIn'
 
 // The first `count` words, which is how a case takes the run a listing prints FIRST.
 export function firstFew(words StringArray, count WordTally) returns StringArray
-	var taken = StringArray.create()
+	var taken = StringArray.create(0)
 
 	for word in words 'eachWord'
 		if taken.count() >= count as ElementIndex 'enough'
@@ -935,7 +935,7 @@ function sortsAhead(before String, after String) returns bool
 end 'sortsAhead'
 
 function bytesOfText(text String) returns ByteArray
-	var collected = ByteArray.create()
+	var collected = ByteArray.create(0)
 
 	for one in text.bytes() 'eachByte'
 		collected.push(one)
@@ -1040,7 +1040,7 @@ export function libraryCacheDirIn(dir FilePath) returns FilePath
 end 'libraryCacheDirIn'
 
 export function runLibraryCacheBuild(dir FilePath, program String, output String, options StringArray) returns CollectedOutput
-	var logged = StringArray.create()
+	var logged = StringArray.create(0)
 	logged.push(CompilerDebugLogFlag)
 
 	for option in options 'eachOption'
@@ -1070,7 +1070,7 @@ let ClockPollLimit = 100 as ClockPollTally
 export let SettledProgramDirName = "app"
 
 export function runRecordedBuild(dir FilePath, program String, output String, options StringArray, binary FilePath = testedCompilerPath()) returns CollectedOutput
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 	arguments.push(BuildCommandWord)
 	arguments.push(program)
 	arguments.push("{OutputOptionPrefix}{dir.join(output).toString()}")
@@ -1209,7 +1209,7 @@ export function waitPastTheModificationOf(file FilePath, probeIn FilePath)
 end 'waitPastTheModificationOf'
 
 export function requireLibraryCacheBuild(dir FilePath, program String, output String, which String) returns CollectedOutput throws TestFailure
-	let built = runLibraryCacheBuild(dir, program: program, output: output, options: StringArray.create())
+	let built = runLibraryCacheBuild(dir, program: program, output: output, options: StringArray.create(0))
 	try Expect.equal(built.exitCode(), expected: 0, message: "{which} did not succeed. It wrote to stdout: {built.stdout} and to stderr: {built.stderr}")
 
 	return built
@@ -1232,7 +1232,7 @@ export function requireWarmBuildMatchesCold(dir FilePath, program String, output
 	let coldImage = retainedAside(image, aside: dir.join(ColdImageName))
 	let coldSidecar = retainedAside(sidecar, aside: dir.join(ColdSidecarName))
 
-	let warm = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: program, output: output, options: StringArray.create()), which: "the warm build of {subject}")
+	let warm = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: program, output: output, options: StringArray.create(0)), which: "the warm build of {subject}")
 	try Expect.equal(warm.baseline, expected: LibraryBaseline.loaded, message: "the warm build of {subject} did not load the library baseline the cold build wrote, so comparing its bytes with the cold build's compares two cold builds. It wrote: {warm.line}")
 	try Expect.greaterThan(warm.loaded, than: 0, message: "the warm build of {subject} loaded no library cache entry, so comparing its bytes with the cold build's compares two cold builds. It wrote: {warm.line}")
 
@@ -1323,7 +1323,9 @@ end 'requireSameBytes'
 let ViewsEntryPrefix = "views-"
 export let AnotherSchemaReason = "the entry was written under another codec schema"
 export let OutOfRangeReason = "a number in the entry is outside the range it is read into"
-export let ForgedProducerMask = 99
+export let ForgedProducerMask = 256
+let ForgedProducerMaskFirstByte = 0x80
+let ForgedProducerMaskSecondByte = 2
 let EntryWordByteCount = 8
 let EntryFingerprintOffset = 4
 let EntryChecksumOffset = 12
@@ -1402,7 +1404,7 @@ end 'byteArrayArrayEndsAt'
 export function entryWithEveryProducerMaskForged(image ByteArray) returns ByteArray
 	let rowCount = entryNumberAt(image, start: EntryPayloadOffset)
 	var at = rowCount.next
-	var lengths = EntryLengthArray.create()
+	var lengths = EntryLengthArray.create(0)
 
 	for _ in 0 upto rowCount.value 'eachRow'
 		for _ in 0 upto EntryRowKeyCount 'eachRowKey'
@@ -1418,7 +1420,8 @@ export function entryWithEveryProducerMaskForged(image ByteArray) returns ByteAr
 
 	for length in lengths 'eachSection'
 		let offset = producerMaskOffsetIn(image, section: at)
-		try forged.set(offset, value: ForgedProducerMask) otherwise panic("CliHarness: the gate could not run - byte {offset} lies outside the {image.count()}-byte entry.")
+		try forged.set(offset, value: ForgedProducerMaskFirstByte) otherwise panic("CliHarness: the gate could not run - byte {offset} lies outside the {image.count()}-byte entry.")
+		try forged.set(offset + 1, value: ForgedProducerMaskSecondByte) otherwise panic("CliHarness: the gate could not run - byte {offset + 1} lies outside the {image.count()}-byte entry.")
 		at = at + (length as ElementIndex)
 	end 'eachSection'
 
@@ -1520,7 +1523,7 @@ type MetricsRow
 end 'MetricsRow'
 
 function metricsRowsOf(table String) returns MetricsRowArray
-	var rows = MetricsRowArray.create()
+	var rows = MetricsRowArray.create(0)
 
 	for row in table.split(MetricsRowSeparator) 'eachRow'
 		let line = row.trimEnd()
@@ -1554,7 +1557,7 @@ export function metricsAllocsOutsidePhase(table String, kind String, phase Strin
 end 'metricsAllocsOutsidePhase'
 
 export function metricsPhasesOf(table String, kind String) returns StringArray
-	var phases = StringArray.create()
+	var phases = StringArray.create(0)
 
 	for row in metricsRowsOf(table) 'eachRow'
 		if row.kind == kind and not phases.contains(row.phase()) 'aNewPhase'
@@ -1889,7 +1892,7 @@ export function requireDeclarationRefused(caseDirName String, source String, ref
 end 'requireDeclarationRefused'
 
 export function requireScratchNameCheckPasses(check String) throws TestFailure
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 	arguments.push(check)
 	arguments.push("{endedProcessId()}")
 	arguments.push(debugStreamSegmentPrefix())

@@ -3,10 +3,10 @@ let ByteIdenticalDebugInfoCaseLabel = "byte-identical-debug-info"
 test 'every build of one source is the same executable, byte for byte, with no sanctioned exception'
 	let identity = ImageIdentityCase.staging(ByteIdenticalDebugInfoCaseLabel, fixture: SpansFixtureName)
 
-	let firstDefault = identity.built("the first default", extraArguments: StringArray.create(), retainedAs: FirstDefaultImageName)
+	let firstDefault = identity.built("the first default", extraArguments: StringArray.create(0), retainedAs: FirstDefaultImageName)
 	Expect.isTrue(firstDefault.wroteASidecar, message: "a default build writes `{identity.sidecar.filename()}` beside its executable — that is what every reader of debug info in this tree relies on, and a build that wrote none leaves the comparisons below comparing two binaries nobody can debug.")
 
-	let secondDefault = identity.built("the second default", extraArguments: StringArray.create(), retainedAs: SecondDefaultImageName)
+	let secondDefault = identity.built("the second default", extraArguments: StringArray.create(0), retainedAs: SecondDefaultImageName)
 
 	identity.requireSameImage(firstDefault.retained, second: secondDefault.retained, why: "⭐ THE POSITIVE CONTROL. Two DEFAULT builds of one staged source to one output path must agree before any difference below can be attributed to a flag. No writer stamps a clock into an image, so a difference here is the build failing to be reproducible — and it would make the identity this case goes on to claim unprovable rather than false.")
 

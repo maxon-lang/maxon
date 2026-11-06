@@ -79,7 +79,7 @@ type Worker
 	var probe as Probe
 
 	static function create() returns Self
-		return Self{pending: WorkPromiseArray.create(), probe: Probe.create()}
+		return Self{pending: WorkPromiseArray.create(0), probe: Probe.create()}
 	end 'create'
 
 	// THE SUBJECT: answers 1 when the coroutine has started and is parked.
@@ -101,7 +101,7 @@ end 'Worker'
 // `BatchSize` services, one message each, every reply awaited; the handles die together at the return, which
 // shuts every service down.
 function batch(joined bool, base Integer) returns Integer
-	var hs = WorkerHandleArray.create()
+	var hs = WorkerHandleArray.create(0)
 	var k = 0 as Integer
 
 	while k < BatchSize 'spawnEach'
@@ -109,7 +109,7 @@ function batch(joined bool, base Integer) returns Integer
 		k = k + 1
 	end 'spawnEach'
 
-	var replies = ReplyPromiseArray.create()
+	var replies = ReplyPromiseArray.create(0)
 	var j = 0 as Integer
 
 	while j < BatchSize 'sendEach'

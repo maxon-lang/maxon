@@ -38,7 +38,7 @@ type Shelf
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function add(item Counter)
@@ -83,7 +83,7 @@ type Shelf uses Item
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function add(item Item)
@@ -131,7 +131,7 @@ type Shelf
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function add(item Counter)
@@ -221,7 +221,7 @@ type Shelf
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function add(item Counter)
@@ -266,7 +266,7 @@ type Shelf
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function add(item Counter)

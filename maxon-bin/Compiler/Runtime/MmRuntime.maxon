@@ -162,7 +162,7 @@ let NoAllocationId = 0
 // offsets the runtime loads by and the offsets this writes are one set of constants that cannot drift —
 // `BufferOwnership.appendRecordSlot`'s discipline, applied to the header the record is addressed through.
 export function immortalBoxHeaderBytes(debugStream bool, recordBytes FullRangeInt) returns ByteArray
-	var header = ByteArray.create()
+	var header = ByteArray.create(0)
 
 	if debugStream 'tracedBuild'
 		header.append(scalarImage(NoAllocationId, byteCount: HeaderSlotBytes))
@@ -853,14 +853,14 @@ end 'installMmRuntime'
 // runtime's `__print_string` (one string pointer) shares it, so it is the same helper rather than a
 // second copy.
 export function oneI64Param() returns StdTypeArray
-	var types = StdTypeArray.create()
+	var types = StdTypeArray.create(0)
 	types.push(StdType.i64)
 	return types
 end 'oneI64Param'
 
 // Two i64 parameters — `__mm_alloc(size, destructor)` and the String runtime's `__str_eq(a, b)`.
 export function twoI64Params() returns StdTypeArray
-	var types = StdTypeArray.create()
+	var types = StdTypeArray.create(0)
 	types.push(StdType.i64)
 	types.push(StdType.i64)
 	return types
@@ -871,7 +871,7 @@ end 'twoI64Params'
 // agree at both ends, `calleeArgFloatMask` routing the argument into an XMM register and
 // `lowerParam` capturing it from one.
 export function oneF64Param() returns StdTypeArray
-	var types = StdTypeArray.create()
+	var types = StdTypeArray.create(0)
 	types.push(StdType.f64)
 	return types
 end 'oneF64Param'
@@ -882,7 +882,7 @@ end 'oneF64Param'
 // these types to route each ARGUMENT into an XMM register, and `lowerParam` reads them to capture
 // it from one.
 export function twoF64Params() returns StdTypeArray
-	var types = StdTypeArray.create()
+	var types = StdTypeArray.create(0)
 	types.push(StdType.f64)
 	types.push(StdType.f64)
 	return types
@@ -891,7 +891,7 @@ end 'twoF64Params'
 // Three i64 parameters — `__str_copy(dest, src, len)` and the managed-memory runtime's `__managed_set(arr, index,
 // value)` / `__managed_mem_set(mem, index, value)`. Shared here so a runtime builder does not mint its own.
 export function threeI64Params() returns StdTypeArray
-	var types = StdTypeArray.create()
+	var types = StdTypeArray.create(0)
 	types.push(StdType.i64)
 	types.push(StdType.i64)
 	types.push(StdType.i64)
@@ -1513,7 +1513,7 @@ end 'CountedLoop'
 //
 // `label` prefixes the three block labels (`<label>h`, `<label>b`, `<label>d`) so a function holding several
 // loops reads back as several loops under `--emit-ir-runtime`.
-export function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, from ValueId, to ValueId, label ByteArray, ids ValueMinter, initial ValueIdArray = ValueIdArray.create()) returns CountedLoop
+export function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, from ValueId, to ValueId, label ByteArray, ids ValueMinter, initial ValueIdArray = ValueIdArray.create(0)) returns CountedLoop
 	var header = module.addBlock(func, label: "{String.from(label)}h".toByteArray(), heat: BlockHeat.normal)
 	var body = module.addBlock(func, label: "{String.from(label)}b".toByteArray(), heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
@@ -1522,7 +1522,7 @@ export function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, 
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 
 	var entryValues = argsOf(from)
-	var carried = ValueIdArray.create()
+	var carried = ValueIdArray.create(0)
 
 	for initialValue in initial 'eachCarried'
 		let arg = ids.mint()
@@ -1545,7 +1545,7 @@ end 'openCountedLoop'
 // op `foldConstOperands` produces, minted by the one party that already knows the operand is a compile-time
 // constant — so the fold has nothing to find here, and the emitted trip carries one `add` rather than a
 // `movRegImm32` AND an add, in the hottest loops the language has.
-export function closeCountedLoop(module StdModule, loop CountedLoop, tail IrBlock, step Imm32, ids ValueMinter, carriedNext ValueIdArray = ValueIdArray.create())
+export function closeCountedLoop(module StdModule, loop CountedLoop, tail IrBlock, step Imm32, ids ValueMinter, carriedNext ValueIdArray = ValueIdArray.create(0))
 	if carriedNext.count() != loop.carried.count() 'sameCarried'
 		panic("closeCountedLoop: {carriedNext.count()} carried values for a loop opened with {loop.carried.count()}")
 	end 'sameCarried'
@@ -1689,8 +1689,8 @@ export function openCopyRunSplit(module StdModule, func IrFunction, cur IrBlock,
 
 	emitBranchOnCompare(module, block: cur, value: byteCount, pred: StdCmpPred.le, against: 0, whenTrue: done, whenFalse: run, ids: ids)
 
-	var used = CopyChunkArray.create()
-	var ends = ValueIdArray.create()
+	var used = CopyChunkArray.create(0)
+	var ends = ValueIdArray.create(0)
 
 	for chunk in CopyChunk.allCases 'eachChunk'
 		if chunk.ordinal >= widest.ordinal 'usedChunk'
@@ -1706,7 +1706,7 @@ export function openCopyRunSplit(module StdModule, func IrFunction, cur IrBlock,
 		end 'usedChunk'
 	end 'eachChunk'
 
-	var runs = CopyRunArray.create()
+	var runs = CopyRunArray.create(0)
 	var lower = emitConst(module, block: run, value: 0, ids: ids)
 
 	for (iter, chunk) in used.withIterator() 'eachRun'
@@ -1904,7 +1904,7 @@ export typealias MmAllocOpList = Array with StdOp
 // `traced` is the `--debugstream` flag of the module the ops land in. `module.debugStream` holds it only
 // once the pipeline arms it, after lowering and the passes, so a caller before that passes the project's.
 export function mmAllocOps(traced bool, result ValueId, size ValueId, destructor ValueId, tag FullRangeInt, ids ValueMinter) returns MmAllocOpList
-	var ops = MmAllocOpList.create()
+	var ops = MmAllocOpList.create(0)
 
 	if not traced 'untracedBuild'
 		ops.push(StdOp.call(result, callee: MmAllocName, args: twoArgs(size, second: destructor)))
@@ -2270,7 +2270,7 @@ end 'CascadeCursor'
 
 // Append one i64 block argument to `block` per value `template` holds, answering the argument ids in order.
 export function appendCarriedBlockArgs(block IrBlock, template ValueIdArray, ids ValueMinter) returns ValueIdArray
-	var args = ValueIdArray.create()
+	var args = ValueIdArray.create(0)
 
 	for _ in template 'eachCarried'
 		let arg = ids.mint()
@@ -2336,7 +2336,7 @@ end 'WalkBody'
 // its depth is the program's data graph, not the runtime's.
 export function beginWalkBody(module StdModule, name ByteArray, scope WalkScope, walksElements bool, recursesPerLevel bool) returns WalkBody
 	let paramCount = walkEntryParamCount(scope, walksElements: walksElements)
-	var paramTypes = StdTypeArray.create()
+	var paramTypes = StdTypeArray.create(0)
 
 	for _ in 0 upto paramCount 'eachParam'
 		paramTypes.push(StdType.i64)
@@ -2363,7 +2363,7 @@ end 'walkReturnType'
 function walkCarriedValues(scope WalkScope) returns ValueIdArray
 	return match scope 'scope'
 		graph gives argsOf(WalkVisitsParam)
-		record gives ValueIdArray.create()
+		record gives ValueIdArray.create(0)
 	end 'scope'
 end 'walkCarriedValues'
 
@@ -3061,7 +3061,7 @@ end 'emitAllocTallyStep'
 
 // `name() -> i64` — one figure walked over every row.
 function buildFigureReader(module StdModule, name ByteArray, figure SlabTrafficFigure)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3105,7 +3105,7 @@ end 'threadColumnOffset'
 // walk reads the scheduler word out of the region, so it cannot run without one — and a program that has
 // never allocated has no scheduler either, which is the arm that answers 0 for every column.
 function buildThreadCounterReader(module StdModule, name ByteArray, model MachineModel, count CombinedCount)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3225,7 +3225,7 @@ end 'unboxedCasePayload'
 typealias CaseIndexArray = Array with CaseIndex
 
 function unboxedManagedCases(layout EnumLayout, project Project, signatures ProgramSignatures) returns CaseIndexArray
-	var cases = CaseIndexArray.create()
+	var cases = CaseIndexArray.create(0)
 
 	for ci in 0 upto layout.caseCount() 'eachCase'
 		if caseHasManagedField(signatures, typeNames: project.typeNames, layout: layout, ci: ci) 'aPayloadCase'
@@ -4078,7 +4078,7 @@ end 'installOneStructRuntimeEntry'
 // against the project's misreads them — see `ProgramSignatures.indexTypeNames` for the panic it produced on
 // this compiler's own source, and for why a misread that happens to land on a declared type is worse.
 export function structRuntimeRoster(project Project, signatures ProgramSignatures) returns StructRosterEntryArray
-	var roster = StructRosterEntryArray.create()
+	var roster = StructRosterEntryArray.create(0)
 
 	for (_, layout) in project.structTypes 'eachCommitted'
 		roster.push(StructRosterEntry.create(layout, typeNames: project.typeNames))
@@ -4124,7 +4124,7 @@ end 'synthesizeStructDestructor'
 // The one list of a struct's releases. `ValueTupleReturn` puts it in place of a cascade call it
 // deletes, so the two cannot release different slots.
 export function structDestructorDrops(layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures) returns ManagedFieldDropArray
-	var drops = ManagedFieldDropArray.create()
+	var drops = ManagedFieldDropArray.create(0)
 
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldOwesDrop(layout.name, index: i) 'scalarField'
@@ -4188,7 +4188,7 @@ end 'structFieldDropKind'
 // managed instance only (like the struct/union cascades), appended already-lowered so it is never
 // re-optimized. No `project` needed — the instance's every fact is answered inside `signatures`.
 function synthesizeGenericInstanceDestructor(module StdModule, id GenericInstanceId, signatures ProgramSignatures)
-	var drops = ManagedFieldDropArray.create()
+	var drops = ManagedFieldDropArray.create(0)
 
 	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
 		if not signatures.genericInstanceFieldOwesDrop(id, index: i) 'scalarField'
@@ -4281,7 +4281,7 @@ end 'CascadeFieldSource'
 // (`declareDictionaryDropNeeds`) all read, so a field is dropped through exactly the callee it is accounted
 // for under.
 function dictionaryFieldDrops(signatures ProgramSignatures, source CascadeFieldSource) returns ManagedFieldDropArray
-	var drops = ManagedFieldDropArray.create()
+	var drops = ManagedFieldDropArray.create(0)
 
 	for i in 0 upto cascadeFieldCount(signatures, source: source) 'eachField'
 		match dictionaryFieldDropKind(signatures, source: source, index: i) 'released'
@@ -4942,7 +4942,7 @@ function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize 
 	let newBox = ids.mint()
 	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: tagName, debugStream: module.debugStream), ids: ids)
 	var copied = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
-	var cur = CascadeCursor.create(copied, carried: ValueIdArray.create())
+	var cur = CascadeCursor.create(copied, carried: ValueIdArray.create(0))
 
 	for spec in clones 'eachField'
 		cur = emitManagedFieldCascade(module, func: func, cur: cur, box: newBox, offset: spec.offset, strategy: spec.strategy, action: CascadeAction.clone, ids: ids)
@@ -4958,7 +4958,7 @@ end 'emitFieldCascadeCloner'
 // diverge: a field a clone deep-copies and a soleness walk skipped would be a co-owned record crossing to
 // another green thread with nothing that reads as a bug at either site.
 function structManagedFieldCascades(layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures, action CascadeAction) returns ManagedFieldCascadeArray
-	var specs = ManagedFieldCascadeArray.create()
+	var specs = ManagedFieldCascadeArray.create(0)
 
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
@@ -4975,7 +4975,7 @@ end 'structManagedFieldCascades'
 // The instance twin of `structManagedFieldCascades`, over each SUBSTITUTED managed field. It needs no
 // `project`: every fact about an instance is answered inside `signatures`, over `signatures`' own interner.
 function instanceManagedFieldCascades(id GenericInstanceId, signatures ProgramSignatures, action CascadeAction) returns ManagedFieldCascadeArray
-	var specs = ManagedFieldCascadeArray.create()
+	var specs = ManagedFieldCascadeArray.create(0)
 
 	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
 		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
@@ -5071,7 +5071,7 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
 	let newBox = ids.mint()
 	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: layout.name, debugStream: module.debugStream), ids: ids)
 	var copied = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
-	var start = CascadeCursor.create(copied, carried: ValueIdArray.create())
+	var start = CascadeCursor.create(copied, carried: ValueIdArray.create(0))
 	view finish = start.at(done)
 
 	var fellThrough = emitUnionManagedCaseChain(module, func: func, cur: start, box: newBox, layout: layout, dest: finish, project: project, signatures: signatures, action: CascadeAction.clone, ids: ids)
@@ -5443,7 +5443,7 @@ function emitHeaderBase(module StdModule, block IrBlock, ptr ValueId, ids ValueM
 end 'emitHeaderBase'
 
 export function argsOf(only ValueId) returns ValueIdArray
-	var args = ValueIdArray.create()
+	var args = ValueIdArray.create(0)
 	args.push(only)
 	return args
 end 'argsOf'
@@ -5452,14 +5452,14 @@ end 'argsOf'
 // siblings, shared by the runtime builders and the parser (a `__mm_alloc(size, dtor)` is two, a
 // `__str_copy(dest, src, len)` three). One home so no builder mints its own.
 export function twoArgs(first ValueId, second ValueId) returns ValueIdArray
-	var args = ValueIdArray.create()
+	var args = ValueIdArray.create(0)
 	args.push(first)
 	args.push(second)
 	return args
 end 'twoArgs'
 
 export function threeArgs(first ValueId, second ValueId, third ValueId) returns ValueIdArray
-	var args = ValueIdArray.create()
+	var args = ValueIdArray.create(0)
 	args.push(first)
 	args.push(second)
 	args.push(third)
@@ -5469,7 +5469,7 @@ end 'threeArgs'
 // Four positional call arguments — `__managed_slice_managed`. Homed here beside its `argsOf`/`twoArgs`/`threeArgs`
 // siblings.
 export function fourArgs(first ValueId, second ValueId, third ValueId, fourth ValueId) returns ValueIdArray
-	var args = ValueIdArray.create()
+	var args = ValueIdArray.create(0)
 	args.push(first)
 	args.push(second)
 	args.push(third)
@@ -5479,7 +5479,7 @@ end 'fourArgs'
 
 // Five positional call arguments — `__mbox_iface_send`'s.
 export function fiveArgs(first ValueId, second ValueId, third ValueId, fourth ValueId, fifth ValueId) returns ValueIdArray
-	var args = ValueIdArray.create()
+	var args = ValueIdArray.create(0)
 	args.push(first)
 	args.push(second)
 	args.push(third)

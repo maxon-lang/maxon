@@ -8,12 +8,12 @@ test 'next through the taken return walks out of the function without ever stopp
 	let startLine = anchorLine(staged.join(StagedProgramFileName), anchor: "before-the-taken-return")
 	let startTarget = lineTarget(startLine)
 	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {startTarget}", RunCommand, "{ClearCommand} {startTarget}"], rest: repeatedCommand(NextCommand, times: NextsPastTheReturn)))
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	var walked = StringArray.create()
+	var walked = StringArray.create(0)
 
 	for stop in stops 'eachStop'
 		walked.push("{textOf(stop, node: stop.root, key: ReasonKey)} {textOf(stop, node: stop.root, key: FunctionKey)}:{numberOf(stop, node: stop.root, key: LineKey)}")

@@ -49,7 +49,7 @@ function main() returns ExitCode
 	end 'iAmTheChild'
 
 	let me = try Process.executablePath() otherwise return 2
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("child")
 
 	var config = Configuration.create(Executable.path(me))
@@ -378,7 +378,7 @@ end 'Setter'
 typealias ApplyReplyArray = Array with Promise with Integer
 
 function main() returns ExitCode
-	var replies = ApplyReplyArray.create()
+	var replies = ApplyReplyArray.create(0)
 
 	for i in 0 upto 8 'spawnEach'
 		let setter = spawn Setter.create("g{i}", quiet: i mod 2 == 1)
@@ -600,7 +600,7 @@ function main() returns ExitCode
 	end 'iAmTheChild'
 
 	let me = try Process.executablePath() otherwise return 2
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("child")
 
 	var config = Configuration.create(Executable.path(me))
@@ -641,13 +641,13 @@ the record names the line that called the helper; the level filters it by rank.
 let auditLevel = LogLevel.named("AUDIT", rank: 2)
 
 extension Log
-	public static function audit(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public static function audit(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		Log.log(auditLevel, message: message, attrs: attrs, file: file, line: line)
 	end 'audit'
 end 'Log'
 
 extension Logger
-	public function audit(message String, attrs LogAttrArray = LogAttrArray.create(), file String = __file__, line SourceLineNumber = __line__)
+	public function audit(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
 		self.log(auditLevel, message: message, attrs: attrs, file: file, line: line)
 	end 'audit'
 end 'Logger'

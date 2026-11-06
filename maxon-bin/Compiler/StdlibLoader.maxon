@@ -236,11 +236,11 @@ end 'loadLibrarySources'
 
 export function scriptlibPackageSources(scriptlibDir FilePath) returns MaxonSourcePathArray throws CompileError
 	if not Directory.exists(scriptlibDir) 'noPackages'
-		return MaxonSourcePathArray.create()
+		return MaxonSourcePathArray.create(0)
 	end 'noPackages'
 
 	let entries = try Directory.list(scriptlibDir) otherwise throw CompileError.directoryNotFound(scriptlibDir)
-	var packageDirectories = MaxonSourcePathArray.create()
+	var packageDirectories = MaxonSourcePathArray.create(0)
 
 	// A `.maxon` directly in the directory belongs to no package, so no `scriptlib.<package>` can name
 	// it; it is skipped and draws no diagnostic.
@@ -261,7 +261,7 @@ end 'scriptlibPackageSources'
 // they cannot disagree with the loader about which files a program compiles.
 export function scriptlibSourcesLoadedBy(root FilePath, scriptlibDir FilePath) returns MaxonSourcePathArray throws CompileError
 	if not rootIsASingleFile(root) 'aProgramOfSeveralFiles'
-		return MaxonSourcePathArray.create()
+		return MaxonSourcePathArray.create(0)
 	end 'aProgramOfSeveralFiles'
 
 	return try scriptlibPackageSources(scriptlibDir)
@@ -315,7 +315,7 @@ function loadLibraryRoot(project Project, root FilePath, usersOwn MaxonSourcePat
 		return false
 	end 'theTierDidNotArrive'
 
-	var found = MaxonSourcePathArray.create()
+	var found = MaxonSourcePathArray.create(0)
 	_ = try collectMaxonSources(root, into: found)
 
 	if found.isEmpty() 'contributedNothing'
@@ -359,7 +359,7 @@ end 'loadLibraryRoot'
 // and are not recorded.
 function setAsideTheUsersOwnLibraryFiles(project Project) returns MaxonSourcePathSet
 	var setAside = MaxonSourcePathSet.create()
-	var libraryFiles = MaxonSourcePathArray.create()
+	var libraryFiles = MaxonSourcePathArray.create(0)
 
 	// ⚠ `Project.rootIsUnder`, not another spelling of the same `resolve` + `isInside`:
 	// `Queries.livesUnderStdlibDirectory`'s soundness proof is a claim about this exact predicate holding
@@ -390,10 +390,10 @@ end 'setAsideTheUsersOwnLibraryFiles'
 // stamp stops describing it. `observedAt` is sampled before any file is read, because a whole-second mtime cannot tell a
 // same-size edit made in that second (see `SourceFileStamp`).
 module function libraryRoster(project Project) returns LibraryNameRoster throws CompileError
-	var found = MaxonSourcePathArray.create()
+	var found = MaxonSourcePathArray.create(0)
 
 	if not Directory.exists(project.stdlibDir) 'theTierDidNotArrive'
-		return LibraryNameRoster.create(SourceFileStampMap.create(), names: NameRoster.create(), interfaces: LibraryInterfaceMap.create())
+		return LibraryNameRoster.create(SourceFileStampMap.create(), names: NameRoster.create(0), interfaces: LibraryInterfaceMap.create())
 	end 'theTierDidNotArrive'
 
 	_ = try collectMaxonSources(project.stdlibDir, into: found)
@@ -407,7 +407,7 @@ module function libraryRoster(project Project) returns LibraryNameRoster throws 
 
 	let observedAt = WallClock.nowUnixSeconds() as Timestamp
 	var stamps = SourceFileStampMap.create()
-	var names = NameRoster.create()
+	var names = NameRoster.create(0)
 	var written = LibraryInterfaceMap.create()
 
 	for path in found 'eachFile'

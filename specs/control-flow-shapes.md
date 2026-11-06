@@ -747,18 +747,18 @@ function arrayWalk(values IntArray) returns Integer
 end 'arrayWalk'
 
 function main() returns ExitCode
-	var first = IntArray.create()
+	var first = IntArray.create(0)
 	first.push(3)
 	first.push(-1)
 	first.push(4)
 	first.push(100)
 	first.push(9)
 	first.push(8)
-	var second = IntArray.create()
+	var second = IntArray.create(0)
 	second.push(1)
 	second.push(2)
 	second.push(3)
-	let third = IntArray.create()
+	let third = IntArray.create(0)
 	print("{arrayWalk(first)}\n")
 	print("{arrayWalk(second)}\n")
 	print("{arrayWalk(third)}\n")

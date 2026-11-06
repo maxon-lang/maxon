@@ -14,7 +14,7 @@ function lifecycleServerName(answer HttpAnswer) returns String
 end 'lifecycleServerName'
 
 test 'an http initialize mints a session id and answers as this compiler'
-	var server = StreamingHttpMcpServer.start(StringArray.create())
+	var server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (answer, sessionId) = server.initializeSession()
 	let name = lifecycleServerName(answer)
 	try server.stop()
@@ -29,7 +29,7 @@ test 'an http initialize mints a session id and answers as this compiler'
 end 'an http initialize mints a session id and answers as this compiler'
 
 test 'an http request carrying no session id is refused 404'
-	var server = StreamingHttpMcpServer.start(StringArray.create())
+	var server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
 	let sessionless = server.post(toolsListRequest(2), sessionId: McpSession.none)
 	let withSession = server.post(toolsListRequest(3), sessionId: sessionId)
@@ -41,7 +41,7 @@ test 'an http request carrying no session id is refused 404'
 end 'an http request carrying no session id is refused 404'
 
 test 'an http request carrying an unknown session id is refused 404'
-	var server = StreamingHttpMcpServer.start(StringArray.create())
+	var server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
 	let stranger = server.post(toolsListRequest(2), sessionId: McpSession.minted("00000000000000000000000000000000"))
 	let mine = server.post(toolsListRequest(3), sessionId: sessionId)
@@ -53,7 +53,7 @@ test 'an http request carrying an unknown session id is refused 404'
 end 'an http request carrying an unknown session id is refused 404'
 
 test 'a DELETE ends the session and a later request on it is 404'
-	var server = StreamingHttpMcpServer.start(StringArray.create())
+	var server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
 	let before = server.post(toolsListRequest(2), sessionId: sessionId)
 	let deleted = server.request("DELETE", target: McpRoutePath, host: server.authority(), origin: "", sessionId: sessionId, body: "")

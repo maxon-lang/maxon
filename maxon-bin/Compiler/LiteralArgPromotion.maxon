@@ -231,7 +231,7 @@ type ArgProvenance
 	var isMergedByteRecord as BoolArray
 
 	static function of(module MaxonModule, func IrFunction) returns ArgProvenance
-		var provenance = Self{isImmortal: BoolArray.create(), isMergedByteRecord: BoolArray.create()}
+		var provenance = Self{isImmortal: BoolArray.create(0), isMergedByteRecord: BoolArray.create(0)}
 		provenance.isImmortal.resize(func.valueTags.count())
 		provenance.isMergedByteRecord.resize(func.valueTags.count())
 
@@ -346,7 +346,7 @@ end 'ArgProvenance'
 // rebuilt fresh by `relocateIrBlock`, so this block's belongs to the merged module alone. It is the same
 // split `IrBlock`'s header states for the phi model.
 function promoteInBlock(project Project, module MaxonModule, block IrBlock, func IrFunction, funcIndex ElementIndex, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary)
-	var newRefs = OpIndexArray.create()
+	var newRefs = OpIndexArray.create(0)
 	var promotedAny = false
 
 	for opIdx in block.bodyOps() 'eachOp'
@@ -443,10 +443,10 @@ function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, 
 		return false
 	end 'nothingToPromote'
 
-	var promotedArgs = ValueIdArray.create()
-	var promoted = ValueIdArray.create()
-	var sources = ValueIdArray.create()
-	var callees = NameRoster.create()
+	var promotedArgs = ValueIdArray.create(0)
+	var promoted = ValueIdArray.create(0)
+	var sources = ValueIdArray.create(0)
+	var callees = NameRoster.create(0)
 
 	for i in 0 upto args.count() 'eachArg'
 		let argId = try args.get(i) otherwise panic("promoteArgsOf: args.get OOB at {i}")

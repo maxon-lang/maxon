@@ -9,7 +9,7 @@ export function backendRosterHolds(roster BackendThreadIdArray, thread BackendTh
 end 'backendRosterHolds'
 
 function backendRosterAmong(roster BackendThreadIdArray, reported BackendThreadIdArray) returns BackendThreadIdArray
-	var kept = BackendThreadIdArray.create()
+	var kept = BackendThreadIdArray.create(0)
 
 	for thread in roster 'eachThread'
 		if backendRosterHolds(reported, thread: thread) 'itIsStillThere'
@@ -21,7 +21,7 @@ function backendRosterAmong(roster BackendThreadIdArray, reported BackendThreadI
 end 'backendRosterAmong'
 
 module function backendRosterWithout(roster BackendThreadIdArray, thread BackendThreadId) returns BackendThreadIdArray
-	var kept = BackendThreadIdArray.create()
+	var kept = BackendThreadIdArray.create(0)
 
 	for held in roster 'eachThread'
 		if held != thread 'anotherThread'
@@ -42,7 +42,7 @@ export type BackendStepRoster
 	var holders as BackendThreadIdArray
 
 	export static function create() returns BackendStepRoster
-		return Self{threads: BackendThreadIdArray.create(), holders: BackendThreadIdArray.create()}
+		return Self{threads: BackendThreadIdArray.create(0), holders: BackendThreadIdArray.create(0)}
 	end 'create'
 
 	export function holds(thread BackendThreadId) returns bool
@@ -95,8 +95,8 @@ export type BackendStepRoster
 	end 'forgetEndingTheHold'
 
 	export function clear()
-		self.threads = BackendThreadIdArray.create()
-		self.holders = BackendThreadIdArray.create()
+		self.threads = BackendThreadIdArray.create(0)
+		self.holders = BackendThreadIdArray.create(0)
 	end 'clear'
 
 	export function keptAmong(reported BackendThreadIdArray)

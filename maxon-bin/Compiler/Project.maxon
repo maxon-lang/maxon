@@ -15,7 +15,7 @@ end 'cacheWriteBoolArray'
 
 module function cacheReadBoolArray(reader LibraryCacheReader) returns BoolArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = BoolArray.create()
+	var result = BoolArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -41,7 +41,7 @@ end 'cacheWriteNameRoster'
 
 module function cacheReadNameRoster(reader LibraryCacheReader) returns NameRoster throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = NameRoster.create()
+	var result = NameRoster.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -218,7 +218,7 @@ end 'cacheWriteSpelledFieldNameArray'
 
 function cacheReadSpelledFieldNameArray(reader LibraryCacheReader) returns SpelledFieldNameArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = SpelledFieldNameArray.create()
+	var result = SpelledFieldNameArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -369,7 +369,7 @@ end 'cacheWriteDefineProblemArray'
 
 module function cacheReadDefineProblemArray(reader LibraryCacheReader) returns DefineProblemArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DefineProblemArray.create()
+	var result = DefineProblemArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -519,7 +519,7 @@ module let CandidateListSeparator = ", "
 
 // ⭐ THE ONE EMPTY `StringArray` every UNAMBIGUOUS name answers with — so the common path allocates
 // nothing. NEVER mutated: the only writer builds a fresh array.
-export let sharedEmptyCandidateNames = StringArray.create()
+export let sharedEmptyCandidateNames = StringArray.create(0)
 
 // A `Visibility` as a small dense number, for the one reader that must MIX a tier into a content hash
 // (`ProgramSignatures.recordAlias`) rather than branch on it. Spelled here, beside the enum, so a fourth
@@ -581,7 +581,7 @@ end 'cacheWriteVisibilityArray'
 
 function cacheReadVisibilityArray(reader LibraryCacheReader) returns VisibilityArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = VisibilityArray.create()
+	var result = VisibilityArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -1033,7 +1033,7 @@ export type VarInfo
 	// The merge renumbering that last rewrote this binding's type ids (`ParseStaging.renumberArtifact`). One
 	// binding is filed in several places, and a name renumbering applied twice moves an id it already moved.
 	export var renumberedIn = 0 as RenumberingEpoch
-	export var brandKey = ByteArray.create()
+	export var brandKey = ByteArray.create(0)
 
 	// ⭐⭐ **THE ONE PLACE A `VarInfo` LITERAL IS SPELLED.** Every constructor below names ONLY the fields
 	// its binding kind actually differs on; everything else — the whole inert tail, and every per-path bit
@@ -1824,7 +1824,7 @@ end 'cacheWriteVarInfoArray'
 
 module function cacheReadVarInfoArray(reader LibraryCacheReader) returns VarInfoArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = VarInfoArray.create()
+	var result = VarInfoArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -2135,7 +2135,7 @@ end 'cacheWriteRangedTypeAliasArray'
 
 module function cacheReadRangedTypeAliasArray(reader LibraryCacheReader) returns RangedTypeAliasArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = RangedTypeAliasArray.create()
+	var result = RangedTypeAliasArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -2204,7 +2204,7 @@ end 'cacheWriteAliasImplementsClauseArray'
 
 module function cacheReadAliasImplementsClauseArray(reader LibraryCacheReader) returns AliasImplementsClauseArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = AliasImplementsClauseArray.create()
+	var result = AliasImplementsClauseArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -2725,7 +2725,7 @@ export type ClaimantProvenance
 
 		for (declPath, spelling) in spellings 'eachDeclaration'
 			if not sharersOfSpelling.contains(spelling) 'firstDeclarationOfThisSpelling'
-				sharersOfSpelling.upsert(spelling, value: StringArray.create())
+				sharersOfSpelling.upsert(spelling, value: StringArray.create(0))
 			end 'firstDeclarationOfThisSpelling'
 
 			var sharers = try sharersOfSpelling.get(spelling) otherwise panic("ClaimantProvenance.ordinalMints: the spelling of '{declPath}' was just seeded into the sharer map and is not there")
@@ -3212,7 +3212,7 @@ export type RangedAliasRegistry
 	end 'record'
 
 	function scopedClaimant(byFile RangedAliasByDeclaringFile, readerPath String) returns RangedTypeAlias
-		var claims = TypeNameClaimArray.create()
+		var claims = TypeNameClaimArray.create(0)
 
 		for (_, claimant) in byFile 'eachClaimant'
 			claims.push(self.provenance.claimOf(TypeDeclKind.rangedAlias, declFilePath: claimant.declFilePath, visibility: claimant.visibility))
@@ -3297,7 +3297,7 @@ export type RangedAliasRegistry
 	//
 	// It allocates once per compile, on a walk that already visits every declaration in the program.
 	export function declaredNames() returns NameRoster
-		var names = NameRoster.create()
+		var names = NameRoster.create(0)
 
 		for (name, _) in self.byName 'eachDeclaredName'
 			names.push(name)
@@ -3307,7 +3307,7 @@ export type RangedAliasRegistry
 	end 'declaredNames'
 
 	export function multiplyDeclaredNames() returns NameRoster
-		var names = NameRoster.create()
+		var names = NameRoster.create(0)
 
 		for (name, _) in self.multiplyDeclared 'eachMultiplyDeclaredName'
 			names.push(name)
@@ -3666,7 +3666,7 @@ export type RangedAliasRegistry
 	// KIND contest's alias side is very often a single declaration, and it is precisely that declaration the
 	// container's element must be pinned to. The `< 2` test therefore belongs to the range walk alone.
 	export function settleRangeContests(alsoScope NameRoster)
-		var mints = RangedTypeAliasArray.create()
+		var mints = RangedTypeAliasArray.create(0)
 		var declarationIdentities = DeclarationIdentityMap.create()
 
 		for (name, _) in self.multiplyDeclared 'eachNameWhoseDeclarationsMayMeet'
@@ -3757,7 +3757,7 @@ export type RangedAliasRegistry
 	// KIND-contested name, and the one file whose container has to be scoped (`stdlib/Builtins.maxon`)
 	// would never be an environment. The claimant walk answers for both halves off one rule.
 	export function rangeContestEnvironments() returns FilePathArray
-		var environments = FilePathArray.create()
+		var environments = FilePathArray.create(0)
 		var seen = DeclaringFilePathSet.create()
 		environments.push(CompilerOwnedDeclFilePath)
 		seen.insert(CompilerOwnedDeclFilePath.toString())
@@ -3787,7 +3787,7 @@ export type RangedAliasRegistry
 	// for. It is `byName` and not `lookup`: this asks about DECLARATIONS, and `lookup` synthesizes the
 	// builtin `ExitCode` for a name no file declares at all.
 	function distinctRangeClaimants(name ByteArray) returns RangedTypeAliasArray
-		var claimants = RangedTypeAliasArray.create()
+		var claimants = RangedTypeAliasArray.create(0)
 
 		let byFile = self.contestedDeclarations(name)
 
@@ -3815,7 +3815,7 @@ export type RangedAliasRegistry
 	// One declaration per distinct range, the earliest-folding of each, in fold order — so a contest's
 	// mints, their declaring files and their order never depend on a map's iteration order.
 	function rangeRepresentativesInFoldOrder(byFile RangedAliasByDeclaringFile) returns RangedTypeAliasArray
-		var representatives = RangedTypeAliasArray.create()
+		var representatives = RangedTypeAliasArray.create(0)
 
 		for (_, alias) in byFile 'eachDeclaringFile'
 			self.admitRangeRepresentative(representatives, alias: alias)
@@ -3825,7 +3825,7 @@ export type RangedAliasRegistry
 	end 'rangeRepresentativesInFoldOrder'
 
 	function inFoldOrder(aliases RangedTypeAliasArray) returns RangedTypeAliasArray
-		var ranked = FoldRankedAliasArray.create()
+		var ranked = FoldRankedAliasArray.create(0)
 
 		for alias in aliases 'eachAlias'
 			let declPath = alias.declFilePath.toString()
@@ -3833,7 +3833,7 @@ export type RangedAliasRegistry
 		end 'eachAlias'
 
 		ranked.sortBy(function(left FoldRankedAlias, right FoldRankedAlias) gives foldRankOrdering(left, right: right))
-		var ordered = RangedTypeAliasArray.create()
+		var ordered = RangedTypeAliasArray.create(0)
 
 		for entry in ranked 'eachRanked'
 			ordered.push(entry.alias)
@@ -3908,7 +3908,7 @@ export type RangedAliasRegistry
 	end 'identityOfName'
 
 	function declarationClaimants(name ByteArray) returns RangedTypeAliasArray
-		var claimants = RangedTypeAliasArray.create()
+		var claimants = RangedTypeAliasArray.create(0)
 		let byFile = self.contestedDeclarations(name)
 
 		if byFile.count() == 0 'oneFileDeclaresIt'
@@ -3931,7 +3931,7 @@ export type RangedAliasRegistry
 			return false
 		end 'oneDeclarationIsNeverContested'
 
-		var declPaths = StringArray.create()
+		var declPaths = StringArray.create(0)
 
 		for held in claimants 'eachDeclaration'
 			declPaths.push(held.declFilePath.toString())
@@ -4002,7 +4002,7 @@ end 'RangedAliasRegistry'
 // exactly like the builtin `ExitCode`, and its NAME is unspellable in source
 // (`CompilerMintSeparator`), so no reader can be admitted or refused by the tier anyway.
 function scopedSpellingsOf(name ByteArray, claimants RangedTypeAliasArray, mints RangedTypeAliasArray) returns NameRoster
-	var spellings = NameRoster.create()
+	var spellings = NameRoster.create(0)
 
 	for claimant in claimants 'eachDistinctRange'
 		let spelling = rangeQualifiedAliasName(name, alias: claimant)
@@ -4264,7 +4264,7 @@ end 'cacheWriteTypeNameClaimArray'
 
 module function cacheReadTypeNameClaimArray(reader LibraryCacheReader) returns TypeNameClaimArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = TypeNameClaimArray.create()
+	var result = TypeNameClaimArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -4334,7 +4334,7 @@ end 'cacheWriteTypeNameDeclArray'
 
 module function cacheReadTypeNameDeclArray(reader LibraryCacheReader) returns TypeNameDeclArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = TypeNameDeclArray.create()
+	var result = TypeNameDeclArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -4384,7 +4384,7 @@ type TypeNameRefuserSlots
 	export var claims as TypeNameClaimArray
 
 	static function create() returns TypeNameRefuserSlots
-		return Self{ids: AdmittedClaimIdArray.create(), claims: TypeNameClaimArray.create()}
+		return Self{ids: AdmittedClaimIdArray.create(0), claims: TypeNameClaimArray.create(0)}
 	end 'create'
 
 	function note(admitted AdmittedTypeNameClaim, directories ModuleDirectoryByFile)
@@ -4566,7 +4566,7 @@ end 'cacheWriteTypeNameCollisionArray'
 
 module function cacheReadTypeNameCollisionArray(reader LibraryCacheReader) returns TypeNameCollisionArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = TypeNameCollisionArray.create()
+	var result = TypeNameCollisionArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -4602,11 +4602,11 @@ export type TypeNameRegistry
 	var accepted as TypeNameDeclArray
 
 	export static function create() returns TypeNameRegistry
-		return Self{admission: TypeNameAdmission.create(), accepted: TypeNameDeclArray.create()}
+		return Self{admission: TypeNameAdmission.create(), accepted: TypeNameDeclArray.create(0)}
 	end 'create'
 
 	export function recordAll(decls TypeNameDeclArray, roster ShadowSpellingRoster, directories ModuleDirectoryByFile) returns TypeNameCollisionArray
-		var collisions = TypeNameCollisionArray.create()
+		var collisions = TypeNameCollisionArray.create(0)
 
 		for decl in decls 'eachDecl'
 			match self.record(decl, roster: roster, directories: directories) 'collision'
@@ -5121,7 +5121,7 @@ end 'cacheWriteRangeCheckSiteArray'
 
 function cacheReadRangeCheckSiteArray(reader LibraryCacheReader) returns RangeCheckSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = RangeCheckSiteArray.create()
+	var result = RangeCheckSiteArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -5262,7 +5262,7 @@ end 'cacheWriteRangeCheckArgSiteArray'
 
 function cacheReadRangeCheckArgSiteArray(reader LibraryCacheReader) returns RangeCheckArgSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = RangeCheckArgSiteArray.create()
+	var result = RangeCheckArgSiteArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -5339,7 +5339,7 @@ end 'cacheWriteRangeCheckReturnSiteArray'
 
 function cacheReadRangeCheckReturnSiteArray(reader LibraryCacheReader) returns RangeCheckReturnSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = RangeCheckReturnSiteArray.create()
+	var result = RangeCheckReturnSiteArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -5653,7 +5653,7 @@ end 'cacheWriteRangeCheckParamSiteArray'
 
 function cacheReadRangeCheckParamSiteArray(reader LibraryCacheReader) returns RangeCheckParamSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = RangeCheckParamSiteArray.create()
+	var result = RangeCheckParamSiteArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -5738,7 +5738,7 @@ end 'cacheWriteRangeCheckParamGuardArray'
 
 module function cacheReadRangeCheckParamGuardArray(reader LibraryCacheReader) returns RangeCheckParamGuardArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = RangeCheckParamGuardArray.create()
+	var result = RangeCheckParamGuardArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -5886,7 +5886,7 @@ export type RangeSiteFacts
 	end 'fillMaxonPositions'
 
 	export function openStdPositions(name ByteArray, count ElementIndex) returns RangeSitePositionArray
-		var positions = RangeSitePositionArray.create()
+		var positions = RangeSitePositionArray.create(0)
 		positions.growFilled(count, value: 0)
 		self.stdPositions.upsert(name, value: positions)
 		return positions
@@ -6037,7 +6037,7 @@ export type FunctionTypeAlias
 
 	// The same declaration with its instance ids renumbered — `underName`'s carry-everything rule, for its reason.
 	export function withInstancesRenumbered(remap TypeIdRemap) returns FunctionTypeAlias
-		var params = FunctionAliasParamArray.create()
+		var params = FunctionAliasParamArray.create(0)
 
 		for param in self.paramTypes 'eachParam'
 			params.push(FunctionAliasParam.create(param.tag, name: param.name, typeName: param.typeName, identity: remappedAliasSlotIdentity(param.identity, remap: remap), aggregateName: param.aggregateName, capability: param.capability, byReference: param.byReference))
@@ -6174,7 +6174,7 @@ end 'cacheWriteFunctionAliasParamArray'
 
 function cacheReadFunctionAliasParamArray(reader LibraryCacheReader) returns FunctionAliasParamArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FunctionAliasParamArray.create()
+	var result = FunctionAliasParamArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -6200,7 +6200,7 @@ end 'cacheWriteFunctionTypeAliasArray'
 
 module function cacheReadFunctionTypeAliasArray(reader LibraryCacheReader) returns FunctionTypeAliasArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FunctionTypeAliasArray.create()
+	var result = FunctionTypeAliasArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -6355,7 +6355,7 @@ export type FunctionAliasRegistry
 	end 'record'
 
 	function scopedClaimant(byFile FunctionAliasByDeclaringFile, readerPath String) returns FunctionTypeAlias
-		var claims = TypeNameClaimArray.create()
+		var claims = TypeNameClaimArray.create(0)
 
 		for (_, claimant) in byFile 'eachClaimant'
 			claims.push(self.provenance.claimOf(TypeDeclKind.functionAlias, declFilePath: claimant.declFilePath, visibility: claimant.visibility))
@@ -6391,7 +6391,7 @@ export type FunctionAliasRegistry
 	end 'contestedDeclarations'
 
 	export function declaredNames() returns NameRoster
-		var names = NameRoster.create()
+		var names = NameRoster.create(0)
 
 		for (name, _) in self.byName 'eachDeclaredName'
 			names.push(name)
@@ -6409,7 +6409,7 @@ export type FunctionAliasRegistry
 	end 'anyShapeContest'
 
 	export function shapeContestEnvironments() returns FilePathArray
-		var environments = FilePathArray.create()
+		var environments = FilePathArray.create(0)
 		var seen = DeclaringFilePathSet.create()
 
 		for (_, byFile) in self.shapeScoped 'eachContestedName'
@@ -6422,7 +6422,7 @@ export type FunctionAliasRegistry
 	end 'shapeContestEnvironments'
 
 	export function multiplyDeclaredNames() returns NameRoster
-		var names = NameRoster.create()
+		var names = NameRoster.create(0)
 
 		for (name, _) in self.multiplyDeclared 'eachMultiplyDeclaredName'
 			names.push(name)
@@ -6446,7 +6446,7 @@ export type FunctionAliasRegistry
 	end 'sharesItsNameWithACorpusDeclaration'
 
 	function anAuthorDeclares(byFile FunctionAliasByDeclaringFile) returns bool
-		var declPaths = StringArray.create()
+		var declPaths = StringArray.create(0)
 
 		for (declPath, _) in byFile 'eachDeclaringFile'
 			declPaths.push(declPath)
@@ -6533,7 +6533,7 @@ export type FunctionAliasRegistry
 	end 'shapeMintNames'
 
 	export function shapeScopedDeclaringFiles(mintName ByteArray) returns FilePathArray
-		var files = FilePathArray.create()
+		var files = FilePathArray.create(0)
 		let byFile = try self.shapeScoped.get(sourceSpelledAliasName(mintName)) otherwise return files
 
 		for (_, mint) in byFile 'eachDeclaringFile'
@@ -6925,7 +6925,7 @@ end 'cacheWriteFieldDefaultArray'
 
 function cacheReadFieldDefaultArray(reader LibraryCacheReader) returns FieldDefaultArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FieldDefaultArray.create()
+	var result = FieldDefaultArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -7024,7 +7024,7 @@ end 'cacheWriteWhereConstraintArray'
 
 module function cacheReadWhereConstraintArray(reader LibraryCacheReader) returns WhereConstraintArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = WhereConstraintArray.create()
+	var result = WhereConstraintArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -7052,7 +7052,7 @@ export function renumberedWhereConstraints(constraints WhereConstraintArray, rem
 		return constraints
 	end 'nothingToRenumber'
 
-	var renumbered = WhereConstraintArray.create()
+	var renumbered = WhereConstraintArray.create(0)
 
 	for constraint in constraints 'eachConstraint'
 		renumbered.push(constraint.withInstancesRenumbered(remap))
@@ -7157,7 +7157,7 @@ end 'cacheWriteBitWidthArray'
 
 function cacheReadBitWidthArray(reader LibraryCacheReader) returns BitWidthArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = BitWidthArray.create()
+	var result = BitWidthArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -7354,7 +7354,7 @@ export type StructLayout
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
-		return Self{name: name, fieldNames: NameRoster.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldDeclaredBrands: NameRoster.create(), fieldSpelledNames: SpelledFieldNameArray.create(), fieldTypeSites: DeclaredTypeSites.create(), fieldOffsets: ByteOffsetArray.create(), fieldBitWidths: BitWidthArray.create(), fieldBitOffsets: BitWidthArray.create(), slotBytes: 0, typeParamNames: NameRoster.create(), whereConstraints: WhereConstraintArray.create(), conformsTo: NameRoster.create(), conformanceBindings: ConformanceBindingArray.create(), messageMethodNames: NameRoster.create(), visibility: visibility, declFilePath: declFilePath}
+		return Self{name: name, fieldNames: NameRoster.create(0), fieldTypes: MaxonTypeArray.create(0), fieldMutable: BoolArray.create(0), fieldVisibility: VisibilityArray.create(0), fieldDefaults: FieldDefaultArray.create(0), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(0), fieldDeclaredBrands: NameRoster.create(0), fieldSpelledNames: SpelledFieldNameArray.create(0), fieldTypeSites: DeclaredTypeSites.create(), fieldOffsets: ByteOffsetArray.create(0), fieldBitWidths: BitWidthArray.create(0), fieldBitOffsets: BitWidthArray.create(0), slotBytes: 0, typeParamNames: NameRoster.create(0), whereConstraints: WhereConstraintArray.create(0), conformsTo: NameRoster.create(0), conformanceBindings: ConformanceBindingArray.create(0), messageMethodNames: NameRoster.create(0), visibility: visibility, declFilePath: declFilePath}
 	end 'create'
 
 	// The layout every COMPILER-SYNTHESIZED type takes: nameable from any file, declared in none. Spelled
@@ -7666,7 +7666,7 @@ export type StructLayout
 	// Recompute `fieldOffsets`/`slotBytes` from `fieldTypes` — the prefix sum, stated ONCE (`addField`
 	// extends it by one term rather than restating it).
 	function rebuildSlotGeometry()
-		var offsets = ByteOffsetArray.create()
+		var offsets = ByteOffsetArray.create(0)
 		var total = 0 as ByteOffset
 
 		for i in 0 upto self.fieldTypes.count() 'eachField'
@@ -7682,7 +7682,7 @@ export type StructLayout
 			return
 		end 'noBitGeometry'
 
-		var bitOffsets = BitWidthArray.create()
+		var bitOffsets = BitWidthArray.create(0)
 		var bits = 0 as BitWidth
 
 		for i in 0 upto self.fieldBitWidths.count() 'eachPackedField'
@@ -7854,7 +7854,7 @@ end 'cacheWriteStructLayoutArray'
 
 module function cacheReadStructLayoutArray(reader LibraryCacheReader) returns StructLayoutArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = StructLayoutArray.create()
+	var result = StructLayoutArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -7944,7 +7944,7 @@ end 'cacheWritePayloadFieldArray'
 
 function cacheReadPayloadFieldArray(reader LibraryCacheReader) returns PayloadFieldArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = PayloadFieldArray.create()
+	var result = PayloadFieldArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -7970,7 +7970,7 @@ end 'cacheWritePayloadFieldArrayArray'
 
 function cacheReadPayloadFieldArrayArray(reader LibraryCacheReader) returns PayloadFieldArrayArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = PayloadFieldArrayArray.create()
+	var result = PayloadFieldArrayArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -8369,7 +8369,7 @@ end 'cacheWriteEnumBackingFieldArray'
 
 function cacheReadEnumBackingFieldArray(reader LibraryCacheReader) returns EnumBackingFieldArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = EnumBackingFieldArray.create()
+	var result = EnumBackingFieldArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -8395,7 +8395,7 @@ end 'cacheWriteEnumBackingFieldArrayArray'
 
 function cacheReadEnumBackingFieldArrayArray(reader LibraryCacheReader) returns EnumBackingFieldArrayArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = EnumBackingFieldArrayArray.create()
+	var result = EnumBackingFieldArrayArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -8412,8 +8412,8 @@ end 'cacheReadEnumBackingFieldArrayArray'
 // column for EVERY case of EVERY enum in the program, and all but a struct-backed one have nothing to put
 // in it — a fresh `create()` at each would be one allocation per case for a column nothing reads. It is the
 // treatment `emitEnumCaseConstant`'s header already argues for one directory over, where a seed
-// `ByteArray.create()` above a match was allocating per case for two arms that never read it.
-export let sharedEmptyEnumBackingFields = EnumBackingFieldArray.create()
+// `ByteArray.create(0)` above a match was allocating per case for two arms that never read it.
+export let sharedEmptyEnumBackingFields = EnumBackingFieldArray.create(0)
 
 // A boxed union is `UnionTagBytes` (the i64 tag at offset 0) plus `FieldSlotBytes` per payload slot
 // of the WIDEST case. The tag is always i64 — an enum value is its i64 tag, boxed or not — so the
@@ -8438,7 +8438,7 @@ export let UnboxedTagBase = 1
 export let UnboxedMaxCases = UnboxedTagMask
 export let UnboxedPayloadSlotOffset = UnionTagBytes as ByteOffset
 
-export let sharedEmptyDeclaredConformances = NameRoster.create()
+export let sharedEmptyDeclaredConformances = NameRoster.create(0)
 
 // ⭐ **ONE `with` ARGUMENT LIST PER INTERFACE NAMED, POSITIONAL AGAINST `conformsTo`.** A clause may
 // bind at more than one of its names — `implements Tagged with Integer, Held with Integer` binds at both —
@@ -8478,7 +8478,7 @@ export type ConformanceBinding
 	// @generated library-cache end
 end 'ConformanceBinding'
 
-export let sharedEmptyConformanceBinding = ConformanceBinding.create(NameRoster.create(), types: RequirementTypeArray.create())
+export let sharedEmptyConformanceBinding = ConformanceBinding.create(NameRoster.create(0), types: RequirementTypeArray.create(0))
 
 export typealias ConformanceBindingArray = Array with ConformanceBinding
 
@@ -8493,7 +8493,7 @@ end 'cacheWriteConformanceBindingArray'
 
 function cacheReadConformanceBindingArray(reader LibraryCacheReader) returns ConformanceBindingArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ConformanceBindingArray.create()
+	var result = ConformanceBindingArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -8511,7 +8511,7 @@ export function renumberedConformanceBindings(bindings ConformanceBindingArray, 
 		return bindings
 	end 'nothingToRenumber'
 
-	var renumbered = ConformanceBindingArray.create()
+	var renumbered = ConformanceBindingArray.create(0)
 
 	for binding in bindings 'eachBinding'
 		renumbered.push(binding.withInstancesRenumbered(remap))
@@ -8533,7 +8533,7 @@ end 'cacheWriteWrittenTypeNameEnds'
 
 function cacheReadWrittenTypeNameEnds(reader LibraryCacheReader) returns WrittenTypeNameEnds throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = WrittenTypeNameEnds.create()
+	var result = WrittenTypeNameEnds.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -8560,7 +8560,7 @@ export type ScannedConformanceClause
 	end 'create'
 
 	export static function declaringNothing() returns ScannedConformanceClause
-		return Self{names: NameRoster.create(), bindings: ConformanceBindingArray.create()}
+		return Self{names: NameRoster.create(0), bindings: ConformanceBindingArray.create(0)}
 	end 'declaringNothing'
 end 'ScannedConformanceClause'
 
@@ -8596,7 +8596,7 @@ end 'conformanceListDeclares'
 // and it owes `implements Error` for the reason this header gives — a `throws Store.keep.sendError` clause is
 // checked by `ConformanceCheck.requireImplErrorConformsAndIsScalar` like any other.
 module function builtinErrorConformance(interfaces IrInterfaceMap) returns NameRoster
-	var conformsTo = NameRoster.create()
+	var conformsTo = NameRoster.create(0)
 	conformsTo.push(interfaces.spellingOf(BuiltinInterfaceKind.error))
 	return conformsTo
 end 'builtinErrorConformance'
@@ -8951,7 +8951,7 @@ export function buildUnionCasesCompanion(layout EnumLayout) returns EnumLayout
 
 	// It carries the UNION's own visibility and declaring file, not `global`/compiler-owned: the companion is
 	// nameable exactly where the union is, so a `module union` does not leak its discriminant type across files.
-	var companion = EnumLayout.create(unionCasesCompanionName(layout.name), isUnion: false, conformsTo: NameRoster.create(), visibility: layout.visibility, declFilePath: layout.declFilePath, backing: layout.backing if mirrorsTheUnionsBacking else EnumBacking.integer)
+	var companion = EnumLayout.create(unionCasesCompanionName(layout.name), isUnion: false, conformsTo: NameRoster.create(0), visibility: layout.visibility, declFilePath: layout.declFilePath, backing: layout.backing if mirrorsTheUnionsBacking else EnumBacking.integer)
 
 	for i in 0 upto layout.caseCount() 'eachVariant'
 		let tag = layout.tagOfIndex(i)
@@ -8960,7 +8960,7 @@ export function buildUnionCasesCompanion(layout EnumLayout) returns EnumLayout
 		// `mirrorsTheUnionsBacking`'s own condition, so the two travel together for the reason that flag's
 		// paragraph gives. Where the tag is only a declaration index the companion states nothing the source
 		// wrote, and `Companion.<case>` interpolates as its case NAME, as the union's does.
-		companion.addCase(layout.caseNameAt(i), tag: tag, rawValue: "{tag}", declaresRawValue: mirrorsTheUnionsBacking and layout.declaresRawValues, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+		companion.addCase(layout.caseNameAt(i), tag: tag, rawValue: "{tag}", declaresRawValue: mirrorsTheUnionsBacking and layout.declaresRawValues, payloads: PayloadFieldArray.create(0), backingFields: sharedEmptyEnumBackingFields)
 	end 'eachVariant'
 
 	return companion
@@ -9268,7 +9268,7 @@ export type EnumLayout
 	export var caseBackingFields as EnumBackingFieldArrayArray
 
 	export static function create(name ByteArray, isUnion bool, conformsTo NameRoster, visibility Visibility, declFilePath FilePath, backing EnumBacking, isSynthesized bool = false) returns EnumLayout
-		return Self{name: name, isUnion: isUnion, isSynthesized: isSynthesized, caseNames: NameRoster.create(), caseTags: FullRangeIntArray.create(), caseRawValues: StringArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing, declaresRawValues: false, backingStruct: EnumBackingStruct.none, caseBackingFields: EnumBackingFieldArrayArray.create()}
+		return Self{name: name, isUnion: isUnion, isSynthesized: isSynthesized, caseNames: NameRoster.create(0), caseTags: FullRangeIntArray.create(0), caseRawValues: StringArray.create(0), casePayloads: PayloadFieldArrayArray.create(0), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing, declaresRawValues: false, backingStruct: EnumBackingStruct.none, caseBackingFields: EnumBackingFieldArrayArray.create(0)}
 	end 'create'
 
 	// The `EnumLayout` twin of `StructLayout.createCompilerOwned`, for the same reason and with the same
@@ -9634,7 +9634,7 @@ end 'cacheWriteEnumLayoutArray'
 
 module function cacheReadEnumLayoutArray(reader LibraryCacheReader) returns EnumLayoutArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = EnumLayoutArray.create()
+	var result = EnumLayoutArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -9740,7 +9740,7 @@ end 'builtinEnumLookupErrorEnum'
 // error enum does.
 function addBuiltinEnumCase(layout EnumLayout, caseName ByteArray)
 	let tag = layout.caseCount()
-	layout.addCase(caseName, tag: tag as FullRangeInt, rawValue: "{tag}", declaresRawValue: false, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+	layout.addCase(caseName, tag: tag as FullRangeInt, rawValue: "{tag}", declaresRawValue: false, payloads: PayloadFieldArray.create(0), backingFields: sharedEmptyEnumBackingFields)
 end 'addBuiltinEnumCase'
 
 // ⭐⭐ **THE ORDINAL DRIFT GUARD FOR THE BUILTIN ERROR ENUMS — ONE MECHANISM, EVERY FAMILY.**
@@ -9871,7 +9871,7 @@ module type BuiltinErrorOrdinalCheck
 	// one place `accountedByIndex` is sized, which is what makes "sized from the declaration" a property of
 	// the type rather than of each door.
 	static function over(project Project, declaration EnumLayout, source BuiltinErrorDeclarationSource, installer ByteArray) returns BuiltinErrorOrdinalCheck
-		var accountedByIndex = BoolArray.create()
+		var accountedByIndex = BoolArray.create(0)
 		var filled = 0 as CaseIndex
 
 		while filled < declaration.caseCount() 'eachCase'
@@ -10265,7 +10265,7 @@ end 'cacheWriteParamExistentialSiteArray'
 
 function cacheReadParamExistentialSiteArray(reader LibraryCacheReader) returns ParamExistentialSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ParamExistentialSiteArray.create()
+	var result = ParamExistentialSiteArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -10282,9 +10282,9 @@ end 'cacheReadParamExistentialSiteArray'
 // nothing — which is very nearly every slot. Homed here, beside the type they anchor, because BOTH the parser
 // (which writes them) and SemanticCheck (which must hand the two argument checkers that hold no signature an
 // honest empty column) name them. Never mutated: a writer builds a fresh array and returns it whole.
-export let sharedEmptyParamExistentialSites = ParamExistentialSiteArray.create()
-export let sharedEmptyReturnExistentialSites = GenericInstanceIdArray.create()
-export let sharedEmptyWrittenTypeNames = WrittenTypeNames.create(NameRoster.create(), ends: WrittenTypeNameEnds.create())
+export let sharedEmptyParamExistentialSites = ParamExistentialSiteArray.create(0)
+export let sharedEmptyReturnExistentialSites = GenericInstanceIdArray.create(0)
+export let sharedEmptyWrittenTypeNames = WrittenTypeNames.create(NameRoster.create(0), ends: WrittenTypeNameEnds.create(0))
 
 // The `Base with Args` instance parameter `position` was declared at, or `MapError.keyNotFound` for a parameter
 // that named no generic alias — which is every parameter of almost every function, and is why the column is
@@ -10491,7 +10491,7 @@ export type FuncSignature
 	export function renumberTypeIds(remap TypeIdRemap)
 		self.paramTypes = remapMaxonTypes(self.paramTypes, remap: remap)
 
-		var paramSites = ParamExistentialSiteArray.create()
+		var paramSites = ParamExistentialSiteArray.create(0)
 
 		for site in self.paramExistentialSites 'eachParamSite'
 			paramSites.push(ParamExistentialSite.create(site.position, instance: remap.applyInstance(site.instance)))
@@ -10499,7 +10499,7 @@ export type FuncSignature
 
 		self.paramExistentialSites = paramSites
 
-		var returnSites = GenericInstanceIdArray.create()
+		var returnSites = GenericInstanceIdArray.create(0)
 
 		for instance in self.returnExistentialSites 'eachReturnSite'
 			returnSites.push(remap.applyInstance(instance))
@@ -10651,7 +10651,7 @@ let AsciiSmallZ = 122
 // SWEEP files the same declaration under it, and two spellings of the derivation would file a test under a
 // name the real parse never registers.
 export function testFunctionRegistrationName(prose ByteArray) returns ByteArray
-	var name = ByteArray.create()
+	var name = ByteArray.create(0)
 
 	for b in TestFunctionNamePrefix 'eachPrefixByte'
 		name.push(b)
@@ -10856,7 +10856,7 @@ function decodeMintedHelperName(helperName ByteArray, prefix ByteArray) returns 
 		lastSplit = i
 	end 'scan'
 
-	if firstSplit == lastSplit or not bytesStartWith(helperName, prefix: mintedName(prefix, suffix: ByteArray.create())) 'notThisMint'
+	if firstSplit == lastSplit or not bytesStartWith(helperName, prefix: mintedName(prefix, suffix: ByteArray.create(0))) 'notThisMint'
 		throw AbsentError.absent
 	end 'notThisMint'
 
@@ -10965,7 +10965,7 @@ end 'cacheWritePendingFnMergeCheckArray'
 
 module function cacheReadPendingFnMergeCheckArray(reader LibraryCacheReader) returns PendingFnMergeCheckArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = PendingFnMergeCheckArray.create()
+	var result = PendingFnMergeCheckArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -11242,7 +11242,7 @@ end 'cacheWritePendingFunctionTypeDoorArray'
 
 module function cacheReadPendingFunctionTypeDoorArray(reader LibraryCacheReader) returns PendingFunctionTypeDoorArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = PendingFunctionTypeDoorArray.create()
+	var result = PendingFunctionTypeDoorArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -11366,7 +11366,7 @@ end 'cacheWritePendingBrandRecordArray'
 
 module function cacheReadPendingBrandRecordArray(reader LibraryCacheReader) returns PendingBrandRecordArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = PendingBrandRecordArray.create()
+	var result = PendingBrandRecordArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -11625,7 +11625,7 @@ end 'cacheWritePendingDiscardedResultArray'
 
 module function cacheReadPendingDiscardedResultArray(reader LibraryCacheReader) returns PendingDiscardedResultArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = PendingDiscardedResultArray.create()
+	var result = PendingDiscardedResultArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -11765,7 +11765,7 @@ export function argLabelSpelling(label ByteArray) returns ByteArray
 	return DiscardBindingName if isDiscardLabel(label) else label
 end 'argLabelSpelling'
 
-let NoSynthesizedSlots = ParamCountArray.create()
+let NoSynthesizedSlots = ParamCountArray.create(0)
 
 export function synthesizedArgIndex(argCount Count, defaultedArgs ParamCount, k ParamCount) returns ParamCount
 	return (argCount as ParamCount) - defaultedArgs + k
@@ -11776,7 +11776,7 @@ export function synthesizedArgSlots(paramNames NameRoster, argLabels NameRoster,
 		return NoSynthesizedSlots
 	end 'nothingSynthesized'
 
-	var slots = ParamCountArray.create()
+	var slots = ParamCountArray.create(0)
 
 	for k in 0 upto defaultedArgs 'eachSynthesizedArg'
 		let argIndex = synthesizedArgIndex(argLabels.count(), defaultedArgs: defaultedArgs, k: k as ParamCount)
@@ -11845,8 +11845,8 @@ function placeCallArgs(paramNames NameRoster, argLabels NameRoster, argCount Par
 		return ArgPlacement.refused(ArgSlotFailure.arityMismatch(paramCount as ParamCount, got: argCount))
 	end 'arity'
 
-	var argAt = ParamCountArray.create()
-	var filled = BoolArray.create()
+	var argAt = ParamCountArray.create(0)
+	var filled = BoolArray.create(0)
 
 	for _ in 0 upto paramCount 'initSlots'
 		argAt.push(0)
@@ -11888,7 +11888,7 @@ export function slotCallArgs(paramNames NameRoster, args ValueIdArray, argLabels
 end 'slotCallArgs'
 
 function argIdsAt(args ValueIdArray, argAt ParamCountArray) returns ValueIdArray
-	var slotIds = ValueIdArray.create()
+	var slotIds = ValueIdArray.create(0)
 
 	for position in argAt 'eachSlot'
 		slotIds.push(try args.get(position) otherwise panic("argIdsAt: args.get OOB at {position} — a placement names positions of the arguments it was made for"))
@@ -11930,7 +11930,7 @@ export type UnknownTypeReports
 	export var unplaced as UnplacedUnknownTypeArray
 
 	export static function create() returns UnknownTypeReports
-		return Self{reportedSites: ReportedTypeSiteSet.create(), reportedMessages: ReportedUnknownTypeMessageSet.create(), reportedNames: ReportedUnknownNameSet.create(), unknownParameters: UnknownParameterSet.create(), occurrences: 0, unplaced: UnplacedUnknownTypeArray.create()}
+		return Self{reportedSites: ReportedTypeSiteSet.create(), reportedMessages: ReportedUnknownTypeMessageSet.create(), reportedNames: ReportedUnknownNameSet.create(), unknownParameters: UnknownParameterSet.create(), occurrences: 0, unplaced: UnplacedUnknownTypeArray.create(0)}
 	end 'create'
 
 	// One report per written site: a generic instance resolves the same written slot again.
@@ -12545,53 +12545,53 @@ export type Project
 			runtimeDir: runtimeDir,
 			scriptlib: scriptlib,
 			stdlibBodies: stdlibBodies,
-			librarySourcePaths: MaxonSourcePathArray.create(),
+			librarySourcePaths: MaxonSourcePathArray.create(0),
 			libraryFacts: LibraryFacts.empty(),
 			emissionRanks: FileEmissionRankMap.create(),
-			managedGlobals: ManagedGlobalArray.create(),
+			managedGlobals: ManagedGlobalArray.create(0),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			funcSignatureFloors: FuncSignatureFloorMap.create(),
 			witnessSlotImpls: WitnessSlotImplMap.create(),
 			refusedConformanceMembers: RefusedConformanceMemberSet.create(),
-			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
-			unusedTypeAliasDiagnostics: DeferredNameDiagnosticArray.create(),
-			hiddenTypeNameDiagnostics: DiagnosticArray.create(),
+			pendingFnMergeChecks: PendingFnMergeCheckArray.create(0),
+			unusedTypeAliasDiagnostics: DeferredNameDiagnosticArray.create(0),
+			hiddenTypeNameDiagnostics: DiagnosticArray.create(0),
 			unknownTypeReports: UnknownTypeReports.create(),
 			genericAliasNamesWrittenByAFile: UsedTypeNameSet.create(),
-			bindingHygieneDiagnostics: DiagnosticArray.create(),
-			targetRefusalDiagnostics: DiagnosticArray.create(),
+			bindingHygieneDiagnostics: DiagnosticArray.create(0),
+			targetRefusalDiagnostics: DiagnosticArray.create(0),
 			collidedTypeNames: CollidedTypeNameSet.create(),
-			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
-			pendingBrandRecords: PendingBrandRecordArray.create(),
-			pendingDiscardedResults: PendingDiscardedResultArray.create(),
+			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(0),
+			pendingBrandRecords: PendingBrandRecordArray.create(0),
+			pendingDiscardedResults: PendingDiscardedResultArray.create(0),
 			// Aimed at the TARGET this project was created for, never the host — see `exitCodeHigh`.
 			typeAliases: RangedAliasRegistry.create(target.os),
 			typeNameDecls: TypeNameRegistry.create(),
-			signatureTypeDemands: SignatureTypeDemandArray.create(),
+			signatureTypeDemands: SignatureTypeDemandArray.create(0),
 			rangeChecks: RangeCheckPlanMap.create(),
 			rangeSiteFacts: RangeSiteFacts.create(),
 			functionTypeAliases: FunctionTypeAliasMap.create(),
 			functionAliasShapes: FunctionShapeMap.create(),
 			structTypes: StructLayoutMap.create(),
-			writtenTupleTypes: WrittenTupleTypeArray.create(),
+			writtenTupleTypes: WrittenTupleTypeArray.create(0),
 			enumTypes: createEnumRegistry(interfaces),
 			interfaces: interfaces,
-			conformances: ConformanceDeclArray.create(),
+			conformances: ConformanceDeclArray.create(0),
 			declaredConformances: DeclaredConformanceMap.create(),
 			declaredConformanceIndexBuilt: false,
-			literalInitSites: LiteralInitSiteArray.create(),
-			inferredInstantiationSites: GenericInstantiationSiteArray.create(),
+			literalInitSites: LiteralInitSiteArray.create(0),
+			inferredInstantiationSites: GenericInstantiationSiteArray.create(0),
 			typeNames: TypeNameInterner.createForSource(0),
 			opRanges: SourceRangeTable.create(),
 			asyncTrace: false,
 			poisonFreed: false,
 			debugStream: debugStream,
 			debugInfo: false,
-			requestedRuntimeBodies: RuntimeFunctionNameArray.create(),
+			requestedRuntimeBodies: RuntimeFunctionNameArray.create(0),
 			rendersTargetIr: false,
 			compilesOnceAndExits: false,
-			functionValueTargets: NameRoster.create(),
+			functionValueTargets: NameRoster.create(0),
 			uncheckedCallPaths: UncheckedCallPaths.none(),
 			entryStubCalls: EntryStubCalls.none(),
 			hostContext: HostContextLayout.unread(),
@@ -12624,7 +12624,7 @@ export type Project
 			deferredChains: DeferredChainTable.create(),
 			rootPath: rootPath,
 			target: target,
-			diagnostics: DiagnosticArray.create(),
+			diagnostics: DiagnosticArray.create(0),
 			poison: DeclarationPoison.create(),
 			libraryBlame: LibraryBlame.unblamed,
 			globalData: GlobalDataTable.create(),
@@ -12632,7 +12632,7 @@ export type Project
 			memory: CompileMemory.create(),
 			retiredWorkers: RetiredWorkers.create(),
 			traceUnit: traceUnitOf(rootPath),
-			openPhaseSpans: TraceNameArray.create(),
+			openPhaseSpans: TraceNameArray.create(0),
 			session: session,
 			keywords: KeywordTable.create(),
 			readerAnchors: ParserAnchors.create()
@@ -12645,7 +12645,7 @@ end 'Project'
 // The library roots are passed IN rather than located here so the project is born
 // with valid ones: the library loader reads them before the first pass runs, and a
 // field that is briefly wrong is a field something can read while it is wrong.
-export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, debugStream bool, session CompileSession, entryFunction ByteArray = MainFunctionName, defines DefineArray = DefineArray.create(), productVersion VersionComponentArray = VersionComponentArray.create(), stdlibBodies LibraryBodies = LibraryBodies.onDemand) returns Project
+export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, debugStream bool, session CompileSession, entryFunction ByteArray = MainFunctionName, defines DefineArray = DefineArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), stdlibBodies LibraryBodies = LibraryBodies.onDemand) returns Project
 	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir, scriptlib: scriptlib, stdlibBodies: stdlibBodies, debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion)
 end 'createProject'
 
@@ -12973,7 +12973,7 @@ type DiagnosticSortRow
 		let code = diagnostic.code.rawValue.toByteArray()
 
 		return match diagnostic.anchor 'anchor'
-			programWide gives Self{place: DiagnosticPlace.programWide, rank: 0, file: ByteArray.create(), line: 0, column: 0, code: code, index: index}
+			programWide gives Self{place: DiagnosticPlace.programWide, rank: 0, file: ByteArray.create(0), line: 0, column: 0, code: code, index: index}
 			file(filePath) gives Self.placedIn(filePath, line: 0, column: 0, code: code, index: index, ranks: ranks)
 			at(filePath, line, column) gives Self.placedIn(filePath, line: line as ElementIndex, column: column as ElementIndex, code: code, index: index, ranks: ranks)
 		end 'anchor'
@@ -12983,7 +12983,7 @@ type DiagnosticSortRow
 		let file = filePath.toString()
 
 		if let rank = try ranks.get(file) 'aFileTheCompileRead'
-			return Self{place: DiagnosticPlace.ranked, rank: rank, file: ByteArray.create(), line: line, column: column, code: code, index: index}
+			return Self{place: DiagnosticPlace.ranked, rank: rank, file: ByteArray.create(0), line: line, column: column, code: code, index: index}
 		end 'aFileTheCompileRead'
 
 		return Self{place: DiagnosticPlace.unranked, rank: 0, file: file.toByteArray(), line: line, column: column, code: code, index: index}
@@ -13046,7 +13046,7 @@ end 'authoredRanksOf'
 
 module function diagnosticsInSourceOrder(project Project) returns DiagnosticArray
 	var seen = DiagnosticIdentitySet.create()
-	var distinct = DiagnosticArray.create()
+	var distinct = DiagnosticArray.create(0)
 
 	for diagnostic in project.diagnostics 'each'
 		let identity = diagnostic.render()
@@ -13064,7 +13064,7 @@ module function diagnosticsInSourceOrder(project Project) returns DiagnosticArra
 	end 'nothingToOrder'
 
 	let ranks = authoredRanksOf(project)
-	var rows = DiagnosticSortRowArray.create()
+	var rows = DiagnosticSortRowArray.create(0)
 
 	for (iter, diagnostic) in distinct.withIterator() 'eachDistinct'
 		rows.push(DiagnosticSortRow.of(diagnostic, index: iter.index(), ranks: ranks))
@@ -13072,7 +13072,7 @@ module function diagnosticsInSourceOrder(project Project) returns DiagnosticArra
 
 	rows.sortBy(function(left DiagnosticSortRow, right DiagnosticSortRow) gives left.compare(right))
 
-	var ordered = DiagnosticArray.create()
+	var ordered = DiagnosticArray.create(0)
 
 	for row in rows 'eachInOrder'
 		ordered.push(try distinct.get(row.index) otherwise panic("diagnosticsInSourceOrder: distinct.get OOB at {row.index}"))

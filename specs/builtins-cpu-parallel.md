@@ -268,7 +268,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create()
+	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "echo")

@@ -113,7 +113,7 @@ function main() returns ExitCode
 	end 'iAmTheChild'
 
 	let me = try Process.executablePath() otherwise return 2
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("child")
 
 	var config = Configuration.create(Executable.path(me))

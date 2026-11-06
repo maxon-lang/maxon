@@ -108,7 +108,7 @@ typealias Bufs = Array with ByteArray
 typealias Len = int(0 to 4096)
 
 function build(n Len) returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.reserve(n as ElementIndex)
 	for i in 0 upto n 'fill'
 		b.push(((i + n) mod 251) as Byte)
@@ -117,7 +117,7 @@ function build(n Len) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create()
+	var bufs = Bufs.create(0)
 	for n in 1 upto 261 'alloc'
 		bufs.push(build(n as Len))
 	end 'alloc'
@@ -163,7 +163,7 @@ typealias Bufs = Array with ByteArray
 typealias Index = int(0 to 65536)
 
 function build(seed Index) returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.reserve(24)
 	for i in 0 upto 24 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -172,7 +172,7 @@ function build(seed Index) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create()
+	var bufs = Bufs.create(0)
 	for k in 0 upto 3000 'alloc'
 		bufs.push(build(k as Index))
 	end 'alloc'
@@ -220,7 +220,7 @@ typealias ByteArray = Array with Byte
 typealias Round = int(0 to 255)
 
 function roundTrip(r Round) returns Integer
-	var big = ByteArray.create()
+	var big = ByteArray.create(0)
 	big.reserve(300000)
 	for i in 0 upto 512 'fill'
 		big.push(((r + i) mod 251) as Byte)
@@ -268,7 +268,7 @@ typealias Bufs = Array with ByteArray
 typealias Index = int(0 to 255)
 
 function build(k Index) returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.reserve((280000 + k * 4096) as ElementIndex)
 	for i in 0 upto 64 'fill'
 		b.push(((k * 7 + i) mod 251) as Byte)
@@ -277,7 +277,7 @@ function build(k Index) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create()
+	var bufs = Bufs.create(0)
 	for k in 0 upto 40 'alloc'
 		bufs.push(build(k as Index))
 	end 'alloc'
@@ -370,7 +370,7 @@ typealias Bufs = Array with ByteArray
 typealias Len = int(0 to 4096)
 
 function build(n Len, seed Len) returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.reserve(n as ElementIndex)
 	for i in 0 upto n 'fill'
 		b.push(((i + seed) mod 251) as Byte)
@@ -393,7 +393,7 @@ function verify(b ByteArray, n Len, seed Len) returns Integer
 end 'verify'
 
 function main() returns ExitCode
-	var keep = Bufs.create()
+	var keep = Bufs.create(0)
 	for k in 0 upto 120 'survivors'
 		keep.push(build((k + 8) as Len, seed: k as Len))
 	end 'survivors'
@@ -401,7 +401,7 @@ function main() returns ExitCode
 	// Four waves of churn. Each wave builds and drops its own population, so the slots it takes come
 	// from — and go back to — the same spans and buckets the survivors were cut from.
 	for wave in 0 upto 4 'waves'
-		var churn = Bufs.create()
+		var churn = Bufs.create(0)
 		for k in 0 upto 200 'build'
 			churn.push(build(((k mod 97) + wave * 13 + 1) as Len, seed: (k + wave) as Len))
 		end 'build'
@@ -436,7 +436,7 @@ virgin arm gets its zeroes free. A pop that failed to unlink, or a push of the w
 slot to two buffers, and the survivors are what shows it. (Every case here reaches that arm; this one
 is the extreme: the shortest slot, recycled the most times.)
 
-⛔ **THE SHAPE IS `b""` AND A GROW, AND THE OBVIOUS SPELLING DOES NOT WORK.** `ByteArray.create()`
+⛔ **THE SHAPE IS `b""` AND A GROW, AND THE OBVIOUS SPELLING DOES NOT WORK.** `ByteArray.create(0)`
 followed by a push allocates nothing to free — an array that never had a buffer owes nothing — so a
 case written that way passes against a `__slab_free` whose span arm has been sabotaged away, which is
 to say it tested nothing here. Against that sabotage the `create()` version passes and this one
@@ -458,7 +458,7 @@ function emptyThenGrow(n Len) returns ByteArray
 end 'emptyThenGrow'
 
 function main() returns ExitCode
-	var keep = Bufs.create()
+	var keep = Bufs.create(0)
 	for k in 0 upto 40 'survivors'
 		keep.push(emptyThenGrow((k + 1) as Len))
 	end 'survivors'
@@ -519,7 +519,7 @@ let LenStep = 4
 let SweepCount = 26
 
 function build(n Len) returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.reserve(n as ElementIndex)
 	for i in 0 upto n 'fill'
 		b.push(((i + n) mod 251) as Byte)
@@ -528,7 +528,7 @@ function build(n Len) returns ByteArray
 end 'build'
 
 function sweep() returns Integer
-	var bufs = Bufs.create()
+	var bufs = Bufs.create(0)
 	for k in 0 upto SweepCount 'alloc'
 		bufs.push(build((FirstLen + k * LenStep) as Len))
 	end 'alloc'
@@ -585,7 +585,7 @@ typealias Bufs = Array with ByteArray
 typealias Len = int(0 to 65536)
 
 function build(n Len, seed Len) returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.reserve(n as ElementIndex)
 	for i in 0 upto 32 'fill'
 		b.push(((i + seed) mod 251) as Byte)
@@ -594,7 +594,7 @@ function build(n Len, seed Len) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create()
+	var bufs = Bufs.create(0)
 	for k in 0 upto 96 'alloc'
 		bufs.push(build((9000 + k * 220) as Len, seed: k as Len))
 	end 'alloc'
@@ -637,7 +637,7 @@ typealias Bufs = Array with ByteArray
 typealias Len = int(0 to 65536)
 
 function build(n Len, seed Len) returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.reserve(n as ElementIndex)
 	for i in 0 upto 16 'fill'
 		b.push(((i + seed) mod 251) as Byte)
@@ -646,7 +646,7 @@ function build(n Len, seed Len) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create()
+	var bufs = Bufs.create(0)
 	// Sixteen sizes spread across the ladder, forty spans' worth of each: the arena serves a run per
 	// span, and the runs are of sixteen different lengths.
 	for k in 0 upto 640 'alloc'

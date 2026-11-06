@@ -17,7 +17,7 @@ The compiler validates that function and method arguments match the expected par
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create()
+	var arr = StringArray.create(0)
 	arr.append("hello")
 	return 0
 end 'main'
@@ -32,7 +32,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push("hello")
 	return 0
 end 'main'
@@ -151,8 +151,8 @@ typealias IntArray = Array with Int
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var ints = IntArray.create()
-	var strings = StringArray.create()
+	var ints = IntArray.create(0)
+	var strings = StringArray.create(0)
 	ints.append(strings)
 	return 0
 end 'main'
@@ -177,7 +177,7 @@ type Foo
 end 'Foo'
 
 function main() returns ExitCode
-	var arr = FooArray.create()
+	var arr = FooArray.create(0)
 	arr.push(Foo.create(42))
 	return arr.count() - 1
 end 'main'
@@ -211,7 +211,7 @@ type Item
 end 'Item'
 
 function main() returns ExitCode
-	var c = Container.create(ItemArray.create())
+	var c = Container.create(ItemArray.create(0))
 	c.items.push(Item.create(7))
 	return c.items.count()
 end 'main'

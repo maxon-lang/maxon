@@ -62,9 +62,9 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var items = TallyArray.create()
+	var items = TallyArray.create(0)
 	items.push(1)                    // fine: items is a var
-	// let fixed = TallyArray.create()
+	// let fixed = TallyArray.create(0)
 	// fixed.push(1)                 // E3159: cannot write through 'fixed': 'fixed' is read-only (a `let` binding)
 	print("{items.count()}\n")
 	return 0

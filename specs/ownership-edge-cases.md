@@ -405,7 +405,7 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	var arr = NodeArray.create()
+	var arr = NodeArray.create(0)
 	if true 'scope'
 		let n = Node.create(10)
 		arr.push(n)
@@ -434,7 +434,7 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	var arr = NodeArray.create()
+	var arr = NodeArray.create(0)
 	arr.push(Node.create(1))
 	arr.push(Node.create(2))
 	view popped = try arr.remove(arr.count() - 1) otherwise 'err'
@@ -463,7 +463,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push(Item.create(50))
 	try arr.set(0, value: Item.create(99)) otherwise panic("test invariant: set OOB")
 	var got = try arr.get(0) otherwise Item.create(-1)
@@ -490,7 +490,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push(Item.create(1))
 	arr.push(Item.create(2))
 	arr.push(Item.create(3))
@@ -518,7 +518,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function fill() returns Integer
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push(Item.create(10))
 	arr.push(Item.create(20))
 	arr.push(Item.create(30))
@@ -550,7 +550,7 @@ end 'Entry'
 typealias EntryArray = Array with Entry
 
 function main() returns ExitCode
-	var arr = EntryArray.create()
+	var arr = EntryArray.create(0)
 	var i = 0 as Integer
 	while i < 5 'push'
 		arr.push(Entry.create(i))
@@ -586,7 +586,7 @@ end 'Val'
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-	var arr = ValArray.create()
+	var arr = ValArray.create(0)
 	arr.push(Val.create(10))
 	arr.push(Val.create(30))
 	arr.insert(1, value: Val.create(20))
@@ -616,7 +616,7 @@ end 'Val'
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-	var arr = ValArray.create()
+	var arr = ValArray.create(0)
 	arr.push(Val.create(1))
 	arr.push(Val.create(2))
 	arr.push(Val.create(3))
@@ -654,7 +654,7 @@ end 'Wrapper'
 typealias WrapperArray = Array with Wrapper
 
 function main() returns ExitCode
-	var arr = WrapperArray.create()
+	var arr = WrapperArray.create(0)
 	arr.push(Wrapper.create(Inner.create(1)))
 	arr.push(Wrapper.create(Inner.create(2)))
 	return arr.count()
@@ -715,7 +715,7 @@ function getFirst(arr ItemArray) returns Item
 end 'getFirst'
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push(Item.create(77))
 	var result = getFirst(arr)
 	return result.value
@@ -910,7 +910,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	var got = try arr.get(0) otherwise Item.create(99)
 	return got.value
 end 'main'
@@ -1041,7 +1041,7 @@ end 'Score'
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var scores = ScoreArray.create()
+	var scores = ScoreArray.create(0)
 	scores.push(Score.create(10))
 	scores.push(Score.create(20))
 	scores.push(Score.create(30))
@@ -1097,11 +1097,11 @@ typealias CellArray = Array with Cell
 typealias Grid = Array with CellArray
 
 function main() returns ExitCode
-	var grid = Grid.create()
-	var row1 = CellArray.create()
+	var grid = Grid.create(0)
+	var row1 = CellArray.create(0)
 	row1.push(Cell.create(1))
 	row1.push(Cell.create(2))
-	var row2 = CellArray.create()
+	var row2 = CellArray.create(0)
 	row2.push(Cell.create(3))
 	grid.push(row1)
 	grid.push(row2)
@@ -1136,7 +1136,7 @@ type Bucket
 end 'Bucket'
 
 function fill() returns Integer
-	var b = Bucket.create(EntryArray.create())
+	var b = Bucket.create(EntryArray.create(0))
 	b.items.push(Entry.create(10))
 	b.items.push(Entry.create(20))
 	return b.items.count()
@@ -1926,7 +1926,7 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-var globalArr = ItemArray.create()
+var globalArr = ItemArray.create(0)
 
 function pushLocal()
 	let item = Item.create(123)
@@ -1958,7 +1958,7 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-var globalArr = ItemArray.create()
+var globalArr = ItemArray.create(0)
 
 function main() returns ExitCode
 	var i = 0 as Integer
@@ -2007,13 +2007,13 @@ end 'Outer'
 
 function initOuter(o Outer)
 		if not o.initialized 'init'
-				o.inner = Inner.create(IntArray.create(), value: 42)
+				o.inner = Inner.create(IntArray.create(0), value: 42)
 				o.initialized = true
 		end 'init'
 end 'initOuter'
 
 function main() returns ExitCode
-		var o = Outer.create(Inner.create(IntArray.create(), value: 0), initialized: false)
+		var o = Outer.create(Inner.create(IntArray.create(0), value: 0), initialized: false)
 		initOuter(o)
 		o.inner.items.push(1)
 		o.inner.items.push(2)
@@ -2189,7 +2189,7 @@ end 'Dependency'
 typealias DependencyArray = Array with Dependency
 
 function main() returns ExitCode
-		var deps = DependencyArray.create()
+		var deps = DependencyArray.create(0)
 		deps.push(Dependency.create(QueryKey.sourceFile("test.maxon")))
 		deps.push(Dependency.create(QueryKey.allModule))
 		deps.push(Dependency.create(QueryKey.sourceFile("other.maxon")))
@@ -2625,7 +2625,7 @@ function getFirst(arr WrapperArray) returns Wrapper throws ArrayError
 end 'getFirst'
 
 function main() returns ExitCode
-	var arr = WrapperArray.create()
+	var arr = WrapperArray.create(0)
 	arr.push(Wrapper.create(99))
 	var w = try getFirst(arr) otherwise Wrapper.create(0)
 	return w.n
@@ -2681,7 +2681,7 @@ end 'Fallback'
 typealias FallbackArray = Array with Fallback
 
 function main() returns ExitCode
-	var arr = FallbackArray.create()
+	var arr = FallbackArray.create(0)
 	arr.push(Fallback.create(10))
 	view a = try arr.get(0) otherwise Fallback.create(99)
 	view b = try arr.get(5) otherwise Fallback.create(42)
@@ -3040,7 +3040,7 @@ function firstOrDefault(arr WrapperArray) returns Wrapper
 end 'firstOrDefault'
 
 function main() returns ExitCode
-	var arr = WrapperArray.create()
+	var arr = WrapperArray.create(0)
 	let w = Wrapper.create(42)
 	arr.push(w)
 	var got = firstOrDefault(arr)

@@ -359,9 +359,9 @@ end 'Store'
 // --- file: main.maxon
 function main() returns ExitCode
 	let store = Store.create()
-	var bag = beta.Bag.create()
+	var bag = beta.Bag.create(0)
 	bag.push(3)
-	let spare = alpha.Bag.create()
+	let spare = alpha.Bag.create(0)
 	return (store.put(bag) + (spare.count() as Integer)) as ExitCode
 end 'main'
 ```
@@ -437,7 +437,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let store = Store.create()
-	let spare = Bytes.create()
+	let spare = Bytes.create(0)
 	return (store.put("A".toByteArray()) + (spare.count() as Integer)) as ExitCode
 end 'main'
 ```
@@ -474,7 +474,7 @@ end 'Store'
 // --- file: main.maxon
 function main() returns ExitCode
 	let store = Store.create()
-	var bag = Bag.create()
+	var bag = Bag.create(0)
 	bag.push(3)
 	bag.push(4)
 	return store.put(bag) as ExitCode
@@ -1649,7 +1649,7 @@ end 'Maker'
 
 type Builder implements Maker
 	function make() returns Other
-		return Other.create()
+		return Other.create(0)
 	end 'make'
 end 'Builder'
 

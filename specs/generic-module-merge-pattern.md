@@ -80,9 +80,9 @@ type GenModule uses Op implements Mergeable with Item
 
 	static function create() returns Self
 		return Self{
-			functions: ItemArray.create(),
-			blocks: BlockArray.create(),
-			ops: OpArray.create()
+			functions: ItemArray.create(0),
+			blocks: BlockArray.create(0),
+			ops: OpArray.create(0)
 		}
 	end 'create'
 
@@ -191,7 +191,7 @@ type GenContainer uses Op
 	export var ops as OpArray
 
 	static function create() returns Self
-		return Self{ops: OpArray.create()}
+		return Self{ops: OpArray.create(0)}
 	end 'create'
 
 	function push(op Op)

@@ -80,7 +80,7 @@ type MoveSequence implements ParallelCopyEmitter
 	export var isSwap as BoolArray
 
 	static function create() returns MoveSequence
-		return Self{dsts: RegNumColumn.create(), srcs: RegNumColumn.create(), isSwap: BoolArray.create()}
+		return Self{dsts: RegNumColumn.create(0), srcs: RegNumColumn.create(0), isSwap: BoolArray.create(0)}
 	end 'create'
 
 	function emitCopy(dst ElementIndex, src ElementIndex)
@@ -102,7 +102,7 @@ end 'MoveSequence'
 // (every phi shares its incoming value's register) produces no moves and no plan.
 export function buildSsaDestructionPlan(module TargetModule, alloc Allocation, liveness LivenessResult, counters RegAllocCounters) returns EdgeMovePlanArray
 	let topo = liveness.cfg.topo
-	var plans = EdgeMovePlanArray.create()
+	var plans = EdgeMovePlanArray.create(0)
 
 	for predLocal in 0 upto topo.numBlocks 'eachPred'
 		let predBlock = blockAt(module, topo: topo, local: predLocal)
@@ -195,7 +195,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 		// Whether the plan's open bracket has had its saves spliced and its reloads not yet.
 		var owesReloads = false
 
-		var newRefs = OpIndexArray.create()
+		var newRefs = OpIndexArray.create(0)
 
 		// A `tryCall`'s two capture moves (`result ← R8/x0`, `flag ← R10/x9`) are emitted in source order
 		// like any other op: the result capture's def has the flag's register physically live after it
@@ -844,10 +844,10 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx ElementIndex, tar
 	// Collect the critical phi edges first (reads), then split them (writes) — the
 	// splits are independent (each only redirects its own edge through a new block),
 	// so the original CFG's classification stays valid across all of them.
-	var predRefs = BlockRefArray.create()
-	var succIds = BlockIdArray.create()
-	var heats = BlockHeatArray.create()
-	var sites = InlineSiteRefArray.create()
+	var predRefs = BlockRefArray.create(0)
+	var succIds = BlockIdArray.create(0)
+	var heats = BlockHeatArray.create(0)
+	var sites = InlineSiteRefArray.create(0)
 
 	for predLocal in 0 upto topo.numBlocks 'eachPred'
 		if topo.succ.degree(predLocal as CsrIndex) <= 1 'singleSucc'
@@ -924,9 +924,9 @@ end 'moveBranchEdgeToSplit'
 
 // Remove the predecessor's `branchEdge` to `succId` and return its phi args.
 function extractPredEdge(module TargetModule, predRef ElementIndex, succId BlockId) returns ValueIdArray
-	var movedArgs = ValueIdArray.create()
+	var movedArgs = ValueIdArray.create(0)
 	var found = false
-	var keptEdges = BranchEdgeArray.create()
+	var keptEdges = BranchEdgeArray.create(0)
 	var predBlock = try module.blocks.get(predRef) otherwise panic("extractPredEdge: predRef not in module.blocks")
 
 	for edge in predBlock.branchEdges 'eachEdge'
@@ -1291,7 +1291,7 @@ end 'jumpTableNamesTarget'
 
 // The case-target table with every `oldTarget` slot rewritten to `newTarget`, others verbatim.
 function remapJumpTargets(caseTargets BlockIdArray, oldTarget BlockId, newTarget BlockId) returns BlockIdArray
-	var out = BlockIdArray.create()
+	var out = BlockIdArray.create(0)
 
 	for t in caseTargets 'eachSlot'
 		out.push(newTarget if t == oldTarget else t)
@@ -1317,7 +1317,7 @@ end 'moveOpOf'
 function clearPhiModel(module TargetModule, func IrFunction)
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("clearPhiModel: blockRef not in module.blocks")
-		block.blockArgs = IrBlockArgArray.create()
-		block.branchEdges = BranchEdgeArray.create()
+		block.blockArgs = IrBlockArgArray.create(0)
+		block.branchEdges = BranchEdgeArray.create(0)
 	end 'eachBlock'
 end 'clearPhiModel'

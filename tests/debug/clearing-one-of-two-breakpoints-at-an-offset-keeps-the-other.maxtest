@@ -7,7 +7,7 @@ test 'clearing a line breakpoint leaves an exact-offset breakpoint armed at the 
 	let rows = statementOffsetsOfLine(executable, staged: staged, line: printLine)
 	let offset = try rows.get(0) otherwise panic("clearing-one-of-two-breakpoints-at-an-offset-keeps-the-other: the print line has a statement row")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(printLine)}", "{BreakCommand} {exactOffsetTarget(offset)}", "{ClearCommand} {lineTarget(printLine)}", RunCommand, ContinueCommand])
-	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let armings = eventsOfKind(events, kind: BreakpointEventName)

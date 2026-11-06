@@ -11,27 +11,27 @@ export type DominatorTree
 	export var reducible as bool
 
 	export static function empty() returns DominatorTree
-		return Self{pre: CfgIndexArray.create(), size: CfgIndexArray.create(), reached: BoolArray.create(), blockAt: CfgIndexArray.create(), idom: CfgIndexArray.create(), reducible: true}
+		return Self{pre: CfgIndexArray.create(0), size: CfgIndexArray.create(0), reached: BoolArray.create(0), blockAt: CfgIndexArray.create(0), idom: CfgIndexArray.create(0), reducible: true}
 	end 'empty'
 
 	export static function of(topo FuncTopology) returns DominatorTree
 		let n = topo.numBlocks
-		var visited = BoolArray.create()
+		var visited = BoolArray.create(0)
 		visited.resize(n)
-		var postorder = CfgIndexArray.create()
+		var postorder = CfgIndexArray.create(0)
 		postorder.reserve(n)
 		rpoDfs(topo, root: EntryBlockLocal, visited: visited, postorder: postorder)
 
-		var postIndex = CfgIndexArray.create()
+		var postIndex = CfgIndexArray.create(0)
 		postIndex.refill(n, value: 0)
 
 		for (position, block) in postorder.withIterator() 'eachReached'
 			try postIndex.set(block, value: position.index()) otherwise panic("DominatorTree.of: postIndex.set OOB at {block}")
 		end 'eachReached'
 
-		var idom = CfgIndexArray.create()
+		var idom = CfgIndexArray.create(0)
 		idom.refill(n, value: EntryBlockLocal)
-		var settled = BoolArray.create()
+		var settled = BoolArray.create(0)
 		settled.resize(n)
 		try settled.set(EntryBlockLocal, value: true) otherwise panic("DominatorTree.of: settled.set OOB at the entry")
 		var changed = true
@@ -73,8 +73,8 @@ export type DominatorTree
 			end 'eachInReversePostorder'
 		end 'untilStable'
 
-		var childOf = CsrColumn.create()
-		var children = CsrColumn.create()
+		var childOf = CsrColumn.create(0)
+		var children = CsrColumn.create(0)
 
 		for block in postorder 'eachDominated'
 			if block != EntryBlockLocal 'notTheEntry'
@@ -84,13 +84,13 @@ export type DominatorTree
 		end 'eachDominated'
 
 		let tree = buildCsr(childOf, to: children, nodeCount: n as CsrIndex)
-		var pre = CfgIndexArray.create()
+		var pre = CfgIndexArray.create(0)
 		pre.refill(n, value: 0)
-		var size = CfgIndexArray.create()
+		var size = CfgIndexArray.create(0)
 		size.refill(n, value: 1)
-		var blockAt = CfgIndexArray.create()
+		var blockAt = CfgIndexArray.create(0)
 		blockAt.reserve(postorder.count())
-		var stack = CfgIndexArray.create()
+		var stack = CfgIndexArray.create(0)
 		stack.push(EntryBlockLocal)
 
 		while stack.count() > 0 'preorder'
@@ -238,15 +238,15 @@ export type LayoutBounds
 	export var enteringPreds as PredLevels
 
 	static function none() returns LayoutBounds
-		return Self{leafBase: 1, highestPred: CfgIndexArray.create(), nearestForwardSucc: CfgIndexArray.create(), enteringPreds: PredLevels.none()}
+		return Self{leafBase: 1, highestPred: CfgIndexArray.create(0), nearestForwardSucc: CfgIndexArray.create(0), enteringPreds: PredLevels.none()}
 	end 'none'
 
 	static function build(topo FuncTopology) returns LayoutBounds
 		let n = topo.numBlocks
 		let leafBase = roundUpToPowerOfTwo(n as BytePos)
-		var highestPred = CfgIndexArray.create()
+		var highestPred = CfgIndexArray.create(0)
 		highestPred.refill(leafBase + leafBase, value: 0)
-		var nearestForwardSucc = CfgIndexArray.create()
+		var nearestForwardSucc = CfgIndexArray.create(0)
 		nearestForwardSucc.refill(leafBase + leafBase, value: 0)
 
 		for y in 0 upto n 'eachBlock'
@@ -300,7 +300,7 @@ export type PredLevels
 	let edgeCount as ElementIndex
 
 	static function none() returns PredLevels
-		return Self{blockStart: CfgIndexArray.create(), sorted: CfgIndexArray.create(), edgeCount: 0}
+		return Self{blockStart: CfgIndexArray.create(0), sorted: CfgIndexArray.create(0), edgeCount: 0}
 	end 'none'
 
 	// Each block's predecessor list is a leaf of the merge-sort tree as it stands, so it must already
@@ -316,14 +316,14 @@ export type PredLevels
 			levelCount = levelCount + 1
 		end 'eachLevel'
 
-		var blockStart = CfgIndexArray.create()
+		var blockStart = CfgIndexArray.create(0)
 		blockStart.refill(leafBase + 1, value: edgeCount)
 
 		for z in 0 upto n 'eachBlockStart'
 			try blockStart.set(z, value: try topo.pred.start.get(z) otherwise panic("PredLevels.build: pred.start.get OOB at block {z}")) otherwise panic("PredLevels.build: blockStart.set OOB at block {z}")
 		end 'eachBlockStart'
 
-		var sorted = CfgIndexArray.create()
+		var sorted = CfgIndexArray.create(0)
 		sorted.refill(levelCount * edgeCount, value: 0)
 
 		for z in 0 upto n 'eachBlock'

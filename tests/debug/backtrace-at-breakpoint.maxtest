@@ -4,7 +4,7 @@ test 'a backtrace at a breakpoint names the callers outward, innermost frame fir
 	let staged = builtFixture(BacktraceCaseLabel, fixture: SteppingFixtureName)
 	let innerLine = anchorLine(staged.join(StagedProgramFileName), anchor: "inner-loop")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(innerLine)}", RunCommand, BacktraceCommand])
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let backtraces = eventsOfKind(events, kind: BacktraceEventName)
@@ -12,9 +12,9 @@ test 'a backtrace at a breakpoint names the callers outward, innermost frame fir
 	Expect.equal(backtraces.count(), expected: 1, message: "`{BacktraceCommand}` at a stop printed no `{BacktraceEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let walked = eventAt(backtraces, index: 0)
-	var named = StringArray.create()
-	var foreignFiles = StringArray.create()
-	var misnumbered = StringArray.create()
+	var named = StringArray.create(0)
+	var foreignFiles = StringArray.create(0)
+	var misnumbered = StringArray.create(0)
 
 	for frame in childrenOf(walked, node: walked.root, key: FramesKey) 'eachFrame'
 		let frameFunction = textOf(walked, node: frame, key: FunctionKey)

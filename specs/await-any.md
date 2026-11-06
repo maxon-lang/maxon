@@ -167,7 +167,7 @@ function quick() returns Integer
 end 'quick'
 
 function main() returns ExitCode
-	var arr = IntPromiseArray.create()
+	var arr = IntPromiseArray.create(0)
 	arr.push(async slow(120))
 	arr.push(async quick())
 	arr.push(async slow(240))
@@ -211,7 +211,7 @@ end 'makeValue'
 
 function main() returns ExitCode
 	let maxSpins = 100
-	var arr = IntPromiseArray.create()
+	var arr = IntPromiseArray.create(0)
 	arr.push(async makeValue())
 	let p = try arr.get(0) otherwise panic("the promise was just pushed")
 	var spins = 0 as Integer
@@ -254,7 +254,7 @@ function value(v Integer) returns Integer
 end 'value'
 
 function main() returns ExitCode
-	var arr = IntPromiseArray.create()
+	var arr = IntPromiseArray.create(0)
 	arr.push(async value(10))
 	arr.push(async value(20))
 	arr.push(async value(30))
@@ -295,7 +295,7 @@ function nap(ms Integer, tag Integer) returns Integer
 end 'nap'
 
 function main() returns ExitCode
-	var arr = IntPromiseArray.create()
+	var arr = IntPromiseArray.create(0)
 	arr.push(async nap(200, tag: 1))
 	arr.push(async nap(20, tag: 2))
 	arr.push(async nap(400, tag: 3))
@@ -361,7 +361,7 @@ end 'Quick'
 function main() returns ExitCode
 	let slow = spawn Slow.create()
 	let quick = spawn Quick.create()
-	var ps = ReplyPromiseArray.create()
+	var ps = ReplyPromiseArray.create(0)
 	ps.push(try slow.value() otherwise panic("send slow"))
 	ps.push(try quick.value() otherwise panic("send quick"))
 	let ready = ps.awaitAny()
@@ -403,7 +403,7 @@ function inner(v Integer) returns Integer
 end 'inner'
 
 function selectOver() returns Integer
-	var ps = IntPromiseArray.create()
+	var ps = IntPromiseArray.create(0)
 	ps.push(async inner(3))
 	ps.push(async inner(4))
 	let ready = ps.awaitAny()
@@ -443,7 +443,7 @@ function makeValue() returns Integer
 end 'makeValue'
 
 function main() returns ExitCode
-	var arr = IntPromiseArray.create()
+	var arr = IntPromiseArray.create(0)
 	arr.resize(2)
 	arr.push(async makeValue())
 	let ready = arr.awaitAny()
@@ -466,7 +466,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function main() returns ExitCode
-	var arr = IntPromiseArray.create()
+	var arr = IntPromiseArray.create(0)
 	let ready = arr.awaitAny()
 	return ready as ExitCode
 end 'main'
@@ -493,7 +493,7 @@ function value(v Integer) returns Integer
 end 'value'
 
 function main() returns ExitCode
-	var arr = IntPromiseArray.create()
+	var arr = IntPromiseArray.create(0)
 	arr.push(async value(1))
 	arr.push(async value(2))
 	let ready = arr.awaitAny()
@@ -546,7 +546,7 @@ type Echo
 end 'Echo'
 
 function main() returns ExitCode
-	var echoes = EchoHandleArray.create()
+	var echoes = EchoHandleArray.create(0)
 	for _ in 0 upto services 'spawnEach'
 		echoes.push(spawn Echo.create())
 	end 'spawnEach'
@@ -554,7 +554,7 @@ function main() returns ExitCode
 	var sum = 0 as Integer
 	var completedPicks = 0 as Integer
 	for r in 0 upto rounds 'eachRound'
-		var replies = ReplyPromiseArray.create()
+		var replies = ReplyPromiseArray.create(0)
 		for (slot, echo) in echoes.withIterator() 'sendEach'
 			replies.push(try echo.value((r as Integer) * services + (slot.index() as Integer)) otherwise panic("send value"))
 		end 'sendEach'
@@ -612,7 +612,7 @@ type Echo
 end 'Echo'
 
 function main() returns ExitCode
-	var echoes = EchoHandleArray.create()
+	var echoes = EchoHandleArray.create(0)
 	for _ in 0 upto services 'spawnEach'
 		echoes.push(spawn Echo.create())
 	end 'spawnEach'
@@ -620,7 +620,7 @@ function main() returns ExitCode
 	var sum = 0 as Integer
 	var completedPicks = 0 as Integer
 	for r in 0 upto rounds 'eachRound'
-		var replies = ReplyPromiseArray.create()
+		var replies = ReplyPromiseArray.create(0)
 		for (slot, echo) in echoes.withIterator() 'sendEach'
 			replies.push(try echo.value((r as Integer) * services + (slot.index() as Integer)) otherwise panic("send value"))
 		end 'sendEach'
@@ -695,7 +695,7 @@ type Echo
 end 'Echo'
 
 function main() returns ExitCode
-	var echoes = EchoHandleArray.create()
+	var echoes = EchoHandleArray.create(0)
 	for _ in 0 upto services 'spawnEach'
 		echoes.push(spawn Echo.create())
 	end 'spawnEach'
@@ -703,7 +703,7 @@ function main() returns ExitCode
 	var sum = 0 as Integer
 	var completedPicks = 0 as Integer
 	for r in 0 upto rounds 'eachRound'
-		var replies = ReplyPromiseArray.create()
+		var replies = ReplyPromiseArray.create(0)
 		for (slot, echo) in echoes.withIterator() 'sendEach'
 			let s = slot.index() as Integer
 			let spins = (s * slotStride + (r as Integer) * roundStride) mod services
@@ -769,7 +769,7 @@ type Echo
 end 'Echo'
 
 function main() returns ExitCode
-	var echoes = EchoHandleArray.create()
+	var echoes = EchoHandleArray.create(0)
 	for _ in 0 upto services 'spawnEach'
 		echoes.push(spawn Echo.create())
 	end 'spawnEach'
@@ -777,7 +777,7 @@ function main() returns ExitCode
 	var sum = 0 as Integer
 	var completedPicks = 0 as Integer
 	for r in 0 upto rounds 'eachRound'
-		var replies = ReplyPromiseArray.create()
+		var replies = ReplyPromiseArray.create(0)
 		for (slot, echo) in echoes.withIterator() 'sendEach'
 			let s = slot.index() as Integer
 			let spins = (s * slotStride + (r as Integer) * roundStride) mod services
@@ -831,7 +831,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	let ready = __Builtins.awaitAny(arr)
 	return ready as ExitCode
@@ -864,7 +864,7 @@ function value(v Integer) returns Integer
 end 'value'
 
 function main() returns ExitCode
-	var arr = IntPromiseArray.create()
+	var arr = IntPromiseArray.create(0)
 	arr.push(async value(10))
 	let ready = arr.awaitAny()
 	return ready as ExitCode

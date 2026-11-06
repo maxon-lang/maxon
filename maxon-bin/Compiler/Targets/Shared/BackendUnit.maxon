@@ -62,12 +62,12 @@ export type SpanLineTable
 	var lineKeys as SpanKeyColumn
 
 	export static function empty() returns SpanLineTable
-		return Self{spans: SpanIdArray.create(), lineKeys: SpanKeyColumn.create()}
+		return Self{spans: SpanIdArray.create(0), lineKeys: SpanKeyColumn.create(0)}
 	end 'empty'
 
 	export static function covering(wanted SpanIdArray, table DebugSpanTable) returns SpanLineTable
-		var spans = SpanIdArray.create()
-		var lineKeys = SpanKeyColumn.create()
+		var spans = SpanIdArray.create(0)
+		var lineKeys = SpanKeyColumn.create(0)
 		wanted.sort()
 
 		for span in wanted 'eachWanted'
@@ -116,12 +116,12 @@ export type FunctionEncodingFacts
 	export var pinsItsThread as bool
 
 	export static function of(func IrFunction, blocks IrBlockArray, spans DebugSpanColumn, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns FunctionEncodingFacts
-		var siteCallSpans = SpanIdArray.create()
-		var siteParentKeys = DebugSiteKeyColumn.create()
+		var siteCallSpans = SpanIdArray.create(0)
+		var siteParentKeys = DebugSiteKeyColumn.create(0)
 		var lines = SpanLineTable.empty()
 
 		if spans.armed 'carriesLines'
-			var wanted = SpanIdArray.create()
+			var wanted = SpanIdArray.create(0)
 			collectOpSpans(func, blocks: blocks, spans: spans, into: wanted)
 			siteCallSpans.reserve(func.inlineSites.count())
 
@@ -191,7 +191,7 @@ export function debugSiteKeyOf(site InlineSiteRef) returns DebugSiteKey
 end 'debugSiteKeyOf'
 
 function siteParentKeysOf(func IrFunction) returns DebugSiteKeyColumn
-	var parentKeys = DebugSiteKeyColumn.create()
+	var parentKeys = DebugSiteKeyColumn.create(0)
 	parentKeys.reserve(func.inlineSites.count())
 
 	for (iter, site) in func.inlineSites.withIterator() 'eachSite'
@@ -238,17 +238,17 @@ export type DebugValueRoster
 			return Self.empty()
 		end 'nothingNamed'
 
-		var valueIds = ValueIdArray.create()
-		var siteKeys = DebugSiteKeyColumn.create()
-		var groups = DebugNameGroupColumn.create()
-		var versionKinds = DebugVersionKindArray.create()
-		var versionBlocks = BlockIdArray.create()
-		var versionAnchors = ValueIdArray.create()
-		var decls = DebugDeclColumn.create()
-		var scopeFirst = DebugDeclColumn.create()
-		var scopeCount = DebugDeclColumn.create()
-		var scopeLost = BoolArray.create()
-		var scopeEndBlocks = BlockIdArray.create()
+		var valueIds = ValueIdArray.create(0)
+		var siteKeys = DebugSiteKeyColumn.create(0)
+		var groups = DebugNameGroupColumn.create(0)
+		var versionKinds = DebugVersionKindArray.create(0)
+		var versionBlocks = BlockIdArray.create(0)
+		var versionAnchors = ValueIdArray.create(0)
+		var decls = DebugDeclColumn.create(0)
+		var scopeFirst = DebugDeclColumn.create(0)
+		var scopeCount = DebugDeclColumn.create(0)
+		var scopeLost = BoolArray.create(0)
+		var scopeEndBlocks = BlockIdArray.create(0)
 		var groupByNameAndSite = DebugNameGroupByKey.create()
 		valueIds.reserve(tally)
 		siteKeys.reserve(tally)
@@ -303,7 +303,7 @@ export type DebugValueRoster
 	end 'siteKeyCount'
 
 	export static function empty() returns DebugValueRoster
-		return Self{valueIds: ValueIdArray.create(), siteKeys: DebugSiteKeyColumn.create(), parentKeys: DebugSiteKeyColumn.create(), groups: DebugNameGroupColumn.create(), versionKinds: DebugVersionKindArray.create(), versionBlocks: BlockIdArray.create(), versionAnchors: ValueIdArray.create(), decls: DebugDeclColumn.create(), scopeFirst: DebugDeclColumn.create(), scopeCount: DebugDeclColumn.create(), scopeLost: BoolArray.create(), scopeEndBlocks: BlockIdArray.create()}
+		return Self{valueIds: ValueIdArray.create(0), siteKeys: DebugSiteKeyColumn.create(0), parentKeys: DebugSiteKeyColumn.create(0), groups: DebugNameGroupColumn.create(0), versionKinds: DebugVersionKindArray.create(0), versionBlocks: BlockIdArray.create(0), versionAnchors: ValueIdArray.create(0), decls: DebugDeclColumn.create(0), scopeFirst: DebugDeclColumn.create(0), scopeCount: DebugDeclColumn.create(0), scopeLost: BoolArray.create(0), scopeEndBlocks: BlockIdArray.create(0)}
 	end 'empty'
 end 'DebugValueRoster'
 
@@ -326,7 +326,7 @@ export type BackendUnit
 	// ⭐ **EVERY RETURN IS `Self{…}` AND THERE IS ONLY ONE**, which is what makes a call to this the
 	// argument of a send (E3138, `SignatureIndex.returnsFreshValue`).
 	export static function extract(module StdModule, func IrFunction, funcIndex ElementIndex, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns BackendUnit
-		var holder = BackendUnitBodyArray.create()
+		var holder = BackendUnitBodyArray.create(0)
 		holder.push(BackendUnitBody.extract(module, func: func, runtimeTier: runtimeTier, spanTable: spanTable))
 		return Self{funcIndex: funcIndex, holder: holder}
 	end 'extract'

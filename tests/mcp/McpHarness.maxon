@@ -57,7 +57,7 @@ end 'pathArgument'
 // Every file under `dir` at any depth other than `kept`, for a report. Empty is what a tool that writes
 // nothing leaves.
 export function filesWrittenBeside(kept FilePath, dir FilePath) returns String
-	var written = FilePathArray.create()
+	var written = FilePathArray.create(0)
 
 	for entry in filesUnder(dir) 'eachFile'
 		if entry.toString() != kept.toString() 'written'
@@ -114,7 +114,7 @@ export function unknownMethodRequest(method String = "unknown/method", id Reques
 end 'unknownMethodRequest'
 
 export function runMcp(requests StringArray, devMode bool = false, environment Environment = Environment.inherit) returns McpRun
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("mcp-server")
 
 	if devMode 'dev'
@@ -135,7 +135,7 @@ export function runMcp(requests StringArray, devMode bool = false, environment E
 end 'runMcp'
 
 export function runMcpSingle(request String, devMode bool = false) returns McpRun
-	var reqs = StringArray.create()
+	var reqs = StringArray.create(0)
 	reqs.push(request)
 	return runMcp(reqs, devMode: devMode)
 end 'runMcpSingle'
@@ -146,7 +146,7 @@ export type StreamingMcpSession
 	// `binary` is a parameter because a case starts a server from a STAGED COPY and then replaces or
 	// renames that copy on disk; it must not be the tree's own slot.
 	export static function startFrom(binary FilePath, devMode bool = false) returns StreamingMcpSession
-		var argv = StringArray.create()
+		var argv = StringArray.create(0)
 		argv.push("mcp-server")
 
 		if devMode 'dev'
@@ -182,7 +182,7 @@ export type StreamingMcpSession
 end 'StreamingMcpSession'
 
 export function responseDocs(run McpRun) returns JsonDocArray
-	var docs = JsonDocArray.create()
+	var docs = JsonDocArray.create(0)
 
 	for line in run.stdout.split("\n") 'each'
 		let trimmed = line.trim()
@@ -212,7 +212,7 @@ function errorNode(doc JsonDoc) returns JsonNodeId
 end 'errorNode'
 
 export function toolNames(doc JsonDoc) returns StringArray
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 	let resId = resultNode(doc)
 	let toolsId = try doc.getChild(resId, key: "tools") otherwise return names
 	let count = try doc.arrayLength(toolsId) otherwise return names
@@ -254,7 +254,7 @@ end 'toolSchemaProperties'
 export function toolPropertyKeys(doc JsonDoc, toolName String) returns StringArray
 	return match toolSchemaProperties(doc, toolName: toolName) 'lookup'
 		found(propsId) gives doc.get(propsId).keys.clone()
-		absent gives StringArray.create()
+		absent gives StringArray.create(0)
 	end 'lookup'
 end 'toolPropertyKeys'
 
@@ -332,7 +332,7 @@ export function passingSpecCase(name String) returns String
 end 'passingSpecCase'
 
 export function failingSpecCases(names StringArray) returns StringArray
-	var cases = StringArray.create()
+	var cases = StringArray.create(0)
 
 	for name in names 'eachName'
 		cases.push(failingSpecCase(name))
@@ -356,7 +356,7 @@ let CheckoutRuntimeDirName = "runtime"
 
 // Drive one request against a server started in the given mode and return its response.
 export function callTool(name String, argumentsJson String = "\{\}", devMode bool = false) returns JsonDoc
-	var reqs = StringArray.create()
+	var reqs = StringArray.create(0)
 	reqs.push(initRequest(1))
 	reqs.push(toolCallRequest(2, name: name, argumentsJson: argumentsJson))
 
@@ -365,7 +365,7 @@ export function callTool(name String, argumentsJson String = "\{\}", devMode boo
 end 'callTool'
 
 export function listTools(devMode bool = false) returns JsonDoc
-	var reqs = StringArray.create()
+	var reqs = StringArray.create(0)
 	reqs.push(initRequest(1))
 	reqs.push(toolsListRequest(2))
 
@@ -590,7 +590,7 @@ export type StreamingHttpMcpServer
 	export var endpointPort as NetworkPort
 
 	export static function start(extraOptions StringArray, environment Environment = Environment.inherit, endsWithItsStdin bool = true) returns StreamingHttpMcpServer
-		var argv = StringArray.create()
+		var argv = StringArray.create(0)
 		argv.push("mcp-server")
 		argv.push(McpHttpOption)
 
@@ -709,7 +709,7 @@ export function sleepingProgramSource(sleepMs ProgramSleepMillis) returns String
 end 'sleepingProgramSource'
 
 export function debuggableProgramSource() returns String
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 	lines.push("typealias Step = int(0 to 1000000)")
 	lines.push("")
 	lines.push("function work(seed Step) returns Step")
@@ -763,7 +763,7 @@ let DebuggedBuildLabel = "debuggee"
 export function buildStagedProgram(program FilePath) returns FilePath
 	let directory = try program.parent() otherwise panic("McpHarness: {program.path} has no directory to build into")
 	let executable = directory.join("debuggee{executableSuffix()}")
-	let build = spawnBuild(program, staged: directory, output: executable, label: DebuggedBuildLabel, extraArguments: StringArray.create())
+	let build = spawnBuild(program, staged: directory, output: executable, label: DebuggedBuildLabel, extraArguments: StringArray.create(0))
 
 	requireBuiltOrPanic(build, output: executable, what: "the build of {program.path} for a debug session")
 
@@ -783,7 +783,7 @@ end 'debugToolState'
 function payloadArray(payload JsonDoc, doc JsonDoc, key String) returns JsonNodeIdArray
 	let arrayId = try payload.getChild(payload.root, key: key) otherwise panic("McpHarness: a tool answered no `{key}`: {toolCallText(doc)}")
 	let count = try payload.arrayLength(arrayId) otherwise panic("McpHarness: `{key}` is not an array: {toolCallText(doc)}")
-	var elements = JsonNodeIdArray.create()
+	var elements = JsonNodeIdArray.create(0)
 
 	for i in 0 upto count 'eachElement'
 		elements.push(try payload.arrayAt(arrayId, index: i) otherwise panic("McpHarness: `{key}` has no element {i} of its {count}"))
@@ -794,7 +794,7 @@ end 'payloadArray'
 
 export function payloadArrayFields(doc JsonDoc, key String, field String) returns StringArray
 	let payload = toolPayload(doc)
-	var values = StringArray.create()
+	var values = StringArray.create(0)
 
 	for elementId in payloadArray(payload, doc: doc, key: key) 'eachElement'
 		values.push(try payload.getString(elementId, key: field) otherwise panic("McpHarness: a `{key}` element carries no string `{field}`: {toolCallText(doc)}"))
@@ -805,7 +805,7 @@ end 'payloadArrayFields'
 
 export function debugEventKinds(doc JsonDoc) returns StringArray
 	let payload = toolPayload(doc)
-	var kinds = StringArray.create()
+	var kinds = StringArray.create(0)
 
 	for eventId in payloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
 		let kind = try payload.getString(eventId, key: DebugEventKindKey) otherwise continue
@@ -817,7 +817,7 @@ end 'debugEventKinds'
 
 export function debugEventLines(doc JsonDoc, kind String) returns StringArray
 	let payload = toolPayload(doc)
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	for eventId in payloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
 		let eventKind = try payload.getString(eventId, key: DebugEventKindKey) otherwise continue
@@ -833,7 +833,7 @@ end 'debugEventLines'
 
 export function debugOutputLines(doc JsonDoc) returns StringArray
 	let payload = toolPayload(doc)
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	for lineId in payloadArray(payload, doc: doc, key: DebugOutputKey) 'eachLine'
 		let line = payload.get(lineId)
@@ -850,7 +850,7 @@ end 'debugOutputLines'
 
 export function debugLocalNames(doc JsonDoc) returns StringArray
 	let payload = toolPayload(doc)
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 
 	for eventId in payloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
 		let localsId = try payload.getChild(eventId, key: "locals") otherwise continue

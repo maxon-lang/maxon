@@ -158,6 +158,13 @@ own parse of the form stays, which is what lets `C1` compile the unshimmed libra
 `0005`, below the generated patch, because the generator computes its hunks over every other patch here and refuses
 one that sorts after it.
 
+⭐ **THE COMPILER'S OWN CAPACITY ARGUMENT IS THE TWELFTH CASE.** An array is created with a stated capacity, and the
+compiler's sources write `create(0)` for an empty one, a call the seed's parser refuses (E2010). The patch writes
+each such site in `maxon-bin/` back as `create()`, which the seed reads as the same empty array. It changes no
+compiler logic: the parse of the form, and the diagnostic for a call with no capacity, stay, which is what lets
+`C1` compile the unshimmed tree into `C2`. It is written over the committed tree by comparing each file to its
+`HEAD` text, line by line, and is numbered `0008`, below the generated patch.
+
 ⛔ **The commit that pins a new seed deletes every patch.** A patch here is what makes CI freeze, prove and pin
 that seed (`docs/RELEASING.md`), and `scripts/pin-seed.sh` deletes them all in the pinning commit once the seed
 has built the tree with none. A patch is dead from that moment — the plain build succeeds before anything here

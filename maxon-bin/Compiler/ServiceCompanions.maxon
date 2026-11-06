@@ -95,7 +95,7 @@ end 'cacheWriteServiceSpawnCandidateArray'
 
 module function cacheReadServiceSpawnCandidateArray(reader LibraryCacheReader) returns ServiceSpawnCandidateArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ServiceSpawnCandidateArray.create()
+	var result = ServiceSpawnCandidateArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -222,7 +222,7 @@ end 'cacheWriteDefaultDeclarationArray'
 
 module function cacheReadDefaultDeclarationArray(reader LibraryCacheReader) returns DefaultDeclarationArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DefaultDeclarationArray.create()
+	var result = DefaultDeclarationArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -1416,7 +1416,7 @@ end 'serviceReplyBlame'
 module function buildServiceRequestUnion(signatures ProgramSignatures, typeName ByteArray, into TypeNameInterner) returns EnumLayout
 	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 	let declFilePath = layout.declFilePath
-	var request = EnumLayout.create(serviceRequestCompanionName(typeName), isUnion: true, conformsTo: NameRoster.create(), visibility: layout.visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
+	var request = EnumLayout.create(serviceRequestCompanionName(typeName), isUnion: true, conformsTo: NameRoster.create(0), visibility: layout.visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
 
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
 		view methodName = layout.messageMethodAt(i)
@@ -1433,7 +1433,7 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 	let key = qualifiedMethodName(typeName, methodName: methodName)
 	let decl = serviceDeclarationOf(signatures, key: key)
 
-	var payloads = PayloadFieldArray.create()
+	var payloads = PayloadFieldArray.create(0)
 
 	for p in 0 upto decl.paramTypes.count() 'eachParam'
 		let declared = try decl.paramTypes.get(p) otherwise panic("serviceRequestPayloads: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(key)}'")
@@ -1532,7 +1532,7 @@ end 'serviceReplyHandlerPlacement'
 module function serviceReplyErrorLayout(signatures ProgramSignatures, errorName ByteArray) returns EnumLayout
 	return match signatures.enumInAnyFile(errorName) 'e'
 		declared(layout) gives layout
-		undeclared gives EnumLayout.create(errorName, isUnion: false, conformsTo: NameRoster.create(), visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
+		undeclared gives EnumLayout.create(errorName, isUnion: false, conformsTo: NameRoster.create(0), visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
 	end 'e'
 end 'serviceReplyErrorLayout'
 
@@ -1698,7 +1698,7 @@ end 'serviceRequestLayoutOf'
 // `Parser.dispatchOnServiceHandle` has an arm per entry. The editor's offer set and the compiler's admit
 // set are one fact, so a fourth thing a handle accepts is owed to all three.
 module function serviceHandleSurface(request EnumLayout) returns NameRoster
-	var surface = NameRoster.create()
+	var surface = NameRoster.create(0)
 
 	for index in 0 upto request.caseCount() 'eachVariant'
 		surface.push(request.caseNameAt(index))
@@ -1746,7 +1746,7 @@ end 'serviceRequestStagingBytes'
 // and credits the `spawn` with this list instead.
 module function serviceLoopHandlerCallees(signatures ProgramSignatures, typeName ByteArray) returns NameRoster
 	let request = requireServiceRequestLayout(signatures, typeName: typeName)
-	var callees = NameRoster.create()
+	var callees = NameRoster.create(0)
 
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
 		callees.push(qualifiedMethodName(typeName, methodName: request.caseNameAt(caseIndex)))
@@ -1779,7 +1779,7 @@ end 'serviceCompanionRoster'
 // rewriting a container mid-walk is the one shape a `for … in` promises nothing about
 // (`ProgramSignatures.rewriteRecordedReturnTypes` collects first for the same reason).
 function serviceRosterOf(signatures ProgramSignatures, liveOnly bool) returns NameRoster
-	var services = NameRoster.create()
+	var services = NameRoster.create(0)
 
 	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
 		let typeName = spawnedTypeNameOf(signatures, candidate: candidate)
@@ -1912,7 +1912,7 @@ end 'buildInterfaceSendErrors'
 
 function buildSendErrorsOf(signatures ProgramSignatures, ownerName ByteArray, visibility Visibility, declFilePath FilePath, into TypeNameInterner) returns EnumLayoutArray
 	view request = requireServiceRequestLayout(signatures, typeName: ownerName)
-	var errors = EnumLayoutArray.create()
+	var errors = EnumLayoutArray.create(0)
 
 	for caseIndex in 0 upto request.caseCount() 'eachMessage'
 		let name = serviceSendErrorCompanionName(qualifiedMethodName(ownerName, methodName: request.caseNameAt(caseIndex)))
@@ -1924,7 +1924,7 @@ function buildSendErrorsOf(signatures ProgramSignatures, ownerName ByteArray, vi
 end 'buildSendErrorsOf'
 
 function adoptedPayloads(signatures ProgramSignatures, payloads PayloadFieldArray, into TypeNameInterner) returns PayloadFieldArray
-	var adopted = PayloadFieldArray.create()
+	var adopted = PayloadFieldArray.create(0)
 
 	for field in payloads 'eachField'
 		adopted.push(PayloadField.create(field.name, declaredType: signatures.adoptType(field.declaredType, into: into), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand, isLet: field.isLet, typeSite: field.typeSite))
@@ -1934,7 +1934,7 @@ function adoptedPayloads(signatures ProgramSignatures, payloads PayloadFieldArra
 end 'adoptedPayloads'
 
 function serviceSendErrorPayloads(payloads PayloadFieldArray) returns PayloadFieldArray
-	var arguments = PayloadFieldArray.create()
+	var arguments = PayloadFieldArray.create(0)
 
 	for field in payloads 'eachField'
 		if not fieldIsTheServiceReplySlot(field) 'anArgument'
@@ -2012,8 +2012,8 @@ function recordInterfaceRequestAndSendErrors(signatures ProgramSignatures, inter
 end 'recordInterfaceRequestAndSendErrors'
 
 function buildInterfaceRequestUnion(signatures ProgramSignatures, interfaceName ByteArray, visibility Visibility, declFilePath FilePath) returns EnumLayout
-	var request = EnumLayout.create(serviceRequestCompanionName(interfaceName), isUnion: true, conformsTo: NameRoster.create(), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
-	let requirements = try signatures.interfaceRequirementSlots(interfaceName) otherwise CollectedInterfaceMethodArray.create()
+	var request = EnumLayout.create(serviceRequestCompanionName(interfaceName), isUnion: true, conformsTo: NameRoster.create(0), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
+	let requirements = try signatures.interfaceRequirementSlots(interfaceName) otherwise CollectedInterfaceMethodArray.create(0)
 
 	for requirement in requirements 'eachRequirement'
 		if request.hasCase(requirement.method.name) 'alreadySendable'
@@ -2032,7 +2032,7 @@ end 'buildInterfaceRequestUnion'
 // vetted against are exactly the services its handle can convert to.
 module function interfaceServiceImplementers(signatures ProgramSignatures, interfaceName ByteArray) returns NameRoster
 	view recorded = signatures.interfaceHandleRepresentative(interfaceName)
-	var implementers = NameRoster.create()
+	var implementers = NameRoster.create(0)
 	implementers.push(recorded)
 
 	for service in serviceCompanionRoster(signatures) 'eachService'
@@ -2078,7 +2078,7 @@ module function interfaceMessageRepresentative(signatures ProgramSignatures, int
 end 'interfaceMessageRepresentative'
 
 function copiedPayloads(payloads PayloadFieldArray) returns PayloadFieldArray
-	var copy = PayloadFieldArray.create()
+	var copy = PayloadFieldArray.create(0)
 
 	for field in payloads 'eachField'
 		copy.push(field)

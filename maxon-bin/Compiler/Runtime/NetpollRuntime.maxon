@@ -116,7 +116,7 @@ let NetpollWakeSigLabel = b"__np_wake_sig"
 let NetpollChildSignalLabel = b"__np_child_signal"
 
 export function netpollRuntimeGlobals() returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create()
+	var out = DataSectionEntryArray.create(0)
 	pushRuntimeGlobal(out, label: NetpollPollerLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: NetpollBreakLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: NetpollWakeSigLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
@@ -356,14 +356,14 @@ end 'emitNetpollOpenTimer'
 // `__np_init()` — see `NetpollInitName`.
 function buildNetpollInit(module StdModule, target Target)
 	let shape = netpollShape(target)
-	var func = IrFunction.createFromStd(NetpollInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(NetpollInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var opened = module.addBlock(func, label: b"npopened", heat: BlockHeat.normal)
 	var armed = module.addBlock(func, label: b"nparmed", heat: BlockHeat.normal)
 
-	let poller = emitNetpoll(module, block: entry, verb: NetpollVerb.openPoller, operands: ValueIdArray.create(), ids: ids)
+	let poller = emitNetpoll(module, block: entry, verb: NetpollVerb.openPoller, operands: ValueIdArray.create(0), ids: ids)
 	emitNetpollRequire(module, func: func, cur: entry, shape: shape, verb: NetpollVerb.openPoller, subject: poller, answer: poller, cont: opened, ids: ids)
 
 	emitStoreGlobalWord(module, block: opened, label: NetpollPollerLabel, value: poller, ids: ids)
@@ -429,7 +429,7 @@ function emitNetpollProbeChildWait(module StdModule, func IrFunction, cur IrBloc
 	_ = emitNetpoll(module, block: pidfdMode, verb: NetpollVerb.closeChildSource, operands: argsOf(probe), ids: ids)
 	module.setTerminator(pidfdMode, op: StdOp.retVoid)
 
-	let blocked = emitNetpoll(module, block: signalMode, verb: NetpollVerb.blockChildSignal, operands: ValueIdArray.create(), ids: ids)
+	let blocked = emitNetpoll(module, block: signalMode, verb: NetpollVerb.blockChildSignal, operands: ValueIdArray.create(0), ids: ids)
 	emitNetpollRequire(module, func: func, cur: signalMode, shape: NetpollShape.epoll, verb: NetpollVerb.blockChildSignal, subject: blocked, answer: blocked, cont: marked, ids: ids)
 
 	emitNetpollStoreChildWait(module, block: marked, word: emitConst(module, block: marked, value: NetpollChildSignalPending, ids: ids), ids: ids)
@@ -439,7 +439,7 @@ end 'emitNetpollProbeChildWait'
 // Opened at the first child rather than in `__np_init`, so a program that spawns none holds no
 // signalfd and its poller carries no extra source.
 function buildNetpollChildSignalFd(module StdModule)
-	var func = IrFunction.createFromStd(NetpollChildSignalFdName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(NetpollChildSignalFdName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -460,7 +460,7 @@ function buildNetpollChildSignalFd(module StdModule)
 	emitSchedLockLeave(module, block: found, ids: ids)
 	module.setTerminator(found, op: StdOp.ret(emitNetpollChildSignalFdOf(module, block: found, word: again, ids: ids)))
 
-	let signalFd = emitNetpoll(module, block: create, verb: NetpollVerb.openSignalSource, operands: ValueIdArray.create(), ids: ids)
+	let signalFd = emitNetpoll(module, block: create, verb: NetpollVerb.openSignalSource, operands: ValueIdArray.create(0), ids: ids)
 	emitNetpollRequire(module, func: func, cur: create, shape: NetpollShape.epoll, verb: NetpollVerb.openSignalSource, subject: signalFd, answer: signalFd, cont: stored, ids: ids)
 
 	emitNetpollStoreChildWait(module, block: stored, word: emitBin(module, block: stored, a: signalFd, b: emitConst(module, block: stored, value: NetpollChildSignalFdBias, ids: ids), opcode: StdBinOpcode.add, ids: ids), ids: ids)
@@ -476,7 +476,7 @@ end 'buildNetpollChildSignalFd'
 
 // `__np_break()` — see `NetpollBreakName`.
 function buildNetpollBreak(module StdModule, target Target)
-	var func = IrFunction.createFromStd(NetpollBreakName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(NetpollBreakName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -595,7 +595,7 @@ function emitNetpollReapIfAny(module StdModule, func IrFunction, cur IrBlock, id
 	let head = emitLoadAcquireGlobalWord(module, block: cur, label: NetpollOrphanExitedLabel, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: head, pred: StdCmpPred.ne, against: 0, whenTrue: reap, whenFalse: none, ids: ids)
 
-	module.appendOp(reap, op: StdOp.call(ids.mint(), callee: NetpollOrphanReapName, args: ValueIdArray.create()))
+	module.appendOp(reap, op: StdOp.call(ids.mint(), callee: NetpollOrphanReapName, args: ValueIdArray.create(0)))
 	module.setTerminator(reap, op: StdOp.retVoid)
 	module.setTerminator(none, op: StdOp.retVoid)
 end 'emitNetpollReapIfAny'
@@ -623,7 +623,7 @@ function emitNetpollDecodeEpoll(module StdModule, func IrFunction, cur IrBlock, 
 	module.setTerminator(cur, op: StdOp.condBranch(emitNetpollIsChildSignalFd(module, block: cur, word: word, key: key, ids: ids), thenBlockId: sweep.id, elseBlockId: socket.id))
 
 	let debt = ids.mint()
-	module.appendOp(sweep, op: StdOp.call(debt, callee: NetpollChildSweepName, args: ValueIdArray.create()))
+	module.appendOp(sweep, op: StdOp.call(debt, callee: NetpollChildSweepName, args: ValueIdArray.create(0)))
 	emitSchedWakeIfOwed(module, cur: sweep, owed: debt, wake: payWake, cont: cont, ids: ids)
 
 	emitNetpollSourceReady(module, func: func, cur: socket, shape: shape, entryAddr: entryAddr, fd: key, cont: cont, label: b"npsockwake", ids: ids)
@@ -2346,7 +2346,7 @@ end 'emitNetpollAdoptEitherKey'
 // dense number from.
 function emitNetpollSourceKeyFromAllocator(module StdModule, block IrBlock, cont IrBlock, ids ValueMinter)
 	let key = ids.mint()
-	module.appendOp(block, op: StdOp.call(key, callee: NetpollSourceKeyAllocName, args: ValueIdArray.create()))
+	module.appendOp(block, op: StdOp.call(key, callee: NetpollSourceKeyAllocName, args: ValueIdArray.create(0)))
 	emitBranchCarrying(module, from: block, to: cont, values: argsOf(key))
 end 'emitNetpollSourceKeyFromAllocator'
 
@@ -2394,9 +2394,9 @@ function emitNetpollChildSourceByMode(module StdModule, func IrFunction, cur IrB
 
 	emitNetpollBranchOnChildSignalMode(module, block: cur, word: emitNetpollLoadChildWait(module, block: cur, ids: ids), signal: minted, pidfd: pidfd, ids: ids)
 
-	module.appendOp(minted, op: StdOp.call(ids.mint(), callee: NetpollChildSignalFdName, args: ValueIdArray.create()))
+	module.appendOp(minted, op: StdOp.call(ids.mint(), callee: NetpollChildSignalFdName, args: ValueIdArray.create(0)))
 	let key = ids.mint()
-	module.appendOp(minted, op: StdOp.call(key, callee: NetpollSourceKeyAllocName, args: ValueIdArray.create()))
+	module.appendOp(minted, op: StdOp.call(key, callee: NetpollSourceKeyAllocName, args: ValueIdArray.create(0)))
 	emitBranchCarrying(module, from: minted, to: sourced, values: argsOf(key))
 
 	let asked = emitNetpoll(module, block: pidfd, verb: NetpollVerb.openChildSource, operands: argsOf(childHandle), ids: ids)
@@ -2485,7 +2485,7 @@ end 'buildNetpollChildBind'
 // to block: XNU can report `NOTE_EXIT` before a non-blocking `waitpid` can reap, and the handle's
 // close reaps without blocking, so a close alone could leave the child a zombie.
 function buildNetpollOrphanReap(module StdModule, target Target)
-	var func = IrFunction.createFromStd(NetpollOrphanReapName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(NetpollOrphanReapName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2594,7 +2594,7 @@ end 'buildNetpollChildTrack'
 // the status is taken afterwards, by `osProcessExitCode` or the orphan reaper's wait, and a reap
 // here would leave it nothing to read.
 function buildNetpollChildSweep(module StdModule)
-	var func = IrFunction.createFromStd(NetpollChildSweepName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(NetpollChildSweepName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2887,7 +2887,7 @@ end 'emitNetpollMintedKey'
 // which is threaded through the records themselves (`PdOffNextFreeKey`); otherwise the high-water
 // mark steps.
 function buildNetpollSourceKeyAlloc(module StdModule, hold SchedLockHold, layout NetpollMintedKeys)
-	var func = IrFunction.createFromStd(lockHoldNameOf(hold, whenFree: NetpollSourceKeyAllocName, whenHeld: NetpollSourceKeyAllocHeldName), returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(lockHoldNameOf(hold, whenFree: NetpollSourceKeyAllocName, whenHeld: NetpollSourceKeyAllocHeldName), returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	requireSchedLockHeldWhen(module, func: func, hold: hold)
 	var ids = ValueMinter.create(0)
 
@@ -2951,7 +2951,7 @@ end 'buildNetpollSourceKeyRelease'
 // thread, so the stamped key lands on the thread the completion packet will name.
 export function emitNetpollOpOpen(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let source = ids.mint()
-	module.appendOp(block, op: StdOp.call(source, callee: NetpollOpOpenName, args: ValueIdArray.create()))
+	module.appendOp(block, op: StdOp.call(source, callee: NetpollOpOpenName, args: ValueIdArray.create(0)))
 	return source
 end 'emitNetpollOpOpen'
 
@@ -2969,7 +2969,7 @@ end 'emitNetpollPollerHandle'
 
 // `__np_op_open()` — see `NetpollOpOpenName`.
 function buildNetpollOpOpen(module StdModule)
-	var func = IrFunction.createFromStd(NetpollOpOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(NetpollOpOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2985,7 +2985,7 @@ end 'buildNetpollOpOpen'
 // back. Only the held form's debt is a value: the free form's adoption pays its own and returns nothing.
 function emitNetpollOpMint(module StdModule, block IrBlock, hold SchedLockHold, ids ValueMinter) returns (ValueId, ValueId)
 	let source = ids.mint()
-	module.appendOp(block, op: StdOp.call(source, callee: lockHoldNameOf(hold, whenFree: NetpollSourceKeyAllocName, whenHeld: NetpollSourceKeyAllocHeldName), args: ValueIdArray.create()))
+	module.appendOp(block, op: StdOp.call(source, callee: lockHoldNameOf(hold, whenFree: NetpollSourceKeyAllocName, whenHeld: NetpollSourceKeyAllocHeldName), args: ValueIdArray.create(0)))
 	let debt = ids.mint()
 	module.appendOp(block, op: StdOp.call(debt, callee: lockHoldNameOf(hold, whenFree: NetpollPdAdoptName, whenHeld: NetpollPdAdoptHeldName), args: argsOf(source)))
 
@@ -3086,7 +3086,7 @@ end 'buildNetpollOpAim'
 
 // `__np_op_clear()` — see `NetpollOpClearName`.
 function buildNetpollOpClear(module StdModule)
-	var func = IrFunction.createFromStd(NetpollOpClearName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(NetpollOpClearName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3107,7 +3107,7 @@ end 'buildNetpollOpClear'
 // high-water mark has no record at all — so `__np_pd_adopt`'s reset finds both directions empty. It is
 // paid regardless, rather than relied on to be zero.
 function buildNetpollOpSettle(module StdModule)
-	var func = IrFunction.createFromStd(NetpollOpSettleName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(NetpollOpSettleName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3142,12 +3142,12 @@ export function emitNetpollOpAim(module StdModule, block IrBlock, source ValueId
 end 'emitNetpollOpAim'
 
 export function emitNetpollOpClear(module StdModule, block IrBlock, ids ValueMinter)
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollOpClearName, args: ValueIdArray.create()))
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollOpClearName, args: ValueIdArray.create(0)))
 end 'emitNetpollOpClear'
 
 export function emitNetpollOpSettle(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let source = ids.mint()
-	module.appendOp(block, op: StdOp.call(source, callee: NetpollOpSettleName, args: ValueIdArray.create()))
+	module.appendOp(block, op: StdOp.call(source, callee: NetpollOpSettleName, args: ValueIdArray.create(0)))
 	return source
 end 'emitNetpollOpSettle'
 

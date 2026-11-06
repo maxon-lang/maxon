@@ -378,7 +378,7 @@ function buildInterfaceHandleConversion(module StdModule, globalData GlobalDataT
 	let interfaceRequest = requireServiceRequestLayout(signatures, typeName: interfaceName)
 	let serviceRequest = requireServiceRequestLayout(signatures, typeName: serviceTypeName)
 	let label = interfaceHandleTableLabel(serviceTypeName, interfaceName: interfaceName)
-	var blob = ByteArray.create()
+	var blob = ByteArray.create(0)
 	blob.growFilled(interfaceSendSlotOffset(interfaceRequest.caseCount()) as ElementIndex, value: 0)
 	_ = globalData.registerRdataConstantLabeled(label, bytes: blob, kind: RdataPayloadKind.witnessTable)
 
@@ -790,7 +790,7 @@ function buildMboxStaging(module StdModule, bytes ByteOffset)
 		panic("buildMboxStaging: the largest request union is {bytes} byte(s), past the {SchedArenaChunkBytes}-byte scheduler-arena chunk a carve cannot span")
 	end 'largerThanAChunk'
 
-	var func = IrFunction.createFromStd(MboxStagingName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(MboxStagingName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1121,7 +1121,7 @@ function buildMboxRecvTake(module StdModule)
 	let inboxSendRoot = emitMboxSendRoot(module, block: takeInbox, mbox: mbox, ids: ids)
 	module.setTerminator(takeInbox, op: StdOp.branch(inboxScan.id))
 
-	let inboxSender = emitMboxClaimFrontSender(module, func: func, scan: inboxScan, root: inboxSendRoot, outcome: MboxSendWake.delivered, empty: noSender, won: inboxWakeSender, carried: ValueIdArray.create(), ids: ids)
+	let inboxSender = emitMboxClaimFrontSender(module, func: func, scan: inboxScan, root: inboxSendRoot, outcome: MboxSendWake.delivered, empty: noSender, won: inboxWakeSender, carried: ValueIdArray.create(0), ids: ids)
 
 	var inboxReserved = emitMboxRingReserve(module, func: func, cur: inboxWakeSender, mbox: mbox, ringCount: ringRemaining, ids: ids)
 	emitMboxAdmitClaimedSender(module, func: func, cur: inboxReserved, mbox: mbox, sender: inboxSender, ringCount: ringRemaining, cont: senderWoken, ids: ids)
@@ -1132,7 +1132,7 @@ function buildMboxRecvTake(module StdModule)
 	let sendRoot = emitMboxSendRoot(module, block: copiedOut, mbox: mbox, ids: ids)
 	module.setTerminator(copiedOut, op: StdOp.branch(senderScan.id))
 
-	let firstSender = emitMboxClaimFrontSender(module, func: func, scan: senderScan, root: sendRoot, outcome: MboxSendWake.delivered, empty: popped, won: wakeSender, carried: ValueIdArray.create(), ids: ids)
+	let firstSender = emitMboxClaimFrontSender(module, func: func, scan: senderScan, root: sendRoot, outcome: MboxSendWake.delivered, empty: popped, won: wakeSender, carried: ValueIdArray.create(0), ids: ids)
 
 	// The slot this pop freed goes to the first sender it claims, at once, so a send arriving later
 	// cannot take it ahead of the senders that waited.
@@ -1395,7 +1395,7 @@ function buildMboxReplyRefused(module StdModule)
 end 'buildMboxReplyRefused'
 
 function buildMboxUnknownTag(module StdModule)
-	var func = IrFunction.createFromStd(MboxUnknownTagName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(MboxUnknownTagName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.cold)

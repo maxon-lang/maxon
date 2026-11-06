@@ -77,7 +77,7 @@ export type WordAccesses
 	export var releases as AccessTally
 
 	export static function create() returns Self
-		return Self{plainLoads: StringArray.create(), plainStores: StringArray.create(), acquires: 0, releases: 0}
+		return Self{plainLoads: StringArray.create(0), plainStores: StringArray.create(0), acquires: 0, releases: 0}
 	end 'create'
 
 	export function record(line String, register String, target String, functionName String, word String)
@@ -104,7 +104,7 @@ export function buildStagedProgram(staged FilePath, caseLabel String, target Str
 	let executable = staged.join("{OutputFileStem}-{caseLabel}-{target}")
 	let ir = staged.join("{OutputFileStem}-{caseLabel}-{target}{IrFileSuffix}")
 
-	var extraArguments = StringArray.create()
+	var extraArguments = StringArray.create(0)
 	extraArguments.push("{TargetOptionPrefix}{target}")
 	extraArguments.push("{EmitIrRuntimeOptionPrefix}{functionName}")
 
@@ -126,7 +126,7 @@ end 'buildStagedProgram'
 export function buildStagedForHost(staged FilePath, caseLabel String) returns FilePath
 	let executable = staged.join("{OutputFileStem}-{caseLabel}{executableSuffix()}")
 
-	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: executable, label: caseLabel, extraArguments: StringArray.create())
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: executable, label: caseLabel, extraArguments: StringArray.create(0))
 
 	requireBuiltOrPanic(build, output: executable, what: "`{BuildCommandName} {StagedProgramFileName}` for the host")
 
@@ -141,7 +141,7 @@ function environmentWithProcessors(procs ProcessorCount) returns Environment
 end 'environmentWithProcessors'
 
 export function runStagedForHost(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs DurationMs, standardInput InputSource) returns CollectedOutput
-	return spawnIn(Executable.path(executable), arguments: StringArray.create(), staged: staged, what: "the staged program at {executable.toString()}", environment: environmentWithProcessors(procs), standardInput: standardInput, timeoutMs: deadlineMs)
+	return spawnIn(Executable.path(executable), arguments: StringArray.create(0), staged: staged, what: "the staged program at {executable.toString()}", environment: environmentWithProcessors(procs), standardInput: standardInput, timeoutMs: deadlineMs)
 end 'runStagedForHost'
 
 let FeedPollMs = 5
@@ -170,7 +170,7 @@ type FedChild
 	var fed as bool
 
 	static function spawn(executable FilePath, staged FilePath, procs ProcessorCount, afterLine String, feed String) returns FedChild
-		let child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(executable), arguments: StringArray.create(), workingDirectory: staged, environment: environmentWithProcessors(procs)) otherwise (e) 'spawnFailed'
+		let child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(executable), arguments: StringArray.create(0), workingDirectory: staged, environment: environmentWithProcessors(procs)) otherwise (e) 'spawnFailed'
 			panic("emitted-runtime tests: the gate could not run — could not spawn the staged program at {executable.toString()} ({e.displayReason()}).")
 		end 'spawnFailed'
 
@@ -285,7 +285,7 @@ end 'irLines'
 
 export function functionBody(lines StringArray, functionName String, target String) returns StringArray
 	let header = "{FunctionHeaderPrefix}{functionName}{FunctionHeaderSuffix}"
-	var body = StringArray.create()
+	var body = StringArray.create(0)
 	var found = false
 
 	for line in lines 'eachLine'
@@ -340,7 +340,7 @@ end 'firstLineIndex'
 // through the register, and whether it overwrites it. `ldr x1, [x1 + 48]` is both, and an event that had to
 // pick one would hide the other from whichever caller wanted it.
 export function registerEvents(body StringArray, register String) returns RegisterEventArray
-	var events = RegisterEventArray.create()
+	var events = RegisterEventArray.create(0)
 
 	for (iter, text) in body.withIterator() 'eachLine'
 		let use = registerUseIn(text, register: register)
@@ -493,7 +493,7 @@ export function noteImageName(findings StringArray, image ByteArray, name String
 end 'noteImageName'
 
 function asciiBytes(name String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	for octet in name.bytes() 'eachByte'
 		bytes.push(octet)

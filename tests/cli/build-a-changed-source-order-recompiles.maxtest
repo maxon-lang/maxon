@@ -8,7 +8,7 @@ test 'a build whose source order differs from the last compile is compiled again
 end 'a build whose source order differs from the last compile is compiled again'
 
 function runReversedOrderBuild(dir FilePath) returns CollectedOutput
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 	arguments.push(BuildCommandWord)
 	arguments.push(SettledProgramDirName)
 	arguments.push("{OutputOptionPrefix}{dir.join(OutputStem).toString()}")
@@ -27,12 +27,12 @@ type ChangedSourceOrderRecompiles implements OutsideCheckoutCase
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
 		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
-		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create()), which: "the first build under an empty cache root")
-		try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create()), which: "a second build in the natural source order")
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(0)), which: "the first build under an empty cache root")
+		try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(0)), which: "a second build in the natural source order")
 
 		try requireCompiled(runReversedOrderBuild(dir), reason: SourceOrderChangedReason, which: "a build with {ChangedSourceOrderVariable}={ChangedSourceOrderReversed}")
 		try requireUpToDate(runReversedOrderBuild(dir), which: "a second build with {ChangedSourceOrderVariable}={ChangedSourceOrderReversed}")
 
-		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create()), reason: SourceOrderChangedReason, which: "a build with {ChangedSourceOrderVariable} unset again")
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(0)), reason: SourceOrderChangedReason, which: "a build with {ChangedSourceOrderVariable} unset again")
 	end 'requireHeldIn'
 end 'ChangedSourceOrderRecompiles'

@@ -52,7 +52,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -100,7 +100,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create()
+	var texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -233,7 +233,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -281,7 +281,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create()
+	var texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -424,7 +424,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -472,7 +472,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create()
+	var texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -575,7 +575,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -623,7 +623,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create()
+	var texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -746,7 +746,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -794,7 +794,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create()
+	var texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -937,7 +937,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -985,7 +985,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create()
+	var texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1128,7 +1128,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1176,7 +1176,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create()
+	var texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1289,7 +1289,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1337,7 +1337,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create()
+	var texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1450,7 +1450,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1498,7 +1498,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create()
+	var texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1601,7 +1601,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1649,7 +1649,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create()
+	var texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1782,7 +1782,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1830,7 +1830,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create()
+	var texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1955,7 +1955,7 @@ function vector7()
 end 'vector7'
 
 function vector8()
-	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray.create(), identity: TlsClientIdentity.anonymous)
+	let config = TlsClientConfig.create(X509VerifyHost.named("example.com"), protocols: TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12], cipherSuites: TlsCipherSuiteCodeArray from [4867, 4865, 4866, 52393, 52392, 49195, 49199, 49196, 49200], groups: TlsGroupCodeArray from [29, 23], keyShareGroups: TlsGroupCodeArray from [29], signatureAlgorithms: TlsSignatureSchemeCodeArray from [1027, 2052, 2055, 1283, 2053, 2054, 1025, 1281, 1537], applicationProtocols: TlsProtocolNameArray.create(0), identity: TlsClientIdentity.anonymous)
 	let entropy = TlsClientEntropy.create(fromHex("888fa18ca461b1a1e800c5e2962c7818e8d82095efba82045945ac03138b581d"), sessionId: fromHex("659a2226480813b71ba216fd39d0897cb55c54c9ad16408a4ef3c8dabe2dc79a"), keySecrets: TlsKeySecretArray from [secret(29, privateKey: fromHex("4899f6b20726b638298e543d2d1cc9ff0575c406724af815ea955b986e66abf2")), secret(23, privateKey: fromHex("a26146311d88c58e07a3894408c68ae30b7ead6bf6dcda0f612677f90348a1f5"))], pssSalt: fromHex("6462c88fb1742f48f3dcaf5ccdac72797b37b2ab8ed79c3b6fa87aa662cc8a415a856f538975053871175b9a6115540b20be06e2eca55e574be5c3ff1d55cb6c"))
 	let peer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
 	let helloSource = TlsBuiltClientHello.create()
@@ -2013,7 +2013,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2061,7 +2061,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create()
+	var texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")

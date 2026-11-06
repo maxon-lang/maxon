@@ -61,7 +61,7 @@ end 'Item'
 type Box uses Elem
 	typealias ElemArray = Array with Elem
 
-	export var items = ElemArray.create()
+	export var items = ElemArray.create(0)
 
 	static function create() returns Self
 		return Self{}

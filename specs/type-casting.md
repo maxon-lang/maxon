@@ -626,7 +626,7 @@ extension Array
 end 'Array'
 
 function main() returns ExitCode
-	let values = IntegerArray.create()
+	let values = IntegerArray.create(0)
 	return values.topLevel()
 end 'main'
 ```
@@ -947,7 +947,7 @@ extension Array
 end 'Array'
 
 function main() returns ExitCode
-	let values = IntegerArray.create()
+	let values = IntegerArray.create(0)
 	return values.levelOf(Meter.create())
 end 'main'
 ```
@@ -1000,7 +1000,7 @@ typealias Byte = int(0 to 255)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var values = Bytes.create()
+	var values = Bytes.create(0)
 	values.push(7)
 	if atLimit() 'limit'
 		return 1
@@ -1182,7 +1182,7 @@ function takes(b Bytes) returns Byte
 end 'takes'
 
 function main() returns ExitCode
-	var a = Bytes.create()
+	var a = Bytes.create(0)
 	a.push(7)
 	return takes(a)
 end 'main'
@@ -1204,7 +1204,7 @@ function takes(b Bytes) returns Wide
 end 'takes'
 
 function main() returns ExitCode
-	var a = Bytes.create()
+	var a = Bytes.create(0)
 	a.push(7)
 	return takes(a)
 end 'main'
@@ -1578,7 +1578,7 @@ function widthOf(c NarrowCol) returns ExitCode
 end 'widthOf'
 
 function main() returns ExitCode
-	var w = WideCol.create()
+	var w = WideCol.create(0)
 	w.push(5)
 	let n = w as NarrowCol
 	return widthOf(n)

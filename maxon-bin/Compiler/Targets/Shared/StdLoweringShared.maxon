@@ -194,7 +194,7 @@ export type CalleeAbiTable
 	// `intern` appends in `functions` order and the columns are pushed in that same order.
 	export static function build(funcNames FunctionNameIndex) returns CalleeAbiTable
 		let rowCount = funcNames.functions.count()
-		var table = Self{names: NameTable.create(rowCount as NameId, byteHint: (rowCount * CalleeNameByteEstimate) as NameByteCount), paramFloatMasks: ArgFloatMaskArray.create(), resultClasses: CalleeResultClassArray.create()}
+		var table = Self{names: NameTable.create(rowCount as NameId, byteHint: (rowCount * CalleeNameByteEstimate) as NameByteCount), paramFloatMasks: ArgFloatMaskArray.create(0), resultClasses: CalleeResultClassArray.create(0)}
 		table.paramFloatMasks.reserve(rowCount)
 		table.resultClasses.reserve(rowCount)
 
@@ -584,7 +584,7 @@ end 'abiStackSlotsBefore'
 // is ever coloured for them).
 export function buildFunctionValueClasses(stdModule StdModule, targetModule TargetModule, funcIndex ElementIndex, abi CalleeAbiTable) returns ValueClassColumn
 	let srcFunc = stdModule.getFunc(funcIndex)
-	var column = ValueClassColumn.create()
+	var column = ValueClassColumn.create(0)
 	column.refill(scanFunctionValueCount(targetModule, func: srcFunc), value: RegClass.gpr)
 
 	for blockRef in srcFunc.blockRefs 'eachBlock'
@@ -927,7 +927,7 @@ export type ScaledIndexFolds
 	// capacity, so the second function's records reuse the first's buffers and the whole analysis
 	// allocates once per compilation.
 	export static function create() returns ScaledIndexFolds
-		return Self{scaleCandidates: StdValueUseSet.create(), retiredScaleDefs: StdValueUseSet.create(), indexedAddrDefs: StdValueUseSet.create(), fusedAddrDefs: StdValueUseSet.create(), baseColumn: ValueIdArray.create(), indexColumn: ValueIdArray.create(), scaleColumn: MemoryIndexScaleArray.create(), defBlockColumn: BlockRefArray.create(), valueUses: StdValueUseSet.createTrackingRepeats(), arithDefBlock: BlockRefArray.create(), arithDefs: StdValueUseSet.create(), operands: StdArithOperands.create(), scaleMatch: MemoryIndexScaleMatch.create()}
+		return Self{scaleCandidates: StdValueUseSet.create(), retiredScaleDefs: StdValueUseSet.create(), indexedAddrDefs: StdValueUseSet.create(), fusedAddrDefs: StdValueUseSet.create(), baseColumn: ValueIdArray.create(0), indexColumn: ValueIdArray.create(0), scaleColumn: MemoryIndexScaleArray.create(0), defBlockColumn: BlockRefArray.create(0), valueUses: StdValueUseSet.createTrackingRepeats(), arithDefBlock: BlockRefArray.create(0), arithDefs: StdValueUseSet.create(), operands: StdArithOperands.create(), scaleMatch: MemoryIndexScaleMatch.create()}
 	end 'create'
 
 	// ⭐ THE ENTRY POINT. Re-decide every fold for `func`, discarding the previous function's (ValueIds
@@ -1455,7 +1455,7 @@ type FusedPredColumn
 	var positions as BodyOpPositionArray
 
 	static function create() returns FusedPredColumn
-		return Self{fused: BoolArray.create(), preds: StdCmpPredArray.create(), positions: BodyOpPositionArray.create()}
+		return Self{fused: BoolArray.create(0), preds: StdCmpPredArray.create(0), positions: BodyOpPositionArray.create(0)}
 	end 'create'
 
 	// Emptied over the module's block refs. The predicate and position fills are never read: `fused` gates
@@ -2328,7 +2328,7 @@ end 'socketServeOperand'
 
 // The operands a POSIX lane's `osNetpoll` chunk is called with — the prefix `posixNetpollOperandCount` names.
 export function posixNetpollChunkArgs(verb NetpollVerb, operands ValueIdArray) returns ValueIdArray
-	var args = ValueIdArray.create()
+	var args = ValueIdArray.create(0)
 
 	for index in 0 upto posixNetpollOperandCount(verb) 'eachRead'
 		args.push(netpollOperand(operands, index: index))

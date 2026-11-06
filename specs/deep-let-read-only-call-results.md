@@ -79,7 +79,7 @@ type Table
 	var names as Names
 
 	static function create() returns Self
-		var names = Names.create()
+		var names = Names.create(0)
 		names.push(b"alpha")
 		return Self{names: names}
 	end 'create'
@@ -115,7 +115,7 @@ type Table
 	var names as Names
 
 	static function create() returns Self
-		var names = Names.create()
+		var names = Names.create(0)
 		names.push(b"alpha")
 		return Self{names: names}
 	end 'create'
@@ -132,7 +132,7 @@ end 'Table'
 function main() returns ExitCode
 	var table = Table.create()
 	table.register(b"gamma")
-	var roster = Names.create()
+	var roster = Names.create(0)
 	roster.push(table.nameOf(1))
 
 	return roster.count() as ExitCode
@@ -155,7 +155,7 @@ type Table
 	var names as Names
 
 	static function create() returns Self
-		var names = Names.create()
+		var names = Names.create(0)
 		names.push(b"alpha")
 		return Self{names: names}
 	end 'create'
@@ -172,7 +172,7 @@ end 'Table'
 function main() returns ExitCode
 	var table = Table.create()
 	table.register(b"gamma")
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	roster.push(table.nameOf(1))
 
 	return roster.count() as ExitCode
@@ -271,7 +271,7 @@ type Table
 			return self.fixed
 		end 'fixed'
 
-		return ByteArray.create()
+		return ByteArray.create(0)
 	end 'pick'
 end 'Table'
 
@@ -305,7 +305,7 @@ type Table
 	var names as NameList
 
 	static function create() returns Self
-		var names = NameList.create()
+		var names = NameList.create(0)
 		names.push(b"alpha")
 		return Self{names: names}
 	end 'create'
@@ -351,7 +351,7 @@ type Table
 	let fixed as ByteArray
 
 	static function create() returns Self
-		var names = NameList.create()
+		var names = NameList.create(0)
 		names.push(b"alpha")
 		return Self{names: names, fixed: b"beta"}
 	end 'create'
@@ -416,7 +416,7 @@ end 'Names'
 
 function main() returns ExitCode
 	let names = Names.create()
-	var roster = Roster.create()
+	var roster = Roster.create(0)
 	roster.push(b"first")
 	let labelled = Labelled.create(names.spell(try roster.get(0) otherwise panic("the roster holds one name")))
 
@@ -461,7 +461,7 @@ end 'Names'
 
 function main() returns ExitCode
 	let names = Names.create()
-	var scratch = ByteArray.create()
+	var scratch = ByteArray.create(0)
 	scratch.push(1)
 	let labelled = Labelled.create(names.spell(scratch))
 

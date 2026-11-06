@@ -633,11 +633,11 @@ type Collector uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{items: ElementArray.create()}
+		return Self{items: ElementArray.create(0)}
 	end 'create'
 
 	static function from (source ElementBag) returns Self
-		var result = ElementArray.create()
+		var result = ElementArray.create(0)
 		for item in source 'collect'
 			result.push(item)
 		end 'collect'

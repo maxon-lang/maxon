@@ -487,7 +487,7 @@ module typealias Score = int(0 to 100)
 
 // --- file: other/main.maxon
 function main() returns ExitCode
-	var b = feature.Bag.create()
+	var b = feature.Bag.create(0)
 	b.push(4)
 	let s = 7 as feature.Score
 	print("{s} {b.count()}")

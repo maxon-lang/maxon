@@ -79,7 +79,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var boxes = Boxes.create()
+	var boxes = Boxes.create(0)
 	boxes.push(Box.create(1))
 	let w = try boxes.get(0) otherwise return 1
 	var again = try boxes.get(0) otherwise return 2
@@ -337,7 +337,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -376,7 +376,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var boxes = Boxes.create()
+	var boxes = Boxes.create(0)
 	var a = Box.create(1)
 	a.n = 2
 	boxes.push(a)
@@ -533,7 +533,7 @@ type H
 end 'H'
 
 function wrap(ms Boxes) returns Hs
-	var hs = Hs.create()
+	var hs = Hs.create(0)
 
 	for m in ms 'each'
 		hs.push(H.create(m))
@@ -543,7 +543,7 @@ function wrap(ms Boxes) returns Hs
 end 'wrap'
 
 function main() returns ExitCode
-	var ms = Boxes.create()
+	var ms = Boxes.create(0)
 	ms.push(Box.create(1))
 	let hs = wrap(ms)
 	var w = try ms.get(0) otherwise return 1
@@ -572,7 +572,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function keepAndReturn(b Box) returns Box
 	kept.push(b)
@@ -614,7 +614,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function matches(b Box) returns bool
 	return b.n > 1
@@ -673,7 +673,7 @@ type Person
 end 'Person'
 
 function countName(p Person) returns Count
-	var names = Names.create()
+	var names = Names.create(0)
 	names.push(p.name)
 	return names.count() as Count
 end 'countName'
@@ -748,7 +748,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var kept = Boxes.create()
+var kept = Boxes.create(0)
 
 function stash(b Box)
 	kept.push(b)
@@ -1162,7 +1162,7 @@ end 'ends'
 
 function main() returns ExitCode
 	let p = Pair.create(Box.create(1), right: Box.create(2))
-	var all = Ends.create()
+	var all = Ends.create(0)
 	all.push(ends(p))
 	print("{all.count()} {p.left.n}\n")
 	return 0
@@ -1840,7 +1840,7 @@ type Bag uses Item
 	let kept as ItemArray
 
 	static function create() returns Self
-		return Self{kept: ItemArray.create()}
+		return Self{kept: ItemArray.create(0)}
 	end 'create'
 
 	function size() returns Count
@@ -2042,7 +2042,7 @@ function dispatch(n Count, replies ReplyPromises)
 end 'dispatch'
 
 function drain() returns Count
-	var replies = ReplyPromises.create()
+	var replies = ReplyPromises.create(0)
 	var total = 0 as Count
 
 	for n in 1 to 3 'each'
@@ -2173,7 +2173,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var shelf = BoxArray.create()
+var shelf = BoxArray.create(0)
 
 function register(b Box)
 	shelf.push(b)
@@ -2313,7 +2313,7 @@ type Box
 	end 'create'
 end 'Box'
 
-var shelf = BoxArray.create()
+var shelf = BoxArray.create(0)
 
 function register(b Box)
 	shelf.push(b)

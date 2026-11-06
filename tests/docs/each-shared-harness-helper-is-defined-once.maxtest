@@ -18,7 +18,7 @@ test 'each shared harness helper is defined once'
 	let support = try FilePath.from(SupportDir) otherwise panic("shared-helpers: '{SupportDir}' is not a spellable path")
 	Expect.isTrue(Directory.isDirectory(support), message: "there is no {SupportDir}/ directory, so no shared harness helper exists to be defined once. Every path here is relative to the CHECKOUT ROOT; run it from there.")
 
-	var helpers = StringArray.create()
+	var helpers = StringArray.create(0)
 
 	for source in sourcesUnder(support) 'eachSupportSource'
 		if not source.filename().endsWith(MaxonSourceSuffix) 'notAHelperSource'
@@ -37,7 +37,7 @@ test 'each shared harness helper is defined once'
 	var declaring = DeclaringFiles.create()
 
 	for helper in helpers 'eachHelperName'
-		declaring.upsert(helper, value: StringArray.create())
+		declaring.upsert(helper, value: StringArray.create(0))
 	end 'eachHelperName'
 
 	let tests = try FilePath.from(TestsDir) otherwise panic("shared-helpers: '{TestsDir}' is not a spellable path")
@@ -63,7 +63,7 @@ test 'each shared harness helper is defined once'
 		end 'eachDeclared'
 	end 'eachSource'
 
-	var misdeclared = StringArray.create()
+	var misdeclared = StringArray.create(0)
 
 	for helper in helpers 'eachHelperChecked'
 		view files = try declaring.get(helper) otherwise panic("shared-helpers: every helper was entered into the map")
@@ -88,7 +88,7 @@ function allUnderSupport(files StringArray) returns bool
 end 'allUnderSupport'
 
 function helperNamesIn(source String) returns StringArray
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 
 	for line in source.split(LineFeed) 'eachLine'
 		let declaration = line.trim()
@@ -102,7 +102,7 @@ function helperNamesIn(source String) returns StringArray
 end 'helperNamesIn'
 
 function functionNamesIn(source String) returns StringArray
-	var names = StringArray.create()
+	var names = StringArray.create(0)
 
 	for line in source.split(LineFeed) 'eachLine'
 		let declaration = withoutModifiers(line.trim())

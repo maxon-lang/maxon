@@ -176,7 +176,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-		var pending = IntPromiseArray.create()
+		var pending = IntPromiseArray.create(0)
 		pending.push(async plain())
 		let batch = Batch.create(pending)
 		let copy = batch.clone()
@@ -201,8 +201,8 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-		var first = IntPromiseArray.create()
-		var second = IntPromiseArray.create()
+		var first = IntPromiseArray.create(0)
+		var second = IntPromiseArray.create(0)
 		second.push(async plain())
 		first.append(second)
 		return first.count() as ExitCode
@@ -234,7 +234,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-		var jobs = JobArray.create()
+		var jobs = JobArray.create(0)
 		jobs.push(Job.create(async plain()))
 		let copy = jobs.clone()
 		return copy.count() as ExitCode
@@ -305,7 +305,7 @@ type Bag uses T
 	var items as TArray
 
 	static function create() returns Self
-		return Self{items: TArray.create()}
+		return Self{items: TArray.create(0)}
 	end 'create'
 
 	function add(item T)
@@ -417,7 +417,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	var ps = IntPromiseArray.create()
+	var ps = IntPromiseArray.create(0)
 	ps.push(try h.double(21) otherwise panic("send double"))
 
 	let p = try ps.pop() otherwise panic("the push above filled it")

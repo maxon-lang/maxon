@@ -156,7 +156,7 @@ function collectProjectDiagnosticsAcrossAnEdit(client LspClient, root FilePath, 
 end 'collectProjectDiagnosticsAcrossAnEdit'
 
 function diagnosticsAcrossAnEdit(client LspClient, root FilePath, uri String, content String, editedContent String) returns ProjectDiagnosticsProbeArray throws LspClientError
-	var probes = ProjectDiagnosticsProbeArray.create()
+	var probes = ProjectDiagnosticsProbeArray.create(0)
 
 	_ = try client.initializeAtRoot(root)
 	try client.initialized()
@@ -175,7 +175,7 @@ function diagnosticsAcrossAnEdit(client LspClient, root FilePath, uri String, co
 end 'diagnosticsAcrossAnEdit'
 
 function brokenProjectDiagnosticsPair(detail String) returns ProjectDiagnosticsProbeArray
-	var probes = ProjectDiagnosticsProbeArray.create()
+	var probes = ProjectDiagnosticsProbeArray.create(0)
 	probes.push(ProjectDiagnosticsProbe.broke(detail.clone()))
 	probes.push(ProjectDiagnosticsProbe.broke(detail))
 
@@ -199,7 +199,7 @@ function collectProjectCheckAcrossAnEdit(client LspClient, root FilePath, uri St
 end 'collectProjectCheckAcrossAnEdit'
 
 function projectCheckAcrossAnEdit(client LspClient, root FilePath, uri String, content String, diskEdits CorpusDiskEditArray, editedContent String) returns ProjectDiagnosticsProbeArray throws LspClientError
-	var probes = ProjectDiagnosticsProbeArray.create()
+	var probes = ProjectDiagnosticsProbeArray.create(0)
 
 	_ = try client.initializeAtRoot(root)
 	try client.initialized()
@@ -285,7 +285,7 @@ function collectProjectCheckSession(client LspClient, rooting CorpusSessionRoot,
 	if let session = try projectCheckSession(client, rooting: rooting, uri: uri, content: content, edits: edits) 'answered'
 		return session
 	end 'answered' else (e) 'failed'
-		return ProjectCheckSession.create(ProjectDiagnosticsProbe.broke(e.explained()), reports: ProjectCheckReportArray.create())
+		return ProjectCheckSession.create(ProjectDiagnosticsProbe.broke(e.explained()), reports: ProjectCheckReportArray.create(0))
 	end 'failed'
 end 'collectProjectCheckSession'
 
@@ -316,7 +316,7 @@ export let ProjectCheckAbandoned = "abandoned"
 export let ProjectCheckUnloadable = "unloadable"
 
 export function expectOneProjectCheckOutcome(reports ProjectCheckReportArray, version DocumentVersion, outcome String, note String) throws TestFailure
-	var outcomes = StringArray.create()
+	var outcomes = StringArray.create(0)
 
 	for report in reports 'eachReport'
 		if report.version == "{version}" 'thisVersion'

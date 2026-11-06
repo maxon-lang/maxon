@@ -87,7 +87,7 @@ function size(op Op) returns Integer
 end 'size'
 
 function main() returns ExitCode
-	var name = ByteArray.create()
+	var name = ByteArray.create(0)
 	name.push(65)
 	name.push(66)
 	let op = Op.call(name, weight: 1)
@@ -110,7 +110,7 @@ union Op
 end 'Op'
 
 function main() returns ExitCode
-	var name = ByteArray.create()
+	var name = ByteArray.create(0)
 	name.push(65)
 	let op = Op.call(name, weight: 1)
 	name.push(66)
@@ -169,7 +169,7 @@ union Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.held(ByteArray.create())
+	var holder = Holder.held(ByteArray.create(0))
 
 	match holder 'write'
 		held(items) then items.push(1)
@@ -478,7 +478,7 @@ type Shelf
 	var holders as HolderArray
 
 	static function create() returns Self
-		return Self{holders: HolderArray.create()}
+		return Self{holders: HolderArray.create(0)}
 	end 'create'
 
 	function shelve(cell Cell)
@@ -530,7 +530,7 @@ type Shelf
 	var holders as HolderArray
 
 	static function create() returns Self
-		return Self{holders: HolderArray.create()}
+		return Self{holders: HolderArray.create(0)}
 	end 'create'
 
 	function shelve(cell Cell)
@@ -565,7 +565,7 @@ union Pair
 end 'Pair'
 
 function main() returns ExitCode
-	var pair = Pair.both(ByteArray.create(), open: ByteArray.create())
+	var pair = Pair.both(ByteArray.create(0), open: ByteArray.create(0))
 
 	match pair 'write'
 		both(_, open) then open.push(1)
@@ -596,7 +596,7 @@ union Slot
 end 'Slot'
 
 function main() returns ExitCode
-	var slot = Slot.numbered(IntegerArray.create())
+	var slot = Slot.numbered(IntegerArray.create(0))
 
 	match slot 'write'
 		numbered(values) then values.push(7)
@@ -669,7 +669,7 @@ function wrapOp(callee ByteArray) returns Op
 end 'wrapOp'
 
 function main() returns ExitCode
-	var scratch = ByteArray.create()
+	var scratch = ByteArray.create(0)
 	scratch.push(1)
 	let op = wrapOp(scratch)
 	scratch.push(2)
@@ -695,8 +695,8 @@ union Parts
 end 'Parts'
 
 function split() returns Parts
-	let a = Bytes.create()
-	let b = Bytes.create()
+	let a = Bytes.create(0)
+	let b = Bytes.create(0)
 	return Parts.parts(a, member: b)
 end 'split'
 
@@ -725,8 +725,8 @@ union Parts
 end 'Parts'
 
 function split() returns Parts
-	let a = Bytes.create()
-	let b = Bytes.create()
+	let a = Bytes.create(0)
+	let b = Bytes.create(0)
 	return Parts.parts(a, member: b)
 end 'split'
 
@@ -771,10 +771,10 @@ function wrapOp(grid Grid) returns Op
 end 'wrapOp'
 
 function main() returns ExitCode
-	var scratch = Grid.create()
-	scratch.push(Row.create())
+	var scratch = Grid.create(0)
+	scratch.push(Row.create(0))
 	let op = wrapOp(scratch)
-	scratch.push(Row.create())
+	scratch.push(Row.create(0))
 
 	return match op 'shape'
 		call(grid) gives grid.count() as ExitCode

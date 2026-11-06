@@ -62,7 +62,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -309,7 +309,7 @@ function finish(server OpensslServer) returns String
 		return "wait: {error.displayReason()}"
 	end 'stuck'
 
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	drainOutput(lines, child: server.child)
 	drainErrors(lines, child: server.child)
@@ -447,7 +447,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -694,7 +694,7 @@ function finish(server OpensslServer) returns String
 		return "wait: {error.displayReason()}"
 	end 'stuck'
 
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	drainOutput(lines, child: server.child)
 	drainErrors(lines, child: server.child)
@@ -847,7 +847,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1094,7 +1094,7 @@ function finish(server OpensslServer) returns String
 		return "wait: {error.displayReason()}"
 	end 'stuck'
 
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	drainOutput(lines, child: server.child)
 	drainErrors(lines, child: server.child)
@@ -1232,7 +1232,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1479,7 +1479,7 @@ function finish(server OpensslServer) returns String
 		return "wait: {error.displayReason()}"
 	end 'stuck'
 
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	drainOutput(lines, child: server.child)
 	drainErrors(lines, child: server.child)
@@ -1628,7 +1628,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1873,7 +1873,7 @@ function attemptClient(directory String, port NetworkPort, options StringArray) 
 		return ClientOutcome.observed("s_client: {error.displayReason()}")
 	end 'failed'
 
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	for line in result.stdout.split("\n") 'eachLine'
 		lines.push(line.trim())
@@ -1952,7 +1952,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2197,7 +2197,7 @@ function attemptClient(directory String, port NetworkPort, options StringArray) 
 		return ClientOutcome.observed("s_client: {error.displayReason()}")
 	end 'failed'
 
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	for line in result.stdout.split("\n") 'eachLine'
 		lines.push(line.trim())
@@ -2291,7 +2291,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2536,7 +2536,7 @@ function attemptClient(directory String, port NetworkPort, options StringArray) 
 		return ClientOutcome.observed("s_client: {error.displayReason()}")
 	end 'failed'
 
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	for line in result.stdout.split("\n") 'eachLine'
 		lines.push(line.trim())
@@ -2624,7 +2624,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2887,7 +2887,7 @@ end 'drainOutput'
 function sentCloseNotify(server OpensslServer) returns bool throws InteropError
 	_ = try server.child.waitWithTimeout(probeTimeoutMs) otherwise throw InteropError.timedOut
 
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	drainOutput(lines, child: server.child)
 	server.child.release()
@@ -2902,7 +2902,7 @@ function sentCloseNotify(server OpensslServer) returns bool throws InteropError
 end 'sentCloseNotify'
 
 function negotiatedProtocol(body String) returns String
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	for line in body.split("\n") 'eachLine'
 		lines.push(line.trim())
@@ -3023,7 +3023,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -3299,7 +3299,7 @@ function attemptClient(directory String, port NetworkPort, request String, optio
 		return ClientOutcome.observed("s_client: {error.displayReason()}")
 	end 'failed'
 
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	for line in result.stdout.split("\n") 'eachLine'
 		lines.push(line.trim())
@@ -3377,7 +3377,7 @@ function main() returns ExitCode
 
 	try mutual.requireClientCertificates(RootCertificates from [fromHex(clientRootHex)]) otherwise return 1
 
-	var plainRuns = ClientRunArray.create()
+	var plainRuns = ClientRunArray.create(0)
 
 	plainRuns.push(ClientRun.create("tls1.3 GET", request: getRequest("/hello?x=1"), flags: ["-tls1_3"]))
 	plainRuns.push(ClientRun.create("tls1.2 GET with ALPN", request: getRequest("/old"), flags: ["-tls1_2", "-alpn", "http/1.1"]))
@@ -3385,7 +3385,7 @@ function main() returns ExitCode
 	plainRuns.push(ClientRun.create("ALPN h2 only", request: getRequest("/never"), flags: ["-alpn", "h2"]))
 	plainRuns.push(ClientRun.create("a good one after", request: getRequest("/last"), flags: ["-tls1_3"]))
 
-	var mutualRuns = ClientRunArray.create()
+	var mutualRuns = ClientRunArray.create(0)
 
 	mutualRuns.push(ClientRun.create("with a certificate", request: getRequest("/who"), flags: clientCertificate))
 	mutualRuns.push(ClientRun.create("without one", request: getRequest("/nobody"), flags: ["-tls1_3"]))

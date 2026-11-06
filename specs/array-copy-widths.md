@@ -26,7 +26,7 @@ function expectedAt(index Count) returns Byte
 end 'expectedAt'
 
 function patterned(count Count) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	for i in 0 upto count 'eachByte'
 		bytes.push(expectedAt(i))
@@ -46,7 +46,7 @@ function main() returns ExitCode
 		let source = patterned(length)
 
 		for lead in 0 upto 4 'eachLead'
-			var destination = ByteArray.create()
+			var destination = ByteArray.create(0)
 
 			for _ in 0 upto lead 'eachLeadByte'
 				destination.push(200)
@@ -88,7 +88,7 @@ function expectedAt(index Count) returns Byte
 end 'expectedAt'
 
 function patterned(count Count) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	for i in 0 upto count 'eachByte'
 		bytes.push(expectedAt(i))
@@ -170,7 +170,7 @@ function expectedAt(index Count) returns Byte
 end 'expectedAt'
 
 function patterned(count Count) returns Bytes
-	var elements = Bytes.create()
+	var elements = Bytes.create(0)
 
 	for i in 0 upto count 'eachElement'
 		elements.push(expectedAt(i))
@@ -268,7 +268,7 @@ function expectedAt(index Count) returns Byte
 end 'expectedAt'
 
 function patterned(count Count) returns Bytes
-	var elements = Bytes.create()
+	var elements = Bytes.create(0)
 
 	for i in 0 upto count 'eachElement'
 		elements.push(expectedAt(i))
@@ -366,7 +366,7 @@ function expectedAt(index Count) returns Byte
 end 'expectedAt'
 
 function patterned(count Count) returns Bytes
-	var elements = Bytes.create()
+	var elements = Bytes.create(0)
 
 	for i in 0 upto count 'eachElement'
 		elements.push(expectedAt(i))

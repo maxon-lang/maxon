@@ -174,7 +174,7 @@ typealias CountedPromise = Promise with Counted
 typealias CountedPromiseArray = Array with CountedPromise
 
 function main() returns ExitCode
-	var promises = CountedPromiseArray.create()
+	var promises = CountedPromiseArray.create(0)
 
 	for i in 0 upto 32 'spawn'
 		promises.push(async step(i))
@@ -350,13 +350,13 @@ type Share
 end 'Share'
 
 function main() returns ExitCode
-	var hs = ShareHandleArray.create()
+	var hs = ShareHandleArray.create(0)
 	var i = 0 as Integer
 	while i < shares 'spawnEach'
 		hs.push(spawn Share.create(i + 1))
 		i = i + 1
 	end 'spawnEach'
-	var replies = ReplyPromiseArray.create()
+	var replies = ReplyPromiseArray.create(0)
 	var k = 0 as Integer
 	while k < shares 'sendEach'
 		view h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — bounded by the pushes above")

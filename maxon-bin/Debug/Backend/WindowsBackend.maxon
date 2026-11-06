@@ -65,7 +65,7 @@ export type WindowsBackend
 	var status as BackendExitStatus
 
 	export static function create() returns WindowsBackend
-		return Self{port: DebugPort.create(), process: BackendProcessHandle.absent, processId: 0, threads: BackendThreadEntryArray.create(), pendingUnowned: false, stopOutstanding: false, sawFirstBreakpoint: false, stopRequested: false, stepping: BackendStepRoster.create(), suspended: BackendThreadIdArray.create(), imageBase: 0, imageEnd: 0, breakInThreads: BackendThreadIdArray.create(), breakInsOwed: 0, status: BackendExitStatus.running}
+		return Self{port: DebugPort.create(), process: BackendProcessHandle.absent, processId: 0, threads: BackendThreadEntryArray.create(0), pendingUnowned: false, stopOutstanding: false, sawFirstBreakpoint: false, stopRequested: false, stepping: BackendStepRoster.create(), suspended: BackendThreadIdArray.create(0), imageBase: 0, imageEnd: 0, breakInThreads: BackendThreadIdArray.create(0), breakInsOwed: 0, status: BackendExitStatus.running}
 	end 'create'
 
 	export function holdsItsScratch() returns bool
@@ -81,7 +81,7 @@ export type WindowsBackend
 	end 'exitStatus'
 
 	export function listThreads() returns BackendThreadIdArray
-		var ids = BackendThreadIdArray.create()
+		var ids = BackendThreadIdArray.create(0)
 
 		for entry in self.threads 'eachThread'
 			ids.push(entry.id)
@@ -176,7 +176,7 @@ export type WindowsBackend
 		let ending = exitCode as BackendExitCode
 		self.status = BackendExitStatus.ended(ending)
 		self.stepping.clear()
-		self.suspended = BackendThreadIdArray.create()
+		self.suspended = BackendThreadIdArray.create(0)
 		_ = self.port.continueEvent(DebugDisposition.handled)
 
 		return BackendEventClass.ended(DebugStopEvent.exited(ending))
@@ -317,7 +317,7 @@ export type WindowsBackend
 			self.threadResumed(thread)
 		end 'eachSuspended'
 
-		self.suspended = BackendThreadIdArray.create()
+		self.suspended = BackendThreadIdArray.create(0)
 	end 'releaseEverySuspendedThread'
 
 	function threadResumed(thread BackendThreadId)
@@ -541,7 +541,7 @@ export type WindowsBackend
 	function forgetThread(id BackendThreadId)
 		self.suspended = backendRosterWithout(self.suspended, thread: id)
 		self.breakInThreads = backendRosterWithout(self.breakInThreads, thread: id)
-		var kept = BackendThreadEntryArray.create()
+		var kept = BackendThreadEntryArray.create(0)
 
 		for entry in self.threads 'eachThread'
 			if entry.id != id 'anotherThread'

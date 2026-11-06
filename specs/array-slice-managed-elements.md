@@ -33,7 +33,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function makeSlice() returns ItemArray throws ArrayError
-		var src = ItemArray.create()
+		var src = ItemArray.create(0)
 		src.push(Item.create("first item long enough for heap allocation", value: 10))
 		src.push(Item.create("second item long enough for heap allocation", value: 20))
 		src.push(Item.create("third item long enough for heap allocation", value: 30))
@@ -70,7 +70,7 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function makeSlice() returns OpArray throws ArrayError
-		var src = OpArray.create()
+		var src = OpArray.create(0)
 		src.push(Op.add(10))
 		src.push(Op.sub(20))
 		src.push(Op.add(30))
@@ -115,7 +115,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-		var src = ItemArray.create()
+		var src = ItemArray.create(0)
 		src.push(Item.create("alpha item long enough for heap alloc", value: 10))
 		src.push(Item.create("beta item long enough for heap alloc", value: 20))
 		src.push(Item.create("gamma item long enough for heap alloc", value: 30))
@@ -163,7 +163,7 @@ function checkLeaf(n String) returns ExitCode
 end 'checkLeaf'
 
 function makeSlice() returns NodeArray throws ArrayError
-		var src = NodeArray.create()
+		var src = NodeArray.create(0)
 		src.push(Node.leaf("first leaf node name long enough for heap"))
 		src.push(Node.branch(42))
 		src.push(Node.leaf("third leaf node name long enough for heap"))
@@ -200,7 +200,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-		var src = IntArray.create()
+		var src = IntArray.create(0)
 		src.push(10)
 		src.push(20)
 		src.push(30)

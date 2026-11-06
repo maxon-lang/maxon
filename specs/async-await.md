@@ -112,7 +112,7 @@ that works.
 typealias IntPromise = Promise with Integer                  // work() does not throw
 typealias IntPromiseArray = Array with IntPromise
 
-var arr = IntPromiseArray.create()
+var arr = IntPromiseArray.create(0)
 arr.push(async work(1))
 arr.push(async work(2))
 for p in arr 'each'
@@ -122,7 +122,7 @@ end 'each'
 typealias FetchPromise = Promise with (Integer, FetchError)  // fetch() throws FetchError
 typealias FetchPromiseArray = Array with FetchPromise
 
-var fetches = FetchPromiseArray.create()
+var fetches = FetchPromiseArray.create(0)
 fetches.push(async fetch(1))
 for p in fetches 'each'
     let result = try await p otherwise (e) 'failed'          // e is a FetchError
@@ -573,7 +573,7 @@ function mayFail() returns Integer throws TaskError
 end 'mayFail'
 
 function main() returns ExitCode
-		var arr = TaskPromiseArray.create()
+		var arr = TaskPromiseArray.create(0)
 		arr.push(async mayFail())
 		let p = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
 		let r = try await p otherwise (e) 'failed'
@@ -614,7 +614,7 @@ function work(n Integer) returns Integer throws WorkError
 end 'work'
 
 function main() returns ExitCode
-		var arr = WorkPromiseArray.create()
+		var arr = WorkPromiseArray.create(0)
 		arr.push(async work(-1))
 		let p = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
 		let r = try await p otherwise (e) 'failed'
@@ -654,7 +654,7 @@ function mayFail() returns Integer throws TaskError
 end 'mayFail'
 
 function main() returns ExitCode
-		var arr = BadPromiseArray.create()
+		var arr = BadPromiseArray.create(0)
 		arr.push(async mayFail())
 		return 0
 end 'main'
@@ -686,7 +686,7 @@ function mayFail() returns Integer throws TaskError
 end 'mayFail'
 
 function main() returns ExitCode
-		var arr = WrongPromiseArray.create()
+		var arr = WrongPromiseArray.create(0)
 		arr.push(async mayFail())
 		return 0
 end 'main'
@@ -710,7 +710,7 @@ function work() returns Integer
 end 'work'
 
 function park(p IntPromise) returns Integer
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	pending.push(p)
 
 	var sum = 0 as Integer
@@ -790,7 +790,7 @@ typealias StrPromise = Promise with String
 typealias IntPromiseArray = Array with IntPromise
 
 function park(p StrPromise) returns Integer
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	pending.push(p)
 	return 0
 end 'park'
@@ -817,7 +817,7 @@ enum TaskError implements Error
 end 'TaskError'
 
 function park(p ThrowingPromise) returns Integer
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	pending.push(p)
 	return 0
 end 'park'
@@ -847,7 +847,7 @@ function ask() returns IntPromise
 end 'ask'
 
 function main() returns ExitCode
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	pending.push(ask())
 	pending.push(ask())
 
@@ -925,7 +925,7 @@ type Holder
 	public var pending as IntPromiseArray
 
 	static function create() returns Self
-		return Self{pending: IntPromiseArray.create()}
+		return Self{pending: IntPromiseArray.create(0)}
 	end 'create'
 end 'Holder'
 
@@ -1018,7 +1018,7 @@ function work() returns Integer
 end 'work'
 
 function park(p IntPromise) returns Integer
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	pending.push(p)
 	return await p
 end 'park'
@@ -1045,7 +1045,7 @@ function work() returns Integer
 end 'work'
 
 function park(p IntPromise) returns Integer
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	pending.push(p)
 	pending.push(p)
 	return pending.count() as Integer
@@ -1073,7 +1073,7 @@ function work() returns Integer
 end 'work'
 
 function park(p IntPromise, keep bool) returns Integer
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 
 	if keep 'store'
 		pending.push(p)
@@ -1111,7 +1111,7 @@ function park(pending IntPromiseArray, p IntPromise)
 end 'park'
 
 function main() returns ExitCode
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	let p = async work()
 	park(pending, p: p)
 	print("{await p}\n")
@@ -1173,7 +1173,7 @@ type Cell
 end 'Cell'
 
 function main() returns ExitCode
-	var source = IntPromiseArray.create()
+	var source = IntPromiseArray.create(0)
 	source.push(async work())
 
 	let popped = try source.pop() otherwise panic("one element was pushed")
@@ -1246,10 +1246,10 @@ function work() returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var source = IntPromiseArray.create()
+	var source = IntPromiseArray.create(0)
 	source.push(async work())
 
-	var sink = IntPromiseArray.create()
+	var sink = IntPromiseArray.create(0)
 	let moved = try source.pop() otherwise async work()
 	sink.push(moved)
 
@@ -1287,7 +1287,7 @@ function keep(pending IntPromiseArray, p IntPromise)
 end 'keep'
 
 function main() returns ExitCode
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	let f = keep
 	f(pending, async work())
 
@@ -1359,7 +1359,7 @@ function drive(sink Sink, pending IntPromiseArray)
 end 'drive'
 
 function main() returns ExitCode
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	drive(keep, pending: pending)
 
 	var sum = 0 as Integer
@@ -1402,7 +1402,7 @@ function drive(sink Sink, pending IntPromiseArray)
 end 'drive'
 
 function main() returns ExitCode
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	drive(keep, pending: pending)
 	return 0
 end 'main'
@@ -1438,7 +1438,7 @@ function drive(sink Sink, pending IntPromiseArray) returns Count
 end 'drive'
 
 function main() returns ExitCode
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	print("{drive(look, pending: pending)}\n")
 	return 0
 end 'main'
@@ -1917,7 +1917,7 @@ function drive(sink Sink, pending IntPromiseArray)
 end 'drive'
 
 function main() returns ExitCode
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	drive(park, pending: pending)
 	return 0
 end 'main'
@@ -2105,7 +2105,7 @@ function relay(sink Sink, pending IntPromiseArray, p IntPromise)
 end 'relay'
 
 function main() returns ExitCode
-	var pending = IntPromiseArray.create()
+	var pending = IntPromiseArray.create(0)
 	relay(keep, pending: pending, p: async work())
 
 	var sum = 0 as Integer
@@ -2379,7 +2379,7 @@ function mayFail() returns Integer throws TaskError
 end 'mayFail'
 
 function viaStorage() returns Integer throws WrapError
-		var arr = TaskPromiseArray.create()
+		var arr = TaskPromiseArray.create(0)
 		arr.push(async mayFail())
 		let p = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
 		let r = try await p
@@ -2600,7 +2600,7 @@ function makeText(i Idx) returns String
 end 'makeText'
 
 function main() returns ExitCode
-		var promises = StrPromiseArray.create()
+		var promises = StrPromiseArray.create(0)
 		for i in 0 upto 3 'spawn'
 				promises.push(async makeText(i))
 		end 'spawn'
@@ -2784,7 +2784,7 @@ function compute(n Integer) returns Integer
 end 'compute'
 
 function main() returns ExitCode
-		var arr = IntPromiseArray.create()
+		var arr = IntPromiseArray.create(0)
 		arr.push(async compute(10))
 		arr.push(async compute(20))
 		arr.push(async compute(12))
@@ -2822,7 +2822,7 @@ function work(n Integer) returns Integer throws WorkError
 end 'work'
 
 function main() returns ExitCode
-		var arr = IntPromiseArray.create()
+		var arr = IntPromiseArray.create(0)
 		arr.push(async work(10))
 		arr.push(async work(20))
 		arr.push(async work(-1))
@@ -2863,7 +2863,7 @@ function work(n Integer) returns Integer throws WorkError
 end 'work'
 
 function main() returns ExitCode
-		var arr = IntPromiseArray.create()
+		var arr = IntPromiseArray.create(0)
 		arr.push(async work(10))
 		arr.push(async work(20))
 		arr.push(async work(-1))
@@ -2900,9 +2900,9 @@ function joinArgs(label String, args StringArray) returns String
 end 'joinArgs'
 
 function main() returns ExitCode
-		var promises = StrPromiseArray.create()
+		var promises = StrPromiseArray.create(0)
 		for i in 0 upto 8 'spawn'
-				var argv = StringArray.create()
+				var argv = StringArray.create(0)
 				argv.push("arg{i}.a")
 				argv.push("arg{i}.b")
 				promises.push(async joinArgs("L{i}", args: argv))
@@ -3219,7 +3219,7 @@ function drainThunk() returns StringArray throws DrainError
 		throw DrainError.broken
 	end 'present'
 
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 	lines.push("one")
 	lines.push("two")
 	return lines
@@ -3264,14 +3264,14 @@ function drainThunk(n Integer) returns StringArray throws DrainError
 	if n < 0 'bad'
 		throw DrainError.broken
 	end 'bad'
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 	lines.push("one")
 	lines.push("two")
 	return lines
 end 'drainThunk'
 
 function main() returns ExitCode
-	var promises = DrainPromiseArray.create()
+	var promises = DrainPromiseArray.create(0)
 	promises.push(async drainThunk(1))
 	promises.push(async drainThunk(2))
 	var total = 0 as Count
@@ -3385,14 +3385,14 @@ error E2073: <fragment>:3:30: `__ManagedFile` static 'readAll' — the type has 
 ```
 
 <!-- test: async-await.error.qualified-spawn-container-alias-static -->
-A container alias reaches the same refusal through the same roster: `TallyArray.create()` lowers to an
+A container alias reaches the same refusal through the same roster: `TallyArray.create(0)` lowers to an
 `Array` create op, not to a call to a function the program declares.
 ```maxon
 typealias Tally = int(0 to 1000)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	let p = async TallyArray.create()
+	let p = async TallyArray.create(0)
 	return await p
 end 'main'
 ```
@@ -3586,7 +3586,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function main() returns ExitCode
-	var promises = IntPromiseArray.create()
+	var promises = IntPromiseArray.create(0)
 	promises.push(async nosuch(1))
 
 	for p in promises 'each'
@@ -3752,7 +3752,7 @@ end 'Box'
 function main() returns ExitCode
 	var box = Box.create()
 	box.name = nosuch(1)
-	var names = NameArray.create()
+	var names = NameArray.create(0)
 	names.push(nosuch(2))
 	print("{box.name}{names.count()}\n")
 	return 0
@@ -3772,7 +3772,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function main() returns ExitCode
-	var ps = IntPromiseArray.create()
+	var ps = IntPromiseArray.create(0)
 	ps.push(nosuch(1))
 	return 0
 end 'main'
@@ -3969,7 +3969,7 @@ typealias IntArray = Array with Integer
 
 function items() returns IntArray
 	Scheduler.yield()
-	var found = IntArray.create()
+	var found = IntArray.create(0)
 	found.push(4)
 	found.push(5)
 	return found
@@ -4572,7 +4572,7 @@ function poke(p Box) returns Integer
 end 'poke'
 
 function main() returns ExitCode
-	var items = Boxes.create()
+	var items = Boxes.create(0)
 	items.push(Box.create())
 	view a = try items.get(0) otherwise panic("no box")
 	print("{await async poke(a)}\n")
@@ -4609,7 +4609,7 @@ function show(p Box) returns Integer
 end 'show'
 
 function main() returns ExitCode
-	var items = Boxes.create()
+	var items = Boxes.create(0)
 	items.push(Box.create())
 	view a = first(items)
 	print("{await async show(a)}\n")
@@ -4650,7 +4650,7 @@ function show(p Box) returns Integer
 end 'show'
 
 function main() returns ExitCode
-	var items = Boxes.create()
+	var items = Boxes.create(0)
 	items.push(Box.create())
 	view a = first(items)
 	print("{await async show(a)}\n")
@@ -4877,7 +4877,7 @@ function measure(words Words) returns Integer
 end 'measure'
 
 function main() returns ExitCode
-	var items = Words.create()
+	var items = Words.create(0)
 	items.push("first padded out long enough to heap allocate {1}")
 	items.push("second padded out long enough to heap allocate {2}")
 

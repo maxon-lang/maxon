@@ -111,7 +111,7 @@ export type DeclarationPoison
 	var deferredConsequences as PendingConsequenceArray
 
 	export static function create() returns Self
-		return Self{files: FailedFileSet.create(), backedFiles: FailedFileSet.create(), declared: PoisonedDeclarationsByName.create(), abandonedBodies: PoisonedDeclarationsByName.create(), duplicated: DuplicatedFunctionSet.create(), lostHeads: LostHeadNameSet.create(), unreadable: false, unreadableTypeUniverse: false, extended: PoisonedDeclarationsByName.create(), heldConsequences: PendingConsequenceArray.create(), deferredConsequences: PendingConsequenceArray.create()}
+		return Self{files: FailedFileSet.create(), backedFiles: FailedFileSet.create(), declared: PoisonedDeclarationsByName.create(), abandonedBodies: PoisonedDeclarationsByName.create(), duplicated: DuplicatedFunctionSet.create(), lostHeads: LostHeadNameSet.create(), unreadable: false, unreadableTypeUniverse: false, extended: PoisonedDeclarationsByName.create(), heldConsequences: PendingConsequenceArray.create(0), deferredConsequences: PendingConsequenceArray.create(0)}
 	end 'create'
 
 	export function snapshot() returns Self
@@ -415,7 +415,7 @@ function declarationIsWithin(declaration PoisonedDeclaration, within DeclaredWit
 end 'declarationIsWithin'
 
 module function singleName(name ByteArray) returns NameRoster
-	var names = NameRoster.create()
+	var names = NameRoster.create(0)
 	names.push(name)
 
 	return names
@@ -462,7 +462,7 @@ function copiedPoisonedDeclarations(table PoisonedDeclarationsByName) returns Po
 end 'copiedPoisonedDeclarations'
 
 function copiedPendingConsequences(held PendingConsequenceArray) returns PendingConsequenceArray
-	var copied = PendingConsequenceArray.create()
+	var copied = PendingConsequenceArray.create(0)
 
 	for consequence in held 'eachConsequence'
 		copied.push(consequence.clone())
@@ -472,7 +472,7 @@ function copiedPendingConsequences(held PendingConsequenceArray) returns Pending
 end 'copiedPendingConsequences'
 
 function fileHeadUnder(table PoisonedDeclarationsByName, head DeclarationHead, file FilePath, backing PoisonBacking)
-	var held = try table.get(head.name) otherwise PoisonedDeclarationArray.create()
+	var held = try table.get(head.name) otherwise PoisonedDeclarationArray.create(0)
 	held.push(PoisonedDeclaration.create(file, reach: head.reach, nominal: head.nominal, backing: backing))
 	table.upsert(head.name, value: held)
 end 'fileHeadUnder'
@@ -531,7 +531,7 @@ function lostFunctionHeadAt(tokens TokenArray, position ElementIndex) returns By
 end 'lostFunctionHeadAt'
 
 function enclosingMemberAt(tokens TokenArray, line LineNumber) returns ByteArray throws AbsentError
-	var member = ByteArray.create()
+	var member = ByteArray.create(0)
 	var named = false
 	var memberLine = 0 as LineNumber
 	var lineStartColumn = 1 as ColumnNumber

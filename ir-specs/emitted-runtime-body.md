@@ -9218,7 +9218,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var buf = ByteArray.create()
+	var buf = ByteArray.create(0)
 	buf.push(1)
 	return buf.count() as ExitCode
 end 'main'
@@ -10826,7 +10826,7 @@ typealias ByteArray = Array with Byte
 function main() returns ExitCode
 	sleep(1)
 
-	var buf = ByteArray.create()
+	var buf = ByteArray.create(0)
 	buf.push(1)
 
 	return buf.count() as ExitCode
@@ -14061,7 +14061,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var buf = ByteArray.create()
+	var buf = ByteArray.create(0)
 	buf.push(1)
 	return buf.count() as ExitCode
 end 'main'
@@ -78712,7 +78712,7 @@ the only gate on the backward block loop.
 
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	bytes.push(1)
 	bytes.push(2)
 	bytes.insert(0, value: 9)
@@ -80772,7 +80772,7 @@ func @__managed_move_elems {
 `__managed_grow` and `__managed_mem_grow` reach one reallocation, and its overflow check is on the capacity times the element's bits. When both are below 2^31 their product cannot wrap a signed 64-bit total, so the check is one `or`, one shift and one branch straight into the allocation. Only a wider operand reaches the `wide` block, where the divide-and-compare refusal lives. A pin that lost the `or` and the shift would be a compiler that divides on every growth, including an array's first.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	bytes.push(1)
 	bytes.reserve(64)
 

@@ -122,7 +122,7 @@ type Holder
 		export var elements as IdxArray
 
 		static function create() returns Self
-				return Self{element: 0, elements: IdxArray.create()}
+				return Self{element: 0, elements: IdxArray.create(0)}
 		end 'create'
 
 		function sum() returns Idx

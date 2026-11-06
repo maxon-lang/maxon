@@ -723,7 +723,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -768,7 +768,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -818,7 +818,7 @@ type Reg
 	export var last as Box
 
 	static function create(seed Box) returns Self
-		return Self{items: Boxes.create(), last: seed}
+		return Self{items: Boxes.create(0), last: seed}
 	end 'create'
 
 	function add(n Count) returns Box
@@ -876,7 +876,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 
@@ -921,7 +921,7 @@ type Reg
 	export var items as Boxes
 
 	static function create() returns Self
-		return Self{items: Boxes.create()}
+		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
 

@@ -53,7 +53,7 @@ type Holder uses Element
 	typealias EArray = Array with Element
 	export typealias Entry = (Element, Integer)
 
-	var items = EArray.create()
+	var items = EArray.create(0)
 
 	static function create() returns Self
 		return Self{}
@@ -99,7 +99,7 @@ type Box
 	export var names as NameArray
 
 	static function create(n Count) returns Box
-		return Self{n: n, names: NameArray.create()}
+		return Self{n: n, names: NameArray.create(0)}
 	end 'create'
 
 	function bump()
@@ -157,7 +157,7 @@ type Box
 	export var names as NameArray
 
 	static function create(n Count) returns Box
-		return Self{n: n, names: NameArray.create()}
+		return Self{n: n, names: NameArray.create(0)}
 	end 'create'
 
 	function bump()
@@ -222,7 +222,7 @@ type Box
 	export var names as NameArray
 
 	static function create(n Count) returns Box
-		return Self{n: n, names: NameArray.create()}
+		return Self{n: n, names: NameArray.create(0)}
 	end 'create'
 
 	function bump()
@@ -280,7 +280,7 @@ type Box
 	export var names as NameArray
 
 	static function create(n Count) returns Box
-		return Self{n: n, names: NameArray.create()}
+		return Self{n: n, names: NameArray.create(0)}
 	end 'create'
 
 	function bump()
@@ -356,7 +356,7 @@ type Box
 	export var names as NameArray
 
 	static function create(n Count) returns Box
-		return Self{n: n, names: NameArray.create()}
+		return Self{n: n, names: NameArray.create(0)}
 	end 'create'
 
 	function bump()
@@ -372,7 +372,7 @@ type Columns uses X, Y
 	var ys as YArray
 
 	static function create() returns Self
-		return Self{xs: XArray.create(), ys: YArray.create()}
+		return Self{xs: XArray.create(0), ys: YArray.create(0)}
 	end 'create'
 
 	function add(x X, y Y)
@@ -448,7 +448,7 @@ type Box
 	export var names as NameArray
 
 	static function create(n Count) returns Box
-		return Self{n: n, names: NameArray.create()}
+		return Self{n: n, names: NameArray.create(0)}
 	end 'create'
 
 	function bump()
@@ -464,7 +464,7 @@ type Columns uses X, Y
 	var ys as YArray
 
 	static function create() returns Self
-		return Self{xs: XArray.create(), ys: YArray.create()}
+		return Self{xs: XArray.create(0), ys: YArray.create(0)}
 	end 'create'
 
 	function add(x X, y Y)
@@ -491,7 +491,7 @@ type Holder uses T
 	end 'create'
 
 	function put(t T)
-		var column = TArray.create()
+		var column = TArray.create(0)
 		column.push(t)
 		self.mixed.add("k", y: column)
 	end 'put'
@@ -539,7 +539,7 @@ type Box
 	export var names as NameArray
 
 	static function create(n Count) returns Box
-		return Self{n: n, names: NameArray.create()}
+		return Self{n: n, names: NameArray.create(0)}
 	end 'create'
 
 	function bump()
@@ -630,7 +630,7 @@ type Box
 	export var names as NameArray
 
 	static function create(n Count) returns Box
-		return Self{n: n, names: NameArray.create()}
+		return Self{n: n, names: NameArray.create(0)}
 	end 'create'
 
 	function bump()
@@ -693,7 +693,7 @@ type Pair uses A, B
 	var seconds as BArray
 
 	static function create() returns Self
-		return Self{firsts: AArray.create(), seconds: BArray.create()}
+		return Self{firsts: AArray.create(0), seconds: BArray.create(0)}
 	end 'create'
 
 	function depth() returns Integer
@@ -724,7 +724,7 @@ type Box
 	export var names as NameArray
 
 	static function create(n Count) returns Box
-		return Self{n: n, names: NameArray.create()}
+		return Self{n: n, names: NameArray.create(0)}
 	end 'create'
 end 'Box'
 
@@ -777,7 +777,7 @@ type Bag uses Element
 	var items as EBoxArray
 
 	static function create() returns Self
-		return Self{items: EBoxArray.create()}
+		return Self{items: EBoxArray.create(0)}
 	end 'create'
 
 	function add(x Element, tag Integer)
@@ -896,7 +896,7 @@ type Bag uses Element
 	var items as EBoxArray
 
 	static function create() returns Self
-		return Self{items: EBoxArray.create()}
+		return Self{items: EBoxArray.create(0)}
 	end 'create'
 
 	function add(x Element, tag Integer)
@@ -960,7 +960,7 @@ type Bag uses Element
 	var items as EBoxArray
 
 	static function create() returns Self
-		return Self{items: EBoxArray.create()}
+		return Self{items: EBoxArray.create(0)}
 	end 'create'
 
 	function add(x Element, tag Integer)
@@ -1032,7 +1032,7 @@ type Bag uses Element
 	var items as EBoxArray
 
 	static function create() returns Self
-		return Self{items: EBoxArray.create()}
+		return Self{items: EBoxArray.create(0)}
 	end 'create'
 
 	function add(x Element, tag Integer)
@@ -1044,7 +1044,7 @@ type Bag uses Element
 	end 'copy'
 
 	function wrap(b EBox) returns EBoxArray
-		var xs = EBoxArray.create()
+		var xs = EBoxArray.create(0)
 		xs.push(b)
 		return xs
 	end 'wrap'
@@ -1091,7 +1091,7 @@ type Box
 	export var names as NameArray
 
 	static function create(n Count) returns Box
-		return Self{n: n, names: NameArray.create()}
+		return Self{n: n, names: NameArray.create(0)}
 	end 'create'
 end 'Box'
 
@@ -1102,7 +1102,7 @@ type Holder uses Value
 	var pairs as Pairs
 
 	static function create() returns Self
-		return Self{pairs: Pairs.create()}
+		return Self{pairs: Pairs.create(0)}
 	end 'create'
 
 	function put(key String, value Value)
@@ -1154,7 +1154,7 @@ type Box
 	export var names as NameArray
 
 	static function create(n Count) returns Box
-		return Self{n: n, names: NameArray.create()}
+		return Self{n: n, names: NameArray.create(0)}
 	end 'create'
 end 'Box'
 
@@ -1165,7 +1165,7 @@ type Holder uses Value
 	var pairs as Pairs
 
 	static function create() returns Self
-		return Self{pairs: Pairs.create()}
+		return Self{pairs: Pairs.create(0)}
 	end 'create'
 
 	function put(key String, value Value)
@@ -1217,7 +1217,7 @@ type Box
 	export var names as NameArray
 
 	static function create(n Count) returns Box
-		return Self{n: n, names: NameArray.create()}
+		return Self{n: n, names: NameArray.create(0)}
 	end 'create'
 end 'Box'
 
@@ -1228,7 +1228,7 @@ type Holder uses Value
 	var pairs as Pairs
 
 	static function create() returns Self
-		return Self{pairs: Pairs.create()}
+		return Self{pairs: Pairs.create(0)}
 	end 'create'
 
 	function put(key String, value Value)
@@ -1290,7 +1290,7 @@ type Bag uses Element
 	var items as EBoxArray
 
 	static function create() returns Self
-		return Self{items: EBoxArray.create()}
+		return Self{items: EBoxArray.create(0)}
 	end 'create'
 
 	function add(x Element, tag Integer)
@@ -1655,7 +1655,7 @@ type Box
 	export var names as NameArray
 
 	static function create(n Count) returns Box
-		return Self{n: n, names: NameArray.create()}
+		return Self{n: n, names: NameArray.create(0)}
 	end 'create'
 end 'Box'
 
@@ -1666,7 +1666,7 @@ type Holder uses Value
 	var pairs as Pairs
 
 	static function create() returns Self
-		return Self{pairs: Pairs.create()}
+		return Self{pairs: Pairs.create(0)}
 	end 'create'
 
 	function put(key String, value Value)
@@ -1718,7 +1718,7 @@ A generic type's own name, written as a literal in its `Self`-returning static, 
 ```maxon
 type Bag uses T
 	typealias TArray = Array with T
-	export var items = TArray.create()
+	export var items = TArray.create(0)
 
 	static function make() returns Self
 		return Bag{}
@@ -1799,7 +1799,7 @@ type Bag uses T
 	export var items as TArray
 
 	static function make() returns Self
-		return Self{items: TArray.create()}
+		return Self{items: TArray.create(0)}
 	end 'make'
 
 	function add(x T)
@@ -1845,7 +1845,7 @@ type Bag uses T
 	export var items as TArray
 
 	static function make() returns Self
-		return Self{items: TArray.create()}
+		return Self{items: TArray.create(0)}
 	end 'make'
 
 	function add(x T)
@@ -1853,7 +1853,7 @@ type Bag uses T
 	end 'add'
 
 	function withOne(y T) returns Self
-		var x = Bag{items: TArray.create()}
+		var x = Bag{items: TArray.create(0)}
 		x.items.push(y)
 		return x
 	end 'withOne'
@@ -1890,7 +1890,7 @@ type Bag uses T
 	export var items as TArray
 
 	static function make() returns Self
-		return Self{items: TArray.create()}
+		return Self{items: TArray.create(0)}
 	end 'make'
 
 	function add(x T)
@@ -1992,7 +1992,7 @@ function heapString(a String, b String) returns String
 end 'heapString'
 
 function main() returns ExitCode
-	var xs = Strings.create()
+	var xs = Strings.create(0)
 	xs.push(heapString("first payload ", b: "long enough to allocate"))
 	xs.push(heapString("second payload ", b: "long enough to allocate"))
 	view c = StrCell.firstOf(xs)
@@ -2033,7 +2033,7 @@ function heapString(a String, b String) returns String
 end 'heapString'
 
 function main() returns ExitCode
-	var xs = Strings.create()
+	var xs = Strings.create(0)
 	xs.push(heapString("first payload ", b: "long enough to allocate"))
 	xs.push(heapString("second payload ", b: "long enough to allocate"))
 	view c = StrCell.firstOf(xs)
@@ -2072,7 +2072,7 @@ function heapString(a String, b String) returns String
 end 'heapString'
 
 function main() returns ExitCode
-	var xs = Strings.create()
+	var xs = Strings.create(0)
 	xs.push(heapString("first payload ", b: "long enough to allocate"))
 	xs.push(heapString("second payload ", b: "long enough to allocate"))
 	view c = StrCell.firstOf(xs)
@@ -2681,7 +2681,7 @@ type Bag uses T
 	export var items as TArray
 
 	static function make() returns Self
-		return Self{items: TArray.create()}
+		return Self{items: TArray.create(0)}
 	end 'make'
 
 	function viaOther(Bag Other) returns Count
@@ -2714,7 +2714,7 @@ type Holder uses Element
 	typealias EArray = Array with Element
 	export typealias Entry = (Element, Integer)
 
-	var items = EArray.create()
+	var items = EArray.create(0)
 
 	static function create() returns Self
 		return Self{}
@@ -2762,7 +2762,7 @@ type Holder uses Element
 	typealias EArray = Array with Element
 	export typealias Entry = (Element, Integer)
 
-	var items = EArray.create()
+	var items = EArray.create(0)
 
 	static function create() returns Self
 		return Self{}
@@ -2983,7 +2983,7 @@ typealias StrBox = Box with String
 
 type Bag
 	typealias BoxArray = Array with StrBox
-	var items = BoxArray.create()
+	var items = BoxArray.create(0)
 
 	static function create() returns Self
 		return Self{}
@@ -3755,7 +3755,7 @@ typealias BoxArray = Array with StrBox
 
 function main() returns ExitCode
 	var b = StrBag.create()
-	var kept = BoxArray.create()
+	var kept = BoxArray.create(0)
 	var i = 0 as Count
 	while i < 100 'fill'
 		var sb = StringBuilder.create()
@@ -5135,7 +5135,7 @@ type Inner uses T
 	end 'create'
 
 	function stash() returns Count
-		var items = Items.create()
+		var items = Items.create(0)
 		items.push(self.v)
 		return items.count()
 	end 'stash'
@@ -5207,7 +5207,7 @@ function heapString(a String, b String) returns String
 end 'heapString'
 
 function main() returns ExitCode
-	var items = StrItems.create()
+	var items = StrItems.create(0)
 	let s = heapString("pushed payload ", b: "long enough to allocate")
 	StrPile.stash(items, item: s)
 	StrPile.stash(items, item: s)
@@ -5235,7 +5235,7 @@ type Pile uses T
 	end 'create'
 
 	static function tally(owner Self) returns Count
-		var items = Items.create()
+		var items = Items.create(0)
 		items.push(owner.top)
 		items.push(owner.top)
 		return items.count()

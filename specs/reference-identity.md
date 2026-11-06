@@ -369,10 +369,10 @@ typealias Num = int(0 to 1000)
 typealias NumArray = Array with Num
 typealias Holder = Array with NumArray
 
-let Anchor = NumArray.create()
+let Anchor = NumArray.create(0)
 
 function main() returns ExitCode
-	var h = Holder.create()
+	var h = Holder.create(0)
 	h.push(Anchor)
 	return h.count() as ExitCode
 end 'main'
@@ -391,7 +391,7 @@ typealias Num = int(0 to 1000)
 typealias NumArray = Array with Num
 typealias Holder = Array with NumArray
 
-let Anchor = NumArray.create()
+let Anchor = NumArray.create(0)
 
 function main() returns ExitCode
 	var result = 0 as ExitCode
@@ -400,9 +400,9 @@ function main() returns ExitCode
 		result = result + 1
 	end 'bindingBorrows'
 
-	var h = Holder.create()
+	var h = Holder.create(0)
 	h.push(Anchor.clone())
-	view stored = try h.get(0) otherwise NumArray.create()
+	view stored = try h.get(0) otherwise NumArray.create(0)
 	if stored is not Anchor 'storeCopies'
 		result = result + 2
 	end 'storeCopies'
@@ -423,12 +423,12 @@ typealias Num = int(0 to 1000)
 typealias NumArray = Array with Num
 typealias Holder = Array with readonly NumArray
 
-let Anchor = NumArray.create()
+let Anchor = NumArray.create(0)
 
 function main() returns ExitCode
-	var h = Holder.create()
+	var h = Holder.create(0)
 	h.push(Anchor)
-	view stored = try h.get(0) otherwise NumArray.create()
+	view stored = try h.get(0) otherwise NumArray.create(0)
 	return (h.count() as ExitCode) + (stored.count() as ExitCode)
 end 'main'
 ```
@@ -445,12 +445,12 @@ typealias Num = int(0 to 1000)
 typealias NumArray = Array with Num
 typealias Holder = Array with readonly NumArray
 
-let Anchor = NumArray.create()
+let Anchor = NumArray.create(0)
 
 function main() returns ExitCode
-	var h = Holder.create()
+	var h = Holder.create(0)
 	h.push(Anchor)
-	view stored = try h.get(0) otherwise NumArray.create()
+	view stored = try h.get(0) otherwise NumArray.create(0)
 
 	if stored is Anchor 'keepsIdentity'
 		return 1
@@ -477,7 +477,7 @@ typealias MapBox = Array with KeyMap
 let Shared = KeyMap.create()
 
 function main() returns ExitCode
-	var box = MapBox.create()
+	var box = MapBox.create(0)
 	box.push(Shared)
 	return box.count() as ExitCode
 end 'main'
@@ -498,7 +498,7 @@ typealias MapBox = Array with KeyMap
 let Shared = KeyMap.create()
 
 function main() returns ExitCode
-	var box = MapBox.create()
+	var box = MapBox.create(0)
 	box.push(Shared.clone())
 	var held = try box.get(0) otherwise KeyMap.create()
 	held.upsert(7, value: 7)
@@ -527,7 +527,7 @@ typealias Ver = int(0 to 100)
 
 type Bag uses T
 	typealias Items = Array with T
-	export var items = Items.create()
+	export var items = Items.create(0)
 	export var version = 7 as Ver
 	static function create() returns Self
 		return Self{}

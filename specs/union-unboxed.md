@@ -273,7 +273,7 @@ function mass(h Holder) returns Mass
 end 'mass'
 
 function main() returns ExitCode
-	var all = HolderArray.create()
+	var all = HolderArray.create(0)
 	all.push(Holder.holding(Body.create(4)))
 	all.push(Holder.empty)
 	all.push(Holder.holding(Body.create(6)))
@@ -884,14 +884,14 @@ function weigh(b Blob) returns Count
 end 'weigh'
 
 function nineBytes() returns ByteArray
-	var data = ByteArray.create()
+	var data = ByteArray.create(0)
 	data.resize(9)
 
 	return data
 end 'nineBytes'
 
 function twoWords() returns WordArray
-	var list = WordArray.create()
+	var list = WordArray.create(0)
 	list.push("one{1}")
 	list.push("two{2}")
 
@@ -1043,7 +1043,7 @@ union Trio
 end 'Trio'
 
 function bytesOf(count Integer) returns ByteArray
-	var data = ByteArray.create()
+	var data = ByteArray.create(0)
 	data.resize(count as ElementIndex)
 
 	return data
@@ -1132,7 +1132,7 @@ end 'weigh'
 function main() returns ExitCode
 	let a = try weigh(Trio.first("xy{3}")) otherwise -1
 	let b = try weigh(Trio.second(Point.create(2, y: 3))) otherwise -1
-	let c = try weigh(Trio.third(ByteArray.create())) otherwise -1
+	let c = try weigh(Trio.third(ByteArray.create(0))) otherwise -1
 
 	print("{a} {b} {c}\n")
 

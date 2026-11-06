@@ -85,7 +85,7 @@ end 'LspDocumentBlock'
 module typealias LspDocumentBlockArray = Array with LspDocumentBlock
 
 module function symbolsServedMethods() returns LspMethodArray
-	var served = LspMethodArray.create()
+	var served = LspMethodArray.create(0)
 	served.push(LspMethod.documentSymbol)
 	served.push(LspMethod.foldingRange)
 	return served
@@ -111,7 +111,7 @@ end 'symbolsAnswer'
 function documentSymbolAnswer(source String, blocks LspDocumentBlockArray) returns LspAnswer
 	var doc = JsonDoc.create()
 	let index = LspLineIndex.build(source)
-	var symbols = JsonNodeIdArray.create()
+	var symbols = JsonNodeIdArray.create(0)
 
 	for block in blocks 'eachBlock'
 		// A nested block is not a top-level symbol, and a statement label declares nothing an outline can
@@ -161,7 +161,7 @@ end 'symbolKindOf'
 // chevron for it.
 function foldingRangeAnswer(blocks LspDocumentBlockArray) returns LspAnswer
 	var doc = JsonDoc.create()
-	var ranges = JsonNodeIdArray.create()
+	var ranges = JsonNodeIdArray.create(0)
 
 	for block in blocks 'eachBlock'
 		if not lspBlockIsTerminated(block) 'stillBeingWritten'
@@ -197,7 +197,7 @@ end 'blockRangeNode'
 /// guess. Every language feature here re-lexes: a document changes on every keystroke, and one `tokenize`
 /// of one open file is cheap next to the request that follows it.
 module function lspDocumentTokens(source String, keywords KeywordTable) returns TokenArray
-	return try tokenize(source, keywords: keywords) otherwise TokenArray.create()
+	return try tokenize(source, keywords: keywords) otherwise TokenArray.create(0)
 end 'lspDocumentTokens'
 
 // One source line's extent in the token stream, layout tokens excluded. `module`, because a line is the
@@ -236,8 +236,8 @@ typealias OpenBlockArray = Array with OpenBlock
 // rest of the file from one such line.
 module function lspDocumentBlocks(tokens TokenArray) returns LspDocumentBlockArray
 	let lines = lspTokenLines(tokens)
-	var open = OpenBlockArray.create()
-	var closed = LspDocumentBlockArray.create()
+	var open = OpenBlockArray.create(0)
+	var closed = LspDocumentBlockArray.create(0)
 
 	for tokenLine in lines 'eachLine'
 		let first = lspTokenAt(tokens, index: tokenLine.firstIndex)
@@ -397,7 +397,7 @@ end 'innermostKindIs'
 
 // Group the stream into source lines, layout tokens excluded.
 module function lspTokenLines(tokens TokenArray) returns LspTokenLineArray
-	var lines = LspTokenLineArray.create()
+	var lines = LspTokenLineArray.create(0)
 	var firstIndex = 0 as ElementIndex
 	var lastIndex = 0 as ElementIndex
 	var currentLine = 0 as LineNumber

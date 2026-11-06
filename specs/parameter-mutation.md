@@ -71,7 +71,7 @@ function grow(dest IntArray)
 end 'grow'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	grow(a)
 	return try a.get(0) otherwise -1
 end 'main'
@@ -92,7 +92,7 @@ function grow(dest IntArray)
 end 'grow'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	grow(a)
 	return try a.get(0) otherwise -1
 end 'main'
@@ -113,7 +113,7 @@ function total(d IntArray) returns Integer
 end 'total'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	return total(a) as ExitCode
 end 'main'
 ```
@@ -138,7 +138,7 @@ function outer(d IntArray)
 end 'outer'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	outer(a)
 	return try a.get(0) otherwise -1
 end 'main'
@@ -229,7 +229,7 @@ function outer(d IntArray) returns Integer
 end 'outer'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	return outer(a) as ExitCode
 end 'main'
 ```
@@ -253,7 +253,7 @@ function rec(d IntArray, n Integer)
 end 'rec'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	rec(a, n: 3)
 	return try a.get(0) otherwise -1
 end 'main'
@@ -282,7 +282,7 @@ function pong(d IntArray, n Integer)
 end 'pong'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	ping(a, n: 3)
 	return try a.get(0) otherwise -1
 end 'main'
@@ -312,7 +312,7 @@ function pong(d IntArray, n Integer)
 end 'pong'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	ping(a, n: 3)
 	return try a.get(0) otherwise -1
 end 'main'
@@ -334,7 +334,7 @@ function grow(n Integer, dest IntArray)
 end 'grow'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	grow(1, dest: a)
 	return a.count() as ExitCode
 end 'main'
@@ -356,8 +356,8 @@ function copyInto(src IntArray, dest IntArray)
 end 'copyInto'
 
 function main() returns ExitCode
-	let a = IntArray.create()
-	var b = IntArray.create()
+	let a = IntArray.create(0)
+	var b = IntArray.create(0)
 	copyInto(a, dest: b)
 	return b.count() as ExitCode
 end 'main'
@@ -378,8 +378,8 @@ function copyInto(dest IntArray, src IntArray)
 end 'copyInto'
 
 function main() returns ExitCode
-	let a = IntArray.create()
-	var b = IntArray.create()
+	let a = IntArray.create(0)
+	var b = IntArray.create(0)
 	copyInto(a, src: b)
 	return b.count() as ExitCode
 end 'main'
@@ -401,7 +401,7 @@ function grow(d IntArray) returns Integer
 end 'grow'
 
 function main() returns ExitCode
-	return grow(IntArray.create()) as ExitCode
+	return grow(IntArray.create(0)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -802,7 +802,7 @@ function caller(p IntArray) returns Integer
 end 'caller'
 
 function main() returns ExitCode
-	var v = IntArray.create()
+	var v = IntArray.create(0)
 	return caller(v) as ExitCode
 end 'main'
 ```
@@ -828,7 +828,7 @@ function caller(p IntArray) returns Integer
 end 'caller'
 
 function main() returns ExitCode
-	var v = IntArray.create()
+	var v = IntArray.create(0)
 	return caller(v) as ExitCode
 end 'main'
 ```
@@ -854,7 +854,7 @@ function outer(d IntArray) returns Integer
 end 'outer'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	return outer(a) as ExitCode
 end 'main'
 ```
@@ -1024,7 +1024,7 @@ type Bag
 	export var items as IntArray
 
 	static function create() returns Bag
-		return Self{items: IntArray.create()}
+		return Self{items: IntArray.create(0)}
 	end 'create'
 
 	function add(v Integer)
@@ -1055,7 +1055,7 @@ type Bag
 	export var items as IntArray
 
 	static function create() returns Bag
-		return Self{items: IntArray.create()}
+		return Self{items: IntArray.create(0)}
 	end 'create'
 
 	function add(v Integer)
@@ -1090,7 +1090,7 @@ function grow(d IntArray)
 end 'grow'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	let f = grow
 	f(a)
 	return a.count() as ExitCode
@@ -1112,7 +1112,7 @@ function grow(d IntArray)
 end 'grow'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	let f = grow
 	f(a)
 	return a.count() as ExitCode
@@ -1140,7 +1140,7 @@ function apply(g Grower, d IntArray)
 end 'apply'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	apply(grow, d: a)
 	return a.count() as ExitCode
 end 'main'
@@ -1171,8 +1171,8 @@ function apply(s Sizer, d IntArray) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	let a = IntArray.create()
-	var b = IntArray.create()
+	let a = IntArray.create(0)
+	var b = IntArray.create(0)
 	let g = grow
 	g(b)
 	let total = apply(size, d: a)
@@ -1209,7 +1209,7 @@ function build(m Maker, d IntArray) returns Shelf
 end 'build'
 
 function main() returns ExitCode
-	var v = IntArray.create()
+	var v = IntArray.create(0)
 	v.push(1)
 	let shelf = build(shelve, d: v)
 	v.push(2)
@@ -1246,7 +1246,7 @@ function build(m Maker, d IntArray) returns Shelf
 end 'build'
 
 function main() returns ExitCode
-	var v = IntArray.create()
+	var v = IntArray.create(0)
 	v.push(1)
 	let shelf = build(shelve, d: v)
 	return shelf.items.count() as ExitCode
@@ -1386,7 +1386,7 @@ function growAndCount(d IntArray) returns Count
 end 'growAndCount'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	let f = function(d IntArray) gives growAndCount(d)
 	return f(a) as ExitCode
 end 'main'
@@ -1412,7 +1412,7 @@ function apply(xs IntArray, f Mutator)
 end 'apply'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	let g = grow
 	apply(a, f: g)
 	return a.count() as ExitCode
@@ -1439,7 +1439,7 @@ function apply(xs IntArray, f Reader) returns Count
 end 'apply'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	let g = look
 	_ = apply(a, f: g)
 	return 0
@@ -1470,7 +1470,7 @@ function relay(ys IntArray, g Mutator)
 end 'relay'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	let w = grow
 	relay(a, g: w)
 	return a.count() as ExitCode
@@ -1498,7 +1498,7 @@ type Bag
 	export var items as IntArray
 
 	static function create() returns Bag
-		return Self{items: IntArray.create()}
+		return Self{items: IntArray.create(0)}
 	end 'create'
 
 	function add(v Integer)
@@ -1538,7 +1538,7 @@ type Bag
 	export let items as IntArray
 
 	static function create() returns Bag
-		return Self{items: IntArray.create()}
+		return Self{items: IntArray.create(0)}
 	end 'create'
 
 	function add()
@@ -1611,7 +1611,7 @@ function tag(p IntArray)
 end 'tag'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	tag(a)
 	return a.count() as ExitCode
 end 'main'
@@ -1827,7 +1827,7 @@ function grow(dest IntArray)
 end 'grow'
 
 function main() returns ExitCode
-	let g = IntArray.create()
+	let g = IntArray.create(0)
 	grow((g))
 	return try g.get(0) otherwise -1
 end 'main'

@@ -23,18 +23,18 @@ let SidecarLocalTypesTypeSeparatorToken = ":"
 
 test 'every local of a two-file program names the type its own file declared it with'
 	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: LocalTypesCaseLabel, fixture: TwoFilesFixtureName)
-	let build = spawnBuild(staged, staged: staged, output: staged.join(OutputFileStem), label: LocalTypesBuildLabel, extraArguments: StringArray.create())
+	let build = spawnBuild(staged, staged: staged, output: staged.join(OutputFileStem), label: LocalTypesBuildLabel, extraArguments: StringArray.create(0))
 
 	if build.exitCode() != 0 'didNotBuild'
 		panic("sidecar-local-types.test: the gate could not run — the build of the staged two-file project exited {build.exitCode()}, so there is no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
 	end 'didNotBuild'
 
-	let dumpRun = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let dumpRun = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create(0))
 	Expect.equal(dumpRun.exitCode(), expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dumpRun.stderr}")
 
 	let functionRows = dumpSectionRows(withoutCarriageReturns(dumpRun.stdout), heading: DumpFunctionsHeading)
 	var asked = 0 as Count
-	var wrong = StringArray.create()
+	var wrong = StringArray.create(0)
 
 	for rawLine in everyStagedSourceLine(staged) 'eachSourceLine'
 		let line = rawLine.trim()

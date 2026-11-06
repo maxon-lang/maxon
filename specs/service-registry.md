@@ -134,7 +134,7 @@ function main() returns ExitCode
 	let holder = Holder.create(spawn Fixed.create(4))
 	let fromField = try await holder.source.value() otherwise 0
 
-	var sources = SourceArray.create()
+	var sources = SourceArray.create(0)
 	sources.push(spawn Fixed.create(8))
 	view element = try sources.get(0) otherwise panic("sources.get(0)")
 	let fromElement = try await element.value() otherwise 0
@@ -1853,7 +1853,7 @@ end 'B'
 typealias PingerHandles = Array with Pinger.handle
 
 function main() returns ExitCode
-	var handles = PingerHandles.create()
+	var handles = PingerHandles.create(0)
 	handles.push((spawn A.create()) as Pinger.handle)
 	let b = spawn B.create()
 	let w = try await b.ping() otherwise 0
@@ -1903,7 +1903,7 @@ end 'B'
 typealias PingerHandles = Array with Pinger.handle
 
 function main() returns ExitCode
-	var handles = PingerHandles.create()
+	var handles = PingerHandles.create(0)
 	handles.push((spawn A.create()) as Pinger.handle)
 	let b = spawn B.create()
 	let w = try await b.ping() otherwise 0
@@ -2494,7 +2494,7 @@ type Board
 	export let scores as Scores
 
 	static function create(top Integer) returns Self
-		var scores = Scores.create()
+		var scores = Scores.create(0)
 		scores.push(top)
 		scores.push(top * 2)
 		return Self{scores: scores}
@@ -2721,7 +2721,7 @@ type Config
 	export var items as Items
 
 	static function create() returns Self
-		var items = Items.create()
+		var items = Items.create(0)
 		items.push(1)
 		return Self{items: items}
 	end 'create'
@@ -2748,7 +2748,7 @@ type Config
 	export var items as Items
 
 	static function create() returns Self
-		var items = Items.create()
+		var items = Items.create(0)
 		items.push(1)
 		return Self{items: items}
 	end 'create'

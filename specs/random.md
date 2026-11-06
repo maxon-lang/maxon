@@ -31,7 +31,7 @@ A thousand draws below 6 each land in `0 upto 6`, and every one of the six value
 typealias FaceCounts = Array with bool
 
 function main() returns ExitCode
-	var seen = FaceCounts.create()
+	var seen = FaceCounts.create(0)
 	seen.resize(6)
 
 	for _ in 0 upto 1000 'eachDraw'
@@ -167,7 +167,7 @@ request is bytes 768 to 999, and 232 bytes drawn at random are all zero with pro
 typealias ByteTally = int(0 to 1000)
 
 function main() returns ExitCode
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	bytes.resize(1000)
 
 	if __Builtins.fillRandom(bytes.managed) != 0 'refused'
@@ -213,7 +213,7 @@ type Sink
 	var bytes as ByteArray
 
 	static function create() returns Sink
-		return Sink{bytes: ByteArray.create()}
+		return Sink{bytes: ByteArray.create(0)}
 	end 'create'
 
 	function fill()
@@ -241,7 +241,7 @@ function fill(drawn ByteArray)
 end 'fill'
 
 function main() returns ExitCode
-	let drawn = ByteArray.create()
+	let drawn = ByteArray.create(0)
 	fill(drawn)
 	return 0
 end 'main'
@@ -390,7 +390,7 @@ typealias DistinctTally = int(0 to 256)
 typealias ValueSeen = Array with bool
 
 function distinctValues(drawn ByteArray) returns DistinctTally
-	var seen = ValueSeen.create()
+	var seen = ValueSeen.create(0)
 	seen.resize(256)
 
 	for byte in drawn 'eachByte'

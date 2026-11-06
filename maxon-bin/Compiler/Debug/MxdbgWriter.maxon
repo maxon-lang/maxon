@@ -186,20 +186,20 @@ end 'MxdbgLayoutRecord'
 typealias MxdbgLayoutRecordArray = Array with MxdbgLayoutRecord
 
 export type MxdbgWriter
-	var stringPool = ByteArray.create()
+	var stringPool = ByteArray.create(0)
 	var interned = MxdbgPoolSliceMap.create()
-	var files = MxdbgPoolSliceArray.create()
-	var funcs = MxdbgFuncRecordArray.create()
-	var lines = MxdbgLineRecordArray.create()
-	var types = MxdbgTypeRecordArray.create()
-	var fields = MxdbgFieldRecordArray.create()
-	var locals = MxdbgLocalRecordArray.create()
-	var covPoints = MxdbgCovRecordArray.create()
-	var inlineSites = MxdbgInlineSiteRecordArray.create()
-	var inlineRanges = MxdbgInlineRangeRecordArray.create()
-	var constWords = MxdbgConstWordArray.create()
-	var globals = MxdbgGlobalRecordArray.create()
-	var layoutFigures = MxdbgLayoutRecordArray.create()
+	var files = MxdbgPoolSliceArray.create(0)
+	var funcs = MxdbgFuncRecordArray.create(0)
+	var lines = MxdbgLineRecordArray.create(0)
+	var types = MxdbgTypeRecordArray.create(0)
+	var fields = MxdbgFieldRecordArray.create(0)
+	var locals = MxdbgLocalRecordArray.create(0)
+	var covPoints = MxdbgCovRecordArray.create(0)
+	var inlineSites = MxdbgInlineSiteRecordArray.create(0)
+	var inlineRanges = MxdbgInlineRangeRecordArray.create(0)
+	var constWords = MxdbgConstWordArray.create(0)
+	var globals = MxdbgGlobalRecordArray.create(0)
+	var layoutFigures = MxdbgLayoutRecordArray.create(0)
 	var imageBase = 0 as MachineWord
 
 	export static function create() returns MxdbgWriter
@@ -345,7 +345,7 @@ export type MxdbgWriter
 		let layoutTableOff = globalTableOff + (self.globals.count() * MxdbgGlobalEntrySize) as ByteOffset
 		let stringPoolOff = layoutTableOff + (self.layoutFigures.count() * MxdbgLayoutEntrySize) as ByteOffset
 
-		var buf = ByteArray.create()
+		var buf = ByteArray.create(0)
 		writeMxdbgMagic(buf)
 		writeZeros(buf, n: (MxdbgHeaderSize - buf.count()) as BytePos)
 		patchDword(buf, offset: MxdbgOffVersion, value: MxdbgFormatVersion as MachineWord)
@@ -518,7 +518,7 @@ export type MxdbgWriter
 	// MEASURED on this compiler compiling itself: that shape spent 23.4 G CPU ticks in the sidecar
 	// phase, against 28.0 G for the WHOLE register allocator.
 	function lineWindows() returns MxdbgLineWindowArray
-		var windows = MxdbgLineWindowArray.create()
+		var windows = MxdbgLineWindowArray.create(0)
 		windows.reserve(self.funcs.count())
 
 		var at = 0 as ElementIndex
@@ -570,7 +570,7 @@ export type MxdbgWriter
 	end 'requireAggregateWindowFits'
 
 	function poolBytes(slice MxdbgPoolSlice) returns ByteArray
-		var bytes = ByteArray.create()
+		var bytes = ByteArray.create(0)
 
 		for i in slice.offset upto slice.offset + slice.length 'eachByte'
 			bytes.push(try self.stringPool.get(i as ElementIndex) otherwise panic("MxdbgWriter.poolBytes: byte {i} of a slice this writer interned is past the {self.stringPool.count()}-byte pool it interned it into"))

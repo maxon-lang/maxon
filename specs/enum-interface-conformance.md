@@ -374,7 +374,7 @@ function through(g Grower, dest IntArray)
 end 'through'
 
 function main() returns ExitCode
-	let a = IntArray.create()
+	let a = IntArray.create(0)
 	through(Step.one, dest: a)
 	return try a.get(0) otherwise 55
 end 'main'
@@ -410,7 +410,7 @@ function through(g Grower, dest IntArray)
 end 'through'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	through(Step.one, dest: a)
 	return try a.get(0) otherwise 55
 end 'main'

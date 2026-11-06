@@ -64,7 +64,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function make() returns IntArray
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -86,7 +86,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function make() returns IntArray
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -108,7 +108,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function make() returns IntArray
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	return arr
 end 'make'
@@ -128,7 +128,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function make() returns IntArray
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -359,7 +359,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function make() returns IntArray
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -381,7 +381,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function make() returns IntArray
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	return arr
 end 'make'
@@ -401,7 +401,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	let n = try arr.count() otherwise return 9
 	return n
@@ -413,7 +413,7 @@ error E3055: specs/try-postfix-target/error.non-throwing-array-accessor.maxon:8:
 
 <!-- test: error.non-throwing-builtin-static-constructor -->
 
-`Array.create()` cannot fail, so `try` on it is E3055 exactly as `try arr.count()`
+`Array.create(0)` cannot fail, so `try` on it is E3055 exactly as `try arr.count()`
 is. ⚠ Accepted, this program would be WRONG: a `tryCall` on a callee that never
 writes an error flag reads whatever the ABI left in the flag register, and takes
 the ERROR path — returning 9 where the only correct answer is 0. An E3055 check
@@ -426,7 +426,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let a = try IntArray.create() otherwise return 9
+	let a = try IntArray.create(0) otherwise return 9
 	return a.count()
 end 'main'
 ```
@@ -493,7 +493,7 @@ enum MyError implements Error
 end 'MyError'
 
 function th() returns IntArray throws MyError
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(10)
 	throw MyError.failed
 end 'th'

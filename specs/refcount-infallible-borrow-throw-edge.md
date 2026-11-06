@@ -92,7 +92,7 @@ type Reader
 end 'Reader'
 
 function main() returns ExitCode
-	var arr = ItemArray.create()
+	var arr = ItemArray.create(0)
 	arr.push(Item.create("alpha", t: 7))
 	var reader = try Reader.create(arr) otherwise return 3
 	// Cursor sits at element 0 (the last). consume(): cur = element 0 (borrow);

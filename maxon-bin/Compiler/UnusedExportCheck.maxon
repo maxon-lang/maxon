@@ -210,7 +210,7 @@ type TrackedDecls
 	var creditedNominalNames as CreditedTypeNameKeySet
 
 	static function create(libraryFiles LibrarySourcePathSet, globalLabels GlobalLabelIndexMap) returns TrackedDecls
-		return Self{entries: TrackedDeclArray.create(), functionIndex: TrackedDeclIndexMap.create(), typeIndex: TrackedDeclIndexMap.create(), bindingIndex: TrackedDeclIndexMap.create(), libraryFiles: libraryFiles, globalLabels: globalLabels, files: AuditedFileMap.create(), creditedTypeNameIds: CreditedTypeNameIdMap.create(), creditedTypeNames: CreditedTypeNameKeySet.create(), creditedNominalNames: CreditedTypeNameKeySet.create()}
+		return Self{entries: TrackedDeclArray.create(0), functionIndex: TrackedDeclIndexMap.create(), typeIndex: TrackedDeclIndexMap.create(), bindingIndex: TrackedDeclIndexMap.create(), libraryFiles: libraryFiles, globalLabels: globalLabels, files: AuditedFileMap.create(), creditedTypeNameIds: CreditedTypeNameIdMap.create(), creditedTypeNames: CreditedTypeNameKeySet.create(), creditedNominalNames: CreditedTypeNameKeySet.create()}
 	end 'create'
 
 	function fileOf(path FilePath, signatures ProgramSignatures) returns AuditedFile
@@ -288,7 +288,7 @@ type TrackedDecls
 	// `upsert`, not `insert`: a contested bare name is a legal program, not a collision — see
 	// `TrackedDeclIndexMap`.
 	function indexUnder(index TrackedDeclIndexMap, key ByteArray, at ElementIndex)
-		var claimants = TrackedDeclIndexArray.create()
+		var claimants = TrackedDeclIndexArray.create(0)
 
 		if let existing = try index.get(key) 'alreadyClaimed'
 			claimants.append(existing)
@@ -334,8 +334,8 @@ module function checkUnusedExports(project Project, module MaxonModule, signatur
 end 'checkUnusedExports'
 
 function splitSourcePaths(project Project) returns SourcePathSplit
-	var paths = FilePathArray.create()
-	var stdlibPaths = FilePathArray.create()
+	var paths = FilePathArray.create(0)
+	var stdlibPaths = FilePathArray.create(0)
 	var libraryFiles = LibrarySourcePathSet.create()
 	var unauditedFiles = LibrarySourcePathSet.create()
 
@@ -1187,7 +1187,7 @@ typealias DemandedTierMap = Map with (ByteArray, Visibility)
 function reachedSignatureDemands(project Project, tracked TrackedDecls) returns DemandedTierMap
 	var demanded = DemandedTierMap.create()
 	var awaiting = DemandsAwaitingOwnerMap.create()
-	var widened = SignatureTypeDemandArray.create()
+	var widened = SignatureTypeDemandArray.create(0)
 
 	for demand in project.signatureTypeDemands 'eachDemand'
 		if demandIsReached(tracked, demand: demand) 'itsDemanderIsReachedFromOutside'
@@ -1203,7 +1203,7 @@ function reachedSignatureDemands(project Project, tracked TrackedDecls) returns 
 		let owner = (try widened.get(next) otherwise panic("reachedSignatureDemands: widened.get OOB at {next} inside its own count")).typeName
 		next = next + 1
 		var waiting = try awaiting.get(owner) otherwise continue
-		var stillWaiting = SignatureTypeDemandArray.create()
+		var stillWaiting = SignatureTypeDemandArray.create(0)
 
 		for demand in waiting 'eachWaiting'
 			if ownerIsCredited(tracked, demand: demand, owner: owner, demanded: demanded) 'itsOwnerIsNowCredited'
@@ -1269,7 +1269,7 @@ function awaitCreditOf(owner ByteArray, demand SignatureTypeDemand, awaiting Dem
 		return
 	end 'aTypeCannotWidenItself'
 
-	var waiting = try awaiting.get(owner) otherwise SignatureTypeDemandArray.create()
+	var waiting = try awaiting.get(owner) otherwise SignatureTypeDemandArray.create(0)
 	waiting.push(demand)
 	awaiting.upsert(owner.clone(), value: waiting)
 end 'awaitCreditOf'

@@ -1030,7 +1030,7 @@ end 'Sack'
 
 function main() returns ExitCode
 	let s = Sack.create()
-	var f = StrArray.create()
+	var f = StrArray.create(0)
 	f.push("a")
 	return s.take(f)
 end 'main'
@@ -1107,7 +1107,7 @@ end 'Sack'
 
 function main() returns ExitCode
 	let s = Sack.create()
-	var f = AlsoIntArray.create()
+	var f = AlsoIntArray.create(0)
 	f.push(7)
 	return s.take(f as IntArray) as ExitCode
 end 'main'
@@ -4188,7 +4188,7 @@ end 'Maker'
 
 type Bag uses Element implements Holder with Element, Maker
 	typealias ElementArray = Array with Element
-	var items = ElementArray.create()
+	var items = ElementArray.create(0)
 
 	static function spawn() returns Self
 		return Self{}
@@ -4232,7 +4232,7 @@ end 'Holder'
 typealias NumStore = Array with Num
 
 type Crate implements Holder with Num
-	var items = NumStore.create()
+	var items = NumStore.create(0)
 
 	static function create() returns Self
 		return Self{}
@@ -4249,7 +4249,7 @@ end 'Crate'
 
 function main() returns ExitCode
 	var c = Crate.create()
-	var v = NumStore.create()
+	var v = NumStore.create(0)
 	v.push(4)
 	v.push(9)
 	c.absorb(v)
@@ -4284,14 +4284,14 @@ end 'Sink'
 
 type Log implements Sink
 	typealias Bytes = Array with Byte
-	var kept = Bytes.create()
+	var kept = Bytes.create(0)
 
 	static function create() returns Self
 		return Self{}
 	end 'create'
 
 	static function single(v Byte) returns Bytes
-		var b = Bytes.create()
+		var b = Bytes.create(0)
 		b.push(v)
 		return b
 	end 'single'
@@ -4339,7 +4339,7 @@ typealias NumStore = Array with Num
 typealias NumStoreStore = Array with NumStore
 
 type Crate implements Holder with Num
-	var items = NumStoreStore.create()
+	var items = NumStoreStore.create(0)
 
 	static function create() returns Self
 		return Self{}
@@ -4356,8 +4356,8 @@ end 'Crate'
 
 function main() returns ExitCode
 	var c = Crate.create()
-	var outer = NumStoreStore.create()
-	var inner = NumStore.create()
+	var outer = NumStoreStore.create(0)
+	var inner = NumStore.create(0)
 	inner.push(3)
 	outer.push(inner)
 	c.absorb(outer)
@@ -4431,7 +4431,7 @@ end 'Holder'
 typealias OtherStore = Array with Other
 
 type Crate implements Holder with Num
-	var items = OtherStore.create()
+	var items = OtherStore.create(0)
 
 	static function create() returns Self
 		return Self{}

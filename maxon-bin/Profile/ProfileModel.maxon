@@ -335,7 +335,7 @@
 	// ========================================================================================
 
 	function rankedProfileFunctions(selfByName ProfileTallyMap, totals ProfileTallyMap) returns ProfileFunctionArray
-		var rows = ProfileFunctionArray.create()
+		var rows = ProfileFunctionArray.create(0)
 
 		for (name, total) in totals 'eachNamedFrame'
 			rows.push(ProfileFunctionRow.create(name, selfSamples: try selfByName.get(name) otherwise 0, totalSamples: total))
@@ -355,7 +355,7 @@
 	end 'rankedProfileFunctions'
 
 	function rankedProfileStacks(stackTotal ProfileTallyMap) returns ProfileStackArray
-		var rows = ProfileStackArray.create()
+		var rows = ProfileStackArray.create(0)
 
 		for (key, samples) in stackTotal 'eachStack'
 			rows.push(ProfileStackRow.create(profileKeyTail(key), samples: samples))
@@ -369,7 +369,7 @@
 	// The call tree, FLAT and ordinally sorted by path — which is what makes each node's subtree the
 	// contiguous run of nodes after it at a greater depth (see this file's header).
 	function rankedProfileNodes(pathTotal ProfileTallyMap, leaves ProfileTallyMap) returns ProfileNodeArray
-		var paths = ProfileStringArray.create()
+		var paths = ProfileStringArray.create(0)
 
 		for (path, _) in pathTotal 'eachPath'
 			paths.push(path)
@@ -377,7 +377,7 @@
 
 		paths.sortBy(function(left String, right String) gives compareBytesOrdinally(left.toByteArray(), right: right.toByteArray()))
 
-		var nodes = ProfileNodeArray.create()
+		var nodes = ProfileNodeArray.create(0)
 
 		for path in paths 'eachNode'
 			let segments = path.split(ProfilePathSeparator)
@@ -484,7 +484,7 @@
 	// ⭐ One level of the tree, walked in RANK order over a contiguous run of the ordinal table. A hidden node
 	// takes its whole subtree with it, because a child listed under a parent nobody printed is an orphan row.
 	function renderProfileTreeRange(report ProfileReport, first ElementIndex, last ElementIndex, depth ProfileDepth) returns ProfileTreeRender
-		var children = ElementIndexArray.create()
+		var children = ElementIndexArray.create(0)
 
 		for candidate in first upto last 'eachNode'
 			if profileNodeDepth(report, slot: candidate as ElementIndex) == depth 'aChild'
@@ -605,7 +605,7 @@
 	// and would rather be given everything. Sorted ordinally so two runs of one program produce diffable
 	// output.
 	module function renderProfileFolded(report ProfileReport) returns String
-		var lines = ProfileStringArray.create()
+		var lines = ProfileStringArray.create(0)
 
 		for node in report.nodes 'eachNode'
 			if node.selfSamples > 0 'aPathSamplesLandedIn'

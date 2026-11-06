@@ -23,7 +23,7 @@ type ChunkNameList
 	var names as NameRoster
 
 	static function create() returns ChunkNameList
-		return Self{names: NameRoster.create()}
+		return Self{names: NameRoster.create(0)}
 	end 'create'
 
 	function noteOnce(name ByteArray)
@@ -146,7 +146,7 @@ type PointerCallMemo
 	var verdicts as PointerCallVerdictColumn
 
 	static function create() returns PointerCallMemo
-		return Self{verdicts: PointerCallVerdictColumn.create()}
+		return Self{verdicts: PointerCallVerdictColumn.create(0)}
 	end 'create'
 
 	function callsThroughAPointer(op TargetOp) returns bool
@@ -253,13 +253,13 @@ type UnguardedChainWalk
 
 	static function create(project Project, funcNames FunctionNameIndex, chunks FunctionCodeChunkArray, target Target, margin StackSize) returns UnguardedChainWalk
 		var indexOf = ChunkIndexByName.create()
-		var viaPointer = BoolArray.create()
-		var addressTaken = BoolArray.create()
-		var reachesPointer = BoolArray.create()
-		var visits = ChainVisitColumn.create()
-		var depths = StackSizeColumn.create()
-		var deepest = ChunkIndexColumn.create()
-		var hasDeepest = BoolArray.create()
+		var viaPointer = BoolArray.create(0)
+		var addressTaken = BoolArray.create(0)
+		var reachesPointer = BoolArray.create(0)
+		var visits = ChainVisitColumn.create(0)
+		var depths = StackSizeColumn.create(0)
+		var deepest = ChunkIndexColumn.create(0)
+		var hasDeepest = BoolArray.create(0)
 
 		for index in 0 upto chunks.count() 'eachChunk'
 			let chunk = try chunks.get(index) otherwise panic("UnguardedChainWalk.create: chunks.get OOB at {index}")
@@ -273,7 +273,7 @@ type UnguardedChainWalk
 			hasDeepest.push(false)
 		end 'eachChunk'
 
-		return Self{project: project, funcNames: funcNames, chunks: chunks, target: target, margin: margin, indexOf: indexOf, viaPointer: viaPointer, addressTaken: addressTaken, reachesPointer: reachesPointer, visits: visits, depths: depths, deepest: deepest, hasDeepest: hasDeepest, path: ChunkIndexColumn.create(), unsized: ChunkNameList.create(), indirectTargets: ChunkIndexColumn.create(), indirectBytes: 0, worstIndirect: 0, hasWorstIndirect: false, firstOverflow: 0, firstKind: ChainOverflow.tooDeep, overflowed: false}
+		return Self{project: project, funcNames: funcNames, chunks: chunks, target: target, margin: margin, indexOf: indexOf, viaPointer: viaPointer, addressTaken: addressTaken, reachesPointer: reachesPointer, visits: visits, depths: depths, deepest: deepest, hasDeepest: hasDeepest, path: ChunkIndexColumn.create(0), unsized: ChunkNameList.create(), indirectTargets: ChunkIndexColumn.create(0), indirectBytes: 0, worstIndirect: 0, hasWorstIndirect: false, firstOverflow: 0, firstKind: ChainOverflow.tooDeep, overflowed: false}
 	end 'create'
 
 	function notePointerCallers(module TargetModule)
@@ -426,7 +426,7 @@ type UnguardedChainWalk
 
 	function edgesOf(index ElementIndex) returns ChainEdgeArray throws CompileError
 		view chunk = self.chunkAt(index)
-		var edges = ChainEdgeArray.create()
+		var edges = ChainEdgeArray.create(0)
 
 		for fixup in chunk.callFixups 'eachCall'
 			if fixup.takesAddressOnly 'notACall'
@@ -565,7 +565,7 @@ type UnguardedChainWalk
 	end 'framedNames'
 
 	function namesOf(indices ChunkIndexColumn, expandInlined bool) returns NameRoster
-		var names = NameRoster.create()
+		var names = NameRoster.create(0)
 
 		for index in indices 'eachIndex'
 			let chunk = self.chunkAt(index)
@@ -586,7 +586,7 @@ type UnguardedChainWalk
 	end 'namesOf'
 
 	function refuseRecursion(index ElementIndex) throws CompileError
-		var cycle = ChunkIndexColumn.create()
+		var cycle = ChunkIndexColumn.create(0)
 		var inCycle = false
 
 		for onPath in self.path 'eachOnPath'
@@ -608,7 +608,7 @@ type UnguardedChainWalk
 	end 'surveying'
 
 	function chainFrom(root ElementIndex) returns ChunkIndexColumn
-		var chain = ChunkIndexColumn.create()
+		var chain = ChunkIndexColumn.create(0)
 		var current = root
 		chain.push(current)
 

@@ -43,7 +43,7 @@ type Blk
 	export var args as NumArray
 
 	static function create() returns Blk
-		return Self{args: NumArray.create()}
+		return Self{args: NumArray.create(0)}
 	end 'create'
 end 'Blk'
 
@@ -79,7 +79,7 @@ type Blk
 	export var args as NumArray
 
 	static function create() returns Blk
-		return Self{args: NumArray.create()}
+		return Self{args: NumArray.create(0)}
 	end 'create'
 
 	function setArgs(x NumArray)
@@ -122,7 +122,7 @@ type Blk
 	export var args as NumArray
 
 	static function create() returns Blk
-		return Self{args: NumArray.create()}
+		return Self{args: NumArray.create(0)}
 	end 'create'
 end 'Blk'
 

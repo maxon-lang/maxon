@@ -39,7 +39,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function add(value Element)
@@ -87,7 +87,7 @@ type Bag uses Element
 	end 'addMemory'
 
 	function replayed() returns Self
-		var out = Self{items: Items.create()}
+		var out = Self{items: Items.create(0)}
 
 		for value in items 'each'
 			out.add(value)
@@ -251,7 +251,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function add(value Element)
@@ -299,7 +299,7 @@ type Bag uses Element
 	end 'addMemory'
 
 	function replayed() returns Self
-		var out = Self{items: Items.create()}
+		var out = Self{items: Items.create(0)}
 
 		for value in items 'each'
 			out.add(value)
@@ -703,7 +703,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	static function wrapping(source Items) returns Self
@@ -745,7 +745,7 @@ type Bag uses Element
 	end 'removeAt'
 
 	function replayed() returns Self
-		var out = Self{items: Items.create()}
+		var out = Self{items: Items.create(0)}
 
 		for value in items 'each'
 			out.add(value)
@@ -821,7 +821,7 @@ function probeSignal()
 	print("signal refilled count {bag.items.count()} sum {sumSignal(bag)}\n")
 	bag.addAll(SignalBag.wrapping([Signal.minus, Signal.plus]))
 	print("signal appended literal count {bag.items.count()} third {bag.at(2).rawValue as Integer} sum {sumSignal(bag)}\n")
-	var concrete = SignalArray.create()
+	var concrete = SignalArray.create(0)
 	concrete.push(Signal.plus)
 	concrete.append([Signal.minus, Signal.plus])
 	var total = 0 as Integer
@@ -853,7 +853,7 @@ function probeMid()
 	print("mid refilled count {bag.items.count()} sum {sumMid(bag)}\n")
 	bag.addAll(MidBag.wrapping([Mid.low, Mid.high]))
 	print("mid appended literal count {bag.items.count()} third {bag.at(2).rawValue as Integer} sum {sumMid(bag)}\n")
-	var concrete = MidArray.create()
+	var concrete = MidArray.create(0)
 	concrete.push(Mid.high)
 	concrete.append([Mid.low, Mid.high])
 	var total = 0 as Integer
@@ -885,7 +885,7 @@ function probeBig()
 	print("big refilled count {bag.items.count()} sum {sumBig(bag)}\n")
 	bag.addAll(BigBag.wrapping([Big.low, Big.high]))
 	print("big appended literal count {bag.items.count()} third {bag.at(2).rawValue as Integer} sum {sumBig(bag)}\n")
-	var concrete = BigArray.create()
+	var concrete = BigArray.create(0)
 	concrete.push(Big.high)
 	concrete.append([Big.low, Big.high])
 	var total = 0 as Integer
@@ -911,7 +911,7 @@ function main() returns ExitCode
 
 	print("first {bag.firstOne().rawValue as Integer} peek {bag.peekedAt(3).rawValue as Integer} {bag.peekedAt(2).rawValue as Integer}\n")
 
-	var concrete = SignalArray.create()
+	var concrete = SignalArray.create(0)
 	concrete.push(Signal.minus)
 	concrete.push(Signal.plus)
 	try bag.items.set(2, value: Signal.minus) otherwise return 3
@@ -1004,7 +1004,7 @@ type Bag uses Element
 	export var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function add(value Element)

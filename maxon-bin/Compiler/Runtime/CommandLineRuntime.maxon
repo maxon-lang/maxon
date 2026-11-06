@@ -101,7 +101,7 @@ let CommandLineEmptyArgLabel = b"__cl_empty_arg"
 // The `.data` slots this family lays out — nothing at all under the Windows shape, where the command line
 // is fetched by a call rather than captured at entry.
 export function commandLineRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create()
+	var out = DataSectionEntryArray.create(0)
 
 	if not usage.usesCommandLine 'noCommandLine'
 		return out
@@ -507,7 +507,7 @@ end 'emitResumeScan'
 // alternative is a `dest == 0` "measure only" mode threaded through the scanner, which puts a branch on the
 // hot byte-copy path of the OTHER caller to save one allocation on a call that happens once per program.
 function buildCommandLineCount(module StdModule)
-	var func = IrFunction.createFromStd(CommandLineCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(CommandLineCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -659,7 +659,7 @@ end 'emitFoundAnArgument'
 // to a vector the kernel has already split would re-interpret bytes the SHELL has already interpreted: an
 // argument that genuinely contains a `"` would come back with it removed.
 function buildCommandLineVectorCount(module StdModule)
-	var func = IrFunction.createFromStd(CommandLineCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(CommandLineCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

@@ -83,12 +83,12 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var n = NarrowCol.create()
+	var n = NarrowCol.create(0)
 	n.push(1)
 	n.push(2)
 	n.push(3)
 
-	var w = WideCol.create()
+	var w = WideCol.create(0)
 	w.push(9)
 
 	var c = n.clone()
@@ -100,7 +100,7 @@ function main() returns ExitCode
 	let s0 = try s.get(0) otherwise 0
 	let s1 = try s.get(1) otherwise 0
 
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(65)
 	var bc = b.clone()
 	bc.append(b"CD")
@@ -132,13 +132,13 @@ typealias MidCol = Array with Mid
 typealias WideCol = Array with Wide
 
 function main() returns ExitCode
-	var n = NarrowCol.create()
+	var n = NarrowCol.create(0)
 	n.push(1)
 	n.push(2)
-	var m = MidCol.create()
+	var m = MidCol.create(0)
 	m.push(3)
 	m.push(4)
-	var w = WideCol.create()
+	var w = WideCol.create(0)
 	w.push(5)
 	w.push(6)
 

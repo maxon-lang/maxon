@@ -215,7 +215,7 @@ export type SplitLineage
 	var sourceIds as ValueIdArray
 
 	export static function create() returns SplitLineage
-		return Self{freshIds: ValueIdArray.create(), sourceIds: ValueIdArray.create()}
+		return Self{freshIds: ValueIdArray.create(0), sourceIds: ValueIdArray.create(0)}
 	end 'create'
 
 	// Record that `freshId` (a reload or rematerialized def) derives from `sourceId`. The two
@@ -617,7 +617,7 @@ export type SplitEdits
 	var shadows as OpIndexArrayArray
 
 	static function create() returns SplitEdits
-		return Self{blocks: CfgIndexArray.create(), positions: BlockOpPosArray.create(), opIdxs: OpIndexArray.create(), insertedSlots: DenseColumn.create(), hasRemoval: false, removalBlock: 0, removalPos: 0, removalOpIdx: 0, held: CfgIndexArray.create(), shadows: OpIndexArrayArray.create()}
+		return Self{blocks: CfgIndexArray.create(0), positions: BlockOpPosArray.create(0), opIdxs: OpIndexArray.create(0), insertedSlots: DenseColumn.create(0), hasRemoval: false, removalBlock: 0, removalPos: 0, removalOpIdx: 0, held: CfgIndexArray.create(0), shadows: OpIndexArrayArray.create(0)}
 	end 'create'
 
 	export function unflushedCount() returns Count
@@ -630,7 +630,7 @@ export type SplitEdits
 		end 'alreadyHeld'
 
 		if VerifyIncrementalSplit 'seedTheShadow'
-			var shadow = OpIndexArray.create()
+			var shadow = OpIndexArray.create(0)
 			shadow.append(block.bodyOps())
 			self.shadows.push(shadow)
 		end 'seedTheShadow'
@@ -846,7 +846,7 @@ export type SplitEdits
 
 	function verifyIndexMatchesShadow(block IrBlock, blockLocal ElementIndex, pressure PressureIndex)
 		let shadow = self.shadowOf(blockLocal)
-		var materialised = OpIndexArray.create()
+		var materialised = OpIndexArray.create(0)
 		pressure.collectBodyOps(blockLocal, block: block, out: materialised)
 
 		if materialised.count() != shadow.count() 'lengthDiffers'
@@ -982,7 +982,7 @@ export type PeakTree
 	var leafBase as ElementIndex
 
 	static function create() returns PeakTree
-		return Self{numBlocks: 0, found: BoolArray.create(), pressure: RegCountColumn.create(), forwardPos: BlockOpPosArray.create(), clobberOnly: BoolArray.create(), witness: RegMaskColumn.create(), witnessClass: ValueClassColumn.create(), atFixedRegisterOp: BoolArray.create(), winner: CfgIndexArray.create(), leftRank: emptyRank(), rightRank: emptyRank(), leafBase: 1}
+		return Self{numBlocks: 0, found: BoolArray.create(0), pressure: RegCountColumn.create(0), forwardPos: BlockOpPosArray.create(0), clobberOnly: BoolArray.create(0), witness: RegMaskColumn.create(0), witnessClass: ValueClassColumn.create(0), atFixedRegisterOp: BoolArray.create(0), winner: CfgIndexArray.create(0), leftRank: emptyRank(), rightRank: emptyRank(), leafBase: 1}
 	end 'create'
 
 	// Size the tree for a function, with every leaf empty. The full sweep then sets each leaf and calls
@@ -1394,7 +1394,7 @@ export type PressureIndex
 	var confFoundInSweep as bool
 
 	export static function create() returns PressureIndex
-		return Self{leafBase: 1, slotsUsed: 0, released: false, reseatSlots: PressureSlotColumn.create(), blockFirst: PressureSlotColumn.create(), blockLen: PressureSlotColumn.create(), blockNode: ColumnLengthColumn.create(), terminated: BoolArray.create(), walker: OpCursor.create(), holdsOp: BoolArray.create(), opAt: PressureCountCellColumn.create(), leafDelta: PressureDeltaCellColumn.create(), leafTransient: PressureDeltaCellColumn.create(), nodeOps: PressureCountCellColumn.create(), nodeSum: PressureDeltaCellColumn.create(), nodeBest: PressureDeltaCellColumn.create(), nodeClobber: RegMaskColumn.create(), defSlot: PressureCountCellColumn.create(), peak: BlockPeakSlot.create(), scanPeak: BlockPeakSlot.create(), leafPending: RegMaskColumn.create(), leafPhysLive: RegMaskColumn.create(), confinedActive: false, confFound: BoolArray.create(), confPressure: PressureCountCellColumn.create(), confAtFixed: BoolArray.create(), confWitness: RegMaskColumn.create(), confClass: ValueClassColumn.create(), confWinner: PressureCountCellColumn.create(), confHas: BoolArray.create(), confFresh: BoolArray.create(), sparseNodes: CfgIndexArray.create(), confLeafChanged: false, confFoundInSweep: false}
+		return Self{leafBase: 1, slotsUsed: 0, released: false, reseatSlots: PressureSlotColumn.create(0), blockFirst: PressureSlotColumn.create(0), blockLen: PressureSlotColumn.create(0), blockNode: ColumnLengthColumn.create(0), terminated: BoolArray.create(0), walker: OpCursor.create(), holdsOp: BoolArray.create(0), opAt: PressureCountCellColumn.create(0), leafDelta: PressureDeltaCellColumn.create(0), leafTransient: PressureDeltaCellColumn.create(0), nodeOps: PressureCountCellColumn.create(0), nodeSum: PressureDeltaCellColumn.create(0), nodeBest: PressureDeltaCellColumn.create(0), nodeClobber: RegMaskColumn.create(0), defSlot: PressureCountCellColumn.create(0), peak: BlockPeakSlot.create(), scanPeak: BlockPeakSlot.create(), leafPending: RegMaskColumn.create(0), leafPhysLive: RegMaskColumn.create(0), confinedActive: false, confFound: BoolArray.create(0), confPressure: PressureCountCellColumn.create(0), confAtFixed: BoolArray.create(0), confWitness: RegMaskColumn.create(0), confClass: ValueClassColumn.create(0), confWinner: PressureCountCellColumn.create(0), confHas: BoolArray.create(0), confFresh: BoolArray.create(0), sparseNodes: CfgIndexArray.create(0), confLeafChanged: false, confFoundInSweep: false}
 	end 'create'
 
 	// ----------------------------------------------------------------------
@@ -1472,25 +1472,25 @@ export type PressureIndex
 	end 'sizeLeavesAndNodes'
 
 	function releaseData()
-		self.opAt = PressureCountCellColumn.create()
-		self.leafDelta = PressureDeltaCellColumn.create()
-		self.leafTransient = PressureDeltaCellColumn.create()
-		self.nodeOps = PressureCountCellColumn.create()
-		self.nodeSum = PressureDeltaCellColumn.create()
-		self.nodeBest = PressureDeltaCellColumn.create()
-		self.nodeClobber = RegMaskColumn.create()
-		self.leafPending = RegMaskColumn.create()
-		self.leafPhysLive = RegMaskColumn.create()
-		self.defSlot = PressureCountCellColumn.create()
-		self.confFound = BoolArray.create()
-		self.confPressure = PressureCountCellColumn.create()
-		self.confAtFixed = BoolArray.create()
-		self.confWitness = RegMaskColumn.create()
-		self.confClass = ValueClassColumn.create()
-		self.confWinner = PressureCountCellColumn.create()
-		self.confHas = BoolArray.create()
-		self.confFresh = BoolArray.create()
-		self.sparseNodes = CfgIndexArray.create()
+		self.opAt = PressureCountCellColumn.create(0)
+		self.leafDelta = PressureDeltaCellColumn.create(0)
+		self.leafTransient = PressureDeltaCellColumn.create(0)
+		self.nodeOps = PressureCountCellColumn.create(0)
+		self.nodeSum = PressureDeltaCellColumn.create(0)
+		self.nodeBest = PressureDeltaCellColumn.create(0)
+		self.nodeClobber = RegMaskColumn.create(0)
+		self.leafPending = RegMaskColumn.create(0)
+		self.leafPhysLive = RegMaskColumn.create(0)
+		self.defSlot = PressureCountCellColumn.create(0)
+		self.confFound = BoolArray.create(0)
+		self.confPressure = PressureCountCellColumn.create(0)
+		self.confAtFixed = BoolArray.create(0)
+		self.confWitness = RegMaskColumn.create(0)
+		self.confClass = ValueClassColumn.create(0)
+		self.confWinner = PressureCountCellColumn.create(0)
+		self.confHas = BoolArray.create(0)
+		self.confFresh = BoolArray.create(0)
+		self.sparseNodes = CfgIndexArray.create(0)
 		self.confinedActive = false
 		self.released = true
 	end 'releaseData'
@@ -2607,10 +2607,10 @@ export type PressureIndex
 	end 'rebuildSparse'
 
 	function verifySparseBuild()
-		var sums = PressureDeltaColumn.create()
-		var bests = PressureDeltaColumn.create()
-		var ops = BlockOpPosArray.create()
-		var clobbers = RegMaskColumn.create()
+		var sums = PressureDeltaColumn.create(0)
+		var bests = PressureDeltaColumn.create(0)
+		var ops = BlockOpPosArray.create(0)
+		var clobbers = RegMaskColumn.create(0)
 
 		for k in 0 upto self.nodeSum.count() 'copySums'
 			sums.push(decodeDelta(try self.nodeSum.get(k) otherwise panic("PressureIndex.verifySparseBuild: nodeSum.get OOB at {k}")))
@@ -2843,7 +2843,7 @@ export type PressureRelayoutScratch
 	var confClass as ValueClassColumn
 
 	export static function create() returns PressureRelayoutScratch
-		return Self{opCounts: DenseColumn.create(), operands: OperandList.create(), first: PressureSlotColumn.create(), len: PressureSlotColumn.create(), windowFirst: 0, holdsOp: BoolArray.create(), opAt: PressureCountCellColumn.create(), delta: PressureDeltaCellColumn.create(), transient: PressureDeltaCellColumn.create(), moved: PressureCountCellColumn.create(), capturedPending: RegMaskColumn.create(), capturedPhysLive: RegMaskColumn.create(), confFound: BoolArray.create(), confPressure: PressureCountCellColumn.create(), confAtFixed: BoolArray.create(), confWitness: RegMaskColumn.create(), confClass: ValueClassColumn.create()}
+		return Self{opCounts: DenseColumn.create(0), operands: OperandList.create(0), first: PressureSlotColumn.create(0), len: PressureSlotColumn.create(0), windowFirst: 0, holdsOp: BoolArray.create(0), opAt: PressureCountCellColumn.create(0), delta: PressureDeltaCellColumn.create(0), transient: PressureDeltaCellColumn.create(0), moved: PressureCountCellColumn.create(0), capturedPending: RegMaskColumn.create(0), capturedPhysLive: RegMaskColumn.create(0), confFound: BoolArray.create(0), confPressure: PressureCountCellColumn.create(0), confAtFixed: BoolArray.create(0), confWitness: RegMaskColumn.create(0), confClass: ValueClassColumn.create(0)}
 	end 'create'
 
 	// Copy the index's per-BLOCK run layout aside — `relayout` only, which is the one thing that moves a
@@ -3750,7 +3750,7 @@ export type SplitWindows
 	var generation as DenseInt
 
 	static function create() returns SplitWindows
-		return Self{lo: DenseColumn.create(), hi: DenseColumn.create(), stamp: DenseColumn.create(), generation: 0}
+		return Self{lo: DenseColumn.create(0), hi: DenseColumn.create(0), stamp: DenseColumn.create(0), generation: 0}
 	end 'create'
 
 	export function begin(numBlocks ElementIndex)
@@ -3894,7 +3894,7 @@ export type SplitScratch
 
 	// THE MUTATORS' buffers: one flag per use site of the victim (does that use start a fresh reload —
 	// `markRunStarts`), and the operand list the use-rewriter fills. Allocating both per SPLIT
-	// (`OperandList.create()` inside `spillOneValue` / `rematerializeConstant`) is the same per-split
+	// (`OperandList.create(0)` inside `spillOneValue` / `rematerializeConstant`) is the same per-split
 	// allocation term the rest of this type exists to remove.
 	export var runStarts as BoolArray
 	export var splitOperands as OperandList
@@ -3919,7 +3919,7 @@ export type SplitScratch
 	export var opRank as PeakRank
 
 	static function create(numBlocks ElementIndex) returns SplitScratch
-		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), carry: TransparentCarry.create(), sparseSweep: false, censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: DefPressureColumn.create(), usedAtPeak: BitRow.create(), candidates: ValueIdArray.create(), fitRecheck: DenseColumn.create(), gaps: VictimGaps.create(), peakReads: ValueIdArray.create(), tailValues: ValueIdArray.create(), splitEpoch: 0, reach: ReachCache.create(numBlocks), peakLiveBefore: BitRow.create(), tree: PeakTree.create(), pressure: PressureIndex.create(), relayout: PressureRelayoutScratch.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), opEffective: zeroClassRow(), reindexCandidates: DenseColumn.create(), reindexSortBuf: DenseColumn.create(), rank: emptyRank(), runStarts: BoolArray.create(), splitOperands: OperandList.create(), span: LiveAcrossSpan.create(), anchor: SplitAnchor.create(), confinedMode: false, unrelievableAtLastPeak: 0, windows: SplitWindows.create(), range: BlockSet.create(), opRank: emptyRank()}
+		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(0), effPools: EffectivePools.create(), census: RegPoolCensus.create(), carry: TransparentCarry.create(), sparseSweep: false, censusIds: ValueIdArray.create(0), censusWasLive: BoolArray.create(0), liveAtOp: ValueIdArray.create(0), hall: HallScratch.create(), defLiveAfter: DefPressureColumn.create(), usedAtPeak: BitRow.create(), candidates: ValueIdArray.create(0), fitRecheck: DenseColumn.create(0), gaps: VictimGaps.create(), peakReads: ValueIdArray.create(0), tailValues: ValueIdArray.create(0), splitEpoch: 0, reach: ReachCache.create(numBlocks), peakLiveBefore: BitRow.create(), tree: PeakTree.create(), pressure: PressureIndex.create(), relayout: PressureRelayoutScratch.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), opEffective: zeroClassRow(), reindexCandidates: DenseColumn.create(0), reindexSortBuf: DenseColumn.create(0), rank: emptyRank(), runStarts: BoolArray.create(0), splitOperands: OperandList.create(0), span: LiveAcrossSpan.create(), anchor: SplitAnchor.create(), confinedMode: false, unrelievableAtLastPeak: 0, windows: SplitWindows.create(), range: BlockSet.create(), opRank: emptyRank()}
 	end 'create'
 
 	// Size everything the incremental update needs and BUILD the positional pressure index. Deferred
@@ -5614,7 +5614,7 @@ function defSeqDescription(module TargetModule, liveness LivenessResult, pressur
 	match index.defKindOf(valueId) 'kind'
 		none then return "no def"
 		phiDef then return "block {index.defBlockOf(valueId)} entry"
-		opDef then return "position {pressure.positionOfSlot(index.defBlockOf(valueId), slot: pressure.defSlotOf(valueId))} (op index {index.requireDefOp(valueId)}: {opShapeDescription(module, opIdx: index.requireDefOp(valueId), buf: OperandList.create(), opFacts: liveness.opFacts)})"
+		opDef then return "position {pressure.positionOfSlot(index.defBlockOf(valueId), slot: pressure.defSlotOf(valueId))} (op index {index.requireDefOp(valueId)}: {opShapeDescription(module, opIdx: index.requireDefOp(valueId), buf: OperandList.create(0), opFacts: liveness.opFacts)})"
 	end 'kind'
 end 'defSeqDescription'
 
@@ -5632,7 +5632,7 @@ function useSeqsDescription(module TargetModule, liveness LivenessResult, valueI
 	for _ in 0 upto useSites 'eachUse'
 		match index.useKindAt(record) 'kind'
 			edge then out.append("{index.useSeqAt(record)}(edge) ")
-			op then out.append("{index.useSeqAt(record)}({opShapeDescription(module, opIdx: index.useOpAt(record), buf: OperandList.create(), opFacts: liveness.opFacts)}) ")
+			op then out.append("{index.useSeqAt(record)}({opShapeDescription(module, opIdx: index.useOpAt(record), buf: OperandList.create(0), opFacts: liveness.opFacts)}) ")
 		end 'kind'
 
 		record = index.nextUseOf(record)
@@ -5653,7 +5653,7 @@ end 'opShapeDescription'
 // refusal path only, so it walks every block.
 function peakCrossesAColdRun(liveness LivenessResult, peak PressurePeak) returns bool
 	let topo = liveness.cfg.topo
-	var members = ValueIdArray.create()
+	var members = ValueIdArray.create(0)
 
 	for local in 0 upto topo.numBlocks 'eachBlock'
 		if liveness.coldRuns.of(local).runCount() == 0 'noRunHere'
@@ -7888,7 +7888,7 @@ export type ReachCache
 	// `chooseVictim` and never walks. Sizing the columns eagerly would put a per-function allocation,
 	// proportional to the block count, on every function in the program to serve the few that spill.
 	static function create(numBlocks ElementIndex) returns ReachCache
-		return Self{numBlocks: numBlocks, hasPeak: false, peakBlockLocal: 0, generation: FirstReachGeneration, rowOf: ReachRowColumn.create(), rowOfGeneration: ReachStampColumn.create(), rows: ReachStampColumn.create(), rowCount: 0, worklist: CfgIndexArray.create(), lowReach: CfgIndexArray.create(), lowReachBuilt: false}
+		return Self{numBlocks: numBlocks, hasPeak: false, peakBlockLocal: 0, generation: FirstReachGeneration, rowOf: ReachRowColumn.create(0), rowOfGeneration: ReachStampColumn.create(), rows: ReachStampColumn.create(), rowCount: 0, worklist: CfgIndexArray.create(0), lowReach: CfgIndexArray.create(0), lowReachBuilt: false}
 	end 'create'
 
 	// Aim the cache at the peak `chooseVictim` is about to ask about. Everything walked from a
@@ -9330,8 +9330,8 @@ function verifyIncremental(module TargetModule, cfg FuncCfg, func IrFunction, li
 	end 'eachHigh'
 
 	for b in 0 upto cfg.topo.numBlocks 'eachBlock'
-		var actualSet = ValueIdArray.create()
-		var expectedSet = ValueIdArray.create()
+		var actualSet = ValueIdArray.create(0)
+		var expectedSet = ValueIdArray.create(0)
 		liveness.live.liveInInto(b, out: actualSet)
 		fresh.live.liveInInto(b, out: expectedSet)
 		verifyLiveSet(actualSet, fresh: expectedSet, onEntry: true, blockLocal: b, name: name, iterations: iterations)
@@ -9405,7 +9405,7 @@ function verifyEntryThreads(liveness LivenessResult, blockLocal ElementIndex, na
 	for direction in 0 upto 2 'eachDirection'
 		let isOut = direction == 1
 		let what = "out of" if isOut else "into"
-		var members = ValueIdArray.create()
+		var members = ValueIdArray.create(0)
 
 		if isOut 'outList'
 			liveness.live.explicitOutInto(blockLocal, out: members)
@@ -9426,8 +9426,8 @@ function verifyFirstBuild(module TargetModule, cfg FuncCfg, func IrFunction, liv
 	view fresh = computeLivenessOn(module, cfg: cfg.withoutSkip(), func: func, valueClass: liveness.valueClass, file: liveness.registerFile, opFacts: liveness.opFacts)
 
 	for b in 0 upto cfg.topo.numBlocks 'eachBlock'
-		var actualSet = ValueIdArray.create()
-		var expectedSet = ValueIdArray.create()
+		var actualSet = ValueIdArray.create(0)
+		var expectedSet = ValueIdArray.create(0)
 		liveness.live.liveInInto(b, out: actualSet)
 		fresh.live.liveInInto(b, out: expectedSet)
 		verifyLiveSet(actualSet, fresh: expectedSet, onEntry: true, blockLocal: b, name: name, iterations: 0)

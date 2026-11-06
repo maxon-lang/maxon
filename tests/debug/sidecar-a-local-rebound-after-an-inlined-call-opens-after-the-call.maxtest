@@ -5,13 +5,13 @@ let ReboundLocalName = "best"
 test 'a var rebound to another name right after an inlined call is not shown as the new value inside the call'
 	let staged = builtFixture(PhiBorrowCaseLabel, fixture: PhiBorrowFixtureName)
 	let executable = builtExecutable(staged)
-	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create())
+	let dump = spawnDumpInfo(executable, staged: staged, sections: StringArray.create(0))
 	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
 	let endAt = anchorLine(staged.join(StagedProgramFileName), anchor: "end")
 	let endOffsets = statementOffsetsOfLine(executable, staged: staged, line: endAt)
 	let firstOfEnd = try endOffsets.get(0) otherwise panic("debug tests: the `end` line has no statement row, so this case cannot say where the call ends")
-	var rows = StringArray.create()
-	var tooEarly = StringArray.create()
+	var rows = StringArray.create(0)
+	var tooEarly = StringArray.create(0)
 
 	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
 		if firstToken(row) == ReboundLocalName 'theLocal'

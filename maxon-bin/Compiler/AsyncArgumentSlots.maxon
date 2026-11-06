@@ -30,8 +30,8 @@ module type AsyncArgumentSlots
 		let mask = Self.floatMaskOf(paramTypes, byReference: byReference)
 		let userCount = paramTypes.count() as ParamCount
 		let witnessParams = Self.witnessParamsOf(paramTypes, byReference: byReference)
-		var offsets = ByteOffsetArray.create()
-		var stackPositions = ParamCountArray.create()
+		var offsets = ByteOffsetArray.create(0)
+		var stackPositions = ParamCountArray.create(0)
 		var usesImage = false
 
 		for position in 0 upto userCount + (witnessParams.count() as ParamCount) 'eachSlot'
@@ -66,17 +66,17 @@ module type AsyncArgumentSlots
 	module static function recorded(paramTypes MaxonTypeArray, byReference ParamPositionMask) returns Self
 		let userCount = paramTypes.count() as ParamCount
 		let witnessParams = Self.witnessParamsOf(paramTypes, byReference: byReference)
-		var offsets = ByteOffsetArray.create()
+		var offsets = ByteOffsetArray.create(0)
 
 		for position in 0 upto userCount + (witnessParams.count() as ParamCount) 'eachSlot'
 			offsets.push((position as ByteOffset) * GtArgSlotBytes)
 		end 'eachSlot'
 
-		return Self{floatMask: Self.floatMaskOf(paramTypes, byReference: byReference), userCount: userCount, offsets: offsets, witnessParams: witnessParams, stackPositions: ParamCountArray.create(), usesImage: false}
+		return Self{floatMask: Self.floatMaskOf(paramTypes, byReference: byReference), userCount: userCount, offsets: offsets, witnessParams: witnessParams, stackPositions: ParamCountArray.create(0), usesImage: false}
 	end 'recorded'
 
 	static function floatMaskOf(paramTypes MaxonTypeArray, byReference ParamPositionMask) returns ArgFloatMask
-		var stdTypes = StdTypeArray.create()
+		var stdTypes = StdTypeArray.create(0)
 
 		for word in cellPositionsAsWords(paramTypes, byReference: byReference) 'eachWord'
 			stdTypes.push(maxonTypeToStdType(word))
@@ -86,7 +86,7 @@ module type AsyncArgumentSlots
 	end 'floatMaskOf'
 
 	static function witnessParamsOf(paramTypes MaxonTypeArray, byReference ParamPositionMask) returns ParamCountArray
-		var witnessParams = ParamCountArray.create()
+		var witnessParams = ParamCountArray.create(0)
 
 		for position in 0 upto paramTypes.count() as ParamCount 'eachParam'
 			let paramType = try paramTypes.get(position) otherwise panic("AsyncArgumentSlots.witnessParamsOf: paramTypes.get OOB at {position} below its own count")

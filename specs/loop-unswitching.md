@@ -73,7 +73,7 @@ function fill(a WordArray, n Count)
 end 'fill'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.resize(5)
 	fill(a, n: 5)
 	var seen = 0 as Word
@@ -107,7 +107,7 @@ function total(a WordArray, n Count) returns Word
 end 'total'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		a.push(i * i)
 	end 'seed'
@@ -136,7 +136,7 @@ function overwrite(b WordArray, n Count)
 end 'overwrite'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 4 'seed'
 		a.push(i)
 	end 'seed'
@@ -185,7 +185,7 @@ function grow(a WordArray, n Count) returns Word
 end 'grow'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.push(7)
 	if grow(a, n: 40) != 280 'sum'
 		return 1
@@ -218,7 +218,7 @@ function walk(a WordArray, n Count) returns Word
 end 'walk'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 5 'seed'
 		a.push(i)
 	end 'seed'
@@ -257,7 +257,7 @@ function lastDoubled(a WordArray, n Count) returns Word
 end 'lastDoubled'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 4 'seed'
 		a.push(i + 1)
 	end 'seed'
@@ -302,7 +302,7 @@ function firstBigRow(rows WordArray, width Count, limit Word) returns Word
 end 'firstBigRow'
 
 function main() returns ExitCode
-	var rows = WordArray.create()
+	var rows = WordArray.create(0)
 	for _ in 0 upto 3 'seed'
 		rows.push(20)
 	end 'seed'
@@ -345,7 +345,7 @@ function tally(a WordArray) returns Word
 end 'tally'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.push(1)
 	a.push(2)
 	a.push(3)
@@ -378,7 +378,7 @@ function crossWrite(a WordArray, b WordArray, n Count) returns Word
 end 'crossWrite'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.resize(4)
 	if crossWrite(a, b: a, n: 4) != 46 'sum'
 		return 1

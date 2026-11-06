@@ -14,7 +14,7 @@ Top-level `var` declarations whose backing slot is never read or written by any 
 
 ### Why It Exists
 
-stdlib code (notably `stdlib/Log.maxon`) declares top-level vars whose initializers allocate heap memory (`var captured = TraceKeyArray.create()`). Without this pass, every user binary pays the allocation cost — even programs that never reference the var. The pass is the optimization referenced by the docstring at the top of `stdlib/Log.maxon`.
+stdlib code (notably `stdlib/Log.maxon`) declares top-level vars whose initializers allocate heap memory (`var captured = TraceKeyArray.create(0)`). Without this pass, every user binary pays the allocation cost — even programs that never reference the var. The pass is the optimization referenced by the docstring at the top of `stdlib/Log.maxon`.
 
 ### Mechanism
 

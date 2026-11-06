@@ -168,7 +168,7 @@ type Sentinel
 end 'Sentinel'
 
 function main() returns ExitCode
-	var readers = ReaderHandleArray.create()
+	var readers = ReaderHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < readerCount 'spawnEach'
@@ -181,7 +181,7 @@ function main() returns ExitCode
 	// Post every read before awaiting any of them — this is what makes eight reads CONCURRENT rather
 	// than eight reads one after another, and it is the whole difference between this program and one
 	// that could never see the subject.
-	var replies = ReplyPromiseArray.create()
+	var replies = ReplyPromiseArray.create(0)
 	var k = 0 as Integer
 	while k < readerCount 'sendEach'
 		view r = try readers.get(k as ElementIndex) otherwise panic("readers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
@@ -244,7 +244,7 @@ type Runner
 
 	export function child() returns Integer
 		let exe = Executable.name("cmd")
-		var argv = StringArray.create()
+		var argv = StringArray.create(0)
 		argv.push("/c")
 		argv.push("exit")
 		argv.push("0")
@@ -271,7 +271,7 @@ type Sentinel
 end 'Sentinel'
 
 function main() returns ExitCode
-	var runners = RunnerHandleArray.create()
+	var runners = RunnerHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < runnerCount 'spawnEach'
@@ -281,7 +281,7 @@ function main() returns ExitCode
 
 	let last = spawn Sentinel.create()
 
-	var replies = ReplyPromiseArray.create()
+	var replies = ReplyPromiseArray.create(0)
 	var k = 0 as Integer
 	while k < runnerCount 'sendEach'
 		view r = try runners.get(k as ElementIndex) otherwise panic("runners.get OOB at {k} — the loop is bounded by the count the pushes above filled")
@@ -590,7 +590,7 @@ OUT. No deadline races the sleep, so a slow host cannot reorder the two lines.
 let napMs = 300
 
 function spawnHeldChild() returns StreamingSubprocess throws SubprocessError
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 
 	#if os(Windows)
 		argv.push("/c")
@@ -663,7 +663,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias SentinelReply = Promise with Integer
 
 function spawnHeldChild() returns StreamingSubprocess throws SubprocessError
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 
 	#if os(Windows)
 		argv.push("/c")

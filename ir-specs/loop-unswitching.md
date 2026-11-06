@@ -40,11 +40,11 @@ function fillOnly(a WordArray, n Count)
 end 'fillOnly'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.resize(5)
-	var log = HalfArray.create()
+	var log = HalfArray.create(0)
 	fillAndLog(a, log: log, n: 5)
-	var b = WordArray.create()
+	var b = WordArray.create(0)
 	b.resize(5)
 	fillOnly(b, n: 5)
 	var seen = 0 as Word
@@ -1315,7 +1315,7 @@ function fillAndLog(a WordArray, n Count) returns Count
 
 	for i in 0 upto n 'each'
 		try a.set(i, value: (i * 3 + 1) as Word) otherwise panic("fillAndLog: i < n = a.count()")
-		var scratch = HalfArray.create()
+		var scratch = HalfArray.create(0)
 		scratch.push(7)
 		logged = logged + scratch.count()
 	end 'each'
@@ -1330,10 +1330,10 @@ function fillOnly(a WordArray, n Count)
 end 'fillOnly'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.resize(5)
 	let logged = fillAndLog(a, n: 5)
-	var b = WordArray.create()
+	var b = WordArray.create(0)
 	b.resize(5)
 	fillOnly(b, n: 5)
 	var seen = 0 as Word

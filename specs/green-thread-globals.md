@@ -231,14 +231,14 @@ type Reader
 end 'Reader'
 
 function main() returns ExitCode
-	var hs = ReaderHandleArray.create()
+	var hs = ReaderHandleArray.create(0)
 	var i = 0 as Count
 	while i < 12 'sp'
 		hs.push(spawn Reader.create())
 		i = i + 1
 	end 'sp'
 
-	var ps = IntPromiseArray.create()
+	var ps = IntPromiseArray.create(0)
 	var k = 0 as Count
 	while k < 12 'send'
 		view h = try hs.get(k) otherwise panic("get")
@@ -280,7 +280,7 @@ note: <fragment>:33:11: the `spawn` that makes `Reader` a service
 anchor belongs to the work rather than the module, which is why the compiler's own parser holds its anchors
 per parser (`ParserAnchors`).
 ```maxon
-var noEntries = IntArray.create()
+var noEntries = IntArray.create(0)
 
 function holdsNothing(column IntArray) returns bool
 	return column is noEntries
@@ -302,7 +302,7 @@ type Counter
 	end 'create'
 
 	export function count(by Integer) returns Integer
-		var column = IntArray.create()
+		var column = IntArray.create(0)
 		column.push(by)
 		return entryCount(column)
 	end 'count'
@@ -379,7 +379,7 @@ type Sorter
 	var items as IntArray
 
 	static function create() returns Self
-		return Self{items: IntArray.create()}
+		return Self{items: IntArray.create(0)}
 	end 'create'
 
 	export function add(n Integer)
@@ -467,7 +467,7 @@ type Roster
 	export var names as NameArray
 
 	static function create(count Integer) returns Self
-		var names = NameArray.create()
+		var names = NameArray.create(0)
 
 		for i in 0 upto count 'fill'
 			names.push("member {i}")
@@ -490,7 +490,7 @@ type Churner
 		var held = 0 as Count
 
 		for _ in 0 upto rounds 'eachRound'
-			var kept = HeldNamesArray.create()
+			var kept = HeldNamesArray.create(0)
 			kept.push(roster.names)
 			held = held + kept.count()
 		end 'eachRound'
@@ -500,7 +500,7 @@ type Churner
 end 'Churner'
 
 function main() returns ExitCode
-	var replies = ChurnReplyArray.create()
+	var replies = ChurnReplyArray.create(0)
 
 	for _ in 0 upto ChurnerCount 'eachChurner'
 		let h = spawn Churner.create()
@@ -627,7 +627,7 @@ type Bag
 	export var names as NameArray
 
 	static function create() returns Self
-		var names = NameArray.create()
+		var names = NameArray.create(0)
 
 		for i in 0 upto 3 'fill'
 			names.push("name {i}")
@@ -690,7 +690,7 @@ type Roster
 	export var names as NameArray
 
 	static function create(count Integer) returns Self
-		var names = NameArray.create()
+		var names = NameArray.create(0)
 
 		for i in 0 upto count 'fill'
 			names.push("member {i}")

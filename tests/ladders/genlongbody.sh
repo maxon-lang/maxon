@@ -25,7 +25,7 @@ esac
   echo -e "\texport var items as Boxes"
   echo ""
   echo -e "\tstatic function create() returns Self"
-  echo -e "\t\treturn Self{items: Boxes.create()}"
+  echo -e "\t\treturn Self{items: Boxes.create(0)}"
   echo -e "\tend 'create'"
   echo "end 'Reg'"
   echo ""

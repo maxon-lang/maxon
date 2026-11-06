@@ -102,7 +102,7 @@ type HeldLockCheck
 	export var refusalCode as ErrorCode
 
 	static function create(first ElementIndex, sites RuntimeLockSiteByOp, byName FuncIndexByName) returns HeldLockCheck
-		return Self{first: first, sites: sites, byName: byName, labels: ExclusiveLockLabelArray.create(), directTakes: LockSetArray.create(), directReleases: LockSetArray.create(), requires: LockSetArray.create(), takes: LockSetArray.create(), returnsHolding: LockSetArray.create(), alwaysReturnsHolding: LockSetArray.create(), addressTaken: BoolArray.create(), callsThroughPointer: BoolArray.create(), edgeStart: FuncIndexArray.create(), edges: FuncIndexArray.create(), indirectTakes: NoLocks, indirectRequires: NoLocks, sawAbort: false, refusal: "", refusalCode: ErrorCode.nestedExclusiveLockTake}
+		return Self{first: first, sites: sites, byName: byName, labels: ExclusiveLockLabelArray.create(0), directTakes: LockSetArray.create(0), directReleases: LockSetArray.create(0), requires: LockSetArray.create(0), takes: LockSetArray.create(0), returnsHolding: LockSetArray.create(0), alwaysReturnsHolding: LockSetArray.create(0), addressTaken: BoolArray.create(0), callsThroughPointer: BoolArray.create(0), edgeStart: FuncIndexArray.create(0), edges: FuncIndexArray.create(0), indirectTakes: NoLocks, indirectRequires: NoLocks, sawAbort: false, refusal: "", refusalCode: ErrorCode.nestedExclusiveLockTake}
 	end 'create'
 
 	function bitOfLabel(label ByteArray) returns LockSet
@@ -140,7 +140,7 @@ type HeldLockCheck
 	end 'noteAddressTaken'
 
 	function survey(module StdModule, globalData GlobalDataTable)
-		var ops = OpIndexArray.create()
+		var ops = OpIndexArray.create(0)
 		var call = StdCallOperands.create()
 		var reference = StdFunctionReference.create()
 		let count = module.funcCount()
@@ -335,7 +335,7 @@ type HeldLockCheck
 	// registered as requiring a lock enters holding it, because E5006 proves that of every caller.
 	function walk(module StdModule, position ElementIndex, summarizing bool) returns (LockSet, LockSet) throws HeldLockRefusal
 		let func = module.getFunc(position)
-		var ops = OpIndexArray.create()
+		var ops = OpIndexArray.create(0)
 		module.collectLiveOpIndices(func, into: ops)
 		let valueLabels = valueLabelsOf(module, ops: ops)
 
@@ -347,15 +347,15 @@ type HeldLockCheck
 		end 'eachBlock'
 
 		let contract = try self.requires.get(position) otherwise panic("HeldLockCheck.walk: requires.get OOB at {position}")
-		var mayAtEntry = LockSetArray.create()
+		var mayAtEntry = LockSetArray.create(0)
 		mayAtEntry.resize(blockCount)
-		var mustAtEntry = LockSetArray.create()
+		var mustAtEntry = LockSetArray.create(0)
 		mustAtEntry.resize(blockCount)
-		var reached = BoolArray.create()
+		var reached = BoolArray.create(0)
 		reached.resize(blockCount)
-		var work = BlockPositionArray.create()
-		var successors = BlockIdArray.create()
-		var blockOps = OpIndexArray.create()
+		var work = BlockPositionArray.create(0)
+		var successors = BlockIdArray.create(0)
+		var blockOps = OpIndexArray.create(0)
 		var exitMay = NoLocks
 		var exitMust = NoLocks
 		var anyReturn = false
@@ -581,11 +581,11 @@ type HeldLockCheck
 
 	function chainFrom(module StdModule, start ElementIndex, bit LockSet) returns String
 		let count = self.directTakes.count()
-		var parent = FuncIndexArray.create()
+		var parent = FuncIndexArray.create(0)
 		parent.resize(count)
-		var visited = BoolArray.create()
+		var visited = BoolArray.create(0)
 		visited.resize(count)
-		var queue = FuncIndexArray.create()
+		var queue = FuncIndexArray.create(0)
 		queue.push(start)
 		try visited.set(start, value: true) otherwise panic("HeldLockCheck.chainFrom: visited.set OOB at {start}")
 		var head = 0 as ElementIndex
@@ -618,7 +618,7 @@ type HeldLockCheck
 	end 'chainFrom'
 
 	function pathNames(module StdModule, parent FuncIndexArray, start ElementIndex, taker ElementIndex) returns String
-		var backwards = FuncIndexArray.create()
+		var backwards = FuncIndexArray.create(0)
 		var at = taker
 
 		while at != start 'toTheStart'
@@ -627,7 +627,7 @@ type HeldLockCheck
 		end 'toTheStart'
 
 		backwards.push(start)
-		var names = NameRoster.create()
+		var names = NameRoster.create(0)
 
 		for offset in 1 to backwards.count() 'eachName'
 			let position = try backwards.get(backwards.count() - offset) otherwise panic("HeldLockCheck.pathNames: backwards.get OOB at offset {offset}")

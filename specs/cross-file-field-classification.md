@@ -502,7 +502,7 @@ export type Bag
 	export var items as IntArray
 
 	export static function make() returns Bag
-		var xs = IntArray.create()
+		var xs = IntArray.create(0)
 		xs.push(1)
 		return Bag{items: xs}
 	end 'make'
@@ -536,7 +536,7 @@ export type Bag
 	export var items as IntArray
 
 	export static function make() returns Bag
-		var xs = IntArray.create()
+		var xs = IntArray.create(0)
 		xs.push(seed())
 		return Bag{items: xs}
 	end 'make'

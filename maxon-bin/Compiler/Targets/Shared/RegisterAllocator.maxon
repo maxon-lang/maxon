@@ -88,7 +88,7 @@ export type Allocation
 		// (`rangedAliasStorageBytes`), so a buffer filled as one and read as the other would hand every later
 		// read a stride it was not written at.
 		let color = RegisterColumn.absent(valueCount)
-		var holderOfReg = ValueIdArray.create()
+		var holderOfReg = ValueIdArray.create(0)
 		holderOfReg.refill(RegisterFileSize, value: 0)
 
 		return Self{color: color, valueCount: valueCount, holderOfReg: holderOfReg}
@@ -268,7 +268,7 @@ export type ColdCallBracketPlan
 	var cursor as ElementIndex
 
 	export static function create(isArm64 bool) returns ColdCallBracketPlan
-		return Self{saveSeqs: OpSeqArray.create(), reloadSeqs: OpSeqArray.create(), ends: ColumnLengthColumn.create(), regs: RegNumColumn.create(), kinds: BracketEntryKindArray.create(), payloads: BracketPayloadArray.create(), isArm64: isArm64, slotOfReg: SpillSlotArray.create(), regHasSlot: BoolArray.create(), nextSlot: 0, cursor: 0}
+		return Self{saveSeqs: OpSeqArray.create(0), reloadSeqs: OpSeqArray.create(0), ends: ColumnLengthColumn.create(0), regs: RegNumColumn.create(0), kinds: BracketEntryKindArray.create(0), payloads: BracketPayloadArray.create(0), isArm64: isArm64, slotOfReg: SpillSlotArray.create(0), regHasSlot: BoolArray.create(0), nextSlot: 0, cursor: 0}
 	end 'create'
 
 	// Forget every bracket and every slot — a pass that ended with a stuck value is discarded whole — and
@@ -613,11 +613,11 @@ export type RegAllocStats
 	export var repairedByEviction as EventCount
 
 	export static function create() returns RegAllocStats
-		var phaseNanos = DurationNanosArray.create()
+		var phaseNanos = DurationNanosArray.create(0)
 		phaseNanos.resize(RegAllocPhase.allCases.count())
-		var phaseCpuTicks = CpuTicksArray.create()
+		var phaseCpuTicks = CpuTicksArray.create(0)
 		phaseCpuTicks.resize(RegAllocPhase.allCases.count())
-		var maxPressureFunc = PressureFuncByClass.create()
+		var maxPressureFunc = PressureFuncByClass.create(0)
 
 		for _ in 0 upto RegClassCount 'eachClass'
 			maxPressureFunc.push("")
@@ -843,7 +843,7 @@ function assertX64CallClobbers(pool RegMask)
 	// the thing that actually moved.
 	assertCalleeSavedListsMatchMasks()
 
-	assertOneCallClobber(TargetOp.callDirect(ByteArray.create()), name: "callDirect", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
+	assertOneCallClobber(TargetOp.callDirect(ByteArray.create(0)), name: "callDirect", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 	assertOneCallClobber(TargetOp.iatCall(0), name: "iatCall", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 
 	// The register-indirect call carries the SAME caller-saved clobber mask as `callDirect`
@@ -906,7 +906,7 @@ function assertEncoderScratchMasks(target Target)
 end 'assertEncoderScratchMasks'
 
 function assertX64EncoderScratchMasks()
-	assertEncoderScratchMask(TargetOp.x64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "x64JumpTable", expected: x64JumpTableScratchMask(), hazard: "the biased index could be colored onto a register the jump-table encoder clobbers")
+	assertEncoderScratchMask(TargetOp.x64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(0), tableLabel: b""), name: "x64JumpTable", expected: x64JumpTableScratchMask(), hazard: "the biased index could be colored onto a register the jump-table encoder clobbers")
 	assertEncoderScratchMask(TargetOp.x64MemFill(0), name: "x64MemFill", expected: x64MemFillScratchMask(), hazard: "a value live across the fill could be colored onto a register the ladder clobbers")
 	assertEncoderScratchMask(TargetOp.cvtu64sdRegReg(TargetVReg.virtual(0), src: TargetVReg.virtual(0)), name: "cvtu64sdRegReg", expected: x64UnsignedToFloatScratchMask(), hazard: "the source could be colored onto the register the halving sequence clobbers before its last read")
 
@@ -918,7 +918,7 @@ end 'assertX64EncoderScratchMasks'
 
 function assertArm64EncoderScratchMasks()
 	let ipPair = regMaskAdd(regMaskAdd(0, regNum: Arm64Ip0Reg), regNum: Arm64Ip1Reg)
-	assertEncoderScratchMask(TargetOp.arm64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "arm64JumpTable", expected: ipPair, hazard: "the biased index could be colored onto a register the jump-table encoder clobbers")
+	assertEncoderScratchMask(TargetOp.arm64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(0), tableLabel: b""), name: "arm64JumpTable", expected: ipPair, hazard: "the biased index could be colored onto a register the jump-table encoder clobbers")
 	assertEncoderScratchMask(TargetOp.arm64MemFill(0), name: "arm64MemFill", expected: arm64MemFillScratchMask(), hazard: "a value live across the fill could be colored onto a register the ladder clobbers")
 
 	// Both atomics keep their working value in x16 and their store status in x17 — the SAME IP pair
@@ -1256,7 +1256,7 @@ function refuseLoweredUnit(project Project, lowered LoweredUnit, authorFilePath 
 	var facts = RegAllocFacts.create()
 
 	// It asks about no named value: the compile is failing, and a diagnostic run has no sidecar to fill.
-	try allocateFunctionCore(lowered.targetModule, func: func, hasAuthor: hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValues: DebugValueRoster.empty(), debugLocations: DebugValueLocationArray.create(), debugRanges: DebugValueRangeArray.create(), debugSpans: DebugSpanRows.create()) otherwise 'refusedAgain'
+	try allocateFunctionCore(lowered.targetModule, func: func, hasAuthor: hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValues: DebugValueRoster.empty(), debugLocations: DebugValueLocationArray.create(0), debugRanges: DebugValueRangeArray.create(0), debugSpans: DebugSpanRows.create()) otherwise 'refusedAgain'
 		try renderRegisterPressureRefusal(project, module: lowered.targetModule, func: func, funcIndex: funcIndex, pool: pool, refusal: refusal)
 	end 'refusedAgain'
 
@@ -1413,7 +1413,7 @@ type DebugTouches
 	var anchors as CsrColumn
 
 	static function create() returns DebugTouches
-		return Self{slots: CsrColumn.create(), anchors: CsrColumn.create()}
+		return Self{slots: CsrColumn.create(0), anchors: CsrColumn.create(0)}
 	end 'create'
 
 	function note(slot DebugNamedSlot, anchor DebugOpAnchor)
@@ -1440,7 +1440,7 @@ type DebugBlockPlaces
 	export var anchorCount as DebugOpAnchor
 
 	static function over(module TargetModule, func IrFunction, topo FuncTopology, opFacts OpVariantFacts, noteStores bool) returns DebugBlockPlaces
-		var places = Self{ordinalOfOp: DebugAnchorColumn.absent(module.ops.count()), placeOfLocal: DebugPlaceColumn.absent(topo.numBlocks), localOfPlace: CfgIndexArray.create(), blockIdOfPlace: BlockIdColumn.create(), siteKeyOfPlace: DebugSiteKeyColumn.create(), blockFirst: DebugAnchorColumn.create(), blockLast: DebugAnchorColumn.create(), storedSlotAt: DebugSlotColumn.create(), anchorCount: 0}
+		var places = Self{ordinalOfOp: DebugAnchorColumn.absent(module.ops.count()), placeOfLocal: DebugPlaceColumn.absent(topo.numBlocks), localOfPlace: CfgIndexArray.create(0), blockIdOfPlace: BlockIdColumn.create(0), siteKeyOfPlace: DebugSiteKeyColumn.create(0), blockFirst: DebugAnchorColumn.create(), blockLast: DebugAnchorColumn.create(), storedSlotAt: DebugSlotColumn.create(), anchorCount: 0}
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("DebugBlockPlaces.over: blockRef from func.blockRefs not in module.blocks")
@@ -1505,21 +1505,21 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 		return
 	end 'runsStandAsHarvested'
 
-	var raw = DebugValueRangeArray.create()
+	var raw = DebugValueRangeArray.create(0)
 	collectDebugRuns(liveness, roster: roster, names: names, places: places, into: raw)
 	refineDebugRuns(raw, into: into, spans: spans, liveness: liveness, roster: roster, locations: locations, names: names, places: places, paramCount: func.paramCount)
 end 'harvestDebugValueRanges'
 
 function collectDebugRuns(liveness LivenessResult, roster DebugValueRoster, names DebugNameIndex, places DebugBlockPlaces, into DebugValueRangeArray)
-	var scratch = DebugNamedSlotColumn.create()
+	var scratch = DebugNamedSlotColumn.create(0)
 	var touches = DebugTouches.create()
 	collectDebugTouches(touches, liveness: liveness, names: names, ordinalOfOp: places.ordinalOfOp, placeOfLocal: places.placeOfLocal, blockFirst: places.blockFirst, siteKeyOfPlace: places.siteKeyOfPlace, scratch: scratch)
 	let byAnchor = touches.byAnchor(places.anchorCount)
 
 	var startOrd = DebugAnchorColumn.absent(roster.valueIds.count())
 	var endOrd = DebugAnchorColumn.absent(roster.valueIds.count())
-	var active = DebugNamedSlotColumn.create()
-	var members = ValueIdArray.create()
+	var active = DebugNamedSlotColumn.create(0)
+	var members = ValueIdArray.create(0)
 
 	for (place, local) in places.localOfPlace.withIterator() 'eachBlocksRuns'
 		let first = try places.blockFirst.get(place.index()) otherwise continue
@@ -1571,8 +1571,8 @@ type DebugNameIndex
 	var siteParents as DebugSiteKeyColumn
 
 	static function over(roster DebugValueRoster, valueCount ValueId) returns DebugNameIndex
-		var sites = CsrColumn.create()
-		var names = CsrColumn.create()
+		var sites = CsrColumn.create(0)
+		var names = CsrColumn.create(0)
 
 		for (iter, value) in roster.valueIds.withIterator() 'eachName'
 			if value < valueCount 'inThisFunction'
@@ -1582,8 +1582,8 @@ type DebugNameIndex
 		end 'eachName'
 
 		let bySite = buildCsr(sites, to: names, nodeCount: roster.siteKeyCount() as CsrIndex)
-		var values = CsrColumn.create()
-		var siteOrdered = CsrColumn.create()
+		var values = CsrColumn.create(0)
+		var siteOrdered = CsrColumn.create(0)
 
 		for site in 0 upto bySite.nodeCount() 'eachSite'
 			for k in 0 upto bySite.degree(site) 'eachNameOfTheSite'
@@ -1663,7 +1663,7 @@ type DebugNameIndex
 end 'DebugNameIndex'
 
 function siteParentsOf(roster DebugValueRoster) returns DebugSiteKeyColumn
-	var parents = DebugSiteKeyColumn.create()
+	var parents = DebugSiteKeyColumn.create(0)
 	parents.reserve(roster.siteKeyCount())
 	parents.push(FunctionTextSiteKey)
 
@@ -1956,20 +1956,20 @@ type DebugBindingSites
 	static function over(roster DebugValueRoster, liveness LivenessResult, locations DebugValueLocationArray, places DebugBlockPlaces, topo FuncTopology, dom DominatorTree, paramCount ParamCount) returns DebugBindingSites
 		let index = liveness.useIndex
 		let count = roster.valueIds.count()
-		var defLocal = CfgIndexArray.create()
+		var defLocal = CfgIndexArray.create(0)
 		defLocal.reserve(count)
 		var startAt = DebugAnchorColumn.absent(count)
-		var startAfterPrevious = BoolArray.create()
+		var startAfterPrevious = BoolArray.create(0)
 		startAfterPrevious.resize(count)
 		var handoverAt = DebugAnchorColumn.absent(count)
-		var borrowed = BoolArray.create()
+		var borrowed = BoolArray.create(0)
 		borrowed.resize(count)
-		var parsePlaced = BoolArray.create()
+		var parsePlaced = BoolArray.create(0)
 		parsePlaced.resize(count)
-		var groupOfOrdinal = CsrColumn.create()
-		var ordinals = CsrColumn.create()
+		var groupOfOrdinal = CsrColumn.create(0)
+		var ordinals = CsrColumn.create(0)
 		var groupCount = 0 as CsrIndex
-		var unplaceableGroups = CsrColumn.create()
+		var unplaceableGroups = CsrColumn.create(0)
 
 		for (iter, value) in roster.valueIds.withIterator() 'eachNamedValue'
 			let ordinal = iter.index()
@@ -2042,7 +2042,7 @@ type DebugBindingSites
 			ordinals.push(ordinal as CsrIndex)
 		end 'eachNamedValue'
 
-		var unplaceable = BoolArray.create()
+		var unplaceable = BoolArray.create(0)
 		unplaceable.resize(groupCount as ElementIndex)
 
 		for group in unplaceableGroups 'eachUnplaceableGroup'
@@ -2050,8 +2050,8 @@ type DebugBindingSites
 		end 'eachUnplaceableGroup'
 
 		let byGroup = buildCsr(groupOfOrdinal, to: ordinals, nodeCount: groupCount)
-		var preOf = CfgIndexArray.create()
-		var spanEnd = CfgIndexArray.create()
+		var preOf = CfgIndexArray.create(0)
+		var spanEnd = CfgIndexArray.create(0)
 		preOf.reserve(count)
 		spanEnd.reserve(count)
 
@@ -2060,9 +2060,9 @@ type DebugBindingSites
 			spanEnd.push(dom.preorderOf(local) + dom.dominatedCount(local))
 		end 'eachDefinitionBlock'
 
-		var orderKey = CfgIndexArray.create()
+		var orderKey = CfgIndexArray.create(0)
 		orderKey.refill(count, value: 0)
-		var keyed = CfgIndexArray.create()
+		var keyed = CfgIndexArray.create(0)
 		keyed.reserve(ordinals.count())
 
 		for grouped in ordinals 'eachGroupedOrdinal'
@@ -2072,8 +2072,8 @@ type DebugBindingSites
 		end 'eachGroupedOrdinal'
 
 		keyed.sort()
-		var inBindingOrder = CsrColumn.create()
-		var preKeys = CsrColumn.create()
+		var inBindingOrder = CsrColumn.create(0)
+		var preKeys = CsrColumn.create(0)
 		inBindingOrder.reserve(keyed.count())
 		preKeys.reserve(keyed.count())
 
@@ -2084,8 +2084,8 @@ type DebugBindingSites
 		end 'eachKeyInOrder'
 
 		let byPre = buildCsr(preKeys, to: inBindingOrder, nodeCount: topo.numBlocks as CsrIndex)
-		var flowGroups = CsrColumn.create()
-		var flowOrdinals = CsrColumn.create()
+		var flowGroups = CsrColumn.create(0)
+		var flowOrdinals = CsrColumn.create(0)
 		flowGroups.reserve(ordinals.count())
 		flowOrdinals.reserve(ordinals.count())
 
@@ -2098,7 +2098,7 @@ type DebugBindingSites
 		end 'eachPreorderPosition'
 
 		let byGroupInFlow = buildCsr(flowGroups, to: flowOrdinals, nodeCount: groupCount)
-		var looseGroup = BoolArray.create()
+		var looseGroup = BoolArray.create(0)
 		looseGroup.resize(groupCount as ElementIndex)
 
 		for (iter, parsed) in parsePlaced.withIterator() 'eachParsePlaced'
@@ -2107,7 +2107,7 @@ type DebugBindingSites
 			end 'withoutAPosition'
 		end 'eachParsePlaced'
 
-		var repeatsEarlier = BoolArray.create()
+		var repeatsEarlier = BoolArray.create(0)
 		repeatsEarlier.resize(count)
 		var firstOfVersion = DebugVersionOrigins.create()
 
@@ -2126,7 +2126,7 @@ type DebugBindingSites
 			end 'theFirstOrdinalOfIt'
 		end 'eachSpilledVersion'
 
-		var refinement = DebugRunRefinementColumn.create()
+		var refinement = DebugRunRefinementColumn.create(0)
 		refinement.reserve(count)
 
 		for (iter, location) in locations.withIterator() 'eachLocation'
@@ -2181,36 +2181,36 @@ type DebugRunRefiner
 
 	static function over(topo FuncTopology, dom DominatorTree, places DebugBlockPlaces, names DebugNameIndex) returns DebugRunRefiner
 		let blockCount = topo.numBlocks
-		var visited = CfgIndexArray.create()
+		var visited = CfgIndexArray.create(0)
 		visited.refill(blockCount, value: 0)
-		var revived = CfgIndexArray.create()
+		var revived = CfgIndexArray.create(0)
 		revived.refill(blockCount, value: 0)
-		var cutStamp = CfgIndexArray.create()
+		var cutStamp = CfgIndexArray.create(0)
 		cutStamp.refill(blockCount, value: 0)
-		var cutBefore = DebugAnchorArray.create()
+		var cutBefore = DebugAnchorArray.create(0)
 		cutBefore.refill(blockCount, value: 0)
-		var stopStamp = CfgIndexArray.create()
+		var stopStamp = CfgIndexArray.create(0)
 		stopStamp.refill(blockCount, value: 0)
 		let siteCount = names.siteCount()
-		var viewOfSite = CfgIndexArray.create()
+		var viewOfSite = CfgIndexArray.create(0)
 		viewOfSite.refill(siteCount, value: 0)
-		var childOf = CsrColumn.create()
-		var children = CsrColumn.create()
+		var childOf = CsrColumn.create(0)
+		var children = CsrColumn.create(0)
 
 		for site in 1 upto siteCount 'eachInlineSite'
 			childOf.push(names.parentOfSite(site) as CsrIndex)
 			children.push(site as CsrIndex)
 		end 'eachInlineSite'
 
-		var siteOf = CsrColumn.create()
-		var localsOf = CsrColumn.create()
+		var siteOf = CsrColumn.create(0)
+		var localsOf = CsrColumn.create(0)
 
 		for (place, local) in places.localOfPlace.withIterator() 'eachPlace'
 			siteOf.push(debugSiteKeyAt(places.siteKeyOfPlace, at: place.index()) as CsrIndex)
 			localsOf.push(local as CsrIndex)
 		end 'eachPlace'
 
-		return Self{visited: visited, revived: revived, cutStamp: cutStamp, cutBefore: cutBefore, stopStamp: stopStamp, pending: CfgIndexArray.create(), rivals: CfgIndexArray.create(), positionless: false, resumeAfter: CfgIndexArray.create(), scopeLocals: CfgIndexArray.create(), rivalLocals: CfgIndexArray.create(), rivalFirst: CfgIndexArray.create(), rivalPast: CfgIndexArray.create(), rivalCuts: DebugAnchorArray.create(), rivalCutKnown: BoolArray.create(), stopLocals: CfgIndexArray.create(), holeStarts: CfgIndexArray.create(), holeEnds: CfgIndexArray.create(), candidates: CfgIndexArray.create(), points: CfgIndexArray.create(), frontier: debugDominanceFrontiers(topo, dom: dom), siteChildren: buildCsr(childOf, to: children, nodeCount: siteCount as CsrIndex), siteLocals: buildCsr(siteOf, to: localsOf, nodeCount: siteCount as CsrIndex), siteWalk: CfgIndexArray.create(), viewOfSite: viewOfSite, viewPreorders: CfgIndexArray.create()}
+		return Self{visited: visited, revived: revived, cutStamp: cutStamp, cutBefore: cutBefore, stopStamp: stopStamp, pending: CfgIndexArray.create(0), rivals: CfgIndexArray.create(0), positionless: false, resumeAfter: CfgIndexArray.create(0), scopeLocals: CfgIndexArray.create(0), rivalLocals: CfgIndexArray.create(0), rivalFirst: CfgIndexArray.create(0), rivalPast: CfgIndexArray.create(0), rivalCuts: DebugAnchorArray.create(0), rivalCutKnown: BoolArray.create(0), stopLocals: CfgIndexArray.create(0), holeStarts: CfgIndexArray.create(0), holeEnds: CfgIndexArray.create(0), candidates: CfgIndexArray.create(0), points: CfgIndexArray.create(0), frontier: debugDominanceFrontiers(topo, dom: dom), siteChildren: buildCsr(childOf, to: children, nodeCount: siteCount as CsrIndex), siteLocals: buildCsr(siteOf, to: localsOf, nodeCount: siteCount as CsrIndex), siteWalk: CfgIndexArray.create(0), viewOfSite: viewOfSite, viewPreorders: CfgIndexArray.create(0)}
 	end 'over'
 
 	function cutBlockBefore(local ElementIndex, anchor DebugOpAnchor, stamp ElementIndex)
@@ -2694,7 +2694,7 @@ type DebugRunRefiner
 			return known - 1
 		end 'aViewAlreadyBuilt'
 
-		var keyed = CfgIndexArray.create()
+		var keyed = CfgIndexArray.create(0)
 		self.siteWalk.clear()
 		self.siteWalk.push(siteKey as ElementIndex)
 
@@ -2913,7 +2913,7 @@ type DebugRunRefiner
 			return
 		end 'alreadyOrdered'
 
-		var keyed = CfgIndexArray.create()
+		var keyed = CfgIndexArray.create(0)
 		keyed.reserve(self.holeStarts.count())
 
 		for at in 0 upto self.holeStarts.count() 'eachHole'
@@ -2921,8 +2921,8 @@ type DebugRunRefiner
 		end 'eachHole'
 
 		keyed.sort()
-		var starts = CfgIndexArray.create()
-		var ends = CfgIndexArray.create()
+		var starts = CfgIndexArray.create(0)
+		var ends = CfgIndexArray.create(0)
 
 		for key in keyed 'eachInOrder'
 			let at = key mod DebugOrdinalSpan
@@ -3028,9 +3028,9 @@ function debugOrderKeyOf(sites DebugBindingSites, ordinal ElementIndex) returns 
 end 'debugOrderKeyOf'
 
 function debugDominanceFrontiers(topo FuncTopology, dom DominatorTree) returns CsrGraph
-	var owners = CsrColumn.create()
-	var members = CsrColumn.create()
-	var recorded = CfgIndexArray.create()
+	var owners = CsrColumn.create(0)
+	var members = CsrColumn.create(0)
+	var recorded = CfgIndexArray.create(0)
 	recorded.refill(topo.numBlocks, value: 0)
 
 	if not dom.reducible 'noFrontierIsNeeded'
@@ -3077,8 +3077,8 @@ function refineDebugRuns(raw DebugValueRangeArray, into DebugValueRangeArray, sp
 	let topo = liveness.cfg.topo
 	let dom = DominatorTree.of(topo)
 	let sites = DebugBindingSites.over(roster, liveness: liveness, locations: locations, places: places, topo: topo, dom: dom, paramCount: paramCount)
-	var runOrdinals = CsrColumn.create()
-	var runIndices = CsrColumn.create()
+	var runOrdinals = CsrColumn.create(0)
+	var runIndices = CsrColumn.create(0)
 
 	for (iter, range) in raw.withIterator() 'eachRawRun'
 		if sites.refinementOf(range.valueOrdinal) == DebugRunRefinement.none 'untouched'
@@ -3191,7 +3191,7 @@ type StuckValues
 	var occupants as ValueIdArray
 
 	static function create() returns StuckValues
-		return Self{values: ValueIdArray.create(), freeMasks: RegMaskColumn.create(), occupantStart: ColumnLengthColumn.create(), occupantCount: ColumnLengthColumn.create(), occupants: ValueIdArray.create()}
+		return Self{values: ValueIdArray.create(0), freeMasks: RegMaskColumn.create(0), occupantStart: ColumnLengthColumn.create(0), occupantCount: ColumnLengthColumn.create(0), occupants: ValueIdArray.create(0)}
 	end 'create'
 
 	function clear()
@@ -3502,12 +3502,12 @@ end 'ColorHints'
 // phi is reached.
 function computeHints(module TargetModule, topo FuncTopology, valueCount ValueId) returns ColorHints
 	var hints = ColorHints.create(valueCount)
-	var buf = OperandList.create()
+	var buf = OperandList.create(0)
 
 	for local in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: local)
 
-		var ordered = OpIndexArray.create()
+		var ordered = OpIndexArray.create(0)
 		block.collectOpsInRunOrder(ordered)
 
 		for opIdx in ordered 'eachOp'
@@ -3764,14 +3764,14 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	let wordsPerRow = liveness.wordsPerRow
 	var alloc = Allocation.create(valueCount)
 	var hints = computeHints(module, topo: topo, valueCount: valueCount)
-	var buf = OperandList.create()
+	var buf = OperandList.create(0)
 
 	// Scratch reused across every block — the live-set walks, the op list, and the death sweep's
 	// working row would otherwise each allocate once per block. `seenBelow` is ONE dense row (not a
 	// matrix); `computeBlockDeaths` returns it to zero in O(live) before the next block.
-	var liveBuf = ValueIdArray.create()
-	var seedBuf = ValueIdArray.create()
-	var ordered = OpIndexArray.create()
+	var liveBuf = ValueIdArray.create(0)
+	var seedBuf = ValueIdArray.create(0)
+	var ordered = OpIndexArray.create(0)
 	var seenBelow = BitRow.create()
 	seenBelow.widen(wordsPerRow)
 
@@ -3784,7 +3784,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	var events = ClobberEvents.create()
 	events.widen(valueCount)
 
-	var deathsOfBlock = BlockDeathsArray.create()
+	var deathsOfBlock = BlockDeathsArray.create(0)
 
 	// Every block's deaths come before any block is colored: `hints.contested` gathers wants from LATER
 	// blocks, and a value is colored at its def. Run per block inside the sweep below, a value's
@@ -4179,7 +4179,7 @@ end 'reportExhaustion'
 // Only the exhaustion path calls it, so allocating a fresh list is free: the compile is about to
 // abort. Ascending register order is what makes the listing and the verdict reproducible run to run.
 function valuesHoldingRegisters(mask RegMask, alloc Allocation) returns ValueIdArray
-	var out = ValueIdArray.create()
+	var out = ValueIdArray.create(0)
 
 	for regNum in 0 upto RegisterFileSize 'eachRegister'
 		if regMaskContains(mask, regNum: regNum) 'occupied'
@@ -4535,8 +4535,8 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 	// Collected backward as (pos, value) pairs, then bucketed by position — the scan discovers them
 	// in reverse, and a counting sort restores order in O(pairs + ops). `posOf` is the CSR KEY column
 	// (its entries are `ElementIndex`), `valueOf` the value column.
-	var posOf = CsrColumn.create()
-	var valueOf = CsrColumn.create()
+	var posOf = CsrColumn.create(0)
+	var valueOf = CsrColumn.create(0)
 
 	for ri in 0 upto n 'eachOpRev'
 		let pos = n - 1 - ri

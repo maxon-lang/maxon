@@ -185,11 +185,11 @@ type PointerScan
 	export var forwardedPositions as ParamCountArray
 
 	static function create(valueBound ValueId) returns PointerScan
-		var escapedLocally = BoolArray.create()
+		var escapedLocally = BoolArray.create(0)
 		escapedLocally.growFilled(valueBound, value: false)
-		var dropSites = ValueIdArray.create()
+		var dropSites = ValueIdArray.create(0)
 		dropSites.growFilled(valueBound, value: 0)
-		return Self{escapedLocally: escapedLocally, dropSites: dropSites, forwardedPointers: ValueIdArray.create(), forwardedCallees: FuncIndexArray.create(), forwardedPositions: ParamCountArray.create()}
+		return Self{escapedLocally: escapedLocally, dropSites: dropSites, forwardedPointers: ValueIdArray.create(0), forwardedCallees: FuncIndexArray.create(0), forwardedPositions: ParamCountArray.create(0)}
 	end 'create'
 
 	function markEscaped(v ValueId)
@@ -334,7 +334,7 @@ function anyConstructor(constructors RecordConstructorArray) returns bool
 end 'anyConstructor'
 
 function buildRecordConstructors(module StdModule) returns RecordConstructorArray
-	var table = RecordConstructorArray.create()
+	var table = RecordConstructorArray.create(0)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		table.push(recognizeRecordConstructor(module, func: module.getFunc(funcIndex)))
@@ -556,7 +556,7 @@ type ConstructorScan
 	var paramCount as ParamCount
 
 	static function create(paramCount ParamCount) returns ConstructorScan
-		return Self{paramOfValue: ValueToParamMap.create(), constOfValue: ValueToConstMap.create(), constTypeOfValue: ValueToStdTypeMap.create(), allocSize: 0, allocSeen: false, fields: RecordFieldArray.create(), slotWritten: BoolArray.create(), paramCount: paramCount}
+		return Self{paramOfValue: ValueToParamMap.create(), constOfValue: ValueToConstMap.create(), constTypeOfValue: ValueToStdTypeMap.create(), allocSize: 0, allocSeen: false, fields: RecordFieldArray.create(0), slotWritten: BoolArray.create(0), paramCount: paramCount}
 	end 'create'
 
 	// Accept one body op, or refuse the whole function. Exhaustive over StdOp through named ranges, so an
@@ -824,7 +824,7 @@ type ParamNodeSpace
 	export var nodeCount as CsrIndex
 
 	static function create(module StdModule) returns ParamNodeSpace
-		var base = CsrColumn.create()
+		var base = CsrColumn.create(0)
 		var next = 0 as CsrIndex
 
 		for funcIndex in 0 upto module.funcCount() 'eachFunc'
@@ -859,13 +859,13 @@ end 'ParamNodeSpace'
 function buildParamEscapeMasks(module StdModule, byName FunctionNameIndex) returns ParamPositionMaskArray
 	let nodes = ParamNodeSpace.create(module)
 
-	var seeds = BoolArray.create()
+	var seeds = BoolArray.create(0)
 	seeds.growFilled(nodes.nodeCount, value: false)
 
 	// Edges point from the CALLEE's parameter to the CALLER's, so the mark propagates BACKWARD from a real
 	// escape site to every parameter that can reach one — the direction `reverseReachabilityMark` walks.
-	var edgeFrom = CsrColumn.create()
-	var edgeTo = CsrColumn.create()
+	var edgeFrom = CsrColumn.create(0)
+	var edgeTo = CsrColumn.create(0)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
@@ -920,7 +920,7 @@ function collectParamForwardEdges(edgeFrom CsrColumn, edgeTo CsrColumn, nodes Pa
 end 'collectParamForwardEdges'
 
 function publishParamMasks(module StdModule, nodes ParamNodeSpace, marked BoolArray) returns ParamPositionMaskArray
-	var masks = ParamPositionMaskArray.create()
+	var masks = ParamPositionMaskArray.create(0)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
@@ -943,7 +943,7 @@ end 'publishParamMasks'
 // The tracked column for a parameter scan: which of `func`'s parameter values were found, through the
 // `param` ops that define them.
 function parameterValues(module StdModule, liveOps OpIndexArray, func IrFunction) returns BoolArray
-	var tracked = BoolArray.create()
+	var tracked = BoolArray.create(0)
 	tracked.growFilled(func.paramCount, value: false)
 
 	for opIdx in liveOps 'eachOp'
@@ -1268,7 +1268,7 @@ end 'promoteInFunction'
 
 // The tracked column for a call-site scan: every value defined by a call to a record constructor.
 function collectConstructorResults(module StdModule, liveOps OpIndexArray, valueBound ValueId, byName FunctionNameIndex, constructors RecordConstructorArray) returns BoolArray
-	var candidates = BoolArray.create()
+	var candidates = BoolArray.create(0)
 	candidates.growFilled(valueBound, value: false)
 
 	for opIdx in liveOps 'eachOp'
@@ -1465,7 +1465,7 @@ function planPromotions(module StdModule, func IrFunction, valueBound ValueId, s
 	// reach would be the one shape that FAILS OPEN here: the constructor call would survive while its
 	// `__mm_decref` was deleted, which is a leak or a double free rather than a missed optimization. Walking
 	// the very set that will be rewritten makes that unreachable by construction rather than by that panic.
-	var plans = RecordPromotionArray.create()
+	var plans = RecordPromotionArray.create(0)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("planPromotions: blockRef from func.blockRefs not in module.blocks")
@@ -1483,7 +1483,7 @@ end 'planPromotions'
 
 // Which tracked pointers were handed to a callee that RETAINS the position they filled.
 function retainedByACallee(valueBound ValueId, scan PointerScan, escapingParams ParamPositionMaskArray) returns BoolArray
-	var retained = BoolArray.create()
+	var retained = BoolArray.create(0)
 	retained.growFilled(valueBound, value: false)
 
 	for edge in 0 upto scan.forwardedPointers.count() 'eachForward'
@@ -1569,7 +1569,7 @@ function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, 
 	// A dense column over the function's value space, NOT a `StdValueUseSet`: that type's whole contract is
 	// "the ids a function's ops READ" (it is `collectStdOpUses`' output), and this is a different question —
 	// which records this pass is promoting. Same representation, and `valueBound` is already in hand.
-	var promoted = BoolArray.create()
+	var promoted = BoolArray.create(0)
 	promoted.growFilled(valueBound, value: false)
 
 	for planIndex in 0 upto plans.count() 'eachPlan'
@@ -1580,7 +1580,7 @@ function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, 
 
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("applyPromotions: blockRef from func.blockRefs not in module.blocks")
-		var rebuilt = OpIndexArray.create()
+		var rebuilt = OpIndexArray.create(0)
 
 		for opIdx in block.bodyOps() 'eachRef'
 			appendRewrittenOp(module, opIdx: opIdx, plans: plans, planAtOp: planAtOp, promoted: promoted, mint: mint, rebuilt: rebuilt)

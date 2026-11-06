@@ -202,7 +202,7 @@ export typealias IntArray = Array with Integer
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(42)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -222,7 +222,7 @@ export type Container
 	export var items as IntArray
 
 	export static function create() returns Self
-		return Container{items: IntArray.create()}
+		return Container{items: IntArray.create(0)}
 	end 'create'
 
 	export function add(n Integer)
@@ -261,7 +261,7 @@ export typealias Integer = int(i64.min to i64.max)
 export typealias IntArray = Array with Integer
 
 export function makeArray() returns IntArray
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(42)
 	return arr
 end 'makeArray'
@@ -282,7 +282,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(42)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -1429,7 +1429,7 @@ typealias Score = int(0 to 100)
 typealias ScoreArray = Array with Score
 
 export function probeScores() returns ExitCode
-	var held = ScoreArray.create()
+	var held = ScoreArray.create(0)
 	held.push(3)
 	return 0 if held.isEmpty() else 3
 end 'probeScores'
@@ -1439,7 +1439,7 @@ type Holder
 	var scores as ScoreArray
 
 	static function create() returns Self
-		return Self{scores: ScoreArray.create()}
+		return Self{scores: ScoreArray.create(0)}
 	end 'create'
 
 	function isEmpty() returns bool
@@ -1453,7 +1453,7 @@ end 'kept'
 
 function main() returns ExitCode
 	let h = Holder.create()
-	let k = kept(ScoreArray.create())
+	let k = kept(ScoreArray.create(0))
 
 	if h.isEmpty() and k.isEmpty() 'bothEmpty'
 		return probeScores()
@@ -1675,13 +1675,13 @@ a body.
 typealias Smalls = Array with ExitCode
 
 export function emptySmalls() returns ExitCode
-	let xs = Smalls.create()
+	let xs = Smalls.create(0)
 	print("{xs.count()}")
 	return 0
 end 'emptySmalls'
 
 // --- file: main.maxon
-let G = Smalls.create()
+let G = Smalls.create(0)
 
 function main() returns ExitCode
 	print("{G.count()}")

@@ -26,7 +26,7 @@ typealias FoldedFieldWriteArray = Array with FoldedFieldWrite
 // fields are plain stores of constants, and no later pass has yet deleted a store into a record nothing
 // reads.
 export function noteFoldedRecords(module StdModule)
-	var liveOps = OpIndexArray.create()
+	var liveOps = OpIndexArray.create(0)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		noteFoldedRecordsInFunc(module, func: module.getFunc(funcIndex), liveOps: liveOps)
@@ -43,7 +43,7 @@ function noteFoldedRecordsInFunc(module StdModule, func IrFunction, liveOps OpIn
 	let valueBound = namedOrDefinedValueBound(module, func: func)
 
 	var ownerOfValue = FoldedOwnerColumn.absent(valueBound)
-	var namedOfValue = ValueIdArray.create()
+	var namedOfValue = ValueIdArray.create(0)
 	namedOfValue.refill(valueBound, value: 0 as ValueId)
 
 	for (iter, local) in func.debugLocals.withIterator() 'eachBinding'
@@ -64,8 +64,8 @@ function noteFoldedRecordsInFunc(module StdModule, func IrFunction, liveOps OpIn
 	var def = StdFoldableDef.create()
 	let constMap = collectConstValues(module, opIndices: liveOps, def: def)
 	var store = StdStoreOperands.create()
-	var writes = FoldedFieldWriteArray.create()
-	var refused = BoolArray.create()
+	var writes = FoldedFieldWriteArray.create(0)
+	var refused = BoolArray.create(0)
 	refused.refill(func.debugLocals.count(), value: false)
 
 	for opIdx in liveOps 'eachOp'
@@ -219,7 +219,7 @@ function publishOneFoldedRecord(func IrFunction, writes FoldedFieldWriteArray, r
 		return
 	end 'aFieldTheCompilerCannotState'
 
-	var words = FullRangeIntArray.create()
+	var words = FullRangeIntArray.create(0)
 	words.reserve(past - first)
 	var at = first
 

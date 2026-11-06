@@ -385,7 +385,7 @@ function stash(xs PairArray) returns (Num, Num)
 end 'stash'
 
 function main() returns ExitCode
-	var xs = PairArray.create()
+	var xs = PairArray.create(0)
 	let r = stash(xs)
 	view q = try xs.get(0) otherwise panic("element 0 was just pushed")
 	return r._0 + r._1 + q._0 + q._1
@@ -899,7 +899,7 @@ typealias Tagged = (Num, String)
 typealias TaggedArray = Array with Tagged
 
 function main() returns ExitCode
-	var xs = TaggedArray.create()
+	var xs = TaggedArray.create(0)
 	xs.push((1, "hello"))
 	xs.push((2, "world"))
 	view r = try xs.get(1) otherwise panic("pushed")
@@ -1382,7 +1382,7 @@ end 'nested'
 
 function main() returns ExitCode
 	let h = Holder.create()
-	var xs = PairArray.create()
+	var xs = PairArray.create(0)
 	xs.push((14, 0))
 	view e = try xs.get(0) otherwise return 1
 	let n = nested()
@@ -1431,7 +1431,7 @@ end 'nested'
 
 function main() returns ExitCode
 	let h = Holder.create()
-	var xs = PairArray.create()
+	var xs = PairArray.create(0)
 	xs.push((14, 0))
 	view e = try xs.get(0) otherwise return 1
 	let n = nested()
@@ -1620,7 +1620,7 @@ export type Holder
 	export var pair as (Bytes, String)
 
 	export static function make() returns Holder
-		var b = Bytes.create()
+		var b = Bytes.create(0)
 		b.push(300)
 		return Holder{pair: (b, "wide")}
 	end 'make'
@@ -1821,7 +1821,7 @@ typealias Pair = (String, Integer)
 typealias Pairs = Array with Pair
 
 function main() returns ExitCode
-	var xs = Pairs.create()
+	var xs = Pairs.create(0)
 	var sb = StringBuilder.create()
 	sb.append("a heap ")
 	sb.append("payload")
@@ -1850,7 +1850,7 @@ typealias Pair = (String, int)
 typealias Pairs = Array with Pair
 
 function main() returns ExitCode
-	var xs = Pairs.create()
+	var xs = Pairs.create(0)
 	var sb = StringBuilder.create()
 	sb.append("a heap ")
 	sb.append("payload")
@@ -1880,7 +1880,7 @@ typealias Pair = (String, Integer)
 typealias Pairs = Array with Pair
 
 function main() returns ExitCode
-	var xs = Pairs.create()
+	var xs = Pairs.create(0)
 	var sb = StringBuilder.create()
 	sb.append("shared ")
 	sb.append("record")
@@ -2743,7 +2743,7 @@ function top(values WideArray) returns Wide
 end 'top'
 
 function main() returns ExitCode
-	var values = WideArray.create()
+	var values = WideArray.create(0)
 	values.push(5)
 	values.push(18446744073709551615)
 	values.push(9223372036854775808)
@@ -2939,7 +2939,7 @@ function pass(p (Xs, Item))
 end 'pass'
 
 function main() returns ExitCode
-	let ys = Ys.create()
+	let ys = Ys.create(0)
 	pass((ys, 1 as Item))
 	return 0
 end 'main'
@@ -2964,7 +2964,7 @@ function pass(p (Ys, Item))
 end 'pass'
 
 function main() returns ExitCode
-	pass((Ys.create(), 1 as Item))
+	pass((Ys.create(0), 1 as Item))
 	return 0
 end 'main'
 ```
@@ -2983,7 +2983,7 @@ function take(xs Xs)
 end 'take'
 
 function main() returns ExitCode
-	let pair = (Ys.create(), 1 as Item)
+	let pair = (Ys.create(0), 1 as Item)
 	let (a, n) = pair
 	print("{n}\n")
 	take(a)
@@ -3012,7 +3012,7 @@ function pass(p XPair)
 end 'pass'
 
 function make() returns YPair
-	return (Ys.create(), 1 as Item)
+	return (Ys.create(0), 1 as Item)
 end 'make'
 
 function main() returns ExitCode
@@ -3041,7 +3041,7 @@ function seeYs(p (Ys, Item))
 end 'seeYs'
 
 function run(v Visit)
-	v((Xs.create(), 1 as Item))
+	v((Xs.create(0), 1 as Item))
 end 'run'
 
 function main() returns ExitCode
@@ -3095,7 +3095,7 @@ function pass(p (Xs, Item))
 end 'pass'
 
 function main() returns ExitCode
-	let xs = Xs.create()
+	let xs = Xs.create(0)
 	pass((xs, 1 as Item))
 	return 0
 end 'main'
@@ -3120,7 +3120,7 @@ export type Holder
 	export var pair as (Xs, Item)
 
 	export static function make() returns Holder
-		return Holder{pair: (Xs.create(), 1 as Item)}
+		return Holder{pair: (Xs.create(0), 1 as Item)}
 	end 'make'
 end 'Holder'
 
@@ -3148,8 +3148,8 @@ typealias Xs = Array with Item
 typealias Ys = Array with Item
 
 function main() returns ExitCode
-	var pair = (Xs.create(), 1 as Item)
-	pair = (Ys.create(), 2 as Item)
+	var pair = (Xs.create(0), 1 as Item)
+	pair = (Ys.create(0), 2 as Item)
 	return pair.1 as ExitCode
 end 'main'
 ```
@@ -3615,7 +3615,7 @@ typealias Words = Array with Word
 
 function main() returns ExitCode
 	let t = (0, 1)
-	var words = Words.create()
+	var words = Words.create(0)
 	words.push(t)
 	return words.count() as ExitCode
 end 'main'

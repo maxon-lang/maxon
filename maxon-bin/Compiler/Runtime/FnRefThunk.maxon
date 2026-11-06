@@ -30,7 +30,7 @@ export function cellPositionsAsWords(declared MaxonTypeArray, byReference ParamP
 		return declared
 	end 'everyPositionIsAValue'
 
-	var words = MaxonTypeArray.create()
+	var words = MaxonTypeArray.create(0)
 
 	for i in 0 upto declared.count() 'eachPosition'
 		words.push(wordAtCellPosition(try declared.get(i) otherwise panic("cellPositionsAsWords: declared.get OOB at {i}"), isCell: maskHasParam(byReference, param: i as ParamCount)))
@@ -130,7 +130,7 @@ export function registerFunctionRecord(globalData GlobalDataTable, funcName Byte
 end 'registerFunctionRecord'
 
 function functionRecordSeedBytes() returns ByteArray
-	var record = ByteArray.create()
+	var record = ByteArray.create(0)
 	record.growFilled(FunctionRecordCaptureBase, value: 0)
 	return record
 end 'functionRecordSeedBytes'
@@ -172,7 +172,7 @@ end 'isFunctionValueBodyName'
 // over the Maxon ops. `funcSignatures` rides along for that one predicate.
 export function collectFnRefThunkTargets(module MaxonModule, funcSignatures FuncSignatureMap) returns NameRoster
 	var seen = FnRefThunkSet.create()
-	var targets = NameRoster.create()
+	var targets = NameRoster.create(0)
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
@@ -270,7 +270,7 @@ export type UncheckedCallPaths
 	var serviceHandlers as CalleeNameSet
 
 	export static function none() returns UncheckedCallPaths
-		return Self{indirectArities: ParamCountArray.create(), indirectlyReachable: CalleeNameSet.create(), witnessMemberRuns: WitnessMemberRunSet.create(), notedWitnessSlots: WitnessSlotKeySet.create(), calleeNames: CalleeNameSet.create(), serviceHandlers: CalleeNameSet.create()}
+		return Self{indirectArities: ParamCountArray.create(0), indirectlyReachable: CalleeNameSet.create(), witnessMemberRuns: WitnessMemberRunSet.create(), notedWitnessSlots: WitnessSlotKeySet.create(), calleeNames: CalleeNameSet.create(), serviceHandlers: CalleeNameSet.create()}
 	end 'none'
 
 	export function mayReach(callee ByteArray) returns bool
@@ -531,7 +531,7 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	// A position its arity's convention passes as a cell is an address in the thunk's signature, an
 	// i64, whatever the declared type. A target that takes it by value reads the cell the address names
 	// and forwards the occupant; one that takes it by reference forwards the address itself.
-	var paramTypes = StdTypeArray.create()
+	var paramTypes = StdTypeArray.create(0)
 
 	for word in cellPositionsAsWords(sig.paramTypes, byReference: byReference) 'eachUserParamType'
 		paramTypes.push(maxonTypeToStdType(word))
@@ -555,7 +555,7 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	emitTypedParams(module, block: entry, paramTypes: paramTypes)
 
 	var values = ValueMinter.create(thunkParamCount)
-	var userArgs = ValueIdArray.create()
+	var userArgs = ValueIdArray.create(0)
 
 	for i in 0 upto userParamCount 'eachArg'
 		userArgs.push(valueIdAtParamPosition(i))

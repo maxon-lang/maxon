@@ -14,7 +14,7 @@ type Sorter
 	var items as IntArray
 
 	static function create() returns Self
-		return Self{items: IntArray.create()}
+		return Self{items: IntArray.create(0)}
 	end 'create'
 
 	export function add(n Integer)

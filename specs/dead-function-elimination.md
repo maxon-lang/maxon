@@ -176,7 +176,7 @@ type Container uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		return Self{ items: ElementArray.create() }
+		return Self{ items: ElementArray.create(0) }
 	end 'create'
 
 	function count() returns Count

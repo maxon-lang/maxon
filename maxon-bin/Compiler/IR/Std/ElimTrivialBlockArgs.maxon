@@ -110,9 +110,9 @@ export type CarriedValues
 	var differs as BoolArray
 
 	export static function create(bound ValueId) returns CarriedValues
-		var seen = BoolArray.create()
-		var only = ValueIdArray.create()
-		var differs = BoolArray.create()
+		var seen = BoolArray.create(0)
+		var only = ValueIdArray.create(0)
+		var differs = BoolArray.create(0)
 		seen.resize(bound)
 		only.resize(bound)
 		differs.resize(bound)
@@ -198,8 +198,8 @@ type FeedTriggers
 	var next as ValueIdArray
 
 	static function create(pairs PhiOperandPairs, bound ValueId) returns FeedTriggers
-		var head = ValueIdArray.create()
-		var next = ValueIdArray.create()
+		var head = ValueIdArray.create(0)
+		var next = ValueIdArray.create(0)
 		head.resize(bound)
 		next.resize(pairs.count())
 
@@ -280,10 +280,10 @@ module function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) re
 	// accumulator merges a different value on each path, every time). It stops before the feeder
 	// index, the user index, the fold chain and the whole-function rewrite are ever allocated, which
 	// is what keeps this pass's cost on ordinary code where the old re-sweep had it.
-	var queued = BoolArray.create()
+	var queued = BoolArray.create(0)
 	queued.resize(bound)
 
-	var worklist = ValueIdArray.create()
+	var worklist = ValueIdArray.create(0)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		view block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
@@ -309,14 +309,14 @@ module function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) re
 	let feeders = buildCsr(pairs.args, to: pairs.incoming, nodeCount: bound as CsrIndex)
 	var triggers = FeedTriggers.create(pairs, bound: bound)
 
-	var parent = ValueIdArray.create()
+	var parent = ValueIdArray.create(0)
 	parent.resize(bound)
 
 	for v in 0 upto bound 'identity'
 		try parent.set(v, value: v) otherwise panic("elimTrivialBlockArgs: parent.set({v}) OOB against a column of {bound}")
 	end 'identity'
 
-	var folded = BoolArray.create()
+	var folded = BoolArray.create(0)
 	folded.resize(bound)
 
 	while worklist.count() > 0 'settle'

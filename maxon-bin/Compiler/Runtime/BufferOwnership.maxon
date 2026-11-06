@@ -218,7 +218,7 @@ export let ManagedRecordSlotBytes = 8 as BytePos
 // Each slot is appended at its named offset and the appender asserts it lands there, so the offsets the
 // runtime loads by and the offsets this writes are one set of constants that cannot drift.
 export function immortalRecordBytes(blobOffset ByteOffset, length FullRangeInt, elementSize FullRangeInt, elementDestroy FullRangeInt) returns ByteArray
-	var record = ByteArray.create()
+	var record = ByteArray.create(0)
 	appendRecordSlot(record, expectedOffset: ManagedRecordBufferOffset, value: blobOffset as FullRangeInt)
 	appendRecordSlot(record, expectedOffset: ManagedRecordLengthOffset, value: length)
 	appendRecordSlot(record, expectedOffset: ManagedRecordCapacityOffset, value: ImmortalRecordCapacity as FullRangeInt)
@@ -736,7 +736,7 @@ end 'emitRouteOnOwedBase'
 // ⛔⛔ **THE RESIDUAL ARM ANSWERS `NoOwedAllocation`, AND ANSWERING "THE RECORD" THERE LEAKS — MEASURED,
 // exit 101.** Written as *"immortal ⇒ nothing, otherwise ⇒ the record"*, that `otherwise` is reached by an
 // OWNER whose `buffer@0` is still 0 just as much as by an inline String: `slice(0, endIndex: 0)` of a fresh
-// `ByteArray.create()` puts a count on the ARRAY's record; the array then grows a buffer, and its
+// `ByteArray.create(0)` puts a count on the ARRAY's record; the array then grows a buffer, and its
 // `__managed_decref` — no longer the last owner — lowers the count and returns WITHOUT releasing that
 // buffer, which the view's later `__mm_decref` / `__mm_free` of the record structurally cannot reach. ⇒ **the arm that names the record must be the
 // POSITIVE test**, so a provenance nobody taught this function about is refused a count rather than handed

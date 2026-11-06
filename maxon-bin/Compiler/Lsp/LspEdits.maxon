@@ -32,7 +32,7 @@ let QuickFixActionKind = "quickfix"
 typealias BindingUseTally = int(0 to u64.max)
 
 module function editsServedMethods() returns LspMethodArray
-	var served = LspMethodArray.create()
+	var served = LspMethodArray.create(0)
 	served.push(LspMethod.linkedEditingRange)
 	served.push(LspMethod.rename)
 	served.push(LspMethod.codeAction)
@@ -97,7 +97,7 @@ end 'namedPairAt'
 
 function linkedEditingAnswer(source String, index LspLineIndex, block LspDocumentBlock) returns LspAnswer
 	var doc = JsonDoc.create()
-	var ranges = JsonNodeIdArray.create()
+	var ranges = JsonNodeIdArray.create(0)
 	ranges.push(lspSpanRangeNode(doc, source: source, index: index, span: block.nameSpan))
 	ranges.push(lspSpanRangeNode(doc, source: source, index: index, span: lspBlockEndNameSpan(block)))
 
@@ -115,7 +115,7 @@ function renameAnswer(request LspRequest, index LspLineIndex, block LspDocumentB
 	let newName = try lspMemberText(request.incoming, of: request.params, key: NewNameKey)
 
 	var doc = JsonDoc.create()
-	var edits = JsonNodeIdArray.create()
+	var edits = JsonNodeIdArray.create(0)
 	edits.push(textEditNode(doc, source: request.text, index: index, span: block.nameSpan, newText: newName))
 	edits.push(textEditNode(doc, source: request.text, index: index, span: lspBlockEndNameSpan(block), newText: newName))
 
@@ -160,7 +160,7 @@ function codeActionAnswer(request LspRequest, tokens TokenArray, blocks LspDocum
 	let selectionEnd = index.offsetOf(request.text, position: try lspPositionMember(request.incoming, of: range, key: LspEndKey))
 
 	var doc = JsonDoc.create()
-	var actions = JsonNodeIdArray.create()
+	var actions = JsonNodeIdArray.create(0)
 
 	for name in unusedLocalNamesIn(tokens, blocks: blocks, selectionStart: selectionStart, selectionEnd: selectionEnd) 'eachUnused'
 		actions.push(removeBindingActionNode(doc, uri: request.uri, name: name))
@@ -183,7 +183,7 @@ end 'UnusedLocalName'
 typealias UnusedLocalNameArray = Array with UnusedLocalName
 
 function unusedLocalNamesIn(tokens TokenArray, blocks LspDocumentBlockArray, selectionStart ByteOffset, selectionEnd ByteOffset) returns UnusedLocalNameArray
-	var found = UnusedLocalNameArray.create()
+	var found = UnusedLocalNameArray.create(0)
 
 	for binding in localBindingsIn(tokens, blocks: blocks) 'eachBinding'
 		// The requested range is a SELECTION, so a binding it merely touches is one the author has the
@@ -221,7 +221,7 @@ typealias LocalBindingArray = Array with LocalBinding
 // is a change to the program's interface rather than a tidy-up — and `blocks` is what tells the two
 // apart without a parse.
 function localBindingsIn(tokens TokenArray, blocks LspDocumentBlockArray) returns LocalBindingArray
-	var bindings = LocalBindingArray.create()
+	var bindings = LocalBindingArray.create(0)
 
 	for (position, token) in tokens.withIterator() 'eachToken'
 		if not bindingKeywordSpells(token.kind) 'notABinding'
@@ -279,7 +279,7 @@ function removeBindingActionNode(doc JsonDoc, uri String, name UnusedLocalName) 
 	edit.putNode(LspRangeKey, value: lspRangeNode(doc, startLine: name.line, startCharacter: 0, endLine: name.line + 1, endCharacter: 0))
 	edit.put(LspNewTextKey, value: JsonNode.stringNode(""))
 
-	var edits = JsonNodeIdArray.create()
+	var edits = JsonNodeIdArray.create(0)
 	edits.push(edit.finish())
 
 	var action = LspJsonObject.create(doc)

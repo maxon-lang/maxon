@@ -177,7 +177,7 @@ module function unswitchInFunc(module StdModule, func IrFunction, origins Derive
 
 	let tree = StdDominatorTree.buildFromSuccessors(succ, blockCount: blockCount)
 	var analysis = UnswitchFunction.gather(module, func: func, tree: tree, scratch: scratch)
-	var plans = UnswitchPlanArray.create()
+	var plans = UnswitchPlanArray.create(0)
 
 	// Outermost first: the discovery order is innermost-first for a nest (`NaturalLoops.headers`).
 	var next = loops.headers.count()
@@ -265,9 +265,9 @@ type UnswitchFunction
 	static function gather(module StdModule, func IrFunction, tree StdDominatorTree, scratch UnswitchScratch) returns UnswitchFunction
 		let reader = StdShapeReader.create(module, func: func)
 		let valueBound = reader.defs.valueBound()
-		var insideVersioned = BoolArray.create()
+		var insideVersioned = BoolArray.create(0)
 		insideVersioned.resize(tree.blockCount)
-		var versionedHeader = BoolArray.create()
+		var versionedHeader = BoolArray.create(0)
 		versionedHeader.resize(tree.blockCount)
 		return Self{tree: tree, stamps: DominatorStamps.build(tree), reader: reader, sites: ReadSites.collect(module, func: func, valueBound: valueBound, scratch: scratch), valueBound: valueBound, insideVersioned: insideVersioned, versionedHeader: versionedHeader}
 	end 'gather'
@@ -310,11 +310,11 @@ type ReadSites
 	export var edgeReaders as CsrGraph
 
 	static function collect(module StdModule, func IrFunction, valueBound ValueId, scratch UnswitchScratch) returns ReadSites
-		var sites = Self{opReaders: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create()), siteOp: OpIndexArray.create(), sitePosition: BlockPositionColumn.create(), edgeReaders: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create())}
-		var readValue = CsrColumn.create()
-		var readSite = CsrColumn.create()
-		var edgeValue = CsrColumn.create()
-		var edgeAt = CsrColumn.create()
+		var sites = Self{opReaders: CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0)), siteOp: OpIndexArray.create(0), sitePosition: BlockPositionColumn.create(0), edgeReaders: CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0))}
+		var readValue = CsrColumn.create(0)
+		var readSite = CsrColumn.create(0)
+		var edgeValue = CsrColumn.create(0)
+		var edgeAt = CsrColumn.create(0)
 
 		for position in 0 upto func.blockRefs.count() 'eachBlock'
 			let block = module.blockAtPosition(func, position: position)
@@ -444,13 +444,13 @@ type UnswitchPlan
 	export var exitPhis as ValueIdArray
 
 	static function create(header ElementIndex, members CsrColumn) returns UnswitchPlan
-		var positions = BlockPositionColumn.create()
+		var positions = BlockPositionColumn.create(0)
 
 		for member in members 'eachMember'
 			positions.push(member)
 		end 'eachMember'
 
-		return Self{header: header, members: positions, walkOrder: BlockPositionColumn.create(), guards: UnswitchGuardArray.create(), bounds: UnswitchGuardArray.create(), stores: ElementStoreSiteArray.create(), knownRecords: ValueIdArray.create(), writerRecords: ValueIdArray.create(), hoisted: StdValueUseSet.create(), hoistedWalk: ValueIdArray.create(), hoistedCanonical: ValueIdArray.create(), escaping: ValueIdArray.create(), escapingTypes: StdTypeArray.create(), exitPhis: ValueIdArray.create()}
+		return Self{header: header, members: positions, walkOrder: BlockPositionColumn.create(0), guards: UnswitchGuardArray.create(0), bounds: UnswitchGuardArray.create(0), stores: ElementStoreSiteArray.create(0), knownRecords: ValueIdArray.create(0), writerRecords: ValueIdArray.create(0), hoisted: StdValueUseSet.create(), hoistedWalk: ValueIdArray.create(0), hoistedCanonical: ValueIdArray.create(0), escaping: ValueIdArray.create(0), escapingTypes: StdTypeArray.create(0), exitPhis: ValueIdArray.create(0)}
 	end 'create'
 
 	// The canonical of the `ordinal`-th hoisted op in walk order, which must be `valueId`'s: the
@@ -1002,7 +1002,7 @@ end 'servesAsTheExit'
 // The hoisted set: every invariant record-field and refcount load, every admitted guard's compare, and
 // every invariant loop-defined value those compares read, transitively.
 function markHoisted(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch)
-	var worklist = ValueIdArray.create()
+	var worklist = ValueIdArray.create(0)
 
 	for position in plan.walkOrder 'eachBlock'
 		let block = module.blockAtPosition(func, position: position)
@@ -1072,7 +1072,7 @@ type HoistNumbering
 	var value as ValueIdArray
 
 	static function create() returns HoistNumbering
-		return Self{shape: HoistShapeColumn.create(), x: HoistKeyColumn.create(), y: HoistKeyColumn.create(), op: HoistKeyColumn.create(), width: HoistKeyColumn.create(), value: ValueIdArray.create()}
+		return Self{shape: HoistShapeColumn.create(0), x: HoistKeyColumn.create(0), y: HoistKeyColumn.create(0), op: HoistKeyColumn.create(0), width: HoistKeyColumn.create(0), value: ValueIdArray.create(0)}
 	end 'create'
 
 	// The value an earlier op with this key computes, or `valueId` once this key is recorded for it.
@@ -1306,19 +1306,19 @@ type RewriteColumns
 	var origins as DerivedOrigins
 
 	static function identity(valueBound ValueId, blockBound BlockId, origins DerivedOrigins) returns RewriteColumns
-		var valueSubst = ValueIdArray.create()
+		var valueSubst = ValueIdArray.create(0)
 
 		for valueId in 0 upto valueBound 'eachValue'
 			valueSubst.push(valueId)
 		end 'eachValue'
 
-		var blockSubst = BlockIdArray.create()
+		var blockSubst = BlockIdArray.create(0)
 
 		for blockId in 0 upto blockBound 'eachBlock'
 			blockSubst.push(blockId)
 		end 'eachBlock'
 
-		return Self{valueSubst: valueSubst, blockSubst: blockSubst, mappedValues: ValueIdArray.create(), mappedBlocks: BlockIdArray.create(), origins: origins}
+		return Self{valueSubst: valueSubst, blockSubst: blockSubst, mappedValues: ValueIdArray.create(0), mappedBlocks: BlockIdArray.create(0), origins: origins}
 	end 'identity'
 
 	function mapValue(original ValueId, fresh ValueId)
@@ -1380,7 +1380,7 @@ function applyPlan(module StdModule, func IrFunction, plan UnswitchPlan, analysi
 end 'applyPlan'
 
 function copyLoop(module StdModule, func IrFunction, plan UnswitchPlan, analysis UnswitchFunction, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
-	var copyRefs = BlockRefArray.create()
+	var copyRefs = BlockRefArray.create(0)
 
 	for index in 0 upto plan.members.count() 'eachMember'
 		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
@@ -1407,7 +1407,7 @@ end 'copyLoop'
 function readHoistedInPlace(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch, columns RewriteColumns)
 	for position in plan.members 'eachMember'
 		var block = module.blockAtPosition(func, position: position)
-		var kept = OpIndexArray.create()
+		var kept = OpIndexArray.create(0)
 
 		for opIdx in block.bodyOps() 'eachOp'
 			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
@@ -1466,7 +1466,7 @@ type TestChain
 	var inlineSite as InlineSiteRef
 
 	static function create(inlineSite InlineSiteRef) returns TestChain
-		return Self{currentRef: 0, open: false, firstRef: 0, started: false, testRefs: BlockRefArray.create(), testConds: ValueIdArray.create(), inlineSite: inlineSite}
+		return Self{currentRef: 0, open: false, firstRef: 0, started: false, testRefs: BlockRefArray.create(0), testConds: ValueIdArray.create(0), inlineSite: inlineSite}
 	end 'create'
 
 	// The block to emit into, opened on demand so an empty block is never minted.
@@ -1682,7 +1682,7 @@ function wireTestChain(module StdModule, func IrFunction, plan UnswitchPlan, cha
 		module.setTerminator(preheader, op: StdOp.branch(firstChainId))
 	end 'fellThroughIntoTheHeader'
 
-	preheader.branchEdges = BranchEdgeArray.create()
+	preheader.branchEdges = BranchEdgeArray.create(0)
 end 'wireTestChain'
 
 function wireTests(module StdModule, chain TestChain, slowId BlockId, fastEntry BlockId, copyHeaderId BlockId, takesArgs bool, entryArgs ValueIdArray)
@@ -1711,7 +1711,7 @@ function copyMember(module StdModule, func IrFunction, plan UnswitchPlan, positi
 	var copy = module.getBlock(copyRef)
 
 	if original.blockArgs.count() != 0 'hasPhis'
-		var blockArgs = IrBlockArgArray.create()
+		var blockArgs = IrBlockArgArray.create(0)
 
 		for blockArg in original.blockArgs 'eachPhi'
 			blockArgs.push(IrBlockArg.create(clonedValue(blockArg.valueId, subst: columns.valueSubst), argType: blockArg.argType))
@@ -1751,7 +1751,7 @@ end 'copyMember'
 // targets and args remapped. An exiting member's edge into the exit already carries the escaping
 // values — `attachExitPhis` runs before any copy — and the column maps each to the copy's own.
 function copiedEdges(original IrBlock, folded bool, keptTargetId BlockId, columns RewriteColumns) returns BranchEdgeArray
-	var edges = BranchEdgeArray.create()
+	var edges = BranchEdgeArray.create(0)
 
 	for edge in original.branchEdges 'eachEdge'
 		if folded and edge.targetBlockId != keptTargetId 'theRefusedArm'
@@ -1768,7 +1768,7 @@ end 'copiedEdges'
 // value itself — the copy's edges, remapped from these, then carry the copy's.
 function attachExitPhis(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, columns RewriteColumns, minter ValueMinter)
 	var exit = module.blockAtPosition(func, position: plan.exit)
-	var blockArgs = IrBlockArgArray.create()
+	var blockArgs = IrBlockArgArray.create(0)
 
 	for blockArg in exit.blockArgs 'eachExisting'
 		blockArgs.push(blockArg)
@@ -1797,7 +1797,7 @@ function attachExitPhis(module StdModule, func IrFunction, analysis UnswitchFunc
 end 'attachExitPhis'
 
 function edgesWithEscapingAppended(member IrBlock, exitId BlockId, plan UnswitchPlan) returns BranchEdgeArray
-	var edges = BranchEdgeArray.create()
+	var edges = BranchEdgeArray.create(0)
 	var exitEdgeCarried = false
 
 	for edge in member.branchEdges 'eachEdge'
@@ -1806,7 +1806,7 @@ function edgesWithEscapingAppended(member IrBlock, exitId BlockId, plan Unswitch
 			continue
 		end 'elsewhere'
 
-		var args = ValueIdArray.create()
+		var args = ValueIdArray.create(0)
 		args.append(edge.argIds)
 		args.append(plan.escaping)
 		edges.push(BranchEdge.create(exitId, argIds: args))
@@ -1814,7 +1814,7 @@ function edgesWithEscapingAppended(member IrBlock, exitId BlockId, plan Unswitch
 	end 'eachEdge'
 
 	if not exitEdgeCarried 'newEdgeIntoTheExit'
-		var args = ValueIdArray.create()
+		var args = ValueIdArray.create(0)
 		args.append(plan.escaping)
 		edges.push(BranchEdge.create(exitId, argIds: args))
 	end 'newEdgeIntoTheExit'
@@ -1924,7 +1924,7 @@ module type UnswitchScratch
 	export var preheaderDef as StdDefinedValues
 
 	module static function create(tally StdPassTally) returns UnswitchScratch
-		return Self{members: LoopMembership.create(), definedInLoop: LoopValueStamps.create(), liveAcross: LoopValueStamps.create(), invariant: LoopValueStamps.create(), hoistableLoads: LoopValueStamps.create(), known: LoopValueStamps.create(), writers: LoopValueStamps.create(), canonical: CanonicalMap.create(0), reads: StdValueUseSet.createRecordingIds(), readHoisted: StdValueUseSet.createRecordingIds(), escapingUses: BlockPositionColumn.create(), load: StdLoadOperands.create(), store: StdStoreOperands.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), cloner: StdOpCloner.create(), guard: ManagedGuardOperands.create(), slot: ElementSlotOperands.create(), preheaderDef: StdDefinedValues.create(), tally: tally}
+		return Self{members: LoopMembership.create(), definedInLoop: LoopValueStamps.create(), liveAcross: LoopValueStamps.create(), invariant: LoopValueStamps.create(), hoistableLoads: LoopValueStamps.create(), known: LoopValueStamps.create(), writers: LoopValueStamps.create(), canonical: CanonicalMap.create(0), reads: StdValueUseSet.createRecordingIds(), readHoisted: StdValueUseSet.createRecordingIds(), escapingUses: BlockPositionColumn.create(0), load: StdLoadOperands.create(), store: StdStoreOperands.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), cloner: StdOpCloner.create(), guard: ManagedGuardOperands.create(), slot: ElementSlotOperands.create(), preheaderDef: StdDefinedValues.create(), tally: tally}
 	end 'create'
 
 	function beginLoop()

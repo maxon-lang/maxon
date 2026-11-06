@@ -3,7 +3,7 @@ let MethodNotAllowedStatus = 405 as HttpAnswerStatus
 let StrayPath = "/tools"
 
 test 'a GET on the mcp route is refused 405'
-	var server = StreamingHttpMcpServer.start(StringArray.create())
+	var server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
 	let got = server.request("GET", target: McpRoutePath, host: server.authority(), origin: "", sessionId: sessionId, body: "")
 	let posted = server.post(toolsListRequest(2), sessionId: sessionId)
@@ -15,7 +15,7 @@ test 'a GET on the mcp route is refused 405'
 end 'a GET on the mcp route is refused 405'
 
 test 'a path other than the mcp route is 404'
-	var server = StreamingHttpMcpServer.start(StringArray.create())
+	var server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
 	let stray = server.request("POST", target: StrayPath, host: server.authority(), origin: "", sessionId: sessionId, body: toolsListRequest(2))
 	let onRoute = server.post(toolsListRequest(3), sessionId: sessionId)
@@ -27,7 +27,7 @@ test 'a path other than the mcp route is 404'
 end 'a path other than the mcp route is 404'
 
 test 'a notification is accepted 202 with no body'
-	var server = StreamingHttpMcpServer.start(StringArray.create())
+	var server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
 	let notified = server.post(initializedNotification(), sessionId: sessionId)
 	let request = server.post(toolsListRequest(2), sessionId: sessionId)

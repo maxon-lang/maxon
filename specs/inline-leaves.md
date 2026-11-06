@@ -570,7 +570,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	if not a.isEmpty() 'startsEmpty'
 		return 1
 	end 'startsEmpty'
@@ -603,7 +603,7 @@ function total(a IntArray) returns Integer
 end 'total'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(20)
 	a.push(22)
 	return total(a) as ExitCode
@@ -764,7 +764,7 @@ function totalBytes(b Bytes) returns Integer
 end 'totalBytes'
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(20 as Byte)
 	b.push(22 as Byte)
 	return totalBytes(b) as ExitCode

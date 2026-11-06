@@ -629,7 +629,7 @@ Storing a promise of the undefined call names the CALL, not a mismatch with the 
 ```maxon
 function main() returns ExitCode
 	let p = async frobnicate(2)
-	var ps = PendingArray.create()
+	var ps = PendingArray.create(0)
 	ps.push(p)
 	return 0
 end 'main'
@@ -646,7 +646,7 @@ Storage typed as a throwing promise is not refused for a callee whose throws cla
 ```maxon
 function main() returns ExitCode
 	let p = async frobnicate(2)
-	var ps = PendingArray.create()
+	var ps = PendingArray.create(0)
 	ps.push(p)
 	return 0
 end 'main'

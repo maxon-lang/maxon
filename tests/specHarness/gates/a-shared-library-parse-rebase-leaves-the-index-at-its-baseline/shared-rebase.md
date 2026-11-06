@@ -147,7 +147,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function makeClone() returns ItemArray
-		var src = ItemArray.create()
+		var src = ItemArray.create(0)
 		src.push(Item.create("first clone item long enough for heap", value: 10))
 		src.push(Item.create("second clone item long enough for heap", value: 20))
 		return src.clone()
@@ -202,7 +202,7 @@ end 'Outer'
 typealias OuterArray = Array with Outer
 
 function makeClone() returns OuterArray
-		var src = OuterArray.create()
+		var src = OuterArray.create(0)
 		src.push(Outer.create(Mid.create(Leaf.create("a nested label long enough to reach the heap", value: 7))))
 		return src.clone()
 		// src and its whole three-level element graph are freed when this function returns
@@ -234,7 +234,7 @@ type Holder
 end 'Holder'
 typealias Holders = Array with Holder
 function main() returns ExitCode
-	var a = Holders.create()
+	var a = Holders.create(0)
 	print("{a.count()}\n")
 	a.push(Holder.create(try File.readBinary(FilePath from "no-such-file.bin") otherwise return 3))
 

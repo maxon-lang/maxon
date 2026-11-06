@@ -54,7 +54,7 @@ export type ReleaseRank
 	end 'ofRelease'
 
 	static function afterEveryRelease() returns ReleaseRank
-		return Self{components: VersionComponentArray.create(), unreleased: true}
+		return Self{components: VersionComponentArray.create(0), unreleased: true}
 	end 'afterEveryRelease'
 
 	function compare(other ReleaseRank) returns Ordering
@@ -166,13 +166,13 @@ end 'recordedChangesOf'
 
 export function changesSince(recorded RecordedRelease) returns BreakingChangeArray
 	return match recordedChangesOf(recorded) 'standing'
-		unrecorded gives BreakingChangeArray.create()
+		unrecorded gives BreakingChangeArray.create(0)
 		sinceRecorded(_, changes) gives changes
 	end 'standing'
 end 'changesSince'
 
 function breakingChangesAfter(recorded ReleaseRank) returns BreakingChangeArray
-	var changes = BreakingChangeArray.create()
+	var changes = BreakingChangeArray.create(0)
 
 	let release = thisCompilerRelease()
 
@@ -251,14 +251,14 @@ export function breakingChangeNotices(projectDir FilePath) returns StringArray t
 	let recorded = try recordedReleaseOf(projectDir)
 
 	return match recordedChangesOf(recorded) 'standing'
-		unrecorded gives StringArray.create()
+		unrecorded gives StringArray.create(0)
 		sinceRecorded(text, changes) gives noticesFor(text, changes: changes)
 	end 'standing'
 end 'breakingChangeNotices'
 
 function noticesFor(recorded String, changes BreakingChangeArray) returns StringArray
 	let lastBuilt = lastBuiltSentence(recorded)
-	var notices = StringArray.create()
+	var notices = StringArray.create(0)
 
 	for change in changes 'eachChange'
 		notices.push("{lastBuilt} {changeEntry(change, fixSeparator: NoticeFixSeparator)}")

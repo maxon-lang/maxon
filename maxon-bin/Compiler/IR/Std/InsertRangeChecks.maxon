@@ -308,7 +308,7 @@ type RangeCheckEmitter
 	var spellings as DeclarationQualifierMemo
 
 	static function create(project Project, module StdModule, func IrFunction, funcIndex ElementIndex, checks FunctionRangeChecks, waivers EntryGuardWaivers, spellings DeclarationQualifierMemo) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, funcIndex: funcIndex, functionChecks: checks, waivers: waivers, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), guardChainTail: ValueIdArray.create(), guardChainBase: BlockOpPosArray.create(), guardChainSource: PreSplitOpsByBlock.create(), spellings: spellings}
+		return Self{project: project, module: module, func: func, funcIndex: funcIndex, functionChecks: checks, waivers: waivers, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), guardChainTail: ValueIdArray.create(0), guardChainBase: BlockOpPosArray.create(0), guardChainSource: PreSplitOpsByBlock.create(0), spellings: spellings}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -430,7 +430,7 @@ type RangeCheckEmitter
 	end 'processSite'
 
 	function checkLiteralUses()
-		var literalSites = RangeCheckSiteArray.create()
+		var literalSites = RangeCheckSiteArray.create(0)
 
 		for site in self.functionChecks.sites 'eachSite'
 			if siteIsALiteralUse(site) 'aLiteralUse'
@@ -644,7 +644,7 @@ type RangeCheckEmitter
 			return
 		end 'bothBoundsElided'
 
-		var owned = BlockIdArray.create()
+		var owned = BlockIdArray.create(0)
 		owned.push(headId)
 
 		for mintedId in firstMintedId upto self.func.nextBlockId 'eachMintedBlock'
@@ -1151,7 +1151,7 @@ type RangeCheckEmitter
 		// A mutable alias to the head block (a parameter binding is immutable; field writes need a `var`).
 		// It is the SAME heap object — IrBlock is a reference type — so these writes land on the real block.
 		var headBlock = site.block
-		var segment = OpIndexArray.create()
+		var segment = OpIndexArray.create(0)
 
 		for i in base upto base + site.position 'carveSegment'
 			let opIdx = try source.get(i) otherwise panic("splitChainEnd: block {sourceBlockId} of '{String.from(self.func.name)}' holds {source.count()} pre-split ops but its chain begins at {base} and the guard splits {site.position} ops into it")
@@ -1424,10 +1424,10 @@ type RangeCheckEmitter
 		end 'alreadyBuilt'
 
 		self.guardChainTail = buildBlockIdIndex(self.module, func: self.func)
-		self.guardChainBase = BlockOpPosArray.create()
+		self.guardChainBase = BlockOpPosArray.create(0)
 		self.guardChainBase.growFilled(self.func.nextBlockId, value: 0)
-		self.guardChainSource = PreSplitOpsByBlock.create()
-		self.guardChainSource.growFilled(self.func.nextBlockId, value: OpIndexArray.create())
+		self.guardChainSource = PreSplitOpsByBlock.create(0)
+		self.guardChainSource.growFilled(self.func.nextBlockId, value: OpIndexArray.create(0))
 	end 'ensureChainIndex'
 
 	// ---- the panic message ----
@@ -1697,7 +1697,7 @@ let RangeCheckPanicLabel = b"__rc_panic"
 // `splitChainEnd` then.
 export function splitBlockInPlace(module StdModule, func IrFunction, head IrBlock, position ElementIndex, label ByteArray) returns IrBlock
 	var headBlock = head
-	var tailOps = OpIndexArray.create()
+	var tailOps = OpIndexArray.create(0)
 
 	for i in position upto headBlock.bodyOpCount() 'moveTail'
 		let opIdx = try headBlock.bodyOpAt(i) otherwise panic("splitBlockInPlace: bodyOpAt OOB at {i}")
@@ -1731,7 +1731,7 @@ function splitBlockExit(module StdModule, func IrFunction, head IrBlock, label B
 
 	headBlock.terminator = Terminator.unset
 	headBlock.condBranch = CondBranch.none
-	headBlock.branchEdges = BranchEdgeArray.create()
+	headBlock.branchEdges = BranchEdgeArray.create(0)
 	headBlock.moveExitTo(ok.id)
 	return ok
 end 'splitBlockExit'
@@ -1758,7 +1758,7 @@ let SignBoundary = 0
 // BEFORE THIS.** A WHOLLY NEGATIVE range's upper is a real bound and is not elided — see
 // `rangeNeedsUpperCheck`'s header for the two uncatchable `#DE`s eliding it reaches.
 function boundChecks(low FullRangeInt, high FullRangeInt, isFloat bool) returns RangeBoundCheckArray
-	var checks = RangeBoundCheckArray.create()
+	var checks = RangeBoundCheckArray.create(0)
 
 	// ⭐ THE UNSIGNED-MAX UPPER SHAPE — `int(N to u64.max)` over a non-negative low bound. Signed
 	// compares cannot express its upper (it rides as `-1`), so out-of-range is `value >= 0 AND
@@ -2052,7 +2052,7 @@ type EntryGuardWaivers
 			return
 		end 'hasAnotherFloor'
 
-		var params = try self.candidates.get(callee) otherwise WaivableParamArray.create()
+		var params = try self.candidates.get(callee) otherwise WaivableParamArray.create(0)
 		params.push(param)
 		self.candidates.upsert(callee, value: params)
 	end 'addCandidateIfUnsignedFull'
@@ -2182,9 +2182,9 @@ type EntryGuardWaivers
 	end 'waivableParamAt'
 end 'EntryGuardWaivers'
 
-let sharedNoCallArgumentSites = RangeCheckSiteArray.create()
+let sharedNoCallArgumentSites = RangeCheckSiteArray.create(0)
 
-let noStdPositions = RangeSitePositionArray.create()
+let noStdPositions = RangeSitePositionArray.create(0)
 
 function indexCallArgumentSite(recorded RecordedCallArguments, site RangeCheckSite)
 	match site.target 'target'
@@ -2214,7 +2214,7 @@ function siteIsALiteralUse(site RangeCheckSite) returns bool
 end 'siteIsALiteralUse'
 
 function appendCallArgumentSite(recorded RecordedCallArguments, callResult ValueId, site RangeCheckSite)
-	var sites = try recorded.get(callResult) otherwise RangeCheckSiteArray.create()
+	var sites = try recorded.get(callResult) otherwise RangeCheckSiteArray.create(0)
 	sites.push(site)
 	recorded.upsert(callResult, value: sites)
 end 'appendCallArgumentSite'

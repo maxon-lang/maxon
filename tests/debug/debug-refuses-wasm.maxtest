@@ -10,7 +10,7 @@ test 'a wasm module is refused by name rather than debugged'
 
 	try File.writeBinary(module, content: b"\x00asm\x01\x00\x00\x00") otherwise panic("debug-refuses-wasm: the gate could not run — could not stage a wasm header at {module.toString()}.")
 
-	let session = spawnDebugBatch(module, staged: staged, commands: RunCommand, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(module, staged: staged, commands: RunCommand, extraOptions: StringArray.create(0))
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	Expect.equal(session.exitCode(), expected: RefusedSessionExitCode, message: "a wasm module carries no `.text` image and hosts no agent, so a session over one must be refused. {said}")

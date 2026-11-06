@@ -214,7 +214,7 @@ end 'lineKey'
 // `eliminated` only when EVERY point on it lost its code.
 function joinFiles(sidecar MxdbgReader, data MxcovData) returns CovFileArray
 	var merged = CovMergedLineMap.create()
-	var order = CovLineKeyArray.create()
+	var order = CovLineKeyArray.create(0)
 
 	for index in 0 upto sidecar.coveragePointCount() 'eachPoint'
 		let point = sidecar.coveragePoint(index as MxdbgIndex)
@@ -261,14 +261,14 @@ function compareLinePosition(left CovLineKey, right CovLineKey) returns Ordering
 end 'compareLinePosition'
 
 function groupedFiles(order CovLineKeyArray, merged CovMergedLineMap) returns CovFileArray
-	var files = CovFileArray.create()
+	var files = CovFileArray.create(0)
 	var groupPath = ""
-	var groupLines = CovLineArray.create()
+	var groupLines = CovLineArray.create(0)
 
 	for key in order 'eachLine'
 		if groupLines.count() > 0 and key.path != groupPath 'aDifferentFile'
 			files.push(CovFile.create(groupPath, lines: groupLines))
-			groupLines = CovLineArray.create()
+			groupLines = CovLineArray.create(0)
 		end 'aDifferentFile'
 
 		groupPath = key.path
@@ -290,7 +290,7 @@ end 'groupedFiles'
 // That is a total order even when two arms share a line (an `if` and its implicit `else` both sit at the
 // `if`), which a sort by position would not be — so the sort below must be STABLE.
 function joinBranches(sidecar MxdbgReader, data MxcovData) returns CovBranchArray
-	var rows = CovArmRowArray.create()
+	var rows = CovArmRowArray.create(0)
 
 	for index in 0 upto sidecar.coveragePointCount() 'eachPoint'
 		let point = sidecar.coveragePoint(index as MxdbgIndex)
@@ -321,16 +321,16 @@ function compareBranchPosition(left CovArmRow, right CovArmRow) returns Ordering
 end 'compareBranchPosition'
 
 function groupedBranches(rows CovArmRowArray) returns CovBranchArray
-	var branches = CovBranchArray.create()
+	var branches = CovBranchArray.create(0)
 	var groupFile = ""
 	var groupLine = 0 as CovLineNumber
 	var groupColumn = 0 as CovSourceColumn
-	var groupArms = CovArmArray.create()
+	var groupArms = CovArmArray.create(0)
 
 	for row in rows 'eachArm'
 		if groupArms.count() > 0 and not (row.file == groupFile and row.branchLine == groupLine and row.branchColumn == groupColumn) 'aDifferentBranch'
 			branches.push(CovBranch.create(groupFile, line: groupLine, column: groupColumn, arms: groupArms))
-			groupArms = CovArmArray.create()
+			groupArms = CovArmArray.create(0)
 		end 'aDifferentBranch'
 
 		groupFile = row.file
@@ -533,7 +533,7 @@ function sourceLines(path String) returns CovSourceLookup
 	let spelled = try FilePath.from(path) otherwise return CovSourceLookup.unreadable
 	let body = try File.readText(spelled) otherwise return CovSourceLookup.unreadable
 
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	for row in body.split(LineFeed) 'eachRow'
 		lines.push(row.replace(CarriageReturn, with: "") if row.endsWith(CarriageReturn) else row)
@@ -591,7 +591,7 @@ function jsonTargetStatus(status CovTargetStatus) returns String
 end 'jsonTargetStatus'
 
 function jsonFile(file CovFile) returns String
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	for line in file.lines 'eachLine'
 		lines.push(jsonLine(line))
@@ -616,7 +616,7 @@ function stateName(state CovLineState) returns String
 end 'stateName'
 
 function jsonBranch(branch CovBranch) returns String
-	var arms = StringArray.create()
+	var arms = StringArray.create(0)
 
 	for arm in branch.arms 'eachArm'
 		arms.push(jsonArm(arm))

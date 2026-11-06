@@ -15,7 +15,7 @@ end 'selectedLabel'
 
 function saidByFilteredRun(patterns StringArray) returns CollectedOutput
 	let staged = stagedGateFixture()
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 
 	for pattern in patterns 'eachPattern'
 		arguments.push(filterFlag(pattern))
@@ -33,7 +33,7 @@ end 'ranVerdictIn'
 
 test 'repeated --filter runs the union'
 	let said = everythingSaid(saidByFilteredRun([specPrefix("alpha"), specPrefix("beta")]))
-	var broken = StringArray.create()
+	var broken = StringArray.create(0)
 
 	for specName in ["alpha", "beta"] 'eachNamed'
 		if not said.contains(failVerdictPrefix(selectedLabel(specName))) 'namedButNotRun'
@@ -51,7 +51,7 @@ end 'repeated --filter runs the union'
 test 'a --filter that selects nothing refuses the run and is named'
 	let run = saidByFilteredRun([UnmatchedPattern, specPrefix("alpha")])
 	let said = everythingSaid(run)
-	var broken = StringArray.create()
+	var broken = StringArray.create(0)
 
 	if run.exitCode() == SuccessExitCode 'accepted'
 		broken.push("the run exited {SuccessExitCode} although `{filterFlag(UnmatchedPattern)}` selects no case. It said:\n{said}\n")
@@ -71,7 +71,7 @@ end 'a --filter that selects nothing refuses the run and is named'
 test 'an empty --filter= refuses the run'
 	let run = saidByFilteredRun([""])
 	let said = everythingSaid(run)
-	var broken = StringArray.create()
+	var broken = StringArray.create(0)
 
 	if run.exitCode() == SuccessExitCode 'accepted'
 		broken.push("the run exited {SuccessExitCode} although `{FilterFlagPrefix}` names no pattern. It said:\n{said}\n")

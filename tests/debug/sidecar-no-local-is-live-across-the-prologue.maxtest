@@ -6,7 +6,7 @@ let FrameSlotLocationPrefix = "["
 
 test 'a local of a function with no parameters is not placed before the function has run an instruction'
 	let staged = builtFixture(PrologueCaseLabel, fixture: PrologueFixtureName)
-	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create(0))
 
 	try Expect.equal(dump.exitCode(), expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
 
@@ -14,7 +14,7 @@ test 'a local of a function with no parameters is not placed before the function
 	let owner = functionRowOf(functionRows, name: ParameterlessFunctionName)
 	let (functionStart, _) = requiredCodeRange(owner, what: "`{ParameterlessFunctionName}`'s function row")
 	var placed = 0 as Count
-	var claimingTheEntry = StringArray.create()
+	var claimingTheEntry = StringArray.create(0)
 
 	for row in localRowsOf(functionRows, name: ParameterlessFunctionName) 'eachLocal'
 		let location = try whitespaceTokens(row).get(LocationColumn) otherwise continue

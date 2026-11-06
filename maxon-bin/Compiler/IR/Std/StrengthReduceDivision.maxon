@@ -466,11 +466,11 @@ module function reduceDivisionsInFunc(module StdModule, func IrFunction, reducti
 	// rather than counted here, which is exact and needs no use census of its own. A LIST rather than
 	// a `StdValueUseSet` because this one is ITERATED, which that dense column has no operation for —
 	// and a repeated id costs one redundant `contains` at the end of the function, nothing more.
-	var detachedDivisors = ValueIdArray.create()
+	var detachedDivisors = ValueIdArray.create(0)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("reduceDivisionsInFunc: blockRef from func.blockRefs not in module.blocks")
-		var rebuilt = OpIndexArray.create()
+		var rebuilt = OpIndexArray.create(0)
 
 		for opIdx in block.bodyOps() 'eachRef'
 			appendReducedOp(module, opIdx: opIdx, constMap: constMap, reduction: reduction, magic: magic, mint: mint, rebuilt: rebuilt, detached: detachedDivisors)

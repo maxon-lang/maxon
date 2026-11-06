@@ -486,8 +486,8 @@ end 'SuitePlan'
 // also nearly free — parsing nineteen markdown files costs less than one of the compiles it is
 // about to dispatch.
 function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns SuitePlan throws CompileError
-	var plans = SpecPlanArray.create()
-	var excluded = ExcludedCaseArray.create()
+	var plans = SpecPlanArray.create(0)
+	var excluded = ExcludedCaseArray.create(0)
 	var tally = FilterPatternTally.create(filterPatterns, spellings: filterPatterns)
 
 	let specPaths = try specFilePaths(specDir)
@@ -518,7 +518,7 @@ function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, mode Sp
 				continue
 			end 'selectsNothing'
 
-			var testNames = StringArray.create()
+			var testNames = StringArray.create(0)
 			var weight = 0 as JobWeight
 
 			for test in tests 'eachTest'
@@ -834,7 +834,7 @@ end 'encodeRecordPayload'
 function decodeRecordPayload(payload String) returns String
 	let bytes = payload.toByteArray()
 	let n = bytes.count()
-	var decoded = ByteArray.create()
+	var decoded = ByteArray.create(0)
 	var i = 0 as ElementIndex
 
 	while i < n 'walk'
@@ -1048,7 +1048,7 @@ end 'decodeJobCount'
 // reach the worker) would otherwise show up as a suite that quietly reported a different set of
 // tests than the one it claims to have run.
 function resultsFromLines(lines StringArray, plan SpecPlan) returns SpecTestResultArray
-	var results = SpecTestResultArray.create()
+	var results = SpecTestResultArray.create(0)
 
 	if lines.count() != plan.testNames.count() 'wrongRecordCount'
 		panic("spec worker pool: '{plan.specName}' returned {lines.count()} record(s), expected {plan.testNames.count()} — a result was lost, or the worker selected different tests than the parent did")
@@ -1146,7 +1146,7 @@ typealias SlotInstantArray = Array with InstantMs
 // place that decides what progress is. The instant IS the answer, written by the one party that knows
 // it. The cost is one clock read per line, against ~2 lines per test.
 function drainResultsThunk(child StreamingSubprocess, spokeAt SlotInstantArray, slot WorkerId) returns StringArray throws SubprocessError
-	var lines = StringArray.create()
+	var lines = StringArray.create(0)
 
 	while true 'lineLoop'
 		let line = try child.readStdoutLine() otherwise (e) 'unread'
@@ -1222,7 +1222,7 @@ end 'lastStepIn'
 // is neither a breadcrumb nor a record survives this and is refused by `decodeWorkerLine`, so nothing
 // is silently walked past.
 function recordLinesOf(lines StringArray) returns StringArray
-	var records = StringArray.create()
+	var records = StringArray.create(0)
 
 	for line in lines 'eachLine'
 		if not line.startsWith(WorkerStepMarker) 'isNotABreadcrumb'
@@ -1276,7 +1276,7 @@ type PersistentWorkerHandle
 	// asked for, and `resultsFromLines` panics. This list is this function's selection parameters; a new
 	// one joins it in the same edit.
 	static function spawnNoWait(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle throws SubprocessError
-		var argv = StringArray.create()
+		var argv = StringArray.create(0)
 		argv.push(SpecTestCommandName)
 		argv.push(WorkerPersistentFlag)
 
@@ -1478,7 +1478,7 @@ end 'deadWorkerStderr'
 // intermittently green suite. Failing it keeps the bug loud AND keeps the other ~200 specs reporting,
 // which holds a compiler panic's cost at one named FAIL rather than the whole run.
 function deadJobResults(plan SpecPlan, reason String) returns SpecTestResultArray
-	var results = SpecTestResultArray.create()
+	var results = SpecTestResultArray.create(0)
 
 	for testName in plan.testNames 'eachTest'
 		results.push(SpecTestResult.create(plan.specName, testName: testName, outcome: TestOutcome.fail(reason)))
@@ -1679,7 +1679,7 @@ end 'deathCause'
 // It reports every failing row rather than the first, for `SpecVerdictSelfTest`'s reason: one careless
 // edit breaks several, and a report naming one sends the reader back for another sweep per row.
 function requireWorkerExitDecodeHolds()
-	var broken = StringArray.create()
+	var broken = StringArray.create(0)
 
 	checkExitDecode(broken, code: 0xC0000005, host: Os.windows, expected: "0xc0000005 (access violation)")
 	checkExitDecode(broken, code: 0xC0000017, host: Os.windows, expected: "0xc0000017 (out of memory)")
@@ -1945,14 +1945,14 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		//
 		// The excluded census rides out here too: a run whose whole selection was live-network reaches
 		// this return, and "no tests selected" alone would hide the cause.
-		return PoolRun.create(SpecTestResultArray.create(), failedWorkers: 0, cpu: SuiteCpuTally.zero(), batch: BatchTally.zero(), library: LibraryCacheTally.create(), poolSize: workerCount, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns)
+		return PoolRun.create(SpecTestResultArray.create(0), failedWorkers: 0, cpu: SuiteCpuTally.zero(), batch: BatchTally.zero(), library: LibraryCacheTally.create(), poolSize: workerCount, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns)
 	end 'selectsNothing'
 
 	try prepareSharedDirs(specDir)
 
 	// ⭐⭐ **TWO QUEUES, AND THE `alone` ONE IS SERVED ONLY BY AN IDLE POOL** — `takeDispatchableJob`.
-	var jobQueue = SpecJobArray.create()
-	var aloneQueue = SpecJobArray.create()
+	var jobQueue = SpecJobArray.create(0)
+	var aloneQueue = SpecJobArray.create(0)
 
 	for i in 0 upto plans.count() 'enqueue'
 		let plan = try plans.get(i) otherwise panic("runSpecPool: plans.get({i}) is in bounds by construction")
@@ -1993,11 +1993,11 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// only reader and is asked per busy slot per park.
 	let runStrategy = runStrategyFor(effectiveTarget)
 
-	var busy = BoolArray.create()
-	var inFlight = SpecJobArray.create()
-	var drains = DrainPromiseArray.create()
-	var dispatchedAt = SlotInstantArray.create()
-	var spokeAt = SlotInstantArray.create()
+	var busy = BoolArray.create(0)
+	var inFlight = SpecJobArray.create(0)
+	var drains = DrainPromiseArray.create(0)
+	var dispatchedAt = SlotInstantArray.create(0)
+	var spokeAt = SlotInstantArray.create(0)
 
 	// Whether this slot's progress bound has already fired and the worker been terminated for it. A
 	// LATCH, not a re-derivable predicate: once a worker has been given up on it stays given up on, and
@@ -2005,7 +2005,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// poll while the EOF makes its way back through the runtime — printing a line each time.
 	// Re-stamping the dispatch instant instead cannot work: a worker that exited on its own would
 	// then have its bound pushed forward for ever.
-	var expired = BoolArray.create()
+	var expired = BoolArray.create(0)
 	let idleJob = SpecJob.idle()
 
 	// The placeholder instant, like `SpecJob.idle()` beside it: never read, because an idle slot's
@@ -2023,10 +2023,10 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 
 	// One bucket per plan, filled out of order and concatenated in plan order at the end. THIS is
 	// where worker-count invariance is won: nothing is reported as it arrives.
-	var buckets = SpecResultBuckets.create()
+	var buckets = SpecResultBuckets.create(0)
 
 	for _ in 0 upto plans.count() 'initBuckets'
-		buckets.push(SpecTestResultArray.create())
+		buckets.push(SpecTestResultArray.create(0))
 	end 'initBuckets'
 
 	// Round-robin cursors. Without them the loop re-dispatches to the slot it just drained and then
@@ -2228,7 +2228,7 @@ end 'runSpecPool'
 // The buckets, in plan order — the suite's report, assembled at last from answers that arrived in
 // whatever order the workers happened to finish.
 function concatBuckets(buckets SpecResultBuckets) returns SpecTestResultArray
-	var results = SpecTestResultArray.create()
+	var results = SpecTestResultArray.create(0)
 
 	for bucket in buckets 'eachSpec'
 		for result in bucket 'eachResult'
@@ -2268,7 +2268,7 @@ end 'prepareSharedDirs'
 // There is no degraded mode to fall back to, and a pool that quietly ran with fewer workers than
 // it was asked for would be a harness lying about what it did.
 function spawnPool(harnessExe FilePath, count WorkerCount, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandleArray
-	var workers = PersistentWorkerHandleArray.create()
+	var workers = PersistentWorkerHandleArray.create(0)
 
 	for i in 0 upto count as ElementIndex 'spawnPhase'
 		workers.push(spawnWorker(harnessExe, workerId: i as WorkerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork))

@@ -1139,15 +1139,15 @@ would fail on the round trip rather than only on the string compare.
 ```maxon
 function main() returns ExitCode
 	var doc = JsonDoc.create()
-	var keys = StringArray.create()
-	var children = JsonNodeIdArray.create()
+	var keys = StringArray.create(0)
+	var children = JsonNodeIdArray.create(0)
 	keys.push("name")
 	children.push(doc.add(JsonNode.stringNode("a\"b")))
 	keys.push("size")
 	children.push(doc.add(JsonNode.numberNode(2.5)))
 	keys.push("done")
 	children.push(doc.add(JsonNode.boolNode(false)))
-	var items = JsonNodeIdArray.create()
+	var items = JsonNodeIdArray.create(0)
 	items.push(doc.add(JsonNode.numberNode(1.0)))
 	items.push(doc.add(JsonNode.nullNode()))
 	keys.push("items")

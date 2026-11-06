@@ -6,13 +6,13 @@ test 'an up-to-date target that asks to rebuild with its output still runs that 
 	let marker = staged.join(RebuildWithOutputMarkerFileName)
 	waitPastWhatWasStaged(staged)
 
-	let first = spawnManifestBuild(staged, options: StringArray.create(), environment: [SecondStageVariable: SecondStageValue])
+	let first = spawnManifestBuild(staged, options: StringArray.create(0), environment: [SecondStageVariable: SecondStageValue])
 	let firstSaid = "It wrote to stdout: {first.stdout} and to stderr: {first.stderr}"
 
 	Expect.equal(first.exitCode(), expected: 0, message: "`maxon build` with {SecondStageVariable} already set did not exit with the build's own success. {firstSaid}")
 	Expect.isFalse(File.exists(marker), message: "`maxon build` with {SecondStageVariable} already set ran the program it wrote. {firstSaid}")
 
-	let second = spawnManifestBuild(staged, options: StringArray.create())
+	let second = spawnManifestBuild(staged, options: StringArray.create(0))
 	let said = "It wrote to stdout: {second.stdout} and to stderr: {second.stderr}"
 
 	Expect.contains(second.stdout, needle: UpToDateLinePrefix, message: "a second `maxon build` of a target nothing had changed for did not say `{UpToDateLinePrefix}<path>`. {said}")

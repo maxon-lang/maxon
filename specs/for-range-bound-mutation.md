@@ -107,7 +107,7 @@ reallocates the array stays valid.
 typealias Labels = Array with String
 
 function main() returns ExitCode
-	var arr = Labels.create()
+	var arr = Labels.create(0)
 	arr.push("growing element number {40 + 2}")
 	for s in arr 'l'
 		if arr.count() < 3 'grow'
@@ -181,7 +181,7 @@ valid, and the next step sees the cleared count and ends.
 ```maxon
 typealias Lines = Array with String
 
-var pending = Lines.create()
+var pending = Lines.create(0)
 
 function wipe()
 	pending.clear()
@@ -212,14 +212,14 @@ record's end.
 typealias Integer = int(i64.min to i64.max)
 typealias IntegerArray = Array with Integer
 
-var numbers = IntegerArray.create()
+var numbers = IntegerArray.create(0)
 
 function main() returns ExitCode
 	numbers.push(1)
 	numbers.push(2)
 	var t = 0 as Integer
 	for n in numbers 'l'
-		numbers = IntegerArray.create()
+		numbers = IntegerArray.create(0)
 		t = t + n
 	end 'l'
 	print("{t} {numbers.count()}\n")

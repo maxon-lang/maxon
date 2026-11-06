@@ -251,14 +251,14 @@ function totalCount(a Integer, b Integer, c Integer, d Integer, e Integer, f Int
 end 'totalCount'
 
 function main() returns ExitCode
-	var first = IntArray.create()
+	var first = IntArray.create(0)
 	first.push(1)
 	first.push(2)
-	var second = IntArray.create()
+	var second = IntArray.create(0)
 	second.push(3)
 	second.push(4)
 	second.push(5)
-	var third = IntArray.create()
+	var third = IntArray.create(0)
 	third.push(6)
 	return totalCount(10, b: 20, c: 30, d: 40, e: 50, f: first, g: second, h: third)
 end 'main'

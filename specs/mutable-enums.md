@@ -515,7 +515,7 @@ type Registry
 	export var held as HolderArray
 
 	static function create() returns Self
-		return Self{held: HolderArray.create()}
+		return Self{held: HolderArray.create(0)}
 	end 'create'
 
 	function keep(settle Settle)
@@ -563,7 +563,7 @@ type Registry
 	export var held as HolderArray
 
 	static function create() returns Self
-		return Self{held: HolderArray.create()}
+		return Self{held: HolderArray.create(0)}
 	end 'create'
 
 	function keep(settle Settle)
@@ -611,7 +611,7 @@ type Registry
 	export var held as HolderArray
 
 	static function create() returns Self
-		return Self{held: HolderArray.create()}
+		return Self{held: HolderArray.create(0)}
 	end 'create'
 
 	function keep(settle Settle)
@@ -662,7 +662,7 @@ type Registry
 	export var held as HolderArray
 
 	static function create() returns Self
-		return Self{held: HolderArray.create()}
+		return Self{held: HolderArray.create(0)}
 	end 'create'
 
 	function keep(settle Settle)
@@ -671,7 +671,7 @@ type Registry
 
 	function run(count Integer)
 		var settle = Settle.someMoved(count)
-		var spare = SettleArray.create()
+		var spare = SettleArray.create(0)
 		spare.push(settle)
 		self.keep(settle)
 		spare.clear()

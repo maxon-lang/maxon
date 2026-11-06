@@ -232,7 +232,7 @@ function main() returns ExitCode
 	var sum = 0 as Integer
 
 	for r in 0 upto rounds 'eachRound'
-		var replies = ReplyPromiseArray.create()
+		var replies = ReplyPromiseArray.create(0)
 
 		for _ in 0 upto workersPerRound 'spawnEach'
 			var worker = spawn Worker.create()
@@ -314,7 +314,7 @@ function main() returns ExitCode
 	var sum = 0 as Integer
 
 	for r in 0 upto rounds 'eachRound'
-		var replies = ReplyPromiseArray.create()
+		var replies = ReplyPromiseArray.create(0)
 
 		for _ in 0 upto workersPerRound 'spawnEach'
 			var worker = spawn Worker.create()

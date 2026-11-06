@@ -3,13 +3,13 @@ let MalformedRecord = "banana"
 test 'a build over a malformed compiler-version record is refused, naming the record'
 	let staged = stagedProject("a-malformed-version-record-is-refused", fixture: DefaultFixtureName)
 
-	let first = spawnManifestBuild(staged, options: StringArray.create())
+	let first = spawnManifestBuild(staged, options: StringArray.create(0))
 	Expect.equal(first.exitCode(), expected: 0, message: "the first `maxon build` over the default manifest exited {first.exitCode()}. It wrote to stdout: {first.stdout} and to stderr: {first.stderr}")
 
 	let record = soleVersionRecordUnder(privateCacheRoot(staged))
 	writeStagedFile(record, content: recordLine(MalformedRecord))
 
-	let refused = spawnManifestBuild(staged, options: StringArray.create())
+	let refused = spawnManifestBuild(staged, options: StringArray.create(0))
 	let stderr = withoutCarriageReturns(refused.stderr)
 
 	Expect.equal(refused.exitCode(), expected: RefusedExitCode, message: "`maxon build` over a compiler-version record holding `{MalformedRecord}` exited {refused.exitCode()}. It wrote to stdout: {refused.stdout} and to stderr: {stderr}")

@@ -145,7 +145,7 @@ end 'cacheWriteStdlibShadowSpellingArray'
 
 function cacheReadStdlibShadowSpellingArray(reader LibraryCacheReader) returns StdlibShadowSpellingArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = StdlibShadowSpellingArray.create()
+	var result = StdlibShadowSpellingArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -219,7 +219,7 @@ end 'cacheWriteShadowRespellingArray'
 
 function cacheReadShadowRespellingArray(reader LibraryCacheReader) returns ShadowRespellingArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ShadowRespellingArray.create()
+	var result = ShadowRespellingArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -245,7 +245,7 @@ end 'cacheWriteRespellingPositionArray'
 
 function cacheReadRespellingPositionArray(reader LibraryCacheReader) returns RespellingPositionArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = RespellingPositionArray.create()
+	var result = RespellingPositionArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -295,7 +295,7 @@ export type ShadowRespellings
 
 	static function of(entries ShadowRespellingArray) returns ShadowRespellings
 		var byMinted = RespellingPositionsByMint.create()
-		var unanchored = RespellingPositionArray.create()
+		var unanchored = RespellingPositionArray.create(0)
 		var reach = 0 as ElementIndex
 
 		for (iter, respelling) in entries.withIterator() 'eachRespelling'
@@ -304,7 +304,7 @@ export type ShadowRespellings
 				continue
 			end 'noLeadingWordByte'
 
-			var positions = try byMinted.get(respelling.mintedName()) otherwise RespellingPositionArray.create()
+			var positions = try byMinted.get(respelling.mintedName()) otherwise RespellingPositionArray.create(0)
 			positions.push(iter.index())
 			byMinted.upsert(respelling.mintedName(), value: positions)
 
@@ -317,7 +317,7 @@ export type ShadowRespellings
 	end 'of'
 
 	export static function none() returns ShadowRespellings
-		return Self.of(ShadowRespellingArray.create())
+		return Self.of(ShadowRespellingArray.create(0))
 	end 'none'
 
 	// One indexed pass over the original text equals respelling every entry in turn: a replacement never
@@ -342,7 +342,7 @@ export type ShadowRespellings
 
 	function candidatePositionsIn(bytes ByteArray) returns RespellingPositionArray
 		var seen = RespellingPositionSet.create()
-		var found = RespellingPositionArray.create()
+		var found = RespellingPositionArray.create(0)
 
 		for position in self.unanchored 'eachUnanchored'
 			seen.insert(position)
@@ -510,7 +510,7 @@ export type ShadowSpellingRoster
 	end 'respellingsFor'
 
 	export static function none() returns ShadowSpellingRoster
-		return Self.of(StdlibShadowSpellingArray.create())
+		return Self.of(StdlibShadowSpellingArray.create(0))
 	end 'none'
 
 	export function bareSpellingOf(name ByteArray) returns ByteArray
@@ -567,7 +567,7 @@ export type ShadowSpellingRoster
 end 'ShadowSpellingRoster'
 
 module function shadowRespellings(spellings StdlibShadowSpellingArray, reader ShadowSpellingReader, written WrittenMintSet) returns ShadowRespellings
-	var respellings = ShadowRespellingArray.create()
+	var respellings = ShadowRespellingArray.create(0)
 
 	for spelling in spellings 'eachSpelling'
 		if written.contains(spelling.minted) 'theFileSpellsItItself'
@@ -581,7 +581,7 @@ module function shadowRespellings(spellings StdlibShadowSpellingArray, reader Sh
 end 'shadowRespellings'
 
 module function libraryNameRespellings(spellings StdlibShadowSpellingArray) returns ShadowRespellings
-	var respellings = ShadowRespellingArray.create()
+	var respellings = ShadowRespellingArray.create(0)
 
 	for spelling in spellings 'eachSpelling'
 		if spelling.isAuthorNominal() 'anAuthorsOwnTypeIsNotALibraryName'
@@ -596,7 +596,7 @@ end 'libraryNameRespellings'
 
 function withIdentifierRespelled(text String, identifier ByteArray, spelling ByteArray) returns String
 	let bytes = text.toByteArray()
-	var respelled = ByteArray.create()
+	var respelled = ByteArray.create(0)
 	var at = 0 as ElementIndex
 
 	while at < bytes.count() 'eachByte'
@@ -913,7 +913,7 @@ end 'cacheWriteDiagnosticArray'
 
 module function cacheReadDiagnosticArray(reader LibraryCacheReader) returns DiagnosticArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DiagnosticArray.create()
+	var result = DiagnosticArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -1141,7 +1141,7 @@ export type DiagnosticSink
 	end 'discarding'
 
 	static function to(destination DiagnosticDestination) returns DiagnosticSink
-		return Self{destination: destination, capturedLines: CapturedDiagnosticTextArray.create()}
+		return Self{destination: destination, capturedLines: CapturedDiagnosticTextArray.create(0)}
 	end 'to'
 
 	export function emit(line String)

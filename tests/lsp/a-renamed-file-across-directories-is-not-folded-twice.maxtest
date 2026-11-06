@@ -45,14 +45,14 @@ function requireCrossDirAnswerNamesOnlyTheNewDirectory(answers CorpusStaleSource
 end 'requireCrossDirAnswerNamesOnlyTheNewDirectory'
 
 function crossDirRun(root FilePath, afterDirectory FilePath, beforeDirectory FilePath) returns CorpusStaleSourceRun
-	var edits = CorpusDiskEditArray.create()
+	var edits = CorpusDiskEditArray.create(0)
 	edits.push(CorpusDiskEdit.wrote(afterDirectory, fileName: CrossDirDeclarationName, content: CrossDirDeclarationSource))
 	edits.push(CorpusDiskEdit.deleted(beforeDirectory, fileName: CrossDirDeclarationName))
 
 	let uri = fileUriOf(root.join(CrossDirReaderName))
 	let reader = CorpusProbePoint.at(uri, line: CrossDirCallLine, character: CrossDirMovedCallCharacter)
 
-	var alsoAsk = CorpusProbePointArray.create()
+	var alsoAsk = CorpusProbePointArray.create(0)
 	alsoAsk.push(CorpusProbePoint.at(uri, line: CrossDirCallLine, character: CrossDirSteadyCallCharacter))
 
 	return CorpusStaleSourceRun.create(reader, readerSource: CrossDirReaderSource, edits: edits, settledWhen: CorpusSettledWhen.theAnswerNames(CrossDirAfterTail), windowMs: CrossDirWindowMs, pauseMs: CrossDirPauseMs, alsoAsk: alsoAsk)

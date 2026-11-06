@@ -12,14 +12,14 @@ test 'a breakpoint on each instruction class is hit and resumed, and the program
 	let staged = builtFixture(InstructionClassCaseLabel, fixture: SteppingFixtureName)
 	let undebugged = runBuiltProgram(staged)
 
-	var anchored = StringArray.create()
+	var anchored = StringArray.create(0)
 	anchored.push(PlainStatementAnchor)
 	anchored.push(CallStatementAnchor)
 	anchored.push(BranchConditionAnchor)
 	anchored.push(LoopBackEdgeAnchor)
 	anchored.push(ReturnStatementAnchor)
 
-	var armings = StringArray.create()
+	var armings = StringArray.create(0)
 
 	for anchor in anchored 'eachAnchor'
 		armings.push("{BreakCommand} {lineTarget(anchorLine(staged.join(StagedProgramFileName), anchor: anchor))}")
@@ -28,17 +28,17 @@ test 'a breakpoint on each instruction class is hit and resumed, and the program
 	armings.push(RunCommand)
 
 	let commands = debugCommandLine(appendedCommands(armings, rest: repeatedCommand(ContinueCommand, times: BreakpointOnEachInstructionClassContinuesPastEveryHit)))
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	var stoppedLines = StringArray.create()
+	var stoppedLines = StringArray.create(0)
 
 	for stop in eventsOfKind(events, kind: StopEventName) 'eachStop'
 		stoppedLines.push("{numberOf(stop, node: stop.root, key: LineKey)}")
 	end 'eachStop'
 
-	var never = StringArray.create()
+	var never = StringArray.create(0)
 
 	for anchor in anchored 'eachAnchorHit'
 		let line = anchorLine(staged.join(StagedProgramFileName), anchor: anchor)

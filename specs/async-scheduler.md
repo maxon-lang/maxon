@@ -1211,7 +1211,7 @@ function twice(n Integer) returns Integer
 end 'twice'
 
 function wave(base Integer) returns Integer
-	var ps = IntPromiseArray.create()
+	var ps = IntPromiseArray.create(0)
 	var i = 0 as Integer
 	while i < 100 'spawnEach'
 		ps.push(async twice(base + i))

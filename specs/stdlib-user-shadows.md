@@ -656,7 +656,7 @@ end 'FullRangeInt'
 typealias ValueBoxes = Array with FullRangeInt
 
 function main() returns ExitCode
-	var boxes = ValueBoxes.create()
+	var boxes = ValueBoxes.create(0)
 	boxes.push(FullRangeInt.create(3))
 	boxes.push(FullRangeInt.create(4))
 
@@ -1198,7 +1198,7 @@ end 'TextLogHandler'
 default LogHandler = spawn stdlib.TextLogHandler.create(LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false))
 
 function main() returns ExitCode
-	let record = LogRecord.create(0, level: LogLevel.info, message: "up", attrs: LogFieldArray.create(), file: "main.maxon", line: 1)
+	let record = LogRecord.create(0, level: LogLevel.info, message: "up", attrs: LogFieldArray.create(0), file: "main.maxon", line: 1)
 	let written = try await LogHandler.current().handle(record) otherwise false
 	return 0 if written else 1
 end 'main'

@@ -33,7 +33,7 @@ enum Ascii
 	space = 32
 end 'Ascii'
 
-var out = ByteArray.create()
+var out = ByteArray.create(0)
 out.push(Ascii.space)   // OK — coerces to Byte, no .rawValue needed
 ```
 
@@ -158,7 +158,7 @@ enum Ascii
 end 'Ascii'
 
 function main() returns ExitCode
-	var out = ByteArray.create()
+	var out = ByteArray.create(0)
 	out.push(Ascii.space)
 	out.push(Ascii.zero)
 	let first = try out.get(0) otherwise 99

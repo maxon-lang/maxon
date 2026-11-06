@@ -6,7 +6,7 @@ let SlotMark = "[rbp-"
 
 test 'a stop in one arm of an if reads a slot local of the other arm as not live here'
 	let staged = builtFixture(SiblingArmCaseLabel, fixture: SiblingArmsFixtureName)
-	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
+	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create(0))
 	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
 	var slotRows = 0 as Count
 
@@ -18,7 +18,7 @@ test 'a stop in one arm of an if reads a slot local of the other arm as not live
 
 	let elseArmAt = anchorLine(staged.join(StagedProgramFileName), anchor: "else-arm")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(elseArmAt)}", RunCommand, "{PrintCommand} {OtherArmsLocalName}"])
-	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let answers = eventsOfKind(events, kind: ValueEventName)

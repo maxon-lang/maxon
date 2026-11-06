@@ -21,7 +21,7 @@ typealias ByteArray = Array with Byte
 typealias ByteArrayArray = Array with ByteArray
 
 function main() returns ExitCode
-	var names = ByteArrayArray.create()
+	var names = ByteArrayArray.create(0)
 	names.push(b"hello")
 	names.push(b"world")
 

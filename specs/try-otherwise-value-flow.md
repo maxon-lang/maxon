@@ -182,7 +182,7 @@ function swapFirstTwo(rows StringArray, doSwap bool)
 end 'swapFirstTwo'
 
 function main() returns ExitCode
-	var rows = StringArray.create()
+	var rows = StringArray.create(0)
 	rows.push("a")
 	rows.push("b")
 	swapFirstTwo(rows, doSwap: true)
@@ -218,7 +218,7 @@ function countSet(bits BoolArray) returns Tally
 end 'countSet'
 
 function main() returns ExitCode
-	var b = BoolArray.create()
+	var b = BoolArray.create(0)
 	b.push(true)
 	b.push(false)
 	b.push(true)
@@ -255,7 +255,7 @@ function check(bytes OctetArray, i Octet) returns ExitCode
 end 'check'
 
 function main() returns ExitCode
-	var a = OctetArray.create()
+	var a = OctetArray.create(0)
 	a.push(200)
 	return check(a, i: 0)
 end 'main'
@@ -301,7 +301,7 @@ function longestLen(rows RowArray) returns ExitCode
 end 'longestLen'
 
 function main() returns ExitCode
-	var rows = RowArray.create()
+	var rows = RowArray.create(0)
 	rows.push(Row.create("ab"))
 	rows.push(Row.create("abcd"))
 	rows.push(Row.create("a"))
@@ -398,7 +398,7 @@ typealias IntArray = Array with Integer
 typealias Wide = int(-1000000000000 to 1000000000000)
 
 function pick() returns Wide
-	let d = IntArray.create().count()
+	let d = IntArray.create(0).count()
 	return try ((8 / d) as Wide) otherwise 5
 end 'pick'
 

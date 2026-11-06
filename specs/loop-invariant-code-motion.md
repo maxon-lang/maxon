@@ -124,7 +124,7 @@ function total(a WordArray) returns Word
 end 'total'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		a.push(i * i)
 	end 'seed'
@@ -164,12 +164,12 @@ function total(a WordArray) returns Word
 end 'total'
 
 function main() returns ExitCode
-	var empty = WordArray.create()
+	var empty = WordArray.create(0)
 	if total(empty) != 0 'emptyIsZero'
 		return 1
 	end 'emptyIsZero'
 
-	var one = WordArray.create()
+	var one = WordArray.create(0)
 	one.push(7)
 	if total(one) != 7 'oneElement'
 		return 2
@@ -346,7 +346,7 @@ function grid(a WordArray, rows Word, k Word) returns Word
 end 'grid'
 
 function main() returns ExitCode
-	var a = WordArray.create()
+	var a = WordArray.create(0)
 	a.push(2)
 	a.push(3)
 	a.push(5)

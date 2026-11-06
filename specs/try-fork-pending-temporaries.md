@@ -15,10 +15,10 @@ the enclosing expression is only half-built at the point the error flag is teste
 the operands already evaluated are values that expression has **yet to consume**:
 
 ```maxon
-return Conf{argv: StrArray.create(), n: try mayFail(n) otherwise panic("…")}
+return Conf{argv: StrArray.create(0), n: try mayFail(n) otherwise panic("…")}
 ```
 
-`StrArray.create()` runs first and owns its array. The `try` then splits control two
+`StrArray.create(0)` runs first and owns its array. The `try` then splits control two
 ways, and the array is stored into the struct several ops later, on whichever edge
 reaches the store.
 
@@ -77,7 +77,7 @@ type Conf
 	export var n as Integer
 
 	static function create(n Integer) returns Conf
-		return Conf{argv: StrArray.create(), n: try mayFail(n) otherwise panic("mayFail cannot fail for a small n")}
+		return Conf{argv: StrArray.create(0), n: try mayFail(n) otherwise panic("mayFail cannot fail for a small n")}
 	end 'create'
 end 'Conf'
 
@@ -115,7 +115,7 @@ type Conf
 	export var n as Integer
 
 	static function create(n Integer) returns Conf
-		return Conf{argv: StrArray.create(), n: try mayFail(n) otherwise 7}
+		return Conf{argv: StrArray.create(0), n: try mayFail(n) otherwise 7}
 	end 'create'
 end 'Conf'
 
@@ -160,7 +160,7 @@ type Conf
 			throw Boom.bad
 		end 'negative'
 
-		return Conf{argv: StrArray.create(), n: try mayFail(n) otherwise return Conf{argv: StrArray.create(), n: 0}}
+		return Conf{argv: StrArray.create(0), n: try mayFail(n) otherwise return Conf{argv: StrArray.create(0), n: 0}}
 	end 'create'
 end 'Conf'
 

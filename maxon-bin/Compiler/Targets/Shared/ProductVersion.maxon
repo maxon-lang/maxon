@@ -56,14 +56,14 @@ end 'ProductVersionError'
 // whether or not this target stamps one.
 export function productVersionFor(dotted String, target Target) returns VersionComponentArray throws ProductVersionError
 	if dotted.isEmpty() 'unversioned'
-		return VersionComponentArray.create()
+		return VersionComponentArray.create(0)
 	end 'unversioned'
 
 	let components = try decimalComponentsOf(dotted)
 
 	return match versionStampSiteOf(target) 'site'
 		field(layout) gives try componentsFitting(components, layout: layout)
-		noField gives VersionComponentArray.create()
+		noField gives VersionComponentArray.create(0)
 	end 'site'
 end 'productVersionFor'
 
@@ -79,7 +79,7 @@ export function releaseVersionComponents(dotted String) returns VersionComponent
 end 'releaseVersionComponents'
 
 function releaseVersionLayout() returns VersionFieldLayout
-	var limits = VersionComponentArray.create()
+	var limits = VersionComponentArray.create(0)
 
 	for _ in 0 upto ReleaseVersionComponentCount 'eachComponent'
 		limits.push(LargestVersionComponent)
@@ -117,7 +117,7 @@ function componentsFitting(components StringArray, layout VersionFieldLayout) re
 		throw ProductVersionError.tooManyComponents(components.count(), held: layout.limits.count(), fieldName: layout.name)
 	end 'tooMany'
 
-	var fitted = VersionComponentArray.create()
+	var fitted = VersionComponentArray.create(0)
 
 	for (iter, component) in components.withIterator() 'eachComponent'
 		let limit = try layout.limits.get(iter.index()) otherwise panic("componentsFitting: a component past the field's last was refused above")

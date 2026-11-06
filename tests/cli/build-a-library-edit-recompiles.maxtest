@@ -17,20 +17,20 @@ type LibraryEditRecompiles implements OutsideCheckoutCase
 	export function requireHeldIn(dir FilePath) throws TestFailure
 		let compiler = installedCompilerIn(dir)
 		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
-		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(), binary: compiler), which: "the first build under an empty cache root")
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(0), binary: compiler), which: "the first build under an empty cache root")
 
 		let stdlibFile = appendedTo(dir, relative: EditedStdlibFile)
 		waitPastTheModificationOf(stdlibFile, probeIn: dir)
-		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(), binary: compiler), reason: ModifiedInputReason, which: "a build after `{EditedStdlibFile}` was edited")
-		try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(), binary: compiler), which: "a second build after `{EditedStdlibFile}` was edited")
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(0), binary: compiler), reason: ModifiedInputReason, which: "a build after `{EditedStdlibFile}` was edited")
+		try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(0), binary: compiler), which: "a second build after `{EditedStdlibFile}` was edited")
 
 		let runtimeFile = appendedTo(dir, relative: EditedRuntimeFile)
 		waitPastTheModificationOf(runtimeFile, probeIn: dir)
-		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(), binary: compiler), reason: ModifiedInputReason, which: "a build after `{EditedRuntimeFile}` was edited")
-		try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(), binary: compiler), which: "a second build after `{EditedRuntimeFile}` was edited")
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(0), binary: compiler), reason: ModifiedInputReason, which: "a build after `{EditedRuntimeFile}` was edited")
+		try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(0), binary: compiler), which: "a second build after `{EditedRuntimeFile}` was edited")
 
 		rewriteWithItsOwnBytes(dir, relative: EditedUnicodeTable)
-		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(), binary: compiler), reason: "{UnicodeTableFileName} {ModifiedInputReason}", which: "a build after `{EditedUnicodeTable}` was rewritten with the bytes it held")
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create(0), binary: compiler), reason: "{UnicodeTableFileName} {ModifiedInputReason}", which: "a build after `{EditedUnicodeTable}` was rewritten with the bytes it held")
 	end 'requireHeldIn'
 end 'LibraryEditRecompiles'
 

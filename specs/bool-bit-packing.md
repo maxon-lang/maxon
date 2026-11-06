@@ -8,7 +8,7 @@ category: types
 
 ## Documentation
 
-When `Array with bool` stores elements, they are bit-packed: each bool occupies a single bit instead of a full byte, giving 8x memory reduction. This is transparent to the user — the Array API works identically. **Every** `Array with bool` is packed the same way, whether built from a constant literal, a non-constant literal, or dynamically via `Array.create()` + `push`.
+When `Array with bool` stores elements, they are bit-packed: each bool occupies a single bit instead of a full byte, giving 8x memory reduction. This is transparent to the user — the Array API works identically. **Every** `Array with bool` is packed the same way, whether built from a constant literal, a non-constant literal, or dynamically via `Array.create(0)` + `push`.
 
 `bool` is the first *sub-byte-packed* element type. The `__ManagedMemory` record marks such an element with a **negative** `elementSize`: the value is `-(bit width)`, so `bool` is `elementSize = -1` (1 bit per element). The general encoding is `elementSize > 0` = byte stride, `elementSize == 0` = unset/non-container, `elementSize < 0` = `(-elementSize)` bits per element. A future 2-bit or nibble type would reuse the same machinery with `-2` / `-4`. Element `i`'s field is at bit `i * width`, i.e. byte `(i * width) >> 3`, bit offset `(i * width) & 7`; widths are restricted to those dividing 8 (1, 2, 4) so a field never straddles a byte boundary.
 
@@ -21,7 +21,7 @@ A *constant* bool-array literal (e.g. `[true, false, true]`) is lowered to a bit
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create()
+	var arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
@@ -50,7 +50,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create()
+	var arr = BoolArray.create(0)
 	arr.push(false)
 	arr.push(false)
 	arr.push(false)
@@ -71,7 +71,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create()
+	var arr = BoolArray.create(0)
 	var i = 0 as Count
 	while i < 9 'push'
 		arr.push(false)
@@ -100,7 +100,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create()
+	var arr = BoolArray.create(0)
 	var i = 0 as Count
 	while i < 100 'push'
 		arr.push(i < 50)
@@ -127,7 +127,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create()
+	var arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(true)
 	arr.insert(1, value: false)
@@ -156,7 +156,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create()
+	var arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
@@ -207,7 +207,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create()
+	var arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
@@ -247,7 +247,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create()
+	var arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.clear()
@@ -266,7 +266,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create()
+	var arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
@@ -282,7 +282,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create()
+	var arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
@@ -303,7 +303,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create()
+	var arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	var copy = arr.clone()
@@ -365,7 +365,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create()
+	var arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)

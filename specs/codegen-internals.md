@@ -67,7 +67,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	return arr.count()
@@ -84,10 +84,10 @@ typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	if true 'outer'
-		var outer_arr = IntArray.create()
+		var outer_arr = IntArray.create(0)
 		outer_arr.push(100)
 		if true 'inner'
-			var inner_arr = IntArray.create()
+			var inner_arr = IntArray.create(0)
 			inner_arr.push(200)
 		end 'inner'
 	end 'outer'
@@ -104,7 +104,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create()
+	var arr = IntArray.create(0)
 	var i = 0 as Integer
 	while i < 10 'loop'
 		arr.push(i)

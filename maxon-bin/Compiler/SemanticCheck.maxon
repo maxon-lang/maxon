@@ -204,7 +204,7 @@ export function withdrawOpsDefining(module MaxonModule, func IrFunction, fromBlo
 end 'withdrawOpsDefining'
 
 function withdrawBlockOpsDefining(module MaxonModule, block IrBlock, results ValueMarkSet)
-	var kept = OpIndexArray.create()
+	var kept = OpIndexArray.create(0)
 	var withdrewAny = false
 
 	for opIdx in block.bodyOps() 'eachOp'
@@ -373,7 +373,7 @@ type UnthrownClauses
 	var settled as BoolArray
 
 	static function collect(project Project, module MaxonModule, signatures ProgramSignatures) returns UnthrownClauses
-		var unthrown = Self{clauses: UnthrownClauseArray.create(), siteOf: UnthrownClauseIndexArray.create(), byPosition: UnthrownClauseIndexesByPosition.create(), byName: UnthrownClauseIndexByName.create(), settled: BoolArray.create()}
+		var unthrown = Self{clauses: UnthrownClauseArray.create(0), siteOf: UnthrownClauseIndexArray.create(0), byPosition: UnthrownClauseIndexesByPosition.create(), byName: UnthrownClauseIndexByName.create(), settled: BoolArray.create(0)}
 
 		for func in module.functions 'eachFunc'
 			match func.throwsTypeName 'clause'
@@ -403,7 +403,7 @@ type UnthrownClauses
 			return
 		end 'positionKnown'
 
-		var indexes = UnthrownClauseIndexArray.create()
+		var indexes = UnthrownClauseIndexArray.create(0)
 		indexes.push(index)
 		self.byPosition.upsert(position, value: indexes)
 	end 'noteIfCandidate'
@@ -609,7 +609,7 @@ export type CallParamEdges
 	export var calleeParams as ParamCountArray
 
 	export static function create() returns CallParamEdges
-		return Self{calleeIndices: CsrColumn.create(), callerIndices: FuncIndexArray.create(), callerParams: ParamCountArray.create(), calleeParams: ParamCountArray.create()}
+		return Self{calleeIndices: CsrColumn.create(0), callerIndices: FuncIndexArray.create(0), callerParams: ParamCountArray.create(0), calleeParams: ParamCountArray.create(0)}
 	end 'create'
 
 	export function count() returns CsrIndex
@@ -652,7 +652,7 @@ export type CallParamEdges
 	// callee. The `to` column is the row number itself, which is what makes the other three columns readable
 	// straight off a neighbour.
 	export function byCallee(funcCount CsrIndex) returns CsrGraph
-		var rows = CsrColumn.create()
+		var rows = CsrColumn.create(0)
 
 		for k in 0 upto self.count() 'eachEdge'
 			rows.push(k)
@@ -681,8 +681,8 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamE
 	// Seeded from the INDEX's own array, not the module's: the masks are addressed by POSITION and
 	// `funcIndexByName` resolves a name TO that position, so a seed walk over any other array would leave every
 	// edge pointing at the wrong function's mask.
-	var masks = ParamPositionMaskArray.create()
-	var recordWriteMasks = ParamPositionMaskArray.create()
+	var masks = ParamPositionMaskArray.create(0)
+	var recordWriteMasks = ParamPositionMaskArray.create(0)
 
 	// ⭐ A receiver written through a value that may BE a parameter's record writes that parameter
 	// (`ProvenanceTracer.stageParamEdges`), in every column that asks whether the record is written. One that
@@ -851,7 +851,7 @@ function collectCallParamEdges(project Project, signatures ProgramSignatures, mo
 	var edges = CallParamEdges.create()
 	var conformers = ConformersByInterface.create()
 	var witnessSlots = WitnessSlotsByDeclIndex.create()
-	var unknownWrites = ParamPositionMaskArray.create()
+	var unknownWrites = ParamPositionMaskArray.create(0)
 	unknownWrites.refill(module.functions.count(), value: NoParamPositions)
 
 	for i in 0 upto module.functions.count() 'eachFunc'
@@ -994,8 +994,8 @@ function bindIndirectCall(project Project, module MaxonModule, func IrFunction, 
 	let result = try maxonOpDefinedValue(op) otherwise panic("bindIndirectCall: an indirect call defines its result")
 
 	let run = try runs.get(result) otherwise panic("bindIndirectCall: an indirect call of arity {arity} passes cells, and the parse recorded no places for it — the parser's places and this convention are both read off the called value's function type")
-	var bound = ValueIdArray.create()
-	var names = WriteBlameArray.create()
+	var bound = ValueIdArray.create(0)
+	var names = WriteBlameArray.create(0)
 	bound.append(indirectCallArgsOf(op))
 	names.append(callArgImmutableNamesOf(op))
 	var boundAny = false
@@ -1078,7 +1078,7 @@ export type CallLandingBodies
 	export var unresolvedMayStore as bool
 
 	export static function create() returns CallLandingBodies
-		return Self{impls: FuncIndexArray.create(), unresolved: false, unresolvedMayStore: false}
+		return Self{impls: FuncIndexArray.create(0), unresolved: false, unresolvedMayStore: false}
 	end 'create'
 end 'CallLandingBodies'
 
@@ -1108,7 +1108,7 @@ module type WitnessImplNames
 	module var unselected as bool
 
 	module static function create() returns WitnessImplNames
-		return Self{names: NameRoster.create(), unselected: false}
+		return Self{names: NameRoster.create(0), unselected: false}
 	end 'create'
 end 'WitnessImplNames'
 
@@ -1183,8 +1183,8 @@ end 'addFunctionValueBodiesEdges'
 // actually changed — which is what bounds the total work and makes a recursive or mutually recursive graph
 // terminate rather than spin. No hashing: the CSR is keyed by function index throughout.
 function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges, byCallee CsrGraph)
-	var worklist = FuncIndexArray.create()
-	var queued = BoolArray.create()
+	var worklist = FuncIndexArray.create(0)
+	var queued = BoolArray.create(0)
 
 	for i in 0 upto masks.count() 'seedWorklist'
 		let mask = try masks.get(i) otherwise panic("propagateParamMasks: masks.get OOB at {i}")
@@ -1387,7 +1387,7 @@ end 'AwaitSite'
 typealias AwaitSiteArray = Array with AwaitSite
 
 function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSiteArray
-	var sites = AwaitSiteArray.create()
+	var sites = AwaitSiteArray.create(0)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("collectAwaitSites: blockRef from func.blockRefs not in module.blocks")
@@ -1556,7 +1556,7 @@ function reachableReawait(module MaxonModule, blockIndex BlockIndexById, func Ir
 	end 'tail'
 
 	var visited = BlockIdSet.create()
-	var worklist = BlockIdArray.create()
+	var worklist = BlockIdArray.create(0)
 	collectMaxonBlockSuccessors(module, block: startBlock, into: worklist)
 
 	var head = 0 as ElementIndex
@@ -2702,7 +2702,7 @@ function valueComesFromARefusedDeclaration(project Project, module MaxonModule, 
 		return false
 	end 'noReceiverToFollow'
 
-	var operands = ValueIdArray.create()
+	var operands = ValueIdArray.create(0)
 	maxonOpOperandValues(producer, into: operands)
 
 	return firstOperandComesFromARefusedDeclaration(project, module: module, func: func, signatures: signatures, operands: operands, readerFilePath: readerFilePath)
@@ -2892,7 +2892,7 @@ end 'ambiguousNameMessage'
 // The candidate trailer, sorted through the shared `insertCandidateName` so E3063 and E3095 order their
 // candidates by one rule — see there for the rule.
 export function renderAmbiguousCandidates(spellings NameRoster) returns String
-	var candidates = StringArray.create()
+	var candidates = StringArray.create(0)
 
 	for spelling in spellings 'eachSpelling'
 		insertCandidateName(candidates, candidate: String.from(spelling))
@@ -3618,7 +3618,7 @@ typealias DiscardSiteIndexArray = Array with ElementIndex
 
 function unrefusedDiscardSites(project Project) returns DiscardSiteIndexArray
 	let refused = DiagnosedLines.of(project)
-	var sites = DiscardSiteIndexArray.create()
+	var sites = DiscardSiteIndexArray.create(0)
 
 	for siteIndex in 0 upto project.pendingDiscardedResults.count() 'eachSite'
 		view site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("unrefusedDiscardSites: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
@@ -3651,7 +3651,7 @@ function effectFreeSummaryIfConsulted(project Project, module MaxonModule, signa
 
 	// Nothing indexes this. The loop above resolved every site without one reaching the purity question, and
 	// a resolution reads only facts a diagnostic cannot change, so the drain resolves each site the same way.
-	return BoolArray.create()
+	return BoolArray.create(0)
 end 'effectFreeSummaryIfConsulted'
 
 // ⭐⭐ **WHICH DIAGNOSTIC ONE FILED SITE EARNS, AND UNDER WHICH NAME.** Three provenances reach this, and
@@ -3815,7 +3815,7 @@ export type WitnessDispatchTargets
 	var byRequirement as WitnessTargetsByRequirement
 
 	module static function create(signatures ProgramSignatures, functions IrFunctionArray) returns WitnessDispatchTargets
-		return Self{signatures: signatures, functions: functions, firstWithName: FunctionByBareName.create(), nextWithName: FuncIndexArray.create(), hasNextWithName: BoolArray.create(), slots: WitnessSlotsByDeclIndex.create(), byRequirement: WitnessTargetsByRequirement.create()}
+		return Self{signatures: signatures, functions: functions, firstWithName: FunctionByBareName.create(), nextWithName: FuncIndexArray.create(0), hasNextWithName: BoolArray.create(0), slots: WitnessSlotsByDeclIndex.create(), byRequirement: WitnessTargetsByRequirement.create()}
 	end 'create'
 
 	// ⭐ **ON THE FIRST DISPATCH ASKED, NOT AT CONSTRUCTION.** This undoes two joins per function of the
@@ -3881,7 +3881,7 @@ export type WitnessDispatchTargets
 		end 'alreadyScanned'
 
 		self.splitBareNames()
-		var candidates = NameRoster.create()
+		var candidates = NameRoster.create(0)
 
 		var i = try self.firstWithName.get(requirement) otherwise 'namesNoMember'
 			self.byRequirement.upsert(requirement, value: candidates)
@@ -3925,7 +3925,7 @@ end 'WitnessDispatchTargets'
 // about; under-accepting REFUSES A CORRECT PROGRAM, and a false rejection is not something the author can work
 // around. Every unknown therefore resolves toward "yields".
 function buildYieldingSummary(module MaxonModule, funcNames FunctionNameIndex, runtimeTier FunctionNameSet) returns BoolArray
-	var seeds = BoolArray.create()
+	var seeds = BoolArray.create(0)
 	var edges = CallGraphEdges.create()
 
 	for i in 0 upto funcNames.functions.count() 'eachFunc'
@@ -4152,7 +4152,7 @@ export type CallGraphEdges
 	export var callerIndices as CsrColumn
 
 	export static function create() returns CallGraphEdges
-		return Self{calleeIndices: CsrColumn.create(), callerIndices: CsrColumn.create()}
+		return Self{calleeIndices: CsrColumn.create(0), callerIndices: CsrColumn.create(0)}
 	end 'create'
 
 	// Pushed together and only here, so the two columns stay the same length by construction. The CSR is built
@@ -5717,8 +5717,8 @@ function functionShapeThroughCallInstance(project Project, func IrFunction, subj
 	// ⚠ `var` for `paramTypeThroughCallInstance`'s reason — the substitution INTERNS the instance and the tuple
 	// it produces, so the identity the comparison is about has to exist by the time it is compared.
 	var signatures = programSignaturesIn(project, asker: "functionShapeThroughCallInstance")
-	var substituted = MaxonTypeArray.create()
-	var identities = NameRoster.create()
+	var substituted = MaxonTypeArray.create(0)
+	var identities = NameRoster.create(0)
 	var moved = false
 
 	for i in 0 upto shape.paramTypes.count() 'eachParam'
@@ -6411,8 +6411,8 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, func 
 	// A function with no registered signature — none, since the parser records one per function it
 	// builds — claims nothing.
 	view returnExistentialSites = try returnExistentialSitesOfFunc(project, name: func.name) otherwise sharedEmptyReturnExistentialSites
-	var retOpIndices = OpIndexArray.create()
-	var retValues = ValueIdArray.create()
+	var retOpIndices = OpIndexArray.create(0)
+	var retValues = ValueIdArray.create(0)
 	var literalRanges = LiteralRangeByValue.create()
 
 	for opIdx in module.liveOpIndices(func) 'eachOp'

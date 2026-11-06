@@ -18,7 +18,7 @@ type BagIter uses E implements Iterator with Int
 	var i as Int
 
 	static function create() returns Self
-		return Self{items: EArray.create(), i: 3}
+		return Self{items: EArray.create(0), i: 3}
 	end 'create'
 
 	function current() returns Int
@@ -76,7 +76,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Ints = Array with Int
 
 function main() returns ExitCode
-	var a = Ints.create()
+	var a = Ints.create(0)
 	a.push(1)
 	a.push(2)
 	let xs = a.map(function(n Int) gives n + 1)
@@ -104,7 +104,7 @@ type TrayIter uses E implements Iterator with Int
 	var i as Int
 
 	static function create() returns Self
-		return Self{items: EArray.create(), i: 2}
+		return Self{items: EArray.create(0), i: 2}
 	end 'create'
 
 	function current() returns Int
@@ -162,7 +162,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Ints = Array with Int
 
 function main() returns ExitCode
-	var a = Ints.create()
+	var a = Ints.create(0)
 	a.push(1)
 	a.push(2)
 	a.push(3)

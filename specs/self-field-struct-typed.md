@@ -410,7 +410,7 @@ type Inner
 	export var items as StringArray
 
 	static function create() returns Self
-		var a = StringArray.create()
+		var a = StringArray.create(0)
 		a.push("first iterated text {40 + 2}")
 		a.push("second iterated text {40 + 5}")
 		return Self{items: a}
@@ -423,7 +423,7 @@ type Outer
 	function probe() returns Small
 		var n = 0 as Small
 		for it in inner.items 'loop'
-			inner.items = StringArray.create()
+			inner.items = StringArray.create(0)
 			print("{it}\n")
 			n = n + (it.byteLength() as Small)
 		end 'loop'

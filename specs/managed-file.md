@@ -850,7 +850,7 @@ function main() returns ExitCode
 	try wf.file.write("ZZZZZZZZZZZZZZZZZZZZZZZZ".toByteArray().managed) otherwise panic("write: 24 bytes to a freshly opened file")
 	wf.file.close()
 
-	var arr = ByteArray.create()
+	var arr = ByteArray.create(0)
 	arr.push(65)
 	arr.push(66)
 	arr.push(67)
@@ -958,7 +958,7 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(1)
 	return open(b.managed)
 end 'main'

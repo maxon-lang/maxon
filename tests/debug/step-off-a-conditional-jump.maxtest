@@ -13,7 +13,7 @@ test 'a step from a breakpoint on a conditional jump arrives as a step stop on t
 
 	let jump = try rows.get(JumpRowOfTheBranchLine) otherwise panic("step-off-a-conditional-jump: the row count was asserted on the line above")
 	let commands = debugCommandLine(["{BreakCommand} {exactOffsetTarget(jump)}", RunCommand, StepCommand])
-	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
+	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
@@ -25,7 +25,7 @@ test 'a step from a breakpoint on a conditional jump arrives as a step stop on t
 	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the conditional jump of the branch line was not armed. {said}")
 	Expect.equal(textOf(armed, node: armed.root, key: OffsetKey), expected: hexSpelling(jump), message: "an exact-offset breakpoint is armed at the offset it names. {said}")
 
-	var walked = StringArray.create()
+	var walked = StringArray.create(0)
 
 	for stop in stops 'eachStop'
 		walked.push("{textOf(stop, node: stop.root, key: ReasonKey)} {textOf(stop, node: stop.root, key: FunctionKey)}:{numberOf(stop, node: stop.root, key: LineKey)} {textOf(stop, node: stop.root, key: OffsetKey)}")

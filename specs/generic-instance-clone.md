@@ -42,7 +42,7 @@ typealias StrBox = Box with String
 typealias BoxArray = Array with StrBox
 
 function makeClone() returns BoxArray
-	var src = BoxArray.create()
+	var src = BoxArray.create(0)
 	src.push(StrBox.create("first boxed string, long enough to live on the heap", tag: 10))
 	src.push(StrBox.create("second boxed string, long enough to live on the heap", tag: 20))
 	return src.clone()
@@ -88,7 +88,7 @@ typealias StrBox = Box with String
 typealias BoxArray = Array with StrBox
 
 function main() returns ExitCode
-	var src = BoxArray.create()
+	var src = BoxArray.create(0)
 	src.push(StrBox.create("original boxed string, long enough to live on the heap", tag: 7))
 
 	let copy = src.clone()
@@ -155,7 +155,7 @@ type Bag uses Element
 	var items as EBoxArray
 
 	static function create() returns Self
-		return Self{items: EBoxArray.create()}
+		return Self{items: EBoxArray.create(0)}
 	end 'create'
 
 	function add(x Element, tag Integer)
@@ -282,7 +282,7 @@ typealias Strs = Array with String
 
 function main() returns ExitCode
 	var b = StrBag.create()
-	var r = Strs.create()
+	var r = Strs.create(0)
 	var sb = StringBuilder.create()
 	sb.append("a heap row element long enough to allocate")
 	r.push(sb.build())
@@ -336,7 +336,7 @@ typealias Smalls = Array with Small
 
 function main() returns ExitCode
 	var b = SmallBag.create()
-	var r = Smalls.create()
+	var r = Smalls.create(0)
 	r.push(41)
 	b.addRow(r)
 	let c = b.copyRows()
@@ -369,7 +369,7 @@ type Bag uses Element
 	var items as EArr
 
 	static function create() returns Self
-		return Self{items: EArr.create()}
+		return Self{items: EArr.create(0)}
 	end 'create'
 
 	function add(x Element)
@@ -433,7 +433,7 @@ type Bag uses Element
 	var items as EBoxArray
 
 	static function create() returns Self
-		return Self{items: EBoxArray.create()}
+		return Self{items: EBoxArray.create(0)}
 	end 'create'
 
 	function add(x Element, tag Integer)
@@ -484,7 +484,7 @@ type Bag uses Element
 	export var items as EBoxArray
 
 	static function create() returns Self
-		return Self{items: EBoxArray.create()}
+		return Self{items: EBoxArray.create(0)}
 	end 'create'
 
 	function add(x Element, tag Integer)
@@ -532,7 +532,7 @@ type Holder uses T
 	var items as TArr
 
 	static function create() returns Self
-		return Self{items: TArr.create()}
+		return Self{items: TArr.create(0)}
 	end 'create'
 
 	function all() returns TArr

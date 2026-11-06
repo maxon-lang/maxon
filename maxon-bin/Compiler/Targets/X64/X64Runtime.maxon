@@ -219,7 +219,7 @@ let ConsoleProbeStderrLabel = b"__mrt_console_probe_stderr"
 // `RequiredData`'s prefix-from-byte-0 rule pinning the same bytes it pinned before. An 8-byte cell here
 // would displace every sub-word user global in the corpus.
 export function x64WindowsRuntimeGlobals(target Target) returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create()
+	var out = DataSectionEntryArray.create(0)
 
 	if target.cpu != CpuArch.x64 or target.os != Os.windows 'notThisLane'
 		return out
@@ -302,7 +302,7 @@ export type X64RuntimeAsm
 	// out from the bottom up — shadow space, outgoing args, then the slots — and rounded to
 	// 16, which is what keeps every `call` in the body aligned (see FrameAlignment).
 	export static function beginFunction(slots StackSize, outgoingStackArgBytes StackSize = 0) returns X64RuntimeAsm
-		return Self.beginFunctionAfterEntry(ByteArray.create(), callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), slots: slots, outgoingStackArgBytes: outgoingStackArgBytes)
+		return Self.beginFunctionAfterEntry(ByteArray.create(0), callFixups: CallFixupArray.create(0), rdataRelocs: RdataRelocationArray.create(0), slots: slots, outgoingStackArgBytes: outgoingStackArgBytes)
 	end 'beginFunction'
 
 	// Open a function whose first bytes, `entry`, run BEFORE its frame exists — `mrt_panic`'s green-thread stack
@@ -334,14 +334,14 @@ export type X64RuntimeAsm
 		return Self{
 			code: code,
 			callFixups: callFixups,
-			iatRelocs: RelocationArray.create(),
+			iatRelocs: RelocationArray.create(0),
 			rdataRelocs: rdataRelocs,
-			rel32Fixups: ChunkRel32FixupArray.create(),
+			rel32Fixups: ChunkRel32FixupArray.create(0),
 			labelOffsets: BlockOffsetTable.create(),
 			nextLabel: 0,
 			stringLabelOf: RuntimeStringLabelMap.create(),
-			stringLabels: RuntimeStringLabelArray.create(),
-			stringBytes: ByteBlobArray.create(),
+			stringLabels: RuntimeStringLabelArray.create(0),
+			stringBytes: ByteBlobArray.create(0),
 			frameBytes: frameBytes,
 			slotAreaBytes: slotAreaBytes,
 			outgoingArgBytes: outgoingStackArgBytes
@@ -1758,9 +1758,9 @@ end 'emitStoreGlobalImm'
 //
 // ⭐⭐ **ON A GREEN THREAD IT GROWS THE STACK BEFORE STEP (1)** — see `emitPanicStackGuard`.
 function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target) returns FunctionCodeChunk
-	var entry = ByteArray.create()
-	var callFixups = CallFixupArray.create()
-	var rdataRelocs = RdataRelocationArray.create()
+	var entry = ByteArray.create(0)
+	var callFixups = CallFixupArray.create(0)
+	var rdataRelocs = RdataRelocationArray.create(0)
 	emitPanicStackGuard(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, usesGt: usesGt, target: target)
 	let guardBytes = codeHere(entry)
 	var asm = X64RuntimeAsm.beginFunctionAfterEntry(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, slots: 0)
@@ -1856,9 +1856,9 @@ end 'emitCoverageAbortDump'
 // Built directly (not through X64RuntimeAsm, which opens a frame). Never actually executed while this
 // handler exits, but the kernel demands the address exists to build the return frame at all.
 function buildLinuxSigreturnTrampolineChunk() returns FunctionCodeChunk
-	var code = ByteArray.create()
+	var code = ByteArray.create(0)
 	encodeX64Syscall(code, number: X64LinuxSyscallRtSigreturn)
-	return FunctionCodeChunk.createWith(LinuxSigreturnName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	return FunctionCodeChunk.createWith(LinuxSigreturnName, code: code, callFixups: CallFixupArray.create(0), rdataRelocs: RdataRelocationArray.create(0), iatRelocs: RelocationArray.create(0))
 end 'buildLinuxSigreturnTrampolineChunk'
 
 // mrt_write_cstr_stderr (LINUX) — rcx = NUL-terminated string. The Linux twin of `buildWriteStderrChunk`:
@@ -2241,7 +2241,7 @@ let RegistryDataOutArgSlot = 1
 let RegistryBytesOutArgSlot = 2
 
 function utf16LittleEndian(text String) returns ByteArray
-	var wide = ByteArray.create()
+	var wide = ByteArray.create(0)
 
 	for byte in text.bytes() 'eachByte'
 		wide.push(byte)

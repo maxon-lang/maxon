@@ -292,7 +292,7 @@ typealias B = Array with Integer
 typealias Rows = Array with A
 
 function main() returns ExitCode
-	var b = B.create()
+	var b = B.create(0)
 	b.push(1)
 	let rows = Rows from [b]
 	return rows.count() as ExitCode
@@ -311,8 +311,8 @@ typealias B = Array with Integer
 typealias Rows = Array with A
 
 function main() returns ExitCode
-	var rows = Rows.create()
-	var b = B.create()
+	var rows = Rows.create(0)
+	var b = B.create(0)
 	b.push(1)
 	rows.push(b)
 	return rows.count() as ExitCode
@@ -335,9 +335,9 @@ function width(rows Rows) returns Integer
 end 'width'
 
 function main() returns ExitCode
-	var first = B.create()
+	var first = B.create(0)
 	first.push(1)
-	var second = B.create()
+	var second = B.create(0)
 	second.push(2)
 	return width([first, second]) as ExitCode
 end 'main'
@@ -381,11 +381,11 @@ function width(rows Rows) returns Integer
 end 'width'
 
 function main() returns ExitCode
-	var first = A.create()
+	var first = A.create(0)
 	first.push(1)
-	var second = A.create()
+	var second = A.create(0)
 	second.push(2)
-	var third = A.create()
+	var third = A.create(0)
 	third.push(3)
 	let headed = Rows from [first]
 	print("{headed.count()} {width([second, third])}\n")
@@ -460,13 +460,13 @@ function make(first Ints) returns Rows
 end 'make'
 
 function main() returns ExitCode
-	var branded = Ints.create()
+	var branded = Ints.create(0)
 	branded.push(1)
 	let plain = Ints from [2]
 	let holder = Holder.create(branded, second: plain)
-	var again = Ints.create()
+	var again = Ints.create(0)
 	again.push(3)
-	var third = Ints.create()
+	var third = Ints.create(0)
 	third.push(4)
 	print("{holder.rows.count()} {width([again, third])} {make(plain).count()}\n")
 	return 0

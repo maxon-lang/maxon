@@ -230,7 +230,7 @@ let PhaseNamePrefix = "phase:"
 let RegAllocNamePrefix = "regalloc:"
 
 export function scalePhaseSources() returns PhaseSourceArray
-	var sources = PhaseSourceArray.create()
+	var sources = PhaseSourceArray.create(0)
 
 	for phase in CompilePhase.allCases 'eachPhase'
 		sources.push(PhaseSource.compilePhase(phase))
@@ -452,7 +452,7 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock LockHo
 	end 'warmFailed'
 
 	printRungHeader()
-	var results = RungResultArray.create()
+	var results = RungResultArray.create(0)
 
 	for rung in ladder 'eachRung'
 		// One rung compiled is this run's unit of progress, and the tree lock's heartbeat is what
@@ -589,7 +589,7 @@ function compileRung(compilerExe FilePath, root FilePath, rung ScaleRung) return
 	let metricsPath = try corpusRootFile(root, name: "{RungDirPrefix}{rung.index}{RungMetricsSuffix}")
 	let outputBase = try corpusRootFile(root, name: "{RungDirPrefix}{rung.index}{RungOutputSuffix}")
 
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push(BuildSubcommandName)
 	argv.push(rung.dir.toString())
 	argv.push("{OutputFlagPrefix}{outputBase.toString()}")
@@ -631,7 +631,7 @@ end 'compileRung'
 function runRung(outputBase FilePath, rung ScaleRung) throws ScaleError
 	let executable = try FilePath.from("{outputBase.toString()}{hostExecutableExtension()}") otherwise throw ScaleError.reason("rung {rung.index}'s output path is not a valid executable path")
 
-	let run = try runProcess(Executable.path(executable), argv: StringArray.create(), workingDirectory: inheritedWorkingDirectory()) otherwise (e) 'spawnFailed'
+	let run = try runProcess(Executable.path(executable), argv: StringArray.create(0), workingDirectory: inheritedWorkingDirectory()) otherwise (e) 'spawnFailed'
 		throw ScaleError.reason("rung {rung.index} compiled but its binary {executable.toString()} could not be started: {e.displayReason()}")
 	end 'spawnFailed'
 
@@ -675,8 +675,8 @@ function leastCpuRung(first RungResult, again RungResult, run ScaleRepeatCount) 
 	// exists: the fold then covers exactly what the tables print, and a phase cannot be added to one
 	// walk and left out of the other. It yields both enums in ordinal order, so pushing in its order
 	// rebuilds the dense ordinal indexing `RungResult.phaseAt`/`regAllocAt` read back.
-	var phases = PhaseMetricArray.create()
-	var regAlloc = PhaseMetricArray.create()
+	var phases = PhaseMetricArray.create(0)
+	var regAlloc = PhaseMetricArray.create(0)
 
 	for source in scalePhaseSources() 'eachSource'
 		let least = try leastCpuPhase(phaseMetricOf(source, result: first), again: phaseMetricOf(source, result: again), what: phaseSourceName(source), rung: first.rung, run: run)
@@ -724,8 +724,8 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 	// This code survived it only because every slot is `set` before anything reads it — and
 	// the identical line in CompileTimings.create, where the first access IS a read, panicked
 	// on phase 0 the moment its column became a struct. Pushing is correct at both.
-	var phases = PhaseMetricArray.create()
-	var regAlloc = PhaseMetricArray.create()
+	var phases = PhaseMetricArray.create(0)
+	var regAlloc = PhaseMetricArray.create(0)
 
 	for _ in 0 upto CompilePhase.allCases.count() 'seedPhases'
 		phases.push(PhaseMetric.zero())
@@ -737,7 +737,7 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 
 	// `seen` is what turns a missing row into an error instead of a zero. A dense array seeded with
 	// zeroes cannot otherwise tell "this phase did no work" from "this phase never reported".
-	var phaseSeen = BoolArray.create()
+	var phaseSeen = BoolArray.create(0)
 	phaseSeen.resize(CompilePhase.allCases.count())
 
 	var total = PhaseMetric.zero()
@@ -1228,7 +1228,7 @@ function printLibraryWalkCensus() throws ScaleError
 end 'printLibraryWalkCensus'
 
 function printTierWalk(label String, dir FilePath) throws ScaleError
-	var sources = MaxonSourcePathArray.create()
+	var sources = MaxonSourcePathArray.create(0)
 	let directories = try collectMaxonSources(dir, into: sources) otherwise throw ScaleError.reason("{dir.toString()} could not be listed")
 
 	print("{padRight(label, width: LibraryWalkLabelWidth)}{groupDigits(sources.count() as Delta)} source file(s) in {groupDigits(directories as Delta)} directory(ies) under {dir.toString()}\n")

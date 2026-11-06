@@ -388,7 +388,7 @@ typealias Codes = Array with Code
 typealias CodeSet = Set with Code
 
 function main() returns ExitCode
-	var codes = Codes.create()
+	var codes = Codes.create(0)
 	codes.push(3)
 	codes.push(7)
 	codes.push(11)
@@ -411,7 +411,7 @@ typealias Code = int(0 to 100)
 typealias Codes = Array with Code
 
 function makeCodes() returns Codes
-	var codes = Codes.create()
+	var codes = Codes.create(0)
 	codes.push(40)
 	codes.push(2)
 	return codes
@@ -438,7 +438,7 @@ typealias Codes = Array with Code
 typealias CodeSet = Set with Code
 
 function main() returns ExitCode
-	var codes = Codes.create()
+	var codes = Codes.create(0)
 	codes.push(5)
 	codes.push(9)
 	codes.push(5)
@@ -464,7 +464,7 @@ typealias Codes = Array with Code
 typealias CodeSet = Set with Code
 
 function main() returns ExitCode
-	let codes = Codes.create()
+	let codes = Codes.create(0)
 	let s = CodeSet from codes
 	print("{s.count()} {s.contains(0)}\n")
 	return 0
@@ -500,7 +500,7 @@ typealias Codes = Array with Code
 typealias Names = Set with String
 
 function main() returns ExitCode
-	var codes = Codes.create()
+	var codes = Codes.create(0)
 	codes.push(1)
 	let s = Names from codes
 	return s.count()
@@ -523,7 +523,7 @@ function main() returns ExitCode
 end 'main'
 
 function laterCodes() returns Codes
-	var codes = Codes.create()
+	var codes = Codes.create(0)
 	codes.push(6)
 	codes.push(6)
 	codes.push(1)
@@ -562,7 +562,7 @@ end 'Point'
 typealias Points = Array with Point
 
 function main() returns ExitCode
-	var points = Points.create()
+	var points = Points.create(0)
 	points.push(Point.create(1, y: 2))
 	points.push(Point.create(3, y: 4))
 	points.push(Point.create(1, y: 2))
@@ -594,7 +594,7 @@ end 'Spot'
 typealias Spots = Array with Spot
 
 function main() returns ExitCode
-	var spots = Spots.create()
+	var spots = Spots.create(0)
 	spots.push(Spot.create(1))
 	let s = Set from spots
 	return s.count()
@@ -619,7 +619,7 @@ module typealias Code = int(0 to 100)
 module typealias Codes = Array with Code
 
 function main() returns ExitCode
-	var codes = Codes.create()
+	var codes = Codes.create(0)
 	codes.push(2)
 	codes.push(2)
 	codes.push(9)
@@ -642,7 +642,7 @@ typealias Chars = Array with Character
 typealias CharSet = Set with Character
 
 function main() returns ExitCode
-	var chars = Chars.create()
+	var chars = Chars.create(0)
 	chars.push('a')
 	chars.push('b')
 	chars.push('a')
@@ -684,7 +684,7 @@ typealias Cells = Array with Cell
 typealias CellSet = Set with Cell
 
 function main() returns ExitCode
-	var cells = Cells.create()
+	var cells = Cells.create(0)
 	cells.push(Cell.create(4))
 	cells.push(Cell.create(4))
 	cells.push(Cell.create(5))
@@ -712,7 +712,7 @@ function total(s CodeSet) returns Count
 end 'total'
 
 function main() returns ExitCode
-	var codes = Codes.create()
+	var codes = Codes.create(0)
 	codes.push(4)
 	print("{total(CodeSet from [1, 2])} {total(CodeSet from codes)}\n")
 	return 0

@@ -131,7 +131,7 @@ typealias Bufs = Array with ByteArray
 typealias Seed = int(0 to 65536)
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.reserve(96)
 	for i in 0 upto 96 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -140,11 +140,11 @@ function build(seed Seed) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create()
+	var bufs = Bufs.create(0)
 	for k in 0 upto 16000 'alloc'
 		bufs.push(build(k as Seed))
 	end 'alloc'
-	bufs = Bufs.create()
+	bufs = Bufs.create(0)
 
 	let first = HeapStats.scavenge()
 	if first != 0 'graceSkipped'
@@ -203,7 +203,7 @@ typealias Bufs = Array with ByteArray
 typealias Seed = int(0 to 65536)
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.reserve(96)
 	for i in 0 upto 96 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -212,7 +212,7 @@ function build(seed Seed) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create()
+	var bufs = Bufs.create(0)
 	for k in 0 upto 16000 'alloc'
 		bufs.push(build(k as Seed))
 	end 'alloc'
@@ -263,7 +263,7 @@ typealias Bufs = Array with ByteArray
 typealias Seed = int(0 to 65536)
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.reserve(96)
 	for i in 0 upto 96 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -272,11 +272,11 @@ function build(seed Seed) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var first = Bufs.create()
+	var first = Bufs.create(0)
 	for k in 0 upto 16000 'allocFirst'
 		first.push(build(k as Seed))
 	end 'allocFirst'
-	first = Bufs.create()
+	first = Bufs.create(0)
 
 	_ = HeapStats.scavenge()
 	let released = HeapStats.scavenge()
@@ -286,7 +286,7 @@ function main() returns ExitCode
 
 	// The second population's HOLDER is created before the reading, so the two live counts describe the same
 	// set of bindings and the only difference between them is the population itself.
-	var second = Bufs.create()
+	var second = Bufs.create(0)
 	let liveBefore = HeapStats.allocationsLive()
 
 	for k in 0 upto 16000 'allocSecond'
@@ -307,7 +307,7 @@ function main() returns ExitCode
 		return 4
 	end 'corrupted'
 
-	second = Bufs.create()
+	second = Bufs.create(0)
 	if HeapStats.allocationsLive() != liveBefore 'refcountsDrifted'
 		return 5
 	end 'refcountsDrifted'
@@ -335,7 +335,7 @@ typealias Bufs = Array with ByteArray
 typealias Seed = int(0 to 65536)
 
 function build(seed Seed, n Seed) returns ByteArray
-	var b = ByteArray.create()
+	var b = ByteArray.create(0)
 	b.reserve(n as ElementIndex)
 	for i in 0 upto n 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -344,18 +344,18 @@ function build(seed Seed, n Seed) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var small = Bufs.create()
+	var small = Bufs.create(0)
 	for k in 0 upto 16000 'allocSmall'
 		small.push(build(k as Seed, n: 96))
 	end 'allocSmall'
-	small = Bufs.create()
+	small = Bufs.create(0)
 
 	_ = HeapStats.scavenge()
 	if HeapStats.scavenge() <= 0 'nothingReleased'
 		return 1
 	end 'nothingReleased'
 
-	var large = Bufs.create()
+	var large = Bufs.create(0)
 	for k in 0 upto 3000 'allocLarge'
 		large.push(build(k as Seed, n: 500))
 	end 'allocLarge'
@@ -400,7 +400,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var big = ByteArray.create()
+	var big = ByteArray.create(0)
 	big.reserve(300000)
 	for i in 0 upto 512 'fill'
 		big.push((i mod 251) as Byte)
@@ -420,7 +420,7 @@ function main() returns ExitCode
 		return 2
 	end 'corrupted'
 
-	big = ByteArray.create()
+	big = ByteArray.create(0)
 	_ = HeapStats.scavenge()
 	_ = HeapStats.scavenge()
 

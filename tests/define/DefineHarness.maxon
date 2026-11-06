@@ -61,7 +61,7 @@ export let BannerDefault = "default"
 
 // Build with no `--define` at all — the control every override is measured against.
 export function requirePlainBuild(staged FilePath) throws TestFailure
-	let noArguments = StringArray.create()
+	let noArguments = StringArray.create(0)
 	let build = spawnBuild(staged, staged: staged, output: executableIn(staged, stem: BuiltStem), label: BuildCommandName, extraArguments: noArguments)
 
 	try requireBuiltExecutable(build, output: executableIn(staged, stem: BuiltStem), what: BuildCommandName, reason: "Every case here rests on an ordinary build of the same fixture succeeding, so a failure at this step is the fixture or the compiler rather than anything about `--define`.")
@@ -70,7 +70,7 @@ end 'requirePlainBuild'
 // Build with one `--define`, asserted rather than panicked: accepting the flag and writing a binary for
 // it is the surface this corpus gates.
 export function requireDefinedBuild(staged FilePath, pair String) throws TestFailure
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 	arguments.push("{DefineOption}{pair}")
 
 	let build = spawnBuild(staged, staged: staged, output: executableIn(staged, stem: BuiltStem), label: BuildCommandName, extraArguments: arguments)
@@ -83,7 +83,7 @@ end 'requireDefinedBuild'
 // binary is the failure that matters: the next step of any build is to run what came out, and a stale or
 // half-defined image there is worse than an error, because nothing downstream would say so.
 export function requireRefusedBuild(staged FilePath, pair String) returns String throws TestFailure
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 	arguments.push("{DefineOption}{pair}")
 
 	let build = spawnBuild(staged, staged: staged, output: executableIn(staged, stem: BuiltStem), label: BuildCommandName, extraArguments: arguments)
@@ -96,7 +96,7 @@ end 'requireRefusedBuild'
 // `verify-recheck` over the staged tree with one `--define`: the command that checks one project more than once,
 // which is where a problem found only while a memo is computed goes missing.
 export function recheckWithDefine(staged FilePath, pair String) returns CollectedOutput
-	var arguments = StringArray.create()
+	var arguments = StringArray.create(0)
 	arguments.push(RecheckCommandName)
 	arguments.push(staged.toString())
 	arguments.push("{DefineOption}{pair}")
@@ -108,7 +108,7 @@ end 'recheckWithDefine'
 // so its output IS the answer to "what value did the binary get?".
 export function runBuiltProgram(staged FilePath) returns String throws TestFailure
 	let executable = executableIn(staged, stem: BuiltStem)
-	let run = spawnIn(Executable.path(executable), arguments: StringArray.create(), staged: staged, what: "the built program at {executable.toString()}")
+	let run = spawnIn(Executable.path(executable), arguments: StringArray.create(0), staged: staged, what: "the built program at {executable.toString()}")
 
 	try Expect.equal(run.exitCode(), expected: 0, message: "the built program exited {run.exitCode()}. It wrote to stderr: {run.stderr}")
 

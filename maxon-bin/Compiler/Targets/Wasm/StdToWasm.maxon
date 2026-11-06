@@ -349,7 +349,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	// Defined functions in the order `wasmFuncIdxOf` assumes — walked off the INDEX'S OWN ARRAY rather than
 	// the module's, so the order the func indices are DERIVED from and the order they are EMITTED in are the
 	// same array rather than two that must be kept in step.
-	var inlinePositions = NameRoster.create()
+	var inlinePositions = NameRoster.create(0)
 	var displacedAddressFolds = DisplacedAddressFolds.create()
 
 	for (iter, func) in funcNames.functions.withIterator() 'eachFunc'
@@ -420,26 +420,26 @@ end 'buildWasmCoreModule'
 // function's index and every funcref-table slot baked into `.rdata` — behind a whole-module scan
 // for a single op.
 function appendWasiImports(builder WasmModuleBuilder)
-	let exitTypeIdx = builder.internFuncType(singletonValTypes(WasmValType.i32), results: WasmValTypeArray.create())
+	let exitTypeIdx = builder.internFuncType(singletonValTypes(WasmValType.i32), results: WasmValTypeArray.create(0))
 	_ = builder.addImportFunc(WasiExitModuleName, fieldName: WasiExitFieldName, typeIdx: exitTypeIdx, debugName: WasiExitDebugName)
 
 	// Both stream accessors have the same signature, so `internFuncType` hands them one type index.
-	let getStreamTypeIdx = builder.internFuncType(WasmValTypeArray.create(), results: singletonValTypes(WasmValType.i32))
+	let getStreamTypeIdx = builder.internFuncType(WasmValTypeArray.create(0), results: singletonValTypes(WasmValType.i32))
 	_ = builder.addImportFunc(WasiStdoutModuleName, fieldName: WasiGetStdoutFieldName, typeIdx: getStreamTypeIdx, debugName: WasiGetStdoutDebugName)
 
 	// `blocking-write-and-flush(handle, ptr, len, retArea)` — four i32 params, no result.
-	var writeFlushParams = WasmValTypeArray.create()
+	var writeFlushParams = WasmValTypeArray.create(0)
 
 	for _ in 0 upto WasmWriteFlushParamCount 'eachParam'
 		writeFlushParams.push(WasmValType.i32)
 	end 'eachParam'
 
-	let writeFlushTypeIdx = builder.internFuncType(writeFlushParams, results: WasmValTypeArray.create())
+	let writeFlushTypeIdx = builder.internFuncType(writeFlushParams, results: WasmValTypeArray.create(0))
 	_ = builder.addImportFunc(WasiStreamsModuleName, fieldName: WasiBlockingWriteFlushFieldName, typeIdx: writeFlushTypeIdx, debugName: WasiBlockingWriteFlushDebugName)
 
 	_ = builder.addImportFunc(WasiStderrModuleName, fieldName: WasiGetStderrFieldName, typeIdx: getStreamTypeIdx, debugName: WasiGetStderrDebugName)
 
-	let getRandomTypeIdx = builder.internFuncType(WasmValTypeArray.create(), results: singletonValTypes(WasmValType.i64))
+	let getRandomTypeIdx = builder.internFuncType(WasmValTypeArray.create(0), results: singletonValTypes(WasmValType.i64))
 	_ = builder.addImportFunc(WasiRandomModuleName, fieldName: WasiGetRandomU64FieldName, typeIdx: getRandomTypeIdx, debugName: WasiGetRandomU64DebugName)
 
 	_ = builder.addImportFunc(WasiMonotonicClockModuleName, fieldName: WasiMonotonicNowFieldName, typeIdx: getRandomTypeIdx, debugName: WasiMonotonicNowDebugName)
@@ -570,13 +570,13 @@ function appendPanicRuntime(builder WasmModuleBuilder, funcNames FunctionNameInd
 	body.call(ExitImportFuncIdx)
 	body.unreachable()
 
-	var localTypes = WasmValTypeArray.create()
+	var localTypes = WasmValTypeArray.create(0)
 
 	for _ in 0 upto WasmPanicDeclaredLocalCount 'eachLocal'
 		localTypes.push(WasmValType.i32)
 	end 'eachLocal'
 
-	let typeIdx = builder.internFuncType(singletonValTypes(WasmValType.i32), results: WasmValTypeArray.create())
+	let typeIdx = builder.internFuncType(singletonValTypes(WasmValType.i32), results: WasmValTypeArray.create(0))
 	let funcIdx = builder.addFunction(typeIdx, localTypes: localTypes, body: body.bytes(), debugName: PanicName)
 
 	if funcIdx != wasmPanicFuncIdx(funcNames) 'indexDrift'
@@ -651,19 +651,19 @@ function appendStreamWriteRuntime(builder WasmModuleBuilder, funcNames FunctionN
 	body.endOp()
 	body.endOp()
 
-	var localTypes = WasmValTypeArray.create()
+	var localTypes = WasmValTypeArray.create(0)
 
 	for _ in 0 upto WasmStreamWriteDeclaredLocalCount 'eachLocal'
 		localTypes.push(WasmValType.i32)
 	end 'eachLocal'
 
-	var paramTypes = WasmValTypeArray.create()
+	var paramTypes = WasmValTypeArray.create(0)
 
 	for _ in 0 upto WasmStreamWriteParamCount 'eachParam'
 		paramTypes.push(WasmValType.i32)
 	end 'eachParam'
 
-	let typeIdx = builder.internFuncType(paramTypes, results: WasmValTypeArray.create())
+	let typeIdx = builder.internFuncType(paramTypes, results: WasmValTypeArray.create(0))
 	let funcIdx = builder.addFunction(typeIdx, localTypes: localTypes, body: body.bytes(), debugName: StreamWriteName)
 
 	if funcIdx != wasmStreamWriteFuncIdx(funcNames) 'indexDrift'
@@ -808,7 +808,7 @@ type WasmFrameStack
 
 	static function above(base Wasm32Index, roster ShadowSpellingRoster) returns Self
 		let ringSlots = roundUpToPowerOfTwo(MaxBacktraceFrames)
-		var prefix = ByteArray.create()
+		var prefix = ByteArray.create(0)
 		let depthOffset = prefix.count()
 		writeDword(prefix, value: WasmFrameInitialDepth)
 
@@ -839,7 +839,7 @@ type WasmFrameStack
 
 	function image(functionNames NameRoster, inlinePositions NameRoster) returns ByteArray
 		var image = self.prefix.clone()
-		var lines = ByteArray.create()
+		var lines = ByteArray.create(0)
 		let linesOffset = image.count() + ((functionNames.count() + inlinePositions.count()) shl WasmFrameLineEntryShift)
 
 		for name in functionNames 'eachName'
@@ -883,7 +883,7 @@ type WasmScratchFrames
 	export let endAddress as Wasm32Index
 
 	static function layout(module StdModule, funcNames FunctionNameIndex, base Wasm32Index) returns Self
-		var bases = Wasm32IndexArray.create()
+		var bases = Wasm32IndexArray.create(0)
 		var next = base
 
 		for func in funcNames.functions 'eachFunc'
@@ -941,7 +941,7 @@ type WasmInlinePositions
 	export var sites as InlineSiteIndexArray
 
 	static function startingAt(first Wasm32Index) returns Self
-		return Self{first: first, bySite: InlinePositionBySite.create(), sites: InlineSiteIndexArray.create()}
+		return Self{first: first, bySite: InlinePositionBySite.create(), sites: InlineSiteIndexArray.create(0)}
 	end 'startingAt'
 
 	function positionOf(siteIndex ElementIndex) returns Wasm32Index
@@ -1004,7 +1004,7 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames F
 	// `in mrt_start` line, which would be a
 	// disguise. Reusing `EntryPointName` instead means the frame is reported, not invented, and the
 	// entry stub's name is spelled in exactly one place for all three backends.
-	let runTypeIdx = builder.internFuncType(WasmValTypeArray.create(), results: singletonValTypes(WasmValType.i32))
+	let runTypeIdx = builder.internFuncType(WasmValTypeArray.create(0), results: singletonValTypes(WasmValType.i32))
 	let addedIdx = builder.addFunction(runTypeIdx, localTypes: singletonValTypes(WasmValType.i32), body: runBody.bytes(), debugName: EntryPointName)
 
 	if addedIdx != runFuncIdx 'indexDrift'
@@ -1322,7 +1322,7 @@ end 'internIndirectCallType'
 
 // The wasm parameter valtypes of an indirect call, one per argument in order.
 function indirectCallParamValTypes(argFloatMask ArgFloatMask, argCount ParamCount) returns WasmValTypeArray
-	var params = WasmValTypeArray.create()
+	var params = WasmValTypeArray.create(0)
 
 	for k in 0 upto argCount 'each'
 		params.push(indirectCallArgValType(argFloatMask, argIndex: k))
@@ -1485,7 +1485,7 @@ end 'requireF64'
 // answer for the same reason `emitBinOp`'s width and `recordDefValtype`'s are: a `local.set` of an i64 into
 // an i32 local is a validation failure, and here it would be a signature the body contradicts.
 function funcParamValTypes(func IrFunction) returns WasmValTypeArray
-	var params = WasmValTypeArray.create()
+	var params = WasmValTypeArray.create(0)
 
 	for pt in func.paramTypes 'each'
 		params.push(wasmMachineValTypeOf(pt))
@@ -1497,7 +1497,7 @@ end 'funcParamValTypes'
 // A function's declared wasm RESULT list — the machine-word image of its Std return type, and the width
 // `emitRet`/`emitErrorReturn` coerce the returned value to. A void return declares no result at all.
 function funcResultValTypes(returnType StdReturnType) returns WasmValTypeArray
-	var results = WasmValTypeArray.create()
+	var results = WasmValTypeArray.create(0)
 
 	match returnType 'r'
 		void then break
@@ -1561,7 +1561,7 @@ function funcSignatureResultValTypes(func IrFunction) returns WasmValTypeArray
 end 'funcSignatureResultValTypes'
 
 function singletonValTypes(vt WasmValType) returns WasmValTypeArray
-	var one = WasmValTypeArray.create()
+	var one = WasmValTypeArray.create(0)
 	one.push(vt)
 	return one
 end 'singletonValTypes'
@@ -1741,7 +1741,7 @@ end 'callResultValType'
 // computed at MACHINE WIDTH, which is what the
 // native backends do with their 64-bit registers and what `wasmMachineValTypeOf` states in full.
 function buildValtypeTable(module StdModule, func IrFunction, funcNames FunctionNameIndex) returns WasmValTypeArray
-	var valtypes = WasmValTypeArray.create()
+	var valtypes = WasmValTypeArray.create(0)
 
 	// A parameter's local IS the wasm parameter, so its valtype is the SIGNATURE's — the machine word
 	// `funcParamValTypes` declares, never the narrower storage class the Std type would give.
@@ -2041,7 +2041,7 @@ type WasmFuncEmitter
 			indirectCallTypeIdx: indirectCallTypeIdx,
 			valtypes: valtypes,
 			body: WasmBody.create(),
-			localTypes: WasmValTypeArray.create(),
+			localTypes: WasmValTypeArray.create(0),
 			plan: plan,
 			flowState: WasmFlowState.create(flowBlockCount),
 			dispatchLocal: 0,
@@ -2211,7 +2211,7 @@ type WasmFuncEmitter
 
 		// Merge children open highest-RPO outermost, so every forward predecessor's `br` to a merge
 		// finds its block still open.
-		var merges = BlockPositionColumn.create()
+		var merges = BlockPositionColumn.create(0)
 		self.plan.appendLabelledChildren(position, into: merges)
 		var remaining = merges.count()
 
@@ -2336,7 +2336,7 @@ type WasmFuncEmitter
 		end 'nest'
 
 		self.body.localGet(self.dispatchLocal)
-		var targets = Wasm32IndexArray.create()
+		var targets = Wasm32IndexArray.create(0)
 
 		for i in 0 upto blockCount 'tableEntry'
 			targets.push(i as Wasm32Index)
@@ -3420,7 +3420,7 @@ type WasmFuncEmitter
 	end 'recordFramePosition'
 
 	function inlinePositionLines() returns NameRoster
-		var lines = NameRoster.create()
+		var lines = NameRoster.create(0)
 
 		for siteIndex in self.positions.sites 'eachSite'
 			lines.push(self.renderInlinePosition(siteIndex))
@@ -3430,7 +3430,7 @@ type WasmFuncEmitter
 	end 'inlinePositionLines'
 
 	function renderInlinePosition(siteIndex ElementIndex) returns ByteArray
-		var lines = ByteArray.create()
+		var lines = ByteArray.create(0)
 		var at = InlineSiteRef.site(siteIndex)
 
 		while true 'chain'
@@ -4144,7 +4144,7 @@ type WasmFuncEmitter
 	// default slot (its target absent from the range, or a 0 in it) correctly reads 0.
 	function slotLandingDepths(caseTargets BlockIdArray, distinct BlockIdArray) returns Wasm32IndexArray
 		let m = distinct.count()
-		var out = Wasm32IndexArray.create()
+		var out = Wasm32IndexArray.create(0)
 
 		if m == 0 'onlyDefault'
 			for _ in caseTargets 'allDefault'
@@ -4167,7 +4167,7 @@ type WasmFuncEmitter
 			end 'upper'
 		end 'range'
 
-		var depthByOffset = Wasm32IndexArray.create()
+		var depthByOffset = Wasm32IndexArray.create(0)
 		depthByOffset.growFilled((maxTarget - minTarget + 1) as ElementIndex, value: 0 as Wasm32Index)
 		var j = 0 as ElementIndex
 

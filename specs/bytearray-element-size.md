@@ -8,7 +8,7 @@ category: memory
 
 ## Documentation
 
-An `Array with Byte` (`ByteArray`) built via `ByteArray.create()` + `push`
+An `Array with Byte` (`ByteArray`) built via `ByteArray.create(0)` + `push`
 must have its backing `__ManagedMemory` `element_size = 1`. An 8-byte stride —
 correct only for the pointer-width elements (int / float / string / struct) —
 is wrong for a `Byte` element: every `push` would write 8 bytes apart, so
@@ -17,7 +17,7 @@ would be garbled.
 
 Most spec tests round-trip strings through stdlib helpers and cannot see this;
 a *self-compiled* compiler does: the type-resolver's `byteSliceToString`
-(`ByteArray.create()` + per-byte `push`) is how a bare `Union.caseName` read is
+(`ByteArray.create(0)` + per-byte `push`) is how a bare `Union.caseName` read is
 split into `(unionName, caseName)`. A garbled slice makes every payload-free
 boxed-union case read (e.g. `Environment.inherit` as a struct-literal field
 initializer) fail to resolve — a spurious "unknown enum case" (E3034). The
@@ -62,7 +62,7 @@ reconstruction is garbage and the equality check fails.
 function main() returns ExitCode
 	let src = "Environment.inherit"
 	let bytes = src.toByteArray()
-	var out = ByteArray.create()
+	var out = ByteArray.create(0)
 	var i = 12 as Count
 	while i < bytes.count() 'copy'
 		let b = try bytes.get(i) otherwise 0
@@ -86,7 +86,7 @@ wrong stride would still push `count` bytes but pack them 8 apart, leaving a
 function main() returns ExitCode
 	let src = "hello world"
 	let bytes = src.toByteArray()
-	var out = ByteArray.create()
+	var out = ByteArray.create(0)
 	for b in bytes 'copy'
 		out.push(b)
 	end 'copy'
@@ -168,7 +168,7 @@ heap-owned from birth and no copy-on-write ever runs. It must give the identical
 answer: the erase width follows `element_size`, not where the buffer came from.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	bytes.push(104)
 	bytes.push(101)
 	bytes.push(121)
@@ -290,7 +290,7 @@ typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var made = Bytes.create()
+	var made = Bytes.create(0)
 	made.push(65)
 	made.append(b"CD")
 	return made.count()
@@ -312,7 +312,7 @@ typealias Bytes = Array with Byte
 var BUFFER = b"hi"
 
 function main() returns ExitCode
-	var made = Bytes.create()
+	var made = Bytes.create(0)
 	made.push(1)
 	BUFFER.push(2)
 	return made.count() + BUFFER.count()
@@ -336,7 +336,7 @@ typealias Bytes = Array with Byte
 var KEYWORDS = [b"hi": 1]
 
 function main() returns ExitCode
-	var made = Bytes.create()
+	var made = Bytes.create(0)
 	made.push(1)
 	return made.count() + KEYWORDS.count()
 end 'main'
@@ -353,7 +353,7 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var made = Bytes.create()
+	var made = Bytes.create(0)
 	made.push(65)
 	made.append(b"CD")
 	return 0 if made.count() == 3 and (try made.get(1) otherwise 0) == 67 and (try made.get(2) otherwise 0) == 68 else 1
@@ -518,7 +518,7 @@ typealias Bytes = Array with Byte
 var BUFFER = b"\xdf"
 
 function main() returns ExitCode
-	var made = Bytes.create()
+	var made = Bytes.create(0)
 	made.push(1)
 	BUFFER.push(2)
 	return made.count() + BUFFER.count()
@@ -643,7 +643,7 @@ function takesBytes(b Bytes) returns ExitCode
 end 'takesBytes'
 
 function main() returns ExitCode
-	var s = Smalls.create()
+	var s = Smalls.create(0)
 	s.push(7)
 	return takesBytes(s)
 end 'main'
@@ -692,7 +692,7 @@ typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var made = Bytes.create()
+	var made = Bytes.create(0)
 	made.push(300)
 	made.push(700)
 	return 0 if made.count() == 2 and (try made.get(1) otherwise 0) == 700 else 1
@@ -714,7 +714,7 @@ typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var made = Bytes.create()
+	var made = Bytes.create(0)
 	made.push(300)
 
 	let path = FilePath from "test_widebyte_roundtrip.txt"
@@ -766,7 +766,7 @@ typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var made = Bytes.create()
+	var made = Bytes.create(0)
 	made.push(300)
 
 	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
@@ -799,7 +799,7 @@ function takesMine(b Bytes) returns ExitCode
 end 'takesMine'
 
 function main() returns ExitCode
-	var stdlibs = ByteArray.create()
+	var stdlibs = ByteArray.create(0)
 	stdlibs.push(65)
 	return takesMine(stdlibs)
 end 'main'
@@ -858,7 +858,7 @@ export type Holder
 	export var items as Bytes
 
 	export static function make() returns Holder
-		var b = Bytes.create()
+		var b = Bytes.create(0)
 		b.push(300)
 		return Holder{items: b}
 	end 'make'
@@ -896,7 +896,7 @@ export type Holder
 	export var items as Bytes
 
 	export static function make() returns Holder
-		var b = Bytes.create()
+		var b = Bytes.create(0)
 		b.push(300)
 		return Holder{items: b}
 	end 'make'
@@ -1134,7 +1134,7 @@ typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var made = Bytes.create()
+	var made = Bytes.create(0)
 	made.push(2000)
 	return 0
 end 'main'
@@ -1152,7 +1152,7 @@ typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
 
 function feed(v Integer) returns Integer
-	var made = Bytes.create()
+	var made = Bytes.create(0)
 	made.push(v as Byte)
 	return try made.get(0) otherwise 0
 end 'feed'
@@ -1455,7 +1455,7 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(104)
 	let s = String.from(b)
 	print("{s}\n")
@@ -1535,7 +1535,7 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(1)
 	b = "hi".toByteArray()
 	return b.count() as ExitCode
@@ -1677,7 +1677,7 @@ function takes(b Bytes) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-	var buf = Bytes.create()
+	var buf = Bytes.create(0)
 	buf.push(0)
 	try buf.managed.setByte(0, 223) otherwise return 3
 	return takes(buf)
@@ -1760,7 +1760,7 @@ function takes(b Smalls) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-	var a = Smalls.create()
+	var a = Smalls.create(0)
 	a.push(1)
 	try a.managed.setByte(0, 223) otherwise return 3
 	return takes(a)
@@ -1801,7 +1801,7 @@ function takes(b Bytes) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(1)
 	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	b.append(cwd)
@@ -1824,7 +1824,7 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(65)
 	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	b.append(cwd)
@@ -1852,7 +1852,7 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(65)
 	var cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let before = cwd.length()
@@ -1875,7 +1875,7 @@ typealias Byte = int(0 to 100)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var b = Bytes.create()
+	var b = Bytes.create(0)
 	b.push(65)
 	var cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let before = cwd.length()
@@ -1964,7 +1964,7 @@ function main() returns ExitCode
 	var buf = try __ManagedMemory.create(2, 8) otherwise return 1
 	try buf.setLength(1) otherwise return 2
 	try buf.set(0, value: 300) otherwise return 3
-	var made = Bytes.create()
+	var made = Bytes.create(0)
 	made.push(300)
 	return 0 if (try buf.get(0) otherwise 0) == 300 and (try made.get(0) otherwise 0) == 300 else 4
 end 'main'
@@ -2017,7 +2017,7 @@ function takes(b Wides) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-	var a = Wides.create()
+	var a = Wides.create(0)
 	a.push(1)
 	try a.managed.setByte(1, 223) otherwise return 3
 	return takes(a)
@@ -2041,7 +2041,7 @@ function takes(b Smalls) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-	var a = Smalls.create()
+	var a = Smalls.create(0)
 	a.push(1)
 	try a.managed.setByte(0, 223) otherwise return 3
 	return takes(a)
@@ -2061,7 +2061,7 @@ value of its slot"* from *"strides one byte"*. Without the rule `v` and `not v` 
 typealias Flags = Array with bool
 
 function main() returns ExitCode
-	var a = Flags.create()
+	var a = Flags.create(0)
 	a.push(false)
 	try a.managed.setByte(0, 223) otherwise return 3
 	return 0 if (try a.get(0) otherwise false) else 1
@@ -2090,7 +2090,7 @@ end 'Color'
 typealias Colors = Array with Color
 
 function main() returns ExitCode
-	var a = Colors.create()
+	var a = Colors.create(0)
 	a.push(Color.red)
 	try a.managed.setByte(0, 223) otherwise return 3
 	return match (try a.get(0) otherwise Color.red) 'v'
@@ -2129,7 +2129,7 @@ sentence quoting it, that keeps this case off the lanes where its element is one
 typealias Codes = Array with ExitCode
 
 function main() returns ExitCode
-	var a = Codes.create()
+	var a = Codes.create(0)
 	a.push(1)
 	try a.managed.setByte(3, 223) otherwise return 3
 	return try a.get(0) otherwise 4
@@ -2155,7 +2155,7 @@ typealias Byte = int(0 to u16.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var a = Bytes.create()
+	var a = Bytes.create(0)
 	a.push(1)
 	try a.managed.setByte(1, 223) otherwise return 3
 	return 0 if (try a.get(0) otherwise 0) == 57089 else 4
@@ -2174,7 +2174,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var xs = IntArray.create()
+	var xs = IntArray.create(0)
 	xs.push(7)
 	try xs.managed.setByte(0, 3) otherwise return 1
 	return 0 if (try xs.get(0) otherwise 0) == 3 else 2

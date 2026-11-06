@@ -357,7 +357,7 @@ type Bag uses Element
 	var items as Items
 
 	static function create() returns Self
-		return Self{items: Items.create()}
+		return Self{items: Items.create(0)}
 	end 'create'
 
 	function slotSize() returns Int

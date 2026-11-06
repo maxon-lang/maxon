@@ -134,7 +134,7 @@ module type MergeEdges
 	var incomings as ValueIdArray
 
 	module static function create() returns MergeEdges
-		return Self{phis: ValueIdArray.create(), incomings: ValueIdArray.create()}
+		return Self{phis: ValueIdArray.create(0), incomings: ValueIdArray.create(0)}
 	end 'create'
 
 	module function note(phi ValueId, incoming ValueId)
@@ -193,21 +193,21 @@ type CalleeFacts
 	var importsBelow as ParamPositionMaskArray
 
 	static function create(funcIndexByName FuncIndexByName, functionCount ElementIndex) returns CalleeFacts
-		var flags = BoolArray.create()
+		var flags = BoolArray.create(0)
 		flags.refill(functionCount, value: false)
-		var retMasks = ParamPositionMaskArray.create()
+		var retMasks = ParamPositionMaskArray.create(0)
 		retMasks.refill(functionCount, value: NoParamPositions)
-		var retBottoms = BoolArray.create()
+		var retBottoms = BoolArray.create(0)
 		retBottoms.refill(functionCount, value: true)
-		var directOwns = ParamPositionMaskArray.create()
+		var directOwns = ParamPositionMaskArray.create(0)
 		directOwns.refill(functionCount, value: NoParamPositions)
-		var directDeeps = ParamPositionMaskArray.create()
+		var directDeeps = ParamPositionMaskArray.create(0)
 		directDeeps.refill(functionCount, value: NoParamPositions)
-		var directBottoms = BoolArray.create()
+		var directBottoms = BoolArray.create(0)
 		directBottoms.refill(functionCount, value: true)
-		var importsOwn = ParamPositionMaskArray.create()
+		var importsOwn = ParamPositionMaskArray.create(0)
 		importsOwn.refill(functionCount, value: everyParamPosition())
-		var importsBelow = ParamPositionMaskArray.create()
+		var importsBelow = ParamPositionMaskArray.create(0)
 		importsBelow.refill(functionCount, value: everyParamPosition())
 		return Self{funcIndexByName: funcIndexByName, flags: flags, retMasks: retMasks, retBottoms: retBottoms, directOwns: directOwns, directDeeps: directDeeps, directBottoms: directBottoms, importsOwn: importsOwn, importsBelow: importsBelow}
 	end 'create'
@@ -302,7 +302,7 @@ type ValueOrigins
 	var taintChanged as bool
 
 	static function empty(signatures ProgramSignatures, typeNames TypeNameInterner, calleeFacts CalleeFacts) returns ValueOrigins
-		return Self{signatures: signatures, typeNames: typeNames, calleeFacts: calleeFacts, codes: ValueOriginColumn.create(), valueRefs: FunctionRefNames.create(), codeRefs: FunctionRefNames.create(), boxCode: FunctionRefNames.create(), ambiguousBoxes: ValueIdSet.create(), merges: MergeEdges.create(), taintMasks: ParamPositionMaskArray.create(), taintBottoms: BoolArray.create(), directOwns: ParamPositionMaskArray.create(), directDeeps: ParamPositionMaskArray.create(), directBottoms: BoolArray.create(), belowForeign: BoolArray.create(), containment: MergeEdges.create(), taintChanged: false}
+		return Self{signatures: signatures, typeNames: typeNames, calleeFacts: calleeFacts, codes: ValueOriginColumn.create(0), valueRefs: FunctionRefNames.create(), codeRefs: FunctionRefNames.create(), boxCode: FunctionRefNames.create(), ambiguousBoxes: ValueIdSet.create(), merges: MergeEdges.create(), taintMasks: ParamPositionMaskArray.create(0), taintBottoms: BoolArray.create(0), directOwns: ParamPositionMaskArray.create(0), directDeeps: ParamPositionMaskArray.create(0), directBottoms: BoolArray.create(0), belowForeign: BoolArray.create(0), containment: MergeEdges.create(), taintChanged: false}
 	end 'empty'
 
 	static function ofBody(module MaxonModule, func IrFunction, signatures ProgramSignatures, typeNames TypeNameInterner, calleeFacts CalleeFacts) returns ValueOrigins
@@ -363,7 +363,7 @@ type ValueOrigins
 	// No op defines the error flags of `tryCall`, `tryAwait` and `witnessTryDispatch`. Left unvisited,
 	// a merge would read them as "no information" and take its other incoming's answer.
 	function settleUndefined()
-		var isMerge = BoolArray.create()
+		var isMerge = BoolArray.create(0)
 		isMerge.refill(self.codes.count(), value: false)
 
 		for index in 0 upto self.merges.count() 'eachMerge'
@@ -808,7 +808,7 @@ type ValueOrigins
 	end 'everyReturnIsLocal'
 
 	function returnedValues(module MaxonModule, func IrFunction) returns ValueIdArray
-		var returned = ValueIdArray.create()
+		var returned = ValueIdArray.create(0)
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("ValueOrigins.returnedValues: blockRef from func.blockRefs not in module.blocks")
@@ -932,11 +932,11 @@ type EffectContext
 	export let bindings as ClosureBindingArray
 
 	static function plain() returns EffectContext
-		return Self{instance: ContextInstance.none, bindings: ClosureBindingArray.create()}
+		return Self{instance: ContextInstance.none, bindings: ClosureBindingArray.create(0)}
 	end 'plain'
 
 	static function ofInstance(id GenericInstanceId) returns EffectContext
-		return Self{instance: ContextInstance.instance(id), bindings: ClosureBindingArray.create()}
+		return Self{instance: ContextInstance.instance(id), bindings: ClosureBindingArray.create(0)}
 	end 'ofInstance'
 
 	function withBinding(position ParamCount, node ElementIndex) returns EffectContext
@@ -1021,7 +1021,7 @@ type EffectNodes
 	export var current as EffectContext
 
 	static function create(signatures ProgramSignatures, functions IrFunctionArray, dispatch WitnessDispatchTargets) returns EffectNodes
-		return Self{signatures: signatures, functions: functions, dispatch: dispatch, keys: SpecializedNodeKeys.create(), specialized: SpecializedNodeArray.create(), current: EffectContext.plain()}
+		return Self{signatures: signatures, functions: functions, dispatch: dispatch, keys: SpecializedNodeKeys.create(), specialized: SpecializedNodeArray.create(0), current: EffectContext.plain()}
 	end 'create'
 
 	function baseCount() returns ElementIndex
@@ -1183,7 +1183,7 @@ type EffectNodes
 		end 'anotherTypesParameter'
 
 		let conformer = self.signatures.conformerTypeArgName(outer, position: owner.position).toByteArray()
-		var targets = ElementIndexArray.create()
+		var targets = ElementIndexArray.create(0)
 
 		for candidate in candidates 'eachCandidate'
 			let candidateOwner = try ownerTypeOf(candidate)
@@ -1260,7 +1260,7 @@ type EffectSummaryBuilder
 		var dispatch = WitnessDispatchTargets.create(signatures, functions: funcNames.functions)
 		var calleeFacts = CalleeFacts.create(funcNames.byName, functionCount: funcNames.functions.count())
 
-		return Self{funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames, ownersByInstance: ResourceByInstance.create(), ownersByName: ResourceByTypeName.create(), funcIndexByName: funcNames.byName, runtimeTier: runtimeTier, nodes: EffectNodes.create(signatures, functions: funcNames.functions, dispatch: dispatch), calleeFacts: calleeFacts, facts: ValueOrigins.empty(signatures, typeNames: typeNames, calleeFacts: calleeFacts), hard: BoolArray.create(), taintEnabled: false, imports: ParamPositionMaskArray.create(), importsBelow: ParamPositionMaskArray.create(), shallow: ParamPositionMaskArray.create(), near: ParamPositionMaskArray.create(), far: ParamPositionMaskArray.create(), siteCallers: CsrColumn.create(), siteCallees: CsrColumn.create(), siteFirstOrigins: CsrColumn.create(), siteOriginCounts: CsrColumn.create(), siteOrigins: ValueOriginColumn.create()}
+		return Self{funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames, ownersByInstance: ResourceByInstance.create(), ownersByName: ResourceByTypeName.create(), funcIndexByName: funcNames.byName, runtimeTier: runtimeTier, nodes: EffectNodes.create(signatures, functions: funcNames.functions, dispatch: dispatch), calleeFacts: calleeFacts, facts: ValueOrigins.empty(signatures, typeNames: typeNames, calleeFacts: calleeFacts), hard: BoolArray.create(0), taintEnabled: false, imports: ParamPositionMaskArray.create(0), importsBelow: ParamPositionMaskArray.create(0), shallow: ParamPositionMaskArray.create(0), near: ParamPositionMaskArray.create(0), far: ParamPositionMaskArray.create(0), siteCallers: CsrColumn.create(0), siteCallees: CsrColumn.create(0), siteFirstOrigins: CsrColumn.create(0), siteOriginCounts: CsrColumn.create(0), siteOrigins: ValueOriginColumn.create(0)}
 	end 'create'
 
 	// The first walk settles every node's imports; the second reads them to tell which minted records
@@ -1314,17 +1314,17 @@ type EffectSummaryBuilder
 	end 'walkEveryNode'
 
 	function restart()
-		self.hard = BoolArray.create()
-		self.imports = ParamPositionMaskArray.create()
-		self.importsBelow = ParamPositionMaskArray.create()
-		self.shallow = ParamPositionMaskArray.create()
-		self.near = ParamPositionMaskArray.create()
-		self.far = ParamPositionMaskArray.create()
-		self.siteCallers = CsrColumn.create()
-		self.siteCallees = CsrColumn.create()
-		self.siteFirstOrigins = CsrColumn.create()
-		self.siteOriginCounts = CsrColumn.create()
-		self.siteOrigins = ValueOriginColumn.create()
+		self.hard = BoolArray.create(0)
+		self.imports = ParamPositionMaskArray.create(0)
+		self.importsBelow = ParamPositionMaskArray.create(0)
+		self.shallow = ParamPositionMaskArray.create(0)
+		self.near = ParamPositionMaskArray.create(0)
+		self.far = ParamPositionMaskArray.create(0)
+		self.siteCallers = CsrColumn.create(0)
+		self.siteCallees = CsrColumn.create(0)
+		self.siteFirstOrigins = CsrColumn.create(0)
+		self.siteOriginCounts = CsrColumn.create(0)
+		self.siteOrigins = ValueOriginColumn.create(0)
 		self.grow(self.nodes.totalCount())
 	end 'restart'
 
@@ -1883,7 +1883,7 @@ type EffectSummaryBuilder
 			return
 		end 'anotherShape'
 
-		var userArguments = ValueIdArray.create()
+		var userArguments = ValueIdArray.create(0)
 
 		for position in 0 upto targetParamCount 'eachUserArgument'
 			userArguments.push(try args.get(position) otherwise panic("EffectSummaryBuilder.callThroughValue: args.get OOB at {position}"))
@@ -1952,15 +1952,15 @@ type EffectSummaryBuilder
 	// bounded number of times; a round-based rescan would cost the call graph's depth on top.
 	function settle()
 		let nodeCount = self.nodes.totalCount()
-		var siteIds = CsrColumn.create()
+		var siteIds = CsrColumn.create(0)
 
 		for site in 0 upto self.siteCallers.count() 'eachSite'
 			siteIds.push(site as CsrIndex)
 		end 'eachSite'
 
 		let sitesByCallee = buildCsr(self.siteCallees, to: siteIds, nodeCount: nodeCount as CsrIndex)
-		var queue = CsrColumn.create()
-		var queued = BoolArray.create()
+		var queue = CsrColumn.create(0)
+		var queued = BoolArray.create(0)
 
 		for node in 0 upto nodeCount 'seed'
 			let known = self.isHard(node) or summaryMaskAt(self.shallow, index: node) != NoParamPositions or summaryMaskAt(self.near, index: node) != NoParamPositions or summaryMaskAt(self.far, index: node) != NoParamPositions or summaryMaskAt(self.imports, index: node) != NoParamPositions or summaryMaskAt(self.importsBelow, index: node) != NoParamPositions
@@ -2136,7 +2136,7 @@ type EffectSummaryBuilder
 	// A function that returns nothing exists for its effects, so it is never effect-free itself. Callers
 	// inherit what its body does, not that it returns nothing.
 	function verdicts() returns BoolArray
-		var effectFree = BoolArray.create()
+		var effectFree = BoolArray.create(0)
 
 		for index in 0 upto self.nodes.baseCount() 'eachFunction'
 			let func = try self.nodes.functions.get(index) otherwise panic("EffectSummaryBuilder.verdicts: functions.get OOB at {index}")

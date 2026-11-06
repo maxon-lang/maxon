@@ -17,7 +17,7 @@ A four-byte big-endian read is a 32-bit load, a byte swap and no call: the memor
 the instruction that reverses its bytes are all the intrinsic costs once the bounds test has passed.
 ```maxon
 function main() returns ExitCode
-	var data = ByteArray.create()
+	var data = ByteArray.create(0)
 
 	for byte in [1, 2, 3, 4, 5, 6, 7, 8] 'fill'
 		data.push(byte)

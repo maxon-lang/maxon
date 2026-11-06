@@ -102,7 +102,7 @@ export type DeclaredTypeSites
 	var sites as PositionKeyArray
 
 	export static function create() returns DeclaredTypeSites
-		return Self{returnSite: PositionlessSite, sites: PositionKeyArray.create()}
+		return Self{returnSite: PositionlessSite, sites: PositionKeyArray.create(0)}
 	end 'create'
 
 	export function noteWrittenType(typeStart Token)
@@ -194,7 +194,7 @@ end 'cacheWriteWrittenTupleTypeArray'
 
 export function cacheReadWrittenTupleTypeArray(reader LibraryCacheReader) returns WrittenTupleTypeArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = WrittenTupleTypeArray.create()
+	var result = WrittenTupleTypeArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -228,7 +228,7 @@ end 'cacheWriteSourceRangeArray'
 
 export function cacheReadSourceRangeArray(reader LibraryCacheReader) returns SourceRangeArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = SourceRangeArray.create()
+	var result = SourceRangeArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -274,7 +274,7 @@ export type SourceRangeTable
 	var columns as ColumnNumberArray
 
 	export static function create() returns SourceRangeTable
-		return Self{startBytes: ByteOffsetArray.create(), endBytes: ByteOffsetArray.create(), lines: LineNumberArray.create(), columns: ColumnNumberArray.create()}
+		return Self{startBytes: ByteOffsetArray.create(0), endBytes: ByteOffsetArray.create(0), lines: LineNumberArray.create(0), columns: ColumnNumberArray.create(0)}
 	end 'create'
 
 	export function count() returns Count
@@ -397,7 +397,7 @@ end 'cacheWriteSpanIdArray'
 
 function cacheReadSpanIdArray(reader LibraryCacheReader) returns SpanIdArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = SpanIdArray.create()
+	var result = SpanIdArray.create(0)
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
@@ -440,11 +440,11 @@ let SpanKeyFileShift = 44
 // for `SourceRangeTable`'s stated reason. A `type` in an array is a heap box per entry, and this
 // table holds one entry per distinct source position in the program.
 export type DebugSpanTable
-	var filePaths = StringArray.create()
+	var filePaths = StringArray.create(0)
 	var fileIdByPath = DebugFileIdMap.create()
-	var fileIds = DebugFileIdArray.create()
-	var lines = LineNumberArray.create()
-	var columns = ColumnNumberArray.create()
+	var fileIds = DebugFileIdArray.create(0)
+	var lines = LineNumberArray.create(0)
+	var columns = ColumnNumberArray.create(0)
 	var internedByKey = SpanInternMap.create()
 
 	// The previous intern, so the run of ops one expression lowers to costs one hash probe rather than
@@ -556,7 +556,7 @@ end 'spanLineKey'
 // writer returns on it before reading the array — which is what makes the executable byte-identical
 // either way structurally, rather than merely observed to be.
 export type DebugSpanColumn
-	var ids = SpanIdArray.create()
+	var ids = SpanIdArray.create(0)
 
 	// The span every op appended from here on is attributed to. A lowering walk sets it at each source
 	// op and CLEARS it when the walk ends: a cursor left set stamps the runtime band that is installed
@@ -654,7 +654,7 @@ export type DebugSpanColumn
 	end 'requireParallelTo'
 
 	export function releaseRows()
-		self.ids = SpanIdArray.create()
+		self.ids = SpanIdArray.create(0)
 		self.current = NoSpanId
 	end 'releaseRows'
 

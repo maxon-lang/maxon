@@ -619,7 +619,7 @@ function run(seed Index) returns Index
 		end 'never'
 	end 'big'
 
-	var words = Strings.create()
+	var words = Strings.create(0)
 	words.push(build(4))
 	let t0 = build(5)
 
@@ -627,7 +627,7 @@ function run(seed Index) returns Index
 		return 3
 	end 'third'
 
-	words = Strings.create()
+	words = Strings.create(0)
 	words.push(build(6))
 
 	if seed == 2 'fourth'

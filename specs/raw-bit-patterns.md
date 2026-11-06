@@ -413,13 +413,13 @@ typealias A2 = Array with W2
 typealias A1 = Array with W1
 
 function main() returns ExitCode
-	let a64 = A64.create()
-	let a32 = A32.create()
-	let a16 = A16.create()
-	let a8 = A8.create()
-	let a4 = A4.create()
-	let a2 = A2.create()
-	let a1 = A1.create()
+	let a64 = A64.create(0)
+	let a32 = A32.create(0)
+	let a16 = A16.create(0)
+	let a8 = A8.create(0)
+	let a4 = A4.create(0)
+	let a2 = A2.create(0)
+	let a1 = A1.create(0)
 	print("{a64.managed.elementSize()} {a32.managed.elementSize()} {a16.managed.elementSize()} {a8.managed.elementSize()}\n")
 	print("{a4.managed.elementSize()} {a2.managed.elementSize()} {a1.managed.elementSize()}\n")
 	return 0
@@ -445,8 +445,8 @@ typealias A4 = Array with W4
 typealias A15 = Array with N15
 
 function main() returns ExitCode
-	let a = A4.create()
-	let b = A15.create()
+	let a = A4.create(0)
+	let b = A15.create(0)
 	print("{a.managed.elementSize()} {b.managed.elementSize()}\n")
 	return 0
 end 'main'
@@ -735,7 +735,7 @@ function packed(bytes ByteArray) returns Word
 end 'packed'
 
 function main() returns ExitCode
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	for i in 1 upto 8 'eachLowByte'
 		bytes.push(i as Byte)

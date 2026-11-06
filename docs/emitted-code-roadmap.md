@@ -2173,7 +2173,7 @@ function sum(a IntArray) returns Integer
 end 'sum'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(1)
 	a.push(2)
 	a.push(3)
@@ -2202,7 +2202,7 @@ function total(a IntArray) returns Integer
 end 'total'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(5)
 	if total(a) != 5 'bad'
 		return 1

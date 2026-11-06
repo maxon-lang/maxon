@@ -218,7 +218,7 @@ function lookup(table IdxArray, index Idx) returns Idx
 end 'lookup'
 
 function main() returns ExitCode
-	var table = IdxArray.create()
+	var table = IdxArray.create(0)
 	var i = 0 as Idx
 	while i < 100 'fill'
 		table.push(i)

@@ -43,7 +43,7 @@ byte length — `seen`, 4. A spawn that inherited instead would echo the unexpan
 exit code rather than a near miss.
 ```maxon
 function main() returns ExitCode
-	var argv = StringArray.create()
+	var argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("echo")
 	argv.push("%MAXON_STREAM_ENV_PROBE%")

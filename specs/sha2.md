@@ -38,7 +38,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -143,7 +143,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -181,7 +181,7 @@ function report(id String, algorithm HashAlgorithm, chunks ChunkHexList)
 end 'report'
 
 function main() returns ExitCode
-	report("sha256-chunked-001", algorithm: HashAlgorithm.sha256, chunks: ChunkHexList.create())
+	report("sha256-chunked-001", algorithm: HashAlgorithm.sha256, chunks: ChunkHexList.create(0))
 	report("sha256-chunked-002", algorithm: HashAlgorithm.sha256, chunks: [""])
 	report("sha256-chunked-003", algorithm: HashAlgorithm.sha256, chunks: ["61", "62", "63"])
 	report("sha256-chunked-004", algorithm: HashAlgorithm.sha256, chunks: ["", "6162", "", "63", ""])
@@ -190,7 +190,7 @@ function main() returns ExitCode
 	report("sha256-chunked-007", algorithm: HashAlgorithm.sha256, chunks: ["5a86b737eaea8ee976a0a24da63e7ed7eefad18a101c1211e2b3650c5187c2a8a650547208251f6d4237e661c7bf4c77f335390394c37fa1a9f9be836ac285", "09"])
 	report("sha256-chunked-008", algorithm: HashAlgorithm.sha256, chunks: ["e2f76e97606a872e317439f1a03fcd92e632e5bd4e7cbc4e97f1afc19a16fde9", "2d77cbe546416b51640cddb92af996534dfd81edb17c4424cf1ac4d75aceeb"])
 	report("sha256-chunked-009", algorithm: HashAlgorithm.sha256, chunks: ["61", "62", "63", "64", "62", "63", "64", "65", "63", "64", "65", "66", "64", "65", "66", "67", "65", "66", "67", "68", "66", "67", "68", "69", "67", "68", "69", "6a", "68", "69", "6a", "6b", "69", "6a", "6b", "6c", "6a", "6b", "6c", "6d", "6b", "6c", "6d", "6e", "6c", "6d", "6e", "6f", "6d", "6e", "6f", "70", "6e", "6f", "70", "71"])
-	report("sha384-chunked-001", algorithm: HashAlgorithm.sha384, chunks: ChunkHexList.create())
+	report("sha384-chunked-001", algorithm: HashAlgorithm.sha384, chunks: ChunkHexList.create(0))
 	report("sha384-chunked-002", algorithm: HashAlgorithm.sha384, chunks: [""])
 	report("sha384-chunked-003", algorithm: HashAlgorithm.sha384, chunks: ["61", "62", "63"])
 	report("sha384-chunked-004", algorithm: HashAlgorithm.sha384, chunks: ["", "6162", "", "63", ""])
@@ -199,7 +199,7 @@ function main() returns ExitCode
 	report("sha384-chunked-007", algorithm: HashAlgorithm.sha384, chunks: ["3bf52cc5ee86b9a0190f390a5c0366a560b557000dbe5115fd9ee11630a62769011575f15881198f227876e8fe685a6939bc8b89fd48a34ec5e71e131462b2886794dffa68ccc6d564733e67ffef25e627c6f4b5460796e3bce67bf58ca6e8e555bc916a8531697ac948b90dc8616f25101db90b50c3d3dbc9e21e42ff3871", "87"])
 	report("sha384-chunked-008", algorithm: HashAlgorithm.sha384, chunks: ["dbed7612448d46cbe0a384d1c93233f02ffd1c984ba765299518656d3723b766c1658d4b1e7047cdc729459e366ef9349efc40cbd990f2a9a24db7a5045e1dea", "12dce8f9d9f2aaed933f93031e7b8959ac5e7bf6bbbdf30b48f7eb783f8fe292371a2f245c5c94b4acae160767a20ce7c0ea7723d97691d8eedda9efd1fe2d"])
 	report("sha384-chunked-009", algorithm: HashAlgorithm.sha384, chunks: ["61", "62", "63", "64", "65", "66", "67", "68", "62", "63", "64", "65", "66", "67", "68", "69", "63", "64", "65", "66", "67", "68", "69", "6a", "64", "65", "66", "67", "68", "69", "6a", "6b", "65", "66", "67", "68", "69", "6a", "6b", "6c", "66", "67", "68", "69", "6a", "6b", "6c", "6d", "67", "68", "69", "6a", "6b", "6c", "6d", "6e", "68", "69", "6a", "6b", "6c", "6d", "6e", "6f", "69", "6a", "6b", "6c", "6d", "6e", "6f", "70", "6a", "6b", "6c", "6d", "6e", "6f", "70", "71", "6b", "6c", "6d", "6e", "6f", "70", "71", "72", "6c", "6d", "6e", "6f", "70", "71", "72", "73", "6d", "6e", "6f", "70", "71", "72", "73", "74", "6e", "6f", "70", "71", "72", "73", "74", "75"])
-	report("sha512-chunked-001", algorithm: HashAlgorithm.sha512, chunks: ChunkHexList.create())
+	report("sha512-chunked-001", algorithm: HashAlgorithm.sha512, chunks: ChunkHexList.create(0))
 	report("sha512-chunked-002", algorithm: HashAlgorithm.sha512, chunks: [""])
 	report("sha512-chunked-003", algorithm: HashAlgorithm.sha512, chunks: ["61", "62", "63"])
 	report("sha512-chunked-004", algorithm: HashAlgorithm.sha512, chunks: ["", "6162", "", "63", ""])
@@ -260,7 +260,7 @@ end 'toHex'
 typealias Repetition = int(0 to 1000000)
 
 function letters(count Repetition) returns ByteArray
-	var bytes = ByteArray.create()
+	var bytes = ByteArray.create(0)
 
 	for _ in 0 upto count 'eachLetter'
 		bytes.push(0x61)

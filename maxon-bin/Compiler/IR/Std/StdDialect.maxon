@@ -4130,7 +4130,7 @@ export type StdAccessOperands
 	export var label as ByteArray
 
 	export static function create() returns StdAccessOperands
-		return Self{shape: StdAccessShape.neither, ordering: StdAccessOrdering.plain, atomicKind: StdAtomicKind.readModifyWrite, resultId: 0, addrId: 0, offset: 0, valueType: StdType.i64, constValue: 0, valueId: 0, label: ByteArray.create()}
+		return Self{shape: StdAccessShape.neither, ordering: StdAccessOrdering.plain, atomicKind: StdAtomicKind.readModifyWrite, resultId: 0, addrId: 0, offset: 0, valueType: StdType.i64, constValue: 0, valueId: 0, label: ByteArray.create(0)}
 	end 'create'
 
 	function recordNeither()
@@ -4479,7 +4479,7 @@ export type StdCallOperands
 	export var secondArg as ValueId
 
 	export static function create() returns StdCallOperands
-		return Self{shape: StdCallShape.other, resultId: 0, errorFlagId: 0, callee: ByteArray.create(), argCount: 0, firstArg: 0, secondArg: 0}
+		return Self{shape: StdCallShape.other, resultId: 0, errorFlagId: 0, callee: ByteArray.create(0), argCount: 0, firstArg: 0, secondArg: 0}
 	end 'create'
 
 	export function namesACallee() returns bool
@@ -4673,7 +4673,7 @@ module type StdWitnessOperands
 	export var args as ValueIdArray
 
 	module static function create() returns StdWitnessOperands
-		return Self{shape: StdWitnessShape.other, resultId: 0, errorFlagId: 0, witnessAddr: 0, methodIndex: 0, resultIsVoid: false, resultIsFloat: false, argFloatMask: 0, args: ValueIdArray.create()}
+		return Self{shape: StdWitnessShape.other, resultId: 0, errorFlagId: 0, witnessAddr: 0, methodIndex: 0, resultIsVoid: false, resultIsFloat: false, argFloatMask: 0, args: ValueIdArray.create(0)}
 	end 'create'
 
 	module function isDispatch() returns bool
@@ -4842,7 +4842,7 @@ export type StdValueDefs
 	var liveOps as OpIndexArray
 
 	export static function create() returns StdValueDefs
-		return Self{opOf: OpIndexArray.create(), hasOp: BoolArray.create(), def: StdDefinedValues.create(), liveOps: OpIndexArray.create()}
+		return Self{opOf: OpIndexArray.create(0), hasOp: BoolArray.create(0), def: StdDefinedValues.create(), liveOps: OpIndexArray.create(0)}
 	end 'create'
 
 	export static function build(module StdModule, func IrFunction) returns StdValueDefs
@@ -5027,11 +5027,11 @@ type BlockArgSources
 	var values as ValueIdArray
 
 	static function create() returns BlockArgSources
-		return Self{head: OptionalElementIndexColumn.create(), chain: OptionalElementIndexColumn.create(), values: ValueIdArray.create()}
+		return Self{head: OptionalElementIndexColumn.create(), chain: OptionalElementIndexColumn.create(), values: ValueIdArray.create(0)}
 	end 'create'
 
 	static function build(module StdModule, func IrFunction, valueBound ValueId) returns BlockArgSources
-		var sources = Self{head: OptionalElementIndexColumn.absent(valueBound), chain: OptionalElementIndexColumn.create(), values: ValueIdArray.create()}
+		var sources = Self{head: OptionalElementIndexColumn.absent(valueBound), chain: OptionalElementIndexColumn.create(), values: ValueIdArray.create(0)}
 		let byId = module.blockIndexById(func)
 
 		for position in 0 upto func.blockRefs.count() 'eachBlock'
@@ -5104,7 +5104,7 @@ export type StdValueUseSet
 	// ⚠ THE **GROWTH** IS OPT-IN, NOT THE FIELD — and the difference is measured. A second `BoolArray`
 	// over the function's whole value space is real memory, and almost every user of this type only ever
 	// asks `contains`, so `create` leaves `tracksRepeats` false and `insert` never GROWS the column for
-	// them. What they still pay is the empty `BoolArray.create()` in the constructor: `scale-test`
+	// them. What they still pay is the empty `BoolArray.create(0)` in the constructor: `scale-test`
 	// charges that ~25,000 allocations at rung 5, one per `StdValueUseSet.create()`, spread over
 	// `foldConstOperands` / `foldConstants` / `promoteStackRecords` / `pruneDeadBlockArgs` / `isel`.
 	// It is +0.06% of a compile against the −1.59% the
@@ -5130,17 +5130,17 @@ export type StdValueUseSet
 	var insertedIds as ValueIdArray
 
 	export static function create() returns StdValueUseSet
-		return Self{member: BoolArray.create(), tracksRepeats: false, repeated: BoolArray.create(), recordsIds: false, insertedIds: ValueIdArray.create()}
+		return Self{member: BoolArray.create(0), tracksRepeats: false, repeated: BoolArray.create(0), recordsIds: false, insertedIds: ValueIdArray.create(0)}
 	end 'create'
 
 	// The counting form — same set, plus `containsRepeat`. See `tracksRepeats`.
 	export static function createTrackingRepeats() returns StdValueUseSet
-		return Self{member: BoolArray.create(), tracksRepeats: true, repeated: BoolArray.create(), recordsIds: false, insertedIds: ValueIdArray.create()}
+		return Self{member: BoolArray.create(0), tracksRepeats: true, repeated: BoolArray.create(0), recordsIds: false, insertedIds: ValueIdArray.create(0)}
 	end 'createTrackingRepeats'
 
 	// The ITERABLE form — same set, plus `insertedIdCount`/`insertedIdAt`. See `recordsIds`.
 	export static function createRecordingIds() returns StdValueUseSet
-		return Self{member: BoolArray.create(), tracksRepeats: false, repeated: BoolArray.create(), recordsIds: true, insertedIds: ValueIdArray.create()}
+		return Self{member: BoolArray.create(0), tracksRepeats: false, repeated: BoolArray.create(0), recordsIds: true, insertedIds: ValueIdArray.create(0)}
 	end 'createRecordingIds'
 
 	// Empty the set, KEEPING the column's capacity — for a per-function set that is hoisted out of
@@ -6011,7 +6011,7 @@ export function compressValueSubstitutions(subst ValueIdArray)
 end 'compressValueSubstitutions'
 
 module function remappedArgs(args ValueIdArray, subst ValueIdArray) returns ValueIdArray
-	var out = ValueIdArray.create()
+	var out = ValueIdArray.create(0)
 
 	for a in args 'each'
 		out.push(remappedValue(a, subst: subst))
@@ -6077,7 +6077,7 @@ module type StdOpCloner
 	var verified as BoolArray
 
 	module static function create() returns StdOpCloner
-		return Self{def: StdDefinedValues.create(), verified: BoolArray.create()}
+		return Self{def: StdDefinedValues.create(), verified: BoolArray.create(0)}
 	end 'create'
 
 	module function clone(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, payloads ClonePayloads) returns StdOp
@@ -6350,7 +6350,7 @@ end 'clonedBlock'
 // A dense `switch` table's whole target list, mapped. A jump table names MANY blocks and one default,
 // so a clone that reached only the default would leave every case arm branching into the callee.
 function clonedBlocks(ids BlockIdArray, subst BlockIdArray) returns BlockIdArray
-	var out = BlockIdArray.create()
+	var out = BlockIdArray.create(0)
 
 	for id in ids 'each'
 		out.push(clonedBlock(id, subst: subst))
@@ -6416,7 +6416,7 @@ module function substituteEdgeArgsInBlock(block IrBlock, subst ValueIdArray)
 	end 'edgesUnchanged'
 
 	var rewritten = block
-	var newEdges = BranchEdgeArray.create()
+	var newEdges = BranchEdgeArray.create(0)
 
 	for edge in rewritten.branchEdges 'eachEdge'
 		newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: remappedArgs(edge.argIds, subst: subst)))
@@ -6473,7 +6473,7 @@ module function removeOpsDefining(module StdModule, func IrFunction, doomed StdV
 			continue
 		end 'nothingToRemove'
 
-		var kept = OpIndexArray.create()
+		var kept = OpIndexArray.create(0)
 
 		for opIdx in block.bodyOps() 'eachRef'
 			if opDefinesADoomedValue(module, opIdx: opIdx, doomed: doomed, def: def) 'removed'
@@ -6785,9 +6785,9 @@ export typealias PredecessorCounts = Array with ElementIndex
 // Counts the edges terminators draw into each block id; the function entry's own entry is not an edge
 // and is not counted.
 export function stdPredecessorCounts(module StdModule, func IrFunction) returns PredecessorCounts
-	var counts = PredecessorCounts.create()
+	var counts = PredecessorCounts.create(0)
 	counts.growFilled(func.nextBlockId as ElementIndex, value: 0)
-	var successors = BlockIdArray.create()
+	var successors = BlockIdArray.create(0)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		successors.clear()

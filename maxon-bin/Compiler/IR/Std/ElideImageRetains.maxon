@@ -14,7 +14,7 @@ typealias ImageRetainArray = Array with ImageRetain
 // is never written, so the image itself serves (`__managed_decref` skips an immortal record); any
 // other use keeps the copy.
 export function elideImageRetains(project Project, module StdModule)
-	var liveOps = OpIndexArray.create()
+	var liveOps = OpIndexArray.create(0)
 	var call = StdCallOperands.create()
 	var census = RetainCensus.create()
 
@@ -41,9 +41,9 @@ function elideInFunction(project Project, module StdModule, func IrFunction, liv
 
 	let bound = defs.valueBound()
 	let flows = valueFlowsOf(module, func: func)
-	var tracked = BoolArray.create()
+	var tracked = BoolArray.create(0)
 	tracked.growFilled(bound, value: false)
-	var escaped = BoolArray.create()
+	var escaped = BoolArray.create(0)
 	escaped.growFilled(bound, value: false)
 
 	for image in images 'eachSeed'
@@ -57,7 +57,7 @@ function elideInFunction(project Project, module StdModule, func IrFunction, liv
 end 'elideInFunction'
 
 function recordRetainsIn(census RetainCensus) returns ImageRetainArray
-	var retains = ImageRetainArray.create()
+	var retains = ImageRetainArray.create(0)
 
 	for site in census.sites 'eachSite'
 		if site.door == OwnershipDoor.managedRetain 'aRecordRetain'
@@ -69,7 +69,7 @@ function recordRetainsIn(census RetainCensus) returns ImageRetainArray
 end 'recordRetainsIn'
 
 function imageRetainsAmong(project Project, module StdModule, retains ImageRetainArray, defs StdValueDefs) returns ImageRetainArray
-	var images = ImageRetainArray.create()
+	var images = ImageRetainArray.create(0)
 
 	for retain in retains 'eachRetain'
 		if not defs.isDefinedByAnOp(retain.source) 'notDefinedByAnOp'
@@ -156,7 +156,7 @@ function opOnlyDropsOrMeasures(op StdOp, call StdCallOperands, load StdLoadOpera
 end 'opOnlyDropsOrMeasures'
 
 function applyElisions(module StdModule, func IrFunction, bound ValueId, images ImageRetainArray, escaped BoolArray)
-	var subst = ValueIdArray.create()
+	var subst = ValueIdArray.create(0)
 
 	for id in 0 upto bound 'identity'
 		subst.push(id as ValueId)

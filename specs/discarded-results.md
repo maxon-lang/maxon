@@ -671,7 +671,7 @@ function removeFirst(arr IntArray, value Integer) returns bool
 end 'removeFirst'
 
 function main() returns ExitCode
-	var a = IntArray.create()
+	var a = IntArray.create(0)
 	a.push(2)
 	a.push(5)
 	_ = removeFirst(a, value: 2)
@@ -694,7 +694,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var arr = TallyArray.create()
+	var arr = TallyArray.create(0)
 	arr.push(1)
 	_ = try arr.first() otherwise 0
 	return 0
@@ -713,7 +713,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var arr = TallyArray.create()
+	var arr = TallyArray.create(0)
 	arr.push(1)
 	_ = try arr.pop() otherwise 0
 	return arr.count()
@@ -795,7 +795,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var arr = TallyArray.create()
+	var arr = TallyArray.create(0)
 	arr.push(1)
 	arr.count()
 	return 0
@@ -814,7 +814,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var arr = TallyArray.create()
+	var arr = TallyArray.create(0)
 	arr.push(7)
 	arr.clone()
 	return arr.count() - 1
@@ -835,9 +835,9 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var src = TallyArray.create()
+	var src = TallyArray.create(0)
 	src.push(3)
-	var dst = TallyArray.create()
+	var dst = TallyArray.create(0)
 	dst.push(try src.get(0) otherwise panic("src holds one element"))
 	return dst.count() - 1
 end 'main'
@@ -858,7 +858,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var arr = TallyArray.create()
+	var arr = TallyArray.create(0)
 	arr.push(7)
 	_ = arr.clone()
 	return arr.count() - 1
@@ -964,7 +964,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var stack = TallyArray.create()
+	var stack = TallyArray.create(0)
 	stack.push(7)
 	_ = try stack.pop() otherwise panic("pushed one element")
 	return 0
@@ -1330,7 +1330,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function squares(count Integer) returns IntArray
-	var out = IntArray.create()
+	var out = IntArray.create(0)
 
 	for i in 0 upto count 'each'
 		out.push(i * i)
@@ -1395,7 +1395,7 @@ function fill(target IntArray, count Integer) returns Integer
 end 'fill'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	_ = fill(values, count: 3)
 
 	if values.count() != 3 'wrong'
@@ -1423,7 +1423,7 @@ function fill(target IntArray, count Integer) returns Integer
 end 'fill'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	fill(values, count: 3)
 	return 0
 end 'main'
@@ -1442,7 +1442,7 @@ type Sink
 	var items as IntArray
 
 	static function create() returns Sink
-		return Sink{items: IntArray.create()}
+		return Sink{items: IntArray.create(0)}
 	end 'create'
 
 	function attach(extra IntArray)
@@ -1455,7 +1455,7 @@ type Sink
 end 'Sink'
 
 function stash(sink Sink, count Integer) returns Integer
-	var extra = IntArray.create()
+	var extra = IntArray.create(0)
 	sink.attach(extra)
 	extra.push(count)
 	return count
@@ -1630,7 +1630,7 @@ type Recorder
 	var seen as PositionArray
 
 	static function create() returns Recorder
-		return Recorder{seen: PositionArray.create()}
+		return Recorder{seen: PositionArray.create(0)}
 	end 'create'
 
 	function record(position Position) returns bool
@@ -1687,7 +1687,7 @@ type Recorder
 	var seen as PositionArray
 
 	static function create() returns Recorder
-		return Recorder{seen: PositionArray.create()}
+		return Recorder{seen: PositionArray.create(0)}
 	end 'create'
 
 	function record(position Position) returns bool
@@ -1821,7 +1821,7 @@ end 'Box'
 
 typealias BoxArray = Array with Box
 
-var registry = BoxArray.create()
+var registry = BoxArray.create(0)
 
 function enroll() returns Box
 	var box = Box.create()
@@ -1874,7 +1874,7 @@ function contains(values IntArray, wanted Integer) returns bool
 end 'contains'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	values.push(4)
 
 	if contains(values, wanted: 4) 'found'
@@ -1906,10 +1906,10 @@ function copyInto(values IntArray, target IntArray) returns Integer
 end 'copyInto'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	values.push(4)
 	values.push(5)
-	var target = IntArray.create()
+	var target = IntArray.create(0)
 	_ = copyInto(values, target: target)
 
 	if target.count() != 2 'wrong'
@@ -1940,7 +1940,7 @@ function show(values IntArray) returns Integer
 end 'show'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	values.push(7)
 	_ = show(values)
 	return 0
@@ -2008,7 +2008,7 @@ function main() returns ExitCode
 	var swap = SwapIter.create()
 	try swap.advance() otherwise ignore
 	print("{swap.current()}\n")
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	values.push(4)
 	return 0 if holds(values, wanted: 4) else 1
 end 'main'
@@ -2145,7 +2145,7 @@ function main() returns ExitCode
 	var values = IntList.create()
 	values.append(4)
 	values.append(5)
-	var target = IntArray.create()
+	var target = IntArray.create(0)
 
 	_ = copyInto(values, target: target)
 
@@ -2295,7 +2295,7 @@ function main() returns ExitCode
 	values.set(0, value: 4)
 	values.set(1, value: 5)
 	values.set(2, value: 6)
-	var target = IntArray.create()
+	var target = IntArray.create(0)
 
 	_ = copyInto(values, target: target)
 
@@ -2438,7 +2438,7 @@ function main() returns ExitCode
 	var values = IntSet.create()
 	values.insert(4)
 	values.insert(5)
-	var target = IntArray.create()
+	var target = IntArray.create(0)
 
 	_ = copyInto(values, target: target)
 
@@ -2637,7 +2637,7 @@ function walked(data IntArray) returns Integer
 end 'walked'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	values.push(4)
 	_ = walked(values)
 	return 0
@@ -2684,7 +2684,7 @@ function wiped(data IntArray) returns Integer
 end 'wiped'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	values.push(4)
 	_ = wiped(values)
 
@@ -2838,7 +2838,7 @@ function grown(target IntArray) returns Integer
 end 'grown'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	_ = grown(values)
 	return 0 if values.count() == 1 else 1
 end 'main'
@@ -2880,7 +2880,7 @@ function shortened(target IntArray) returns Integer
 end 'shortened'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	values.push(2)
 	values.push(1)
 	_ = shortened(values)
@@ -2929,7 +2929,7 @@ function grown(target IntArray) returns Integer
 end 'grown'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	_ = grown(values)
 	return 0 if values.count() == 1 else 1
 end 'main'
@@ -2997,7 +2997,7 @@ type Holder
 	var items as IntArray
 
 	static function make() returns Holder
-		return Holder{items: IntArray.create()}
+		return Holder{items: IntArray.create(0)}
 	end 'make'
 
 	function adopt(fresh IntArray)
@@ -3013,7 +3013,7 @@ type Wrapper
 	var items as IntArray
 
 	static function make() returns Wrapper
-		return Wrapper{items: IntArray.create()}
+		return Wrapper{items: IntArray.create(0)}
 	end 'make'
 
 	function touchChild()
@@ -3039,7 +3039,7 @@ function grown(items IntArray) returns Integer
 end 'grown'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	_ = grown(values)
 	return 0 if values.count() == 1 else 1
 end 'main'
@@ -3127,7 +3127,7 @@ type Holder
 	var items as IntArray
 
 	static function create() returns Holder
-		return Holder{items: IntArray.create()}
+		return Holder{items: IntArray.create(0)}
 	end 'create'
 
 	function adopt(fresh IntArray)
@@ -3160,7 +3160,7 @@ function grown(target IntArray) returns Integer
 end 'grown'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	_ = grown(values)
 	return 0 if values.count() == 1 else 1
 end 'main'
@@ -3237,12 +3237,12 @@ type Shelf uses T
 	var flagged as bool
 
 	static function create() returns Self
-		return Self{items: IntArray.create(), flagged: false}
+		return Self{items: IntArray.create(0), flagged: false}
 	end 'create'
 
 	function adopt(fresh IntArray, scratchy bool)
 		if scratchy 'scratch'
-			var scratch = TArray.create()
+			var scratch = TArray.create(0)
 
 			if scratch.isEmpty() 'empty'
 				self.flagged = true
@@ -3272,7 +3272,7 @@ function grown(target IntArray) returns Integer
 end 'grown'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	_ = grown(values)
 	return 0 if values.count() == 1 else 1
 end 'main'
@@ -3470,7 +3470,7 @@ end 'allocated'
 
 function main() returns ExitCode
 	let before = allocated()
-	var kept = ByteArray.create()
+	var kept = ByteArray.create(0)
 	kept.push(1)
 	_ = allocated()
 	return 0 if allocated() > before else 1
@@ -3499,7 +3499,7 @@ type Cursor
 end 'Cursor'
 
 function scratch() returns Integer
-	var cursor = Cursor.over(IntArray.create())
+	var cursor = Cursor.over(IntArray.create(0))
 	cursor.drop()
 	return 1
 end 'scratch'
@@ -3537,7 +3537,7 @@ function wipe(values IntArray) returns Integer
 end 'wipe'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	values.push(4)
 	_ = wipe(values)
 
@@ -3574,14 +3574,14 @@ type Cursor
 end 'Cursor'
 
 function reset(extra IntArray) returns Integer
-	var cursor = Cursor.over(IntArray.create())
+	var cursor = Cursor.over(IntArray.create(0))
 	cursor.adopt(extra)
 	cursor.drop()
 	return 1
 end 'reset'
 
 function main() returns ExitCode
-	var values = IntArray.create()
+	var values = IntArray.create(0)
 	values.push(4)
 	_ = reset(values)
 
@@ -3651,7 +3651,7 @@ function worker() returns Integer
 end 'worker'
 
 function park() returns Integer
-	var parked = PromiseArray.create()
+	var parked = PromiseArray.create(0)
 	parked.push(async worker())
 	return 1
 end 'park'
