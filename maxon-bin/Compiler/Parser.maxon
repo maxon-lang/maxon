@@ -25959,7 +25959,15 @@ export type Parser
 					end 'notThisConformers'
 
 					if not self.job.isStdlibSource 'anAuthorsMember'
-						index.recordExtensionInnerAliasKeeper(joinQualifiedName(conformer, member: nestedNameTok.value), site: self.extensionInnerAliasSiteAt(nestedNameTok))
+						let nestedQualified = joinQualifiedName(conformer, member: nestedNameTok.value)
+						let nestedSite = self.extensionInnerAliasSiteAt(nestedNameTok)
+						index.recordExtensionInnerAliasKeeper(nestedQualified, site: nestedSite)
+
+						let keeper = try index.extensionInnerAliasKeeper(nestedQualified) otherwise panic("Parser.foldExtensionDeclarationInto: '{String.from(nestedQualified)}' has no keeper right after one was recorded for it")
+
+						if nestedSite.compare(keeper) != Ordering.equalTo 'aRefusedDuplicate'
+							continue
+						end 'aRefusedDuplicate'
 					end 'anAuthorsMember'
 
 					match nested 'nested'
@@ -95182,7 +95190,7 @@ export type Parser
 	end 'probeRecordInitializer'
 
 	function probedRecordOf(decl TopLevelDecl, value ValueId) returns RecordInitializerProbe throws ConstEvalError
-		if self.constIsKnown(value) or self.floatConstIsKnown(value) 'aKnownScalar'
+		if (self.constIsKnown(value) or self.floatConstIsKnown(value)) and not self.varStartsAsAnEmptyCaseOfAnOwningType(decl, value: value) 'aKnownScalar'
 			return RecordInitializerProbe.scalar(self.constValueOfKnown(value))
 		end 'aKnownScalar'
 
@@ -95208,6 +95216,10 @@ export type Parser
 
 		return RecordInitializerProbe.record(settled)
 	end 'probedRecordOf'
+
+	function varStartsAsAnEmptyCaseOfAnOwningType(decl TopLevelDecl, value ValueId) returns bool
+		return decl.mutable and self.signatures.typeOwesDropFor(self.typeOf(value), from: self.artifact.typeNames, readerFilePath: self.job.path)
+	end 'varStartsAsAnEmptyCaseOfAnOwningType'
 
 	function probedInlineWordOf(value ValueId) returns ConstValue throws AbsentError
 		var nodes = ProbedConstructionArray.create(0)
@@ -95609,7 +95621,7 @@ export type Parser
 	end 'noteConstLetCast'
 
 	function foldedValueOfBodyResult(decl TopLevelDecl, value ValueId) returns FoldedInitializer throws ConstEvalError
-		if self.constIsKnown(value) or self.floatConstIsKnown(value) 'aKnownScalar'
+		if (self.constIsKnown(value) or self.floatConstIsKnown(value)) and not self.varStartsAsAnEmptyCaseOfAnOwningType(decl, value: value) 'aKnownScalar'
 			return FoldedInitializer.scalar(self.constValueOfKnown(value))
 		end 'aKnownScalar'
 

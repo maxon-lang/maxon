@@ -9050,7 +9050,7 @@ index caace52..6d94f03 100644
  	for site in artifact.inferredInstantiationSites 'eachInferredSite'
  		sites.push(GenericInstantiationSite.create(remap.applyInstance(site.gid), nameLine: site.nameLine, nameColumn: site.nameColumn, filePath: site.filePath))
 diff --git a/maxon-bin/Compiler/Parser.maxon b/maxon-bin/Compiler/Parser.maxon
-index f6e0863..9fd753b 100644
+index 17b9cf2..1699e4b 100644
 --- a/maxon-bin/Compiler/Parser.maxon
 +++ b/maxon-bin/Compiler/Parser.maxon
 @@ -50,7 +50,7 @@ end 'cacheWriteTokenIndexArray'
@@ -10818,7 +10818,7 @@ index f6e0863..9fd753b 100644
  
  		self.pos = site.tokenPos
  
-@@ -26039,7 +26039,7 @@ export type Parser
+@@ -26047,7 +26047,7 @@ export type Parser
  		// there is one place that decides what a scanned signature means. Everything an extension does not
  		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
  		// per-file sweep passes its own.
@@ -10827,7 +10827,7 @@ index f6e0863..9fd753b 100644
  	end 'foldExtensionDeclarationInto'
  
  	function consumeExtensionTargetName() returns Token throws SourceParseError
-@@ -26110,12 +26110,12 @@ export type Parser
+@@ -26118,12 +26118,12 @@ export type Parser
  		let interfaces = try self.readImplementsList()
  
  		if not self.at(TokenKind.where) 'unconditional'
@@ -10842,7 +10842,7 @@ index f6e0863..9fd753b 100644
  		let constraints = try self.readWhereClause(self.enclosingTypeParams, owner: TypeWhereClauseOwner, admitsAssociatedBindings: true, bounds: spelledBounds)
  		try self.requireNoRegionBounds(spelledBounds, whereTok: whereTok, owner: "an `extension`'s `where` clause")
  		self.enclosingTypeParams = self.emptyTypeParams
-@@ -26205,7 +26205,7 @@ export type Parser
+@@ -26213,7 +26213,7 @@ export type Parser
  		// `sharedEmptyWhereConstraints` is the extension's OWN side, which is empty for the reason above.
  		self.enclosingTypeParams = index.structTypeParamsOf(conformer)
  		self.enclosingWhereConstraints = index.typeExtensionWitnessConstraints(conformer, extensionConstraints: sharedEmptyWhereConstraints)
@@ -10851,7 +10851,7 @@ index f6e0863..9fd753b 100644
  
  		// BOTH COLUMNS OR NEITHER — the length agreement `conformerAssociatedBindings` enforces has already
  		// emptied a list that cannot be paired, so an empty one here means only "this conformer binds nothing
-@@ -26332,7 +26332,7 @@ export type Parser
+@@ -26340,7 +26340,7 @@ export type Parser
  	// verdict independent of fold order.
  	function publishOrShadowExtensionMethod(index ProgramSignatures, header ExtensionHeader, conformer ByteArray, shadowed bool, qualifiedMethodName ByteArray, takesReceiver bool, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, bodyFacts SweptBodyFactEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut NameRoster)
  		if shadowed 'theConformerDeclaresItsOwn'
@@ -10860,7 +10860,7 @@ index f6e0863..9fd753b 100644
  			return
  		end 'theConformerDeclaresItsOwn'
  
-@@ -26352,14 +26352,14 @@ export type Parser
+@@ -26360,14 +26360,14 @@ export type Parser
  		// than threaded to the conformer's layout: `extension Countable` declares one body on every conformer, and
  		// a service's variant order is a wire format its own declaration has to own. The two withheld arms above
  		// discard for the same reason plus their own.
@@ -10877,7 +10877,7 @@ index f6e0863..9fd753b 100644
  
  		// The skip is keyed by the qualified name the conformer's own method also wears, so filing one for a
  		// shadowed method would refuse every call to the conformer's method as E4006.
-@@ -26441,7 +26441,7 @@ export type Parser
+@@ -26449,7 +26449,7 @@ export type Parser
  				// ⚠ **AN ENUM/UNION METHOD IS NOT A MESSAGE** — a service is a declared `type`, reached through
  				// `spawn <T>.<factory>()`, whose target test requires a struct declaration. So the roster this method
  				// would contribute is discarded, exactly as an extension method's is.
@@ -10886,7 +10886,7 @@ index f6e0863..9fd753b 100644
  				continue
  			end 'method'
  
-@@ -26525,8 +26525,8 @@ export type Parser
+@@ -26533,8 +26533,8 @@ export type Parser
  		self.declaredNestedAliases = noInnerAliases
  		self.clearBodyAliasScan()
  		self.innerAliasesFromIndex = false
@@ -10897,7 +10897,7 @@ index f6e0863..9fd753b 100644
  		self.clearExtensionAssociatedTypes()
  	end 'enterTypeScope'
  
-@@ -26631,7 +26631,7 @@ export type Parser
+@@ -26639,7 +26639,7 @@ export type Parser
  	end 'openTypeParamNames'
  
  	function readUsesNames() returns NameRoster
@@ -10906,7 +10906,7 @@ index f6e0863..9fd753b 100644
  
  		while self.at(TokenKind.identifier) 'usesLoop'
  			let paramTok = self.current()
-@@ -26674,8 +26674,8 @@ export type Parser
+@@ -26682,8 +26682,8 @@ export type Parser
  
  		// Restored in lockstep so a dispatch outside a constrained type body resolves against
  		// no stale constraints — and allocates nothing, exactly as `emptyTypeParams` restores.
@@ -10917,7 +10917,7 @@ index f6e0863..9fd753b 100644
  
  		// Restored in lockstep for the identical reason (conditional extensions): the NEXT conformer's pass
  		// over the same extension body installs its own bindings, and a `Element` left pointing at the previous
-@@ -26698,10 +26698,10 @@ export type Parser
+@@ -26706,10 +26706,10 @@ export type Parser
  	// PARAMETER would abandon the clause and file a SHORTER slot list whole-program — a wrong ABI, not a
  	// wrong message. Parentheses make the extent a token fact, so both passes read the same list.
  	function readWhereConstraintBindings(interfaceName ByteArray) returns RequirementTypeArray throws SourceParseError
@@ -10930,7 +10930,7 @@ index f6e0863..9fd753b 100644
  			return types
  		end 'delimited'
  
-@@ -26720,7 +26720,7 @@ export type Parser
+@@ -26728,7 +26728,7 @@ export type Parser
  	// fill. Returns the (possibly empty) constraint list; the caller records it on the layout.
  	function readWhereClause(typeParamNames NameRoster, owner String, admitsAssociatedBindings bool, bounds RegionBoundArray) returns WhereConstraintArray throws SourceParseError
  		try self.consume(TokenKind.where)
@@ -10939,7 +10939,7 @@ index f6e0863..9fd753b 100644
  
  		while true 'params'
  			let paramTok = try self.consume(TokenKind.identifier)
-@@ -27614,7 +27614,7 @@ export type Parser
+@@ -27622,7 +27622,7 @@ export type Parser
  		self.publishExistentialInstances(initializer)
  		self.fileDeferredProvenance(initializer)
  		self.publishDebugLocals(initializer)
@@ -10948,7 +10948,7 @@ index f6e0863..9fd753b 100644
  		self.commitRangeChecks(name)
  		self.pos = resume
  	end 'parseGlobalInitializer'
-@@ -27783,7 +27783,7 @@ export type Parser
+@@ -27791,7 +27791,7 @@ export type Parser
  
  		self.beginDeclaredBody(0, returnSpelling: EmptySourceText, returnBrand: EmptySourceText, mayReturnAGlobalAlias: false, returnAlias: self.anchors.undeclaredAlias, paramSites: sharedEmptyParamSites, layoutParam: HiddenWordParam.none, countParam: HiddenWordParam.none, nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction, witnessParamBase: 0, witnessParamCount: 0)
  
@@ -10957,7 +10957,7 @@ index f6e0863..9fd753b 100644
  		initializer.visibility = Visibility.global
  
  		let initializerIndex = self.artifact.module.funcCount()
-@@ -27800,7 +27800,7 @@ export type Parser
+@@ -27808,7 +27808,7 @@ export type Parser
  		self.publishExistentialInstances(initializer)
  		self.fileDeferredProvenance(initializer)
  		self.publishDebugLocals(initializer)
@@ -10966,7 +10966,7 @@ index f6e0863..9fd753b 100644
  		self.commitRangeChecks(name)
  	end 'parseDefaultInitializer'
  
-@@ -28629,9 +28629,9 @@ export type Parser
+@@ -28637,9 +28637,9 @@ export type Parser
  		// way. The tuple form is the one shape that hands back no declaration to take a name off, and it needs
  		// one for exactly the reason the other two per-instance forms do: `enclosingInnerAliases`.
  		let memberNameIndex = self.pos + 1
@@ -10979,7 +10979,7 @@ index f6e0863..9fd753b 100644
  
  		// The FORM comes from the reader that decided it, never from which array grew: that inference
  		// would be a second copy of a discrimination `readTypeAliasDeclaration` already makes, free to
-@@ -28686,7 +28686,7 @@ export type Parser
+@@ -28694,7 +28694,7 @@ export type Parser
  	// COPY-ON-WRITE off the shared empty, `recordInnerAliasName`'s discipline for its reason.
  	function noteInterfaceAlias(entry GenericAliasEntry)
  		if self.interfaceAliasScratch is self.anchors.interfaceAliases 'stillShared'
@@ -10988,7 +10988,7 @@ index f6e0863..9fd753b 100644
  		end 'stillShared'
  
  		self.interfaceAliasScratch.push(self.qualifiedInnerGenericAlias(entry))
-@@ -28848,7 +28848,7 @@ export type Parser
+@@ -28856,7 +28856,7 @@ export type Parser
  			entries(names) then return names
  		end 'state'
  
@@ -10997,7 +10997,7 @@ index f6e0863..9fd753b 100644
  		self.scannedPerInstanceAliases = ScannedAliasNames.entries(fresh)
  		return fresh
  	end 'scannedPerInstanceAliasesForWrite'
-@@ -28859,7 +28859,7 @@ export type Parser
+@@ -28867,7 +28867,7 @@ export type Parser
  			entries(names) then return names
  		end 'state'
  
@@ -11006,7 +11006,7 @@ index f6e0863..9fd753b 100644
  		self.scannedFunctionAliases = ScannedAliasNames.entries(fresh)
  		return fresh
  	end 'scannedFunctionAliasesForWrite'
-@@ -29110,7 +29110,7 @@ export type Parser
+@@ -29118,7 +29118,7 @@ export type Parser
  		// surface every declared position naming this alias takes.
  		let baseIsBuffer = base.written.equals(ManagedMemoryTypeName)
  		view baseName = self.canonicalGenericBaseNameInThisFile(base.written)
@@ -11015,7 +11015,7 @@ index f6e0863..9fd753b 100644
  		let argsStart = self.pos
  		let (argCount, qualified) = try self.parseGenericArgNodes(args, baseName: baseName, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true, slot: self.genericArgSlotOf(baseName))
  		let selfRef = self.selfNamingArgToken(aliasTok, argsStart: argsStart)
-@@ -29553,7 +29553,7 @@ export type Parser
+@@ -29561,7 +29561,7 @@ export type Parser
  
  	function paramMarkerFactsOf(parenPos ElementIndex, firstPosition ParamCount) returns ParamMarkerFacts
  		var written = NoParamPositions
@@ -11024,7 +11024,7 @@ index f6e0863..9fd753b 100644
  
  		for _ in 0 upto firstPosition 'theReceiverSlots'
  			heads.push(EmptySourceText)
-@@ -29812,7 +29812,7 @@ export type Parser
+@@ -29820,7 +29820,7 @@ export type Parser
  			// The canonical base, for the top-level arm's reason: a nested `__ManagedMemory with T` must
  			// intern to the same instance a nested `Array with T` does, or one record has two ids.
  			view subBaseName = self.canonicalGenericBaseNameInThisFile(base.written)
@@ -11033,7 +11033,7 @@ index f6e0863..9fd753b 100644
  			let (subCount, subQualified) = try self.parseGenericArgNodes(subNodes, baseName: subBaseName, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false, slot: self.genericArgSlotOf(subBaseName))
  			self.checkGenericInstance(base, argCount: subCount)
  			nodes.push(GenericArgNode.instanceHeader(subBaseName, argCount: subCount, shape: subQualified if subQualified.isReadOnlyQualified() else subSize))
-@@ -30175,15 +30175,15 @@ export type Parser
+@@ -30183,15 +30183,15 @@ export type Parser
  		// and dropped here) and the interner-free `(tag, name)` pairs the alias stores. The empty arrays a
  		// sweep still constructs grow no heap buffer — an `Array`'s backing storage is allocated lazily on the
  		// first `push`, which a sweep never makes.
@@ -11053,7 +11053,7 @@ index f6e0863..9fd753b 100644
  		var typeSites = DeclaredTypeSites.create()
  
  		if not self.at(TokenKind.rightParen) 'params'
-@@ -30374,7 +30374,7 @@ export type Parser
+@@ -30382,7 +30382,7 @@ export type Parser
  			return
  		end 'aLibraryFilesOwnSpelling'
  
@@ -11062,7 +11062,7 @@ index f6e0863..9fd753b 100644
  	end 'appendAuditedTypeNamesHere'
  
  	// The interned NAME behind one type in a function alias's declared signature — a PARAMETER's or the
-@@ -30678,7 +30678,7 @@ export type Parser
+@@ -30686,7 +30686,7 @@ export type Parser
  		// (so the body parse below recognizes a `self.item.digest()` witness dispatch and reserves witness
  		// parameters) AND recorded on the layout (so the instantiation-site check validates `Box with Point`).
  		if self.at(TokenKind.where) 'whereClause'
@@ -11071,7 +11071,7 @@ index f6e0863..9fd753b 100644
  			var constraints = try self.readWhereClause(self.enclosingTypeParams, owner: TypeWhereClauseOwner, admitsAssociatedBindings: true, bounds: spelledBounds)
  			self.enclosingWhereConstraints = constraints
  			layout.recordWhereConstraints(constraints)
-@@ -31244,8 +31244,8 @@ export type Parser
+@@ -31252,8 +31252,8 @@ export type Parser
  		// declares no generic-instance alias — every interface in the corpus but a handful — costs nothing.
  		self.interfaceAliasScratch = self.anchors.interfaceAliases
  
@@ -11082,7 +11082,7 @@ index f6e0863..9fd753b 100644
  		try self.parseInterfaceHeaderClauses(extendsInterfaces, associatedTypeNames: associatedTypeNames)
  		try requireMemberCount(associatedTypeNames.count(), limit: MaxDeclaredMembers, members: "associated types", anchor: nameTok)
  
-@@ -31261,7 +31261,7 @@ export type Parser
+@@ -31269,7 +31269,7 @@ export type Parser
  			self.enclosingTypeParams = associatedTypeNames
  		end 'hasAssociatedTypes'
  
@@ -11091,7 +11091,7 @@ index f6e0863..9fd753b 100644
  		var claimedRequirementNames = RequirementNameSet.create()
  
  		while true 'members'
-@@ -31425,19 +31425,19 @@ export type Parser
+@@ -31433,19 +31433,19 @@ export type Parser
  		let nameTok = try self.consumeNameToken(NamePosition.declaration)
  		try requireUnclaimedInterfaceRequirementName(nameTok, interfaceName: interfaceName, claimed: claimed)
  
@@ -11119,7 +11119,7 @@ index f6e0863..9fd753b 100644
  		let selfCapability = try self.readReceiverCapability(not isStatic)
  		try self.consume(TokenKind.leftParen)
  		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, paramCapabilities: paramCapabilities, paramMarkers: paramMarkers, markerTokens: markerTokens, owner: ParamDefaultOwner.interfaceRequirement, paramTypeOffer: noClosureParamOffer)
-@@ -31471,7 +31471,7 @@ export type Parser
+@@ -31479,7 +31479,7 @@ export type Parser
  		// the impl's throw-path primary (0) came back as a real answer.
  		let throwsClause = try self.parseOptionalThrowsClause()
  
@@ -11128,7 +11128,7 @@ index f6e0863..9fd753b 100644
  		let paramRequirements = self.interfaceParamRequirements(paramTypes, paramTypeStarts: paramTypeStarts, interfaceName: interfaceName)
  		let returnRequirement = self.interfaceReturnRequirement(returnType, typeStart: returnTypeStart, interfaceName: interfaceName)
  		return InterfaceMethodSig.create(nameTok.value, paramNames: paramNames, paramTypeNames: self.renderInterfaceParamTypes(paramTypes, requirements: paramRequirements, paramTypeStarts: paramTypeStarts, interfaceName: interfaceName), paramTypes: paramRequirements, returnTypeName: self.renderInterfaceReturnType(returnType, requirement: returnRequirement, typeStart: returnTypeStart, interfaceName: interfaceName), returnType: returnRequirement, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: interfaceParamBufferSpellings(paramSurfaces), paramCapabilities: paramCapabilities, returnCapability: qualifiedReturn.capability, byRefParams: markerMaskOf(paramMarkers), nameLine: nameTok.line, nameColumn: nameTok.column, written: written, selfCapability: selfCapability)
-@@ -31488,7 +31488,7 @@ export type Parser
+@@ -31496,7 +31496,7 @@ export type Parser
  	// the corpus but the two `BuiltinDictionaryLiteral` writes — so the common path reads one count and
  	// pushes `false`.
  	function interfaceParamBufferSpellings(paramSurfaces DeclaredSurfaceArray) returns BoolArray
@@ -11137,7 +11137,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto paramSurfaces.count() 'each'
  			let surface = try paramSurfaces.get(i) otherwise panic("interfaceParamBufferSpellings: paramSurfaces.get OOB at {i} of {paramSurfaces.count()} — parseFunctionParameters fills this column in lockstep with the names")
-@@ -31500,7 +31500,7 @@ export type Parser
+@@ -31508,7 +31508,7 @@ export type Parser
  
  	// A parameter declared through a generic-instance ALIAS renders as that alias, the requirement's brand.
  	function renderInterfaceParamTypes(paramTypes MaxonTypeArray, requirements RequirementTypeArray, paramTypeStarts TokenIndexArray, interfaceName ByteArray) returns NameRoster
@@ -11146,7 +11146,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto paramTypes.count() 'each'
  			let paramType = try paramTypes.get(i) otherwise panic("renderInterfaceParamTypes: paramTypes.get OOB at {i}")
-@@ -31512,7 +31512,7 @@ export type Parser
+@@ -31520,7 +31520,7 @@ export type Parser
  	end 'renderInterfaceParamTypes'
  
  	function interfaceParamRequirements(paramTypes MaxonTypeArray, paramTypeStarts TokenIndexArray, interfaceName ByteArray) returns RequirementTypeArray
@@ -11155,7 +11155,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto paramTypes.count() 'each'
  			let paramType = try paramTypes.get(i) otherwise panic("interfaceParamRequirements: paramTypes.get OOB at {i}")
-@@ -31646,7 +31646,7 @@ export type Parser
+@@ -31654,7 +31654,7 @@ export type Parser
  
  		try self.consume(TokenKind.implements)
  
@@ -11164,7 +11164,7 @@ index f6e0863..9fd753b 100644
  		interfaces.push(try self.parseOneConformance())
  
  		while self.at(TokenKind.comma) 'moreInterfaces'
-@@ -31667,8 +31667,8 @@ export type Parser
+@@ -31675,8 +31675,8 @@ export type Parser
  		end 'bindsNothing'
  
  		try self.consume(TokenKind.with)
@@ -11175,7 +11175,7 @@ index f6e0863..9fd753b 100644
  		let withArgs = try self.parseConformanceWithArgs(ifaceTok.value, spellings: spellings, types: types)
  		return InterfaceConformance.create(ifaceTok.value, withArgs: withArgs, withArgSpellings: spellings, withArgTypes: types)
  	end 'parseOneConformance'
-@@ -31707,7 +31707,7 @@ export type Parser
+@@ -31715,7 +31715,7 @@ export type Parser
  	// indistinguishable one line later — recording a flag on it purely so a later pass could re-derive what
  	// this function is looking straight at would be plumbing a parse fact through the whole tier for no gain.
  	function parseConformanceWithArgs(interfaceName ByteArray, spellings NameRoster, types RequirementTypeArray) returns NameRoster throws SourceParseError
@@ -11184,7 +11184,7 @@ index f6e0863..9fd753b 100644
  
  		if self.at(TokenKind.leftParen) and self.parenthesizedWithBindsOneTuple(interfaceName) 'oneTupleArgument'
  			// ONE argument, read by the ordinary reference reader — `parseTypeReference` meets the `(` and
-@@ -32106,7 +32106,7 @@ export type Parser
+@@ -32114,7 +32114,7 @@ export type Parser
  		// not a callable head) and never writes an `=`: its raw value is already in hand, and an `=` after it
  		// would be a second raw value for one case.
  		if tokenKindIsEnumLiteralBacking(nameTok.kind) 'implicitBacking'
@@ -11193,7 +11193,7 @@ index f6e0863..9fd753b 100644
  			return
  		end 'implicitBacking'
  
-@@ -32195,7 +32195,7 @@ export type Parser
+@@ -32203,7 +32203,7 @@ export type Parser
  	// value may follow.
  	function readOptionalPayloadFields() returns PayloadFieldArray throws SourceParseError
  		if not self.at(TokenKind.leftParen) 'noPayloadList'
@@ -11202,7 +11202,7 @@ index f6e0863..9fd753b 100644
  		end 'noPayloadList'
  
  		return try self.readPayloadFieldsInto()
-@@ -32424,7 +32424,7 @@ export type Parser
+@@ -32432,7 +32432,7 @@ export type Parser
  	// as A end` reaches this door FIRST — and here it is simply a case that fails the missing-field rule at
  	// whatever depth the author stopped writing.
  	function checkEnumBackingGroup(struct StructLayout, entries EnumBackingFieldArray, group EnumBackingGroupId, layout EnumLayout, index CaseIndex, caseTok Token) throws SourceParseError
@@ -11211,7 +11211,7 @@ index f6e0863..9fd753b 100644
  
  		for _ in 0 upto struct.fieldCount() 'seedFilledColumn'
  			filled.push(false)
-@@ -32782,7 +32782,7 @@ export type Parser
+@@ -32790,7 +32790,7 @@ export type Parser
  	// ⇒ What an argument means is its POSITION (or its label), and nothing else: `Meta.create(1)` IS
  	// `Meta{<field 0>: 1}`. That is why the two forms share one `EnumBackingFieldArray` and one reader.
  	function readEnumBackingFields(typeTok Token) returns EnumBackingFieldArray throws SourceParseError
@@ -11220,7 +11220,7 @@ index f6e0863..9fd753b 100644
  		try self.readEnumBackingGroupInto(fields, typeTok: typeTok, group: RootBackingGroup)
  
  		return fields
-@@ -32983,7 +32983,7 @@ export type Parser
+@@ -32991,7 +32991,7 @@ export type Parser
  	// a struct field and a parameter use, so a payload's type is spelled by one grammar.
  	function readPayloadFieldsInto() returns PayloadFieldArray throws SourceParseError
  		try self.consume(TokenKind.leftParen)
@@ -11229,7 +11229,7 @@ index f6e0863..9fd753b 100644
  
  		while true 'fieldLoop'
  			let isLet = self.at(TokenKind.let)
-@@ -33347,22 +33347,22 @@ export type Parser
+@@ -33355,22 +33355,22 @@ export type Parser
  		// binding them needs the fresh per-function scope + value numbering, which is
  		// re-seeded at the resulting paramCount just below. Parsing itself only
  		// consumes tokens, so it needs no scope.
@@ -11257,7 +11257,7 @@ index f6e0863..9fd753b 100644
  
  		// ⭐⭐ **THE HEAD FORK, AND THE THREE FACTS IT PRODUCES.** Whatever a head reads, the body below needs
  		// exactly this much from it: the TOKEN every position in this declaration is anchored at, the name the
-@@ -33706,7 +33706,7 @@ export type Parser
+@@ -33714,7 +33714,7 @@ export type Parser
  
  			// A test takes no parameters, so it can have no defaults and there is no contest to compose: its
  			// own key is its own name.
@@ -11266,7 +11266,7 @@ index f6e0863..9fd753b 100644
  		end 'aTestHead'
  
  		try self.consume(TokenKind.function)
-@@ -33757,7 +33757,7 @@ export type Parser
+@@ -33765,7 +33765,7 @@ export type Parser
  
  			// The receiver is typed by `enclosingSelfType`, never by a source spelling, so it can never be
  			// the buffer alias — but it occupies position 0 and every column here is indexed by position.
@@ -11275,7 +11275,7 @@ index f6e0863..9fd753b 100644
  
  			// Nor is it declared at a type any token spells, and its slot must therefore hold an index that
  			// names no type BY TOKEN KIND rather than by a claim about what some name means. The cursor has not
-@@ -33772,13 +33772,13 @@ export type Parser
+@@ -33780,13 +33780,13 @@ export type Parser
  		let parameterListStart = self.pos
  		let selfCapability = try self.readReceiverCapability(takesReceiver)
  		try self.consume(TokenKind.leftParen)
@@ -11293,7 +11293,7 @@ index f6e0863..9fd753b 100644
  
  		if self.at(TokenKind.uses) 'aTypeParameterList'
  			ownTypeParams = try self.readFunctionTypeParams()
-@@ -33936,7 +33936,7 @@ export type Parser
+@@ -33944,7 +33944,7 @@ export type Parser
  	end 'noteDeclarationCloser'
  
  	function scanBlockClosers(bodyStart ElementIndex, openingLabel ByteArray) returns BlockCloserScan
@@ -11302,7 +11302,7 @@ index f6e0863..9fd753b 100644
  		open.push(OpenedBlockLabel.spelled(openingLabel))
  		var q = bodyStart
  
-@@ -33990,7 +33990,7 @@ export type Parser
+@@ -33998,7 +33998,7 @@ export type Parser
  	end 'publishMisclosedBlock'
  
  	function namesDeclaredFrom(start ElementIndex) returns NameRoster
@@ -11311,7 +11311,7 @@ index f6e0863..9fd753b 100644
  		var q = start
  
  		while self.kindAt(q) != TokenKind.eof 'walk'
-@@ -34113,7 +34113,7 @@ export type Parser
+@@ -34121,7 +34121,7 @@ export type Parser
  			throw RangedParamError.noRangedParameters
  		end 'noneRanged'
  
@@ -11320,7 +11320,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto paramTypes.count() 'eachParam'
  			let paramType = try paramTypes.get(i) otherwise panic("rangedParamSites: paramTypes.get OOB at {i}")
-@@ -34525,11 +34525,11 @@ export type Parser
+@@ -34533,11 +34533,11 @@ export type Parser
  	// mutable door that moves or refuses it (`ProvenanceTracer.withholdVarShouldBeLet`). The first, at
  	// `first`, is reported now, and replaced there when it is withheld.
  	function varShouldBeLetCandidatesFrom(first ElementIndex) returns VarShouldBeLetCandidates
@@ -11337,7 +11337,7 @@ index f6e0863..9fd753b 100644
  
  		for candidateIndex in first upto self.bodyState.unusedCandidates.count() 'eachCandidate'
  			if not self.isVarShouldBeLetCandidate(candidateIndex) 'notACandidate'
-@@ -34886,7 +34886,7 @@ export type Parser
+@@ -34894,7 +34894,7 @@ export type Parser
  	// `declaredExistentialInstanceAt` twice. The cost is one empty array per parsed function, which is
  	// strictly less than the full-length column `paramAggregateNamesOf` builds beside it.
  	function paramExistentialSitesOf(paramTypes MaxonTypeArray, paramTypeStarts TokenIndexArray) returns ParamExistentialSiteArray
@@ -11346,7 +11346,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto paramTypes.count() 'eachParam'
  			let paramType = try paramTypes.get(i) otherwise panic("paramExistentialSitesOf: paramTypes.get OOB at {i} below the count just read from the same array")
-@@ -34911,14 +34911,14 @@ export type Parser
+@@ -34919,14 +34919,14 @@ export type Parser
  
  	function returnExistentialSitesOf(returnType MaxonReturnType, returnTypeStart ElementIndex) returns GenericInstanceIdArray
  		if maxonReturnTypeIsVoid(returnType) 'returnsNothing'
@@ -11364,7 +11364,7 @@ index f6e0863..9fd753b 100644
  
  		if let claim = try self.declaredExistentialInstanceAt(returnTypeStart) 'namesAnInstantiation'
  			sites.push(claim.instance)
-@@ -35147,7 +35147,7 @@ export type Parser
+@@ -35155,7 +35155,7 @@ export type Parser
  		self.enclosingWhereConstraints = layout.whereConstraints
  
  		// A TYPE's own declaration carries no extension clause; the extension half is the extension's alone.
@@ -11373,7 +11373,7 @@ index f6e0863..9fd753b 100644
  	end 'installDeclaringTypeScope'
  
  	// ⭐ **THE NAME AND THE TIER — the ONLY two things a parameter default's helper and a field default's
-@@ -35226,7 +35226,7 @@ export type Parser
+@@ -35234,7 +35234,7 @@ export type Parser
  		self.publishExistentialInstances(helper)
  		self.fileDeferredProvenance(helper)
  		self.publishDebugLocals(helper)
@@ -11382,7 +11382,7 @@ index f6e0863..9fd753b 100644
  		self.commitRangeChecks(helperName)
  	end 'parseDefaultHelperBody'
  
-@@ -35264,7 +35264,7 @@ export type Parser
+@@ -35272,7 +35272,7 @@ export type Parser
  		// leaves the declaring function's pair standing (see `parseClosureExpression`).
  		self.beginDeclaredBody((helperParamCount + layoutReserve) as ValueId, returnSpelling: EmptySourceText, returnBrand: EmptySourceText, mayReturnAGlobalAlias: self.functionMayReturnAGlobalAlias(helperName), returnAlias: self.rangedReturnAlias(returnType), paramSites: sharedEmptyParamSites, layoutParam: layoutParamOf(mayCarryALayoutDescriptor, paramCount: helperParamCount + layoutReserve), countParam: fixedElementCountParamOf(needsCountParam, paramCount: helperParamCount, witnessParamCount: 0), nascentSelfFactory: false, kind: EnclosingBodyKind.declaredFunction, witnessParamBase: 0, witnessParamCount: 0)
  
@@ -11391,7 +11391,7 @@ index f6e0863..9fd753b 100644
  
  		// The tier the OWNER decided (`parseDefaultHelper`), which is the one fact about a helper that is not
  		// the same for both doors: a parameter's is reachable from every file, a field's from exactly one.
-@@ -35341,7 +35341,7 @@ export type Parser
+@@ -35349,7 +35349,7 @@ export type Parser
  
  	function bindParameters(func IrFunction, consume CalleeConsume, paramNames NameRoster, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray, paramTypeStarts TokenIndexArray) throws SourceParseError
  		if not isLiftedClosureName(func.name) 'aDeclaredBody'
@@ -11400,7 +11400,7 @@ index f6e0863..9fd753b 100644
  		end 'aDeclaredBody'
  
  		for i in 0 upto paramNames.count() 'eachParam'
-@@ -36071,12 +36071,12 @@ export type Parser
+@@ -36079,12 +36079,12 @@ export type Parser
  
  		try self.consume(TokenKind.implements)
  
@@ -11415,7 +11415,7 @@ index f6e0863..9fd753b 100644
  
  		while true 'moreInterfaces'
  			let nameTok = try self.consumeConformedInterfaceName()
-@@ -36087,8 +36087,8 @@ export type Parser
+@@ -36095,8 +36095,8 @@ export type Parser
  
  				// Read BEFORE the arguments, because the reader consumes the `(` that is the answer.
  				let delimited = self.at(TokenKind.leftParen)
@@ -11426,7 +11426,7 @@ index f6e0863..9fd753b 100644
  				_ = try self.parseConformanceWithArgs(nameTok.value, spellings: spellings, types: types)
  				bindings.push(ConformanceBinding.create(spellings, types: types))
  
-@@ -37244,7 +37244,7 @@ export type Parser
+@@ -37252,7 +37252,7 @@ export type Parser
  	// rewrite for one function's parameters, done ONCE after they are parsed so every downstream reader
  	// (the value-tag seeding, the binding types, the recorded signature) sees the same resolved list.
  	function resolveNamedStructAll(types MaxonTypeArray) returns MaxonTypeArray
@@ -11435,7 +11435,7 @@ index f6e0863..9fd753b 100644
  
  		for t in types 'each'
  			resolved.push(resolveNamedStruct(t, typeNames: self.artifact.typeNames, signatures: self.signatures, scopeFilePath: self.job.path))
-@@ -39027,7 +39027,7 @@ export type Parser
+@@ -39035,7 +39035,7 @@ export type Parser
  	// wanted one name simply omits the parens.
  	function parseDestructuringNames(keywordTok Token) returns TokenArray throws SourceParseError
  		try self.consume(TokenKind.leftParen)
@@ -11444,7 +11444,7 @@ index f6e0863..9fd753b 100644
  
  		while not self.at(TokenKind.rightParen) 'collectNames'
  			let nameTok = try self.consume(TokenKind.identifier)
-@@ -39477,7 +39477,7 @@ export type Parser
+@@ -39485,7 +39485,7 @@ export type Parser
  	// IS a target's name and nothing else is one — a qualifier is a KEYWORD and a separator is a comma — so
  	// this is the walk in full, and the k-th identifier is the k-th tuple element's target.
  	function tupleAssignTargetIndices(openIndex ElementIndex, equalsIndex ElementIndex) returns TokenIndexArray
@@ -11453,7 +11453,7 @@ index f6e0863..9fd753b 100644
  		var i = openIndex + 1
  
  		while i < equalsIndex 'eachToken'
-@@ -39725,7 +39725,7 @@ export type Parser
+@@ -39733,7 +39733,7 @@ export type Parser
  		// `ParserAnchors.mutableVarShadowed`. The name index below carries a spelled state and is installed
  		// by its own door, so this guard speaks for the array alone.
  		if self.bodyState.mutableVarShadowed is self.anchors.mutableVarShadowed 'firstVarInThisFunction'
@@ -11462,7 +11462,7 @@ index f6e0863..9fd753b 100644
  		end 'firstVarInThisFunction'
  
  		self.bodyState.mutableVarShadowed.push(self.innermostMutableVar(binding.name))
-@@ -40377,7 +40377,7 @@ export type Parser
+@@ -40385,7 +40385,7 @@ export type Parser
  	// The ABI is unaffected: which parameters are addresses is `IrFunction.reassignedParamMask`'s answer, and
  	// the lowering reads that rather than a tag.
  	function allocateCell(declared MaxonType, range SourceRange) returns ValueId
@@ -11471,7 +11471,7 @@ index f6e0863..9fd753b 100644
  	end 'allocateCell'
  
  	// Move `value` into a freshly allocated cell and hand the cell back — the shared body of the two things
-@@ -42065,8 +42065,8 @@ export type Parser
+@@ -42073,8 +42073,8 @@ export type Parser
  	end 'publishDebugLocals'
  
  	function publishBrandOrigins(func IrFunction, byValue BrandOriginMap)
@@ -11482,7 +11482,7 @@ index f6e0863..9fd753b 100644
  
  		for (value, key) in byValue 'eachOrigin'
  			values.push(value)
-@@ -42321,7 +42321,7 @@ export type Parser
+@@ -42329,7 +42329,7 @@ export type Parser
  
  	// The body's sole-owner marks as a column of their own, sized to them, for the function that keeps them.
  	function mintedSoleColumn() returns BoolArray
@@ -11491,7 +11491,7 @@ index f6e0863..9fd753b 100644
  		column.reserve(self.bodyState.valueMintedSole.count())
  
  		for minted in self.bodyState.valueMintedSole 'eachValue'
-@@ -42360,7 +42360,7 @@ export type Parser
+@@ -42368,7 +42368,7 @@ export type Parser
  
  	// The container writes `writes` deferred, as `noteContainerWrite` would have filed them.
  	function spelledReceiverWrites(writes DeferredReceiverWrites) returns ReceiverWriteSiteArray
@@ -11500,7 +11500,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto writes.receivers.count() 'eachWrite'
  			let methodIndex = try writes.methodIndices.get(i) otherwise panic("spelledReceiverWrites: methodIndices.get OOB at {i} — the columns are pushed together")
-@@ -42374,7 +42374,7 @@ export type Parser
+@@ -42382,7 +42382,7 @@ export type Parser
  
  	// The write-throughs `writes` deferred, each place spelled as `noteWriteThroughAField` would have.
  	function spelledWriteThroughs(writes DeferredWriteThroughs) returns FieldWriteSiteArray
@@ -11509,7 +11509,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto writes.targets.count() 'eachWrite'
  			let place = self.tokenTextFrom(try writes.placeStarts.get(i) otherwise panic("spelledWriteThroughs: placeStarts.get OOB at {i} — the columns are pushed together"), endIndex: try writes.placeEnds.get(i) otherwise panic("spelledWriteThroughs: placeEnds.get OOB at {i} — the columns are pushed together")).toByteArray()
-@@ -43024,8 +43024,8 @@ export type Parser
+@@ -43032,8 +43032,8 @@ export type Parser
  			return sharedEmptyWrittenTypeNames
  		end 'aSignatureNoAuthorAudits'
  
@@ -11520,7 +11520,7 @@ index f6e0863..9fd753b 100644
  
  		for position in 0 upto paramNames.count() 'eachParam'
  			if not (try paramNames.get(position) otherwise panic("writtenSignatureTypeNames: paramNames.get OOB at {position} inside its own `upto` bound")).equals(SelfParamName) 'aWrittenParameterType'
-@@ -43336,7 +43336,7 @@ export type Parser
+@@ -43344,7 +43344,7 @@ export type Parser
  	// `erasedAggregateNameOf` folded over a parameter list — `FuncSignature.paramAggregateNames` for a
  	// declared function or a lifted closure, one entry per parameter and in lockstep with `paramTypes`.
  	function paramAggregateNamesOf(paramTypes MaxonTypeArray) returns NameRoster
@@ -11529,7 +11529,7 @@ index f6e0863..9fd753b 100644
  
  		for pt in paramTypes 'each'
  			names.push(self.erasedAggregateNameOf(pt))
-@@ -43371,7 +43371,7 @@ export type Parser
+@@ -43379,7 +43379,7 @@ export type Parser
  	end 'selfSpelledParamsOf'
  
  	function paramDeclaredNamesOf(paramNames NameRoster, paramTypes MaxonTypeArray, paramTypeStarts TokenIndexArray) returns NameRoster
@@ -11538,7 +11538,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto paramTypes.count() 'each'
  			let pt = try paramTypes.get(i) otherwise panic("paramDeclaredNamesOf: paramTypes.get OOB at {i} below the count just read from the same array")
-@@ -44642,7 +44642,7 @@ export type Parser
+@@ -44650,7 +44650,7 @@ export type Parser
  	// truncate leaves the ops running on the path that was supposed to lose them — a `+1` (or a whole arm) on
  	// both edges of a fork, which is a leak on one of them and no diagnostic on either.
  	function detachOpRefsAbove(block IrBlock, mark ElementIndex) returns OpIndexArray
@@ -11547,7 +11547,7 @@ index f6e0863..9fd753b 100644
  
  		for i in mark upto block.bodyOpCount() 'collect'
  			detached.push(try block.bodyOpAt(i) otherwise panic("detachOpRefsAbove: block {block.id} bodyOpAt OOB at {i}"))
-@@ -45291,7 +45291,7 @@ export type Parser
+@@ -45299,7 +45299,7 @@ export type Parser
  		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
  		self.emitIndirectStore(box, offset: UnionTagOffset, value: self.emitAddLiteral(status, addend: tagShift, anchor: anchor), storageType: MaxonType.integer, range: range)
  
@@ -11556,7 +11556,7 @@ index f6e0863..9fd753b 100644
  
  		for slot in 0 upto layout.maxPayloadArity() 'eachStagedWord'
  			self.requireSendErrorSlotMatchesRequest(sent, layout: layout, slot: slot)
-@@ -45490,7 +45490,7 @@ export type Parser
+@@ -45498,7 +45498,7 @@ export type Parser
  	// slot in that block's `blockArgs` indexes each incoming edge's `argIds` (recorded in lockstep — an edge
  	// exists in `branchEdges` iff its target carries block-args, so every edge into this block has one).
  	function phiIncomingValues(func IrFunction, phi ValueId) returns ValueIdArray
@@ -11565,7 +11565,7 @@ index f6e0863..9fd753b 100644
  
  		for blockRef in func.blockRefs 'eachBlock'
  			let block = try self.artifact.module.blocks.get(blockRef) otherwise panic("phiIncomingValues: blockRef from func.blockRefs not in module.blocks")
-@@ -45738,7 +45738,7 @@ export type Parser
+@@ -45746,7 +45746,7 @@ export type Parser
  	// Called BEFORE the edges' branches are emitted: each decref is appended to the edge block that owes it, and
  	// has to land ahead of that block's jump to the continuation.
  	function reconcileMovesAtTwoEdgeMerge(a IrBlock, markA MoveMark, b IrBlock, markB MoveMark, anchor Token)
@@ -11574,7 +11574,7 @@ index f6e0863..9fd753b 100644
  		moveEdges.push(ReachingMoveEdge.create(a, mark: markA))
  		moveEdges.push(ReachingMoveEdge.create(b, mark: markB))
  		self.reconcileMovesAtMerge(moveEdges, anchor: anchor)
-@@ -45932,12 +45932,12 @@ export type Parser
+@@ -45940,12 +45940,12 @@ export type Parser
  		// so the two edges are reconciled here as the fell-through form reconciles them.
  		self.reconcileMovesAtTwoEdgeMerge(okBlock, markA: entryMoveMark, b: errEnd, markB: self.captureMoveMark(), anchor: tryTok)
  
@@ -11589,7 +11589,7 @@ index f6e0863..9fd753b 100644
  		errArgs.push(errEdgeValue)
  		self.recordBranchEdge(errEnd, targetId: cont.id, argIds: errArgs)
  		self.emitBranch(errEnd, targetId: cont.id)
-@@ -46159,7 +46159,7 @@ export type Parser
+@@ -46167,7 +46167,7 @@ export type Parser
  		let ownedFloor = self.bodyState.ownedBindings.count()
  		let caught = self.recoverCaughtErrorValue(flag, errorType: errorType, anchor: anchor)
  
@@ -11598,7 +11598,7 @@ index f6e0863..9fd753b 100644
  		args.push(self.emitStringLiteral(TestProtocolWrapper.toByteArray(), range: range))
  		args.push(self.emitStringLiteral(TestProtocolSeparator.toByteArray(), range: range))
  		args.push(self.emitStringLiteral(self.signatures.shadowRoster().authorSpelledText(errorTypeName).toByteArray(), range: range))
-@@ -46201,9 +46201,9 @@ export type Parser
+@@ -46209,9 +46209,9 @@ export type Parser
  	// out of the very parts `parseStringInterpolation` builds a written one from, so the report and a
  	// `print("{e}")` in the same program cannot render one error two ways.
  	function emitCaughtErrorText(caught ValueId, anchor Token, range SourceRange) returns ValueId
@@ -11611,7 +11611,7 @@ index f6e0863..9fd753b 100644
  		try self.materializeInterpExpr(caught, exprTok: anchor, format: InterpFormat.plain, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range) otherwise panic("emitCaughtErrorText: interpolating a caught '{String.from(self.valueTypeName(caught))}' was refused, but the value is decoded from a declared error enum or union and rendered with no format specifier, so no interpolation refusal can apply to it")
  		return self.emitStringInterp(partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
  	end 'emitCaughtErrorText'
-@@ -46969,7 +46969,7 @@ export type Parser
+@@ -46977,7 +46977,7 @@ export type Parser
  			node.attachArgument(self.mintPhi(node.block, tag: ValueTypeTag.integer, nameId: UnnamedTypeId))
  		end 'eachSharedDropNode'
  
@@ -11620,7 +11620,7 @@ index f6e0863..9fd753b 100644
  
  		for k in 0 upto ctx.routedEdges.count() 'computeEach'
  			var edge = try ctx.routedEdges.get(k) otherwise panic("synthesizeErrorUnion: routedEdges.get OOB at {k} on a list walked to its own count")
-@@ -46997,8 +46997,8 @@ export type Parser
+@@ -47005,8 +47005,8 @@ export type Parser
  	// — the table, the ordering, the tag arithmetic — is one operation, and a second copy of it would be a
  	// `match e` arm selected by a table the other half did not build.
  	function fusedErrorUnionInfo(members TryBlockErrorMemberArray, fusedOrdinal ValueId) returns ErrorUnionInfo
@@ -11631,7 +11631,7 @@ index f6e0863..9fd753b 100644
  
  		for m in 0 upto members.count() 'eachMember'
  			let member = try members.get(m) otherwise panic("fusedErrorUnionInfo: members.get OOB at {m} on a list walked to its own count")
-@@ -47006,7 +47006,7 @@ export type Parser
+@@ -47014,7 +47014,7 @@ export type Parser
  			for i in 0 upto member.layout.caseCount() 'eachCase'
  				// `declaresRawValue: false` is the literal truth and not a default: this layout exists only to
  				// dispatch the fused `match` and no value is ever TYPED by it, so nothing can interpolate one.
@@ -11640,7 +11640,7 @@ index f6e0863..9fd753b 100644
  				caseMembers.push(member)
  			end 'eachCase'
  		end 'eachMember'
-@@ -47038,7 +47038,7 @@ export type Parser
+@@ -47046,7 +47046,7 @@ export type Parser
  	end 'sentReplyCaughtForm'
  
  	function sentReplyErrorMembers(messageName ByteArray, sendErrorName ByteArray) returns TryBlockErrorMemberArray
@@ -11649,7 +11649,7 @@ index f6e0863..9fd753b 100644
  		let sendLayout = self.requireRoutedErrorLayout(sendErrorName)
  		members.push(TryBlockErrorMember.create(sendErrorName, clause: ThrowsClause.throwing(String.from(sendErrorName)), isBoxed: sendLayout.carriesPayloads(), layout: sendLayout, placement: serviceSendErrorPlacement(sendLayout)))
  
-@@ -47432,7 +47432,7 @@ export type Parser
+@@ -47440,7 +47440,7 @@ export type Parser
  		end 'nothingWasHeld'
  
  		let covered = self.opProducingTheValue(claim.floor)
@@ -11658,7 +11658,7 @@ index f6e0863..9fd753b 100644
  
  		for i in claim.heldAwaitMark upto self.heldAwaits.count() 'eachHeldAwait'
  			let held = try self.heldAwaits.get(i) otherwise panic("closeClaim: heldAwaits.get OOB at {i} on a range walked to its own count")
-@@ -47673,7 +47673,7 @@ export type Parser
+@@ -47681,7 +47681,7 @@ export type Parser
  	// with nothing to report it. `parseWhileStatement` keeps its own edge list in one place
  	// (`loopHeaderArgs`) for the same reason.
  	function tryBlockErrorEdgeArgs(ctx TryBlockContext, flag ValueId) returns ValueIdArray
@@ -11667,7 +11667,7 @@ index f6e0863..9fd753b 100644
  		errArgs.push(flag)
  
  		for arg in self.edgeArgsFor(ctx.phiVars, preLoop: false) 'carried'
-@@ -47751,7 +47751,7 @@ export type Parser
+@@ -47759,7 +47759,7 @@ export type Parser
  			panic("routedThrowShape: a routed edge carries {errArgs.count()} values but the error block of '{String.from(ctx.label)}' holds {errBlock.blockArgs.count()} phis — the two are positional")
  		end 'argsAndPhisDisagree'
  
@@ -11676,7 +11676,7 @@ index f6e0863..9fd753b 100644
  
  		for arg in errBlock.blockArgs 'eachPhi'
  			slots.push(CarriedSlot.create(self.tagOf(arg.valueId), nameId: self.valueNameId(arg.valueId)))
-@@ -48186,7 +48186,7 @@ export type Parser
+@@ -48194,7 +48194,7 @@ export type Parser
  	end 'emitScopeReleasesInto'
  
  	function scopeReleasesAbove(floor ElementIndex, anchor Token) returns OwnedBindingPositionArray
@@ -11685,7 +11685,7 @@ index f6e0863..9fd753b 100644
  		var i = self.bodyState.ownedBindings.count()
  
  		while i > floor 'eachOwned'
-@@ -48564,7 +48564,7 @@ export type Parser
+@@ -48572,7 +48572,7 @@ export type Parser
  	end 'exitShapeOf'
  
  	function exitPayloadOf(exit FunctionExit, shape ExitShape) returns ValueIdArray
@@ -11694,7 +11694,7 @@ index f6e0863..9fd753b 100644
  
  		if exitShapeCarriesAWitness(shape) 'anExistential'
  			return twoArgs(value, second: self.witnessOfValue(value))
-@@ -48633,11 +48633,11 @@ export type Parser
+@@ -48641,11 +48641,11 @@ export type Parser
  			return ExitRoute.flagged(first, entry: self.skipChainEntry(chain, rank: count - 1, anchor: anchor), lanes: self.laneValuesThrough(chain, rank: count - 1), skip: rank)
  		end 'sharedSkipChain'
  
@@ -11708,7 +11708,7 @@ index f6e0863..9fd753b 100644
  
  		for index in 0 upto chain.laneCount() 'eachLane'
  			let laneRank = chain.laneRankAt(index)
-@@ -48652,7 +48652,7 @@ export type Parser
+@@ -48660,7 +48660,7 @@ export type Parser
  	end 'laneSlotsThrough'
  
  	function laneValuesThrough(chain ReleaseChain, rank ElementIndex) returns ValueIdArray
@@ -11717,7 +11717,7 @@ index f6e0863..9fd753b 100644
  
  		for index in 0 upto chain.laneCount() 'eachLane'
  			let laneRank = chain.laneRankAt(index)
-@@ -48691,7 +48691,7 @@ export type Parser
+@@ -48699,7 +48699,7 @@ export type Parser
  
  	function extendEntries(chain ReleaseChain, built ElementIndex, through ElementIndex, anchor Token)
  		let below = self.chainEntry(chain, rank: built, anchor: anchor)
@@ -11726,7 +11726,7 @@ index f6e0863..9fd753b 100644
  		var next = through
  
  		while next > built 'eachNewRank'
-@@ -48710,7 +48710,7 @@ export type Parser
+@@ -48718,7 +48718,7 @@ export type Parser
  
  	function exclusionSegmentEntry(chain ReleaseChain, excludedRank ElementIndex, anchor Token) returns BlockId
  		let below = self.chainEntry(chain, rank: excludedRank - 1, anchor: anchor)
@@ -11735,7 +11735,7 @@ index f6e0863..9fd753b 100644
  		var rank = chain.releasableCount() - 1
  
  		while rank > excludedRank 'eachRankAbove'
-@@ -48730,7 +48730,7 @@ export type Parser
+@@ -48738,7 +48738,7 @@ export type Parser
  	// (`opLiesBetween`). A chain's debug span is chosen apart from it, in `LowerMaxonToStd`.
  	function materializeNodes(chain ReleaseChain, ranks ReleasableRankColumn, below BlockId, anchor Token) returns BlockIdArray
  		var cascade = self.dropCascade()
@@ -11744,7 +11744,7 @@ index f6e0863..9fd753b 100644
  		var successor = below
  		var pending = ranks.count()
  
-@@ -48742,7 +48742,7 @@ export type Parser
+@@ -48750,7 +48750,7 @@ export type Parser
  		end 'sharedSuffix'
  
  		var func = self.bodyFunction()
@@ -11753,7 +11753,7 @@ index f6e0863..9fd753b 100644
  
  		for _ in 0 upto pending 'eachNewNode'
  			fresh.push(self.artifact.module.addBlock(func, label: DropCascadeNodeLabel, heat: BlockHeat.normal, role: BlockRole.exitChain))
-@@ -48759,7 +48759,7 @@ export type Parser
+@@ -48767,7 +48767,7 @@ export type Parser
  			self.emitDropNode(block, chain: chain, rank: try ranks.get(index) otherwise panic("materializeNodes: ranks.get OOB at {index} below its own count"), successor: nextId, cascade: cascade, anchor: anchor)
  		end 'eachNewNodeInExecutionOrder'
  
@@ -11762,7 +11762,7 @@ index f6e0863..9fd753b 100644
  
  		for block in fresh 'eachFresh'
  			nodes.push(block.id)
-@@ -48811,8 +48811,8 @@ export type Parser
+@@ -48819,8 +48819,8 @@ export type Parser
  		end 'allShared'
  
  		var func = self.bodyFunction()
@@ -11773,7 +11773,7 @@ index f6e0863..9fd753b 100644
  
  		for _ in next to through 'eachNewRankInExecutionOrder'
  			tests.push(self.artifact.module.addBlock(func, label: SkipTestNodeLabel, heat: BlockHeat.normal, role: BlockRole.exitChain))
-@@ -48861,12 +48861,12 @@ export type Parser
+@@ -48869,12 +48869,12 @@ export type Parser
  		chain.noteSkipEntry(test.id)
  		cascade.noteNode(self.nodeKeyOf(chain, rank: rank, role: ChainNodeRole.skipTest), exitShape: chain.shape, context: chain.context, successor: skipBelow, alternate: plainBelow, blockId: test.id)
  
@@ -11788,7 +11788,7 @@ index f6e0863..9fd753b 100644
  		dropEdges.push(afterDrop)
  		self.noteRoutedBlock(cascade, shape: chain.shape, block: drop, edges: dropEdges)
  	end 'emitSkipNode'
-@@ -48879,7 +48879,7 @@ export type Parser
+@@ -48887,7 +48887,7 @@ export type Parser
  	end 'noteRoutedBlock'
  
  	function mintLanePhis(block IrBlock, chain ReleaseChain, through ElementIndex) returns ValueIdArray
@@ -11797,7 +11797,7 @@ index f6e0863..9fd753b 100644
  
  		for slot in self.laneSlotsThrough(chain, rank: through) 'eachLane'
  			phis.push(self.mintPhi(block, tag: slot.tag, nameId: slot.nameId))
-@@ -48934,7 +48934,7 @@ export type Parser
+@@ -48942,7 +48942,7 @@ export type Parser
  		self.emitChainJump(block, target: successor, edgeArgs: onward, range: SourceRange.ofToken(anchor))
  		cascade.noteNode(self.nodeKeyOf(chain, rank: rank, role: ChainNodeRole.drop), exitShape: chain.shape, context: chain.context, successor: successor, alternate: successor, blockId: block.id)
  
@@ -11806,7 +11806,7 @@ index f6e0863..9fd753b 100644
  		edges.push(onward)
  		self.noteRoutedBlock(cascade, shape: chain.shape, block: block, edges: edges)
  	end 'emitDropNode'
-@@ -48974,7 +48974,7 @@ export type Parser
+@@ -48982,7 +48982,7 @@ export type Parser
  	end 'mintFunctionExitPhis'
  
  	function mintExitPhis(block IrBlock, shape ExitShape) returns ValueIdArray
@@ -11815,7 +11815,7 @@ index f6e0863..9fd753b 100644
  
  		match shape 'which'
  			functionExit(kind, tag, nameId) then self.mintFunctionExitPhis(block, kind: kind, tag: tag, nameId: nameId, into: phis)
-@@ -49054,7 +49054,7 @@ export type Parser
+@@ -49062,7 +49062,7 @@ export type Parser
  	end 'noteHeaderDrop'
  
  	function opResultsSince(firstOp ElementIndex) returns ValueIdArray
@@ -11824,7 +11824,7 @@ index f6e0863..9fd753b 100644
  
  		for opIndex in firstOp upto self.artifact.module.ops.count() 'eachOp'
  			let op = try self.artifact.module.ops.get(opIndex) otherwise panic("opResultsSince: ops.get OOB at {opIndex} below the count just read")
-@@ -49199,9 +49199,9 @@ export type Parser
+@@ -49207,9 +49207,9 @@ export type Parser
  			return self.bodyState.moveLedger.live
  		end 'nothingChangedSinceTheLastSnapshot'
  
@@ -11837,7 +11837,7 @@ index f6e0863..9fd753b 100644
  
  		for position in positions 'eachPosition'
  			view binding = try self.bodyState.ownedBindings.get(position) otherwise panic("syncedMoveSlots: ownedBindings.get OOB at {position}")
-@@ -49351,7 +49351,7 @@ export type Parser
+@@ -49359,7 +49359,7 @@ export type Parser
  		if anyEdgeConsumed or self.bodyState.promiseConsumes.count() > 0 'consumeStateToSettle'
  			// A FRESH private list, for `sharedEmptyPromiseConsumes`' hard invariant: whatever lands in
  			// `promiseConsumes` is pushed into and unioned into later, so it may never be a mark's array.
@@ -11846,7 +11846,7 @@ index f6e0863..9fd753b 100644
  
  			for edge in edges 'eachEdgesConsumes'
  				unionPromiseConsumes(settled, from: edge.mark.consumes)
-@@ -49363,7 +49363,7 @@ export type Parser
+@@ -49371,7 +49371,7 @@ export type Parser
  
  	function positionsToReconcile(edges ReachingMoveEdgeArray) returns MoveSlotIndexColumn
  		let first = try edges.get(0) otherwise panic("positionsToReconcile: a merge is reconciled only with a reaching edge")
@@ -11855,7 +11855,7 @@ index f6e0863..9fd753b 100644
  
  		for edge in edges 'eachEdge'
  			positions.append(positionsThatMayDiffer(first.mark, b: edge.mark))
-@@ -49793,7 +49793,7 @@ export type Parser
+@@ -49801,7 +49801,7 @@ export type Parser
  	end 'emitBoxAlloc'
  
  	function emitBoxAllocWithDestructor(size ValueId, destructor ValueId, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange, tag MmTag) returns ValueId
@@ -11864,7 +11864,7 @@ index f6e0863..9fd753b 100644
  		allocArgs.push(size)
  		allocArgs.push(destructor)
  
-@@ -50139,7 +50139,7 @@ export type Parser
+@@ -50147,7 +50147,7 @@ export type Parser
  	// value is normally the last one pushed (a binding's initializer is the statement's final expression),
  	// keying on identity rather than position is what stays correct if that ever stops holding.
  	function removeFromPendingTemps(value ValueId)
@@ -11873,7 +11873,7 @@ index f6e0863..9fd753b 100644
  
  		for pending in self.bodyState.pendingTempDrops 'each'
  			if pending != value 'notTransferred'
-@@ -50159,8 +50159,8 @@ export type Parser
+@@ -50167,8 +50167,8 @@ export type Parser
  	// runs. The handed-off values themselves stay pending: their doors move them. So does a hold on a
  	// handed-off operand (`HoldPolicy.survivesTheHandOff`), because the transfer reads it after this release.
  	function releaseHandOffBuildTemps(tempFloor ElementIndex, ownedFloor ElementIndex, handedOff ValueIdArray, anchor Token)
@@ -11884,7 +11884,7 @@ index f6e0863..9fd753b 100644
  
  		for (iter, pending) in self.bodyState.pendingTempDrops.withIterator() 'each'
  			if iter.index() < tempFloor or handedOff.contains(pending) or self.holdKindOf(pending).has(HoldPolicy.survivesTheHandOff) 'stillOwed'
-@@ -50676,7 +50676,7 @@ export type Parser
+@@ -50684,7 +50684,7 @@ export type Parser
  	end 'emitSlotVacate'
  
  	function emitVacateCall(callee ByteArray, container ValueId, index ValueId, read ValueId, range SourceRange)
@@ -11893,7 +11893,7 @@ index f6e0863..9fd753b 100644
  		args.push(container)
  		args.push(index)
  		args.push(read)
-@@ -50717,7 +50717,7 @@ export type Parser
+@@ -50725,7 +50725,7 @@ export type Parser
  	end 'retireEveryPendingReadOfSlot'
  
  	function pendingReadsOfSlot(container ValueId, index ValueId) returns ValueIdArray
@@ -11902,7 +11902,7 @@ index f6e0863..9fd753b 100644
  
  		for position in 0 upto self.bodyState.promiseSlotCarriers.count() 'eachCarrier'
  			let other = try self.bodyState.promiseSlotCarriers.get(position) otherwise panic("pendingReadsOfSlot: promiseSlotCarriers.get OOB at {position} on a walk bounded by its own count")
-@@ -50923,9 +50923,9 @@ export type Parser
+@@ -50931,9 +50931,9 @@ export type Parser
  	// `resultTag` is threaded from here rather than fixed at the encoder because the encoder has a second
  	// caller (`parseStringInterpolation`) whose result genuinely IS a String.
  	function promoteToOwnedString(source ValueId, range SourceRange) returns ValueId
@@ -11915,7 +11915,7 @@ index f6e0863..9fd753b 100644
  		self.materializeStringRecordPart(source, partBufs: partBufs, partLens: partLens, range: range)
  		return self.emitStringInterp(partBufs, partLens: partLens, scratchIds: scratchIds, range: range, resultTag: self.tagOf(source))
  	end 'promoteToOwnedString'
-@@ -51444,7 +51444,7 @@ export type Parser
+@@ -51452,7 +51452,7 @@ export type Parser
  			return
  		end 'nothingWasRead'
  
@@ -11924,7 +11924,7 @@ index f6e0863..9fd753b 100644
  
  		for opIdx in window 'eachDetachedOp'
  			view detached = try self.artifact.module.ops.get(opIdx) otherwise panic("deferReadsSince: ops.get OOB at {opIdx}")
-@@ -51496,7 +51496,7 @@ export type Parser
+@@ -51504,7 +51504,7 @@ export type Parser
  	end 'positionOfLateRead'
  
  	function attachLateReadsOf(block IrBlock, op MaxonOp)
@@ -11933,7 +11933,7 @@ index f6e0863..9fd753b 100644
  		maxonOpOperandValues(op, into: operands)
  		self.attachLateReadsFor(block, values: operands)
  	end 'attachLateReadsOf'
-@@ -51962,13 +51962,13 @@ export type Parser
+@@ -51970,13 +51970,13 @@ export type Parser
  	// reading a pointer-shaped word where a `ValueId` belonged) — and the list is empty for almost every
  	// `try`, so the copy is a `create()` and nothing else.
  	function takeForkTemps() returns ValueIdArray
@@ -11949,7 +11949,7 @@ index f6e0863..9fd753b 100644
  		return taken
  	end 'takeForkTemps'
  
-@@ -52016,7 +52016,7 @@ export type Parser
+@@ -52024,7 +52024,7 @@ export type Parser
  			return
  		end 'nothingToHandBack'
  
@@ -11958,7 +11958,7 @@ index f6e0863..9fd753b 100644
  
  		for temp in forkTemps 'builtBeforeTheFork'
  			merged.push(temp)
-@@ -52095,7 +52095,7 @@ export type Parser
+@@ -52103,7 +52103,7 @@ export type Parser
  			return self.noForkTemps
  		end 'plainCondition'
  
@@ -11967,7 +11967,7 @@ index f6e0863..9fd753b 100644
  		var i = floor
  
  		while i < self.bodyState.pendingTempDrops.count() 'collect'
-@@ -53083,8 +53083,8 @@ export type Parser
+@@ -53091,8 +53091,8 @@ export type Parser
  		self.assertSnapshotAligned(bindings, snapshot: valsA, site: "mergeAtContinuation/valsA")
  		self.assertSnapshotAligned(bindings, snapshot: valsB, site: "mergeAtContinuation/valsB")
  
@@ -11978,7 +11978,7 @@ index f6e0863..9fd753b 100644
  
  		for k in 0 upto bindings.count() 'eachVar'
  			var binding = try bindings.get(k) otherwise panic("mergeAtContinuation: bindings.get OOB at {k}")
-@@ -53331,7 +53331,7 @@ export type Parser
+@@ -53339,7 +53339,7 @@ export type Parser
  	// they are installed only for the HANDLER, which is the block those phis dominate. One mint, two install
  	// points, and the positional contract `edgeArgsFor` depends on is written down once.
  	function mintCarriedPhis(block IrBlock, carried VarInfoArray) returns LoopPhiVarArray
@@ -11987,7 +11987,7 @@ index f6e0863..9fd753b 100644
  
  		for k in 0 upto carried.count() 'mkPhi'
  			var binding = try carried.get(k) otherwise panic("mintCarriedPhis: carried.get OOB at {k}")
-@@ -54281,7 +54281,7 @@ export type Parser
+@@ -54289,7 +54289,7 @@ export type Parser
  
  		// The empty block carries no binding: every carried value it needs is supplied on ITS edge into the
  		// join, straight from the pre-loop set, because nothing between here and there can have assigned one.
@@ -11996,7 +11996,7 @@ index f6e0863..9fd753b 100644
  		self.emitCondBranch(self.bodyState.currentBlock, cond: gotCursor, thenId: header.id, elseId: empty.id, ifTok: forTok)
  		return empty
  	end 'emitEmptyIterableEntry'
-@@ -54310,7 +54310,7 @@ export type Parser
+@@ -54318,7 +54318,7 @@ export type Parser
  
  		// Collected BEFORE the phis are minted, because minting rebinds each binding to its phi and the exit
  		// edge must carry what the binding held on the way OUT of the loop.
@@ -12005,7 +12005,7 @@ index f6e0863..9fd753b 100644
  
  		for k in 0 upto phiVars.count() 'exitEdge'
  			view pv = try phiVars.get(k) otherwise panic("joinAfterEmptyIterable: phiVars.get OOB at {k}")
-@@ -54345,7 +54345,7 @@ export type Parser
+@@ -54353,7 +54353,7 @@ export type Parser
  
  		let nameTok = try self.consume(TokenKind.identifier)
  		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
@@ -12014,7 +12014,7 @@ index f6e0863..9fd753b 100644
  		names.push(nameTok)
  		return names
  	end 'parseLoopVariablePattern'
-@@ -54450,7 +54450,7 @@ export type Parser
+@@ -54458,7 +54458,7 @@ export type Parser
  			return GenericArgQualifier.plain
  		end 'anotherValue'
  
@@ -12023,7 +12023,7 @@ index f6e0863..9fd753b 100644
  		maxonOpOperandValues(op, into: operands)
  		let receiver = try operands.get(0) otherwise return GenericArgQualifier.plain
  
-@@ -54661,7 +54661,7 @@ export type Parser
+@@ -54669,7 +54669,7 @@ export type Parser
  	// block-arg 0 — see `parseForStatement`), then one slot per carried binding. Both edges that name
  	// the header go through here, so the index can never end up in a different slot on one of them.
  	function loopHeaderArgs(indexValue ValueId, carried ValueIdArray) returns ValueIdArray
@@ -12032,7 +12032,7 @@ index f6e0863..9fd753b 100644
  		vals.push(indexValue)
  
  		for v in carried 'each'
-@@ -55038,7 +55038,7 @@ export type Parser
+@@ -55046,7 +55046,7 @@ export type Parser
  	// a receiver came through may not change what the answer IS.
  	function witnessProtocolTarget(receiver ValueId, methodName ByteArray, anchor Token) returns WitnessProtocolTarget throws SourceParseError
  		let candidates = try self.findWitnessDispatchCandidates(receiver, methodName: methodName, errorTok: anchor)
@@ -12041,7 +12041,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto candidates.count() 'eachCandidate'
  			let candidate = try candidates.get(i) otherwise panic("witnessProtocolTarget: candidates.get OOB at {i} below count {candidates.count()}")
-@@ -55903,11 +55903,11 @@ export type Parser
+@@ -55911,11 +55911,11 @@ export type Parser
  	module function takeBlockExtents() returns BlockExtents
  		self.buildBlockExtentIndex()
  		view movedExtentEnds = self.blockExtentEnds
@@ -12056,7 +12056,7 @@ index f6e0863..9fd753b 100644
  		return BlockExtents.create(self.tokens, extentEnds: movedExtentEnds, keywordNames: movedKeywordNames, declaredNameKeywords: movedDeclaredNames)
  	end 'takeBlockExtents'
  
-@@ -55953,13 +55953,13 @@ export type Parser
+@@ -55961,13 +55961,13 @@ export type Parser
  			// token stream. `matchingEndOf` panics on a zero rather than inventing an extent.
  			// ALL THREE OUTPUTS ARE INSTALLED BEFORE THE WALK, AND THE WALK WRITES THROUGH `self` — see the
  			// re-entrancy paragraph above.
@@ -12074,7 +12074,7 @@ index f6e0863..9fd753b 100644
  
  			// The token past the last parameter list already recorded, which is what keeps
  			// `declaredNameKeywords` ascending (see `recordDeclaredNamesAt`).
-@@ -56140,7 +56140,7 @@ export type Parser
+@@ -56148,7 +56148,7 @@ export type Parser
  			return
  		end 'noBreak'
  
@@ -12083,7 +12083,7 @@ index f6e0863..9fd753b 100644
  
  		for k in 0 upto ctx.phiVars.count() 'mkExitPhi'
  			var pv = try ctx.phiVars.get(k) otherwise panic("wireLoopExit: phiVars.get OOB at {k}")
-@@ -56197,7 +56197,7 @@ export type Parser
+@@ -56205,7 +56205,7 @@ export type Parser
  			return FinishedLoop.create(falseSource, scan: scan)
  		end 'onlyTheConditionLeaves'
  
@@ -12092,7 +12092,7 @@ index f6e0863..9fd753b 100644
  
  		for breakEdge in scan.breakEdges 'eachBreak'
  			edges.push(ReachingMoveEdge.create(breakEdge.block, mark: self.loopExitEdgeMark(breakEdge.mark, scan: scan, movedAtTheHeader: movedAtTheHeader, touched: touched)))
-@@ -56211,7 +56211,7 @@ export type Parser
+@@ -56219,7 +56219,7 @@ export type Parser
  
  	function loopTouchedPositions(scan LoopMoveScan) returns MoveSlotIndexColumn
  		let entry = scan.entryMark
@@ -12101,7 +12101,7 @@ index f6e0863..9fd753b 100644
  
  		for back in scan.backEdges 'eachBackEdge'
  			edges.push(back.mark.slots)
-@@ -56223,7 +56223,7 @@ export type Parser
+@@ -56231,7 +56231,7 @@ export type Parser
  			edges.push(breakEdge.mark.slots)
  		end 'eachBreakEdge'
  
@@ -12110,7 +12110,7 @@ index f6e0863..9fd753b 100644
  
  		for outer in self.bodyState.loopScans 'eachEnclosingLoop'
  			enclosing.push(outer.entryMark.slots)
-@@ -56326,7 +56326,7 @@ export type Parser
+@@ -56334,7 +56334,7 @@ export type Parser
  	end 'refuseCellTakesRootedAt'
  
  	function recordCellTakeInEnclosingLoops(epoch ValueId, refusedFrom CellOccupantExclusivity, refusal SourceParseError)
@@ -12119,7 +12119,7 @@ index f6e0863..9fd753b 100644
  
  		for scan in self.bodyState.loopScans 'eachLoop'
  			roots.push(try scan.cellEpochRootOf(epoch) otherwise continue)
-@@ -56546,7 +56546,7 @@ export type Parser
+@@ -56554,7 +56554,7 @@ export type Parser
  	end 'loopBlockAt'
  
  	function withdrawDropsOf(func IrFunction, scan LoopMoveScan, dependents HeaderDependents)
@@ -12128,7 +12128,7 @@ index f6e0863..9fd753b 100644
  
  		for drop in scan.headerDrops 'eachDrop'
  			if dependents.holds(drop.value) 'dropsADependent'
-@@ -56729,10 +56729,10 @@ export type Parser
+@@ -56737,10 +56737,10 @@ export type Parser
  	end 'settleBackEdgeConsumes'
  
  	function loopExitEdgeMark(mark MoveMark, scan LoopMoveScan, movedAtTheHeader ValueMarkSet, touched MoveSlotIndexColumn) returns MoveMark
@@ -12143,7 +12143,7 @@ index f6e0863..9fd753b 100644
  		var consumes = copyPromiseConsumes(mark.consumes)
  
  		for back in scan.backEdges 'eachBackEdge'
-@@ -56781,10 +56781,10 @@ export type Parser
+@@ -56789,10 +56789,10 @@ export type Parser
  
  	function markOfASkippedLoop(scan LoopMoveScan, height ElementIndex) returns MoveMark
  		let prefix = moveMarkPrefix(scan.entryMark, height: height)
@@ -12158,7 +12158,7 @@ index f6e0863..9fd753b 100644
  
  		// Only a header phi's value differs from its entry value, and `droppedBeforeTheLoop` holds only phi
  		// entry values, so every binding no phi carries keeps its entry slot (`OwnedBindingIndex`'s
-@@ -57012,7 +57012,7 @@ export type Parser
+@@ -57020,7 +57020,7 @@ export type Parser
  	// `if`'s three merge snapshots (entry / then-exit / else-exit), positional over the
  	// statement's carried set (`assignedBindings`).
  	function snapshotBindings(bindings VarInfoArray) returns ValueIdArray
@@ -12167,7 +12167,7 @@ index f6e0863..9fd753b 100644
  
  		for binding in bindings 'each'
  			vals.push(binding.boundValue)
-@@ -57080,13 +57080,13 @@ export type Parser
+@@ -57088,13 +57088,13 @@ export type Parser
  		let mutableCount = self.bodyState.mutableVars.count()
  
  		if mutableCount == 0 'nothingToCarry'
@@ -12183,7 +12183,7 @@ index f6e0863..9fd753b 100644
  
  		if pastSite - firstSite <= mutableCount 'fewerWritesThanBindings'
  			for site in firstSite upto pastSite 'eachWrite'
-@@ -57104,7 +57104,7 @@ export type Parser
+@@ -57112,7 +57112,7 @@ export type Parser
  			end 'eachBinding'
  		end 'fewerBindingsThanWrites'
  
@@ -12192,7 +12192,7 @@ index f6e0863..9fd753b 100644
  
  		for k in 0 upto positions.count() 'each'
  			let position = try positions.get(k) otherwise panic("assignedBindingsIn: positions.get OOB at {k}")
-@@ -57139,8 +57139,8 @@ export type Parser
+@@ -57147,8 +57147,8 @@ export type Parser
  	// writes nothing. The `!= i` test keeps `tupleAssignTargetIndices`, which allocates, off every
  	// token that opens no tuple assignment.
  	function buildWriteSiteIndex() returns WriteSiteIndex
@@ -12203,7 +12203,7 @@ index f6e0863..9fd753b 100644
  		let count = self.tokens.count()
  		var i = 0 as ElementIndex
  
-@@ -57203,7 +57203,7 @@ export type Parser
+@@ -57211,7 +57211,7 @@ export type Parser
  	// entry per element, no filtering): a second copy that grew a filter would misalign one edge against
  	// the header's block-args, which is a silent miscompile rather than a compile error.
  	function edgeArgsFor(phiVars LoopPhiVarArray, preLoop bool) returns ValueIdArray
@@ -12212,7 +12212,7 @@ index f6e0863..9fd753b 100644
  
  		for pv in phiVars 'each'
  			let carried = pv.entryValue if preLoop else pv.binding.boundValue
-@@ -57392,11 +57392,11 @@ export type Parser
+@@ -57400,11 +57400,11 @@ export type Parser
  		var sawDefault = false
  		var prevFallthrough = false
  		var prevExitBlock = self.bodyState.currentBlock
@@ -12228,7 +12228,7 @@ index f6e0863..9fd753b 100644
  
  		// ⭐ ENUM vs SCALAR is decided ONCE, from the scrutinee's type. A `named(X)` scrutinee whose
  		// name is a declared enum/union takes the enum path — case-name patterns,
-@@ -57424,7 +57424,7 @@ export type Parser
+@@ -57432,7 +57432,7 @@ export type Parser
  		// One coverage bit per case, in declaration order — the enum twin of `seenValues`. Populated
  		// only for an enum match; a bare case marks its bit, a range marks the slice it covers, and a
  		// second mark on one bit is E2027. Its all-true state IS exhaustiveness.
@@ -12237,7 +12237,7 @@ index f6e0863..9fd753b 100644
  
  		if isEnumMatch 'initEnumCoverage'
  			view layout = requireEnumLayout(enumMatch)
-@@ -57559,13 +57559,13 @@ export type Parser
+@@ -57567,13 +57567,13 @@ export type Parser
  		// which single ownership refuses (E3102 on the next read of `currentTestBlock`) — the block is
  		// re-fetched at the one place the dispatch is emitted.
  		let dispatchEntryId = currentTestBlock.id
@@ -12253,7 +12253,7 @@ index f6e0863..9fd753b 100644
  		var planMissIsUnreachable = false
  
  		// ⭐ **`--coverage`: THIS CONSTRUCT BECOMES THE BRANCH THE ARMS BELOW GROUP UNDER.** Entered after the
-@@ -57665,7 +57665,7 @@ export type Parser
+@@ -57673,7 +57673,7 @@ export type Parser
  
  				if usePlan and defaultNeedsADispatchEdge 'defaultDropsOnTheDispatchEdge'
  					planMissBlockId = self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: defaultArrivedMoveMark, prevExit: prevExitBlock, targetId: planMissBlockId, edgeArgs: planMissArgs, anchor: defTok)
@@ -12262,7 +12262,7 @@ index f6e0863..9fd753b 100644
  				end 'defaultDropsOnTheDispatchEdge'
  
  				// ⭐ **A `default` IS AN ARM THE USER WROTE**, including the `default throws` / `default panic`
-@@ -57796,7 +57796,7 @@ export type Parser
+@@ -57804,7 +57804,7 @@ export type Parser
  				end 'scalarChainPattern'
  
  				var armArrivedMoveMark = self.emptyMoveMark
@@ -12271,7 +12271,7 @@ index f6e0863..9fd753b 100644
  
  				if prevFallthrough 'armIsFtTarget'
  					armArrivedMoveMark = self.captureMoveMark()
-@@ -57819,7 +57819,7 @@ export type Parser
+@@ -57827,7 +57827,7 @@ export type Parser
  
  						if armDropsOnItsDispatchEdge 'unionArmDropsOnItsDispatchEdge'
  							let edgeId = self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: armArrivedMoveMark, prevExit: prevExitBlock, targetId: entry.targetId, edgeArgs: entry.args, anchor: patternTok)
@@ -12280,7 +12280,7 @@ index f6e0863..9fd753b 100644
  						end 'unionArmDropsOnItsDispatchEdge' else 'unionArmDispatchedDirectly'
  							retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: entry.targetId, args: entry.args)
  						end 'unionArmDispatchedDirectly'
-@@ -57828,7 +57828,7 @@ export type Parser
+@@ -57836,7 +57836,7 @@ export type Parser
  					end 'errorUnionArmEntry' else 'dispatchIntoBody'
  						if armDropsOnItsDispatchEdge 'armDropsOnItsDispatchEdge'
  							let edgeId = self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: armArrivedMoveMark, prevExit: prevExitBlock, targetId: bodyBlock.id, edgeArgs: matchEdgeArgs, anchor: patternTok)
@@ -12289,7 +12289,7 @@ index f6e0863..9fd753b 100644
  						end 'armDropsOnItsDispatchEdge' else 'armDispatchedDirectly'
  							retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: bodyBlock.id, args: matchEdgeArgs)
  						end 'armDispatchedDirectly'
-@@ -58285,7 +58285,7 @@ export type Parser
+@@ -58293,7 +58293,7 @@ export type Parser
  					panic("parseArmBody: a `panic`/`throws` arm of a match expression left its block UNTERMINATED — `parseDivergingTerminalForm` terminates on both of its routes, and the merge below relies on it: an arm that reached the result phi carrying no `gives` value would leave the phi an operand short")
  				end 'divergentArmLeftControlLive'
  
@@ -12298,7 +12298,7 @@ index f6e0863..9fd753b 100644
  			end 'divergingArm'
  
  			try self.consume(TokenKind.gives)
-@@ -58350,7 +58350,7 @@ export type Parser
+@@ -58358,7 +58358,7 @@ export type Parser
  		try self.returnCheckedValue(func, expression: give, retStart: valueStart, anchor: anchor)
  		var returnedBlock = self.bodyState.currentBlock
  		try self.rejectStrayAndOnExpressionArm()
@@ -12307,7 +12307,7 @@ index f6e0863..9fd753b 100644
  	end 'returnedArmBody'
  
  	// ⭐ **`and fallthrough` IS MEANINGLESS ON EITHER SHAPE OF MATCH-EXPRESSION ARM, so the refusal is one
-@@ -58376,8 +58376,8 @@ export type Parser
+@@ -58384,8 +58384,8 @@ export type Parser
  	// the caller to record on the match edge (a regular arm's `condBranch` then-edge, or the
  	// default's fail edge).
  	function setupFallthroughTargetPhis(bodyBlock IrBlock, carried VarInfoArray, entryVals ValueIdArray, prevExitBlock IrBlock, prevExitVals ValueIdArray) returns ValueIdArray
@@ -12318,7 +12318,7 @@ index f6e0863..9fd753b 100644
  
  		for k in 0 upto carried.count() 'each'
  			var binding = try carried.get(k) otherwise panic("setupFallthroughTargetPhis: carried.get OOB at {k}")
-@@ -58563,7 +58563,7 @@ export type Parser
+@@ -58571,7 +58571,7 @@ export type Parser
  		// records nothing: its signature is unknown, and E3004 at its call explains the program.
  		if isExpression and not self.anArmGives(reachingArms, sought: SoughtGive.deferred) 'recordFnMergeCheck'
  			if self.tagOf(self.giveValueOf(firstArm.give)) == ValueTypeTag.function 'firstArmIsFunction'
@@ -12327,7 +12327,7 @@ index f6e0863..9fd753b 100644
  
  				for i in 0 upto reachingArms.count() 'collectArmNames'
  					view arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
-@@ -58582,7 +58582,7 @@ export type Parser
+@@ -58590,7 +58590,7 @@ export type Parser
  		// unconditionally. When no arm gives an owned value the phi stays borrowed. `finalGives` carries
  		// each reaching arm's post-promotion give value (empty for a statement match), used below for the
  		// phi and the edges.
@@ -12336,7 +12336,7 @@ index f6e0863..9fd753b 100644
  		let resultOwned = try self.resolveGivesOwnership(reachingArms, isExpression: isExpression, matchTok: matchTok, finalGives: finalGives)
  
  		// ⭐ **CONDITIONAL MOVE RECONCILED across the reaching arms** — an owned binding moved in one arm and
-@@ -58590,7 +58590,7 @@ export type Parser
+@@ -58598,7 +58598,7 @@ export type Parser
  		// and marked uniformly moved past the merge. Emitted BEFORE the branches so the decref lands in the
  		// arm's own body. A returning/breaking arm contributed no reaching entry, so it is not reconciled —
  		// it dropped its own live values on the way out.
@@ -12345,7 +12345,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto reachingArms.count() 'collectMoveEdges'
  			var arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
-@@ -58606,7 +58606,7 @@ export type Parser
+@@ -58614,7 +58614,7 @@ export type Parser
  		end 'branchToMerge'
  
  		// A carried var needs a merge phi iff its value is not identical across every reaching arm.
@@ -12354,7 +12354,7 @@ index f6e0863..9fd753b 100644
  
  		for k in 0 upto carried.count() 'eachVar'
  			let v0 = try firstArm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}")
-@@ -58733,7 +58733,7 @@ export type Parser
+@@ -58741,7 +58741,7 @@ export type Parser
  				let phiId = self.mintPhiForBinding(merge, binding: binding)
  				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: phiId, def: DebugVersionDef.definedIn(merge.id))
  				binding.setBoundValue(phiId, ledger: self.bodyState.moveLedger)
@@ -12363,7 +12363,7 @@ index f6e0863..9fd753b 100644
  
  				for i in 0 upto reachingArms.count() 'eachArm'
  					view arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
-@@ -58751,7 +58751,7 @@ export type Parser
+@@ -58759,7 +58759,7 @@ export type Parser
  		// Record each reaching arm's edge args, in the block-arg order minted above.
  		for i in 0 upto reachingArms.count() 'recordEdges'
  			var arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
@@ -12372,7 +12372,7 @@ index f6e0863..9fd753b 100644
  
  			if isExpression 'giveArg'
  				argIds.push(try finalGives.get(i) otherwise panic("finalizeMatchMerge: finalGives.get OOB at {i} — one entry per reaching arm"))
-@@ -59726,7 +59726,7 @@ export type Parser
+@@ -59734,7 +59734,7 @@ export type Parser
  		end 'rangeArm'
  
  		try self.recordDuplicateInt(lo, seenValues: seenValues, start: loStart, pastEnd: self.pos)
@@ -12381,7 +12381,7 @@ index f6e0863..9fd753b 100644
  	end 'collectScalarPatternAtom'
  
  	// Consume a range upper (`to`/`upto <literal|max>`) with the cursor at the keyword, and push the arm's
-@@ -59744,7 +59744,7 @@ export type Parser
+@@ -59752,7 +59752,7 @@ export type Parser
  		// the keyword), so `lo to/upto max` covers `[lo, i64.max]` and is never empty.
  		if self.isOpenBoundIdentifier(self.current(), marker: MaxBoundField) 'openUpper'
  			self.advance()
@@ -12390,7 +12390,7 @@ index f6e0863..9fd753b 100644
  			return
  		end 'openUpper'
  
-@@ -59764,7 +59764,7 @@ export type Parser
+@@ -59772,7 +59772,7 @@ export type Parser
  		end 'closedLowerBound'
  
  		let hi = (rawHi - 1) if isUpto else rawHi
@@ -12399,7 +12399,7 @@ index f6e0863..9fd753b 100644
  	end 'collectScalarRangeInterval'
  
  	// Decode a single scalar pattern LITERAL — an int (optionally negated), a character, or a bool — to
-@@ -59847,7 +59847,7 @@ export type Parser
+@@ -59855,7 +59855,7 @@ export type Parser
  
  	function takeDeferredPatternBindings() returns TokenArray
  		var taken = self.deferredPatternBindings
@@ -12408,7 +12408,7 @@ index f6e0863..9fd753b 100644
  
  		return taken
  	end 'takeDeferredPatternBindings'
-@@ -59951,7 +59951,7 @@ export type Parser
+@@ -59959,7 +59959,7 @@ export type Parser
  		let boxed = enumMatchIsDeclared(decl) and requireEnumLayout(decl).carriesPayloads()
  
  		if self.boxedUnionAnswers is self.anchors.boxedUnionAnswers 'firstAnswer'
@@ -12417,7 +12417,7 @@ index f6e0863..9fd753b 100644
  		end 'firstAnswer'
  
  		self.boxedUnionAnswers.growFilled(nameId + 1, value: BoxedUnionAnswer.unasked)
-@@ -59980,8 +59980,8 @@ export type Parser
+@@ -59988,8 +59988,8 @@ export type Parser
  	// ⭐ **A SYNTHESIZED ERROR UNION'S ARM IS PARSED HERE TOO** — only an alternative's resolution differs
  	// (`collectEnumPatternAlternative`), so the chain, the binding rules and the fold are one grammar for both.
  	function collectEnumPatternIntervals(table EnumArmTable, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray, intervalMark ElementIndex) returns EnumPatternArm throws SourceParseError
@@ -12428,7 +12428,7 @@ index f6e0863..9fd753b 100644
  		try self.collectEnumPatternAlternative(table, covered: covered, bodyBlockId: bodyBlockId, into: into, bindings: bindings, members: members)
  
  		while self.at(TokenKind.or) 'orChain'
-@@ -60078,7 +60078,7 @@ export type Parser
+@@ -60086,7 +60086,7 @@ export type Parser
  			_ = try into.pop() otherwise panic("foldEnumCaseRun: into.pop on a list whose count exceeds the mark")
  		end 'dropPoints'
  
@@ -12437,7 +12437,7 @@ index f6e0863..9fd753b 100644
  	end 'foldEnumCaseRun'
  
  	// Does one of the arm's own point intervals stand at `tag`? Asked only of tags inside the arm's span,
-@@ -60279,7 +60279,7 @@ export type Parser
+@@ -60287,7 +60287,7 @@ export type Parser
  
  		try self.markEnumCovered(covered, index: lowIndex, layout: layout, patternTok: patternTok)
  		let tag = self.dispatchTagOfIndex(layout, index: lowIndex)
@@ -12446,7 +12446,7 @@ index f6e0863..9fd753b 100644
  	end 'collectEnumPatternAtomIntervals'
  
  	// ⭐⭐ **ONE ALTERNATIVE OF AN ARM OF A MATCH ON A SYNTHESIZED ERROR UNION.** The union path's twin of
-@@ -60353,7 +60353,7 @@ export type Parser
+@@ -60361,7 +60361,7 @@ export type Parser
  		noteArmMember(members, member: member)
  		try self.markEnumCovered(covered, index: index, layout: info.layout, patternTok: caseTok)
  		let tag = info.layout.tagOfIndex(index)
@@ -12455,7 +12455,7 @@ index f6e0863..9fd753b 100644
  	end 'collectErrorUnionPatternAtom'
  
  	// `Member.case` — the fused index of that pair. Both halves are E3034 with their own sentences: a
-@@ -60487,7 +60487,7 @@ export type Parser
+@@ -60495,7 +60495,7 @@ export type Parser
  		var exit = self.emitErrorUnionBoxReleases(func, members: members, fused: fused, entry: entry, flag: flag, anchor: anchor)
  		self.recordBranchEdge(exit, targetId: body.id, argIds: edgeArgs)
  		self.emitBranch(exit, targetId: body.id)
@@ -12464,7 +12464,7 @@ index f6e0863..9fd753b 100644
  	end 'enterErrorUnionArm'
  
  	// The slice of the fused dispatch line this member owns — its own tag span, shifted by its offset, which
-@@ -60555,7 +60555,7 @@ export type Parser
+@@ -60563,7 +60563,7 @@ export type Parser
  	// `caseTok` is the ARM's case-name token, carried in for one reason: it is E3081's anchor (below).
  	function parseCasePayloadBindings(layout EnumLayout, caseIndex CaseIndex, caseTok Token) returns PayloadBindingArray throws SourceParseError
  		let payloads = layout.payloadsAt(caseIndex)
@@ -12473,7 +12473,7 @@ index f6e0863..9fd753b 100644
  
  		// Tracked as the list is read rather than re-walked afterwards — the loop already knows which arm
  		// each binding took.
-@@ -60605,7 +60605,7 @@ export type Parser
+@@ -60613,7 +60613,7 @@ export type Parser
  
  	function parseBindingNameList(checked CheckedBindingNames) returns TokenArray throws SourceParseError
  		try self.consume(TokenKind.leftParen)
@@ -12482,7 +12482,7 @@ index f6e0863..9fd753b 100644
  
  		while true 'eachName'
  			let nameTok = try self.consume(TokenKind.identifier)
-@@ -61037,7 +61037,7 @@ export type Parser
+@@ -61045,7 +61045,7 @@ export type Parser
  	// changes — an earlier-arm interval activating (at its `lo`) or the current owner ending (at its `hi`),
  	// the only two coordinates where ownership can change — which coalesces same-owner runs.
  	function normalizeDispatchIntervals(raw DispatchIntervalArray) returns DispatchIntervalArray
@@ -12491,7 +12491,7 @@ index f6e0863..9fd753b 100644
  		let n = raw.count()
  
  		if n == 0 'empty'
-@@ -61045,7 +61045,7 @@ export type Parser
+@@ -61053,7 +61053,7 @@ export type Parser
  		end 'empty'
  
  		let order = self.dispatchIntervalsSortedByLo(raw)
@@ -12500,7 +12500,7 @@ index f6e0863..9fd753b 100644
  
  		// `si` is the next not-yet-activated interval in `lo` order; `sweepPos` the coordinate whose owner we
  		// are currently deciding. A segment for `segOwner` is open over `[segStart, sweepPos-1]` while
-@@ -61180,13 +61180,13 @@ export type Parser
+@@ -61188,13 +61188,13 @@ export type Parser
  	// (it activates a whole equal-`lo` run before picking an owner), but it costs nothing and is tidy.
  	function dispatchIntervalsSortedByLo(raw DispatchIntervalArray) returns DispatchIndexArray
  		let n = raw.count()
@@ -12516,7 +12516,7 @@ index f6e0863..9fd753b 100644
  		scratch.growFilled(n, value: 0 as ElementIndex)
  		self.mergeSortDispatchIndices(raw, order: order, scratch: scratch, lo: 0, hi: n)
  		return order
-@@ -61442,7 +61442,7 @@ export type Parser
+@@ -61450,7 +61450,7 @@ export type Parser
  		// Every slot in `[min, max]` needs a target; the ones no interval covers are the default. An
  		// `or`-list simply fills several slots. `growFilled` from an empty array fills every one of `span`
  		// slots with the default.
@@ -12525,7 +12525,7 @@ index f6e0863..9fd753b 100644
  		targets.growFilled(plan.span as ElementIndex, value: miss.targetBlockId)
  
  		for i in from upto to 'eachInterval'
-@@ -61538,7 +61538,7 @@ export type Parser
+@@ -61546,7 +61546,7 @@ export type Parser
  			if not isLast 'moreTests'
  				nextId = self.artifact.module.addBlock(func, label: b"matchnext", heat: BlockHeat.normal).id
  				elseTarget = nextId
@@ -12534,7 +12534,7 @@ index f6e0863..9fd753b 100644
  			end 'moreTests'
  
  			self.recordBranchEdge(current, targetId: interval.targetBlockId, argIds: interval.edgeArgs)
-@@ -62480,8 +62480,8 @@ export type Parser
+@@ -62488,8 +62488,8 @@ export type Parser
  		end 'notInstrumenting'
  
  		if self.covMatchLines.count() == 0 'firstConstruct'
@@ -12545,7 +12545,7 @@ index f6e0863..9fd753b 100644
  		end 'firstConstruct'
  
  		self.covMatchLines.push(matchTok.line)
-@@ -62796,9 +62796,9 @@ export type Parser
+@@ -62804,9 +62804,9 @@ export type Parser
  		var savedTerminator = startBlock.terminator
  		var savedEdges = startBlock.branchEdges
  		startBlock.terminator = Terminator.unset
@@ -12557,7 +12557,7 @@ index f6e0863..9fd753b 100644
  
  		for i in markBlockRefCount upto func.blockRefs.count() 'collectBlocks'
  			armInnerBlockRefs.push(try func.blockRefs.get(i) otherwise panic("parseTernaryExpression: func.blockRefs.get OOB at {i}"))
-@@ -62906,11 +62906,11 @@ export type Parser
+@@ -62914,11 +62914,11 @@ export type Parser
  		// no carried vars; `finalizeMatchMerge` runs every give-agreement/ownership rule and mints the result
  		// phi and both edges. The ternary supplies only the branch out of the condition, emitted after so
  		// `condExit` is still open when the merge's per-arm reconciliation runs.
@@ -12573,7 +12573,7 @@ index f6e0863..9fd753b 100644
  		var outcome = try self.finalizeMatchMerge(func, matchTok: ifTok, carried: carried, reachingArms: reachingArms, construct: MergeConstruct.ternary)
  
  		self.emitCondBranch(condExit, cond: cond, thenId: trueBranch.id, elseId: falseBranch.id, ifTok: ifTok)
-@@ -64847,7 +64847,7 @@ export type Parser
+@@ -64855,7 +64855,7 @@ export type Parser
  	end 'storedSlotInstanceOf'
  
  	function storedSlotCandidates(func IrFunction, callee ByteArray, args ValueIdArray, argAnchors TokenIndexArray, argLabels NameRoster, receiver ReceiverArg, constructorInstance ConstructorInstance) returns StoredSlotArgArray
@@ -12582,7 +12582,7 @@ index f6e0863..9fd753b 100644
  		let declaration = try self.declarationNameableHere(callee) otherwise return candidates
  		let (instance, firstSource) = try self.storedSlotInstanceOf(args, receiver: receiver, constructorInstance: constructorInstance) otherwise return candidates
  
-@@ -65264,7 +65264,7 @@ export type Parser
+@@ -65272,7 +65272,7 @@ export type Parser
  	end 'parseModifyStatement'
  
  	function emitStrandGuard(callee ByteArray, range SourceRange)
@@ -12591,7 +12591,7 @@ index f6e0863..9fd753b 100644
  	end 'emitStrandGuard'
  
  	function openWindowCount() returns ElementIndex
-@@ -67157,7 +67157,7 @@ export type Parser
+@@ -67165,7 +67165,7 @@ export type Parser
  		let promotedDividend = self.promotedOperand(dividendNumber, left: leftTag, right: rightTag, opTok: opTok)
  		let promotedDivisor = self.promotedOperand(divisorNumber, left: leftTag, right: rightTag, opTok: opTok)
  
@@ -12600,7 +12600,7 @@ index f6e0863..9fd753b 100644
  		args.push(promotedDividend)
  		args.push(promotedDivisor)
  
-@@ -68659,7 +68659,7 @@ export type Parser
+@@ -68667,7 +68667,7 @@ export type Parser
  		// rather than a check applied to whichever candidate came first, which is strictly stronger: checked
  		// after the fact, a constraint declaring a non-protocol `equals` MASKS a genuinely `Equatable` constraint
  		// written after it, because the search stops at the first name match and then rejects it.
@@ -12609,7 +12609,7 @@ index f6e0863..9fd753b 100644
  		let candidates = try self.findWitnessDispatchCandidates(receiver, methodName: method.name, errorTok: opTok)
  
  		for i in 0 upto candidates.count() 'eachCandidate'
-@@ -68898,7 +68898,7 @@ export type Parser
+@@ -68906,7 +68906,7 @@ export type Parser
  	// Emit the `__str_eq(lhs, rhs)` runtime call, typed `boolean` (its i64 result is 0/1). The one
  	// caller-typed emit site for both `==` and `!=`, and for a `string`-scrutinee `match` pattern.
  	function emitStrEqCall(lhs ValueId, rhs ValueId, opTok Token) returns ValueId
@@ -12618,7 +12618,7 @@ index f6e0863..9fd753b 100644
  		args.push(lhs)
  		args.push(rhs)
  		return self.emitRuntimeCall(StrEqName, args: args, resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(opTok))
-@@ -69487,19 +69487,19 @@ export type Parser
+@@ -69495,19 +69495,19 @@ export type Parser
  	// A function value is the exception: it takes the column type a receiving slot declares
  	// (`declaredTupleColumnType`).
  	function parseTupleLiteral(func IrFunction, first ValueId, firstStart ElementIndex, openTok Token, target DeclaredTupleTarget) returns ValueId throws SourceParseError
@@ -12645,7 +12645,7 @@ index f6e0863..9fd753b 100644
  
  		if self.valueIsDeferred(first) 'aDeferredFirstElement'
  			return try self.deferredLiteralRest(func, entry: LiteralEntryShape.tupleElement)
-@@ -69612,10 +69612,10 @@ export type Parser
+@@ -69620,10 +69620,10 @@ export type Parser
  			throw SourceParseError.unsupported("an empty tuple type '()' (a tuple has at least {MinTupleArity} elements; a function that returns nothing simply omits its `returns` clause)", line: openTok.line, column: openTok.column)
  		end 'emptyTuple'
  
@@ -12659,7 +12659,7 @@ index f6e0863..9fd753b 100644
  		elements.push(try self.readTupleElementType(voice, brands: brands, sites: sites, capabilities: capabilities))
  
  		while self.at(TokenKind.comma) 'eachElement'
-@@ -69838,7 +69838,7 @@ export type Parser
+@@ -69846,7 +69846,7 @@ export type Parser
  			entries(recorded) then return recorded
  		end 'state'
  
@@ -12668,7 +12668,7 @@ index f6e0863..9fd753b 100644
  		self.declaredTypeAliases = DeferredNameDiagnosticRoster.entries(fresh)
  		return fresh
  	end 'declaredTypeAliasesForWrite'
-@@ -70504,14 +70504,14 @@ export type Parser
+@@ -70512,14 +70512,14 @@ export type Parser
  		let startTok = self.current()
  		let range = SourceRange.ofToken(startTok)
  
@@ -12687,7 +12687,7 @@ index f6e0863..9fd753b 100644
  
  		self.materializeFragmentBytes(prefix, partBufs: partBufs, partLens: partLens, range: range)
  		try self.materializeLiteralFragment(partBufs, partLens: partLens, range: range)
-@@ -70816,7 +70816,7 @@ export type Parser
+@@ -70824,7 +70824,7 @@ export type Parser
  	end 'pushFieldWidthArguments'
  
  	function materializeFloatToStringPart(exprVal ValueId, exprTok Token, format InterpFormat, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws SourceParseError
@@ -12696,7 +12696,7 @@ index f6e0863..9fd753b 100644
  		args.push(exprVal)
  
  		// The callee is spelled by `primitiveStaticCallee`, the ONE speller of a primitive's reserved-space
-@@ -70851,7 +70851,7 @@ export type Parser
+@@ -70859,7 +70859,7 @@ export type Parser
  	// (`emitRetaggedCastValue`, folded away at the Std tier) is the same bits under no name; an already
  	// unnamed value is passed as it is.
  	function materializeFormattedIntPart(exprVal ValueId, exprTok Token, format InterpFormatSpec, rendersUnsigned bool, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws SourceParseError
@@ -12705,7 +12705,7 @@ index f6e0863..9fd753b 100644
  		args.push(self.emitRetaggedCastValue(exprVal, targetType: MaxonType.integer, range: range) if self.tagOf(exprVal) == ValueTypeTag.named else exprVal)
  		args.push(self.emitLiteral(boolPayload(format.spellsASign and not rendersUnsigned), valueType: MaxonType.boolean, range: range))
  		args.push(self.emitLiteral(format.halfRadix as FullRangeInt, valueType: MaxonType.integer, range: range))
-@@ -70863,7 +70863,7 @@ export type Parser
+@@ -70871,7 +70871,7 @@ export type Parser
  	end 'materializeFormattedIntPart'
  
  	function materializeQuotedTextPart(exprVal ValueId, tag ValueTypeTag, spec InterpFormatSpec, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws SourceParseError
@@ -12714,7 +12714,7 @@ index f6e0863..9fd753b 100644
  		args.push(exprVal)
  		args.push(self.emitLiteral(spec.width as FullRangeInt, valueType: MaxonType.integer, range: range))
  
-@@ -70885,8 +70885,8 @@ export type Parser
+@@ -70893,8 +70893,8 @@ export type Parser
  	// what a compiler-minted call wants: these arguments have no author-written spelling to agree with,
  	// and binding them by NAME would couple this lowering to the parameter names `stdlib` happens to use.
  	function materializeCallPart(callee ByteArray, args ValueIdArray, mint CalleeMint, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws SourceParseError
@@ -12725,7 +12725,7 @@ index f6e0863..9fd753b 100644
  
  		for _ in 0 upto args.count() 'eachArg'
  			argLabels.push(EmptySourceText)
-@@ -70933,7 +70933,7 @@ export type Parser
+@@ -70941,7 +70941,7 @@ export type Parser
  
  		try self.requireImplicitMethodReachable(structName, methodName: ToStringMethodName, anchor: exprTok)
  
@@ -12734,7 +12734,7 @@ index f6e0863..9fd753b 100644
  		args.push(exprVal)
  
  		if let spec = try format.spec() 'aFormatSpec'
-@@ -70971,9 +70971,9 @@ export type Parser
+@@ -70979,9 +70979,9 @@ export type Parser
  	// ⚠ A format specifier is a property of an INTERPOLATION HOLE, and `x.toString()` is not one — the
  	// spelling that takes one is `x.toString(spec)`, a written call this lowering is not on the path of.
  	function emitValueToString(exprVal ValueId, exprTok Token, range SourceRange) returns ValueId throws SourceParseError
@@ -12747,7 +12747,7 @@ index f6e0863..9fd753b 100644
  		try self.materializeInterpExpr(exprVal, exprTok: exprTok, format: InterpFormat.plain, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
  		return self.emitStringInterp(partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
  	end 'emitValueToString'
-@@ -70994,7 +70994,7 @@ export type Parser
+@@ -71002,7 +71002,7 @@ export type Parser
  		let scratchSize = self.emitLiteral(scratchBytes, valueType: MaxonType.integer, range: range)
  		let scratch = self.emitBoxAlloc(scratchSize, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range, tag: MmTag.InterpolationScratch)
  
@@ -12756,7 +12756,7 @@ index f6e0863..9fd753b 100644
  		convArgs.push(exprVal)
  		convArgs.push(scratch)
  		let length = self.emitRuntimeCall(converter, args: convArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-@@ -71027,7 +71027,7 @@ export type Parser
+@@ -71035,7 +71035,7 @@ export type Parser
  		for i in 0 upto partBufs.count() 'copyParts'
  			let buf = try partBufs.get(i) otherwise panic("emitStringInterp: partBufs.get OOB at {i} — partBufs and partLens grow in lockstep")
  			let length = try partLens.get(i) otherwise panic("emitStringInterp: partLens.get OOB at {i} — partBufs and partLens grow in lockstep")
@@ -12765,7 +12765,7 @@ index f6e0863..9fd753b 100644
  			copyArgs.push(cursor)
  			copyArgs.push(buf)
  			copyArgs.push(length)
-@@ -71211,9 +71211,9 @@ export type Parser
+@@ -71219,9 +71219,9 @@ export type Parser
  		// unwritten slot into E3086 rather than into a zero nobody chose. `fieldBareLocal[i]` records
  		// whether the literal's value for field `i` was a bare reference to a local binding — what a
  		// managed field's move-in poisons (`moveInPayload`), captured here because only the parse can see it.
@@ -12778,7 +12778,7 @@ index f6e0863..9fd753b 100644
  
  		for _ in 0 upto layout.fieldCount() 'initSlots'
  			fieldValues.push(0 as ValueId)
-@@ -71265,7 +71265,7 @@ export type Parser
+@@ -71273,7 +71273,7 @@ export type Parser
  		// size. The declaration's `return Self{}` is unchanged, which is what lets the BOOTSTRAP compile the
  		// same corpus line — it has no `countof` and needs none, because the count is the literal's.
  		if self.signatures.declarationsValueIsTheManagedRecord(layout.name) and not (try filled.get(0) otherwise panic("parseStructLiteral: filled.get OOB at 0 — `declarationIsTheManagedRecord` established a sole field and the column is sized to the layout's field count")) 'theEmptyContainer'
@@ -12787,7 +12787,7 @@ index f6e0863..9fd753b 100644
  		end 'theEmptyContainer'
  
  		self.fillFromNascentSelfSlots(layout, fieldValues: fieldValues, filled: filled, fieldBareLocal: fieldBareLocal, anchor: lbraceTok)
-@@ -71295,7 +71295,7 @@ export type Parser
+@@ -71303,7 +71303,7 @@ export type Parser
  			return
  		end 'notAFactory'
  
@@ -12796,7 +12796,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto layout.fieldCount() 'eachField'
  			let wasFilled = try filled.get(i) otherwise panic("fillFromNascentSelfSlots: filled.get OOB at {i} — the columns are sized to the layout's field count")
-@@ -71390,7 +71390,7 @@ export type Parser
+@@ -71398,7 +71398,7 @@ export type Parser
  		end 'writtenField'
  
  		let rbraceTok = try self.consume(TokenKind.rightBrace)
@@ -12805,7 +12805,7 @@ index f6e0863..9fd753b 100644
  	end 'parseInnerAliasLiteral'
  
  	// ⭐⭐ **WHERE AN INADMISSIBLE STRUCT LITERAL IS BLAMED: THE TOKEN FOLLOWING THE `{`, NOT THE TYPE
-@@ -71530,7 +71530,7 @@ export type Parser
+@@ -71538,7 +71538,7 @@ export type Parser
  		// a concrete managed `v` increfs per slot and is released per slot (the 2026-08-12 ruling). What is
  		// still refused is a repeat at a field that INHERITS this frame's single reference, which would drop it
  		// twice; `rejectDoubleOwningStore` asks that through the gate the ARGUMENT guard asks too.
@@ -12814,7 +12814,7 @@ index f6e0863..9fd753b 100644
  
  		while true 'fieldLoop'
  			let nameTok = try self.consume(TokenKind.identifier)
-@@ -72162,7 +72162,7 @@ export type Parser
+@@ -72170,7 +72170,7 @@ export type Parser
  	// stated reason: a `SourceRange` is an offset into THIS file's bytes, and it also serves as the call's
  	// `rparenTok` because the call has no parentheses in the source at all — nobody wrote it.
  	function fillFieldDefaultFromHelper(helperName ByteArray, index FieldIndex, fieldValues ValueIdArray, filled BoolArray, anchor Token) throws SourceParseError
@@ -12823,7 +12823,7 @@ index f6e0863..9fd753b 100644
  		self.recordFieldDefaultValue(index, value: value, fieldValues: fieldValues, filled: filled)
  	end 'fillFieldDefaultFromHelper'
  
-@@ -72264,7 +72264,7 @@ export type Parser
+@@ -72272,7 +72272,7 @@ export type Parser
  	// Reports the FIRST omitted field, in declaration order, so the message is a function of the
  	// type rather than of a hash walk.
  	function requireAllFieldsInitialized(layout StructLayout, filled BoolArray, anchor Token) throws SourceParseError
@@ -12832,7 +12832,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto layout.fieldCount() 'eachField'
  			let wasFilled = try filled.get(i) otherwise panic("requireAllFieldsInitialized: filled.get OOB at {i} — the column is sized to the layout's field count")
-@@ -72311,8 +72311,8 @@ export type Parser
+@@ -72319,8 +72319,8 @@ export type Parser
  		// `entryIn` starts EMPTY at the entry block and FULL everywhere else, which is the initial condition an
  		// intersection dataflow needs: a block whose predecessors have not been visited must not yet constrain
  		// anything, and the entry block has none to be constrained by.
@@ -12843,7 +12843,7 @@ index f6e0863..9fd753b 100644
  
  		for b in 0 upto blockCount 'seedBlocks'
  			for f in 0 upto width 'seedFields'
-@@ -72414,7 +72414,7 @@ export type Parser
+@@ -72422,7 +72422,7 @@ export type Parser
  
  	// Every field this body deferred, once each — the dataflow's column set.
  	function nascentSelfFieldRoster() returns NameRoster
@@ -12852,7 +12852,7 @@ index f6e0863..9fd753b 100644
  
  		for write in self.bodyState.nascentSelfWrites 'eachWrite'
  			if not roster.contains(write.field) 'newField'
-@@ -72428,7 +72428,7 @@ export type Parser
+@@ -72436,7 +72436,7 @@ export type Parser
  	// One literal's verdict: every field it took must reach it — through the block's entry, or through a
  	// write earlier in the block itself.
  	function reportNascentSelfCheck(func IrFunction, check NascentSelfCheck, fields NameRoster, width ElementIndex, entryIn BoolArray) throws SourceParseError
@@ -12861,7 +12861,7 @@ index f6e0863..9fd753b 100644
  
  		for taken in check.fields 'eachTakenField'
  			if self.nascentFieldReachesCheck(func, check: check, field: taken, fields: fields, width: width, entryIn: entryIn) 'assigned'
-@@ -73546,7 +73546,7 @@ export type Parser
+@@ -73554,7 +73554,7 @@ export type Parser
  	end 'requirementThroughConstraints'
  
  	function constraintsOnParameter(constraints WhereConstraintArray, position ElementIndex, methodName ByteArray, errorTok Token) returns ConstraintOnParameterArray throws SourceParseError
@@ -12870,7 +12870,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto constraints.count() 'eachConstraint'
  			let constraint = try constraints.get(i) otherwise panic("constraintsOnParameter: constraints.get OOB at {i} below count {constraints.count()}")
-@@ -74017,7 +74017,7 @@ export type Parser
+@@ -74025,7 +74025,7 @@ export type Parser
  	// that names the member.
  	function emitEnumAllCases(layout EnumLayout, range SourceRange) returns ValueId throws SourceParseError
  		let giid = self.signatures.builtinInstanceForNamedElement(self.signatures.arrayRecordBaseName(), element: layout.name)
@@ -12879,7 +12879,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto layout.caseCount() 'eachCase'
  			self.emitArrayPush(arr, element: self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(i), range: range), range: range)
-@@ -74237,9 +74237,9 @@ export type Parser
+@@ -74245,9 +74245,9 @@ export type Parser
  		let arity = layout.payloadArityAt(caseIndex)
  		let caseName = layout.caseNameAt(caseIndex)
  
@@ -12892,7 +12892,7 @@ index f6e0863..9fd753b 100644
  
  		for _ in 0 upto arity 'eachSlot'
  			if not self.at(TokenKind.comma) 'tooFew'
-@@ -74264,7 +74264,7 @@ export type Parser
+@@ -74272,7 +74272,7 @@ export type Parser
  
  		// Validate + classify every slot before emitting anything permanent — `emitEnumBox`'s discipline, for
  		// its reason: a refused payload leaves no code behind.
@@ -12901,7 +12901,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto arity 'validate'
  			let field = try payloads.get(i) otherwise panic("parseEnumFromNameCase: payloadsAt returned fewer fields than its own count at {i}")
-@@ -74278,7 +74278,7 @@ export type Parser
+@@ -74286,7 +74286,7 @@ export type Parser
  
  		let result = self.mintValue(ValueTypeTag.named, nameId: self.artifact.typeNames.intern(layout.name))
  
@@ -12910,7 +12910,7 @@ index f6e0863..9fd753b 100644
  		args.push(self.emitStringLiteral(caseName, range: SourceRange.ofToken(nameTok)))
  
  		for i in 0 upto arity 'moveIn'
-@@ -74355,7 +74355,7 @@ export type Parser
+@@ -74363,7 +74363,7 @@ export type Parser
  	// is `false` and cannot be otherwise — the value was minted two lines up and names no binding to poison.
  	function emitEnumAllCaseNames(layout EnumLayout, range SourceRange) returns ValueId throws SourceParseError
  		let giid = self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: MaxonType.string)
@@ -12919,7 +12919,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto layout.caseCount() 'eachCase'
  			let literal = self.emitStringLiteral(layout.caseNameAt(i), range: range)
-@@ -74393,10 +74393,10 @@ export type Parser
+@@ -74401,10 +74401,10 @@ export type Parser
  		// to a local binding — what a managed payload's move-in poisons (`moveInPayload`); `slotAnchors[i]`
  		// is the token the slot's TYPE refusal is anchored at, which the type check (in `emitEnumBox`, after
  		// the whole list is read) can no longer see for itself — see `parsePayloadArgs`.
@@ -12934,7 +12934,7 @@ index f6e0863..9fd753b 100644
  
  		for _ in 0 upto arity 'initSlots'
  			slotValues.push(0 as ValueId)
-@@ -74557,7 +74557,7 @@ export type Parser
+@@ -74565,7 +74565,7 @@ export type Parser
  		let payloads = layout.payloadsAt(caseIndex)
  
  		// Validate + classify every field before emitting a single op — a refused payload emits no code.
@@ -12943,7 +12943,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto payloads.count() 'validate'
  			let field = try payloads.get(i) otherwise panic("emitEnumBox: payloadsAt returned fewer fields than its own count at {i}")
-@@ -74650,7 +74650,7 @@ export type Parser
+@@ -74658,7 +74658,7 @@ export type Parser
  	function openPayloadRecord(layout EnumLayout, fill PayloadFill, range SourceRange) returns ValueId
  		match fill 'destination'
  			unionConstruct then return self.allocatedUnionBox(layout, range: range)
@@ -12952,7 +12952,7 @@ index f6e0863..9fd753b 100644
  		end 'destination'
  	end 'openPayloadRecord'
  
-@@ -74704,7 +74704,7 @@ export type Parser
+@@ -74712,7 +74712,7 @@ export type Parser
  	// and the store below must carry the copy rather than the borrow.
  	function transferPayloadsIntoAGreenThread(fill PayloadFill, args ValueIdArray, payloads PayloadFieldArray, argAnchors TokenIndexArray, caseTok Token) returns SharedSlotHandBackArray throws SourceParseError
  		match fill 'fill'
@@ -12961,7 +12961,7 @@ index f6e0863..9fd753b 100644
  			serviceMessage(serviceTypeName) then return try self.moveMessagePayloads(serviceTypeName, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok)
  		end 'fill'
  	end 'transferPayloadsIntoAGreenThread'
-@@ -74723,7 +74723,7 @@ export type Parser
+@@ -74731,7 +74731,7 @@ export type Parser
  	// design is that the sender and the service each hold it and each arrive at it exactly once. Handing it
  	// over IS the mechanism the rule exists to protect.
  	function moveMessagePayloads(serviceTypeName ByteArray, args ValueIdArray, payloads PayloadFieldArray, argAnchors TokenIndexArray, caseTok Token) returns SharedSlotHandBackArray throws SourceParseError
@@ -12970,7 +12970,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto payloads.count() 'eachAuthored'
  			let field = try payloads.get(i) otherwise panic("moveMessagePayloads: payloads.get OOB at {i} — the loop is bounded by that same count")
-@@ -74744,7 +74744,7 @@ export type Parser
+@@ -74752,7 +74752,7 @@ export type Parser
  		end 'eachAuthored'
  
  		view plans = try self.handOffArguments(authored, args: args)
@@ -12979,7 +12979,7 @@ index f6e0863..9fd753b 100644
  
  		for _ in 0 upto payloads.count() 'eachSlot'
  			handBack.push(SharedSlotHandBack.moved)
-@@ -75369,7 +75369,7 @@ export type Parser
+@@ -75377,7 +75377,7 @@ export type Parser
  	// claim of a record's type parameter, so the store names none.
  	function recordExistentialPayloadStore(field PayloadField, declared MaxonType, value ValueId, caseTok Token, argTok Token)
  		let site = "'{String.from(field.name)}' of the message '{String.from(caseTok.value)}'".toByteArray()
@@ -12988,7 +12988,7 @@ index f6e0863..9fd753b 100644
  	end 'recordExistentialPayloadStore'
  
  	// ⚠ **THE TAG COMES OFF THE RESOLVED `declared`, NEVER OFF `field.declaredType`.** Read raw, a
-@@ -76049,7 +76049,7 @@ export type Parser
+@@ -76057,7 +76057,7 @@ export type Parser
  			if self.constOf(length) >= (MinFixedElementCount as FullRangeInt) and self.constOf(length) <= (MaxFixedElementCount as FullRangeInt) 'aUsableCount'
  				let sized = self.signatures.fixedArrayInstanceForElement(self.signatures.containerElementType(giid), size: self.constOf(length) as FixedElementCount)
  
@@ -12997,7 +12997,7 @@ index f6e0863..9fd753b 100644
  			end 'aUsableCount'
  
  			self.recordSizedBaseCountRefusal(lengthTok, fault: "create's length is the constant {self.constOf(length)}")
-@@ -76397,7 +76397,7 @@ export type Parser
+@@ -76405,7 +76405,7 @@ export type Parser
  
  	function instanceFixedByFactoryDeclaration(supplied ConstructorInstance, base ByteArray, decl SweptDeclaration, callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token, site ServiceSpawnSite) returns ConstructorInstance throws SourceParseError
  		view params = self.signatures.structTypeParamsOf(base)
@@ -13006,7 +13006,7 @@ index f6e0863..9fd753b 100644
  
  		for position in 0 upto params.count() 'eachTypeParam'
  			view paramName = try params.get(position) otherwise panic("instanceFixedByFactoryDeclaration: params.get OOB at {position} on a list walked to its own count")
-@@ -77444,7 +77444,7 @@ export type Parser
+@@ -77452,7 +77452,7 @@ export type Parser
  	end 'originOfValue'
  
  	function originNamesOf(value ValueId) returns NameRoster
@@ -13015,7 +13015,7 @@ index f6e0863..9fd753b 100644
  		let brand = self.brandOf(value)
  
  		if not brand.isEmpty() 'aBrandedValue'
-@@ -78240,17 +78240,17 @@ export type Parser
+@@ -78248,17 +78248,17 @@ export type Parser
  		try self.consumeNameToken(NamePosition.declaration)
  		try self.consume(TokenKind.leftParen)
  
@@ -13038,7 +13038,7 @@ index f6e0863..9fd753b 100644
  		let argumentTempFloor = self.bodyState.pendingTempDrops.count()
  		let argumentOwnedFloor = self.bodyState.ownedBindings.count()
  
-@@ -78276,10 +78276,10 @@ export type Parser
+@@ -78284,10 +78284,10 @@ export type Parser
  
  		let range = SourceRange.between(baseTok, last: rparenTok)
  		let payloads = request.payloadsAt(caseIndex)
@@ -13053,7 +13053,7 @@ index f6e0863..9fd753b 100644
  		self.seedMessageSlots(payloads, anchor: memberIndex, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
  
  		try self.slotMessageArgs(callee, payloads: payloads, args: args, argLabels: argLabels, argAnchors: argAnchors, memberIndex: memberIndex, slotValues: slotValues, filled: filled, slotAnchors: slotAnchors, memberTok: memberTok)
-@@ -79337,7 +79337,7 @@ export type Parser
+@@ -79345,7 +79345,7 @@ export type Parser
  	// TAG through `decrefCalleeFor` (`__managed_decref`), which destroys the elements the record's own
  	// `element_destroy@40` stamp names — so a managed-element fill needs nothing extra here.
  	function emitMaterializedFill(giid GenericInstanceId, callee ByteArray, source ValueId, range SourceRange) returns ValueId throws SourceParseError
@@ -13062,7 +13062,7 @@ index f6e0863..9fd753b 100644
  		_ = self.emitRuntimeCall(callee, args: twoArgs(source, second: filled), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
  		self.trackOwnedTemp(filled, exclusivity: OwnedHeapExclusivity.sole)
  		return filled
-@@ -79599,7 +79599,7 @@ export type Parser
+@@ -79607,7 +79607,7 @@ export type Parser
  	// the caller drops like any other array record.
  	function parseManagedDirectoryCurrentPath(range SourceRange) returns ValueId throws SourceParseError
  		try self.consumeEmptyArgList()
@@ -13071,7 +13071,7 @@ index f6e0863..9fd753b 100644
  	end 'parseManagedDirectoryCurrentPath'
  
  	function parseManagedDirectoryResolve(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
-@@ -79751,7 +79751,7 @@ export type Parser
+@@ -79759,7 +79759,7 @@ export type Parser
  	function parseManagedHandleTimer(range SourceRange) returns ValueId throws SourceParseError
  		try self.consumeEmptyArgList()
  
@@ -13080,7 +13080,7 @@ index f6e0863..9fd753b 100644
  	end 'parseManagedHandleTimer'
  
  	function parseManagedHandleAdopting(func IrFunction, methodTok Token, range SourceRange) returns ValueId throws SourceParseError
-@@ -79763,7 +79763,7 @@ export type Parser
+@@ -79771,7 +79771,7 @@ export type Parser
  	function parseManagedPinAcquire(range SourceRange) returns ValueId throws SourceParseError
  		try self.consumeEmptyArgList()
  
@@ -13089,7 +13089,7 @@ index f6e0863..9fd753b 100644
  	end 'parseManagedPinAcquire'
  
  	function dispatchManagedPagesMethod(recv MethodReceiver) returns ValueId throws SourceParseError
-@@ -80753,7 +80753,7 @@ export type Parser
+@@ -80761,7 +80761,7 @@ export type Parser
  	// recognizes and `hash`'s `HashValue` carries the ranged alias's.
  	function emitBuiltinConformanceCall(func IrFunction, receiver ValueId, target DirectConformanceTarget, method InterfaceMethodSig, baseTok Token, methodTok Token) returns ValueId throws SourceParseError
  		try self.consume(TokenKind.leftParen)
@@ -13098,7 +13098,7 @@ index f6e0863..9fd753b 100644
  		args.push(self.holdStorageReadForStatement(receiver, kind: HoldKind.callOperand, range: SourceRange.ofToken(baseTok), position: OperandSuccession.receiverBeforeArguments))
  
  		if not self.at(TokenKind.rightParen) 'hasArgs'
-@@ -80931,7 +80931,7 @@ export type Parser
+@@ -80939,7 +80939,7 @@ export type Parser
  			return try self.parseCollectedArrayLiteralBody(func, first: head, firstStart: firstStart, giid: giid, range: range, restIsConstantRun: self.restIsIntegerLiteralRun() and self.constIsKnown(head) and self.admitIntegerLiteralIntoElementSlot(first, slot: self.elementSlotOf(giid)))
  		end 'anInlineStoredElement'
  
@@ -13107,7 +13107,7 @@ index f6e0863..9fd753b 100644
  		try self.pushArrayLiteralElement(arr, elem: head, giid: giid, valueStart: firstStart, range: range)
  
  		return try self.finishArrayLiteral(func, arr: arr, giid: giid, range: range)
-@@ -80959,8 +80959,8 @@ export type Parser
+@@ -80967,8 +80967,8 @@ export type Parser
  	// box — so there is no managed move-in to preserve, which is what makes holding the elements across the
  	// `]` legitimate at all. `arrayElementMayBeConstantBlob` is where that exclusion is stated.
  	function parseCollectedArrayLiteralBody(func IrFunction, first ValueId, firstStart ElementIndex, giid GenericInstanceId, range SourceRange, restIsConstantRun bool) returns ValueId throws SourceParseError
@@ -13118,7 +13118,7 @@ index f6e0863..9fd753b 100644
  		values.push(first)
  		starts.push(firstStart)
  
-@@ -80987,7 +80987,7 @@ export type Parser
+@@ -80995,7 +80995,7 @@ export type Parser
  			panic("Parser.parseCollectedArrayLiteralBody: a run of integer literals converted into '{String.from(self.signatures.instanceDisplayName(giid))}' left a non-constant element — every element of the run is a constant, converted or proven in range")
  		end 'aRunThatIsNotConstant'
  
@@ -13127,7 +13127,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto values.count() 'eachElement'
  			let elem = try values.get(i) otherwise panic("parseCollectedArrayLiteralBody: values.get({i}) failed inside its own upto bound")
-@@ -81020,7 +81020,7 @@ export type Parser
+@@ -81028,7 +81028,7 @@ export type Parser
  	// The stride the blob is stamped with is the stride its image was serialized at, because both come
  	// from the one `constArrayBlobOf` call.
  	function emitConstantArrayBlob(values ValueIdArray, giid GenericInstanceId, range SourceRange) returns ValueId
@@ -13136,7 +13136,7 @@ index f6e0863..9fd753b 100644
  
  		for elem in values 'each'
  			constants.push(self.constOf(elem))
-@@ -81412,7 +81412,7 @@ export type Parser
+@@ -81420,7 +81420,7 @@ export type Parser
  
  		view constants = try self.plainConstantArrayElements(value) otherwise panic("plainConstantArrayAs: v{value} was just found in the plain constant array table")
  		let elementType = MaxonType.float if tagIsFloat(maxonTypeTag(self.signatures.containerElementType(self.valueInstanceId(value)))) else MaxonType.integer
@@ -13145,7 +13145,7 @@ index f6e0863..9fd753b 100644
  
  		for constant in constants 'eachConstant'
  			let literal = self.emitLiteral(constant, valueType: elementType, range: SourceRange.ofToken(anchor))
-@@ -81906,7 +81906,7 @@ export type Parser
+@@ -81914,7 +81914,7 @@ export type Parser
  	// body does not declare — bare, or as a type argument (`Array with T`) — would type the closure against a
  	// binding nothing here supplies, so it withholds.
  	function offeredClosureParamTypes(alias FunctionTypeAlias, aliasName ByteArray, origin ReceiverOrigin, args ValueIdArray, receiverArgs ParamCount) returns ClosureParamOffer
@@ -13154,7 +13154,7 @@ index f6e0863..9fd753b 100644
  
  		for param in alias.paramTypes 'eachParam'
  			let stored = maxonTypeOfStoredAliasParam(param, typeNames: self.artifact.typeNames)
-@@ -81995,7 +81995,7 @@ export type Parser
+@@ -82003,7 +82003,7 @@ export type Parser
  		end 'noClosureToOffer'
  
  		match self.functionAliasForName(self.internedName(typeNameIdOf(declared))) 'alias'
@@ -13163,7 +13163,7 @@ index f6e0863..9fd753b 100644
  			undeclared then break
  		end 'alias'
  	end 'stateClosureOfferOfDeclaredType'
-@@ -82314,14 +82314,14 @@ export type Parser
+@@ -82322,14 +82322,14 @@ export type Parser
  	// lowering reads both from the descriptor (`appendOpaqueContainerCreate`).
  	function emitArrayCreateOp(giid GenericInstanceId, range SourceRange, sizing ValueIdArray) returns ValueId throws SourceParseError
  		match self.signatures.containerCreateRoute(giid) 'route'
@@ -13180,7 +13180,7 @@ index f6e0863..9fd753b 100644
  	end 'emitComposedArrayCreateOp'
  
  	function emitStampedArrayCreateOp(giid GenericInstanceId, range SourceRange, sizing ValueIdArray) returns ValueId throws SourceParseError
-@@ -82336,7 +82336,7 @@ export type Parser
+@@ -82344,7 +82344,7 @@ export type Parser
  	end 'emitInstanceElementSize'
  
  	function emitArrayCreateCall(giid GenericInstanceId, leading ValueIdArray, trailing ValueIdArray, sizing ValueIdArray, range SourceRange) returns ValueId
@@ -13189,7 +13189,7 @@ index f6e0863..9fd753b 100644
  		args.append(leading)
  		args.append(sizing)
  		args.append(trailing)
-@@ -82435,7 +82435,7 @@ export type Parser
+@@ -82443,7 +82443,7 @@ export type Parser
  				self.recordArtifactDiagnostic(ErrorCode.arrayCreateWithoutCapacity, message: "'{String.from(aliasName)}.{String.from(CreateMethod)}()' needs a capacity: write '{String.from(CreateMethod)}(0)' for an empty array, '{String.from(CreateMethod)}(n)' for n zero elements, or '{String.from(CreateMethod)}(n, {String.from(ArrayCreateZeroedLabel)}: false)' for an empty array with room for n", range: range)
  			end 'libraryArray'
  
@@ -13198,7 +13198,7 @@ index f6e0863..9fd753b 100644
  		end 'noArguments'
  
  		let capacity = try self.parseCreateLengthArg(func, lengthOwner: self.signatures.genericInstanceBaseName(giid), paramName: ArrayCreateCapacityName, aliasTok: aliasTok)
-@@ -82450,7 +82450,7 @@ export type Parser
+@@ -82458,7 +82458,7 @@ export type Parser
  		try self.consume(TokenKind.rightParen)
  
  		if self.constIsKnown(capacity) and self.constOf(capacity) == 0 'emptyArray'
@@ -13207,7 +13207,7 @@ index f6e0863..9fd753b 100644
  		end 'emptyArray'
  
  		if zeroed 'zeroedSlots'
-@@ -82652,7 +82652,7 @@ export type Parser
+@@ -82660,7 +82660,7 @@ export type Parser
  
  		try self.consumeEmptyArgList()
  
@@ -13216,7 +13216,7 @@ index f6e0863..9fd753b 100644
  	end 'parseBuiltinContainerStaticCall'
  
  	// ⭐⭐ **THE OWNED EMPTY CONTAINER AN INSTANCE ALIAS DENOTES — the ONE producer behind BOTH spellings**,
-@@ -82690,7 +82690,7 @@ export type Parser
+@@ -82698,7 +82698,7 @@ export type Parser
  			self.noteEmptyContainerImage(container)
  		end 'anEmptyContainer'
  
@@ -13225,7 +13225,7 @@ index f6e0863..9fd753b 100644
  
  		return container
  	end 'emitOwnedContainerCreate'
-@@ -82906,7 +82906,7 @@ export type Parser
+@@ -82914,7 +82914,7 @@ export type Parser
  	// Its callers are the `CharacterSet` member set (a preset's seed and a `CharSet from […]`), the corpus arm
  	// of `Set from […]`, a `[k: v]` map literal, and `List from […]`.
  	function emitContainerLiteralCreate(baseName ByteArray, giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws SourceParseError
@@ -13234,7 +13234,7 @@ index f6e0863..9fd753b 100644
  	end 'emitContainerLiteralCreate'
  
  	// ⭐⭐ **THE RESULT IS ALREADY ENROLLED AS AN OWNED TEMPORARY, SO NO CALLER MAY TRACK IT.** `emitCall`
-@@ -83267,14 +83267,14 @@ export type Parser
+@@ -83275,14 +83275,14 @@ export type Parser
  		let literalStart = self.pos
  		let value = try self.parseLiteralInitOperand(func, form: form, callee: callee)
  
@@ -13254,7 +13254,7 @@ index f6e0863..9fd753b 100644
  
  		// POSITIONAL and un-nameable: `init`'s single parameter takes it at position 0, and a literal is not a
  		// bare binding, so it can never be the subject of an E3159 blame.
-@@ -83300,7 +83300,7 @@ export type Parser
+@@ -83308,7 +83308,7 @@ export type Parser
  		match form 'f'
  			stringLiteral then return try self.parseStringLiteral(func)
  			charLiteral then return try self.parseCharLiteral()
@@ -13263,7 +13263,7 @@ index f6e0863..9fd753b 100644
  		end 'f'
  
  		return try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
-@@ -83598,7 +83598,7 @@ export type Parser
+@@ -83606,7 +83606,7 @@ export type Parser
  	// statically stamped 0 (`columnDestroyValue`'s trivial arm), which is the same instruction for both and
  	// leaks the managed one.
  	function emitOpaqueChainCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
@@ -13272,7 +13272,7 @@ index f6e0863..9fd753b 100644
  	end 'emitOpaqueChainCreateOp'
  
  	// ⭐ **THE CHAIN ELEMENT-TYPE GATE.** A node's `value@16` is ONE MACHINE WORD, so the positive rule is
-@@ -84611,20 +84611,20 @@ export type Parser
+@@ -84619,20 +84619,20 @@ export type Parser
  		// FRESH columns holding the USER's arguments only — the borrowed receiver is prepended after
  		// slotting, not before it. `parseCallArgs` counts arguments from 0 against the SOURCE, so the
  		// receiver must not be in the array or the user's first argument would be judged as its second.
@@ -13298,7 +13298,7 @@ index f6e0863..9fd753b 100644
  
  		// The first argument's label is OPTIONAL at an interface / type-parameter receiver and MANDATORY
  		// from the second on — see `consumeArgLabel`.
-@@ -84692,7 +84692,7 @@ export type Parser
+@@ -84700,7 +84700,7 @@ export type Parser
  	end 'noteRequirementCallSite'
  
  	function witnessDeclarationFacts(candidates WitnessDispatchTargetArray) returns DeclarationFactsArray
@@ -13307,7 +13307,7 @@ index f6e0863..9fd753b 100644
  
  		if not self.signatures.programTakesAParamByRef() 'nothingIsPassedByReference'
  			return facts
-@@ -84714,14 +84714,14 @@ export type Parser
+@@ -84722,14 +84722,14 @@ export type Parser
  			return NoImmutableArgNames
  		end 'nothingIsBlamed'
  
@@ -13324,7 +13324,7 @@ index f6e0863..9fd753b 100644
  		slotted.push(WriteBlame.unblamed)
  
  		for i in WitnessReceiverArgCount upto ordered.count() 'eachFormal'
-@@ -84802,7 +84802,7 @@ export type Parser
+@@ -84810,7 +84810,7 @@ export type Parser
  		self.noteCallToken(range, args: placed, start: range)
  
  		self.routeThrowingOp(self.unclaimedThrowRouteDestination(), opIdx: opIdx, clause: target.throwsClause, result: result)
@@ -13333,7 +13333,7 @@ index f6e0863..9fd753b 100644
  		return opIdx
  	end 'emitWitnessDispatch'
  
-@@ -84848,7 +84848,7 @@ export type Parser
+@@ -84856,7 +84856,7 @@ export type Parser
  			return args
  		end 'noFloatFormal'
  
@@ -13342,7 +13342,7 @@ index f6e0863..9fd753b 100644
  
  		// `args[0]` is the BORROWED receiver, which fills no formal — interface formal `j` is `args[j+1]`, the
  		// same mapping `requireGenuineSelfArgs` walks. It is copied across before the loop so the loop body
-@@ -84931,7 +84931,7 @@ export type Parser
+@@ -84939,7 +84939,7 @@ export type Parser
  			return candidates
  		end 'allTakeAReceiver'
  
@@ -13351,7 +13351,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto candidates.count() 'eachCandidate'
  			let candidate = try candidates.get(i) otherwise panic("requireWitnessDispatchCandidates: candidates.get OOB at {i} below count {candidates.count()}")
-@@ -84970,7 +84970,7 @@ export type Parser
+@@ -84978,7 +84978,7 @@ export type Parser
  	// `LowerMaxonToStd.ensureWitnessTable` lays the table out by, so `methodIndex` names the slot the emitted
  	// blob actually fills. `errorTok` positions `requireInterfaceForParse`'s undeclared-interface reject.
  	function findWitnessDispatchCandidates(receiver ValueId, methodName ByteArray, errorTok Token) returns WitnessDispatchTargetArray throws SourceParseError
@@ -13360,7 +13360,7 @@ index f6e0863..9fd753b 100644
  
  		// ⭐ **AN EXISTENTIAL SEARCHES THE ONE INTERFACE THE VALUE IS HELD AT, AND ITS WITNESS IS THE FAT
  		// POINTER'S OWN SECOND HALF.** There is no constraint list to walk and no
-@@ -85129,7 +85129,7 @@ export type Parser
+@@ -85137,7 +85137,7 @@ export type Parser
  	end 'witnessParamValueId'
  
  	function witnessSlotIndicesNamed(slots CollectedInterfaceMethodArray, methodName ByteArray) returns NamedSlotIndexArray
@@ -13369,7 +13369,7 @@ index f6e0863..9fd753b 100644
  
  		for slotIndex in 0 upto slots.count() 'eachSlot'
  			if (try slots.get(slotIndex) otherwise panic("witnessSlotIndicesNamed: slots.get OOB at {slotIndex} below count {slots.count()}")).method.name.equals(methodName) 'named'
-@@ -85207,7 +85207,7 @@ export type Parser
+@@ -85215,7 +85215,7 @@ export type Parser
  	// not survive it is still reported by `slotCallArgs` whenever there is a single candidate to report
  	// against (see below). The label rules stay entirely that function's.
  	function pickWitnessDispatchByArity(candidates WitnessDispatchTargetArray, argCount ParamCount, receiver ValueId, methodTok Token) returns WitnessDispatchTarget throws SourceParseError
@@ -13378,7 +13378,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto candidates.count() 'eachCandidate'
  			let candidate = try candidates.get(i) otherwise panic("pickWitnessDispatchByArity: candidates.get OOB at {i} below count {candidates.count()}")
-@@ -91374,7 +91374,7 @@ export type Parser
+@@ -91382,7 +91382,7 @@ export type Parser
  	end 'requireHolderWritable'
  
  	function isolatedHopsOf(opened ValueId) returns ValueIdArray
@@ -13387,7 +13387,7 @@ index f6e0863..9fd753b 100644
  		var value = opened
  
  		while true 'eachHopTowardTheRoot'
-@@ -92469,7 +92469,7 @@ export type Parser
+@@ -92477,7 +92477,7 @@ export type Parser
  	end 'functionTypeThroughInstance'
  
  	function functionAliasThroughInstance(alias FunctionTypeAlias, declared MaxonType, gid GenericInstanceId) returns MaxonType
@@ -13396,7 +13396,7 @@ index f6e0863..9fd753b 100644
  		var moved = false
  
  		for param in alias.paramTypes 'eachParam'
-@@ -92509,7 +92509,7 @@ export type Parser
+@@ -92517,7 +92517,7 @@ export type Parser
  	end 'functionSlotThroughInstance'
  
  	function instanceViewAlias(alias FunctionTypeAlias, viewName ByteArray, paramTypes MaxonTypeArray, returnType MaxonReturnType) returns FunctionTypeAlias
@@ -13405,7 +13405,7 @@ index f6e0863..9fd753b 100644
  
  		for position in 0 upto paramTypes.count() 'eachParam'
  			let paramType = try paramTypes.get(position) otherwise panic("instanceViewAlias: paramTypes.get OOB at {position} below count {paramTypes.count()}")
-@@ -93915,7 +93915,7 @@ export type Parser
+@@ -93923,7 +93923,7 @@ export type Parser
  			return sharedEmptyDeclaredSurface
  		end 'namesTheBufferNowhere'
  
@@ -13414,7 +13414,7 @@ index f6e0863..9fd753b 100644
  		self.appendSurfaceNodesAt(surface, index: index, slotElementsFromAliases: slotElementsFromAliases)
  		return surface
  	end 'declaredSurfaceAt'
-@@ -94024,7 +94024,7 @@ export type Parser
+@@ -94032,7 +94032,7 @@ export type Parser
  	// A malformed or unterminated type is not this walk's to report: it stops at the matching `)` or at the
  	// end of the token array, and `parseTupleTypeReference` reports what is actually wrong a moment later.
  	function tupleElementStartsAt(open ElementIndex) returns TokenIndexArray
@@ -13423,7 +13423,7 @@ index f6e0863..9fd753b 100644
  		starts.push(open + 1)
  		var depth = 0 as NestingDepth
  		var at = open
-@@ -94414,18 +94414,18 @@ export type Parser
+@@ -94422,18 +94422,18 @@ export type Parser
  		// a legal identifier the check accepts (the corpus's `function(_ Integer) gives …`). An UNTYPED
  		// parameter (`function(p) gives …`) is typed from `paramTypeOffer` when the call argument supplied one
  		// and refused with a positioned diagnostic when it did not — `parameterTypeOrOffered`.
@@ -13450,7 +13450,7 @@ index f6e0863..9fd753b 100644
  		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, paramCapabilities: paramCapabilities, paramMarkers: paramMarkers, markerTokens: markerTokens, owner: ParamDefaultOwner.closureLiteral, paramTypeOffer: paramTypeOffer)
  		try self.consume(TokenKind.rightParen)
  
-@@ -94569,7 +94569,7 @@ export type Parser
+@@ -94577,7 +94577,7 @@ export type Parser
  		// a plain function's `__fnref_` thunk. `emitParams` (lowering) reads `paramCount`/`maxonParamTypes`, so a
  		// patch here is seen.
  		lifted.paramCount = liftedParamCount
@@ -13459,7 +13459,7 @@ index f6e0863..9fd753b 100644
  
  		for pt in paramTypes 'copyUserParams'
  			liftedParamTypes.push(pt.clone())
-@@ -94606,9 +94606,9 @@ export type Parser
+@@ -94614,9 +94614,9 @@ export type Parser
  		// closure's parameters ARE spelled (`function(t IntTaker) gives …`) and carry the same `paramTypeStarts`
  		// every declared function's do, while its return type is INFERRED from the body and names no token for
  		// `declaredExistentialInstanceAt` to read.
@@ -13471,7 +13471,7 @@ index f6e0863..9fd753b 100644
  
  		// Commit the closure's OWN range-check sites under its OWN lifted name, so `InsertRangeChecks`
  		// resolves them against the function whose SSA space numbered them. It sits here — after the body,
-@@ -94709,7 +94709,7 @@ export type Parser
+@@ -94717,7 +94717,7 @@ export type Parser
  	end 'publishLiftedBody'
  
  	function closureEnvFieldsOf(captureNames NameRoster, capturedTypes MaxonTypeArray) returns ClosureEnvFieldArray
@@ -13480,7 +13480,7 @@ index f6e0863..9fd753b 100644
  
  		for (iter, name) in captureNames.withIterator() 'eachCapture'
  			if not self.nameBindsOrIsCaptured(name) 'aCompilerWord'
-@@ -94765,7 +94765,7 @@ export type Parser
+@@ -94773,7 +94773,7 @@ export type Parser
  
  	function ownHiddenWordValue(word ClosureHiddenWord, slot ValueId, anchor Token) returns ValueId
  		return match word 'word'
@@ -13489,7 +13489,7 @@ index f6e0863..9fd753b 100644
  			fixedElementCount gives slot
  		end 'word'
  	end 'ownHiddenWordValue'
-@@ -94850,7 +94850,7 @@ export type Parser
+@@ -94858,7 +94858,7 @@ export type Parser
  	end 'callInstanceMap'
  
  	function handCapturesOver(captureNames NameRoster, capturedValues CapturedValueArray, captureAnchors TokenArray, closureName ByteArray, envPosition ParamCount) returns EnvSlotIndexArray throws SourceParseError
@@ -13498,7 +13498,7 @@ index f6e0863..9fd753b 100644
  
  		for (iter, name) in captureNames.withIterator() 'eachCapture'
  			let slot = iter.index() as EnvSlotIndex
-@@ -94967,7 +94967,7 @@ export type Parser
+@@ -94975,7 +94975,7 @@ export type Parser
  		let savedFuncIndex = self.artifact.currentFuncIndex
  		let envParam = 0 as ValueId
  
@@ -13507,7 +13507,7 @@ index f6e0863..9fd753b 100644
  		paramTypes.push(MaxonType.integer)
  		self.bodyState = self.liftedBodyState(ClosureEnvDropParamCount as ValueId, closureEnv: ClosureEnvParam.param(envParam), returnAlias: self.anchors.undeclaredAlias, paramSites: sharedEmptyParamSites, layoutParam: closureEnvDropLayoutParam(closureLayout), countParam: HiddenWordParam.none)
  		var drop = self.pushLiftedFunction(dropName, returnType: MaxonReturnType.void, paramTypes: paramTypes, anchor: anchor)
-@@ -94993,11 +94993,11 @@ export type Parser
+@@ -95001,11 +95001,11 @@ export type Parser
  
  		self.emitBodyTerminator(self.bodyState.currentBlock, op: MaxonOp.retVoid, range: range)
  
@@ -13522,8 +13522,8 @@ index f6e0863..9fd753b 100644
  		self.fileDeferredProvenance(drop)
  
  		self.bodyState = savedBody
-@@ -95210,7 +95210,7 @@ export type Parser
- 	end 'probedRecordOf'
+@@ -95222,7 +95222,7 @@ export type Parser
+ 	end 'varStartsAsAnEmptyCaseOfAnOwningType'
  
  	function probedInlineWordOf(value ValueId) returns ConstValue throws AbsentError
 -		var nodes = ProbedConstructionArray.create(0)
@@ -13531,7 +13531,7 @@ index f6e0863..9fd753b 100644
  		let slot = try self.probedImageSlotOf(value, nodes: nodes)
  
  		match slot 'slot'
-@@ -95286,7 +95286,7 @@ export type Parser
+@@ -95298,7 +95298,7 @@ export type Parser
  			return ProbedShape.stringTable(self.stringTableTexts())
  		end 'aStringTable'
  
@@ -13540,7 +13540,7 @@ index f6e0863..9fd753b 100644
  		let slot = try self.probedImageSlotOf(value, nodes: nodes) otherwise return ProbedShape.opaque
  
  		return match slot 'slot'
-@@ -95329,7 +95329,7 @@ export type Parser
+@@ -95341,7 +95341,7 @@ export type Parser
  	end 'probedEmptyContainerSlot'
  
  	function valueIsLeftUntouched(value ValueId) returns bool
@@ -13549,7 +13549,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto self.artifact.module.opCount() 'eachOp'
  			let op = self.maxonOpAt(i)
-@@ -95375,7 +95375,7 @@ export type Parser
+@@ -95387,7 +95387,7 @@ export type Parser
  	end 'calleeIsTheContainersCreate'
  
  	function probedConstructionOf(layout StructLayout, fields ValueIdArray, nodes ProbedConstructionArray) returns ElementIndex throws AbsentError
@@ -13558,7 +13558,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto fields.count() 'eachField'
  			slots.push(try self.probedFieldSlot(layout, index: i as FieldIndex, value: try fields.get(i) otherwise throw AbsentError.absent, nodes: nodes))
-@@ -95451,8 +95451,8 @@ export type Parser
+@@ -95463,8 +95463,8 @@ export type Parser
  	end 'probedFactoryConstruction'
  
  	function probedFactoryFields(callee ByteArray, layout StructLayout, paramNames NameRoster, args ValueIdArray, labels NameRoster, nodes ProbedConstructionArray) returns ProbedSlot throws AbsentError
@@ -13569,7 +13569,7 @@ index f6e0863..9fd753b 100644
  
  		for _ in 0 upto layout.fieldCount() 'initSlots'
  			supplied.push(0)
-@@ -95471,7 +95471,7 @@ export type Parser
+@@ -95483,7 +95483,7 @@ export type Parser
  			try filled.set(index, value: true) otherwise throw AbsentError.absent
  		end 'eachArgument'
  
@@ -13578,7 +13578,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto layout.fieldCount() 'eachField'
  			let isSupplied = try filled.get(i) otherwise throw AbsentError.absent
-@@ -95546,7 +95546,7 @@ export type Parser
+@@ -95558,7 +95558,7 @@ export type Parser
  	end 'initializerIsAStringTable'
  
  	function stringTableTexts() returns ByteBlobArray
@@ -13587,7 +13587,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto self.artifact.module.opCount() 'eachOp'
  			if let bytes = try stringLiteralBytesOf(self.maxonOpAt(i)) 'aStringLiteral'
-@@ -95821,11 +95821,11 @@ export type Parser
+@@ -95833,11 +95833,11 @@ export type Parser
  	// every compile.
  	export function recordedLetCastReads() returns LetCastReadArray
  		if self.isLibrarySource() 'aLibraryInitializer'
@@ -13601,7 +13601,7 @@ index f6e0863..9fd753b 100644
  			tracking(state) gives state.reads
  		end 'tracking'
  	end 'recordedLetCastReads'
-@@ -96244,14 +96244,14 @@ export type Parser
+@@ -96256,14 +96256,14 @@ export type Parser
  			return try self.parseDebugStreamNameId(func, anchor: anchor)
  		end 'debugStreamNameId'
  
@@ -13621,7 +13621,7 @@ index f6e0863..9fd753b 100644
  
  		// ⭐ **THE RECEIVER GOES IN FIRST, AS AN UNLABELLED ARGUMENT, AND THEN IT IS JUST AN
  		// ARGUMENT.** Pushed BEFORE the source's own arguments are parsed, so it occupies index 0
-@@ -96298,7 +96298,7 @@ export type Parser
+@@ -96310,7 +96310,7 @@ export type Parser
  
  		let rparenTok = try self.consume(TokenKind.rightParen)
  		var opensAnIsolatedValue = false
@@ -13630,7 +13630,7 @@ index f6e0863..9fd753b 100644
  		let resolvedCallee = try self.genericInstanceCallee(callee, anchor: anchor, args: args, argLabels: argLabels, mint: mint)
  
  		if labelRule == ArgLabelRule.firstNamedIfDefaulted 'firstLabelNeedsADefault'
-@@ -97311,7 +97311,7 @@ export type Parser
+@@ -97323,7 +97323,7 @@ export type Parser
  	function emitDebugStreamEnabled(args ValueIdArray, calleeTok Token) returns ValueId throws SourceParseError
  		try requireBuiltinArity(args, builtinName: DebugStreamEnabledCallee, arity: DebugStreamEnabledArity, calleeTok: calleeTok)
  
@@ -13639,7 +13639,7 @@ index f6e0863..9fd753b 100644
  	end 'emitDebugStreamEnabled'
  
  	// ⭐ **`__Builtins.currentTimeMs()` — THE NANOSECOND READING, SCALED. NOT the coarse tick.**
-@@ -97357,7 +97357,7 @@ export type Parser
+@@ -97369,7 +97369,7 @@ export type Parser
  		// Zero for a shape with no constant position, which is not a sentinel: the op's `constant` field is
  		// what the emitted instruction carries in place of an operand, and a shape without one carries none.
  		var constant = 0 as FullRangeInt
@@ -13648,7 +13648,7 @@ index f6e0863..9fd753b 100644
  
  		for position in 0 upto args.count() 'eachArgument'
  			let arg = try args.get(position) otherwise panic("emitRawIntrinsic: arity was just checked but args.get({position}) failed")
-@@ -97510,7 +97510,7 @@ export type Parser
+@@ -97522,7 +97522,7 @@ export type Parser
  	function emitClockIntrinsicCall(args ValueIdArray, name ByteArray, runtimeName ByteArray, resultAlias ByteArray, calleeTok Token) returns ValueId throws SourceParseError
  		try requireBuiltinArity(args, builtinName: name, arity: ClockIntrinsicArity, calleeTok: calleeTok)
  
@@ -13657,7 +13657,7 @@ index f6e0863..9fd753b 100644
  	end 'emitClockIntrinsicCall'
  
  	// `trunc(x)` — **THE f64 → int BRIDGE**, and a compiler BUILTIN rather than a stdlib function.
-@@ -97866,7 +97866,7 @@ export type Parser
+@@ -97878,7 +97878,7 @@ export type Parser
  		// The buffer is BORROWED — the runtime entry reads `buffer@0`/`length@8` through it and never takes
  		// ownership — so there is no owned temporary to enrol and a literal argument needs no decref. This is
  		// exactly how `__Builtins.runProcess` borrows its command line.
@@ -13666,7 +13666,7 @@ index f6e0863..9fd753b 100644
  		callArgs.push(arg)
  		return self.emitLibraryAliasedRuntimeCall(runtimeName, args: callArgs, alias: CountAliasName, range: SourceRange.ofToken(calleeTok))
  	end 'emitBuiltinsStreamWrite'
-@@ -97977,7 +97977,7 @@ export type Parser
+@@ -97989,7 +97989,7 @@ export type Parser
  		try self.consume(TokenKind.rightParen)
  
  		self.artifact.recordDebugStreamNameSite(name)
@@ -13675,7 +13675,7 @@ index f6e0863..9fd753b 100644
  	end 'parseDebugStreamNameId'
  
  	// ⭐⭐⭐ **`__Builtins.writeStdout(s.addressableBytes())` BECOMES `__write_stdout(s)` — ONE OP REWRITTEN, ONE
-@@ -98066,7 +98066,7 @@ export type Parser
+@@ -98078,7 +98078,7 @@ export type Parser
  			throw SourceParseError.voidCallResultUsed(String.from(BuiltinsSleepName), line: calleeTok.line, column: calleeTok.column)
  		end 'noValueToUse'
  
@@ -13684,7 +13684,7 @@ index f6e0863..9fd753b 100644
  		callArgs.push(arg)
  		return self.emitRuntimeCall(GtSleepName, args: callArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
  	end 'emitSleep'
-@@ -98095,7 +98095,7 @@ export type Parser
+@@ -98107,7 +98107,7 @@ export type Parser
  			throw SourceParseError.voidCallResultUsed(String.from(builtinName), line: calleeTok.line, column: calleeTok.column)
  		end 'noValueToUse'
  
@@ -13693,7 +13693,7 @@ index f6e0863..9fd753b 100644
  	end 'emitVoidZeroArgIntrinsic'
  
  	// ⭐⭐ **THE RULE EVERY ARGUMENTLESS VALUE-ANSWERING INTRINSIC IS CHECKED AGAINST, IN ONE PLACE** — the
-@@ -98123,13 +98123,13 @@ export type Parser
+@@ -98135,13 +98135,13 @@ export type Parser
  	function emitZeroArgIntrinsic(args ValueIdArray, builtinName ByteArray, runtimeName ByteArray, arity ParamCount, resultTag ValueTypeTag, resultAlias ByteArray, calleeTok Token) returns ValueId throws SourceParseError
  		try requireBuiltinArity(args, builtinName: builtinName, arity: arity, calleeTok: calleeTok)
  
@@ -13709,7 +13709,7 @@ index f6e0863..9fd753b 100644
  	end 'emitZeroArgBufferIntrinsic'
  
  	// ⭐⭐ **THE ARGUMENT RULE EVERY COMMAND-LINE BUILTIN IS CHECKED AGAINST, IN ONE PLACE** — the
-@@ -98160,7 +98160,7 @@ export type Parser
+@@ -98172,7 +98172,7 @@ export type Parser
  			throw SourceParseError.builtinOperandType(String.from(builtinName), required: typeTagName(ValueTypeTag.string), got: self.valueKindWord(commandLine), line: calleeTok.line, column: calleeTok.column)
  		end 'notAString'
  
@@ -13718,7 +13718,7 @@ index f6e0863..9fd753b 100644
  		callArgs.push(commandLine)
  		return self.emitLibraryAliasedRuntimeCall(runtimeName, args: callArgs, alias: FullRangeIntAliasName, range: SourceRange.ofToken(calleeTok))
  	end 'emitCommandLineRuntimeCall'
-@@ -98191,7 +98191,7 @@ export type Parser
+@@ -98203,7 +98203,7 @@ export type Parser
  	// temporary (`trackOwnedTemp`) so ownership drops it exactly as an interpolation result — the same door.
  	function emitSubpReadLine(args ValueIdArray, runtimeName ByteArray, builtinName ByteArray, calleeTok Token) returns ValueId throws SourceParseError
  		let handle = try self.requireHandleArg(args, builtinName: builtinName, arity: SubpReadArity, calleeTok: calleeTok)
@@ -13727,7 +13727,7 @@ index f6e0863..9fd753b 100644
  		callArgs.push(handle)
  
  		// ⭐ **THE PER-LINE CAP IS A PARAMETER OF THE ENTRY POINT**, because
-@@ -98216,7 +98216,7 @@ export type Parser
+@@ -98228,7 +98228,7 @@ export type Parser
  			throw SourceParseError.builtinOperandType(String.from(SubpWriteLineBuiltinName), required: typeTagName(ValueTypeTag.string), got: self.valueKindWord(line), line: calleeTok.line, column: calleeTok.column)
  		end 'notAString'
  
@@ -13736,7 +13736,7 @@ index f6e0863..9fd753b 100644
  		callArgs.push(handle)
  		callArgs.push(line)
  		return self.emitLibraryAliasedRuntimeCall(SubpWriteLineName, args: callArgs, alias: FullRangeIntAliasName, range: SourceRange.ofToken(calleeTok))
-@@ -98232,7 +98232,7 @@ export type Parser
+@@ -98244,7 +98244,7 @@ export type Parser
  			throw SourceParseError.voidCallResultUsed(String.from(builtinName), line: calleeTok.line, column: calleeTok.column)
  		end 'noValueToUse'
  
@@ -13745,7 +13745,7 @@ index f6e0863..9fd753b 100644
  		callArgs.push(handle)
  		return self.emitIntrinsicAnswer(runtimeName, args: callArgs, resultTag: resultTag, resultAlias: FullRangeIntAliasName if resultTag == ValueTypeTag.integer else NoAnswerAlias, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
  	end 'emitSubpHandleOp'
-@@ -98247,7 +98247,7 @@ export type Parser
+@@ -98259,7 +98259,7 @@ export type Parser
  	function requireIntrinsicArgs(args ValueIdArray, callee ByteArray, arity ParamCount, shape IntrinsicArgShape, calleeTok Token) returns ValueIdArray throws SourceParseError
  		try requireBuiltinArity(args, builtinName: callee, arity: arity, calleeTok: calleeTok)
  
@@ -13754,7 +13754,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto arity 'each'
  			let arg = try args.get(i) otherwise panic("requireIntrinsicArgs: args.count() == arity just checked but get(i) failed")
-@@ -98610,7 +98610,7 @@ export type Parser
+@@ -98622,7 +98622,7 @@ export type Parser
  	end 'millisecondsAlias'
  
  	function bindPlaceArguments(places PlaceArgumentArray, declaration DeclarationFacts, args ValueIdArray, argLabels NameRoster, callAnchor Token) returns ArgumentBlameArray throws SourceParseError
@@ -13763,7 +13763,7 @@ index f6e0863..9fd753b 100644
  
  		for place in places 'eachPlace'
  			if not declaration.byRef.takesArgumentByRef(place.column, label: callArgumentLabel(argLabels, argIndex: place.column)) 'theValueStands'
-@@ -98682,12 +98682,12 @@ export type Parser
+@@ -98694,12 +98694,12 @@ export type Parser
  			witnessDispatch(declarations, _) then return conventionsOf(declarations)
  			callee(name) then return self.byRefConventionsReachableFrom(name)
  			coroutine(name) then return self.byRefConventionsReachableFrom(name)
@@ -13778,7 +13778,7 @@ index f6e0863..9fd753b 100644
  
  		if not self.signatures.isGenericFunctionKey(callee) 'notAGenericName'
  			conventions.push(self.signatures.byRefOf(callee))
-@@ -99017,7 +99017,7 @@ export type Parser
+@@ -99029,7 +99029,7 @@ export type Parser
  			return noPlaceArguments
  		end 'nothingIsPassedByReference'
  
@@ -13787,7 +13787,7 @@ index f6e0863..9fd753b 100644
  
  		for column in 0 upto args.count() 'eachColumn'
  			places.push(PlaceArgument.create(column as ParamCount, value: try args.get(column) otherwise panic("placesOfArguments: args.get OOB at {column} below count {args.count()}"), storage: noHandedPlaceStorage, anchor: anchor, source: PlaceSource.compilerMade))
-@@ -99594,7 +99594,7 @@ export type Parser
+@@ -99606,7 +99606,7 @@ export type Parser
  	function inferredGenericInstances(callee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, mint CalleeMint) returns GenericFunctionInstanceArray throws SourceParseError
  		view templates = self.genericTemplatesNameableHere(callee, mint: mint)
  		let refuse = templates.count() == 1 and not self.signatures.declaresCallee(callee)
@@ -13796,7 +13796,7 @@ index f6e0863..9fd753b 100644
  
  		for template in templates 'eachTemplate'
  			match try self.inferGenericInstance(template, args: args, argLabels: argLabels, anchor: anchor, refuse: refuse) 'inference'
-@@ -99614,7 +99614,7 @@ export type Parser
+@@ -99626,7 +99626,7 @@ export type Parser
  	end 'genericTemplatesNameableHere'
  
  	function genericTemplatesNameableFrom(callee ByteArray, mint CalleeMint) returns GenericFunctionTemplateArray
@@ -13805,7 +13805,7 @@ index f6e0863..9fd753b 100644
  		let callerName = self.namingCallerName()
  		let exempt = callNamesNothingTheReaderWrote(mint, readerFilePath: self.job.path)
  
-@@ -99629,11 +99629,11 @@ export type Parser
+@@ -99641,11 +99641,11 @@ export type Parser
  
  	function inferGenericInstance(template GenericFunctionTemplate, args ValueIdArray, argLabels NameRoster, anchor Token, refuse bool) returns GenericInference throws SourceParseError
  		let functionName = (bareMethodName(template.key))
@@ -13819,7 +13819,7 @@ index f6e0863..9fd753b 100644
  
  			for argIndex in firstUserParamIndex(template.takesReceiver) upto args.count() 'eachArgument'
  				let label = try argLabels.get(argIndex) otherwise panic("inferGenericInstance: argLabels holds {argLabels.count()} entries for {args.count()} arguments — the two columns are parallel")
-@@ -99667,7 +99667,7 @@ export type Parser
+@@ -99679,7 +99679,7 @@ export type Parser
  			end 'violates'
  		end 'eachConstraint'
  
@@ -13828,7 +13828,7 @@ index f6e0863..9fd753b 100644
  
  		for argument in arguments 'eachArgument'
  			owned.push(GenericFunctionArgument.create(argument.kind, name: argument.name.clone()))
-@@ -99678,8 +99678,8 @@ export type Parser
+@@ -99690,8 +99690,8 @@ export type Parser
  	end 'inferGenericInstance'
  
  	function unifyGenericArguments(values ValueIdArray, functionName String, paramName String, anchor Token, refuse bool) returns GenericUnification throws SourceParseError
@@ -13839,7 +13839,7 @@ index f6e0863..9fd753b 100644
  
  		for value in values 'eachValue'
  			if tagIsUnresolved(self.tagOf(value)) 'notYetTyped'
-@@ -100204,8 +100204,8 @@ export type Parser
+@@ -100216,8 +100216,8 @@ export type Parser
  	// `"main.maxon"` is, with the same (absent) ownership obligation.
  	function emitDefaultHelperCall(name ByteArray, anchor Token) returns ValueId throws SourceParseError
  		let opFloor = self.artifact.module.ops.count()
@@ -13850,7 +13850,7 @@ index f6e0863..9fd753b 100644
  
  		return value
  	end 'emitDefaultHelperCall'
-@@ -101201,14 +101201,14 @@ export type Parser
+@@ -101213,14 +101213,14 @@ export type Parser
  		let target = try self.asyncSpawnCallee()
  		try self.consume(TokenKind.leftParen)
  
@@ -13870,7 +13870,7 @@ index f6e0863..9fd753b 100644
  
  		// `firstNamedIfDefaulted`, unconditionally: an `async` call always emits a real `MaxonOp.call` to
  		// a declared function, so its callee always has parameter names — no bare builtin is reachable
-@@ -101234,7 +101234,7 @@ export type Parser
+@@ -101246,7 +101246,7 @@ export type Parser
  		let spawnedOp = try self.bodyState.emittedCall.opIndex() otherwise panic("parseAsyncCall: emitAsyncCall returned without emitting its asyncCall op")
  
  		if self.regionTracking() 'tracked'
@@ -13879,7 +13879,7 @@ index f6e0863..9fd753b 100644
  		end 'tracked'
  
  		self.noteTiedAsync(func, opIdx: spawnedOp, args: args)
-@@ -101332,13 +101332,13 @@ export type Parser
+@@ -101344,13 +101344,13 @@ export type Parser
  		end 'notAnInstance'
  
  		let site = try self.artifact.requestedGenericInstanceSiteKey(callee) otherwise panic("Parser.spawnedCalleeConventions: '{String.from(callee)}' is the instance `genericInstanceCallee` just requested, and no request names it")
@@ -13895,7 +13895,7 @@ index f6e0863..9fd753b 100644
  		let params = self.spawnFactoryParams(writtenCallee)
  
  		for column in 0 upto count 'eachArg'
-@@ -101367,7 +101367,7 @@ export type Parser
+@@ -101379,7 +101379,7 @@ export type Parser
  		try self.requireSpawnArgumentsHoldNoPromise(callee, args: args, argRanges: argRanges)
  		try self.requireSpawnArgumentsRideTheStartRecord(callee, args: args, anchor: anchor)
  
@@ -13904,7 +13904,7 @@ index f6e0863..9fd753b 100644
  
  		for range in argRanges 'eachRange'
  			argAnchors.push(self.argumentFirstTokenIndex(range))
-@@ -101375,7 +101375,7 @@ export type Parser
+@@ -101387,7 +101387,7 @@ export type Parser
  
  		var blames = argImmutableNames.clone()
  		try self.transferThreadArguments(callee, doors: ThreadArgumentDoors.factory(self.spawnFactoryArgumentBlames(callee, writtenCallee: writtenCallee, argLabels: argLabels, count: args.count())), args: args, argImmutableNames: blames, argAnchors: argAnchors, cells: NoParamPositions, anchor: anchor)
@@ -13913,7 +13913,7 @@ index f6e0863..9fd753b 100644
  
  		if inferInstanceOf.isOf() 'aSpawnFactory'
  			match constructed 'inferred'
-@@ -101547,7 +101547,7 @@ export type Parser
+@@ -101559,7 +101559,7 @@ export type Parser
  	// The RESULT replaces the argument, for `transferConsumedArgs`' reason: a promoted borrowed String is a
  	// DIFFERENT record, and it is the one the thread's arguments must carry.
  	function transferThreadArguments(callee ByteArray, doors ThreadArgumentDoors, args ValueIdArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, cells ParamPositionMask, anchor Token) throws SourceParseError
@@ -13922,7 +13922,7 @@ index f6e0863..9fd753b 100644
  
  		for i in 0 upto args.count() 'eachArgument'
  			if maskHasParam(cells, param: i as ParamCount) 'theCallersCellStaysItsOwn'
-@@ -101574,7 +101574,7 @@ export type Parser
+@@ -101586,7 +101586,7 @@ export type Parser
  	// promise also handed to a taking parameter is E3102 at its second argument, as
  	// `specs/async-promise-drop.md` pins.
  	function transferAsyncPromiseArgs(callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token) throws SourceParseError
@@ -13931,7 +13931,7 @@ index f6e0863..9fd753b 100644
  
  		for column in 0 upto args.count() as ParamCount 'eachArg'
  			if self.argumentHoldsAPromise(try args.get(column) otherwise panic("transferAsyncPromiseArgs: args.get OOB at {column}")) 'aPromiseTravels'
-@@ -101587,7 +101587,7 @@ export type Parser
+@@ -101599,7 +101599,7 @@ export type Parser
  		end 'noPromiseTravels'
  
  		let declaration = self.declarationFactsBoundBy(callee)
@@ -13940,7 +13940,7 @@ index f6e0863..9fd753b 100644
  
  		for column in promiseColumns 'eachPromiseColumn'
  			let argValue = try args.get(column) otherwise panic("transferAsyncPromiseArgs: args.get OOB at {column}")
-@@ -102004,10 +102004,10 @@ export type Parser
+@@ -102016,10 +102016,10 @@ export type Parser
  
  	function isolatedParamBitsDeclaredBy(callee ByteArray) returns BoolArray
  		if not self.regionTracking() 'noRegionsInThisProgram'
@@ -13953,7 +13953,7 @@ index f6e0863..9fd753b 100644
  		return self.signatures.isolatedParamBitsOf(declaration)
  	end 'isolatedParamBitsDeclaredBy'
  
-@@ -102029,7 +102029,7 @@ export type Parser
+@@ -102041,7 +102041,7 @@ export type Parser
  	end 'consumeFactsTakeArgument'
  
  	function transferConsumedArgs(info ParamConsumeInfo, isolated BoolArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance) throws SourceParseError
@@ -13962,7 +13962,7 @@ index f6e0863..9fd753b 100644
  
  		for column in 0 upto args.count() as ParamCount 'eachArg'
  			try self.transferConsumedColumn(info, isolated: isolated, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned)
-@@ -102400,7 +102400,7 @@ export type Parser
+@@ -102412,7 +102412,7 @@ export type Parser
  	// Every argument's take is decided, and every refusal thrown, before any is handed over: a
  	// hand-over emits, and `requireEachArgumentHandedOffOnce` needs every take in hand.
  	function handOffArguments(arguments HandedOffArgumentArray, args ValueIdArray) returns HandOffPlanArray throws SourceParseError
@@ -13971,7 +13971,7 @@ index f6e0863..9fd753b 100644
  
  		for argument in arguments 'eachRefusal'
  			plans.push(HandOffPlan.create(argument, take: try self.handOffTakeOf(argument)))
-@@ -102851,7 +102851,7 @@ export type Parser
+@@ -102863,7 +102863,7 @@ export type Parser
  	// aborts on a record with an owner the walk never met, frees the table, and does both before the hand-off.
  	// `walked` is the value, preceded by its witness half when the walk reads one.
  	function emitTransferWalk(walked ValueIdArray, callee ByteArray, range SourceRange)
@@ -13980,7 +13980,7 @@ index f6e0863..9fd753b 100644
  
  		for value in walked 'eachWalked'
  			args.push(value)
-@@ -103413,10 +103413,10 @@ export type Parser
+@@ -103425,10 +103425,10 @@ export type Parser
  		try self.consume(TokenKind.leftParen)
  		self.anchorCalleeReadOutOfASlot(callee, range: SourceRange.ofToken(anchor))
  
@@ -13995,7 +13995,7 @@ index f6e0863..9fd753b 100644
  		let places = try self.parseIndirectCallArgs(func, governing: governing, args: args, names: argImmutableNames, argRanges: argRanges, argAnchors: argAnchors, anchor: anchor, calleeName: calleeTok.value)
  		let argsAreChecked = self.indirectArgumentsAreChecked(governing, args: args, anchor: anchor)
  
-@@ -103685,7 +103685,7 @@ export type Parser
+@@ -103697,7 +103697,7 @@ export type Parser
  	end 'indirectByRefPositionsOf'
  
  	function pendingIndirectPlaces(places PlaceArgumentArray) returns PendingArgumentBindingArray throws SourceParseError
@@ -14004,7 +14004,7 @@ index f6e0863..9fd753b 100644
  
  		for place in places 'eachPlace'
  			pending.push(PendingArgumentBinding.create(place.column, cell: try self.placeStorageFor(place), blame: placeBlame(place)))
-@@ -103790,7 +103790,7 @@ export type Parser
+@@ -103802,7 +103802,7 @@ export type Parser
  		// file. When the declaring file refused the case (E3095, E2004), the call defers and that refusal
  		// reports it.
  		if self.signatures.backsAFunctionBackedEnumCase(name) 'aRefusedEnumCaseBacking'
@@ -14013,7 +14013,7 @@ index f6e0863..9fd753b 100644
  		end 'aRefusedEnumCaseBacking'
  
  		panic("functionValueShape: a `function`-tagged value's governing name '{String.from(name)}' is neither a lifted closure, a function alias, a declared function, nor a function-backed enum case's backing name — every function value is minted from one of the four (parseClosureExpression / parseTypeReference / emitFunctionRef / a function-backed enum's `.rawValue`)")
-@@ -103894,7 +103894,7 @@ export type Parser
+@@ -103906,7 +103906,7 @@ export type Parser
  	end 'handIsolatedArgumentAt'
  
  	function aliasPromisesTaken(alias FunctionTypeAlias) returns BoolArray
@@ -14022,7 +14022,7 @@ index f6e0863..9fd753b 100644
  
  		for declared in self.aliasParamTypes(alias) 'eachParameter'
  			taken.push(typeIsPromiseStorage(self.signatures, t: declared))
-@@ -103904,7 +103904,7 @@ export type Parser
+@@ -103916,7 +103916,7 @@ export type Parser
  	end 'aliasPromisesTaken'
  
  	function aliasParamTypes(alias FunctionTypeAlias) returns MaxonTypeArray
@@ -14031,7 +14031,7 @@ index f6e0863..9fd753b 100644
  
  		for param in alias.paramTypes 'eachParam'
  			paramTypes.push(self.repairSweptType(maxonTypeOfStoredAliasParam(param, typeNames: self.artifact.typeNames), scopeFilePath: alias.declFilePath))
-@@ -103914,7 +103914,7 @@ export type Parser
+@@ -103926,7 +103926,7 @@ export type Parser
  	end 'aliasParamTypes'
  
  	function functionValueShapeOf(decl SweptDeclaration) returns FunctionValueShape
@@ -14040,7 +14040,7 @@ index f6e0863..9fd753b 100644
  
  		for swept in decl.paramTypes 'eachParam'
  			paramTypes.push(self.sweptParamType(swept, scopeFilePath: decl.declFilePath))
-@@ -103925,7 +103925,7 @@ export type Parser
+@@ -103937,7 +103937,7 @@ export type Parser
  
  	function promisesTakenBy(decl SweptDeclaration, count ElementIndex) returns BoolArray
  		let consume = self.signatures.consumeOfDeclaration(decl.site)
@@ -14049,7 +14049,7 @@ index f6e0863..9fd753b 100644
  
  		for position in 0 upto count 'eachPosition'
  			taken.push(consume.takesPromiseAt(position as ParamCount))
-@@ -105603,7 +105603,7 @@ export type Parser
+@@ -105615,7 +105615,7 @@ export type Parser
  		// (`emitFieldLoad`), so a backing field of a ranged alias arrives tagged exactly as `s.width` on a
  		// real record does — which is what makes `return op.rawValue.value` from a `returns Latency` function
  		// type-check, and what gives the `named(Priority)` an `.ordinal` hop below needs.
@@ -14058,7 +14058,7 @@ index f6e0863..9fd753b 100644
  		let fieldType = leaf.fieldType
  		let domain = leaf.domain
  
-@@ -106404,10 +106404,10 @@ end 'ShadowRenamedTokens'
+@@ -106416,10 +106416,10 @@ end 'ShadowRenamedTokens'
  
  function conformanceInterfaceNames(interfaces InterfaceConformanceArray) returns NameRoster
  	if interfaces.isEmpty() 'declaresNothing'
@@ -14071,7 +14071,7 @@ index f6e0863..9fd753b 100644
  
  	for conformance in interfaces 'eachInterface'
  		names.push(conformance.interfaceName)
-@@ -106481,7 +106481,7 @@ type AuthorNameScopeWalk
+@@ -106493,7 +106493,7 @@ type AuthorNameScopeWalk
  	var interfaceEnd as ElementIndex
  
  	static function over(tokens TokenArray, extents BlockExtents, watched DeclaredTypeNameSet) returns AuthorNameScopeWalk
@@ -14080,7 +14080,7 @@ index f6e0863..9fd753b 100644
  	end 'over'
  
  	function isNonReference(at ElementIndex) returns bool
-@@ -106779,7 +106779,7 @@ type AuthorNameScopeWalk
+@@ -106791,7 +106791,7 @@ type AuthorNameScopeWalk
  	end 'declareNameAt'
  
  	function segmentNameIndexes(open ElementIndex, close ElementIndex, markTypes bool) returns TokenIndexArray

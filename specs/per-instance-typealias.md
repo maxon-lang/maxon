@@ -781,7 +781,7 @@ export extension Seq
 	export typealias Items = Array with Item
 
 	export function all() returns Items
-		return Items.create()
+		return Items.create(0)
 	end 'all'
 end 'Seq'
 
@@ -894,7 +894,7 @@ export extension Seq
 	export typealias Items = Array with Item
 
 	export function all() returns Items
-		return Items.create()
+		return Items.create(0)
 	end 'all'
 end 'Seq'
 
@@ -1438,6 +1438,65 @@ function main() returns ExitCode
 	listed.prepend(box.n)
 	var arrayed = crate.items()
 	arrayed.push(crate.n)
+	return (listed.count() + arrayed.count()) as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: two-types-each-get-an-extension-member-of-one-name -->
+The key is `<Type>.<member>` for an `extension` body too, so an `extension Box` declaring `Items` as a `List` and
+an `extension Crate` declaring `Items` as an `Array` are not duplicates, and each body reads its own
+declaration whichever file is folded first.
+```maxon
+// --- file: types.maxon
+export typealias Digit = int(0 to 9)
+
+export type Box
+	export var n as Digit
+
+	export static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+export type Crate
+	export var n as Digit
+
+	export static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Crate'
+
+// --- file: box.maxon
+export extension Box
+	export typealias Items = List with Digit
+
+	export function items() returns Items
+		var made = Items.create()
+		made.append(self.n)
+		return made
+	end 'items'
+end 'Box'
+
+// --- file: crate.maxon
+export extension Crate
+	export typealias Items = Array with Digit
+
+	export function items() returns Items
+		var made = Items.create(0)
+		made.push(self.n)
+		return made
+	end 'items'
+end 'Crate'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let box = Box.create(3)
+	let crate = Crate.create(4)
+	let listed = box.items()
+	let arrayed = crate.items()
 	return (listed.count() + arrayed.count()) as ExitCode
 end 'main'
 ```

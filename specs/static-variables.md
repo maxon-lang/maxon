@@ -2028,6 +2028,60 @@ end 'main'
 hi!!
 ```
 
+<!-- test: top-level-var-union-starts-empty-and-is-reassigned-to-a-managed-payload -->
+A `var` of a one-word union starts as its payload-free case, which is a bare word with no heap behind it,
+and `main` reassigns it to a case that owns a `String`. The reassigned payload is released at exit like any
+other global's.
+```maxon
+union Holder
+	empty
+	holding(text String)
+end 'Holder'
+
+var held = Holder.empty
+
+function main() returns ExitCode
+	held = Holder.holding("abc{3}")
+	print("stored\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+stored
+```
+
+<!-- test: static-var-union-starts-empty-and-is-reassigned-to-a-managed-payload -->
+The same holds for a `static var` of a type, which no module-level declaration is involved in.
+```maxon
+union Holder
+	empty
+	holding(text String)
+end 'Holder'
+
+type Slot
+	static var held = Holder.empty
+
+	static function fill()
+		Slot.held = Holder.holding("abc{3}")
+	end 'fill'
+end 'Slot'
+
+function main() returns ExitCode
+	Slot.fill()
+	print("stored\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+stored
+```
+
 <!-- test: top-level-let-string-literal -->
 ```maxon
 let name = "Ada"
