@@ -15,8 +15,9 @@ or a method named `merge` keeps working. A method may declare its receiver as it
 capability, `function reported(immutable self)`, for the cases inference cannot express; `self` is never
 written at the call.
 
-A capability word written directly on a value type (a number, `bool`, an enum, `String`), a service handle
-or a promise is refused, because such a type has no region of its own to qualify. `mutable` on a parameter
+A capability word written directly on a value type (a number, `bool`, a payload-free union or enum,
+`String`), a service handle or a promise is refused, because such a type has no region of its own to
+qualify. A union with a payload has one and takes `isolated` and `immutable`. `mutable` on a parameter
 or function-type parameter of a value type is the one exception: it makes the parameter by reference.
 
 ## Tests
@@ -38,6 +39,66 @@ end 'main'
 ```
 ```maxoncstderr
 error E2010: <fragment>:4:17: Expected 'a type' but got 'immutable'
+```
+
+<!-- test: capability-word-on-a-payload-free-union-refused -->
+A union none of whose cases carries a payload is a plain tag value that belongs to no region, so `isolated` is refused as on an enum.
+
+```maxon
+union Mode
+	idle
+	busy
+end 'Mode'
+
+function echo(m isolated Mode) returns Mode
+	return m
+end 'echo'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:7:17: Expected 'a type' but got 'isolated'
+```
+
+<!-- test: capability-word-on-a-payload-union-parameter-and-result-runs -->
+A union with a payload holds a record, so it is a region and takes `isolated` on a parameter and on a result.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+union Slot
+	filled(box Box)
+	vacant
+end 'Slot'
+
+function fill(n Count) returns isolated Slot
+	return Slot.filled(Box.create(n))
+end 'fill'
+
+function read(slot isolated Slot) returns Count
+	return match slot 'which'
+		filled(box) gives box.n
+		vacant gives 0
+	end 'which'
+end 'read'
+
+function main() returns ExitCode
+	let slot = fill(7)
+	return read(slot) as ExitCode
+end 'main'
+```
+```exitcode
+7
 ```
 
 <!-- test: self-parameter-not-first-refused -->

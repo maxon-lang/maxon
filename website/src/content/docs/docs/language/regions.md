@@ -46,8 +46,9 @@ keeps its meaning, and `swap(1, right: 2)`, with the parenthesis against the nam
 | `modify x 'label' … end 'label'` | opens an `isolated` value for several statements |
 | `freeze x`, `swap path with value`, `merge x` | turn a region into frozen data, take a region out of a slot, bring a region into the current one |
 
-A capability word written directly on a number, `bool`, an enum or a `String` is not a type there: those
-values belong to no region. `mutable` on a parameter or function-type parameter of such a type is the one
+A capability word written directly on a number, `bool`, an enum, a payload-free union or a `String` is not a
+type there: those values belong to no region. A union with a payload does, and takes `isolated` and
+`immutable` like a record. `mutable` on a parameter or function-type parameter of a value type is the one
 place it is accepted, and it makes the parameter by reference. The same words in other positions fail as any
 stray word does: the cases are in `specs/regions-syntax.md`.
 

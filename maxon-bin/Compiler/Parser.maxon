@@ -29617,6 +29617,13 @@ export type Parser
 		end 'notARecordTag'
 
 		let name = self.internedName(typeNameIdOf(spelled))
+
+		// A union with a payload holds a record and is a region of its own; a payload-free one, like an enum, is
+		// a bare tag with nothing to qualify.
+		if self.signatures.containsEnumInAnyFile(name) 'aUnion'
+			return self.signatures.enumNameIsBoxed(name)
+		end 'aUnion'
+
 		return self.signatures.containsStructInAnyFile(name) and not self.signatures.isServiceHandle(name)
 	end 'typeAdmitsACapability'
 
@@ -71432,7 +71439,7 @@ export type Parser
 			return
 		end 'readOnlyIntoALetField'
 
-		let source = self.rhsBareLocalSourceName(valueStart)
+		let source = self.rhsBareLocalSourceName(self.startPastMerge(valueStart))
 
 		if let localName = try source.localName() 'aBareLocal'
 			var binding = self.bodyState.scope.getInfo(localName)
@@ -71480,6 +71487,16 @@ export type Parser
 
 		try self.refuseStoreIntoALetField(place, into: into, subject: "a value other names may still write", anchor: anchor)
 	end 'requireValueMeetsLetFieldRules'
+
+	// `merge x` re-enters the bare local or parameter `x` into this region, so the let-field door judges `x`
+	// itself, as `parseMerge` does.
+	function startPastMerge(valueStart ElementIndex) returns ElementIndex
+		if regionOperatorAt(self.tokens, index: valueStart) and self.tokenAt(valueStart).value.equals(MergeOperatorWord) 'aMerge'
+			return valueStart + 1
+		end 'aMerge'
+
+		return valueStart
+	end 'startPastMerge'
 
 	function valueIsOpaque(value ValueId) returns bool
 		return self.tagOf(value) == ValueTypeTag.typeParameter

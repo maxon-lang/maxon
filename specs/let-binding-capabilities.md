@@ -2215,3 +2215,38 @@ end 'main'
 ```exitcode
 1
 ```
+
+<!-- test: let-binding-capabilities.a-merged-isolated-parameter-kept-by-a-let-field-is-accepted -->
+`merge attrs` turns the `isolated` parameter back into ordinary data the `let` field owns alone, so the store reads through `merge` to the parameter exactly as `parseMerge` does and takes it like a moved parameter.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Attrs
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Attrs'
+
+type Holder
+	let attrs as Attrs
+
+	function read() returns Count
+		return self.attrs.n
+	end 'read'
+
+	static function create(attrs isolated Attrs) returns Self
+		return Self{attrs: merge attrs}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.create(Attrs.create(5) as isolated Attrs)
+	return holder.read() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
