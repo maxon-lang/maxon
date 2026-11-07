@@ -265,7 +265,7 @@ argument is **E3195**. `create(0)` makes an empty array. `create(n)` makes `n` z
 most 256 bytes; `n` is an `ElementIndex` and `zeroed:` a literal `true` or `false`. `push(value)` appends; `reserve(n)` grows the capacity of an existing
 array without changing `count()`. `resize(n)` changes the length and fills new slots with zero, so `resize` and
 `create(n)` are available only for elements stored inline — integers, floats, `bool`, payload-free enums and
-unions — whose type admits zero. For an array of records, strings or other managed values, of an alias whose
+unions — whose type admits zero. For an array of records, strings, promises or other managed values, of an alias whose
 range excludes 0 (`int(1 to 100)`), or of an enum or union whose raw values (tags) include no 0, `resize` and
 `create(n)` are **E3106**, as are `create(n, zeroed: true)` and `FixedArray.create` (which takes
 `value: v` for such an element, as [runtime-sized fixed arrays](#runtime-sized-fixed-arrays) states); create with

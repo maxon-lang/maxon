@@ -482,6 +482,10 @@ release's version as its heading when the release is cut.
 - `HttpServer.serve` takes `handler immutable HttpHandler`.
   Fix: write `server.serve(freeze MyHandler.create(…))`; a function that receives a handler for `serve`
   declares its parameter `immutable`.
+- A promise has no zero value, so `create(n)`, `create(n, zeroed: true)` and `resize` on an `Array` of
+  promises are E3106, as they are for a `String`, and so is `create(n)` in a generic body that some
+  instantiation makes an array of promises.
+  Fix: create with `create(n, zeroed: false)` and fill with `push`.
 
 ## 0.5.0 — 2026-10-08
 

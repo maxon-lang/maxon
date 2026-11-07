@@ -86933,7 +86933,10 @@ export type Parser
 	// publishes `n` slots of a fresh zeroed buffer; `create(n, zeroed: false)` and a literal-zero capacity
 	// publish none and never reach this gate. A zero is an ELEMENT only while the element lives
 	// INLINE in the buffer. A MANAGED element lives there as an 8-byte POINTER (`ManagedArrayElementBytes`),
-	// so a zeroed slot is NULL — an absence, not a value — and Maxon has no default constructor to make one.
+	// and a promise as a pointer into the scheduler's slab, so a zeroed slot of either is NULL — an
+	// absence, not a value — and Maxon has no default constructor to make one. The gate therefore asks
+	// whether the element OWES A DROP (`containerElementOwesDrop`), not whether it is an `__mm` box: a
+	// promise is not one.
 	// The array that comes back answers `count()` = N while `get(0)` takes the empty-slot branch of
 	// `emitLoadElemAndOkReturn`: a `count()` that does not agree with `get()`, which is a silent wrong answer
 	// rather than a missing feature. `push(value)` is the growth that supplies the element. An inline element
@@ -86955,7 +86958,7 @@ export type Parser
 	// obligation from its end, and this note is the pointer back, so neither side can be changed without
 	// meeting the other.
 	function requireArrayGrowthHasZeroElement(giid GenericInstanceId, tok Token, refusal ZeroElementRefusal) throws SourceParseError
-		if self.signatures.containerElementIsManaged(giid) 'managed'
+		if self.signatures.containerElementOwesDrop(giid) 'managed'
 			let element = self.signatures.arrayElementDisplayName(giid)
 
 			match refusal 'managedRefusal'

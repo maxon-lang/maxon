@@ -4465,6 +4465,284 @@ end 'main'
 error E3106: <fragment>:10:13: 'create(n)' cannot publish zeroed slots of 'Held': zero is not a value of 'Held'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
 ```
 
+<!-- test: error.create-with-capacity-zeroed-cannot-hold-a-service-handle -->
+A `<Service>.handle` is a pointer to a cown box, so a zeroed slot is a null handle that a send would dereference. The default (zeroed) form is refused for it exactly as it is for a record.
+```maxon
+typealias Digit = int(0 to 9)
+
+type Worker
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ping() returns Digit
+		return 3
+	end 'ping'
+end 'Worker'
+
+typealias Handles = Array with Worker.handle
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let handles = Handles.create(2)
+	let reply = try await worker.ping() otherwise 9
+
+	return (reply + handles.count()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:18:16: 'create(n)' cannot publish zeroed slots of 'Worker.handle': zero is not a value of 'Worker.handle'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.create-with-capacity-explicitly-zeroed-cannot-hold-a-service-handle -->
+```maxon
+typealias Digit = int(0 to 9)
+
+type Worker
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ping() returns Digit
+		return 3
+	end 'ping'
+end 'Worker'
+
+typealias Handles = Array with Worker.handle
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let handles = Handles.create(2, zeroed: true)
+	let reply = try await worker.ping() otherwise 9
+
+	return (reply + handles.count()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:18:16: 'create(n)' cannot publish zeroed slots of 'Worker.handle': zero is not a value of 'Worker.handle'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: create-with-capacity-not-zeroed-holds-a-service-handle -->
+Only the not-zeroed form builds an array of handles, and `push` supplies each one. A handle read back from the array reaches its service.
+```maxon
+typealias Digit = int(0 to 9)
+
+type Worker
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ping() returns Digit
+		return 3
+	end 'ping'
+end 'Worker'
+
+typealias Handles = Array with Worker.handle
+
+function main() returns ExitCode
+	var handles = Handles.create(2, zeroed: false)
+	let first = spawn Worker.create()
+	let second = spawn Worker.create()
+
+	handles.push(first)
+	handles.push(second)
+
+	view picked = try handles.get(1) otherwise panic("two were pushed")
+	let reply = try await picked.ping() otherwise 9
+
+	return 0 if reply == 3 and handles.count() == 2 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-handle-of-a-type-nothing-spawns-is-an-unknown-type -->
+Whether a type is a service is a whole-program property, so `Worker.handle` names a type only in a program that spawns a `Worker`. Without a `spawn` the element is an unknown type, and it is refused as one rather than judged for a zero value.
+```maxon
+export typealias Digit = int(0 to 9)
+
+type Worker
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ping() returns Digit
+		return 3
+	end 'ping'
+end 'Worker'
+
+typealias Handles = Array with Worker.handle
+
+function main() returns ExitCode
+	let s = Handles.create(2)
+	let h = try s.get(0) otherwise panic("get")
+	let n = try await h.ping() otherwise 9
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:14:32: Unknown type 'Worker.handle'
+error E3011: <fragment>:19:22: Unknown type 'Worker.handle'
+```
+
+<!-- test: error.create-with-capacity-zeroed-cannot-hold-an-unknown-type -->
+```maxon
+typealias Nothings = Array with Nope
+
+function main() returns ExitCode
+	let nothings = Nothings.create(2)
+
+	return nothings.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:2:33: Unknown type 'Nope'
+```
+
+<!-- test: error.create-with-capacity-zeroed-cannot-hold-a-promise -->
+A promise slot holds a pointer into the scheduler's own slab, so a zeroed slot is a null promise that `await` would dereference. The default (zeroed) form is refused as it is for any managed element.
+```maxon
+typealias Digit = int(0 to 9)
+typealias DigitPromise = Promise with Digit
+typealias DigitPromises = Array with DigitPromise
+
+function main() returns ExitCode
+	let promises = DigitPromises.create(2)
+
+	return promises.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:7:17: 'create(n)' cannot publish zeroed slots of 'DigitPromise': zero is not a value of 'DigitPromise'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.create-with-capacity-zeroed-cannot-hold-a-promise-spelled-inline -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias DigitPromises = Array with Promise with Digit
+
+function main() returns ExitCode
+	let promises = DigitPromises.create(2, zeroed: true)
+
+	return promises.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:6:17: 'create(n)' cannot publish zeroed slots of 'Promise with int(0 to 9)': zero is not a value of 'Promise with int(0 to 9)'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.resize-cannot-grow-an-array-of-promises -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias DigitPromise = Promise with Digit
+typealias DigitPromises = Array with DigitPromise
+
+function main() returns ExitCode
+	var promises = DigitPromises.create(0)
+	promises.resize(2)
+
+	return promises.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:8:11: 'resize' cannot grow an array of 'DigitPromise': a grown slot holds NO element — Maxon has no default constructor — so 'count()' would not agree with 'get()'. Append with 'push(value)'
+```
+
+<!-- test: create-with-capacity-not-zeroed-holds-a-promise -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias DigitPromise = Promise with Digit
+typealias DigitPromises = Array with DigitPromise
+
+function three() returns Digit
+	Scheduler.yield()
+	return 3
+end 'three'
+
+function main() returns ExitCode
+	var promises = DigitPromises.create(2, zeroed: false)
+
+	promises.push(async three())
+	promises.push(async three())
+
+	let second = try promises.pop() otherwise panic("two were pushed")
+	let first = try promises.pop() otherwise panic("two were pushed")
+	let sum = await first + await second
+
+	return sum as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: error.create-with-capacity-in-a-generic-body-is-refused-for-a-promise-instantiation -->
+```maxon
+typealias Digit = int(0 to 9)
+typealias DigitPromise = Promise with Digit
+
+type Pool uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create(3)}
+	end 'create'
+
+	function size() returns Count
+		return items.count()
+	end 'size'
+end 'Pool'
+
+typealias PromisePool = Pool with DigitPromise
+
+function main() returns ExitCode
+	let pool = PromisePool.create()
+
+	return pool.size() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:11:22: 'create(n)' cannot publish zeroed slots of a type parameter: 'PromisePool' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0). Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.create-with-capacity-zeroed-cannot-hold-a-function -->
+A function value is a closure record, so a zeroed slot is a null closure.
+```maxon
+typealias Digit = int(0 to 9)
+typealias Step = function(Digit) returns Digit
+typealias Steps = Array with Step
+
+function main() returns ExitCode
+	let steps = Steps.create(2)
+
+	return steps.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:7:14: 'create(n)' cannot publish zeroed slots of 'Step': zero is not a value of 'Step'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
+<!-- test: error.create-with-capacity-zeroed-cannot-hold-a-tuple -->
+A tuple is a record, so a zeroed slot is a null tuple.
+```maxon
+typealias Digit = int(0 to 9)
+typealias Pair = (Digit, Digit)
+typealias Pairs = Array with Pair
+
+function main() returns ExitCode
+	let pairs = Pairs.create(2)
+
+	return pairs.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:7:14: 'create(n)' cannot publish zeroed slots of '(Digit, Digit)': zero is not a value of '(Digit, Digit)'. Pass 'zeroed: false' to reserve capacity and append with 'push(value)'
+```
+
 <!-- test: create-with-capacity-zeroed-holds-an-enum-whose-first-case-is-zero -->
 A plain enum numbers its first case 0, an explicit raw value of 0 names a case too, and a string-backed enum stores declaration indices, so each admits the zeroed form and its zeroed slots read as the case numbered 0.
 ```maxon

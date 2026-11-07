@@ -1669,6 +1669,92 @@ end 'main'
 error E3106: <fragment>:5:10: 'FixedArray.create' cannot publish slots of 'String': every slot is zero and zero is not a value of 'String'
 ```
 
+<!-- test: error.a-service-handle-element-is-refused -->
+A `<Service>.handle` is a pointer to a cown box, so `Slots.create()` would publish null handles that a send dereferences. It is refused as a `String` is, and the array starts from `create(value: h)` instead.
+```maxon
+typealias Digit = int(0 to 9)
+
+type Worker
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ping() returns Digit
+		return 3
+	end 'ping'
+end 'Worker'
+
+typealias Slots = FixedArray with 2 Worker.handle
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let slots = Slots.create()
+	let reply = try await worker.ping() otherwise 9
+
+	return (reply + slots.count()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:18:14: 'FixedArray.create' cannot publish slots of 'Worker.handle': every slot is zero and zero is not a value of 'Worker.handle'
+```
+
+<!-- test: a-service-handle-fixed-array-starts-from-a-value -->
+Every slot starts as the one handle, so a send through any slot reaches the service.
+```maxon
+typealias Digit = int(0 to 9)
+
+type Worker
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ping() returns Digit
+		return 3
+	end 'ping'
+end 'Worker'
+
+typealias Slots = FixedArray with 2 Worker.handle
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let slots = Slots.create(value: worker)
+	let picked = slots.get(1)
+	let reply = try await picked.ping() otherwise 9
+
+	return 0 if reply == 3 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-handle-of-a-type-nothing-spawns-is-an-unknown-fixed-array-element -->
+Without a `spawn` there is no `Worker.handle` to hold, so the element is an unknown type and not a type judged for a zero value.
+```maxon
+export typealias Digit = int(0 to 9)
+
+type Worker
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ping() returns Digit
+		return 3
+	end 'ping'
+end 'Worker'
+
+typealias Slots = FixedArray with 2 Worker.handle
+
+function main() returns ExitCode
+	let slots = Slots.create()
+
+	return slots.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:14:37: Unknown type 'Worker.handle'
+```
+
 <!-- test: error.an-element-that-is-neither-scalar-nor-managed-is-refused -->
 An element must be an integer, a bool, a float or a managed value. A `Promise` is none of them, so the alias over it is E2015, before any slot is published.
 ```maxon

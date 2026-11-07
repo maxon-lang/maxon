@@ -38021,7 +38021,7 @@ export type ProgramSignatures
 			consumeMoved then return self.typeArgIsOwned(t)
 			uncopyableElement then return not self.typeSupportsDeepClone(t, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone)
 			managedElement then return self.typeArgIsManagedElement(t)
-			noZeroElement then return self.typeArgIsManagedElement(t) or self.typeExcludesZero(t)
+			noZeroElement then return self.typeArgOwesDrop(t) or self.typeExcludesZero(t)
 			retainedFeed then return self.typeIsManaged(t, from: self.typeNames)
 			greenThreadElement or
 			greenThreadFeed then return self.sourceCloneVerdictOfType(t) == SourceCloneVerdict.holdsAGreenThread
@@ -38112,6 +38112,17 @@ export type ProgramSignatures
 		return self.typeIsManaged(t, from: self.typeNames)
 	end 'typeArgIsManagedElement'
 
+	// The `noZeroElement` kind asks this where `typeArgIsManagedElement` is too narrow: a promise is
+	// not an `__mm` box and still has no zero value. A superseded spelling votes nothing, for the
+	// reason given there.
+	export function typeArgOwesDrop(t MaxonType) returns bool
+		if self.typeArgSpellingIsSuperseded(t) 'theContestReplacedThisOne'
+			return false
+		end 'theContestReplacedThisOne'
+
+		return self.typeOwesDrop(t, from: self.typeNames)
+	end 'typeArgOwesDrop'
+
 	export function typeExcludesZero(t MaxonType) returns bool
 		if maxonTypeTag(t) != ValueTypeTag.named 'namesNoDeclaration'
 			return false
@@ -38137,17 +38148,13 @@ export type ProgramSignatures
 		return not layout.declaresZeroTag()
 	end 'enumNameExcludesZero'
 
+	// A name no declaration holds has no zero rule to apply: it is either the byte element a `b"…"`
+	// literal mints, which admits zero, or an unknown type that E3011 reports before lowering.
 	function innerAliasExcludesZero(name ByteArray) returns bool
-		match self.innerAliasOf(name) 'inner'
-			declared(alias) then return aliasExcludesZero(alias)
-			undeclared then break
+		return match self.innerAliasOf(name) 'inner'
+			declared(alias) gives aliasExcludesZero(alias)
+			undeclared gives false
 		end 'inner'
-
-		if self.nameIsAnUndeclaredByteElement(name) 'theByteAnArrayLiteralMints'
-			return false
-		end 'theByteAnArrayLiteralMints'
-
-		panic("ProgramSignatures.innerAliasExcludesZero: '{String.from(name)}' is a `named` type no registry holds and not the byte element a `b\"…\"` literal mints — every other named element is a declared alias, enum or union")
 	end 'innerAliasExcludesZero'
 
 	// The element-copy refusal fires only for an `Array` instance some code copies, directly or through a
