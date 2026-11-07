@@ -1163,7 +1163,8 @@ end 'main'
 ```
 <!-- test: error.function-value-call-keeps-its-argument-in-a-let-field -->
 The same judgement covers what a function value KEEPS: `shelve` stores its parameter in a `let` field, so the
-call through `build`'s `Maker` keeps `v`, which is read again afterwards.
+call through `build`'s `Maker` keeps `v`, which is read again afterwards. `Maker` and `shelve` both declare the
+parameter `mutable`, so the conversion is allowed and this older door is the one that speaks.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1177,13 +1178,13 @@ type Shelf
 	end 'create'
 end 'Shelf'
 
-typealias Maker = function(IntArray) returns Shelf
+typealias Maker = function(mutable IntArray) returns Shelf
 
-function shelve(d IntArray) returns Shelf
+function shelve(d mutable IntArray) returns Shelf
 	return Shelf.create(d)
 end 'shelve'
 
-function build(m Maker, d IntArray) returns Shelf
+function build(m Maker, d mutable IntArray) returns Shelf
 	return m(d)
 end 'build'
 
@@ -1200,7 +1201,8 @@ error E3078: <fragment>:26:14: cannot pass the `var` 'v', which is read again, t
 ```
 
 <!-- test: function-value-call-keeps-an-argument-it-is-last-used-in -->
-The accepted twin: `v` is not read after the call, so the `let` field takes it by a move.
+The accepted twin: `v` is not read after the call, so the `let` field takes it by a move. The function value
+keeps its parameter, so `Maker` and `shelve` declare it `mutable`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1214,13 +1216,13 @@ type Shelf
 	end 'create'
 end 'Shelf'
 
-typealias Maker = function(IntArray) returns Shelf
+typealias Maker = function(mutable IntArray) returns Shelf
 
-function shelve(d IntArray) returns Shelf
+function shelve(d mutable IntArray) returns Shelf
 	return Shelf.create(d)
 end 'shelve'
 
-function build(m Maker, d IntArray) returns Shelf
+function build(m Maker, d mutable IntArray) returns Shelf
 	return m(d)
 end 'build'
 

@@ -1579,7 +1579,7 @@ type Sink
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(ys Ys)
+	export function take(ys isolated Ys)
 		self.seen = self.seen + 1
 		print("{ys.count()}\n")
 	end 'take'
@@ -1587,13 +1587,12 @@ end 'Sink'
 
 function main() returns ExitCode
 	let h = spawn Sink.create()
-	let a = Xs.create(0)
-	try h.take(a) otherwise panic("send take")
+	try h.take(Xs.create(0)) otherwise panic("send take")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:22:13: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
+error E3005: <fragment>:21:13: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
 ```
 
 <!-- test: error.a-call-result-of-a-qualified-return-wears-the-brand-it-names -->

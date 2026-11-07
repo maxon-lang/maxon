@@ -425,6 +425,20 @@ end 'main'
 **What crosses a message.** A value sent to a service must not stay reachable from the sender in a way
 either side could write, because the two green threads may run at the same time on different processors:
 
+- **A parameter or reply that holds data of its region names how it crosses.** A message parameter, a
+  message reply or a factory parameter whose type is a record, a union with a payload, an array or other
+  container, or an interface value is written `isolated T` or `immutable T`; with neither, the `spawn` that makes
+  the type a service is [E3217](/docs/cli/error-codes/#e3217--semanticmessageneedsacapability), naming the parameter or
+  message. `isolated` hands the value over: the sender passes a fresh region or an `isolated` local
+  ([Separate Regions](/docs/language/regions/#separate-regions-isolated)) and cannot read it afterwards. `immutable` shares frozen
+  data that both threads only read: the sender passes `freeze x.clone()` or an `immutable` value
+  ([Frozen Data](/docs/language/regions/#frozen-data-freeze-and-immutable)). Only the factory the `spawn` names is judged, and a
+  reply is judged at its declaration, so a generic message that `returns T` is not refused here. A word is
+  needed on none of these: numbers, `bool`, `ExitCode`, `String`, `Character`, enums, unions whose cases carry
+  nothing, service and interface handles, `SharedValue` cells, a tuple none of whose elements owns heap, and a
+  type that holds a `unique` value or an OS handle (`TcpClient`, `TcpListener`, …). A promise, a function value
+  or an opaque type parameter is **E3135**, a reply the cell cannot carry is **E3140**, and a state field that
+  can hold a promise is **E3216**; those are reported before E3217.
 - A local `let` or `var`, a temporary or a literal argument the sender owns is **moved** into the service;
   reading the sender's variable afterwards is **E3102**. Replies are moved too, and so is every argument a
   `spawn` hands its factory, whether or not the factory keeps it. The handler owns what it was moved, so it may

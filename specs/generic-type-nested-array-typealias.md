@@ -4212,7 +4212,7 @@ type Sink uses T
 		return Self{tag: tag}
 	end 'create'
 
-	export function put(c IntCell, extra Count = sizeof(T)) returns Count
+	export function put(c isolated IntCell, extra Count = sizeof(T)) returns Count
 		return extra + (c.item as Count) * 0
 	end 'put'
 end 'Sink'

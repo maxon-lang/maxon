@@ -37,23 +37,21 @@ union TraceCommand
 end 'TraceCommand'
 
 type TraceRecorder
-	var keys as TraceKeyArray
+	var keys as isolated TraceKeyArray
 
 	static function create() returns Self
 		return Self{keys: TraceKeyArray.create(0)}
 	end 'create'
 
-	export function apply(command TraceCommand)
+	export function apply(command isolated TraceCommand)
 		match command 'which'
 			note(key) then self.keys.push(key)
 			reset then self.keys.clear()
 		end 'which'
 	end 'apply'
 
-	export function finish() returns TraceKeyArray
-		var result = self.keys
-		self.keys = TraceKeyArray.create(0)
-		return result
+	export function finish() returns isolated TraceKeyArray
+		return swap self.keys with TraceKeyArray.create(0)
 	end 'finish'
 end 'TraceRecorder'
 
@@ -78,8 +76,8 @@ type TraceCaptureControl
 
 	// A `ForeverMs` send fails `mailboxFull` only for a cancelled sender: here its command is dropped,
 	// and in `stop` it gets no keys.
-	function submit(command TraceCommand)
-		try self.recorder.apply(command.clone(), sendTimeout: ForeverMs) otherwise (e) 'refused'
+	function submit(command isolated TraceCommand)
+		try self.recorder.apply(command, sendTimeout: ForeverMs) otherwise (e) 'refused'
 			match e 'why'
 				mailboxFull or
 				serviceStopped then return

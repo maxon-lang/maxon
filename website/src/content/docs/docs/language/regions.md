@@ -56,10 +56,10 @@ A method may declare its receiver as its first parameter, `function reported(imm
 inference cannot express what the method needs. `self` is not written at the call. A receiver capability on a
 `static` or free function, or `self` after another parameter, is a parse error (`specs/regions-syntax.md`).
 
-The capability checks run on the standard library, on every file of a program that declares a field,
-parameter, receiver, result or function-type position `isolated` or `immutable`, and on any file that spells
-`modify`, `async`, `freeze`, `swap`, `merge`, `isolated` or `immutable`. Other code is held to the
-read-only rules of [Read-Only Values](/docs/language/memory-model/#read-only-values) alone, and those rules apply everywhere.
+The capability checks run on every body of every program, whether or not it spells a region word. In a program
+that spells none, what they report is the conversion rule: a function value or a conformer converts to a function type or an interface
+requirement only if it declares what it does. One that writes, keeps or returns a parameter, or may wait or
+yield, against a type or requirement that does not declare it is **E3210** (`specs/regions-everywhere.md`).
 
 ## Frozen Data: `freeze` and `immutable`
 
@@ -310,7 +310,11 @@ error E3210: function value for 'Look' writes its parameter 'counter', but 'Look
 error E3210: function value for 'Array.SortComparator' writes data it captured, but 'Array.SortComparator' does not declare `mutates captures`
 error E3210: function value for 'Step' may yield (it awaits a coroutine at line 12), but a function type never waits or yields
 error E3210: 'Relay.echo' may wait (it awaits a reply from 'Bouncer' at line 28), but a requirement never waits or yields
+error E3210: function value for 'KeyOf' returns data reached from its read-only parameter 'key', which 'KeyOf' does not allow
 ```
+
+A function value that returns its read-only parameter, or throws it in an error payload, converts once it
+returns a `.clone()` of it (`specs/regions-everywhere.md`).
 
 A conformer or function value whose declaration marks a position the boundary leaves unmarked, or the
 reverse, is refused too. A value of a `mutates captures` type called through frozen or read-only
@@ -381,3 +385,5 @@ write is the exception a hold cannot cover, and E3186 refuses it at compile time
 | [E3213](/docs/cli/error-codes/#e3213--semanticpromisedropped) | a promise dropped, overwritten or discarded |
 | [E3214](/docs/cli/error-codes/#e3214--semanticuniquevaluerefused) | a unique value cloned, aliased, frozen or moved out of a slot it was only read from |
 | [E3215](/docs/cli/error-codes/#e3215--semanticregionboundrefused) | a type argument that breaks a `where T is sendable` or `where T is isolated` bound |
+| [E3216](/docs/cli/error-codes/#e3216--semanticservicestateholdsapromise) | a service type whose state can hold a promise |
+| [E3217](/docs/cli/error-codes/#e3217--semanticmessageneedsacapability) | a service message or factory parameter, or a message reply, that holds data of its region and names neither `isolated` nor `immutable` |

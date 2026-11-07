@@ -1592,7 +1592,7 @@ override for `db.pool`, else the one for `db`, else the minimum. `Log`'s own wri
 
 ### Handlers and sinks
 
-A `LogHandler` is a service interface with one requirement, `handle(mutable self, record LogRecord) returns bool`. A sink
+A `LogHandler` is a service interface with one requirement, `handle(mutable self, record immutable LogRecord) returns bool`. A sink
 pairs a handler with its levels:
 
 | Member | Returns | Description |
@@ -1609,15 +1609,15 @@ The two handlers write each record with one write, so lines from different threa
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `TextLogHandler.create(options LogHandlerOptions)` | `TextLogHandler` | `key=value` pairs in the order `time`, `level`, `source` (`file:line`), `msg`, then the attributes; the time is RFC 3339 with milliseconds. A text value is quoted with `Json.quote`'s escapes when it is empty or holds a space, a control byte, `"` or `=`. A group's attributes print with dotted keys. |
-| `JsonLogHandler.create(options LogHandlerOptions)` | `JsonLogHandler` | One JSON object per line: `time` (RFC 3339 with nanoseconds), `level`, `source` as `{"file":…,"line":…}`, `msg`, then the attributes, a group as a nested object. A non-finite float is a string. |
+| `TextLogHandler.create(options immutable LogHandlerOptions)` | `TextLogHandler` | `key=value` pairs in the order `time`, `level`, `source` (`file:line`), `msg`, then the attributes; the time is RFC 3339 with milliseconds. A text value is quoted with `Json.quote`'s escapes when it is empty or holds a space, a control byte, `"` or `=`. A group's attributes print with dotted keys. |
+| `JsonLogHandler.create(options immutable LogHandlerOptions)` | `JsonLogHandler` | One JSON object per line: `time` (RFC 3339 with nanoseconds), `level`, `source` as `{"file":…,"line":…}`, `msg`, then the attributes, a group as a nested object. A non-finite float is a string. |
 | `LogHandlerOptions.create(stream LogStream, addTime bool, addSource bool)` | `LogHandlerOptions` | Where to write, and whether to include the time and the caller's location. |
 | `LogHandlerOptions.standard()` | `LogHandlerOptions` | Stderr, time on, source off. |
 | `stream`, `addTime`, `addSource` | | The options' fields. |
 
 `LogStream` has the cases `standardError` and `standardOutput`.
 
-A handler of your own implements `LogHandler` and receives a `LogRecord`:
+A handler of your own implements `LogHandler`, declares its parameter `record immutable LogRecord`, and receives a frozen `LogRecord`:
 
 | Member | Returns | Description |
 |--------|---------|-------------|
@@ -1625,11 +1625,11 @@ A handler of your own implements `LogHandler` and receives a `LogRecord`:
 | `level`, `message` | `LogLevel`, `String` | |
 | `attrs` | `LogFieldArray` | The logger's bound fields, then the call's own. |
 | `file`, `line` | `String`, `SourceLineNumber` | The caller's location. |
-| `LogRecord.create(time, level:, message:, attrs:, file:, line:)` | `LogRecord` | A record. |
+| `LogRecord.create(time, level:, message:, attrs:, file:, line:)` | `LogRecord` | A record. `attrs` is an `isolated LogFieldArray`: pass a fresh array or an `isolated` local. `freeze` the record to send it to a handler. |
 
 ```maxon
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.debug))
 	Log.setDefault(LogSink.create(spawn JsonLogHandler.create(options), levels: levels))
 
@@ -2916,7 +2916,7 @@ connection closes. Keep-alive, chunked transfer and `Expect: 100-continue` are o
 | `setLimits(caps HttpServerLimits)` | — | — | Replace the caps later requests are parsed under. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `HttpServerError` | Make an `accept()` still waiting `milliseconds` after this call throw `acceptTimedOut`; `0` clears it. Throws `listenerClosed` once the server is closed. |
 | `accept()` | `HttpExchange` | `HttpServerError` | Take the next connection and the one request on it. An `OPTIONS *` is answered here, and the next connection taken. |
-| `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection in a service of its own. |
+| `serve(handler immutable HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection in a service of its own. |
 | `close()` | — | — | Stop listening: a parked or later `accept()` throws `listenerClosed`, which ends `serve`. |
 
 `close()` writes the server, so the server it is called on is held in a `var`; through a `let` it is
@@ -2929,14 +2929,15 @@ flight are bounded by the operating system's socket limits, each in time by [`Ht
 and, for TLS, by the options' handshake deadline. `serve` returns once the listener has ended and every
 connection it took has finished.
 
-The handler is one value every connection reads at once, so it is read-only. A handler whose methods write one
-of its fields is [E3138](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3138), reported where `serve` sends
-the handler to the connection's thread (in `HttpServer.maxon`). State the connections share, or the caller
+The handler is one frozen value every connection reads at once: `serve` takes it `immutable`, so the caller
+passes `freeze Handler.create(…)` or an `immutable` handler it received. A handler whose methods write one
+of its fields fails to conform to `HttpHandler` ([E3210](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3210)),
+and is refused again where `serve` sends the handler to the connection's thread (in `HttpServer.maxon`,
+[E3138](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3138)). State the connections share, or the caller
 reads when `serve` returns, lives in a [service](LANGUAGE_REFERENCE.md#services--spawn) the handler holds a handle
-to, as in the example below. Build the handler where `serve` is called, with `handle.clone()` for each
-handle it keeps, or give it only `let` fields, which make it a plain value; a handler the calling function
-shares with another coroutine stops the program with exit code 96 at the first connection. A handler that
-holds an OS handle, a function value or a promise does too.
+to, as in the example below; give the handler a `handle.clone()` for each handle it keeps. A handler that
+holds an OS handle, a function value or a promise stops the program with exit code 96 at the first
+connection.
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -2977,7 +2978,7 @@ function main() returns ExitCode
 	let server = try HttpServer.bind("127.0.0.1", port: 8080) otherwise return 1
 	let visits = spawn Visits.create()
 
-	_ = server.serve(CountingHandler.create(visits.clone()))
+	_ = server.serve(freeze CountingHandler.create(visits.clone()))
 
 	return 0
 end 'main'
@@ -3041,7 +3042,7 @@ function main() returns ExitCode
 	let identity = try TlsIdentity.fromPem(certificates, key: key) otherwise return 3
 	let server = try HttpServer.bindTls("0.0.0.0", port: 8443, options: TlsServerOptions.create(identity)) otherwise return 4
 
-	_ = server.serve(HelloHandler.create())
+	_ = server.serve(freeze HelloHandler.create())
 
 	return 0
 end 'main'
@@ -3179,7 +3180,7 @@ end 'HelloHandler'
 
 function main() returns ExitCode
 	let server = try HttpServer.bind("127.0.0.1", port: 8080) otherwise return 1
-	_ = server.serve(HelloHandler.create("hello\n"))
+	_ = server.serve(freeze HelloHandler.create("hello\n"))
 
 	return 0
 end 'main'

@@ -352,8 +352,8 @@ type Keeper
 		return Self{cells: Cells.create(1)}
 	end 'create'
 
-	export function adopt(incoming Cells, last ElementIndex) returns Word
-		self.cells = incoming
+	export function adopt(incoming isolated Cells, last ElementIndex) returns Word
+		self.cells = merge incoming
 		try self.cells.set(last, value: 7) otherwise panic("set")
 
 		return (try self.cells.get(1) otherwise 0) + (try self.cells.get(last) otherwise 0)
@@ -362,7 +362,7 @@ end 'Keeper'
 
 function check(count ElementIndex) returns ExitCode
 	let keeper = spawn Keeper.create()
-	var cells = Cells.create(count)
+	var cells = Cells.create(count) as isolated Cells
 	try cells.set(1, value: 5) otherwise panic("set")
 
 	let total = try await keeper.adopt(cells, last: count - 1) otherwise 0
@@ -1078,14 +1078,14 @@ type Reader
 		return Self{reads: 0}
 	end 'create'
 
-	export function read(holder Holder) returns Word
+	export function read(holder isolated Holder) returns Word
 		return holder.planes.get(1) + holder.planes.get(3)
 	end 'read'
 end 'Reader'
 
 function main() returns ExitCode
 	let reader = spawn Reader.create()
-	let holder = Holder.around()
+	let holder = Holder.around() as isolated Holder
 	let total = try await reader.read(holder) otherwise 0
 
 	if total != 14 'total'

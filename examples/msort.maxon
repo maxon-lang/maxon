@@ -417,20 +417,26 @@ function rowsFrom(lines LineArray, maker KeyMaker) returns RowArray
 end 'rowsFrom'
 
 type Sorter
-	var settings as SortSettings
+	var settings as immutable SortSettings
 
-	static function create(settings SortSettings) returns Self
+	static function create(settings immutable SortSettings) returns Self
 		return Self{settings: settings}
 	end 'create'
 
-	export function sortLines(lines LineArray) returns LineArray
-		var rows = sortRows(lines)
-		var sorted = LineArray.create(0)
-		sorted.reserve(rows.count())
+	export function sortLines(lines isolated LineArray) returns isolated LineArray
+		var sorted = LineArray.create(0) as isolated LineArray
 
-		for row in rows 'eachRow'
-			sorted.push(row.text.clone())
-		end 'eachRow'
+		modify lines 'read'
+			let rows = self.sortRows(lines)
+
+			modify sorted 'write'
+				sorted.reserve(rows.count())
+
+				for row in rows 'eachRow'
+					sorted.push(row.text)
+				end 'eachRow'
+			end 'write'
+		end 'read'
 
 		return sorted
 	end 'sortLines'
@@ -510,7 +516,7 @@ function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCoun
 	var sorters = SorterArray.create(0)
 
 	for _ in 1 to workers 'spawnWorkers'
-		sorters.push(spawn Sorter.create(settings.clone()))
+		sorters.push(spawn Sorter.create(freeze settings.clone()))
 	end 'spawnWorkers'
 
 	var replies = SortedPromiseArray.create(0)
@@ -521,13 +527,16 @@ function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCoun
 		let remaining = (workers - slot) as WorkerCount
 		let share = (lines.count() - first) / remaining
 		let stop = first + share
-		var chunk = LineArray.create(0)
-		chunk.reserve(share)
+		var chunk = LineArray.create(0) as isolated LineArray
 
-		for position in first upto stop 'eachLine'
-			let line = try lines.get(position) otherwise panic("sortedChunks: every position lies inside the input")
-			chunk.push(line.clone())
-		end 'eachLine'
+		modify chunk 'fill'
+			chunk.reserve(share)
+
+			for position in first upto stop 'eachLine'
+				let line = try lines.get(position) otherwise panic("sortedChunks: every position lies inside the input")
+				chunk.push(line.clone())
+			end 'eachLine'
+		end 'fill'
 
 		replies.push(try sorter.sortLines(chunk) otherwise panic("sortedChunks: a fresh sorter refuses its only chunk"))
 		first = stop
@@ -610,7 +619,7 @@ end 'mergeChunks'
 
 function sortedRows(lines LineArray, settings SortSettings, workers WorkerCount, maker KeyMaker) returns RowArray
 	if workers == fewestWorkers 'inProcess'
-		return Sorter.create(settings.clone()).sortRows(lines)
+		return Sorter.create(freeze settings.clone()).sortRows(lines)
 	end 'inProcess'
 
 	return mergeChunks(sortedChunks(lines, settings: settings, workers: workers, maker: maker), compare: settings.comparator())

@@ -4616,7 +4616,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias UnaryOp = function(Integer) returns Integer
 
 interface Stasher
-	function stash(mutable self, fn UnaryOp) returns Integer
+	function stash(mutable self, fn mutable UnaryOp) returns Integer
 end 'Stasher'
 
 type Slot implements Stasher
@@ -4626,7 +4626,7 @@ type Slot implements Stasher
 		return Self{op: op}
 	end 'create'
 
-	function stash(fn UnaryOp) returns Integer
+	function stash(fn mutable UnaryOp) returns Integer
 		self.op = fn
 		return self.op(2)
 	end 'stash'
@@ -4640,7 +4640,8 @@ type W uses T where T is Stasher
 	end 'create'
 
 	function put(k Integer) returns Integer
-		return self.inner.stash(function(n Integer) gives n + k)
+		var op = function(n Integer) gives n + k
+		return self.inner.stash(op)
 	end 'put'
 end 'W'
 

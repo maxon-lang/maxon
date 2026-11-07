@@ -2,7 +2,7 @@
 /// flushes every record sent to the handler before it.
 /// @category System
 public interface LogHandler
-	function handle(mutable self, record LogRecord) returns bool
+	function handle(mutable self, record immutable LogRecord) returns bool
 end 'LogHandler'
 
 public enum LogStream
@@ -38,13 +38,13 @@ end 'LogHandlerOptions'
 /// Writes each record as one line of `key=value` pairs; a value that is empty or holds a space, a
 /// control character, a quote or `=` is quoted.
 public type TextLogHandler implements LogHandler
-	let options as LogHandlerOptions
+	let options as immutable LogHandlerOptions
 
-	public static function create(options LogHandlerOptions) returns TextLogHandler
-		return TextLogHandler{options: options.clone()}
+	public static function create(options immutable LogHandlerOptions) returns TextLogHandler
+		return TextLogHandler{options: options}
 	end 'create'
 
-	public function handle(record LogRecord) returns bool
+	public function handle(record immutable LogRecord) returns bool
 		self.options.write(textLogLine(record, options: self.options))
 		return true
 	end 'handle'
@@ -53,13 +53,13 @@ end 'TextLogHandler'
 /// Writes each record as one JSON object per line, a group as a nested object, the time to the
 /// nanosecond.
 public type JsonLogHandler implements LogHandler
-	let options as LogHandlerOptions
+	let options as immutable LogHandlerOptions
 
-	public static function create(options LogHandlerOptions) returns JsonLogHandler
-		return JsonLogHandler{options: options.clone()}
+	public static function create(options immutable LogHandlerOptions) returns JsonLogHandler
+		return JsonLogHandler{options: options}
 	end 'create'
 
-	public function handle(record LogRecord) returns bool
+	public function handle(record immutable LogRecord) returns bool
 		self.options.write(jsonLogLine(record, options: self.options))
 		return true
 	end 'handle'

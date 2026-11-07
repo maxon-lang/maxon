@@ -10,9 +10,9 @@
 // FUNCTION; every step around it is per function too. Fusing them means a function crosses to a
 // worker ONCE — as a Std unit — and comes home ONCE — as a finished Target function and its chunk.
 //
-// ⭐⭐ **WHAT MAKES IT SAFE IS THE UNIT, NOT LOCKING — there is none.** A message MOVES, so a worker is
-// handed a `BackendUnit` nobody else can reach and hands back a `BackendUnitReply` nobody else can reach.
-// `BackendUnit`'s header owns that argument.
+// ⭐⭐ **WHAT MAKES IT SAFE IS THE UNIT, NOT LOCKING — there is none.** A message MOVES, so a worker
+// is handed a `BackendUnit` nobody else can reach and hands back the same unit with its
+// `FinishedUnit` filed in it. `BackendUnit`'s header owns that argument.
 //
 // ⭐⭐ **AND THE OUTPUT DOES NOT DEPEND ON THE POOL.** Splicing is order-independent — a reply appends its
 // ops and blocks to the module's two arrays, and an index into either reaches no emitted byte
@@ -24,13 +24,13 @@
 // chunks, whose order is `.text`'s. The two byte-identity gates pass on a pool of one
 // (`tests/parallelCompile/byte-identical`, `rdata-order`).
 //
-// ⚠ **THE THREE THINGS A WORKER STRUCTURALLY CANNOT DO** are what shaped the split, and each is a rule
-// with teeth rather than a preference. It holds no `Project`, and a green thread
-// runs on whichever OS thread the scheduler gives it, which rules out the trace-span stack,
-// the `.rdata` table and every `Project` table. It may not await — E3139 refuses a service that blocks on
-// another, and this one never sends. And it may not be handed anything a second frame still owns — E3138
-// at the send, exit 96 at run time — which is why a unit is built inside the argument expression and the
-// callee ABI table is copied per worker.
+// ⚠ **THE THREE THINGS A WORKER STRUCTURALLY CANNOT DO** are what shaped the split, and each is a
+// rule with teeth rather than a preference. It holds no `Project`, and a green thread runs on
+// whichever OS thread the scheduler gives it, which rules out the trace-span stack, the `.rdata`
+// table and every `Project` table. It may not await — E3139 refuses a service that blocks on
+// another, and this one never sends. And it may not be handed anything a second frame still owns —
+// E3138 at the send, exit 96 at run time — which is why a unit is an `isolated` value and each
+// worker is handed its own clone of the callee ABI table.
 
 // How many jobs are kept in flight PER WORKER.
 //
@@ -48,7 +48,7 @@
 let JobsInFlightPerWorker = 2
 
 // A reply cell carrying one finished function, and the refusal its message can throw.
-typealias BackendReply = Promise with (BackendUnitReply, RegAllocRefusal)
+typealias BackendReply = Promise with (BackendUnit, RegAllocRefusal)
 typealias BackendReplyArray = Array with BackendReply
 typealias BackendArrivedUnits = ArrivedUnits with TargetModule
 typealias BackendWorkerHandleArray = Array with BackendWorker.handle
@@ -446,40 +446,39 @@ module function lowerAndSplitUnit(lowering UnitLowering, unitModule StdModule, p
 	return lowered
 end 'lowerAndSplitUnit'
 
-// ⭐⭐ **THE WORKER. Its state is the four per-ISA facts the allocator runs on** — derived once from
-// the two enums it is handed and never re-derived. `OpVariantFacts` especially: every fact in it is
-// a property of the DIALECT (which registers a `callDirect` clobbers, whether a `loadRegSlot`
-// touches a spill slot), so its natural lifetime is the whole compile — rebuilt per message it
-// would re-derive the ~30 cases each function's ops name, on every function the pool sees.
+// ⭐⭐ **THE WORKER. Its state is the per-ISA facts the allocator runs on** — derived once from the
+// two enums it is handed and never re-derived — plus the callee ABI table and the unit it is
+// running.
 //
-// ⚠ **IT IS HANDED `cpu` AND `os`, NOT A `Target`, AND ITS OWN COPY OF THE ABI TABLE.** A `spawn`'s
-// factory arguments are MOVED, and the driver keeps its own `target` and its own table for the rest of
-// the compile — so passing either record would be handing a box to a second green thread while this one
-// still holds it, which is E3138 at best and exit 96 at worst. Two enums are scalars and copy; the table
-// is copied per worker (`CalleeAbiTable.copyOf`).
+// ⚠ **IT IS HANDED `cpu` AND `os`, NOT A `Target`, AND ITS OWN CLONE OF THE ABI TABLE.** A
+// `spawn`'s factory arguments are MOVED, and the driver keeps its own `target` and its own table
+// for the rest of the compile — so passing either record would be handing a box to a second green
+// thread while this one still holds it, which is E3138 at best and exit 96 at worst. Two enums are
+// scalars and copy; the table arrives `isolated`, cloned per worker.
 //
 // ⛔ **THE ISEL IS BUILT PER MESSAGE AND NEVER HELD.** Its scratches (`CompareFusionCensus`,
 // `ScaledIndexFolds`, `MemoryDestinationFolds`, …) are refilled per function and keep their
 // capacity, so an isel kept across jobs makes a job's allocations depend on what its worker ran
 // before — and under `PoolAssignment.firstFree` that is timing.
 //
-// ⚠ **AND THE FOUR IT DERIVES ARE THE DRIVER'S OWN, NOT A SECOND OPINION OF THEM.** `Target` has exactly
-// those two fields, and each of the four comes from the same pure function the driver called — so the
-// reconstruction is exact, not approximate. That matters because the driver's copies are what a REFUSAL
-// is rendered against (`refuseForRegisterPressure`): a pool colouring against one pool while E5001
-// measured a deficit against another would be a diagnostic about a machine nobody compiled for.
+// ⚠ **AND WHAT IT DERIVES IS THE DRIVER'S OWN, NOT A SECOND OPINION OF IT.** `Target` has exactly
+// those two fields, and each fact comes from the same pure function the driver called — so the
+// reconstruction is exact, not approximate. That matters because the driver's copies are what a
+// REFUSAL is rendered against (`refuseForRegisterPressure`): a pool colouring against one pool
+// while E5001 measured a deficit against another would be a diagnostic about a machine nobody
+// compiled for.
 export type BackendWorker
 	var target as Target
 	var abi as CalleeAbiTable
 	var usesGt as bool
 	let pool as RegMask
 	let callerSaved as RegMask
-	var file as RegisterFile
-	var opFacts as OpVariantFacts
+	let file as RegisterFile
+	var slot as isolated BackendUnit
 
-	static function create(cpu CpuArch, os Os, abi CalleeAbiTable, usesGt bool) returns Self
+	static function create(cpu CpuArch, os Os, abi isolated CalleeAbiTable, usesGt bool) returns Self
 		let target = Target.create(cpu, os: os)
-		return Self{target: target, abi: abi, usesGt: usesGt, pool: allocatablePool(target), callerSaved: callerSavedMaskFor(target), file: registerFileFor(target), opFacts: OpVariantFacts.create()}
+		return Self{target: target, abi: merge abi, usesGt: usesGt, pool: allocatablePool(target), callerSaved: callerSavedMaskFor(target), file: registerFileFor(target), slot: BackendUnit.awaitingABody(0)}
 	end 'create'
 
 	// The isel is handed a `Target` of its own rather than this worker's: the driver's E5001 re-run builds
@@ -490,8 +489,16 @@ export type BackendWorker
 
 	// The message. It never awaits and never sends, which is what makes the blocking graph E3139 checks
 	// trivially acyclic: a pool worker is a leaf.
-	export function run(unit BackendUnit) returns BackendUnitReply throws RegAllocRefusal
-		return try BackendUnitReply.afterRunning(unit, worker: self)
+	export function run(unit isolated BackendUnit) returns isolated BackendUnit throws RegAllocRefusal
+		let idle = swap self.slot with unit
+
+		modify self.slot 'work'
+			var body = try self.slot.holder.pop() otherwise panic("BackendWorker.run: the unit for function {self.slot.funcIndex} carried no body — `BackendUnit.extract` pushes exactly one")
+			let finished = try self.finish(body)
+			self.slot.finished.push(finished)
+		end 'work'
+
+		return swap self.slot with idle
 	end 'run'
 
 	// Each stage is bracketed on this thread's counters into the same rows a serial run bills them to.
@@ -513,7 +520,8 @@ export type BackendWorker
 		var debugLocations = DebugValueLocationArray.create(0)
 		var debugRanges = DebugValueRangeArray.create(0)
 		var debugSpans = DebugSpanRows.create()
-		try allocateFunctionCore(lowered.targetModule, func: unitFunc, hasAuthor: body.hasAuthor, pool: self.pool, callerSaved: self.callerSaved, file: self.file, valueClass: lowered.valueClass, opFacts: self.opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValues: body.debugValues, debugLocations: debugLocations, debugRanges: debugRanges, debugSpans: debugSpans)
+		var opFacts = OpVariantFacts.create()
+		try allocateFunctionCore(lowered.targetModule, func: unitFunc, hasAuthor: body.hasAuthor, pool: self.pool, callerSaved: self.callerSaved, file: self.file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValues: body.debugValues, debugLocations: debugLocations, debugRanges: debugRanges, debugSpans: debugSpans)
 		unitFunc.debugLocalLocations = debugLocations
 		unitFunc.debugLocalRanges = debugRanges
 		unitFunc.debugLocalSpans = debugSpans
@@ -625,7 +633,7 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 	var workers = BackendWorkerHandleArray.create(sizing.workerCount, zeroed: false)
 
 	for _ in 0 upto sizing.workerCount 'eachWorker'
-		workers.push(spawn BackendWorker.create(target.cpu, os: target.os, abi: CalleeAbiTable.copyOf(abi), usesGt: usesGt))
+		workers.push(spawn BackendWorker.create(target.cpu, os: target.os, abi: abi.clone(), usesGt: usesGt))
 	end 'eachWorker'
 
 	var landed = BackendUnitLandingArray.create(funcCount, zeroed: false)
@@ -704,9 +712,9 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 	// pool's: a refusal of function 0 has to be storable here, and `PoolSize` starts at one.
 	var refused = stdModule.funcCount()
 
-	// First-free: what a worker keeps across jobs is sized up front (`OpVariantFacts`) and its isel is
-	// built per job, and the small functions at the end of the longest-first order cost what their
-	// size does not predict, so a fixed share leaves one worker running while the rest wait.
+	// First-free: a worker keeps no scratch across jobs, and the small functions at the end of the
+	// longest-first order cost what their size does not predict, so a fixed share leaves one worker
+	// running while the rest wait.
 	var dispatch = PoolDispatch.boundedByInFlightSize(functionOpTallies(stdModule.functions, blocks: stdModule.blocks), workerCount: workerCount, assignment: PoolAssignment.firstFree)
 	var replies = BackendReplyArray.create(dispatch.pipelineDepth(), zeroed: false)
 	var arrivedUnits = BackendArrivedUnits.create(stdModule.funcCount(), spent: TargetModule.create())
@@ -729,9 +737,11 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 		let reply = try replies.remove(ready) otherwise panic("drainTheBackendPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
 
 		if let answer = try await reply 'finished'
+			var returned = answer
+			var done = returned.takeFinished()
 			slots.record(job, slot: landed.count())
-			arrivedUnits.arrive(answer.unitModule)
-			landed.push(answer.landing)
+			arrivedUnits.arrive(done.unitModule)
+			landed.push(done.landing)
 		end 'finished' else (e) 'notFinished'
 			match e 'why'
 				hotOverflow then refused = funcIndex if funcIndex < refused else refused
@@ -797,11 +807,6 @@ end 'workerRefusedSendMessage'
 
 // Send the next job in dispatch order to ONE worker, and push its reply at the slot `PoolDispatch` just
 // recorded the job in.
-//
-// ⭐ **THE UNIT IS BUILT INSIDE THE ARGUMENT AND STORED NOWHERE**, which is E3138's rule and not a
-// style: a value this frame has taken a second reference to cannot be proven sole at the send, and the
-// only shape the check admits is a call whose every `return` is a record literal (see
-// `BackendUnit.extract`).
 function dispatchOneBackendJob(stdModule StdModule, workers BackendWorkerHandleArray, workerSlot ElementIndex, dispatch PoolDispatch, replies BackendReplyArray, runtimeTier FunctionNameSet, spanTable DebugSpanTable)
 	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneBackendJob: workers.get OOB at {workerSlot} below count {workers.count()}")
 	let funcIndex = dispatch.nextJob(workerSlot)

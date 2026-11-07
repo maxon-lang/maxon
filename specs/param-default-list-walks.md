@@ -503,7 +503,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function bump(_ Integer = 1, p Payload) returns Integer
+	export function bump(_ Integer = 1, p isolated Payload) returns Integer
 		p.n = p.n + 1
 		self.seen = self.seen + 1
 		return p.n
@@ -519,7 +519,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:28:30: argument `p` of the message `Store.bump` is a read-only value shared with the service, and the handler `Store.bump` writes or keeps its parameter `p`. A record both threads reach may be written by neither. Send a `.clone()`, or make `Store.bump` only read `p`
+error E3200: <fragment>:28:30: 'Shared' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: a-message-whose-handler-only-reads-its-parameter-after-a-discard-accepts-a-shared-value -->
@@ -540,7 +540,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(_ Integer = 1, p Payload) returns Integer
+	export function keep(_ Integer = 1, p immutable Payload) returns Integer
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -550,7 +550,7 @@ let Shared = Payload.create(7)
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	let got = try await h.keep(p: Shared) otherwise 0
+	let got = try await h.keep(p: freeze Shared.clone()) otherwise 0
 	print("{got}\n")
 	return 0
 end 'main'
@@ -597,7 +597,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function bump(d Describable, _ Integer = 1, p Payload) returns Integer
+	export function bump(d isolated Describable, _ Integer = 1, p isolated Payload) returns Integer
 		p.n = p.n + d.describe()
 		self.seen = self.seen + 1
 		return p.n
@@ -613,7 +613,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:44:44: argument `p` of the message `Store.bump` is a read-only value shared with the service, and the handler `Store.bump` writes or keeps its parameter `p`. A record both threads reach may be written by neither. Send a `.clone()`, or make `Store.bump` only read `p`
+error E3200: <fragment>:44:44: 'Shared' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: a-promise-forwarded-by-a-method-with-discards-through-a-later-function-parameter-is-handed-on -->

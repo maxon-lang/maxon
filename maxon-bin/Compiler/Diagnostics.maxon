@@ -928,8 +928,11 @@ end 'cacheReadDiagnosticArray'
 // diagnostics have been reported (the driver has already printed them, so its
 // handler stays silent for this arm — see Main.maxon).
 export union CompileError implements Error
-	fileNotFound(path FilePath)
-	directoryNotFound(path FilePath)
+	// A path's spelling, not a `FilePath`: a thrown payload stores its argument, so a `FilePath` would
+	// pin the throwing function's path parameter mutable-only, which E3210 refuses wherever that
+	// function is converted to a function type.
+	fileNotFound(spelling String)
+	directoryNotFound(spelling String)
 	noSourceFiles(root FilePath)
 	readError(path FilePath)
 

@@ -451,11 +451,12 @@ end 'foldPoolPhaseDelta'
 
 // ⭐⭐ **ONE UNIT OF POOL WORK'S PER-PHASE COSTS, MEASURED WITHOUT A `Project`.**
 //
-// A pool worker has no `Project`, which is how the compile's tables are reached. So a worker accumulates into one of these and the driver folds it in
-// on the main thread: the register allocator's core into the `RegAllocPhase` sub-phase rows through
-// `addRegAllocDelta`, one record per function; the Std pass pool into the passes' own `CompilePhase` rows
-// through `foldPoolPhaseDelta`, one record per worker for the whole compile. The index space is the
-// caller's — a phase enum's ordinals, or a schedule's step positions.
+// A pool worker has no `Project`, which is how the compile's tables are reached. So a worker
+// accumulates into one of these and the driver folds it in on the main thread: the register
+// allocator's core into the `RegAllocPhase` sub-phase rows through `addRegAllocDelta`, one record
+// per function; the Std pass pool into the passes' own `CompilePhase` rows through
+// `foldPoolPhaseDelta`, one record per function. The index space is the caller's — a phase enum's
+// ordinals, or a schedule's step positions.
 //
 // ⚠ **WHICH COLUMNS SURVIVE A PARALLEL COMPILE, AND WHAT THEY SUM TO.** `nanos` and `cpuTicks` are
 // per-bracket durations and remain exactly that: summed over workers they answer *"how much time did the
@@ -480,12 +481,6 @@ export type PoolPhaseCosts
 	export static function create(width ElementIndex) returns PoolPhaseCosts
 		return Self{nanos: DurationNanosArray.create(width), cpuTicks: CpuTicksArray.create(width), allocs: FixedAllocCountArray.create(width), frees: FixedAllocCountArray.create(width), bytes: FixedByteCountArray.create(width), closing: PhaseDelta.zero()}
 	end 'create'
-
-	// A record nothing else holds, with `source`'s figures — what a worker hands back through a reply,
-	// which moves and so admits no record a second frame still owns.
-	export static function copyOf(source PoolPhaseCosts) returns PoolPhaseCosts
-		return Self{nanos: source.nanos.clone(), cpuTicks: source.cpuTicks.clone(), allocs: source.allocs.clone(), frees: source.frees.clone(), bytes: source.bytes.clone(), closing: PhaseDelta.zero()}
-	end 'copyOf'
 
 	export function width() returns ElementIndex
 		return self.nanos.count()

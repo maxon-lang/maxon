@@ -957,6 +957,10 @@ A type argument breaks a bound on a generic type's type parameter. `where T is s
 
 A service type's state can hold a promise. A field of a service type that is a `Promise`, an array of promises, or a record or union holding one is refused, reported at the `spawn` that makes the type a service and naming the field. A service's state is run by whichever green thread takes its next message, and a coroutine belongs to the strand that started it, so a promise kept in the state could be awaited or dropped by a strand that does not own its coroutine. `await` the promise, or `.cancel()` it, before the message or factory returns, and keep its result in the field.
 
+### E3217 — `semanticMessageNeedsACapability`
+
+A service's message parameter, message reply or factory parameter carries data with no capability word. A message hands its arguments to another green thread and its reply to the thread that awaits it, so a record, a union carrying data, an array or an interface value that crosses must be owned by one side or read-only on both. Reported at the `spawn` that makes the type a service, naming the parameter or message; only the factory that `spawn` names is judged. Numbers, `bool`, `String`, `Character`, enums, unions with no data, service handles, `SharedValue` cells and a `unique` value need no word. Write `isolated` to give the value away, built for this one send, or `immutable` to share it frozen (`freeze x.clone()`).
+
 ## Intermediate Representation (E4xxx)
 
 IR generation.

@@ -596,7 +596,7 @@ connection closes. Keep-alive, chunked transfer and `Expect: 100-continue` are o
 | `setLimits(caps HttpServerLimits)` | — | — | Replace the caps later requests are parsed under. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `HttpServerError` | Make an `accept()` still waiting `milliseconds` after this call throw `acceptTimedOut`; `0` clears it. Throws `listenerClosed` once the server is closed. |
 | `accept()` | `HttpExchange` | `HttpServerError` | Take the next connection and the one request on it. An `OPTIONS *` is answered here, and the next connection taken. |
-| `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection in a service of its own. |
+| `serve(handler immutable HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection in a service of its own. |
 | `close()` | — | — | Stop listening: a parked or later `accept()` throws `listenerClosed`, which ends `serve`. |
 
 `close()` writes the server, so the server it is called on is held in a `var`; through a `let` it is
@@ -609,14 +609,15 @@ flight are bounded by the operating system's socket limits, each in time by [`Ht
 and, for TLS, by the options' handshake deadline. `serve` returns once the listener has ended and every
 connection it took has finished.
 
-The handler is one value every connection reads at once, so it is read-only. A handler whose methods write one
-of its fields is [E3138](/docs/cli/error-codes/#e3138--semanticserviceargumentnotunique), reported where `serve` sends
-the handler to the connection's thread (in `HttpServer.maxon`). State the connections share, or the caller
+The handler is one frozen value every connection reads at once: `serve` takes it `immutable`, so the caller
+passes `freeze Handler.create(…)` or an `immutable` handler it received. A handler whose methods write one
+of its fields fails to conform to `HttpHandler` ([E3210](/docs/cli/error-codes/#e3210--semanticcapabilityconversionrefused)),
+and is refused again where `serve` sends the handler to the connection's thread (in `HttpServer.maxon`,
+[E3138](/docs/cli/error-codes/#e3138--semanticserviceargumentnotunique)). State the connections share, or the caller
 reads when `serve` returns, lives in a [service](/docs/language/async/#services--spawn) the handler holds a handle
-to, as in the example below. Build the handler where `serve` is called, with `handle.clone()` for each
-handle it keeps, or give it only `let` fields, which make it a plain value; a handler the calling function
-shares with another coroutine stops the program with exit code 96 at the first connection. A handler that
-holds an OS handle, a function value or a promise does too.
+to, as in the example below; give the handler a `handle.clone()` for each handle it keeps. A handler that
+holds an OS handle, a function value or a promise stops the program with exit code 96 at the first
+connection.
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -657,7 +658,7 @@ function main() returns ExitCode
 	let server = try HttpServer.bind("127.0.0.1", port: 8080) otherwise return 1
 	let visits = spawn Visits.create()
 
-	_ = server.serve(CountingHandler.create(visits.clone()))
+	_ = server.serve(freeze CountingHandler.create(visits.clone()))
 
 	return 0
 end 'main'
@@ -721,7 +722,7 @@ function main() returns ExitCode
 	let identity = try TlsIdentity.fromPem(certificates, key: key) otherwise return 3
 	let server = try HttpServer.bindTls("0.0.0.0", port: 8443, options: TlsServerOptions.create(identity)) otherwise return 4
 
-	_ = server.serve(HelloHandler.create())
+	_ = server.serve(freeze HelloHandler.create())
 
 	return 0
 end 'main'
@@ -859,7 +860,7 @@ end 'HelloHandler'
 
 function main() returns ExitCode
 	let server = try HttpServer.bind("127.0.0.1", port: 8080) otherwise return 1
-	_ = server.serve(HelloHandler.create("hello\n"))
+	_ = server.serve(freeze HelloHandler.create("hello\n"))
 
 	return 0
 end 'main'

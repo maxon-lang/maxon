@@ -18,21 +18,58 @@ export let FileLocalNamesBase = 0 as TypeNameId
 export type TypeNameInterner
 	var table as NameTable
 
-	// How many names the interner held when the signature index was settled. Only the index's own interner is
-	// ever settled; every other interner keeps 0 and never restores.
+	// How many names the interner held when the signature index was settled. Only the index's own
+	// interner is ever settled, and an overlay's is its base's name count; every other interner keeps
+	// 0 and never restores.
 	var baselineCount as TypeNameId
 	var baselineArenaBytes as NameByteCount
+	let base as NameTableBase
+	var baseCount as TypeNameId
+	var idOffset as TypeNameId
 
 	// ⭐ **ID 0 IS THE EMPTY NAME, IN EVERY INTERNER.** `UnnamedTypeId` is the filler a scalar's slot and an
 	// unbranded value's slot carry, and interning the empty name first is what makes that filler a NAME
 	// rather than a collision with whichever real name a file happened to intern first. `foldInto` then
 	// maps it to itself, so a remap needs no special case for it either.
 	export static function createForSource(sourceBytes SourceByteCount) returns TypeNameInterner
-		let nameHint = internedNameHintFor(sourceBytes)
-		var interner = Self{table: NameTable.create(nameHint, byteHint: internedArenaHintFor(nameHint)), baselineCount: 0, baselineArenaBytes: 0}
-		_ = interner.intern(EmptySourceText)
-		return interner
+		return Self.made(sourceBytes, base: NameTableBase.none, baseCount: 0)
 	end 'createForSource'
+
+	// An interner over a frozen base: ids below the base's name count resolve there, and the overlay's
+	// own names follow from that count. Its table keeps the empty name every interner starts with as
+	// an unreachable row 0, so a table row `r` holds id `r + idOffset`.
+	module static function overlaying(frozen FrozenNames) returns TypeNameInterner
+		return Self.made(0, base: NameTableBase.over(frozen), baseCount: frozen.table.count() as TypeNameId)
+	end 'overlaying'
+
+	static function made(sourceBytes SourceByteCount, base NameTableBase, baseCount TypeNameId) returns TypeNameInterner
+		let nameHint = internedNameHintFor(sourceBytes)
+		let offset = (baseCount - 1) if baseCount > 0 else 0
+		var interner = Self{table: NameTable.create(nameHint, byteHint: internedArenaHintFor(nameHint)), baselineCount: baseCount, baselineArenaBytes: 0, base: base, baseCount: baseCount, idOffset: offset}
+		_ = interner.table.intern(EmptySourceText)
+		return interner
+	end 'made'
+
+	module function frozenNames() returns FrozenNames
+		var texts = NameRoster.create(self.table.count(), zeroed: false)
+
+		for id in 0 upto self.table.count() 'eachName'
+			texts.push(self.table.ownedCopyOf(id))
+		end 'eachName'
+
+		return FrozenNames.of(self.table.clone(), texts: texts)
+	end 'frozenNames'
+
+	function baseNames() returns FrozenNames
+		return match self.base 'base'
+			none panic("TypeNameInterner.baseNames: this interner is not an overlay — only an overlay reads names through a base")
+			over(frozen) gives frozen
+		end 'base'
+	end 'baseNames'
+
+	function baseNameOf(id TypeNameId) returns ByteArray throws NameTableError
+		return try self.baseNames().texts.get(id as ElementIndex) otherwise throw NameTableError.unknownId
+	end 'baseNameOf'
 
 	export function reserveForSource(sourceBytes SourceByteCount)
 		let nameHint = internedNameHintFor(sourceBytes)
@@ -40,6 +77,10 @@ export type TypeNameInterner
 	end 'reserveForSource'
 
 	export function settleBaseline()
+		if self.baseCount > 0 'anOverlay'
+			panic("TypeNameInterner.settleBaseline: an overlay's baseline is its base's name count, set when it is made")
+		end 'anOverlay'
+
 		self.baselineCount = table.count() as TypeNameId
 		self.baselineArenaBytes = table.arenaByteCount()
 
@@ -52,9 +93,10 @@ export type TypeNameInterner
 	// Copies, because they cross a thread: a record the worker's own table also holds would give the reply
 	// a second owner.
 	export function namesSinceBaseline() returns NameRoster
-		var added = NameRoster.create(table.count() - (self.baselineCount as NameId), zeroed: false)
+		let first = self.tableBaseline()
+		var added = NameRoster.create(table.count() - first, zeroed: false)
 
-		for id in (self.baselineCount as NameId) upto table.count() 'eachAdded'
+		for id in first upto table.count() 'eachAdded'
 			added.push(table.ownedCopyOf(id))
 		end 'eachAdded'
 
@@ -62,8 +104,12 @@ export type TypeNameInterner
 	end 'namesSinceBaseline'
 
 	export function restoreBaseline()
-		table.truncateTo(self.baselineCount as NameId)
+		table.truncateTo(self.tableBaseline())
 	end 'restoreBaseline'
+
+	function tableBaseline() returns NameId
+		return (self.baselineCount - self.idOffset) as NameId
+	end 'tableBaseline'
 
 	export function baselineNameCount() returns TypeNameId
 		return self.baselineCount
@@ -79,7 +125,13 @@ export type TypeNameInterner
 	// Intern `name`, returning its stable id. Idempotent: a name already present
 	// returns its existing id without appending a duplicate.
 	export function intern(name ByteArray) returns TypeNameId
-		return table.intern(name)
+		if self.baseCount > 0 'anOverlay'
+			if let id = try self.baseNames().table.idOf(name) 'inTheBase'
+				return id
+			end 'inTheBase'
+		end 'anOverlay'
+
+		return table.intern(name) + self.idOffset
 	end 'intern'
 
 	// Resolve an id back to its name. Throws for an id this interner never
@@ -89,7 +141,11 @@ export type TypeNameInterner
 			throw NameTableError.unknownId
 		end 'pastEveryIdATableCanHoldAtAll'
 
-		return try table.nameOf(id as NameId)
+		if id < self.baseCount 'aBaseName'
+			return try self.baseNameOf(id)
+		end 'aBaseName'
+
+		return try table.nameOf((id - self.idOffset) as NameId)
 	end 'nameOf'
 
 	// Resolve a NAME to its id WITHOUT interning it — the read-only half of `intern`, for a caller
@@ -99,19 +155,33 @@ export type TypeNameInterner
 	// so a mere lookup by a caller holding a name that is not a type would silently rewrite output.
 	// Unlike `nameOf`'s, this throw is not a compiler bug: "no such type name" is a legitimate answer.
 	export function idOf(name ByteArray) returns TypeNameId throws NameTableError
-		return try table.idOf(name)
+		if self.baseCount > 0 'anOverlay'
+			if let id = try self.baseNames().table.idOf(name) 'inTheBase'
+				return id
+			end 'inTheBase'
+		end 'anOverlay'
+
+		return (try table.idOf(name)) + self.idOffset
 	end 'idOf'
 
 	export function equalsAt(id TypeNameId, other ByteArray) returns bool
-		return id <= NameTableIdLimit and table.equalsAt(id as NameId, other: other)
+		if id < self.baseCount 'aBaseName'
+			return self.baseNames().table.equalsAt(id as NameId, other: other)
+		end 'aBaseName'
+
+		return id <= NameTableIdLimit and table.equalsAt((id - self.idOffset) as NameId, other: other)
 	end 'equalsAt'
 
 	export function startsWith(id TypeNameId, prefix ByteArray) returns bool
-		return id <= NameTableIdLimit and table.startsWith(id as NameId, prefix: prefix)
+		if id < self.baseCount 'aBaseName'
+			return self.baseNames().table.startsWith(id as NameId, prefix: prefix)
+		end 'aBaseName'
+
+		return id <= NameTableIdLimit and table.startsWith((id - self.idOffset) as NameId, prefix: prefix)
 	end 'startsWith'
 
 	export function count() returns TypeNameId
-		return table.count()
+		return table.count() + self.idOffset
 	end 'count'
 
 	export function arenaByteCount() returns NameByteCount
@@ -141,6 +211,10 @@ export type TypeNameInterner
 	// Fold every name of `source` (a file-local interner) into `self` (the project interner) in id order,
 	// returning the renumbering from each source id to the id it was assigned in `self`.
 	export function foldInto(source TypeNameInterner) returns TypeIdRemap
+		if self.baseCount > 0 or source.baseCount > 0 'anOverlay'
+			panic("TypeNameInterner.foldInto: an overlay holds only the names past its base, so a fold into or out of one would renumber them against ids it does not own")
+		end 'anOverlay'
+
 		var mapping = TypeNameIdArray.create(source.table.count(), zeroed: false)
 
 		for srcId in 0 upto source.table.count() 'each'
@@ -150,6 +224,20 @@ export type TypeNameInterner
 		return TypeIdRemap.create(mapping, namesBase: FileLocalNamesBase, instances: GenericInstanceIdMap.create())
 	end 'foldInto'
 end 'TypeNameInterner'
+
+union NameTableBase
+	none
+	over(let frozen FrozenNames)
+end 'NameTableBase'
+
+module type FrozenNames
+	module let table as NameTable
+	module let texts as NameRoster
+
+	module static function of(table NameTable, texts NameRoster) returns FrozenNames
+		return Self{table: table, texts: texts}
+	end 'of'
+end 'FrozenNames'
 
 export typealias GenericInstanceIdMap = Map with (GenericInstanceId, GenericInstanceId)
 export typealias ObservedNameSet = Set with TypeNameId

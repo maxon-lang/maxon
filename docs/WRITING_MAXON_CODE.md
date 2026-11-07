@@ -1259,7 +1259,13 @@ capability word only where a value must change owners or be shared without a wri
 - `type T is unique` for a value that must never be copied or aliased; `let b = a` moves it.
 - `where T is sendable` or `where T is isolated` on a generic **type** bounds its argument.
 - On an interface requirement or function type, write `mutable self`, `mutable T` or `mutates captures`
-  where the callee writes; unmarked ones are read-only and never wait or yield.
+  where the callee writes; unmarked ones are read-only and never wait or yield. This holds in every program,
+  whether or not it spells a region word. A function value that hands back its read-only parameter returns
+  `x.clone()`.
+- A service message parameter, message reply or factory parameter whose type is a record, a union with a
+  payload, an array or an interface value is written `isolated T` (the sender builds it for this one send) or
+  `immutable T` (the sender passes `freeze x.clone()`). Numbers, `bool`, `String`, `Character`, enums, handles
+  and `SharedValue` cells need no word.
 
 Common refusals and their fixes:
 
@@ -1281,6 +1287,7 @@ Common refusals and their fixes:
 | **E3214** a unique value cloned, frozen, or bound from a field or element | move it with `pop` or `remove`, or read it through a `view` |
 | **E3215** a type argument breaks a `where T is sendable` or `is isolated` bound | `immutable Job` or a value for `sendable`; a value or unique type for `isolated` |
 | **E3216** a service's state field can hold a promise | `await` or `.cancel()` the promise before the message or factory returns, and keep its result in the field |
+| **E3217** a service message or factory parameter, or a reply, is a record, payload union, array or interface value with no `isolated` or `immutable` | write `isolated T` and send a fresh value, or `immutable T` and send `freeze x.clone()` |
 | **E3186** a local read before a by-reference call writes it | copy it into a `let` in an earlier statement and read the copy |
 | **E3005** a `Narrow` variable at a `mutable Wide` parameter | declare the variable at the parameter's type |
 

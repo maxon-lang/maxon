@@ -20,7 +20,7 @@ module type LspStdinReader
 		return Self{stdin: Console.stdin()}
 	end 'create'
 
-	export function next() returns LspArrival
+	export function next() returns isolated LspArrival
 		return match readLspMessage(self.stdin) 'incoming'
 			message(body) gives LspArrival.framed(body)
 			endOfStream gives LspArrival.endOfStream
@@ -37,7 +37,7 @@ module type LspProjectResolver
 		return Self{}
 	end 'create'
 
-	export function resolve(dir FilePath, ticket ResolutionTicket, previous DeclaredInputStamps) returns LspArrival
-		return LspArrival.projectResolved(dir.clone(), answer: resolvedProjectInputs(dir, previous: previous), ticket: ticket)
+	export function resolve(dirPath String, ticket ResolutionTicket, previous immutable DeclaredInputStamps) returns isolated LspArrival
+		return LspArrival.projectResolved(projectDirectoryAt(dirPath), answer: resolvedProjectInputs(dirPath, previous: previous), ticket: ticket)
 	end 'resolve'
 end 'LspProjectResolver'

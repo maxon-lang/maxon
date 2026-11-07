@@ -1,11 +1,19 @@
 export typealias LeftoverLivenessOf = function(String) returns ScratchStanding
-export typealias LeftoverKeyOf = function(FilePath) returns FilePath
+
+// `itself` rather than the entry returned: a function value may not return data reached from its
+// read-only parameter (E3210).
+export union LeftoverKey
+	itself
+	belongsTo(file FilePath)
+end 'LeftoverKey'
+
+export typealias LeftoverKeyOf = function(FilePath) returns LeftoverKey
 export typealias LeftoverDiscard = function(FilePath)
 
 /// Removes what processes that have ended left in `directory`. `livenessOf` judges an entry by its
-/// name, and `leftoverIsAbandoned` decides which judgments are removed. `keyOf` maps an entry to the
-/// file it belongs with: a key goes through `discardKeyed`, and any other entry goes once its key is
-/// gone.
+/// name, and `leftoverIsAbandoned` decides which judgments are removed. `keyOf` answers `itself`
+/// for an entry that is its own key, or the file the entry belongs with: a key goes through
+/// `discardKeyed`, and any other entry goes once its key is gone.
 export function sweepLeftoversOfEndedOwners(directory FilePath, livenessOf LeftoverLivenessOf, keyOf LeftoverKeyOf, discardKeyed LeftoverDiscard)
 	if not Directory.isDirectory(directory) 'nothingLeftYet'
 		return
@@ -25,8 +33,13 @@ export function sweepLeftoversOfEndedOwners(directory FilePath, livenessOf Lefto
 end 'sweepLeftoversOfEndedOwners'
 
 function discardLeftoverOf(entry FilePath, keyOf LeftoverKeyOf, discardKeyed LeftoverDiscard)
-	let key = keyOf(entry)
+	match keyOf(entry) 'keyed'
+		itself then discardKeyed(entry)
+		belongsTo(file) then discardLeftoverKeyedBy(entry, key: file, discardKeyed: discardKeyed)
+	end 'keyed'
+end 'discardLeftoverOf'
 
+function discardLeftoverKeyedBy(entry FilePath, key FilePath, discardKeyed LeftoverDiscard)
 	if key.equals(entry) 'theKey'
 		discardKeyed(entry)
 		return
@@ -35,7 +48,11 @@ function discardLeftoverOf(entry FilePath, keyOf LeftoverKeyOf, discardKeyed Lef
 	if not File.exists(key) 'orphaned'
 		removeOwnedFile(entry)
 	end 'orphaned'
-end 'discardLeftoverOf'
+end 'discardLeftoverKeyedBy'
+
+export function leftoverIsItsOwnKey(_ FilePath) returns LeftoverKey
+	return LeftoverKey.itself
+end 'leftoverIsItsOwnKey'
 
 export function ownerProcessNamed(field String) returns LeftoverOwner
 	if not isDecimal(field) 'notDigits'

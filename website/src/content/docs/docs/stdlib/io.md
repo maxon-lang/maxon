@@ -427,7 +427,7 @@ override for `db.pool`, else the one for `db`, else the minimum. `Log`'s own wri
 
 ### Handlers and sinks
 
-A `LogHandler` is a service interface with one requirement, `handle(mutable self, record LogRecord) returns bool`. A sink
+A `LogHandler` is a service interface with one requirement, `handle(mutable self, record immutable LogRecord) returns bool`. A sink
 pairs a handler with its levels:
 
 | Member | Returns | Description |
@@ -444,15 +444,15 @@ The two handlers write each record with one write, so lines from different threa
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `TextLogHandler.create(options LogHandlerOptions)` | `TextLogHandler` | `key=value` pairs in the order `time`, `level`, `source` (`file:line`), `msg`, then the attributes; the time is RFC 3339 with milliseconds. A text value is quoted with `Json.quote`'s escapes when it is empty or holds a space, a control byte, `"` or `=`. A group's attributes print with dotted keys. |
-| `JsonLogHandler.create(options LogHandlerOptions)` | `JsonLogHandler` | One JSON object per line: `time` (RFC 3339 with nanoseconds), `level`, `source` as `{"file":…,"line":…}`, `msg`, then the attributes, a group as a nested object. A non-finite float is a string. |
+| `TextLogHandler.create(options immutable LogHandlerOptions)` | `TextLogHandler` | `key=value` pairs in the order `time`, `level`, `source` (`file:line`), `msg`, then the attributes; the time is RFC 3339 with milliseconds. A text value is quoted with `Json.quote`'s escapes when it is empty or holds a space, a control byte, `"` or `=`. A group's attributes print with dotted keys. |
+| `JsonLogHandler.create(options immutable LogHandlerOptions)` | `JsonLogHandler` | One JSON object per line: `time` (RFC 3339 with nanoseconds), `level`, `source` as `{"file":…,"line":…}`, `msg`, then the attributes, a group as a nested object. A non-finite float is a string. |
 | `LogHandlerOptions.create(stream LogStream, addTime bool, addSource bool)` | `LogHandlerOptions` | Where to write, and whether to include the time and the caller's location. |
 | `LogHandlerOptions.standard()` | `LogHandlerOptions` | Stderr, time on, source off. |
 | `stream`, `addTime`, `addSource` | | The options' fields. |
 
 `LogStream` has the cases `standardError` and `standardOutput`.
 
-A handler of your own implements `LogHandler` and receives a `LogRecord`:
+A handler of your own implements `LogHandler`, declares its parameter `record immutable LogRecord`, and receives a frozen `LogRecord`:
 
 | Member | Returns | Description |
 |--------|---------|-------------|
@@ -460,11 +460,11 @@ A handler of your own implements `LogHandler` and receives a `LogRecord`:
 | `level`, `message` | `LogLevel`, `String` | |
 | `attrs` | `LogFieldArray` | The logger's bound fields, then the call's own. |
 | `file`, `line` | `String`, `SourceLineNumber` | The caller's location. |
-| `LogRecord.create(time, level:, message:, attrs:, file:, line:)` | `LogRecord` | A record. |
+| `LogRecord.create(time, level:, message:, attrs:, file:, line:)` | `LogRecord` | A record. `attrs` is an `isolated LogFieldArray`: pass a fresh array or an `isolated` local. `freeze` the record to send it to a handler. |
 
 ```maxon
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.debug))
 	Log.setDefault(LogSink.create(spawn JsonLogHandler.create(options), levels: levels))
 

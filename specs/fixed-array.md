@@ -2885,13 +2885,13 @@ type Cell
 end 'Cell'
 
 type Svc
-	var held as Cell
+	var held as isolated Cell
 
-	static function create(held Cell) returns Self
+	static function create(held isolated Cell) returns Self
 		return Self{held: held}
 	end 'create'
 
-	export function report(other Cell) returns Cell
+	export function report(other isolated Cell) returns isolated Cell
 		print("held {self.held.describe()}\n")
 		print("argument {other.describe()}\n")
 		return Cell.create(Content.empty, mask: flagsOf(false, second: true))

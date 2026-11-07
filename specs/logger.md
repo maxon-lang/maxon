@@ -79,7 +79,7 @@ ok
 <!-- test: a-disabled-level-writes-nothing -->
 ```maxon
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.info))
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(options), levels: levels))
 	Log.debug("hidden")
@@ -100,7 +100,7 @@ An unnamed level prints relative to the named level at or below it, as slog does
 name. Filtering is by rank: at WARN, rank 2 is dropped and rank 6 is written.
 ```maxon
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.trace))
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(options), levels: levels))
 	let audit = LogLevel.named("AUDIT", rank: 2)
@@ -133,7 +133,7 @@ A text value is quoted when it holds a space, an `=`, a `"` or a control byte, w
 float prints its shortest round-trip form; a group's attrs print with dotted keys.
 ```maxon
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.info))
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(options), levels: levels))
 	Log.info("request", attrs: [
@@ -162,7 +162,7 @@ level=INFO msg=request path="/a b" status=200 delta=-3 ratio=0.5 ok=true req.met
 The same record through `JsonLogHandler`: one object per line, a group nested as an object.
 ```maxon
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.info))
 	Log.setDefault(LogSink.create(spawn JsonLogHandler.create(options), levels: levels))
 	Log.info("request", attrs: [
@@ -192,7 +192,7 @@ end 'main'
 passed, is qualified by `req`.
 ```maxon
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.info))
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(options), levels: levels))
 	let base = Log.default().withAttrs([LogAttr.string("service", value: "api")]).withGroup("req")
@@ -213,7 +213,7 @@ level=INFO msg=again service=api req.id=7
 The same loggers through `JsonLogHandler`: the group nests the attrs that follow it.
 ```maxon
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.info))
 	Log.setDefault(LogSink.create(spawn JsonLogHandler.create(options), levels: levels))
 	let base = Log.default().withAttrs([LogAttr.string("service", value: "api")]).withGroup("req")
@@ -235,7 +235,7 @@ With `addSource`, the record names the file and line of the call that logged it,
 ```maxon
 // --- file: main.maxon
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: true)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: true)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.info))
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(options), levels: levels))
 	Log.info("first")
@@ -244,7 +244,7 @@ function main() returns ExitCode
 	Log.default().info("third")
 	Log.error("fourth")
 
-	let jsonOptions = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: true)
+	let jsonOptions = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: true)
 	Log.setDefault(LogSink.create(spawn JsonLogHandler.create(jsonOptions), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
 	Log.info("fifth")
 	return 0
@@ -265,7 +265,7 @@ level=ERROR source=main.maxon:9 msg=fourth
 A group's own level overrides the minimum for loggers in that group and for no other.
 ```maxon
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.info))
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(options), levels: levels))
 	Log.setGroupLevel("a", level: LogLevel.debug)
@@ -304,7 +304,7 @@ type Tuner
 end 'Tuner'
 
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.info))
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(options), levels: levels))
 	Log.debug("before")
@@ -418,11 +418,11 @@ Each sink carries its own `LogLevelVar`, so `setLevel` through a logger on one s
 on the other writes. `la.error` waits for its line, which orders the two handlers' output.
 ```maxon
 function main() returns ExitCode
-	let optionsA = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let optionsA = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(optionsA), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
 	let la = Log.default().withAttrs([LogAttr.string("via", value: "a")])
 
-	let optionsB = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let optionsB = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(optionsB), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
 	let lb = Log.default().withAttrs([LogAttr.string("via", value: "b")])
 
@@ -449,7 +449,7 @@ level=DEBUG msg=shown via=b
 <!-- test: a-logger-built-before-set-level-obeys-it -->
 ```maxon
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.info))
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(options), levels: levels))
 	let l = Log.default()
@@ -470,11 +470,11 @@ level=DEBUG msg=after
 The new sink writes to stderr at DEBUG; a logger built on the old one keeps writing to stdout at INFO.
 ```maxon
 function main() returns ExitCode
-	let toStdout = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let toStdout = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(toStdout), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
 	let old = Log.default().withAttrs([LogAttr.string("via", value: "old")])
 
-	let toStderr = LogHandlerOptions.create(LogStream.standardError, addTime: false, addSource: false)
+	let toStderr = freeze LogHandlerOptions.create(LogStream.standardError, addTime: false, addSource: false)
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(toStderr), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.debug))))
 
 	Log.debug("fresh")
@@ -511,7 +511,7 @@ type Worker
 end 'Worker'
 
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.info))
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(options), levels: levels))
 
@@ -542,7 +542,7 @@ type Collect implements LogHandler
 		return Self{count: 0}
 	end 'create'
 
-	export function handle(record LogRecord) returns bool
+	export function handle(record immutable LogRecord) returns bool
 		self.count = self.count + 1
 		print("collected {self.count}: {record.level.name()} {record.message}\n")
 		return true
@@ -653,7 +653,7 @@ extension Logger
 end 'Logger'
 
 function main() returns ExitCode
-	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: true)
+	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: true)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.info))
 	Log.setDefault(LogSink.create(spawn TextLogHandler.create(options), levels: levels))
 	Log.audit("static")

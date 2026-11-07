@@ -41,7 +41,7 @@ end 'HelloHandler'
 
 function main() returns ExitCode
 	var server = try HttpServer.bind("127.0.0.1", port: 8080) otherwise return 1
-	_ = server.serve(HelloHandler.create("hello\n"))
+	_ = server.serve(freeze HelloHandler.create("hello\n"))
 
 	return 0
 end 'main'
@@ -338,14 +338,14 @@ type PickyHandler implements HttpHandler
 	end 'faulted'
 end 'PickyHandler'
 
-function serveUntilClosed(server HttpServer, handler PickyHandler) returns Served
+function serveUntilClosed(server HttpServer, handler immutable PickyHandler) returns Served
 	_ = server.serve(handler)
 
 	return 3
 end 'serveUntilClosed'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let handler = PickyHandler.create("second")
+	let handler = freeze PickyHandler.create("second")
 	let peer = async serveUntilClosed(server, handler: handler)
 	let port = server.port()
 
@@ -404,12 +404,12 @@ type LateThrowingHandler implements HttpHandler
 	end 'faulted'
 end 'LateThrowingHandler'
 
-function serveUntilClosed(server HttpServer, handler LateThrowingHandler) returns HttpServeEnd
+function serveUntilClosed(server HttpServer, handler immutable LateThrowingHandler) returns HttpServeEnd
 	return server.serve(handler)
 end 'serveUntilClosed'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let handler = LateThrowingHandler.create("answered")
+	let handler = freeze LateThrowingHandler.create("answered")
 	let peer = async serveUntilClosed(server, handler: handler)
 	let port = server.port()
 
@@ -503,15 +503,15 @@ type EchoPathHandler implements HttpHandler
 	end 'faulted'
 end 'EchoPathHandler'
 
-function serveUntilClosed(server HttpServer, handler EchoPathHandler) returns HttpServeEnd
+function serveUntilClosed(server HttpServer, handler immutable EchoPathHandler) returns HttpServeEnd
 	return server.serve(handler)
 end 'serveUntilClosed'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let handler = EchoPathHandler.create("echo")
+	let handler = freeze EchoPathHandler.create("echo")
 	try server.setAcceptDeadline(300) otherwise return 2
 
-	let idle = server.serve(handler.clone())
+	let idle = server.serve(handler)
 
 	try server.setAcceptDeadline(0) otherwise return 3
 	let peer = async serveUntilClosed(server, handler: handler)
@@ -1184,14 +1184,14 @@ type PlainHandler implements HttpHandler
 	end 'faulted'
 end 'PlainHandler'
 
-function serveUntilClosed(server HttpServer, handler PlainHandler) returns Served
+function serveUntilClosed(server HttpServer, handler immutable PlainHandler) returns Served
 	_ = server.serve(handler)
 
 	return 3
 end 'serveUntilClosed'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let handler = PlainHandler.create("serving")
+	let handler = freeze PlainHandler.create("serving")
 	let peer = async serveUntilClosed(server, handler: handler)
 
 	let response = try HttpClient.get("http://127.0.0.1:{server.port()}/first") otherwise 'cancelled28'
@@ -1657,12 +1657,12 @@ type ForgetfulHandler implements HttpHandler
 	end 'faulted'
 end 'ForgetfulHandler'
 
-function serveUntilClosed(server HttpServer, handler ForgetfulHandler) returns HttpServeEnd
+function serveUntilClosed(server HttpServer, handler immutable ForgetfulHandler) returns HttpServeEnd
 	return server.serve(handler)
 end 'serveUntilClosed'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let handler = ForgetfulHandler.create("remembered")
+	let handler = freeze ForgetfulHandler.create("remembered")
 	let peer = async serveUntilClosed(server, handler: handler)
 	let port = server.port()
 
@@ -1766,12 +1766,12 @@ function sendThenReset(port NetworkPort) returns bool
 	return res.succeeded()
 end 'sendThenReset'
 
-function serveUntilClosed(server HttpServer, handler ResetHandler) returns HttpServeEnd
+function serveUntilClosed(server HttpServer, handler immutable ResetHandler) returns HttpServeEnd
 	return server.serve(handler)
 end 'serveUntilClosed'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let peer = async serveUntilClosed(server, handler: ResetHandler.create())
+	let peer = async serveUntilClosed(server, handler: freeze ResetHandler.create())
 	let reset = sendThenReset(server.port())
 	raiseFlag(PeerResetFlag)
 	awaitFlag(FaultReportedFlag)
@@ -1827,7 +1827,7 @@ type PlainHandler implements HttpHandler
 	end 'faulted'
 end 'PlainHandler'
 
-function serveUntilClosed(server HttpServer, handler PlainHandler) returns HttpServeEnd
+function serveUntilClosed(server HttpServer, handler immutable PlainHandler) returns HttpServeEnd
 	return server.serve(handler)
 end 'serveUntilClosed'
 
@@ -1838,7 +1838,7 @@ function statusCodeOf(answer String) returns String
 end 'statusCodeOf'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let peer = async serveUntilClosed(server, handler: PlainHandler.create("after"))
+	let peer = async serveUntilClosed(server, handler: freeze PlainHandler.create("after"))
 
 	let client = try TcpClient.connect("127.0.0.1", port: server.port()) otherwise 'cancelled31'
 		peer.cancel()
@@ -2148,12 +2148,12 @@ function bigAnswer() returns String
 	return body.build()
 end 'bigAnswer'
 
-function serveOne(server HttpServer, handler BigAnswerHandler) returns HttpServeEnd
+function serveOne(server HttpServer, handler immutable BigAnswerHandler) returns HttpServeEnd
 	return server.serve(handler)
 end 'serveOne'
 
 function exchangeOver(listening HttpServer) returns ExitCode
-	let handler = BigAnswerHandler.create(bigAnswer())
+	let handler = freeze BigAnswerHandler.create(bigAnswer())
 	let peer = async serveOne(listening, handler: handler)
 
 	let client = try TcpClient.connect("127.0.0.1", port: listening.port()) otherwise 'cancelled39'
@@ -2571,7 +2571,7 @@ type AnswerHandler implements HttpHandler
 end 'AnswerHandler'
 
 function serveAnswers(server HttpServer) returns HttpServeEnd
-	return server.serve(AnswerHandler.create())
+	return server.serve(freeze AnswerHandler.create())
 end 'serveAnswers'
 
 function main() returns ExitCode
@@ -2703,7 +2703,7 @@ type Prober
 end 'Prober'
 
 function serving(server HttpServer, gate Gate.handle, released ReleaseCell) returns HttpServeEnd
-	return server.serve(SpinHandler.create(gate.clone(), released: released.clone()))
+	return server.serve(freeze SpinHandler.create(gate.clone(), released: released.clone()))
 end 'serving'
 
 function main() returns ExitCode
@@ -2788,7 +2788,7 @@ type CountingHandler implements HttpHandler
 end 'CountingHandler'
 
 function serving(server HttpServer, tally Tally.handle) returns HttpServeEnd
-	return server.serve(CountingHandler.create(tally.clone()))
+	return server.serve(freeze CountingHandler.create(tally.clone()))
 end 'serving'
 
 function main() returns ExitCode
@@ -2849,7 +2849,7 @@ end 'CountingHandler'
 function main() returns ExitCode
 	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 
-	_ = server.serve(CountingHandler.create())
+	_ = server.serve(freeze CountingHandler.create())
 
 	return 0
 end 'main'
@@ -2857,4 +2857,5 @@ end 'main'
 ```maxoncstderr
 error E3210: <fragment>:11:11: 'CountingHandler.handle' writes its receiver, but 'HttpHandler.handle' does not declare `mutable self`
 error E3138: stdlib/HttpServer.maxon:338:35: argument `handler` of the message `ConnectionWorker.serve` is a PARAMETER shared with the service, and the handler `ConnectionWorker.serve` writes or keeps its parameter `handler`. A record both threads reach may be written by neither. Send a `.clone()`, or make `ConnectionWorker.serve` only read `handler`
+error E3207: stdlib/HttpServer.maxon:448:58: 'dispatchExchange' writes 'handler' (it calls 'handle', which writes its receiver); 'handler' is immutable
 ```

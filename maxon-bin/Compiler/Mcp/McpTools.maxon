@@ -50,7 +50,17 @@ module type ToolContext
 end 'ToolContext'
 
 typealias ToolAnswer = function(StringArray, CollectedOutput, DurationMs) returns String
-module typealias ToolWithin = function(keep JsonDoc, JsonNodeId, keep OptionalNode, keep ToolContext) returns String
+
+// An enum rather than a function type: the tool bodies write `reqDoc`, which a function value
+// converted to a function type may not do (E3210).
+module enum ToolWithin
+	build
+	execute
+	test
+	fmt
+	specTest
+	scaleTest
+end 'ToolWithin'
 
 function runCompilerThen(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, what String, answer ToolAnswer) returns String
 	let startTime = Clock.nowMs()
@@ -74,9 +84,20 @@ end 'runAndReport'
 module function withinContext(context TreeContext, reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, tool ToolWithin) returns String
 	return match context 'tree'
 		answered(reply) gives reply
-		usable(ctx) gives tool(reqDoc, idNode, args, ctx.boundedBy(childTimeoutMsOf(reqDoc, args: args, unasked: ctx.timeoutMs)))
+		usable(ctx) gives runToolWithin(tool, reqDoc: reqDoc, idNode: idNode, args: args, ctx: ctx.boundedBy(childTimeoutMsOf(reqDoc, args: args, unasked: ctx.timeoutMs)))
 	end 'tree'
 end 'withinContext'
+
+function runToolWithin(tool ToolWithin, reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
+	return match tool 't'
+		build gives executeBuildToolWithin(reqDoc, idNode: idNode, args: args, ctx: ctx)
+		execute gives executeExecuteToolWithin(reqDoc, idNode: idNode, args: args, ctx: ctx)
+		test gives executeTestToolWithin(reqDoc, idNode: idNode, args: args, ctx: ctx)
+		fmt gives executeFmtToolWithin(reqDoc, idNode: idNode, args: args, ctx: ctx)
+		specTest gives executeSpecTestToolWithin(reqDoc, idNode: idNode, args: args, ctx: ctx)
+		scaleTest gives executeScaleTestToolWithin(reqDoc, idNode: idNode, args: args, ctx: ctx)
+	end 't'
+end 'runToolWithin'
 
 function addTimedRunFields(doc JsonDoc, payload JsonObjectBuilder, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs)
 	addRunFields(doc, payload: payload, command: formatArgv(ctx.compiler, argv: argv), repoRoot: ctx.repoRootLabel, res: res)
@@ -170,14 +191,14 @@ export function sweepStaleSnippets()
 	sweepLeftoversOfEndedOwners(StagedFamily.snippet.directoryUnder(root), livenessOf: function(name) gives StagedFamily.snippet.livenessOf(name), keyOf: snippetSourceOf, discardKeyed: discardSnippet)
 end 'sweepStaleSnippets'
 
-function snippetSourceOf(staged FilePath) returns FilePath
+function snippetSourceOf(staged FilePath) returns LeftoverKey
 	let directory = try staged.parent() otherwise panic("snippetSourceOf: {staged.path} was listed inside the snippet directory")
 
 	let name = staged.filename()
 
 	match parsedScratchName(name, family: ScratchFamily.afterBase(StagedFamily.snippet.stem())) 'parsed'
-		minted(stem, _) then return directory.join("{stem}{SnippetExtension}")
-		unminted then return directory.join("{unmintedSnippetStem(name)}{SnippetExtension}")
+		minted(stem, _) then return LeftoverKey.belongsTo(directory.join("{stem}{SnippetExtension}"))
+		unminted then return LeftoverKey.belongsTo(directory.join("{unmintedSnippetStem(name)}{SnippetExtension}"))
 	end 'parsed'
 end 'snippetSourceOf'
 
@@ -316,7 +337,7 @@ module function buildToolContext(reqDoc JsonDoc, idNode JsonNodeId, args Optiona
 	return resolveTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath, compiler: treeCompilerOf(reqDoc, args: args))
 end 'buildToolContext'
 
-module function executeBuildToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
+function executeBuildToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
 	let target = resolveSourceTarget(reqDoc, args: args)
 
 	if not target.ok() 'badSource'
@@ -357,7 +378,7 @@ module function executeBuildToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args O
 	return target.answeredWith(runAndReport(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: BuildSubcommandName))
 end 'executeBuildToolWithin'
 
-module function executeExecuteToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
+function executeExecuteToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
 	let target = resolveSourceTarget(reqDoc, args: args)
 
 	if not target.ok() 'bad'
@@ -400,7 +421,7 @@ function boundSecondsOf(parse TargetSecondsParse) returns TargetSeconds
 	end 'read'
 end 'boundSecondsOf'
 
-module function executeTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
+function executeTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
 	var argv = StringArray.create(0)
 	argv.push(TestCommandName)
 
@@ -427,7 +448,7 @@ function wholeOptionOf(reqDoc JsonDoc, args OptionalNode, key String, prefix Str
 	end 'whole'
 end 'wholeOptionOf'
 
-module function executeFmtToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
+function executeFmtToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
 	let target = resolveSourceTarget(reqDoc, args: args)
 
 	if not target.ok() 'badSource'
@@ -709,7 +730,7 @@ module function hostOrTreeContext(reqDoc JsonDoc, idNode JsonNodeId, args Option
 	return resolveTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath, compiler: TreeCompiler.ownSlot)
 end 'hostOrTreeContext'
 
-module function executeSpecTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
+function executeSpecTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
 	let dirArg = getOptionalStringArg(reqDoc, args: args, key: "directory", defaultVal: DefaultSpecDir)
 
 	match specToolArgv(reqDoc, idNode: idNode, args: args, ctx: ctx, directory: dirArg) 'argv'
@@ -785,7 +806,7 @@ function runWithResultDocument(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContex
 		return toolErrorText(reqDoc, idNode: idNode, message: "{what}: could not reserve a name for the run's result document in {resultDir.path} ({e.name}).", repoRoot: ctx.repoRootLabel)
 	end 'unreserved'
 
-	sweepLeftoversOfEndedOwners(resultDir, livenessOf: function(entry) gives family.livenessOf(entry), keyOf: function(entry) gives entry, discardKeyed: removeOwnedFile)
+	sweepLeftoversOfEndedOwners(resultDir, livenessOf: function(entry) gives family.livenessOf(entry), keyOf: leftoverIsItsOwnKey, discardKeyed: removeOwnedFile)
 
 	var ranArgv = StringArray.create(0)
 	ranArgv.append(argv)
@@ -923,7 +944,7 @@ function failureArrayNode(doc JsonDoc, failures SpecFailureSummaryArray, listed 
 	return doc.add(JsonNode.arrayNode(nodeIds))
 end 'failureArrayNode'
 
-module function executeScaleTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
+function executeScaleTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
 	var argv = StringArray.create(0)
 	argv.push(ScaleTestCommandName)
 

@@ -110,8 +110,8 @@ public type LogRecord
 	public let file as String
 	public let line as SourceLineNumber
 
-	public static function create(time UnixNanos, level LogLevel, message String, attrs LogFieldArray, file String, line SourceLineNumber) returns LogRecord
-		return LogRecord{time: time, level: level, message: message, attrs: attrs, file: file, line: line}
+	public static function create(time UnixNanos, level LogLevel, message String, attrs isolated LogFieldArray, file String, line SourceLineNumber) returns LogRecord
+		return LogRecord{time: time, level: level, message: message, attrs: merge attrs, file: file, line: line}
 	end 'create'
 end 'LogRecord'
 
@@ -326,18 +326,21 @@ end 'LogSink'
 
 let LogHandOverTimeoutMs = 10000 as Milliseconds
 
-function ownedLogRecord(time UnixNanos, level LogLevel, message String, bound LogFieldArray, attrs LogAttrArray, groups LogGroupPath, file String, line SourceLineNumber) returns LogRecord
-	var fields = LogFieldArray.create(0)
+function ownedLogRecord(time UnixNanos, level LogLevel, message String, bound LogFieldArray, attrs LogAttrArray, groups LogGroupPath, file String, line SourceLineNumber) returns immutable LogRecord
+	var fields = LogFieldArray.create(0) as isolated LogFieldArray
 
-	for field in bound 'eachBound'
-		fields.push(field.clone())
-	end 'eachBound'
+	modify fields 'fill'
+		for field in bound 'eachBound'
+			fields.push(field.clone())
+		end 'eachBound'
 
-	appendLogFields(attrs, groups: groups, into: fields)
-	return LogRecord.create(time, level: level.clone(), message: "{message}", attrs: fields, file: "{file}", line: line)
+		appendLogFields(attrs, groups: groups, into: fields)
+	end 'fill'
+
+	return freeze LogRecord.create(time, level: level.clone(), message: "{message}", attrs: fields, file: "{file}", line: line)
 end 'ownedLogRecord'
 
-default LogSink = LogSink.create(spawn TextLogHandler.create(LogHandlerOptions.standard()), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info)))
+default LogSink = LogSink.create(spawn TextLogHandler.create(freeze LogHandlerOptions.standard()), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info)))
 
 /// The program's default logger. Each call reads the current `LogSink`. `error`, and `log` at
 /// `error` or above, returns once its line and every record handed over before it are written. A

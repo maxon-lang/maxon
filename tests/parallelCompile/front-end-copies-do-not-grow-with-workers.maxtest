@@ -1,13 +1,15 @@
 let FrontEndPoolPhaseName = "frontEndPool"
+let IndexOverlayLinePrefix = "[CMP] DEBUG: front end index overlay: "
 let IndexCopyLinePrefix = "[CMP] DEBUG: front end index copy: "
 let PooledProcessors = 4 as ProcessorCount
 let MinimumPooledAdoptions = 3 as ReportedPoolCount
-let WorkerOverheadDivisor = 4 as ReportedPoolCount
+let OverlayCopyDivisor = 4 as ReportedPoolCount
+let WorkerCopyDivisor = 4 as ReportedPoolCount
 let WarmUpLabel = "library-cache warm-up"
 let OneProcessorLabel = "one processor"
 let PooledLabel = "four processors"
 
-test 'the front end does not copy the whole signature index per worker'
+test 'the front end copies no part of the signature index per worker or per file'
 	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "front-end-copies-do-not-grow-with-workers", fixture: "shared-index-program")
 
 	var arguments = StringArray.create(0)
@@ -27,29 +29,32 @@ test 'the front end does not copy the whole signature index per worker'
 	Expect.atLeast(pooledAdoptions, than: MinimumPooledAdoptions, message: "under MAXON_MAX_PROCS={PooledProcessors} the front end reported {pooledAdoptions} worker(s) adopting the signature index, so its parse drain did not spread the fixture's similar-sized files over several workers and the growth below measures nothing. One processor reported {singleAdoptions}.")
 	Expect.greaterThan(pooledAdoptions, than: singleAdoptions, message: "the front end reported {pooledAdoptions} adoption(s) at {PooledProcessors} processors and {singleAdoptions} at one, so there is no extra worker to price.")
 
-	let copyAllocations = indexCopyAllocations(pooled)
-	Expect.greaterThan(copyAllocations, than: 0, message: "the front end reported a private index copy of {copyAllocations} allocations, so the per-worker bound below measures nothing.")
+	let copyAllocations = reportedAllocations(pooled, prefix: IndexCopyLinePrefix)
+	let overlayAllocations = reportedAllocations(pooled, prefix: IndexOverlayLinePrefix)
+	Expect.greaterThan(copyAllocations, than: 0, message: "the front end reported a whole-index copy of {copyAllocations} allocations, so the bounds below measure nothing.")
+	Expect.greaterThan(overlayAllocations, than: 0, message: "the front end reported a parse overlay of {overlayAllocations} allocations, so the bound below measures nothing.")
+
+	let overlayBound = copyAllocations / OverlayCopyDivisor
+	Expect.lessThan(overlayAllocations, than: overlayBound, message: "one parse's overlay over the shared signature index allocated {overlayAllocations} times, and a whole copy of that index {copyAllocations}: an overlay holds only what its parse writes, so it may cost at most 1/{OverlayCopyDivisor} of a copy, {overlayBound}.")
 
 	let growth = pooledAllocations - singleAllocations
 	let extraAdoptions = pooledAdoptions - singleAdoptions
 	let perAdoption = try (growth / extraAdoptions) otherwise panic("parallel-compile.test: the adoption counts were found to differ above")
 
-	// An extra worker costs its private clone plus a quarter of one for its own state; a second copy
-	// per worker made on the main thread lands past the bound.
-	let bound = copyAllocations + copyAllocations / WorkerOverheadDivisor
+	let workerBound = copyAllocations / WorkerCopyDivisor
 
-	Expect.lessThan(perAdoption, than: bound, message: "the `{PhaseRowKind} {FrontEndPoolPhaseName}` row allocated {pooledAllocations} times with {pooledAdoptions} worker(s) adopting the index under MAXON_MAX_PROCS={PooledProcessors}, and {singleAllocations} times with {singleAdoptions} under one processor: {growth} more, {perAdoption} per extra adopting worker. One worker's private copy of this fixture's signature index measured {copyAllocations} allocations, and an extra worker may cost that plus 1/{WorkerOverheadDivisor} of it, {bound}, for its own state — each worker shares the settled declarations and the published template, and clones the template on its own thread, so the main thread copies and sends nothing per worker.")
-end 'the front end does not copy the whole signature index per worker'
+	Expect.lessThan(perAdoption, than: workerBound, message: "the `{PhaseRowKind} {FrontEndPoolPhaseName}` row allocated {pooledAllocations} times with {pooledAdoptions} worker(s) adopting the index under MAXON_MAX_PROCS={PooledProcessors}, and {singleAllocations} times with {singleAdoptions} under one processor: {growth} more, {perAdoption} per extra adopting worker. A whole copy of this fixture's signature index allocates {copyAllocations}, and an extra worker may cost at most 1/{WorkerCopyDivisor} of it, {workerBound}, for its own state — every worker reads the one published index and each parse writes only its own overlay, so neither the main thread nor a worker copies the index.")
+end 'the front end copies no part of the signature index per worker or per file'
 
 function frontEndPoolAllocations(table MetricsTable) returns ReportedPoolCount
 	let cell = table.cellOf(PhaseRowKind, name: FrontEndPoolPhaseName, column: AllocsColumn)
 	return try int.fromString(cell) otherwise panic("parallel-compile.test: the `{PhaseRowKind} {FrontEndPoolPhaseName}` row holds '{cell}' where an allocation count belongs.")
 end 'frontEndPoolAllocations'
 
-function indexCopyAllocations(run CollectedOutput) returns ReportedPoolCount
-	let afterPrefix = try run.stderr.split(IndexCopyLinePrefix).get(1) otherwise panic("parallel-compile.test: `{CompilerDebugLogFlag}` printed no line starting `{IndexCopyLinePrefix}`, so the cost of one worker's private index copy cannot be read. It wrote to stderr: {run.stderr}")
+function reportedAllocations(run CollectedOutput, prefix String) returns ReportedPoolCount
+	let afterPrefix = try run.stderr.split(prefix).get(1) otherwise panic("parallel-compile.test: `{CompilerDebugLogFlag}` printed no line starting `{prefix}`, so the allocation count it reports cannot be read. It wrote to stderr: {run.stderr}")
 	let line = (try afterPrefix.split(LineFeed).get(0) otherwise panic("parallel-compile.test: splitting a string always yields its first piece")).trim()
 	let count = try line.split(" ").get(0) otherwise panic("parallel-compile.test: splitting a string always yields its first piece")
 
-	return try int.fromString(count) otherwise panic("parallel-compile.test: the index copy line holds '{count}' where an allocation count belongs. It wrote: {line}")
-end 'indexCopyAllocations'
+	return try int.fromString(count) otherwise panic("parallel-compile.test: the line holds '{count}' where an allocation count belongs. It wrote: {line}")
+end 'reportedAllocations'

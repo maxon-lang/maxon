@@ -5442,6 +5442,20 @@ end 'main'
 **What crosses a message.** A value sent to a service must not stay reachable from the sender in a way
 either side could write, because the two green threads may run at the same time on different processors:
 
+- **A parameter or reply that holds data of its region names how it crosses.** A message parameter, a
+  message reply or a factory parameter whose type is a record, a union with a payload, an array or other
+  container, or an interface value is written `isolated T` or `immutable T`; with neither, the `spawn` that makes
+  the type a service is [E3217](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3217), naming the parameter or
+  message. `isolated` hands the value over: the sender passes a fresh region or an `isolated` local
+  ([Separate Regions](#separate-regions-isolated)) and cannot read it afterwards. `immutable` shares frozen
+  data that both threads only read: the sender passes `freeze x.clone()` or an `immutable` value
+  ([Frozen Data](#frozen-data-freeze-and-immutable)). Only the factory the `spawn` names is judged, and a
+  reply is judged at its declaration, so a generic message that `returns T` is not refused here. A word is
+  needed on none of these: numbers, `bool`, `ExitCode`, `String`, `Character`, enums, unions whose cases carry
+  nothing, service and interface handles, `SharedValue` cells, a tuple none of whose elements owns heap, and a
+  type that holds a `unique` value or an OS handle (`TcpClient`, `TcpListener`, …). A promise, a function value
+  or an opaque type parameter is **E3135**, a reply the cell cannot carry is **E3140**, and a state field that
+  can hold a promise is **E3216**; those are reported before E3217.
 - A local `let` or `var`, a temporary or a literal argument the sender owns is **moved** into the service;
   reading the sender's variable afterwards is **E3102**. Replies are moved too, and so is every argument a
   `spawn` hands its factory, whether or not the factory keeps it. The handler owns what it was moved, so it may
@@ -6051,10 +6065,10 @@ A method may declare its receiver as its first parameter, `function reported(imm
 inference cannot express what the method needs. `self` is not written at the call. A receiver capability on a
 `static` or free function, or `self` after another parameter, is a parse error (`specs/regions-syntax.md`).
 
-The capability checks run on the standard library, on every file of a program that declares a field,
-parameter, receiver, result or function-type position `isolated` or `immutable`, and on any file that spells
-`modify`, `async`, `freeze`, `swap`, `merge`, `isolated` or `immutable`. Other code is held to the
-read-only rules of [Read-Only Values](#read-only-values) alone, and those rules apply everywhere.
+The capability checks run on every body of every program, whether or not it spells a region word. In a program
+that spells none, what they report is the conversion rule: a function value or a conformer converts to a function type or an interface
+requirement only if it declares what it does. One that writes, keeps or returns a parameter, or may wait or
+yield, against a type or requirement that does not declare it is **E3210** (`specs/regions-everywhere.md`).
 
 ### Frozen Data: `freeze` and `immutable`
 
@@ -6305,7 +6319,11 @@ error E3210: function value for 'Look' writes its parameter 'counter', but 'Look
 error E3210: function value for 'Array.SortComparator' writes data it captured, but 'Array.SortComparator' does not declare `mutates captures`
 error E3210: function value for 'Step' may yield (it awaits a coroutine at line 12), but a function type never waits or yields
 error E3210: 'Relay.echo' may wait (it awaits a reply from 'Bouncer' at line 28), but a requirement never waits or yields
+error E3210: function value for 'KeyOf' returns data reached from its read-only parameter 'key', which 'KeyOf' does not allow
 ```
+
+A function value that returns its read-only parameter, or throws it in an error payload, converts once it
+returns a `.clone()` of it (`specs/regions-everywhere.md`).
 
 A conformer or function value whose declaration marks a position the boundary leaves unmarked, or the
 reverse, is refused too. A value of a `mutates captures` type called through frozen or read-only
@@ -6376,6 +6394,8 @@ write is the exception a hold cannot cover, and E3186 refuses it at compile time
 | [E3213](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3213) | a promise dropped, overwritten or discarded |
 | [E3214](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3214) | a unique value cloned, aliased, frozen or moved out of a slot it was only read from |
 | [E3215](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3215) | a type argument that breaks a `where T is sendable` or `where T is isolated` bound |
+| [E3216](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3216) | a service type whose state can hold a promise |
+| [E3217](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3217) | a service message or factory parameter, or a message reply, that holds data of its region and names neither `isolated` nor `immutable` |
 
 ## Memory Model
 
@@ -6878,8 +6898,7 @@ awaited or dropped exits with **75** instead (see [Concurrency](#exit-codes)).
 | [E3174](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3174) | a published value that is not solely owned |
 | [E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) | raw memory or a raw handle used outside the library tier |
 | [E3186](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3186) | a local read by an operand evaluated before a call writes it through a `mutable` parameter |
-| [E3196](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3196)–[E3215](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3215) | the capability, window, tied-promise and unique checks (see [Capability Errors](#capability-errors)) |
-| [E3216](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3216) | a service whose state holds a promise |
+| [E3196](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3196)–[E3217](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3217) | the capability, window, tied-promise, unique and service-state checks (see [Capability Errors](#capability-errors)) |
 | [E5004](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e5004) | a chain of unchecked runtime functions that can exceed the stack margin |
 | exit 96 | a mutable value sent to another thread while not solely owned |
 | exit 101 | memory still allocated when `main` returns |

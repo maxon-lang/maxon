@@ -1020,8 +1020,9 @@ baseline went unused.
 **The front-end pool.** `front end: <W> worker(s) over <P> processor(s), <n> file(s), <n> adopted` sizes
 the pool that lexed and parsed the files no memo held. `adopted` counts the workers handed the signature
 index before they parse: a warm compile of a one-file program adopts at most one. The next line,
-`front end index copy: <n> allocations`, is the allocation count of one worker's private clone of that
-index, the cost each adopting worker adds. A compile that keeps that work on the compiling thread prints
+`front end index overlay: <n> allocations`, is the allocation count of creating the overlay a parse
+writes into over the index the workers share. The line after it, `front end index copy: <n> allocations`, is
+the allocation count of one whole copy of that shared index, the figure the overlay's count is read against. A compile that keeps that work on the compiling thread prints
 `front end: serial, in process, <n> file(s) — <reason>`. The work stays there when the compiler's runtime
 cannot move a shared-record graph between threads, and under [`--allocations-by-tag`](#maxon-build), whose
 tally attributes each stage to the thread that runs it.

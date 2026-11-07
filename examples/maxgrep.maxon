@@ -155,7 +155,7 @@ type Options
 		return self.jobs
 	end 'workersFor'
 
-	function searchRequest() returns SearchRequest
+	function searchRequest() returns isolated SearchRequest
 		return SearchRequest.create(self.pattern, ignoreCase: self.ignoreCase, fixedString: self.fixedString, invertMatch: self.invertMatch, keepsLines: not (self.countOnly or self.filesWithMatches), stopsAtFirstSelection: self.filesWithMatches)
 	end 'searchRequest'
 
@@ -521,9 +521,9 @@ end 'SearchError'
 
 type Searcher
 	var matcher as Matcher
-	let request as SearchRequest
+	let request as immutable SearchRequest
 
-	static function prepare(request SearchRequest) returns Self throws PatternError
+	static function prepare(request immutable SearchRequest) returns Self throws PatternError
 		let fold = byteFold(request.ignoreCase)
 
 		if request.fixedString 'fixed'
@@ -533,41 +533,43 @@ type Searcher
 		return Self{matcher: try RegexMatcher.compile(request.pattern, fold: fold), request: request}
 	end 'prepare'
 
-	static function create(request SearchRequest) returns Self
+	static function create(request immutable SearchRequest) returns Self
 		return try prepare(request) otherwise panic("main prepares this same request before it spawns a Searcher")
 	end 'create'
 
-	export function search(path FilePath) returns FileReport throws SearchError
+	export function search(path immutable FilePath) returns isolated FileReport throws SearchError
 		let contents = try File.readBinary(path) otherwise throw SearchError.unreadable
 		return searchBuffer(contents)
 	end 'search'
 
-	function searchBuffer(buffer ByteArray) returns FileReport
+	function searchBuffer(buffer ByteArray) returns isolated FileReport
 		let isBinary = buffer.contains(ControlByte.nul)
-		var report = FileReport.create(isBinary)
+		var report = FileReport.create(isBinary) as isolated FileReport
 		var lineStart = 0 as BufferPos
 		var lineNumber = firstLineNumber as LineNumber
 
-		while lineStart < buffer.count() 'eachLine'
-			let lineEnd = lineEndFrom(buffer, lineStart: lineStart)
-			let selected = self.matcher.matchesLine(buffer, lineStart: lineStart, lineEnd: lineEnd) != self.request.invertMatch
+		modify report 'fill'
+			while lineStart < buffer.count() 'eachLine'
+				let lineEnd = lineEndFrom(buffer, lineStart: lineStart)
+				let selected = self.matcher.matchesLine(buffer, lineStart: lineStart, lineEnd: lineEnd) != self.request.invertMatch
 
-			if selected 'selectLine'
-				report.selectedCount = report.selectedCount + 1
+				if selected 'selectLine'
+					report.selectedCount = report.selectedCount + 1
 
-				if self.request.keepsLines and not isBinary 'keepText'
-					let text = try buffer.slice(lineStart, endIndex: lineEnd) otherwise panic("searchBuffer: a line lies inside its buffer")
-					report.lines.push(LineMatch.create(lineNumber, text: String.from(text)))
-				end 'keepText'
+					if self.request.keepsLines and not isBinary 'keepText'
+						let text = try buffer.slice(lineStart, endIndex: lineEnd) otherwise panic("searchBuffer: a line lies inside its buffer")
+						report.lines.push(LineMatch.create(lineNumber, text: String.from(text)))
+					end 'keepText'
 
-				if self.request.stopsAtFirstSelection 'enough'
-					break
-				end 'enough'
-			end 'selectLine'
+					if self.request.stopsAtFirstSelection 'enough'
+						break
+					end 'enough'
+				end 'selectLine'
 
-			lineStart = lineEnd + 1
-			lineNumber = lineNumber + 1
-		end 'eachLine'
+				lineStart = lineEnd + 1
+				lineNumber = lineNumber + 1
+			end 'eachLine'
+		end 'fill'
 
 		return report
 	end 'searchBuffer'
@@ -706,7 +708,7 @@ function searchStandardInput(searcher Searcher, style OutputStyle, summary RunSu
 		buffer.push(ControlByte.newline)
 	end 'eachLine'
 
-	let report = searcher.searchBuffer(buffer)
+	let report = merge searcher.searchBuffer(buffer)
 	print(renderReport(report, label: standardInputLabel, style: style))
 	summary.record(report)
 end 'searchStandardInput'
@@ -735,7 +737,7 @@ function findFiles(options Options, summary RunSummary) returns PathArray
 end 'findFiles'
 
 function submitSearch(replies ReportPromiseArray, searcher Searcher.handle, path FilePath)
-	replies.push(try searcher.search(path.clone(), sendTimeout: ForeverMs) otherwise (e) 'refused'
+	replies.push(try searcher.search(freeze path.clone(), sendTimeout: ForeverMs) otherwise (e) 'refused'
 		match e 'why'
 			mailboxFull then panic("submitSearch: runs on main's green thread, which no promise names and so nothing cancels, and a send given ForeverMs waits for room — mailboxFull cannot occur")
 			serviceStopped then panic("submitSearch: a searcher stopped before the files were sent")
@@ -743,11 +745,11 @@ function submitSearch(replies ReportPromiseArray, searcher Searcher.handle, path
 	end 'refused')
 end 'submitSearch'
 
-function searchFiles(files PathArray, request SearchRequest, style OutputStyle, workers WorkerCount, summary RunSummary)
+function searchFiles(files PathArray, request immutable SearchRequest, style OutputStyle, workers WorkerCount, summary RunSummary)
 	var searchers = SearcherArray.create(0)
 
 	for _ in 1 to workers 'spawnWorkers'
-		searchers.push(spawn Searcher.create(request.clone()))
+		searchers.push(spawn Searcher.create(freeze request.clone()))
 	end 'spawnWorkers'
 
 	var replies = ReportPromiseArray.create(0)
@@ -788,7 +790,7 @@ function main() returns ExitCode
 		return Outcome.troubled
 	end 'badUsage'
 
-	let request = options.searchRequest()
+	let request = freeze options.searchRequest()
 	let style = options.outputStyle()
 
 	let searcher = try Searcher.prepare(request) otherwise (problem) 'badPattern'

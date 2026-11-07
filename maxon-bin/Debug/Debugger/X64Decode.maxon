@@ -118,41 +118,43 @@ enum X64Family
 	modRmGroupFive
 end 'X64Family'
 
+// It holds no `code`: the reads take it as a parameter, because a record that stored the caller's
+// bytes would pin them mutable-only, which E3210 refuses where the decoder is reached through a
+// function value.
 type X64Cursor
-	let code as ByteArray
 	export var position as DecodedOffset
 	let limit as DecodedOffset
 
 	static function create(code ByteArray, at DecodedOffset) returns X64Cursor
-		return Self{code: code, position: at, limit: code.count() as DecodedOffset}
+		return Self{position: at, limit: code.count() as DecodedOffset}
 	end 'create'
 
 	function exhausted() returns bool
 		return self.position >= self.limit
 	end 'exhausted'
 
-	function take() returns X64ByteValue throws X64DecodeError
+	function take(code ByteArray) returns X64ByteValue throws X64DecodeError
 		if self.exhausted() 'pastTheEnd'
 			throw X64DecodeError.pastTheCode
 		end 'pastTheEnd'
 
-		let byte = try self.code.get(self.position) otherwise throw X64DecodeError.pastTheCode
+		let byte = try code.get(self.position) otherwise throw X64DecodeError.pastTheCode
 		self.position = self.position + 1
 
 		return byte as X64ByteValue
 	end 'take'
 
-	function peek() returns X64ByteValue throws X64DecodeError
+	function peek(code ByteArray) returns X64ByteValue throws X64DecodeError
 		if self.exhausted() 'pastTheEnd'
 			throw X64DecodeError.pastTheCode
 		end 'pastTheEnd'
 
-		return (try self.code.get(self.position) otherwise throw X64DecodeError.pastTheCode) as X64ByteValue
+		return (try code.get(self.position) otherwise throw X64DecodeError.pastTheCode) as X64ByteValue
 	end 'peek'
 
-	function skip(bytes DecodedLength) throws X64DecodeError
+	function skip(code ByteArray, bytes DecodedLength) throws X64DecodeError
 		for _ in 0 upto bytes 'eachByte'
-			_ = try self.take()
+			_ = try self.take(code)
 		end 'eachByte'
 	end 'skip'
 
@@ -165,14 +167,14 @@ type X64Cursor
 
 		return span as DecodedLength
 	end 'spanFrom'
-
-	function signedAt(offset DecodedOffset, width DebugWidth) returns DecodedDisplacement throws X64DecodeError
-		match debugLittleEndianAt(self.code, at: offset as DebugAddress, width: width) 'read'
-			pastTheBytes then throw X64DecodeError.pastTheCode
-			read(value) then return debugSignExtended(value, width: width) as DecodedDisplacement
-		end 'read'
-	end 'signedAt'
 end 'X64Cursor'
+
+function signedDisplacementAt(code ByteArray, offset DecodedOffset, width DebugWidth) returns DecodedDisplacement throws X64DecodeError
+	match debugLittleEndianAt(code, at: offset as DebugAddress, width: width) 'read'
+		pastTheBytes then throw X64DecodeError.pastTheCode
+		read(value) then return debugSignExtended(value, width: width) as DecodedDisplacement
+	end 'read'
+end 'signedDisplacementAt'
 
 enum X64DecodeError implements Error
 	pastTheCode
@@ -249,52 +251,52 @@ function x64InstructionAt(code ByteArray, at DecodedOffset, address DecodedAddre
 	var scanningPrefixes = true
 
 	while scanningPrefixes 'eachPrefix'
-		let byte = try cursor.peek()
+		let byte = try cursor.peek(code)
 
 		if isLegacyPrefix(byte) 'aLegacyPrefix'
 			narrowOperand = narrowOperand or byte == OperandSizePrefix
 			addressOverridden = addressOverridden or overridesTheAddress(byte)
 			rex = NoRex
-			try cursor.skip(1)
+			try cursor.skip(code, bytes: 1)
 			continue
 		end 'aLegacyPrefix'
 
 		if byte >= RexLow and byte <= RexHigh 'aRexByte'
 			rex = byte
-			try cursor.skip(1)
+			try cursor.skip(code, bytes: 1)
 			continue
 		end 'aRexByte'
 
 		scanningPrefixes = false
 	end 'eachPrefix'
 
-	let primary = try cursor.take()
+	let primary = try cursor.take(code)
 
 	if primary == TwoByteEscape 'theSecondMap'
-		let secondary = try cursor.take()
+		let secondary = try cursor.take(code)
 
-		return try decodedTwoByteInstruction(cursor, at: at, address: address, secondary: secondary, narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
+		return try decodedTwoByteInstruction(code, cursor: cursor, at: at, address: address, secondary: secondary, narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
 	end 'theSecondMap'
 
-	return try decodedShapedInstruction(cursor, at: at, address: address, shape: oneByteShape(primary), condition: (primary and ConditionNibbleMask) as X64Condition, relativeBytes: oneByteRelativeBytes(primary), narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
+	return try decodedShapedInstruction(code, cursor: cursor, at: at, address: address, shape: oneByteShape(primary), condition: (primary and ConditionNibbleMask) as X64Condition, relativeBytes: oneByteRelativeBytes(primary), narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
 end 'x64InstructionAt'
 
-function decodedTwoByteInstruction(cursor X64Cursor, at DecodedOffset, address DecodedAddress, secondary X64ByteValue, narrowOperand bool, addressOverridden bool, rex X64ByteValue) returns X64Instruction throws X64DecodeError
+function decodedTwoByteInstruction(code ByteArray, cursor X64Cursor, at DecodedOffset, address DecodedAddress, secondary X64ByteValue, narrowOperand bool, addressOverridden bool, rex X64ByteValue) returns X64Instruction throws X64DecodeError
 	if secondary >= LongJccLow and secondary <= LongJccHigh 'aLongConditionalJump'
-		return try decodedShapedInstruction(cursor, at: at, address: address, shape: X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.conditionalJump), condition: (secondary and ConditionNibbleMask) as X64Condition, relativeBytes: Disp32Bytes, narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
+		return try decodedShapedInstruction(code, cursor: cursor, at: at, address: address, shape: X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.conditionalJump), condition: (secondary and ConditionNibbleMask) as X64Condition, relativeBytes: Disp32Bytes, narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
 	end 'aLongConditionalJump'
 
-	return try decodedShapedInstruction(cursor, at: at, address: address, shape: twoByteShape(secondary), condition: 0, relativeBytes: 0, narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
+	return try decodedShapedInstruction(code, cursor: cursor, at: at, address: address, shape: twoByteShape(secondary), condition: 0, relativeBytes: 0, narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
 end 'decodedTwoByteInstruction'
 
-function decodedShapedInstruction(cursor X64Cursor, at DecodedOffset, address DecodedAddress, shape X64Shape, condition X64Condition, relativeBytes DecodedLength, narrowOperand bool, addressOverridden bool, rex X64ByteValue) returns X64Instruction throws X64DecodeError
+function decodedShapedInstruction(code ByteArray, cursor X64Cursor, at DecodedOffset, address DecodedAddress, shape X64Shape, condition X64Condition, relativeBytes DecodedLength, narrowOperand bool, addressOverridden bool, rex X64ByteValue) returns X64Instruction throws X64DecodeError
 	match shape 'known'
 		unknown then throw X64DecodeError.notAnInstructionThisBuildDecodes
-		operation(hasModRm, immediate, family) then return try decodedOperation(cursor, at: at, address: address, hasModRm: hasModRm, immediate: immediate, family: family, condition: condition, relativeBytes: relativeBytes, narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
+		operation(hasModRm, immediate, family) then return try decodedOperation(code, cursor: cursor, at: at, address: address, hasModRm: hasModRm, immediate: immediate, family: family, condition: condition, relativeBytes: relativeBytes, narrowOperand: narrowOperand, addressOverridden: addressOverridden, rex: rex)
 	end 'known'
 end 'decodedShapedInstruction'
 
-function decodedOperation(cursor X64Cursor, at DecodedOffset, address DecodedAddress, hasModRm bool, immediate X64Immediate, family X64Family, condition X64Condition, relativeBytes DecodedLength, narrowOperand bool, addressOverridden bool, rex X64ByteValue) returns X64Instruction throws X64DecodeError
+function decodedOperation(code ByteArray, cursor X64Cursor, at DecodedOffset, address DecodedAddress, hasModRm bool, immediate X64Immediate, family X64Family, condition X64Condition, relativeBytes DecodedLength, narrowOperand bool, addressOverridden bool, rex X64ByteValue) returns X64Instruction throws X64DecodeError
 	var ripRelative = false
 	var displacementPosition = 0 as DecodedLength
 	var displacementBytes = 0 as DecodedLength
@@ -304,14 +306,14 @@ function decodedOperation(cursor X64Cursor, at DecodedOffset, address DecodedAdd
 	var sib = NoSib
 
 	if hasModRm 'anAddressingByte'
-		let modRm = try cursor.take()
+		let modRm = try cursor.take(code)
 		addressing = (modRm shr ModRmModShift) and ModRmModMask
 		rm = (modRm and ModRmLowMask) as X64ModRmField
 		modRmReg = ((modRm shr ModRmRegShift) and ModRmLowMask) as X64ModRmField
 
 		if addressing != ModRmDirect 'aMemoryOperand'
 			if rm == ModRmSibRm 'aScaledIndex'
-				sib = try cursor.take()
+				sib = try cursor.take(code)
 
 				if addressing == ModRmNoDisplacement and (sib and ModRmLowMask) == SibNoBase 'anAbsoluteBase'
 					displacementBytes = Disp32Bytes
@@ -328,7 +330,7 @@ function decodedOperation(cursor X64Cursor, at DecodedOffset, address DecodedAdd
 			end 'aWordDisplacement'
 
 			displacementPosition = try cursor.spanFrom(at)
-			try cursor.skip(displacementBytes)
+			try cursor.skip(code, bytes: displacementBytes)
 		end 'aMemoryOperand'
 	end 'anAddressingByte'
 
@@ -339,8 +341,8 @@ function decodedOperation(cursor X64Cursor, at DecodedOffset, address DecodedAdd
 		releasePosition = try cursor.spanFrom(at)
 	end 'releasesArguments'
 
-	try cursor.skip(immediateBytes)
-	try cursor.skip(relativeBytes)
+	try cursor.skip(code, bytes: immediateBytes)
+	try cursor.skip(code, bytes: relativeBytes)
 
 	let length = try cursor.spanFrom(at)
 	let instructionClass = classOf(family, modRmReg: modRmReg, ripRelative: ripRelative)
@@ -350,40 +352,39 @@ function decodedOperation(cursor X64Cursor, at DecodedOffset, address DecodedAdd
 	end 'aSixteenBitBranch'
 
 	let taken = condition if instructionClass == DbgClassConditionalJump else 0
-	let target = try targetOf(cursor, at: at, address: address, instructionClass: instructionClass, length: length, relativeBytes: relativeBytes, displacementPosition: displacementPosition)
+	let target = try targetOf(code, at: at, address: address, instructionClass: instructionClass, length: length, relativeBytes: relativeBytes, displacementPosition: displacementPosition)
 	var callOperand = DecodedCallOperand.none
 
 	if instructionClass == DbgClassIndirectCall 'anIndirectCall'
-		callOperand = try X64CallOperandReader.create(cursor, at: at, address: address, length: length, rex: rex, addressOverridden: addressOverridden).operandOf(addressing, rm: rm, sib: sib, displacementPosition: displacementPosition, displacementBytes: displacementBytes)
+		callOperand = try X64CallOperandReader.create(at, address: address, length: length, rex: rex, addressOverridden: addressOverridden).operandOf(code, addressing: addressing, rm: rm, sib: sib, displacementPosition: displacementPosition, displacementBytes: displacementBytes)
 	end 'anIndirectCall'
 
 	return X64Instruction.create(length, instructionClass: instructionClass, condition: taken, displacementPosition: displacementPosition, releasePosition: releasePosition, target: target, pushesARegister: family == X64Family.pushingRegister, callOperand: callOperand)
 end 'decodedOperation'
 
 type X64CallOperandReader
-	let cursor as X64Cursor
 	let at as DecodedOffset
 	let address as DecodedAddress
 	let length as DecodedLength
 	let rex as X64ByteValue
 	let addressOverridden as bool
 
-	static function create(cursor X64Cursor, at DecodedOffset, address DecodedAddress, length DecodedLength, rex X64ByteValue, addressOverridden bool) returns X64CallOperandReader
-		return Self{cursor: cursor, at: at, address: address, length: length, rex: rex, addressOverridden: addressOverridden}
+	static function create(at DecodedOffset, address DecodedAddress, length DecodedLength, rex X64ByteValue, addressOverridden bool) returns X64CallOperandReader
+		return Self{at: at, address: address, length: length, rex: rex, addressOverridden: addressOverridden}
 	end 'create'
 
-	function operandOf(addressing X64ByteValue, rm X64ModRmField, sib X64ByteValue, displacementPosition DecodedLength, displacementBytes DecodedLength) returns DecodedCallOperand throws X64DecodeError
+	function operandOf(code ByteArray, addressing X64ByteValue, rm X64ModRmField, sib X64ByteValue, displacementPosition DecodedLength, displacementBytes DecodedLength) returns DecodedCallOperand throws X64DecodeError
 		if addressing == ModRmDirect 'aRegister'
 			return DecodedCallOperand.register(self.extended(rm, by: RexBaseBit))
 		end 'aRegister'
 
-		let operand = try self.memoryOperandOf(addressing, rm: rm, sib: sib, displacementPosition: displacementPosition, displacementBytes: displacementBytes)
+		let operand = try self.memoryOperandOf(code, addressing: addressing, rm: rm, sib: sib, displacementPosition: displacementPosition, displacementBytes: displacementBytes)
 
 		return DecodedCallOperand.addressOverridden(operand.callForm(), referent: operand.rebasedReferent()) if self.addressOverridden else operand
 	end 'operandOf'
 
-	function memoryOperandOf(addressing X64ByteValue, rm X64ModRmField, sib X64ByteValue, displacementPosition DecodedLength, displacementBytes DecodedLength) returns DecodedCallOperand throws X64DecodeError
-		let displacement = try self.displacementOf(displacementPosition, bytes: displacementBytes)
+	function memoryOperandOf(code ByteArray, addressing X64ByteValue, rm X64ModRmField, sib X64ByteValue, displacementPosition DecodedLength, displacementBytes DecodedLength) returns DecodedCallOperand throws X64DecodeError
+		let displacement = try self.displacementOf(code, position: displacementPosition, bytes: displacementBytes)
 
 		if addressing == ModRmNoDisplacement and rm == ModRmRipRm 'programCounterRelative'
 			return DecodedCallOperand.programCounterRelative(try relativeTo(self.address, length: self.length, by: displacement))
@@ -406,12 +407,12 @@ type X64CallOperandReader
 		return (field + (RexExtendedRegisters if (self.rex and by) != 0 else 0)) as DecodedRegisterNumber
 	end 'extended'
 
-	function displacementOf(position DecodedLength, bytes DecodedLength) returns DecodedDisplacement throws X64DecodeError
+	function displacementOf(code ByteArray, position DecodedLength, bytes DecodedLength) returns DecodedDisplacement throws X64DecodeError
 		if bytes == 0 'noDisplacement'
 			return 0
 		end 'noDisplacement'
 
-		return try self.cursor.signedAt(self.at + (position as DecodedOffset), width: bytes as DebugWidth)
+		return try signedDisplacementAt(code, offset: self.at + (position as DecodedOffset), width: bytes as DebugWidth)
 	end 'displacementOf'
 end 'X64CallOperandReader'
 
@@ -448,13 +449,13 @@ function dataOperandClass(ripRelative bool) returns DecodedClass
 	return (DbgClassPcRelativeData if ripRelative else DbgClassPlain) as DecodedClass
 end 'dataOperandClass'
 
-function targetOf(cursor X64Cursor, at DecodedOffset, address DecodedAddress, instructionClass DecodedClass, length DecodedLength, relativeBytes DecodedLength, displacementPosition DecodedLength) returns DecodedTarget throws X64DecodeError
+function targetOf(code ByteArray, at DecodedOffset, address DecodedAddress, instructionClass DecodedClass, length DecodedLength, relativeBytes DecodedLength, displacementPosition DecodedLength) returns DecodedTarget throws X64DecodeError
 	if instructionClass == DbgClassPcRelativeData 'aRebasedOperand'
-		return DecodedTarget.at(try relativeTo(address, length: length, by: try cursor.signedAt(at + (displacementPosition as DecodedOffset), width: Disp32Bytes as DebugWidth)))
+		return DecodedTarget.at(try relativeTo(address, length: length, by: try signedDisplacementAt(code, offset: at + (displacementPosition as DecodedOffset), width: Disp32Bytes as DebugWidth)))
 	end 'aRebasedOperand'
 
 	if instructionClass == DbgClassDirectCall or instructionClass == DbgClassDirectJump or instructionClass == DbgClassConditionalJump 'aBranch'
-		return DecodedTarget.at(try relativeTo(address, length: length, by: try cursor.signedAt(at + ((length - relativeBytes) as DecodedOffset), width: relativeBytes as DebugWidth)))
+		return DecodedTarget.at(try relativeTo(address, length: length, by: try signedDisplacementAt(code, offset: at + ((length - relativeBytes) as DecodedOffset), width: relativeBytes as DebugWidth)))
 	end 'aBranch'
 
 	return DecodedTarget.none

@@ -588,6 +588,29 @@ module union ServiceRosterVerdict
 	messageDeclaresTheSendTimeoutLabel(let methodName ByteArray)
 
 	stateFieldHoldsAPromise(let fieldName ByteArray, noun String)
+
+	messageParameterNeedsACapability(let methodName ByteArray, let paramName ByteArray, noun String)
+
+	messageReplyNeedsACapability(let methodName ByteArray, noun String)
+
+	factoryParameterNeedsACapability(let factoryName ByteArray, let paramName ByteArray, noun String)
+
+	function isDispatchable() returns bool
+		return match self 'verdict'
+			rosterIsDispatchable gives true
+
+			messageParameterIsNotTransferable or
+			messageReplyIsNotCarriable or
+			messageReplyGraphIsNotWalkable or
+			messageReplyHoldsAPromise or
+			messageReplyAliasesServiceState or
+			messageDeclaresTheSendTimeoutLabel or
+			stateFieldHoldsAPromise or
+			messageParameterNeedsACapability or
+			messageReplyNeedsACapability or
+			factoryParameterNeedsACapability gives false
+		end 'verdict'
+	end 'isDispatchable'
 end 'ServiceRosterVerdict'
 
 module let ServiceSendTimeoutLabel = b"sendTimeout"
@@ -717,7 +740,7 @@ end 'ServiceCrossing'
 // ⭐⭐ **CAN EVERY MESSAGE BECOME A VARIANT? — the roster's own rule, asked in declaration order so the
 // FIRST offending message is the one named.** A stable answer matters: this decides the text of a
 // diagnostic that fires at a `spawn` in a different file from the method it names.
-module function classifyServiceRoster(signatures ProgramSignatures, typeName ByteArray, knowledge ServiceRosterKnowledge) returns ServiceRosterVerdict
+module function classifyServiceRoster(signatures ProgramSignatures, typeName ByteArray, factory ByteArray, knowledge ServiceRosterKnowledge) returns ServiceRosterVerdict
 	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
@@ -759,8 +782,119 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 		end 'eachParam'
 	end 'eachMessage'
 
-	return stateFieldPromiseVerdict(signatures, layout: layout, knowledge: knowledge)
+	let stateVerdict = stateFieldPromiseVerdict(signatures, layout: layout, knowledge: knowledge)
+
+	if not stateVerdict.isDispatchable() 'stateRefused'
+		return stateVerdict
+	end 'stateRefused'
+
+	return capabilityVerdict(signatures, layout: layout, factory: factory)
 end 'classifyServiceRoster'
+
+union UnmarkedParameter
+	allMarkedOrValues
+	needsAWord(let paramName ByteArray, noun String)
+end 'UnmarkedParameter'
+
+// Asked last, so a program an earlier rule refuses at the same `spawn` keeps that rule's code. Only
+// the factory the `spawn` names is judged: another factory's parameters never cross at this
+// `spawn`.
+function capabilityVerdict(signatures ProgramSignatures, layout StructLayout, factory ByteArray) returns ServiceRosterVerdict
+	for i in 0 upto layout.messageMethodCount() 'eachMessage'
+		view methodName = layout.messageMethodAt(i)
+		let decl = serviceDeclarationOf(signatures, key: qualifiedMethodName(layout.name, methodName: methodName))
+
+		match firstUnmarkedParameter(signatures, decl: decl, declFilePath: layout.declFilePath) 'parameters'
+			allMarkedOrValues then break
+			needsAWord(paramName, noun) then return ServiceRosterVerdict.messageParameterNeedsACapability(methodName, paramName: paramName, noun: noun)
+		end 'parameters'
+
+		match unmarkedReplyNoun(signatures, decl: decl, declFilePath: layout.declFilePath) 'reply'
+			acceptable then break
+			refused(noun) then return ServiceRosterVerdict.messageReplyNeedsACapability(methodName, noun: noun)
+		end 'reply'
+	end 'eachMessage'
+
+	let factoryDecl = serviceDeclarationOf(signatures, key: qualifiedMethodName(layout.name, methodName: factory))
+
+	match firstUnmarkedParameter(signatures, decl: factoryDecl, declFilePath: layout.declFilePath) 'factoryParameters'
+		allMarkedOrValues then return ServiceRosterVerdict.rosterIsDispatchable
+		needsAWord(paramName, noun) then return ServiceRosterVerdict.factoryParameterNeedsACapability(factory, paramName: paramName, noun: noun)
+	end 'factoryParameters'
+end 'capabilityVerdict'
+
+function firstUnmarkedParameter(signatures ProgramSignatures, decl SweptDeclaration, declFilePath FilePath) returns UnmarkedParameter
+	for p in 0 upto decl.paramTypes.count() 'eachParam'
+		if declaredCapabilityAt(decl.paramCapabilities, position: p as ParamCount) != ParamCapability.unmarked 'marked'
+			continue
+		end 'marked'
+
+		let declared = try decl.paramTypes.get(p) otherwise panic("firstUnmarkedParameter: paramTypes.get OOB at {p} below count {decl.paramTypes.count()}")
+		let resolved = serviceParamSlotType(signatures, declared: declared, into: signatures.indexTypeNames(), declFilePath: declFilePath)
+
+		if typeNeedsACapabilityWord(signatures, resolved: resolved) 'aRecord'
+			return UnmarkedParameter.needsAWord(serviceParamName(decl, index: p as ParamCount), noun: capabilityWordNoun(signatures, resolved: resolved))
+		end 'aRecord'
+	end 'eachParam'
+
+	return UnmarkedParameter.allMarkedOrValues
+end 'firstUnmarkedParameter'
+
+function unmarkedReplyNoun(signatures ProgramSignatures, decl SweptDeclaration, declFilePath FilePath) returns ServiceCrossing
+	if maxonReturnTypeIsVoid(decl.returnType) or decl.returnCapability != ResultCapability.unmarked 'nothingToJudge'
+		return ServiceCrossing.acceptable
+	end 'nothingToJudge'
+
+	let resolved = declaredReplyType(signatures, returnType: decl.returnType, declFilePath: declFilePath)
+
+	if typeNeedsACapabilityWord(signatures, resolved: resolved) 'aRecord'
+		return ServiceCrossing.refused(capabilityWordNoun(signatures, resolved: resolved))
+	end 'aRecord'
+
+	return ServiceCrossing.acceptable
+end 'unmarkedReplyNoun'
+
+// `function` and `typeParameter` answer false because a function value or a `T` parameter is
+// refused earlier (E3135), and a reply declared at `T` is legal.
+function typeNeedsACapabilityWord(signatures ProgramSignatures, resolved MaxonType) returns bool
+	match maxonTypeTag(resolved) 'tag'
+		boolean or
+		integer or
+		float or
+		exitCode or
+		unresolved or
+		void or
+		string or
+		character or
+		function or
+		typeParameter or
+		cstring then return false
+
+		interfaceRef then return true
+		genericInstance then return not signatures.instanceBaseIsServiceHandle(genericInstanceIdOf(resolved)) and not signatures.instanceBaseIsSharedValue(genericInstanceIdOf(resolved)) and ownsHeapDataOfItsRegion(signatures, resolved: resolved)
+		structRef or
+		named then return recordNeedsACapabilityWord(signatures, resolved: resolved)
+	end 'tag'
+end 'typeNeedsACapabilityWord'
+
+function recordNeedsACapabilityWord(signatures ProgramSignatures, resolved MaxonType) returns bool
+	let aggregate = signatures.denotedAggregateName(serviceIndexTypeName(signatures, id: typeNameIdOf(resolved)))
+	return not signatures.isAnyServiceHandle(aggregate) and not signatures.nameIsACopyableTuple(aggregate) and ownsHeapDataOfItsRegion(signatures, resolved: resolved)
+end 'recordNeedsACapabilityWord'
+
+// The `unique` inference leaves out the OS-handle builtins, so `slotOwnsAnOsHandle` is asked beside
+// it: a type owning an OS handle needs no word.
+function ownsHeapDataOfItsRegion(signatures ProgramSignatures, resolved MaxonType) returns bool
+	if not signatures.typeIsManaged(resolved, from: signatures.indexTypeNames()) 'aValue'
+		return false
+	end 'aValue'
+
+	return not signatures.valueHoldsAUnique(maxonTypeTag(resolved), nameId: typeNameIdOf(resolved), from: signatures.indexTypeNames()) and not signatures.slotOwnsAnOsHandle(resolved)
+end 'ownsHeapDataOfItsRegion'
+
+function capabilityWordNoun(signatures ProgramSignatures, resolved MaxonType) returns String
+	return "a `{maxonTypeDisplayName(resolved, typeNames: signatures.indexTypeNames(), signatures: signatures)}`"
+end 'capabilityWordNoun'
 
 // ⚠ A promise captured by a closure stored in a function-typed field is not in the field's type, so it
 // is not seen here; it aborts at run time with exit 70 (`specs/services.md`,
@@ -1193,6 +1327,8 @@ end 'serviceParamName'
 // ⭐⭐ **THE ONE SENTENCE THAT TEACHES THE FORM — written once and quoted by every refusal that needs it.**
 // The single most valuable thing a `spawn` diagnostic can say is what the one legal shape IS: there is
 // exactly one, and an author who has just written the wrong one is exactly the reader who needs it.
+let ServiceCapabilityCures = "`isolated` gives the value away: the sender builds it for this one send and no other name reaches it afterwards. `immutable` shares it: the sender freezes it (`freeze x.clone()`), and both threads only read it."
+
 let SpawnTeachingSentence = "`spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`"
 
 // ⭐⭐ **THE WORDS FOR EVERY REFUSING TARGET VERDICT — beside the rule that chose them.** `SourceParseError`
@@ -1274,6 +1410,9 @@ module function serviceRosterRefusalMessage(verdict ServiceRosterVerdict, typeNa
 		messageReplyAliasesServiceState(methodName, replyTypeName) then return serviceGenericReplyAliasesStateRefusal(typeName, methodName: methodName, replyTypeName: replyTypeName)
 		messageDeclaresTheSendTimeoutLabel(methodName) then return "the message `{String.from(typeName)}.{String.from(methodName)}` declares a parameter named `{String.from(ServiceSendTimeoutLabel)}`, and this `spawn` makes `{String.from(typeName)}` a service. `{String.from(ServiceSendTimeoutLabel)}:` is reserved on every message call: it is the milliseconds a send waits for room in a full mailbox, and it never enters the request, so a call could not tell the parameter from the timeout. Rename the parameter"
 		stateFieldHoldsAPromise(fieldName, noun) then return "`{String.from(typeName)}.{String.from(fieldName)}` is {noun}. `{String.from(typeName)}` is a service, and a service's state is run by whichever green thread takes its next message, so a promise kept in it could be awaited or dropped by a strand that does not own its coroutine. `await` the promise (or `.cancel()` it) before the message or factory returns and keep its result in the field"
+		messageParameterNeedsACapability(methodName, paramName, noun) then return "parameter `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}` is {noun} with no capability word, and this `spawn` makes `{String.from(typeName)}` a service — whose messages hand their arguments to another green thread, so what crosses must be owned by one side or read-only on both. {ServiceCapabilityCures} Write it `{String.from(methodName)}({String.from(paramName)} isolated …)` or `{String.from(methodName)}({String.from(paramName)} immutable …)`"
+		messageReplyNeedsACapability(methodName, noun) then return "the message `{String.from(typeName)}.{String.from(methodName)}` returns {noun} with no capability word, and this `spawn` makes `{String.from(typeName)}` a service — whose reply is handed to the green thread that awaits it, so what crosses must be owned by one side or read-only on both. {ServiceCapabilityCures} Write it `returns isolated …` or `returns immutable …`"
+		factoryParameterNeedsACapability(factoryName, paramName, noun) then return "parameter `{String.from(paramName)}` of the factory `{String.from(typeName)}.{String.from(factoryName)}` is {noun} with no capability word, and this `spawn` moves its arguments into the state of `{String.from(typeName)}`, a service — whose state is run by whichever green thread takes its next message, so what crosses must be owned by one side or read-only on both. {ServiceCapabilityCures} Write it `{String.from(factoryName)}({String.from(paramName)} isolated …)` or `{String.from(factoryName)}({String.from(paramName)} immutable …)`"
 		messageReplyIsNotCarriable(methodName, noun) then return "the message `{String.from(typeName)}.{String.from(methodName)}` declares {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry"
 	end 'why'
 end 'serviceRosterRefusalMessage'

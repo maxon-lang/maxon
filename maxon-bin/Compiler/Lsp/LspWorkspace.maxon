@@ -466,7 +466,7 @@ module type LspWorkspaceState
 		let ticket = self.nextResolutionTicket
 		var root = try self.held.rootSpelledAs(dir) otherwise panic("LspWorkspaceState.requestResolution: a resolution is requested only through `projectInputsOf`, which files the root under this very spelling first")
 		var resolver = root.resolver.obtained(function() gives spawn LspProjectResolver.create())
-		self.arrivals.push(try resolver.resolve(dir.clone(), ticket: ticket, previous: root.inputs.previousInputStamps().clone(), sendTimeout: ForeverMs) otherwise panic("LspWorkspaceState.requestResolution: a send that waits forever for room, to a resolver this workspace holds, was refused"))
+		self.arrivals.push(try resolver.resolve(dir.path, ticket: ticket, previous: freeze root.inputs.previousInputStamps().clone(), sendTimeout: ForeverMs) otherwise panic("LspWorkspaceState.requestResolution: a send that waits forever for room, to a resolver this workspace holds, was refused"))
 
 		return ticket
 	end 'requestResolution'
@@ -743,7 +743,7 @@ end 'writeProjectLoadingNotification'
 module function lspProjectCheckerFor(workspace LspWorkspaceState, name RootName, tiers LibraryTiers) returns LspProjectChecker.handle
 	var root = workspace.held.rootAt(name)
 
-	return root.checker.obtained(function() gives spawn LspProjectChecker.create(name.spelled.clone(), stdlibDir: tiers.stdlibDir.clone(), runtimeDir: tiers.runtimeDir.clone(), writer: workspace.writer.clone()))
+	return root.checker.obtained(function() gives spawn LspProjectChecker.create(freeze name.spelled.clone(), stdlibDir: freeze tiers.stdlibDir.clone(), runtimeDir: freeze tiers.runtimeDir.clone(), writer: workspace.writer.clone()))
 end 'lspProjectCheckerFor'
 
 union HeldWorkspaceSlot
@@ -1347,12 +1347,17 @@ function decisionFor(dir FilePath, stamp ProjectFileStamp, trusted bool) returns
 	end 'need'
 end 'decisionFor'
 
+module function projectDirectoryAt(dirPath String) returns FilePath
+	return try FilePath.from(dirPath) otherwise panic("projectDirectoryAt: `{dirPath}` is the spelling of a directory the workspace already holds as a FilePath")
+end 'projectDirectoryAt'
+
 // The `.maxproj` and the previous run's inputs are stamped before the run and checked after it: a
 // file edited during the run leaves the answer `unknown`, so the next ask runs it again rather than
 // holding an answer about text that is gone. This run's inputs are known only once it ends, so they
 // are digested after it. One the previous run did not declare has no digest from before, so a write
 // to it during the run shows only as a modification time not settled before `started`.
-module function resolvedProjectInputs(dir FilePath, previous DeclaredInputStamps) returns ProjectInputsAnswer
+module function resolvedProjectInputs(dirPath String, previous DeclaredInputStamps) returns ProjectInputsAnswer
+	var dir = projectDirectoryAt(dirPath)
 	let started = WallClock.nowUnixSeconds() as Timestamp
 	let inputsBefore = declaredInputStampsOf(declaredPathsOf(previous), since: previous)
 	let before = projectFileStampIn(dir)
@@ -1576,7 +1581,7 @@ extension Project
 
 		match walk 'walk'
 			swept then break
-			walkFailed then try refuseWhen(unreadable, failure: CompileError.directoryNotFound(self.rootPath))
+			walkFailed then try refuseWhen(unreadable, failure: CompileError.directoryNotFound(self.rootPath.path))
 		end 'walk'
 
 		for path in sweptSourcesOf(walk) 'eachSource'

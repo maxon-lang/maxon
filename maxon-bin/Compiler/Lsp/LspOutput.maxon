@@ -40,8 +40,8 @@ end 'LspWriterCommand'
 
 // A `ForeverMs` send fails `mailboxFull` only for a cancelled sender: here its command is dropped,
 // and below its question answers false.
-module function submitToLspWriter(writer LspStdoutWriter.handle, command LspWriterCommand)
-	try writer.perform(command.clone(), sendTimeout: ForeverMs) otherwise (e) 'refused'
+module function submitToLspWriter(writer LspStdoutWriter.handle, command isolated LspWriterCommand)
+	try writer.perform(command, sendTimeout: ForeverMs) otherwise (e) 'refused'
 		match e 'why'
 			mailboxFull then return
 			serviceStopped then panic("submitToLspWriter: the stdout writer stopped while the session still held its handle")
@@ -81,8 +81,10 @@ export type LspStdoutWriter
 		return Self{versions: LspDocumentVersionMap.create(), sessionOpen: true}
 	end 'create'
 
-	export function perform(command LspWriterCommand)
-		match command 'which'
+	export function perform(command isolated LspWriterCommand)
+		let owned = merge command
+
+		match owned 'which'
 			write(body) then writeLspMessage(body)
 			track(uri, version) then self.versions.upsert(uri.clone(), value: version)
 			forget(uri) then _ = self.versions.remove(uri)

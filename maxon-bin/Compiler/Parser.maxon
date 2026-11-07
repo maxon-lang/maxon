@@ -19497,7 +19497,6 @@ export type Parser
 	// The token span of the most recently completed cast. It is never cleared: a record left by an
 	// earlier expression cannot match, because `operandIsACast` asks for the operand's exact span.
 	var lastCast = RecordedCast.nothingRecorded
-	var regionSurface = RegionSurface.unknown
 
 	// ⭐⭐ **THE `match` CONSTRUCTS CURRENTLY BEING PARSED, INNERMOST LAST — two scalar columns, pushed in
 	// lockstep.** An arm's coverage point needs TWO positions: its OWN, so the line listing counts the arm's
@@ -33627,9 +33626,7 @@ export type Parser
 			func.closeColumn = self.current().column
 			try self.closeFunctionBody(func, bodyEnd: bodyEnd, nameTok: nameTok)
 
-			if self.regionTracking() 'tracked'
-				self.finishCapabilityFacts(func)
-			end 'tracked'
+			self.finishCapabilityFacts(func)
 
 			try self.validateNascentSelfAssignments(func)
 			try self.requireNoWitnessCursorElementIsDropped("'{String.from(nameTok.value)}'", line: nameTok.line, column: nameTok.column)
@@ -37944,9 +37941,7 @@ export type Parser
 			try self.requireNoUniqueAlias(value, action: "bind '{String.from(nameTok.value)}' to", anchor: nameTok)
 		end 'aNameThatOwnsWhatItIsGiven'
 
-		if self.regionTracking() 'tracked'
-			try self.settleBindingCapability(value, rhsStart: rhsStart, nameTok: nameTok)
-		end 'tracked'
+		try self.settleBindingCapability(value, rhsStart: rhsStart, nameTok: nameTok)
 
 		try self.requireVarNotBornFromABareNumber(value, kind: kind, anchor: self.tokenAt(rhsStart))
 		try self.requireLetNotBornFromAnUnboundedNumber(value, kind: kind, anchor: self.tokenAt(rhsStart))
@@ -38260,10 +38255,6 @@ export type Parser
 	end 'openHold'
 
 	function carryHeldRegionFacts(held ValueId, source ValueId)
-		if not self.regionTracking() 'untracked'
-			return
-		end 'untracked'
-
 		let capability = self.capabilityOfValue(source)
 
 		if capabilityIsReadOnly(capability) 'readOnlyData'
@@ -39561,9 +39552,9 @@ export type Parser
 	end 'destructuredElement'
 
 	// ⭐ **IS `value` A TUPLE THIS RUNG MAY COPY?** — a tuple `structRef` none of whose elements owes a drop.
-	// THE one gate on the value-semantics copy, so its askers cannot come to disagree about which tuples have
-	// value semantics — a disagreement that would not be a missed case but a record freed twice or not at all.
-	// Its askers are the durable-storage move-in (`moveManagedValueInto`),
+	// The test is `ProgramSignatures.nameIsACopyableTuple`, so its askers cannot come to disagree about which
+	// tuples have value semantics — a disagreement that would not be a missed case but a record freed twice
+	// or not at all. The askers here are the durable-storage move-in (`moveManagedValueInto`),
 	// `promoteBorrowedToOwned`, which asks it for the whole HAND-OFF family at once (a `return`, a
 	// closure `gives`, a `match`/ternary arm, a `try … otherwise` fallback), and `greenThreadTakeOf`,
 	// which copies a trivial tuple leaving this green thread.
@@ -39578,17 +39569,7 @@ export type Parser
 			return false
 		end 'notAStruct'
 
-		let name = self.valueTypeName(value)
-
-		// ⛔⛔ **A SLOT STANDING AT A BARE TYPE PARAMETER IS NOT A TRIVIAL ELEMENT, AND `structHasFieldOwingDrop`
-		// CANNOT SEE IT.** `typeIsManaged` answers `false` for a `typeParameter`, so a `(K, V)` tuple
-		// read as copyable — and the shallow copy below then took a SECOND pointer to a reference the source
-		// record owns. **MEASURED on the mm-trace: `Map.map` pushed the copy into its result array, the
-		// original's dictionary destructor released the key it had CLONED (`retainFunc@64` is `__str_clone`
-		// for a String argument), and the array's element was left pointing at a freed 58-byte record.** The
-		// rule this restores is the one this predicate's own header states — only a TRIVIAL-element tuple may
-		// be shallow-copied — over the one element kind the managed test is blind to.
-		return isTupleTypeName(name) and not self.signatures.structHasFieldOwingDrop(name) and not self.signatures.recordRestsAnOpaqueSlot(name)
+		return self.signatures.nameIsACopyableTuple(self.valueTypeName(value))
 	end 'valueIsCopyableTuple'
 
 	// A fresh record holding the same elements as `value` — the copy `valueIsCopyableTuple` licenses. It is
@@ -39837,10 +39818,7 @@ export type Parser
 	function parseAssignment(func IrFunction, block IrBlock) throws SourceParseError
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
-
-		if self.regionTracking() 'tracked'
-			try self.requireAssignmentAllowedInWindows(nameTok)
-		end 'tracked'
+		try self.requireAssignmentAllowedInWindows(nameTok)
 
 		// `_ = <expr>` — a DISCARD assignment: evaluate the RHS for its effect and throw the value away. `_`
 		// binds nothing (`DiscardBindingName`, the same discard the match-payload `walk(_)` uses), so at file
@@ -39918,10 +39896,7 @@ export type Parser
 		let rhsStart = self.pos
 		self.stateDeclaredLiteralTarget(binding.varType, scopeFilePath: self.job.path, valueStart: rhsStart)
 		let parsedValue = try self.parseExpression(func, block: block)
-
-		if self.regionTracking() 'tracked'
-			try self.requireAssignmentAllowedInWindows(nameTok)
-		end 'tracked'
+		try self.requireAssignmentAllowedInWindows(nameTok)
 
 		// WHICH local the RHS was a bare reference to (`s = t`), empty for every other RHS. Only that shape
 		// can MOVE an owned value out of a source binding; every other RHS is a consume. The NAME rather
@@ -43569,9 +43544,7 @@ export type Parser
 	function returnCheckedValue(func IrFunction, expression ValueId, retStart ElementIndex, anchor Token) throws SourceParseError
 		try self.requireByReferenceIsolatedStaysPut(func, value: expression, at: anchor)
 
-		if self.regionTracking() 'tracked'
-			try self.requireReturnedCapability(func, value: expression, retStart: retStart)
-		end 'tracked'
+		try self.requireReturnedCapability(func, value: expression, retStart: retStart)
 
 		self.fileReturnedValueSite(retStart, returned: expression)
 		let parsed = try self.integerizedOperand(expression, expected: maxonReturnTypeTag(func.maxonReturnType), start: retStart, pastEnd: self.pos)
@@ -48183,10 +48156,6 @@ export type Parser
 	end 'noteFunctionExitSite'
 
 	function joinExitCapability(entry BlockId, carried ValueIdArray)
-		if not self.regionTracking() 'untracked'
-			return
-		end 'untracked'
-
 		let phi = self.exitChainPhi(entry)
 		let carriedValue = try carried.get(0) otherwise panic("joinExitCapability: a value exit carries no value")
 		let incoming = self.capabilityOfValue(carriedValue)
@@ -49587,7 +49556,7 @@ export type Parser
 	// wants its result minted from the tag and the type name, and must not be free to mint it twice or from a
 	// different tag than the one the op is emitted under.
 	function deferWriteThroughReadOnlyReceiver(callee ByteArray, args ValueIdArray, range SourceRange)
-		if (not self.regionTracking() and self.drainingLoops == 0) or not receiverWritingRuntimeCallee(callee) or (self.drainingLoops > 0 and callee.equals(ManagedVacateName)) 'nothingWritten'
+		if not receiverWritingRuntimeCallee(callee) or (self.drainingLoops > 0 and callee.equals(ManagedVacateName)) 'nothingWritten'
 			return
 		end 'nothingWritten'
 
@@ -50858,8 +50827,9 @@ export type Parser
 	// (`SemanticCheck.checkExistentialSiteClaimAtFieldStore`). A non-existential source has neither and carries
 	// nothing, which is what lets the two retain doors share this step.
 	//
-	// ⚠ Asked by the one existential retain (`emitRetainExistentialCall`) and by nothing else: it is a property
-	// of the retain, and every door that retains — a co-own, a consume — reaches it there.
+	// ⚠ Asked by the existential retain (`emitRetainExistentialCall`), which every door that retains —
+	// a co-own, a consume — reaches, and by the doors that name a value again without retaining it
+	// (`openHold`, `movedAliasOf`).
 	function carryInterfaceWitness(retained ValueId, from ValueId)
 		if self.tagOf(from) != ValueTypeTag.interfaceRef 'notAnExistential'
 			return
@@ -55932,9 +55902,7 @@ export type Parser
 	function finishLoopMoves(func IrFunction, falseSource IrBlock, exit IrBlock, anchor Token) returns FinishedLoop throws SourceParseError
 		var scan = try self.bodyState.loopScans.pop() otherwise panic("finishLoopMoves: the loop scan stack is empty at the end of a loop that opened one")
 
-		if self.regionTracking() 'tracked'
-			try self.settleCarriedCapabilities()
-		end 'tracked'
+		try self.settleCarriedCapabilities()
 
 		self.discardLoopReleaseChains(scan.blockFloor)
 		var movedAtTheHeader = ValueMarkSet.create()
@@ -58475,9 +58443,7 @@ export type Parser
 			// that second one accepted, which is the hole this rule exists to close.
 			self.recordMergeBlame(phiId, blamed: firstArmBlame(reachingArms))
 
-			if self.regionTracking() 'tracked'
-				self.notePhiParamSources(func, phi: phiId, gives: finalGives)
-			end 'tracked'
+			self.notePhiParamSources(func, phi: phiId, gives: finalGives)
 
 			result = MatchGiveValue.value(phiId)
 		end 'resultPhi'
@@ -58781,7 +58747,7 @@ export type Parser
 	end 'settleArmGive'
 
 	function valueIsAnOwnedIsolatedLocal(value ValueId) returns bool
-		return self.regionTracking() and self.effectiveCapabilityOf(value) == ValueCapability.isolated and not self.valueIsASlotRead(value) and self.valueIsOwnedHeap(value)
+		return self.effectiveCapabilityOf(value) == ValueCapability.isolated and not self.valueIsASlotRead(value) and self.valueIsOwnedHeap(value)
 	end 'valueIsAnOwnedIsolatedLocal'
 
 	// The four clauses of `settleArmGive`'s question, named so the sentence above is the code: the arm holds
@@ -64258,6 +64224,7 @@ export type Parser
 		self.poisonMoveSource(value)
 
 		let alias = self.emitRetaggedCastValue(value, targetType: self.typeOf(value), range: range)
+		self.carryInterfaceWitness(alias, from: value)
 		self.carryFromSharedRecord(alias, from: value, source: self.bodyState, path: ValueCarryPath.copy)
 
 		if owned 'handsOverTheDrop'
@@ -64829,7 +64796,7 @@ export type Parser
 	end 'indirectResultCapabilityDeclared'
 
 	function noteClosureCapture(closureName ByteArray, position ParamCount, value ValueId, name ByteArray, anchor Token)
-		if not self.regionTracking() or self.valueIsAValueType(value) 'nothingToJudge'
+		if self.valueIsAValueType(value) 'nothingToJudge'
 			return
 		end 'nothingToJudge'
 
@@ -64846,10 +64813,6 @@ export type Parser
 	end 'noteClosureCapture'
 
 	function carryReadOnlyCaptures(closure ValueId, captured CapturedValueArray)
-		if not self.regionTracking() 'untracked'
-			return
-		end 'untracked'
-
 		var meet = ValueCapability.immutable
 		var capturesRecordData = false
 		var capturesUncleanData = false
@@ -64886,7 +64849,7 @@ export type Parser
 	end 'recordCapturedBy'
 
 	function adaptElementRead(result ValueId, receiver ValueId, opFloor ElementIndex)
-		if not self.regionTracking() or self.valueIsAValueType(result) or not self.resultIsABorrowedElementRead(opFloor) 'nothingToAdapt'
+		if self.valueIsAValueType(result) or not self.resultIsABorrowedElementRead(opFloor) 'nothingToAdapt'
 			return
 		end 'nothingToAdapt'
 
@@ -64948,7 +64911,7 @@ export type Parser
 	end 'valueHoldsAFrozenTupleItem'
 
 	function markFresh(value ValueId)
-		if not self.regionTracking() or self.valueIsAValueType(value) 'nothingToMark'
+		if self.valueIsAValueType(value) 'nothingToMark'
 			return
 		end 'nothingToMark'
 
@@ -65020,19 +64983,11 @@ export type Parser
 	end 'emitStrandGuard'
 
 	function openWindowCount() returns ElementIndex
-		if not self.regionTracking() 'untracked'
-			return 0
-		end 'untracked'
-
 		view table = self.regionFactsForWrite()
 		return modifyWindowCount(table.windows) + table.callGuards
 	end 'openWindowCount'
 
 	function callNeedsAStrandGuard(opensAnIsolatedValue bool) returns bool
-		if not self.regionTracking() 'untracked'
-			return false
-		end 'untracked'
-
 		if opensAnIsolatedValue 'anOpenedValue'
 			return true
 		end 'anOpenedValue'
@@ -65158,10 +65113,6 @@ export type Parser
 	end 'deferRegionRefusal'
 
 	function requireNoDeferredRefusal() throws SourceParseError
-		if not self.regionTracking() 'untracked'
-			return
-		end 'untracked'
-
 		match self.regionFactsForWrite().deferredRefusal 'state'
 			none then return
 			at(line, column, code, message) then throw self.regionRefusal(code, message: message, line: line, column: column)
@@ -65169,18 +65120,10 @@ export type Parser
 	end 'requireNoDeferredRefusal'
 
 	function statementWindowFloor() returns ElementIndex
-		if not self.regionTracking() 'untracked'
-			return 0
-		end 'untracked'
-
 		return self.regionFactsForRead().windows.count()
 	end 'statementWindowFloor'
 
 	function closeWindowsTo(floor ElementIndex)
-		if not self.regionTracking() 'untracked'
-			return
-		end 'untracked'
-
 		var windows = self.regionFactsForWrite().windows
 
 		while windows.count() > floor 'eachWindowThisStatementOpened'
@@ -65331,14 +65274,14 @@ export type Parser
 		self.bodyState.temporaryFieldReads = noValueMarks
 		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeName, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: self.staticCallHeadMint(baseIndex, typeTok: typeTok), inferInstanceOf: FactoryInference.of(typeName), serviceSite: ServiceSpawnSite.at(spawnTok, launch: launch))
 		self.bodyState.temporaryFieldReads = outerTemporaryFieldReads
-		try self.requireServiceRosterIsDispatchable(typeName, knowledge: ServiceRosterKnowledge.declarationOnly, spawnTok: spawnTok)
+		try self.requireServiceRosterIsDispatchable(typeName, factory: memberTok.value, knowledge: ServiceRosterKnowledge.declarationOnly, spawnTok: spawnTok)
 		let instance = self.serviceStateInstanceOf(state)
 
 		// The deferred half, asked only where something was deferred: a monomorphic service has no type
 		// parameter for the first ask to have left open, so it is judged once and exactly as it always was.
 		match instance 'fixed'
 			monomorphic then break
-			at then try self.requireServiceRosterIsDispatchable(typeName, knowledge: ServiceRosterKnowledge.atInstance(instance), spawnTok: spawnTok)
+			at then try self.requireServiceRosterIsDispatchable(typeName, factory: memberTok.value, knowledge: ServiceRosterKnowledge.atInstance(instance), spawnTok: spawnTok)
 		end 'fixed'
 
 		match self.lastSpawnStart 'reply'
@@ -65448,11 +65391,11 @@ export type Parser
 		end 'constant'
 	end 'emitDefaultMailboxCapacity'
 
-	// ⭐ **THE ROSTER'S REFUSALS, IN ONE PLACE BECAUSE THE `spawn` ASKS TWICE.** Both asks raise the same
-	// three diagnostics at the same site; a second copy of these arms would be a second chance for the two
-	// asks to report one verdict two ways.
-	function requireServiceRosterIsDispatchable(typeName ByteArray, knowledge ServiceRosterKnowledge, spawnTok Token) throws SourceParseError
-		view roster = classifyServiceRoster(self.signatures, typeName: typeName, knowledge: knowledge)
+	// ⭐ **THE ROSTER'S REFUSALS, IN ONE PLACE BECAUSE THE `spawn` ASKS TWICE.** Both asks raise the
+	// same diagnostics at the same site; a second copy of these arms would be a second chance for the
+	// two asks to report one verdict two ways.
+	function requireServiceRosterIsDispatchable(typeName ByteArray, factory ByteArray, knowledge ServiceRosterKnowledge, spawnTok Token) throws SourceParseError
+		view roster = classifyServiceRoster(self.signatures, typeName: typeName, factory: factory, knowledge: knowledge)
 
 		match roster 'roster'
 			rosterIsDispatchable then return
@@ -65473,6 +65416,10 @@ export type Parser
 			messageReplyAliasesServiceState then throw SourceParseError.serviceReplyAliasesState(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, note: DiagnosticNote.none)
 			messageDeclaresTheSendTimeoutLabel then throw SourceParseError.registryRefused(ErrorCode.semanticServiceSendTimeoutReserved, explanation: serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, note: DiagnosticNote.none)
 			stateFieldHoldsAPromise then throw SourceParseError.registryRefused(ErrorCode.semanticServiceStateHoldsAPromise, explanation: serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, note: DiagnosticNote.none)
+
+			messageParameterNeedsACapability or
+			messageReplyNeedsACapability or
+			factoryParameterNeedsACapability then throw SourceParseError.registryRefused(ErrorCode.semanticMessageNeedsACapability, explanation: serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, note: DiagnosticNote.none)
 		end 'roster'
 	end 'requireServiceRosterIsDispatchable'
 
@@ -69290,7 +69237,7 @@ export type Parser
 			none then break
 		end 'target'
 
-		if not self.regionTracking() or self.valueIsAValueType(value) or self.valueIsOpaque(value) 'carriesNoCapability'
+		if self.valueIsAValueType(value) or self.valueIsOpaque(value) 'carriesNoCapability'
 			return ParamCapability.unmarked
 		end 'carriesNoCapability'
 
@@ -74200,9 +74147,7 @@ export type Parser
 			let value = try self.parseValueExpression(func)
 			try self.requireLetPayloadStore(layout, field: payloadField, value: value, valueStart: valueStart, caseTok: caseTok, anchor: labelTok)
 
-			if self.regionTracking() 'aPayloadSlotToJudge'
-				try self.admitStore(func, slot: ParamCapability.unmarked, value: value, valueStart: valueStart, place: payloadPlaceText(layout, field: payloadField, caseTok: caseTok), holder: StoreHolder.unheld)
-			end 'aPayloadSlotToJudge'
+			try self.admitStore(func, slot: ParamCapability.unmarked, value: value, valueStart: valueStart, place: payloadPlaceText(layout, field: payloadField, caseTok: caseTok), holder: StoreHolder.unheld)
 
 			// ⭐ **THE TOKEN AFTER THE ARGUMENT — READ ONCE, AND BOTH REFUSALS ABOUT THIS ARGUMENT TAKE IT.** The
 			// escaping-closure reject is positioned there (matching its `maxoncstderr` block) and so is the
@@ -78135,9 +78080,7 @@ export type Parser
 		self.pendingSendTimeout = SendTimeoutArgument.absent
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
-		if self.regionTracking() 'tracked'
-			try self.checkSendArgumentCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, anchor: memberTok)
-		end 'tracked'
+		try self.checkSendArgumentCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, anchor: memberTok)
 
 		// A message's declared defaults are filled exactly as a direct call's are, through the same door, so
 		// `h.bump()` on a `bump(by int = 1)` sends the same request `h.bump(1)` does.
@@ -84525,18 +84468,12 @@ export type Parser
 		let result = try self.mintWitnessDispatchResult(target, receiver: receiver, methodTok: methodTok, resultUsed: resultUsed)
 		let opIdx = self.emitWitnessDispatch(result, args: args, blames: blames, target: target, range: range, siteTok: methodTok)
 
-		if self.regionTracking() 'tracked'
-			self.noteRequirementCallSite(func, opIdx: opIdx, target: target, args: args, argLabels: argLabels, argAnchors: argAnchors, receiverTok: self.tokenAt(methodIndex - 2))
-		end 'tracked'
+		self.noteRequirementCallSite(func, opIdx: opIdx, target: target, args: args, argLabels: argLabels, argAnchors: argAnchors, receiverTok: self.tokenAt(methodIndex - 2))
 
 		return result
 	end 'dispatchWitnessMethod'
 
 	function handIsolatedWitnessArguments(target WitnessDispatchTarget, args ValueIdArray, argRanges SourceRangeArray, methodTok Token) throws SourceParseError
-		if not self.regionTracking() 'noRegionsInThisProgram'
-			return
-		end 'noRegionsInThisProgram'
-
 		let slot = witnessSlotAt(self.signatures, interfaces: self.signatures.interfaceMap(), witnessSlots: WitnessSlotsByDeclIndex.create(), interfaceDeclIndex: target.interfaceDeclIndex, methodIndex: target.methodIndex)
 		let first = requirementFirstPosition(slot.method)
 
@@ -89527,9 +89464,7 @@ export type Parser
 		// f64. Same door as the struct literal and the `p.v = 3` spelling.
 		let value = try self.requireFieldType(layout, index: index, fieldType: fieldType, value: parsed, valueStart: valueStart, anchor: fieldTok)
 
-		if self.regionTracking() 'tracked'
-			try self.requireFieldStoreAllowed(func, box: receiver, layout: layout, index: index, value: value, valueStart: valueStart, placeText: "self", line: range.line, column: range.column)
-		end 'tracked'
+		try self.requireFieldStoreAllowed(func, box: receiver, layout: layout, index: index, value: value, valueStart: valueStart, placeText: "self", line: range.line, column: range.column)
 
 		self.noteClosureStoreSite(ClosureStoreDestination.field(receiver, base: ClosureStoreBase.unspelled), value: value, at: self.tokenAt(valueStart))
 
@@ -89887,9 +89822,7 @@ export type Parser
 		// f64. Same door as the struct literal and the bare self-field spelling.
 		let value = try self.requireFieldType(step.layout, index: index, fieldType: storedType, value: parsed, valueStart: valueStart, anchor: step.lastFieldTok)
 
-		if self.regionTracking() 'tracked'
-			try self.requireFieldStoreAllowed(func, box: step.box, layout: step.layout, index: index, value: value, valueStart: valueStart, placeText: self.tokenTextFrom(baseIndex, endIndex: lastDotIndex), line: step.baseTok.line, column: step.baseTok.column)
-		end 'tracked'
+		try self.requireFieldStoreAllowed(func, box: step.box, layout: step.layout, index: index, value: value, valueStart: valueStart, placeText: self.tokenTextFrom(baseIndex, endIndex: lastDotIndex), line: step.baseTok.line, column: step.baseTok.column)
 
 		try self.requireStoreRootStillLive(self.storeRootOf(step.baseBinding), rootTok: step.baseTok)
 		self.noteClosureStoreSite(ClosureStoreDestination.field(step.box, base: ClosureStoreBase.spelled(step.baseBinding.boundValue, name: step.baseBinding.name.clone())), value: value, at: self.tokenAt(valueStart))
@@ -90953,18 +90886,6 @@ export type Parser
 		return SourceParseError.registryRefused(code, explanation: message, line: line, column: column, note: DiagnosticNote.none)
 	end 'regionRefusal'
 
-	function regionTracking() returns bool
-		if self.job.isStdlibSource or self.signatures.programTracksRegions() or self.drainingLoops > 0 'everySourceOfTheLibraryOrAProgramDeclaration'
-			return true
-		end 'everySourceOfTheLibraryOrAProgramDeclaration'
-
-		if self.regionSurface == RegionSurface.unknown 'notDecidedYet'
-			self.regionSurface = RegionSurface.present if tokensSpellRegionSurface(self.tokens) else RegionSurface.absent
-		end 'notDecidedYet'
-
-		return self.regionSurface == RegionSurface.present
-	end 'regionTracking'
-
 	function regionFactsForRead() returns RegionFactTable
 		match self.bodyState.regionFacts 'state'
 			unwritten then return self.anchors.unwrittenRegionFacts
@@ -91016,11 +90937,9 @@ export type Parser
 	end 'noteMutableUse'
 
 	function carryCapability(source ValueId, target ValueId)
-		if self.regionTracking() 'tracked'
-			self.setValueCapability(target, capability: self.effectiveCapabilityOf(source))
-			self.noteCarriedDerivation(target, source: source, slot: ParamCapability.unmarked, joins: false)
-			self.carryParamSources(target, source: source)
-		end 'tracked'
+		self.setValueCapability(target, capability: self.effectiveCapabilityOf(source))
+		self.noteCarriedDerivation(target, source: source, slot: ParamCapability.unmarked, joins: false)
+		self.carryParamSources(target, source: source)
 	end 'carryCapability'
 
 	function armIsAnUndecidedParameter(func IrFunction, arm ValueId) returns bool
@@ -91028,7 +90947,7 @@ export type Parser
 	end 'armIsAnUndecidedParameter'
 
 	function joinMergeCapability(phi ValueId, arms ValueIdArray, func IrFunction, anchor Token) throws SourceParseError
-		if not self.regionTracking() or self.valueIsAValueType(phi) 'nothingToJoin'
+		if self.valueIsAValueType(phi) 'nothingToJoin'
 			return
 		end 'nothingToJoin'
 
@@ -91130,7 +91049,7 @@ export type Parser
 	end 'valueHasOtherPath'
 
 	function joinCapabilityInto(phi ValueId, incoming ValueId)
-		if not self.regionTracking() or self.valueIsAValueType(phi) 'nothingToJoin'
+		if self.valueIsAValueType(phi) 'nothingToJoin'
 			return
 		end 'nothingToJoin'
 
@@ -91155,10 +91074,6 @@ export type Parser
 	end 'joinCapabilityInto'
 
 	function carryCapabilityToAlias(source ValueId, target ValueId)
-		if not self.regionTracking() 'untracked'
-			return
-		end 'untracked'
-
 		let given = self.effectiveCapabilityOf(source)
 		self.setValueCapability(target, capability: ValueCapability.mutable if given == ValueCapability.temporary else given)
 		self.carryParamSources(target, source: source)
@@ -91354,12 +91269,6 @@ export type Parser
 		return operand
 	end 'parseCapabilityAnnotation'
 
-	function seedTrackedCapability(value ValueId, capability ValueCapability)
-		if self.regionTracking() 'tracked'
-			self.setValueCapability(value, capability: capability)
-		end 'tracked'
-	end 'seedTrackedCapability'
-
 	function seedParameterCapabilities(func IrFunction, head FunctionHead, takesReceiver bool)
 		var position = 0 as ParamCount
 
@@ -91384,7 +91293,7 @@ export type Parser
 	end 'seedDeclaredParameter'
 
 	function seedIsolatedParameter(position ParamCount, marked bool)
-		self.seedTrackedCapability(position as ValueId, capability: ValueCapability.isolated)
+		self.setValueCapability(position as ValueId, capability: ValueCapability.isolated)
 
 		if marked 'aMutableIsolatedParameter'
 			self.bodyState.declaredMutableParams = maskWithParam(self.bodyState.declaredMutableParams, param: position)
@@ -91407,7 +91316,7 @@ export type Parser
 	end 'seedMutableParameter'
 
 	function seedFrozenParameter(func IrFunction, position ParamCount)
-		self.seedTrackedCapability(position as ValueId, capability: ValueCapability.immutable)
+		self.setValueCapability(position as ValueId, capability: ValueCapability.immutable)
 		func.needsFrozenParamMask = maskWithParam(func.needsFrozenParamMask, param: position)
 	end 'seedFrozenParameter'
 
@@ -91463,7 +91372,7 @@ export type Parser
 		try self.requireByReferenceIsolatedStaysPut(func, value: value, at: self.tokenAt(valueStart))
 		let intoAHolder = self.storeHolderIsHeld(holder)
 
-		if not self.regionTracking() or (self.valueIsOpaque(value) and not intoAHolder) 'nothingToJudge'
+		if self.valueIsOpaque(value) and not intoAHolder 'nothingToJudge'
 			return
 		end 'nothingToJudge'
 
@@ -91566,10 +91475,6 @@ export type Parser
 	end 'requireStoreVerdictFits'
 
 	function requireAssignmentFitsVariable(binding VarInfo, value ValueId, valueStart ElementIndex, valueEnd ElementIndex) throws SourceParseError
-		if not self.regionTracking() 'untracked'
-			return
-		end 'untracked'
-
 		let verdict = assignmentVerdict(self.capabilityOfValue(binding.boundValue), value: self.effectiveCapabilityOf(value), isValueType: self.valueIsAValueType(value), isSlotRead: self.valueIsASlotRead(value))
 		try self.requireStoreVerdictFits(verdict, fieldName: String.from(binding.name), value: value, valueStart: valueStart, valueEnd: valueEnd, joinedAtALoop: false)
 
@@ -91599,10 +91504,6 @@ export type Parser
 	end 'noteCarriedDerivation'
 
 	function noteLoopHeaderPhisCarried(phiVars LoopPhiVarArray)
-		if not self.regionTracking() 'untracked'
-			return
-		end 'untracked'
-
 		var table = self.regionFactsForWrite()
 
 		for phiVar in phiVars 'eachHeaderPhi'
@@ -91704,10 +91605,6 @@ export type Parser
 	end 'waitInsideWindowMessage'
 
 	function requireNoWaitInsideWindow(waitTok Token) throws SourceParseError
-		if not self.regionTracking() 'untracked'
-			return
-		end 'untracked'
-
 		view windows = self.regionFactsForRead().windows
 
 		if not windowIsOpen(windows) 'noWindow'
@@ -91718,10 +91615,6 @@ export type Parser
 	end 'requireNoWaitInsideWindow'
 
 	function deferNoWaitInsideWindow(range SourceRange)
-		if not self.regionTracking() 'untracked'
-			return
-		end 'untracked'
-
 		view windows = self.regionFactsForRead().windows
 
 		if not windowIsOpen(windows) 'noWindow'
@@ -91881,7 +91774,7 @@ export type Parser
 	function emitFieldLoad(box ValueId, layout StructLayout, index FieldIndex, range SourceRange) returns ValueId
 		let loaded = self.emitFieldLoadValue(box, layout: layout, index: index, range: range)
 
-		if loaded != box and self.regionTracking() 'tracked'
+		if loaded != box 'aFieldWasRead'
 			self.openStatementWindowThrough(box, floor: loaded, range: range)
 			view windows = self.regionFactsForRead().windows
 
@@ -91892,7 +91785,7 @@ export type Parser
 			end 'windowState'
 
 			self.regionFactsForWrite().fieldOrigins.upsert(loaded, value: FieldOrigin.create(box, layoutName: layout.name, field: index, slot: layout.fieldTypeSites.capabilityAt(index)))
-		end 'tracked'
+		end 'aFieldWasRead'
 
 		return loaded
 	end 'emitFieldLoad'
@@ -94101,9 +93994,7 @@ export type Parser
 		let reference = self.emitFunctionRefOp(funcName, anchor: anchor)
 		self.markImmortalFunction(reference)
 
-		if self.regionTracking() 'aCaptureLessFunction'
-			self.regionFactsForWrite().cleanFunctionValues.insert(reference)
-		end 'aCaptureLessFunction'
+		self.regionFactsForWrite().cleanFunctionValues.insert(reference)
 
 		self.trackOwnedTemp(reference, exclusivity: OwnedHeapExclusivity.sole)
 		return reference
@@ -96065,19 +95956,15 @@ export type Parser
 		self.noteReceiverDoors(func, target: CallArgTarget.movedInto(callee) if serviceSite.isASpawn() else CallArgTarget.callee(callee), receiver: receiver, anchor: anchor)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
-		var opensAnIsolatedValue = false
-		var storedSlots = StoredSlotArgArray.create(0)
 		let resolvedCallee = try self.genericInstanceCallee(callee, anchor: anchor, args: args, argLabels: argLabels, mint: mint)
 
 		if labelRule == ArgLabelRule.firstNamedIfDefaulted 'firstLabelNeedsADefault'
 			try self.requireFirstArgLabelHasDefault(resolvedCallee, firstParam: receiverArgs as ParamCount, argLabels: argLabels, argRanges: argRanges, receiverArgs: receiverArgs)
 		end 'firstLabelNeedsADefault'
 
-		if self.regionTracking() 'tracked'
-			opensAnIsolatedValue = try self.checkCallCapabilities(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, anchor: anchor)
-			let instantiated = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, serviceSite: serviceSite)
-			storedSlots = self.storedSlotCandidates(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, constructorInstance: instantiated)
-		end 'tracked'
+		let opensAnIsolatedValue = try self.checkCallCapabilities(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, anchor: anchor)
+		let instantiated = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, serviceSite: serviceSite)
+		let storedSlots = self.storedSlotCandidates(func, callee: resolvedCallee, args: args, argAnchors: argAnchors, argLabels: argLabels, receiver: receiver, constructorInstance: instantiated)
 
 		match receiver 'receiverless'
 			value then break
@@ -97060,13 +96947,11 @@ export type Parser
 			self.leaveCallGuard(SourceRange.ofToken(rparenTok))
 		end 'leaveTheGuard'
 
-		if self.regionTracking() 'tracked'
-			try self.noteCallResultCapability(called, callee: resolvedCallee, args: args, opensAnIsolatedValue: opensAnIsolatedValue, opFloor: callOpFloor, anchor: anchor)
+		try self.noteCallResultCapability(called, callee: resolvedCallee, args: args, opensAnIsolatedValue: opensAnIsolatedValue, opFloor: callOpFloor, anchor: anchor)
 
-			if let opIdx = try emittedCall.opIndex() 'aCallWasEmitted'
-				self.fileCallNotes(func, opIdx: opIdx, args: args, argAnchors: argAnchors, stored: storedSlots, receiver: receiver, anchor: anchor)
-			end 'aCallWasEmitted'
-		end 'tracked'
+		if let opIdx = try emittedCall.opIndex() 'aCallWasEmitted'
+			self.fileCallNotes(func, opIdx: opIdx, args: args, argAnchors: argAnchors, stored: storedSlots, receiver: receiver, anchor: anchor)
+		end 'aCallWasEmitted'
 
 		return called
 	end 'parseCallNamed'
@@ -100985,9 +100870,7 @@ export type Parser
 		let callee = try self.genericInstanceCallee(target.name, anchor: target.anchor, args: args, argLabels: argLabels, mint: target.mint)
 		try self.requireFirstArgLabelHasDefault(callee, firstParam: 0, argLabels: argLabels, argRanges: argRanges, receiverArgs: 0)
 
-		if self.regionTracking() 'tracked'
-			try self.requireNoIsolatedArgumentInAnAsyncCall(callee, args: args, argAnchors: argAnchors, argLabels: argLabels)
-		end 'tracked'
+		try self.requireNoIsolatedArgumentInAnAsyncCall(callee, args: args, argAnchors: argAnchors, argLabels: argLabels)
 
 		// `self.pos` now sits one PAST the `)`, which is exactly `tokenTextFrom`'s exclusive end. The POSITION is
 		// the `async` keyword's, so E3073's caret lands on the first character of the text it quotes.
@@ -100999,9 +100882,7 @@ export type Parser
 
 		let spawnedOp = try self.bodyState.emittedCall.opIndex() otherwise panic("parseAsyncCall: emitAsyncCall returned without emitting its asyncCall op")
 
-		if self.regionTracking() 'tracked'
-			self.fileCallNotes(func, opIdx: spawnedOp, args: args, argAnchors: argAnchors, stored: StoredSlotArgArray.create(0), receiver: ReceiverArg.none, anchor: target.anchor)
-		end 'tracked'
+		self.fileCallNotes(func, opIdx: spawnedOp, args: args, argAnchors: argAnchors, stored: StoredSlotArgArray.create(0), receiver: ReceiverArg.none, anchor: target.anchor)
 
 		self.noteTiedAsync(func, opIdx: spawnedOp, args: args)
 		return spawned
@@ -101045,10 +100926,6 @@ export type Parser
 	end 'valueCrossesToACoroutine'
 
 	function noteTiedAsync(func IrFunction, opIdx ElementIndex, args ValueIdArray)
-		if not self.regionTracking() 'nothingIsTracked'
-			return
-		end 'nothingIsTracked'
-
 		var sharesMutableData = false
 
 		for position in 0 upto args.count() 'eachArg'
@@ -101769,10 +101646,6 @@ export type Parser
 	end 'applyCallerConsume'
 
 	function isolatedParamBitsDeclaredBy(callee ByteArray) returns BoolArray
-		if not self.regionTracking() 'noRegionsInThisProgram'
-			return BoolArray.create(0)
-		end 'noRegionsInThisProgram'
-
 		let declaration = try self.declarationNameableHere(callee) otherwise return BoolArray.create(0)
 		return self.signatures.isolatedParamBitsOf(declaration)
 	end 'isolatedParamBitsDeclaredBy'
@@ -102316,7 +102189,7 @@ export type Parser
 			return HandOffTake.sharedReadOnly
 		end 'nothingCanWriteIt'
 
-		if not self.valueIsSolelyOwnedHere(value) 'aSecondOwnerMayExist'
+		if not self.valueIsSolelyOwnedHere(value) and not self.valueIsAnOwnedIsolatedLocal(value) 'aSecondOwnerMayExist'
 			return try self.unprovenOwnerTakeOf(argument, filed: filed)
 		end 'aSecondOwnerMayExist'
 
@@ -102389,9 +102262,13 @@ export type Parser
 			return true
 		end 'aPermanentReadOnlyRoot'
 
-		if self.regionTracking() and self.effectiveCapabilityOf(argument.value) == ValueCapability.immutable 'aFrozenGraph'
+		if self.effectiveCapabilityOf(argument.value) == ValueCapability.immutable 'aFrozenGraph'
 			return true
 		end 'aFrozenGraph'
+
+		if self.valueIsAnOwnedIsolatedLocal(argument.value) 'anIsolatedRegionIsGivenAway'
+			return false
+		end 'anIsolatedRegionIsGivenAway'
 
 		if not tokenCanBeAName(argument.anchor) or not self.bodyState.scope.contains(argument.anchor.value) 'notABinding'
 			return false
@@ -103213,10 +103090,8 @@ export type Parser
 		let callOpIndex = self.artifact.module.ops.count()
 		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.indirectCall(result, callee: callee, args: args, argImmutableNames: argImmutableNames), range: SourceRange.between(anchor, last: rparenTok))
 
-		if self.regionTracking() 'tracked'
-			self.noteFunctionValueCallSite(func, opIdx: callOpIndex, args: args, argAnchors: argAnchors)
-			self.noteIndirectResultCapability(result, carrier: callee, governing: governing)
-		end 'tracked'
+		self.noteFunctionValueCallSite(func, opIdx: callOpIndex, args: args, argAnchors: argAnchors)
+		self.noteIndirectResultCapability(result, carrier: callee, governing: governing)
 
 		self.recordDeferredArgumentBindings(pending, callResult: result)
 		self.noteCallToken(SourceRange.between(anchor, last: rparenTok), args: args, start: SourceRange.ofToken(calleeTok))
@@ -103615,10 +103490,6 @@ export type Parser
 	end 'takePromisesTheFunctionTypeTakes'
 
 	function handIsolatedArgumentsTheFunctionTypeTakes(governing TypeNameId, args ValueIdArray, argRanges SourceRangeArray, anchor Token) throws SourceParseError
-		if not self.regionTracking() 'noRegionsInThisProgram'
-			return
-		end 'noRegionsInThisProgram'
-
 		let isolated = self.functionValueShape(governing).isolatedParams
 
 		for position in 0 upto args.count() 'eachArgument'
@@ -103631,10 +103502,6 @@ export type Parser
 	end 'handIsolatedArgumentsTheFunctionTypeTakes'
 
 	function handIsolatedAsyncArguments(callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, cells ParamPositionMask, anchor Token) throws SourceParseError
-		if not self.regionTracking() 'noRegionsInThisProgram'
-			return
-		end 'noRegionsInThisProgram'
-
 		let declaration = try self.declarationNameableHere(callee) otherwise return
 		let isolated = self.signatures.isolatedParamBitsOf(declaration)
 

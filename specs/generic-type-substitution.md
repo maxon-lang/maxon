@@ -1362,7 +1362,7 @@ type Box uses T implements Iterable with (T, BoxIter)
 	end 'create'
 
 	function createIterator() returns BoxIter throws IterationError
-		return try BoxIter.create(items)
+		return try BoxIter.create(items.clone())
 	end 'createIterator'
 end 'Box'
 

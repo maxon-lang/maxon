@@ -53,7 +53,7 @@ interface Mergeable uses Func
 	function blockCount() returns Count
 	function funcCount() returns Count
 	function getFunc(index Count) returns Func
-	function pushFunc(mutable self, func Func)
+	function pushFunc(mutable self, func mutable Func)
 	function cloneFunc(src Func) returns Func
 end 'Mergeable'
 
@@ -64,7 +64,7 @@ export extension Mergeable
 
 		for i in 0 upto source.funcCount() 'eachFunc'
 			let srcFunc = source.getFunc(i)
-			let func = self.cloneFunc(srcFunc)
+			var func = self.cloneFunc(srcFunc)
 			self.pushFunc(func)
 		end 'eachFunc'
 	end 'merge'
@@ -108,7 +108,7 @@ type GenModule uses Op implements Mergeable with Item
 		end 'unreachable'
 	end 'getFunc'
 
-	function pushFunc(func Item)
+	function pushFunc(func mutable Item)
 		self.functions.push(func)
 	end 'pushFunc'
 

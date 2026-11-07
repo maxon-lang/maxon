@@ -14,8 +14,8 @@ through the `view`.
 
 Writing through a `view` is `E3159`. A `view` lives only inside its function: storing it, handing it to a parameter
 that is kept, returning it (or a call's result that is still the `view`) and capturing it in a closure are `E3078`,
-handing it to a parameter the callee writes is `E3159`, and sending it to a service is `E3138`. Use a clone() for any
-of them. A `view` of a number or another value with no capability is copied where it goes, so a closure may capture
+handing it to a parameter the callee writes is `E3159`, and sending it to a service is `E3207` where the message takes
+`immutable` data and `E3200` where it takes `isolated` data. Use a clone() for any of them. A `view` of a number or another value with no capability is copied where it goes, so a closure may capture
 it.
 
 A `view` holds its own reference to the record its value names. A record something may write is refused where it is
@@ -491,7 +491,8 @@ end 'main'
 ```
 
 <!-- test: view-binding.error.a-view-sent-to-a-service-is-refused -->
-A `view` names data its own green thread may write, so it can be neither moved nor shared with a service.
+A `view` names data its own green thread may write, so it is mutable data of its region: it cannot be frozen for a
+message that takes `immutable` data, and it cannot be given away to one that takes `isolated` data.
 
 ```maxon
 type Box
@@ -517,7 +518,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Box) returns Integer
+	export function keep(p immutable Box) returns Integer
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -534,7 +535,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:36:27: argument `v` of the message `Store.keep` is a `view`: it names data something else may write, so it can be neither moved nor shared with the service. Send a `.clone()`
+error E3207: <fragment>:36:27: 'keep' takes `immutable` 'p'; 'v' is mutable. Freeze it first
 ```
 
 <!-- test: view-binding.error.a-heap-annotated-view-is-refused -->

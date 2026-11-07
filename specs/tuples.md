@@ -3347,7 +3347,7 @@ type Tally
 		return Self{sum: 0}
 	end 'create'
 
-	export function take(items Nums)
+	export function take(items isolated Nums)
 		self.sum = try items.get(0) otherwise 0
 	end 'take'
 
@@ -3358,7 +3358,9 @@ end 'Tally'
 
 export function second() returns ExitCode
 	let t = spawn Tally.create()
-	try t.take([43 as Num]) otherwise panic("an open mailbox with room takes the send")
+	var items = Nums.create(0) as isolated Nums
+	items.push(43 as Num)
+	try t.take(items) otherwise panic("an open mailbox with room takes the send")
 	let sum = try await t.total() otherwise panic("the tally is running")
 	t.shutdown()
 	return sum

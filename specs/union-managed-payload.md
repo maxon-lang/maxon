@@ -3451,7 +3451,7 @@ type Thermometer
 		return Self{shown: 0}
 	end 'create'
 
-	export function show(r Reading)
+	export function show(r isolated Reading)
 		self.shown = self.shown + 1
 
 		match r 'which'

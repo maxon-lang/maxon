@@ -685,7 +685,7 @@ let LibraryCheckProgramSource = "function main() returns ExitCode\n\treturn 0\ne
 export function scriptlibPackagesCompile(scriptlibDir FilePath, session CompileSession) returns bool throws CompileError
 	let stdlibDir = try locateStdlibDir()
 	let resolvedDir = scriptlibDir.resolve(Directory.currentPath())
-	let besideScriptlib = try resolvedDir.parent() otherwise throw CompileError.directoryNotFound(scriptlibDir)
+	let besideScriptlib = try resolvedDir.parent() otherwise throw CompileError.directoryNotFound(scriptlibDir.path)
 
 	let check = try libraryCheckOf(besideScriptlib.join(ScriptlibCheckProgramName), target: detectHostTarget(), stdlibDir: stdlibDir, scriptlib: ScriptlibLoad.checking(resolvedDir), stdlibBodies: LibraryBodies.onDemand, session: session)
 
@@ -714,7 +714,7 @@ end 'LibraryCheck'
 
 export function stdlibCheckOf(target Target, session CompileSession) returns LibraryCheck throws CompileError
 	let stdlibDir = try locateStdlibDir()
-	let besideStdlib = try stdlibDir.parent() otherwise throw CompileError.directoryNotFound(stdlibDir)
+	let besideStdlib = try stdlibDir.parent() otherwise throw CompileError.directoryNotFound(stdlibDir.path)
 
 	return try libraryCheckOf(besideStdlib.join(StdlibCheckProgramName), target: target, stdlibDir: stdlibDir, scriptlib: ScriptlibLoad.omitted, stdlibBodies: LibraryBodies.every, session: session)
 end 'stdlibCheckOf'
@@ -2074,7 +2074,7 @@ export function namedSourceFiles(paths MaxonSourcePathArray, selection SourceSel
 		end 'isFile' else if Directory.exists(path) 'isDir'
 			_ = try collectIfFirst(path, into: files, selection: selection, nestedProjects: nestedProjects, ledger: ledger)
 		end 'isDir' else 'notFound'
-			throw CompileError.fileNotFound(path)
+			throw CompileError.fileNotFound(path.path)
 		end 'notFound'
 	end 'eachNamed'
 
@@ -2207,7 +2207,7 @@ function collectIfFirst(dir FilePath, into MaxonSourcePathArray, selection Sourc
 end 'collectIfFirst'
 
 function collectBelow(dir FilePath, into MaxonSourcePathArray, selection SourceSelection, nestedProjects NestedProjectRule, ledger PhysicalEntryLedger) returns DirectoryWalkCount throws CompileError
-	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
+	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir.path)
 
 	match nestedProjects 'rule'
 		refused then try requireProjectStandsAlone(entries)
@@ -2262,7 +2262,7 @@ function collectSubdirectorySources(dir FilePath, into MaxonSourcePathArray, sel
 end 'collectSubdirectorySources'
 
 function collectUnlessAProject(dir FilePath, into MaxonSourcePathArray, selection SourceSelection, ledger PhysicalEntryLedger) returns DirectoryWalkCount throws CompileError
-	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
+	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir.path)
 
 	match driverFilesAmong(entries, extension: ProjectFileExtension) 'declared'
 		none then break
@@ -2352,7 +2352,7 @@ union DriverFilesAmong
 end 'DriverFilesAmong'
 
 export function driverFileIn(dir FilePath, extension String) returns DriverFileSearch throws CompileError
-	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
+	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir.path)
 	return try soleDriverFile(driverFilesAmong(entries, extension: extension))
 end 'driverFileIn'
 

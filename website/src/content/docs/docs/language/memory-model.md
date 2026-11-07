@@ -506,8 +506,7 @@ awaited or dropped exits with **75** instead (see [Concurrency](/docs/language/a
 | [E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned) | a published value that is not solely owned |
 | [E3185](/docs/cli/error-codes/#e3185--rawsurfaceoutsidelibrarytier) | raw memory or a raw handle used outside the library tier |
 | [E3186](/docs/cli/error-codes/#e3186--argumentoverlapswrittenparameter) | a local read by an operand evaluated before a call writes it through a `mutable` parameter |
-| [E3196](/docs/cli/error-codes/#e3196--semanticcapabilitymismatchatstore)–[E3215](/docs/cli/error-codes/#e3215--semanticregionboundrefused) | the capability, window, tied-promise and unique checks (see [Capability Errors](/docs/language/regions/#capability-errors)) |
-| [E3216](/docs/cli/error-codes/#e3216--semanticservicestateholdsapromise) | a service whose state holds a promise |
+| [E3196](/docs/cli/error-codes/#e3196--semanticcapabilitymismatchatstore)–[E3217](/docs/cli/error-codes/#e3217--semanticmessageneedsacapability) | the capability, window, tied-promise, unique and service-state checks (see [Capability Errors](/docs/language/regions/#capability-errors)) |
 | [E5004](/docs/cli/error-codes/#e5004--unguardedstackchain) | a chain of unchecked runtime functions that can exceed the stack margin |
 | exit 96 | a mutable value sent to another thread while not solely owned |
 | exit 101 | memory still allocated when `main` returns |

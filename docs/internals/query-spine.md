@@ -165,9 +165,14 @@ process.
 `queryAllModule` opens a pool of workers for its duration (`FrontEndPool.maxon`) and lexes and parses the
 files that missed their memo on it. `MAXON_MAX_PROCS=1` gives a pool of one worker, not a separate path.
 
-- A worker parses against its own copy of the part of the settled signature index a parse writes, and
-  reads the settled declarations from one frozen copy every worker shares. The worker makes its copy on
-  its own thread. A write a parse has not declared panics.
+- Every worker reads one published, read-only signature index and the settled declarations, both shared
+  by all workers. A parse writes only into an overlay of its own over that
+  index (`ProgramSignatures.overlaying`), whose accessors read the overlay's rows first and the shared
+  rows second. A walk over the whole program (`requireWholeProgramIndex`) belongs to the settle and the
+  fold on the compiling thread, and panics on an overlay.
+- A name or generic instance an overlay mints is numbered from the shared index's counts and renumbered
+  in source-path order when the compiling thread adopts the parse (`adoptParseMints`), so the numbering
+  does not depend on which worker parsed a file.
 - Results are merged in emission order on the compiling thread, so the output is the same whatever order
   the workers finish in. The shared `Project` is written on the compiling thread alone.
 - Identical compiles report identical allocation totals whichever worker finishes first. Every pool

@@ -19,7 +19,7 @@ typealias Integer = int(i64.min to i64.max)
 interface Mergeable uses Func
 	function itemCount() returns Count
 	function getItem(index Count) returns Func
-	function pushItem(mutable self, item Func)
+	function pushItem(mutable self, item mutable Func)
 	function opsCount() returns Count
 	function appendOps(mutable self, source Self)
 	function cloneItem(src Func) returns Func
@@ -30,7 +30,7 @@ extension Mergeable
 		self.appendOps(source)
 		for i in 0 upto source.itemCount() 'eachItem'
 			let src = source.getItem(i)
-			let copy = self.cloneItem(src)
+			var copy = self.cloneItem(src)
 			self.pushItem(copy)
 		end 'eachItem'
 	end 'merge'
@@ -76,7 +76,7 @@ type Container uses Op implements Mergeable with Wrapper
 		end 'unreachable'
 	end 'getItem'
 
-	function pushItem(item Wrapper)
+	function pushItem(item mutable Wrapper)
 		self.items.push(item)
 	end 'pushItem'
 
@@ -97,7 +97,8 @@ function main() returns ExitCode
 	var a = IntContainer.create()
 	a.pushOp(10)
 	a.pushOp(20)
-	a.pushItem(Wrapper.create(99))
+	var first = Wrapper.create(99)
+	a.pushItem(first)
 
 	var b = IntContainer.create()
 	b.merge(a)

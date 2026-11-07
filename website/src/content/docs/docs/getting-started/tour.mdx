@@ -91,13 +91,14 @@ so `wc -w -l` prints lines before words, as `wc` does, whatever order the flags 
 
 ## Counting
 
-<TourStep from={97} to={136}>
+<TourStep from={97} to={141}>
 `extension int` adds a method to a **primitive type**: `self` is the byte, and the comparisons read the
 `Whitespace` constants directly, because an enum with raw values compares with the numbers it names.
 
-`Counts` is the three numbers and the two ways to make them. `of` is the whole of counting — one pass
+`Counts` is the three numbers and the ways to make them. `of` is the whole of counting — one pass
 over the bytes, a line at each line feed, a word wherever a non-blank byte follows a blank one. `inWord`
-is the only state it needs.
+is the only state it needs. `ofFile` reads a file and counts it, and **`throws FileReadError`** because the
+read can fail.
 
 `content.count()` answers the array's own index type, and the `as Tally` converts it. Two aliases with
 the same range are still two types — a count of bytes and a position in an array do not mix by
@@ -107,30 +108,24 @@ accident.
 records are passed by reference, so the caller's `Counts` is the one that changes.
 </TourStep>
 
-<TourStep from={138} to={152}>
-**A [union](/docs/language/enums-unions/) is a value that is exactly one of several shapes, and
-carries different data in each.** A file's result is either its counts, or the fact that it could not
-be read — and nothing that reads a `FileCount` can reach the counts without first establishing which
-it has.
-
+<TourStep from={143} to={151}>
 **`Counter` is the type that becomes a service, and it is an ordinary type.** `export` on a method
 marks the **message API**: what another thread may ask this type to do. `count` reads one file and
-answers its result.
+answers its counts, or throws `FileReadError` when the file cannot be read.
 
-`try File.readBinary(path) otherwise return FileCount.unreadable` turns a failed read into a value
-rather than an error. A file that cannot be read is an *answer*, which is why the union has a case for
-it.
+**A message says how its data crosses to the other thread.** `path immutable FilePath` is frozen data the
+sender shares with the service, which only reads it. `returns isolated Counts` is a value the service
+gives away: the caller owns the counts outright once the reply arrives. A record parameter or reply with
+neither word is refused where the service is spawned. Numbers, strings and service handles need no word.
+See [Concurrency](/docs/language/async/).
 </TourStep>
 
 ## Reporting
 
-<TourStep from={154} to={193}>
+<TourStep from={153} to={185}>
 `Report` holds what the run has seen: the columns to print, the running total, and whether anything
-went wrong.
-
-`match result 'outcome'` takes the union apart. `counted(counts)` both *tests* the shape and *binds*
-what it carries; `unreadable` has nothing to bind. The arms use `then` rather than `gives` because they
-*do* something rather than produce something.
+went wrong. `addCounts` folds a file's counts into the total and prints its row; `addFailure` says on
+standard error that a file could not be read and records that the run was troubled.
 
 `printRow` is where the closures are spent: `column(counts)` calls whichever function the flag chose.
 `{column(counts):8}` is **string interpolation** with a format specifier — the value, right-aligned in
@@ -139,16 +134,16 @@ eight places. A `StringBuilder` collects the row so it is printed once.
 
 ## Using the processors
 
-<TourStep from={195} to={235}>
+<TourStep from={187} to={232}>
 **`spawn` turns a type into a service running on its own green thread**, scheduled across the
 machine's processors. `spawn Counter.create()` runs the factory over there and hands back a
 `Counter.handle`. `workersFor` starts one per processor, or one per file when there are fewer files —
 the `as WorkerCount` at the end is checked at run time, and `Options.parse` has already guaranteed at
 least one file.
 
-`try counter.count(path.clone(), sendTimeout: ForeverMs)` **returns once the message is queued**. It
-hands back a promise, so every file is in flight before the first answer is read. Sending moves a value to the service; the
-`clone()` in `submitCount` gives it a path of its own, because `paths` still holds the original. See
+`try counter.count(freeze path.clone(), sendTimeout: ForeverMs)` **returns once the message is queued**. It
+hands back a promise, so every file is in flight before the first answer is read. `freeze path.clone()`
+gives the service a frozen path of its own, because `paths` still holds the original. See
 the [memory model](/docs/language/memory-model/).
 
 A send is a `try` because it can fail on the spot: a service's mailbox holds at most 1024 messages, and
@@ -156,9 +151,10 @@ a stopped service takes none. `sendTimeout: ForeverMs` makes a send to a full ma
 until a worker takes a message, so `mailboxFull` reaches only a cancelled coroutine. `submitCount` runs
 on `main`'s own green thread, and the `panic` in that arm says why it is unreachable.
 
-`await reply` takes each answer back, **in the order the files were named**, not the order the
-workers finished — so the output is the same at one worker or sixty-four. A message that was queued
-always runs, so its reply carries only what the handler returns.
+`try await reply otherwise 'unreadable'` takes each answer back, **in the order the files were named**,
+not the order the workers finished — so the output is the same at one worker or sixty-four. A message
+that was queued always runs, so its reply carries what the handler returns or throws: a file that
+could not be read reaches the `'unreadable'` block, which reports it and moves on to the next reply.
 
 A service outlives the function that spawned it until someone says otherwise, so every worker is shut
 down explicitly. See [Concurrency](/docs/language/async/).
@@ -166,7 +162,7 @@ down explicitly. See [Concurrency](/docs/language/async/).
 
 ## Finishing
 
-<TourStep from={237} to={261}>
+<TourStep from={234} to={258}>
 `printUsage` walks `Flag.allCases` again, so the help text cannot fall behind the enum.
 
 `try Options.parse(…) otherwise (problem) 'badUsage'` binds the error that was thrown, and the handler

@@ -572,7 +572,7 @@ type Counter
 		return Self{}
 	end 'create'
 
-	export function count(empty bool) returns FileCount
+	export function count(empty bool) returns isolated FileCount
 		if empty 'nothingToCount'
 			return FileCount.unreadable
 		end 'nothingToCount'
@@ -635,7 +635,7 @@ type Store
 		return Self{}
 	end 'create'
 
-	export function keep(s Shape) returns Coord
+	export function keep(s immutable Shape) returns Coord
 		self.seen = self.seen + 1
 
 		return match s 'shape'
@@ -647,8 +647,8 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var s = Shape.dot(Point.create(1, y: 2, label: "ab{1}"))
-	s = Shape.dot(Point.create(10, y: 20, label: "cde{2}"))
+	var s = freeze Shape.dot(Point.create(1, y: 2, label: "ab{1}"))
+	s = freeze Shape.dot(Point.create(10, y: 20, label: "cde{2}"))
 	view w = s
 	let r = try await h.keep(s) otherwise 0
 
@@ -697,7 +697,7 @@ type Store
 		return Self{}
 	end 'create'
 
-	export function keep(s Shape) returns Coord
+	export function keep(s immutable Shape) returns Coord
 		self.seen = self.seen + 1
 
 		return match s 'shape'
@@ -709,8 +709,8 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var s = Shape.cell(Cell.create(5, label: "ab{1}"))
-	s = Shape.cell(Cell.create(7, label: "cde{2}"))
+	var s = freeze Shape.cell(Cell.create(5, label: "ab{1}"))
+	s = freeze Shape.cell(Cell.create(7, label: "cde{2}"))
 	view w = s
 	let r = try await h.keep(s) otherwise 0
 
@@ -757,7 +757,7 @@ type Store
 		return Self{}
 	end 'create'
 
-	export function keep(s Shape) returns Coord
+	export function keep(s immutable Shape) returns Coord
 		self.seen = self.seen + 1
 
 		return match s 'shape'
@@ -776,8 +776,8 @@ end 'weigh'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var s = Shape.cell(Cell.create(1, label: "x{0}"))
-	s = Shape.cell(Cell.create(5, label: "ab{1}"))
+	var s = freeze Shape.cell(Cell.create(1, label: "x{0}"))
+	s = freeze Shape.cell(Cell.create(5, label: "ab{1}"))
 	view a = s
 	view b = s
 	let r = try await h.keep(s) otherwise 0
@@ -810,7 +810,7 @@ type Store
 		return Self{}
 	end 'create'
 
-	export function keep(n Note) returns Count
+	export function keep(n immutable Note) returns Count
 		self.seen = self.seen + 1
 
 		return match n 'note'
@@ -829,8 +829,8 @@ end 'weigh'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var n = Note.text("x{0}")
-	n = Note.text("abc{1}")
+	var n = freeze Note.text("x{0}")
+	n = freeze Note.text("abc{1}")
 	view a = n
 	view b = n
 	let r = try await h.keep(n) otherwise 0
@@ -866,7 +866,7 @@ type Store
 		return Self{}
 	end 'create'
 
-	export function keep(b Blob) returns Count
+	export function keep(b immutable Blob) returns Count
 		self.seen = self.seen + 1
 
 		return match b 'blob'
@@ -902,10 +902,10 @@ end 'twoWords'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var blob = Blob.nothing
-	blob = Blob.bytes(nineBytes())
-	var other = Blob.nothing
-	other = Blob.words(twoWords())
+	var blob = freeze Blob.nothing
+	blob = freeze Blob.bytes(nineBytes())
+	var other = freeze Blob.nothing
+	other = freeze Blob.words(twoWords())
 	let before = weigh(blob)
 	let r = try await h.keep(blob) otherwise 0
 	let q = try await h.keep(other) otherwise 0
@@ -1950,7 +1950,7 @@ type Store
 		return Self{}
 	end 'create'
 
-	export function keep(w Wide) returns Weight
+	export function keep(w immutable Wide) returns Weight
 		self.seen = self.seen + 1
 
 		return match w 'wide'
@@ -1969,14 +1969,14 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	let spotted = Wide.spot(Point.create(5, label: "ab{1}"))
-	let texted = Wide.text("xyz{2}")
-	var last = Wide.idle
-	last = Wide.ten
-	var first = Wide.eight
-	first = Wide.idle
-	var broken = Wide.nine
-	broken = Wide.failed
+	let spotted = freeze Wide.spot(Point.create(5, label: "ab{1}"))
+	let texted = freeze Wide.text("xyz{2}")
+	var last = freeze Wide.idle
+	last = freeze Wide.ten
+	var first = freeze Wide.eight
+	first = freeze Wide.idle
+	var broken = freeze Wide.nine
+	broken = freeze Wide.failed
 	let a = try await h.keep(last) otherwise 0
 	let b = try await h.keep(spotted) otherwise 0
 	let c = try await h.keep(first) otherwise 0
@@ -2014,36 +2014,34 @@ mm_free InterpolationScratch #7
 mm_alloc Store #9 size=8
 mm_decref ServiceStartRecord #1 rc=0
 mm_free ServiceStartRecord #1
-mm_alloc ElementBuffer #10 size=3
-mm_decref Point #5 rc=0
-mm_decref StringRecord #6 rc=0
-mm_decref ElementBuffer #10 rc=0
-mm_free ElementBuffer #10
-mm_free StringRecord #6
-mm_free Point #5
-mm_alloc ElementBuffer #11 size=4
-mm_decref StringRecord #8 rc=0
-mm_decref ElementBuffer #11 rc=0
-mm_free ElementBuffer #11
-mm_free StringRecord #8
+mm_incref Point #5 rc=2
+mm_decref Point #5 rc=1
+mm_incref StringRecord #8 rc=2
+mm_decref StringRecord #8 rc=1
+mm_alloc InterpolationScratch #10 size=20
+mm_alloc InterpolationScratch #11 size=20
 mm_alloc InterpolationScratch #12 size=20
 mm_alloc InterpolationScratch #13 size=20
 mm_alloc InterpolationScratch #14 size=20
-mm_alloc InterpolationScratch #15 size=20
-mm_alloc InterpolationScratch #16 size=20
-mm_alloc StringRecord #17 size=67
+mm_alloc StringRecord #15 size=67
+mm_decref InterpolationScratch #10 rc=0
+mm_free InterpolationScratch #10
+mm_decref InterpolationScratch #11 rc=0
+mm_free InterpolationScratch #11
 mm_decref InterpolationScratch #12 rc=0
 mm_free InterpolationScratch #12
 mm_decref InterpolationScratch #13 rc=0
 mm_free InterpolationScratch #13
 mm_decref InterpolationScratch #14 rc=0
 mm_free InterpolationScratch #14
-mm_decref InterpolationScratch #15 rc=0
-mm_free InterpolationScratch #15
-mm_decref InterpolationScratch #16 rc=0
-mm_free InterpolationScratch #16
-mm_decref StringRecord #17 rc=0
-mm_free StringRecord #17
+mm_decref StringRecord #15 rc=0
+mm_free StringRecord #15
+mm_decref StringRecord #8 rc=0
+mm_free StringRecord #8
+mm_decref Point #5 rc=0
+mm_decref StringRecord #6 rc=0
+mm_free StringRecord #6
+mm_free Point #5
 mm_decref Store.handle #2 rc=0
 mm_free Store.handle #2
 mm_decref Store #9 rc=0

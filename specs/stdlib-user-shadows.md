@@ -1171,15 +1171,15 @@ end 'main'
 ```
 
 <!-- test: stdlib-user-shadows.a-spawn-reaches-a-shadowed-library-type-by-its-qualified-name -->
-A program that declares its own `Range` spawns the library's `Range` as a service by writing
-`stdlib.Range`, the spelling a direct call and an `async` spawn accept.
+A program that declares its own `StringBuilder` spawns the library's `StringBuilder` as a service by writing
+`stdlib.StringBuilder`, the spelling a direct call and an `async` spawn accept.
 ```maxon
-type Range
+type StringBuilder
 	export var y as Count
-end 'Range'
+end 'StringBuilder'
 
 function main() returns ExitCode
-	_ = spawn stdlib.Range.create(1, finish: 4)
+	_ = spawn stdlib.StringBuilder.create()
 	return 0
 end 'main'
 ```
@@ -1195,10 +1195,10 @@ type TextLogHandler
 	export var y as Count
 end 'TextLogHandler'
 
-default LogHandler = spawn stdlib.TextLogHandler.create(LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false))
+default LogHandler = spawn stdlib.TextLogHandler.create(freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false))
 
 function main() returns ExitCode
-	let record = LogRecord.create(0, level: LogLevel.info, message: "up", attrs: LogFieldArray.create(0), file: "main.maxon", line: 1)
+	let record = freeze LogRecord.create(0, level: LogLevel.info.clone(), message: "up", attrs: LogFieldArray.create(0), file: "main.maxon", line: 1)
 	let written = try await LogHandler.current().handle(record) otherwise false
 	return 0 if written else 1
 end 'main'

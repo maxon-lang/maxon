@@ -5,18 +5,19 @@
 // cannot move what a worker answers (`RuntimeMovesSharedRecords`), and a compile tallying
 // allocations by tag, do the same worker's work on this thread (`FrontEndPlacement`).
 //
-// ⭐⭐ **WHAT MAKES A PARSE SAFE ON A WORKER IS A PRIVATE INDEX.** A parse reads the whole program's
-// signature index and writes into it while it runs (`ProgramSignatures.openParseBand`), so every
-// worker holds its own copy of the part of the settled baseline a parse writes, cloned by `adopt`
-// on the worker's own thread, and hands what the parse wrote back inside the artifact; the
-// fingerprint guard (`requireAtBaseline`) checks after every parse that the copy is at its baseline
-// again. The rest, `SettledDeclarations`, is one frozen record every worker reads. Everything else
-// a message carries — a file's bytes, its resolved tokens, its job and its row-set answers — is a
-// copy the send moves, so nothing else a worker reaches is reachable from any other thread.
+// ⭐⭐ **WHAT MAKES A PARSE SAFE ON A WORKER IS THAT IT WRITES ONLY INTO AN OVERLAY OF ITS OWN.** A
+// parse reads the whole program's signature index and writes into it while it runs
+// (`ProgramSignatures.openParseBand`), so a worker parses against `ProgramSignatures.overlaying`:
+// the published, read-only baseline (`FrontEndBaseline`) that every worker reads, plus tables the
+// parse alone writes. The overlay is built per file on the worker's own thread and dropped when the
+// parse ends, and what the parse wrote leaves inside the artifact. Everything else a message
+// carries — a file's bytes, its resolved tokens, its job and its row-set answers — is a copy the
+// send moves, so nothing else a worker reaches is reachable from any other thread.
 //
-// ⛔ **AND THE ARTIFACT HOLDS NO RECORD THE WORKER'S INDEX HOLDS.** The reply moves, so a record both held would
-// abort it (exit 96) — and would leave two threads stepping one count. The artifact's own doors take the copies
-// (`ParseStaging.artifactOwnedOp`), and `closeParseBand` copies what it hands out.
+// ⛔ **AND THE ARTIFACT HOLDS NO RECORD THE INDEX IT PARSED AGAINST HOLDS.** The answer moves, so a
+// record both held would abort it (exit 96) — and would leave two threads stepping one count. The
+// artifact's own doors take the copies (`ParseStaging.artifactOwnedOp`), and `closeParseBand`
+// copies what it hands out.
 //
 // ⭐⭐ **AND THE OUTPUT DOES NOT DEPEND ON THE POOL.** Nothing lands in arrival order: streams are memoized and
 // published, and parses are memoized, reported and merged, in SOURCE-PATH ORDER on this thread after the drain.
@@ -24,18 +25,19 @@
 // (`ProgramSignatures.adoptParseMints`), so no output can depend on which worker parsed a file or on what that
 // worker parsed before it (`tests/parallelCompile/front-end-byte-identical`).
 //
-// ⭐ **ONE POOL PER FRONT END, AND ONE INDEX COPY PER WORKER PER BASELINE.** `queryAllModule` opens the pool and
-// closes it on every exit, so the lex, the first fold, every refold and every body-demand round share its
-// workers — and every one of those folds parses against the same settled index, so a worker is handed its copy
-// once. Workers are spawned as a drain needs them rather than when the pool opens: the lex needs no index, and a
-// front end whose every file is memoized needs no worker at all.
+// ⭐ **ONE POOL PER FRONT END, AND ONE HANDOFF PER WORKER PER BASELINE.** `queryAllModule` opens the
+// pool and closes it on every exit, so the lex, the first fold, every refold and every body-demand
+// round share its workers — and every one of those folds parses against the same settled index, so
+// a worker is handed the baseline once. Workers are spawned as a drain needs them rather than when
+// the pool opens: the lex needs no index, and a front end whose every file is memoized needs no
+// worker at all.
 //
 // ⚠ **WHAT A WORKER STRUCTURALLY CANNOT DO** is `BackendPool`'s list: await, or be
 // handed a record a second frame still owns (E3138 at the send, exit 96 at run time).
 
 // A reply cell for each message that carries one. No message throws, so the promise names no error
 // type.
-typealias FrontEndReplyPromise = Promise with (FrontEndReply)
+typealias FrontEndReplyPromise = Promise with (FrontEndJob)
 typealias FrontEndReplyPromiseArray = Array with FrontEndReplyPromise
 typealias FrontEndWorkerHandleArray = Array with FrontEndWorker.handle
 
@@ -48,10 +50,11 @@ export typealias FrontEndWorkArray = Array with FrontEndWork
 typealias FrontEndOutcomeArray = Array with FrontEndOutcome
 typealias ParseQueryArray = Array with ParseQuery
 
-// At most one index: the baseline a pool's workers parse against, or a worker's own index adopted
-// from it.
+// At most one index: the baseline a pool parses against, or the index the in-process worker holds.
 typealias HeldIndexArray = Array with ProgramSignatures
 typealias WorkerHandoffArray = Array with WorkerHandoff
+typealias FrontEndBaselineArray = Array with FrontEndBaseline
+typealias LiveReachArray = Array with immutable LiveReach
 typealias LiveKeysRevisionArray = Array with LiveKeysRevision
 
 // The rows a worker measures, by the ordinal its costs are indexed with.
@@ -126,7 +129,8 @@ export union LexOutcome
 	end 'resolvedStream'
 end 'LexOutcome'
 
-// One file's work for a worker: its bytes to lex, or what its parse reads beside the worker's index.
+// One file's work for a worker: its bytes to lex, or what its parse reads beside the signature
+// index.
 export union FrontEndWork
 	lex(content String)
 	parse(let job ParseJob, let tokens TokenArray, let overrides RowSetOverrideTable)
@@ -138,101 +142,211 @@ export union FrontEndOutcome
 	parsed(outcome FileParseOutcome)
 end 'FrontEndOutcome'
 
-// One file's work on its way to a worker, in a one-slot holder the worker pops. The work lives as long as a
-// message argument does — until the reply is sent — and the reply holds slices of its bytes and tokens, so work
-// the argument still held would be a second owner of what the reply carries.
+// One file's work on its way to a worker, in a one-slot holder the worker pops, and its answer on
+// the way back in `answers`. The answer holds slices of the work's bytes and tokens, so work still
+// in the holder beside it would be a second owner of what the answer carries.
 export type FrontEndJob
 	export var holder as FrontEndWorkArray
+	export var answers as FrontEndAnswerArray
 
 	// ⭐ **EVERY RETURN IS `Self{…}`**, which is what makes a call to one of these the argument of a send (E3138).
-	//
-	// ⛔ **THE COPIES ARE TAKEN IN HERE, NOT BY THE CALLER.** A temporary the caller builds lives to the end of the
-	// sending statement, so the holder would share it with the sender's frame at the send's walk (exit 96); one
-	// built in this statement has died by the time the record is returned.
-	static function lexing(content String) returns FrontEndJob
+	static function holding(work FrontEndWork) returns FrontEndJob
 		var holder = FrontEndWorkArray.create(0)
-		holder.push(FrontEndWork.lex(content.clone()))
-		return Self{holder: holder}
+		holder.push(work)
+		return Self{holder: holder, answers: FrontEndAnswerArray.create(0)}
+	end 'holding'
+
+	static function awaitingWork() returns FrontEndJob
+		return Self{holder: FrontEndWorkArray.create(0), answers: FrontEndAnswerArray.create(0)}
+	end 'awaitingWork'
+
+	function takeWork() returns FrontEndWork
+		return try self.holder.pop() otherwise panic("FrontEndJob.takeWork: the job carried no work — `FrontEndJob` pushes exactly one")
+	end 'takeWork'
+
+	function takeAnswer() returns FrontEndAnswer
+		return try self.answers.pop() otherwise panic("FrontEndJob.takeAnswer: the job came back with no answer")
+	end 'takeAnswer'
+
+	// ⛔ **THE COPIES ARE TAKEN IN HERE AND IN `parsing`, NOT BY THE CALLER.** A temporary the caller
+	// builds lives to the end of the sending statement, so the holder would share it with the sender's
+	// frame at the send's walk (exit 96); one built in this statement has died by the time the record
+	// is returned.
+	static function lexing(content String) returns isolated FrontEndJob
+		return Self.holding(FrontEndWork.lex(content.clone()))
 	end 'lexing'
 
 	// The job's strings are the project's and the index's, the row-set answers are the database's, and the tokens
 	// are the memo's.
-	static function parsing(query ParseQuery) returns FrontEndJob
-		var holder = FrontEndWorkArray.create(0)
-
+	static function parsing(query ParseQuery) returns isolated FrontEndJob
 		match query 'query'
 			memoized then panic("FrontEndJob.parsing: a memoized parse was dispatched — only a `needed` query is noted as a job")
-			needed(job, tokens, overrides, _) then holder.push(FrontEndWork.parse(job.clone(), tokens: tokens.clone(), overrides: overrides.clone()))
+			needed(job, tokens, overrides, _) then return Self.holding(FrontEndWork.parse(job.clone(), tokens: tokens.clone(), overrides: overrides.clone()))
 		end 'query'
-
-		return Self{holder: holder}
 	end 'parsing'
 end 'FrontEndJob'
 
-// A reply's value is a record, never a union (E3140), so the outcome travels in one.
-export type FrontEndReply
+export typealias FrontEndAnswerArray = Array with FrontEndAnswer
+
+export type FrontEndAnswer
 	export var outcome as FrontEndOutcome
-
-	// ⭐ **EVERY RETURN IS `Self{…}`**, which is what lets a reply carry one of these (E3137).
-	static function create(outcome FrontEndOutcome) returns FrontEndReply
-		return Self{outcome: outcome}
-	end 'create'
-end 'FrontEndReply'
-
-// Everything one worker spent, as a record nothing else holds (a reply moves).
-export type FrontEndWorkerReport
 	export var costs as PoolPhaseCosts
 
-	static function of(costs PoolPhaseCosts) returns FrontEndWorkerReport
-		return Self{costs: PoolPhaseCosts.copyOf(costs)}
+	static function of(outcome FrontEndOutcome, costs PoolPhaseCosts) returns FrontEndAnswer
+		return Self{outcome: outcome, costs: costs}
 	end 'of'
-end 'FrontEndWorkerReport'
+end 'FrontEndAnswer'
 
-// ⭐⭐ **THE WORKER: a service around `FrontEndWorkerState`.**
+type FrontEndBaseline
+	export let declarations as SettledDeclarationsCell
+	export let template as IndexTemplateCell
+
+	static function of(declarations SettledDeclarationsCell, template IndexTemplateCell) returns FrontEndBaseline
+		return Self{declarations: declarations, template: template}
+	end 'of'
+end 'FrontEndBaseline'
+
+// ⭐⭐ **THE WORKER: a service around `FrontEndTools`.**
 //
 // ⚠ **IT IS HANDED `cpu`, `os` AND THE FLAG, NOT THE PROJECT'S `ConditionFacts`**, for `BackendWorker`'s reason:
 // a `spawn`'s factory arguments are MOVED, and the project keeps its `Target` for the rest of the compile.
 export type FrontEndWorker
-	var state as FrontEndWorkerState
+	let tools as FrontEndTools
+	var baselines as FrontEndBaselineArray
+	var reaches as LiveReachArray
+	var slot as isolated FrontEndJob
 
 	static function create(cpu CpuArch, os Os, debugStream bool) returns Self
-		return Self{state: FrontEndWorkerState.create(cpu, os: os, debugStream: debugStream)}
+		return Self{tools: FrontEndTools.create(cpu, os: os, debugStream: debugStream), baselines: FrontEndBaselineArray.create(0), reaches: LiveReachArray.create(0), slot: FrontEndJob.awaitingWork()}
 	end 'create'
 
 	// The messages. None awaits and none sends, which is what makes the blocking graph E3139 checks trivially
 	// acyclic: a pool worker is a leaf.
-	export function run(job FrontEndJob) returns FrontEndReply
-		return FrontEndReply.create(self.state.ran(job))
+	export function run(job isolated FrontEndJob) returns isolated FrontEndJob
+		let idle = swap self.slot with job
+
+		modify self.slot 'work'
+			var work = self.slot.takeWork()
+			let answer = self.answered(work)
+			self.slot.answers.push(answer)
+		end 'work'
+
+		return swap self.slot with idle
 	end 'run'
 
 	export function adopt(declarations SettledDeclarationsCell, template IndexTemplateCell)
-		self.state.hold(ProgramSignatures.adopting(declarations, template: template))
+		self.baselines.clear()
+		self.baselines.push(FrontEndBaseline.of(declarations, template: template))
+		self.reaches.clear()
 	end 'adopt'
 
-	export function adoptLiveReach(reach LiveReach)
-		self.state.adoptLiveReach(reach)
+	export function adoptLiveReach(reach immutable LiveReach)
+		self.reaches.clear()
+		self.reaches.push(reach)
 	end 'adoptLiveReach'
 
-	// ⚠ The index is released HERE, on the worker's own thread and awaited, rather than left to the drop of
-	// the last handle to this service. Dropping a handle only queues the service's finish, which runs when
-	// the scheduler next runs the service's runner, and the whole back end can pass before that — leaving one private index
-	// copy per worker alive across the backend peak. This is the one point where no later drain can want
-	// the copy back.
-	export function retire() returns FrontEndWorkerReport
-		self.state.releaseIndex()
-		return FrontEndWorkerReport.of(self.state.costs)
+	// ⚠ The baseline is released HERE, on the worker's own thread and awaited, rather than left to the
+	// drop of the last handle to this service. Dropping a handle only queues the service's finish,
+	// which runs when the scheduler next runs the service's runner, and the whole back end can pass
+	// before that — leaving the published baseline alive across the backend peak. This is the one
+	// point where no later drain can want it back.
+	export function retire() returns bool
+		let held = self.baselines.count() > 0
+		self.baselines.clear()
+		self.reaches.clear()
+		return held
 	end 'retire'
+
+	function answered(work FrontEndWork) returns FrontEndAnswer
+		var costs = PoolPhaseCosts.create(FrontEndStage.allCases.count())
+		var probe = PhaseProbe.beginCounters()
+		var outcome = self.outcomeOf(work, costs: costs, probe: probe)
+		return FrontEndAnswer.of(outcome, costs: costs)
+	end 'answered'
+
+	function outcomeOf(work FrontEndWork, costs PoolPhaseCosts, probe PhaseProbe) returns FrontEndOutcome
+		match work 'work'
+			lex(content) then return FrontEndOutcome.lexed(self.tools.lexed(content, edges: UntalliedEdges.create(), costs: costs, probe: probe))
+			parse(parseJob, tokens, overrides) then return FrontEndOutcome.parsed(self.tools.parsed(parseJob, tokens: tokens, overrides: overrides, index: self.privateIndex(), costs: costs, probe: probe))
+		end 'work'
+	end 'outcomeOf'
+
+	function privateIndex() returns ProgramSignatures
+		let baseline = try self.baselines.get(0) otherwise panic("FrontEndWorker.privateIndex: a parse reached a worker holding no baseline — the pool hands every worker its baseline before the first parse it dispatches")
+		var index = ProgramSignatures.overlaying(baseline.declarations, template: baseline.template)
+
+		if let reach = try self.reaches.get(0) 'filedSinceTheBaseline'
+			index.adoptLiveReach(reach)
+		end 'filedSinceTheBaseline'
+
+		return index
+	end 'privateIndex'
 end 'FrontEndWorker'
 
-// ⭐⭐ **WHAT A WORKER HOLDS AND DOES: its own keyword table, the build facts the `#if` filter reads, its private
-// signature index once adopted, and the per-stage costs.**
+// No edges to report: only the allocation tally watches them, and it is never handed a pooled
+// worker. A type of its own because `settleTo` is `mutable self`, which the worker's state inside
+// `run` cannot supply.
+type UntalliedEdges implements PhaseEdges
+	static function create() returns UntalliedEdges
+		return Self{}
+	end 'create'
+
+	export function settleTo(phase CompilePhase)
+		return
+	end 'settleTo'
+end 'UntalliedEdges'
+
+type FrontEndTools
+	var keywords as KeywordTable
+	var facts as ConditionFacts
+
+	static function create(cpu CpuArch, os Os, debugStream bool) returns FrontEndTools
+		return Self{keywords: KeywordTable.create(), facts: ConditionFacts.create(Target.create(cpu, os: os), debugStream: debugStream)}
+	end 'create'
+
+	// Each stage reports its end to `edges` right after its cost is recorded, failing or not, so the
+	// tally's intervals partition the lex. The first edge closes the gap before the lex into
+	// `frontEndPool`.
+	function lexed(content String, edges PhaseEdges, costs PoolPhaseCosts, probe PhaseProbe) returns LexOutcome
+		edges.settleTo(CompilePhase.frontEndPool)
+		probe.reopenCounters()
+
+		let tokens = try tokenize(content, keywords: self.keywords) otherwise (lexErr) 'lexFail'
+			costs.record(FrontEndStage.lex.ordinal, probe: probe)
+			edges.settleTo(CompilePhase.lex)
+			return LexOutcome.lexFailed(lexErr)
+		end 'lexFail'
+
+		costs.record(FrontEndStage.lex.ordinal, probe: probe)
+		edges.settleTo(CompilePhase.lex)
+		probe.reopenCounters()
+
+		let active = try filterConditionalTokens(tokens, facts: self.facts) otherwise (directiveErr) 'directiveFail'
+			costs.record(FrontEndStage.directives.ordinal, probe: probe)
+			edges.settleTo(CompilePhase.directives)
+			return LexOutcome.directiveFailed(tokens, error: directiveErr)
+		end 'directiveFail'
+
+		costs.record(FrontEndStage.directives.ordinal, probe: probe)
+		edges.settleTo(CompilePhase.directives)
+		return LexOutcome.lexed(tokens, active: active)
+	end 'lexed'
+
+	function parsed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, index ProgramSignatures, costs PoolPhaseCosts, probe PhaseProbe) returns FileParseOutcome
+		probe.reopenCounters()
+		let outcome = parseFile(job, tokens: tokens, overrides: overrides, signatures: index)
+		costs.record(FrontEndStage.parse.ordinal, probe: probe)
+		return outcome
+	end 'parsed'
+end 'FrontEndTools'
+
+// ⭐⭐ **WHAT THE IN-PROCESS FRONT END HOLDS AND DOES: its tools, its index, and the per-stage costs.**
 //
 // ⛔ **A TYPE OF ITS OWN, BECAUSE THE IN-PROCESS FRONT END MUST CALL NO MESSAGE.** A message's body walks what
 // crosses with it even when it is called directly, and a binary whose runtime cannot move a shared-record graph
 // aborts that walk (`FrontEndPool.RuntimeMovesSharedRecords`).
-type FrontEndWorkerState implements PhaseEdges
-	var keywords as KeywordTable
-	var facts as ConditionFacts
+type FrontEndWorkerState
+	var tools as FrontEndTools
 	var ownIndex as HeldIndexArray
 	export var costs as PoolPhaseCosts
 
@@ -241,7 +355,7 @@ type FrontEndWorkerState implements PhaseEdges
 	var probe as PhaseProbe
 
 	static function create(cpu CpuArch, os Os, debugStream bool) returns FrontEndWorkerState
-		return Self{keywords: KeywordTable.create(), facts: ConditionFacts.create(Target.create(cpu, os: os), debugStream: debugStream), ownIndex: HeldIndexArray.create(0), costs: PoolPhaseCosts.create(FrontEndStage.allCases.count()), probe: PhaseProbe.beginCounters()}
+		return Self{tools: FrontEndTools.create(cpu, os: os, debugStream: debugStream), ownIndex: HeldIndexArray.create(0), costs: PoolPhaseCosts.create(FrontEndStage.allCases.count()), probe: PhaseProbe.beginCounters()}
 	end 'create'
 
 	// The index every later parse reads, replacing any this worker held.
@@ -250,65 +364,22 @@ type FrontEndWorkerState implements PhaseEdges
 		self.ownIndex.push(index)
 	end 'hold'
 
-	function adoptLiveReach(reach LiveReach)
-		var index = try self.ownIndex.get(0) otherwise panic("FrontEndWorkerState.adoptLiveReach: a worker holding no index was sent live reach — the pool sends it only to a worker that adopted the baseline")
-		index.adoptLiveReach(reach)
-	end 'adoptLiveReach'
-
-	function releaseIndex()
-		self.ownIndex.clear()
-	end 'releaseIndex'
-
-	// ⛔ **POPPED, NOT READ** — see `FrontEndJob`.
 	function ran(job FrontEndJob) returns FrontEndOutcome
-		var work = try job.holder.pop() otherwise panic("FrontEndWorkerState.ran: the job carried no work — `FrontEndJob` pushes exactly one")
+		var work = job.takeWork()
 
 		match work 'work'
-			lex(content) then return FrontEndOutcome.lexed(self.lexed(content, edges: self))
+			lex(content) then return FrontEndOutcome.lexed(self.lexed(content, edges: UntalliedEdges.create()))
 			parse(parseJob, tokens, overrides) then return FrontEndOutcome.parsed(self.parsed(parseJob, tokens: tokens, overrides: overrides))
 		end 'work'
 	end 'ran'
 
-	// Each stage reports its end to `edges` right after its cost is recorded, failing or not, so the
-	// tally's intervals partition the lex. The first edge closes the gap before the lex into
-	// `frontEndPool`.
 	function lexed(content String, edges PhaseEdges) returns LexOutcome
-		edges.settleTo(CompilePhase.frontEndPool)
-		self.probe.reopenCounters()
-
-		let tokens = try tokenize(content, keywords: self.keywords) otherwise (lexErr) 'lexFail'
-			self.costs.record(FrontEndStage.lex.ordinal, probe: self.probe)
-			edges.settleTo(CompilePhase.lex)
-			return LexOutcome.lexFailed(lexErr)
-		end 'lexFail'
-
-		self.costs.record(FrontEndStage.lex.ordinal, probe: self.probe)
-		edges.settleTo(CompilePhase.lex)
-		self.probe.reopenCounters()
-
-		let active = try filterConditionalTokens(tokens, facts: self.facts) otherwise (directiveErr) 'directiveFail'
-			self.costs.record(FrontEndStage.directives.ordinal, probe: self.probe)
-			edges.settleTo(CompilePhase.directives)
-			return LexOutcome.directiveFailed(tokens, error: directiveErr)
-		end 'directiveFail'
-
-		self.costs.record(FrontEndStage.directives.ordinal, probe: self.probe)
-		edges.settleTo(CompilePhase.directives)
-		return LexOutcome.lexed(tokens, active: active)
+		return self.tools.lexed(content, edges: edges, costs: self.costs, probe: self.probe)
 	end 'lexed'
-
-	// No edges to report: only the allocation tally watches them, and it is never handed a pooled
-	// worker.
-	export function settleTo(phase CompilePhase)
-		return
-	end 'settleTo'
 
 	function parsed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable) returns FileParseOutcome
 		var index = try self.ownIndex.get(0) otherwise panic("FrontEndWorkerState.parsed: a parse reached a worker holding no index — the pool hands every worker its baseline before the first parse it dispatches")
-		self.probe.reopenCounters()
-		var outcome = parseFile(job, tokens: tokens, overrides: overrides, signatures: index)
-		self.costs.record(FrontEndStage.parse.ordinal, probe: self.probe)
-		return outcome
+		return self.tools.parsed(job, tokens: tokens, overrides: overrides, index: index, costs: self.costs, probe: self.probe)
 	end 'parsed'
 end 'FrontEndWorkerState'
 
@@ -371,16 +442,20 @@ module type FrontEndPool
 	// By worker slot: whether that worker holds a copy of `baseline`.
 	var adopted as BoolArray
 	var adoptions as ElementIndex
+	var overlayAllocations as AllocCount
 	var indexCopyAllocations as AllocCount
 	var baselineRevision as LiveKeysRevision
 	var heldRevisions as LiveKeysRevisionArray
+
+	// What the workers' answers spent, summed as they land.
+	var spent as PoolPhaseCosts
 
 	// Which stages ran on the workers, so only those rows are folded from them.
 	var lexed as bool
 	var parsed as bool
 
 	module static function create() returns FrontEndPool
-		return Self{workers: FrontEndWorkerHandleArray.create(0), inProcess: FrontEndWorkerStateArray.create(0), mostFilesDispatched: 0, baseline: HeldIndexArray.create(0), handoffs: WorkerHandoffArray.create(0), adopted: BoolArray.create(0), adoptions: 0, indexCopyAllocations: 0, baselineRevision: 0, heldRevisions: LiveKeysRevisionArray.create(0), lexed: false, parsed: false}
+		return Self{workers: FrontEndWorkerHandleArray.create(0), inProcess: FrontEndWorkerStateArray.create(0), mostFilesDispatched: 0, baseline: HeldIndexArray.create(0), handoffs: WorkerHandoffArray.create(0), adopted: BoolArray.create(0), adoptions: 0, overlayAllocations: 0, indexCopyAllocations: 0, baselineRevision: 0, heldRevisions: LiveKeysRevisionArray.create(0), spent: PoolPhaseCosts.create(FrontEndStage.allCases.count()), lexed: false, parsed: false}
 	end 'create'
 
 	static function placement(project Project) returns FrontEndPlacement
@@ -506,6 +581,7 @@ module type FrontEndPool
 
 		if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
 			logCompilerDebugSettled("{sizing.line(PoolKind.frontEnd)}, {self.adoptions} adopted")
+			logCompilerDebugSettled("front end index overlay: {self.overlayAllocations} allocations")
 			logCompilerDebugSettled("front end index copy: {self.indexCopyAllocations} allocations")
 		end 'debugging'
 	end 'reportWorkerPool'
@@ -534,16 +610,18 @@ module type FrontEndPool
 			inProcessForTally then self.reportInProcess(filesDispatched, placement: placement)
 		end 'placement'
 
-		for slot in 0 upto self.workers.count() 'eachReport'
+		for slot in 0 upto self.workers.count() 'eachRetirement'
 			var worker = try self.workers.get(slot) otherwise panic("FrontEndPool.close: workers.get OOB at {slot} below count {self.workers.count()}")
-			let report = try await worker.retire() otherwise panic("{workerGoneMessage("FrontEndPool.close", subject: "worker {slot}")}")
-			self.foldCosts(project, costs: report.costs)
-		end 'eachReport'
+			_ = try await worker.retire() otherwise panic("{workerGoneMessage("FrontEndPool.close", subject: "worker {slot}")}")
+		end 'eachRetirement'
+
+		self.foldCosts(project, costs: self.spent)
 
 		if let worker = try self.inProcess.get(0) 'ranInProcess'
 			self.foldCosts(project, costs: worker.costs)
 		end 'ranInProcess'
 
+		self.spent = PoolPhaseCosts.create(FrontEndStage.allCases.count())
 		project.retiredWorkers.frontEnd.keep(self.workers)
 		self.workers = FrontEndWorkerHandleArray.create(0)
 		self.inProcess.clear()
@@ -565,8 +643,9 @@ module type FrontEndPool
 		end 'eachMissingWorker'
 	end 'requireWorkers'
 
-	// Parse against `signatures` from now on. A worker already holding a copy of this very index keeps it, so the
-	// folds that follow against the same index copy nothing but the live keys (`refreshLiveKeys`).
+	// Parse against `signatures` from now on. A worker already holding the baseline of this very index
+	// keeps it, so the folds that follow against the same index hand a worker nothing but the live
+	// keys (`refreshLiveKeys`).
 	//
 	// The handoff is taken while `signatures` is at its settled baseline: the fold restores it before
 	// it parses, and a drain writes nothing into it.
@@ -595,14 +674,15 @@ module type FrontEndPool
 		let handoff = WorkerHandoff.of(signatures, os: os)
 
 		if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'measuringACopy'
-			self.indexCopyAllocations = handoff.template.current().signatures.copyAllocations()
+			self.overlayAllocations = ProgramSignatures.overlayAllocations(handoff.declarations, template: handoff.template)
+			self.indexCopyAllocations = handoff.template.current().base.copyAllocations()
 		end 'measuringACopy'
 
 		self.handoffs.push(handoff)
 	end 'pushHandoff'
 
-	// The worker clones its index on its own thread (`FrontEndWorker.adopt`); this thread hands over
-	// two handles, so no worker's first parse waits behind another worker's copy.
+	// This thread hands a worker two handles to the published baseline (`FrontEndWorker.adopt`); the
+	// worker builds each parse's overlay on its own thread (`FrontEndWorker.privateIndex`).
 	function requireAdopted(workerSlot ElementIndex)
 		let holdsTheBaseline = try self.adopted.get(workerSlot) otherwise panic("FrontEndPool.requireAdopted: adopted.get OOB at {workerSlot} below count {self.adopted.count()}")
 
@@ -624,7 +704,7 @@ module type FrontEndPool
 	end 'requireAdopted'
 
 	// A fold moves the live keys without re-sweeping the index, so a worker takes them as a small
-	// update rather than a fresh copy of the whole index.
+	// update rather than a new baseline.
 	function refreshLiveKeys(workerSlot ElementIndex)
 		let held = try self.heldRevisions.get(workerSlot) otherwise panic("FrontEndPool.refreshLiveKeys: heldRevisions.get OOB at {workerSlot} below count {self.heldRevisions.count()}")
 
@@ -632,7 +712,7 @@ module type FrontEndPool
 			return
 		end 'current'
 
-		try self.workerAt(workerSlot).adoptLiveReach(self.baselineIndex().liveReach().clone()) otherwise panic("{workerRefusedSendMessage("FrontEndPool.refreshLiveKeys", subject: "the worker in slot {workerSlot}")}")
+		try self.workerAt(workerSlot).adoptLiveReach(freeze self.baselineIndex().liveReach().clone()) otherwise panic("{workerRefusedSendMessage("FrontEndPool.refreshLiveKeys", subject: "the worker in slot {workerSlot}")}")
 		try self.heldRevisions.set(workerSlot, value: self.baselineRevision) otherwise panic("FrontEndPool.refreshLiveKeys: heldRevisions.set OOB at {workerSlot} below count {self.heldRevisions.count()}")
 	end 'refreshLiveKeys'
 
@@ -701,8 +781,6 @@ module type FrontEndPool
 	// ⭐⭐ **THE DISPATCH LOOP: fill the pipeline, then serve whoever finished first.** The protocol is
 	// `PoolDispatch`'s, shared with the backend's two pools.
 	function drain(project Project, input FrontEndDrainInput, files PoolJobArray, sizes PoolJobSizeArray, workerCount PoolSize, outcomes FrontEndOutcomeArray, slots LandingSlots) throws CompileError
-		// A static share: a worker parses into its own copy of what a parse writes in the signature
-		// index, kept across the files it is handed, and that copy is too costly to rebuild per file.
 		var dispatch = PoolDispatch.create(sizes, workerCount: workerCount, assignment: PoolAssignment.staticShare)
 		var replies = FrontEndReplyPromiseArray.create(dispatch.pipelineDepth(), zeroed: false)
 
@@ -715,7 +793,9 @@ module type FrontEndPool
 			let freedWorker = dispatch.workerAt(ready)
 			let fileIndex = fileOfJob(files, job: dispatch.land(ready, outstanding: replies.count()))
 			let reply = try replies.remove(ready) otherwise panic("FrontEndPool.drain: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
-			let answer = await reply
+			var unit = await reply
+			var answer = unit.takeAnswer()
+			self.noteCosts(answer.costs)
 			landOutcome(answer.outcome, fileIndex: fileIndex, outcomes: outcomes, slots: slots)
 
 			if dispatch.hasUndispatchedFor(freedWorker) 'handTheFreedWorkerTheNextJob'
@@ -738,11 +818,17 @@ module type FrontEndPool
 		return try self.workers.get(workerSlot) otherwise panic("FrontEndPool.workerAt: workers.get OOB at {workerSlot} below count {self.workers.count()}")
 	end 'workerAt'
 
-	// The worker at `workerSlot`, holding its copy of the baseline.
+	// The worker at `workerSlot`, holding the baseline.
 	function adoptedWorkerAt(workerSlot ElementIndex) returns FrontEndWorker.handle
 		self.requireAdopted(workerSlot)
 		return self.workerAt(workerSlot)
 	end 'adoptedWorkerAt'
+
+	function noteCosts(costs PoolPhaseCosts)
+		for stage in FrontEndStage.allCases 'eachStage'
+			self.spent.add(stage.ordinal, delta: costs.accumulated(stage.ordinal))
+		end 'eachStage'
+	end 'noteCosts'
 
 	function foldCosts(project Project, costs PoolPhaseCosts)
 		for stage in FrontEndStage.allCases 'eachStage'
@@ -758,11 +844,11 @@ function lexInProcess(project Project, worker FrontEndWorkerState, content Strin
 		return FrontEndOutcome.lexed(worker.lexed(content, edges: project.memory.allocTally))
 	end 'tallied'
 
-	return worker.ran(FrontEndJob.lexing(content))
+	return worker.ran(merge FrontEndJob.lexing(content))
 end 'lexInProcess'
 
 function parseInProcess(project Project, worker FrontEndWorkerState, query ParseQuery) returns FrontEndOutcome
-	var job = FrontEndJob.parsing(query)
+	var job = merge FrontEndJob.parsing(query)
 
 	if not project.allocationsByTag 'untallied'
 		return worker.ran(job)
@@ -804,10 +890,10 @@ function noteJob(fileIndex ElementIndex, size PoolJobSize, files PoolJobArray, s
 	sizes.push(size)
 end 'noteJob'
 
-// ⭐ **HOW MANY OF THE POOL'S WORKERS A PARSE DRAIN USES: as many as carry the whole work in the time of its longest
-// file, `ceil(total / longest)`, up to the pool.** No drain ends before its longest parse does, so a worker past that
-// count shortens nothing — and each worker a drain uses costs this thread a copy of the whole index before its first
-// parse (`requireAdopted`).
+// ⭐ **HOW MANY OF THE POOL'S WORKERS A PARSE DRAIN USES: as many as carry the whole work in the
+// time of its longest file, `ceil(total / longest)`, up to the pool.** No drain ends before its
+// longest parse does, so a worker past that count shortens nothing — and each worker a drain uses
+// costs this thread a baseline handoff before its first parse (`requireAdopted`).
 function parseDrainWorkerCount(sizes PoolJobSizeArray, poolSize PoolSize) returns PoolSize
 	var total = 0 as PoolJobSize
 	var longest = 0 as PoolJobSize

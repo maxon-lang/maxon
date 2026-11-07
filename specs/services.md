@@ -88,6 +88,11 @@ owner outside the graph (a record the graph reaches twice is legal when both ref
 immortal literal has no count and passes), a shared copy-on-write buffer is detached, and a RECORD with an
 owner outside the graph aborts the process with exit **96** rather than hand one box to two green threads.
 
+A message parameter, a reply or a factory parameter whose type is a record, a union that carries data, a container
+or an interface value names how it crosses (**E3217**, specified in `service-message-capabilities`): `isolated` moves a
+value the sender built for this one send, so a graph with an owner outside it is refused at the argument, and
+`immutable` shares a frozen value that both threads only read.
+
 ### A send can fail
 
 A service can be gone and a mailbox can be full, so every send is a throwing call. It fails AT the send, with
@@ -713,7 +718,7 @@ type Sink
 		return Self{n: 0}
 	end 'create'
 
-	export function take(ps PromiseArray)
+	export function take(ps isolated PromiseArray)
 		self.n = self.n + (1 if ps.isEmpty() else 2)
 	end 'take'
 end 'Sink'
@@ -745,7 +750,7 @@ type Sink
 		return Self{n: 0}
 	end 'create'
 
-	export function take(ps PromiseArray)
+	export function take(ps isolated PromiseArray)
 		self.n = self.n + (1 if ps.isEmpty() else 2)
 	end 'take'
 end 'Sink'
@@ -781,7 +786,7 @@ type Sink
 		return Self{n: 0}
 	end 'create'
 
-	export function take(s Slot)
+	export function take(s isolated Slot)
 		match s 'slot'
 			idle then self.n = self.n + 1
 			held then self.n = self.n + 2
@@ -826,7 +831,7 @@ type Sink
 		return Self{n: 0}
 	end 'create'
 
-	export function make() returns Holder
+	export function make() returns isolated Holder
 		return Holder.create()
 	end 'make'
 end 'Sink'
@@ -898,7 +903,7 @@ end 'Holder'
 type Sink
 	var n as Integer
 
-	static function create(h Holder) returns Self
+	static function create(h isolated Holder) returns Self
 		let done = h.held.isComplete()
 		return Self{n: 1 if done else 0}
 	end 'create'
@@ -945,7 +950,7 @@ type Calc
 		return Self{count: 0}
 	end 'create'
 
-	export function measure(s Shape)
+	export function measure(s isolated Shape)
 		self.count = self.count + s.area()
 	end 'measure'
 
@@ -2429,7 +2434,7 @@ type Store
 		return Self{n: 0, tag: tag}
 	end 'create'
 
-	export function keep(w Wrap)
+	export function keep(w immutable Wrap)
 		match w 'm'
 			held(t) then self.take(t)
 			empty then self.n = self.n + 100
@@ -2456,10 +2461,10 @@ function describe(w Wrap)
 	end 'again'
 end 'describe'
 
-function offer(h Store.handle, other Store.handle, w Wrap)
+function offer(h Store.handle, other Store.handle, w immutable Wrap)
 	try h.keep(w) otherwise (e) 'refused'
 		match e 'why'
-			mailboxFull(back) then try other.keep(back) otherwise panic("a service with room takes the send")
+			mailboxFull(back) then try other.keep(freeze back.clone()) otherwise panic("a service with room takes the send")
 			serviceStopped then panic("the service is running")
 		end 'why'
 	end 'refused'
@@ -2468,7 +2473,7 @@ end 'offer'
 function main() returns ExitCode
 	let h = spawn(capacity: 1) Store.create(1)
 	let other = spawn Store.create(2)
-	let first = Wrap.held("first{1}")
+	let first = freeze Wrap.held("first{1}")
 
 	for _ in 0 upto 3 'many'
 		offer(h, other: other, w: first)
@@ -2512,7 +2517,7 @@ type Store
 		return Self{n: 0}
 	end 'create'
 
-	export function keep(w Wrap)
+	export function keep(w immutable Wrap)
 		match w 'm'
 			held(t) then print("kept {t}\n")
 			empty then self.n = self.n + 100
@@ -2527,20 +2532,20 @@ function describe(w Wrap)
 	end 'again'
 end 'describe'
 
-function offer(h Store.handle, w Wrap) throws Store.keep.sendError
+function offer(h Store.handle, w immutable Wrap) throws Store.keep.sendError
 	try h.keep(w)
 end 'offer'
 
 function main() returns ExitCode
 	let h = spawn(capacity: 1) Store.create()
 	let other = spawn Store.create()
-	let first = Wrap.held("first{1}")
+	let first = freeze Wrap.held("first{1}")
 
 	try offer(h, w: first) otherwise panic("a capacity of one takes the first send")
 
 	try offer(h, w: first) otherwise (e) 'refused'
 		match e 'why'
-			mailboxFull(back) then try other.keep(back) otherwise panic("a service with room takes the send")
+			mailboxFull(back) then try other.keep(freeze back.clone()) otherwise panic("a service with room takes the send")
 			serviceStopped then return 1
 		end 'why'
 	end 'refused'
@@ -2617,12 +2622,12 @@ type Door
 		return Self{seen: 0}
 	end 'create'
 
-	export function look(h Holder)
+	export function look(h immutable Holder)
 		self.seen = self.seen + h.measure()
 	end 'look'
 end 'Door'
 
-function offer(h Door.handle, held Holder)
+function offer(h Door.handle, held immutable Holder)
 	try h.look(held) otherwise (e) 'refused'
 		match e 'why'
 			serviceStopped(back) then print("stopped, handed back a holder measuring {back.measure()}\n")
@@ -2635,7 +2640,7 @@ function main() returns ExitCode
 	let h = spawn Door.create()
 	h.shutdown()
 
-	let holder = Holder.create(Plain.create())
+	let holder = freeze Holder.create(Plain.create())
 	offer(h, held: holder)
 	print("the original measures {holder.measure()}\n")
 
@@ -4726,19 +4731,19 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Payload) returns Integer
+	export function keep(p immutable Payload) returns Integer
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
 end 'Store'
 
-function forward(h Store.handle, p Payload) returns Integer
+function forward(h Store.handle, p immutable Payload) returns Integer
 	return (try await h.keep(p) otherwise 0) + p.n
 end 'forward'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	let p = Payload.create(7)
+	let p = freeze Payload.create(7)
 	let total = forward(h, p: p)
 	print("{total} {p.n}\n")
 	return 0
@@ -4771,7 +4776,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Payload) returns Integer
+	export function keep(p isolated Payload) returns Integer
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -4790,7 +4795,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:25:26: argument `p` of the message `Store.keep` is a PARAMETER this function writes. A parameter nothing here writes is shared with the service — both threads read one record and every count in it steps atomically — but a record this function writes would change under the service while it reads. Send a `.clone()`, or stop writing the parameter
+error E3200: <fragment>:25:26: 'p' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: error.a-borrowed-parameter-the-handler-writes-may-not-be-sent -->
@@ -4812,8 +4817,11 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function bump(p Payload) returns Integer
-		p.n = p.n + 1
+	export function bump(p isolated Payload) returns Integer
+		modify p 'write'
+			p.n = p.n + 1
+		end 'write'
+
 		self.seen = self.seen + 1
 		return p.n
 	end 'bump'
@@ -4831,12 +4839,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:25:26: argument `p` of the message `Store.bump` is a PARAMETER shared with the service, and the handler `Store.bump` writes or keeps its parameter `p`. A record both threads reach may be written by neither. Send a `.clone()`, or make `Store.bump` only read `p`
+error E3200: <fragment>:28:26: 'p' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: error.a-var-read-again-is-not-handed-to-a-function-that-sends-it-shared -->
-`forward` shares its parameter with the service, so the value a caller hands it must have no other writer. A `var`
-the caller reads again has one.
+`forward` sends its parameter to the service, which owns it afterwards, so a binding the caller reads again is a
+moved value.
 ```maxon
 type Payload
 	export var n as Integer
@@ -4853,27 +4861,26 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Payload) returns Integer
+	export function keep(p isolated Payload) returns Integer
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
 end 'Store'
 
-function forward(h Store.handle, p Payload) returns Integer
+function forward(h Store.handle, p isolated Payload) returns Integer
 	return try await h.keep(p) otherwise 0
 end 'forward'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var p = Payload.create(7)
+	let p = Payload.create(7) as isolated Payload
 	let total = forward(h, p: p)
-	p.n = 9
 	return (total + p.n) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:30:14: cannot pass the `var` 'p', which is read again, to parameter 'p' of 'forward', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+error E3102: <fragment>:31:18: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: a-module-let-record-is-shared-with-the-service -->
@@ -4896,17 +4903,16 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Payload) returns Integer
+	export function keep(p immutable Payload) returns Integer
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
 end 'Store'
 
-let Shared = Payload.create(7)
-
 function main() returns ExitCode
 	let h = spawn Store.create()
-	let total = (try await h.keep(Shared) otherwise 0) + Shared.n
+	let shared = freeze Payload.create(7)
+	let total = (try await h.keep(shared) otherwise 0) + shared.n
 	print("{total}\n")
 	return 0
 end 'main'
@@ -4932,10 +4938,10 @@ type Payload
 end 'Payload'
 
 type Holder
-	export let payload as Payload
+	export let payload as immutable Payload
 
 	static function create(n Integer) returns Self
-		return Self{payload: Payload.create(n)}
+		return Self{payload: freeze Payload.create(n)}
 	end 'create'
 end 'Holder'
 
@@ -4946,7 +4952,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Payload) returns Integer
+	export function keep(p immutable Payload) returns Integer
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -4987,23 +4993,22 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function bump(p Payload) returns Integer
+	export function bump(p immutable Payload) returns Integer
 		p.n = p.n + 1
 		self.seen = self.seen + 1
 		return p.n
 	end 'bump'
 end 'Store'
 
-let Shared = Payload.create(7)
-
 function main() returns ExitCode
 	let h = spawn Store.create()
-	return (try await h.bump(Shared) otherwise 0) as ExitCode
+	let shared = freeze Payload.create(7)
+	return (try await h.bump(shared) otherwise 0) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:28:27: argument `p` of the message `Store.bump` is a read-only value shared with the service, and the handler `Store.bump` writes or keeps its parameter `p`. A record both threads reach may be written by neither. Send a `.clone()`, or make `Store.bump` only read `p`
+error E3197: <fragment>:18:3: cannot write 'n' through 'p', which is immutable
 ```
 
 <!-- test: a-shared-value-read-is-shared-with-the-service -->
@@ -5025,7 +5030,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(c Config) returns Integer
+	export function keep(c immutable Config) returns Integer
 		self.seen = self.seen + 1
 		return c.n
 	end 'keep'
@@ -5034,7 +5039,8 @@ end 'Store'
 function main() returns ExitCode
 	let cell = ConfigCell.create(Config.create(7))
 	let h = spawn Store.create()
-	let total = (try await h.keep(cell.current()) otherwise 0) + cell.current().n
+	let shared = freeze cell.current().clone()
+	let total = (try await h.keep(shared) otherwise 0) + cell.current().n
 	print("{total}\n")
 	return 0
 end 'main'
@@ -5067,7 +5073,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function bump(c Config) returns Integer
+	export function bump(c immutable Config) returns Integer
 		c.n = c.n + 1
 		self.seen = self.seen + 1
 		return c.n
@@ -5077,13 +5083,14 @@ end 'Store'
 function main() returns ExitCode
 	let cell = ConfigCell.create(Config.create(7))
 	let h = spawn Store.create()
-	return (try await h.bump(cell.current()) otherwise 0) as ExitCode
+	let shared = freeze cell.current().clone()
+	return (try await h.bump(shared) otherwise 0) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 typealias ConfigCell = SharedValue with Config
 ```
 ```maxoncstderr
-error E3138: <fragment>:27:27: argument `c` of the message `Store.bump` is a read-only value shared with the service, and the handler `Store.bump` writes or keeps its parameter `c`. A record both threads reach may be written by neither. Send a `.clone()`, or make `Store.bump` only read `c`
+error E3197: <fragment>:18:3: cannot write 'n' through 'c', which is immutable
 ```
 
 <!-- test: error.a-service-is-rejected-on-wasm -->
@@ -5150,7 +5157,7 @@ type Plot
 		return Self{n: 0}
 	end 'create'
 
-	export function at(p Point)
+	export function at(p isolated Point)
 		self.n = self.n + 1
 		print("at {p.x},{p.y} ({self.n})\n")
 	end 'at'
@@ -5205,8 +5212,8 @@ end 'Holder'
 type Svc
 	var held as Holder
 
-	static function create(held Holder) returns Self
-		return Self{held: held}
+	static function create(held isolated Holder) returns Self
+		return Self{held: merge held}
 	end 'create'
 
 	export function report()
@@ -5242,11 +5249,15 @@ type Source
 		return Self{n: 0}
 	end 'create'
 
-	export function values() returns IntegerArray
-		var xs = IntegerArray.create(0)
-		xs.push(1)
-		xs.push(2)
-		xs.push(3)
+	export function values() returns isolated IntegerArray
+		var xs = IntegerArray.create(0) as isolated IntegerArray
+
+		modify xs 'fill'
+			xs.push(1)
+			xs.push(2)
+			xs.push(3)
+		end 'fill'
+
 		return xs
 	end 'values'
 end 'Source'
@@ -5285,7 +5296,7 @@ type Author
 		return Self{n: 0}
 	end 'create'
 
-	export function write(k Integer) returns Note
+	export function write(k Integer) returns isolated Note
 		return Note.create(k)
 	end 'write'
 end 'Author'
@@ -5305,12 +5316,9 @@ typealias Integer = int(i64.min to i64.max)
 note 4
 ```
 
-<!-- test: deepmove.abort.a-reply-holding-a-shared-record-aborts -->
-The refusal on the reply road. The reply's root is a `CellArray` the handler mints in its own frame, so the
-static E3137 rule admits it; what the walk finds inside is the `Cell` the service's state still owns —
-`push` takes its own reference to the element, so that one record has two owners, the state and the reply. Handing it
-across would put one box in two green threads' hands with a plain reference count between them, so the move
-aborts with `RuntimeAbort` exit **96** and nothing reaches the awaiter.
+<!-- test: deepmove.error.a-reply-holding-a-shared-record-is-refused -->
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 type Cell
 	export var n as Integer
@@ -5332,7 +5340,7 @@ type Store
 		return Self{cells: cells}
 	end 'create'
 
-	export function snapshot() returns CellArray
+	export function snapshot() returns isolated CellArray
 		var out = CellArray.create(0)
 		let first = try self.cells.get(0) otherwise Cell.create()
 		out.push(first)
@@ -5347,11 +5355,8 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3200: <fragment>:26:10: 'out' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted. Declare it `as isolated CellArray`, or pass a copy
 ```
 
 <!-- test: deepmove.a-container-crosses-with-its-elements -->
@@ -5378,7 +5383,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(cs CellArray)
+	export function take(cs isolated CellArray)
 		var sum = 0 as Integer
 		for c in cs 'each'
 			sum = sum + c.n
@@ -5389,9 +5394,13 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var cs = CellArray.create(0)
-	cs.push(Cell.create())
-	cs.push(Cell.create())
+	var cs = CellArray.create(0) as isolated CellArray
+
+	modify cs 'fill'
+		cs.push(Cell.create())
+		cs.push(Cell.create())
+	end 'fill'
+
 	let h = spawn Svc.create()
 	try h.take(cs) otherwise panic("an open mailbox with room takes the send")
 	return 0
@@ -5406,13 +5415,9 @@ svc 2
 sum 2
 ```
 
-<!-- test: deepmove.abort.a-container-holding-a-shared-record-aborts-at-the-send -->
-The refusal the walk exists to make. `cell` is owned by `main`'s binding and by `cs` at once — `push`
-increfs — and `main` reads it back after the send, so handing the array across would leave one box with a
-plain refcount on two green threads. The root `cs` is this frame's alone, so no static arm can see the
-second owner; the walk finds the `Cell` at a count of 2 and aborts the process before anything is enqueued —
-`RuntimeAbort` exit **96** on the sender's own green thread. No processor count is
-involved: nothing has crossed yet.
+<!-- test: deepmove.error.a-container-holding-a-shared-record-is-refused-at-the-send -->
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 type Cell
 	export var n as Integer
@@ -5431,7 +5436,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(cs CellArray)
+	export function take(cs isolated CellArray)
 		print("svc {cs.count()}\n")
 	end 'take'
 end 'Svc'
@@ -5446,11 +5451,8 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3200: <fragment>:29:13: 'cs' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: deepmove.a-cloned-array-detaches-its-shared-buffer-at-the-send -->
@@ -5469,7 +5471,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(xs IntegerArray) returns Integer
+	export function take(xs isolated IntegerArray) returns Integer
 		for x in xs 'each'
 			print("svc {x}\n")
 		end 'each'
@@ -5482,7 +5484,7 @@ function main() returns ExitCode
 	a.push(1)
 	a.push(2)
 	a.push(3)
-	let b = a.clone()
+	let b = a.clone() as isolated IntegerArray
 	let h = spawn Svc.create()
 	let n = try await h.take(b) otherwise 0
 	for x in a 'each'
@@ -5698,7 +5700,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(xs Texts)
+	export function take(xs isolated Texts)
 		for x in xs 'each'
 			print("svc {x}\n")
 		end 'each'
@@ -5706,9 +5708,13 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var xs = Texts.create()
-	xs.append("a {1}")
-	xs.append("b {2}")
+	var xs = Texts.create() as isolated Texts
+
+	modify xs 'fill'
+		xs.append("a {1}")
+		xs.append("b {2}")
+	end 'fill'
+
 	let h = spawn Svc.create()
 	try h.take(xs) otherwise panic("an open mailbox with room takes the send")
 	return 0
@@ -5723,10 +5729,9 @@ svc a 1
 svc b 2
 ```
 
-<!-- test: deepmove.abort.a-chain-holding-a-shared-record-aborts -->
-The chain's refusal, and the element half of the walk is what finds it: `append` increfs the `Cell` it is
-handed, `main` reads it back afterwards, and the chain's own record and nodes are all sole — so only a walk
-that descends into the NODE's element sees the second owner. Exit **96** on the sender's own green thread.
+<!-- test: deepmove.error.a-chain-holding-a-shared-record-is-refused -->
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 type Cell
 	export var n as Integer
@@ -5745,7 +5750,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(xs Cells)
+	export function take(xs isolated Cells)
 		print("svc {xs.count()}\n")
 	end 'take'
 end 'Svc'
@@ -5760,11 +5765,8 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3200: <fragment>:29:13: 'xs' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: deepmove.a-map-crosses-with-its-keys-and-values -->
@@ -5781,7 +5783,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(m Names)
+	export function take(m isolated Names)
 		print("svc {m.count()}\n")
 		let v = try m.get("a 1") otherwise "missing"
 		print("got {v}\n")
@@ -5789,8 +5791,12 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var m = Names.create()
-	m.upsert("a {1}", value: "x {2}")
+	var m = Names.create() as isolated Names
+
+	modify m 'fill'
+		m.upsert("a {1}", value: "x {2}")
+	end 'fill'
+
 	let h = spawn Svc.create()
 	try h.take(m) otherwise panic("an open mailbox with room takes the send")
 	return 0
@@ -5805,9 +5811,9 @@ svc 1
 got x 2
 ```
 
-<!-- test: deepmove.abort.a-map-holding-a-shared-value-aborts -->
-The same refusal two containers down: `upsert` increfs the `Cell` into the value column, `main` reads it
-back, and the walk finds that one record at two owners. Exit **96**.
+<!-- test: deepmove.error.a-map-holding-a-shared-value-is-refused -->
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 type Cell
 	export var n as Integer
@@ -5826,7 +5832,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(m Cells)
+	export function take(m isolated Cells)
 		print("svc {m.count()}\n")
 	end 'take'
 end 'Svc'
@@ -5841,11 +5847,8 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3200: <fragment>:29:13: 'm' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: deepmove.a-map-releases-a-removed-entry-so-the-map-crosses -->
@@ -5863,18 +5866,23 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(m Texts) returns Integer
+	export function take(m isolated Texts) returns Integer
 		return m.count() as Integer
 	end 'take'
 end 'Svc'
 
 function main() returns ExitCode
-	var m = Texts.create()
+	var m = Texts.create() as isolated Texts
 	let key = "gone {1}"
 	let text = "value {7}"
-	m.upsert(key, value: text)
-	m.upsert("kept {2}", value: "value {8}")
-	let removed = m.remove(key)
+	var removed = false
+
+	modify m 'fill'
+		m.upsert(key, value: text)
+		m.upsert("kept {2}", value: "value {8}")
+		removed = m.remove(key)
+	end 'fill'
+
 	let h = spawn Svc.create()
 	let n = try await h.take(m) otherwise 0
 	print("removed {removed}, the service holds {n}, main still reads {key} and {text}\n")
@@ -5918,16 +5926,21 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(s Cells) returns Integer
+	export function take(s isolated Cells) returns Integer
 		return s.count() as Integer
 	end 'take'
 end 'Svc'
 
 function main() returns ExitCode
-	var s = Cells.create()
+	var s = Cells.create() as isolated Cells
 	let cell = Cell.create(1)
-	s.insert(cell)
-	let removed = s.remove(cell)
+	var removed = false
+
+	modify s 'fill'
+		s.insert(cell.clone())
+		removed = s.remove(cell)
+	end 'fill'
+
 	let h = spawn Svc.create()
 	let n = try await h.take(s) otherwise 0
 	print("removed {removed}, the service holds {n}, main still reads {cell.n}\n")
@@ -5963,19 +5976,26 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(m Cells) returns Integer
-		let kept = try m.get("kept 2") otherwise panic("the kept entry crossed with the map")
-		return (m.count() as Integer) + kept.n
+	export function take(m isolated Cells) returns Integer
+		let ownedM = merge m
+
+		let kept = try ownedM.get("kept 2") otherwise panic("the kept entry crossed with the map")
+		return (ownedM.count() as Integer) + kept.n
 	end 'take'
 end 'Svc'
 
 function main() returns ExitCode
-	var m = Cells.create()
+	var m = Cells.create() as isolated Cells
 	let key = "gone {1}"
 	var cell = Cell.create(7)
-	m.upsert(key, value: cell)
-	m.upsert("kept {2}", value: Cell.create(8))
-	let removed = m.remove(key)
+	var removed = false
+
+	modify m 'fill'
+		m.upsert(key, value: cell.clone())
+		m.upsert("kept {2}", value: Cell.create(8))
+		removed = m.remove(key)
+	end 'fill'
+
 	let h = spawn Svc.create()
 	let n = try await h.take(m) otherwise 0
 	cell.n = cell.n + 1
@@ -6003,7 +6023,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(s Names) returns Integer
+	export function take(s isolated Names) returns Integer
 		if s.contains("kept 2") 'kept'
 			return s.count() as Integer
 		end 'kept'
@@ -6013,11 +6033,16 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var s = Names.create()
+	var s = Names.create() as isolated Names
 	let gone = "gone {1}"
-	s.insert(gone)
-	s.insert("kept {2}")
-	let removed = s.remove(gone)
+	var removed = false
+
+	modify s 'fill'
+		s.insert(gone)
+		s.insert("kept {2}")
+		removed = s.remove(gone)
+	end 'fill'
+
 	let h = spawn Svc.create()
 	let n = try await h.take(s) otherwise 0
 	print("removed {removed}, the service holds {n}, main still reads {gone}\n")
@@ -6052,15 +6077,21 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(m Cells) returns Integer
-		let kept = try m.get("kept 2") otherwise panic("the kept entry crossed with the map")
+	export function take(m isolated Cells) returns Integer
+		let ownedM = merge m
+
+		let kept = try ownedM.get("kept 2") otherwise panic("the kept entry crossed with the map")
 		return kept.n
 	end 'take'
 end 'Svc'
 
 function main() returns ExitCode
-	var m = Cells.create()
-	m.upsert("kept {2}", value: Cell.create())
+	var m = Cells.create() as isolated Cells
+
+	modify m 'fill'
+		m.upsert("kept {2}", value: Cell.create())
+	end 'fill'
+
 	let h = spawn Svc.create()
 	let n = try await h.take(m) otherwise 0
 	print("crossed {n}\n")
@@ -6092,7 +6123,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(s Shape)
+	export function take(s isolated Shape)
 		match s 'k'
 			empty then print("empty\n")
 			labelled(t) then print("labelled {t}\n")
@@ -6114,9 +6145,9 @@ typealias Integer = int(i64.min to i64.max)
 labelled heap 2
 ```
 
-<!-- test: deepmove.abort.a-union-payload-with-a-second-owner-aborts -->
-The tag-guarded half of that walk, refusing: `Shape.held(cell)` increfs into the payload slot and `main`
-reads `cell` back, so the live case's payload has two owners. Exit **96**.
+<!-- test: deepmove.error.a-union-payload-with-a-second-owner-is-refused -->
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 type Cell
 	export var n as Integer
@@ -6138,7 +6169,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(s Shape)
+	export function take(s isolated Shape)
 		match s 'k'
 			empty then print("empty\n")
 			held(c) then print("held {c.n}\n")
@@ -6155,11 +6186,8 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3200: <fragment>:34:13: 's' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: deepmove.a-deep-graph-crosses-and-is-released-on-the-service -->
@@ -6753,8 +6781,10 @@ type Sink
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(root S63)
-		self.seen = self.seen + root.n
+	export function take(root isolated S63)
+		let ownedRoot = merge root
+
+		self.seen = self.seen + ownedRoot.n
 	end 'take'
 
 	export function report()
@@ -6818,8 +6848,8 @@ end 'Pair'
 type Svc
 	var held as Pair
 
-	static function create(held Pair) returns Self
-		return Self{held: held}
+	static function create(held isolated Pair) returns Self
+		return Self{held: merge held}
 	end 'create'
 
 	export function report()
@@ -6867,8 +6897,8 @@ end 'oneCellTwice'
 type Svc
 	var cells as CellArray
 
-	static function create(cells CellArray) returns Self
-		return Self{cells: cells}
+	static function create(cells isolated CellArray) returns Self
+		return Self{cells: merge cells}
 	end 'create'
 
 	export function report()
@@ -6924,8 +6954,8 @@ end 'Frame'
 type Svc
 	var frame as Frame
 
-	static function create(frame Frame) returns Self
-		return Self{frame: frame}
+	static function create(frame isolated Frame) returns Self
+		return Self{frame: merge frame}
 	end 'create'
 
 	export function report()
@@ -6994,7 +7024,7 @@ type Maker
 		return Self{n: 0}
 	end 'create'
 
-	export function make() returns Pair
+	export function make() returns isolated Pair
 		return Pair.create()
 	end 'make'
 end 'Maker'
@@ -7015,10 +7045,9 @@ typealias Integer = int(i64.min to i64.max)
 5 2
 ```
 
-<!-- test: deepmove.dag.an-outside-owner-of-a-record-reached-twice-aborts -->
-Reaching a record twice is admitted only when every owner is inside the graph. `Pair.around(bag)` puts `bag`
-in both fields, so the record has three owners and `main`'s binding, which reads it after the send, is not
-one the walk meets: the move aborts with `RuntimeAbort` exit **96** before anything is enqueued.
+<!-- test: deepmove.dag.an-outside-owner-of-a-record-reached-twice-is-refused -->
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 type Cell
 	export var n as Integer
@@ -7058,7 +7087,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(p Pair)
+	export function take(p isolated Pair)
 		print("svc {p.right.n}\n")
 	end 'take'
 end 'Svc'
@@ -7071,11 +7100,8 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3200: <fragment>:48:13: 'Pair' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: deepmove.dag.a-string-and-its-bytes-cross-together -->
@@ -7098,14 +7124,14 @@ type Reader
 		return Self{n: 0}
 	end 'create'
 
-	export function read(h Holder) returns Integer
+	export function read(h isolated Holder) returns Integer
 		return h.text.byteLength() + (h.bytes.count() as BytePos)
 	end 'read'
 end 'Reader'
 
 function main() returns ExitCode
 	let r = spawn Reader.create()
-	var holder = Holder.around("payload {42}")
+	var holder = Holder.around("payload {42}") as isolated Holder
 	let n = try await r.read(holder) otherwise 0
 	print("n={n}\n")
 	return 0
@@ -7144,8 +7170,8 @@ end 'oneCellUnderTwoKeys'
 type Svc
 	var cells as Cells
 
-	static function create(cells Cells) returns Self
-		return Self{cells: cells}
+	static function create(cells isolated Cells) returns Self
+		return Self{cells: merge cells}
 	end 'create'
 
 	export function report()
@@ -7195,8 +7221,8 @@ end 'oneCellTwice'
 type Svc
 	var cells as Cells
 
-	static function create(cells Cells) returns Self
-		return Self{cells: cells}
+	static function create(cells isolated Cells) returns Self
+		return Self{cells: merge cells}
 	end 'create'
 
 	export function report()
@@ -7252,8 +7278,8 @@ end 'pairedCells'
 type Svc
 	var cells as CellArray
 
-	static function create(cells CellArray) returns Self
-		return Self{cells: cells}
+	static function create(cells isolated CellArray) returns Self
+		return Self{cells: merge cells}
 	end 'create'
 
 	export function report()
@@ -7281,9 +7307,9 @@ typealias Integer = int(i64.min to i64.max)
 80 slots sum to 80
 ```
 
-<!-- test: deepmove.dag.an-outside-owner-among-many-records-reached-twice-aborts -->
-Among forty records each met twice, one has a third owner: `main`'s `kept`, which the walk never meets. The
-move aborts with exit **96** before anything is enqueued.
+<!-- test: deepmove.dag.an-outside-owner-among-many-records-reached-twice-is-refused -->
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 type Cell
 	export var n as Integer
@@ -7312,7 +7338,7 @@ end 'pairedCellsAround'
 type Svc
 	var cells as CellArray
 
-	static function create(cells CellArray) returns Self
+	static function create(cells isolated CellArray) returns Self
 		return Self{cells: cells}
 	end 'create'
 
@@ -7329,11 +7355,9 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3196: <fragment>:30:22: cannot store an isolated 'CellArray' into 'cells', which holds a mutable 'CellArray'; `merge` it first
+error E3200: <fragment>:40:27: 'pairedCellsAround' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: borrow.error.a-let-string-read-after-its-awaited-send-is-use-after-move -->
@@ -7443,8 +7467,8 @@ end 'Shelf'
 type Keeper
 	let shelf as Shelf
 
-	static function create(shelf Shelf) returns Self
-		return Self{shelf: shelf}
+	static function create(shelf isolated Shelf) returns Self
+		return Self{shelf: merge shelf}
 	end 'create'
 
 	export function weight() returns Integer
@@ -7467,13 +7491,13 @@ end 'shelf'
 
 function main() returns ExitCode
 	let original = shelf(true)
-	let copy = original.clone()
+	let copy = original.clone() as isolated Shelf
 	let first = spawn Keeper.create(copy)
 	let firstSaw = try await first.weight() otherwise 0
 	print("let copy: service {firstSaw}, sender {original.weight()}\n")
 
 	let unindexed = shelf(false)
-	var moved = unindexed.clone()
+	var moved = unindexed.clone() as isolated Shelf
 	let second = spawn Keeper.create(moved)
 	let secondSaw = try await second.weight() otherwise 0
 	print("var copy: service {secondSaw}, sender {unindexed.weight()}\n")
@@ -7578,7 +7602,7 @@ type Reader
 		return Self{id: id}
 	end 'create'
 
-	export function read(d Doc) returns Integer
+	export function read(d isolated Doc) returns Integer
 		return self.id * 1000 + digest(d)
 	end 'read'
 end 'Reader'
@@ -7643,7 +7667,7 @@ type Tally
 		return Self{sends: 0, letters: 0}
 	end 'create'
 
-	export function take(t Tree)
+	export function take(t isolated Tree)
 		var read = t.name.count() as Integer
 		for leaf in t.leaves 'each'
 			read = read + (leaf.text.count() as Integer)
@@ -7716,9 +7740,11 @@ type Keeper
 		return Self{seen: "nothing"}
 	end 'create'
 
-	export function take(t Tree)
-		let first = try t.leaves.get(0) otherwise panic("a tree has leaves")
-		self.seen = "{t.name} starting with {first.text}"
+	export function take(t isolated Tree)
+		let ownedT = merge t
+
+		let first = try ownedT.leaves.get(0) otherwise panic("a tree has leaves")
+		self.seen = "{ownedT.name} starting with {first.text}"
 	end 'take'
 
 	export function report() returns String
@@ -7727,7 +7753,7 @@ type Keeper
 end 'Keeper'
 
 function sendAndReturn(h Keeper.handle)
-	let tree = Tree.create(3)
+	let tree = Tree.create(3) as isolated Tree
 	print("sender read {tree.name}\n")
 	try h.take(tree) otherwise panic("an open mailbox with room takes the send")
 end 'sendAndReturn'
@@ -7779,7 +7805,7 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function poke(target Holder)
+	export function poke(target isolated Holder)
 		var copy = target.inner.clone()
 		copy.bump()
 		print("{copy.n}\n")
@@ -7788,7 +7814,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Holder.create()
+	let b = Holder.create() as isolated Holder
 	try h.poke(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
@@ -7844,7 +7870,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function look(target Pair) returns Integer
+	export function look(target isolated Pair) returns Integer
 		print("service reads {target.right.n}\n")
 		return target.right.cells.count() as Integer
 	end 'look'
@@ -7852,7 +7878,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let p = Pair.create()
+	let p = Pair.create() as isolated Pair
 	let cells = try await h.look(p) otherwise 0
 	print("service counted {cells} cells\n")
 	return 0
@@ -7909,7 +7935,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function look(target Pair) returns Integer
+	export function look(target isolated Pair) returns Integer
 		print("service reads {target.right.n}\n")
 		return target.right.cells.count() as Integer
 	end 'look'
@@ -7917,7 +7943,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let p = Pair.create()
+	let p = Pair.create() as isolated Pair
 	let first = try await h.look(p.clone()) otherwise 0
 	let second = try await h.look(p) otherwise 0
 	print("service counted {first + second} cells\n")
@@ -7966,15 +7992,17 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function look(shelf Shelf) returns Integer
-		let second = try shelf.cells.get(1) otherwise panic("two cells were pushed")
+	export function look(shelf isolated Shelf) returns Integer
+		let ownedShelf = merge shelf
+
+		let second = try ownedShelf.cells.get(1) otherwise panic("two cells were pushed")
 		return second.n
 	end 'look'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let shelf = Shelf.create()
+	let shelf = Shelf.create() as isolated Shelf
 	let n = try await h.look(shelf) otherwise 0
 	print("service read {n}\n")
 	return 0
@@ -7988,9 +8016,9 @@ typealias Integer = int(i64.min to i64.max)
 service read 1
 ```
 
-<!-- test: borrow.dag.an-outside-owner-of-a-record-reached-twice-aborts -->
-A send admits a record reached twice only when every owner is inside the sent graph. `bag` is a third owner
-the walk never meets, so the send aborts with exit **96** before anything is enqueued.
+<!-- test: borrow.dag.an-outside-owner-of-a-record-reached-twice-is-refused -->
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 type Cell
 	export var n as Integer
@@ -8029,7 +8057,7 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function look(target Pair) returns Integer
+	export function look(target isolated Pair) returns Integer
 		return target.right.n
 	end 'look'
 end 'Svc'
@@ -8044,11 +8072,8 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3200: <fragment>:48:27: 'p' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: borrow.dag.bytes-and-their-string-are-sent-together -->
@@ -8072,14 +8097,14 @@ type Reader
 		return Self{n: 0}
 	end 'create'
 
-	export function read(h Holder) returns Integer
+	export function read(h isolated Holder) returns Integer
 		return h.text.byteLength() + (h.bytes.count() as BytePos)
 	end 'read'
 end 'Reader'
 
 function main() returns ExitCode
 	let r = spawn Reader.create()
-	let holder = Holder.around("payload {42}")
+	let holder = Holder.around("payload {42}") as isolated Holder
 	let n = try await r.read(holder) otherwise 0
 	print("n={n}\n")
 	return 0
@@ -8093,8 +8118,9 @@ typealias Integer = int(i64.min to i64.max)
 n=20
 ```
 
-<!-- test: borrow.dag.an-outside-owner-of-a-viewed-string-aborts -->
-`kept` takes a third owner of the String's record outside the sent graph, so the send aborts with exit **96**.
+<!-- test: borrow.dag.an-outside-owner-of-a-viewed-string-is-refused -->
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 type Holder
 	export let text as String
@@ -8112,7 +8138,7 @@ type Reader
 		return Self{n: 0}
 	end 'create'
 
-	export function read(h Holder) returns Integer
+	export function read(h isolated Holder) returns Integer
 		return h.text.byteLength() + (h.bytes.count() as BytePos)
 	end 'read'
 end 'Reader'
@@ -8129,17 +8155,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 typealias TextArray = Array with String
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3200: <fragment>:28:27: 'holder' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
-<!-- test: borrow.dag.an-outside-owner-of-a-string-its-bytes-reach-first-aborts -->
-The same outside owner with the view declared first. The view's meeting is the record's first, so it is entered
-in the visit table rather than only marked, and the meeting through `text` then finds the owner `kept` holds
-unmet: exit **96**.
+<!-- test: borrow.dag.an-outside-owner-of-a-string-its-bytes-reach-first-is-refused -->
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 type Holder
 	export let bytes as ByteArray
@@ -8157,7 +8179,7 @@ type Reader
 		return Self{n: 0}
 	end 'create'
 
-	export function read(h Holder) returns Integer
+	export function read(h isolated Holder) returns Integer
 		return h.text.byteLength() + (h.bytes.count() as BytePos)
 	end 'read'
 end 'Reader'
@@ -8174,11 +8196,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 typealias TextArray = Array with String
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3200: <fragment>:28:27: 'holder' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: borrow.a-sent-handle-may-be-kept-by-the-handler -->
@@ -8267,8 +8286,10 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(b Box)
-		self.seen = self.seen + b.n
+	export function take(b isolated Box)
+		let ownedB = merge b
+
+		self.seen = self.seen + ownedB.n
 	end 'take'
 
 	export function total() returns Integer
@@ -8281,10 +8302,10 @@ function stash(xs Boxes, item Box)
 end 'stash'
 
 function route(h Svc.handle, xs Boxes, n Integer, way Route)
-	let b = Box.create(n)
+	let b = Box.create(n) as isolated Box
 	match way 'send'
 		toService then try h.take(b) otherwise panic("an open mailbox with room takes the send")
-		toArray then stash(xs, item: b)
+		toArray then stash(xs, item: merge b)
 	end 'send'
 end 'route'
 
@@ -8335,8 +8356,10 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(b Box)
-		self.seen = self.seen + b.n
+	export function take(b isolated Box)
+		let ownedB = merge b
+
+		self.seen = self.seen + ownedB.n
 	end 'take'
 end 'Svc'
 
@@ -8345,12 +8368,12 @@ function stash(xs Boxes, item Box)
 end 'stash'
 
 function route(h Svc.handle, xs Boxes, n Integer, way Route)
-	let b = Box.create(n)
+	let b = Box.create(n) as isolated Box
 	match way 'send'
 		toService then try h.take(b) otherwise panic("an open mailbox with room takes the send")
 		toArray then print("kept, not sent\n")
 	end 'send'
-	stash(xs, item: b)
+	stash(xs, item: merge b)
 end 'route'
 
 function main() returns ExitCode
@@ -8362,7 +8385,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:39:18: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:41:24: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: borrow.error.a-door-on-a-sibling-arm-inside-a-loop-follows-the-send -->
@@ -8391,8 +8414,10 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(b Box)
-		self.seen = self.seen + b.n
+	export function take(b isolated Box)
+		let ownedB = merge b
+
+		self.seen = self.seen + ownedB.n
 	end 'take'
 end 'Svc'
 
@@ -8407,11 +8432,11 @@ end 'routeFor'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	var xs = Boxes.create(0)
-	let b = Box.create(3)
+	let b = Box.create(3) as isolated Box
 	var trip = 0 as Integer
 	while trip < 2 'twice'
 		match routeFor(trip) 'send'
-			toArray then stash(xs, item: b)
+			toArray then stash(xs, item: merge b)
 			toService then try h.take(b) otherwise panic("an open mailbox with room takes the send")
 		end 'send'
 		trip = trip + 1
@@ -8421,7 +8446,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:44:33: use of moved value 'b': it was moved in an earlier iteration of this loop
+error E3102: <fragment>:46:39: use of moved value 'b': it was moved in an earlier iteration of this loop
 ```
 
 <!-- test: borrow.a-let-rebound-each-trip-is-sent-afresh -->
@@ -8450,8 +8475,10 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(b Box)
-		self.seen = self.seen + b.n
+	export function take(b isolated Box)
+		let ownedB = merge b
+
+		self.seen = self.seen + ownedB.n
 	end 'take'
 
 	export function total() returns Integer
@@ -8472,9 +8499,9 @@ function main() returns ExitCode
 	var xs = Boxes.create(0)
 	var trip = 0 as Integer
 	while trip < 4 'eachTrip'
-		let b = Box.create(trip + 1)
+		let b = Box.create(trip + 1) as isolated Box
 		match routeFor(trip) 'send'
-			toArray then stash(xs, item: b)
+			toArray then stash(xs, item: merge b)
 			toService then try h.take(b) otherwise panic("an open mailbox with room takes the send")
 		end 'send'
 		trip = trip + 1
@@ -8518,14 +8545,16 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(b Box)
-		self.seen = self.seen + b.n
+	export function take(b isolated Box)
+		let ownedB = merge b
+
+		self.seen = self.seen + ownedB.n
 	end 'take'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	var m = b
 	m.n = 2
@@ -8534,7 +8563,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:26:10: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:28:10: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: borrow.error.a-sent-let-may-not-be-assigned-to-a-var -->
@@ -8555,15 +8584,17 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(b Box)
-		self.seen = self.seen + b.n
+	export function take(b isolated Box)
+		let ownedB = merge b
+
+		self.seen = self.seen + ownedB.n
 	end 'take'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	var m = Box.create()
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	m = b
 	m.n = 2
@@ -8572,7 +8603,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:27:6: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:29:6: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: borrow.error.a-value-read-out-of-a-sent-let-is-use-after-move -->
@@ -8601,14 +8632,16 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(p Pair)
-		self.seen = self.seen + p.inner.n
+	export function take(p isolated Pair)
+		let ownedP = merge p
+
+		self.seen = self.seen + ownedP.inner.n
 	end 'take'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let p = Pair.create(Box.create())
+	let p = Pair.create(Box.create()) as isolated Pair
 	try h.take(p) otherwise panic("an open mailbox with room takes the send")
 	var y = p.inner
 	y.n = 2
@@ -8617,7 +8650,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:34:10: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:36:10: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: borrow.error.a-sent-let-may-not-be-stored-in-a-field -->
@@ -8646,15 +8679,17 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(b Box)
-		self.seen = self.seen + b.n
+	export function take(b isolated Box)
+		let ownedB = merge b
+
+		self.seen = self.seen + ownedB.n
 	end 'take'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	var holder = Holder.create()
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	holder.item = b
 	return holder.item.n as ExitCode
@@ -8662,7 +8697,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:35:16: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:37:16: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: borrow.error.a-sent-let-may-not-be-wrapped-in-a-new-record -->
@@ -8689,14 +8724,16 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(b Box)
-		self.seen = self.seen + b.n
+	export function take(b isolated Box)
+		let ownedB = merge b
+
+		self.seen = self.seen + ownedB.n
 	end 'take'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	let w = Wrap.held(b)
 	print("{w.name}\n")
@@ -8705,7 +8742,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:31:20: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:33:20: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: borrow.error.a-sent-let-may-not-be-stored-in-a-container -->
@@ -8728,15 +8765,17 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(b Box)
-		self.seen = self.seen + b.n
+	export function take(b isolated Box)
+		let ownedB = merge b
+
+		self.seen = self.seen + ownedB.n
 	end 'take'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	var xs = Boxes.create(0)
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	xs.push(b)
 	return xs.count() as ExitCode
@@ -8744,7 +8783,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:29:10: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:31:10: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: borrow.error.a-sent-let-may-not-be-returned -->
@@ -8765,14 +8804,16 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(b Box)
-		self.seen = self.seen + b.n
+	export function take(b isolated Box)
+		let ownedB = merge b
+
+		self.seen = self.seen + ownedB.n
 	end 'take'
 end 'Svc'
 
 function sendAndKeep() returns Box
 	let h = spawn Svc.create()
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	return b
 end 'sendAndKeep'
@@ -8784,7 +8825,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:26:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:28:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: borrow.error.a-sent-let-may-not-be-captured-by-a-closure -->
@@ -8805,14 +8846,16 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(b Box)
-		self.seen = self.seen + b.n
+	export function take(b isolated Box)
+		let ownedB = merge b
+
+		self.seen = self.seen + ownedB.n
 	end 'take'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	let peek = function() gives b.n
 	return peek() as ExitCode
@@ -8820,7 +8863,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:26:30: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:28:30: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: borrow.a-handler-may-keep-a-sent-parameter -->
@@ -8843,14 +8886,14 @@ type Svc
 		return Self{kept: Boxes.create(0)}
 	end 'create'
 
-	export function keep(given Box)
-		self.kept.push(given)
+	export function keep(given isolated Box)
+		self.kept.push(merge given)
 	end 'keep'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	try h.keep(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
@@ -8888,14 +8931,16 @@ type Svc
 		return Self{kept: Boxes.create(0)}
 	end 'create'
 
-	export function keep(p Pair)
-		self.kept.push(p.inner)
+	export function keep(p isolated Pair)
+		let ownedP = merge p
+
+		self.kept.push(ownedP.inner)
 	end 'keep'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let pair = Pair.create(Box.create())
+	let pair = Pair.create(Box.create()) as isolated Pair
 	try h.keep(pair) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
@@ -8924,14 +8969,14 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function bump(target Box)
+	export function bump(target isolated Box)
 		target.n = target.n + 1
 	end 'bump'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	try h.bump(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
@@ -8963,14 +9008,14 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function poke(target Box)
+	export function poke(target isolated Box)
 		target.bump()
 	end 'poke'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	try h.poke(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
@@ -9010,14 +9055,14 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function poke(target Holder)
+	export function poke(target isolated Holder)
 		target.inner.bump()
 	end 'poke'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Holder.create()
+	let b = Holder.create() as isolated Holder
 	try h.poke(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
@@ -9061,14 +9106,14 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function poke(target Holder)
+	export function poke(target isolated Holder)
 		nudge(target)
 	end 'poke'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Holder.create()
+	let b = Holder.create() as isolated Holder
 	try h.poke(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
@@ -9102,14 +9147,16 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function poke(target Holder)
-		pick(target).push(1)
+	export function poke(target isolated Holder)
+		var ownedTarget = merge target
+
+		pick(ownedTarget).push(1)
 	end 'poke'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Holder.create()
+	let b = Holder.create() as isolated Holder
 	try h.poke(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
@@ -9377,7 +9424,7 @@ type Store
 		return Self{n: 1}
 	end 'create'
 
-	export function itself() returns Store
+	export function itself() returns immutable Store
 		return self
 	end 'itself'
 end 'Store'
@@ -9403,7 +9450,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Items = Array with Integer
 
 type Store
-	var items as Items
+	var items as isolated Items
 
 	static function create() returns Self
 		return Self{items: Items.create(0)}
@@ -9413,10 +9460,8 @@ type Store
 		self.items.push(n)
 	end 'put'
 
-	export function take() returns Items
-		var old = self.items
-		self.items = Items.create(0)
-		return old
+	export function take() returns isolated Items
+		return swap self.items with Items.create(0)
 	end 'take'
 end 'Store'
 
@@ -9453,7 +9498,7 @@ type Store
 		self.items.push(n)
 	end 'put'
 
-	export function take() returns Items
+	export function take() returns immutable Items
 		var old = self.items
 		let seen = self.items.count()
 		self.items = Items.create(0)
@@ -9470,8 +9515,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3206: <fragment>:16:18: parameter the receiver is used as mutable at line 19 and as immutable; a parameter cannot be both
 error E3137: <fragment>:20:3: `Store.take` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
 note: <fragment>:25:10: the `spawn` that makes `Store` a service
+error E3209: <fragment>:20:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: error.a-field-another-store-fills-with-a-borrowed-record-is-not-swapped-out -->
@@ -9492,11 +9539,11 @@ type Store
 		self.items.push(n)
 	end 'put'
 
-	export function replace(given Items)
-		self.items = given
+	export function replace(given isolated Items)
+		self.items = merge given
 	end 'replace'
 
-	export function take() returns Items
+	export function take() returns immutable Items
 		var old = self.items
 		self.items = Items.create(0)
 		return old
@@ -9512,8 +9559,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3206: <fragment>:20:18: parameter the receiver is used as mutable at line 22 and as immutable; a parameter cannot be both
 error E3137: <fragment>:23:3: `Store.take` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
 note: <fragment>:28:10: the `spawn` that makes `Store` a service
+error E3209: <fragment>:23:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: error.a-reply-may-not-return-a-message-parameter -->
@@ -9569,8 +9618,8 @@ end 'Shelf'
 type Keeper
 	let shelf as Shelf
 
-	static function create(shelf Shelf) returns Self
-		return Self{shelf: shelf}
+	static function create(shelf isolated Shelf) returns Self
+		return Self{shelf: merge shelf}
 	end 'create'
 
 	export function describe() returns String
@@ -10512,7 +10561,7 @@ type Counter
 		return Self{count: 0}
 	end 'create'
 
-	export function bumped(by Integer) returns Tally
+	export function bumped(by Integer) returns isolated Tally
 		self.count = self.count + by
 		return Tally.create(self.count)
 	end 'bumped'
@@ -10774,7 +10823,7 @@ type Box uses T
 		return Self{seen: held.count() as Count}
 	end 'create'
 
-	export function all() returns Items
+	export function all() returns isolated Items
 		self.seen = self.seen + 1
 		return Items.create()
 	end 'all'
@@ -11289,8 +11338,10 @@ type Worker
 		return Self{total: 0}
 	end 'create'
 
-	export function run(j Job) returns Integer
-		self.total = self.total + j.n
+	export function run(j isolated Job) returns Integer
+		let ownedJ = merge j
+
+		self.total = self.total + ownedJ.n
 		return self.total
 	end 'run'
 end 'Worker'
@@ -11305,7 +11356,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:49:35: argument `j` of the message `Worker.run` cannot be proven to have exactly one owner (`j`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3200: <fragment>:51:35: 'j' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: error.a-value-popped-from-a-generic-stack-is-moved-out-not-solely-owned -->
@@ -11348,8 +11399,10 @@ type Worker
 		return Self{total: 0}
 	end 'create'
 
-	export function run(j Job) returns Integer
-		self.total = self.total + j.n
+	export function run(j isolated Job) returns Integer
+		let ownedJ = merge j
+
+		self.total = self.total + ownedJ.n
 		return self.total
 	end 'run'
 end 'Worker'
@@ -11365,7 +11418,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:51:35: argument `j` of the message `Worker.run` cannot be proven to have exactly one owner (`j`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3200: <fragment>:53:35: 'j' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: a-borrowed-string-parameter-is-copied-into-the-send -->
@@ -11498,7 +11551,7 @@ type Store
 		return Self{n: 0}
 	end 'create'
 
-	export function keep(p Payload)
+	export function keep(p isolated Payload)
 		self.n = self.n + p.count()
 	end 'keep'
 
@@ -12309,11 +12362,11 @@ type Worker
 		return Self{scale: 2}
 	end 'create'
 
-	export function measure(n Tally) returns Report
+	export function measure(n Tally) returns isolated Report
 		return build(n)
 	end 'measure'
 
-	function build(n Tally) returns Report
+	function build(n Tally) returns isolated Report
 		return Report.create(n * self.scale)
 	end 'build'
 end 'Worker'
@@ -12354,7 +12407,7 @@ type Worker
 		return Self{calls: 0}
 	end 'create'
 
-	export function measure(n Tally) returns Report
+	export function measure(n Tally) returns isolated Report
 		self.calls = self.calls + 1
 		return buildReport(n)
 	end 'measure'
@@ -12436,7 +12489,7 @@ type Worker
 		return Self{report: Report.create(42)}
 	end 'create'
 
-	export function measure() returns Report
+	export function measure() returns immutable Report
 		return current()
 	end 'measure'
 
@@ -12482,7 +12535,7 @@ type Worker
 		return Self{report: Report.create(42)}
 	end 'create'
 
-	export function measure() returns Report
+	export function measure() returns immutable Report
 		return pass(self.report)
 	end 'measure'
 end 'Worker'
@@ -12522,7 +12575,7 @@ type Worker
 		return Self{history: ReportArray.create(0)}
 	end 'create'
 
-	export function measure(n Tally) returns Report
+	export function measure(n Tally) returns immutable Report
 		return build(n)
 	end 'measure'
 
@@ -12571,7 +12624,7 @@ type Worker
 		return Self{report: buildReport(21)}
 	end 'create'
 
-	export function measure(n Tally) returns Report
+	export function measure(n Tally) returns immutable Report
 		return build(n)
 	end 'measure'
 
@@ -12612,8 +12665,10 @@ type Worker
 		return seed
 	end 'adopt'
 
-	static function create(seed Worker) returns Self
-		return adopt(seed)
+	static function create(seed isolated Worker) returns Self
+		let ownedSeed = merge seed
+
+		return adopt(ownedSeed)
 	end 'create'
 
 	export function measure(n Tally) returns Tally
@@ -12622,7 +12677,7 @@ type Worker
 end 'Worker'
 
 function main() returns ExitCode
-	let seed = Worker.make(2)
+	let seed = Worker.make(2) as isolated Worker
 	let worker = spawn Worker.create(seed)
 	let total = try await worker.measure(21) otherwise panic("the worker is running")
 	print("{total} {seed.scale}\n")
@@ -12631,7 +12686,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:28:18: use of moved value 'seed': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:30:18: use of moved value 'seed': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: error.spawn-factory-argument-borrowed-from-a-parameter-refused -->
@@ -12651,8 +12706,8 @@ end 'Shelf'
 type Keeper
 	var shelf as Shelf
 
-	static function create(shelf Shelf) returns Self
-		return Self{shelf: shelf}
+	static function create(shelf isolated Shelf) returns Self
+		return Self{shelf: merge shelf}
 	end 'create'
 
 	export function count() returns Tally
@@ -12675,7 +12730,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:25:30: argument `shelf` of `spawn Keeper.create(…)` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3200: <fragment>:25:30: 'shelf' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: error.spawn-factory-argument-read-off-an-earlier-statements-temporary-refused -->
@@ -12704,8 +12759,8 @@ end 'Holder'
 type Surveyor
 	var settings as Settings
 
-	static function create(settings Settings) returns Self
-		return Self{settings: settings}
+	static function create(settings isolated Settings) returns Self
+		return Self{settings: merge settings}
 	end 'create'
 
 	export function measure(n Tally) returns Tally
@@ -12723,7 +12778,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:34:39: argument `settings` of `spawn Surveyor.create(…)` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3200: <fragment>:34:39: 'settings' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: a-spawn-factory-string-argument-borrowed-from-a-parameter-is-copied -->
@@ -12797,8 +12852,8 @@ end 'Outer'
 type Surveyor
 	var settings as Settings
 
-	static function create(settings Settings) returns Self
-		return Self{settings: settings}
+	static function create(settings isolated Settings) returns Self
+		return Self{settings: merge settings}
 	end 'create'
 
 	export function measure(n Tally) returns Tally
@@ -12807,7 +12862,7 @@ type Surveyor
 end 'Surveyor'
 
 function main() returns ExitCode
-	let surveyor = spawn Surveyor.create(Outer.create(Holder.create(Settings.create(true))).holder.settings)
+	let surveyor = spawn Surveyor.create(Outer.create(Holder.create(Settings.create(true))).holder.settings.clone())
 	let total = try await surveyor.measure(21) otherwise panic("the surveyor is running")
 	print("{total}\n")
 	surveyor.shutdown()
@@ -12847,7 +12902,7 @@ type Worker
 		return Self{report: Report.make(41)}
 	end 'create'
 
-	export function measure() returns Report
+	export function measure() returns immutable Report
 		return build()
 	end 'measure'
 
@@ -12891,11 +12946,11 @@ type Worker
 		return Self{scale: 2}
 	end 'create'
 
-	export function measure(n Tally) returns Clock
+	export function measure(n Tally) returns isolated Clock
 		return build(n)
 	end 'measure'
 
-	function build(n Tally) returns Clock
+	function build(n Tally) returns isolated Clock
 		return Clock.make(n * self.scale)
 	end 'build'
 end 'Worker'
@@ -12975,8 +13030,8 @@ typealias Tally = int(0 to 1000)
 type Cell
 	export var flags as Flags
 
-	static function create(flags Flags) returns Self
-		return Self{flags: flags}
+	static function create(flags isolated Flags) returns Self
+		return Self{flags: merge flags}
 	end 'create'
 end 'Cell'
 
@@ -12987,11 +13042,15 @@ type Worker
 		return Self{calls: 0}
 	end 'create'
 
-	export function report() returns Cell
+	export function report() returns isolated Cell
 		self.calls = self.calls + 1
-		var flags = Flags.create(0)
-		flags.push(false)
-		flags.push(true)
+		var flags = Flags.create(0) as isolated Flags
+
+		modify flags 'fill'
+			flags.push(false)
+			flags.push(true)
+		end 'fill'
+
 		return Cell.create(flags)
 	end 'report'
 end 'Worker'
@@ -13021,8 +13080,8 @@ typealias Tally = int(0 to 1000)
 type Cell
 	export var flags as Flags
 
-	static function create(flags Flags) returns Self
-		return Self{flags: flags}
+	static function create(flags isolated Flags) returns Self
+		return Self{flags: merge flags}
 	end 'create'
 end 'Cell'
 
@@ -13033,7 +13092,7 @@ type Worker
 		return Self{calls: 0}
 	end 'create'
 
-	export function wrap(flags Flags) returns Cell
+	export function wrap(flags isolated Flags) returns isolated Cell
 		self.calls = self.calls + 1
 		return Cell.create(flags)
 	end 'wrap'
@@ -13041,8 +13100,12 @@ end 'Worker'
 
 function main() returns ExitCode
 	let worker = spawn Worker.create()
-	var flags = Flags.create(0)
-	flags.push(true)
+	var flags = Flags.create(0) as isolated Flags
+
+	modify flags 'fill'
+		flags.push(true)
+	end 'fill'
+
 	let cell = try await worker.wrap(flags) otherwise panic("the worker is running")
 	print("{cell.flags.count()}\n")
 	worker.shutdown()
@@ -13125,22 +13188,20 @@ end 'Holder'
 typealias Holders = List with Holder
 
 type Maker
-	var items as Holders
+	var items as isolated Holders
 
 	static function create(side Integer) returns Self
-		var items = Holders.create()
-		items.append(Holder.create(Square.create(side)))
+		var items = Holders.create() as isolated Holders
+
+		modify items 'fill'
+			items.append(Holder.create(Square.create(side)))
+		end 'fill'
+
 		return Self{items: items}
 	end 'create'
 
-	export function drain() returns Holders
-		var out = Holders.create()
-
-		if let item = try self.items.removeFirst() 'held'
-			out.append(item)
-		end 'held'
-
-		return out
+	export function drain() returns isolated Holders
+		return swap self.items with Holders.create()
 	end 'drain'
 end 'Maker'
 
@@ -13212,12 +13273,13 @@ type Worker
 		return Self{scale: 2}
 	end 'create'
 
-	export function measure(n Tally) returns Report
+	export function measure(n Tally) returns isolated Report
 		return summarize(n)
 	end 'measure'
 
-	function summarize(n Tally) returns Report
-		let report = Report.create(n * self.scale)
+	function summarize(n Tally) returns isolated Report
+		let report = Report.create(n * self.scale) as isolated Report
+
 		return report
 	end 'summarize'
 end 'Worker'
@@ -13257,14 +13319,19 @@ type Worker
 		return Self{scale: 2}
 	end 'create'
 
-	export function measure(n Tally) returns Report
+	export function measure(n Tally) returns isolated Report
 		return summarize(n)
 	end 'measure'
 
-	function summarize(n Tally) returns Report
-		var report = Report.create()
-		report.lines.push("scaled")
-		report.total = n * self.scale
+	function summarize(n Tally) returns isolated Report
+		let scaled = n * self.scale
+		var report = Report.create() as isolated Report
+
+		modify report 'fill'
+			report.lines.push("scaled")
+			report.total = scaled
+		end 'fill'
+
 		return report
 	end 'summarize'
 end 'Worker'
@@ -13303,7 +13370,7 @@ type Worker
 		return Self{history: ReportArray.create(0)}
 	end 'create'
 
-	export function measure(n Tally) returns Report
+	export function measure(n Tally) returns immutable Report
 		return summarize(n)
 	end 'measure'
 
@@ -13347,7 +13414,7 @@ type Worker
 		return Self{last: 0}
 	end 'create'
 
-	export function measure(n Tally) returns Report
+	export function measure(n Tally) returns immutable Report
 		return summarize(n)
 	end 'measure'
 
@@ -13398,7 +13465,7 @@ type Worker
 		return Self{history: ReportArray.create(0)}
 	end 'create'
 
-	export function measure(n Tally) returns Report
+	export function measure(n Tally) returns immutable Report
 		return summarize(n)
 	end 'measure'
 
@@ -13452,7 +13519,7 @@ type Worker
 		return Self{ranks: ReportRanks.create()}
 	end 'create'
 
-	export function measure(n Tally) returns Report
+	export function measure(n Tally) returns immutable Report
 		return summarize(n)
 	end 'measure'
 
@@ -13501,7 +13568,7 @@ type Worker
 		return Self{scale: 2}
 	end 'create'
 
-	export function measure(n Tally) returns Report
+	export function measure(n Tally) returns immutable Report
 		return summarize(n)
 	end 'measure'
 
@@ -13528,10 +13595,9 @@ error E3137: <fragment>:22:3: `Worker.measure` returns a value this frame does n
 note: <fragment>:36:15: the `spawn` that makes `Worker` a service
 ```
 
-<!-- test: services.a-reply-whose-local-shares-a-field-with-the-state-aborts -->
-A field read through the returned local is admitted: only the local's own record is proved at compile time.
-`summarize` stores `report.inner` in the service's `kept`, so the record below the reply has a second owner, and
-the walk at the publish aborts with exit **96** before the caller can read it.
+<!-- test: services.a-reply-whose-local-shares-a-field-with-the-state-is-refused -->
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 typealias Tally = int(0 to 1000000)
 
@@ -13558,7 +13624,7 @@ type Worker
 		return Self{kept: Inner.create(0)}
 	end 'create'
 
-	export function measure(n Tally) returns Report
+	export function measure(n Tally) returns isolated Report
 		return summarize(n)
 	end 'measure'
 
@@ -13577,11 +13643,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3200: <fragment>:28:10: 'summarize(n)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted. Declare it `as isolated Report`, or pass a copy
 ```
 
 <!-- test: services.a-service-state-may-hold-a-value-at-an-interface-type -->
@@ -13659,7 +13722,7 @@ type Factory
 		return Self{made: 0}
 	end 'create'
 
-	export function make(side Tally) returns Shape
+	export function make(side Tally) returns isolated Shape
 		self.made = self.made + 1
 		return Square.create(side)
 	end 'make'
@@ -13710,7 +13773,7 @@ type Calc
 		return Self{count: 0}
 	end 'create'
 
-	export function measure(s Shape)
+	export function measure(s isolated Shape)
 		self.count = self.count + s.area()
 	end 'measure'
 
@@ -13721,7 +13784,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let shape = squareOf(3)
+	let shape = squareOf(3) as isolated Shape
 	let mine = shape.area()
 	try h.measure(shape) otherwise panic("a running service with room takes the send")
 	let total = try await h.total() otherwise panic("the service is running")
@@ -13734,10 +13797,9 @@ end 'main'
 9 9
 ```
 
-<!-- test: services.a-second-owner-inside-a-conformer-aborts -->
-A value held at an interface type is walked through the conformer it holds, so a record it reaches that
-another owner still names is found at the send: the list's cell is co-owned by `main`, and the move aborts
-with exit **96** before the service can see it.
+<!-- test: services.a-second-owner-inside-a-conformer-is-refused -->
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 typealias Tally = int(0 to u64.max)
 
@@ -13778,7 +13840,7 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(s Shape)
+	export function take(s isolated Shape)
 		self.seen = s.area()
 	end 'take'
 end 'Svc'
@@ -13793,11 +13855,8 @@ function main() returns ExitCode
 	return cell.n as ExitCode
 end 'main'
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3200: <fragment>:52:13: 'shape' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: services.a-conformer-holding-a-string-crosses -->
@@ -13832,7 +13891,7 @@ type Calc
 		return Self{count: 0}
 	end 'create'
 
-	export function measure(s Shape)
+	export function measure(s isolated Shape)
 		self.count = self.count + s.area()
 	end 'measure'
 
@@ -13843,7 +13902,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	var shape = labelOf(1234)
+	var shape = labelOf(1234) as isolated Shape
 	try h.measure(shape) otherwise panic("a running service with room takes the send")
 	let total = try await h.total() otherwise panic("the service is running")
 	print("{total}\n")
@@ -13885,7 +13944,7 @@ type Factory
 		return Self{made: 0}
 	end 'create'
 
-	export function make(width Tally) returns Shape
+	export function make(width Tally) returns isolated Shape
 		self.made = self.made + 1
 		return Label.create("w{width}")
 	end 'make'
@@ -13928,7 +13987,7 @@ type Calc
 		return Self{count: 0}
 	end 'create'
 
-	export function measure(s Shape)
+	export function measure(s isolated Shape)
 		self.count = self.count + s.area()
 	end 'measure'
 end 'Calc'
@@ -14024,12 +14083,12 @@ type Factory
 		return Self{made: 0}
 	end 'create'
 
-	export function make(width Tally) returns Shape
+	export function make(width Tally) returns isolated Shape
 		self.made = self.made + 1
 		return Label.create("w{width}")
 	end 'make'
 
-	export function inspect(s Shape)
+	export function inspect(s isolated Shape)
 		self.made = self.made + s.area()
 	end 'inspect'
 end 'Factory'
@@ -14115,7 +14174,7 @@ type Calc
 		return Self{calls: 0}
 	end 'create'
 
-	export function combine(a Shape, scale Tally, b Shape) returns Tally
+	export function combine(a isolated Shape, scale Tally, b isolated Shape) returns Tally
 		self.calls = self.calls + 1
 		return a.area() * scale + b.area()
 	end 'combine'
@@ -14123,7 +14182,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let sent = squareOf(2)
+	let sent = squareOf(2) as isolated Shape
 	let sentArea = sent.area()
 	let n = try await h.combine(sent, scale: 10, b: labelOf(123)) otherwise panic("the calc is running")
 	print("{n} {sentArea}\n")
@@ -14172,14 +14231,14 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function poke(c Counter)
+	export function poke(c isolated Counter)
 		c.bump()
 	end 'poke'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let c = counterOf()
+	let c = counterOf() as isolated Counter
 	try h.poke(c) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
@@ -14220,14 +14279,14 @@ type Keeper
 		return Self{last: Square.create(1)}
 	end 'create'
 
-	export function keep(s Shape)
-		self.last = s
+	export function keep(s isolated Shape)
+		self.last = merge s
 	end 'keep'
 end 'Keeper'
 
 function main() returns ExitCode
 	let h = spawn Keeper.create()
-	let s = squareOf(2)
+	let s = squareOf(2) as isolated Shape
 	try h.keep(s) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
@@ -14284,10 +14343,9 @@ end 'main'
 9
 ```
 
-<!-- test: services.a-conformer-no-walk-reaches-aborts-when-sent-at-its-interface-type -->
-A value held at an interface type is walked through whatever conformer it holds at run time, so a conformer
-whose graph reaches an OS handle cannot be refused where it is sent: the send aborts with exit **96** before
-the service can see it.
+<!-- test: services.a-conformer-no-walk-reaches-is-refused-when-sent-at-its-interface-type -->
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 typealias Tally = int(0 to u64.max)
 
@@ -14318,7 +14376,7 @@ type Calc
 		return Self{count: 0}
 	end 'create'
 
-	export function measure(s Shape)
+	export function measure(s isolated Shape)
 		self.count = self.count + s.area()
 	end 'measure'
 end 'Calc'
@@ -14330,11 +14388,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3200: <fragment>:39:16: 'shape' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: error.a-conformer-no-walk-reaches-sent-at-its-own-type-is-refused -->
@@ -14366,7 +14421,7 @@ type Calc
 		return Self{count: 0}
 	end 'create'
 
-	export function measure(s Shape)
+	export function measure(s isolated Shape)
 		self.count = self.count + s.area()
 	end 'measure'
 end 'Calc'
@@ -14410,7 +14465,7 @@ type Surveyor
 		return Self{shape: Square.create(side)}
 	end 'create'
 
-	export function peek() returns Shape
+	export function peek() returns immutable Shape
 		return self.shape
 	end 'peek'
 end 'Surveyor'
@@ -14448,8 +14503,10 @@ type Surveyor
 		return Self{settings: settings}
 	end 'prepare'
 
-	static function create(settings Settings) returns Self
-		return prepare(settings)
+	static function create(settings isolated Settings) returns Self
+		let ownedSettings = merge settings
+
+		return prepare(ownedSettings)
 	end 'create'
 
 	export function measure(n Tally) returns Tally
@@ -14505,7 +14562,7 @@ type Keeper
 		return Self{kept: 0}
 	end 'create'
 
-	export function keep(holder Holder) returns Tally
+	export function keep(holder isolated Holder) returns Tally
 		self.kept = self.kept + 1
 		return 42 if holder.settings.doubled else 0
 	end 'keep'
@@ -14556,8 +14613,10 @@ type Surveyor
 		return Self{settings: settings, label: label}
 	end 'prepare'
 
-	static function create(settings Settings, label String) returns Self
-		return try prepare(settings, label: label) otherwise panic("prepare refused")
+	static function create(settings isolated Settings, label String) returns Self
+		let ownedSettings = merge settings
+
+		return try prepare(ownedSettings, label: label) otherwise panic("prepare refused")
 	end 'create'
 
 	export function measure(n Tally) returns Tally
@@ -14606,8 +14665,8 @@ end 'Holder'
 type Surveyor
 	var settings as Settings
 
-	static function create(settings Settings) returns Self
-		return Self{settings: settings}
+	static function create(settings isolated Settings) returns Self
+		return Self{settings: merge settings}
 	end 'create'
 
 	export function measure(n Tally) returns Tally
@@ -14616,7 +14675,7 @@ type Surveyor
 end 'Surveyor'
 
 function main() returns ExitCode
-	let surveyor = spawn Surveyor.create(Holder.create(Settings.create(true)).settings)
+	let surveyor = spawn Surveyor.create(Holder.create(Settings.create(true)).settings.clone())
 	let total = try await surveyor.measure(21) otherwise panic("the surveyor is running")
 	print("{total}\n")
 	surveyor.shutdown()
@@ -14659,7 +14718,7 @@ type Keeper
 		return Self{kept: 0}
 	end 'create'
 
-	export function keep(holder Holder) returns Tally
+	export function keep(holder isolated Holder) returns Tally
 		self.kept = self.kept + 1
 		return 42 if holder.settings.doubled else 0
 	end 'keep'
@@ -14667,7 +14726,7 @@ end 'Keeper'
 
 function main() returns ExitCode
 	let keeper = spawn Keeper.create()
-	let total = try await keeper.keep(Holder.create(Holder.create(Settings.create(true)).settings)) otherwise panic("the keeper is running")
+	let total = try await keeper.keep(Holder.create(Holder.create(Settings.create(true)).settings.clone())) otherwise panic("the keeper is running")
 	print("{total}\n")
 	keeper.shutdown()
 	return 0
@@ -14722,7 +14781,7 @@ type Keeper
 		return Self{kept: 0}
 	end 'create'
 
-	export function keep(holder Holder, label String) returns Tally
+	export function keep(holder isolated Holder, label String) returns Tally
 		self.kept = self.kept + 1
 		return 42 if holder.settings.doubled and label.byteLength() == 5 else 0
 	end 'keep'
@@ -14777,8 +14836,8 @@ end 'Holder'
 type Surveyor
 	var settings as Settings
 
-	static function create(settings Settings) returns Self
-		return Self{settings: settings}
+	static function create(settings isolated Settings) returns Self
+		return Self{settings: merge settings}
 	end 'create'
 
 	export function measure(n Tally) returns Tally
@@ -14793,7 +14852,7 @@ function measureWith(surveyor Surveyor.handle, extra Holder) returns Tally
 end 'measureWith'
 
 function main() returns ExitCode
-	let total = measureWith(spawn Surveyor.create(Holder.create(Settings.create(true)).settings), extra: Holder.create(Holder.create(Settings.create(false)).settings))
+	let total = measureWith(spawn Surveyor.create(Holder.create(Settings.create(true)).settings.clone()), extra: Holder.create(Holder.create(Settings.create(false)).settings))
 	print("{total}\n")
 	return 0
 end 'main'
@@ -15002,21 +15061,24 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take2(a Box, other Box)
-		self.seen = self.seen + a.n + other.n
+	export function take2(a isolated Box, other isolated Box)
+		let ownedA = merge a
+		let ownedOther = merge other
+
+		self.seen = self.seen + ownedA.n + ownedOther.n
 	end 'take2'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	try h.take2(b, other: b) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:25:24: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:28:24: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: services.error.a-let-and-its-alias-sent-in-one-message-are-refused -->
@@ -15037,14 +15099,17 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take2(a Box, other Box)
-		self.seen = self.seen + a.n + other.n
+	export function take2(a isolated Box, other isolated Box)
+		let ownedA = merge a
+		let ownedOther = merge other
+
+		self.seen = self.seen + ownedA.n + ownedOther.n
 	end 'take2'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	let c = b
 	try h.take2(b, other: c) otherwise panic("a running service with room takes the send")
 	return 0
@@ -15052,7 +15117,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:26:24: argument `other` of the message `Svc.take2` cannot be proven to have exactly one owner (`b`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3102: <fragment>:29:14: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: services.error.a-sent-let-used-as-a-method-receiver-is-use-after-move -->
@@ -15077,21 +15142,23 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(b Box)
-		self.seen = self.seen + b.n
+	export function take(b isolated Box)
+		let ownedB = merge b
+
+		self.seen = self.seen + ownedB.n
 	end 'take'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	try h.take(b) otherwise panic("a running service with room takes the send")
 	return b.doubled() as ExitCode
 end 'main'
 public typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:30:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:32:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: services.error.a-sent-let-passed-to-an-async-call-is-use-after-move -->
@@ -15112,8 +15179,10 @@ type Svc
 		return Self{seen: 0}
 	end 'create'
 
-	export function take(b Box)
-		self.seen = self.seen + b.n
+	export function take(b isolated Box)
+		let ownedB = merge b
+
+		self.seen = self.seen + ownedB.n
 	end 'take'
 end 'Svc'
 
@@ -15124,7 +15193,7 @@ end 'readIt'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	let b = Box.create()
+	let b = Box.create() as isolated Box
 	try h.take(b) otherwise panic("a running service with room takes the send")
 	let p = async readIt(b)
 	return (await p) as ExitCode
@@ -15132,7 +15201,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:31:23: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:33:23: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: error.a-var-the-loop-iterates-is-not-sent-inside-the-loop -->
@@ -15150,7 +15219,7 @@ type Summer
 		return Self{total: 0}
 	end 'create'
 
-	export function add(words Words) returns Integer
+	export function add(words isolated Words) returns Integer
 		for word in words 'each'
 			self.total = self.total + (word.byteLength() as Integer)
 		end 'each'
@@ -15175,7 +15244,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:28:27: argument `words` of the message `Summer.add` cannot be proven to have exactly one owner (`items`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3200: <fragment>:28:27: 'items' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: services.a-var-the-loop-iterated-is-sent-after-the-loop -->
@@ -15191,7 +15260,7 @@ type Summer
 		return Self{total: 0}
 	end 'create'
 
-	export function add(words Words) returns Integer
+	export function add(words isolated Words) returns Integer
 		for word in words 'each'
 			self.total = self.total + (word.byteLength() as Integer)
 		end 'each'
@@ -15202,9 +15271,13 @@ end 'Summer'
 
 function main() returns ExitCode
 	let h = spawn Summer.create()
-	var items = Words.create(0)
-	items.push("first padded out long enough to heap allocate {1}")
-	items.push("second padded out long enough to heap allocate {2}")
+	var items = Words.create(0) as isolated Words
+
+	modify items 'fill'
+		items.push("first padded out long enough to heap allocate {1}")
+		items.push("second padded out long enough to heap allocate {2}")
+	end 'fill'
+
 	var seen = 0 as Integer
 
 	for x in items 'each'
@@ -15224,8 +15297,8 @@ end 'main'
 ```
 
 <!-- test: services.a-value-whose-field-a-closure-holds-is-refused-at-the-send -->
-`inner` is a field of `b`, and the closure that captured `inner` holds a reference of its own to it, so `b`'s graph
-has a second owner when it crosses to the service: the send's soleness walk refuses it at run time.
+An `isolated` value is one no other name reaches, so a graph the sender still owns a part of is refused at the argument.
+
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -15252,26 +15325,25 @@ type Holder
 		return Self{total: 0}
 	end 'create'
 
-	export function take(b Outer) returns Integer
-		self.total = self.total + b.inner.n
+	export function take(b isolated Outer) returns Integer
+		let ownedB = merge b
+
+		self.total = self.total + ownedB.inner.n
 		return self.total
 	end 'take'
 end 'Holder'
 
 function main() returns ExitCode
 	let h = spawn Holder.create()
-	let b = Outer.create()
+	let b = Outer.create() as isolated Outer
 	let inner = b.inner
 	let peek = function() gives inner.n
 	let r = try await h.take(b) otherwise 0
 	return (r + peek()) as ExitCode
 end 'main'
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3202: <fragment>:38:14: 'b.inner' is mutable and cannot leave the statement that opens 'the isolated value'; a value leaving a one-statement open must be a value, immutable or a fresh isolated
 ```
 
 <!-- test: services.error.an-argument-whose-graph-holds-a-function-value-is-refused -->
@@ -15296,8 +15368,10 @@ type Calc
 		return Self{count: 0}
 	end 'create'
 
-	export function run(j Job)
-		self.count = j.op(self.count)
+	export function run(j isolated Job)
+		let ownedJ = merge j
+
+		self.count = ownedJ.op(self.count)
 	end 'run'
 end 'Calc'
 
@@ -15308,7 +15382,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:27:12: argument `j` of the message `Calc.run` is a `Job` whose graph reaches a function value, a closure record that owns what it captures and does not cross to another thread. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3138: <fragment>:29:12: argument `j` of the message `Calc.run` is a `Job` whose graph reaches a function value, a closure record that owns what it captures and does not cross to another thread. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
 ```
 
 <!-- test: services.error.a-function-valued-reply-is-refused -->
@@ -15453,7 +15527,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function show(p Point) returns Count
+	export function show(p isolated Point) returns Count
 		self.seen = self.seen + 1
 		return p.x
 	end 'show'
@@ -15497,7 +15571,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Box) returns Count
+	export function keep(p isolated Box) returns Count
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -15505,8 +15579,12 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var b = Box.create(1)
-	b.n = 2
+	var b = Box.create(1) as isolated Box
+
+	modify b 'fill'
+		b.n = 2
+	end 'fill'
+
 	view w = b
 	print("{w.n}\n")
 	let r = try await h.keep(b) otherwise 0
@@ -15515,7 +15593,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:31:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3138: <fragment>:35:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
 ```
 
 <!-- test: services.error.a-var-sent-after-it-has-been-viewed-and-read-afterwards-is-refused -->
@@ -15539,8 +15617,8 @@ type Store
 		return Self{kept: Box.create(0)}
 	end 'create'
 
-	export function keep(p Box) returns Count
-		self.kept = p
+	export function keep(p isolated Box) returns Count
+		self.kept = merge p
 		self.kept.n = 9
 		return 0
 	end 'keep'
@@ -15548,8 +15626,12 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var b = Box.create(1)
-	b.n = 2
+	var b = Box.create(1) as isolated Box
+
+	modify b 'fill'
+		b.n = 2
+	end 'fill'
+
 	view w = b
 	let r = try await h.keep(b) otherwise 0
 	print("{w.n} {r}\n")
@@ -15557,7 +15639,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:31:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3138: <fragment>:35:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
 ```
 
 <!-- test: services.a-text-field-read-through-a-view-is-sent-as-a-value -->
@@ -15634,16 +15716,20 @@ type Store
 		return Self{kept: Box.create(0)}
 	end 'create'
 
-	export function keep(p Box) returns Count
-		self.kept = p
+	export function keep(p isolated Box) returns Count
+		self.kept = merge p
 		return 0
 	end 'keep'
 end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var b = Box.create(1)
-	b.child.n = 2
+	var b = Box.create(1) as isolated Box
+
+	modify b 'fill'
+		b.child.n = 2
+	end 'fill'
+
 	view w = b.child
 	let r = try await h.keep(b) otherwise 0
 	print("{w.n} {r}\n")
@@ -15651,7 +15737,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:38:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3202: <fragment>:41:11: 'b.child' is mutable and cannot leave the statement that opens 'the isolated value'; a value leaving a one-statement open must be a value, immutable or a fresh isolated
 ```
 
 <!-- test: services.error.a-var-a-ternary-view-may-name-sent-is-refused -->
@@ -15675,7 +15761,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Box) returns Count
+	export function keep(p isolated Box) returns Count
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -15683,10 +15769,17 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var b = Box.create(1)
-	var c = Box.create(2)
-	b.n = 3
-	c.n = 4
+	var b = Box.create(1) as isolated Box
+	var c = Box.create(2) as isolated Box
+
+	modify b 'fillB'
+		b.n = 3
+	end 'fillB'
+
+	modify c 'fillC'
+		c.n = 4
+	end 'fillC'
+
 	view w = b if b.n > c.n else c
 	let r = try await h.keep(c) otherwise 0
 	print("{w.n} {r}\n")
@@ -15694,7 +15787,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:32:27: argument `c` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `c` can be neither moved nor shared with the service. Send a `.clone()`
+error E3202: <fragment>:38:11: 'b if b.n > c.n else c' is mutable and cannot leave the statement that opens 'the isolated value'; a value leaving a one-statement open must be a value, immutable or a fresh isolated
 ```
 
 <!-- test: services.error.a-var-an-otherwise-view-may-name-sent-is-refused -->
@@ -15719,7 +15812,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Box) returns Count
+	export function keep(p isolated Box) returns Count
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -15727,10 +15820,18 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var boxes = Boxes.create(0)
-	boxes.push(Box.create(1))
-	var spare = Box.create(0)
-	spare.n = 2
+	var boxes = Boxes.create(0) as isolated Boxes
+
+	modify boxes 'fill'
+		boxes.push(Box.create(1))
+	end 'fill'
+
+	var spare = Box.create(0) as isolated Box
+
+	modify spare 'fill'
+		spare.n = 2
+	end 'fill'
+
 	view w = try boxes.get(0) otherwise spare
 	let r = try await h.keep(spare) otherwise 0
 	print("{w.n} {r}\n")
@@ -15738,7 +15839,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:33:27: argument `spare` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `spare` can be neither moved nor shared with the service. Send a `.clone()`
+error E3200: <fragment>:40:11: a join of an isolated value with data that is not isolated is refused: every arm must be isolated, or a fresh value
 ```
 
 <!-- test: services.error.a-var-a-view-of-a-calls-result-may-name-sent-is-refused -->
@@ -15762,7 +15863,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Box) returns Count
+	export function keep(p isolated Box) returns Count
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -15774,8 +15875,12 @@ end 'pick'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var b = Box.create(1)
-	b.n = 2
+	var b = Box.create(1) as isolated Box
+
+	modify b 'fill'
+		b.n = 2
+	end 'fill'
+
 	view w = pick(b)
 	let r = try await h.keep(b) otherwise 0
 	print("{w.n} {r}\n")
@@ -15783,7 +15888,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:34:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3201: <fragment>:37:11: 'pick' hands back mutable data of the isolated region it opens; use it inside a `modify` block
 ```
 
 <!-- test: services.error.a-var-a-view-of-a-methods-result-may-name-sent-is-refused -->
@@ -15819,7 +15924,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Box) returns Count
+	export function keep(p isolated Box) returns Count
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -15828,8 +15933,12 @@ end 'Store'
 function main() returns ExitCode
 	let h = spawn Store.create()
 	let c = Picker.create()
-	var b = Box.create(1)
-	b.n = 2
+	var b = Box.create(1) as isolated Box
+
+	modify b 'fill'
+		b.n = 2
+	end 'fill'
+
 	view w = c.pick(b)
 	let r = try await h.keep(b) otherwise 0
 	print("{w.n} {r}\n")
@@ -15837,7 +15946,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:43:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3201: <fragment>:46:13: 'pick' hands back mutable data of the isolated region it opens; use it inside a `modify` block
 ```
 
 <!-- test: services.error.a-var-a-match-view-may-name-sent-is-refused -->
@@ -15866,7 +15975,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Box) returns Count
+	export function keep(p isolated Box) returns Count
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -15875,10 +15984,16 @@ end 'Store'
 function main() returns ExitCode
 	let h = spawn Store.create()
 	let side = Side.left
-	var b = Box.create(1)
-	var c = Box.create(2)
-	b.n = 3
-	c.n = 4
+	var b = Box.create(1) as isolated Box
+	var c = Box.create(2) as isolated Box
+
+	modify b 'fillB'
+		b.n = 3
+	end 'fillB'
+
+	modify c 'fillC'
+		c.n = 4
+	end 'fillC'
 
 	view w = match side 'which'
 		left gives b
@@ -15891,7 +16006,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:43:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3102: <fragment>:49:27: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: services.error.an-array-an-element-view-reaches-sent-is-refused -->
@@ -15916,7 +16031,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keepAll(p Boxes) returns Count
+	export function keepAll(p isolated Boxes) returns Count
 		self.seen = self.seen + 1
 		return p.count() as Count
 	end 'keepAll'
@@ -15924,8 +16039,12 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var boxes = Boxes.create(0)
-	boxes.push(Box.create(1))
+	var boxes = Boxes.create(0) as isolated Boxes
+
+	modify boxes 'fill'
+		boxes.push(Box.create(1))
+	end 'fill'
+
 	view e = try boxes.get(0) otherwise return 1
 	let r = try await h.keepAll(boxes) otherwise 0
 	print("{e.n} {r}\n")
@@ -15933,7 +16052,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:31:30: argument `boxes` of the message `Store.keepAll` has been viewed by 'e': a view's reference is a second owner for the rest of the function, so `boxes` can be neither moved nor shared with the service. Send a `.clone()`
+error E3138: <fragment>:35:30: argument `boxes` of the message `Store.keepAll` has been viewed by 'e': a view's reference is a second owner for the rest of the function, so `boxes` can be neither moved nor shared with the service. Send a `.clone()`
 ```
 
 <!-- test: services.error.an-array-an-if-view-reached-sent-later-is-refused -->
@@ -15958,7 +16077,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keepAll(p Boxes) returns Count
+	export function keepAll(p isolated Boxes) returns Count
 		self.seen = self.seen + 1
 		return p.count() as Count
 	end 'keepAll'
@@ -15966,8 +16085,11 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var boxes = Boxes.create(0)
-	boxes.push(Box.create(1))
+	var boxes = Boxes.create(0) as isolated Boxes
+
+	modify boxes 'fill'
+		boxes.push(Box.create(1))
+	end 'fill'
 
 	if view e = try boxes.get(0) 'first'
 		print("{e.n}\n")
@@ -15979,7 +16101,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:35:30: argument `boxes` of the message `Store.keepAll` has been viewed by 'e': a view's reference is a second owner for the rest of the function, so `boxes` can be neither moved nor shared with the service. Send a `.clone()`
+error E3138: <fragment>:38:30: argument `boxes` of the message `Store.keepAll` has been viewed by 'e': a view's reference is a second owner for the rest of the function, so `boxes` can be neither moved nor shared with the service. Send a `.clone()`
 ```
 
 <!-- test: services.error.a-var-viewed-earlier-in-a-loop-body-sent-later-in-it-is-refused -->
@@ -16003,7 +16125,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Box) returns Count
+	export function keep(p isolated Box) returns Count
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -16013,8 +16135,12 @@ function main() returns ExitCode
 	let h = spawn Store.create()
 
 	for _ in 1 to 2 'each'
-		var b = Box.create(1)
-		b.n = 2
+		var b = Box.create(1) as isolated Box
+
+		modify b 'fill'
+			b.n = 2
+		end 'fill'
+
 		view w = b
 		print("{w.n}\n")
 		let r = try await h.keep(b) otherwise 0
@@ -16025,7 +16151,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:33:28: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3138: <fragment>:37:28: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
 ```
 
 <!-- test: services.error.a-var-viewed-then-handed-to-spawn-as-state-is-refused -->
@@ -16045,8 +16171,8 @@ end 'Box'
 type Worker
 	var held as Box
 
-	static function create(held Box) returns Self
-		return Self{held: held}
+	static function create(held isolated Box) returns Self
+		return Self{held: merge held}
 	end 'create'
 
 	export function bump() returns Count
@@ -16056,8 +16182,12 @@ type Worker
 end 'Worker'
 
 function main() returns ExitCode
-	var b = Box.create(1)
-	b.n = 2
+	var b = Box.create(1) as isolated Box
+
+	modify b 'fill'
+		b.n = 2
+	end 'fill'
+
 	view w = b
 	let h = spawn Worker.create(b)
 	let r = try await h.bump() otherwise 0
@@ -16066,7 +16196,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:29:30: argument `b` of `spawn Worker.create(…)` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3138: <fragment>:33:30: argument `b` of `spawn Worker.create(…)` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
 ```
 
 <!-- test: services.a-viewed-var-of-an-immutable-record-is-shared-with-the-service -->
@@ -16090,7 +16220,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Box) returns Count
+	export function keep(p immutable Box) returns Count
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -16098,8 +16228,8 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var b = Box.create(1)
-	b = Box.create(2)
+	var b = freeze Box.create(1)
+	b = freeze Box.create(2)
 	view w = b
 	let r = try await h.keep(b) otherwise 0
 	print("{w.n} {r}\n")
@@ -16134,7 +16264,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Box) returns Count
+	export function keep(p isolated Box) returns Count
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -16146,10 +16276,18 @@ end 'boxed'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var a = Box.create(1)
-	a.n = 2
-	var other = Box.create(3)
-	other.n = 4
+	var a = Box.create(1) as isolated Box
+
+	modify a 'fill'
+		a.n = 2
+	end 'fill'
+
+	var other = Box.create(3) as isolated Box
+
+	modify other 'fill'
+		other.n = 4
+	end 'fill'
+
 	let flag = a.n > other.n
 	view w = boxed(try await h.keep(a if flag else other) otherwise 0)
 	a.n = 9
@@ -16158,7 +16296,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:37:2: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:45:2: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: services.a-viewed-var-of-an-immutable-generic-instance-is-shared-with-the-service -->
@@ -16184,7 +16322,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p CountCell) returns Count
+	export function keep(p immutable CountCell) returns Count
 		self.seen = self.seen + 1
 		return p.v
 	end 'keep'
@@ -16192,8 +16330,8 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var b = CountCell.create(1)
-	b = CountCell.create(3)
+	var b = freeze CountCell.create(1)
+	b = freeze CountCell.create(3)
 	view w = b
 	let r = try await h.keep(b) otherwise 0
 	print("{w.v} {r}\n")
@@ -16225,7 +16363,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(n Note) returns Count
+	export function keep(n immutable Note) returns Count
 		self.seen = self.seen + 1
 
 		return match n 'note'
@@ -16237,8 +16375,8 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var n = Note.text("a")
-	n = Note.text("bb")
+	var n = freeze Note.text("a")
+	n = freeze Note.text("bb")
 	view w = n
 	let r = try await h.keep(n) otherwise 0
 
@@ -16280,7 +16418,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Box) returns Count
+	export function keep(p isolated Box) returns Count
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -16289,7 +16427,7 @@ end 'Store'
 function main() returns ExitCode
 	let h = spawn Store.create()
 	var boxes = Boxes.create(0)
-	var b = Box.create(1)
+	var b = Box.create(1) as isolated Box
 	boxes.push(b)
 	view w = boxes
 	let r = try await h.keep(b) otherwise 0
@@ -16298,7 +16436,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:32:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3196: <fragment>:30:13: cannot store an isolated 'Box' into 'an element of the container push writes', which holds a mutable 'Box'; `merge` it first
 ```
 
 <!-- test: services.error.an-immutable-record-no-view-reaches-is-moved-by-the-send -->
@@ -16322,7 +16460,7 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Box) returns Count
+	export function keep(p isolated Box) returns Count
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
@@ -16369,13 +16507,13 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Box) returns Count
+	export function keep(p isolated Box) returns Count
 		self.seen = self.seen + 1
 		return p.n
 	end 'keep'
 end 'Store'
 
-function made(fail bool) returns Box throws MakeError
+function made(fail bool) returns isolated Box throws MakeError
 	if fail 'refuse'
 		throw MakeError.refused
 	end 'refuse'
@@ -16383,7 +16521,7 @@ function made(fail bool) returns Box throws MakeError
 	return Box.create(1)
 end 'made'
 
-function spare() returns Box
+function spare() returns isolated Box
 	return Box.create(2)
 end 'spare'
 
@@ -16446,16 +16584,22 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(names lib.Names) returns Count
-		self.seen = self.seen + names.count()
+	export function keep(names isolated lib.Names) returns Count
+		let added = names.count()
+
+		self.seen = self.seen + added
 		return self.seen
 	end 'keep'
 end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var tags = lib.Names.create(0)
-	tags.push("a")
+	var tags = lib.Names.create(0) as isolated lib.Names
+
+	modify tags 'fill'
+		tags.push("a")
+	end 'fill'
+
 	let got = try await h.keep(tags) otherwise panic("the store is open")
 	return got as ExitCode
 end 'main'
@@ -16506,8 +16650,10 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function weigh(item lib.Item) returns Count
-		self.seen = self.seen + item.weight
+	export function weigh(item isolated lib.Item) returns Count
+		let weight = item.weight
+
+		self.seen = self.seen + weight
 		return self.seen
 	end 'weigh'
 
@@ -16515,7 +16661,7 @@ type Store
 		return 10 if mode == lib.Mode.loud else 1
 	end 'volume'
 
-	export function tag(plate lib.Named) returns Count
+	export function tag(plate isolated lib.Named) returns Count
 		return plate.label()
 	end 'tag'
 end 'Store'
@@ -16904,8 +17050,8 @@ fatal error: runtime abort 96 (transferredRecordNotSole)
 
 <!-- test: services.a-tcp-client-held-at-an-interface-type-crosses-and-echoes -->
 <!-- procs: 4 -->
-A conformer that owns a connection and is held at an interface type crosses through its witness: the walk the table
-names for `Port` proves the connection sole, and the service reads and writes it through the interface.
+A connection moves into a service whose state holds a conformer of it at an interface type, and the service reads and
+writes the connection through the interface.
 ```maxon
 typealias Tally = int(0 to 1000000)
 
@@ -16929,21 +17075,16 @@ type Port implements Speaker
 	end 'speak'
 end 'Port'
 
-function speakerFor(listener TcpListener) returns Speaker
-	let accepted = try listener.accept() otherwise panic("a connection is waiting in the backlog")
-
-	return Port.create(accepted)
-end 'speakerFor'
-
 type Stage
 	var heard as Tally
+	var speaker as Speaker
 
-	static function create() returns Self
-		return Self{heard: 0}
+	static function create(client TcpClient) returns Self
+		return Self{heard: 0, speaker: Port.create(client)}
 	end 'create'
 
-	export function perform(speaker Speaker) returns Tally
-		self.heard = self.heard + speaker.speak()
+	export function perform() returns Tally
+		self.heard = self.heard + self.speaker.speak()
 
 		return self.heard
 	end 'perform'
@@ -16952,8 +17093,9 @@ end 'Stage'
 function main() returns ExitCode
 	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	var out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
-	let stage = spawn Stage.create()
-	let reply = try stage.perform(speakerFor(listener)) otherwise return 4
+	let accepted = try listener.accept() otherwise return 3
+	let stage = spawn Stage.create(accepted)
+	let reply = try stage.perform() otherwise return 4
 
 	_ = try out.send("interface") otherwise 'refused5x49'
 		reply.cancel()
@@ -17101,7 +17243,7 @@ type Maker
 		return Self{made: 0}
 	end 'create'
 
-	export function next() returns Box
+	export function next() returns isolated Box
 		self.made = self.made + 1
 
 		return Box.make(self.made)
@@ -17149,8 +17291,8 @@ type Shelf
 		return Self{held: Box.make(0)}
 	end 'create'
 
-	export function keep(box Box)
-		self.held = box
+	export function keep(box isolated Box)
+		self.held = merge box
 	end 'keep'
 
 	export function total() returns Tally
@@ -17435,7 +17577,7 @@ type Plot
 	var count as Whole
 	var span as Area
 
-	static function create(a Whole, b Area, shape Shape, c Whole, d Area, e Whole, f Area, g Whole, h Area, i Whole) returns Self
+	static function create(a Whole, b Area, shape isolated Shape, c Whole, d Area, e Whole, f Area, g Whole, h Area, i Whole) returns Self
 		return Self{count: a + c + e + g + i, span: b + d + f + h + shape.area()}
 	end 'create'
 
@@ -17856,7 +17998,7 @@ type Plot
 	var count as Whole
 	var span as Area
 
-	static function create(a Whole, b Area, shape Shape, c Whole, d Area, e Whole, f Area, g Whole, h Area, i Whole) returns Self throws PlotError
+	static function create(a Whole, b Area, shape isolated Shape, c Whole, d Area, e Whole, f Area, g Whole, h Area, i Whole) returns Self throws PlotError
 		if a < 0 'empty'
 			throw PlotError.empty
 		end 'empty'
@@ -17968,7 +18110,7 @@ type Ledger
 	var label as String
 	var total as Whole
 
-	static function create(label String, ids WholeArray) returns Self throws StartError
+	static function create(label String, ids isolated WholeArray) returns Self throws StartError
 		if ids.count() == 0 'empty'
 			throw StartError.refused
 		end 'empty'
@@ -17982,7 +18124,7 @@ type Ledger
 end 'Ledger'
 
 function main() returns ExitCode
-	let ids = WholeArray.create(0)
+	let ids = WholeArray.create(0) as isolated WholeArray
 
 	try spawn Ledger.create("a label long enough to be a heap string", ids: ids) otherwise (e) 'failed'
 		match e 'which'
@@ -17990,7 +18132,15 @@ function main() returns ExitCode
 		end 'which'
 	end 'failed'
 
-	let kept = try spawn Ledger.create("a label long enough to be a heap string", ids: [1, 2, 3]) otherwise return 1
+	var more = WholeArray.create(0) as isolated WholeArray
+
+	modify more 'fill'
+		more.push(1)
+		more.push(2)
+		more.push(3)
+	end 'fill'
+
+	let kept = try spawn Ledger.create("a label long enough to be a heap string", ids: more) otherwise return 1
 	let n = try await kept.size() otherwise return 1
 	print("{n}\n")
 	kept.shutdown()

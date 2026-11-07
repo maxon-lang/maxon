@@ -142,12 +142,13 @@ export function memoryDisplacement(offset ByteOffset) returns Imm32
 	return offset as Imm32
 end 'memoryDisplacement'
 
-// ⭐⭐ **EVERYTHING A CALL SITE NEEDS TO KNOW ABOUT ITS CALLEE'S ABI: which parameters travel in the float
-// file, and which file the result comes back in.** Both are the callee's DECLARED types, folded once; a
-// call site reads the fold rather than the callee's `IrFunction`, because the isel runs on a pool worker
-// and a worker can reach no function but the one it was handed (`BackendPool`). The table is built once
-// on the main thread from the checked name index (`build`) and each worker is spawned with its own copy
-// (`copyOf`) — a send moves, so the driver's table cannot be the one a worker holds.
+// ⭐⭐ **EVERYTHING A CALL SITE NEEDS TO KNOW ABOUT ITS CALLEE'S ABI: which parameters travel in the
+// float file, and which file the result comes back in.** Both are the callee's DECLARED types,
+// folded once; a call site reads the fold rather than the callee's `IrFunction`, because the isel
+// runs on a pool worker and a worker can reach no function but the one it was handed
+// (`BackendPool`). The table is built once on the main thread from the checked name index (`build`)
+// and each worker is spawned with its own clone (`clone`) — a send moves, so the driver's table
+// cannot be the one a worker holds.
 //
 // The parameter side is a MASK, not a per-callee `RegClassArray`: a parameter's class is ONE bit (GPR vs
 // XMM), and an array would heap-box one small array for EVERY function in the module — most all-integer
@@ -181,13 +182,13 @@ end 'LoweredUnit'
 // asks three or four times per call op, and a bisection over the sorted names would walk the shared
 // prefix of thirteen of them on every ask.
 //
-// Every name lives in that one arena, so a worker's copy is seven array clones — five of them the name
-// table's — rather than two allocations per callee per worker.
+// Every name lives in that one arena, so a worker's clone is a handful of array clones rather than
+// two allocations per callee per worker.
 export type CalleeAbiTable
 	// A row IS a `NameId`, so the two columns below are indexed by what the lookup already answers.
-	var names as NameTable
-	var paramFloatMasks as ArgFloatMaskArray
-	var resultClasses as CalleeResultClassArray
+	let names as NameTable
+	let paramFloatMasks as ArgFloatMaskArray
+	let resultClasses as CalleeResultClassArray
 
 	// ⭐ **IT TAKES THE CHECKED INDEX, NOT THE MODULE** — so its key set is provably the one
 	// `FunctionNameIndex.create` refused a duplicate over, rather than whatever the module happened to hold
@@ -195,29 +196,23 @@ export type CalleeAbiTable
 	// `intern` appends in `functions` order and the columns are pushed in that same order.
 	export static function build(funcNames FunctionNameIndex) returns CalleeAbiTable
 		let rowCount = funcNames.functions.count()
-		var table = Self{names: NameTable.create(rowCount as NameId, byteHint: (rowCount * CalleeNameByteEstimate) as NameByteCount), paramFloatMasks: ArgFloatMaskArray.create(0), resultClasses: CalleeResultClassArray.create(0)}
-		table.paramFloatMasks.reserve(rowCount)
-		table.resultClasses.reserve(rowCount)
+		var names = NameTable.create(rowCount as NameId, byteHint: (rowCount * CalleeNameByteEstimate) as NameByteCount)
+		var paramFloatMasks = ArgFloatMaskArray.create(rowCount, zeroed: false)
+		var resultClasses = CalleeResultClassArray.create(rowCount, zeroed: false)
 
 		for func in funcNames.functions 'eachFunc'
-			let row = table.names.intern(func.name)
+			let row = names.intern(func.name)
 
-			if row != (table.paramFloatMasks.count() as NameId) 'nameAlreadyInterned'
-				panic("CalleeAbiTable.build: callee '{String.from(func.name)}' interned as id {row} where the columns hold {table.paramFloatMasks.count()} rows — `FunctionNameIndex.create` refused a duplicate name, so every intern here must append")
+			if row != (paramFloatMasks.count() as NameId) 'nameAlreadyInterned'
+				panic("CalleeAbiTable.build: callee '{String.from(func.name)}' interned as id {row} where the columns hold {paramFloatMasks.count()} rows — `FunctionNameIndex.create` refused a duplicate name, so every intern here must append")
 			end 'nameAlreadyInterned'
 
-			table.paramFloatMasks.push(floatParamMaskOf(func.paramTypes))
-			table.resultClasses.push(returnTypeResultClass(func.returnType))
+			paramFloatMasks.push(floatParamMaskOf(func.paramTypes))
+			resultClasses.push(returnTypeResultClass(func.returnType))
 		end 'eachFunc'
 
-		return table
+		return Self{names: names, paramFloatMasks: paramFloatMasks, resultClasses: resultClasses}
 	end 'build'
-
-	// A table nothing else holds, with `source`'s rows in `source`'s order — what a worker is spawned
-	// with, since a spawn's factory arguments move and the driver keeps its own for the E5001 re-run.
-	export static function copyOf(source CalleeAbiTable) returns CalleeAbiTable
-		return Self{names: NameTable.copyOf(source.names), paramFloatMasks: source.paramFloatMasks.clone(), resultClasses: source.resultClasses.clone()}
-	end 'copyOf'
 
 	function paramFloatMaskOf(callee ByteArray) returns ArgFloatMask throws CalleeAbiLookup
 		let row = try self.rowFor(callee)

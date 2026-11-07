@@ -18,10 +18,11 @@ be parsed after its caller and recursion needs a least fixpoint.
 | Where | What it holds |
 | --- | --- |
 | `Compiler/CapabilityRules.maxon` | The contextual words (`IsolatedCapabilityWord`, `ModifyBlockWord`, `UniqueDeclarationWord`, `SendableBoundWord`, `MutatesClauseWord`, …), the store verdict (`storeVerdict`, `assignmentVerdict`), the join and adapt rules, and the shared refusal wording |
-| `Compiler/RegionWindows.maxon` | `RegionFactTable`, the per-body facts the parser writes: the window stack (`OpenWindow`, `WindowKind.modify` and `oneStatement`), field origins, carried derivations and stores, lent locals, and the deferred refusal. Also `tokensSpellRegionSurface` and `regionOperatorAt`, the token-level rules for the contextual words |
+| `Compiler/RegionWindows.maxon` | `RegionFactTable`, the per-body facts the parser writes: the window stack (`OpenWindow`, `WindowKind.modify` and `oneStatement`), field origins, carried derivations and stores, lent locals, and the deferred refusal. Also `regionOperatorAt`, the token-level rule for the region operators |
 | `Compiler/Lexer.maxon` | `markContextualHeads` retags a statement-start `modify` that opens a block, and `foldReceiverCapabilities` folds `mutable self` and `immutable self` into one parameter token |
 | `Compiler/CapabilityInference.maxon` | `inferCapabilities`: the per-function facts over the call graph (`CapabilityFacts`) |
 | `Compiler/CapabilityCallCheck.maxon` | `checkCapabilityCalls`: the call-site, conversion, tied-promise and must-use checks, run after inference |
+| `Compiler/ServiceCompanions.maxon` | `classifyServiceRoster`, run at a `spawn`: after the roster's E3135, E3137, E3138, E3140 and E3216 verdicts, `capabilityVerdict` judges the message parameters, the replies and the named factory's parameters for E3217 (`typeNeedsACapabilityWord`) |
 | `Compiler/OperandEvent.maxon`, `Compiler/OperandOrder.maxon`, `Compiler/ByRefOverlapCheck.maxon` | The E3186 evaluation-order check |
 
 `SemanticCheck.maxon` runs `checkByReferenceOverlaps` and then `inferCapabilities` and `checkCapabilityCalls`,
@@ -29,12 +30,11 @@ after the parameter-mutation summary they read.
 
 ## Where the checker runs
 
-`Parser.regionTracking()` gates the parse-time checks. It is true for the standard library's own source, for a
-program whose declarations spell `isolated` or `immutable` anywhere (`SignatureIndex.programTracksRegions`, set by
-`noteRegionSurfaceDeclared`), for a file whose tokens spell region surface (`tokenSpellsRegionSurface`: `modify`,
-`async`, `isolated`, `immutable`, `freeze`, `swap`, `merge`), and inside a loop that drains its array. The flag
-is part of the signature hash (`SignatureDiscriminator.regionSurfaceSeen`), so a program that gains its first
-region word recompiles every file.
+The parse-time checks run in every body of every program, the standard library's included, and so do
+`inferCapabilities`, `checkCapabilityCalls` and `checkFunctionTypeDoors`. A program that spells no region word
+has no frozen data, window or tied promise for them to judge, so what they report there is the conversion
+rule: a function value or conformer that writes, keeps or returns a read-only parameter, or may wait or yield,
+against a function type or requirement that does not declare it (E3210).
 
 ## Inferred facts
 

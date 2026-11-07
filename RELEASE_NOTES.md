@@ -427,13 +427,16 @@ release's version as its heading when the release is cut.
   array read-only in the body: pushing to it, clearing it or passing it to a function that writes it is E3197 or
   E3207.
   Fix: collect what the body adds in another array and use it after the loop.
-- A program or file that uses `async`, `modify`, `freeze`, `swap`, `merge`, `isolated` or `immutable`, and the
-  standard library, is held to the capability checks: a write through frozen or read-only data (E3197), a
-  store that mixes capabilities (E3196), an argument a parameter's inferred use refuses (E3207), a parameter
-  the body needs both mutable and immutable (E3206), results whose source arguments disagree (E3208, E3209),
-  and a call that may wait or yield inside a `modify` block (E3205).
+- Every program is held to the capability checks, whether or not its source spells a region word: a write
+  through frozen or read-only data (E3197), a store that mixes capabilities (E3196), an argument a
+  parameter's inferred use refuses (E3207), a parameter the body needs both mutable and immutable (E3206),
+  results whose source arguments disagree (E3208, E3209), a call that may wait or yield inside a `modify`
+  block (E3205), and a function value or conformer that writes, keeps or returns a parameter its function
+  type or requirement leaves read-only (E3210).
   Fix: follow the message, which names the use that decided the class: pass a mutable argument, `freeze` a
-  `.clone()` where a frozen one is wanted, or move the write out of the data that is frozen.
+  `.clone()` where a frozen one is wanted, or move the write out of the data that is frozen; declare
+  `mutable` on the parameter or `mutable self` on the boundary where a function value or conformer writes,
+  and return a `.clone()` of a read-only parameter instead of the parameter.
 - `sendable` and `isolated` after `is` in a generic type's `where` clause are region bounds, so an interface
   of either name is not a constraint there, and the same words in a function's or an extension's `where`
   clause are E3215.
@@ -460,6 +463,25 @@ release's version as its heading when the release is cut.
   more directly, so the `n + 1`th send succeeded; it now fails `mailboxFull` (or waits, with a `sendTimeout:`).
   Fix: give the service a capacity one larger where a program relies on the extra slot, or give the send a
   `sendTimeout:`.
+- A service message parameter, message reply or factory parameter whose type is a record, a union with a
+  payload, an array or other container, or an interface value is written `isolated T` or `immutable T`; with
+  neither, the `spawn` is E3217. Only the factory the `spawn` names is judged, and a reply is judged at its
+  declaration. Numbers, `bool`, `String`, `Character`, enums, unions whose cases carry nothing, service and
+  interface handles, `SharedValue` cells, tuples that own no heap, and types that hold a `unique` value or an
+  OS handle need no word.
+  Fix: write `isolated T` and send a fresh value or an `isolated` local, which the sender cannot read
+  afterwards, or write `immutable T` and send `freeze x.clone()`.
+- `LogHandler.handle` takes `record immutable LogRecord`, and `TextLogHandler.create` and
+  `JsonLogHandler.create` take `options immutable LogHandlerOptions`, so a handler conforming to
+  `LogHandler` declares `handle(record immutable LogRecord)` and a handler's options are frozen.
+  `LogRecord.create` takes `attrs isolated LogFieldArray`.
+  Fix: spell `immutable` on a `LogHandler` conformer's `record` parameter; write
+  `spawn TextLogHandler.create(freeze LogHandlerOptions.standard())`; pass `attrs` as a fresh
+  `LogFieldArray.create(0)` call or an `isolated` local, and `freeze` a `LogRecord` before sending it to a
+  handler.
+- `HttpServer.serve` takes `handler immutable HttpHandler`.
+  Fix: write `server.serve(freeze MyHandler.create(…))`; a function that receives a handler for `serve`
+  declares its parameter `immutable`.
 
 ## 0.5.0 — 2026-10-08
 

@@ -10,9 +10,9 @@
 // the schedule before the next, so a function crosses to a worker ONCE and comes home ONCE, rather than
 // once per pass.
 //
-// ⭐⭐ **WHAT MAKES IT SAFE IS THE UNIT, NOT LOCKING — there is none.** A message MOVES, so a worker is
-// handed a `StdUnit` nobody else can reach and hands back a `StdUnitBody` nobody else can reach.
-// `StdUnit`'s header owns that argument, and `BackendPool`'s owns the pool's.
+// ⭐⭐ **WHAT MAKES IT SAFE IS THE UNIT, NOT LOCKING — there is none.** A message MOVES, so a worker
+// is handed a `StdUnit` nobody else can reach and hands back the same unit with its `StdUnitAnswer`
+// filed in it. `StdUnit`'s header owns that argument, and `BackendPool`'s owns the pool's.
 //
 // ⭐⭐ **AND THE OUTPUT DOES NOT DEPEND ON THE POOL.** Splicing is order-independent — a result writes
 // this function's own block and op slots and the TAIL of the two module arrays, and an index into either
@@ -37,7 +37,7 @@
 
 // A reply cell carrying one function back. The message throws nothing, so the promise names no
 // error type.
-typealias StdPassReply = Promise with (StdUnitBody)
+typealias StdPassReply = Promise with (StdUnit)
 typealias StdPassReplyArray = Array with StdPassReply
 typealias StdArrivedUnits = ArrivedUnits with StdModule
 typealias StdPassWorkerHandleArray = Array with StdPassWorker.handle
@@ -74,9 +74,8 @@ end 'StdFanOutStep'
 
 export typealias StdFanOutStepArray = Array with StdFanOutStep
 
-// What one step of the schedule reuses across every function a worker runs: the pass's scratch. A
-// step with no scratch carries nothing; its tally is the worker's per-step tally, which a scratch that
-// counts also holds a reference to.
+// What one step of the schedule runs with: the pass's scratch. A step with no scratch carries
+// nothing; its tally is the step's own, which a scratch that counts also holds a reference to.
 union StepWorkspace
 	blockArgPrune
 	blockArgFold
@@ -119,64 +118,57 @@ enum VersioningAnswer
 	rewrote
 end 'VersioningAnswer'
 
-// ⭐⭐ **THE WORKER. Its state is the two target facts the passes read, one scratch per schedule step, the
-// tallies those scratches write into, and the per-step costs** — built ONCE and reused for every
-// function the pool hands it, exactly as the pipeline reuses one scratch per pass across the module.
+// ⭐⭐ **THE WORKER. Its state is the two target facts the passes read, the schedule, and the unit it
+// is running.** The scratch for each schedule step, the tallies those scratches write into and the
+// per-step costs are built per unit, in `runSteps`.
 //
 // ⚠ **IT IS HANDED `cpu` AND `os`, NOT A `Target`, AND THE SCHEDULE AS SCALARS**, for `BackendWorker`'s
 // reason: a `spawn`'s factory arguments are MOVED, and a record or a union box the driver still holds
 // would be a second owner.
 export type StdPassWorker
 	let reducesDivision as bool
-	var budget as HoistPressureBudget
-	var schedule as StdFanOutStepArray
+	let budget as HoistPressureBudget
+	let schedule as immutable StdFanOutStepArray
+	var slot as isolated StdUnit
 
-	// Empty until the first message (`prepareWorkspaces`), then one entry per schedule step.
-	var steps as StepWorkspaceArray
-	var tallies as StdPassTallyArray
-	var costs as PoolPhaseCosts
-
-	// The one bracket every step of every function is measured with, reopened per step
-	// (`PhaseProbe.reopenCounters`): a probe minted per step would be an allocation inside every row.
-	var probe as PhaseProbe
-
-	static function create(cpu CpuArch, os Os, steps StdFanOutStepArray) returns Self
-		return Self{reducesDivision: targetLowersMulHigh(cpu), budget: hoistPressureBudgetFor(Target.create(cpu, os: os)), schedule: steps, steps: StepWorkspaceArray.create(0), tallies: StdPassTallyArray.create(0), costs: PoolPhaseCosts.create(steps.count()), probe: PhaseProbe.beginCounters()}
+	static function create(cpu CpuArch, os Os, steps immutable StdFanOutStepArray) returns Self
+		return Self{reducesDivision: targetLowersMulHigh(cpu), budget: hoistPressureBudgetFor(Target.create(cpu, os: os)), schedule: steps, slot: StdUnit.empty(0)}
 	end 'create'
-
-	function prepareWorkspaces()
-		if self.steps.count() == self.schedule.count() 'alreadyBuilt'
-			return
-		end 'alreadyBuilt'
-
-		for step in self.schedule 'eachStep'
-			var tally = StdPassTally.create()
-			self.tallies.push(tally)
-			self.steps.push(workspaceFor(step, tally: tally))
-		end 'eachStep'
-	end 'prepareWorkspaces'
 
 	// The message. It never awaits and never sends, which is what makes the blocking graph E3139 checks
 	// trivially acyclic: a pool worker is a leaf. Its error set is empty — see this file's header.
-	export function run(unit StdUnit) returns StdUnitBody
-		return StdUnitBody.afterRunning(unit, worker: self)
+	export function run(unit isolated StdUnit) returns isolated StdUnit
+		let idle = swap self.slot with unit
+
+		modify self.slot 'work'
+			var body = try self.slot.holder.pop() otherwise panic("StdPassWorker.run: the unit for function {self.slot.funcIndex} carried no body — `StdUnit.extract` pushes exactly one")
+			let answer = self.runSteps(body)
+			self.slot.answers.push(answer)
+		end 'work'
+
+		return swap self.slot with idle
 	end 'run'
 
-	// What this worker counted and spent over every function it ran, as fresh records the reply may carry.
-	export function report() returns StdPassWorkerReport
-		return StdPassWorkerReport.of(self.costs, tallies: self.tallies)
-	end 'report'
+	// Every step of the schedule over the unit's one function, each bracketed on this thread's counters.
+	// The workspaces, the tallies the scratches write into and the costs are this function's own.
+	module function runSteps(body StdUnitBody) returns StdUnitAnswer
+		var tallies = StdPassTallyArray.create(self.schedule.count(), zeroed: false)
+		var workspaces = StepWorkspaceArray.create(self.schedule.count(), zeroed: false)
 
-	// Every step of the schedule over the unit's one function, each bracketed on this thread's
-	// counters.
-	module function runSteps(body StdUnitBody)
-		self.prepareWorkspaces()
+		for step in self.schedule 'eachStep'
+			var tally = StdPassTally.create()
+			tallies.push(tally)
+			workspaces.push(workspaceFor(step, tally: tally))
+		end 'eachStep'
+
+		var costs = PoolPhaseCosts.create(self.schedule.count())
+		var probe = PhaseProbe.beginCounters()
 		var answer = VersioningAnswer.unasked
 
-		for k in 0 upto self.steps.count() 'eachStep'
-			self.probe.reopenCounters()
-			self.runStep(k, unitModule: body.unitModule, origins: body.origins, answer: answer)
-			self.costs.record(k, probe: self.probe)
+		for k in 0 upto workspaces.count() 'eachStep'
+			probe.reopenCounters()
+			answer = runFanOutStep(try workspaces.get(k) otherwise panic("StdPassWorker.runSteps: workspaces.get OOB at {k}"), module: body.unitModule, funcIndex: UnitFunctionIndex, tally: try tallies.get(k) otherwise panic("StdPassWorker.runSteps: tallies.get OOB at {k} — one tally per step, pushed together"), origins: body.origins, reducesDivision: self.reducesDivision, budget: self.budget, answer: answer)
+			costs.record(k, probe: probe)
 		end 'eachStep'
 
 		// ⛔ **THE ORPHANS GO BEFORE THE REPLY.** A rewrite that leaves an op behind in the flat array leaves
@@ -184,13 +176,8 @@ export type StdPassWorker
 		// every record reachable from it must have one owner. Compacting drops the orphans, which is also
 		// what makes the reply carry the function's live ops and nothing else.
 		body.unitModule.compactOps()
+		return StdUnitAnswer.of(body, costs: costs, tallies: tallies)
 	end 'runSteps'
-
-	// One step, over the unit's one function.
-	function runStep(k ElementIndex, unitModule StdModule, origins DerivedOrigins, answer mutable VersioningAnswer)
-		var tally = try self.tallies.get(k) otherwise panic("StdPassWorker.runStep: tallies.get OOB at {k} — one tally per step, pushed together at create")
-		answer = runFanOutStep(try self.steps.get(k) otherwise panic("StdPassWorker.runStep: steps.get OOB at {k}"), module: unitModule, funcIndex: UnitFunctionIndex, tally: tally, origins: origins, reducesDivision: self.reducesDivision, budget: self.budget, answer: answer)
-	end 'runStep'
 end 'StdPassWorker'
 
 // ⭐⭐ **ONE STEP OF THE SCHEDULE OVER ONE FUNCTION — THE ONE PLACE A STEP IS TIED TO THE PASS IT RUNS.**
@@ -246,23 +233,6 @@ function refineVersionedRangesInFunc(module StdModule, funcIndex ElementIndex, s
 	end 'answer'
 end 'refineVersionedRangesInFunc'
 
-// EVERYTHING ONE WORKER HANDS BACK AT THE END: its per-step costs and tallies, as records nothing else
-// holds (a reply moves).
-export type StdPassWorkerReport
-	export var costs as PoolPhaseCosts
-	export var tallies as StdPassTallyArray
-
-	module static function of(costs PoolPhaseCosts, tallies StdPassTallyArray) returns StdPassWorkerReport
-		var copies = StdPassTallyArray.create(tallies.count(), zeroed: false)
-
-		for tally in tallies 'eachStep'
-			copies.push(StdPassTally.copyOf(tally))
-		end 'eachStep'
-
-		return Self{costs: PoolPhaseCosts.copyOf(costs), tallies: copies}
-	end 'of'
-end 'StdPassWorkerReport'
-
 // Run the schedule's per-function passes over every function on a worker pool; `PoolSizing` owns how the
 // pool is sized. `members` is the schedule, every one a pass `classifyPass` answers `perFunction` for
 // (`PassPipeline.requireFanOutMembership`).
@@ -290,23 +260,16 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 		var workers = StdPassWorkerHandleArray.create(workerCount, zeroed: false)
 
 		for _ in 0 upto workerCount 'eachWorker'
-			workers.push(spawn StdPassWorker.create(project.target.cpu, os: project.target.os, steps: members.clone()))
+			workers.push(spawn StdPassWorker.create(project.target.cpu, os: project.target.os, steps: freeze members.clone()))
 		end 'eachWorker'
 
 		let stealsBefore = Scheduler.counters().steals
-		drainTheStdPool(module, workers: workers, workerCount: poolSize, landedOrigins: landedOrigins, slots: slots)
+		drainTheStdPool(project, module: module, members: members, workers: workers, workerCount: poolSize, landedOrigins: landedOrigins, slots: slots, tallies: tallies)
 		let stealsAfter = Scheduler.counters().steals
 
 		if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
 			compilerLogger(CompilerLogGroup.codegen).debug("stdFanOut pool: {stealsAfter - stealsBefore} work-steal(s) while the pool drained")
 		end 'debugging'
-
-		// Each worker's costs and tallies come home once, after its last function. Both are SUMS, so the
-		// worker order cannot reach a row or a line.
-		for slot in 0 upto workerCount 'eachReport'
-			var worker = try workers.get(slot) otherwise panic("runStdPassesOnAWorkerPool: workers.get OOB at {slot} below count {workers.count()}")
-			foldWorkerReport(project, report: try await worker.report() otherwise panic("{workerGoneMessage("runStdPassesOnAWorkerPool", subject: "worker {slot}")}"), members: members, tallies: tallies)
-		end 'eachReport'
 
 		project.retiredWorkers.stdPass.keep(workers)
 	end 'somethingToRun'
@@ -421,30 +384,28 @@ function bandPhaseOfStep(step StdFanOutStep) returns CompilePhase
 	end 'phase'
 end 'bandPhaseOfStep'
 
-// Fold one worker's per-step costs into the passes' own phase rows, and its tallies into the driver's.
-function foldWorkerReport(project Project, report StdPassWorkerReport, members StdFanOutStepArray, tallies StdPassTallyArray)
-	if report.costs.width() != members.count() or report.tallies.count() != members.count() 'notTheSchedule'
-		panic("runStdPassesOnAWorkerPool: a worker reported {report.costs.width()} cost row(s) and {report.tallies.count()} tally(s) against a schedule of {members.count()} step(s) — every worker is spawned with this schedule")
+// Fold one function's per-step costs into the passes' own phase rows, and its tallies into the driver's.
+function foldUnitAnswer(project Project, answer StdUnitAnswer, members StdFanOutStepArray, tallies StdPassTallyArray)
+	if answer.costs.width() != members.count() or answer.tallies.count() != members.count() 'notTheSchedule'
+		panic("runStdPassesOnAWorkerPool: a unit answered {answer.costs.width()} cost row(s) and {answer.tallies.count()} tally(s) against a schedule of {members.count()} step(s) — every worker is spawned with this schedule")
 	end 'notTheSchedule'
 
 	for k in 0 upto members.count() 'eachStep'
-		let step = try members.get(k) otherwise panic("foldWorkerReport: members.get OOB at {k}")
-		foldPoolPhaseDelta(project, phase: compilePhaseOfPass(passKindOfFanOutStep(step)), driver: CompilePhase.stdFanOut, delta: report.costs.accumulated(k))
-		var tally = try tallies.get(k) otherwise panic("foldWorkerReport: tallies.get OOB at {k}")
-		tally.absorb(try report.tallies.get(k) otherwise panic("foldWorkerReport: report.tallies.get OOB at {k} after the count check"))
+		let step = try members.get(k) otherwise panic("foldUnitAnswer: members.get OOB at {k}")
+		foldPoolPhaseDelta(project, phase: compilePhaseOfPass(passKindOfFanOutStep(step)), driver: CompilePhase.stdFanOut, delta: answer.costs.accumulated(k))
+		var tally = try tallies.get(k) otherwise panic("foldUnitAnswer: tallies.get OOB at {k}")
+		tally.absorb(try answer.tallies.get(k) otherwise panic("foldUnitAnswer: answer.tallies.get OOB at {k} after the count check"))
 	end 'eachStep'
-end 'foldWorkerReport'
+end 'foldUnitAnswer'
 
 // ⭐⭐ **THE DISPATCH LOOP: fill the pipeline, then serve whoever finished first.** The protocol is
 // `PoolDispatch`'s, shared with `BackendPool.drainTheBackendPool`; what is this pool's own is the reply
 // type and the landing. Every promise is awaited (an un-awaited one is the green-thread exit gate's own
 // error, exit 75), `awaitAny` keeps the pool busy, and the dispatch order is longest-first
 // (`fillLongestFirstOrder`, which says why that order cannot reach the output).
-function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, workerCount PoolSize, landedOrigins DerivedOriginsArray, slots LandingSlots)
+function drainTheStdPool(project Project, module StdModule, members StdFanOutStepArray, workers StdPassWorkerHandleArray, workerCount PoolSize, landedOrigins DerivedOriginsArray, slots LandingSlots, tallies StdPassTallyArray)
 	var scratch = SpliceScratch.create()
 
-	// A static share: a worker keeps its step workspaces across the functions it is handed
-	// (`StdPassWorker`), and rebuilding them per function costs more than this pool's tail.
 	var dispatch = PoolDispatch.create(functionOpTallies(module.functions, blocks: module.blocks), workerCount: workerCount, assignment: PoolAssignment.staticShare)
 	var replies = StdPassReplyArray.create(dispatch.pipelineDepth(), zeroed: false)
 	var arrivedUnits = StdArrivedUnits.create(module.funcCount(), spent: StdModule.create())
@@ -459,10 +420,12 @@ function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, wor
 		let job = dispatch.land(ready, outstanding: replies.count())
 		let reply = try replies.remove(ready) otherwise panic("drainTheStdPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
 
-		var body = await reply
+		var unit = await reply
+		var answer = unit.takeAnswer()
 		slots.record(job, slot: landedOrigins.count())
-		arrivedUnits.arrive(body.unitModule)
-		landedOrigins.push(body.origins)
+		arrivedUnits.arrive(answer.body.unitModule)
+		landedOrigins.push(answer.body.origins)
+		foldUnitAnswer(project, answer: answer, members: members, tallies: tallies)
 
 		if dispatch.hasUndispatchedFor(freedWorker) 'handTheFreedWorkerTheNextJob'
 			dispatchOneStdJob(module, workers: workers, workerSlot: freedWorker, dispatch: dispatch, replies: replies)
@@ -483,10 +446,8 @@ function spliceSettledStdUnits(module StdModule, dispatch PoolDispatch, slots La
 	end 'eachSettledJob'
 end 'spliceSettledStdUnits'
 
-// Send the next job in dispatch order to ONE worker, and push its reply at the slot `PoolDispatch` just
-// recorded the job in. The unit is built INSIDE the argument and stored nowhere, which is E3138's rule
-// and not a style: the one shape the check admits is a call whose every `return` is a record literal
-// (`StdUnit.extract`).
+// Send the next job in dispatch order to ONE worker, and push its reply at the slot `PoolDispatch`
+// just recorded the job in.
 function dispatchOneStdJob(module StdModule, workers StdPassWorkerHandleArray, workerSlot ElementIndex, dispatch PoolDispatch, replies StdPassReplyArray)
 	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneStdJob: workers.get OOB at {workerSlot} below count {workers.count()}")
 	let funcIndex = dispatch.nextJob(workerSlot)

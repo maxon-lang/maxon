@@ -4029,14 +4029,14 @@ type Inner
 end 'Inner'
 
 type Holder
-	export var inner as Inner
+	export var inner as immutable Inner
 
 	static function create(text String) returns Self
-		return Self{inner: Inner.create(text)}
+		return Self{inner: freeze Inner.create(text)}
 	end 'create'
 
 	function reset() returns String
-		self.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		self.inner = freeze Inner.create("replacement {7} padded out long enough for the heap")
 		return "second {5} padded out long enough for the heap"
 	end 'reset'
 end 'Holder'
@@ -4048,7 +4048,7 @@ type Joiner
 		return Self{seen: "none"}
 	end 'create'
 
-	export function take(first Named, second String) returns String
+	export function take(first immutable Named, second String) returns String
 		let filler = Tag.create("filler {1} padded out long enough for the heap")
 		return "[{first.name()}] [{second}] [{filler.name()}]"
 	end 'take'
@@ -4099,14 +4099,14 @@ type Inner
 end 'Inner'
 
 type Holder
-	export var inner as Inner
+	export var inner as immutable Inner
 
 	static function create(text String) returns Self
-		return Self{inner: Inner.create(text)}
+		return Self{inner: freeze Inner.create(text)}
 	end 'create'
 
 	function reset() returns String
-		self.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		self.inner = freeze Inner.create("replacement {7} padded out long enough for the heap")
 		return "second {5} padded out long enough for the heap"
 	end 'reset'
 end 'Holder'
@@ -4118,7 +4118,7 @@ type Joiner
 		return Self{seen: "none"}
 	end 'create'
 
-	export function take(first Named, second String) returns String
+	export function take(first immutable Named, second String) returns String
 		return "[{first.name()}] [{second}]"
 	end 'take'
 end 'Joiner'
@@ -4163,14 +4163,14 @@ type Inner
 end 'Inner'
 
 type Holder
-	export var inner as Inner
+	export var inner as immutable Inner
 
 	static function create(text String) returns Self
-		return Self{inner: Inner.create(text)}
+		return Self{inner: freeze Inner.create(text)}
 	end 'create'
 
 	function reset() returns String
-		self.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		self.inner = freeze Inner.create("replacement {7} padded out long enough for the heap")
 		return "second {5} padded out long enough for the heap"
 	end 'reset'
 end 'Holder'
@@ -4182,7 +4182,7 @@ type Joiner
 		return Self{seen: "none"}
 	end 'create'
 
-	export function take(first Tag, second String) returns String
+	export function take(first immutable Tag, second String) returns String
 		return "[{first.name()}] [{second}]"
 	end 'take'
 end 'Joiner'

@@ -1,9 +1,3 @@
-export enum RegionSurface
-	unknown
-	absent
-	present
-end 'RegionSurface'
-
 export enum WindowKind
 	modify
 	oneStatement
@@ -811,27 +805,3 @@ module function regionOperatorAt(tokens TokenArray, index ElementIndex) returns 
 	let paren = try tokens.get(index + 1) otherwise return false
 	return paren.line != tok.line or paren.column != tok.column + (tok.value.count() as ColumnNumber)
 end 'regionOperatorAt'
-
-module function tokensSpellRegionSurface(tokens TokenArray) returns bool
-	for index in 0 upto tokens.count() 'eachToken'
-		if tokenSpellsRegionSurface(tokens, index: index) 'aRegionWord'
-			return true
-		end 'aRegionWord'
-	end 'eachToken'
-
-	return false
-end 'tokensSpellRegionSurface'
-
-function tokenSpellsRegionSurface(tokens TokenArray, index ElementIndex) returns bool
-	let tok = try tokens.get(index) otherwise return false
-
-	if tok.kind == TokenKind.modify or tok.kind == TokenKind.async 'aModifyBlockOrAnAsyncCall'
-		return true
-	end 'aModifyBlockOrAnAsyncCall'
-
-	if tok.kind == TokenKind.leftParen and (tok.value.equals(IsolatedCapabilityWord) or tok.value.equals(ImmutableCapabilityWord)) 'aFoldedReceiverWord'
-		return true
-	end 'aFoldedReceiverWord'
-
-	return tok.kind == TokenKind.identifier and (tok.value.equals(IsolatedCapabilityWord) or tok.value.equals(ImmutableCapabilityWord) or regionOperatorAt(tokens, index: index))
-end 'tokenSpellsRegionSurface'

@@ -45,7 +45,7 @@ type Plot
 		return Self{n: 0}
 	end 'create'
 
-	export function at(p Point)
+	export function at(p isolated Point)
 		self.n = self.n + 1
 		print("at {p.x},{p.y} ({self.n})\n")
 	end 'at'

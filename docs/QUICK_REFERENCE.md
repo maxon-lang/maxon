@@ -985,6 +985,8 @@ function reported(immutable self) returns Tally // runs on a frozen receiver onl
 - `modify x 'label'` opens an `isolated` value: a mutable value cannot leave it (E3202), its slot cannot be reassigned there (E3203), and no `await` or call that may wait or yield is allowed inside (E3205)
 - An `isolated` value is read outside a block only through `swap` (E3198); mutable data where an `isolated` value is wanted is E3200; one statement reaching two isolated regions is E3201
 - Region bounds `where T is sendable` and `where T is isolated` belong to a generic type's own `where` clause (E3215)
+- The region checks run in every program: a function value or conformer that writes, keeps or returns a parameter, or may wait or yield, against a function type or requirement that does not declare it is E3210
+- A service message parameter, message reply or factory parameter that is a record, a payload union, an array or an interface value is written `isolated T` (the sender hands over a fresh value) or `immutable T` (the sender passes `freeze x.clone()`); with neither the `spawn` is E3217
 
 ## Async/Await
 
@@ -1025,7 +1027,7 @@ for q in arr 'each'
 end 'each'
 ```
 
-- `async` starts a coroutine of the CURRENT green thread — not a new thread. It overlaps waiting, not execution; `spawn` starts a **service**, which handles one message at a time on whichever green thread takes its next message, in parallel with other services (`specs/services.md`). A service type whose state holds a promise is **E3216**; a file-scope or `static` `var` is a syntax error
+- `async` starts a coroutine of the CURRENT green thread — not a new thread. It overlaps waiting, not execution; `spawn` starts a **service**, which handles one message at a time on whichever green thread takes its next message, in parallel with other services (`specs/services.md`). A service type whose state holds a promise is **E3216**; a message, reply or factory parameter that is a record, payload union, array or interface value without `isolated` or `immutable` is **E3217**; a file-scope or `static` `var` is a syntax error
 - Every service send is a throwing call: `try h.m(x) otherwise …`, `try await h.m(x)` for a reply, `let p = try h.m(x)` to keep the reply as a promise. A send queues the message, or fails with `<Svc>.<msg>.sendError` — `mailboxFull(args)` or `serviceStopped(args)`, handing the arguments back. A full mailbox fails it at once; `try h.m(x, sendTimeout: 50)` waits up to 50 ms for room, in line behind the senders already waiting, and `sendTimeout: ForeverMs` waits as long as it takes. `sendTimeout:` is the call's last argument, or its only one; a message parameter named `sendTimeout` is **E3192**. A message that returns or throws, sent as a statement, is **E3190**; `_ = try h.m(x)` discards its reply
 - `spawn(capacity: n) T.create()` sets the mailbox's capacity, a `MailboxCapacity` (`int(1 to 2^31)`); a service that has not started takes exactly that many messages; a bare `spawn` takes `DefaultMailboxCapacity` (1024). `h.shutdown()` lets the queued messages run, then stops the service; later sends fail `serviceStopped`
 - Green threads run on the four native lanes; `wasm32-wasi` refuses `async` and `spawn` with **E3104**, and its `sleep` waits the whole program

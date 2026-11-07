@@ -6,7 +6,7 @@ typealias FlagArray = Array with Flag
 typealias Column = function(Counts) returns Tally
 typealias ColumnArray = Array with Column
 typealias CounterArray = Array with Counter.handle
-typealias CountPromise = Promise with (FileCount)
+typealias CountPromise = Promise with (Counts, FileReadError)
 typealias CountPromiseArray = Array with CountPromise
 
 let programPathArgument = 0
@@ -128,6 +128,11 @@ type Counts
 		return counts
 	end 'of'
 
+	static function ofFile(path FilePath) returns Self throws FileReadError
+		let content = try File.readBinary(path)
+		return Self.of(content)
+	end 'ofFile'
+
 	function add(other Counts)
 		self.lines = self.lines + other.lines
 		self.words = self.words + other.words
@@ -135,19 +140,13 @@ type Counts
 	end 'add'
 end 'Counts'
 
-union FileCount
-	counted(counts Counts)
-	unreadable
-end 'FileCount'
-
 type Counter
 	static function create() returns Self
 		return Self{}
 	end 'create'
 
-	export function count(path FilePath) returns FileCount
-		let content = try File.readBinary(path) otherwise return FileCount.unreadable
-		return FileCount.counted(Counts.of(content))
+	export function count(path immutable FilePath) returns isolated Counts throws FileReadError
+		return try Counts.ofFile(path)
 	end 'count'
 end 'Counter'
 
@@ -159,13 +158,6 @@ type Report
 	static function create(columns ColumnArray) returns Self
 		return Self{columns: columns}
 	end 'create'
-
-	function record(result FileCount, label String)
-		match result 'outcome'
-			counted(counts) then self.addCounts(counts, label: label)
-			unreadable then self.addFailure(label)
-		end 'outcome'
-	end 'record'
 
 	function addCounts(counts Counts, label String)
 		self.total.add(counts)
@@ -199,7 +191,7 @@ function workersFor(files PathArray) returns WorkerCount
 end 'workersFor'
 
 function submitCount(replies CountPromiseArray, counter Counter.handle, path FilePath)
-	replies.push(try counter.count(path.clone(), sendTimeout: ForeverMs) otherwise (e) 'refused'
+	replies.push(try counter.count(freeze path.clone(), sendTimeout: ForeverMs) otherwise (e) 'refused'
 		match e 'why'
 			mailboxFull then panic("submitCount: runs on main's green thread, which no promise names and so nothing cancels, and a send given ForeverMs waits for room — mailboxFull cannot occur")
 			serviceStopped then panic("submitCount: a counter stopped before the files were sent")
@@ -226,7 +218,12 @@ function countFiles(paths PathArray, report Report)
 
 	for (file, reply) in replies.withIterator() 'receiveCounts'
 		let path = try paths.get(file.index()) otherwise panic("countFiles: one reply per file")
-		report.record(await reply, label: "{path}")
+		var counts = try await reply otherwise 'unreadable'
+			report.addFailure("{path}")
+			continue
+		end 'unreadable'
+
+		report.addCounts(counts, label: "{path}")
 	end 'receiveCounts'
 
 	for counter in counters 'shutDown'
