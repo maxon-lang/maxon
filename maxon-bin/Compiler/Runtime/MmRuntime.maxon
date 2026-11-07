@@ -1812,6 +1812,16 @@ module type InlineBoxAlloc
 	end 'create'
 end 'InlineBoxAlloc'
 
+// Marks every block `emitSlabFastAlloc` made, which holds every instruction from the first read of the
+// machine to the store that completes the pop. An instruction of the pop outside a marked block can be
+// stopped, and the allocation that runs meanwhile pops the same slot: one slot serves two allocations.
+function markBlocksAsyncUnsafe(module StdModule, func IrFunction, from ElementIndex)
+	for position in from upto func.blockRefs.count() 'eachPopBlock'
+		var block = module.blockAtPosition(func, position: position)
+		block.role = BlockRole.asyncUnsafe
+	end 'eachPopBlock'
+end 'markBlocksAsyncUnsafe'
+
 module function emitMmAllocInline(module StdModule, func IrFunction, cur IrBlock, size ValueId, destructor ValueId, model MachineModel, ids ValueMinter) returns InlineBoxAlloc
 	var bail = module.addBlock(func, label: b"__ia_slow", heat: BlockHeat.cold)
 	var joined = module.addBlock(func, label: b"__ia_done", heat: BlockHeat.normal)
@@ -1820,7 +1830,9 @@ module function emitMmAllocInline(module StdModule, func IrFunction, cur IrBlock
 
 	let total = emitBoxTotal(module, block: cur, size: size, ids: ids)
 	let slot = ids.mint()
+	let firstPopBlock = func.blockRefs.count()
 	var served = emitSlabFastAlloc(module, func: func, cur: cur, size: total, zeroed: true, counting: SlabCounting.tracked, model: model, abortRoad: SlabAbortRoad.endsInline, bail: bail, slotId: slot, ids: ids)
+	markBlocksAsyncUnsafe(module, func: func, from: firstPopBlock)
 	let hit = emitBoxPayload(module, block: served, slot: slot, destructor: destructor, ids: ids)
 	emitBranchCarrying(module, from: served, to: joined, values: argsOf(hit))
 

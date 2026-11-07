@@ -9,16 +9,16 @@ category: system
 
 ## Documentation
 
-A constant-capacity `create` of an array is expanded in its caller as the allocator's hit path only where no
-asynchronous stop can land in the expansion. A program with green threads stops its user functions where they
-stand once they run long enough, so there the create is the runtime's own entry, which is never stopped. A
-program with no green threads has nothing that stops it and keeps the expansion.
+A constant-capacity `create` of an array is expanded in its caller as the allocator's hit path. A program with
+green threads stops its user functions where they stand once they run long enough, so the expansion is an
+async-unsafe range: a stop whose PC lands inside it is declined and retried, and no two creates are handed one
+slot.
 
 ## Tests
 
 <!-- test: eight-services-churning-constant-capacity-arrays-keep-their-sums -->
 <!-- procs: 4 -->
-Eight services each build and drop two constant-capacity arrays per round for two million rounds, on four
+Eight services each build and drop two constant-capacity arrays per round for eight million rounds, on four
 processors, so the monitor stops each runner many times and a stopped runner resumes on another machine as often
 as on its own. An allocation stopped half way and resumed after another service allocated from the same span
 hands one slot to two arrays: a sum comes back wrong, the leak gate fires, or the allocator aborts.
@@ -29,7 +29,7 @@ typealias WordArray = Array with Word
 typealias ChurnHandleArray = Array with Churn.handle
 
 let ServiceCount = 8
-let Rounds = 2000000 as Word
+let Rounds = 8000000 as Word
 
 type Churn
 	var finished as Total

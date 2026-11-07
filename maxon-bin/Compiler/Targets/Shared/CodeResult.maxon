@@ -57,19 +57,17 @@ export typealias CallFixupArray = Array with CallFixup
 // A DebugSymbol pairs a function name with its byte offset in `.text`.
 // Format-neutral: PE writes COFF symbols, ELF Elf64_Sym, Mach-O nlist_64.
 //
-// `asyncPreemptible`, the unsafe prefix and `compilerScaffolding` ride along because `__symtable`
-// carries them in its per-symbol byte (`BacktraceFormat.SymtabSafeFromBias`): they are the only
-// per-function facts the backtrace table holds beyond a name, and the object writers ignore all
-// three.
+// `asyncPreemptible` and `compilerScaffolding` ride along because `__symtable` carries them in its
+// per-symbol byte (`BacktraceFormat.SymtabPreemptibleBit`): they are the only per-function facts the
+// backtrace table holds beyond a name, and the object writers ignore both.
 export type DebugSymbol
 	export let name as ByteArray
 	export let codeOffset as CodeOffset
 	export var asyncPreemptible as bool
-	export var asyncUnsafePrefixBytes as CodeOffset
 	export var compilerScaffolding as bool
 
-	export static function create(name ByteArray, codeOffset CodeOffset, asyncPreemptible bool, asyncUnsafePrefixBytes CodeOffset, compilerScaffolding bool) returns DebugSymbol
-		return Self{name: name, codeOffset: codeOffset, asyncPreemptible: asyncPreemptible, asyncUnsafePrefixBytes: asyncUnsafePrefixBytes, compilerScaffolding: compilerScaffolding}
+	export static function create(name ByteArray, codeOffset CodeOffset, asyncPreemptible bool, compilerScaffolding bool) returns DebugSymbol
+		return Self{name: name, codeOffset: codeOffset, asyncPreemptible: asyncPreemptible, compilerScaffolding: compilerScaffolding}
 	end 'create'
 end 'DebugSymbol'
 
@@ -751,17 +749,21 @@ export type FunctionCodeChunk
 	export var inlineSites as InlineSiteArray
 	export var inlineRanges as InlineRangeArray
 
+	// The CHUNK-LOCAL code range of every run of `BlockRole.asyncUnsafe` blocks, rebased and folded into
+	// `__asyncunsafe` at concat by `BacktraceFormat.AsyncUnsafeTable`. Empty unless `asyncPreemptible`.
+	export var asyncUnsafeRanges as InlineRangeArray
+
 	// May a thread be stopped where it stands inside this chunk? True for every function a green
 	// thread runs that is not the compiler's own scaffolding, which is what
-	// `BacktraceFormat.SymtabSafeFromBias` records for the safe-point predicate. False for every
+	// `BacktraceFormat.SymtabPreemptibleBit` records for the safe-point predicate. False for every
 	// hand-assembled chunk: those are the context switch, the stack mover, the shims and the
 	// trampolines, and a thread stopped inside one has no coherent state to park.
 	export var asyncPreemptible as bool
 
 	// The bytes at this chunk's start a stop may not land in — the prologue stack guard, which holds a
-	// machine-bound value in a register while it walks TLS (`BacktraceFormat.SymtabSafeFromBias`). The
-	// sidecar records it as the function's prologue offset, where the debugger's prologue scan starts, so
-	// a guarded hand-assembled chunk (`mrt_panic`) sets it too.
+	// machine-bound value in a register while it walks TLS (`BacktraceFormat.AsyncUnsafeTable` lists it
+	// in `__asyncunsafe`). The sidecar records it as the function's prologue offset, where the
+	// debugger's prologue scan starts, so a guarded hand-assembled chunk (`mrt_panic`) sets it too.
 	//
 	// An inlined body cannot move it: the guard is not IR. The encoder emits it at the first block of
 	// the final function and reads this count off the buffer, so there is no prefix for a splice to
@@ -811,6 +813,7 @@ export type FunctionCodeChunk
 			paramCount: 0,
 			inlineSites: InlineSiteArray.create(0),
 			inlineRanges: InlineRangeArray.create(0),
+			asyncUnsafeRanges: InlineRangeArray.create(0),
 			asyncPreemptible: false,
 			asyncUnsafePrefixBytes: 0,
 			compilerScaffolding: true,
@@ -843,6 +846,7 @@ export type FunctionCodeChunk
 			paramCount: 0,
 			inlineSites: InlineSiteArray.create(0),
 			inlineRanges: InlineRangeArray.create(0),
+			asyncUnsafeRanges: InlineRangeArray.create(0),
 			asyncPreemptible: false,
 			asyncUnsafePrefixBytes: 0,
 			compilerScaffolding: true,

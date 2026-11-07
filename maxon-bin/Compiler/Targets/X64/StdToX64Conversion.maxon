@@ -5538,7 +5538,7 @@ export type StdToX64Lowering
 
 		// The `ordered` block is the second half of the original's branch, so it runs exactly when the
 		// original does.
-		let newRef = self.addOrderedBlock(funcIdx, heat: self.blockAt(blockRef).heat, inlineSite: self.blockAt(blockRef).inlineSite)
+		let newRef = self.addOrderedBlock(funcIdx, heat: self.blockAt(blockRef).heat, role: asyncUnsafeRoleOf(self.blockAt(blockRef)), inlineSite: self.blockAt(blockRef).inlineSite)
 		let newId = self.blockAt(newRef).id
 		self.emitOrderedBlockBody(newRef, cond: floatCondCodeForPred(pred), thenBlockId: thenBlockId, elseBlockId: elseBlockId, edges: inheritedEdges)
 		return newId
@@ -5549,11 +5549,11 @@ export type StdToX64Lowering
 	// established way a Target-tier pass grows the CFG. Same shape as `addSplitBlock`, down to the
 	// inline site being COPIED: the original block keeps its own box, and the module travels home in a
 	// reply.
-	function addOrderedBlock(funcIdx ElementIndex, heat BlockHeat, inlineSite InlineSiteRef) returns ElementIndex
+	function addOrderedBlock(funcIdx ElementIndex, heat BlockHeat, role BlockRole, inlineSite InlineSiteRef) returns ElementIndex
 		var srcFunc = self.stdModule.getFunc(funcIdx)
 		let newId = srcFunc.nextBlockId
 		srcFunc.nextBlockId = srcFunc.nextBlockId + 1
-		self.targetModule.blocks.push(IrBlock.create(newId, label: FloatOrderedLabel, heat: heat, inlineSite: copiedInlineSite(inlineSite)))
+		self.targetModule.blocks.push(IrBlock.create(newId, label: FloatOrderedLabel, heat: heat, inlineSite: copiedInlineSite(inlineSite), role: role))
 		let newRef = self.targetModule.blocks.count() - 1
 		srcFunc.blockRefs.push(newRef)
 		return newRef

@@ -847,6 +847,7 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx ElementIndex, tar
 	var predRefs = BlockRefArray.create(0)
 	var succIds = BlockIdArray.create(0)
 	var heats = BlockHeatArray.create(0)
+	var roles = BlockRoleArray.create(0)
 	var sites = InlineSiteRefArray.create(0)
 
 	for predLocal in 0 upto topo.numBlocks 'eachPred'
@@ -865,7 +866,9 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx ElementIndex, tar
 
 				// The split block runs exactly when the edge is taken, which is only when both ends run. Its
 				// moves complete the predecessor's branch, so it stays in the predecessor's text.
-				heats.push(colderHeat(predBlock.heat, b: blockAt(module, topo: topo, local: succLocal).heat))
+				view succBlock = blockAt(module, topo: topo, local: succLocal)
+				heats.push(colderHeat(predBlock.heat, b: succBlock.heat))
+				roles.push(asyncUnsafeEdgeRoleOf(predBlock, succ: succBlock))
 				sites.push(predBlock.inlineSite)
 			end 'critical'
 		end 'eachEdge'
@@ -875,13 +878,14 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx ElementIndex, tar
 		let predRef = try predRefs.get(k) otherwise panic("splitCriticalEdgesInFunc: predRefs.get OOB")
 		let succId = try succIds.get(k) otherwise panic("splitCriticalEdgesInFunc: succIds.get OOB")
 		let heat = try heats.get(k) otherwise panic("splitCriticalEdgesInFunc: heats.get OOB")
+		let role = try roles.get(k) otherwise panic("splitCriticalEdgesInFunc: roles.get OOB")
 		view inlineSite = try sites.get(k) otherwise panic("splitCriticalEdgesInFunc: sites.get OOB")
-		performCriticalSplit(module, funcIdx: funcIdx, predRef: predRef, succId: succId, heat: heat, inlineSite: inlineSite, target: target)
+		performCriticalSplit(module, funcIdx: funcIdx, predRef: predRef, succId: succId, heat: heat, role: role, inlineSite: inlineSite, target: target)
 	end 'eachSplit'
 end 'splitCriticalEdgesInFunc'
 
-function performCriticalSplit(module TargetModule, funcIdx ElementIndex, predRef ElementIndex, succId BlockId, heat BlockHeat, inlineSite InlineSiteRef, target Target)
-	let newRef = addSplitBlock(module, funcIdx: funcIdx, succId: succId, heat: heat, inlineSite: inlineSite, target: target)
+function performCriticalSplit(module TargetModule, funcIdx ElementIndex, predRef ElementIndex, succId BlockId, heat BlockHeat, role BlockRole, inlineSite InlineSiteRef, target Target)
+	let newRef = addSplitBlock(module, funcIdx: funcIdx, succId: succId, heat: heat, role: role, inlineSite: inlineSite, target: target)
 	view newBlock = try module.blocks.get(newRef) otherwise panic("performCriticalSplit: newRef not in module.blocks")
 	let newId = newBlock.id
 	moveBranchEdgeToSplit(module, predRef: predRef, succId: succId, splitRef: newRef)
@@ -893,11 +897,11 @@ end 'performCriticalSplit'
 // `arm64Branch` for arm64 — so the split block speaks the same ISA as the code around it.
 // The inline site is COPIED: the predecessor keeps its own box, and the module travels home from a
 // pool worker in a reply that must own everything it reaches.
-function addSplitBlock(module TargetModule, funcIdx ElementIndex, succId BlockId, heat BlockHeat, inlineSite InlineSiteRef, target Target) returns ElementIndex
+function addSplitBlock(module TargetModule, funcIdx ElementIndex, succId BlockId, heat BlockHeat, role BlockRole, inlineSite InlineSiteRef, target Target) returns ElementIndex
 	var func = module.getFunc(funcIdx)
 	let newId = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
-	module.blocks.push(IrBlock.create(newId, label: CritSplitLabel, heat: heat, inlineSite: copiedInlineSite(inlineSite)))
+	module.blocks.push(IrBlock.create(newId, label: CritSplitLabel, heat: heat, inlineSite: copiedInlineSite(inlineSite), role: role))
 	let newRef = module.blocks.count() - 1
 	func.blockRefs.push(newRef)
 	var splitBlock = try module.blocks.get(newRef) otherwise panic("addSplitBlock: newRef not in module.blocks")

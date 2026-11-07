@@ -427,15 +427,18 @@ end 'cacheTableAgreesBlockHeat'
 // `exitChain` is a block of a function's shared exit chain (`Parser.emitFunctionExit`), and
 // `exitSite` an exit block that branches into one. Every copy of a block keeps its role:
 // `IrModule.exitChainsOf`, `LowerMaxonToStd`'s debug spans and `BranchCleanup`'s return tails find
-// the chain by it.
+// the chain by it. `asyncUnsafe` is a block of an inline slab pop (`MmRuntime.markBlocksAsyncUnsafe`): the
+// backends list its code range in `__asyncunsafe`, and a pass that makes a block out of one must carry the
+// role (`asyncUnsafeRoleOf`), or the copy can be stopped.
 export enum BlockRole
 	ordinary
 	exitChain
 	exitSite
+	asyncUnsafe
 end 'BlockRole'
 
 // @generated library-cache begin
-let CacheCasesBlockRole = [BlockRole.ordinary, BlockRole.exitChain, BlockRole.exitSite]
+let CacheCasesBlockRole = [BlockRole.ordinary, BlockRole.exitChain, BlockRole.exitSite, BlockRole.asyncUnsafe]
 
 function cacheReadBlockRole(reader LibraryCacheReader) returns BlockRole throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -465,6 +468,18 @@ end 'cacheTableAgreesBlockRole'
 // @generated library-cache end
 
 export typealias BlockHeatArray = Array with BlockHeat
+
+export typealias BlockRoleArray = Array with BlockRole
+
+export function asyncUnsafeRoleOf(block IrBlock) returns BlockRole
+	return BlockRole.asyncUnsafe if block.role == BlockRole.asyncUnsafe else BlockRole.ordinary
+end 'asyncUnsafeRoleOf'
+
+export function asyncUnsafeEdgeRoleOf(pred IrBlock, succ IrBlock) returns BlockRole
+	let predRole = asyncUnsafeRoleOf(pred)
+
+	return predRole if predRole == BlockRole.asyncUnsafe else asyncUnsafeRoleOf(succ)
+end 'asyncUnsafeEdgeRoleOf'
 
 // The heat of a block that runs only when BOTH `a`'s block and `b`'s do — a split edge's block — which
 // is the colder of the two.

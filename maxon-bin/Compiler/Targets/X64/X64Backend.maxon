@@ -3114,6 +3114,8 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 	// The code range of every run of blocks under one inline site, read off the block loop itself: the
 	// only thing that knows where a block's code starts and ends.
 	var inlineRanges = InlineRangeBuilder.create()
+	var asyncUnsafeRanges = InlineRangeBuilder.create()
+	let stoppable = asyncPreemptionCanStop(usesGt, skipsStackGuard: encoding.skipsStackGuard, pinsItsThread: encoding.pinsItsThread)
 
 	let threadPointerSegment = x64ThreadPointerSegment(target.os)
 	var mark = EmitMark.create()
@@ -3169,6 +3171,10 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 
 		chunkBlockEnds.place(block.id, value: codeHere(code))
 		inlineRanges.note(block.inlineSite, codeStart: blockStart as CodeOffset, codeEnd: codeHere(code))
+
+		if stoppable 'mayBeStopped'
+			noteAsyncUnsafeBlock(asyncUnsafeRanges, block: block, codeStart: blockStart as CodeOffset, codeEnd: codeHere(code))
+		end 'mayBeStopped'
 	end 'eachBlock'
 
 	resolveChunkRel32Fixups(code, labelOffsets: chunkLabelOffsets, rel32Fixups: rel32Fixups)
@@ -3178,8 +3184,9 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 
 	// Not `emitGuard`: see `asyncPreemptionCanStop`. The safe-point predicate tests the stack
 	// pointer against `GtRuntime.gtAsyncPreemptMargin` itself.
-	chunk.asyncPreemptible = asyncPreemptionCanStop(usesGt, skipsStackGuard: encoding.skipsStackGuard, pinsItsThread: encoding.pinsItsThread)
+	chunk.asyncPreemptible = stoppable
 	chunk.asyncUnsafePrefixBytes = unsafePrefixBytes
+	chunk.asyncUnsafeRanges = asyncUnsafeRanges.ranges
 
 	// Provenance, not `mightGuard`: a guarded cascade is still scaffolding to the debugger.
 	chunk.compilerScaffolding = encoding.compilerScaffolding
@@ -3228,6 +3235,7 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	var debugLineRows = DebugLineRowArray.create(0)
 	var covPointOffsets = CovPointOffsetArray.create(0)
 	var inlineFrames = InlineFrameTables.create()
+	var asyncUnsafe = AsyncUnsafeTable.create()
 
 	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
 	// owns the rule and the refusal for both native backends.
@@ -3243,6 +3251,7 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 		labelsLaid = labelsLaid + 1
 		recordChunkSymbol(debugSymbols, chunk: chunk, codeOffset: funcStart as CodeOffset)
 		let inlineSiteBase = inlineFrames.appendChunk(chunk, funcStart: funcStart as CodeOffset)
+		asyncUnsafe.appendChunk(chunk, funcStart: funcStart as CodeOffset)
 
 		if captureSpans 'debugInfo'
 			foldChunkDebugInfo(chunk, funcStart: funcStart as CodeOffset, inlineSiteBase: inlineSiteBase, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
@@ -3286,13 +3295,18 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	padToAlignment(code, alignment: SymbolTableAlignment)
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
-	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, roster: project.shadowRoster))
+	code.append(buildSymbolTableBytes(debugSymbols, roster: project.shadowRoster))
 
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in.
 	padToAlignment(code, alignment: SymbolTableAlignment)
 	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	code.append(buildInlineFrameTableBytes(inlineFrames, roster: project.shadowRoster))
+	labelsLaid = labelsLaid + 1
+
+	padToAlignment(code, alignment: SymbolTableAlignment)
+	try recordChunkLabel(labelOffsets, name: AsyncUnsafeTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
+	code.append(buildAsyncUnsafeTableBytes(asyncUnsafe))
 
 	resolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 

@@ -1362,12 +1362,12 @@ end 'terminatorRole'
 
 // ⛔⛔ **THE SAFE-POINT BYTE DESCRIBES A WHOLE SYMBOL, SO EVERY BYTE INSIDE ONE MUST AGREE ON WHETHER A
 // THREAD MAY BE STOPPED THERE.** `__symtable` carries ONE flag per SYMBOL
-// (`BacktraceFormat.SymtabSafeFromBias`) and each backend derives it from the function's OWN provenance
+// (`BacktraceFormat.SymtabPreemptibleBit`) and each backend derives it from the function's OWN provenance
 // (`TargetPrinter.skipsGreenThreadStackGuard`, read by both `emitFunctionChunk`s). A splice moves code
 // ACROSS that boundary, and a body the compiler owns — the scheduler core, the memory manager, the shims —
 // spliced into a body it does not would sit inside a symbol the safe-point predicate answers PREEMPTIBLE
-// for, with no per-byte channel left to say otherwise. A thread stopped there is stopped in code that must
-// never be stopped.
+// for, and `__asyncunsafe` excludes only the blocks marked `BlockRole.asyncUnsafe`. A thread stopped
+// there is stopped in code that must never be stopped.
 //
 // ⚠ **ONE DIRECTION ONLY.** The reverse — an ordinary body spliced into the scaffolding — only takes stop
 // opportunities AWAY, which costs a little latency and never correctness, so it stays admitted.

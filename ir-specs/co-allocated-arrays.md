@@ -3537,82 +3537,82 @@ func @main {
     x64.movRegImm32 r8, 1
     x64.movRegImm32 r9, 0
     x64.movRegImm32 r10, 0
-  cls#10:
+  cls#10: [async-unsafe]
     x64.leaRegRdata rax, [rip + __slab_size_to_class8]
     x64.loadRegBaseDisp.byte rax, [rax + 12]
-  cls#12:
+  cls#12: [async-unsafe]
     x64.leaRegGlobal rcx, __slab_state
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __ia_slow#7
-  state#13:
+  state#13: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 24]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, walk#21
-  walk#14:
+  walk#14: [async-unsafe]
     x64.loadRegBaseIndexScale.word64 r11, [rcx + rax*8 + 139328]
     x64.cmpRegImm32 r11, 0
     x64.jcc equal, __ia_slow#7
-  probe#24:
+  probe#24: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 16]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __ia_slow#7
-  probe#25:
+  probe#25: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 48]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __ia_slow#7
-  probe#23:
+  probe#23: [async-unsafe]
     x64.aluBaseDispImm32.add [rcx + 152120], 1
     x64.aluBaseDispImm32.add [rcx + 152128], 80
     x64.jmp pop#22
-  walk#21:
+  walk#21: [async-unsafe]
     x64.mov rdx, gs:[rdx]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __ia_slow#7
-  walk#15:
+  walk#15: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdi, [rdx + 0]
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, __ia_slow#7
-  walk#18:
+  walk#18: [async-unsafe]
     x64.loadRegBaseDisp.word64 r11, [rdi + 32]
     x64.cmpRegImm32 r11, 255
     x64.jcc greaterEqual, __ia_slow#7
-  walk#20:
+  walk#20: [async-unsafe]
     x64.imulRegRegImm32 rbx, r11, 544
     x64.leaRegRegReg rbx, rcx, rbx
     x64.loadRegBaseIndexScale.word64 rbx, [rbx + rax*8 + 608]
     x64.cmpRegImm32 rbx, 0
     x64.jcc equal, __ia_slow#7
-  ownprobe#27:
+  ownprobe#27: [async-unsafe]
     x64.loadRegBaseDisp.word64 r12, [rbx + 16]
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, __ia_slow#7
-  ownprobe#28:
+  ownprobe#28: [async-unsafe]
     x64.loadRegBaseDisp.word64 r12, [rbx + 48]
     x64.cmpRegReg r12, rdi
     x64.jcc notEqual, __ia_slow#7
-  ownprobe#26:
+  ownprobe#26: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, ownthread#30
-  ownthread#29:
+  ownthread#29: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 112]
     x64.aluBaseDispImm32.add [rdx + 512], 1
     x64.aluBaseDispImm32.add [rdx + 528], 96
-  ownthread#30:
+  ownthread#30: [async-unsafe]
     x64.imulRegRegImm32 rdx, r11, 48
     x64.leaRegRegImm32 rcx, rcx, 139872
     x64.leaRegRegReg rcx, rcx, rdx
     x64.aluBaseDispImm32.add [rcx + 8], 1
     x64.aluBaseDispImm32.add [rcx + 16], 80
     x64.movRegReg r11, rbx
-  pop#22:
+  pop#22: [async-unsafe]
     x64.leaRegRdata rcx, [rip + __slab_class_geom]
     x64.loadRegBaseIndexScale.word32 rcx, [rcx + rax*8 + 0]
     x64.loadRegBaseDisp.word64 rbx, [r11 + 8]
     x64.cmpRegImm32 rbx, 0
     x64.jcc notEqual, pop#31
-  pop#32:
+  pop#32: [async-unsafe]
     x64.loadRegBaseDisp.word64 rax, [r11 + 40]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 32]
     x64.leaRegRdata rdi, [rip + __slab_class_geom]
@@ -3623,49 +3623,49 @@ func @main {
     x64.leaRegRegReg rdx, rdx, rdi
     x64.cmpRegReg rax, rdx
     x64.jcc greaterEqual, pop#34
-  pop#33:
+  pop#33: [async-unsafe]
     x64.leaRegRegReg rcx, rax, rcx
     x64.storeBaseDispReg.word64 [r11 + 40], rcx
     x64.jmp pop#35
-  pop#31:
+  pop#31: [async-unsafe]
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.storeBaseDispReg.word64 [r11 + 8], rax
     x64.movRegReg rdi, rbx
     x64.x64MemFill 0x00
     x64.movRegReg rax, rbx
-  pop#35:
+  pop#35: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [r11 + 16]
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.storeBaseDispReg.word64 [r11 + 16], rcx
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, pop#37
-  pop#38:
+  pop#38: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [r11 + 48]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 32]
     x64.leaRegGlobal rdi, __slab_state
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, pop#39
-  pop#40:
+  pop#40: [async-unsafe]
     x64.leaRegRegImm32 rcx, rdi, 138720
     x64.leaRegRegImm32 rcx, rcx, 608
     x64.leaRegBaseIndexScale rcx, [rcx + rdx*8]
     x64.jmp pop#36
-  pop#39:
+  pop#39: [async-unsafe]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, pop#42
-  pop#41:
+  pop#41: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 32]
     x64.imulRegRegImm32 rcx, rcx, 544
     x64.leaRegRegReg rcx, rdi, rcx
     x64.leaRegRegImm32 rcx, rcx, 608
     x64.leaRegBaseIndexScale rcx, [rcx + rdx*8]
-  pop#36:
+  pop#36: [async-unsafe]
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 0], rdx
     x64.movRegImm rcx, 18446744073709551613
     x64.storeBaseDispReg.word64 [r11 + 48], rcx
-  pop#37:
+  pop#37: [async-unsafe]
     x64.storeBaseDispReg.word64 [rax + 0], r10
     x64.leaRegRegImm32 rbx, rax, 16
   __ia_done#8:
@@ -3683,82 +3683,82 @@ func @main {
     x64.movRegImm32 r8, 1
     x64.movRegImm32 r9, 0
     x64.movRegImm32 r10, 0
-  cls#47:
+  cls#47: [async-unsafe]
     x64.leaRegRdata rax, [rip + __slab_size_to_class8]
     x64.loadRegBaseDisp.byte rax, [rax + 12]
-  cls#49:
+  cls#49: [async-unsafe]
     x64.leaRegGlobal rcx, __slab_state
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __ia_slow#44
-  state#50:
+  state#50: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 24]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, walk#58
-  walk#51:
+  walk#51: [async-unsafe]
     x64.loadRegBaseIndexScale.word64 r11, [rcx + rax*8 + 139328]
     x64.cmpRegImm32 r11, 0
     x64.jcc equal, __ia_slow#44
-  probe#61:
+  probe#61: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 16]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __ia_slow#44
-  probe#62:
+  probe#62: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 48]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __ia_slow#44
-  probe#60:
+  probe#60: [async-unsafe]
     x64.aluBaseDispImm32.add [rcx + 152120], 1
     x64.aluBaseDispImm32.add [rcx + 152128], 80
     x64.jmp pop#59
-  walk#58:
+  walk#58: [async-unsafe]
     x64.mov rdx, gs:[rdx]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __ia_slow#44
-  walk#52:
+  walk#52: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdi, [rdx + 0]
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, __ia_slow#44
-  walk#55:
+  walk#55: [async-unsafe]
     x64.loadRegBaseDisp.word64 r11, [rdi + 32]
     x64.cmpRegImm32 r11, 255
     x64.jcc greaterEqual, __ia_slow#44
-  walk#57:
+  walk#57: [async-unsafe]
     x64.imulRegRegImm32 r12, r11, 544
     x64.leaRegRegReg r12, rcx, r12
     x64.loadRegBaseIndexScale.word64 r12, [r12 + rax*8 + 608]
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, __ia_slow#44
-  ownprobe#64:
+  ownprobe#64: [async-unsafe]
     x64.loadRegBaseDisp.word64 r13, [r12 + 16]
     x64.cmpRegImm32 r13, 0
     x64.jcc equal, __ia_slow#44
-  ownprobe#65:
+  ownprobe#65: [async-unsafe]
     x64.loadRegBaseDisp.word64 r13, [r12 + 48]
     x64.cmpRegReg r13, rdi
     x64.jcc notEqual, __ia_slow#44
-  ownprobe#63:
+  ownprobe#63: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, ownthread#67
-  ownthread#66:
+  ownthread#66: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 112]
     x64.aluBaseDispImm32.add [rdx + 512], 1
     x64.aluBaseDispImm32.add [rdx + 528], 96
-  ownthread#67:
+  ownthread#67: [async-unsafe]
     x64.imulRegRegImm32 rdx, r11, 48
     x64.leaRegRegImm32 rcx, rcx, 139872
     x64.leaRegRegReg rcx, rcx, rdx
     x64.aluBaseDispImm32.add [rcx + 8], 1
     x64.aluBaseDispImm32.add [rcx + 16], 80
     x64.movRegReg r11, r12
-  pop#59:
+  pop#59: [async-unsafe]
     x64.leaRegRdata rcx, [rip + __slab_class_geom]
     x64.loadRegBaseIndexScale.word32 rcx, [rcx + rax*8 + 0]
     x64.loadRegBaseDisp.word64 r12, [r11 + 8]
     x64.cmpRegImm32 r12, 0
     x64.jcc notEqual, pop#68
-  pop#69:
+  pop#69: [async-unsafe]
     x64.loadRegBaseDisp.word64 rax, [r11 + 40]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 32]
     x64.leaRegRdata rdi, [rip + __slab_class_geom]
@@ -3769,49 +3769,49 @@ func @main {
     x64.leaRegRegReg rdx, rdx, rdi
     x64.cmpRegReg rax, rdx
     x64.jcc greaterEqual, pop#71
-  pop#70:
+  pop#70: [async-unsafe]
     x64.leaRegRegReg rcx, rax, rcx
     x64.storeBaseDispReg.word64 [r11 + 40], rcx
     x64.jmp pop#72
-  pop#68:
+  pop#68: [async-unsafe]
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.storeBaseDispReg.word64 [r11 + 8], rax
     x64.movRegReg rdi, r12
     x64.x64MemFill 0x00
     x64.movRegReg rax, r12
-  pop#72:
+  pop#72: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [r11 + 16]
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.storeBaseDispReg.word64 [r11 + 16], rcx
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, pop#74
-  pop#75:
+  pop#75: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [r11 + 48]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 32]
     x64.leaRegGlobal rdi, __slab_state
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, pop#76
-  pop#77:
+  pop#77: [async-unsafe]
     x64.leaRegRegImm32 rcx, rdi, 138720
     x64.leaRegRegImm32 rcx, rcx, 608
     x64.leaRegBaseIndexScale rcx, [rcx + rdx*8]
     x64.jmp pop#73
-  pop#76:
+  pop#76: [async-unsafe]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, pop#79
-  pop#78:
+  pop#78: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 32]
     x64.imulRegRegImm32 rcx, rcx, 544
     x64.leaRegRegReg rcx, rdi, rcx
     x64.leaRegRegImm32 rcx, rcx, 608
     x64.leaRegBaseIndexScale rcx, [rcx + rdx*8]
-  pop#73:
+  pop#73: [async-unsafe]
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 0], rdx
     x64.movRegImm rcx, 18446744073709551613
     x64.storeBaseDispReg.word64 [r11 + 48], rcx
-  pop#74:
+  pop#74: [async-unsafe]
     x64.storeBaseDispReg.word64 [rax + 0], r10
     x64.leaRegRegImm32 rcx, rax, 16
   __ia_done#45:
@@ -3894,7 +3894,7 @@ func @main {
     x64.callDirect __managed_push
     x64.loadRegSlot rcx, slot0
     x64.jmp __im_cont#80
-  pop#34:
+  pop#34: [async-unsafe]
     x64.callDirect __slab_past_end
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -3903,7 +3903,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  pop#42:
+  pop#42: [async-unsafe]
     x64.callDirect __slab_evict_unowned
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -3912,7 +3912,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  pop#71:
+  pop#71: [async-unsafe]
     x64.callDirect __slab_past_end
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -3921,7 +3921,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  pop#79:
+  pop#79: [async-unsafe]
     x64.callDirect __slab_evict_unowned
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -3964,82 +3964,82 @@ func @main {
     x64.movRegImm32 r8, 1
     x64.movRegImm32 r9, 0
     x64.movRegImm32 r10, 0
-  cls#10:
+  cls#10: [async-unsafe]
     x64.leaRegRdata rax, [rip + __slab_size_to_class8]
     x64.loadRegBaseDisp.byte rax, [rax + 12]
-  cls#12:
+  cls#12: [async-unsafe]
     x64.leaRegGlobal rcx, __slab_state
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __ia_slow#7
-  state#13:
+  state#13: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 24]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, walk#21
-  walk#14:
+  walk#14: [async-unsafe]
     x64.loadRegBaseIndexScale.word64 r11, [rcx + rax*8 + 139328]
     x64.cmpRegImm32 r11, 0
     x64.jcc equal, __ia_slow#7
-  probe#24:
+  probe#24: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 16]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __ia_slow#7
-  probe#25:
+  probe#25: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 48]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __ia_slow#7
-  probe#23:
+  probe#23: [async-unsafe]
     x64.aluBaseDispImm32.add [rcx + 152120], 1
     x64.aluBaseDispImm32.add [rcx + 152128], 80
     x64.jmp pop#22
-  walk#21:
+  walk#21: [async-unsafe]
     x64.mov rdx, gs:[rdx]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __ia_slow#7
-  walk#15:
+  walk#15: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdi, [rdx + 0]
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, __ia_slow#7
-  walk#18:
+  walk#18: [async-unsafe]
     x64.loadRegBaseDisp.word64 r11, [rdi + 32]
     x64.cmpRegImm32 r11, 255
     x64.jcc greaterEqual, __ia_slow#7
-  walk#20:
+  walk#20: [async-unsafe]
     x64.imulRegRegImm32 rbx, r11, 544
     x64.leaRegRegReg rbx, rcx, rbx
     x64.loadRegBaseIndexScale.word64 rbx, [rbx + rax*8 + 608]
     x64.cmpRegImm32 rbx, 0
     x64.jcc equal, __ia_slow#7
-  ownprobe#27:
+  ownprobe#27: [async-unsafe]
     x64.loadRegBaseDisp.word64 r12, [rbx + 16]
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, __ia_slow#7
-  ownprobe#28:
+  ownprobe#28: [async-unsafe]
     x64.loadRegBaseDisp.word64 r12, [rbx + 48]
     x64.cmpRegReg r12, rdi
     x64.jcc notEqual, __ia_slow#7
-  ownprobe#26:
+  ownprobe#26: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, ownthread#30
-  ownthread#29:
+  ownthread#29: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 112]
     x64.aluBaseDispImm32.add [rdx + 512], 1
     x64.aluBaseDispImm32.add [rdx + 528], 96
-  ownthread#30:
+  ownthread#30: [async-unsafe]
     x64.imulRegRegImm32 rdx, r11, 48
     x64.leaRegRegImm32 rcx, rcx, 139872
     x64.leaRegRegReg rcx, rcx, rdx
     x64.aluBaseDispImm32.add [rcx + 8], 1
     x64.aluBaseDispImm32.add [rcx + 16], 80
     x64.movRegReg r11, rbx
-  pop#22:
+  pop#22: [async-unsafe]
     x64.leaRegRdata rcx, [rip + __slab_class_geom]
     x64.loadRegBaseIndexScale.word32 rcx, [rcx + rax*8 + 0]
     x64.loadRegBaseDisp.word64 rbx, [r11 + 8]
     x64.cmpRegImm32 rbx, 0
     x64.jcc notEqual, pop#31
-  pop#32:
+  pop#32: [async-unsafe]
     x64.loadRegBaseDisp.word64 rax, [r11 + 40]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 32]
     x64.leaRegRdata rdi, [rip + __slab_class_geom]
@@ -4050,49 +4050,49 @@ func @main {
     x64.leaRegRegReg rdx, rdx, rdi
     x64.cmpRegReg rax, rdx
     x64.jcc greaterEqual, pop#34
-  pop#33:
+  pop#33: [async-unsafe]
     x64.leaRegRegReg rcx, rax, rcx
     x64.storeBaseDispReg.word64 [r11 + 40], rcx
     x64.jmp pop#35
-  pop#31:
+  pop#31: [async-unsafe]
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.storeBaseDispReg.word64 [r11 + 8], rax
     x64.movRegReg rdi, rbx
     x64.x64MemFill 0x00
     x64.movRegReg rax, rbx
-  pop#35:
+  pop#35: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [r11 + 16]
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.storeBaseDispReg.word64 [r11 + 16], rcx
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, pop#37
-  pop#38:
+  pop#38: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [r11 + 48]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 32]
     x64.leaRegGlobal rdi, __slab_state
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, pop#39
-  pop#40:
+  pop#40: [async-unsafe]
     x64.leaRegRegImm32 rcx, rdi, 138720
     x64.leaRegRegImm32 rcx, rcx, 608
     x64.leaRegBaseIndexScale rcx, [rcx + rdx*8]
     x64.jmp pop#36
-  pop#39:
+  pop#39: [async-unsafe]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, pop#42
-  pop#41:
+  pop#41: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 32]
     x64.imulRegRegImm32 rcx, rcx, 544
     x64.leaRegRegReg rcx, rdi, rcx
     x64.leaRegRegImm32 rcx, rcx, 608
     x64.leaRegBaseIndexScale rcx, [rcx + rdx*8]
-  pop#36:
+  pop#36: [async-unsafe]
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 0], rdx
     x64.movRegImm rcx, 18446744073709551613
     x64.storeBaseDispReg.word64 [r11 + 48], rcx
-  pop#37:
+  pop#37: [async-unsafe]
     x64.storeBaseDispReg.word64 [rax + 0], r10
     x64.leaRegRegImm32 rbx, rax, 16
   __ia_done#8:
@@ -4110,82 +4110,82 @@ func @main {
     x64.movRegImm32 r8, 1
     x64.movRegImm32 r9, 0
     x64.movRegImm32 r10, 0
-  cls#47:
+  cls#47: [async-unsafe]
     x64.leaRegRdata rax, [rip + __slab_size_to_class8]
     x64.loadRegBaseDisp.byte rax, [rax + 12]
-  cls#49:
+  cls#49: [async-unsafe]
     x64.leaRegGlobal rcx, __slab_state
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __ia_slow#44
-  state#50:
+  state#50: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 24]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, walk#58
-  walk#51:
+  walk#51: [async-unsafe]
     x64.loadRegBaseIndexScale.word64 r11, [rcx + rax*8 + 139328]
     x64.cmpRegImm32 r11, 0
     x64.jcc equal, __ia_slow#44
-  probe#61:
+  probe#61: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 16]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __ia_slow#44
-  probe#62:
+  probe#62: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 48]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __ia_slow#44
-  probe#60:
+  probe#60: [async-unsafe]
     x64.aluBaseDispImm32.add [rcx + 152120], 1
     x64.aluBaseDispImm32.add [rcx + 152128], 80
     x64.jmp pop#59
-  walk#58:
+  walk#58: [async-unsafe]
     x64.mov rdx, gs:[rdx]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __ia_slow#44
-  walk#52:
+  walk#52: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdi, [rdx + 0]
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, __ia_slow#44
-  walk#55:
+  walk#55: [async-unsafe]
     x64.loadRegBaseDisp.word64 r11, [rdi + 32]
     x64.cmpRegImm32 r11, 255
     x64.jcc greaterEqual, __ia_slow#44
-  walk#57:
+  walk#57: [async-unsafe]
     x64.imulRegRegImm32 r12, r11, 544
     x64.leaRegRegReg r12, rcx, r12
     x64.loadRegBaseIndexScale.word64 r12, [r12 + rax*8 + 608]
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, __ia_slow#44
-  ownprobe#64:
+  ownprobe#64: [async-unsafe]
     x64.loadRegBaseDisp.word64 r13, [r12 + 16]
     x64.cmpRegImm32 r13, 0
     x64.jcc equal, __ia_slow#44
-  ownprobe#65:
+  ownprobe#65: [async-unsafe]
     x64.loadRegBaseDisp.word64 r13, [r12 + 48]
     x64.cmpRegReg r13, rdi
     x64.jcc notEqual, __ia_slow#44
-  ownprobe#63:
+  ownprobe#63: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, ownthread#67
-  ownthread#66:
+  ownthread#66: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 112]
     x64.aluBaseDispImm32.add [rdx + 512], 1
     x64.aluBaseDispImm32.add [rdx + 528], 96
-  ownthread#67:
+  ownthread#67: [async-unsafe]
     x64.imulRegRegImm32 rdx, r11, 48
     x64.leaRegRegImm32 rcx, rcx, 139872
     x64.leaRegRegReg rcx, rcx, rdx
     x64.aluBaseDispImm32.add [rcx + 8], 1
     x64.aluBaseDispImm32.add [rcx + 16], 80
     x64.movRegReg r11, r12
-  pop#59:
+  pop#59: [async-unsafe]
     x64.leaRegRdata rcx, [rip + __slab_class_geom]
     x64.loadRegBaseIndexScale.word32 rcx, [rcx + rax*8 + 0]
     x64.loadRegBaseDisp.word64 r12, [r11 + 8]
     x64.cmpRegImm32 r12, 0
     x64.jcc notEqual, pop#68
-  pop#69:
+  pop#69: [async-unsafe]
     x64.loadRegBaseDisp.word64 rax, [r11 + 40]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 32]
     x64.leaRegRdata rdi, [rip + __slab_class_geom]
@@ -4196,49 +4196,49 @@ func @main {
     x64.leaRegRegReg rdx, rdx, rdi
     x64.cmpRegReg rax, rdx
     x64.jcc greaterEqual, pop#71
-  pop#70:
+  pop#70: [async-unsafe]
     x64.leaRegRegReg rcx, rax, rcx
     x64.storeBaseDispReg.word64 [r11 + 40], rcx
     x64.jmp pop#72
-  pop#68:
+  pop#68: [async-unsafe]
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.storeBaseDispReg.word64 [r11 + 8], rax
     x64.movRegReg rdi, r12
     x64.x64MemFill 0x00
     x64.movRegReg rax, r12
-  pop#72:
+  pop#72: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [r11 + 16]
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.storeBaseDispReg.word64 [r11 + 16], rcx
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, pop#74
-  pop#75:
+  pop#75: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [r11 + 48]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 32]
     x64.leaRegGlobal rdi, __slab_state
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, pop#76
-  pop#77:
+  pop#77: [async-unsafe]
     x64.leaRegRegImm32 rcx, rdi, 138720
     x64.leaRegRegImm32 rcx, rcx, 608
     x64.leaRegBaseIndexScale rcx, [rcx + rdx*8]
     x64.jmp pop#73
-  pop#76:
+  pop#76: [async-unsafe]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, pop#79
-  pop#78:
+  pop#78: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 32]
     x64.imulRegRegImm32 rcx, rcx, 544
     x64.leaRegRegReg rcx, rdi, rcx
     x64.leaRegRegImm32 rcx, rcx, 608
     x64.leaRegBaseIndexScale rcx, [rcx + rdx*8]
-  pop#73:
+  pop#73: [async-unsafe]
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 0], rdx
     x64.movRegImm rcx, 18446744073709551613
     x64.storeBaseDispReg.word64 [r11 + 48], rcx
-  pop#74:
+  pop#74: [async-unsafe]
     x64.storeBaseDispReg.word64 [rax + 0], r10
     x64.leaRegRegImm32 rcx, rax, 16
   __ia_done#45:
@@ -4320,7 +4320,7 @@ func @main {
     x64.callDirect __managed_push
     x64.loadRegSlot rcx, slot0
     x64.jmp __im_cont#80
-  pop#34:
+  pop#34: [async-unsafe]
     x64.callDirect __slab_past_end
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -4329,7 +4329,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  pop#42:
+  pop#42: [async-unsafe]
     x64.callDirect __slab_evict_unowned
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -4338,7 +4338,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  pop#71:
+  pop#71: [async-unsafe]
     x64.callDirect __slab_past_end
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -4347,7 +4347,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  pop#79:
+  pop#79: [async-unsafe]
     x64.callDirect __slab_evict_unowned
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -4385,34 +4385,34 @@ func @main {
     arm64.movImm x5, 1
     arm64.movImm x6, 0
     arm64.movImm x7, 0
-  cls#10:
+  cls#10: [async-unsafe]
     arm64.leaRdata x0, __slab_size_to_class8
     arm64.loadRegBaseDisp.byte x0, [x0 + 12]
-  cls#12:
+  cls#12: [async-unsafe]
     arm64.leaGlobal x1, __slab_state
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.cmp x1, 0
     arm64.b.eq __ia_slow#7
-  state#13:
+  state#13: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x1 + 24]
     arm64.cmp x2, 0
     arm64.b.ne walk#21
-  walk#14:
+  walk#14: [async-unsafe]
     arm64.arm64AddLsl x2, x1, x0, lsl #3
     arm64.add x16, x2, 139328
     arm64.loadRegBaseDisp.word64 x8, [x16 + 0]
     arm64.cmp x8, 0
     arm64.b.eq __ia_slow#7
-  probe#24:
+  probe#24: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 16]
     arm64.cmp x2, 0
     arm64.b.eq __ia_slow#7
-  probe#25:
+  probe#25: [async-unsafe]
     arm64.add x16, x8, 48
     arm64.ldar.word64 x2, [x16]
     arm64.cmp x2, 0
     arm64.b.ne __ia_slow#7
-  probe#23:
+  probe#23: [async-unsafe]
     arm64.add x1, x1, 152112
     arm64.loadRegBaseDisp.word64 x2, [x1 + 8]
     arm64.add x2, x2, 1
@@ -4421,7 +4421,7 @@ func @main {
     arm64.add x2, x2, 80
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
     arm64.b pop#22
-  walk#21:
+  walk#21: [async-unsafe]
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
     arm64.add x16, x16, x2
     arm64.cmp x2, 0
@@ -4430,15 +4430,15 @@ func @main {
     arm64.mul x2, x16, x17
     arm64.cmp x2, 0
     arm64.b.eq __ia_slow#7
-  walk#15:
+  walk#15: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
     arm64.cmp x3, 0
     arm64.b.eq __ia_slow#7
-  walk#18:
+  walk#18: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x8, [x3 + 32]
     arm64.cmp x8, 255
     arm64.b.ge __ia_slow#7
-  walk#20:
+  walk#20: [async-unsafe]
     arm64.movImm x16, 544
     arm64.mul x9, x8, x16
     arm64.add x9, x1, x9
@@ -4446,20 +4446,20 @@ func @main {
     arm64.loadRegBaseDisp.word64 x9, [x9 + 608]
     arm64.cmp x9, 0
     arm64.b.eq __ia_slow#7
-  ownprobe#27:
+  ownprobe#27: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x10, [x9 + 16]
     arm64.cmp x10, 0
     arm64.b.eq __ia_slow#7
-  ownprobe#28:
+  ownprobe#28: [async-unsafe]
     arm64.add x16, x9, 48
     arm64.ldar.word64 x10, [x16]
     arm64.cmp x10, x3
     arm64.b.ne __ia_slow#7
-  ownprobe#26:
+  ownprobe#26: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
     arm64.cmp x2, 0
     arm64.b.eq ownthread#30
-  ownthread#29:
+  ownthread#29: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 112]
     arm64.loadRegBaseDisp.word64 x3, [x2 + 512]
     arm64.add x3, x3, 1
@@ -4467,7 +4467,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x3, [x2 + 528]
     arm64.add x3, x3, 96
     arm64.storeBaseDispReg.word64 [x2 + 528], x3
-  ownthread#30:
+  ownthread#30: [async-unsafe]
     arm64.movImm x16, 48
     arm64.mul x2, x8, x16
     arm64.add x1, x1, 139872
@@ -4479,14 +4479,14 @@ func @main {
     arm64.add x2, x2, 80
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
     arm64.movRegReg x8, x9
-  pop#22:
+  pop#22: [async-unsafe]
     arm64.leaRdata x1, __slab_class_geom
     arm64.arm64AddLsl x0, x1, x0, lsl #3
     arm64.loadRegBaseDisp.word32 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x9, [x8 + 8]
     arm64.cmp x9, 0
     arm64.b.ne pop#31
-  pop#32:
+  pop#32: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x0, [x8 + 40]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 32]
     arm64.leaRdata x3, __slab_class_geom
@@ -4497,23 +4497,23 @@ func @main {
     arm64.add x2, x3, x2
     arm64.cmp x0, x2
     arm64.b.ge pop#34
-  pop#33:
+  pop#33: [async-unsafe]
     arm64.add x1, x0, x1
     arm64.storeBaseDispReg.word64 [x8 + 40], x1
     arm64.b pop#35
-  pop#31:
+  pop#31: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x0, [x9 + 0]
     arm64.storeBaseDispReg.word64 [x8 + 8], x0
     arm64.movRegReg x0, x9
     arm64.arm64MemFill 0x00
     arm64.movRegReg x0, x9
-  pop#35:
+  pop#35: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x1, [x8 + 16]
     arm64.sub x1, x1, 1
     arm64.storeBaseDispReg.word64 [x8 + 16], x1
     arm64.cmp x1, 0
     arm64.b.ne pop#37
-  pop#38:
+  pop#38: [async-unsafe]
     arm64.add x16, x8, 48
     arm64.ldar.word64 x1, [x16]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 32]
@@ -4521,28 +4521,28 @@ func @main {
     arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
     arm64.cmp x1, 0
     arm64.b.ne pop#39
-  pop#40:
+  pop#40: [async-unsafe]
     arm64.add x1, x3, 138720
     arm64.add x1, x1, 608
     arm64.arm64AddLsl x1, x1, x2, lsl #3
     arm64.b pop#36
-  pop#39:
+  pop#39: [async-unsafe]
     arm64.cmp x1, 0
     arm64.b.lt pop#42
-  pop#41:
+  pop#41: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 32]
     arm64.movImm x16, 544
     arm64.mul x1, x1, x16
     arm64.add x1, x3, x1
     arm64.add x1, x1, 608
     arm64.arm64AddLsl x1, x1, x2, lsl #3
-  pop#36:
+  pop#36: [async-unsafe]
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.movImm x1, 18446744073709551613
     arm64.add x16, x8, 48
     arm64.stlr.word64 [x16], x1
-  pop#37:
+  pop#37: [async-unsafe]
     arm64.storeBaseDispReg.word64 [x0 + 0], x7
     arm64.add x19, x0, 16
   __ia_done#8:
@@ -4560,34 +4560,34 @@ func @main {
     arm64.movImm x5, 1
     arm64.movImm x6, 0
     arm64.movImm x7, 0
-  cls#47:
+  cls#47: [async-unsafe]
     arm64.leaRdata x0, __slab_size_to_class8
     arm64.loadRegBaseDisp.byte x0, [x0 + 12]
-  cls#49:
+  cls#49: [async-unsafe]
     arm64.leaGlobal x1, __slab_state
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.cmp x1, 0
     arm64.b.eq __ia_slow#44
-  state#50:
+  state#50: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x1 + 24]
     arm64.cmp x2, 0
     arm64.b.ne walk#58
-  walk#51:
+  walk#51: [async-unsafe]
     arm64.arm64AddLsl x2, x1, x0, lsl #3
     arm64.add x16, x2, 139328
     arm64.loadRegBaseDisp.word64 x8, [x16 + 0]
     arm64.cmp x8, 0
     arm64.b.eq __ia_slow#44
-  probe#61:
+  probe#61: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 16]
     arm64.cmp x2, 0
     arm64.b.eq __ia_slow#44
-  probe#62:
+  probe#62: [async-unsafe]
     arm64.add x16, x8, 48
     arm64.ldar.word64 x2, [x16]
     arm64.cmp x2, 0
     arm64.b.ne __ia_slow#44
-  probe#60:
+  probe#60: [async-unsafe]
     arm64.add x1, x1, 152112
     arm64.loadRegBaseDisp.word64 x2, [x1 + 8]
     arm64.add x2, x2, 1
@@ -4596,7 +4596,7 @@ func @main {
     arm64.add x2, x2, 80
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
     arm64.b pop#59
-  walk#58:
+  walk#58: [async-unsafe]
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
     arm64.add x16, x16, x2
     arm64.cmp x2, 0
@@ -4605,15 +4605,15 @@ func @main {
     arm64.mul x2, x16, x17
     arm64.cmp x2, 0
     arm64.b.eq __ia_slow#44
-  walk#52:
+  walk#52: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
     arm64.cmp x3, 0
     arm64.b.eq __ia_slow#44
-  walk#55:
+  walk#55: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x8, [x3 + 32]
     arm64.cmp x8, 255
     arm64.b.ge __ia_slow#44
-  walk#57:
+  walk#57: [async-unsafe]
     arm64.movImm x16, 544
     arm64.mul x9, x8, x16
     arm64.add x9, x1, x9
@@ -4621,20 +4621,20 @@ func @main {
     arm64.loadRegBaseDisp.word64 x9, [x9 + 608]
     arm64.cmp x9, 0
     arm64.b.eq __ia_slow#44
-  ownprobe#64:
+  ownprobe#64: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x10, [x9 + 16]
     arm64.cmp x10, 0
     arm64.b.eq __ia_slow#44
-  ownprobe#65:
+  ownprobe#65: [async-unsafe]
     arm64.add x16, x9, 48
     arm64.ldar.word64 x10, [x16]
     arm64.cmp x10, x3
     arm64.b.ne __ia_slow#44
-  ownprobe#63:
+  ownprobe#63: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
     arm64.cmp x2, 0
     arm64.b.eq ownthread#67
-  ownthread#66:
+  ownthread#66: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 112]
     arm64.loadRegBaseDisp.word64 x3, [x2 + 512]
     arm64.add x3, x3, 1
@@ -4642,7 +4642,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x3, [x2 + 528]
     arm64.add x3, x3, 96
     arm64.storeBaseDispReg.word64 [x2 + 528], x3
-  ownthread#67:
+  ownthread#67: [async-unsafe]
     arm64.movImm x16, 48
     arm64.mul x2, x8, x16
     arm64.add x1, x1, 139872
@@ -4654,14 +4654,14 @@ func @main {
     arm64.add x2, x2, 80
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
     arm64.movRegReg x8, x9
-  pop#59:
+  pop#59: [async-unsafe]
     arm64.leaRdata x1, __slab_class_geom
     arm64.arm64AddLsl x0, x1, x0, lsl #3
     arm64.loadRegBaseDisp.word32 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x9, [x8 + 8]
     arm64.cmp x9, 0
     arm64.b.ne pop#68
-  pop#69:
+  pop#69: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x0, [x8 + 40]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 32]
     arm64.leaRdata x3, __slab_class_geom
@@ -4672,23 +4672,23 @@ func @main {
     arm64.add x2, x3, x2
     arm64.cmp x0, x2
     arm64.b.ge pop#71
-  pop#70:
+  pop#70: [async-unsafe]
     arm64.add x1, x0, x1
     arm64.storeBaseDispReg.word64 [x8 + 40], x1
     arm64.b pop#72
-  pop#68:
+  pop#68: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x0, [x9 + 0]
     arm64.storeBaseDispReg.word64 [x8 + 8], x0
     arm64.movRegReg x0, x9
     arm64.arm64MemFill 0x00
     arm64.movRegReg x0, x9
-  pop#72:
+  pop#72: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x1, [x8 + 16]
     arm64.sub x1, x1, 1
     arm64.storeBaseDispReg.word64 [x8 + 16], x1
     arm64.cmp x1, 0
     arm64.b.ne pop#74
-  pop#75:
+  pop#75: [async-unsafe]
     arm64.add x16, x8, 48
     arm64.ldar.word64 x1, [x16]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 32]
@@ -4696,28 +4696,28 @@ func @main {
     arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
     arm64.cmp x1, 0
     arm64.b.ne pop#76
-  pop#77:
+  pop#77: [async-unsafe]
     arm64.add x1, x3, 138720
     arm64.add x1, x1, 608
     arm64.arm64AddLsl x1, x1, x2, lsl #3
     arm64.b pop#73
-  pop#76:
+  pop#76: [async-unsafe]
     arm64.cmp x1, 0
     arm64.b.lt pop#79
-  pop#78:
+  pop#78: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 32]
     arm64.movImm x16, 544
     arm64.mul x1, x1, x16
     arm64.add x1, x3, x1
     arm64.add x1, x1, 608
     arm64.arm64AddLsl x1, x1, x2, lsl #3
-  pop#73:
+  pop#73: [async-unsafe]
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.movImm x1, 18446744073709551613
     arm64.add x16, x8, 48
     arm64.stlr.word64 [x16], x1
-  pop#74:
+  pop#74: [async-unsafe]
     arm64.storeBaseDispReg.word64 [x0 + 0], x7
     arm64.add x0, x0, 16
   __ia_done#45:
@@ -4797,7 +4797,7 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.b __im_cont#80
-  pop#34:
+  pop#34: [async-unsafe]
     arm64.movRegReg x0, x1
     arm64.bl __slab_past_end
     arm64.movImm x0, 0
@@ -4805,7 +4805,7 @@ func @main {
     arm64.loadRegSlot x20, slot2
     arm64.epilogue 48
     arm64.ret
-  pop#42:
+  pop#42: [async-unsafe]
     arm64.movRegReg x0, x1
     arm64.bl __slab_evict_unowned
     arm64.movImm x0, 0
@@ -4813,7 +4813,7 @@ func @main {
     arm64.loadRegSlot x20, slot2
     arm64.epilogue 48
     arm64.ret
-  pop#71:
+  pop#71: [async-unsafe]
     arm64.movRegReg x0, x1
     arm64.bl __slab_past_end
     arm64.movImm x0, 0
@@ -4821,7 +4821,7 @@ func @main {
     arm64.loadRegSlot x20, slot2
     arm64.epilogue 48
     arm64.ret
-  pop#79:
+  pop#79: [async-unsafe]
     arm64.movRegReg x0, x1
     arm64.bl __slab_evict_unowned
     arm64.movImm x0, 0
@@ -4859,34 +4859,34 @@ func @main {
     arm64.movImm x5, 1
     arm64.movImm x6, 0
     arm64.movImm x7, 0
-  cls#10:
+  cls#10: [async-unsafe]
     arm64.leaRdata x0, __slab_size_to_class8
     arm64.loadRegBaseDisp.byte x0, [x0 + 12]
-  cls#12:
+  cls#12: [async-unsafe]
     arm64.leaGlobal x1, __slab_state
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.cmp x1, 0
     arm64.b.eq __ia_slow#7
-  state#13:
+  state#13: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x1 + 24]
     arm64.cmp x2, 0
     arm64.b.ne walk#21
-  walk#14:
+  walk#14: [async-unsafe]
     arm64.arm64AddLsl x2, x1, x0, lsl #3
     arm64.add x16, x2, 139328
     arm64.loadRegBaseDisp.word64 x8, [x16 + 0]
     arm64.cmp x8, 0
     arm64.b.eq __ia_slow#7
-  probe#24:
+  probe#24: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 16]
     arm64.cmp x2, 0
     arm64.b.eq __ia_slow#7
-  probe#25:
+  probe#25: [async-unsafe]
     arm64.add x16, x8, 48
     arm64.ldar.word64 x2, [x16]
     arm64.cmp x2, 0
     arm64.b.ne __ia_slow#7
-  probe#23:
+  probe#23: [async-unsafe]
     arm64.add x1, x1, 152112
     arm64.loadRegBaseDisp.word64 x2, [x1 + 8]
     arm64.add x2, x2, 1
@@ -4895,7 +4895,7 @@ func @main {
     arm64.add x2, x2, 80
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
     arm64.b pop#22
-  walk#21:
+  walk#21: [async-unsafe]
     arm64.arm64ThreadPointer x16, linuxWritable
     arm64.add x16, x16, x2
     arm64.cmp x2, 0
@@ -4904,15 +4904,15 @@ func @main {
     arm64.mul x2, x16, x17
     arm64.cmp x2, 0
     arm64.b.eq __ia_slow#7
-  walk#15:
+  walk#15: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
     arm64.cmp x3, 0
     arm64.b.eq __ia_slow#7
-  walk#18:
+  walk#18: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x8, [x3 + 32]
     arm64.cmp x8, 255
     arm64.b.ge __ia_slow#7
-  walk#20:
+  walk#20: [async-unsafe]
     arm64.movImm x16, 544
     arm64.mul x9, x8, x16
     arm64.add x9, x1, x9
@@ -4920,20 +4920,20 @@ func @main {
     arm64.loadRegBaseDisp.word64 x9, [x9 + 608]
     arm64.cmp x9, 0
     arm64.b.eq __ia_slow#7
-  ownprobe#27:
+  ownprobe#27: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x10, [x9 + 16]
     arm64.cmp x10, 0
     arm64.b.eq __ia_slow#7
-  ownprobe#28:
+  ownprobe#28: [async-unsafe]
     arm64.add x16, x9, 48
     arm64.ldar.word64 x10, [x16]
     arm64.cmp x10, x3
     arm64.b.ne __ia_slow#7
-  ownprobe#26:
+  ownprobe#26: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
     arm64.cmp x2, 0
     arm64.b.eq ownthread#30
-  ownthread#29:
+  ownthread#29: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 112]
     arm64.loadRegBaseDisp.word64 x3, [x2 + 512]
     arm64.add x3, x3, 1
@@ -4941,7 +4941,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x3, [x2 + 528]
     arm64.add x3, x3, 96
     arm64.storeBaseDispReg.word64 [x2 + 528], x3
-  ownthread#30:
+  ownthread#30: [async-unsafe]
     arm64.movImm x16, 48
     arm64.mul x2, x8, x16
     arm64.add x1, x1, 139872
@@ -4953,14 +4953,14 @@ func @main {
     arm64.add x2, x2, 80
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
     arm64.movRegReg x8, x9
-  pop#22:
+  pop#22: [async-unsafe]
     arm64.leaRdata x1, __slab_class_geom
     arm64.arm64AddLsl x0, x1, x0, lsl #3
     arm64.loadRegBaseDisp.word32 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x9, [x8 + 8]
     arm64.cmp x9, 0
     arm64.b.ne pop#31
-  pop#32:
+  pop#32: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x0, [x8 + 40]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 32]
     arm64.leaRdata x3, __slab_class_geom
@@ -4971,23 +4971,23 @@ func @main {
     arm64.add x2, x3, x2
     arm64.cmp x0, x2
     arm64.b.ge pop#34
-  pop#33:
+  pop#33: [async-unsafe]
     arm64.add x1, x0, x1
     arm64.storeBaseDispReg.word64 [x8 + 40], x1
     arm64.b pop#35
-  pop#31:
+  pop#31: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x0, [x9 + 0]
     arm64.storeBaseDispReg.word64 [x8 + 8], x0
     arm64.movRegReg x0, x9
     arm64.arm64MemFill 0x00
     arm64.movRegReg x0, x9
-  pop#35:
+  pop#35: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x1, [x8 + 16]
     arm64.sub x1, x1, 1
     arm64.storeBaseDispReg.word64 [x8 + 16], x1
     arm64.cmp x1, 0
     arm64.b.ne pop#37
-  pop#38:
+  pop#38: [async-unsafe]
     arm64.add x16, x8, 48
     arm64.ldar.word64 x1, [x16]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 32]
@@ -4995,28 +4995,28 @@ func @main {
     arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
     arm64.cmp x1, 0
     arm64.b.ne pop#39
-  pop#40:
+  pop#40: [async-unsafe]
     arm64.add x1, x3, 138720
     arm64.add x1, x1, 608
     arm64.arm64AddLsl x1, x1, x2, lsl #3
     arm64.b pop#36
-  pop#39:
+  pop#39: [async-unsafe]
     arm64.cmp x1, 0
     arm64.b.lt pop#42
-  pop#41:
+  pop#41: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 32]
     arm64.movImm x16, 544
     arm64.mul x1, x1, x16
     arm64.add x1, x3, x1
     arm64.add x1, x1, 608
     arm64.arm64AddLsl x1, x1, x2, lsl #3
-  pop#36:
+  pop#36: [async-unsafe]
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.movImm x1, 18446744073709551613
     arm64.add x16, x8, 48
     arm64.stlr.word64 [x16], x1
-  pop#37:
+  pop#37: [async-unsafe]
     arm64.storeBaseDispReg.word64 [x0 + 0], x7
     arm64.add x19, x0, 16
   __ia_done#8:
@@ -5034,34 +5034,34 @@ func @main {
     arm64.movImm x5, 1
     arm64.movImm x6, 0
     arm64.movImm x7, 0
-  cls#47:
+  cls#47: [async-unsafe]
     arm64.leaRdata x0, __slab_size_to_class8
     arm64.loadRegBaseDisp.byte x0, [x0 + 12]
-  cls#49:
+  cls#49: [async-unsafe]
     arm64.leaGlobal x1, __slab_state
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.cmp x1, 0
     arm64.b.eq __ia_slow#44
-  state#50:
+  state#50: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x1 + 24]
     arm64.cmp x2, 0
     arm64.b.ne walk#58
-  walk#51:
+  walk#51: [async-unsafe]
     arm64.arm64AddLsl x2, x1, x0, lsl #3
     arm64.add x16, x2, 139328
     arm64.loadRegBaseDisp.word64 x8, [x16 + 0]
     arm64.cmp x8, 0
     arm64.b.eq __ia_slow#44
-  probe#61:
+  probe#61: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 16]
     arm64.cmp x2, 0
     arm64.b.eq __ia_slow#44
-  probe#62:
+  probe#62: [async-unsafe]
     arm64.add x16, x8, 48
     arm64.ldar.word64 x2, [x16]
     arm64.cmp x2, 0
     arm64.b.ne __ia_slow#44
-  probe#60:
+  probe#60: [async-unsafe]
     arm64.add x1, x1, 152112
     arm64.loadRegBaseDisp.word64 x2, [x1 + 8]
     arm64.add x2, x2, 1
@@ -5070,7 +5070,7 @@ func @main {
     arm64.add x2, x2, 80
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
     arm64.b pop#59
-  walk#58:
+  walk#58: [async-unsafe]
     arm64.arm64ThreadPointer x16, linuxWritable
     arm64.add x16, x16, x2
     arm64.cmp x2, 0
@@ -5079,15 +5079,15 @@ func @main {
     arm64.mul x2, x16, x17
     arm64.cmp x2, 0
     arm64.b.eq __ia_slow#44
-  walk#52:
+  walk#52: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
     arm64.cmp x3, 0
     arm64.b.eq __ia_slow#44
-  walk#55:
+  walk#55: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x8, [x3 + 32]
     arm64.cmp x8, 255
     arm64.b.ge __ia_slow#44
-  walk#57:
+  walk#57: [async-unsafe]
     arm64.movImm x16, 544
     arm64.mul x9, x8, x16
     arm64.add x9, x1, x9
@@ -5095,20 +5095,20 @@ func @main {
     arm64.loadRegBaseDisp.word64 x9, [x9 + 608]
     arm64.cmp x9, 0
     arm64.b.eq __ia_slow#44
-  ownprobe#64:
+  ownprobe#64: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x10, [x9 + 16]
     arm64.cmp x10, 0
     arm64.b.eq __ia_slow#44
-  ownprobe#65:
+  ownprobe#65: [async-unsafe]
     arm64.add x16, x9, 48
     arm64.ldar.word64 x10, [x16]
     arm64.cmp x10, x3
     arm64.b.ne __ia_slow#44
-  ownprobe#63:
+  ownprobe#63: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
     arm64.cmp x2, 0
     arm64.b.eq ownthread#67
-  ownthread#66:
+  ownthread#66: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 112]
     arm64.loadRegBaseDisp.word64 x3, [x2 + 512]
     arm64.add x3, x3, 1
@@ -5116,7 +5116,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x3, [x2 + 528]
     arm64.add x3, x3, 96
     arm64.storeBaseDispReg.word64 [x2 + 528], x3
-  ownthread#67:
+  ownthread#67: [async-unsafe]
     arm64.movImm x16, 48
     arm64.mul x2, x8, x16
     arm64.add x1, x1, 139872
@@ -5128,14 +5128,14 @@ func @main {
     arm64.add x2, x2, 80
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
     arm64.movRegReg x8, x9
-  pop#59:
+  pop#59: [async-unsafe]
     arm64.leaRdata x1, __slab_class_geom
     arm64.arm64AddLsl x0, x1, x0, lsl #3
     arm64.loadRegBaseDisp.word32 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x9, [x8 + 8]
     arm64.cmp x9, 0
     arm64.b.ne pop#68
-  pop#69:
+  pop#69: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x0, [x8 + 40]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 32]
     arm64.leaRdata x3, __slab_class_geom
@@ -5146,23 +5146,23 @@ func @main {
     arm64.add x2, x3, x2
     arm64.cmp x0, x2
     arm64.b.ge pop#71
-  pop#70:
+  pop#70: [async-unsafe]
     arm64.add x1, x0, x1
     arm64.storeBaseDispReg.word64 [x8 + 40], x1
     arm64.b pop#72
-  pop#68:
+  pop#68: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x0, [x9 + 0]
     arm64.storeBaseDispReg.word64 [x8 + 8], x0
     arm64.movRegReg x0, x9
     arm64.arm64MemFill 0x00
     arm64.movRegReg x0, x9
-  pop#72:
+  pop#72: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x1, [x8 + 16]
     arm64.sub x1, x1, 1
     arm64.storeBaseDispReg.word64 [x8 + 16], x1
     arm64.cmp x1, 0
     arm64.b.ne pop#74
-  pop#75:
+  pop#75: [async-unsafe]
     arm64.add x16, x8, 48
     arm64.ldar.word64 x1, [x16]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 32]
@@ -5170,28 +5170,28 @@ func @main {
     arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
     arm64.cmp x1, 0
     arm64.b.ne pop#76
-  pop#77:
+  pop#77: [async-unsafe]
     arm64.add x1, x3, 138720
     arm64.add x1, x1, 608
     arm64.arm64AddLsl x1, x1, x2, lsl #3
     arm64.b pop#73
-  pop#76:
+  pop#76: [async-unsafe]
     arm64.cmp x1, 0
     arm64.b.lt pop#79
-  pop#78:
+  pop#78: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 32]
     arm64.movImm x16, 544
     arm64.mul x1, x1, x16
     arm64.add x1, x3, x1
     arm64.add x1, x1, 608
     arm64.arm64AddLsl x1, x1, x2, lsl #3
-  pop#73:
+  pop#73: [async-unsafe]
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.movImm x1, 18446744073709551613
     arm64.add x16, x8, 48
     arm64.stlr.word64 [x16], x1
-  pop#74:
+  pop#74: [async-unsafe]
     arm64.storeBaseDispReg.word64 [x0 + 0], x7
     arm64.add x0, x0, 16
   __ia_done#45:
@@ -5271,7 +5271,7 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.b __im_cont#80
-  pop#34:
+  pop#34: [async-unsafe]
     arm64.movRegReg x0, x1
     arm64.bl __slab_past_end
     arm64.movImm x0, 0
@@ -5279,7 +5279,7 @@ func @main {
     arm64.loadRegSlot x20, slot2
     arm64.epilogue 48
     arm64.ret
-  pop#42:
+  pop#42: [async-unsafe]
     arm64.movRegReg x0, x1
     arm64.bl __slab_evict_unowned
     arm64.movImm x0, 0
@@ -5287,7 +5287,7 @@ func @main {
     arm64.loadRegSlot x20, slot2
     arm64.epilogue 48
     arm64.ret
-  pop#71:
+  pop#71: [async-unsafe]
     arm64.movRegReg x0, x1
     arm64.bl __slab_past_end
     arm64.movImm x0, 0
@@ -5295,7 +5295,7 @@ func @main {
     arm64.loadRegSlot x20, slot2
     arm64.epilogue 48
     arm64.ret
-  pop#79:
+  pop#79: [async-unsafe]
     arm64.movRegReg x0, x1
     arm64.bl __slab_evict_unowned
     arm64.movImm x0, 0
@@ -5724,82 +5724,82 @@ func @make {
     x64.movRegImm32 r8, 8
     x64.movRegImm32 r9, 0
     x64.movRegImm32 r10, 0
-  cls#5:
+  cls#5: [async-unsafe]
     x64.leaRegRdata rax, [rip + __slab_size_to_class8]
     x64.loadRegBaseDisp.byte rax, [rax + 18]
-  cls#7:
+  cls#7: [async-unsafe]
     x64.leaRegGlobal rcx, __slab_state
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __ia_slow
-  state:
+  state: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 24]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, walk#16
-  walk#9:
+  walk#9: [async-unsafe]
     x64.loadRegBaseIndexScale.word64 r11, [rcx + rax*8 + 139328]
     x64.cmpRegImm32 r11, 0
     x64.jcc equal, __ia_slow
-  probe#19:
+  probe#19: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 16]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __ia_slow
-  probe#20:
+  probe#20: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 48]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __ia_slow
-  probe#18:
+  probe#18: [async-unsafe]
     x64.aluBaseDispImm32.add [rcx + 152120], 1
     x64.aluBaseDispImm32.add [rcx + 152128], 128
     x64.jmp pop#17
-  walk#16:
+  walk#16: [async-unsafe]
     x64.mov rdx, gs:[rdx]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __ia_slow
-  walk#10:
+  walk#10: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdi, [rdx + 0]
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, __ia_slow
-  walk#13:
+  walk#13: [async-unsafe]
     x64.loadRegBaseDisp.word64 r11, [rdi + 32]
     x64.cmpRegImm32 r11, 255
     x64.jcc greaterEqual, __ia_slow
-  walk#15:
+  walk#15: [async-unsafe]
     x64.imulRegRegImm32 rbx, r11, 544
     x64.leaRegRegReg rbx, rcx, rbx
     x64.loadRegBaseIndexScale.word64 rbx, [rbx + rax*8 + 608]
     x64.cmpRegImm32 rbx, 0
     x64.jcc equal, __ia_slow
-  ownprobe#22:
+  ownprobe#22: [async-unsafe]
     x64.loadRegBaseDisp.word64 r12, [rbx + 16]
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, __ia_slow
-  ownprobe#23:
+  ownprobe#23: [async-unsafe]
     x64.loadRegBaseDisp.word64 r12, [rbx + 48]
     x64.cmpRegReg r12, rdi
     x64.jcc notEqual, __ia_slow
-  ownprobe#21:
+  ownprobe#21: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, ownthread#25
-  ownthread#24:
+  ownthread#24: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 112]
     x64.aluBaseDispImm32.add [rdx + 512], 1
     x64.aluBaseDispImm32.add [rdx + 528], 144
-  ownthread#25:
+  ownthread#25: [async-unsafe]
     x64.imulRegRegImm32 rdx, r11, 48
     x64.leaRegRegImm32 rcx, rcx, 139872
     x64.leaRegRegReg rcx, rcx, rdx
     x64.aluBaseDispImm32.add [rcx + 8], 1
     x64.aluBaseDispImm32.add [rcx + 16], 128
     x64.movRegReg r11, rbx
-  pop#17:
+  pop#17: [async-unsafe]
     x64.leaRegRdata rcx, [rip + __slab_class_geom]
     x64.loadRegBaseIndexScale.word32 rcx, [rcx + rax*8 + 0]
     x64.loadRegBaseDisp.word64 rbx, [r11 + 8]
     x64.cmpRegImm32 rbx, 0
     x64.jcc notEqual, pop#26
-  pop#27:
+  pop#27: [async-unsafe]
     x64.loadRegBaseDisp.word64 rax, [r11 + 40]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 32]
     x64.leaRegRdata rdi, [rip + __slab_class_geom]
@@ -5810,49 +5810,49 @@ func @make {
     x64.leaRegRegReg rdx, rdx, rdi
     x64.cmpRegReg rax, rdx
     x64.jcc greaterEqual, pop#29
-  pop#28:
+  pop#28: [async-unsafe]
     x64.leaRegRegReg rcx, rax, rcx
     x64.storeBaseDispReg.word64 [r11 + 40], rcx
     x64.jmp pop#30
-  pop#26:
+  pop#26: [async-unsafe]
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.storeBaseDispReg.word64 [r11 + 8], rax
     x64.movRegReg rdi, rbx
     x64.x64MemFill 0x00
     x64.movRegReg rax, rbx
-  pop#30:
+  pop#30: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [r11 + 16]
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.storeBaseDispReg.word64 [r11 + 16], rcx
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, pop#32
-  pop#33:
+  pop#33: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [r11 + 48]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 32]
     x64.leaRegGlobal rdi, __slab_state
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, pop#34
-  pop#35:
+  pop#35: [async-unsafe]
     x64.leaRegRegImm32 rcx, rdi, 138720
     x64.leaRegRegImm32 rcx, rcx, 608
     x64.leaRegBaseIndexScale rcx, [rcx + rdx*8]
     x64.jmp pop#31
-  pop#34:
+  pop#34: [async-unsafe]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, pop#37
-  pop#36:
+  pop#36: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 32]
     x64.imulRegRegImm32 rcx, rcx, 544
     x64.leaRegRegReg rcx, rdi, rcx
     x64.leaRegRegImm32 rcx, rcx, 608
     x64.leaRegBaseIndexScale rcx, [rcx + rdx*8]
-  pop#31:
+  pop#31: [async-unsafe]
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 0], rdx
     x64.movRegImm rcx, 18446744073709551613
     x64.storeBaseDispReg.word64 [r11 + 48], rcx
-  pop#32:
+  pop#32: [async-unsafe]
     x64.storeBaseDispReg.word64 [rax + 0], r10
     x64.leaRegRegImm32 rax, rax, 16
   __ia_done:
@@ -5881,7 +5881,7 @@ func @make {
     x64.movRegImm32 r8, 8
     x64.movRegImm32 r9, 0
     x64.jmp __ia_done
-  pop#29:
+  pop#29: [async-unsafe]
     x64.callDirect __slab_past_end
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -5889,7 +5889,7 @@ func @make {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  pop#37:
+  pop#37: [async-unsafe]
     x64.callDirect __slab_evict_unowned
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -5980,82 +5980,82 @@ func @make {
     x64.movRegImm32 r8, 8
     x64.movRegImm32 r9, 0
     x64.movRegImm32 r10, 0
-  cls#5:
+  cls#5: [async-unsafe]
     x64.leaRegRdata rax, [rip + __slab_size_to_class8]
     x64.loadRegBaseDisp.byte rax, [rax + 18]
-  cls#7:
+  cls#7: [async-unsafe]
     x64.leaRegGlobal rcx, __slab_state
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __ia_slow
-  state:
+  state: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 24]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, walk#16
-  walk#9:
+  walk#9: [async-unsafe]
     x64.loadRegBaseIndexScale.word64 r11, [rcx + rax*8 + 139328]
     x64.cmpRegImm32 r11, 0
     x64.jcc equal, __ia_slow
-  probe#19:
+  probe#19: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 16]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __ia_slow
-  probe#20:
+  probe#20: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 48]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __ia_slow
-  probe#18:
+  probe#18: [async-unsafe]
     x64.aluBaseDispImm32.add [rcx + 152120], 1
     x64.aluBaseDispImm32.add [rcx + 152128], 128
     x64.jmp pop#17
-  walk#16:
+  walk#16: [async-unsafe]
     x64.mov rdx, gs:[rdx]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, __ia_slow
-  walk#10:
+  walk#10: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdi, [rdx + 0]
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, __ia_slow
-  walk#13:
+  walk#13: [async-unsafe]
     x64.loadRegBaseDisp.word64 r11, [rdi + 32]
     x64.cmpRegImm32 r11, 255
     x64.jcc greaterEqual, __ia_slow
-  walk#15:
+  walk#15: [async-unsafe]
     x64.imulRegRegImm32 rbx, r11, 544
     x64.leaRegRegReg rbx, rcx, rbx
     x64.loadRegBaseIndexScale.word64 rbx, [rbx + rax*8 + 608]
     x64.cmpRegImm32 rbx, 0
     x64.jcc equal, __ia_slow
-  ownprobe#22:
+  ownprobe#22: [async-unsafe]
     x64.loadRegBaseDisp.word64 r12, [rbx + 16]
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, __ia_slow
-  ownprobe#23:
+  ownprobe#23: [async-unsafe]
     x64.loadRegBaseDisp.word64 r12, [rbx + 48]
     x64.cmpRegReg r12, rdi
     x64.jcc notEqual, __ia_slow
-  ownprobe#21:
+  ownprobe#21: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, ownthread#25
-  ownthread#24:
+  ownthread#24: [async-unsafe]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 112]
     x64.aluBaseDispImm32.add [rdx + 512], 1
     x64.aluBaseDispImm32.add [rdx + 528], 144
-  ownthread#25:
+  ownthread#25: [async-unsafe]
     x64.imulRegRegImm32 rdx, r11, 48
     x64.leaRegRegImm32 rcx, rcx, 139872
     x64.leaRegRegReg rcx, rcx, rdx
     x64.aluBaseDispImm32.add [rcx + 8], 1
     x64.aluBaseDispImm32.add [rcx + 16], 128
     x64.movRegReg r11, rbx
-  pop#17:
+  pop#17: [async-unsafe]
     x64.leaRegRdata rcx, [rip + __slab_class_geom]
     x64.loadRegBaseIndexScale.word32 rcx, [rcx + rax*8 + 0]
     x64.loadRegBaseDisp.word64 rbx, [r11 + 8]
     x64.cmpRegImm32 rbx, 0
     x64.jcc notEqual, pop#26
-  pop#27:
+  pop#27: [async-unsafe]
     x64.loadRegBaseDisp.word64 rax, [r11 + 40]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 32]
     x64.leaRegRdata rdi, [rip + __slab_class_geom]
@@ -6066,49 +6066,49 @@ func @make {
     x64.leaRegRegReg rdx, rdx, rdi
     x64.cmpRegReg rax, rdx
     x64.jcc greaterEqual, pop#29
-  pop#28:
+  pop#28: [async-unsafe]
     x64.leaRegRegReg rcx, rax, rcx
     x64.storeBaseDispReg.word64 [r11 + 40], rcx
     x64.jmp pop#30
-  pop#26:
+  pop#26: [async-unsafe]
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.storeBaseDispReg.word64 [r11 + 8], rax
     x64.movRegReg rdi, rbx
     x64.x64MemFill 0x00
     x64.movRegReg rax, rbx
-  pop#30:
+  pop#30: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [r11 + 16]
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.storeBaseDispReg.word64 [r11 + 16], rcx
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, pop#32
-  pop#33:
+  pop#33: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [r11 + 48]
     x64.loadRegBaseDisp.word64 rdx, [r11 + 32]
     x64.leaRegGlobal rdi, __slab_state
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, pop#34
-  pop#35:
+  pop#35: [async-unsafe]
     x64.leaRegRegImm32 rcx, rdi, 138720
     x64.leaRegRegImm32 rcx, rcx, 608
     x64.leaRegBaseIndexScale rcx, [rcx + rdx*8]
     x64.jmp pop#31
-  pop#34:
+  pop#34: [async-unsafe]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, pop#37
-  pop#36:
+  pop#36: [async-unsafe]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 32]
     x64.imulRegRegImm32 rcx, rcx, 544
     x64.leaRegRegReg rcx, rdi, rcx
     x64.leaRegRegImm32 rcx, rcx, 608
     x64.leaRegBaseIndexScale rcx, [rcx + rdx*8]
-  pop#31:
+  pop#31: [async-unsafe]
     x64.movRegImm32 rdx, 0
     x64.storeBaseDispReg.word64 [rcx + 0], rdx
     x64.movRegImm rcx, 18446744073709551613
     x64.storeBaseDispReg.word64 [r11 + 48], rcx
-  pop#32:
+  pop#32: [async-unsafe]
     x64.storeBaseDispReg.word64 [rax + 0], r10
     x64.leaRegRegImm32 rax, rax, 16
   __ia_done:
@@ -6137,7 +6137,7 @@ func @make {
     x64.movRegImm32 r8, 8
     x64.movRegImm32 r9, 0
     x64.jmp __ia_done
-  pop#29:
+  pop#29: [async-unsafe]
     x64.callDirect __slab_past_end
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -6145,7 +6145,7 @@ func @make {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  pop#37:
+  pop#37: [async-unsafe]
     x64.callDirect __slab_evict_unowned
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -6229,34 +6229,34 @@ func @make {
     arm64.movImm x5, 8
     arm64.movImm x6, 0
     arm64.movImm x7, 0
-  cls#5:
+  cls#5: [async-unsafe]
     arm64.leaRdata x0, __slab_size_to_class8
     arm64.loadRegBaseDisp.byte x0, [x0 + 18]
-  cls#7:
+  cls#7: [async-unsafe]
     arm64.leaGlobal x1, __slab_state
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.cmp x1, 0
     arm64.b.eq __ia_slow
-  state:
+  state: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x1 + 24]
     arm64.cmp x2, 0
     arm64.b.ne walk#16
-  walk#9:
+  walk#9: [async-unsafe]
     arm64.arm64AddLsl x2, x1, x0, lsl #3
     arm64.add x16, x2, 139328
     arm64.loadRegBaseDisp.word64 x8, [x16 + 0]
     arm64.cmp x8, 0
     arm64.b.eq __ia_slow
-  probe#19:
+  probe#19: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 16]
     arm64.cmp x2, 0
     arm64.b.eq __ia_slow
-  probe#20:
+  probe#20: [async-unsafe]
     arm64.add x16, x8, 48
     arm64.ldar.word64 x2, [x16]
     arm64.cmp x2, 0
     arm64.b.ne __ia_slow
-  probe#18:
+  probe#18: [async-unsafe]
     arm64.add x1, x1, 152112
     arm64.loadRegBaseDisp.word64 x2, [x1 + 8]
     arm64.add x2, x2, 1
@@ -6265,7 +6265,7 @@ func @make {
     arm64.add x2, x2, 128
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
     arm64.b pop#17
-  walk#16:
+  walk#16: [async-unsafe]
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
     arm64.add x16, x16, x2
     arm64.cmp x2, 0
@@ -6274,15 +6274,15 @@ func @make {
     arm64.mul x2, x16, x17
     arm64.cmp x2, 0
     arm64.b.eq __ia_slow
-  walk#10:
+  walk#10: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
     arm64.cmp x3, 0
     arm64.b.eq __ia_slow
-  walk#13:
+  walk#13: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x8, [x3 + 32]
     arm64.cmp x8, 255
     arm64.b.ge __ia_slow
-  walk#15:
+  walk#15: [async-unsafe]
     arm64.movImm x16, 544
     arm64.mul x9, x8, x16
     arm64.add x9, x1, x9
@@ -6290,20 +6290,20 @@ func @make {
     arm64.loadRegBaseDisp.word64 x9, [x9 + 608]
     arm64.cmp x9, 0
     arm64.b.eq __ia_slow
-  ownprobe#22:
+  ownprobe#22: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x10, [x9 + 16]
     arm64.cmp x10, 0
     arm64.b.eq __ia_slow
-  ownprobe#23:
+  ownprobe#23: [async-unsafe]
     arm64.add x16, x9, 48
     arm64.ldar.word64 x10, [x16]
     arm64.cmp x10, x3
     arm64.b.ne __ia_slow
-  ownprobe#21:
+  ownprobe#21: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
     arm64.cmp x2, 0
     arm64.b.eq ownthread#25
-  ownthread#24:
+  ownthread#24: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 112]
     arm64.loadRegBaseDisp.word64 x3, [x2 + 512]
     arm64.add x3, x3, 1
@@ -6311,7 +6311,7 @@ func @make {
     arm64.loadRegBaseDisp.word64 x3, [x2 + 528]
     arm64.add x3, x3, 144
     arm64.storeBaseDispReg.word64 [x2 + 528], x3
-  ownthread#25:
+  ownthread#25: [async-unsafe]
     arm64.movImm x16, 48
     arm64.mul x2, x8, x16
     arm64.add x1, x1, 139872
@@ -6323,14 +6323,14 @@ func @make {
     arm64.add x2, x2, 128
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
     arm64.movRegReg x8, x9
-  pop#17:
+  pop#17: [async-unsafe]
     arm64.leaRdata x1, __slab_class_geom
     arm64.arm64AddLsl x0, x1, x0, lsl #3
     arm64.loadRegBaseDisp.word32 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x9, [x8 + 8]
     arm64.cmp x9, 0
     arm64.b.ne pop#26
-  pop#27:
+  pop#27: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x0, [x8 + 40]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 32]
     arm64.leaRdata x3, __slab_class_geom
@@ -6341,23 +6341,23 @@ func @make {
     arm64.add x2, x3, x2
     arm64.cmp x0, x2
     arm64.b.ge pop#29
-  pop#28:
+  pop#28: [async-unsafe]
     arm64.add x1, x0, x1
     arm64.storeBaseDispReg.word64 [x8 + 40], x1
     arm64.b pop#30
-  pop#26:
+  pop#26: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x0, [x9 + 0]
     arm64.storeBaseDispReg.word64 [x8 + 8], x0
     arm64.movRegReg x0, x9
     arm64.arm64MemFill 0x00
     arm64.movRegReg x0, x9
-  pop#30:
+  pop#30: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x1, [x8 + 16]
     arm64.sub x1, x1, 1
     arm64.storeBaseDispReg.word64 [x8 + 16], x1
     arm64.cmp x1, 0
     arm64.b.ne pop#32
-  pop#33:
+  pop#33: [async-unsafe]
     arm64.add x16, x8, 48
     arm64.ldar.word64 x1, [x16]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 32]
@@ -6365,28 +6365,28 @@ func @make {
     arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
     arm64.cmp x1, 0
     arm64.b.ne pop#34
-  pop#35:
+  pop#35: [async-unsafe]
     arm64.add x1, x3, 138720
     arm64.add x1, x1, 608
     arm64.arm64AddLsl x1, x1, x2, lsl #3
     arm64.b pop#31
-  pop#34:
+  pop#34: [async-unsafe]
     arm64.cmp x1, 0
     arm64.b.lt pop#37
-  pop#36:
+  pop#36: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 32]
     arm64.movImm x16, 544
     arm64.mul x1, x1, x16
     arm64.add x1, x3, x1
     arm64.add x1, x1, 608
     arm64.arm64AddLsl x1, x1, x2, lsl #3
-  pop#31:
+  pop#31: [async-unsafe]
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.movImm x1, 18446744073709551613
     arm64.add x16, x8, 48
     arm64.stlr.word64 [x16], x1
-  pop#32:
+  pop#32: [async-unsafe]
     arm64.storeBaseDispReg.word64 [x0 + 0], x7
     arm64.add x0, x0, 16
   __ia_done:
@@ -6410,13 +6410,13 @@ func @make {
     arm64.movImm x5, 8
     arm64.movImm x6, 0
     arm64.b __ia_done
-  pop#29:
+  pop#29: [async-unsafe]
     arm64.movRegReg x0, x1
     arm64.bl __slab_past_end
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  pop#37:
+  pop#37: [async-unsafe]
     arm64.movRegReg x0, x1
     arm64.bl __slab_evict_unowned
     arm64.movImm x0, 0
@@ -6497,34 +6497,34 @@ func @make {
     arm64.movImm x5, 8
     arm64.movImm x6, 0
     arm64.movImm x7, 0
-  cls#5:
+  cls#5: [async-unsafe]
     arm64.leaRdata x0, __slab_size_to_class8
     arm64.loadRegBaseDisp.byte x0, [x0 + 18]
-  cls#7:
+  cls#7: [async-unsafe]
     arm64.leaGlobal x1, __slab_state
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.cmp x1, 0
     arm64.b.eq __ia_slow
-  state:
+  state: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x1 + 24]
     arm64.cmp x2, 0
     arm64.b.ne walk#16
-  walk#9:
+  walk#9: [async-unsafe]
     arm64.arm64AddLsl x2, x1, x0, lsl #3
     arm64.add x16, x2, 139328
     arm64.loadRegBaseDisp.word64 x8, [x16 + 0]
     arm64.cmp x8, 0
     arm64.b.eq __ia_slow
-  probe#19:
+  probe#19: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 16]
     arm64.cmp x2, 0
     arm64.b.eq __ia_slow
-  probe#20:
+  probe#20: [async-unsafe]
     arm64.add x16, x8, 48
     arm64.ldar.word64 x2, [x16]
     arm64.cmp x2, 0
     arm64.b.ne __ia_slow
-  probe#18:
+  probe#18: [async-unsafe]
     arm64.add x1, x1, 152112
     arm64.loadRegBaseDisp.word64 x2, [x1 + 8]
     arm64.add x2, x2, 1
@@ -6533,7 +6533,7 @@ func @make {
     arm64.add x2, x2, 128
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
     arm64.b pop#17
-  walk#16:
+  walk#16: [async-unsafe]
     arm64.arm64ThreadPointer x16, linuxWritable
     arm64.add x16, x16, x2
     arm64.cmp x2, 0
@@ -6542,15 +6542,15 @@ func @make {
     arm64.mul x2, x16, x17
     arm64.cmp x2, 0
     arm64.b.eq __ia_slow
-  walk#10:
+  walk#10: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
     arm64.cmp x3, 0
     arm64.b.eq __ia_slow
-  walk#13:
+  walk#13: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x8, [x3 + 32]
     arm64.cmp x8, 255
     arm64.b.ge __ia_slow
-  walk#15:
+  walk#15: [async-unsafe]
     arm64.movImm x16, 544
     arm64.mul x9, x8, x16
     arm64.add x9, x1, x9
@@ -6558,20 +6558,20 @@ func @make {
     arm64.loadRegBaseDisp.word64 x9, [x9 + 608]
     arm64.cmp x9, 0
     arm64.b.eq __ia_slow
-  ownprobe#22:
+  ownprobe#22: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x10, [x9 + 16]
     arm64.cmp x10, 0
     arm64.b.eq __ia_slow
-  ownprobe#23:
+  ownprobe#23: [async-unsafe]
     arm64.add x16, x9, 48
     arm64.ldar.word64 x10, [x16]
     arm64.cmp x10, x3
     arm64.b.ne __ia_slow
-  ownprobe#21:
+  ownprobe#21: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
     arm64.cmp x2, 0
     arm64.b.eq ownthread#25
-  ownthread#24:
+  ownthread#24: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 112]
     arm64.loadRegBaseDisp.word64 x3, [x2 + 512]
     arm64.add x3, x3, 1
@@ -6579,7 +6579,7 @@ func @make {
     arm64.loadRegBaseDisp.word64 x3, [x2 + 528]
     arm64.add x3, x3, 144
     arm64.storeBaseDispReg.word64 [x2 + 528], x3
-  ownthread#25:
+  ownthread#25: [async-unsafe]
     arm64.movImm x16, 48
     arm64.mul x2, x8, x16
     arm64.add x1, x1, 139872
@@ -6591,14 +6591,14 @@ func @make {
     arm64.add x2, x2, 128
     arm64.storeBaseDispReg.word64 [x1 + 16], x2
     arm64.movRegReg x8, x9
-  pop#17:
+  pop#17: [async-unsafe]
     arm64.leaRdata x1, __slab_class_geom
     arm64.arm64AddLsl x0, x1, x0, lsl #3
     arm64.loadRegBaseDisp.word32 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x9, [x8 + 8]
     arm64.cmp x9, 0
     arm64.b.ne pop#26
-  pop#27:
+  pop#27: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x0, [x8 + 40]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 32]
     arm64.leaRdata x3, __slab_class_geom
@@ -6609,23 +6609,23 @@ func @make {
     arm64.add x2, x3, x2
     arm64.cmp x0, x2
     arm64.b.ge pop#29
-  pop#28:
+  pop#28: [async-unsafe]
     arm64.add x1, x0, x1
     arm64.storeBaseDispReg.word64 [x8 + 40], x1
     arm64.b pop#30
-  pop#26:
+  pop#26: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x0, [x9 + 0]
     arm64.storeBaseDispReg.word64 [x8 + 8], x0
     arm64.movRegReg x0, x9
     arm64.arm64MemFill 0x00
     arm64.movRegReg x0, x9
-  pop#30:
+  pop#30: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x1, [x8 + 16]
     arm64.sub x1, x1, 1
     arm64.storeBaseDispReg.word64 [x8 + 16], x1
     arm64.cmp x1, 0
     arm64.b.ne pop#32
-  pop#33:
+  pop#33: [async-unsafe]
     arm64.add x16, x8, 48
     arm64.ldar.word64 x1, [x16]
     arm64.loadRegBaseDisp.word64 x2, [x8 + 32]
@@ -6633,28 +6633,28 @@ func @make {
     arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
     arm64.cmp x1, 0
     arm64.b.ne pop#34
-  pop#35:
+  pop#35: [async-unsafe]
     arm64.add x1, x3, 138720
     arm64.add x1, x1, 608
     arm64.arm64AddLsl x1, x1, x2, lsl #3
     arm64.b pop#31
-  pop#34:
+  pop#34: [async-unsafe]
     arm64.cmp x1, 0
     arm64.b.lt pop#37
-  pop#36:
+  pop#36: [async-unsafe]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 32]
     arm64.movImm x16, 544
     arm64.mul x1, x1, x16
     arm64.add x1, x3, x1
     arm64.add x1, x1, 608
     arm64.arm64AddLsl x1, x1, x2, lsl #3
-  pop#31:
+  pop#31: [async-unsafe]
     arm64.movImm x2, 0
     arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.movImm x1, 18446744073709551613
     arm64.add x16, x8, 48
     arm64.stlr.word64 [x16], x1
-  pop#32:
+  pop#32: [async-unsafe]
     arm64.storeBaseDispReg.word64 [x0 + 0], x7
     arm64.add x0, x0, 16
   __ia_done:
@@ -6678,13 +6678,13 @@ func @make {
     arm64.movImm x5, 8
     arm64.movImm x6, 0
     arm64.b __ia_done
-  pop#29:
+  pop#29: [async-unsafe]
     arm64.movRegReg x0, x1
     arm64.bl __slab_past_end
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  pop#37:
+  pop#37: [async-unsafe]
     arm64.movRegReg x0, x1
     arm64.bl __slab_evict_unowned
     arm64.movImm x0, 0

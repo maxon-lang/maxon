@@ -571,7 +571,7 @@ func @__np_pd_wait_any {
   npholdnotwoken:
     x64.cmpRegImm32 rax, 2
     x64.jcc equal, npgaclearnext
-  npholdnotended:
+  npholdnotended: [async-unsafe]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.mov rcx, gs:[rcx]
@@ -4373,7 +4373,7 @@ func @__np_pd_wait_any {
   npholdnotwoken:
     arm64.cmp x0, 2
     arm64.b.eq npgaclearnext
-  npholdnotended:
+  npholdnotended: [async-unsafe]
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
@@ -8187,7 +8187,7 @@ func @__np_pd_wait_any {
   npholdnotwoken:
     arm64.cmp x0, 2
     arm64.b.eq npgaclearnext
-  npholdnotended:
+  npholdnotended: [async-unsafe]
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.arm64ThreadPointer x16, linuxWritable

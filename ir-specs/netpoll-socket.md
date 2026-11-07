@@ -4267,7 +4267,7 @@ func @__ms_send_from {
     x64.storeSlotReg slot1, r8
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRegReg rbx, rax, r12
-  mssendtry:
+  mssendtry: [async-unsafe]
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.mov rax, gs:[rax]

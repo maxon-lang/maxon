@@ -839,10 +839,6 @@ let Arm64GuardSaveBytes = 16
 // they are declared together with it rather than chosen here.
 let Arm64GuardScratchReg = Arm64Register.x13
 
-export function arm64WidestGuardedFrame(margin FullRangeInt) returns StackSize
-	return (Arm64AddSubImmWideMax as StackSize) - (margin as StackSize) - Arm64GuardSaveBytes
-end 'arm64WidestGuardedFrame'
-
 // Emit the guard at the very start of a guarded function's entry block, before the prologue, for a
 // user function of a green-thread module that reserves a frame. When the running green thread's
 // projected SP would dip below its stack guard the cold path runs; otherwise it is a handful of
@@ -1035,8 +1031,8 @@ export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns Functio
 		// then run a libSystem call on ANOTHER machine's 64 KB system stack. On x64 that window is emitted
 		// INLINE into every compiled function holding an IAT call, so it is reachable and is closed by
 		// `__gt_shim_enter`. Here the whole door is `mrt_darwin_libc_call`, a hand-assembled CHUNK — and a
-		// chunk's `__symtable` safe-point byte is 0, so no instruction of it is ever a safe point and the
-		// window has no instant to open in.
+		// chunk's `__symtable` preemptible bit is clear, so no instruction of it is ever a safe point and
+		// the window has no instant to open in.
 		//
 		// ⚠ **THE BRACKET IS KEPT ANYWAY, AS A BELT ON THAT ONE PROPERTY.** It costs two instructions and it
 		// is what would still be true the day this door stopped being a chunk; the exclusion is what makes it
@@ -1553,6 +1549,11 @@ end 'emitArm64LinuxPreemptSend'
 function buildArm64PreemptHandlerChunk(os Os) returns FunctionCodeChunk
 	let SlotRegisterFile = 0
 	let SlotMachine = 1
+
+	if Arm64RedZoneBytes != 0 'aRedZone'
+		panic("buildArm64PreemptHandlerChunk: this ABI declares a {Arm64RedZoneBytes}-byte red zone below SP, and an asynchronous stop pushes the interrupted link register there — the injected pair would overwrite live data of the interrupted function at every stop, silently. Push the pair below the red zone and teach `{String.from(AsyncPreemptName)}` to restore SP past it")
+	end 'aRedZone'
+
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
 	let decline = asm.newLabel()

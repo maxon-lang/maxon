@@ -1,0 +1,169 @@
+export function requirePreemptibleBodiesHoldNoMachineWindow(module StdModule, runtimeTier FunctionNameSet)
+	var offenders = ""
+
+	for func in module.functions 'eachFunc'
+		if not isStoppableCompilerBuiltBody(func, runtimeTier: runtimeTier) 'notStoppableScaffolding'
+			continue
+		end 'notStoppableScaffolding'
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = module.getBlock(blockRef)
+
+			if block.role == BlockRole.asyncUnsafe 'insideAnUnsafeWindow'
+				continue
+			end 'insideAnUnsafeWindow'
+
+			if blockReadsTheCurrentMachine(module, block: block) 'aMachineBoundRead'
+				offenders.append(" '{String.from(func.name)}' block '{String.from(block.label)}';")
+			end 'aMachineBoundRead'
+		end 'eachBlock'
+	end 'eachFunc'
+
+	if offenders.byteLength() > 0 'anyOffender'
+		panic("requirePreemptibleBodiesHoldNoMachineWindow: these compiler-built bodies can be stopped asynchronously and read the current machine through a TLS slot outside any region the async-unsafe table marks —{offenders} a thread stopped after that read resumes, possibly on another machine, holding the first machine's value. Mark the window (`BlockRole.asyncUnsafe`) or pin the body to its thread (`pinsItsThread`)")
+	end 'anyOffender'
+end 'requirePreemptibleBodiesHoldNoMachineWindow'
+
+function blockReadsTheCurrentMachine(module StdModule, block IrBlock) returns bool
+	for opIdx in block.bodyOps() 'eachOp'
+		if readsTheCurrentMachine(module.getOp(opIdx)) 'aMachineBoundRead'
+			return true
+		end 'aMachineBoundRead'
+	end 'eachOp'
+
+	return false
+end 'blockReadsTheCurrentMachine'
+
+// The compiler's own bodies the backends leave `asyncPreemptible`. This pass runs only for a program
+// with green threads.
+function isStoppableCompilerBuiltBody(func IrFunction, runtimeTier FunctionNameSet) returns bool
+	return isRuntimeFunction(func, runtimeTier: runtimeTier) and asyncPreemptionCanStop(true, skipsStackGuard: skipsGreenThreadStackGuard(func, runtimeTier: runtimeTier), pinsItsThread: func.pinsItsThread)
+end 'isStoppableCompilerBuiltBody'
+
+function readsTheCurrentMachine(op StdOp) returns bool
+	return match op 'op'
+		tlsSlotLoad gives true
+		const or
+		binOp or
+		unaryOp or
+		cmp or
+		binOpImm or
+		cmpImm or
+		div or
+		mod or
+		condBranch or
+		branch or
+		ret or
+		param or
+		retVoid or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		osAllocPages or
+		osWriteStdout or
+		rdataAddr or
+		errorReturn or
+		osExit or
+		funcAddr or
+		callIndirect or
+		osPanic or
+		osReadClock or
+		osProcessSpawn or
+		osProcessExitCode or
+		osCloseHandle or
+		osWaitHandle or
+		osWaitChild or
+		osFreePages or
+		switch or
+		witnessCall or
+		osPipeCreate or
+		osEventCreate or
+		osThreadCreate or
+		osLockInit or
+		osLockEnter or
+		osLockLeave or
+		osReadOverlapped or
+		osLastError or
+		osProcessSpawnInherit or
+		osCancelIo or
+		osGetPid or
+		osPipeCreateOutbound or
+		osWriteFile or
+		osReadWallClock or
+		witnessTryCall or
+		osFileOpenRead or
+		osFileClose or
+		osReadFile or
+		osFileOpenWrite or
+		osFileSize or
+		osFileDelete or
+		osFileRename or
+		osFileFindFirst or
+		osFileFindClose or
+		osFileFindNext or
+		osDirCreate or
+		osDirRemove or
+		osDirCurrentPath or
+		osFileAttributes or
+		osPanicValue or
+		osCommandLine or
+		osStdHandle or
+		osExecutablePath or
+		osProcessNamespace or
+		osRandomFill or
+		osWriteStderr or
+		stackRecordAddr or
+		osOpenNamedSegment or
+		osMapNamedSegment or
+		osTickCountMs or
+		osHandleSetInherit or
+		osPipePeek or
+		osEnvRead or
+		osProcessTerminate or
+		osSocketStartup or
+		osSocketResolve or
+		osSocketFreeAddrInfo or
+		osSocketCreate or
+		osSocketConnect or
+		osSocketSend or
+		osSocketError or
+		osSocketRecv or
+		osSocketClose or
+		osCpuCount or
+		osThreadCpuTicks or
+		osDecommitPages or
+		memFill or
+		osGuardPages or
+		osCommitPages or
+		osReservePages or
+		atomicCas or
+		atomicRmw or
+		tlsAlloc or
+		tlsSetValue or
+		osThreadToken or
+		osSetEvent or
+		osEnterBackgroundPriority or
+		osFileOpenWriteExecutable or
+		osFileOpenCreateNew or
+		osEnvBlock or
+		osEnvBlockFree or
+		loadAcquire or
+		storeRelease or
+		osHandleFileType or
+		osProcessProbe or
+		osProcessExitSignal or
+		osCreateNamedSegment or
+		osAdoptNamedSegment or
+		osUnmapNamedSegment or
+		osUnpublishNamedSegment or
+		covPoint or
+		osHostProcess or
+		osNetpoll or
+		cryptoRoutine or
+		osPathQuery or
+		osSocketOverlapped or
+		osSocketServe or
+		call or
+		tryCall gives false
+	end 'op'
+end 'readsTheCurrentMachine'

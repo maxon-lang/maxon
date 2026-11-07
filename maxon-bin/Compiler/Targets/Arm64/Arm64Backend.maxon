@@ -592,7 +592,7 @@ end 'arm64ShlDwordsOpcode'
 // so its isel asks `arm64ImmIsEncodableAddSub` and never selects the immediate form for a wider constant;
 // a FRAME past this has no encodable form at all (SP cannot be a shifted-register operand), so the split
 // panics rather than truncate.
-module let Arm64AddSubImmWideMax = Arm64ShiftedImm12Max or Arm64ImmMask
+let Arm64AddSubImmWideMax = Arm64ShiftedImm12Max or Arm64ImmMask
 
 // The reach of a `b`/`bl` (imm26 scaled by 4 = ±128 MiB) and of a `b.cond`/`cbz`/`cbnz` (imm19 scaled
 // by 4 = ±1 MiB), as byte counts. Guarded on resolution so an out-of-range branch is never a silently
@@ -2920,6 +2920,8 @@ function encodeArm64FunctionChunk(module TargetModule, func IrFunction, frameByt
 
 	// The code range of every run of blocks under one inline site — x64's channel, read off the block loop.
 	var inlineRanges = InlineRangeBuilder.create()
+	var asyncUnsafeRanges = InlineRangeBuilder.create()
+	let stoppable = asyncPreemptionCanStop(greenThreads, skipsStackGuard: encoding.skipsStackGuard, pinsItsThread: encoding.pinsItsThread)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("emitArm64FunctionChunk: blockRef from func.blockRefs not in module.blocks")
@@ -2964,6 +2966,10 @@ function encodeArm64FunctionChunk(module TargetModule, func IrFunction, frameByt
 
 		blockEnds.place(block.id, value: codeHere(code))
 		inlineRanges.note(block.inlineSite, codeStart: blockStart as CodeOffset, codeEnd: codeHere(code))
+
+		if stoppable 'mayBeStopped'
+			noteAsyncUnsafeBlock(asyncUnsafeRanges, block: block, codeStart: blockStart as CodeOffset, codeEnd: codeHere(code))
+		end 'mayBeStopped'
 	end 'eachBlock'
 
 	arm64ResolveRelaxableBlockBranches(code, blockOffsets: blockOffsets, branches: branches)
@@ -2975,8 +2981,9 @@ function encodeArm64FunctionChunk(module TargetModule, func IrFunction, frameByt
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: blockOffsets)
 
 	// `X64Backend.emitFunctionChunk` says why `compilerScaffolding` is asked separately.
-	chunk.asyncPreemptible = asyncPreemptionCanStop(greenThreads, skipsStackGuard: encoding.skipsStackGuard, pinsItsThread: encoding.pinsItsThread)
+	chunk.asyncPreemptible = stoppable
 	chunk.asyncUnsafePrefixBytes = unsafePrefixBytes
+	chunk.asyncUnsafeRanges = asyncUnsafeRanges.ranges
 	chunk.compilerScaffolding = encoding.compilerScaffolding
 	chunk.spendsCallerStack(frameBytes, checks: guarded)
 
@@ -3033,6 +3040,7 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	var debugLineRows = DebugLineRowArray.create(0)
 	var covPointOffsets = CovPointOffsetArray.create(0)
 	var inlineFrames = InlineFrameTables.create()
+	var asyncUnsafe = AsyncUnsafeTable.create()
 
 	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
 	// owns the rule and the refusal for both native backends. `__symtable` and `__inlframes` go through
@@ -3048,6 +3056,7 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 		labelsLaid = labelsLaid + 1
 		recordChunkSymbol(debugSymbols, chunk: chunk, codeOffset: funcStart as CodeOffset)
 		let inlineSiteBase = inlineFrames.appendChunk(chunk, funcStart: funcStart as CodeOffset)
+		asyncUnsafe.appendChunk(chunk, funcStart: funcStart as CodeOffset)
 
 		if captureSpans 'debugInfo'
 			foldChunkDebugInfo(chunk, funcStart: funcStart as CodeOffset, inlineSiteBase: inlineSiteBase, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
@@ -3096,7 +3105,7 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	padToAlignment(code, alignment: SymbolTableAlignment)
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
-	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, roster: project.shadowRoster))
+	code.append(buildSymbolTableBytes(debugSymbols, roster: project.shadowRoster))
 
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in; x64's
@@ -3104,6 +3113,11 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	padToAlignment(code, alignment: SymbolTableAlignment)
 	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	code.append(buildInlineFrameTableBytes(inlineFrames, roster: project.shadowRoster))
+	labelsLaid = labelsLaid + 1
+
+	padToAlignment(code, alignment: SymbolTableAlignment)
+	try recordChunkLabel(labelOffsets, name: AsyncUnsafeTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
+	code.append(buildAsyncUnsafeTableBytes(asyncUnsafe))
 
 	arm64ResolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 	arm64ResolveFuncAdrpRelocs(funcAdrpRelocs, labelOffsets: labelOffsets)

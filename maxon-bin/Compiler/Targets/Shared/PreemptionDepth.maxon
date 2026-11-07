@@ -11,6 +11,24 @@ export function requireAsyncPreemptionFitsItsMargin(tree StackSize, target Targe
 	end 'overflowsTheMargin'
 end 'requireAsyncPreemptionFitsItsMargin'
 
+export function requireAsyncPreemptionSavesEveryVectorValue(target Target)
+	let slotBytes = asyncPreemptVectorSlotBytes(target)
+
+	for stdType in StdType.allCases 'eachType'
+		if stdTypeIsFloat(stdType) and (stdTypeStorageBytes(stdType) as FullRangeInt) > (slotBytes as FullRangeInt) 'widerThanTheSave'
+			panic("requireAsyncPreemptionSavesEveryVectorValue: a `{stdType.name}` value is {stdTypeStorageBytes(stdType)} bytes and lives in a vector register, but the {targetToString(target)} async-preemption trampoline saves {slotBytes} bytes of each — a stop would lose the rest of the interrupted function's value. Save the register's full width in `{String.from(AsyncPreemptName)}`")
+		end 'widerThanTheSave'
+	end 'eachType'
+end 'requireAsyncPreemptionSavesEveryVectorValue'
+
+function asyncPreemptVectorSlotBytes(target Target) returns StackSize
+	return match target.cpu 'cpu'
+		x64 gives XmmSaveSlotBytes
+		arm64 gives SpillSlotBytes
+		wasm32 panic("asyncPreemptVectorSlotBytes: wasm32-wasi has no green-thread stack to stop a thread on — `targetProvidesFacility` denies `greenThreads` there")
+	end 'cpu'
+end 'asyncPreemptVectorSlotBytes'
+
 function asyncPreemptTrampolineStackBytes(target Target) returns StackSize
 	return match target.cpu 'cpu'
 		x64 gives x64GtAsyncPreemptStackBytes()

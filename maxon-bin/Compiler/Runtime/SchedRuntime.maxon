@@ -2187,6 +2187,8 @@ end 'emitLoadCurrentP'
 // and the runtime is reached only from user code or from an M's scheduler context. A caller that CANNOT make
 // that claim takes `emitLoadCurrentGtAndProcIdOrZero` below instead.
 export function emitLoadCurrentGt(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	block.role = BlockRole.asyncUnsafe
+
 	return emitLoadField(module, block: block, record: emitLoadCurrentM(module, block: block, ids: ids), offset: MOffCurrentGt, ids: ids)
 end 'emitLoadCurrentGt'
 
@@ -7899,8 +7901,9 @@ end 'buildSchedPreemptOne'
 // - the stack pointer outside the thread's own stack or within the stop floor of its base
 //   (`GtRuntime.gtAsyncPreemptFloor`), which excludes the shim window and `__gt_morestack` (both on
 //   the system stack), the guard region, and too little room for the trampoline's register block;
-// - a PC outside every function `__symtable` marks asynchronously preemptible, or inside its
-//   prologue guard (`BacktraceFormat.SymtabSafeFromBias`).
+// - a PC outside every function `__symtable` marks asynchronously preemptible, or inside a range of
+//   `__asyncunsafe` (`BacktraceFormat.AsyncUnsafeTableName`): a prologue stack guard or a block marked
+//   `BlockRole.asyncUnsafe`.
 //
 // A debugger's planted `int3` needs no arm of its own: a debug session withdraws asynchronous
 // preemption wholesale at the entry stop (`__sched_async_preempt_off`), so the monitor never reaches
@@ -7922,9 +7925,9 @@ function buildGtPreemptSafe(module StdModule, target Target)
 	var inText = module.addBlock(func, label: b"psintext", heat: BlockHeat.normal)
 	var named = module.addBlock(func, label: b"psnamed", heat: BlockHeat.normal)
 	var flagged = module.addBlock(func, label: b"psflagged", heat: BlockHeat.normal)
-	var pastTheGuard = module.addBlock(func, label: b"pspastguard", heat: BlockHeat.normal)
 	var safe = module.addBlock(func, label: b"pssafe", heat: BlockHeat.normal)
 	var notSafe = module.addBlock(func, label: b"psnotsafe", heat: BlockHeat.normal)
+	var unsafeTable = module.addBlock(func, label: b"psunsafe", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let m = 0
@@ -7967,39 +7970,76 @@ function buildGtPreemptSafe(module StdModule, target Target)
 	module.appendOp(named, op: StdOp.call(index, callee: SymtabIndexName, args: twoArgs(textOffset, second: symtable)))
 	emitBranchOnCompare(module, block: named, value: index, pred: StdCmpPred.lt, against: 0, whenTrue: notSafe, whenFalse: flagged, ids: ids)
 
-	// The safe-point run is one byte per entry at the entry's own index, reached through the header
-	// column that records where the variable-length names end — read as the whole header word and
-	// shifted down (`BacktraceFormat.SymtabHeaderFlagsOffsetShift`). The byte shares its top bit with
-	// `SymtabScaffoldingBit`; unmasked, a scaffolding function the table marks never-safe would pass
-	// the zero test.
+	// The flag run is one byte per entry at the entry's own index, reached through the header column that
+	// records where the variable-length names end — read as the whole header word and shifted down
+	// (`BacktraceFormat.SymtabHeaderFlagsOffsetShift`). The byte shares its top bit with
+	// `SymtabScaffoldingBit`, so the test masks the one bit it asks about.
 	let header = emitLoadField(module, block: flagged, record: symtable, offset: 0, ids: ids)
 	let flagsOffset = emitBin(module, block: flagged, a: header, b: emitConst(module, block: flagged, value: SymtabHeaderFlagsOffsetShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
 	let flagsBase = emitBin(module, block: flagged, a: symtable, b: flagsOffset, opcode: StdBinOpcode.add, ids: ids)
 	let flagsByte = emitLoadByteIndexed(module, block: flagged, base: flagsBase, index: index, ids: ids)
-	let safeFrom = emitBin(module, block: flagged, a: flagsByte, b: emitConst(module, block: flagged, value: SymtabSafeFromMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	emitBranchOnCompare(module, block: flagged, value: safeFrom, pred: StdCmpPred.eq, against: 0, whenTrue: notSafe, whenFalse: pastTheGuard, ids: ids)
+	let preemptible = emitBin(module, block: flagged, a: flagsByte, b: emitConst(module, block: flagged, value: SymtabPreemptibleBit, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	view cleared = emitGtPreemptSafeLlscLookback(module, func: func, pc: pc, notSafe: notSafe, safe: unsafeTable, target: target, ids: ids)
+	emitBranchOnCompare(module, block: flagged, value: preemptible, pred: StdCmpPred.eq, against: 0, whenTrue: notSafe, whenFalse: cleared, ids: ids)
 
-	// Past the function's prologue guard too, which holds a machine in a register between its TLS load
-	// and its green-thread load: a thread stopped there resumes, possibly on another machine, and
-	// takes the green thread of the machine it left for its own. `BacktraceFormat.SymtabSafeFromBias`
-	// carries the argument.
-	let entryStride = emitBin(module, block: pastTheGuard, a: index, b: emitConst(module, block: pastTheGuard, value: SymtabEntryShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
-	let entryOffset = emitBin(module, block: pastTheGuard, a: entryStride, b: emitConst(module, block: pastTheGuard, value: SymtabOffEntries as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	let entryAddr = emitBin(module, block: pastTheGuard, a: symtable, b: entryOffset, opcode: StdBinOpcode.add, ids: ids)
-	let entryWord = emitLoadField(module, block: pastTheGuard, record: entryAddr, offset: 0, ids: ids)
-	let funcStart = emitBin(module, block: pastTheGuard, a: entryWord, b: emitConst(module, block: pastTheGuard, value: SymtabEntryCodeOffsetMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	let intoFunc = emitBin(module, block: pastTheGuard, a: textOffset, b: funcStart, opcode: StdBinOpcode.sub, ids: ids)
-	let safeGranules = emitBin(module, block: pastTheGuard, a: safeFrom, b: emitConst(module, block: pastTheGuard, value: SymtabSafeFromBias, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	let firstSafe = emitBin(module, block: pastTheGuard, a: safeGranules, b: emitConst(module, block: pastTheGuard, value: safePointGranuleOf(target) as FullRangeInt, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
-	let insideTheGuard = emitCmp(module, block: pastTheGuard, a: intoFunc, b: firstSafe, pred: StdCmpPred.lt, ids: ids)
-	view cleared = emitGtPreemptSafeLlscLookback(module, func: func, pc: pc, notSafe: notSafe, safe: safe, target: target, ids: ids)
-	module.setTerminator(pastTheGuard, op: StdOp.condBranch(insideTheGuard, thenBlockId: notSafe.id, elseBlockId: cleared.id))
+	emitGtPreemptSafeUnsafeWindowSearch(module, func: func, from: unsafeTable, textOffset: textOffset, notSafe: notSafe, safe: safe, ids: ids)
 
 	module.setTerminator(safe, op: StdOp.ret(gt))
 	module.setTerminator(notSafe, op: StdOp.ret(emitConst(module, block: notSafe, value: 0, ids: ids)))
 
 	module.functions.push(func)
 end 'buildGtPreemptSafe'
+
+function emitGtPreemptSafeUnsafeWindowSearch(module StdModule, func IrFunction, from IrBlock, textOffset ValueId, notSafe IrBlock, safe IrBlock, ids ValueMinter)
+	var header = module.addBlock(func, label: b"psusearch", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"psubody", heat: BlockHeat.normal)
+	var right = module.addBlock(func, label: b"psuright", heat: BlockHeat.normal)
+	var left = module.addBlock(func, label: b"psuleft", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"psudone", heat: BlockHeat.normal)
+	var last = module.addBlock(func, label: b"psulast", heat: BlockHeat.normal)
+
+	let table = ids.mint()
+	module.appendOp(from, op: StdOp.funcAddr(table, funcName: AsyncUnsafeTableName))
+	let count = ids.mint()
+	module.appendOp(from, op: StdOp.loadIndirect(count, addrId: table, offset: 0, valueType: StdType.u32))
+	let first = emitConst(module, block: from, value: 0, ids: ids)
+	emitBranchCarrying(module, from: from, to: header, values: twoArgs(first, second: count))
+
+	let lo = ids.mint()
+	let hi = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(lo, argType: StdType.i64))
+	header.blockArgs.push(IrBlockArg.create(hi, argType: StdType.i64))
+	let past = ids.mint()
+	done.blockArgs.push(IrBlockArg.create(past, argType: StdType.i64))
+	emitBranchOnCompareValues(module, block: header, a: lo, pred: StdCmpPred.ge, b: hi, whenTrue: done, whenFalse: body, ids: ids)
+	pushBranchEdge(header, to: done, values: argsOf(lo))
+
+	let span = emitBin(module, block: body, a: lo, b: hi, opcode: StdBinOpcode.add, ids: ids)
+	let mid = emitBin(module, block: body, a: span, b: emitConst(module, block: body, value: 1, ids: ids), opcode: StdBinOpcode.shr, ids: ids)
+	let midEntry = emitAsyncUnsafeRangeAddr(module, block: body, table: table, index: mid, ids: ids)
+	let start = ids.mint()
+	module.appendOp(body, op: StdOp.loadIndirect(start, addrId: midEntry, offset: (AsyncUnsafeTableOffRanges + AsyncUnsafeRangeOffStart) as ByteOffset, valueType: StdType.u32))
+	emitBranchOnCompareValues(module, block: body, a: start, pred: StdCmpPred.le, b: textOffset, whenTrue: right, whenFalse: left, ids: ids)
+
+	let afterMid = emitBin(module, block: right, a: mid, b: emitConst(module, block: right, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	emitBranchCarrying(module, from: right, to: header, values: twoArgs(afterMid, second: hi))
+	emitBranchCarrying(module, from: left, to: header, values: twoArgs(lo, second: mid))
+
+	emitBranchOnCompare(module, block: done, value: past, pred: StdCmpPred.eq, against: 0, whenTrue: safe, whenFalse: last, ids: ids)
+
+	let lastIndex = emitBin(module, block: last, a: past, b: emitConst(module, block: last, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let lastEntry = emitAsyncUnsafeRangeAddr(module, block: last, table: table, index: lastIndex, ids: ids)
+	let rangeEnd = ids.mint()
+	module.appendOp(last, op: StdOp.loadIndirect(rangeEnd, addrId: lastEntry, offset: (AsyncUnsafeTableOffRanges + AsyncUnsafeRangeOffEnd) as ByteOffset, valueType: StdType.u32))
+	emitBranchOnCompareValues(module, block: last, a: textOffset, pred: StdCmpPred.lt, b: rangeEnd, whenTrue: notSafe, whenFalse: safe, ids: ids)
+end 'emitGtPreemptSafeUnsafeWindowSearch'
+
+function emitAsyncUnsafeRangeAddr(module StdModule, block IrBlock, table ValueId, index ValueId, ids ValueMinter) returns ValueId
+	let shift = emitConst(module, block: block, value: AsyncUnsafeRangeEntryShift as FullRangeInt, ids: ids)
+	let offset = emitBin(module, block: block, a: index, b: shift, opcode: StdBinOpcode.shl, ids: ids)
+
+	return emitBin(module, block: block, a: table, b: offset, opcode: StdBinOpcode.add, ids: ids)
+end 'emitAsyncUnsafeRangeAddr'
 
 // ⛔⛔ **arm64 ONLY: A STOP INSIDE A LOAD-LINKED / STORE-CONDITIONAL PAIR IS DECLINED.** The park between the
 // two halves runs arbitrary code — including other exclusive pairs — so the reservation is gone by the time
@@ -8016,7 +8056,7 @@ end 'buildGtPreemptSafe'
 // longer than four instructions, and no compiled function precedes it — so the earliest preemptible PC in
 // any image is far past the bound already tested above.
 //
-// Answers the block the caller's "past the guard" test should fall through TO.
+// Answers the block the caller should fall through TO once its other tests pass.
 function emitGtPreemptSafeLlscLookback(module StdModule, func IrFunction, pc ValueId, notSafe IrBlock, safe IrBlock, target Target, ids ValueMinter) returns IrBlock
 	if target.cpu != CpuArch.arm64 'noRestartableSequences'
 		return safe

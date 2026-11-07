@@ -154,8 +154,8 @@ only by builders). They run inside the margin `GtRuntime.gtStackGuardMargin` is 
 must not recurse on program-sized data.
 
 The `asyncPreemptible` consequence is not observable by any spec case: the guard is emitted at byte level
-rather than as a `TargetOp`, the bit reaches only the symbol table's safe-point bits
-(`BacktraceFormat.symbolSafeFromByte`), and `schedPreemptCount()` counts preemptions honoured. A pin
+rather than as a `TargetOp`, the bit reaches only the symbol table's preemptible flag
+(`BacktraceFormat.symbolFlagsByte`), and `schedPreemptCount()` counts preemptions honoured. A pin
 cannot catch a regression in `isRuntimeFunction`; read the predicate.
 
 ## Built and reached

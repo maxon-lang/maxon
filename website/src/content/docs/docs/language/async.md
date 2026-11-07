@@ -806,9 +806,12 @@ that call and the report.
   count above the CPU count; any other value leaves the default. `Scheduler.processorCount()` answers the resolved count. Services use
   the processors in parallel; an `async`-only program's coroutines stay on the green thread that started
   them.
-- **Preemption.** A green thread that has run for 10 ms is stopped at its next function entry, `spawn`, `async` call, service send, `await` or `awaitAny`, or
-  when a service takes its next message, and moved
-  behind the other runnable work, so a CPU-bound loop cannot starve the rest of the program.
+- **Preemption.** A green thread that has run for 10 ms is stopped and moved behind the other runnable
+  work, so a CPU-bound loop cannot starve the rest of the program. It can be stopped at any instruction of
+  user and standard-library code, outside the short compiler-generated sequences that must run whole, such
+  as an inline allocation; the runtime's own code (the scheduler, the allocator, the context switch) always
+  runs uninterrupted. It is also stopped at its next function entry, `spawn`, `async` call, service send,
+  `await` or `awaitAny`, or when a service takes its next message.
   `MAXON_PREEMPT=off` disables preemption; `on`, or unset, is the default, and any other value makes the
   program exit at start-up with code 116.
 - **Coroutines switch only where they wait**: at `await`, `sleep`, `Scheduler.yield()`, I/O, and a service

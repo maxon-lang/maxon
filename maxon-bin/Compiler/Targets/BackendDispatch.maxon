@@ -126,6 +126,10 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	try requireAlwaysSplicedBodiesAreGone(project, module: stdModule, byName: funcNames)
 	recordPhase(project, phase: CompilePhase.alwaysSplicedGate, probe: splicedProbe)
 
+	if usage.usesGt and targetStopsThreadsForPreemption(target) 'stoppableBodies'
+		requirePreemptibleBodiesHoldNoMachineWindow(stdModule, runtimeTier: project.libraryFacts.runtimeTier)
+	end 'stoppableBodies'
+
 	if usage.usesGt 'indirectJumpReturns'
 		markIndirectJumpReturns(stdModule, byName: funcNames.byName)
 	end 'indirectJumpReturns'
@@ -149,31 +153,12 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 
 	recordPhase(project, phase: CompilePhase.layOutGlobals, probe: layoutProbe)
 
-	if usage.usesGt 'guardedFunctions'
-		requireStackGuardFitsTheSafePointColumn(widestStackGuardBytes(target), target: target)
-	end 'guardedFunctions'
-
 	match target.cpu 'cpu'
 		x64 then return try buildX64Backend(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
 		arm64 then return try buildArm64Backend(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
 		wasm32 then return buildWasmBackend(stdModule, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
 	end 'cpu'
 end 'buildBackend'
-
-// The guard's encoding grows with the frame it projects, so the widest frame a guard can encode
-// bounds every guard this target emits, and one check per program covers a function of any size.
-function widestStackGuardBytes(target Target) returns CodeOffset
-	let margin = gtStackGuardMargin(target)
-	var code = ByteArray.create(0)
-
-	match target.cpu 'cpu'
-		x64 then emitGtStackGuard(code, callFixups: CallFixupArray.create(0), rdataRelocs: RdataRelocationArray.create(0), frameBytes: x64WidestGuardedFrame(margin), margin: margin, site: GtGuardSite.functionEntry, target: target)
-		arm64 then emitArm64GtStackGuard(code, callFixups: CallFixupArray.create(0), rdataRelocs: RdataRelocationArray.create(0), frameBytes: arm64WidestGuardedFrame(margin), margin: margin, site: GtGuardSite.functionEntry, target: target)
-		wasm32 then panic("widestStackGuardBytes: wasm32 runs no green thread, so no function of it carries a stack guard")
-	end 'cpu'
-
-	return code.count()
-end 'widestStackGuardBytes'
 
 // ⭐⭐ **THE `.data` ROSTER, IN LAYOUT ORDER: the user's globals, then every runtime family's words.** The
 // order is the `.data` order — `layOut` sorts by width and is stable — so a family's position here is a

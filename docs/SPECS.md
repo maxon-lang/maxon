@@ -136,6 +136,10 @@ Three things pin what the compiler emits:
   checks it. A case carrying any `TargetIr` block always compiles and runs on its own. The cases that pin
   emitted code live in `ir-specs/`.
 
+  The blocks of an inline slab pop, where an asynchronous stop is declined, carry `[async-unsafe]` after their
+  labels. A function a stop can land in ends with one `async-unsafe [a, b)` line per code range those blocks
+  occupy, the bounds being hexadecimal offsets from the function's start.
+
   A spec that holds any `TargetIr` block is an IR spec, and in one every case that expects a successful compile
   carries a block for each native lane its `<!-- unsupported-targets: … -->` marker does not exclude. A case
   short of one is refused when the spec is read, on every host and for whichever lane the run is for, because a

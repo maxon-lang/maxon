@@ -1174,8 +1174,8 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	// counter (a lost update leaves that machine permanently unpreemptible) before switching onto its stack.
 	// No ordering of a "read m, then step m's counter" pair closes it; only moving both inside code that is
 	// never a safe point does. `__gt_shim_enter` is a hand-assembled chunk, and a chunk's `__symtable`
-	// safe-point byte is 0 — so a stop lands either BEFORE the call, with nothing cached, or AFTER it, with
-	// the depth already raised.
+	// preemptible bit is clear — so a stop lands either BEFORE the call, with nothing cached, or AFTER it,
+	// with the depth already raised.
 	encodeCallDirect(code, callFixups: callFixups, targetName: GtShimEnterName)
 
 	// Switch RSP to THIS M's OWN system stack (`SchedRuntime.MOffSystemStackSP` carries why it is the M's). r10
@@ -1754,15 +1754,6 @@ function emitGtRelocateChainWalk(code ByteArray)
 	walkLabels.place(WalkDoneLabel, value: codeHere(code))
 	resolveChunkRel32Fixups(code, labelOffsets: walkLabels, rel32Fixups: walkFixups)
 end 'emitGtRelocateChainWalk'
-
-// The largest frame whose projection `frameBytes + margin` still fits the guard's `sub` immediate,
-// so `widestStackGuardBytes` measures the longest guard any function carries; a larger frame fails
-// the `Imm32` cast.
-export function x64WidestGuardedFrame(margin FullRangeInt) returns StackSize
-	return (LargestGuardProjection - margin) as StackSize
-end 'x64WidestGuardedFrame'
-
-let LargestGuardProjection = i32.max as FullRangeInt
 
 // The prologue stack guard. `X64Backend` emits it before `push rbp` in the entry block of a
 // green-thread module's function that reserves a frame or reaches a callee and is not exempt

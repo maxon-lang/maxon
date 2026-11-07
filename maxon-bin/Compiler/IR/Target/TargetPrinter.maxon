@@ -18,6 +18,8 @@
 // contracts shared with the committed fragments — named, not scattered literals,
 // so the one place the layout is defined is here.
 let BlockLabelIndent = "  "
+let AsyncUnsafeBlockNote = " [async-unsafe]"
+let AsyncUnsafeWindowPrefix = "async-unsafe "
 let OpIndent = "    "
 
 // Every mnemonic is prefixed once by the ISA namespace (`x64.`) at the print
@@ -171,6 +173,7 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 	// pin is minted without the body, and the test claiming the gate goes green for ever. An edit to
 	// the skip rule cannot bypass the refusal, because there is no second rule to bypass.
 	var rendered = FixedBoolArray.create(runtimeNames.count())
+	let chunkPositions = chunkPositionsByName(codeChunks)
 
 	for func in module.functions 'eachFunc'
 		let named = markNamedBy(runtimeNames, name: func.name, rendered: rendered)
@@ -195,7 +198,7 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 			body.append("\n")
 		end 'separator'
 
-		body.append(printTargetFunction(module, func: func, cpu: cpu, globalData: globalData))
+		body.append(printTargetFunction(module, func: func, cpu: cpu, globalData: globalData, windows: asyncUnsafeWindowsOf(codeChunks, positions: chunkPositions, name: func.name)))
 		afterFirst = true
 	end 'eachFunc'
 
@@ -730,7 +733,7 @@ end 'blockPrintName'
 // Serialize one function: `func @<name> {`, then each block as `<name>:` (see
 // `buildBlockPrintNames` — NOT its raw label, which is not unique) followed by
 // its ops (and terminator) one per line, then the closing brace.
-function printTargetFunction(module TargetModule, func IrFunction, cpu CpuArch, globalData GlobalDataTable) returns String
+function printTargetFunction(module TargetModule, func IrFunction, cpu CpuArch, globalData GlobalDataTable, windows InlineRangeArray) returns String
 	var sb = StringBuilder.create()
 	sb.append("{FuncHeaderPrefix}{String.from(func.name)} {OpenBrace}\n")
 
@@ -741,7 +744,7 @@ function printTargetFunction(module TargetModule, func IrFunction, cpu CpuArch, 
 	let names = buildBlockPrintNames(funcBlocks)
 
 	for block in funcBlocks 'eachBlock'
-		sb.append("{BlockLabelIndent}{blockPrintName(block.id, names: names)}:\n")
+		sb.append("{BlockLabelIndent}{blockPrintName(block.id, names: names)}:{AsyncUnsafeBlockNote if block.role == BlockRole.asyncUnsafe else ""}\n")
 
 		for opIdx in block.bodyOps() 'eachOp'
 			sb.append(printOpLine(module, opIdx: opIdx, names: names, cpu: cpu, globalData: globalData))
@@ -752,9 +755,31 @@ function printTargetFunction(module TargetModule, func IrFunction, cpu CpuArch, 
 		end 'hasTerm'
 	end 'eachBlock'
 
+	for window in windows 'eachWindow'
+		sb.append("{OpIndent}{AsyncUnsafeWindowPrefix}[{hexOffset(window.codeStart)}, {hexOffset(window.codeEnd)})\n")
+	end 'eachWindow'
+
 	sb.append("{CloseBrace}\n")
 	return sb.build()
 end 'printTargetFunction'
+
+typealias ChunkPositionByName = Map with (ByteArray, ElementIndex)
+
+function chunkPositionsByName(codeChunks FunctionCodeChunkArray) returns ChunkPositionByName
+	var positions = ChunkPositionByName.create()
+
+	for (iter, chunk) in codeChunks.withIterator() 'eachChunk'
+		positions.upsert(chunk.funcName, value: iter.index())
+	end 'eachChunk'
+
+	return positions
+end 'chunkPositionsByName'
+
+function asyncUnsafeWindowsOf(codeChunks FunctionCodeChunkArray, positions ChunkPositionByName, name ByteArray) returns InlineRangeArray
+	let position = try positions.get(name) otherwise panic("asyncUnsafeWindowsOf: the Target IR render holds '{String.from(name)}' but the backend kept no code chunk under that name")
+
+	return (try codeChunks.get(position) otherwise panic("asyncUnsafeWindowsOf: position {position} is outside the {codeChunks.count()} chunk(s) indexed by name")).asyncUnsafeRanges
+end 'asyncUnsafeWindowsOf'
 
 // One op, indented, ISA-prefixed, newline-terminated. An out-of-range op index
 // is an invariant violation (a block references an op not in `module.ops`), not

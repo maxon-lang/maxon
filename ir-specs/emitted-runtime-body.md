@@ -29875,7 +29875,7 @@ func @__gt_cell_get {
 }
 
 func @__gt_cell_alloc {
-  entry:
+  entry: [async-unsafe]
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
@@ -30946,7 +30946,7 @@ func @__gt_cell_get {
 }
 
 func @__gt_cell_alloc {
-  entry:
+  entry: [async-unsafe]
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
@@ -32167,7 +32167,7 @@ func @__gt_cell_get {
 }
 
 func @__gt_cell_alloc {
-  entry:
+  entry: [async-unsafe]
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
@@ -33406,7 +33406,7 @@ func @__gt_cell_get {
 }
 
 func @__gt_cell_alloc {
-  entry:
+  entry: [async-unsafe]
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
@@ -51654,7 +51654,7 @@ func @__gt_free_get {
 }
 
 func @__gt_spawn {
-  entry:
+  entry: [async-unsafe]
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
@@ -52236,7 +52236,7 @@ func @__gt_free_get {
 }
 
 func @__gt_spawn {
-  entry:
+  entry: [async-unsafe]
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
@@ -52872,7 +52872,7 @@ func @__gt_free_get {
 }
 
 func @__gt_spawn {
-  entry:
+  entry: [async-unsafe]
     arm64.prologue 32
     arm64.storeSlotReg slot1, x19
     arm64.movRegReg x19, x0
@@ -53529,7 +53529,7 @@ func @__gt_free_get {
 }
 
 func @__gt_spawn {
-  entry:
+  entry: [async-unsafe]
     arm64.prologue 32
     arm64.storeSlotReg slot1, x19
     arm64.movRegReg x19, x0
@@ -56900,7 +56900,7 @@ func @main {
 }
 
 func @__gt_spawn {
-  entry:
+  entry: [async-unsafe]
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
@@ -57813,7 +57813,7 @@ func @main {
 }
 
 func @__gt_spawn {
-  entry:
+  entry: [async-unsafe]
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
@@ -58711,7 +58711,7 @@ func @main {
 }
 
 func @__gt_spawn {
-  entry:
+  entry: [async-unsafe]
     arm64.prologue 32
     arm64.storeSlotReg slot1, x19
     arm64.movRegReg x19, x0
@@ -59694,7 +59694,7 @@ func @main {
 }
 
 func @__gt_spawn {
-  entry:
+  entry: [async-unsafe]
     arm64.prologue 32
     arm64.storeSlotReg slot1, x19
     arm64.movRegReg x19, x0
