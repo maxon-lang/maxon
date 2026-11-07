@@ -1,0 +1,54 @@
+typealias ExitCode = int(0 to 255)
+
+let EchoCount = 100
+let BurnRounds = 4000000000
+let MixMultiplier = 31
+let MixMask = 0xFFFFFF
+
+type Burner
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function burn(rounds Count) returns Count
+		var acc = 0 as Count
+		var round = 0 as Count
+
+		while round < rounds 'eachRound'
+			acc = (acc * MixMultiplier + round) and MixMask
+			round = round + 1
+		end 'eachRound'
+
+		print("burned\n")
+
+		return acc
+	end 'burn'
+end 'Burner'
+
+type Echo
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function ping(value Count) returns Count
+		return value
+	end 'ping'
+end 'Echo'
+
+function main() returns ExitCode
+	let burner = spawn Burner.create()
+	let echo = spawn Echo.create()
+
+	_ = try burner.burn(BurnRounds) otherwise panic("preemption: the burner stopped before it ran")
+
+	var total = 0 as Count
+
+	for message in 0 upto EchoCount 'eachMessage'
+		let answered = try await echo.ping(message) otherwise panic("preemption: the echo stopped before it answered")
+		total = total + answered
+	end 'eachMessage'
+
+	print("echoed {total}\n")
+
+	return 0
+end 'main'

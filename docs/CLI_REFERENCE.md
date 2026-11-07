@@ -1955,6 +1955,8 @@ go: through thread handles on Windows, Mach task and thread ports on macOS, and 
   that cannot be detached within 10 seconds has its whole process killed rather than left stopped, and
   stderr says so in one line per process:
   `sampler: thread <tid> of process <pid> could not be detached within 10000 ms, so the process was killed rather than left stopped`.
+  A signal that arrives while the profiler holds a thread, such as the runtime's preemption signal, is
+  delivered to the thread when the profiler detaches it.
 - A thread in uninterruptible sleep (`D` in `/proc/<pid>/task/<tid>/stat`) is waited on when it is the
   program's main thread at the start, for the same 10 seconds, and then treated as traceable. Any other
   thread found in that state on a tick is counted as an unreadable stack for that tick.

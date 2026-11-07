@@ -477,6 +477,7 @@ tests/
     profile-hot-ordering.maxtest            the busier function ranks first in every section
     profile-folded.maxtest                  collapsed stacks carry every path, whatever the floor
     profile-greenthreads.maxtest            two green threads as themselves, the scheduler absent
+    profile-leaves-asynchronous-preemption-working.maxtest   a one-processor program whose burner never yields still preempts it to run its echo service while it is profiled
     profile-ordinary-build-has-no-entitlement.maxtest    an ordinary arm64-macos build names no `get-task-allow`
     profile-runs-an-ordinary-build.maxtest               an ordinary build is measured with no flag and no rebuild
     profile-a-program-that-ends-at-once.maxtest          a program gone before the attach is reported as ended, never as an access refusal
@@ -1090,9 +1091,10 @@ test` runs files concurrently, and a tree is what an output path lives in.
 
 ## `profile/` — where a program's CPU time went, measured from outside it
 
-Thirteen cases over one subject: `maxon profile run` samples a RUNNING program by stopping its threads from
-another process, and reports where the samples landed. Five measure a run, one of them an ordinary build
-that needs no flag and one a program that ends before the profiler attaches. The other eight are the
+One subject: `maxon profile run` samples a RUNNING program by stopping its threads from
+another process, and reports where the samples landed. Some cases measure a run, among them an ordinary build
+that needs no flag, a program that ends before the profiler attaches, and a service that never yields and
+must still be preempted while it is profiled. The rest are the
 `arm64-macos` entitlement and the copy it needs: one reads a cross-built image's code signature on any host,
 four read the image the profiler launches, where it sits and what becomes of it, and three run the profiler on
 macOS against an image or a directory it must refuse — a spoiled SuperBlob, an ELF image and an image with no

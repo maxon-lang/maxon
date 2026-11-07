@@ -710,6 +710,8 @@ let PtraceOptionTraceClone = 0x00000008
 let PtraceOptionExitKill = 0x00100000
 
 let PtraceEventClone = 3
+let PtraceEventStop = 128
+let SignalCodeEventShift = 8
 let SignalCodeSentByKill = 0
 public let NoTraceSignal = 0 as DebuggeeSignal
 
@@ -853,15 +855,36 @@ public type ProcessTrace
 		return traceHostCall(TraceHostVerb.signalProcess, a0: process as RegisterWord, a1: signal as RegisterWord, a2: 0, a3: 0, a4: 0) != 0
 	end 'signalProcess'
 
+	function signalInfoRead(thread DebuggeeThreadId) returns bool
+		return traceHostCall(TraceHostVerb.request, a0: PtraceGetSigInfo, a1: thread as RegisterWord, a2: 0, a3: self.scratch.addressOf(TraceSigInfoSlot), a4: 0) != 0
+	end 'signalInfoRead'
+
 	public function signalWasSentByKill(thread DebuggeeThreadId) returns bool
 		self.scratch.setWord(TraceSigInfoCodeSlot, value: 0)
 
-		if traceHostCall(TraceHostVerb.request, a0: PtraceGetSigInfo, a1: thread as RegisterWord, a2: 0, a3: self.scratch.addressOf(TraceSigInfoSlot), a4: 0) == 0 'theKernelRefused'
+		if not self.signalInfoRead(thread) 'theKernelRefused'
 			return false
 		end 'theKernelRefused'
 
 		return (self.scratch.word(TraceSigInfoCodeSlot) and LowDwordMask) == SignalCodeSentByKill
 	end 'signalWasSentByKill'
+
+	module function signalAwaitingDelivery(thread DebuggeeThreadId) returns DebuggeeSignal
+		self.scratch.setWord(TraceSigInfoCodeSlot, value: 0)
+
+		if not self.signalInfoRead(thread) 'theKernelRefused'
+			return NoTraceSignal
+		end 'theKernelRefused'
+
+		// An interrupt or group stop is an event stop, and its `si_code` carries `PTRACE_EVENT_STOP` above
+		// the low byte. `PTRACE_GETSIGINFO` succeeds there too, so `si_signo` alone would wrongly owe a
+		// `SIGTRAP`.
+		if ((self.scratch.word(TraceSigInfoCodeSlot) and LowDwordMask) shr SignalCodeEventShift) == PtraceEventStop 'anEventStop'
+			return NoTraceSignal
+		end 'anEventStop'
+
+		return (self.scratch.word(TraceSigInfoSlot) and LowDwordMask) as DebuggeeSignal
+	end 'signalAwaitingDelivery'
 
 	public function readMemory(process DebuggeeProcessId, address DebuggeeAddress, count DebuggeeByteCount) returns ByteArray throws DebuggeeError
 		let wanted = try transferIsWanted(count as TransferByteCount, refusal: DebuggeeError.unreadable)

@@ -179,6 +179,28 @@
 			absent
 			present(code String)
 		end 'ThreadState'
+
+		// `owed` is the signal the stop was holding for delivery, and the detach hands it back: detaching
+		// with `NoTraceSignal` from a signal-delivery-stop cancels it, and a cancelled preemption `SIGURG`
+		// leaves that machine unpreempted for the rest of the run.
+		union StopArrival
+			lost
+			held(owed DebuggeeSignal)
+
+			function isHeld() returns bool
+				return match self 'which'
+					lost gives false
+					held gives true
+				end 'which'
+			end 'isHeld'
+
+			function owedSignal() returns DebuggeeSignal
+				return match self 'which'
+					lost gives NoTraceSignal
+					held(owed) gives owed
+				end 'which'
+			end 'owedSignal'
+		end 'StopArrival'
 	#endif
 
 	#if not os(Windows)
@@ -999,7 +1021,8 @@
 					held then break
 				end 'seized'
 
-				let stopped = self.trace.interrupt(id) and self.awaitStop(id)
+				let arrival = self.interruptedAndHeld(id)
+				let stopped = arrival.isHeld()
 				var programCounter = 0 as RegisterWord
 				var framePointer = 0 as RegisterWord
 				var stackPointer = 0 as RegisterWord
@@ -1012,7 +1035,7 @@
 					copied = self.copyStack(stackPointer)
 				end 'registersAreHeld'
 
-				_ = self.letGo(id)
+				_ = self.letGo(id, owed: arrival.owedSignal())
 
 				var suspendedCycles = self.lastCycles(thread.id)
 
@@ -1043,11 +1066,9 @@
 					held then break
 				end 'seized'
 
-				if self.trace.interrupt(leader) 'asked'
-					_ = self.awaitStop(leader)
-				end 'asked'
+				let arrival = self.interruptedAndHeld(leader)
 
-				return TraceProbe.traceable if self.letGo(leader) else TraceProbe.killed
+				return TraceProbe.traceable if self.letGo(leader, owed: arrival.owedSignal()) else TraceProbe.killed
 			end 'canBeTraced'
 
 			function seizeForStop(thread DebuggeeThreadId, stateKnown bool) returns SeizeOutcome
@@ -1076,8 +1097,8 @@
 				return true
 			end 'holdForStop'
 
-			function detachedOrGone(thread DebuggeeThreadId) returns bool
-				if self.trace.detach(thread, signal: NoTraceSignal) or ((thread as RegisterWord) != self.pid and self.trace.reapedGone(thread)) or self.threadHasExited(thread as RegisterWord) 'noLongerHeld'
+			function detachedOrGone(thread DebuggeeThreadId, owed DebuggeeSignal) returns bool
+				if self.trace.detach(thread, signal: owed) or ((thread as RegisterWord) != self.pid and self.trace.reapedGone(thread)) or self.threadHasExited(thread as RegisterWord) 'noLongerHeld'
 					self.seized.remove(thread)
 
 					return true
@@ -1086,10 +1107,10 @@
 				return false
 			end 'detachedOrGone'
 
-			function letGo(thread DebuggeeThreadId) returns bool
+			function letGo(thread DebuggeeThreadId, owed DebuggeeSignal) returns bool
 				let started = Clock.nowNanos()
 
-				while not self.detachedOrGone(thread) 'untilItHasStopped'
+				while not self.detachedOrGone(thread, owed: owed) 'untilItHasStopped'
 					if Clock.elapsedNanos(started) > TraceStopBudgetNanos 'outOfTime'
 						self.seized.killProcessHolding(thread)
 
@@ -1108,22 +1129,32 @@
 				end 'spunLongEnough'
 			end 'pauseAfterSpinning'
 
-			function awaitStop(thread DebuggeeThreadId) returns bool
+			function interruptedAndHeld(thread DebuggeeThreadId) returns StopArrival
+				if not self.trace.interrupt(thread) 'refused'
+					return StopArrival.lost
+				end 'refused'
+
+				return self.awaitStop(thread)
+			end 'interruptedAndHeld'
+
+			// Readiness is read from the registers and never by waiting on `thread`: `wait4` on the leader's
+			// id reaps its exit status, and `ProfileCommand`'s `pollExit` would then never see the program end.
+			function awaitStop(thread DebuggeeThreadId) returns StopArrival
 				let started = Clock.nowNanos()
 
 				while Clock.elapsedNanos(started) <= TraceStopBudgetNanos 'untilItHasStopped'
 					if self.trace.readGeneralRegisters(thread) 'stopped'
-						return true
+						return StopArrival.held(self.trace.signalAwaitingDelivery(thread))
 					end 'stopped'
 
 					if Clock.elapsedNanos(started) > TraceStopSpinNanos and self.threadHasExited(thread as RegisterWord) 'exited'
-						return false
+						return StopArrival.lost
 					end 'exited'
 
 					self.pauseAfterSpinning(started)
 				end 'untilItHasStopped'
 
-				return false
+				return StopArrival.lost
 			end 'awaitStop'
 		#endif
 
