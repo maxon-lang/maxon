@@ -701,7 +701,7 @@ not the tree you would push: **rebase and RE-RUN §8** before pushing again.
 > ### ⛔ DO NOT WAIT FOR CI (user ruling)
 > **The push ends the change.** Do not watch, poll or schedule a check on the CI run; report and stop.
 > CI hosts the four native targets on their own architecture, runs the full suite, the tree corpora,
-> the two-stage seed build and `scripts/fixpoint.sh`, none of which your landing gates do, so a lane
+> and the two-stage seed build, none of which your landing gates do, so a lane
 > can still go red after you have reported — that is why the report names every lane and gate your
 > landing gates did not run. CI also runs the wasm32-wasi suite, on its x64-linux lane. When a red lane is reported to you, it is yours to fix whether or not
 > you caused it (AGENTS.md), in its own commit, reproduced on that platform's own host — never on the

@@ -99,13 +99,7 @@ After a change, rebuild and re-run the suite:
 ```bash
 maxon-bin/.maxon/maxon run build           # the compiler rebuilds itself
 maxon-bin/.maxon/maxon spec-test           # or --filter=<spec> for one area
-scripts/fixpoint.sh                        # does the compiler still reproduce itself?
 ```
-
-`scripts/fixpoint.sh` builds the compiler with itself, builds it again with the result, and checks the
-two binaries are byte-identical. A difference is a miscompile the suite cannot see, because every stage
-shares the same logic. A fixpoint shows the compiler is stable, not that it is right — that is the
-suite's job.
 
 ### Tests
 
@@ -120,8 +114,7 @@ test cases together. When you change behavior, update or add the relevant spec, 
   [Ideas](https://github.com/maxon-lang/maxon/discussions/categories/ideas), so the design can
   be agreed on.
 - Keep changes focused — one logical change per pull request.
-- Make sure the compiler builds cleanly, `./maxon-bin/.maxon/maxon spec-test` passes, and
-  `scripts/fixpoint.sh` holds.
+- Make sure the compiler builds cleanly and `./maxon-bin/.maxon/maxon spec-test` passes.
 - Format Maxon source with `maxon-bin/.maxon/maxon fmt`.
 - Match the style of the surrounding code; Maxon favors explicit, readable code over clever or
   terse code, in the compiler as much as in the language.

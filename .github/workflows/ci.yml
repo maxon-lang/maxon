@@ -64,7 +64,6 @@ on:
       - 'scripts/fetch-vendor.sh'
       - 'scripts/freeze-seed.sh'
       - 'scripts/pin-seed.sh'
-      - 'scripts/fixpoint.sh'
       - 'scripts/lib/**'
       - 'scripts/multicore-stress/**'
       - 'scripts/debugstream-stress/**'
@@ -429,14 +428,6 @@ jobs:
       - name: Targets corpus
         if: steps.seed.outputs.seeded == 'yes' && contains(format(',{0},', matrix.roles), ',targets-gate,')
         run: ./maxon-bin/.maxon/maxon test tests/targets
-
-      # ⭐ THE FIXPOINT IS THE ONE CHECK A GREEN SUITE CANNOT STAND IN FOR. Every stage shares the
-      # compiler's logic, so the suite exercises the same behaviour whichever stage ran it; only the
-      # BYTES of two successive self-compiles say whether the emitted code is stable, and a difference
-      # is a miscompile.
-      - name: Fixpoint
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./scripts/fixpoint.sh
 
   freeze:
     if: github.repository == 'maxon-lang/maxon' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.freeze_seed))

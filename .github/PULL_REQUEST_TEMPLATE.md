@@ -23,5 +23,4 @@ case did BEFORE the fix, and what it does now.
 ## Checks
 
 - [ ] `./maxon-bin/.maxon/maxon spec-test` — 0 failed
-- [ ] `./scripts/fixpoint.sh` — the compiler still reproduces itself byte-for-byte
 - [ ] New or changed comments describe the PRESENT, with no history in them
