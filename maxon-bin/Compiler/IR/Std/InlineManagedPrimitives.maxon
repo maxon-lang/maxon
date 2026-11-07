@@ -290,7 +290,7 @@ export function inlineManagedPrimitives(project Project, module StdModule, usesG
 			continue
 		end 'notInTheProgram'
 
-		var inliner = PrimitiveInliner.create(module, func: func, usesGreenThreads: usesGreenThreads, traced: project.debugStream, road: createRoadOf(project), target: project.target, funcIndex: funcIndex, origins: project.valueOrigins, strides: project.stdOpElementStrides, trivialElements: project.stdOpTrivialElementSites, globalData: project.globalData)
+		var inliner = PrimitiveInliner.create(module, func: func, usesGreenThreads: usesGreenThreads, traced: project.debugStream, road: createRoadOf(project, func: func, usesGreenThreads: usesGreenThreads), target: project.target, funcIndex: funcIndex, origins: project.valueOrigins, strides: project.stdOpElementStrides, trivialElements: project.stdOpTrivialElementSites, globalData: project.globalData)
 		inliner.run()
 		expanded = expanded + inliner.expanded
 	end 'eachFunc'
@@ -302,10 +302,15 @@ export function inlineManagedPrimitives(project Project, module StdModule, usesG
 	end 'debugging'
 end 'inlineManagedPrimitives'
 
-function createRoadOf(project Project) returns CoAllocatedAllocRoad
+function createRoadOf(project Project, func IrFunction, usesGreenThreads bool) returns CoAllocatedAllocRoad
 	if project.debugStream 'traced'
 		return CoAllocatedAllocRoad.call
 	end 'traced'
+
+	// An asynchronous stop inside the expanded slab pop could hand one slot to two allocations.
+	if usesGreenThreads and not skipsGreenThreadStackGuard(func, runtimeTier: project.libraryFacts.runtimeTier) 'aStoppableCaller'
+		return CoAllocatedAllocRoad.call
+	end 'aStoppableCaller'
 
 	return CoAllocatedAllocRoad.slabHit
 end 'createRoadOf'
