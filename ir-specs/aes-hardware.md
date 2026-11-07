@@ -3838,7 +3838,7 @@ func @main {
     arm64.b.ne tryerr#6
     arm64.b tryok#5
   __rc_panic#33:
-    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:782: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:780: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -3854,7 +3854,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   __rc_panic#55:
-    arm64.leaRdata x0, __str_blob_22  ; "panic at AesBitsliced.maxon:694: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_22  ; "panic at AesBitsliced.maxon:692: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -3870,7 +3870,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   tryerr#150:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at AesBitsliced.maxon:119: aes: a word inside an array the caller sized is missing\x0a"
+    arm64.leaRdata x0, __str_blob_8  ; "panic at AesBitsliced.maxon:117: aes: a word inside an array the caller sized is missing\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -3902,7 +3902,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   __rc_panic#60:
-    arm64.leaRdata x0, __str_blob_24  ; "panic at AesBitsliced.maxon:697: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_24  ; "panic at AesBitsliced.maxon:695: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -3918,7 +3918,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   tryerr#98:
-    arm64.leaRdata x0, __str_blob_11  ; "panic at AesBitsliced.maxon:706: aes: round constant index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_11  ; "panic at AesBitsliced.maxon:704: aes: round constant index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -3934,7 +3934,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   __rc_panic#108:
-    arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:712: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:710: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -3950,7 +3950,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   __rc_panic#111:
-    arm64.leaRdata x0, __str_blob_26  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_26  ; "panic at AesBitsliced.maxon:711: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -3982,7 +3982,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   __rc_panic#114:
-    arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:714: Range check failed: value outside typealias 'AesKeySlot'\x0a"
+    arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:712: Range check failed: value outside typealias 'AesKeySlot'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -3998,7 +3998,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   __rc_panic#117:
-    arm64.leaRdata x0, __str_blob_28  ; "panic at AesBitsliced.maxon:718: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_28  ; "panic at AesBitsliced.maxon:716: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -4706,7 +4706,7 @@ func @main {
     arm64.b.ne tryerr#6
     arm64.b tryok#5
   __rc_panic#33:
-    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:782: Range check failed: value outside typealias 'AesRoundCount'\x0a"
+    arm64.leaRdata x0, __str_blob_33  ; "panic at AesBitsliced.maxon:780: Range check failed: value outside typealias 'AesRoundCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -4722,7 +4722,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   __rc_panic#55:
-    arm64.leaRdata x0, __str_blob_22  ; "panic at AesBitsliced.maxon:694: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_22  ; "panic at AesBitsliced.maxon:692: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -4738,7 +4738,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   tryerr#150:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at AesBitsliced.maxon:119: aes: a word inside an array the caller sized is missing\x0a"
+    arm64.leaRdata x0, __str_blob_8  ; "panic at AesBitsliced.maxon:117: aes: a word inside an array the caller sized is missing\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -4770,7 +4770,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   __rc_panic#60:
-    arm64.leaRdata x0, __str_blob_24  ; "panic at AesBitsliced.maxon:697: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_24  ; "panic at AesBitsliced.maxon:695: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -4786,7 +4786,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   tryerr#98:
-    arm64.leaRdata x0, __str_blob_11  ; "panic at AesBitsliced.maxon:706: aes: round constant index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_11  ; "panic at AesBitsliced.maxon:704: aes: round constant index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -4802,7 +4802,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   __rc_panic#108:
-    arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:712: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_25  ; "panic at AesBitsliced.maxon:710: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -4818,7 +4818,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   __rc_panic#111:
-    arm64.leaRdata x0, __str_blob_26  ; "panic at AesBitsliced.maxon:713: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_26  ; "panic at AesBitsliced.maxon:711: Range check failed: value outside typealias 'AesKeyWordIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -4850,7 +4850,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   __rc_panic#114:
-    arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:714: Range check failed: value outside typealias 'AesKeySlot'\x0a"
+    arm64.leaRdata x0, __str_blob_27  ; "panic at AesBitsliced.maxon:712: Range check failed: value outside typealias 'AesKeySlot'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -4866,7 +4866,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   __rc_panic#117:
-    arm64.leaRdata x0, __str_blob_28  ; "panic at AesBitsliced.maxon:718: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_28  ; "panic at AesBitsliced.maxon:716: Range check failed: value outside typealias 'AesConstantIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
