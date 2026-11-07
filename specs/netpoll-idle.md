@@ -70,53 +70,28 @@ quiet=true
 
 <!-- test: netpoll-idle.an-earlier-timer-interrupts-a-later-wait -->
 <!-- procs: 2 -->
-**A DEADLINE ARMED EARLIER THAN THE ONE THE POLLER WAITS FOR ENDS ITS WAIT.** A service parks a coroutine on a
+**A DEADLINE ARMED EARLIER THAN THE ONE THE POLLER WAITS FOR ENDS ITS WAIT.** `main` parks a coroutine on a
 timer without end (`ForeverMs`), so the machine that runs it settles into the poller with no deadline that could
 ever wake it. `main` stays busy until a processor reports idle, which is that machine giving its processor up,
 and then sleeps 50 ms. Only an interrupt of the poller's wait can fire that timer, so a missed one leaves `main`
 asleep for ever and the runner reports the case TIMED OUT: no elapsed time is compared to a threshold, and no
 deadline of the sleeper's can run out before the nap is armed.
 
-⚠ **THE SLEEPER IS A COROUTINE THE SERVICE HOLDS, NOT A HANDLER THAT SLEEPS.** A handler asleep without end
-cannot be ended from outside, `cancel()` on its reply included: a queued message always runs. The coroutine sits
-in a field of the service, `arm` yields once so the strand runs it up to its `sleep`, and `release` pops it and
-drops it at its end, so the sleep ends and the program exits. It reports whether the coroutine was still parked
-when it was dropped.
+⚠ **THE SLEEPER IS A COROUTINE `main` HOLDS, NOT A HANDLER THAT SLEEPS.** A handler asleep without end cannot be
+ended from outside, `cancel()` on its reply included: a queued message always runs, and a service's state may not
+hold a promise. `main` yields once so the coroutine runs up to its `sleep`, and cancels it at the end, so the sleep
+ends and the program exits. It reports whether the coroutine was still parked when it was cancelled.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Held = Promise with Integer
-typealias HeldArray = Array with Held
 
 function forever() returns Integer
 	sleep(ForeverMs)
 	return 1
 end 'forever'
 
-type Sleeper
-	var held as HeldArray
-
-	static function create() returns Self
-		return Self{held: HeldArray.create(0)}
-	end 'create'
-
-	export function arm() returns Integer
-		self.held.push(async forever())
-		Scheduler.yield()
-		return 1
-	end 'arm'
-
-	export function release() returns bool
-		let sleeper = try self.held.pop() otherwise panic("arm ran before this message")
-		let stillParked = not sleeper.isComplete()
-		sleeper.cancel()
-		return stillParked
-	end 'release'
-end 'Sleeper'
-
 function main() returns ExitCode
-	let s = spawn Sleeper.create()
-	let armed = try s.arm() otherwise panic("an open mailbox with room takes the send")
-	let v = await armed
+	let sleeper = async forever()
+	Scheduler.yield()
 	var idle = 0 as SchedulerEventCount
 
 	// Busy, so this machine does not go idle: the other machine settles into the poller on the sleeper's
@@ -126,14 +101,14 @@ function main() returns ExitCode
 	end 'untilOtherIdles'
 
 	sleep(50)
-	let stillParked = try await s.release() otherwise false
-	s.shutdown()
-	print("napped parked={stillParked} v={v}\n")
+	let stillParked = not sleeper.isComplete()
+	sleeper.cancel()
+	print("napped parked={stillParked}\n")
 	return 0
 end 'main'
 ```
 ```stdout
-napped parked=true v=1
+napped parked=true
 ```
 ```exitcode
 0
@@ -143,44 +118,21 @@ napped parked=true v=1
 <!-- procs: 2 -->
 **A BREAK ENDS THE POLLER'S WAIT WHILE ANOTHER MACHINE THAT ONCE POLLED IS BUSY.** `main`'s machine waits in the
 poller first, then stays busy while a service's 50 ms sleep breaks the other machine's wait on a deadline that
-never comes (a held coroutine asleep for `ForeverMs`). `main` spins until that service has finished its nap and
+never comes (a coroutine `main` holds, asleep for `ForeverMs`). `main` spins until that service has finished its nap and
 published it, so a break that never reaches the poller leaves the nap unfired and `main` spinning for ever, and
 the runner reports the case TIMED OUT. No elapsed time is compared to a threshold, and the long sleeper cannot
 wake first.
 
-⚠ **THE LONG SLEEPER IS A COROUTINE THE SERVICE HOLDS**, for the reason the previous case gives: a handler asleep
-without end cannot be ended, and `release` drops the coroutine out of the field that holds it.
+⚠ **THE LONG SLEEPER IS A COROUTINE `main` HOLDS**, for the reason the previous case gives: a handler asleep
+without end cannot be ended, and a service's state may not hold a promise. `main` cancels it at the end.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Held = Promise with Integer
-typealias HeldArray = Array with Held
 typealias NapCell = SharedValue with bool
 
 function forever() returns Integer
 	sleep(ForeverMs)
 	return 1
 end 'forever'
-
-type Holder
-	var held as HeldArray
-
-	static function create() returns Self
-		return Self{held: HeldArray.create(0)}
-	end 'create'
-
-	export function arm() returns Integer
-		self.held.push(async forever())
-		Scheduler.yield()
-		return 1
-	end 'arm'
-
-	export function release() returns bool
-		let sleeper = try self.held.pop() otherwise panic("arm ran before this message")
-		let stillParked = not sleeper.isComplete()
-		sleeper.cancel()
-		return stillParked
-	end 'release'
-end 'Holder'
 
 type Napper
 	let napped as NapCell
@@ -198,10 +150,9 @@ end 'Napper'
 
 function main() returns ExitCode
 	let napped = NapCell.create(false)
-	let longer = spawn Holder.create()
 	let shorter = spawn Napper.create(napped.clone())
-	let armed = try longer.arm() otherwise panic("an open mailbox with room takes the send")
-	let v = await armed
+	let longer = async forever()
+	Scheduler.yield()
 
 	// `main`'s machine is the poller for this one, and then the other machine polls on the sleeper's deadline.
 	sleep(20)
@@ -221,14 +172,14 @@ function main() returns ExitCode
 	end 'untilNapped'
 
 	let took = await r2
-	let stillParked = try await longer.release() otherwise false
-	longer.shutdown()
-	print("napped={seen} took={took} parked={stillParked} v={v}\n")
+	let stillParked = not longer.isComplete()
+	longer.cancel()
+	print("napped={seen} took={took} parked={stillParked}\n")
 	return 0
 end 'main'
 ```
 ```stdout
-napped=true took=1 parked=true v=1
+napped=true took=1 parked=true
 ```
 ```exitcode
 0
