@@ -12,9 +12,7 @@
 // threads, and every case of a program that exited non-zero, reruns alone from the same binary,
 // never recompiled. The default `Log` sink is a registry-owned service alive until exit, so a case
 // that logs through it reads a count of 1 and reruns alone; that is why the count is a marker field
-// and not an exit code. On a target with no command line (wasm32) the entry cannot read
-// `--select=`, so it runs every case and a case it cannot read is compiled and run alone instead
-// (`withBatchedFailuresDiagnosed`), since only a recompile can run one case of the program again.
+// and not an exit code.
 //
 // Batching recovers nothing silently. Output outside every marker fails every case of the program:
 // some case ran code before `main` that the up-front checks missed, and the runner must be fixed to
@@ -39,6 +37,7 @@ let BatchEndTag = "<"
 let BatchFieldEnd = ";"
 
 let BatchSelectedExit = 0
+let BatchCaseIndent = "\t\t"
 
 let MainSignatureReturningExitCode = "function main() returns ExitCode"
 let MainSignatureReturningNothing = "function main()"
@@ -584,24 +583,19 @@ function batchCaseSource(test SpecTest, caseIndex ElementIndex) returns String
 	return "{joinedWith(lines, separator: SourceLineBreak)}{SourceLineBreak}"
 end 'batchCaseSource'
 
-// Asked of the target's facilities: without a command line the entry cannot select one case, and
-// without green threads it has nothing to quiesce (`gtQuiesce` would be E3104).
+// Asked of the target's facilities: without green threads the entry has nothing to quiesce
+// (`gtQuiesce` would be E3104).
 type EntryFacilities
-	export let selects as bool
 	export let quiesces as bool
 
 	static function of(target Target) returns EntryFacilities
-		return Self{selects: targetProvidesFacility(target, facility: HostFacility.commandLine), quiesces: targetProvidesFacility(target, facility: HostFacility.greenThreads)}
+		return Self{quiesces: targetProvidesFacility(target, facility: HostFacility.greenThreads)}
 	end 'of'
-
-	function indent() returns String
-		return "\t\t" if self.selects else "\t"
-	end 'indent'
 end 'EntryFacilities'
 
 function endedCaseSource(index ElementIndex, codeText String, facilities EntryFacilities) returns String
 	let outstanding = "{GreenThreadQuiesceCall} as {BatchLeftAlias}" if facilities.quiesces else "{BatchNothingOutstanding}"
-	return "{facilities.indent()}{BatchRunType}.ended({index}, code: {codeText}, outstanding: {outstanding})\n"
+	return "{BatchCaseIndent}{BatchRunType}.ended({index}, code: {codeText}, outstanding: {outstanding})\n"
 end 'endedCaseSource'
 
 function batchEntrySource(members BatchMemberArray, facilities EntryFacilities) returns String
@@ -613,11 +607,7 @@ function batchEntrySource(members BatchMemberArray, facilities EntryFacilities) 
 
 	source.append("export typealias {BatchLeftAlias} = int(i64.min to i64.max)\n\n")
 	source.append("export type {BatchRunType}\n")
-
-	if facilities.selects 'definesSelection'
-		source.append(selectionMembersSource(BatchIndexAlias))
-	end 'definesSelection'
-
+	source.append(selectionMembersSource(BatchIndexAlias))
 	source.append("\texport static function began(index {BatchIndexAlias})\n")
 	source.append("\t\tprint(\"{begun}\\n\")\n")
 	source.append("\t\tprintError(\"{begun}\\n\")\n")
@@ -630,30 +620,20 @@ function batchEntrySource(members BatchMemberArray, facilities EntryFacilities) 
 
 	source.append("export function {BatchEntrySymbol}() returns ExitCode\n")
 
-	if facilities.selects 'readsSelection'
-		source.append("\tlet selection = {BatchRunType}.selection()\n\n")
-	end 'readsSelection'
-
-	let indent = facilities.indent()
+	source.append("\tlet selection = {BatchRunType}.selection()\n\n")
 
 	for (iter, member) in members.withIterator() 'eachCase'
 		let index = iter.index()
 
-		if facilities.selects 'opensCase'
-			source.append("\tif {BatchRunType}.selected(selection, index: {index}) 'case{index}'\n")
-		end 'opensCase'
-
-		source.append("{indent}{BatchRunType}.began({index})\n")
+		source.append("\tif {BatchRunType}.selected(selection, index: {index}) 'case{index}'\n")
+		source.append("{BatchCaseIndent}{BatchRunType}.began({index})\n")
 
 		match member.shape 'shape'
-			returnsExitCode then source.append("{indent}let code{index} = {batchCaseName(index)}()\n{endedCaseSource(index, codeText: "code{index}", facilities: facilities)}")
-			returnsNothing then source.append("{indent}{batchCaseName(index)}()\n{endedCaseSource(index, codeText: "{BatchSelectedExit}", facilities: facilities)}")
+			returnsExitCode then source.append("{BatchCaseIndent}let code{index} = {batchCaseName(index)}()\n{endedCaseSource(index, codeText: "code{index}", facilities: facilities)}")
+			returnsNothing then source.append("{BatchCaseIndent}{batchCaseName(index)}()\n{endedCaseSource(index, codeText: "{BatchSelectedExit}", facilities: facilities)}")
 		end 'shape'
 
-		if facilities.selects 'closesCase'
-			source.append("\tend 'case{index}'\n")
-		end 'closesCase'
-
+		source.append("\tend 'case{index}'\n")
 		source.append("\n")
 	end 'eachCase'
 
@@ -677,10 +657,9 @@ module type BatchProgram
 	export let stdlibDir as String
 	export let runtimeDir as String
 	export let writtenFiles as FilePathArray
-	export let selects as bool
 
-	module static function create(exePath FilePath, members BatchMemberArray, stdlibDir String, runtimeDir String, writtenFiles FilePathArray, selects bool) returns BatchProgram
-		return Self{exePath: exePath, members: members, stdlibDir: stdlibDir, runtimeDir: runtimeDir, writtenFiles: writtenFiles, selects: selects}
+	module static function create(exePath FilePath, members BatchMemberArray, stdlibDir String, runtimeDir String, writtenFiles FilePathArray) returns BatchProgram
+		return Self{exePath: exePath, members: members, stdlibDir: stdlibDir, runtimeDir: runtimeDir, writtenFiles: writtenFiles}
 	end 'create'
 
 	module function allCases() returns TestRunIndexArray
@@ -776,7 +755,7 @@ function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 		end 'aStagedFile'
 	end 'eachTarget'
 
-	return BatchBuild.built(BatchProgram.create(exePath, members: members, stdlibDir: stdlibDir.toString(), runtimeDir: runtimeDir.toString(), writtenFiles: written, selects: facilities.selects), ticks: product.totalCpuTicks)
+	return BatchBuild.built(BatchProgram.create(exePath, members: members, stdlibDir: stdlibDir.toString(), runtimeDir: runtimeDir.toString(), writtenFiles: written), ticks: product.totalCpuTicks)
 end 'buildBatch'
 
 module typealias BatchRefusalMap = Map with (ElementIndex, String)
@@ -1105,20 +1084,10 @@ end 'BatchReading'
 module typealias BatchReadingArray = Array with readonly BatchReading
 
 let OutsideTheMarkers = "the batch program printed outside the case markers — a case runs code before main that the batching checks did not catch; the runner must keep it out of batches"
-let UnreadableOnThisTarget = "the batch program's output for this case could not be read (a crash, or no end marker), and this target cannot run a single case of the program again"
 
-module function isUnisolatedBatchMember(observation RunObservation) returns bool
-	return match observation 'observed'
-		failed(reason) gives reason == UnreadableOnThisTarget
-		completed or
-		notRequired or
-		notRunnableHere gives false
-	end 'observed'
-end 'isUnisolatedBatchMember'
-
-module function readBatch(batch ProcessCapture, caseCount ElementIndex, selects bool) returns BatchReadingArray
+module function readBatch(batch ProcessCapture, caseCount ElementIndex) returns BatchReadingArray
 	var readings = BatchReadingArray.create(caseCount, zeroed: false)
-	let unreadable = unreadableReading(selects)
+	let unreadable = BatchReading.unobserved
 	let process = batchProcessTrusted(batch)
 	var stdout = parseMarkedStream(batch.stdout)
 	var stderr = parseMarkedStream(batch.stderr)
@@ -1146,15 +1115,11 @@ module function readBatch(batch ProcessCapture, caseCount ElementIndex, selects 
 	return readings
 end 'readBatch'
 
-module function unreadBatch(caseCount ElementIndex, selects bool) returns BatchReadingArray
+module function unreadBatch(caseCount ElementIndex) returns BatchReadingArray
 	var readings = BatchReadingArray.create(caseCount, zeroed: false)
-	readings.refill(caseCount, value: unreadableReading(selects))
+	readings.refill(caseCount, value: BatchReading.unobserved)
 	return readings
 end 'unreadBatch'
-
-function unreadableReading(selects bool) returns BatchReading
-	return BatchReading.unobserved if selects else BatchReading.failed(UnreadableOnThisTarget)
-end 'unreadableReading'
 
 function leftWorkRunning(stream MarkedStream, index ElementIndex) returns bool
 	return match stream.endedRegionFor(index) 'region'

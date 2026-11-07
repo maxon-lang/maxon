@@ -78,7 +78,7 @@ end 'main'
 - Arguments containing spaces must be quoted at the shell level
 - Each call to `args()` re-parses the command line
 - `Process.executablePath()` returns the absolute path via OS-specific APIs, or throws `ProcessIntrospectionError.pathUnavailable` if the lookup fails
-- Platform support: Windows (full), Linux (not yet implemented)
+- Platform support: every target
 
 ## Tests
 
@@ -241,6 +241,42 @@ end 'main'
 --key=value
 ```
 
+<!-- test: args-keep-spaces-and-utf8-bytes -->
+<!-- Args: "two words" é -->
+```maxon
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let spaced = try args.get(1) otherwise return 2
+	let accented = try args.get(2) otherwise return 3
+	print("{spaced}|{accented}|{accented.byteLength()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+two words|é|2
+```
+
+<!-- test: reading-the-arguments-leaves-no-raw-allocation-live -->
+<!-- Args: a b c -->
+Whatever a lane holds the arguments in, reading them leaves the public raw-allocation counter at 0 on every
+lane, so `HeapStats` answers alike everywhere.
+```maxon
+function main() returns ExitCode
+	let args = CommandLine.args()
+	print("{HeapStats.rawAllocationsLive()}")
+	return args.count()
+end 'main'
+```
+```exitcode
+4
+```
+```stdout
+0
+```
+
 <!-- test: executable-path -->
 ```maxon
 function main() returns ExitCode
@@ -260,11 +296,6 @@ end 'main'
 <!-- Args: alpha beta gamma -->
 ```maxon
 function main() returns ExitCode
-	// Phase B4 parity check: the unified mrt_command_line_count /
-	// mrt_command_line_arg / mrt_executable_path bodies route through the
-	// new osGetArgc / osGetArgv / osGetExecutablePath ops, which on
-	// x64-windows dispatch into the hand-rolled mrt_win32_get_* helpers
-	// emitted as raw machine code by X64Backend.emitX64Win32Helpers.
 	let args = CommandLine.args()
 	if args.count() < 4 'count-check'
 		return 1

@@ -8995,11 +8995,9 @@ let BuiltinsSubprocessStdoutStateName = b"__Builtins.subprocessStdoutState"
 let BuiltinsSubprocessStderrStateName = b"__Builtins.subprocessStderrState"
 let BuiltinsManagedIsNullName = b"__Builtins.managedIsNull"
 
-// ⭐ **THE ENVIRONMENT READER, WHICH IS IN THIS BAND BECAUSE ITS ONLY CALLER IS.** It is not a subprocess
-// entry any more than `managedIsNull` is, and it is here for that member's stated reason: this is where its
-// one caller lives. `stdlib/Subprocess.maxon` walks it to assemble the block an `Environment.inheritUpdating`
-// child is given, so it lowers into the `__gt_subp_` family and inherits that family's E3104 target gate
-// whole — see `SubprocessRuntime.SubpEnvEntryName`.
+// The environment reader. It shares this band's managed-result emission, but it lowers to
+// `__env_entry` and is gated by `HostFacility.environment`, not the subprocess facility: reading
+// the environment needs no spawn. See `EnvironmentRuntime.EnvironmentEntryName`.
 let BuiltinsOsEnvironmentEntryName = b"__Builtins.osEnvironmentEntry"
 
 // ⭐ **THE EIGHT MEMBERS OF `stdlib/SharedMemory.maxon`'s FLOOR — A NAMED SECTION TWO PROCESSES BOTH MAP.**
@@ -96640,7 +96638,7 @@ export type Parser
 			// The index is an ordinary machine word, so the argument carries no buffer — the RESULT is the owned
 			// `__ManagedMemory`, which is what puts this beside the two readers above rather than in the scalar band.
 			if callee.equals(BuiltinsOsEnvironmentEntryName) 'osEnvironmentEntry'
-				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpEnvEntryName, arity: SubprocessOneArgArity, shape: IntrinsicArgShape.allMachineWords, calleeTok: anchor)
+				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: EnvironmentEntryName, arity: SubprocessOneArgArity, shape: IntrinsicArgShape.allMachineWords, calleeTok: anchor)
 			end 'osEnvironmentEntry'
 
 			// ⭐⭐ **THE SIX MEMBERS OF `stdlib/SharedMemory.maxon`'s FLOOR.** Every argument is a machine word

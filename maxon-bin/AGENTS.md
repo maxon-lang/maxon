@@ -307,7 +307,7 @@ vendored wasmtime. By hand, for ONE program:
 
 ```
 ./maxon-bin/.maxon/maxon build f.maxon --output=out --target=wasm32-wasi
-./vendor/wasmtime/wasmtime run -S cli-exit-with-code=y out.wasm
+./vendor/wasmtime/wasmtime run -S cli-exit-with-code=y -S inherit-env=y out.wasm
 ./vendor/wasm-tools/wasm-tools print out.wasm      # attribute a wrong answer to an instruction
 ```
 
@@ -317,7 +317,7 @@ vendored wasmtime. By hand, for ONE program:
 ⚠ **THE wasm LANE IS NOT "SCALAR ONLY".** Heap, `String`, `print`, structs, arrays, closures,
 interfaces and **floats** (arithmetic AND shortest-round-trip printing) all work there; the two lanes
 run within a few hundred cases of each other. The families it has no substrate for (**async / green
-threads, the uptime and thread-CPU clocks, argv**) answer E3104 and are counted SKIPs (see the rule below). The
+threads, the uptime and thread-CPU clocks, file and directory IO**) answer E3104 and are counted SKIPs (see the rule below). The
 x64-only CODEGEN cases (register pressure, `.rdata`, emitted symbol names), which are about x64's
 output rather than about wasm, carry an `<!-- unsupported-targets: … -->` exclusion. ⇒ **a float or
 String case failing on wasm is a BUG on that lane, not an out-of-slice case to refuse.**
@@ -336,7 +336,7 @@ spelling.
 ⛔⛔ **DO NOT MARK A CASE THE COMPILER ALREADY REFUSES.** A lane with no substrate answers **E3104**, and
 the harness reports that as a counted **SKIP** naming the case; a marker removes the case from selection
 with nothing said anywhere. The two are not two spellings of one fact — one is the fact and the other is
-the fact made invisible. So async, the thread-CPU clock, argv, file and directory IO and console stdin
+the fact made invisible. So async, the thread-CPU clock, file and directory IO and console stdin
 carry NO marker on wasm: every one of those skips is a case a reader can count. A marker is for a case
 that would otherwise go RED — an ISA-specific codegen reading, a POSIX/Windows shell spelling, a
 diagnostic displaced by E3104 — and it states its reason. E3104 waits for the Maxon-tier checks, so only

@@ -98,8 +98,11 @@ export enum HostFacility
 
 	// The program's own argument vector (`__cl_*`). Its own facility rather than a corner of `processInfo`
 	// because argv has a DIFFERENT SHAPE per platform — one unsplit string on Windows, a pre-split vector
-	// under SysV — so a target serves it with a runtime body of its own rather than as a lowering.
+	// under SysV, a list of (ptr, len) records under WASI — so a target serves it with a runtime body
+	// of its own rather than as a lowering.
 	commandLine
+
+	environment
 
 	// Standard input (`__con_*`).
 	consoleStdin
@@ -316,9 +319,9 @@ end 'CalleeFacility'
 // `__gt_subp_` band behind the seven streaming builtins and the `__Builtins.subprocess*`
 // intrinsics (`managedIsNull` sits in that band's parser table but is a heap predicate and lowers nowhere
 // near it) —
-// so a subprocess program on arm64/linux/wasm is refused at the call's own span instead of panicking three
-// tiers down. Each satisfies this set's rule: SOURCE names the builtin and the parser routes it to exactly
-// one entry.
+// so a subprocess program on a lane without `subprocess` is refused at the call's own span instead
+// of panicking three tiers down. Each satisfies this set's rule: SOURCE names the builtin and the
+// parser routes it to exactly one entry.
 //
 // ⚠ The band test also admits FOUR entries no source line names — `__gt_subp_yield_read`,
 // `__gt_subp_spawn_core`, `__gt_subp_str_from_bytes` and `__gt_subp_argv_cmdline` (count them off the
@@ -335,10 +338,14 @@ end 'CalleeFacility'
 // HERE, at the call's own span, before it reaches one.
 // The directory entries join them on the same terms and by the same PREFIX test, so the whole
 // eight-method surface is gated by construction rather than by a list somebody has to remember to extend.
-// The command-line entries join on the same terms and by the same PREFIX test. ⚠ Their reason is one the
-// four above do not have: argv is not merely UNIMPLEMENTED elsewhere, it has a DIFFERENT SHAPE elsewhere
-// (one unsplit string on Windows, a pre-split vector under SysV), so serving another target takes a runtime body of its own
-// rather than a lowering. `CommandLineRuntime`'s header carries it in full.
+// The command-line entries join on the same terms and by the same PREFIX test. ⚠ Their reason is
+// one the four above do not have: argv is not merely UNIMPLEMENTED elsewhere, it has a DIFFERENT
+// SHAPE elsewhere (one unsplit string on Windows, a pre-split vector under SysV, a list of records
+// under WASI), so serving another target takes a runtime body of its own rather than a lowering.
+// `CommandLineRuntime`'s header carries it in full.
+// The environment entry joins on the same terms and by the same PREFIX test, as a band of its own
+// rather than the subprocess band's: reading the environment needs no spawn primitive, so a lane
+// can serve it without serving `subprocess`.
 // The standard-input and executable-path entries join on the same terms and by the same PREFIX test, and
 // each has a reason of its own beyond "unimplemented elsewhere" — the shape argument again, twice over.
 // STANDARD INPUT has no HANDLE
@@ -546,6 +553,10 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.commandLine)
 	end 'argvBand'
 
+	if isEnvironmentRuntimeCallee(callee) 'environmentBand'
+		return CalleeFacility.needs(HostFacility.environment)
+	end 'environmentBand'
+
 	if isConsoleRuntimeCallee(callee) 'stdinBand'
 		return CalleeFacility.needs(HostFacility.consoleStdin)
 	end 'stdinBand'
@@ -654,8 +665,8 @@ end 'calleeHasHostFacility'
 // Windows, libSystem imports on macOS, raw syscalls on the two static Linux images. A premature `true` is worse than a `false`;
 // this file's header says why.
 //
-// ⚠ **wasm32-wasi PROVIDES ONLY `pageMemory`, `hostMutex`, `entropy`, THE TWO CLOCKS AND `sleep`, AND
-// SOME OF ITS `false`s ARE PERMANENT.** WASI
+// ⚠ **wasm32-wasi PROVIDES ONLY `pageMemory`, `hostMutex`, `entropy`, THE TWO CLOCKS, `sleep`,
+// `commandLine` AND `environment`, AND SOME OF ITS `false`s ARE PERMANENT.** WASI
 // has no process-spawn primitive and no per-thread CPU clock at all, so `subprocess` and `threadCpuClock`
 // there are refusals of a different KIND from "not yet" — that distinction is carried by
 // `SemanticCheck.targetCanHostSubprocess` and its E3074, which reads this table's subject and not its
@@ -675,6 +686,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			managedDirectory or
 			managedSocket or
 			commandLine or
+			environment or
 			consoleStdin or
 			processInfo or
 			processPriority or
@@ -731,6 +743,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			managedFile or
 			managedDirectory or
 			commandLine or
+			environment or
 			consoleStdin or
 			processInfo or
 			processPriority or
@@ -798,6 +811,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// `LinuxRuntime.linuxReadsEnvironment` rather than the scheduler's bit, because a
 			// terminal-detecting program need not have a scheduler.
 			commandLine or
+			environment or
 			managedFile or
 			managedDirectory or
 			consoleStdin or
@@ -861,6 +875,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// producer of `StdOp.osEnvRead` on this lane, so a new producer joins it there once rather than
 			// at each lane's chunk list.
 			commandLine or
+			environment or
 			managedFile or
 			managedDirectory or
 			consoleStdin or
@@ -906,14 +921,16 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			entropy or
 			monotonicClock or
 			wallClock or
-			sleep gives true
+			sleep or
+			commandLine or
+			environment gives true
 
 			// ⛔ **THE REST ARE ABSENT, AND FOR TWO DIFFERENT KINDS OF REASON THIS COLUMN DOES NOT RECORD.**
 			// A WASI component has one thread and no process-spawn primitive, so the green-thread floor,
 			// the child-process band, the per-thread CPU clock and per-OS-thread STORAGE are permanent
 			// refusals, as is the uptime clock: WASI's monotonic origin is arbitrary, so answering "time
 			// since boot" with it would be a plausible wrong answer. The file, directory,
-			// socket, argv, stdin, identity, priority, machine-query and named-section families are surfaces
+			// socket, stdin, identity, priority, machine-query and named-section families are surfaces
 			// nobody has ported. `SemanticCheck.targetCanHostSubprocess` is where the permanent half of that
 			// distinction is written down, reading this table's SUBJECT rather than its answer.
 			//
@@ -927,7 +944,6 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			managedFile or
 			managedDirectory or
 			managedSocket or
-			commandLine or
 			consoleStdin or
 			processInfo or
 			processPriority or

@@ -1385,7 +1385,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// ⭐ **WHAT THE ENTRY STUB WILL CALL, RECORDED WHERE EVERY PRODUCER OF THOSE FACTS HAS RUN.** The
 	// reachability roots and the inliner's called-once census read it (`Project.entryStubCalls`), and the
 	// census runs inside the pipeline below, where no usage record is in reach.
-	project.entryStubCalls = EntryStubCalls.fromUsage(usage)
+	project.entryStubCalls = EntryStubCalls.fromUsage(usage, target: project.target)
 	project.hostContext = HostContextLayout.read(signatures, target: project.target, project: project)
 
 	// ⭐⭐ **THE MIRROR QUESTION, SETTLED HERE ON THE MINTERS' COMMON GATE: WHICH TIER BODIES THIS PROGRAM
@@ -1557,6 +1557,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	pipeline.stdModule.usesProcessNamespace = usage.usesProcessNamespace
 	pipeline.stdModule.usesEntropy = usage.usesEntropy
 	pipeline.stdModule.usesTrustStore = usage.usesTrustStore
+	pipeline.stdModule.usesEnvironment = usage.usesEnvironment
 
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
 	// neighbours. `__tty_stdout_wants_color` needs `GetFileType` — and `GetEnvironmentVariableW`, already in
@@ -1770,6 +1771,8 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// no ordering against the Array install below even though `__cl_arg` CALLS `__managed_create`, for the reason
 	// stated there: one module, name-resolved calls, and the `usesManagedMemory` bit was settled before any install ran.
 	installCommandLineRuntime(pipeline.stdModule, usage: usage, target: project.target)
+
+	installEnvironmentRuntime(pipeline.stdModule, usage: usage, target: project.target)
 
 	// The console and process runtimes (`__con_read_stdin`, `__proc_exe_path`) — the same already-lowered
 	// way, each on its OWN bit, so a program that reads stdin carries no path walk and one that asks for its

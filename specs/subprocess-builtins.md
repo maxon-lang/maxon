@@ -2465,8 +2465,9 @@ error E3104: <fragment>:3:10: this construct lowers to the runtime entry '__gt_s
 ⛔⛔ **A `Subprocess` PROGRAM CROSS-COMPILED TO arm64-macOS.** `--target=arm64-macos` on a
 `Configuration.create` + `runConfiguration` with the DEFAULT `Environment.inherit` must compile and run.
 `TargetFacilities` answers `subprocess gives true` for arm64-macOS, so the whole `__gt_subp_` family is
-built there, `__gt_subp_env_entry` with it, and dead code elimination cannot drop what the stdlib's
-spawn path calls — so the environment-block ops must lower on this lane.
+built there, and dead code elimination cannot drop what the stdlib's spawn path calls — including
+`__env_entry`, which reads the inherited environment — so the environment-block ops must lower on
+this lane.
 
 ⭐ **WHY IT NEEDS A CASE OF ITS OWN.** The `posix-*` cases above drive
 `__Builtins.subprocessSpawn` DIRECTLY, so none of them reaches `stdlib/Subprocess.maxon`'s

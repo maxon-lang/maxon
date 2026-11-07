@@ -176,6 +176,7 @@ export function dataSectionRoster(userGlobals DataSectionEntryArray, usage Runti
 	appendDataSectionEntries(roster, entries: gtRuntimeGlobals(usage, target: target))
 	appendDataSectionEntries(roster, entries: schedRuntimeGlobals(usage, target: target))
 	appendDataSectionEntries(roster, entries: commandLineRuntimeGlobals(usage, target: target))
+	appendDataSectionEntries(roster, entries: environmentRuntimeGlobals(usage, target: target))
 	appendDataSectionEntries(roster, entries: arm64LinuxRuntimeGlobals(usage, target: target))
 	appendDataSectionEntries(roster, entries: linuxEntryVectorGlobals(target))
 	appendDataSectionEntries(roster, entries: cpuFeatureRuntimeGlobals(usage, target: target))
@@ -265,7 +266,7 @@ end 'appendDataSectionEntries'
 // `StdToWasm.appendLeakGate`.
 function buildWasmBackend(module StdModule, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
-	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: project.entryStubCalls.checksLeaks, initGlobals: usage.usesManagedGlobals, releasesRegistry: project.entryStubCalls.releasesRegistry, funcNames: funcNames, entryFunction: project.entryFunctionName, roster: project.shadowRoster, runtimeTier: project.libraryFacts.runtimeTier)
+	let coreModule = buildWasmCoreModule(module, globalData: globalData, stub: project.entryStubCalls, initGlobals: usage.usesManagedGlobals, funcNames: funcNames, entryFunction: project.entryFunctionName, roster: project.shadowRoster, runtimeTier: project.libraryFacts.runtimeTier)
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	return CodeResult.forWasm(module, wasmCoreModule: coreModule)

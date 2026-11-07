@@ -44,17 +44,15 @@ is `=C:`; splitting at byte 0 would give every one of them the empty name.
 
 ### Not on `wasm32-wasi`
 
-The walk reaches the environment through `__gt_subp_env_entry`, which sits behind the subprocess
-band's runtime prefix, so a program naming it is refused on that lane at compile time with **E3074**
-(`subprocess-unsupported.md` pins that refusal). E3074 is NOT the target refusal the harness folds
-into a counted skip — only E3104 is — so each case below that builds and runs carries an `unsupported-targets:`
-marker excluding that lane alone, exactly as `subprocess.md`'s do. The case that pins a language refusal carries
-none: E3074 is reported only when the program has no other diagnostic.
+The walk reaches the environment through `__env_entry`, which every lane provides; on `wasm32-wasi`
+it reads the list the host hands the program at start. A case that spawns a child is refused on that
+lane at compile time with **E3074** (`subprocess-unsupported.md` pins that refusal), and E3074 is NOT
+the target refusal the harness folds into a counted skip — only E3104 is — so such a case carries an
+`unsupported-targets:` marker excluding that lane alone, exactly as `subprocess.md`'s do.
 
 ## Tests
 
 <!-- test: process-environment-variable.finds-a-variable-every-host-has -->
-<!-- unsupported-targets: wasm32-wasi -->
 Every host this compiler runs on sets a search path, so a non-empty answer for `PATH` is the one
 value assertion that is true everywhere. On Windows it is ALSO the case-fold pin: the environment
 block there spells the name `Path`, so a byte-exact comparison answers `variableUnset` here.
@@ -73,7 +71,6 @@ end 'main'
 ```
 
 <!-- test: process-environment-variable.unset-name-throws -->
-<!-- unsupported-targets: wasm32-wasi -->
 ⭐ A name nothing carries THROWS rather than answering the empty string, because a variable set to the
 empty string is a different fact from one that is not set at all, and a caller choosing a fallback has
 to be able to tell them apart.

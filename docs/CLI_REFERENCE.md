@@ -2640,20 +2640,19 @@ differences a program can meet are:
   first nameserver in `/etc/resolv.conf`, no search domains and no CNAME following.
 
 **`wasm32-wasi`** runs heap-allocated values, strings, `print`, structs, arrays, closures, interfaces and
-floating point, the monotonic and wall clocks, and `sleep`, which waits the whole program. A program
+floating point, the monotonic and wall clocks, `sleep` (which waits the whole program), command-line
+arguments and environment variables. A program
 that reaches one of the following is **refused at compile time**, at the call:
 
 | Not available on `wasm32-wasi` | Refused with |
 |--------------------------------|--------------|
 | `async`/`await`, green threads, services (the standard library's `Log` included), `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
 | Machine uptime and thread CPU time (`Clock.osTickMs`, `Clock.threadCpuTicks`) | E3104 |
-| Command-line arguments | E3104 |
 | File and directory I/O | E3104 |
 | Sockets | E3104 |
 | Reading console stdin | E3104 |
 | Process information, priority, CPU count | E3104 |
 | Subprocesses | E3074 |
-| Environment variables (`Process.environmentVariable`) | E3074 |
 
 ```text
 error E3104: app.maxon:3:10: 'Clock.threadCpuTicks' lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation

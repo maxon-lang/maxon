@@ -1,31 +1,17 @@
-// Runtime/CommandLineRuntime.maxon — argv, split out of the one string Windows gives a process.
+// Runtime/CommandLineRuntime.maxon — argv, in the shape each platform hands a process.
 //
-// ⭐ **WHAT IT SERVES.** `stdlib/CommandLine.maxon`'s `args()` bottoms out in two `__Builtins` intrinsics —
-// `commandLineCount()` and `commandLineArg(i)` — and nothing else in the language reaches these entry
+// ⭐ **WHAT IT SERVES.** `stdlib/CommandLine.maxon`'s `args()` bottoms out in two `__Builtins`
+// intrinsics — `commandLineCount()` and `commandLineArg(i)` — and nothing else in the language
+// reaches these entry points. A target without `HostFacility.commandLine` refuses at the call site
+// with `E3104 targetUnsupportedConstruct`, which matches on the `__cl_` PREFIX — so an entry point
+// added later is gated by construction rather than by memory.
 //
-// ⭐⭐ **TWO LANES, AND THEY RUN DIFFERENT Std GRAPHS — the only family in this compiler that does**, for a
-// reason of its own that is exactly why the fork is a fork rather than a lowering. A target that
-// provides neither still refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct`,
-// which matches on the `__cl_` PREFIX — so an entry point added later is gated by construction rather than
-// by memory.
-//
-// ⭐⭐ **arm64-macOS SERVES IT, AND THE PARAGRAPH BELOW IS WHY THAT TAKES A PER-TARGET CAPTURE PLUS A
-// TARGET-NEUTRAL SURFACE OVER IT RATHER THAN A LOWERING:** the ENTRY STUB captures `argc`/`argv`
-// into two `.data` words, and this file builds ONE of TWO Std graphs over them depending on which shape the
-// target's process start-up has. Neither graph contains a target test; `commandLineShape` asks once, at
-// install.
-//
-// ⚠⚠ **THE EXTRA REASON MATTERS, because it is not "nobody wrote the lowering yet": THE SHAPE OF argv IS
-// NOT THE SAME ON THE OTHER PLATFORMS.** Windows hands a process ONE UNSPLIT STRING and the splitting is
-// code (this file). SysV hands `_start` a PRE-SPLIT VECTOR — argc at `[rsp]`, argv at `rsp+8` on x64-linux
-// (`Targets/BackendDispatch.maxon:409`), argc/argv in x0/x1 on arm64-macos (`Arm64Runtime.maxon:117-121`) —
-// where there is nothing to split and the work is instead to capture two registers at entry and keep them.
-// Those are two different mechanisms behind one surface, and the compiler's Std tier is TARGET-NEUTRAL: there is no
-// place in it for a body that is a splitter on one target and an indexed load on another. Serving them
-// honestly means a per-target capture plus a target-neutral surface over it, not a lowering — so
-// this file builds the Windows half and REFUSES the rest LOUDLY, which is the one thing that must
-// not be traded for a target that compiles and answers an empty argv.
-// ⚠ wasm is refused as well: WASI has `args_sizes_get`/`args_get`, and nothing here lowers to them.
+// ⚠⚠ **THE SHAPE OF argv IS NOT THE SAME ON EVERY PLATFORM, SO EACH TARGET GETS A CAPTURE OF ITS
+// OWN AND A TARGET-NEUTRAL Std GRAPH OVER IT, NOT A LOWERING.** Windows hands a process ONE UNSPLIT
+// STRING and the splitting is code (this file). SysV hands `_start` a PRE-SPLIT VECTOR, which the
+// entry stub captures into two `.data` words. WASI answers `get-arguments` with a list of (ptr,
+// len) records, which `$run` captures into the same two words. `commandLineShape` asks once, at
+// install, and no graph contains a target test.
 //
 // ---
 //
@@ -53,10 +39,10 @@
 // ⚠ **ENCODING.** The UTF-16 line is converted to UTF-8 whole and then split. Every rule above is
 // ASCII, so splitting the UTF-8 bytes finds the same boundaries a split of the UTF-16 units would.
 
-// ⭐⭐ **THE TWO SHAPES A PLATFORM CAN HAND A PROCESS ITS ARGUMENTS IN — the one fact this family forks on.**
-// It is asked ONCE, at install, and each answer builds a complete Std graph; nothing downstream of that ever
-// asks which target it is compiling for, which is what keeps the ops target-neutral while the SURFACE stays
-// one surface.
+// ⭐⭐ **THE SHAPES A PLATFORM CAN HAND A PROCESS ITS ARGUMENTS IN — the one fact this family forks
+// on.** It is asked ONCE, at install, and each answer builds a complete Std graph; nothing
+// downstream of that ever asks which target it is compiling for, which is what keeps the ops
+// target-neutral while the SURFACE stays one surface.
 //
 // ⚠ It is keyed on the OS and not on the CPU, because it is an ABI fact: every SysV platform hands `_start`
 // a pre-split vector and Windows hands `GetCommandLineW` one string, whatever the ISA.
@@ -67,24 +53,28 @@ enum CommandLineShape
 	// SysV: a pre-split vector the process start-up already holds. `argc` and `argv` reach the Std tier
 	// through the two `.data` words below, which the target's entry stub fills before `main` runs.
 	argumentVector
+
+	// WASI: `get-arguments`' `list<string>`, which `$run` captures into the same two `.data` words
+	// before `__module_init`. Each record is a (ptr, len) pair whose bytes carry no NUL terminator and
+	// may hold any byte, so the copy is length-known.
+	hostStringList
 end 'CommandLineShape'
 
-// ⚠ **WASI ANSWERS `argumentVector` AND THAT IS A SHAPE ANSWER, NOT A CAPABILITY CLAIM.**
-// `args_sizes_get`/`args_get` hand a component a pre-split vector exactly as SysV hands a process one, so
-// the SHAPE really is that one — what that lane lacks is the entry-stub capture and a reachable consumer
-// (`args()` answers an `Array with String`), and `targetProvidesFacility` is where that refusal lives. A
-// shape function that lied about the shape to express a capability would put the same fact in two places.
 function commandLineShape(target Target) returns CommandLineShape
 	return match target.os 'os'
 		windows gives CommandLineShape.unsplitString
 		linux or
-		macos or
-		wasi gives CommandLineShape.argumentVector
+		macos gives CommandLineShape.argumentVector
+		wasi gives CommandLineShape.hostStringList
 	end 'os'
 end 'commandLineShape'
 
-// ⭐ **THE THREE `.data` WORDS THE VECTOR SHAPE READS.** Two are the captured vector; the third is the
-// answer an out-of-range index gets.
+export function argumentsArriveAsHostList(target Target) returns bool
+	return commandLineShape(target) == CommandLineShape.hostStringList
+end 'argumentsArriveAsHostList'
+
+// ⭐ **THE THREE `.data` WORDS THE CAPTURED SHAPES READ.** Two are the captured list; the third is
+// the answer an out-of-range index gets.
 //
 // ⚠ **`__cl_empty_arg` IS A WORD OF ZEROES USED AS A C STRING, AND THAT IS WHY IT IS A GLOBAL RATHER THAN
 // AN ALLOCATION.** `__cl_arg` answers the empty string for an index outside the vector, and every OTHER
@@ -109,7 +99,8 @@ export function commandLineRuntimeGlobals(usage RuntimeUsage, target Target) ret
 
 	match commandLineShape(target) 'shape'
 		unsplitString then break
-		argumentVector then pushCapturedArgvGlobals(out)
+		argumentVector or
+		hostStringList then pushCapturedArgvGlobals(out)
 	end 'shape'
 
 	return out
@@ -651,14 +642,14 @@ function emitFoundAnArgument(module StdModule, block IrBlock, next ValueId, ids 
 	return emitCompareWithConstant(module, block: block, value: next, pred: StdCmpPred.ge, against: 0, ids: ids)
 end 'emitFoundAnArgument'
 
-// ⭐⭐ **`__cl_count()` AND `__cl_arg(i)` OVER A PRE-SPLIT VECTOR.** The two entry points and their
+// ⭐⭐ **`__cl_count()` AND `__cl_arg(i)` OVER A CAPTURED LIST.** The two entry points and their
 // contracts are the Windows half's exactly — the raw count with argv[0] included, and the empty string for
 // an index outside it — and the BODIES have nothing in common with it, because there is nothing to scan.
 //
 // ⚠ **`__cl_scan_one` IS NOT BUILT ON THIS SHAPE AT ALL.** It is the CRT's quoting rules, and applying them
 // to a vector the kernel has already split would re-interpret bytes the SHELL has already interpreted: an
 // argument that genuinely contains a `"` would come back with it removed.
-function buildCommandLineVectorCount(module StdModule)
+function buildCommandLineCapturedCount(module StdModule)
 	var func = IrFunction.createFromStd(CommandLineCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	var ids = ValueMinter.create(0)
 
@@ -667,12 +658,8 @@ function buildCommandLineVectorCount(module StdModule)
 	module.setTerminator(entry, op: StdOp.ret(count))
 
 	module.functions.push(func)
-end 'buildCommandLineVectorCount'
+end 'buildCommandLineCapturedCount'
 
-// ⭐ **THE BOUNDS CHECK IS TWO-SIDED, AND BOTH SIDES ARE REACHABLE FROM SOURCE.** `stdlib/CommandLine.maxon`
-// never asks out of range, but nothing stops a caller — and here an out-of-range index would be a load from
-// a wild address rather than the Windows half's walk simply running out. A NEGATIVE index is checked as well
-// as a past-the-end one: the parameter is an ordinary `int`, so `args.get(-1)` reaches this.
 function buildCommandLineVectorArg(module StdModule)
 	var func = IrFunction.createFromStd(CommandLineArgName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
@@ -691,15 +678,9 @@ function buildCommandLineVectorArg(module StdModule)
 	let cstr = ids.mint()
 	copyOut.blockArgs.push(IrBlockArg.create(cstr, argType: StdType.i64))
 
-	emitBranchOnCompare(module, block: entry, value: index, pred: StdCmpPred.lt, against: 0, whenTrue: outOfRange, whenFalse: upperBound, ids: ids)
+	emitCapturedListIndexGuard(module, entry: entry, upperBound: upperBound, index: index, countLabel: CommandLineArgcLabel, inRange: fromVector, outOfRange: outOfRange, ids: ids)
 
-	let count = emitLoadGlobalWord(module, block: upperBound, label: CommandLineArgcLabel, ids: ids)
-	emitBranchOnCompareValues(module, block: upperBound, a: index, pred: StdCmpPred.ge, b: count, whenTrue: outOfRange, whenFalse: fromVector, ids: ids)
-
-	let base = emitLoadGlobalWord(module, block: fromVector, label: CommandLineArgvLabel, ids: ids)
-	let stride = emitConst(module, block: fromVector, value: ArgvPointerBytes, ids: ids)
-	let offset = emitBin(module, block: fromVector, a: index, b: stride, opcode: StdBinOpcode.mul, ids: ids)
-	let slot = emitBin(module, block: fromVector, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
+	let slot = emitCapturedListSlotAddress(module, block: fromVector, listLabel: CommandLineArgvLabel, index: index, stride: ArgvPointerBytes, ids: ids)
 	let found = emitLoadField(module, block: fromVector, record: slot, offset: 0, ids: ids)
 	emitBranchCarrying(module, from: fromVector, to: copyOut, values: argsOf(found))
 
@@ -714,13 +695,78 @@ function buildCommandLineVectorArg(module StdModule)
 	module.functions.push(func)
 end 'buildCommandLineVectorArg'
 
+function buildCommandLineHostListArg(module StdModule)
+	var func = IrFunction.createFromStd(CommandLineArgName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var upperBound = module.addBlock(func, label: b"clhupper", heat: BlockHeat.normal)
+	var fromList = module.addBlock(func, label: b"clhload", heat: BlockHeat.normal)
+	var outOfRange = module.addBlock(func, label: b"clhoob", heat: BlockHeat.normal)
+	var copyOut = module.addBlock(func, label: b"clhcopy", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let index = 0
+
+	let source = ids.mint()
+	let byteCount = ids.mint()
+	copyOut.blockArgs.push(IrBlockArg.create(source, argType: StdType.i64))
+	copyOut.blockArgs.push(IrBlockArg.create(byteCount, argType: StdType.i64))
+
+	emitCapturedListIndexGuard(module, entry: entry, upperBound: upperBound, index: index, countLabel: CommandLineArgcLabel, inRange: fromList, outOfRange: outOfRange, ids: ids)
+
+	let slot = emitCapturedListSlotAddress(module, block: fromList, listLabel: CommandLineArgvLabel, index: index, stride: CanonicalPairBytes, ids: ids)
+	let foundSource = emitLoadCanonicalWord(module, block: fromList, pair: slot, offset: CanonicalPairPointerOffset, ids: ids)
+	let foundByteCount = emitLoadCanonicalWord(module, block: fromList, pair: slot, offset: CanonicalPairLengthOffset, ids: ids)
+	emitBranchCarrying(module, from: fromList, to: copyOut, values: twoArgs(foundSource, second: foundByteCount))
+
+	let empty = ids.mint()
+	module.appendOp(outOfRange, op: StdOp.globalAddr(empty, label: CommandLineEmptyArgLabel))
+	let noBytes = emitConst(module, block: outOfRange, value: 0, ids: ids)
+	emitBranchCarrying(module, from: outOfRange, to: copyOut, values: twoArgs(empty, second: noBytes))
+
+	let record = ids.mint()
+	var built = emitBytesToManaged(module, func: func, cur: copyOut, source: source, byteCount: byteCount, record: record, ids: ids)
+	module.setTerminator(built, op: StdOp.ret(record))
+
+	module.functions.push(func)
+end 'buildCommandLineHostListArg'
+
+// ⭐ **THE BOUNDS CHECK IS TWO-SIDED, AND BOTH SIDES ARE REACHABLE FROM SOURCE.** Nothing stops a
+// caller asking out of range, and an out-of-range index into a captured list would be a load from a
+// wild address. A NEGATIVE index is checked as well as a past-the-end one: the parameter is an
+// ordinary `int`, so `args.get(-1)` reaches this.
+export function emitCapturedListIndexGuard(module StdModule, entry IrBlock, upperBound IrBlock, index ValueId, countLabel ByteArray, inRange IrBlock, outOfRange IrBlock, ids ValueMinter)
+	emitBranchOnCompare(module, block: entry, value: index, pred: StdCmpPred.lt, against: 0, whenTrue: outOfRange, whenFalse: upperBound, ids: ids)
+
+	let count = emitLoadGlobalWord(module, block: upperBound, label: countLabel, ids: ids)
+	emitBranchOnCompareValues(module, block: upperBound, a: index, pred: StdCmpPred.ge, b: count, whenTrue: outOfRange, whenFalse: inRange, ids: ids)
+end 'emitCapturedListIndexGuard'
+
+export function emitCapturedListSlotAddress(module StdModule, block IrBlock, listLabel ByteArray, index ValueId, stride FullRangeInt, ids ValueMinter) returns ValueId
+	let base = emitLoadGlobalWord(module, block: block, label: listLabel, ids: ids)
+	let strideValue = emitConst(module, block: block, value: stride, ids: ids)
+	let offset = emitBin(module, block: block, a: index, b: strideValue, opcode: StdBinOpcode.mul, ids: ids)
+
+	return emitBin(module, block: block, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
+end 'emitCapturedListSlotAddress'
+
+export function emitLoadCanonicalWord(module StdModule, block IrBlock, pair ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+	let loaded = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(loaded, addrId: pair, offset: offset, valueType: StdType.u32))
+
+	return loaded
+end 'emitLoadCanonicalWord'
+
 // `argv` is an array of POINTERS, so an index scales by the width of one.
 let ArgvPointerBytes = 8
 
-// ⚠ **THE INSTALL FORKS ON THE TARGET, AND THAT IS THIS FAMILY'S WHOLE DIVERGENCE FROM THE OTHERS.** Every
-// other runtime installer builds ONE graph for every target; argv cannot, because the two platforms do not
-// hand a process the same THING (see `CommandLineShape`). `installSchedRuntime` already takes a `target` for
-// a smaller version of the same reason, so the seam exists.
+export let CanonicalPairPointerOffset = 0 as ByteOffset
+export let CanonicalPairLengthOffset = 4 as ByteOffset
+export let CanonicalPairBytes = 8
+
+// ⚠ **THE INSTALL FORKS ON THE TARGET**, because the platforms do not hand a process the same THING
+// (see `CommandLineShape`).
 export function installCommandLineRuntime(module StdModule, usage RuntimeUsage, target Target)
 	if not usage.usesCommandLine 'noCommandLine'
 		return
@@ -729,6 +775,7 @@ export function installCommandLineRuntime(module StdModule, usage RuntimeUsage, 
 	match commandLineShape(target) 'shape'
 		unsplitString then installCommandLineSplitter(module)
 		argumentVector then installCommandLineVector(module)
+		hostStringList then installCommandLineHostList(module)
 	end 'shape'
 end 'installCommandLineRuntime'
 
@@ -741,9 +788,14 @@ end 'installCommandLineSplitter'
 
 // The SysV half: a `.data` load and an indexed one. There is no scanner, because there is nothing to scan.
 function installCommandLineVector(module StdModule)
-	buildCommandLineVectorCount(module)
+	buildCommandLineCapturedCount(module)
 	buildCommandLineVectorArg(module)
 end 'installCommandLineVector'
+
+function installCommandLineHostList(module StdModule)
+	buildCommandLineCapturedCount(module)
+	buildCommandLineHostListArg(module)
+end 'installCommandLineHostList'
 
 // Every callee this file installs — what `scanRuntimeUsage` reads to set `usesCommandLine`, and what
 // `TargetFacilities.calleeHostFacility` maps onto `HostFacility.commandLine`, so a lane without one refuses

@@ -146,19 +146,20 @@ qualified: `Array.ElementIterator`, `Array.ElementMemory`, `Map.Entry`, `List.Li
 
 Everything that is pure computation (strings, collections, `Json`, `Base64`, `Pem`, `DerReader`, the SHA-2, HMAC
 and HKDF functions, `Hasher`, `Math`, `URL` parsing) works on every target, and so does `Random`. Operating-system facilities are available on `x64-windows`,
-`arm64-macos`, `arm64-linux` and `x64-linux`.
+`arm64-macos`, `arm64-linux` and `x64-linux`. `CommandLine`, `Process.environmentVariable` and
+`Process.currentEnvironmentEntries` also work on `wasm32-wasi`.
 
 On `wasm32-wasi` a call that needs a facility the target does not provide is refused **at compile time**,
 at the call site, rather than failing at run time:
 
 | Refused on `wasm32-wasi` | Error |
 |--------------------------|-------|
-| `File`, `Directory`, `Console`, `CommandLine` | E3104 |
+| `File`, `Directory`, `Console` | E3104 |
 | `Clock.osTickMs`, `Clock.threadCpuTicks`, `MachinePin`, every `Scheduler` member but `parallelBoundary` | E3104 |
 | `Log`, `Logger`, `LogSink` and the log handlers: logging runs on services, which need green threads | E3104 |
 | `TcpClient`, `TcpListener`, `HttpClient`, `HttpServer` | E3104 |
 | `Process.executablePath`, `FilePath.resolvedPhysically`, `SharedSegment`, `TrustStore` | E3104 |
-| `Subprocess`, `StreamingSubprocess`, `Configuration`, `Process.environmentVariable` | E3074 |
+| `Subprocess`, `StreamingSubprocess`, `Configuration` | E3074 |
 
 E3104 means this compiler has not implemented the facility for the target; E3074 means the platform has
 no process-spawn primitive at all. Guard such calls with `#if not os(Wasi)`.

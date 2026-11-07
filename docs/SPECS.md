@@ -528,9 +528,7 @@ did not catch, and the runner must keep it out of batches. A batched case
 that FAILS is compiled and run alone to diagnose the failure: when it passes alone the case FAILS with a
 message saying it passes alone but fails batched, which is a batching gap (a missing check, or a case
 that needs `<!-- process: own -->`); when it fails alone too, the solo failure is the verdict. The case
-counts as run alone either way, and a batched PASS stands. A target with no command line (wasm32-wasi)
-cannot read `--select=`, so its entry runs every case, and a case whose output cannot be read there is
-diagnosed the same way.
+counts as run alone either way, and a batched PASS stands.
 
 These cases always compile and run on their own: a compile-error case; a case pinning `stderr`; an `Args`
 marker; a `stdin`, `procs`, `preempt`, `network`, `tier: stdlib`, `process: own` or `runs: alone` marker; an `MmTrace`, `LogTrace`,

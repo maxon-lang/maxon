@@ -136,27 +136,34 @@ export type DeadFunctionSurvivors
 	end 'create'
 end 'DeadFunctionSurvivors'
 
-// ⭐ **WHAT THE ENTRY STUB CALLS BY NAME, DERIVED ONCE.** The four stub calls that exist only in some builds
-// — the scheduler's `__gt_run_main`/`__gt_drain_at_exit`, the leak gate, the DebugStream bracket and the
-// coverage dump — are decided here and nowhere else: the reachability roots, the inliner's called-once census
-// and the three stub emitters (`augmentWithRuntime` for x64, `appendArm64RuntimeChunks`,
-// `buildWasmCoreModule`) all read this record, so what the roots keep alive and what a stub calls cannot
-// disagree. Built from the usage record in `compileToCodeResult` and held on the project, because the census
-// runs mid-pipeline where no usage record is in reach.
+// ⭐ **WHAT THE ENTRY STUB CALLS BY NAME, DERIVED ONCE.** The stub calls that exist only in some
+// builds — the scheduler's `__gt_run_main`/`__gt_drain_at_exit`, the leak gate, the DebugStream
+// bracket, the coverage dump and wasm's host-list captures — are decided here and nowhere else: the
+// reachability roots, the inliner's called-once census and the three stub emitters
+// (`augmentWithRuntime` for x64, `appendArm64RuntimeChunks`, `buildWasmCoreModule`) all read this
+// record, so what the roots keep alive and what a stub calls cannot disagree. Built from the usage
+// record in `compileToCodeResult` and held on the project, because the census runs mid-pipeline
+// where no usage record is in reach.
 export type EntryStubCalls
 	export let runsMainOnAGreenThread as bool
 	export let checksLeaks as bool
 	export let bracketsDebugStream as bool
 	export let dumpsCoverage as bool
 	export let releasesRegistry as bool
+	export let capturesArguments as bool
+	export let capturesEnvironment as bool
 
 	export static function none() returns EntryStubCalls
-		return Self{runsMainOnAGreenThread: false, checksLeaks: false, bracketsDebugStream: false, dumpsCoverage: false, releasesRegistry: false}
+		return Self{runsMainOnAGreenThread: false, checksLeaks: false, bracketsDebugStream: false, dumpsCoverage: false, releasesRegistry: false, capturesArguments: false, capturesEnvironment: false}
 	end 'none'
 
-	export static function fromUsage(usage RuntimeUsage) returns EntryStubCalls
-		return Self{runsMainOnAGreenThread: usage.usesGt, checksLeaks: usage.usesHeap, bracketsDebugStream: usage.usesDebugStream, dumpsCoverage: usage.usesCoverage, releasesRegistry: usage.releasesRegistry}
+	export static function fromUsage(usage RuntimeUsage, target Target) returns EntryStubCalls
+		return Self{runsMainOnAGreenThread: usage.usesGt, checksLeaks: usage.usesHeap, bracketsDebugStream: usage.usesDebugStream, dumpsCoverage: usage.usesCoverage, releasesRegistry: usage.releasesRegistry, capturesArguments: usage.usesCommandLine and argumentsArriveAsHostList(target), capturesEnvironment: usage.usesEnvironment and environmentArrivesAsHostList(target)}
 	end 'fromUsage'
+
+	export function allocatesHostLists() returns bool
+		return self.capturesArguments or self.capturesEnvironment
+	end 'allocatesHostLists'
 end 'EntryStubCalls'
 
 // ⭐⭐ **THE PRE-ELIMINATION PASSES BET ON THIS PASS, AND THIS IS WHERE THE BET IS SETTLED.** Every pass
@@ -351,6 +358,8 @@ end 'functionRecordCodesOf'
 //     program without green threads; with them, `__gt_drain_at_exit` calls it.
 //   * `__mm_leak_check` — both entry stubs' leak gate, emitted from `RuntimeUsage.usesHeap` where
 //     installation is decided; a pruned root leaves a call with no callee, loudly, on every backend.
+//   * `__slab_alloc_scaffold` — the door wasm's `cabi_realloc`, which no Std body contains,
+//     allocates a captured host list through.
 //   * `__sched_syscall_regain` and the bracket pair — called only from the Target tier's syscall handoff,
 //     on the lanes that build it (`SchedRuntime.targetBracketsBlockingSyscalls`, whose gate the install
 //     shares); an ungated root here would be the shape in which the two halves drift apart silently.
@@ -376,6 +385,7 @@ module function compilerOwnedRoots(target Target, stub EntryStubCalls) returns C
 	roots.push(CompilerOwnedRoot.create(GlobalCleanupName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(RegistryReleaseName, isCalledHere: stub.releasesRegistry and not stub.runsMainOnAGreenThread))
 	roots.push(CompilerOwnedRoot.create(MmLeakCheckName, isCalledHere: stub.checksLeaks))
+	roots.push(CompilerOwnedRoot.create(slabAllocDoorOf(SlabBufferKind.hostSnapshot), isCalledHere: stub.allocatesHostLists()))
 	roots.push(CompilerOwnedRoot.create(SchedSyscallRegainName, isCalledHere: targetBracketsBlockingSyscalls(target)))
 	roots.push(CompilerOwnedRoot.create(SchedEnterSyscallName, isCalledHere: targetCallsTheSyscallBracket(target)))
 	roots.push(CompilerOwnedRoot.create(SchedExitSyscallName, isCalledHere: targetCallsTheSyscallBracket(target)))

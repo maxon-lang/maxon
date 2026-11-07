@@ -411,6 +411,11 @@ export type RuntimeUsage
 	// scan cannot see.
 	export var usesCommandLine as bool
 
+	// The program reads its own ENVIRONMENT. It carries `usesHeap` and `usesManagedMemory` as
+	// `usesCommandLine` does: `__env_entry` builds its `__ManagedMemory` answer inside a Std body this
+	// scan cannot see.
+	export var usesEnvironment as bool
+
 	// The program reads STANDARD INPUT. It carries `usesHeap` (the out word is a raw alloc) AND
 	// `usesManagedMemory`: `__con_read_stdin` answers with an `Array` record it builds through
 	// `__managed_create`/`__managed_reserve` in a Std body this Maxon-module scan cannot see.
@@ -564,7 +569,7 @@ export type RuntimeUsage
 	export var neededInterfaceConversions = InterfaceConversionNameSet.create()
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesReleaseTypeParam: false, usesReclaimTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesSchedulerlessNowNs: false, usesSchedulerlessSleep: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesTrustStore: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesTerminalDetection: false, usesCpuCount: false, usesCpuFeatures: false, usesHardwareAes: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, usesMachTaskPorts: false, usesRawOsLock: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesReleaseTypeParam: false, usesReclaimTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesSchedulerlessNowNs: false, usesSchedulerlessSleep: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesEnvironment: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesTrustStore: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesTerminalDetection: false, usesCpuCount: false, usesCpuFeatures: false, usesHardwareAes: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, usesMachTaskPorts: false, usesRawOsLock: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -913,6 +918,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesManagedMemory = true
 	end 'commandLine'
+
+	if isEnvironmentRuntimeCallee(callee) 'environment'
+		usage.usesEnvironment = true
+		usage.usesHeap = true
+		usage.usesManagedMemory = true
+	end 'environment'
 
 	// A `__con_*` or a `__proc_*` call. Same two transitive bits as the command-line family and for the
 	// same two reasons — a raw-alloc scratch word (or buffer), and an `Array` record each answers with from a

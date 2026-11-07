@@ -1,0 +1,297 @@
+// The shape this process's own environment arrives in: the platforms hand it over in genuinely
+// different data structures.
+enum EnvironmentSnapshotShape
+	// Windows: `GetEnvironmentStringsW` answers ONE BLOCK — NUL-terminated `NAME=VALUE` entries back to
+	// back, ended by one more NUL — and it is a COPY the caller owes `FreeEnvironmentStringsW`.
+	nulSeparatedBlock
+
+	// POSIX: `environ` is a NULL-terminated vector of `char *`. It is the live table rather than a copy, so
+	// there is nothing to release — which is why the `pointerVector` body emits no `osEnvBlockFree` and the
+	// arm64 lane needs no lowering for one.
+	pointerVector
+
+	// WASI: `get-environment`'s `list<tuple<string, string>>`, which `$run` captures into
+	// `__env_list` and `__env_count` before `__module_init`. Each record is two (ptr, len) pairs whose
+	// bytes carry no NUL terminator and may hold any byte, so every copy is length-known.
+	hostEntryList
+end 'EnvironmentSnapshotShape'
+
+// ⚠ **KEYED ON THE OS**: which shape a process's environment is published in is an ABI fact about the
+// platform and not about the instruction set.
+function environmentSnapshotShape(target Target) returns EnvironmentSnapshotShape
+	return match target.os 'os'
+		windows gives EnvironmentSnapshotShape.nulSeparatedBlock
+		linux or
+		macos gives EnvironmentSnapshotShape.pointerVector
+		wasi gives EnvironmentSnapshotShape.hostEntryList
+	end 'os'
+end 'environmentSnapshotShape'
+
+export function environmentArrivesAsHostList(target Target) returns bool
+	return environmentSnapshotShape(target) == EnvironmentSnapshotShape.hostEntryList
+end 'environmentArrivesAsHostList'
+
+let EnvironmentRuntimePrefix = b"__env_"
+
+export let EnvironmentEntryName = b"__env_entry"
+export let EnvironmentListLabel = b"__env_list"
+export let EnvironmentCountLabel = b"__env_count"
+
+let EnvironmentUnreadableByte = 0
+
+// The `=` the WASI body rebuilds `NAME=VALUE` with, so `stdlib/Process.maxon` splits every lane's
+// entry one way.
+let EnvironmentSeparatorByte = 61
+
+// The block walk's state lives in a slab record, not in block arguments: a hand-built runtime
+// function's values are span-less, so register pressure there panics instead of diagnosing.
+let EnvCursor = 0
+let EnvRemaining = 8
+let EnvBlock = 16
+let EnvWalkBytes = 24
+
+// One `char *`. Both lanes that answer `pointerVector` are 64-bit.
+let EnvPointerStride = 8
+let EnvironmentRecordBytes = CanonicalPairBytes * 2
+
+export function isEnvironmentRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: EnvironmentRuntimePrefix)
+end 'isEnvironmentRuntimeCallee'
+
+export function environmentRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create(0)
+
+	if not usage.usesEnvironment 'noEnvironment'
+		return out
+	end 'noEnvironment'
+
+	match environmentSnapshotShape(target) 'shape'
+		nulSeparatedBlock or
+		pointerVector then break
+		hostEntryList then pushCapturedEnvironmentGlobals(out)
+	end 'shape'
+
+	return out
+end 'environmentRuntimeGlobals'
+
+function pushCapturedEnvironmentGlobals(out DataSectionEntryArray)
+	pushRuntimeGlobal(out, label: EnvironmentListLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
+	pushRuntimeGlobal(out, label: EnvironmentCountLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
+end 'pushCapturedEnvironmentGlobals'
+
+// ⭐⭐ `__env_entry(index) -> ownedManagedMemory` — `__Builtins.osEnvironmentEntry(i)`: this process's
+// index-th `NAME=VALUE` environment entry, an EMPTY record once the index is past the last one, or the
+// one-NUL record `emitEnvironmentUnreadable` builds when the host handed over no environment at all.
+//
+// ⭐⭐ **NEITHER NON-ENTRY ANSWER IS ONE A REAL ENVIRONMENT CAN IMITATE** — every entry carries at
+// least a name, so none is empty, and none is a lone NUL: a host cstring holds no NUL and the WASI
+// body writes at least the `=`. That is what lets `Process.currentEnvironmentEntries` walk from 0
+// until it stops, and throw rather than stop when the host failed, with no count entry point beside
+// this one: a count would be a second question asked of a snapshot this one takes and releases, and
+// the two could disagree.
+//
+// ⭐⭐ **ONE NAME, ONE BODY PER `EnvironmentSnapshotShape`, and every caller is written once.** The
+// ANSWER is identical on every lane (the index-th entry, or empty past the end); only the structure
+// being indexed differs, and that structure is the platform's, not this compiler's choice.
+export function installEnvironmentRuntime(module StdModule, usage RuntimeUsage, target Target)
+	if not usage.usesEnvironment 'noEnvironment'
+		return
+	end 'noEnvironment'
+
+	match environmentSnapshotShape(target) 'shape'
+		nulSeparatedBlock then buildEnvironmentEntryFromBlock(module)
+		pointerVector then buildEnvironmentEntryFromVector(module)
+		hostEntryList then buildEnvironmentEntryFromHostList(module)
+	end 'shape'
+end 'installEnvironmentRuntime'
+
+// `__env_entry`'s answer when the host handed over no environment: an owned one-byte record holding
+// `EnvironmentUnreadableByte`, a NUL, which no cstring entry can contain. `stdlib/Process.maxon`'s
+// `EnvironmentUnreadableByte` is the reader's half of the same statement.
+function emitEnvironmentUnreadable(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let record = ids.mint()
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let buffer = emitManagedByteBuffer(module, block: block, record: record, byteCount: one, ids: ids)
+	let firstByte = emitConst(module, block: block, value: 0, ids: ids)
+	let nul = emitConst(module, block: block, value: EnvironmentUnreadableByte, ids: ids)
+	emitStoreByte(module, block: block, base: buffer, index: firstByte, value: nul, ids: ids)
+	emitStoreField(module, block: block, record: record, offset: ManagedRecordLengthOffset, value: one)
+	return record
+end 'emitEnvironmentUnreadable'
+
+function buildEnvironmentEntryFromHostList(module StdModule)
+	var func = IrFunction.createFromStd(EnvironmentEntryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var upperBound = module.addBlock(func, label: b"envhupper", heat: BlockHeat.normal)
+	var fromList = module.addBlock(func, label: b"envhload", heat: BlockHeat.normal)
+	var pastEnd = module.addBlock(func, label: b"envhend", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let index = 0
+
+	emitCapturedListIndexGuard(module, entry: entry, upperBound: upperBound, index: index, countLabel: EnvironmentCountLabel, inRange: fromList, outOfRange: pastEnd, ids: ids)
+
+	let namePair = emitCapturedListSlotAddress(module, block: fromList, listLabel: EnvironmentListLabel, index: index, stride: EnvironmentRecordBytes, ids: ids)
+	let pairBytes = emitConst(module, block: fromList, value: CanonicalPairBytes, ids: ids)
+	let valuePair = emitBin(module, block: fromList, a: namePair, b: pairBytes, opcode: StdBinOpcode.add, ids: ids)
+	let nameSource = emitLoadCanonicalWord(module, block: fromList, pair: namePair, offset: CanonicalPairPointerOffset, ids: ids)
+	let nameBytes = emitLoadCanonicalWord(module, block: fromList, pair: namePair, offset: CanonicalPairLengthOffset, ids: ids)
+	let valueSource = emitLoadCanonicalWord(module, block: fromList, pair: valuePair, offset: CanonicalPairPointerOffset, ids: ids)
+	let valueBytes = emitLoadCanonicalWord(module, block: fromList, pair: valuePair, offset: CanonicalPairLengthOffset, ids: ids)
+
+	let one = emitConst(module, block: fromList, value: 1, ids: ids)
+	let nameAndSeparator = emitBin(module, block: fromList, a: nameBytes, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let total = emitBin(module, block: fromList, a: nameAndSeparator, b: valueBytes, opcode: StdBinOpcode.add, ids: ids)
+
+	let record = ids.mint()
+	let buffer = emitManagedByteBuffer(module, block: fromList, record: record, byteCount: total, ids: ids)
+	var afterName = emitForwardCopy(module, func: func, cur: fromList, dest: buffer, src: nameSource, byteCount: nameBytes, ids: ids)
+
+	let separator = emitConst(module, block: afterName, value: EnvironmentSeparatorByte, ids: ids)
+	emitStoreByte(module, block: afterName, base: buffer, index: nameBytes, value: separator, ids: ids)
+
+	let valueDest = emitBin(module, block: afterName, a: buffer, b: nameAndSeparator, opcode: StdBinOpcode.add, ids: ids)
+	var afterValue = emitForwardCopy(module, func: func, cur: afterName, dest: valueDest, src: valueSource, byteCount: valueBytes, ids: ids)
+
+	emitStoreField(module, block: afterValue, record: record, offset: ManagedRecordLengthOffset, value: total)
+	module.setTerminator(afterValue, op: StdOp.ret(record))
+
+	let emptyRecord = emitEmptyManaged(module, block: pastEnd, ids: ids)
+	module.setTerminator(pastEnd, op: StdOp.ret(emptyRecord))
+
+	module.functions.push(func)
+end 'buildEnvironmentEntryFromHostList'
+
+// ⭐ **THE POSIX BODY: `environ[index]`, and there is no walk at all.** A pointer vector is randomly
+// addressable, so the block-scan below — cursor, countdown, per-byte skip — has no counterpart here: the
+// index IS the subscript. A NULL vector is `osEnvBlock`'s "the host could not answer", which a process that
+// has an environment never sees, so it answers the unreadable record rather than the past-the-end one.
+//
+// ⚠ **NOTHING IS RELEASED, AND THAT IS THE SHAPE'S OWN CONTRACT rather than a forgotten free**: `environ` is
+// the live table this process runs on, not a copy taken for us. See `EnvironmentSnapshotShape.pointerVector`.
+function buildEnvironmentEntryFromVector(module StdModule)
+	var func = IrFunction.createFromStd(EnvironmentEntryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var subscript = module.addBlock(func, label: b"envat", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"envfound", heat: BlockHeat.normal)
+	var noEntry = module.addBlock(func, label: b"envnone", heat: BlockHeat.normal)
+	var noVector = module.addBlock(func, label: b"envfail", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let index = 0
+
+	let vector = ids.mint()
+	module.appendOp(entry, op: StdOp.osEnvBlock(vector))
+	emitBranchOnCompare(module, block: entry, value: vector, pred: StdCmpPred.eq, against: 0, whenTrue: noVector, whenFalse: subscript, ids: ids)
+
+	let unreadableRecord = emitEnvironmentUnreadable(module, block: noVector, ids: ids)
+	module.setTerminator(noVector, op: StdOp.ret(unreadableRecord))
+
+	let stride = emitConst(module, block: subscript, value: EnvPointerStride, ids: ids)
+	let displacement = emitBin(module, block: subscript, a: index, b: stride, opcode: StdBinOpcode.mul, ids: ids)
+	let slot = emitBin(module, block: subscript, a: vector, b: displacement, opcode: StdBinOpcode.add, ids: ids)
+	let cursor = emitLoadField(module, block: subscript, record: slot, offset: 0, ids: ids)
+
+	emitBranchOnCompare(module, block: subscript, value: cursor, pred: StdCmpPred.eq, against: 0, whenTrue: noEntry, whenFalse: found, ids: ids)
+
+	let record = ids.mint()
+	var afterCopy = emitCStringToManaged(module, func: func, cur: found, cstr: cursor, record: record, ids: ids)
+	module.setTerminator(afterCopy, op: StdOp.ret(record))
+
+	let emptyRecord = emitEmptyManaged(module, block: noEntry, ids: ids)
+	module.setTerminator(noEntry, op: StdOp.ret(emptyRecord))
+
+	module.functions.push(func)
+end 'buildEnvironmentEntryFromVector'
+
+// The Win32 body: a NUL-separated block, walked entry by entry because it is not randomly addressable, and
+// released on BOTH exits because `GetEnvironmentStringsW` handed over a copy. A wide block is walked
+// in UTF-16 units and only the entry answered is narrowed: callers ask once per entry, so narrowing
+// the whole block on every call would multiply the cost of the whole enumeration.
+//
+// ⭐ **THE SNAPSHOT IS TAKEN AND RELEASED PER CALL, WHICH IS O(n) PER ENTRY AND DELIBERATE.**
+// `GetEnvironmentStringsW` hands back a COPY the caller owns; holding one across the whole walk would mean a
+// runtime-global cache with a lifetime nothing here can bound. An environment is tens of entries, so
+// the quadratic is over a number that does not grow.
+function buildEnvironmentEntryFromBlock(module StdModule)
+	var func = IrFunction.createFromStd(EnvironmentEntryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var noBlock = module.addBlock(func, label: b"envnone", heat: BlockHeat.normal)
+	var scan = module.addBlock(func, label: b"envscan", heat: BlockHeat.normal)
+	var skip = module.addBlock(func, label: b"envskip", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"envfound", heat: BlockHeat.normal)
+	var pastEnd = module.addBlock(func, label: b"envend", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let index = 0
+
+	let block = ids.mint()
+	module.appendOp(entry, op: StdOp.osEnvBlock(block))
+	let state = emitEnvironmentWalkState(module, block: entry, ids: ids)
+	emitStoreField(module, block: entry, record: state, offset: EnvBlock, value: block)
+	emitStoreField(module, block: entry, record: state, offset: EnvCursor, value: block)
+	emitStoreField(module, block: entry, record: state, offset: EnvRemaining, value: index)
+	emitBranchOnCompare(module, block: entry, value: block, pred: StdCmpPred.eq, against: 0, whenTrue: noBlock, whenFalse: scan, ids: ids)
+
+	emitSlabFree(module, block: noBlock, ptr: state, kind: SlabBufferKind.environmentValue, ids: ids)
+	let noneRecord = emitEnvironmentUnreadable(module, block: noBlock, ids: ids)
+	module.setTerminator(noBlock, op: StdOp.ret(noneRecord))
+
+	// The cursor stands on the first unit of an entry, or on the block's own terminator.
+	let cursor = emitLoadField(module, block: scan, record: state, offset: EnvCursor, ids: ids)
+	let zeroIdx = emitConst(module, block: scan, value: 0, ids: ids)
+	let firstByte = emitHostUnit(module, block: scan, base: cursor, unitIndex: zeroIdx, ids: ids)
+	let blockEnded = emitCompareWithConstant(module, block: scan, value: firstByte, pred: StdCmpPred.eq, against: 0, ids: ids)
+	var stillCounting = module.addBlock(func, label: b"envcount", heat: BlockHeat.normal)
+	module.setTerminator(scan, op: StdOp.condBranch(blockEnded, thenBlockId: pastEnd.id, elseBlockId: stillCounting.id))
+
+	let remaining = emitLoadField(module, block: stillCounting, record: state, offset: EnvRemaining, ids: ids)
+	let arrived = emitCompareWithConstant(module, block: stillCounting, value: remaining, pred: StdCmpPred.eq, against: 0, ids: ids)
+	var stepOn = module.addBlock(func, label: b"envstep", heat: BlockHeat.normal)
+	module.setTerminator(stillCounting, op: StdOp.condBranch(arrived, thenBlockId: found.id, elseBlockId: stepOn.id))
+
+	let oneStep = emitConst(module, block: stepOn, value: 1, ids: ids)
+	let remaining2 = emitLoadField(module, block: stepOn, record: state, offset: EnvRemaining, ids: ids)
+	let nextRemaining = emitBin(module, block: stepOn, a: remaining2, b: oneStep, opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: stepOn, record: state, offset: EnvRemaining, value: nextRemaining)
+	module.setTerminator(stepOn, op: StdOp.branch(skip.id))
+
+	let skipCursor = emitLoadField(module, block: skip, record: state, offset: EnvCursor, ids: ids)
+	let skipIdx = emitConst(module, block: skip, value: 0, ids: ids)
+	let skipByte = emitHostUnit(module, block: skip, base: skipCursor, unitIndex: skipIdx, ids: ids)
+	let oneUnit = emitConst(module, block: skip, value: 1, ids: ids)
+	let unitBytes = emitByteCountOfUnits(module, block: skip, units: oneUnit, encoding: module.hostText, ids: ids)
+	let advanced = emitBin(module, block: skip, a: skipCursor, b: unitBytes, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: skip, record: state, offset: EnvCursor, value: advanced)
+	emitBranchOnCompare(module, block: skip, value: skipByte, pred: StdCmpPred.eq, against: 0, whenTrue: scan, whenFalse: skip, ids: ids)
+
+	let foundCursor = emitLoadField(module, block: found, record: state, offset: EnvCursor, ids: ids)
+	let record = ids.mint()
+	var afterCopy = emitTextToManaged(module, func: func, cur: found, cstr: foundCursor, record: record, encoding: module.hostText, ids: ids)
+	emitReleaseEnvironmentSnapshot(module, block: afterCopy, state: state, ids: ids)
+	module.setTerminator(afterCopy, op: StdOp.ret(record))
+
+	let endRecord = emitEmptyManaged(module, block: pastEnd, ids: ids)
+	emitReleaseEnvironmentSnapshot(module, block: pastEnd, state: state, ids: ids)
+	module.setTerminator(pastEnd, op: StdOp.ret(endRecord))
+
+	module.functions.push(func)
+end 'buildEnvironmentEntryFromBlock'
+
+function emitEnvironmentWalkState(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let sizeConst = emitConst(module, block: block, value: EnvWalkBytes, ids: ids)
+
+	return emitSlabAlloc(module, block: block, bytes: sizeConst, kind: SlabBufferKind.environmentValue, ids: ids)
+end 'emitEnvironmentWalkState'
+
+function emitReleaseEnvironmentSnapshot(module StdModule, block IrBlock, state ValueId, ids ValueMinter)
+	let snapshot = emitLoadField(module, block: block, record: state, offset: EnvBlock, ids: ids)
+	module.appendOp(block, op: StdOp.osEnvBlockFree(snapshot))
+	emitSlabFree(module, block: block, ptr: state, kind: SlabBufferKind.environmentValue, ids: ids)
+end 'emitReleaseEnvironmentSnapshot'

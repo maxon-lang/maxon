@@ -80,7 +80,7 @@ typealias InlinePositionBySite = Map with (ElementIndex, Wasm32Index)
 typealias InlineSiteIndexArray = Array with ElementIndex
 typealias WasmDepthColumn = FixedArray with Wasm32Index
 
-// TEN functions are imported, in this fixed order — so their func indices are the constants
+// These functions are imported, in this fixed order — so their func indices are the constants
 // below and every DEFINED function is offset by `WasmImportCount`. `buildWasmCoreModule` MUST
 // `addImportFunc` them in exactly this order for the indices to hold; `wasmFuncIdxOf`
 // derives each defined function's index as `WasmImportCount + position` on the same assumption. The
@@ -96,13 +96,18 @@ typealias WasmDepthColumn = FixedArray with Wasm32Index
 //   7  wasi:io/poll@0.2.6 [method]pollable.block                       (param i32) -> ()
 //   8  wasi:io/poll@0.2.6 [resource-drop]pollable                      (param i32) -> ()
 //   9  wasi:clocks/wall-clock@0.2.6 now                                (param i32) -> ()
+//  10  wasi:cli/environment@0.2.6 get-arguments                        (param i32) -> ()
+//  11  wasi:cli/environment@0.2.6 get-environment                      (param i32) -> ()
+//
+// Every import is emitted whether or not the program calls it: a conditional import would shift
+// every index after it.
 //
 // ⚠ `get-stderr` is APPENDED, not slotted in beside its stdout twin, for the reason a `StdOp` variant
 // is appended at the end of its band: the indices above it are read from a dozen emit sites and a
 // renumber is invisible at every one of them — the module would still validate and would call the
 // wrong import. Appending costs only the ONE derived offset (`WasmImportCount`), which every defined
 // function's index already goes through.
-let WasmImportCount = 10 as Wasm32Index
+let WasmImportCount = 12 as Wasm32Index
 let ExitImportFuncIdx = 0
 let GetStdoutImportFuncIdx = 1 as Wasm32Index
 let BlockingWriteFlushImportFuncIdx = 2
@@ -113,6 +118,8 @@ let SubscribeDurationImportFuncIdx = 6
 let PollableBlockImportFuncIdx = 7
 let PollableDropImportFuncIdx = 8
 let WallClockNowImportFuncIdx = 9
+let GetArgumentsImportFuncIdx = 10
+let GetEnvironmentImportFuncIdx = 11
 
 // ⭐ The wasm half of `StdLoweringShared.posixStreamFd` — which `wasi:cli` accessor hands over the
 // output-stream a write targets. Exhaustive over `OsOutputStream` for that door's reason: a third
@@ -124,12 +131,12 @@ function wasmStreamAccessorImportFuncIdx(stream OsOutputStream) returns Wasm32In
 	end 's'
 end 'wasmStreamAccessorImportFuncIdx'
 
-// The canonical-ABI RETURN AREA `osWriteStdout` hands `blocking-write-and-flush` its
-// `result<_, stream-error>` into. It sits in the low scratch region BELOW the `.data` base
-// (1024) and within page 0, so it never overlaps real data. Only the result's tag byte is read
-// (`mrt_write_stream` stops on an error); the error payload is not — 256 leaves ample room to the
-// data base. `wall-clock.now` returns its 16-byte datetime here too: each import's area is read right
-// after its call returns, so the two never overlap.
+// The canonical-ABI RETURN AREA `osWriteStdout` hands `blocking-write-and-flush` its `result<_,
+// stream-error>` into. It sits in the low scratch region BELOW the `.data` base (1024) and within
+// page 0, so it never overlaps real data. Only the result's tag byte is read (`mrt_write_stream`
+// stops on an error); the error payload is not — 256 leaves ample room to the data base.
+// `wall-clock.now` returns its 16-byte datetime here too, and `get-arguments` and `get-environment`
+// their (ptr, len) lists: each import's area is read right after its call returns, so none overlap.
 let WasmRetAreaBase = 256
 
 // `blocking-write-and-flush(handle, ptr, len, retArea)` takes four i32 params — the stream handle,
@@ -239,6 +246,15 @@ let WasmDatetimeSecondsOffset = 0
 let WasmDatetimeNanosecondsOffset = 8
 let WasmSleepNothingToReport = 0
 
+let WasiEnvironmentModuleName = b"wasi:cli/environment@0.2.6"
+let WasiGetArgumentsFieldName = b"get-arguments"
+let WasiGetEnvironmentFieldName = b"get-environment"
+let WasmReallocExportName = b"cabi_realloc"
+let WasmReallocParamCount = 4
+let WasmReallocOldPtrLocal = 0
+let WasmReallocAlignLocal = 2
+let WasmReallocNewSizeLocal = 3
+
 enum WasmRandomFillUnit
 	word
 	byte
@@ -282,6 +298,8 @@ let WasiSubscribeDurationDebugName = b"subscribe_duration"
 let WasiPollableBlockDebugName = b"pollable_block"
 let WasiPollableDropDebugName = b"pollable_drop"
 let WasiWallClockNowDebugName = b"wall_clock_now"
+let WasiGetArgumentsDebugName = b"get_arguments"
+let WasiGetEnvironmentDebugName = b"get_environment"
 
 // Each linear-memory region after `.data` (`.rdata`, the scratch frames, the frame-trace ring) starts
 // immediately after the one before it, rounded up to 8 so every 8-byte field lands naturally aligned.
@@ -293,11 +311,11 @@ let WasmRegionAlignment = 8
 // ==========================================================================
 
 // Lower a fully-compiled Std module to a WASI-Preview2 CORE wasm module. The module imports
-// `exit-with-code`, defines every function in `module.functions` under the identity-local
-// model, synthesizes the `wasi:cli/run@0.2.6#run` entry (`call $main; i32.wrap_i64; call
-// $exit; i32.const 0`), and exports `memory` + `run`. Deterministic: output is driven entirely
-// by module/block/op/arg ORDER, never by map iteration, so worker-count byte-identity holds.
-export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool, initGlobals bool, releasesRegistry bool, funcNames FunctionNameIndex, entryFunction ByteArray, roster ShadowSpellingRoster, runtimeTier FunctionNameSet) returns ByteArray
+// `exit-with-code`, defines every function in `module.functions` under the identity-local model,
+// synthesizes the `wasi:cli/run@0.2.6#run` entry (`call $main; i32.wrap_i64; call $exit; i32.const
+// 0`), and exports `memory`, `run` and `cabi_realloc`. Deterministic: output is driven entirely by
+// module/block/op/arg ORDER, never by map iteration, so worker-count byte-identity holds.
+export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, stub EntryStubCalls, initGlobals bool, funcNames FunctionNameIndex, entryFunction ByteArray, roster ShadowSpellingRoster, runtimeTier FunctionNameSet) returns ByteArray
 	var calleeParamTypes = buildCalleeParamTypesMap(funcNames)
 
 	var builder = WasmModuleBuilder.create()
@@ -375,12 +393,13 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 		end 'indexDrift'
 	end 'eachFunc'
 
-	// The three SYNTHETIC functions, appended in the order `wasmPanicFuncIdx` fixes: `mrt_panic` first
+	// The SYNTHETIC functions, appended in the order `wasmPanicFuncIdx` fixes: `mrt_panic` first
 	// (its index is read by every panic site, which was emitted above), then the entry stub, then
-	// `mrt_write_stream` (its index is read by every write site, panic included).
+	// `mrt_write_stream` (its index is read by every write site, panic included), then `cabi_realloc`.
 	appendPanicRuntime(builder, funcNames: funcNames, frames: frames)
-	let runFuncIdx = appendRunEntry(builder, module: module, funcNames: funcNames, frames: frames, checkLeaks: checkLeaks, initGlobals: initGlobals, releasesRegistry: releasesRegistry, entryFunction: entryFunction)
+	let runFuncIdx = appendRunEntry(builder, module: module, globalData: globalData, funcNames: funcNames, frames: frames, stub: stub, initGlobals: initGlobals, entryFunction: entryFunction)
 	appendStreamWriteRuntime(builder, funcNames: funcNames)
+	let reallocFuncIdx = appendHostReallocRuntime(builder, funcNames: funcNames, hostAllocates: stub.allocatesHostLists())
 	view functionNames = builder.functionDebugNames()
 
 	if functionNames.count() != wasmFirstInlinePosition(funcNames) 'positionDrift'
@@ -407,6 +426,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	builder.addDataSegment(frames.base, bytes: frameImage)
 
 	builder.exportFunc(WasiRunExportName, funcIdx: runFuncIdx)
+	builder.exportFunc(WasmReallocExportName, funcIdx: reallocFuncIdx)
 
 	return builder.finish()
 end 'buildWasmCoreModule'
@@ -452,6 +472,10 @@ function appendWasiImports(builder WasmModuleBuilder)
 	_ = builder.addImportFunc(WasiPollModuleName, fieldName: WasiPollableDropFieldName, typeIdx: exitTypeIdx, debugName: WasiPollableDropDebugName)
 
 	_ = builder.addImportFunc(WasiWallClockModuleName, fieldName: WasiWallClockNowFieldName, typeIdx: exitTypeIdx, debugName: WasiWallClockNowDebugName)
+
+	_ = builder.addImportFunc(WasiEnvironmentModuleName, fieldName: WasiGetArgumentsFieldName, typeIdx: exitTypeIdx, debugName: WasiGetArgumentsDebugName)
+
+	_ = builder.addImportFunc(WasiEnvironmentModuleName, fieldName: WasiGetEnvironmentFieldName, typeIdx: exitTypeIdx, debugName: WasiGetEnvironmentDebugName)
 end 'appendWasiImports'
 
 // Bake every `.rdata` slot naming another `.rdata` payload (see `PendingRdataAbsReloc`) into the `.rdata`
@@ -603,8 +627,12 @@ function wasmStreamWriteFuncIdx(funcNames FunctionNameIndex) returns Wasm32Index
 	return (wasmRunFuncIdx(funcNames) + 1) as Wasm32Index
 end 'wasmStreamWriteFuncIdx'
 
-function wasmFirstInlinePosition(funcNames FunctionNameIndex) returns Wasm32Index
+function wasmReallocFuncIdx(funcNames FunctionNameIndex) returns Wasm32Index
 	return (wasmStreamWriteFuncIdx(funcNames) + 1) as Wasm32Index
+end 'wasmReallocFuncIdx'
+
+function wasmFirstInlinePosition(funcNames FunctionNameIndex) returns Wasm32Index
+	return (wasmReallocFuncIdx(funcNames) + 1) as Wasm32Index
 end 'wasmFirstInlinePosition'
 
 // `mrt_write_stream(handle, ptr, len)` writes `len` bytes as consecutive `blocking-write-and-flush`
@@ -671,6 +699,52 @@ function appendStreamWriteRuntime(builder WasmModuleBuilder, funcNames FunctionN
 		panic("appendStreamWriteRuntime: `{String.from(StreamWriteName)}` landed at wasm function index {funcIdx}, but every write site was emitted calling {wasmStreamWriteFuncIdx(funcNames)} — it is no longer appended directly after `{String.from(EntryPointName)}`")
 	end 'indexDrift'
 end 'appendStreamWriteRuntime'
+
+// `cabi_realloc` is exported from every module: `wasm-tools component new` demands it once any
+// import returns a list, and the `wasi:cli/environment` imports always do. The canonical ABI lowers
+// an import result only as `realloc(0, 0, align, size)`, so a nonzero old pointer traps.
+function appendHostReallocRuntime(builder WasmModuleBuilder, funcNames FunctionNameIndex, hostAllocates bool) returns Wasm32Index
+	var body = WasmBody.create()
+
+	if hostAllocates 'slabBacked'
+		let slabAllocDoor = slabAllocDoorOf(SlabBufferKind.hostSnapshot)
+		let slabAllocIdx = try wasmFuncIdxOf(funcNames, callee: slabAllocDoor) otherwise panic("appendHostReallocRuntime: the program captures a host list (its arguments or its environment), so `{String.from(slabAllocDoor)}` must be in this module — its absence means the `DeadFunctionElimination.compilerOwnedRoots` root that keeps it for this call was pruned, and the host would allocate that list through nothing")
+
+		body.localGet(WasmReallocOldPtrLocal)
+		body.beginIf()
+		body.unreachable()
+		body.endOp()
+
+		body.localGet(WasmReallocNewSizeLocal)
+		body.i32Eqz()
+		body.beginIf()
+		body.localGet(WasmReallocAlignLocal)
+		body.returnOp()
+		body.endOp()
+
+		body.localGet(WasmReallocNewSizeLocal)
+		body.i64ExtendI32U()
+		body.call(slabAllocIdx)
+		body.i32WrapI64()
+	end 'slabBacked' else 'neverCalled'
+		body.unreachable()
+	end 'neverCalled'
+
+	var paramTypes = WasmValTypeArray.create(WasmReallocParamCount, zeroed: false)
+
+	for _ in 0 upto WasmReallocParamCount 'eachParam'
+		paramTypes.push(WasmValType.i32)
+	end 'eachParam'
+
+	let typeIdx = builder.internFuncType(paramTypes, results: singletonValTypes(WasmValType.i32))
+	let funcIdx = builder.addFunction(typeIdx, localTypes: WasmValTypeArray.create(0), body: body.bytes(), debugName: WasmReallocExportName)
+
+	if funcIdx != wasmReallocFuncIdx(funcNames) 'indexDrift'
+		panic("appendHostReallocRuntime: `{String.from(WasmReallocExportName)}` landed at wasm function index {funcIdx}, but `wasmReallocFuncIdx` derives {wasmReallocFuncIdx(funcNames)} — it is no longer appended directly after `{String.from(StreamWriteName)}`")
+	end 'indexDrift'
+
+	return funcIdx
+end 'appendHostReallocRuntime'
 
 // `mrt_panic`'s locals. Local 0 is its one parameter (identity-local model: a wasm function's params
 // occupy the first local indices), local 1 the scan cursor, the rest the frame walk's.
@@ -964,7 +1038,7 @@ end 'WasmInlinePositions'
 // `entryFunction` is `Project.entryFunctionName` — `main` for every ordinary build, and this lane's only
 // reader of it. It is threaded rather than respelled here for that field's reason: a wasm lane naming its
 // own `main` would be a fourth copy of the entry, free to disagree with the three walks that seed from it.
-function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames FunctionNameIndex, frames WasmFrameStack, checkLeaks bool, initGlobals bool, releasesRegistry bool, entryFunction ByteArray) returns Wasm32Index
+function appendRunEntry(builder WasmModuleBuilder, module StdModule, globalData GlobalDataTable, funcNames FunctionNameIndex, frames WasmFrameStack, stub EntryStubCalls, initGlobals bool, entryFunction ByteArray) returns Wasm32Index
 	let entryName = String.from(entryFunction)
 	let mainFuncIdx = try wasmFuncIdxOf(funcNames, callee: entryFunction) otherwise panic("buildWasmCoreModule: no `{entryName}` function in the module — the wasm `run` entry has nothing to call")
 	let mainReturnValType = mainReturnValueType(module, entryFunction: entryFunction)
@@ -973,12 +1047,21 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames F
 	var runBody = WasmBody.create()
 	emitFramePush(runBody, frames: frames, funcIdx: runFuncIdx, savedDepthLocal: WasmRunSavedDepthLocal)
 
+	// Captured before `__module_init`: a managed top-level global may read the arguments.
+	if stub.capturesArguments 'argumentList'
+		appendHostListCapture(runBody, globalData: globalData, importFuncIdx: GetArgumentsImportFuncIdx, listLabel: CommandLineArgvLabel, countLabel: CommandLineArgcLabel)
+	end 'argumentList'
+
+	if stub.capturesEnvironment 'environmentList'
+		appendHostListCapture(runBody, globalData: globalData, importFuncIdx: GetEnvironmentImportFuncIdx, listLabel: EnvironmentListLabel, countLabel: EnvironmentCountLabel)
+	end 'environmentList'
+
 	appendModuleInitCall(runBody, funcNames: funcNames, initGlobals: initGlobals)
 
 	runBody.call(mainFuncIdx)
 
 	let afterGlobalsVt = appendExitCodePassThroughGate(runBody, exitCodeValType: mainReturnValType, funcNames: funcNames, callee: GlobalCleanupName, installed: initGlobals)
-	let afterCleanupVt = appendExitCodePassThroughGate(runBody, exitCodeValType: afterGlobalsVt, funcNames: funcNames, callee: RegistryReleaseName, installed: releasesRegistry)
+	let afterCleanupVt = appendExitCodePassThroughGate(runBody, exitCodeValType: afterGlobalsVt, funcNames: funcNames, callee: RegistryReleaseName, installed: stub.releasesRegistry)
 
 	// THE LEAK GATE — the sibling of the native backends' entry-stub gate
 	// (BackendDispatch.prependEntryStub). When the MM runtime installed `__mm_leak_check`, main's
@@ -988,7 +1071,7 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames F
 	// ⚠ Through `coerceOnStack` rather than a hand-rolled `i32WrapI64`, because "how does this backend
 	// change a value's width?" is ONE fact, and a hand-rolled spelling is the weaker one: it passes an
 	// f64 through UNTOUCHED where the shared door panics naming the lowering bug.
-	let exitCodeVt = appendLeakGate(runBody, exitCodeValType: afterCleanupVt, funcNames: funcNames, checkLeaks: checkLeaks)
+	let exitCodeVt = appendLeakGate(runBody, exitCodeValType: afterCleanupVt, funcNames: funcNames, checkLeaks: stub.checksLeaks)
 	coerceOnStack(runBody, from: exitCodeVt, to: WasmValType.i32)
 	runBody.call(ExitImportFuncIdx)
 	emitFramePop(runBody, frames: frames, savedDepthLocal: WasmRunSavedDepthLocal)
@@ -1016,6 +1099,22 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames F
 end 'appendRunEntry'
 
 let WasmRunSavedDepthLocal = 0
+
+function appendHostListCapture(runBody WasmBody, globalData GlobalDataTable, importFuncIdx Wasm32Index, listLabel ByteArray, countLabel ByteArray)
+	runBody.i32Const(WasmRetAreaBase)
+	runBody.call(importFuncIdx)
+
+	appendHostWordCapture(runBody, globalData: globalData, label: listLabel, fromOffset: CanonicalPairPointerOffset)
+	appendHostWordCapture(runBody, globalData: globalData, label: countLabel, fromOffset: CanonicalPairLengthOffset)
+end 'appendHostListCapture'
+
+function appendHostWordCapture(runBody WasmBody, globalData GlobalDataTable, label ByteArray, fromOffset ByteOffset)
+	runBody.i32Const(wasmLinearAddress(WasmDataBaseOffset, byteOffset: globalData.dataSectionOffsetOf(String.from(label))))
+	runBody.i32Const(WasmRetAreaBase)
+	runBody.i32Load(fromOffset as Wasm32Index)
+	runBody.i64ExtendI32U()
+	runBody.i64Store(0)
+end 'appendHostWordCapture'
 
 // ⭐ **FILL EVERY EAGER managed global's `.data` SLOT BEFORE `main`** — a `static`
 // member's is filled on first access instead (see `ModuleInit`) — the sibling of the
@@ -2700,7 +2799,7 @@ type WasmFuncEmitter
 			// happened. Refused at the call's own span with E3104 by the `__proc_` prefix, so this is a backstop.
 			osEnterBackgroundPriority then panic("emitBodyOp: `osEnterBackgroundPriority` has no wasm32-wasi lowering — a WASI component has no process and no scheduler priority, so there is nothing here to lower it to")
 			osEnvBlock or
-			osEnvBlockFree then panic("emitBodyOp: the environment-block ops have no wasm32-wasi lowering — their one producer is the attached-subprocess substrate, which a WASI component has no primitive for at all, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			osEnvBlockFree then panic("emitBodyOp: the environment-block ops have no wasm32-wasi lowering — wasm32-wasi answers `EnvironmentSnapshotShape.hostEntryList`, whose `__env_entry` body indexes the list `$run` captured from `get-environment` and never asks for a block, so reaching one is a compiler bug rather than a user-facing rejection")
 
 			// ⚠ REFUSED NOWHERE, unlike every other absent-op arm here: `installTerminalRuntime` reads
 			// `HostFacility.terminalDetection` and gives this lane a `__tty_stdout_wants_color` body that answers

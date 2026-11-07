@@ -36,7 +36,7 @@ public enum ProcessIntrospectionError implements Error
 end 'ProcessIntrospectionError'
 
 // The byte `__Builtins.osEnvironmentEntry`'s one-byte "host could not answer" record holds — a NUL, which no
-// cstring entry contains. `SubprocessRuntime.SubpEnvUnreadableByte` is the producer's half.
+// real entry consists of. `EnvironmentRuntime.EnvironmentUnreadableByte` is the producer's half.
 let EnvironmentUnreadableByte = 0
 
 public typealias BackgroundPriority = int(i64.min to i64.max)
@@ -100,7 +100,8 @@ public type Process
 	///
 	/// The walk reads `__Builtins.osEnvironmentEntry` from index 0 and tells its three answers apart by
 	/// what no real entry can be: an EMPTY answer is past the last entry (every entry carries a name),
-	/// and a lone NUL is the host's failure (every entry is a cstring, so none holds a NUL).
+	/// and a lone NUL is the host's failure (no entry is one: a host cstring holds no NUL, and a WASI
+	/// entry carries its `=`).
 	public static function currentEnvironmentEntries() returns StringArray throws ProcessIntrospectionError
 		var entries = StringArray.create(0)
 		var index = 0 as ElementIndex

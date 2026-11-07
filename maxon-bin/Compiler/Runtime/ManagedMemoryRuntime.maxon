@@ -1684,6 +1684,15 @@ export function emitManagedByteBuffer(module StdModule, block IrBlock, record Va
 	return emitLoadField(module, block: block, record: record, offset: ManagedRecordBufferOffset, ids: ids)
 end 'emitManagedByteBuffer'
 
+// `emitManagedByteBuffer` leaves the length 0, so the reserved, unpublished record IS the empty
+// answer.
+export function emitEmptyManaged(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let record = ids.mint()
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	_ = emitManagedByteBuffer(module, block: block, record: record, byteCount: zero, ids: ids)
+	return record
+end 'emitEmptyManaged'
+
 function emitCreateSizedEmpty(module StdModule, block IrBlock, record ValueId, elementSize ValueId, capacity ValueId, elementDestroy ValueId, ids ValueMinter)
 	let noLength = emitConst(module, block: block, value: 0, ids: ids)
 	module.appendOp(block, op: StdOp.call(record, callee: ManagedCreateSizedName, args: fourArgs(elementSize, second: capacity, third: noLength, fourth: elementDestroy)))

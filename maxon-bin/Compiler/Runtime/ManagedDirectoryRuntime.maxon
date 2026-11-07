@@ -369,15 +369,19 @@ export function emitCStringToManaged(module StdModule, func IrFunction, cur IrBl
 	let i = ids.mint()
 	var build = emitCStringLength(module, func: func, cur: cur, cstr: cstr, length: i, ids: ids)
 
-	let buffer = emitManagedByteBuffer(module, block: build, record: record, byteCount: i, ids: ids)
-	var afterCopy = emitForwardCopy(module, func: func, cur: build, dest: buffer, src: cstr, byteCount: i, ids: ids)
+	return emitBytesToManaged(module, func: func, cur: build, source: cstr, byteCount: i, record: record, ids: ids)
+end 'emitCStringToManaged'
+
+export function emitBytesToManaged(module StdModule, func IrFunction, cur IrBlock, source ValueId, byteCount ValueId, record ValueId, ids ValueMinter) returns IrBlock
+	let buffer = emitManagedByteBuffer(module, block: cur, record: record, byteCount: byteCount, ids: ids)
+	var afterCopy = emitForwardCopy(module, func: func, cur: cur, dest: buffer, src: source, byteCount: byteCount, ids: ids)
 
 	// PUBLISH the bytes. `emitManagedByteBuffer` sets the capacity and leaves the length 0 (that is its contract,
 	// and `__managed_mem_create`'s comment states it); `String.init` reads `length@8`, so an unpublished record would
 	// answer with the empty string.
-	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordLengthOffset, value: i)
+	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordLengthOffset, value: byteCount)
 	return afterCopy
-end 'emitCStringToManaged'
+end 'emitBytesToManaged'
 
 // `__md_open_search(pathRec) -> (box, flag)` — open a Win32 search, or throw `__ManagedDirectoryError`.
 //

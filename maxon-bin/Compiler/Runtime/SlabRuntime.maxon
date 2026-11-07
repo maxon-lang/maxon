@@ -487,11 +487,17 @@ export enum SlabBufferKind
 	subprocessSlotBuffer
 	netpollTable
 	netpollDescriptor
+	hostSnapshot
 end 'SlabBufferKind'
 
 // A buffer whose allocation count follows the schedule or the environment is scaffolding: through a
 // counted door it would reach the allocation counts `scale-test` and `tests/parallelCompile` require
 // to be identical between two compiles of one program.
+//
+// `hostSnapshot` holds the lists the WASI host writes through `cabi_realloc`, which are never
+// freed: through a counted door they would fail the leak gate and move the raw `HeapStats`
+// counters, which `specs/command-line-args.md`'s
+// `reading-the-arguments-leaves-no-raw-allocation-live` pins at 0.
 function slabCountingOf(kind SlabBufferKind) returns SlabCounting
 	return match kind 'kind'
 		managedBox gives SlabCounting.tracked
@@ -507,7 +513,8 @@ function slabCountingOf(kind SlabBufferKind) returns SlabCounting
 		subprocessTable or
 		subprocessSlotBuffer or
 		netpollTable or
-		netpollDescriptor gives SlabCounting.scaffolding
+		netpollDescriptor or
+		hostSnapshot gives SlabCounting.scaffolding
 	end 'kind'
 end 'slabCountingOf'
 
@@ -3566,8 +3573,12 @@ export function emitSlabAlloc(module StdModule, block IrBlock, bytes ValueId, ki
 end 'emitSlabAlloc'
 
 export function emitSlabAllocInto(module StdModule, block IrBlock, result ValueId, bytes ValueId, kind SlabBufferKind)
-	module.appendOp(block, op: StdOp.call(result, callee: SlabDoors.of(slabCountingOf(kind)).alloc, args: argsOf(bytes)))
+	module.appendOp(block, op: StdOp.call(result, callee: slabAllocDoorOf(kind), args: argsOf(bytes)))
 end 'emitSlabAllocInto'
+
+export function slabAllocDoorOf(kind SlabBufferKind) returns ByteArray
+	return SlabDoors.of(slabCountingOf(kind)).alloc
+end 'slabAllocDoorOf'
 
 let SpanOwnerCheckName = "assertSpanOwnerAccessIsOrdered"
 

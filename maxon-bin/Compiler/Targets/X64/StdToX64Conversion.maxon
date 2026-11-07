@@ -3052,10 +3052,11 @@ export type StdToX64Lowering
 	end 'lowerOsEnvRead'
 
 	// `osEnvBlock(result)` ⇒ this process's environment, in whichever shape the target's producer
-	// indexes (`SubprocessRuntime.environmentSnapshotShape`): the NUL-separated block
+	// indexes (`EnvironmentRuntime.environmentSnapshotShape`): the NUL-separated block
 	// `GetEnvironmentStringsW` hands back a copy of, or the pointer vector every POSIX lane already
 	// holds. Unlike `GetCommandLineW`'s, the Windows pointer is owned, so every caller pairs it with
-	// `osEnvBlockFree` (`SubprocessRuntime.buildSubpEnvEntry` frees it on both of its exits).
+	// `osEnvBlockFree` (`EnvironmentRuntime.buildEnvironmentEntryFromBlock` frees it on both of its
+	// exits).
 	//
 	// A static Linux image has no `environ` and no libc to hold one. The kernel hands `envp` to the
 	// entry stub on the stack and nowhere else, so the stub parks its base in `__mrt_envp`
@@ -3089,7 +3090,7 @@ export type StdToX64Lowering
 	function lowerOsEnvBlockFree(blockPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.emitHostCall(dstBlock, callee: HostCallee.import(IatSlot.FreeEnvironmentStringsW), args: argsOf(blockPtrId))
-			syscall then panic("lowerOsEnvBlockFree: `osEnvBlockFree` releases a `GetEnvironmentStringsW` COPY and x64-linux has none — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` there, whose `__gt_subp_env_entry` body indexes the live environment vector and emits no release")
+			syscall then panic("lowerOsEnvBlockFree: `osEnvBlockFree` releases a `GetEnvironmentStringsW` COPY and x64-linux has none — `EnvironmentRuntime.environmentSnapshotShape` answers `pointerVector` there, whose `__env_entry` body indexes the live environment vector and emits no release")
 		end 'route'
 	end 'lowerOsEnvBlockFree'
 

@@ -420,11 +420,11 @@ export enum IatSlot
 	// enumerable. See `StdOp.osEnvBlock`.
 	//
 	// ⚠ **THE SNAPSHOT IS OWNED, WHICH IS WHY THE FREE IS AN IMPORT AND NOT AN OMISSION.**
-	// `GetEnvironmentStringsW` hands back a COPY; a program that spawned children in a loop and
-	// never released it would leak one environment per spawn.
+	// `GetEnvironmentStringsW` hands back a COPY on every `__env_entry` call; never released, a walk
+	// of the environment would leak one copy per entry read.
 	//
 	// ⚠ They join the OPTIONAL TRAILING BAND rather than the always-emitted set, on the same terms as every
-	// band above: their only producer is the attached-subprocess substrate, so a program that spawns nothing
+	// band above: their only producer is `__env_entry`, so a program that never reads its environment
 	// pays neither.
 	GetEnvironmentStringsW = IatSlotMeta{dll: ImportDll.kernel32}
 	FreeEnvironmentStringsW = IatSlotMeta{dll: ImportDll.kernel32}
@@ -1996,8 +1996,9 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// ⚠ `usesGt` is a producer in its own right: the scheduler's per-P init reads `MAXON_MAX_PROCS` through
 	// `GetEnvironmentVariableW` and the machine's processor count through `GetActiveProcessorCount`, and its
 	// TLS pair lives in this band too. It also answers for a spawning image, whose child-process bodies are
-	// installed only with the scheduler.
-	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesProcessLiveness or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling or codeResult.stdModule.usesProcessDebug or codeResult.stdModule.usesProcessNamespace
+	// installed only with the scheduler. `usesEnvironment` answers for an image that reads its
+	// environment without a scheduler, whose `__env_entry` calls the whole-environment pair.
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesProcessLiveness or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling or codeResult.stdModule.usesProcessDebug or codeResult.stdModule.usesProcessNamespace or codeResult.stdModule.usesEnvironment
 
 	// ⭐ **THE SAMPLER IS ntdll's ONLY PRODUCER**, and it feeds BOTH gates: the suspend/context/read/resume
 	// family, the timer pair and the module walk ride the optional kernel32 band above, while

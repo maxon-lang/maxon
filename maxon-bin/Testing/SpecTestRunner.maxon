@@ -232,11 +232,12 @@ let WasmtimeRunSubcommand = "run"
 
 // `-S cli-exit-with-code=y` enables the gated `cli-exit-with-code` proposal so the component's
 // `wasi:cli/exit#exit-with-code` import resolves — the WIT marks it `@unstable(cli-exit-with-code)`,
-// and without the flag wasmtime rejects the module. The scalar slice needs no other `-S` setting
-// (no file or socket I/O). All `-S` flags MUST precede the module path; anything after it is
-// forwarded as guest argv.
+// and without the flag wasmtime rejects the module. `-S inherit-env=y` hands the guest the host's
+// environment, as a native case's process inherits it. All `-S` flags MUST precede the module path;
+// anything after it is forwarded as guest argv.
 let WasmtimeSettingFlag = "-S"
 let WasmtimeExitWithCodeSetting = "cli-exit-with-code=y"
+let WasmtimeInheritEnvSetting = "inherit-env=y"
 
 // --- OrbStack: the Linux runner on a macOS host ---
 //
@@ -1032,11 +1033,6 @@ function noteFailedBatched(failed TestRunIndexArray, reasons BatchedFailureMap, 
 
 	let observation = observationAt(observations, index: at)
 
-	if isUnisolatedBatchMember(observation) 'diedWithTheProgram'
-		failed.push(at)
-		return
-	end 'diedWithTheProgram'
-
 	match finishPendingRun(pending, observation: observation, effectiveTarget: effectiveTarget).outcome 'outcome'
 		fail(reason) then noteBatchedFailure(failed, reasons: reasons, at: at, reason: reason)
 		pass or
@@ -1075,9 +1071,7 @@ function batchedShare(prepared PreparedTestArray, programCount ElementIndex) ret
 end 'batchedShare'
 
 // A batched FAIL is compiled alone only to diagnose it, never to recover it: a solo PASS becomes a FAIL
-// naming the batching gap (`batchingGapVerdict`), and a solo FAIL is the case's verdict. The exception is
-// a member the program's death left unreadable on a target that cannot run one case again
-// (`isUnisolatedBatchMember`): it is no gap, so its solo verdict stands whichever way it falls.
+// naming the batching gap (`batchingGapVerdict`), and a solo FAIL is the case's verdict.
 function withBatchedFailuresDiagnosed(performed RunsPerformed, prepared PreparedTestArray, programCount ElementIndex, tests SpecTestArray, actions IrActionArray, specName String, specDirName String, tempDir FilePath, exeExtension String, runWorkingDir FilePath, effectiveTarget Target, fileMemos SharedFileMemoMap) returns RunsPerformed
 	var failed = TestRunIndexArray.create(0)
 	var reasons = BatchedFailureMap.create()
@@ -3703,14 +3697,15 @@ function findMonitorPath() returns FilePath
 	return try Process.executablePath() otherwise panic("SpecTestRunner: the host could not name this process's own executable, and a capture case is RUN under `<this compiler> {MonitorSubcommand} {MonitorMmFilterArg}` — there is no other binary that is guaranteed to be the one under test")
 end 'findMonitorPath'
 
-// `wasmtime run -S cli-exit-with-code=y <module.wasm>` — the exact command the wasm component
-// skeleton was proven under. No guest argv, no `--dir`/socket preopens:
-// the scalar slice does no I/O, and one `-S` setting is all the scalar surface needs.
+// `wasmtime run -S cli-exit-with-code=y -S inherit-env=y <module.wasm>`. No `--dir`/socket
+// preopens: the wasm lane has no file or socket surface.
 function buildWasmRunCommand(modulePath FilePath) returns RunCommand
-	var argv = StringArray.create(4, zeroed: false)
+	var argv = StringArray.create(6, zeroed: false)
 	argv.push(WasmtimeRunSubcommand)
 	argv.push(WasmtimeSettingFlag)
 	argv.push(WasmtimeExitWithCodeSetting)
+	argv.push(WasmtimeSettingFlag)
+	argv.push(WasmtimeInheritEnvSetting)
 
 	// The module path MUST come after every `-S`: anything after it is forwarded to the guest as argv.
 	argv.push(modulePath.toString())
@@ -4200,10 +4195,10 @@ function batchedPerformed(program BatchProgram, ordinal ElementIndex, prepared P
 	end 'neverRan'
 
 	let readings = match batchObservation 'observed'
-		completed(capture) gives readBatch(capture, caseCount: program.members.count(), selects: program.selects)
+		completed(capture) gives readBatch(capture, caseCount: program.members.count())
 		failed or
 		notRequired or
-		notRunnableHere gives unreadBatch(program.members.count(), selects: program.selects)
+		notRunnableHere gives unreadBatch(program.members.count())
 	end 'observed'
 
 	var rerunCases = TestRunIndexArray.create(0)

@@ -1792,7 +1792,7 @@ func @main {
     arm64.movImm x23, 0
   eachEntry:
     arm64.movRegReg x0, x23
-    arm64.bl __gt_subp_env_entry
+    arm64.bl __env_entry
     arm64.movRegReg x24, x0
     arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
     arm64.cmp x0, 0
@@ -3354,7 +3354,7 @@ func @main {
     arm64.epilogue 688 record@48
     arm64.retIndirect
   tryerr#327:
-    arm64.leaRdata x0, __str_blob_158  ; "panic at Process.maxon:116: Process.currentEnvironmentEntries: byteAt(0) of a one-byte answer\x0a"
+    arm64.leaRdata x0, __str_blob_158  ; "panic at Process.maxon:117: Process.currentEnvironmentEntries: byteAt(0) of a one-byte answer\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot68
@@ -3390,7 +3390,7 @@ func @main {
     arm64.epilogue 688 record@48
     arm64.retIndirect
   tryerr#374:
-    arm64.leaRdata x0, __str_rec_159  ; "panic at Process.maxon:180: "
+    arm64.leaRdata x0, __str_rec_159  ; "panic at Process.maxon:181: "
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
     arm64.leaRdata x0, __str_rec_160  ; "envEntrySeparatorAt: i < n = bytes.count() but get("
@@ -3608,7 +3608,7 @@ func @main {
     arm64.epilogue 688 record@48
     arm64.retIndirect
   tryerr#386:
-    arm64.leaRdata x0, __str_rec_162  ; "panic at Process.maxon:194: "
+    arm64.leaRdata x0, __str_rec_162  ; "panic at Process.maxon:195: "
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
     arm64.leaRdata x0, __str_rec_163  ; "envEntryBytes: i < to <= bytes.count() but get("
@@ -5606,7 +5606,7 @@ func @main {
     arm64.movImm x23, 0
   eachEntry:
     arm64.movRegReg x0, x23
-    arm64.bl __gt_subp_env_entry
+    arm64.bl __env_entry
     arm64.movRegReg x24, x0
     arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
     arm64.cmp x0, 0
@@ -7168,7 +7168,7 @@ func @main {
     arm64.epilogue 688 record@48
     arm64.retIndirect
   tryerr#327:
-    arm64.leaRdata x0, __str_blob_158  ; "panic at Process.maxon:116: Process.currentEnvironmentEntries: byteAt(0) of a one-byte answer\x0a"
+    arm64.leaRdata x0, __str_blob_158  ; "panic at Process.maxon:117: Process.currentEnvironmentEntries: byteAt(0) of a one-byte answer\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot68
@@ -7204,7 +7204,7 @@ func @main {
     arm64.epilogue 688 record@48
     arm64.retIndirect
   tryerr#374:
-    arm64.leaRdata x0, __str_rec_159  ; "panic at Process.maxon:180: "
+    arm64.leaRdata x0, __str_rec_159  ; "panic at Process.maxon:181: "
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
     arm64.leaRdata x0, __str_rec_160  ; "envEntrySeparatorAt: i < n = bytes.count() but get("
@@ -7422,7 +7422,7 @@ func @main {
     arm64.epilogue 688 record@48
     arm64.retIndirect
   tryerr#386:
-    arm64.leaRdata x0, __str_rec_162  ; "panic at Process.maxon:194: "
+    arm64.leaRdata x0, __str_rec_162  ; "panic at Process.maxon:195: "
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
     arm64.leaRdata x0, __str_rec_163  ; "envEntryBytes: i < to <= bytes.count() but get("

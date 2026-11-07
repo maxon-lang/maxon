@@ -2965,10 +2965,10 @@ export union StdOp
 	// `osEnvBlockFree(blockPtr)` = `FreeEnvironmentStringsW(blockPtr)` — the release a COPY owes, emitted only
 	// by the shape that takes one.
 	//
-	// ⚠ **THE OP IS THE QUESTION, NOT THE ANSWER'S LAYOUT**, and `SubprocessRuntime.EnvironmentSnapshotShape`
-	// is where the layout is decided — once, in the one producer, so no consumer has to ask what target it is
-	// running on. That separation is what makes a single op pair honest across two genuinely different data
-	// structures.
+	// ⚠ **THE OP IS THE QUESTION, NOT THE ANSWER'S LAYOUT**, and
+	// `EnvironmentRuntime.EnvironmentSnapshotShape` is where the layout is decided — once, in the one
+	// producer, so no consumer has to ask what target it is running on. That separation is what makes
+	// a single op pair honest across two genuinely different data structures.
 	//
 	// ⭐⭐ **`osEnvRead` CANNOT BE ASKED THIS QUESTION, WHICH IS WHY THERE IS A SECOND ENVIRONMENT OP.** It
 	// answers ONE NAME the caller already knows. Building a child's environment means walking the names the
@@ -2979,12 +2979,11 @@ export union StdOp
 	// the caller must release, so a single "read the environment" op would either leak one block per spawn or
 	// have to hide the free inside a lowering that cannot know when the walk is finished.
 	//
-	// ⭐ **GATED ON `HostFacility.subprocess`, WHICH IS NOT THE SAME SET AS "x64-windows".** The sole caller
-	// is `SubprocessRuntime.buildSubpEnvEntry`, whose entry point is under the `__gt_subp_` prefix
-	// `SemanticCheck.calleeHostFacility` maps to that facility; `targetProvidesFacility` answers `true` for
-	// x64-windows AND arm64-macOS, so BOTH lower `osEnvBlock` and only the first ever sees `osEnvBlockFree`.
-	// A backend the facility denies never sees either, which is why wasm stubs neither — a stub would answer
-	// "this process has no environment", and a child built from that answer would start with an EMPTY one.
+	// ⭐ **ONLY THE BLOCK AND VECTOR SHAPES EMIT THEM.** The producers are `EnvironmentRuntime`'s
+	// `nulSeparatedBlock` and `pointerVector` bodies of `__env_entry`, so every native lane lowers
+	// `osEnvBlock` and only x64-windows ever sees `osEnvBlockFree`. wasm32-wasi's `hostEntryList`
+	// body indexes the list `$run` captured and emits neither, so the wasm arms panic rather than stub
+	// one: a stub would answer "this process has no environment".
 	// Full call-barrier metadata: both ARE indirect calls once lowered.
 	osEnvBlock(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
 	osEnvBlockFree(blockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}

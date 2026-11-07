@@ -1118,11 +1118,8 @@ export type StdToArm64Lowering
 			osFileOpenWriteExecutable(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, darwinFlags: DarwinOpenCreateTruncateFlags, linuxFlags: LinuxOpenCreateTruncateFlags, mode: PosixCreateExecutableFileMode as MachineWord, dstRef: dstRef)
 			osFileOpenCreateNew(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, darwinFlags: DarwinOpenCreateExclusiveFlags, linuxFlags: LinuxOpenCreateExclusiveFlags, mode: PosixCreateFileMode as MachineWord, dstRef: dstRef)
 
-			// ⭐ **`osEnvBlock` IS SERVED HERE, BECAUSE THE ATTACHED-SUBPROCESS SUBSTRATE IS NOT REFUSED ON
-			// THIS LANE.** The facility table says `subprocess gives true` for arm64-macOS, so `buildSubpEnvEntry`
-			// is built and nothing drops it — and a refusal here would reach every program that so much as names
-			// `runConfiguration`, including one with the DEFAULT `Environment.inherit`, which reads no
-			// environment at all.
+			// `osEnvBlock` is served here: both arm64 lanes provide `HostFacility.environment`, and their
+			// `pointerVector` body of `__env_entry` asks for the vector.
 			osEnvBlock(resultId) then self.lowerOsEnvBlock(resultId, dstRef: dstRef)
 
 			// `GetFileType` goes through a chunk on both lanes, and the two bodies are different calls:
@@ -1133,7 +1130,7 @@ export type StdToArm64Lowering
 			osHandleFileType(resultId, handleId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostHandleFileTypeName), args: argsOf(handleId), dstRef: dstRef)
 			osProcessProbe(resultId, pidId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostProcProbeName), args: argsOf(pidId), dstRef: dstRef)
 			osProcessExitSignal(resultId, handleId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostProcExitSignalName), args: argsOf(handleId), dstRef: dstRef)
-			osEnvBlockFree then panic("StdToArm64Lowering: `osEnvBlockFree` releases a `GetEnvironmentStringsW` COPY and neither POSIX lane has one — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` for both, whose `__gt_subp_env_entry` body indexes the live environment vector and emits no release. Reaching here means a producer emitted one anyway, which is a compiler bug rather than a user-facing rejection")
+			osEnvBlockFree then panic("StdToArm64Lowering: `osEnvBlockFree` releases a `GetEnvironmentStringsW` COPY and neither POSIX lane has one — `EnvironmentRuntime.environmentSnapshotShape` answers `pointerVector` for both, whose `__env_entry` body indexes the live environment vector and emits no release. Reaching here means a producer emitted one anyway, which is a compiler bug rather than a user-facing rejection")
 		end 'lower'
 
 		if bracketed 'readTheVerdict'
@@ -2962,8 +2959,8 @@ export type StdToArm64Lowering
 	end 'lowerOsCloseHandle'
 
 	// ⭐⭐ `osEnvBlock(result)` ⇒ this process's `environ`, the POSIX shape of the question
-	// `GetEnvironmentStringsW` answers on Windows. `SubprocessRuntime.environmentSnapshotShape` is what tells
-	// the producer which of the two it is indexing, so nothing below the Std tier has to know.
+	// `GetEnvironmentStringsW` answers on Windows. `EnvironmentRuntime.environmentSnapshotShape` is
+	// what tells the producer which shape it is indexing, so nothing below the Std tier has to know.
 	//
 	// ⛔⛔ **BOTH LANES REACH THE VECTOR THROUGH A WORD THAT HOLDS IT, AND THE DEREFERENCE IS THEREFORE
 	// WRITTEN ONCE.** What differs is only how the ADDRESS OF that word is obtained. Darwin calls
