@@ -95,8 +95,7 @@ end 'cacheWriteServiceSpawnCandidateArray'
 
 module function cacheReadServiceSpawnCandidateArray(reader LibraryCacheReader) returns ServiceSpawnCandidateArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ServiceSpawnCandidateArray.create(0)
-	result.reserve(count)
+	var result = ServiceSpawnCandidateArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try ServiceSpawnCandidate.cacheRead(reader)
@@ -222,8 +221,7 @@ end 'cacheWriteDefaultDeclarationArray'
 
 module function cacheReadDefaultDeclarationArray(reader LibraryCacheReader) returns DefaultDeclarationArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DefaultDeclarationArray.create(0)
-	result.reserve(count)
+	var result = DefaultDeclarationArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try DefaultDeclaration.cacheRead(reader)
@@ -1783,7 +1781,7 @@ end 'serviceRequestStagingBytes'
 // and credits the `spawn` with this list instead.
 module function serviceBehaviourHandlerCallees(signatures ProgramSignatures, typeName ByteArray) returns NameRoster
 	let request = requireServiceRequestLayout(signatures, typeName: typeName)
-	var callees = NameRoster.create(0)
+	var callees = NameRoster.create(request.caseCount(), zeroed: false)
 
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
 		callees.push(qualifiedMethodName(typeName, methodName: request.caseNameAt(caseIndex)))
@@ -1949,7 +1947,7 @@ end 'buildInterfaceSendErrors'
 
 function buildSendErrorsOf(signatures ProgramSignatures, ownerName ByteArray, visibility Visibility, declFilePath FilePath, into TypeNameInterner) returns EnumLayoutArray
 	view request = requireServiceRequestLayout(signatures, typeName: ownerName)
-	var errors = EnumLayoutArray.create(0)
+	var errors = EnumLayoutArray.create(request.caseCount(), zeroed: false)
 
 	for caseIndex in 0 upto request.caseCount() 'eachMessage'
 		let name = serviceSendErrorCompanionName(qualifiedMethodName(ownerName, methodName: request.caseNameAt(caseIndex)))
@@ -1961,7 +1959,7 @@ function buildSendErrorsOf(signatures ProgramSignatures, ownerName ByteArray, vi
 end 'buildSendErrorsOf'
 
 function adoptedPayloads(signatures ProgramSignatures, payloads PayloadFieldArray, into TypeNameInterner) returns PayloadFieldArray
-	var adopted = PayloadFieldArray.create(0)
+	var adopted = PayloadFieldArray.create(payloads.count(), zeroed: false)
 
 	for field in payloads 'eachField'
 		adopted.push(PayloadField.create(field.name, declaredType: signatures.adoptType(field.declaredType, into: into), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand, isLet: field.isLet, typeSite: field.typeSite))
@@ -2115,7 +2113,7 @@ module function interfaceMessageRepresentative(signatures ProgramSignatures, int
 end 'interfaceMessageRepresentative'
 
 function copiedPayloads(payloads PayloadFieldArray) returns PayloadFieldArray
-	var copy = PayloadFieldArray.create(0)
+	var copy = PayloadFieldArray.create(payloads.count(), zeroed: false)
 
 	for field in payloads 'eachField'
 		copy.push(field)

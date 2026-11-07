@@ -85,14 +85,14 @@ export function installServiceBehaviours(module MaxonModule, project Project, si
 end 'installServiceBehaviours'
 
 function servicesInDeclarationOrder(discovered NameRoster, signatures ProgramSignatures, fileRanks FileEmissionRankMap) returns NameRoster
-	var positions = DeclarationPositionArray.create(0)
+	var positions = DeclarationPositionArray.create(discovered.count(), zeroed: false)
 
 	for typeName in discovered 'eachService'
 		view layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 		positions.push(DeclarationPosition.of(fileRanks, path: layout.declFilePath, line: layout.declLine, column: layout.declColumn, kind: "the service type", name: typeName))
 	end 'eachService'
 
-	var ordered = NameRoster.create(0)
+	var ordered = NameRoster.create(discovered.count(), zeroed: false)
 
 	for slot in declarationsInPositionOrder(positions) 'eachInDeclarationOrder'
 		ordered.push(try discovered.get(slot) otherwise panic("servicesInDeclarationOrder: discovered.get OOB at {slot}"))
@@ -117,8 +117,8 @@ function buildServiceBehaviours(module MaxonModule, project Project, signatures 
 	// built from the discovery walk's raw token candidates, so a type can be on it with not one
 	// `serviceSpawn` op behind it. There is nothing to build behaviours for and nothing that could call
 	// one.
-	var mangledInstances = NameRoster.create(0)
-	var instanceOrder = DeclarationOrder.create(0)
+	var mangledInstances = NameRoster.create(instances.count(), zeroed: false)
+	var instanceOrder = DeclarationOrder.create(instances.count(), zeroed: false)
 
 	for gid in instances 'eachMangled'
 		instanceOrder.push(mangledInstances.count())
@@ -151,7 +151,7 @@ typealias SpawnedInstanceSet = Set with GenericInstanceId
 // by hand (`serviceTypeRoster`'s own bound) — unlike the INSTANTIATIONS, which grow with the program and are
 // therefore deduped through a set rather than a scan.
 function spawnedInstancesByService(module MaxonModule, services NameRoster) returns SpawnedInstanceBuckets
-	var buckets = SpawnedInstanceBuckets.create(0)
+	var buckets = SpawnedInstanceBuckets.create(services.count(), zeroed: false)
 
 	for _ in services 'eachService'
 		buckets.push(GenericInstanceIdArray.create(0))
@@ -285,7 +285,7 @@ function buildServiceBehave(module MaxonModule, project Project, signatures Prog
 	// case count), so the table's index IS the case index.
 	view unknownTag = buildUnknownTagBlock(fn, site: site)
 
-	var armIds = BlockIdArray.create(0)
+	var armIds = BlockIdArray.create(request.caseCount(), zeroed: false)
 
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
 		armIds.push(buildMessageArm(fn, signatures: signatures, funcNames: funcNames, callee: qualifiedMethodName(typeName, methodName: request.caseNameAt(caseIndex)), instance: instance, request: request, caseIndex: caseIndex, state: state, site: site))
@@ -341,8 +341,8 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	// does not have.
 	var args = ValueIdArray.create(0)
 	args.push(state)
-	var payloadClasses = LoadedPayloadClassArray.create(0)
-	var payloadTypes = MaxonTypeArray.create(0)
+	var payloadClasses = LoadedPayloadClassArray.create(decl.paramTypes.count(), zeroed: false)
+	var payloadTypes = MaxonTypeArray.create(decl.paramTypes.count(), zeroed: false)
 
 	for param in 0 upto decl.paramTypes.count() 'eachParam'
 		let slot = serviceParamPayloadSlot(payloads, paramIndex: param as ParamCount)
@@ -653,7 +653,7 @@ end 'publishReplyValue'
 // reach is walked once, and `__mm_walk_settle` then aborts on an owner the graph does not hold and frees the table.
 // `walked` is the reply, preceded by its witness half when the walk reads one.
 function emitReplyGraphWalk(fn SynthesizedFunction, walk ByteArray, walked ValueIdArray, site SynthesizedSite)
-	var args = ValueIdArray.create(0)
+	var args = ValueIdArray.create(walked.count() + 1, zeroed: false)
 
 	for value in walked 'eachWalked'
 		args.push(value)

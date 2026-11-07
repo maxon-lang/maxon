@@ -1222,8 +1222,7 @@ end 'appendThunkPass'
 // the two disagreed on order, every DLL would be loaded under its neighbour's name. Emission order is the
 // enum's declaration order, once, in every loop here.
 function buildImportSection(idataRva Rva, gates ImportGates) returns ImportSection
-	var data = ByteArray.create(0)
-	data.reserve(256)
+	var data = ByteArray.create(256, zeroed: false)
 
 	let thunkBytes = thunkTableBytes(gates)
 	let iatOffset = 0
@@ -1562,7 +1561,7 @@ let PeVersionComponentCount = 4
 let PeVersionComponentMax = 65535 as VersionComponent
 
 export function peVersionFieldLayout() returns VersionFieldLayout
-	var limits = VersionComponentArray.create(0)
+	var limits = VersionComponentArray.create(PeVersionComponentCount, zeroed: false)
 
 	for _ in 0 upto PeVersionComponentCount 'eachComponent'
 		limits.push(PeVersionComponentMax)
@@ -1916,8 +1915,7 @@ end 'buildRsrcSection'
 // --- Main PE writer ---
 
 export function writePe(outputPath FilePath, codeResult CodeResult, target Target, productVersion VersionComponentArray) returns ImagePlacement
-	var pe = ByteArray.create(0)
-	pe.reserve(4096)
+	var pe = ByteArray.create(4096, zeroed: false)
 
 	var code = codeResult.code
 	let codeSize = code.count()

@@ -333,8 +333,7 @@ end 'cacheWriteByteBlobArray'
 
 export function cacheReadByteBlobArray(reader LibraryCacheReader) returns ByteBlobArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ByteBlobArray.create(0)
-	result.reserve(count)
+	var result = ByteBlobArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try reader.bytes()
@@ -705,8 +704,7 @@ export type GlobalDataTable
 	export function registerJumpTable(slotCount ElementIndex) returns String
 		let label = "{JumpTableLabelPrefix}{self.nextStringId}"
 		self.nextStringId = self.nextStringId + 1
-		var bytes = ByteArray.create(0)
-		bytes.growFilled(slotCount * JumpTableSlotBytes, value: 0)
+		var bytes = ByteArray.create(slotCount * JumpTableSlotBytes)
 		self.appendRdataPayload(label, bytes: bytes, kind: RdataPayloadKind.jumpTable, labelAt: 0)
 		return label
 	end 'registerJumpTable'
@@ -862,7 +860,7 @@ export type GlobalDataTable
 	end 'dropFunctionRecordRelocsExcept'
 
 	export function functionNamesInRdata() returns NameRoster
-		var roster = NameRoster.create(0)
+		var roster = NameRoster.create(self.pendingRdataRelocs.count(), zeroed: false)
 
 		for reloc in self.pendingRdataRelocs 'eachSlot'
 			roster.push(reloc.funcName)
@@ -1202,7 +1200,7 @@ function retainReachedSlots(roster DataSectionEntryArray, referenced ReferencedG
 end 'retainReachedSlots'
 
 function rosterSegment(roster DataSectionEntryArray, from ElementIndex, upto ElementIndex) returns DataSectionEntryArray
-	var segment = DataSectionEntryArray.create(0)
+	var segment = DataSectionEntryArray.create(upto - from, zeroed: false)
 
 	for index in from upto upto 'eachEntry'
 		segment.push(try roster.get(index) otherwise panic("rosterSegment: entry {index} is not below the roster's {roster.count()}"))
@@ -1272,7 +1270,7 @@ function paddedTo(bytes ByteArray, alignment BytePos) returns ByteArray
 		return bytes
 	end 'alreadyAligned'
 
-	var padded = ByteArray.create(0)
+	var padded = ByteArray.create(storedCount, zeroed: false)
 	padded.append(bytes)
 	padded.growFilled(storedCount, value: PadByte)
 	return padded
@@ -1288,7 +1286,7 @@ end 'paddedTo'
 // one fact written twice — with the two free to disagree about what `3.14` is.
 
 export function scalarImage(value FullRangeInt, byteCount BytePos) returns ByteArray
-	var bytes = ByteArray.create(0)
+	var bytes = ByteArray.create(byteCount as ElementIndex, zeroed: false)
 	appendLittleEndianScalar(bytes, value: value, byteCount: byteCount)
 	return bytes
 end 'scalarImage'

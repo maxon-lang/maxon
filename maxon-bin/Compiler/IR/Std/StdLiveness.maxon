@@ -29,13 +29,13 @@ module interface LiveRangeVisitor
 end 'LiveRangeVisitor'
 
 type PeakCounter implements LiveRangeVisitor
-	var heldParams as BoolArray
+	var heldParams as FixedBoolArray
 	var queried as BoolArray
 	var counts as RegCountColumn
 	let cap as RegCount
 	var peak as RegCount
 
-	static function create(heldParams BoolArray, queried BoolArray, counts RegCountColumn, cap RegCount) returns PeakCounter
+	static function create(heldParams FixedBoolArray, queried BoolArray, counts RegCountColumn, cap RegCount) returns PeakCounter
 		return Self{heldParams: heldParams, queried: queried, counts: counts, cap: cap, peak: 0}
 	end 'create'
 
@@ -140,7 +140,7 @@ module type StdLiveness
 
 	// Answers min(peak, `cap + 1`). A caller compares only its sum against a budget, and every
 	// peak past `cap` fails it alike, so the walk stops at the first count past `cap`.
-	module function peakLiveIn(module StdModule, func IrFunction, valueBound ValueId, heldParams BoolArray, cap RegCount) returns RegCount
+	module function peakLiveIn(module StdModule, func IrFunction, valueBound ValueId, heldParams FixedBoolArray, cap RegCount) returns RegCount
 		self.recomputeBlocks(module, func: func, valueBound: valueBound)
 		let loops = NaturalLoops.find(self.succ, nodeCount: self.blockCount as CsrIndex)
 		let loopless = loops.headers.count() == 0
@@ -203,8 +203,8 @@ module type StdLiveness
 			return cuts
 		end 'ranksAreUnknown'
 
-		var rankColumn = CsrColumn.create(0)
-		var cutColumn = CsrColumn.create(0)
+		var rankColumn = CsrColumn.create(cutCount, zeroed: false)
+		var cutColumn = CsrColumn.create(cutCount, zeroed: false)
 
 		for cut in 0 upto cutCount 'eachCutRank'
 			rankColumn.push(self.reach.rankOfNode(self.blockCount + cut))
@@ -234,15 +234,14 @@ module type StdLiveness
 	end 'nodeAt'
 
 	function segmentedSuccessors(cutBlock BlockPositionColumn) returns CsrGraph
-		var tail = BlockPositionColumn.create(0)
-		tail.resize(self.blockCount)
+		var tail = IndexColumn.create(self.blockCount)
 
 		for block in 0 upto self.blockCount 'eachBlock'
 			try tail.set(block, value: block) otherwise panic("StdLiveness.segmentedSuccessors: tail.set OOB at {block}")
 		end 'eachBlock'
 
-		var edgeFrom = CsrColumn.create(0)
-		var edgeTo = CsrColumn.create(0)
+		var edgeFrom = CsrColumn.create(cutBlock.count() + self.blockSucc.list.count(), zeroed: false)
+		var edgeTo = CsrColumn.create(cutBlock.count() + self.blockSucc.list.count(), zeroed: false)
 
 		for cut in 0 upto cutBlock.count() 'eachCut'
 			let block = try cutBlock.get(cut) otherwise panic("StdLiveness.segmentedSuccessors: cutBlock.get OOB at {cut}")
@@ -412,8 +411,8 @@ end 'StdLiveness'
 
 // The predecessor relation of `succ`: the same edges, read the other way round.
 module function reversedGraph(succ CsrGraph) returns CsrGraph
-	var edgeFrom = CsrColumn.create(0)
-	var edgeTo = CsrColumn.create(0)
+	var edgeFrom = CsrColumn.create(succ.list.count(), zeroed: false)
+	var edgeTo = CsrColumn.create(succ.list.count(), zeroed: false)
 
 	for node in 0 upto succ.nodeCount() 'eachNode'
 		for k in 0 upto succ.degree(node) 'eachSuccessor'

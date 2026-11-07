@@ -32,8 +32,7 @@ export type WasmFlowPlan
 
 		let tree = StdDominatorTree.build(module, func: func)
 		let order = tree.reverseOrder
-		var rpoIndex = BlockPositionColumn.create(0)
-		rpoIndex.growFilled(blockCount, value: 0 as ElementIndex)
+		var rpoIndex = BlockPositionColumn.create(blockCount)
 
 		for orderIndex in 0 upto order.count() 'rank'
 			let position = try order.get(orderIndex) otherwise panic("WasmFlowPlan.build: order.get OOB at {orderIndex}")
@@ -41,10 +40,8 @@ export type WasmFlowPlan
 		end 'rank'
 
 		let stamps = DominatorStamps.build(tree)
-		var forwardInEdges = BlockPositionColumn.create(0)
-		forwardInEdges.growFilled(blockCount, value: 0 as ElementIndex)
-		var loopHeader = BoolArray.create(0)
-		loopHeader.growFilled(blockCount, value: false)
+		var forwardInEdges = IndexColumn.create(blockCount)
+		var loopHeader = BoolArray.create(blockCount)
 		var reducible = true
 
 		for tail in order 'eachReachable'
@@ -69,9 +66,8 @@ export type WasmFlowPlan
 			end 'eachSuccessor'
 		end 'eachReachable'
 
-		var labelled = BoolArray.create(0)
-		labelled.growFilled(blockCount, value: false)
-		var subtreeSize = BlockPositionColumn.create(0)
+		var labelled = BoolArray.create(blockCount)
+		var subtreeSize = BlockPositionColumn.create(blockCount, zeroed: false)
 		subtreeSize.growFilled(blockCount, value: 1 as ElementIndex)
 
 		for position in order 'eachMerge'
@@ -175,6 +171,7 @@ export type WasmFlowState
 	var level as Wasm32Index
 	var blockLevel as Wasm32IndexArray
 	var loopLevel as Wasm32IndexArray
+
 	// An explicit task stack: emitting by host recursion would overflow on a long block chain.
 	var taskKinds as WasmFlowTaskArray
 	var taskFroms as BlockPositionColumn

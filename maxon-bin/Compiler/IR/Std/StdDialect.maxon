@@ -6011,7 +6011,7 @@ export function compressValueSubstitutions(subst ValueIdArray)
 end 'compressValueSubstitutions'
 
 module function remappedArgs(args ValueIdArray, subst ValueIdArray) returns ValueIdArray
-	var out = ValueIdArray.create(0)
+	var out = ValueIdArray.create(args.count(), zeroed: false)
 
 	for a in args 'each'
 		out.push(remappedValue(a, subst: subst))
@@ -6350,7 +6350,7 @@ end 'clonedBlock'
 // A dense `switch` table's whole target list, mapped. A jump table names MANY blocks and one default,
 // so a clone that reached only the default would leave every case arm branching into the callee.
 function clonedBlocks(ids BlockIdArray, subst BlockIdArray) returns BlockIdArray
-	var out = BlockIdArray.create(0)
+	var out = BlockIdArray.create(ids.count(), zeroed: false)
 
 	for id in ids 'each'
 		out.push(clonedBlock(id, subst: subst))
@@ -6416,7 +6416,7 @@ module function substituteEdgeArgsInBlock(block IrBlock, subst ValueIdArray)
 	end 'edgesUnchanged'
 
 	var rewritten = block
-	var newEdges = BranchEdgeArray.create(0)
+	var newEdges = BranchEdgeArray.create(rewritten.branchEdges.count(), zeroed: false)
 
 	for edge in rewritten.branchEdges 'eachEdge'
 		newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: remappedArgs(edge.argIds, subst: subst)))
@@ -6785,8 +6785,7 @@ export typealias PredecessorCounts = Array with ElementIndex
 // Counts the edges terminators draw into each block id; the function entry's own entry is not an edge
 // and is not counted.
 export function stdPredecessorCounts(module StdModule, func IrFunction) returns PredecessorCounts
-	var counts = PredecessorCounts.create(0)
-	counts.growFilled(func.nextBlockId as ElementIndex, value: 0)
+	var counts = PredecessorCounts.create(func.nextBlockId as ElementIndex)
 	var successors = BlockIdArray.create(0)
 
 	for blockRef in func.blockRefs 'eachBlock'

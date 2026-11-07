@@ -222,18 +222,16 @@ type ArgProvenance
 	// claim about every other route rather than an omission: an interpolation, a `__str_clone`, a `var`
 	// String's promotion at its declaration and a `returns String` hand-off all ALLOCATE, and everything
 	// else is a borrow of something that did.
-	var isImmortal as BoolArray
+	var isImmortal as FixedBoolArray
 
 	// A merge phi of BYTE-RECORD type — the value whose provenance is not a compile-time fact at all,
 	// because its edges may disagree. The TAG is part of the test: a merge of two `int`s owns no record and
 	// a merge of two arrays cannot be immortal (every array record is `__mm_alloc`'d), so neither needs a
 	// writable record and neither may be handed to `__str_retain`, which reads a String record's fields.
-	var isMergedByteRecord as BoolArray
+	var isMergedByteRecord as FixedBoolArray
 
 	static function of(module MaxonModule, func IrFunction) returns ArgProvenance
-		var provenance = Self{isImmortal: BoolArray.create(0), isMergedByteRecord: BoolArray.create(0)}
-		provenance.isImmortal.resize(func.valueTags.count())
-		provenance.isMergedByteRecord.resize(func.valueTags.count())
+		var provenance = Self{isImmortal: FixedBoolArray.create(func.valueTags.count()), isMergedByteRecord: FixedBoolArray.create(func.valueTags.count())}
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("ArgProvenance.of: blockRef from func.blockRefs not in module.blocks")
@@ -443,7 +441,7 @@ function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, 
 		return false
 	end 'nothingToPromote'
 
-	var promotedArgs = ValueIdArray.create(0)
+	var promotedArgs = ValueIdArray.create(args.count(), zeroed: false)
 	var promoted = ValueIdArray.create(0)
 	var sources = ValueIdArray.create(0)
 	var callees = NameRoster.create(0)

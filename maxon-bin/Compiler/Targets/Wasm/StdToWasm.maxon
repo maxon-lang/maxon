@@ -78,6 +78,7 @@ typealias IndirectCallTypeIdxMap = Map with (ByteArray, Wasm32Index)
 
 typealias InlinePositionBySite = Map with (ElementIndex, Wasm32Index)
 typealias InlineSiteIndexArray = Array with ElementIndex
+typealias WasmDepthColumn = FixedArray with Wasm32Index
 
 // TEN functions are imported, in this fixed order — so their func indices are the constants
 // below and every DEFINED function is offset by `WasmImportCount`. `buildWasmCoreModule` MUST
@@ -428,7 +429,7 @@ function appendWasiImports(builder WasmModuleBuilder)
 	_ = builder.addImportFunc(WasiStdoutModuleName, fieldName: WasiGetStdoutFieldName, typeIdx: getStreamTypeIdx, debugName: WasiGetStdoutDebugName)
 
 	// `blocking-write-and-flush(handle, ptr, len, retArea)` — four i32 params, no result.
-	var writeFlushParams = WasmValTypeArray.create(0)
+	var writeFlushParams = WasmValTypeArray.create(WasmWriteFlushParamCount, zeroed: false)
 
 	for _ in 0 upto WasmWriteFlushParamCount 'eachParam'
 		writeFlushParams.push(WasmValType.i32)
@@ -570,7 +571,7 @@ function appendPanicRuntime(builder WasmModuleBuilder, funcNames FunctionNameInd
 	body.call(ExitImportFuncIdx)
 	body.unreachable()
 
-	var localTypes = WasmValTypeArray.create(0)
+	var localTypes = WasmValTypeArray.create(WasmPanicDeclaredLocalCount, zeroed: false)
 
 	for _ in 0 upto WasmPanicDeclaredLocalCount 'eachLocal'
 		localTypes.push(WasmValType.i32)
@@ -651,13 +652,13 @@ function appendStreamWriteRuntime(builder WasmModuleBuilder, funcNames FunctionN
 	body.endOp()
 	body.endOp()
 
-	var localTypes = WasmValTypeArray.create(0)
+	var localTypes = WasmValTypeArray.create(WasmStreamWriteDeclaredLocalCount, zeroed: false)
 
 	for _ in 0 upto WasmStreamWriteDeclaredLocalCount 'eachLocal'
 		localTypes.push(WasmValType.i32)
 	end 'eachLocal'
 
-	var paramTypes = WasmValTypeArray.create(0)
+	var paramTypes = WasmValTypeArray.create(WasmStreamWriteParamCount, zeroed: false)
 
 	for _ in 0 upto WasmStreamWriteParamCount 'eachParam'
 		paramTypes.push(WasmValType.i32)
@@ -1322,7 +1323,7 @@ end 'internIndirectCallType'
 
 // The wasm parameter valtypes of an indirect call, one per argument in order.
 function indirectCallParamValTypes(argFloatMask ArgFloatMask, argCount ParamCount) returns WasmValTypeArray
-	var params = WasmValTypeArray.create(0)
+	var params = WasmValTypeArray.create(argCount, zeroed: false)
 
 	for k in 0 upto argCount 'each'
 		params.push(indirectCallArgValType(argFloatMask, argIndex: k))
@@ -1485,7 +1486,7 @@ end 'requireF64'
 // answer for the same reason `emitBinOp`'s width and `recordDefValtype`'s are: a `local.set` of an i64 into
 // an i32 local is a validation failure, and here it would be a signature the body contradicts.
 function funcParamValTypes(func IrFunction) returns WasmValTypeArray
-	var params = WasmValTypeArray.create(0)
+	var params = WasmValTypeArray.create(func.paramTypes.count(), zeroed: false)
 
 	for pt in func.paramTypes 'each'
 		params.push(wasmMachineValTypeOf(pt))
@@ -2336,7 +2337,7 @@ type WasmFuncEmitter
 		end 'nest'
 
 		self.body.localGet(self.dispatchLocal)
-		var targets = Wasm32IndexArray.create(0)
+		var targets = Wasm32IndexArray.create(blockCount, zeroed: false)
 
 		for i in 0 upto blockCount 'tableEntry'
 			targets.push(i as Wasm32Index)
@@ -3420,7 +3421,7 @@ type WasmFuncEmitter
 	end 'recordFramePosition'
 
 	function inlinePositionLines() returns NameRoster
-		var lines = NameRoster.create(0)
+		var lines = NameRoster.create(self.positions.sites.count(), zeroed: false)
 
 		for siteIndex in self.positions.sites 'eachSite'
 			lines.push(self.renderInlinePosition(siteIndex))
@@ -4167,8 +4168,7 @@ type WasmFuncEmitter
 			end 'upper'
 		end 'range'
 
-		var depthByOffset = Wasm32IndexArray.create(0)
-		depthByOffset.growFilled((maxTarget - minTarget + 1) as ElementIndex, value: 0 as Wasm32Index)
+		var depthByOffset = WasmDepthColumn.create((maxTarget - minTarget + 1) as ElementIndex)
 		var j = 0 as ElementIndex
 
 		for target in distinct 'depths'

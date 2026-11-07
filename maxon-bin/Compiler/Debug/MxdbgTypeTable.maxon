@@ -140,8 +140,7 @@ export type MxdbgTypeTable
 	end 'create'
 
 	export function closeClosureEnv(project Project, signatures ProgramSignatures, closure IrFunction)
-		var fields = MxdbgFieldDescArray.create(0)
-		fields.reserve(closure.closureEnvFields.count())
+		var fields = MxdbgFieldDescArray.create(closure.closureEnvFields.count(), zeroed: false)
 
 		for field in closure.closureEnvFields 'eachCapture'
 			fields.push(MxdbgFieldDesc.create(field.name, offset: envSlotOffset(field.slot) as MxdbgIndex, typeName: mxdbgTypeNameOf(project.typeNames, signatures: signatures, ref: field.declaredType)))
@@ -209,8 +208,7 @@ export type MxdbgTypeTable
 			end 'alreadyDescribed'
 
 			var desc = try self.closureEnvDescOf(next) otherwise mxdbgDescribeType(project, signatures: signatures, name: next, element: self.arrayElementOf(next))
-			var referenced = NameRoster.create(0)
-			referenced.reserve(desc.fields.count())
+			var referenced = NameRoster.create(desc.fields.count(), zeroed: false)
 
 			for field in desc.fields 'eachFieldType'
 				referenced.push(field.typeName)
@@ -290,8 +288,7 @@ export type MxdbgTypeTable
 
 		// The names are lifted out before the map is refilled: an entry read from `entries` is an element
 		// borrow of it, and the map being rebuilt lives on the same record.
-		var names = NameRoster.create(0)
-		names.reserve(self.entries.count())
+		var names = NameRoster.create(self.entries.count(), zeroed: false)
 
 		for entry in self.entries 'eachName'
 			names.push(entry.name)
@@ -400,8 +397,7 @@ end 'mxdbgFunctionRecordDesc'
 
 // A struct's fields in DECLARATION order, at the very offsets codegen laid them out at.
 function mxdbgDescribeStruct(project Project, signatures ProgramSignatures, layout StructLayout) returns MxdbgTypeDesc
-	var fields = MxdbgFieldDescArray.create(0)
-	fields.reserve(layout.fieldCount())
+	var fields = MxdbgFieldDescArray.create(layout.fieldCount(), zeroed: false)
 
 	for i in 0 upto layout.fieldCount() 'eachField'
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("mxdbgDescribeStruct: fieldTypes.get OOB at {i} for `type {String.from(layout.name)}`, whose columns are index-parallel")
@@ -418,8 +414,7 @@ end 'mxdbgDescribeStruct'
 // A case's "type" is its payload: `void` for a payload-free case, that type for a single value, and the
 // managed-record placeholder for a multi-value payload, which has no single type in this model.
 function mxdbgDescribeEnum(project Project, signatures ProgramSignatures, layout EnumLayout) returns MxdbgTypeDesc
-	var fields = MxdbgFieldDescArray.create(0)
-	fields.reserve(layout.caseCount())
+	var fields = MxdbgFieldDescArray.create(layout.caseCount(), zeroed: false)
 
 	let representation = unionRepresentationOf(signatures, typeNames: project.typeNames, layout: layout)
 

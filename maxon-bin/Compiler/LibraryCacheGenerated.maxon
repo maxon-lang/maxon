@@ -36,8 +36,7 @@ end 'cacheWriteFullRangeIntArray'
 
 export function cacheReadFullRangeIntArray(reader LibraryCacheReader) returns FullRangeIntArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FullRangeIntArray.create(0)
-	result.reserve(count)
+	var result = FullRangeIntArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.signed()) as FullRangeInt
@@ -57,8 +56,7 @@ end 'cacheWriteStringArray'
 
 export function cacheReadStringArray(reader LibraryCacheReader) returns StringArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = StringArray.create(0)
-	result.reserve(count)
+	var result = StringArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try reader.text()
@@ -105,8 +103,7 @@ end 'cacheWriteFilePathArray'
 
 export function cacheReadFilePathArray(reader LibraryCacheReader) returns FilePathArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FilePathArray.create(0)
-	result.reserve(count)
+	var result = FilePathArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try reader.path()
@@ -172,7 +169,7 @@ module function cacheReadFixedElementCount(reader LibraryCacheReader) returns Fi
 	return (try reader.boundedUnsigned(1, high: u32.max)) as FixedElementCount
 end 'cacheReadFixedElementCount'
 
-module let CacheSchemaFingerprint = 0xB6741961B3830759 as HashDigest
+module let CacheSchemaFingerprint = 0xBDB6BE33A4FCC5FA as HashDigest
 
 export function cacheWriteMaxonModule(writer LibraryCacheWriter, value MaxonModule)
 	cacheWriteIrFunctionArray(writer, value: value.functions)

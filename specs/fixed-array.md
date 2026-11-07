@@ -1673,6 +1673,408 @@ end 'main'
 error E2015: <fragment>:5:10: Unsupported: `FixedArray` holds its elements INLINE and publishes every slot at `create`, so it has no element destructor to stamp and a 'String' element would leak its storage and be read back as a null slot — a fixed array's element is an integer, a bool or a float
 ```
 
+## A Fixed Array Can Start From A Value, And Be Overwritten In Place
+
+`create(n, value: v)` builds a runtime-sized fixed array whose every element starts as `v`, and a type-sized alias takes the same `value:` argument with no length (`Pair.create(value: v)`). Because every slot is written before anything can read it, the value form is legal for an element whose zero is not a value (a ranged alias that excludes 0, an enum whose raw values include no 0), which the plain `create` refuses with E3106. `refill(value)` writes `value` into every element of an existing fixed array and changes neither its length nor its identity.
+
+<!-- test: create-with-a-value-fills-every-slot -->
+Every slot of the four starts as `7`: `4 28`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let buf = Buf.create(launder(4), value: 7)
+	var sum = 0 as Int
+
+	for x in buf 'each'
+		sum = sum + x
+	end 'each'
+
+	print("{buf.count()} {sum}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 28
+```
+
+<!-- test: create-with-a-value-admits-a-ranged-element-that-excludes-zero -->
+`Level` has no zero, so `Levels.create(n)` is E3106; with a value every slot is a `Level` from the start: `3 15`.
+```maxon
+typealias Level = int(1 to 9)
+typealias Levels = FixedArray with Level
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let levels = Levels.create(launder(3), value: 5)
+	var sum = 0 as Count
+
+	for level in levels 'each'
+		sum = sum + (level as Count)
+	end 'each'
+
+	print("{levels.count()} {sum}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 15
+```
+
+<!-- test: create-with-a-value-admits-an-enum-whose-raw-values-exclude-zero -->
+No `Tier` has the raw value 0, and all three slots read back `high`: `3 3`.
+```maxon
+enum Tier
+	low = 1
+	high = 2
+end 'Tier'
+
+typealias Tiers = FixedArray with Tier
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let tiers = Tiers.create(launder(3), value: Tier.high)
+	var highs = 0 as Count
+
+	for tier in tiers 'each'
+		if tier == Tier.high 'isHigh'
+			highs = highs + 1
+		end 'isHigh'
+	end 'each'
+
+	print("{tiers.count()} {highs}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 3
+```
+
+<!-- test: a-type-sized-create-takes-a-value-and-no-length -->
+The count is the type's, so only `value:` is written, and the proven indices need no `try`: `2 8`.
+```maxon
+typealias Level = int(1 to 9)
+typealias Pair = FixedArray with 2 Level
+
+function main() returns ExitCode
+	let pair = Pair.create(value: 4)
+
+	print("{pair.count()} {pair.get(0) + pair.get(1)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 8
+```
+
+<!-- test: create-with-a-value-packs-bools -->
+Eleven bools cross a byte boundary and all start `true`: `11 11`.
+```maxon
+typealias Flags = FixedArray with bool
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let flags = Flags.create(launder(11), value: true)
+	var set = 0 as Count
+
+	for flag in flags 'each'
+		if flag 'isSet'
+			set = set + 1
+		end 'isSet'
+	end 'each'
+
+	print("{flags.count()} {set}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+11 11
+```
+
+<!-- test: create-with-a-value-of-count-zero-is-empty -->
+A length of zero that is only known at run time builds an empty fixed array: `0`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let buf = Buf.create(launder(0), value: 9)
+
+	print("{buf.count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: create-with-a-value-and-a-constant-length-is-sized -->
+A constant length gives the sized type, so the proven indices are written without `try`: `4 7 7`.
+```maxon
+typealias Level = int(1 to 9)
+typealias Levels = FixedArray with Level
+
+function main() returns ExitCode
+	let levels = Levels.create(4, value: 7)
+
+	print("{levels.count()} {levels.get(0)} {levels.get(3)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 7 7
+```
+
+<!-- test: error.a-value-label-inside-a-braced-argument-is-not-a-value-fill -->
+A `value:` that sits inside a struct literal in the length argument labels a field, not the fill, so the plain `create` rule applies: `Level` has no zero and `Levels.create(n)` is E3106.
+```maxon
+typealias Level = int(1 to 9)
+typealias Levels = FixedArray with Level
+
+type Cell
+	export var value as ElementIndex
+	export var n as ElementIndex
+
+	static function slots(n ElementIndex) returns Count
+		let levels = Levels.create(Cell{value: 3, n: n}.n)
+
+		return levels.count()
+	end 'slots'
+end 'Cell'
+
+function main() returns ExitCode
+	return Cell.slots(2) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:10:16: 'FixedArray.create' cannot publish slots of 'Level': every slot is zero and zero is not a value of 'Level'
+```
+
+<!-- test: error.a-value-label-inside-a-braced-argument-is-not-a-type-sized-value-fill -->
+A type-sized alias states its length, so a length argument is E3194 however the argument is written, and a braced `value:` is not the fill; `Level` has no zero, so the plain `create` rule is asked first and refuses with E3106.
+```maxon
+typealias Level = int(1 to 9)
+typealias Pair = FixedArray with 2 Level
+
+type Cell
+	export var value as ElementIndex
+	export var n as ElementIndex
+
+	static function slots(n ElementIndex) returns Count
+		let pair = Pair.create(Cell{value: 1, n: n}.n)
+
+		return pair.count()
+	end 'slots'
+end 'Cell'
+
+function main() returns ExitCode
+	return Cell.slots(2) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:10:14: 'FixedArray.create' cannot publish slots of 'Level': every slot is zero and zero is not a value of 'Level'
+```
+
+<!-- test: refill-overwrites-every-element-in-place -->
+Slots written one by one are all replaced, and the length is unchanged: `5 35`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var buf = Buf.create(launder(5))
+
+	for i in 0 upto buf.count() 'fill'
+		try buf.set(i, value: i as Int) otherwise panic("set")
+	end 'fill'
+
+	buf.refill(7)
+
+	var sum = 0 as Int
+
+	for x in buf 'each'
+		sum = sum + x
+	end 'each'
+
+	print("{buf.count()} {sum}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 35
+```
+
+<!-- test: refill-writes-a-value-that-is-not-zero-into-a-type-sized-array -->
+`refill` reaches a type-sized fixed array too, and the new value may be any element: `3 6`.
+```maxon
+typealias Level = int(1 to 9)
+typealias Trio = FixedArray with 3 Level
+
+function main() returns ExitCode
+	var trio = Trio.create(value: 1)
+
+	trio.refill(2)
+
+	print("{trio.count()} {trio.get(0) + trio.get(1) + trio.get(2)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 6
+```
+
+<!-- test: refill-of-an-empty-fixed-array-does-nothing -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var buf = Buf.create(launder(0))
+
+	buf.refill(3)
+
+	print("{buf.count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: refill-packs-bools -->
+Overwriting a bit-packed fixed array writes every bit, including the partial last byte: `10 0`.
+```maxon
+typealias Flags = FixedArray with bool
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var flags = Flags.create(launder(10), value: true)
+
+	flags.refill(false)
+
+	var set = 0 as Count
+
+	for flag in flags 'each'
+		if flag 'isSet'
+			set = set + 1
+		end 'isSet'
+	end 'each'
+
+	print("{flags.count()} {set}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10 0
+```
+
+<!-- test: error.a-managed-element-is-refused-with-a-value -->
+A value does not make a managed element inline: the value form keeps the E2015 refusal the plain `create` gives.
+```maxon
+typealias Names = FixedArray with String
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let names = Names.create(launder(2), value: "a")
+
+	return names.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:9:14: Unsupported: `FixedArray` holds its elements INLINE and publishes every slot at `create`, so it has no element destructor to stamp and a 'String' element would leak its storage and be read back as a null slot — a fixed array's element is an integer, a bool or a float
+```
+
+<!-- test: error.a-value-form-needs-a-length-on-a-runtime-sized-alias -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Buf = FixedArray with Int
+
+function main() returns ExitCode
+	let buf = Buf.create(value: 3)
+
+	return buf.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3194: <fragment>:6:16: 'Buf' states no length in its type, so 'create' needs one: write 'Buf.create(n)'
+```
+
 ## A Sized Container's Buffer May Not Change Its Own Length
 
 ⛔⛔ **`count()` ANSWERS FROM THE TYPE WHILE `get` AND THE WALK ANSWER FROM THE RECORD, AND THIS REFUSAL
@@ -3118,7 +3520,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3194: <fragment>:6:15: 'Vec3' states its length in its type (FixedArray with 3 Int), so 'create' takes no argument: write 'Vec3.create()'
+error E3194: <fragment>:6:15: 'Vec3' states its length in its type (FixedArray with 3 Int), so 'create' takes no length: write 'Vec3.create()' or 'Vec3.create(value: v)'
 ```
 
 <!-- test: error.a-runtime-sized-create-needs-a-length -->
@@ -3149,7 +3551,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3194: <fragment>:6:16: 'Buf.create' takes only a length: a fixed array is always zeroed and never grows. Use 'Array.create(n, zeroed: false)' for a growable buffer
+error E3194: <fragment>:6:16: 'Buf.create' takes a length and an optional 'value:': a fixed array never grows. Use 'Array.create(n, zeroed: false)' for a growable buffer
 ```
 
 <!-- test: error.push-is-refused-on-a-runtime-sized-fixed-array -->

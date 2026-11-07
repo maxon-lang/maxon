@@ -350,13 +350,13 @@ end 'collectRegionOps'
 
 // The region's BLOCKS — the peak's enclosing loop nest, or every block of the function when the peak is
 // not in a loop.
-function regionBlocks(cfg FuncCfg, peak PressurePeak, peakInLoop bool) returns BoolArray
+function regionBlocks(cfg FuncCfg, peak PressurePeak, peakInLoop bool) returns FixedBoolArray
 	if peakInLoop 'inLoop'
 		return enclosingLoopBlocks(cfg.topo, blockLocal: peak.blockLocal)
 	end 'inLoop'
 
-	var everyBlock = BoolArray.create(0)
-	everyBlock.refill(cfg.topo.numBlocks, value: true)
+	var everyBlock = FixedBoolArray.create(cfg.topo.numBlocks)
+	everyBlock.refill(true)
 	return everyBlock
 end 'regionBlocks'
 
@@ -394,7 +394,7 @@ end 'firstOriginLineOfOp'
 // `let` and collecting writes the row's own counter. This runs once, on the E5001 refusal path.
 function collectCandidates(project Project, module TargetModule, func IrFunction, cfg FuncCfg, funcIndex ElementIndex, peak PressurePeak, lineage SplitLineage, regionOps OpIndexArray) returns PressureCandidateArray
 	let wordsPerRow = bitsetWordsFor(cfg.valueCount as BitIndex)
-	var candidates = PressureCandidateArray.create(0)
+	var candidates = PressureCandidateArray.create(cfg.valueCount, zeroed: false)
 
 	for v in 0 upto cfg.valueCount 'eachValue'
 		if not peak.liveBefore.test(v as BitIndex) 'notLive'
@@ -415,7 +415,7 @@ end 'collectCandidates'
 // leaving the reference-typed `candidates` untouched: the blocking set is tiny (bounded by the
 // register file), so O(n^2) is fine, and there is no Map/hash iteration to introduce drift.
 function sortedOrder(candidates PressureCandidateArray) returns CandidateOrder
-	var order = CandidateOrder.create(0)
+	var order = CandidateOrder.create(candidates.count(), zeroed: false)
 
 	for i in 0 upto candidates.count() 'seed'
 		order.push(i)

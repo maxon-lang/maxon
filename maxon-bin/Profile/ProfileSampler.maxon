@@ -90,10 +90,10 @@
 		var fileTypes as ProfileWordArray
 
 		static function over(modules SampledModuleArray) returns ProfileModuleMap
-			var starts = ProfileWordArray.create(0)
-			var ends = ProfileWordArray.create(0)
-			var names = ProfileStringArray.create(0)
-			var fileTypes = ProfileWordArray.create(0)
+			var starts = ProfileWordArray.create(modules.count(), zeroed: false)
+			var ends = ProfileWordArray.create(modules.count(), zeroed: false)
+			var names = ProfileStringArray.create(modules.count(), zeroed: false)
+			var fileTypes = ProfileWordArray.create(modules.count(), zeroed: false)
 
 			for loaded in modules 'eachModule'
 				starts.push(loaded.base)
@@ -409,9 +409,10 @@
 		// two refreshes is charged nothing meanwhile — its count reads zero, below its baseline — unless a charge
 		// was already due, in which case the suspend that refuses drops it sooner.
 		export function refreshThreads()
-			var seen = ProfileThreadIdArray.create(0)
+			let live = self.process.threads()
+			var seen = ProfileThreadIdArray.create(live.count(), zeroed: false)
 
-			for thread in self.process.threads() 'eachThread'
+			for thread in live 'eachThread'
 				seen.push(thread.id)
 
 				if self.tracks(thread.id) 'alreadyTracked'

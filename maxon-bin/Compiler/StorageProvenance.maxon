@@ -232,8 +232,12 @@ typealias HeldRecordKindsArray = Array with HeldRecordKinds
 // One mask per parameter of a function: which of its parameters its body stores into that one's record.
 module typealias ParamMaskRows = Array with ParamPositionMaskArray
 
+module typealias FixedEntryIndexArray = FixedArray with ElementIndex
+
 // Positions into another column: its entries, or the start of each group of them.
 module typealias EntryIndexArray = Array with ElementIndex
+
+typealias VisitedBlockFlags = FixedArray with bool
 
 // The byte offset a field read steps by.
 typealias AccessStep = int(0 to u64.max)
@@ -916,7 +920,7 @@ export type ProvenanceSummary
 end 'ProvenanceSummary'
 
 module function emptyStoreRows(funcCount ElementIndex, sharedEmptyRow ParamPositionMaskArray) returns ParamMaskRows
-	var rows = ParamMaskRows.create(0)
+	var rows = ParamMaskRows.create(funcCount, zeroed: false)
 	rows.refill(funcCount, value: sharedEmptyRow)
 	return rows
 end 'emptyStoreRows'
@@ -939,8 +943,7 @@ module function widenStoreRow(rows ParamMaskRows, index ElementIndex, by ParamPo
 		end 'nothingStoredHere'
 
 		if row is sharedEmptyRow 'firstStore'
-			row = ParamPositionMaskArray.create(0)
-			row.refill(by.count(), value: NoParamPositions)
+			row = ParamPositionMaskArray.create(by.count())
 			try rows.set(index, value: row) otherwise panic("widenStoreRow: rows.set OOB at {index}")
 		end 'firstStore'
 
@@ -956,9 +959,7 @@ module function widenStoreRow(rows ParamMaskRows, index ElementIndex, by ParamPo
 end 'widenStoreRow'
 
 module function emptySummaryColumn(funcCount ElementIndex) returns ParamPositionMaskArray
-	var column = ParamPositionMaskArray.create(0)
-	column.refill(funcCount, value: NoParamPositions)
-	return column
+	return ParamPositionMaskArray.create(funcCount)
 end 'emptySummaryColumn'
 
 // By function index, the parameters a receiver-writing call writes through a value that may BE their record
@@ -1899,7 +1900,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return
 		end 'noVars'
 
-		var order = VarDeathArray.create(0)
+		var order = VarDeathArray.create(self.writableRank - self.firstWritableValueRank, zeroed: false)
 
 		for rank in self.firstWritableValueRank upto self.writableRank 'eachVar'
 			order.push(VarDeath.create(rank, until: try self.varDeadFrom.get(rank) otherwise panic("ProvenanceTracer.settleVarLiveness: varDeadFrom.get OOB at {rank}")))
@@ -1907,8 +1908,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		order.sortBy(function(left VarDeath, right VarDeath) gives right.until.compare(left.until))
 
-		var settled = BoolArray.create(0)
-		settled.refill(self.writableRank, value: false)
+		var settled = FixedBoolArray.create(self.writableRank)
 		var frontier = EntryIndexArray.create(0)
 
 		for death in order 'eachVarLatestDyingFirst'
@@ -1929,7 +1929,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'eachVarLatestDyingFirst'
 	end 'settleVarLiveness'
 
-	function extendLivenessOfTheVarsItLiesWithin(derived ElementIndex, until ElementIndex, settled BoolArray, frontier EntryIndexArray)
+	function extendLivenessOfTheVarsItLiesWithin(derived ElementIndex, until ElementIndex, settled FixedBoolArray, frontier EntryIndexArray)
 		for column in AliasLivenessColumns 'eachColumn'
 			if var chunk = try self.sets.first(self.setOf(column, value: self.rootValueAt(derived))) 'hasWords'
 				while true 'eachWord'
@@ -3956,7 +3956,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'mark'
 	end 'setKeptMark'
 
-	function carryKeptMark(mark KeptMark, records ValueIdArray, starts EntryIndexArray, byDestination EntryIndexArray)
+	function carryKeptMark(mark KeptMark, records ValueIdArray, starts FixedEntryIndexArray, byDestination FixedEntryIndexArray)
 		var worklist = ValueIdArray.create(0)
 
 		for destination in 0 upto starts.count() - 1 'eachDestination'
@@ -4003,9 +4003,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'eachSeed'
 
 		let valueCount = func.valueTags.count()
-		var records = ValueIdArray.create(0)
-		var starts = EntryIndexArray.create(0)
-		starts.refill(valueCount + 1, value: 0)
+		var records = ValueIdArray.create(self.pendingKeeps.count(), zeroed: false)
+		var starts = FixedEntryIndexArray.create(valueCount + 1)
 
 		for pending in self.pendingKeeps 'eachStoreRecord'
 			records.push(self.recordHoldingAt(func, address: pending.value))
@@ -4019,8 +4018,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'eachRunningTotal'
 
 		var filled = starts.clone()
-		var byDestination = EntryIndexArray.create(0)
-		byDestination.refill(self.pendingKeeps.count(), value: 0)
+		var byDestination = FixedEntryIndexArray.create(self.pendingKeeps.count())
 
 		for (iter, pending) in self.pendingKeeps.withIterator() 'eachStoreByDestination'
 			let slot = try filled.get(pending.destination) otherwise panic("ProvenanceTracer.settleKeeps: filled.get OOB at v{pending.destination}")
@@ -8501,8 +8499,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'valueIsAFreshOccupantOfALocalCell'
 
 	function cellHoldsOnlyFreshRecords(func IrFunction, cell ValueId, except ValueIdArray, depth ElementIndex) returns bool
-		var occupants = BoolArray.create(0)
-		occupants.refill(func.valueTags.count(), value: false)
+		var occupants = FixedBoolArray.create(func.valueTags.count())
 
 		if not self.cellIsFilledOnlyWithFreshRecords(func, cell: cell, aliases: occupants, except: except, depth: depth) 'aForeignRecordMayLandInIt'
 			return false
@@ -8517,7 +8514,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return callee.equals(ParameterCellAllocName)
 	end 'valueIsALocalCell'
 
-	function cellIsFilledOnlyWithFreshRecords(func IrFunction, cell ValueId, aliases BoolArray, except ValueIdArray, depth ElementIndex) returns bool
+	function cellIsFilledOnlyWithFreshRecords(func IrFunction, cell ValueId, aliases FixedBoolArray, except ValueIdArray, depth ElementIndex) returns bool
 		view ir = self.module
 		self.indexDefinitions(func, ir: ir)
 
@@ -8546,7 +8543,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return true
 	end 'cellIsFilledOnlyWithFreshRecords'
 
-	function cellOpFillsOnlyFreshRecords(func IrFunction, plainOp MaxonOp, cell ValueId, aliases BoolArray, except ValueIdArray, depth ElementIndex) returns bool
+	function cellOpFillsOnlyFreshRecords(func IrFunction, plainOp MaxonOp, cell ValueId, aliases FixedBoolArray, except ValueIdArray, depth ElementIndex) returns bool
 		let op = self.wordOpAsMemoryOp(func, op: plainOp)
 
 		if not self.opNamesTheRecord(func, op: op, record: cell) 'unrelated'
@@ -8597,7 +8594,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'op'
 	end 'cellOpFillsOnlyFreshRecords'
 
-	function cellLoadKeepsItsOccupant(func IrFunction, result ValueId, addr ValueId, offset ByteOffset, cell ValueId, aliases BoolArray, except ValueIdArray) returns bool
+	function cellLoadKeepsItsOccupant(func IrFunction, result ValueId, addr ValueId, offset ByteOffset, cell ValueId, aliases FixedBoolArray, except ValueIdArray) returns bool
 		if self.sameRecordBase(func, ir: self.module, value: addr) != cell or offset != ParameterCellValueOffset 'notTheOccupantsSlot'
 			return false
 		end 'notTheOccupantsSlot'
@@ -8792,8 +8789,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	function ownerIsUntouchedFrom(func IrFunction, byId BlockIndexById, loadOp ElementIndex, mint ElementIndex, ownerBase ValueId, key StoreSlotKey) returns bool
 		view ir = self.module
 		var worklist = BlockIdArray.create(0)
-		var visited = BoolArray.create(0)
-		visited.refill(func.nextBlockId, value: false)
+		var visited = VisitedBlockFlags.create(func.nextBlockId)
 
 		for blockRef in func.blockRefs 'findTheLoad'
 			view block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.ownerIsUntouchedFrom: blockRef from func.blockRefs not in module.blocks")
@@ -8923,8 +8919,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'ownerRecordIsOwned'
 
 	function varsOwnValues(func IrFunction) returns BoolArray
-		var varsOwn = BoolArray.create(0)
-		varsOwn.refill(func.valueTags.count(), value: false)
+		var varsOwn = BoolArray.create(func.valueTags.count())
 		ProvenanceTracer.markVarsOwn(func, sites: func.provenanceSites(self.noSites), into: varsOwn)
 		return varsOwn
 	end 'varsOwnValues'
@@ -8934,8 +8929,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.indexDefinitions(func, ir: ir)
 		let ownerBase = self.sameRecordBase(func, ir: ir, value: addr)
 		view ownerKind = try self.heldKindOfValue(func, value: ownerBase) otherwise return false
-		var aliases = BoolArray.create(0)
-		aliases.refill(func.valueTags.count(), value: false)
+		var aliases = FixedBoolArray.create(func.valueTags.count())
 		self.addAlias(aliases, value: result)
 
 		for blockRef in func.blockRefs 'eachBlock'
@@ -8970,7 +8964,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return false
 	end 'loadIsSwappedOut'
 
-	function windowStepOf(func IrFunction, plainOp MaxonOp, ownerBase ValueId, ownerKind ByteArray, key StoreSlotKey, aliases BoolArray) returns WindowStep
+	function windowStepOf(func IrFunction, plainOp MaxonOp, ownerBase ValueId, ownerKind ByteArray, key StoreSlotKey, aliases FixedBoolArray) returns WindowStep
 		let op = self.wordOpAsMemoryOp(func, op: plainOp)
 
 		match op 'op'
@@ -9017,7 +9011,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'op'
 	end 'windowStepOf'
 
-	function windowLoadStep(func IrFunction, result ValueId, addr ValueId, offset ByteOffset, key StoreSlotKey, aliases BoolArray) returns WindowStep
+	function windowLoadStep(func IrFunction, result ValueId, addr ValueId, offset ByteOffset, key StoreSlotKey, aliases FixedBoolArray) returns WindowStep
 		if self.isAliasBase(func, aliases: aliases, value: addr) 'readsTheRecord'
 			return WindowStep.touches
 		end 'readsTheRecord'
@@ -9031,7 +9025,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return WindowStep.touches
 	end 'windowLoadStep'
 
-	function windowStoreStep(func IrFunction, addr ValueId, offset ByteOffset, value ValueId, ownerBase ValueId, key StoreSlotKey, aliases BoolArray) returns WindowStep
+	function windowStoreStep(func IrFunction, addr ValueId, offset ByteOffset, value ValueId, ownerBase ValueId, key StoreSlotKey, aliases FixedBoolArray) returns WindowStep
 		if self.isAliasBase(func, aliases: aliases, value: value) or self.isAliasBase(func, aliases: aliases, value: addr) 'movesOrWritesTheRecord'
 			return WindowStep.touches
 		end 'movesOrWritesTheRecord'
@@ -9049,7 +9043,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return WindowStep.touches
 	end 'windowStoreStep'
 
-	function windowHoldStep(func IrFunction, op MaxonOp, result ValueId, held ValueId, ownerBase ValueId, ownerKind ByteArray, aliases BoolArray) returns WindowStep
+	function windowHoldStep(func IrFunction, op MaxonOp, result ValueId, held ValueId, ownerBase ValueId, ownerKind ByteArray, aliases FixedBoolArray) returns WindowStep
 		if self.isAliasBase(func, aliases: aliases, value: held) 'holdsTheRecord'
 			self.addAlias(aliases, value: result)
 			return WindowStep.passes
@@ -9058,7 +9052,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return self.windowOperandsStep(func, op: op, ownerBase: ownerBase, ownerKind: ownerKind, aliases: aliases, reachesModuleVars: false)
 	end 'windowHoldStep'
 
-	function windowCallStep(func IrFunction, op MaxonOp, result ValueId, callee ByteArray, args ValueIdArray, ownerBase ValueId, ownerKind ByteArray, aliases BoolArray) returns WindowStep
+	function windowCallStep(func IrFunction, op MaxonOp, result ValueId, callee ByteArray, args ValueIdArray, ownerBase ValueId, ownerKind ByteArray, aliases FixedBoolArray) returns WindowStep
 		if droppingBookkeepingCallee(callee) 'aRelease'
 			return WindowStep.passes
 		end 'aRelease'
@@ -9071,7 +9065,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return self.windowOperandsStep(func, op: op, ownerBase: ownerBase, ownerKind: ownerKind, aliases: aliases, reachesModuleVars: not ownershipBookkeepingCallee(callee))
 	end 'windowCallStep'
 
-	function windowOperandsStep(func IrFunction, op MaxonOp, ownerBase ValueId, ownerKind ByteArray, aliases BoolArray, reachesModuleVars bool) returns WindowStep
+	function windowOperandsStep(func IrFunction, op MaxonOp, ownerBase ValueId, ownerKind ByteArray, aliases FixedBoolArray, reachesModuleVars bool) returns WindowStep
 		maxonOpOperandValues(op, into: self.swapOperands)
 
 		for operand in self.swapOperands 'eachOperand'
@@ -9097,15 +9091,15 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return WindowStep.passes
 	end 'windowOperandsStep'
 
-	function isAlias(aliases BoolArray, value ValueId) returns bool
+	function isAlias(aliases FixedBoolArray, value ValueId) returns bool
 		return value < aliases.count() and (try aliases.get(value) otherwise false)
 	end 'isAlias'
 
-	function isAliasBase(func IrFunction, aliases BoolArray, value ValueId) returns bool
+	function isAliasBase(func IrFunction, aliases FixedBoolArray, value ValueId) returns bool
 		return self.isAlias(aliases, value: self.sameRecordBase(func, ir: self.module, value: value))
 	end 'isAliasBase'
 
-	function addAlias(aliases BoolArray, value ValueId)
+	function addAlias(aliases FixedBoolArray, value ValueId)
 		if value < aliases.count() and not (try aliases.get(value) otherwise true) 'aNewAlias'
 			try aliases.set(value, value: true) otherwise panic("ProvenanceTracer.addAlias: aliases.set OOB at v{value}")
 			self.aliasesGrew = true
@@ -9287,13 +9281,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'storeKeepsSlotExclusive'
 
 	function recordUseOf(func IrFunction, root ValueId) returns RecordUse
-		var aliases = BoolArray.create(0)
-		aliases.refill(func.valueTags.count(), value: false)
+		var aliases = FixedBoolArray.create(func.valueTags.count())
 		self.addAlias(aliases, value: root)
 		return self.recordUseOfAliases(func, aliases: aliases)
 	end 'recordUseOf'
 
-	function recordUseOfAliases(func IrFunction, aliases BoolArray) returns RecordUse
+	function recordUseOfAliases(func IrFunction, aliases FixedBoolArray) returns RecordUse
 		view ir = self.module
 		self.indexDefinitions(func, ir: ir)
 		var worst = RecordUse.dropped
@@ -9326,7 +9319,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return worst
 	end 'recordUseOfAliases'
 
-	function useOfAliasIn(func IrFunction, plainOp MaxonOp, aliases BoolArray) returns RecordUse
+	function useOfAliasIn(func IrFunction, plainOp MaxonOp, aliases FixedBoolArray) returns RecordUse
 		let op = self.wordOpAsMemoryOp(func, op: plainOp)
 
 		match op 'op'
@@ -9373,7 +9366,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'op'
 	end 'useOfAliasIn'
 
-	function operandsUse(op MaxonOp, aliases BoolArray) returns RecordUse
+	function operandsUse(op MaxonOp, aliases FixedBoolArray) returns RecordUse
 		maxonOpOperandValues(op, into: self.swapOperands)
 
 		for operand in self.swapOperands 'eachOperand'
@@ -9385,7 +9378,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return RecordUse.dropped
 	end 'operandsUse'
 
-	function holdUse(result ValueId, held ValueId, aliases BoolArray) returns RecordUse
+	function holdUse(result ValueId, held ValueId, aliases FixedBoolArray) returns RecordUse
 		if self.isAlias(aliases, value: held) 'holdsTheRecord'
 			self.addAlias(aliases, value: result)
 		end 'holdsTheRecord'
@@ -9393,7 +9386,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return RecordUse.dropped
 	end 'holdUse'
 
-	function callUse(func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, aliases BoolArray) returns RecordUse
+	function callUse(func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, aliases FixedBoolArray) returns RecordUse
 		var use = RecordUse.dropped
 
 		for index in 0 upto args.count() 'eachArgument'
@@ -9407,7 +9400,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return use
 	end 'callUse'
 
-	function argumentUse(func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, index ElementIndex, aliases BoolArray) returns RecordUse
+	function argumentUse(func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, index ElementIndex, aliases FixedBoolArray) returns RecordUse
 		if ownershipBookkeepingCallee(callee) 'bookkeeping'
 			if not droppingBookkeepingCallee(callee) and not copyingBookkeepingCallee(callee) 'handsTheRecordBack'
 				self.addAlias(aliases, value: result)
@@ -10605,7 +10598,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'ownerIsGeneric'
 
 	function judgeLandingInstantiation(caller IrFunction, callerIndex ElementIndex, opIdx ElementIndex, result ValueId, args ValueIdArray, bodies CallLandingBodies, reporting bool) returns bool
-		var positions = ParamCountArray.create(0)
+		var positions = ParamCountArray.create(args.count(), zeroed: false)
 
 		for i in 0 upto args.count() 'eachArg'
 			positions.push(i as ParamCount)
@@ -10950,7 +10943,7 @@ end 'freshArgAt'
 // reaches (`Parser.emitCodeAddress`). The `__` prefix alone does not decide it: a batched spec case
 // runs inside `__spec_case_<n>`, so its lifted closures wear the prefix and are ordinary function
 // values. Any other name no function of the module answers to is a body no summary describes.
-module function noteFunctionRefBody(name ByteArray, byName FuncIndexByName, named BoolArray, funcSignatures FuncSignatureMap, into CallLandingBodies, bodiless NameRoster)
+module function noteFunctionRefBody(name ByteArray, byName FuncIndexByName, named FixedBoolArray, funcSignatures FuncSignatureMap, into CallLandingBodies, bodiless NameRoster)
 	if not isFunctionValueBodyName(name, funcSignatures: funcSignatures) 'aDescriptorRoutine'
 		return
 	end 'aDescriptorRoutine'
@@ -11073,7 +11066,7 @@ function moduleLetKindsOf(project Project, signatures ProgramSignatures) returns
 end 'moduleLetKindsOf'
 
 function moduleGlobalTypesOf(globals ManagedGlobalArray) returns MaxonTypeArray
-	var types = MaxonTypeArray.create(0)
+	var types = MaxonTypeArray.create(globals.count(), zeroed: false)
 
 	for global in globals 'eachGlobal'
 		types.push(global.valueType)
@@ -11124,7 +11117,7 @@ end 'writeThroughSharedViewMessage'
 
 // The indices of `sites` in token order, and in recorded order among equal tokens.
 function moveSitesInTokenOrder(sites MoveSiteArray) returns MoveSiteIndexArray
-	var order = MoveSiteIndexArray.create(0)
+	var order = MoveSiteIndexArray.create(sites.count(), zeroed: false)
 
 	for k in 0 upto sites.count() 'eachSite'
 		let token = (try sites.get(k) otherwise panic("moveSitesInTokenOrder: sites.get OOB at {k}")).token

@@ -34,6 +34,8 @@
 // needs the source of a phi chases it to an incoming value on one of its edges (each of
 // which IS op-defined and so IS in this table); the E5001 diagnostic does precisely that.
 
+export typealias FixedFuncIndexArray = FixedArray with ElementIndex
+
 // A dense column of function indices, one per recorded value origin. Same dense-int
 // representation as `ValueIdArray`/`OpIndexArray` and a DIFFERENT type from either — each names its own
 // quantity, and `as` is the door between two of them.
@@ -50,8 +52,7 @@ end 'cacheWriteFuncIndexArray'
 
 export function cacheReadFuncIndexArray(reader LibraryCacheReader) returns FuncIndexArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FuncIndexArray.create(0)
-	result.reserve(count)
+	var result = FuncIndexArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ElementIndex
@@ -369,7 +370,7 @@ export type ParamOriginTable
 	// renumbering has to reach these rows at all, and for the in-place compaction rationale (allocates
 	// nothing; byte-identical to a rebuild). Same rule: a row whose function was dropped goes, and a
 	// survivor's key moves to the function's new position.
-	export function remapFunctionIndices(reached BoolArray, newIndexOfOld FuncIndexArray)
+	export function remapFunctionIndices(reached BoolArray, newIndexOfOld FixedFuncIndexArray)
 		let rows = RowCompaction.of(self.funcIndices, reached: reached, newIndexOfOld: newIndexOfOld, table: "ParamOriginTable")
 		compactValueIds(self.valueIds, rows: rows)
 		compactByteOffsets(self.startBytes, rows: rows)
@@ -418,8 +419,8 @@ type RowCompaction
 	// The old row of each surviving row, in order.
 	var oldRows as OpIndexArray
 
-	static function of(funcIndices FuncIndexArray, reached BoolArray, newIndexOfOld FuncIndexArray, table String) returns RowCompaction
-		var oldRows = OpIndexArray.create(0)
+	static function of(funcIndices FuncIndexArray, reached BoolArray, newIndexOfOld FixedFuncIndexArray, table String) returns RowCompaction
+		var oldRows = OpIndexArray.create(funcIndices.count(), zeroed: false)
 
 		for read in 0 upto funcIndices.count() 'each'
 			let f = try funcIndices.get(read) otherwise panic("{table}.remapFunctionIndices: funcIndices.get OOB at {read}")
@@ -643,7 +644,7 @@ export type ValueOriginTable
 	// unchanged; this is a memory optimization, not a semantic one. The `write <= read` invariant holds at
 	// every step (a survivor consumes at most one slot per row scanned), so a slot is always read before it
 	// can be overwritten.
-	export function remapFunctionIndices(reached BoolArray, newIndexOfOld FuncIndexArray)
+	export function remapFunctionIndices(reached BoolArray, newIndexOfOld FixedFuncIndexArray)
 		let rows = RowCompaction.of(self.funcIndices, reached: reached, newIndexOfOld: newIndexOfOld, table: "ValueOriginTable")
 		compactValueIds(self.valueIds, rows: rows)
 		compactOpIndices(self.opIndices, rows: rows)
@@ -668,7 +669,7 @@ export type ValueOriginTable
 	// a consumer that reads a few hundred tiny functions' worth of it. `rowStarts` stays dense over
 	// the function space — it is one word per function, and a sparse map here would be a hash probe on
 	// the splice path.
-	export function indexRowsOfFunctions(selected BoolArray, funcCount ElementIndex) returns ValueOriginRowIndex
+	export function indexRowsOfFunctions(selected FixedBoolArray, funcCount ElementIndex) returns ValueOriginRowIndex
 		return ValueOriginRowIndex.create(indexRowsByFunction(self.funcIndices, selected: selected, funcCount: funcCount), derived: indexRowsByFunction(self.derivedFuncIndices, selected: selected, funcCount: funcCount))
 	end 'indexRowsOfFunctions'
 
@@ -871,7 +872,7 @@ end 'DerivedOrigins'
 // answered `false` rather than refused: a caller that selected nothing beyond function K has no rows to
 // find past it, and reading the length as the answer is what lets the caller size its column by the
 // functions it cares about instead of by the module.
-function isSelectedFunction(selected BoolArray, funcIndex ElementIndex) returns bool
+function isSelectedFunction(selected FixedBoolArray, funcIndex ElementIndex) returns bool
 	return try selected.get(funcIndex) otherwise false
 end 'isSelectedFunction'
 
@@ -939,10 +940,10 @@ end 'noteAppendedRange'
 // One CSR over one function-keyed column: `rows[rowStarts[f] .. rowStarts[f + 1])` are the row indices
 // of function `f`.
 export type FunctionRowCsr
-	var rowStarts as OpIndexArray
-	var rows as OpIndexArray
+	var rowStarts as FixedOpIndexArray
+	var rows as FixedOpIndexArray
 
-	export static function create(rowStarts OpIndexArray, rows OpIndexArray) returns FunctionRowCsr
+	export static function create(rowStarts FixedOpIndexArray, rows FixedOpIndexArray) returns FunctionRowCsr
 		return Self{rowStarts: rowStarts, rows: rows}
 	end 'create'
 
@@ -962,9 +963,8 @@ end 'FunctionRowCsr'
 // The CSR over `funcIndices` for the functions `selected` names: a count per function into slot `f + 1`,
 // a prefix sum that turns the counts into starts in place, then a scatter through a SEPARATE cursor per
 // function so `rowStarts` survives intact.
-function indexRowsByFunction(funcIndices FuncIndexArray, selected BoolArray, funcCount ElementIndex) returns FunctionRowCsr
-	var rowStarts = OpIndexArray.create(0)
-	rowStarts.resize(funcCount + 1)
+function indexRowsByFunction(funcIndices FuncIndexArray, selected FixedBoolArray, funcCount ElementIndex) returns FunctionRowCsr
+	var rowStarts = FixedOpIndexArray.create(funcCount + 1)
 
 	for i in 0 upto funcIndices.count() 'countEach'
 		let f = try funcIndices.get(i) otherwise panic("indexRowsByFunction: funcIndices.get OOB at {i}")
@@ -985,10 +985,8 @@ function indexRowsByFunction(funcIndices FuncIndexArray, selected BoolArray, fun
 		try rowStarts.set(f, value: total) otherwise panic("indexRowsByFunction: rowStarts.set OOB at {f}")
 	end 'prefixSum'
 
-	var rows = OpIndexArray.create(0)
-	rows.resize(total)
-	var cursor = OpIndexArray.create(0)
-	cursor.resize(funcCount)
+	var rows = FixedOpIndexArray.create(total)
+	var cursor = IndexColumn.create(funcCount)
 
 	for f in 0 upto funcCount 'seedCursor'
 		try cursor.set(f, value: try rowStarts.get(f) otherwise panic("indexRowsByFunction: rowStarts.get OOB at {f}")) otherwise panic("indexRowsByFunction: cursor.set OOB at {f}")
@@ -1068,8 +1066,7 @@ end 'cacheWriteDeferredChainCallsArray'
 
 function cacheReadDeferredChainCallsArray(reader LibraryCacheReader) returns DeferredChainCallsArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DeferredChainCallsArray.create(0)
-	result.reserve(count)
+	var result = DeferredChainCallsArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadDeferredChainCalls(reader)
@@ -1141,7 +1138,7 @@ export type DeferredChainTable
 		return DeferredChainRowLookup.absent
 	end 'rowOf'
 
-	export function remapFunctionIndices(newIndexOfOld FuncIndexArray)
+	export function remapFunctionIndices(newIndexOfOld FixedFuncIndexArray)
 		for row in 0 upto self.funcIndices.count() 'each'
 			let old = try self.funcIndices.get(row) otherwise panic("DeferredChainTable.remapFunctionIndices: funcIndices.get OOB at {row}")
 			try self.funcIndices.set(row, value: try newIndexOfOld.get(old) otherwise panic("DeferredChainTable.remapFunctionIndices: newIndexOfOld.get OOB at {old}")) otherwise panic("DeferredChainTable.remapFunctionIndices: funcIndices.set OOB at {row}")

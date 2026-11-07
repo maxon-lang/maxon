@@ -236,7 +236,7 @@ module function hexBytesOf(digits String) returns HexBytesRead
 		return HexBytesRead.notHex
 	end 'notWholeBytes'
 
-	var bytes = ByteArray.create(0)
+	var bytes = ByteArray.create(digits.count() / HexDigitsPerByte, zeroed: false)
 	var pending = 0 as Byte
 	var half = 0 as Count
 
@@ -519,8 +519,9 @@ end 'runDumpInfo'
 // keeps printing the whole sidecar, which is the documented default and what every other reader of this
 // dump relies on.
 function parseDumpSections(args MaxonArgs) returns DumpSectionRequest
-	var sections = BoolArray.create(0)
-	sections.refill(dumpSectionRoster().count(), value: args.paths.count() <= FirstSectionArgument)
+	let sectionCount = dumpSectionRoster().count()
+	var sections = BoolArray.create(sectionCount, zeroed: false)
+	sections.refill(sectionCount, value: args.paths.count() <= FirstSectionArgument)
 
 	for i in FirstSectionArgument upto args.paths.count() 'eachName'
 		let spelled = try args.paths.get(i) otherwise ""
@@ -727,7 +728,7 @@ end 'dumpInlineFrames'
 // Every range's start, read back through the same lookup the profiler uses so the dump shows what a
 // sample there would be named.
 function inlineRangeStarts(reader MxdbgReader) returns MxdbgCodeOffsetArray
-	var starts = MxdbgCodeOffsetArray.create(0)
+	var starts = MxdbgCodeOffsetArray.create(reader.inlineRangeCount(), zeroed: false)
 
 	for i in 0 upto reader.inlineRangeCount() 'eachRange'
 		starts.push(reader.inlineRangeStart(i as MxdbgIndex))

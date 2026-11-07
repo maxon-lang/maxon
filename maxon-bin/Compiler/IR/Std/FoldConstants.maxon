@@ -735,7 +735,7 @@ module let ConditionIsFalse = 0 as FullRangeInt
 // case, where it could have two, is refused by `foldCondBranch` and by `threadConstantBranches` alike,
 // which is the other pass that turns a `condBranch` into a `branch` and drops the arm's edge through here).
 module function edgesWithoutTarget(edges BranchEdgeArray, droppedTarget BlockId) returns BranchEdgeArray
-	var kept = BranchEdgeArray.create(0)
+	var kept = BranchEdgeArray.create(edges.count(), zeroed: false)
 	var alreadyDropped = false
 
 	for edge in edges 'eachEdge'
@@ -801,11 +801,10 @@ end 'dropUnreachableBlocks'
 // Reachability is over the edges the terminator ops name, exactly as `buildStdSuccessorGraph` reads
 // them: a block without a terminator op is a `Terminator.dead` one, which no execution leaves, so
 // the block minted after it is reachable only through its own predecessors.
-module function reachableBlockPositions(module StdModule, func IrFunction) returns BoolArray
+module function reachableBlockPositions(module StdModule, func IrFunction) returns FixedBoolArray
 	let blockCount = func.blockRefs.count()
 	let byId = module.blockIndexById(func)
-	var reachable = BoolArray.create(0)
-	reachable.growFilled(blockCount, value: false)
+	var reachable = FixedBoolArray.create(blockCount)
 	var stack = BlockRefIndexArray.create(0)
 	var successors = BlockIdArray.create(0)
 
@@ -831,7 +830,7 @@ end 'reachableBlockPositions'
 typealias BlockRefIndexArray = Array with ElementIndex
 
 // Mark a block position reachable and queue it, once. Both columns are the caller's.
-function markPositionReachable(reachable BoolArray, stack BlockRefIndexArray, position ElementIndex)
+function markPositionReachable(reachable FixedBoolArray, stack BlockRefIndexArray, position ElementIndex)
 	let seenBefore = try reachable.get(position) otherwise panic("markPositionReachable: reachable.get OOB at {position}")
 
 	if seenBefore 'alreadySeen'

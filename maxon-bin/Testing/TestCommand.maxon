@@ -318,7 +318,7 @@ end 'FilteredSelection'
 // `--select=` picks which of them run, so a filter can change between runs without changing the thing
 // being tested.
 function selectionFor(groups TestFileGroupArray, total ReportedTestCount, patterns FilterPatternArray) returns FilteredSelection
-	var keys = FilterPatternArray.create(0)
+	var keys = FilterPatternArray.create(patterns.count(), zeroed: false)
 
 	for pattern in patterns 'eachPattern'
 		keys.push(pattern.toLower())
@@ -327,11 +327,7 @@ function selectionFor(groups TestFileGroupArray, total ReportedTestCount, patter
 	var tally = FilterPatternTally.create(keys, spellings: patterns)
 
 	// One slot per DISCOVERED test, indexed by run index — see `TestSelection`.
-	var selected = TestSelection.create(0)
-
-	for _ in 0 upto total 'oneSlotPerTest'
-		selected.push(false)
-	end 'oneSlotPerTest'
+	var selected = TestSelection.create(total as ElementIndex)
 
 	for group in groups 'eachFile'
 		// Lowered ONCE per file: it is the same haystack for every test the file declares.
@@ -393,7 +389,7 @@ function filterValueRefusalReason(error FilterValueError) returns String
 end 'filterValueRefusalReason'
 
 function quotedPatterns(patterns FilterPatternArray) returns String
-	var quoted = StringArray.create(0)
+	var quoted = StringArray.create(patterns.count(), zeroed: false)
 
 	for pattern in patterns 'eachPattern'
 		quoted.push("'{pattern}'")
@@ -544,8 +540,8 @@ function runBuiltTests(args MaxonArgs, staged StagedTestBuild, binary FilePath, 
 	let plan = TestLaunchPlan.create(binary, timeoutMs: args.testTimeoutMs)
 	var progress = TestRunProgress.create()
 	let reportOrder = reportFileOrder(staged.groups)
-	var ran = TestFileResultsArray.create(0)
-	var files = TestFileResultsArray.create(0)
+	var ran = TestFileResultsArray.create(staged.groups.count(), zeroed: false)
+	var files = TestFileResultsArray.create(staged.groups.count(), zeroed: false)
 	var emitted = 0 as ElementIndex
 
 	// The RUN follows the walk, so an order dependence that changes a RESULT still surfaces; only the

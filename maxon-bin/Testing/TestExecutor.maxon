@@ -33,7 +33,7 @@ let CouldNotLaunchPrefix = "the test binary could not be launched: "
 // than a list of the chosen ones: membership is asked once per test per shard build and once more per
 // test by `--list`, and a scan would make that Θ(tests²) in a project's own size for a question that
 // never changes during a run.
-export typealias TestSelection = Array with bool
+export typealias TestSelection = FixedArray with bool
 
 // Whether this run selected the test at `index`. Out of range answers FALSE, which is the honest
 // answer and not a swallowed error: the selection is built with one entry per DISCOVERED test, so an
@@ -357,7 +357,7 @@ function attributeLaunch(plan TestLaunchPlan, group TestFileGroup, expected Test
 		stated(problem) gives problem
 	end 'launch'
 
-	var settled = UnitTestResultArray.create(0)
+	var settled = UnitTestResultArray.create(expected.count(), zeroed: false)
 	var unobserved = TestRunIndexArray.create(0)
 
 	for index in expected 'eachExpectedTest'
@@ -397,7 +397,7 @@ end 'resultFor'
 function withLeakAttribution(plan TestLaunchPlan, results UnitTestResultArray, leaked bool) returns UnitTestResultArray
 	let onlyCandidate = results.count() == 1
 
-	var updated = UnitTestResultArray.create(0)
+	var updated = UnitTestResultArray.create(results.count(), zeroed: false)
 
 	for result in results 'eachResult'
 		if not leaked or result.outcome != UnitTestOutcome.passed 'keepsItsVerdict'
@@ -506,7 +506,7 @@ end 'executeShard'
 // same move a leak needs and for the same reason. The recursion is one level deep: a shard of one takes
 // the branch above.
 function deadlineVerdicts(plan TestLaunchPlan, group TestFileGroup, indices TestRunIndexArray) returns UnitTestResultArray
-	var verdicts = UnitTestResultArray.create(0)
+	var verdicts = UnitTestResultArray.create(indices.count(), zeroed: false)
 
 	if indices.count() == 1 'exactlyOneCandidate'
 		let index = try indices.get(0) otherwise panic("deadlineVerdicts: index 0 exists — the count is exactly 1 one line above")
@@ -526,7 +526,7 @@ end 'deadlineVerdicts'
 function unobservedVerdicts(group TestFileGroup, indices TestRunIndexArray, reason String) returns UnitTestResultArray
 	let output = reason if not reason.isEmpty() else NothingStartedText
 
-	var verdicts = UnitTestResultArray.create(0)
+	var verdicts = UnitTestResultArray.create(indices.count(), zeroed: false)
 
 	for index in indices 'eachTest'
 		verdicts.push(UnitTestResult.create(index, test: testOf(group, index: index), outcome: UnitTestOutcome.didNotRun, nanos: 0, thrown: ThrownReport.absent, output: output))

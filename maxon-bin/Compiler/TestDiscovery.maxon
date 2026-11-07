@@ -88,8 +88,7 @@ end 'cacheWriteDiscoveredTestArray'
 
 module function cacheReadDiscoveredTestArray(reader LibraryCacheReader) returns DiscoveredTestArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DiscoveredTestArray.create(0)
-	result.reserve(count)
+	var result = DiscoveredTestArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try DiscoveredTest.cacheRead(reader)
@@ -128,9 +127,10 @@ export function discoverTests(inputPaths MaxonSourcePathArray, target Target) re
 		try refuseCompile(project)
 	end 'theSweepReported'
 
-	var found = DiscoveredTestArray.create(0)
+	view declaredTests = signatures.settledDeclarations().declaredTests
+	var found = DiscoveredTestArray.create(declaredTests.count(), zeroed: false)
 
-	for declared in signatures.settledDeclarations().declaredTests 'eachDeclaredTest'
+	for declared in declaredTests 'eachDeclaredTest'
 		found.push(DiscoveredTest.create(declared.symbol.clone(), displayName: declared.displayName, file: declared.file, line: declared.line))
 	end 'eachDeclaredTest'
 

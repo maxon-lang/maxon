@@ -51,6 +51,7 @@
 // a walk root. ⚠ That is NOT "no program pays": a live `CharacterSet` preset is a calling-initializer global,
 // so any program that reads one has roots here.
 
+typealias FixedGlobalInitIndexArray = FixedArray with ElementIndex
 typealias GlobalInitIndexArray = Array with ElementIndex
 typealias GlobalInitIndexSet = Set with ElementIndex
 typealias GlobalInitIndexByLabel = Map with (ByteArray, ElementIndex)
@@ -59,6 +60,8 @@ typealias GlobalInitIndexByLabel = Map with (ByteArray, ElementIndex)
 typealias GlobalInitDependencies = Array with GlobalInitIndexArray
 
 typealias GlobalInitCursorArray = Array with ElementIndex
+
+typealias GlobalInitSeenFlags = FixedArray with bool
 
 // How much a walk may credit — see the header's two-edge-sets paragraph.
 enum EdgeConfidence
@@ -89,15 +92,16 @@ export function dependencyOrderedGlobals(module MaxonModule, project Project, si
 		return globals
 	end 'nothingRunsProgramCode'
 
-	var nodes = InitOrderNodeArray.create(0)
+	var nodes = InitOrderNodeArray.create(globals.count(), zeroed: false)
 
 	for global in globals 'eachGlobal'
 		nodes.push(InitOrderNode.create(global.label, initCallees: global.initCallees))
 	end 'eachGlobal'
 
-	var ordered = ManagedGlobalArray.create(0)
+	let order = try dependencyOrder(module, project: project, signatures: signatures, nodes: nodes, refusal: InitCycleRefusal.globals(globals))
+	var ordered = ManagedGlobalArray.create(order.count(), zeroed: false)
 
-	for position in try dependencyOrder(module, project: project, signatures: signatures, nodes: nodes, refusal: InitCycleRefusal.globals(globals)) 'eachPosition'
+	for position in order 'eachPosition'
 		ordered.push(globalAt(globals, index: position))
 	end 'eachPosition'
 
@@ -112,7 +116,7 @@ export function dependencyOrderedDefaults(module MaxonModule, project Project, s
 		return defaults
 	end 'nothingToOrder'
 
-	var nodes = InitOrderNodeArray.create(0)
+	var nodes = InitOrderNodeArray.create(defaults.count(), zeroed: false)
 
 	for slot in defaults 'eachDefault'
 		var roots = NameRoster.create(0)
@@ -120,9 +124,10 @@ export function dependencyOrderedDefaults(module MaxonModule, project Project, s
 		nodes.push(InitOrderNode.create(slot.label, initCallees: roots))
 	end 'eachDefault'
 
-	var ordered = DefaultSlotArray.create(0)
+	let order = try dependencyOrder(module, project: project, signatures: signatures, nodes: nodes, refusal: InitCycleRefusal.defaults(defaults))
+	var ordered = DefaultSlotArray.create(order.count(), zeroed: false)
 
-	for position in try dependencyOrder(module, project: project, signatures: signatures, nodes: nodes, refusal: InitCycleRefusal.defaults(defaults)) 'eachPosition'
+	for position in order 'eachPosition'
 		ordered.push(try defaults.get(position) otherwise panic("dependencyOrderedDefaults: defaults.get OOB at {position}, a position this walk minted over the same list"))
 	end 'eachPosition'
 
@@ -181,7 +186,7 @@ end 'anyInitializerCalls'
 // have forced is lost and that global reads a zero. The alternative is refusing every program whose witness
 // impls happen to cross-reference, and which impl a dispatch runs is a fact about its receiver.
 function buildEffectiveDeps(nodeCount ElementIndex, named GlobalInitDependencies, possible GlobalInitDependencies, refusal InitCycleRefusal, project Project) returns GlobalInitDependencies throws CompileError
-	var effective = GlobalInitDependencies.create(0)
+	var effective = GlobalInitDependencies.create(nodeCount, zeroed: false)
 
 	for _ in 0 upto nodeCount 'eachGlobal'
 		effective.push(GlobalInitIndexArray.create(0))
@@ -240,13 +245,8 @@ end 'reachesBack'
 // Iterative, with a parent column, for `orderedByDependency`'s reason: nothing here may recurse to the depth
 // of a user's dependency chain.
 function pathBetween(deps GlobalInitDependencies, from ElementIndex, to ElementIndex) returns GlobalInitIndexArray
-	var seen = BoolArray.create(0)
-	seen.resize(deps.count())
-	var parent = GlobalInitIndexArray.create(0)
-
-	for _ in 0 upto deps.count() 'eachGlobal'
-		parent.push(0)
-	end 'eachGlobal'
+	var seen = GlobalInitSeenFlags.create(deps.count())
+	var parent = FixedGlobalInitIndexArray.create(deps.count())
 
 	var stack = GlobalInitIndexArray.create(0)
 	stack.push(from)
@@ -277,7 +277,7 @@ end 'pathBetween'
 
 // The walked path, source first. `from`'s own parent entry is never read, which is what lets the climb
 // terminate on it rather than on a sentinel.
-function pathBackFrom(node ElementIndex, from ElementIndex, parent GlobalInitIndexArray) returns GlobalInitIndexArray
+function pathBackFrom(node ElementIndex, from ElementIndex, parent FixedGlobalInitIndexArray) returns GlobalInitIndexArray
 	var reversed = GlobalInitIndexArray.create(0)
 	var walker = node
 	reversed.push(walker)
@@ -287,7 +287,7 @@ function pathBackFrom(node ElementIndex, from ElementIndex, parent GlobalInitInd
 		reversed.push(walker)
 	end 'climb'
 
-	var path = GlobalInitIndexArray.create(0)
+	var path = GlobalInitIndexArray.create(reversed.count(), zeroed: false)
 
 	for i in 0 upto reversed.count() 'eachStep'
 		path.push(try reversed.get(reversed.count() - 1 - i) otherwise panic("pathBackFrom: reversed.get OOB inside a loop bounded by its own count"))
@@ -323,11 +323,10 @@ function initDependencies(module MaxonModule, project Project, signatures Progra
 		slotOf.upsert(nodeAt(nodes, index: i).label, value: i)
 	end 'eachGlobal'
 
-	var reached = BoolArray.create(0)
-	reached.resize(module.funcCount())
+	var reached = FixedBoolArray.create(module.funcCount())
 	var names = FunctionNameSet.create()
 
-	var deps = GlobalInitDependencies.create(0)
+	var deps = GlobalInitDependencies.create(nodes.count(), zeroed: false)
 
 	for j in 0 upto nodes.count() 'eachRoot'
 		let node = nodeAt(nodes, index: j)
@@ -348,7 +347,7 @@ function nodeAt(nodes InitOrderNodeArray, index ElementIndex) returns InitOrderN
 	return try nodes.get(index) otherwise panic("nodeAt: nodes.get OOB at {index}, outside the list every position in this walk was minted from")
 end 'nodeAt'
 
-function clearReached(reached BoolArray)
+function clearReached(reached FixedBoolArray)
 	for i in 0 upto reached.count() 'eachFunction'
 		try reached.set(i, value: false) otherwise panic("clearReached: reached.set OOB at {i}, inside a loop bounded by its own count")
 	end 'eachFunction'
@@ -356,7 +355,7 @@ end 'clearReached'
 
 // Every global slot named by any function reachable from `roots` at this confidence — the initializer's own
 // call tree, walked to a fixpoint.
-function slotsReadFrom(module MaxonModule, project Project, signatures ProgramSignatures, index FunctionNameIndex, roots NameRoster, slotOf GlobalInitIndexByLabel, reached BoolArray, names FunctionNameSet, edges EdgeConfidence) returns GlobalInitIndexArray
+function slotsReadFrom(module MaxonModule, project Project, signatures ProgramSignatures, index FunctionNameIndex, roots NameRoster, slotOf GlobalInitIndexByLabel, reached FixedBoolArray, names FunctionNameSet, edges EdgeConfidence) returns GlobalInitIndexArray
 	var found = GlobalInitIndexArray.create(0)
 	var claimed = GlobalInitIndexSet.create()
 	var worklist = FuncIndexArray.create(0)
@@ -389,14 +388,14 @@ end 'slotsReadFrom'
 
 // The callee an op binds, credited at this confidence. `possible` is `StdlibSource`'s own edge; `named` asks
 // the same dialect classifier and then declines a minted parameter-default helper.
-function markOpCallee(op MaxonOp, edges EdgeConfidence, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markOpCallee(op MaxonOp, edges EdgeConfidence, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match edges 'edges'
 		possible then markMaxonCalleeEdge(op, byName: byName, reached: reached, worklist: worklist, names: names)
 		named then markNamedOpCallee(op, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'edges'
 end 'markOpCallee'
 
-function markNamedOpCallee(op MaxonOp, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markNamedOpCallee(op MaxonOp, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match maxonOpCalleeKind(op) 'kind'
 		direct or
 		functionValue then markCalleeEdge(maxonOpCalleeName(op), edges: EdgeConfidence.named, byName: byName, reached: reached, worklist: worklist, names: names)
@@ -405,14 +404,14 @@ function markNamedOpCallee(op MaxonOp, byName FuncIndexByName, reached BoolArray
 end 'markNamedOpCallee'
 
 // One callee NAME, credited at this confidence.
-function markCalleeEdge(name ByteArray, edges EdgeConfidence, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markCalleeEdge(name ByteArray, edges EdgeConfidence, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match edges 'edges'
 		possible then markOneReachable(name, byName: byName, reached: reached, worklist: worklist, names: names)
 		named then markNamedCallee(name, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'edges'
 end 'markCalleeEdge'
 
-function markNamedCallee(name ByteArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markNamedCallee(name ByteArray, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	if isParamDefaultHelperName(name) 'aParamDefaultHelper'
 		return
 	end 'aParamDefaultHelper'
@@ -422,7 +421,7 @@ end 'markNamedCallee'
 
 // A reached type's witness impls. A dispatch names a SLOT rather than a body, so which impl runs is a fact
 // about the receiver — credited at `possible` and never at `named`.
-function markWitnessEdges(func IrFunction, project Project, signatures ProgramSignatures, edges EdgeConfidence, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markWitnessEdges(func IrFunction, project Project, signatures ProgramSignatures, edges EdgeConfidence, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match edges 'edges'
 		named then break
 		possible then markConformerWitnessImpls(func, project: project, signatures: signatures, seedConformers: noSeededConformers, byName: byName, reached: reached, worklist: worklist, names: names)
@@ -461,13 +460,13 @@ end 'noteSlotNamed'
 // compiler's own stack with no diagnostic and no binary (`STATUS_STACK_OVERFLOW`), while the same program
 // with the chain broken compiled. The frames are heap arrays here, so depth costs memory and nothing else.
 function orderedByDependency(nodeCount ElementIndex, deps GlobalInitDependencies) returns GlobalInitIndexArray
-	var state = GlobalInitVisitArray.create(0)
+	var state = GlobalInitVisitArray.create(nodeCount, zeroed: false)
 
 	for _ in 0 upto nodeCount 'eachGlobal'
 		state.push(GlobalInitVisit.unvisited)
 	end 'eachGlobal'
 
-	var ordered = GlobalInitIndexArray.create(0)
+	var ordered = GlobalInitIndexArray.create(nodeCount, zeroed: false)
 	var frames = GlobalInitIndexArray.create(0)
 	var cursors = GlobalInitCursorArray.create(0)
 
@@ -543,14 +542,14 @@ function refuseInitializationCycle(arc GlobalInitIndexArray, refusal InitCycleRe
 end 'refuseInitializationCycle'
 
 function refuseDefaultCycle(arc GlobalInitIndexArray, defaults DefaultSlotArray, project Project)
-	var members = GlobalInitIndexArray.create(0)
+	var members = GlobalInitIndexArray.create(arc.count(), zeroed: false)
 
 	for member in arc 'eachMember'
 		members.push(member)
 	end 'eachMember'
 
 	members.sort()
-	var keys = NameRoster.create(0)
+	var keys = NameRoster.create(members.count(), zeroed: false)
 
 	for member in members 'eachDeclared'
 		keys.push((try defaults.get(member) otherwise panic("refuseDefaultCycle: defaults.get OOB at {member}, a position this walk minted")).declaration.key)

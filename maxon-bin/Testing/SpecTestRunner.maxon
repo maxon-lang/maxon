@@ -954,7 +954,6 @@ end 'TestRun'
 // `notRequired` observation included, so the third pass pairs them by index; a length that disagrees
 // panics rather than misattributing a result.
 export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap) returns SpecRun throws CompileError
-	var results = SpecTestResultArray.create(0)
 	var cpu = SuiteCpuTally.zero()
 
 	let specPath = specDir.join("{specName}{SpecFileExtension}")
@@ -962,9 +961,10 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	let tests = testsThatRun(selectedTests(parsed.tests, specName: specName, filterPatterns: filterPatterns, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, assumeNativeHost: false).selected, runs: runs)
 
 	if tests.count() == 0 'selectsNothing'
-		return SpecRun.create(results, cpu: cpu, batch: BatchTally.zero())
+		return SpecRun.create(SpecTestResultArray.create(0), cpu: cpu, batch: BatchTally.zero())
 	end 'selectsNothing'
 
+	var results = SpecTestResultArray.create(tests.count(), zeroed: false)
 	let tempDir = specTempDirFor(specDir, specName: specName)
 
 	if not Directory.create(tempDir) 'noTempDir'
@@ -979,7 +979,7 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	let actions = irActionsFor(tests, holdsPins: specHoldsAnyPin(parsed.tests), mode: mode, effectiveTarget: effectiveTarget)
 	let batch = prepareBatch(tests, actions: actions, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, mode: mode, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 	var reminted = BlockRemintArray.create(0)
-	var prepared = PreparedTestArray.create(0)
+	var prepared = PreparedTestArray.create(tests.count(), zeroed: false)
 
 	for (iter, test) in tests.withIterator() 'eachCompile'
 		var batchedStep = batch.stepFor(iter.index())
@@ -1093,7 +1093,7 @@ function withBatchedFailuresDiagnosed(performed RunsPerformed, prepared Prepared
 		return performed
 	end 'nothingFailedBatched'
 
-	var again = PreparedTestArray.create(0)
+	var again = PreparedTestArray.create(failed.count(), zeroed: false)
 
 	for at in failed 'eachAffected'
 		let test = try tests.get(at) otherwise panic("withBatchedFailuresDiagnosed: test {at} is past the {tests.count()} the spec selected")
@@ -1200,7 +1200,7 @@ function irActionFor(test SpecTest, holdsPins bool, mode SpecRunMode, effectiveT
 end 'irActionFor'
 
 function irActionsFor(tests SpecTestArray, holdsPins bool, mode SpecRunMode, effectiveTarget Target) returns IrActionArray
-	var actions = IrActionArray.create(0)
+	var actions = IrActionArray.create(tests.count(), zeroed: false)
 
 	for test in tests 'eachTest'
 		actions.push(irActionFor(test, holdsPins: holdsPins, mode: mode, effectiveTarget: effectiveTarget))
@@ -1619,7 +1619,7 @@ end 'ResultTally'
 export typealias VerdictTokenArray = Array with VerdictToken
 
 export function tallyResults(results SpecTestResultArray) returns ResultTally
-	var verdicts = VerdictTokenArray.create(0)
+	var verdicts = VerdictTokenArray.create(results.count(), zeroed: false)
 
 	for result in results 'each'
 		verdicts.push(result.outcome.token())
@@ -1758,9 +1758,10 @@ end 'unrunnableReasonFor'
 // The list itself is rendered by `indentedList` rather than by a loop written here — that function
 // exists because four files had each written this loop and nothing would have made them agree.
 function indentedRefusals(text String) returns String
-	var lines = StringArray.create(0)
+	let rows = text.split(LineSeparator)
+	var lines = StringArray.create(rows.count(), zeroed: false)
 
-	for line in text.split(LineSeparator) 'eachLine'
+	for line in rows 'eachLine'
 		let trimmed = line.trim()
 
 		if trimmed.isEmpty() 'blank'
@@ -1847,7 +1848,7 @@ typealias FilterPatternIndexArray = Array with ElementIndex
 export type FilterPatternTally
 	let keys as FilterPatternArray
 	let spellings as FilterPatternArray
-	var matched as BoolArray
+	var matched as FixedBoolArray
 	var hits as FilterPatternIndexArray
 
 	module static function create(keys FilterPatternArray, spellings FilterPatternArray) returns FilterPatternTally
@@ -1855,13 +1856,7 @@ export type FilterPatternTally
 			panic("FilterPatternTally.create: {keys.count()} match key(s) for {spellings.count()} spelling(s), and each pattern has one of each")
 		end 'unpaired'
 
-		var matched = BoolArray.create(0)
-
-		for _ in keys 'eachPattern'
-			matched.push(false)
-		end 'eachPattern'
-
-		return Self{keys: keys, spellings: spellings, matched: matched, hits: FilterPatternIndexArray.create(0)}
+		return Self{keys: keys, spellings: spellings, matched: FixedBoolArray.create(keys.count()), hits: FilterPatternIndexArray.create(0)}
 	end 'create'
 
 	module function filters() returns bool
@@ -2295,7 +2290,7 @@ function batchRefusalVerdict(pending PendingRun, diagnostics String) returns Pre
 end 'batchRefusalVerdict'
 
 function batchSteps(program BatchProgram, ordinal ElementIndex, tests SpecTestArray, specName String, specDirName String, ticks CpuTicks, effectiveTarget Target) returns PreparedTestArray
-	var steps = PreparedTestArray.create(0)
+	var steps = PreparedTestArray.create(program.members.count(), zeroed: false)
 	let cases = program.members.count() as CpuTicks
 	let share = try (ticks / cases) otherwise panic("batchSteps: a batch program has at least {MinBatchedCases} members")
 	let remainder = ticks - share * cases
@@ -2858,9 +2853,10 @@ end 'linesWithoutMonitorPrefix'
 
 // Every line of `text` that does not begin with `prefix`, rejoined. The one filter both stream splits use.
 function linesWithoutPrefix(text String, prefix String) returns String
-	var kept = StringArray.create(0)
+	let rows = text.split(LineSeparator)
+	var kept = StringArray.create(rows.count(), zeroed: false)
 
-	for line in text.split(LineSeparator) 'eachLine'
+	for line in rows 'eachLine'
 		if line.trim().startsWith(prefix) 'monitorsOwn'
 			continue
 		end 'monitorsOwn'
@@ -2948,7 +2944,7 @@ function stageTest(tempDir FilePath, test SpecTest, specDirName String) returns 
 		return StagingResult.failed("could not write fragment {fragmentPath.toString()}")
 	end 'writeFailed'
 
-	var buildTargets = MaxonSourcePathArray.create(0)
+	var buildTargets = MaxonSourcePathArray.create(1, zeroed: false)
 	buildTargets.push(fragmentPath)
 
 	let stdlibDir = try locateStdlibDir() otherwise return StagingResult.failed(missingStdlibReason())
@@ -3008,7 +3004,7 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, specDirName String) r
 	// case's private stdlib is not one of the units the program is built FROM. `staged` is separate
 	// from BOTH: it is every file the case declared, before `compilationUnitsAmong` decides which of
 	// them are part of the program.
-	var staged = MaxonSourcePathArray.create(0)
+	var staged = MaxonSourcePathArray.create(test.sourceFiles.count() + 1, zeroed: false)
 
 	for file in test.sourceFiles 'eachFile'
 		if not isSafeRelativeName(file.name) 'unsafeName'
@@ -3131,7 +3127,7 @@ end 'stageFragment'
 // declared AFTER the file it excludes would not exist yet, and the case's meaning would depend on the
 // order its sections happen to be written in.
 function compilationUnitsAmong(staged MaxonSourcePathArray, root FilePath) returns MaxonSourcePathArray
-	var targets = MaxonSourcePathArray.create(0)
+	var targets = MaxonSourcePathArray.create(staged.count(), zeroed: false)
 
 	for path in staged 'eachStaged'
 		let dir = try path.parent() otherwise panic("SpecTestRunner.compilationUnitsAmong: {path.toString()} has no parent directory, though `stageSourceFiles` created one to write it into")
@@ -3667,7 +3663,7 @@ function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArg
 		unspawnable panic("SpecTestRunner: nothing on this host can execute a {targetToString(effectiveTarget)} binary, so there is no run command to build — `runStrategyFor` and `buildRunCommand` disagree about this target")
 	end 'runner'
 
-	var argv = StringArray.create(0)
+	var argv = StringArray.create(launch.argv.count() + programArgs.count(), zeroed: false)
 	argv.append(launch.argv)
 	argv.append(programArgs)
 
@@ -3684,7 +3680,7 @@ end 'buildRunCommand'
 // ⚠ It is the HOST path only, and it has to be: the monitor SPAWNS the binary, so a capture case on a
 // target this host cannot run is skipped before it is ever compiled (`targetCanCaptureTrace`).
 function buildMonitorRunCommand(modulePath FilePath, family TraceFamily, programArgs ProgramArgArray) returns RunCommand
-	var argv = StringArray.create(0)
+	var argv = StringArray.create(programArgs.count() + 3, zeroed: false)
 	argv.push(MonitorSubcommand)
 	argv.push(traceFilterArgOf(family))
 	argv.push(modulePath.toString())
@@ -3711,7 +3707,7 @@ end 'findMonitorPath'
 // skeleton was proven under. No guest argv, no `--dir`/socket preopens:
 // the scalar slice does no I/O, and one `-S` setting is all the scalar surface needs.
 function buildWasmRunCommand(modulePath FilePath) returns RunCommand
-	var argv = StringArray.create(0)
+	var argv = StringArray.create(4, zeroed: false)
 	argv.push(WasmtimeRunSubcommand)
 	argv.push(WasmtimeSettingFlag)
 	argv.push(WasmtimeExitWithCodeSetting)
@@ -3762,7 +3758,7 @@ end 'findWasmtimePath'
 //
 // A missing `orb` is caught ONCE, up front, by `requireRunnerAvailable`.
 function buildLinuxVmRunCommand(exePath FilePath) returns RunCommand
-	var argv = StringArray.create(0)
+	var argv = StringArray.create(4, zeroed: false)
 	argv.push(OrbRunSubcommand)
 	argv.push(OrbMachineFlag)
 	argv.push(OrbMachineName)
@@ -3860,7 +3856,7 @@ function buildGuestCompiler(harnessExe FilePath, projectRoot FilePath, guestExe 
 	let targetKey = targetToString(effectiveTarget)
 	printError("building the {targetKey} compiler that will run this suite ({because}) — a few minutes, unless the build finds it up to date\n")
 
-	var argv = StringArray.create(0)
+	var argv = StringArray.create(4, zeroed: false)
 	argv.push(BuildSubcommandName)
 	argv.push(projectRoot.toString())
 	argv.push("{TargetFlagPrefix}{targetKey}")
@@ -4062,7 +4058,7 @@ function caseExecution(pending PendingRun, specName String) returns Execution
 end 'caseExecution'
 
 function selectedExecution(program BatchProgram, indices TestRunIndexArray, key String, label String) returns Execution
-	var arguments = ProgramArgArray.create(0)
+	var arguments = ProgramArgArray.create(1, zeroed: false)
 	arguments.push("{testSelectFlag()}{formatTestSelection(indices)}")
 	return Execution.create(program.exePath, key: key, arguments: arguments, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, traceCapture: SpecTraceCapture.off, label: label)
 end 'selectedExecution'
@@ -4160,7 +4156,7 @@ function executeRuns(prepared PreparedTestArray, batches PreparedBatchArray, spe
 end 'executeRuns'
 
 function notRequiredFor(prepared PreparedTestArray) returns RunObservationArray
-	var observations = RunObservationArray.create(0)
+	var observations = RunObservationArray.create(prepared.count(), zeroed: false)
 
 	for _ in prepared 'eachStep'
 		observations.push(RunObservation.notRequired)
@@ -4224,7 +4220,7 @@ function batchedPerformed(program BatchProgram, ordinal ElementIndex, prepared P
 end 'batchedPerformed'
 
 function notRunnableHereFor(caseCount ElementIndex) returns RunObservationArray
-	var members = RunObservationArray.create(0)
+	var members = RunObservationArray.create(caseCount, zeroed: false)
 
 	for _ in 0 upto caseCount 'eachCase'
 		members.push(RunObservation.notRunnableHere)
@@ -4234,7 +4230,7 @@ function notRunnableHereFor(caseCount ElementIndex) returns RunObservationArray
 end 'notRunnableHereFor'
 
 function readAloneRuns(reruns RunObservationArray, cases TestRunIndexArray) returns RunObservationArray
-	var read = RunObservationArray.create(0)
+	var read = RunObservationArray.create(cases.count(), zeroed: false)
 
 	for (iter, caseIndex) in cases.withIterator() 'eachCase'
 		read.push(readAlone(observationAt(reruns, index: iter.index()), caseIndex: caseIndex))
@@ -4244,7 +4240,7 @@ function readAloneRuns(reruns RunObservationArray, cases TestRunIndexArray) retu
 end 'readAloneRuns'
 
 function rerunsOf(program BatchProgram, cases TestRunIndexArray, specName String) returns ExecutionArray
-	var executions = ExecutionArray.create(0)
+	var executions = ExecutionArray.create(cases.count(), zeroed: false)
 
 	for caseIndex in cases 'eachCase'
 		executions.push(selectedExecution(program, indices: soleIndex(caseIndex), key: "{program.exePath.filename()}.{caseIndex}", label: "{specName}: case {caseIndex} of the batch program, alone"))
@@ -4254,7 +4250,7 @@ function rerunsOf(program BatchProgram, cases TestRunIndexArray, specName String
 end 'rerunsOf'
 
 function settledMembers(readings BatchReadingArray, reruns RunObservationArray) returns RunObservationArray
-	var members = RunObservationArray.create(0)
+	var members = RunObservationArray.create(readings.count(), zeroed: false)
 	var rerunCursor = 0 as ElementIndex
 
 	for reading in readings 'eachReading'
@@ -4290,7 +4286,7 @@ end 'placeBatched'
 
 // One spawn per test — the host's own binaries, and the two external runners that are not batched.
 function spawnEach(executions ExecutionArray, runWorkingDir FilePath, effectiveTarget Target) returns RunObservationArray
-	var observations = RunObservationArray.create(0)
+	var observations = RunObservationArray.create(executions.count(), zeroed: false)
 
 	for execution in executions 'eachExecution'
 		observations.push(spawnExecution(execution, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget))
@@ -4450,7 +4446,7 @@ function runGuestBatch(executions ExecutionArray, launcher BatchLauncher, specNa
 
 	let launch = launchBatch(executions, launcher: launcher, tempDir: tempDir, batchDir: batchDir, runWorkingDir: runWorkingDir)
 
-	var observations = RunObservationArray.create(0)
+	var observations = RunObservationArray.create(executions.count(), zeroed: false)
 
 	for execution in executions 'eachExecution'
 		observations.push(batchObservationFor(execution.key, launcher: launcher, batchDir: batchDir, launch: launch))
@@ -4905,7 +4901,7 @@ end 'orbEmulatedMachineRequirement'
 // answer — and because a stopped machine is STARTED by this call, so the first real test does not
 // pay that latency inside its own timing.
 function requireOrbMachineReachable(effectiveTarget Target, probeScript String, requirement String)
-	var argv = StringArray.create(0)
+	var argv = StringArray.create(6, zeroed: false)
 	argv.push(OrbRunSubcommand)
 	argv.push(OrbMachineFlag)
 	argv.push(OrbMachineName)
@@ -4936,7 +4932,7 @@ end 'requireOrbMachineReachable'
 function requireWslAvailable(effectiveTarget Target)
 	let wslTargetKey = targetToString(effectiveTarget)
 
-	var argv = StringArray.create(0)
+	var argv = StringArray.create(4, zeroed: false)
 	argv.push(WslExecFlag)
 	argv.push(GuestShell)
 	argv.push(GuestShellCommandFlag)
@@ -5457,7 +5453,7 @@ end 'portableLibraryTail'
 // and NO renumbering (its lines are already the fragment's). An compiler-native expectation names
 // `<fragment>` already and passes through untouched.
 function referencePathMapping(specDirName String, specName String, testName String) returns FragmentPathMappingArray
-	var paths = FragmentPathMappingArray.create(0)
+	var paths = FragmentPathMappingArray.create(1, zeroed: false)
 
 	// No directory prefix: an expectation ported from `/specs` carries its own (`dir_b/<fragment>`) in
 	// the corpus text, ahead of the fragment path this replaces, and passes through untouched.
@@ -5475,9 +5471,10 @@ function rewriteDiagnosticPaths(text String, path String, lineOffset ElementInde
 		return text.replace(path, with: token)
 	end 'linesAlreadyMatch'
 
-	var rewritten = StringArray.create(0)
+	let rows = text.split(LineSeparator)
+	var rewritten = StringArray.create(rows.count(), zeroed: false)
 
-	for line in text.split(LineSeparator) 'eachLine'
+	for line in rows 'eachLine'
 		rewritten.push(rewriteDiagnosticLine(line, path: path, lineOffset: lineOffset, token: token))
 	end 'eachLine'
 

@@ -50,7 +50,7 @@ export union BackendRegisterRead
 	unreadable
 end 'BackendRegisterRead'
 
-typealias BackendRegisterWordArray = Array with BackendWord
+typealias BackendRegisterWordArray = FixedArray with BackendWord
 
 export function backendIsVectorSlot(number BackendRegisterNumber) returns bool
 	return number >= BackendGprSlots and number < BackendGprSlots + BackendVectorSlots
@@ -61,13 +61,7 @@ export type DebugRegisterFile
 	var vectorsRead as bool
 
 	export static function create() returns DebugRegisterFile
-		var slots = BackendRegisterWordArray.create(0)
-
-		for _ in 0 upto BackendRegisterSlots 'eachSlot'
-			slots.push(0)
-		end 'eachSlot'
-
-		return Self{slots: slots, vectorsRead: false}
+		return Self{slots: BackendRegisterWordArray.create(BackendRegisterSlots), vectorsRead: false}
 	end 'create'
 
 	export function awaitsItsVectors(number BackendRegisterNumber) returns bool

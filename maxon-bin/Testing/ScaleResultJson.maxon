@@ -126,7 +126,7 @@ end 'addRepeatSampling'
 // ===========================================================================================
 
 function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, bytes ByteDelta) returns JsonNodeId
-	var items = JsonNodeIdArray.create(0)
+	var items = JsonNodeIdArray.create(results.count(), zeroed: false)
 
 	for i in 0 upto results.count() 'eachRung'
 		let result = try results.get(i) otherwise panic("rungsNode: i < count but results.get({i}) failed")
@@ -154,8 +154,8 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, byt
 		// The per-phase breakdown, off the ONE phase enumeration the human table also walks
 		// (ScaleTestRunner.scalePhaseSources) — so a phase added to `CompilePhase` appears in the report
 		// and in this document together, or in neither.
-		var phases = JsonNodeIdArray.create(0)
-		var subs = JsonNodeIdArray.create(0)
+		var phases = JsonNodeIdArray.create(CompilePhase.allCases.count(), zeroed: false)
+		var subs = JsonNodeIdArray.create(RegAllocPhase.allCases.count(), zeroed: false)
 
 		for source in scalePhaseSources() 'eachPhase'
 			let node = metricNode(doc, name: phaseSourceName(source), metric: phaseMetricOf(source, result: result))

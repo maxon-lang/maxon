@@ -431,9 +431,10 @@ type DapAdapter
 	function setSourceBreakpoints(request DapRequest, session DebugToolSession) throws DapArgumentError
 		let spelled = try (try request.arguments.object(SourceArgument)).text(PathArgument)
 		let path = try FilePath.from(spelled) otherwise throw DapArgumentError.wrongType(PathArgument)
-		var asked = DapBreakpointRequestArray.create(0)
+		let breakpoints = try request.arguments.objects(BreakpointsArgument)
+		var asked = DapBreakpointRequestArray.create(breakpoints.count(), zeroed: false)
 
-		for breakpoint in try request.arguments.objects(BreakpointsArgument) 'eachBreakpoint'
+		for breakpoint in breakpoints 'eachBreakpoint'
 			let clientLine = try breakpoint.number(LineArgument)
 			let line = self.numbering.lineFromClient(clientLine)
 
@@ -460,7 +461,7 @@ type DapAdapter
 	end 'sourceBreakpointsAt'
 
 	function holdSourceBreakpoints(path FilePath, armed DapBreakpointAskArray)
-		var kept = DapSourceBreakpointsArray.create(0)
+		var kept = DapSourceBreakpointsArray.create(self.sourceBreakpoints.count() + 1, zeroed: false)
 
 		for source in self.sourceBreakpoints 'eachSource'
 			if not source.path.equals(path) 'anotherSource'
@@ -473,9 +474,10 @@ type DapAdapter
 	end 'holdSourceBreakpoints'
 
 	function setFunctionBreakpoints(request DapRequest, session DebugToolSession) throws DapArgumentError
-		var asked = DapBreakpointRequestArray.create(0)
+		let breakpoints = try request.arguments.objects(BreakpointsArgument)
+		var asked = DapBreakpointRequestArray.create(breakpoints.count(), zeroed: false)
 
-		for breakpoint in try request.arguments.objects(BreakpointsArgument) 'eachBreakpoint'
+		for breakpoint in breakpoints 'eachBreakpoint'
 			asked.push(DapBreakpointRequest.ask(DapBreakpointAsk.create(DebugBreakTarget.named(try breakpoint.text(NameArgument)), condition: try dapBreakCondition(breakpoint), requested: DapRequestedLine.none)))
 		end 'eachBreakpoint'
 
@@ -488,7 +490,7 @@ type DapAdapter
 		end 'eachPrevious'
 
 		var doc = JsonDoc.create()
-		var nodes = JsonNodeIdArray.create(0)
+		var nodes = JsonNodeIdArray.create(asked.count(), zeroed: false)
 		var armed = DapBreakpointAskArray.create(0)
 
 		for requested in asked 'eachBreakpoint'
@@ -658,7 +660,7 @@ type DapAdapter
 
 	function respondValues(request DapRequest, tree ElementIndex, indices DebugValueIndexArray)
 		var doc = JsonDoc.create()
-		var nodes = JsonNodeIdArray.create(0)
+		var nodes = JsonNodeIdArray.create(indices.count(), zeroed: false)
 
 		for index in indices 'eachValue'
 			view value = (try self.renderedTrees.get(tree) otherwise panic("DapAdapter.respondValues: the tree was registered before its values were asked for")).nodeAt(index)
@@ -876,7 +878,7 @@ type DapAdapter
 	end 'emitProgramOutput'
 
 	function emitText(category String, text String)
-		var lines = StringArray.create(0)
+		var lines = StringArray.create(1, zeroed: false)
 		lines.push(text)
 		self.emitLines(category, lines: lines)
 	end 'emitText'

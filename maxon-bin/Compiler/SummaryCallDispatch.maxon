@@ -83,6 +83,8 @@ function functionValueBodiesKey(calleeType ByteArray, readerFilePath FilePath) r
 	return "{String.from(calleeType)}{FunctionValueReaderSeparator}{readerFilePath}".toByteArray()
 end 'functionValueBodiesKey'
 
+typealias ReachedBlockFlags = FixedArray with bool
+
 // The block order of `ProvenanceTracer.walk`, `ProvenanceTracer.stageParamEdges` and
 // `CycleTrace.walk`, which must agree: the first walk of a body files its call sites in the order
 // it meets them, and the others replay that list by position, so a walker in another order reads
@@ -108,8 +110,7 @@ module function callSiteWalkOrder(ir MaxonModule, func IrFunction) returns Block
 	end 'eachBlock'
 
 	var order = StdDominatorTree.reversePostorder(buildCsr(edgeFrom, to: edgeTo, nodeCount: blockCount as CsrIndex), blockCount: blockCount)
-	var reached = BoolArray.create(0)
-	reached.growFilled(blockCount, value: false)
+	var reached = ReachedBlockFlags.create(blockCount)
 
 	for position in order 'eachReached'
 		try reached.set(position, value: true) otherwise panic("callSiteWalkOrder: reached.set OOB at {position}")
@@ -206,14 +207,15 @@ function storeThroughRuntimeShape(walker SummaryCallWalker, func IrFunction, arg
 	end 'eachReceiver'
 end 'storeThroughRuntimeShape'
 
+typealias FuncFlags = FixedArray with bool
+
 // A least fixpoint: every body `tracesFirst` admits is traced once, then the callers of each body whose summary
 // grew are traced again until nothing grows.
 module function settleSummaries(project Project, order CsrColumn, bodies SummarizedBodies, dependencies CallDependencies) throws CompileError
 	let funcCount = order.count()
 	let ranks = ranksOf(order)
 	var worklist = FuncIndexArray.create(0)
-	var queued = BoolArray.create(0)
-	queued.refill(funcCount, value: false)
+	var queued = FuncFlags.create(funcCount)
 
 	for i in order 'firstTrace'
 		try requireStillWanted(project)
@@ -233,8 +235,7 @@ module function settleSummaries(project Project, order CsrColumn, bodies Summari
 	end 'firstTrace'
 
 	let callersByCallee = buildCsr(dependencies.callees, to: dependencies.callers, nodeCount: funcCount as CsrIndex)
-	var stale = BoolArray.create(0)
-	stale.refill(funcCount, value: false)
+	var stale = FuncFlags.create(funcCount)
 
 	for calleeIndex in worklist 'eachFirstPassGrowth'
 		markCallersStale(callersByCallee, calleeIndex: calleeIndex, through: rankAt(ranks, index: calleeIndex), stale: stale, ranks: ranks)
@@ -273,7 +274,7 @@ end 'settleSummaries'
 
 // `through` is a rank in the first pass's `order`: a caller ranked past it traced after the growth
 // and read the grown summary already.
-function markCallersStale(callersByCallee CsrGraph, calleeIndex ElementIndex, through ElementIndex, stale BoolArray, ranks CsrColumn)
+function markCallersStale(callersByCallee CsrGraph, calleeIndex ElementIndex, through ElementIndex, stale FuncFlags, ranks FixedCsrColumn)
 	for k in 0 upto callersByCallee.degree(calleeIndex as CsrIndex) 'eachCaller'
 		let callerIndex = callersByCallee.neighbour(calleeIndex as CsrIndex, k: k)
 
@@ -283,9 +284,8 @@ function markCallersStale(callersByCallee CsrGraph, calleeIndex ElementIndex, th
 	end 'eachCaller'
 end 'markCallersStale'
 
-function ranksOf(order CsrColumn) returns CsrColumn
-	var ranks = CsrColumn.create(0)
-	ranks.resize(order.count())
+function ranksOf(order CsrColumn) returns FixedCsrColumn
+	var ranks = FixedCsrColumn.create(order.count())
 
 	for (iter, index) in order.withIterator() 'eachPosition'
 		try ranks.set(index, value: iter.index() as CsrIndex) otherwise panic("ranksOf: function index {index} is outside the {order.count()} the order spans")
@@ -294,7 +294,7 @@ function ranksOf(order CsrColumn) returns CsrColumn
 	return ranks
 end 'ranksOf'
 
-function rankAt(ranks CsrColumn, index ElementIndex) returns CsrIndex
+function rankAt(ranks FixedCsrColumn, index ElementIndex) returns CsrIndex
 	return try ranks.get(index) otherwise panic("rankAt: function index {index} is outside the {ranks.count()} ranked")
 end 'rankAt'
 
@@ -509,7 +509,7 @@ module type CallSummaryIndex
 
 		if let aliasShape = try registry.aliasShapes.get(typeName) 'aDeclaredBoundary'
 			let alias = try self.project.functionTypeAliases.get(typeName) otherwise panic("CallSummaryIndex.functionValueKeeps: '{String.from(typeName)}' has a shape but no alias")
-			var names = NameRoster.create(0)
+			var names = NameRoster.create(alias.paramTypes.count(), zeroed: false)
 
 			for param in alias.paramTypes 'eachParameter'
 				names.push(param.name)
@@ -674,8 +674,7 @@ module type CallSummaryIndex
 
 		self.functionRefBodiesGathered = true
 		var bodies = CallLandingBodies.create()
-		var named = BoolArray.create(0)
-		named.refill(self.module.functions.count(), value: false)
+		var named = FixedBoolArray.create(self.module.functions.count())
 
 		for op in self.module.ops 'eachOp'
 			if maxonOpCalleeKind(op) == MaxonCalleeKind.functionValue 'aFunctionRef'

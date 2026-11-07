@@ -14,8 +14,10 @@ public type FixedArray uses Element implements BuiltinArrayLiteral, Iterable wit
 
 	/// Create a zero-initialized fixed array of the length its type states, as in `Vec3.create()` for
 	/// `typealias Vec3 = FixedArray with 3 Int`. A runtime-sized type (`FixedArray with Int`) states
-	/// no length and is created with `Buf.create(n)`. An element with no zero value (a ranged alias that
-	/// excludes 0, an enum or union whose raw values include no 0) is E3106.
+	/// no length and is created with `Buf.create(n)`. `value:` (`Vec3.create(value: v)`,
+	/// `Buf.create(n, value: v)`) starts every element at `v`. An element with no zero value (a ranged
+	/// alias that excludes 0, an enum or union whose raw values include no 0) is E3106 unless `value:`
+	/// is given.
 	public static function create() returns Self
 		return Self{}
 	end 'create'
@@ -136,6 +138,17 @@ public type FixedArray uses Element implements BuiltinArrayLiteral, Iterable wit
 			panic("FixedArray.set: the buffer refused an index inside the fixed size, which is always within the capacity")
 		end 'setErr'
 	end 'set'
+
+	/// Write `value` into every element, in place. The length does not change.
+	public function refill(value Element)
+		let applied = try managed.fill(0, count: count(), value: value) otherwise 'fillErr'
+			panic("FixedArray.refill: fill OOB — the window is the fixed size, which is inside the length")
+		end 'fillErr'
+
+		if not applied 'aDeclinedFill'
+			panic("FixedArray.refill: the buffer declined a bulk fill, which an element stored inline never does")
+		end 'aDeclinedFill'
+	end 'refill'
 
 	// =========================================================================
 	// Iterable Interface

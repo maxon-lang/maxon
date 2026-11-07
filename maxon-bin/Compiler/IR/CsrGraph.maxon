@@ -26,7 +26,11 @@
 // A dense node key, a neighbour, or a count — one non-negative integer, so one graph type serves
 // every key domain (blocks, values, functions); a consumer casts at its own door.
 export typealias CsrIndex = int(0 to u64.max) implements ElementIndex
+export typealias FixedCsrColumn = FixedArray with CsrIndex
 export typealias CsrColumn = Array with CsrIndex
+typealias CsrFillColumn = FixedArray with CsrIndex
+export typealias FlagColumn = FixedArray with bool
+export typealias IndexColumn = FixedArray with ElementIndex
 
 // `list[start[n] .. start[n+1])` are the values associated with key `n`.
 export type CsrGraph
@@ -68,8 +72,7 @@ end 'CsrGraph'
 export function buildCsr(from CsrColumn, to CsrColumn, nodeCount CsrIndex) returns CsrGraph
 	let edgeCount = from.count()
 
-	var start = CsrColumn.create(0)
-	start.resize((nodeCount + 1) as ElementIndex)
+	var start = CsrColumn.create((nodeCount + 1) as ElementIndex)
 
 	for k in 0 upto edgeCount 'countDeg'
 		let f = try from.get(k) otherwise panic("buildCsr: from.get OOB")
@@ -83,12 +86,10 @@ export function buildCsr(from CsrColumn, to CsrColumn, nodeCount CsrIndex) retur
 		try start.set(n + 1, value: a + b) otherwise panic("buildCsr: prefix start.set OOB")
 	end 'prefix'
 
-	var list = CsrColumn.create(0)
-	list.resize(edgeCount)
+	var list = CsrColumn.create(edgeCount)
 
 	// Running fill cursor per key, seeded from `start[key]`.
-	var fill = CsrColumn.create(0)
-	fill.resize(nodeCount)
+	var fill = CsrFillColumn.create(nodeCount)
 
 	for n in 0 upto nodeCount 'seedFill'
 		let s = try start.get(n) otherwise panic("buildCsr: seedFill start.get OOB")
@@ -124,7 +125,7 @@ end 'buildCsr'
 // "Re-scan every node until nothing changes" costs O(depth x (nodes + edges)) and the depth is the source
 // program's own, so the cost grows while not one token of the program changes.
 export function reverseReachabilityMark(graph CsrGraph, seeds BoolArray) returns BoolArray
-	var marked = BoolArray.create(0)
+	var marked = BoolArray.create(seeds.count(), zeroed: false)
 	var worklist = CsrColumn.create(0)
 
 	for i in 0 upto seeds.count() 'seed'
@@ -168,7 +169,7 @@ end 'reverseReachabilityMark'
 //
 // The DFS is iterated over an explicit stack rather than recursed: the depth is the graph's own, and a
 // chain of N generic aliases would be N native frames.
-export function nodesOnACycle(graph CsrGraph) returns BoolArray
+export function nodesOnACycle(graph CsrGraph) returns FixedBoolArray
 	var walk = SccWalk.overNodes(graph.nodeCount())
 
 	// The DFS stack, as parallel columns: the node, and how many of its neighbours it has walked.
@@ -243,10 +244,8 @@ export function shortestCycleThrough(graph CsrGraph, start CsrIndex) returns Csr
 	// The BFS tree: `reached` is the visited set, `cameFrom` the parent each node was first reached from.
 	// Only nodes the search actually reached are ever read back out of `cameFrom`, so its zero fill is never
 	// mistaken for an answer.
-	var reached = BoolArray.create(0)
-	reached.resize(graph.nodeCount())
-	var cameFrom = CsrColumn.create(0)
-	cameFrom.resize(graph.nodeCount())
+	var reached = FlagColumn.create(graph.nodeCount())
+	var cameFrom = FixedCsrColumn.create(graph.nodeCount())
 
 	var frontier = CsrColumn.create(0)
 	frontier.push(start)
@@ -284,7 +283,7 @@ end 'shortestCycleThrough'
 // The nodes from `start` down to `closedBy` inclusive, read backwards off the BFS tree and handed back in
 // walk order. `closedBy == start` is the one-node cycle — a node that is its own neighbour — and falls out
 // of the same walk without a case of its own.
-function cycleThrough(cameFrom CsrColumn, closedBy CsrIndex, start CsrIndex) returns CsrColumn
+function cycleThrough(cameFrom FixedCsrColumn, closedBy CsrIndex, start CsrIndex) returns CsrColumn
 	var backwards = CsrColumn.create(0)
 	var at = closedBy
 
@@ -295,7 +294,7 @@ function cycleThrough(cameFrom CsrColumn, closedBy CsrIndex, start CsrIndex) ret
 
 	backwards.push(start)
 
-	var path = CsrColumn.create(0)
+	var path = CsrColumn.create(backwards.count(), zeroed: false)
 
 	for i in 0 upto backwards.count() 'eachNode'
 		let fromTheEnd = backwards.count() - 1 - i
@@ -308,8 +307,7 @@ end 'cycleThrough'
 // Iterated over an explicit stack for the reason `nodesOnACycle` gives.
 export function postorderOf(graph CsrGraph) returns CsrColumn
 	var order = CsrColumn.create(0)
-	var visited = BoolArray.create(0)
-	visited.refill(graph.nodeCount(), value: false)
+	var visited = FlagColumn.create(graph.nodeCount())
 	var frameNode = CsrColumn.create(0)
 	var frameEdge = CsrColumn.create(0)
 
@@ -352,12 +350,10 @@ end 'postorderOf'
 // One rank per strongly connected component of `graph`, callers first: a caller outside a callee's
 // component ranks below it. `callers` must be `graph` transposed — any other graph yields wrong
 // components with no error.
-export function callerFirstRanks(graph CsrGraph, callers CsrGraph) returns CsrColumn
+export function callerFirstRanks(graph CsrGraph, callers CsrGraph) returns FixedCsrColumn
 	let finished = postorderOf(graph)
-	var ranks = CsrColumn.create(0)
-	ranks.refill(graph.nodeCount(), value: 0)
-	var assigned = BoolArray.create(0)
-	assigned.refill(graph.nodeCount(), value: false)
+	var ranks = FixedCsrColumn.create(graph.nodeCount())
+	var assigned = FlagColumn.create(graph.nodeCount())
 	var members = CsrColumn.create(0)
 	var rank = 0 as CsrIndex
 	var position = finished.count()
@@ -415,35 +411,30 @@ end 'nodeNamesItself'
 // after it.
 type SccWalk
 	// 1-based discovery order, so 0 reads as "not visited yet" and no second column has to say so.
-	var discovered as CsrColumn
+	var discovered as FixedCsrColumn
 
 	// The lowest discovery index reachable from the node's subtree — Tarjan's lowlink.
-	var lowlink as CsrColumn
+	var lowlink as FixedCsrColumn
 
 	// Where the node sits on `componentStack`, which turns a component's SIZE into a subtraction.
-	var openAt as CsrColumn
+	var openAt as FixedCsrColumn
 
 	// Is the node still on `componentStack` — is its component still being built?
-	var isOpen as BoolArray
+	var isOpen as FixedBoolArray
 
 	// The answer: does the node lie on a cycle?
-	export var onCycle as BoolArray
+	export var onCycle as FixedBoolArray
 
 	// The nodes of every component still open, in discovery order.
 	var componentStack as CsrColumn
 	var nextDiscovery as CsrIndex
 
 	static function overNodes(nodeCount CsrIndex) returns SccWalk
-		var discovered = CsrColumn.create(0)
-		discovered.resize(nodeCount)
-		var lowlink = CsrColumn.create(0)
-		lowlink.resize(nodeCount)
-		var openAt = CsrColumn.create(0)
-		openAt.resize(nodeCount)
-		var isOpen = BoolArray.create(0)
-		isOpen.resize(nodeCount)
-		var onCycle = BoolArray.create(0)
-		onCycle.resize(nodeCount)
+		var discovered = FixedCsrColumn.create(nodeCount)
+		var lowlink = FixedCsrColumn.create(nodeCount)
+		var openAt = FixedCsrColumn.create(nodeCount)
+		var isOpen = FixedBoolArray.create(nodeCount)
+		var onCycle = FixedBoolArray.create(nodeCount)
 
 		return Self{discovered: discovered, lowlink: lowlink, openAt: openAt, isOpen: isOpen, onCycle: onCycle, componentStack: CsrColumn.create(0), nextDiscovery: 1}
 	end 'overNodes'

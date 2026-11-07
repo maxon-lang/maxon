@@ -109,9 +109,10 @@ export type DapObject
 	end 'object'
 
 	export function objects(key String) returns DapObjectArray throws DapArgumentError
-		var found = DapObjectArray.create(0)
+		let held = try self.elements(key)
+		var found = DapObjectArray.create(held.count(), zeroed: false)
 
-		for element in try self.elements(key) 'eachElement'
+		for element in held 'eachElement'
 			if self.doc.get(element).kind != JsonKind.jsonObject 'notAnObject'
 				throw DapArgumentError.wrongType(key)
 			end 'notAnObject'
@@ -123,9 +124,10 @@ export type DapObject
 	end 'objects'
 
 	export function texts(key String) returns StringArray throws DapArgumentError
-		var found = StringArray.create(0)
+		let held = try self.elements(key)
+		var found = StringArray.create(held.count(), zeroed: false)
 
-		for element in try self.elements(key) 'eachElement'
+		for element in held 'eachElement'
 			let value = self.doc.get(element)
 
 			if value.kind != JsonKind.jsonString 'notAString'

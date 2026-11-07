@@ -1418,7 +1418,7 @@ export function generateCorpus(root FilePath, rungs RungCount) returns ScaleRung
 	let marker = root.join("{IgnoreMarkerName}")
 	try File.writeText(marker, content: "") otherwise throw ScaleError.reason("could not write {marker.toString()}")
 
-	var ladder = ScaleRungArray.create(0)
+	var ladder = ScaleRungArray.create(rungs as ElementIndex, zeroed: false)
 
 	for rung in 0 upto rungs as ElementIndex 'eachRung'
 		ladder.push(try generateRung(root, rung: rung as RungIndex))
@@ -2055,7 +2055,7 @@ function pressuredLoopsSource(loopCount KnobSize) returns String
 	for loopIndex in 0 upto loopCount as ElementIndex 'eachLoop'
 		// Fresh accumulator names per loop, so the loops' live ranges do not overlap and peak
 		// pressure stays at one loop's worth however many loops there are.
-		var live = TrackedValueArray.create(0)
+		var live = TrackedValueArray.create(PressuredValuesPerLoop as ElementIndex, zeroed: false)
 
 		for v in 0 upto PressuredValuesPerLoop as ElementIndex 'declValues'
 			out.append("\tvar s{loopIndex}_{v} = a + {v + 1}\n")
@@ -2475,7 +2475,7 @@ function floatSpillSource(loopCount KnobSize) returns String
 	for loopIndex in 0 upto loopCount as ElementIndex 'eachLoop'
 		// Fresh names per loop, so the loops' live ranges do not overlap and peak XMM pressure stays at
 		// one loop's worth however many loops there are — `PressuredLoopsBase`'s rule, in the other file.
-		var live = TrackedFloatArray.create(0)
+		var live = TrackedFloatArray.create(floatsPerLoop as ElementIndex, zeroed: false)
 
 		for v in 0 upto floatsPerLoop as ElementIndex 'declValues'
 			out.append("\tvar g{loopIndex}_{v} = (a + {v + 1}.25) as {ScaleFloatAlias}\n")
@@ -2558,7 +2558,7 @@ function globalConstsSource(constCount KnobSize) returns String
 	// would measure nothing — and `values` is the same recurrence's answer, stepped once per emitted
 	// line. That is one model with two outputs, not two models: nothing re-reads the generated text and
 	// nothing computes the sequence a second time.
-	var values = TrackedValueArray.create(0)
+	var values = TrackedValueArray.create(constCount as ElementIndex, zeroed: false)
 	out.append("let {GlobalConstPrefix}0 = {GlobalConstSeedLow}\n")
 	values.push(GlobalConstSeedLow)
 	out.append("let {GlobalConstPrefix}1 = {GlobalConstSeedHigh}\n")

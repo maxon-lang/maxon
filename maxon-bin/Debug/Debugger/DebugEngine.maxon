@@ -592,7 +592,7 @@ export type DebugEngine implements DebugMemory
 	end 'cacheCovers'
 
 	function slicedCache(address DebugAddress, length EngineReadLength) returns ByteArray
-		var taken = ByteArray.create(0)
+		var taken = ByteArray.create(length as ElementIndex, zeroed: false)
 		let start = address - self.cacheBase
 
 		for i in 0 upto length 'eachByte'
@@ -764,7 +764,7 @@ export type DebugEngine implements DebugMemory
 	end 'breakpointAt'
 
 	export function standingBreakpointOffsets() returns DebugAddressArray
-		var standing = DebugAddressArray.create(0)
+		var standing = DebugAddressArray.create(self.breakpoints.count(), zeroed: false)
 
 		for breakpoint in self.breakpoints 'eachBreakpoint'
 			standing.push(breakpoint.offset)
@@ -779,7 +779,7 @@ export type DebugEngine implements DebugMemory
 	end 'recordBreakpoint'
 
 	function forgetBreakpoint(offset DebugAddress)
-		var kept = EngineBreakpointArray.create(0)
+		var kept = EngineBreakpointArray.create(self.breakpoints.count(), zeroed: false)
 
 		for breakpoint in self.breakpoints 'eachBreakpoint'
 			if breakpoint.offset != offset 'anotherOne'
@@ -813,7 +813,7 @@ export type DebugEngine implements DebugMemory
 	end 'plantReturnPoint'
 
 	module function rebaseReturnPoint(greenThread DebugAddress, from DebugAddress, to DebugAddress)
-		var kept = DebugReturnPointArray.create(0)
+		var kept = DebugReturnPointArray.create(self.returnPoints.count(), zeroed: false)
 
 		for standing in self.returnPoints 'eachPoint'
 			kept.push(standing.movedWith(greenThread, from: from, to: to))
@@ -974,7 +974,7 @@ export type DebugEngine implements DebugMemory
 	end 'liftedTrapOn'
 
 	function forgetLiftedTrap(thread BackendThreadId)
-		var kept = EngineLiftedTrapArray.create(0)
+		var kept = EngineLiftedTrapArray.create(self.liftedTraps.count(), zeroed: false)
 
 		for lifted in self.liftedTraps 'eachLifted'
 			if lifted.thread != thread 'anotherThread'
@@ -1819,7 +1819,7 @@ end 'wordIn'
 // The walk records one (return address, frame pointer) pair per frame; a frame's CALLER frame pointer is
 // the next frame's own, and the outermost one is the link the walk did not take.
 function callersOf(cursors DebugAddressArray, outer DebugAddress) returns DebugAddressArray
-	var callers = DebugAddressArray.create(0)
+	var callers = DebugAddressArray.create(cursors.count(), zeroed: false)
 
 	for (iter, _) in cursors.withIterator() 'eachFrame'
 		if iter.index() + 1 < cursors.count() 'hasAnOuterFrame'

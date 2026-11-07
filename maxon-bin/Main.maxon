@@ -617,7 +617,7 @@ end 'runBuild'
 // Every positional is compiled as one program, in the order given: `Compiler.loadSourceFiles`
 // registers them in that order and roots the project at their common ancestor.
 function runBuildPaths(args MaxonArgs) returns ExitCode
-	var inputPaths = MaxonSourcePathArray.create(0)
+	var inputPaths = MaxonSourcePathArray.create(args.paths.count(), zeroed: false)
 
 	for spelling in args.paths 'eachPositional'
 		let path = try FilePath.from(spelling) otherwise 'badPath'
@@ -1213,7 +1213,7 @@ function fmtSelection(spelling String) returns FmtSelection
 	end 'aDirectory'
 
 	if File.exists(target) 'aFile'
-		var only = FilePathArray.create(0)
+		var only = FilePathArray.create(1, zeroed: false)
 		only.push(target)
 		return FmtSelection.files(only)
 	end 'aFile'
@@ -1294,7 +1294,7 @@ module function joinedWith(values StringArray, separator String) returns String
 end 'joinedWith'
 
 module function backQuoted(words StringArray) returns StringArray
-	var quoted = StringArray.create(0)
+	var quoted = StringArray.create(words.count(), zeroed: false)
 
 	for word in words 'eachWord'
 		quoted.push("`{word}`")
@@ -1390,7 +1390,7 @@ function filterSuffix(unmatchedPatterns FilterPatternArray) returns String
 		return ""
 	end 'noFilter'
 
-	var flags = StringArray.create(0)
+	var flags = StringArray.create(unmatchedPatterns.count(), zeroed: false)
 
 	for pattern in unmatchedPatterns 'eachPattern'
 		flags.push("{FilterFlagPrefix}{pattern}")
@@ -1608,7 +1608,7 @@ function commandsTaking(spelling String, args MaxonArgs) returns MaxonCommandArr
 end 'commandsTaking'
 
 function commandWordsOf(commands MaxonCommandArray) returns String
-	var words = StringArray.create(0)
+	var words = StringArray.create(commands.count(), zeroed: false)
 
 	for command in commands 'eachCommand'
 		words.push((try commandReference(command) otherwise panic("commandWordsOf: an option reference names `unknown`, which is no command")).word)
@@ -2106,7 +2106,7 @@ end 'optionReference'
 
 // Every roster walk comes through here, so `unknown` is skipped in one place.
 function namedCommands() returns MaxonCommandArray
-	var named = MaxonCommandArray.create(0)
+	var named = MaxonCommandArray.create(MaxonCommand.allCases.count(), zeroed: false)
 
 	for command in MaxonCommand.allCases 'eachCase'
 		if command != MaxonCommand.unknown 'itNamesACommand'
@@ -2854,7 +2854,7 @@ end 'MaxonArgs'
 // No arm of the parser consumes the child's command line and nothing rewrites it. A function rather
 // than a loop in `parse`, whose loop is register-bound (see its note).
 function monitorTail(args StringArray, from ElementIndex) returns SourcePathSpellingArray
-	var tail = SourcePathSpellingArray.create(0)
+	var tail = SourcePathSpellingArray.create(args.count() - from, zeroed: false)
 
 	for position in from upto args.count() 'eachTailArgument'
 		tail.push(try args.get(position) otherwise panic("monitorTail: index {position} is past args.count() despite the upto bound"))

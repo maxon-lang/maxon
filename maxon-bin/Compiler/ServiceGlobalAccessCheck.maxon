@@ -77,9 +77,7 @@ export type CalleeWalk
 	export var worklist as FuncIndexArray
 
 	static function create(funcCount CsrIndex) returns CalleeWalk
-		var reached = BoolArray.create(0)
-		reached.resize(funcCount)
-		return Self{reached: reached, worklist: FuncIndexArray.create(0)}
+		return Self{reached: BoolArray.create(funcCount), worklist: FuncIndexArray.create(0)}
 	end 'create'
 
 	export function reach(funcIndex ElementIndex)
@@ -288,7 +286,7 @@ end 'initializerReaching'
 // store. The walk stops at that store, so the `default`s built after the marks belong to no initializer.
 module function initializerCallees(project Project, module MaxonModule, funcNames FunctionNameIndex) returns FuncIndexRows
 	let globalCount = project.managedGlobals.count()
-	var rows = FuncIndexRows.create(0)
+	var rows = FuncIndexRows.create(globalCount, zeroed: false)
 
 	if globalCount == 0 'noManagedGlobal'
 		return rows
@@ -427,8 +425,7 @@ end 'managedGlobalAt'
 
 // A seed column holding exactly `funcIndices`.
 function seedsAt(survey ServiceProgramSurvey, funcIndices FuncIndexArray) returns BoolArray
-	var seeds = BoolArray.create(0)
-	seeds.resize(survey.funcCount())
+	var seeds = BoolArray.create(survey.funcCount())
 
 	for funcIndex in funcIndices 'eachSeed'
 		try seeds.set(funcIndex, value: true) otherwise panic("seedsAt: seeds.set OOB at {funcIndex} — every index was resolved through the function list the survey swept")

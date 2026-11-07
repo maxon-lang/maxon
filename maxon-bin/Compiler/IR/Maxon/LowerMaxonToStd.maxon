@@ -1045,7 +1045,7 @@ type DescriptorTable
 	end 'create'
 
 	function reachedInstances() returns GenericInstanceIdArray
-		var reached = GenericInstanceIdArray.create(0)
+		var reached = GenericInstanceIdArray.create(self.instances.count() + self.witnesses.count(), zeroed: false)
 
 		for instance in self.instances 'eachInstance'
 			reached.push(instance)
@@ -1243,7 +1243,7 @@ end 'PendingTable'
 typealias PendingTableArray = Array with PendingTable
 
 typealias NodeMarks = int(0 to 7)
-typealias NodeMarksArray = Array with NodeMarks
+typealias NodeMarksArray = FixedArray with NodeMarks
 
 let CarrierSeedMark = 1
 let DispatchMark = 2
@@ -1261,8 +1261,7 @@ type LayoutCarrierScan
 	export var creations as ClosureCreationArray
 
 	static function create(functionCount ElementIndex) returns Self
-		var marks = NodeMarksArray.create(0)
-		marks.growFilled(functionCount, value: 0)
+		var marks = NodeMarksArray.create(functionCount)
 		return Self{indexOfName: CarrierIndexMap.create(), marks: marks, dispatchCalleeEnds: CsrColumn.create(0), dispatchCallerEnds: CsrColumn.create(0), pendingTables: PendingTableArray.create(0), calleeEnds: CsrColumn.create(0), callerEnds: CsrColumn.create(0), calls: CarrierCallArray.create(0), creations: ClosureCreationArray.create(0)}
 	end 'create'
 
@@ -1277,7 +1276,7 @@ type LayoutCarrierScan
 	end 'marked'
 
 	function column(mark NodeMarks) returns BoolArray
-		var seeds = BoolArray.create(0)
+		var seeds = BoolArray.create(self.marks.count(), zeroed: false)
 
 		for node in 0 upto self.marks.count() 'eachNode'
 			seeds.push(self.marked(node as CsrIndex, mark: mark))
@@ -1802,7 +1801,7 @@ type MaxonToStdLowering
 		// indices were kept 1:1 above.
 		for i in 0 upto self.maxonModule.functions.count() 'transferFuncs'
 			var func = self.functionAt(i, reader: "lowerMaxonToStd")
-			var stdParams = StdTypeArray.create(0)
+			var stdParams = StdTypeArray.create(func.paramCount as ElementIndex, zeroed: false)
 
 			for k in 0 upto func.maxonParamTypes.count() 'eachParam'
 				// ⭐⭐ **A BY-REFERENCE PARAMETER CARRIES AN ADDRESS, WHATEVER ITS DECLARED TYPE SAYS.**
@@ -2044,7 +2043,7 @@ type MaxonToStdLowering
 			return
 		end 'everyArgIsAlreadyStd'
 
-		var retyped = IrBlockArgArray.create(0)
+		var retyped = IrBlockArgArray.create(block.blockArgs.count(), zeroed: false)
 
 		for arg in block.blockArgs 'eachArg'
 			retyped.push(IrBlockArg.create(arg.valueId, argType: self.stdTypeOf(arg.valueId), returnRole: arg.returnRole))
@@ -2280,7 +2279,7 @@ type MaxonToStdLowering
 		end 'notBelowItsNamer'
 
 		let entry = try nodes.get(node) otherwise panic("ensureImmortalBoxNode: node id {node} is outside a {nodes.count()}-entry arena — the op carries the whole tree its root names")
-		var slotLabels = StringArray.create(0)
+		var slotLabels = StringArray.create(entry.columns.count(), zeroed: false)
 
 		for column in entry.columns 'eachSlot'
 			slotLabels.push(self.immortalBoxSlotLabel(nodes, below: node, value: column.value))
@@ -3101,9 +3100,10 @@ type MaxonToStdLowering
 		// from `methodCount` and not from the sum below. It is the length of the list a dispatch's
 		// `methodIndex` indexes; the associated block is addressed from that same count and is not part of
 		// it, so widening this word would move every reader's idea of where the methods end.
-		var blob = ByteArray.create(0)
+		let blobBytes = WitnessTableHeaderBytes + WitnessSlotBytes * (methodCount + associatedCount)
+		var blob = ByteArray.create(blobBytes, zeroed: false)
 		blob.append(scalarImage(methodCount as FullRangeInt, byteCount: WitnessSlotBytes as BytePos))
-		blob.growFilled(WitnessTableHeaderBytes + WitnessSlotBytes * (methodCount + associatedCount), value: 0)
+		blob.growFilled(blobBytes, value: 0)
 		_ = self.globalData.registerRdataConstantLabeled(label, bytes: blob, kind: RdataPayloadKind.witnessTable)
 
 		// ⭐ **`destroyFunc@8` — HOW AN OWNED EXISTENTIAL OF THIS CONFORMER IS RELEASED — and `retainFunc@16`,
@@ -4546,7 +4546,7 @@ type MaxonToStdLowering
 		end 'nothingToReadItFrom'
 
 		let slotImpls = self.conformanceSlotImpls(conformer, interfaceName: interfaceName)
-		var impls = CarrierIndexArray.create(0)
+		var impls = CarrierIndexArray.create(slotImpls.names.count(), zeroed: false)
 
 		for name in slotImpls.names 'eachImpl'
 			impls.push(try scan.indexOfName.get(name) otherwise continue)
@@ -4721,13 +4721,13 @@ type MaxonToStdLowering
 	// calls pass the zero `NullWitnessArgRequest` proves unread. It runs before that check, which
 	// walks witness entries too and would otherwise refuse the program.
 	function dropGrowingWitnessEntries()
-		var owners = NameRoster.create(0)
+		var owners = NameRoster.create(self.descriptorTables.count(), zeroed: false)
 
 		for (owner, _) in self.descriptorTables 'eachOwner'
 			owners.push(owner)
 		end 'eachOwner'
 
-		var partitions = WitnessPartitionArray.create(0)
+		var partitions = WitnessPartitionArray.create(owners.count(), zeroed: false)
 
 		for owner in owners 'eachOwnerWithWitnesses'
 			view table = try self.descriptorTables.get(owner) otherwise panic("dropGrowingWitnessEntries: '{String.from(owner)}' was just listed and is not there")
@@ -5054,7 +5054,7 @@ type MaxonToStdLowering
 		// ⭐ ONE BLOCK PER TYPE PARAMETER — see `layoutDescriptorBytesFor` for the wild free a single shared
 		// `destroyFunc@40` caused on a two-parameter generic.
 		let paramCount = self.signatures.genericInstanceArgCount(gid)
-		var dictionaries = ArgumentDictionaryArray.create(0)
+		var dictionaries = ArgumentDictionaryArray.create(paramCount, zeroed: false)
 
 		for position in 0 upto paramCount 'eachArgument'
 			dictionaries.push(ArgumentDictionary.create(self.signatures.genericInstanceArgLogicalSize(gid, position: position), elementStamp: self.signatures.genericInstanceArgElementStamp(gid, position: position)))
@@ -5992,7 +5992,7 @@ type MaxonToStdLowering
 	function witnessSlotFormalTypes(slot CollectedInterfaceMethod, dispatched IrInterface, site FormalSite) returns MaxonTypeArray
 		let formals = slot.method.paramTypes
 
-		var types = MaxonTypeArray.create(0)
+		var types = MaxonTypeArray.create(formals.count() + 1, zeroed: false)
 		types.push(MaxonType.integer)
 
 		for j in 0 upto formals.count() 'eachFormal'
@@ -6490,7 +6490,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(entry, op: StdOp.param(behaviour, index: 1, paramType: StdType.i64))
 		let record = self.mintStdValueId()
 		self.stdModule.appendOp(entry, op: StdOp.loadIndirect(record, addrId: behaviour, offset: BehOffPayload, valueType: StdType.i64))
-		var factoryArgs = ValueIdArray.create(0)
+		var factoryArgs = ValueIdArray.create(wordCount, zeroed: false)
 
 		for k in 0 upto wordCount 'eachWord'
 			let loaded = self.mintStdValueId()
@@ -6613,7 +6613,7 @@ type MaxonToStdLowering
 			return args
 		end 'takesItsRecord'
 
-		var userArgs = ValueIdArray.create(0)
+		var userArgs = ValueIdArray.create(userArityOfIndirectCall(args), zeroed: false)
 
 		for i in 0 upto userArityOfIndirectCall(args) 'eachUserArg'
 			userArgs.push(try args.get(i) otherwise panic("argsTheTargetTakes: args.get OOB at {i} below the user argument count"))

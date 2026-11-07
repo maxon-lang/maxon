@@ -140,7 +140,7 @@ end 'publishDebugSidecar'
 function discardSupersededBuilds(slot RunSlot)
 	let current = slot.executable.filename()
 
-	var kept = BuildNameArray.create(0)
+	var kept = BuildNameArray.create(2, zeroed: false)
 	kept.push(current)
 	kept.push(sidecarNameOf(current))
 
@@ -400,7 +400,7 @@ function freshnessKey(program FilePath, target Target, entryFunction ByteArray) 
 end 'freshnessKey'
 
 function cacheFormatLine() returns String
-	var fields = StringArray.create(0)
+	var fields = StringArray.create(1, zeroed: false)
 	fields.push(cacheFormatName())
 
 	return manifestLine(VersionFieldLabel, fields: fields)
@@ -446,7 +446,7 @@ export type CompilerIdentity
 	end 'fields'
 
 	export function lineage() returns String
-		var fields = StringArray.create(0)
+		var fields = StringArray.create(2, zeroed: false)
 		fields.push(self.path.toString())
 		fields.push(targetToString(self.target))
 
@@ -454,7 +454,7 @@ export type CompilerIdentity
 	end 'lineage'
 
 	export function build() returns String
-		var fields = StringArray.create(0)
+		var fields = StringArray.create(2, zeroed: false)
 		fields.push("{self.size}")
 		fields.push("{self.modifiedTime}")
 
@@ -493,7 +493,7 @@ end 'digestLines'
 function sourceLine(label String, path FilePath) returns String throws RunCacheError
 	let digest = try fileDigestOf(path) otherwise throw RunCacheError.unavailable("could not read {path.toString()}, which the build cache key is computed over")
 
-	var fields = StringArray.create(0)
+	var fields = StringArray.create(2, zeroed: false)
 	fields.push(path.toString())
 	fields.push(hexOfLeadingBytes(digest, count: CacheNameDigestBytes))
 

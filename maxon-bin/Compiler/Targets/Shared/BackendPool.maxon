@@ -56,7 +56,7 @@ typealias BackendWorkerHandleArray = Array with BackendWorker.handle
 export typealias BackendRetirees = WorkerRetirees with BackendWorker.handle
 
 export typealias InFlightCount = int(0 to u64.max)
-typealias InFlightCountArray = Array with InFlightCount
+typealias InFlightCountArray = FixedArray with InFlightCount
 
 // How many workers a pool holds, or how many jobs it has to run. NARROWED to exclude zero, which is what
 // lets the round-robin and the key unpacking DIVIDE by one: both are reached only past a guard that has
@@ -64,6 +64,7 @@ typealias InFlightCountArray = Array with InFlightCount
 // of being remembered at it.
 export typealias PoolSize = int(1 to u32.max)
 
+typealias FixedPoolSlotArray = FixedArray with ElementIndex
 export typealias PoolSlotArray = Array with ElementIndex
 
 export typealias PoolJobArray = Array with ElementIndex
@@ -72,7 +73,7 @@ export typealias PoolJobArray = Array with ElementIndex
 export typealias PoolJobSize = int(0 to u64.max)
 export typealias PoolJobSizeArray = Array with PoolJobSize
 
-export typealias LandingSlotArray = Array with ElementIndex
+export typealias LandingSlotArray = FixedArray with ElementIndex
 
 // ⭐ **WHERE EACH JOB'S ANSWER LANDED — the column that turns arrival order back into job order.** A drain
 // pushes answers as they arrive and records the slot here; the fold after the drain walks the jobs in
@@ -84,8 +85,8 @@ export type LandingSlots
 	// Filled with the one value no landing slot has — the job count — so a job that never landed is a panic
 	// at the fold rather than job 0's answer folded twice.
 	export static function create(jobCount ElementIndex) returns LandingSlots
-		var slotOfJob = LandingSlotArray.create(0)
-		slotOfJob.refill(jobCount, value: jobCount)
+		var slotOfJob = LandingSlotArray.create(jobCount)
+		slotOfJob.refill(jobCount)
 		return Self{slotOfJob: slotOfJob, jobCount: jobCount}
 	end 'create'
 
@@ -136,9 +137,9 @@ export type PoolDispatch
 	let workerCount as PoolSize
 	let assignment as PoolAssignment
 	var dispatched as ElementIndex
-	var handedToWorker as PoolSlotArray
-	var positionOfJob as PoolSlotArray
-	var arrivedAtPosition as BoolArray
+	var handedToWorker as FixedPoolSlotArray
+	var positionOfJob as FixedPoolSlotArray
+	var arrivedAtPosition as FixedBoolArray
 	var settled as ElementIndex
 	var replyJob as PoolJobArray
 	var replyWorker as PoolSlotArray
@@ -165,27 +166,20 @@ export type PoolDispatch
 		var order = PoolJobArray.create(0)
 		var sizeInDispatchOrder = PoolJobSizeArray.create(0)
 		fillLongestFirstOrder(sizes, jobCount: jobCount, order: order, sizeInDispatchOrder: sizeInDispatchOrder)
-		var outstandingPerWorker = InFlightCountArray.create(0)
-		outstandingPerWorker.refill(workerCount as ElementIndex, value: 0 as InFlightCount)
-		var handedToWorker = PoolSlotArray.create(0)
-		handedToWorker.refill(workerCount as ElementIndex, value: 0)
-		var positionOfJob = PoolSlotArray.create(0)
-		positionOfJob.refill(jobCount as ElementIndex, value: 0)
+		var outstandingPerWorker = InFlightCountArray.create(workerCount as ElementIndex)
+		var handedToWorker = FixedPoolSlotArray.create(workerCount as ElementIndex)
+		var positionOfJob = FixedPoolSlotArray.create(jobCount as ElementIndex)
 
 		for position in 0 upto order.count() 'eachPosition'
 			let job = try order.get(position) otherwise panic("PoolDispatch.withBound: order.get OOB at {position} below {order.count()}")
 			try positionOfJob.set(job, value: position) otherwise panic("PoolDispatch.withBound: positionOfJob.set OOB at job {job} below {jobCount}")
 		end 'eachPosition'
 
-		var arrivedAtPosition = BoolArray.create(0)
-		arrivedAtPosition.refill(jobCount as ElementIndex, value: false)
+		var arrivedAtPosition = FixedBoolArray.create(jobCount as ElementIndex)
 		let depth = pipelineDepthOf(workerCount, jobCount: jobCount)
-		var replyJob = PoolJobArray.create(0)
-		replyJob.reserve(depth)
-		var replyWorker = PoolSlotArray.create(0)
-		replyWorker.reserve(depth)
-		var replySize = PoolJobSizeArray.create(0)
-		replySize.reserve(depth)
+		var replyJob = PoolJobArray.create(depth, zeroed: false)
+		var replyWorker = PoolSlotArray.create(depth, zeroed: false)
+		var replySize = PoolJobSizeArray.create(depth, zeroed: false)
 		return Self{handedToWorker: handedToWorker, positionOfJob: positionOfJob, arrivedAtPosition: arrivedAtPosition, settled: 0, order: order, sizeInDispatchOrder: sizeInDispatchOrder, jobCount: jobCount, workerCount: workerCount, assignment: assignment, dispatched: 0, replyJob: replyJob, replyWorker: replyWorker, replySize: replySize, outstandingPerWorker: outstandingPerWorker, inFlightSize: 0, sizeBound: sizeBound}
 	end 'withBound'
 
@@ -628,14 +622,13 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 		return module
 	end 'nothingToLower'
 
-	var workers = BackendWorkerHandleArray.create(0)
+	var workers = BackendWorkerHandleArray.create(sizing.workerCount, zeroed: false)
 
 	for _ in 0 upto sizing.workerCount 'eachWorker'
 		workers.push(spawn BackendWorker.create(target.cpu, os: target.os, abi: CalleeAbiTable.copyOf(abi), usesGt: usesGt))
 	end 'eachWorker'
 
-	var landed = BackendUnitLandingArray.create(0)
-	landed.reserve(funcCount)
+	var landed = BackendUnitLandingArray.create(funcCount, zeroed: false)
 	var slots = LandingSlots.create(funcCount)
 
 	// ⭐ **WHAT THE SCHEDULER DID WHILE THE POOL RAN.** A pool of W workers over P processors is only
@@ -715,8 +708,7 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 	// built per job, and the small functions at the end of the longest-first order cost what their
 	// size does not predict, so a fixed share leaves one worker running while the rest wait.
 	var dispatch = PoolDispatch.boundedByInFlightSize(functionOpTallies(stdModule.functions, blocks: stdModule.blocks), workerCount: workerCount, assignment: PoolAssignment.firstFree)
-	var replies = BackendReplyArray.create(0)
-	replies.reserve(dispatch.pipelineDepth())
+	var replies = BackendReplyArray.create(dispatch.pipelineDepth(), zeroed: false)
 	var arrivedUnits = BackendArrivedUnits.create(stdModule.funcCount(), spent: TargetModule.create())
 
 	while dispatch.fillAdmitsAnother() 'fillThePipeline'
@@ -776,8 +768,7 @@ export type ArrivedUnits uses Unit
 	var spent as Unit
 
 	export static function create(capacity ElementIndex, spent Unit) returns Self
-		var units = UnitColumn.create(0)
-		units.reserve(capacity)
+		var units = UnitColumn.create(capacity, zeroed: false)
 		return Self{units: units, spent: spent}
 	end 'create'
 
@@ -831,7 +822,7 @@ end 'dispatchOneBackendJob'
 // comparator closure to carry: `size * jobCount + job` is injective for `job < jobCount`, and it is bounded
 // by the total size times the job count. Read back DESCENDING, which is what makes it longest-first.
 function fillLongestFirstOrder(sizes PoolJobSizeArray, jobCount PoolSize, order PoolJobArray, sizeInDispatchOrder PoolJobSizeArray)
-	var keys = LongestFirstKeyArray.create(0)
+	var keys = LongestFirstKeyArray.create(sizes.count(), zeroed: false)
 	let keyStride = jobCount as LongestFirstKey
 
 	for (position, size) in sizes.withIterator() 'eachJob'
@@ -850,7 +841,7 @@ end 'fillLongestFirstOrder'
 // Every function's live op count, in index order — the size both backend pools dispatch a function by. It
 // takes the two arrays rather than a module because it serves two pools over the same Std module.
 export function functionOpTallies(functions IrFunctionArray, blocks IrBlockArray) returns PoolJobSizeArray
-	var sizes = PoolJobSizeArray.create(0)
+	var sizes = PoolJobSizeArray.create(functions.count(), zeroed: false)
 
 	for func in functions 'eachFunc'
 		sizes.push(liveOpTallyOf(blocks, func: func) as PoolJobSize)

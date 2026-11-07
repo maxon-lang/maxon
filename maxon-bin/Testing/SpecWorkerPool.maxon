@@ -518,7 +518,7 @@ function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, mode Sp
 				continue
 			end 'selectsNothing'
 
-			var testNames = StringArray.create(0)
+			var testNames = StringArray.create(tests.count(), zeroed: false)
 			var weight = 0 as JobWeight
 
 			for test in tests 'eachTest'
@@ -834,7 +834,7 @@ end 'encodeRecordPayload'
 function decodeRecordPayload(payload String) returns String
 	let bytes = payload.toByteArray()
 	let n = bytes.count()
-	var decoded = ByteArray.create(0)
+	var decoded = ByteArray.create(n, zeroed: false)
 	var i = 0 as ElementIndex
 
 	while i < n 'walk'
@@ -1048,7 +1048,7 @@ end 'decodeJobCount'
 // reach the worker) would otherwise show up as a suite that quietly reported a different set of
 // tests than the one it claims to have run.
 function resultsFromLines(lines StringArray, plan SpecPlan) returns SpecTestResultArray
-	var results = SpecTestResultArray.create(0)
+	var results = SpecTestResultArray.create(lines.count(), zeroed: false)
 
 	if lines.count() != plan.testNames.count() 'wrongRecordCount'
 		panic("spec worker pool: '{plan.specName}' returned {lines.count()} record(s), expected {plan.testNames.count()} — a result was lost, or the worker selected different tests than the parent did")
@@ -1476,7 +1476,7 @@ end 'deadWorkerStderr'
 // intermittently green suite. Failing it keeps the bug loud AND keeps the other ~200 specs reporting,
 // which holds a compiler panic's cost at one named FAIL rather than the whole run.
 function deadJobResults(plan SpecPlan, reason String) returns SpecTestResultArray
-	var results = SpecTestResultArray.create(0)
+	var results = SpecTestResultArray.create(plan.testNames.count(), zeroed: false)
 
 	for testName in plan.testNames 'eachTest'
 		results.push(SpecTestResult.create(plan.specName, testName: testName, outcome: TestOutcome.fail(reason)))
@@ -1818,7 +1818,7 @@ end 'formatSeconds'
 // `idleFor` is the interval actually MEASURED, not the threshold that was crossed. The two differ by
 // at most one poll on a real wedge and by an unbounded amount on a suspended machine, which is the
 // case the header exists to let an operator tell apart: a run idle for 4000 s did not wedge, it slept.
-function abortOnWedgedPool(busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt SlotInstantArray, spokeAt SpokeCellArray, expired BoolArray, idleFor DurationMs, queued JobTally, dispatched JobTally, completed JobTally)
+function abortOnWedgedPool(busy FixedBoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt SlotInstantArray, spokeAt SpokeCellArray, expired FixedBoolArray, idleFor DurationMs, queued JobTally, dispatched JobTally, completed JobTally)
 	var report = TextJoiner.create()
 	report.push("\n=== spec worker pool WEDGED: nothing dispatched or collected for {formatSeconds(idleFor)} (limit {formatSeconds(WedgeWatchdogMs)}) ===")
 	report.push("{dispatched} job(s) dispatched, {completed} collected, {queued} still queued")
@@ -1991,11 +1991,12 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// only reader and is asked per busy slot per park.
 	let runStrategy = runStrategyFor(effectiveTarget)
 
-	var busy = BoolArray.create(0)
-	var inFlight = SpecJobArray.create(0)
+	let slotCount = poolSize as ElementIndex
+	var busy = FixedBoolArray.create(slotCount)
+	var inFlight = SpecJobArray.create(slotCount, zeroed: false)
 	var drains = DrainPromiseArray.create(0)
-	var dispatchedAt = SlotInstantArray.create(0)
-	var spokeAt = SpokeCellArray.create(0)
+	var dispatchedAt = SlotInstantArray.create(slotCount, zeroed: false)
+	var spokeAt = SpokeCellArray.create(slotCount, zeroed: false)
 
 	// Whether this slot's progress bound has already fired and the worker been terminated for it. A
 	// LATCH, not a re-derivable predicate: once a worker has been given up on it stays given up on, and
@@ -2003,7 +2004,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// poll while the EOF makes its way back through the runtime — printing a line each time.
 	// Re-stamping the dispatch instant instead cannot work: a worker that exited on its own would
 	// then have its bound pushed forward for ever.
-	var expired = BoolArray.create(0)
+	var expired = FixedBoolArray.create(slotCount)
 	let idleJob = SpecJob.idle()
 
 	// The placeholder instant, like `SpecJob.idle()` beside it: never read, because an idle slot's
@@ -2011,17 +2012,15 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// the start, so the three are indexed by the same slot number.
 	let idleInstant = Clock.nowMs()
 
-	for _ in 0 upto poolSize as ElementIndex 'initSlots'
-		busy.push(false)
+	for _ in 0 upto slotCount 'initSlots'
 		inFlight.push(idleJob)
 		dispatchedAt.push(idleInstant)
 		spokeAt.push(SpokeCell.create(idleInstant))
-		expired.push(false)
 	end 'initSlots'
 
 	// One bucket per plan, filled out of order and concatenated in plan order at the end. THIS is
 	// where worker-count invariance is won: nothing is reported as it arrives.
-	var buckets = SpecResultBuckets.create(0)
+	var buckets = SpecResultBuckets.create(plans.count(), zeroed: false)
 
 	for _ in 0 upto plans.count() 'initBuckets'
 		buckets.push(SpecTestResultArray.create(0))
@@ -2268,7 +2267,7 @@ end 'prepareSharedDirs'
 // There is no degraded mode to fall back to, and a pool that quietly ran with fewer workers than
 // it was asked for would be a harness lying about what it did.
 function spawnPool(harnessExe FilePath, count WorkerCount, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandleArray
-	var workers = PersistentWorkerHandleArray.create(0)
+	var workers = PersistentWorkerHandleArray.create(count as ElementIndex, zeroed: false)
 
 	for i in 0 upto count as ElementIndex 'spawnPhase'
 		workers.push(spawnWorker(harnessExe, workerId: i as WorkerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork))
@@ -2353,7 +2352,7 @@ end 'silenceMs'
 // on every poll while the EOF propagates. Re-stamping its instant would suppress the re-kill too, but it
 // would also push a dead slot's bound forward for ever — and the wedge watchdog, whose clock this
 // function resets, would then never run either.
-function enforceProgressDeadlines(workers PersistentWorkerHandleArray, busy BoolArray, inFlight SpecJobArray, spokeAt SpokeCellArray, expired BoolArray, plans SpecPlanArray, strategy RunStrategy, now InstantMs) returns bool
+function enforceProgressDeadlines(workers PersistentWorkerHandleArray, busy FixedBoolArray, inFlight SpecJobArray, spokeAt SpokeCellArray, expired FixedBoolArray, plans SpecPlanArray, strategy RunStrategy, now InstantMs) returns bool
 	var anyWithinDeadline = false
 
 	for slot in 0 upto busy.count() 'eachSlot'
@@ -2427,7 +2426,7 @@ end 'enforceProgressDeadlines'
 // so with nothing seeded the sweep would read a slot's silence as stretching back to whenever that
 // worker last spoke on its PREVIOUS job — and terminate a healthy worker part-way into its first
 // compile. Dispatch is the moment the interval starts, so dispatch is what starts it.
-function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job SpecJob, busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt SlotInstantArray, spokeAt SpokeCellArray, expired BoolArray)
+function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job SpecJob, busy FixedBoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt SlotInstantArray, spokeAt SpokeCellArray, expired FixedBoolArray)
 	var handle = try workers.get(slot) otherwise panic("sendAndDrain: workers.get({slot}) is in bounds by construction")
 
 	try handle.sendJob(job.toJobLine()) otherwise (e) 'sendFailed'
@@ -2489,7 +2488,7 @@ end 'shutdownPool'
 // the pool does not pin its work to the low-numbered workers. Both scans below sweep all `poolSize`
 // slots before giving up, so the cursor's position can never starve a slot — it only chooses which
 // of several eligible slots is served first.
-function findIdleSlot(busy BoolArray, cursor WorkerId) returns WorkerId throws NoSlot
+function findIdleSlot(busy FixedBoolArray, cursor WorkerId) returns WorkerId throws NoSlot
 	let poolSize = busy.count()
 
 	for offset in 0 upto poolSize 'scan'
@@ -2507,7 +2506,7 @@ end 'findIdleSlot'
 // The next BUSY slot at or after `cursor` whose drain green thread has already COMPLETED — a
 // non-blocking peek at the promise, which is what lets the loop serve whoever finished first
 // instead of whoever it happened to await first.
-function findReadyDrain(busy BoolArray, drains DrainPromiseArray, cursor WorkerId) returns WorkerId throws NoSlot
+function findReadyDrain(busy FixedBoolArray, drains DrainPromiseArray, cursor WorkerId) returns WorkerId throws NoSlot
 	let poolSize = busy.count()
 
 	for offset in 0 upto poolSize 'scan'
@@ -2528,7 +2527,7 @@ function findReadyDrain(busy BoolArray, drains DrainPromiseArray, cursor WorkerI
 	throw NoSlot.none
 end 'findReadyDrain'
 
-function anySlotBusy(busy BoolArray) returns bool
+function anySlotBusy(busy FixedBoolArray) returns bool
 	for isBusy in busy 'eachSlot'
 		if isBusy 'stillWorking'
 			return true

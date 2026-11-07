@@ -428,7 +428,7 @@ export type MoveLedger
 			return base
 		end 'nothingToOverlay'
 
-		var chunks = MoveChunkColumn.create(0)
+		var chunks = MoveChunkColumn.create(chunksHolding(height), zeroed: false)
 		var next = 0 as ElementIndex
 
 		for index in 0 upto chunksHolding(height) 'eachChunk'
@@ -437,11 +437,13 @@ export type MoveLedger
 				continue
 			end 'untouched'
 
-			var chunkMoved = BoolArray.create(0)
-			var chunkValues = ValueIdArray.create(0)
-			var chunkAwaiting = MoveSlotIndexColumn.create(0)
+			let first = chunkFirst(index)
+			let stop = chunkStop(index, height: height)
+			var chunkMoved = BoolArray.create(stop - first, zeroed: false)
+			var chunkValues = ValueIdArray.create(stop - first, zeroed: false)
+			var chunkAwaiting = MoveSlotIndexColumn.create(stop - first, zeroed: false)
 
-			for position in chunkFirst(index) upto chunkStop(index, height: height) 'eachPosition'
+			for position in first upto stop 'eachPosition'
 				if next < positions.count() and (try positions.get(next) otherwise panic("MoveLedger.overlay: positions.get OOB at {next}")) == position 'overlaid'
 					chunkMoved.push(try moved.get(next) otherwise panic("MoveLedger.overlay: moved.get OOB at {next}"))
 					chunkValues.push(try values.get(next) otherwise panic("MoveLedger.overlay: values.get OOB at {next}"))

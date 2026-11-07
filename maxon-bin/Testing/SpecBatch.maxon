@@ -563,9 +563,10 @@ end 'batchCaseName'
 
 function batchCaseSource(test SpecTest, caseIndex ElementIndex) returns String
 	let name = batchCaseName(caseIndex)
-	var lines = StringArray.create(0)
+	let rawLines = test.source.split(SourceLineBreak)
+	var lines = StringArray.create(rawLines.count(), zeroed: false)
 
-	for rawLine in test.source.split(SourceLineBreak) 'eachLine'
+	for rawLine in rawLines 'eachLine'
 		let line = rawLine.trimEnd(CharacterSet.newlines())
 		let lineEnding = SourceCarriageReturn if rawLine.endsWith(SourceCarriageReturn) else ""
 
@@ -662,7 +663,7 @@ function batchEntrySource(members BatchMemberArray, facilities EntryFacilities) 
 end 'batchEntrySource'
 
 function mintedNamesForBatchEntry() returns NameRoster
-	var names = NameRoster.create(0)
+	var names = NameRoster.create(4, zeroed: false)
 	names.push(BatchIndexAlias.toByteArray())
 	names.push(BatchLeftAlias.toByteArray())
 	names.push(BatchRunType.toByteArray())
@@ -683,7 +684,7 @@ module type BatchProgram
 	end 'create'
 
 	module function allCases() returns TestRunIndexArray
-		var cases = TestRunIndexArray.create(0)
+		var cases = TestRunIndexArray.create(self.members.count(), zeroed: false)
 
 		for index in 0 upto self.members.count() 'eachMember'
 			cases.push(index)
@@ -717,7 +718,7 @@ function stageBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 		let test = try tests.get(member.testIndex) otherwise panic("SpecBatch: batch member {iter.index()} names test {member.testIndex}, past the {tests.count()} the spec selected")
 		let caseIndex = iter.index()
 		let path = build.root.join("{BatchCaseDirPrefix}{caseIndex}").join(BatchCaseFileName)
-		var names = NameRoster.create(0)
+		var names = NameRoster.create(1, zeroed: false)
 		names.push(batchCaseName(caseIndex).toByteArray())
 		try build.addSource(path, content: batchCaseSource(test, caseIndex: caseIndex), mintedNames: names)
 	end 'eachMember'
@@ -767,7 +768,7 @@ function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 		return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: DrivesOtherProcessesGap), refused: TestRunIndexArray.create(0))
 	end 'aGapInPlacement'
 
-	var written = FilePathArray.create(0)
+	var written = FilePathArray.create(staged.buildTargets.count(), zeroed: false)
 
 	for path in staged.buildTargets 'eachTarget'
 		if not path.equals(staged.root) 'aStagedFile'
@@ -824,7 +825,7 @@ function namesCase(text String, ordinal ElementIndex, caseIndex ElementIndex) re
 end 'namesCase'
 
 function membersWithout(members BatchMemberArray, positions TestRunIndexArray) returns BatchMemberArray
-	var kept = BatchMemberArray.create(0)
+	var kept = BatchMemberArray.create(members.count(), zeroed: false)
 
 	for (iter, member) in members.withIterator() 'eachMember'
 		if not positions.contains(iter.index()) 'stays'
@@ -1116,7 +1117,7 @@ module function isUnisolatedBatchMember(observation RunObservation) returns bool
 end 'isUnisolatedBatchMember'
 
 module function readBatch(batch ProcessCapture, caseCount ElementIndex, selects bool) returns BatchReadingArray
-	var readings = BatchReadingArray.create(0)
+	var readings = BatchReadingArray.create(caseCount, zeroed: false)
 	let unreadable = unreadableReading(selects)
 	let process = batchProcessTrusted(batch)
 	var stdout = parseMarkedStream(batch.stdout)
@@ -1146,7 +1147,7 @@ module function readBatch(batch ProcessCapture, caseCount ElementIndex, selects 
 end 'readBatch'
 
 module function unreadBatch(caseCount ElementIndex, selects bool) returns BatchReadingArray
-	var readings = BatchReadingArray.create(0)
+	var readings = BatchReadingArray.create(caseCount, zeroed: false)
 	readings.refill(caseCount, value: unreadableReading(selects))
 	return readings
 end 'unreadBatch'

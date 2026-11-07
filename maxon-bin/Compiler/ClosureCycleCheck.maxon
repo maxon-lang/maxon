@@ -128,11 +128,7 @@ type TracedCycleRow
 	export var globals as GlobalEffectArray
 
 	static function create(paramCount ParamCount) returns TracedCycleRow
-		var row = Self{resultIs: NoParamPositions, resultWithin: NoParamPositions, resultHolds: NoParamPositions, resultCaptures: NoParamPositions, resultCapturesWithin: NoParamPositions, storesHeld: ParamPositionMaskArray.create(0), storesRecord: ParamPositionMaskArray.create(0), storesCaptured: ParamPositionMaskArray.create(0), globals: GlobalEffectArray.create(0)}
-		row.storesHeld.refill(paramCount, value: NoParamPositions)
-		row.storesRecord.refill(paramCount, value: NoParamPositions)
-		row.storesCaptured.refill(paramCount, value: NoParamPositions)
-		return row
+		return Self{resultIs: NoParamPositions, resultWithin: NoParamPositions, resultHolds: NoParamPositions, resultCaptures: NoParamPositions, resultCapturesWithin: NoParamPositions, storesHeld: ParamPositionMaskArray.create(paramCount), storesRecord: ParamPositionMaskArray.create(paramCount), storesCaptured: ParamPositionMaskArray.create(paramCount), globals: GlobalEffectArray.create(0)}
 	end 'create'
 end 'TracedCycleRow'
 
@@ -150,7 +146,7 @@ type CycleSummary
 
 	static function create(funcCount ElementIndex) returns CycleSummary
 		var noStores = ParamPositionMaskArray.create(0)
-		var globals = GlobalEffectColumn.create(0)
+		var globals = GlobalEffectColumn.create(funcCount, zeroed: false)
 
 		while globals.count() < funcCount 'eachFunction'
 			globals.push(GlobalEffectArray.create(0))
@@ -257,7 +253,7 @@ type ClosureCycleChecker implements SummarizedBodies
 	export var funcNames as FunctionNameIndex
 	export var calls as CallSiteCursor
 	export var summary as CycleSummary
-	var relevant as BoolArray
+	var relevant as FixedBoolArray
 	var holdings as FunctionHoldingAnswers
 	export var heldGlobals as HeldGlobalsByLabel
 	export var globalsGrew as bool
@@ -272,8 +268,7 @@ type ClosureCycleChecker implements SummarizedBodies
 
 	static function create(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, resolution CallSummaryIndex) returns ClosureCycleChecker
 		let funcCount = funcNames.functions.count()
-		var relevant = BoolArray.create(0)
-		relevant.refill(funcCount, value: false)
+		let relevant = FixedBoolArray.create(funcCount)
 		return Self{project: project, module: module, signatures: signatures, funcNames: funcNames, calls: CallSiteCursor.create(resolution), summary: CycleSummary.create(funcCount), relevant: relevant, holdings: FunctionHoldingAnswers.create(), heldGlobals: HeldGlobalsByLabel.create(), globalsGrew: false, reported: ReportedPositionSet.create(), noSites: ProvenanceSites.create(ProvenanceColumns.create()), listPool: OriginListArray.create(0), bodyIndexes: CycleBodyIndexByFunction.create(), noOrigins: OriginList.create(0)}
 	end 'create'
 
@@ -595,10 +590,8 @@ type CycleTrace implements SummaryCallWalker
 		view module = self.checker.module
 		module.refillBlockIndexById(self.traced, into: self.blockIndex)
 		var targets = BlockIdArray.create(0)
-		var predecessorCounts = EntryIndexArray.create(0)
-		var lastPredecessor = EntryIndexArray.create(0)
-		predecessorCounts.refill(self.traced.blockRefs.count(), value: 0)
-		lastPredecessor.refill(self.traced.blockRefs.count(), value: 0)
+		var predecessorCounts = FixedEntryIndexArray.create(self.traced.blockRefs.count())
+		var lastPredecessor = FixedEntryIndexArray.create(self.traced.blockRefs.count())
 
 		for (blockIter, blockRef) in self.traced.blockRefs.withIterator() 'eachBlock'
 			view block = self.blockAt(blockRef)
@@ -623,7 +616,7 @@ type CycleTrace implements SummaryCallWalker
 		self.indexForwardedLoads(predecessorCounts, lastPredecessor: lastPredecessor)
 	end 'indexBody'
 
-	function indexForwardedLoads(predecessorCounts EntryIndexArray, lastPredecessor EntryIndexArray)
+	function indexForwardedLoads(predecessorCounts FixedEntryIndexArray, lastPredecessor FixedEntryIndexArray)
 		view module = self.checker.module
 		var exits = KnownStoresByBlock.create()
 
@@ -638,7 +631,7 @@ type CycleTrace implements SummaryCallWalker
 		end 'eachBlock'
 	end 'indexForwardedLoads'
 
-	function knownStoresEntering(position ElementIndex, predecessorCounts EntryIndexArray, lastPredecessor EntryIndexArray, exits KnownStoresByBlock) returns KnownFieldStores
+	function knownStoresEntering(position ElementIndex, predecessorCounts FixedEntryIndexArray, lastPredecessor FixedEntryIndexArray, exits KnownStoresByBlock) returns KnownFieldStores
 		if (try predecessorCounts.get(position) otherwise panic("CycleTrace.knownStoresEntering: predecessorCounts.get OOB at {position}")) != 1 'notOnePath'
 			return KnownFieldStores.create()
 		end 'notOnePath'
@@ -1265,7 +1258,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'noteResultCapturesWithin'
 
 	function summarizeGlobals()
-		var labels = NameRoster.create(0)
+		var labels = NameRoster.create(self.globalOrigins.count(), zeroed: false)
 
 		for (label, _) in self.globalOrigins 'eachGlobal'
 			labels.push(label)
@@ -1613,8 +1606,7 @@ type CycleTrace implements SummaryCallWalker
 			return memoized
 		end 'asked'
 
-		var reached = BoolArray.create(0)
-		reached.refill(self.successors.count(), value: false)
+		var reached = BoolArray.create(self.successors.count())
 		var pending = OriginList.create(0)
 		pending.push(block as OriginIndex)
 		var head = 0 as ElementIndex

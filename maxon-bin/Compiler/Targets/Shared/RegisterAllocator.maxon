@@ -81,15 +81,14 @@ export type Allocation
 	// block is held either by a live-in seeded there or by a def coloured since. A last-writer map
 	// alone would name a sibling block's occupant for a live-in register and hand the diagnostic's
 	// Hall verdict a live set the point does not have.
-	var holderOfReg as ValueIdArray
+	var holderOfReg as FixedValueIdArray
 
 	export static function create(valueCount ValueId) returns Allocation
 		// Each column is BUILT as its own declared instance: `RegNum` strides ONE byte and `DenseInt` EIGHT
 		// (`rangedAliasStorageBytes`), so a buffer filled as one and read as the other would hand every later
 		// read a stride it was not written at.
 		let color = RegisterColumn.absent(valueCount)
-		var holderOfReg = ValueIdArray.create(0)
-		holderOfReg.refill(RegisterFileSize, value: 0)
+		var holderOfReg = FixedValueIdArray.create(RegisterFileSize)
 
 		return Self{color: color, valueCount: valueCount, holderOfReg: holderOfReg}
 	end 'create'
@@ -545,7 +544,7 @@ end 'RegAllocCounters'
 export type RegAllocFacts
 	export var livenessMarkSteps as EventCount
 	export var rowWordsVisited as EventCount
-	export var maxPressure as RegCountColumn
+	export var maxPressure as FixedRegCountColumn
 	export var maxLoopDepth as LoopDepth
 
 	export static function create() returns RegAllocFacts
@@ -573,7 +572,7 @@ export type RegAllocStats
 	// The worst per-FILE pressure seen, and the function it was seen in — one entry per register
 	// class, because the peak of a mixed figure is no file's peak. `maxPressureFunc` names the
 	// function per class for the same reason.
-	export var maxPressure as RegCountColumn
+	export var maxPressure as FixedRegCountColumn
 	export var maxPressureFunc as PressureFuncByClass
 	export var maxLoopDepth as LoopDepth
 	export var copiesInserted as EventCount
@@ -613,11 +612,9 @@ export type RegAllocStats
 	export var repairedByEviction as EventCount
 
 	export static function create() returns RegAllocStats
-		var phaseNanos = DurationNanosArray.create(0)
-		phaseNanos.resize(RegAllocPhase.allCases.count())
-		var phaseCpuTicks = CpuTicksArray.create(0)
-		phaseCpuTicks.resize(RegAllocPhase.allCases.count())
-		var maxPressureFunc = PressureFuncByClass.create(0)
+		var phaseNanos = DurationNanosArray.create(RegAllocPhase.allCases.count())
+		var phaseCpuTicks = CpuTicksArray.create(RegAllocPhase.allCases.count())
+		var maxPressureFunc = PressureFuncByClass.create(RegClassCount, zeroed: false)
 
 		for _ in 0 upto RegClassCount 'eachClass'
 			maxPressureFunc.push("")
@@ -1662,8 +1659,7 @@ type DebugNameIndex
 end 'DebugNameIndex'
 
 function siteParentsOf(roster DebugValueRoster) returns DebugSiteKeyColumn
-	var parents = DebugSiteKeyColumn.create(0)
-	parents.reserve(roster.siteKeyCount())
+	var parents = DebugSiteKeyColumn.create(roster.siteKeyCount(), zeroed: false)
 	parents.push(FunctionTextSiteKey)
 
 	for parent in roster.parentKeys 'eachSite'
@@ -1940,33 +1936,29 @@ end 'debugRecordedBlockLocal'
 type DebugBindingSites
 	export var defLocal as CfgIndexArray
 	export var startAt as DebugAnchorColumn
-	export var startAfterPrevious as BoolArray
+	export var startAfterPrevious as FixedBoolArray
 	export var handoverAt as DebugAnchorColumn
-	export var parsePlaced as BoolArray
+	export var parsePlaced as FixedBoolArray
 	export var refinement as DebugRunRefinementColumn
 	export var byGroup as CsrGraph
 	export var byGroupInFlow as CsrGraph
 	export var preOf as CfgIndexArray
 	export var spanEnd as CfgIndexArray
-	export var looseGroup as BoolArray
-	export var orderKey as CfgIndexArray
-	export var repeatsEarlier as BoolArray
+	export var looseGroup as FixedBoolArray
+	export var orderKey as FixedCfgIndexArray
+	export var repeatsEarlier as FixedBoolArray
 
 	static function over(roster DebugValueRoster, liveness LivenessResult, locations DebugValueLocationArray, places DebugBlockPlaces, topo FuncTopology, dom DominatorTree, paramCount ParamCount) returns DebugBindingSites
 		let index = liveness.useIndex
 		let count = roster.valueIds.count()
-		var defLocal = CfgIndexArray.create(0)
-		defLocal.reserve(count)
+		var defLocal = CfgIndexArray.create(count, zeroed: false)
 		var startAt = DebugAnchorColumn.absent(count)
-		var startAfterPrevious = BoolArray.create(0)
-		startAfterPrevious.resize(count)
+		var startAfterPrevious = FixedBoolArray.create(count)
 		var handoverAt = DebugAnchorColumn.absent(count)
-		var borrowed = BoolArray.create(0)
-		borrowed.resize(count)
-		var parsePlaced = BoolArray.create(0)
-		parsePlaced.resize(count)
-		var groupOfOrdinal = CsrColumn.create(0)
-		var ordinals = CsrColumn.create(0)
+		var borrowed = FixedBoolArray.create(count)
+		var parsePlaced = FixedBoolArray.create(count)
+		var groupOfOrdinal = CsrColumn.create(roster.valueIds.count(), zeroed: false)
+		var ordinals = CsrColumn.create(roster.valueIds.count(), zeroed: false)
 		var groupCount = 0 as CsrIndex
 		var unplaceableGroups = CsrColumn.create(0)
 
@@ -2041,28 +2033,23 @@ type DebugBindingSites
 			ordinals.push(ordinal as CsrIndex)
 		end 'eachNamedValue'
 
-		var unplaceable = BoolArray.create(0)
-		unplaceable.resize(groupCount as ElementIndex)
+		var unplaceable = FlagColumn.create(groupCount as ElementIndex)
 
 		for group in unplaceableGroups 'eachUnplaceableGroup'
 			try unplaceable.set(group, value: true) otherwise panic("DebugBindingSites.over: unplaceable.set OOB at {group}")
 		end 'eachUnplaceableGroup'
 
 		let byGroup = buildCsr(groupOfOrdinal, to: ordinals, nodeCount: groupCount)
-		var preOf = CfgIndexArray.create(0)
-		var spanEnd = CfgIndexArray.create(0)
-		preOf.reserve(count)
-		spanEnd.reserve(count)
+		var preOf = CfgIndexArray.create(count, zeroed: false)
+		var spanEnd = CfgIndexArray.create(count, zeroed: false)
 
 		for local in defLocal 'eachDefinitionBlock'
 			preOf.push(dom.preorderOf(local))
 			spanEnd.push(dom.preorderOf(local) + dom.dominatedCount(local))
 		end 'eachDefinitionBlock'
 
-		var orderKey = CfgIndexArray.create(0)
-		orderKey.refill(count, value: 0)
-		var keyed = CfgIndexArray.create(0)
-		keyed.reserve(ordinals.count())
+		var orderKey = FixedCfgIndexArray.create(count)
+		var keyed = CfgIndexArray.create(ordinals.count(), zeroed: false)
 
 		for grouped in ordinals 'eachGroupedOrdinal'
 			let key = debugBindingOrderKey(handoverAt, ordinal: grouped as ElementIndex)
@@ -2071,10 +2058,8 @@ type DebugBindingSites
 		end 'eachGroupedOrdinal'
 
 		keyed.sort()
-		var inBindingOrder = CsrColumn.create(0)
-		var preKeys = CsrColumn.create(0)
-		inBindingOrder.reserve(keyed.count())
-		preKeys.reserve(keyed.count())
+		var inBindingOrder = CsrColumn.create(keyed.count(), zeroed: false)
+		var preKeys = CsrColumn.create(keyed.count(), zeroed: false)
 
 		for key in keyed 'eachKeyInOrder'
 			let grouped = key mod DebugOrdinalSpan
@@ -2083,10 +2068,8 @@ type DebugBindingSites
 		end 'eachKeyInOrder'
 
 		let byPre = buildCsr(preKeys, to: inBindingOrder, nodeCount: topo.numBlocks as CsrIndex)
-		var flowGroups = CsrColumn.create(0)
-		var flowOrdinals = CsrColumn.create(0)
-		flowGroups.reserve(ordinals.count())
-		flowOrdinals.reserve(ordinals.count())
+		var flowGroups = CsrColumn.create(ordinals.count(), zeroed: false)
+		var flowOrdinals = CsrColumn.create(ordinals.count(), zeroed: false)
 
 		for position in 0 upto byPre.nodeCount() 'eachPreorderPosition'
 			for k in 0 upto byPre.degree(position) 'eachOrdinalThere'
@@ -2097,8 +2080,7 @@ type DebugBindingSites
 		end 'eachPreorderPosition'
 
 		let byGroupInFlow = buildCsr(flowGroups, to: flowOrdinals, nodeCount: groupCount)
-		var looseGroup = BoolArray.create(0)
-		looseGroup.resize(groupCount as ElementIndex)
+		var looseGroup = FixedBoolArray.create(groupCount as ElementIndex)
 
 		for (iter, parsed) in parsePlaced.withIterator() 'eachParsePlaced'
 			if parsed and not handoverAt.holds(iter.index()) 'withoutAPosition'
@@ -2106,8 +2088,7 @@ type DebugBindingSites
 			end 'withoutAPosition'
 		end 'eachParsePlaced'
 
-		var repeatsEarlier = BoolArray.create(0)
-		repeatsEarlier.resize(count)
+		var repeatsEarlier = FixedBoolArray.create(count)
 		var firstOfVersion = DebugVersionOrigins.create()
 
 		for (iter, location) in locations.withIterator() 'eachSpilledVersion'
@@ -2125,8 +2106,7 @@ type DebugBindingSites
 			end 'theFirstOrdinalOfIt'
 		end 'eachSpilledVersion'
 
-		var refinement = DebugRunRefinementColumn.create(0)
-		refinement.reserve(count)
+		var refinement = DebugRunRefinementColumn.create(count, zeroed: false)
 
 		for (iter, location) in locations.withIterator() 'eachLocation'
 			let ordinal = iter.index()
@@ -2142,6 +2122,7 @@ type DebugBindingSites
 	end 'refinementOf'
 end 'DebugBindingSites'
 
+typealias FixedDebugAnchorArray = FixedArray with DebugOpAnchor
 typealias DebugAnchorArray = Array with DebugOpAnchor
 
 enum DebugScopeState
@@ -2151,11 +2132,11 @@ enum DebugScopeState
 end 'DebugScopeState'
 
 type DebugRunRefiner
-	var visited as CfgIndexArray
-	var revived as CfgIndexArray
-	var cutStamp as CfgIndexArray
-	var cutBefore as DebugAnchorArray
-	var stopStamp as CfgIndexArray
+	var visited as FixedCfgIndexArray
+	var revived as FixedCfgIndexArray
+	var cutStamp as FixedCfgIndexArray
+	var cutBefore as FixedDebugAnchorArray
+	var stopStamp as FixedCfgIndexArray
 	var pending as CfgIndexArray
 	var rivals as CfgIndexArray
 	var positionless as bool
@@ -2175,34 +2156,28 @@ type DebugRunRefiner
 	var siteChildren as CsrGraph
 	var siteLocals as CsrGraph
 	var siteWalk as CfgIndexArray
-	var viewOfSite as CfgIndexArray
+	var viewOfSite as FixedCfgIndexArray
 	var viewPreorders as CfgIndexArray
 
 	static function over(topo FuncTopology, dom DominatorTree, places DebugBlockPlaces, names DebugNameIndex) returns DebugRunRefiner
 		let blockCount = topo.numBlocks
-		var visited = CfgIndexArray.create(0)
-		visited.refill(blockCount, value: 0)
-		var revived = CfgIndexArray.create(0)
-		revived.refill(blockCount, value: 0)
-		var cutStamp = CfgIndexArray.create(0)
-		cutStamp.refill(blockCount, value: 0)
-		var cutBefore = DebugAnchorArray.create(0)
-		cutBefore.refill(blockCount, value: 0)
-		var stopStamp = CfgIndexArray.create(0)
-		stopStamp.refill(blockCount, value: 0)
+		var visited = FixedCfgIndexArray.create(blockCount)
+		var revived = FixedCfgIndexArray.create(blockCount)
+		var cutStamp = FixedCfgIndexArray.create(blockCount)
+		var cutBefore = FixedDebugAnchorArray.create(blockCount)
+		var stopStamp = FixedCfgIndexArray.create(blockCount)
 		let siteCount = names.siteCount()
-		var viewOfSite = CfgIndexArray.create(0)
-		viewOfSite.refill(siteCount, value: 0)
-		var childOf = CsrColumn.create(0)
-		var children = CsrColumn.create(0)
+		var viewOfSite = FixedCfgIndexArray.create(siteCount)
+		var childOf = CsrColumn.create(siteCount - 1, zeroed: false)
+		var children = CsrColumn.create(siteCount - 1, zeroed: false)
 
 		for site in 1 upto siteCount 'eachInlineSite'
 			childOf.push(names.parentOfSite(site) as CsrIndex)
 			children.push(site as CsrIndex)
 		end 'eachInlineSite'
 
-		var siteOf = CsrColumn.create(0)
-		var localsOf = CsrColumn.create(0)
+		var siteOf = CsrColumn.create(places.localOfPlace.count(), zeroed: false)
+		var localsOf = CsrColumn.create(places.localOfPlace.count(), zeroed: false)
 
 		for (place, local) in places.localOfPlace.withIterator() 'eachPlace'
 			siteOf.push(debugSiteKeyAt(places.siteKeyOfPlace, at: place.index()) as CsrIndex)
@@ -2912,8 +2887,7 @@ type DebugRunRefiner
 			return
 		end 'alreadyOrdered'
 
-		var keyed = CfgIndexArray.create(0)
-		keyed.reserve(self.holeStarts.count())
+		var keyed = CfgIndexArray.create(self.holeStarts.count(), zeroed: false)
 
 		for at in 0 upto self.holeStarts.count() 'eachHole'
 			keyed.push((try self.holeStarts.get(at) otherwise panic("DebugRunRefiner.normalizeHoles: holeStarts.get OOB at {at}")) * DebugOrdinalSpan + at)
@@ -3029,8 +3003,7 @@ end 'debugOrderKeyOf'
 function debugDominanceFrontiers(topo FuncTopology, dom DominatorTree) returns CsrGraph
 	var owners = CsrColumn.create(0)
 	var members = CsrColumn.create(0)
-	var recorded = CfgIndexArray.create(0)
-	recorded.refill(topo.numBlocks, value: 0)
+	var recorded = IndexColumn.create(topo.numBlocks)
 
 	if not dom.reducible 'noFrontierIsNeeded'
 		return buildCsr(owners, to: members, nodeCount: topo.numBlocks as CsrIndex)
@@ -3783,7 +3756,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	var events = ClobberEvents.create()
 	events.widen(valueCount)
 
-	var deathsOfBlock = BlockDeathsArray.create(0)
+	var deathsOfBlock = BlockDeathsArray.create(topo.numBlocks, zeroed: false)
 
 	// Every block's deaths come before any block is colored: `hints.contested` gathers wants from LATER
 	// blocks, and a value is colored at its def. Run per block inside the sweep below, a value's
@@ -4505,7 +4478,7 @@ end 'BlockDeaths'
 //
 // It also closes each value's clobber windows into `hints.contested`; `colorFunction` runs it over
 // every block before coloring any.
-function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness LivenessResult, local ElementIndex, block IrBlock, buf OperandList, seenBelow BitRow, seedBuf ValueIdArray, liveByClass RegCountColumn, hints ColorHints, events ClobberEvents) returns BlockDeaths
+function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness LivenessResult, local ElementIndex, block IrBlock, buf OperandList, seenBelow BitRow, seedBuf ValueIdArray, liveByClass FixedRegCountColumn, hints ColorHints, events ClobberEvents) returns BlockDeaths
 	let n = ordered.count()
 
 	liveness.liveOutInto(local, out: seedBuf)

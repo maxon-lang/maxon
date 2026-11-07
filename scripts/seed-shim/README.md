@@ -68,10 +68,6 @@ Such a patch rewrites the library BODY to calls the seed knows, and withdraws th
 produce together with the arms that name them. The restore runs before the second build, so `C1` compiles
 `C2` against the unshimmed library, and only `C1`'s own behaviour is weaker.
 
-`0001-spell-the-sized-container-as-the-seed-names-it-in-the-first-build.patch` is the library case for a renamed
-type: the seed knows the sized container only as `Vector`, so the patch spells `stdlib/FixedArray.maxon`'s type and
-every `FixedArray with N` in `stdlib/` that way. The file keeps its name, which the restore needs.
-
 ⭐ **A RULE THE TREE HAS DELETED AND THE SEED STILL ENFORCES IS THE SIXTH CASE, AND ITS REWRITES ARE
 GENERATED WITH THE FOURTH'S.** With the forms withdrawn the seed judges the tree by its older rules, and refuses
 sites the tree is right to write: a `let` that holds a collection's element across a call that mutates the
@@ -95,11 +91,9 @@ naming the site.
 
 A rule the tree relaxed is written by hand and sorts below the generated patch. A `while true` loop that no `break`
 targets has no end, so the tree's functions leave it by `return` alone; the seed reads the function's end as
-reachable (E3013), and the second patch puts back the `panic` after the loop in the functions the seed refuses:
-`HttpServer.accept`, `Json.parseArray`, `Json.parseObject`, `Json.parseString`, `NistCurves.deterministicSignature`,
-`Rsa.blinding`, `TlsClientConfig.drawSecret` and `httpReadDelimited`. A `match` returned from a function that
-returns an interface gives a different conformer per arm; the seed reads the arms as disagreeing (E3005), and the
-first patch withdraws `TlsRecordProtection.tlsAead` and writes `TlsRecordState.create` as one struct literal per arm.
+reachable (E3013), and the patch puts back the `panic` after the loop in each function the seed refuses. A `match`
+returned from a function that returns an interface gives a different conformer per arm; the seed reads the arms as
+disagreeing (E3005), and the patch writes the construction as one struct literal per arm.
 
 The seed's parser ends a file's parse at its first type refusal, so one build reports at most one such site per
 file, and a file holding hundreds would cost hundreds of builds. Once a file has been refused at a single site in
@@ -157,22 +151,22 @@ an array where it creates it — `create(n)` and `create(n, zeroed: false)` — 
 `create()`, so the library linked into `C1` is refused. The patch writes each such site back as `create()` followed
 by `resize(n)` or `reserve(n)`, and `create(0)` as `create()`. It also writes the AES hardware schedule's
 runtime-sized `FixedArray` back to `Array with Byte`. Only the library changes: the compiler's
-own parse of the form stays, which is what lets `C1` compile the unshimmed library. It is hand-written and numbered
-`0005`, below the generated patch, because the generator computes its hunks over every other patch here and refuses
-one that sorts after it.
+own parse of the form stays, which is what lets `C1` compile the unshimmed library. It is hand-written and sorts
+below the generated patch, because the generator computes its hunks over every other patch here and refuses one
+that sorts after it.
 
 ⭐ **THE COMPILER'S OWN CAPACITY ARGUMENT IS THE TWELFTH CASE.** An array is created with a stated capacity, and the
 compiler's sources write `create(0)` for an empty one, a call the seed's parser refuses (E2010). The patch writes
 each such site in `maxon-bin/` back as `create()`, which the seed reads as the same empty array. It changes no
 compiler logic: the parse of the form, and the diagnostic for a call with no capacity, stay, which is what lets
 `C1` compile the unshimmed tree into `C2`. It is written over the committed tree by comparing each file to its
-`HEAD` text, line by line, and is numbered `0008`, below the generated patch.
+`HEAD` text, line by line, and sorts below the generated patch.
 
 ⭐ **A CAPABILITY WORD A REQUIREMENT'S PARAMETER NEEDS IS THE THIRTEENTH CASE.** The tree's interface requirements
 (`BuiltinArrayLiteral.init`, `InitableFromArrayLiteral.init`, `TlsPeerAuthenticator.verifyChain`, `TlsMessageHandler.dispatch`)
 state a parameter's capability with `mutable`, or with none, where the seed requires `keep` on a parameter its implementers
 store. A requirement has no body from which the seed could infer the capability, and the generated patch withdraws every
-`mutable` marker, so the patch writes `keep` on those parameters. It is hand-written and numbered `0006`, below the
+`mutable` marker, so the patch writes `keep` on those parameters. It is hand-written and sorts below the
 generated patch, because the generator computes its hunks over every other patch here.
 
 ⛔ **The commit that pins a new seed deletes every patch.** A patch here is what makes CI freeze, prove and pin

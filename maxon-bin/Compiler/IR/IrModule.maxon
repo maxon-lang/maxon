@@ -426,7 +426,7 @@ export type IrModule uses Op
 	end 'blockHoldingTheExitOf'
 
 	export function scopeExitsAfterSplits(local DebugLocalDecl, func IrFunction, byId BlockIndexById) returns BlockIdArray
-		var exits = BlockIdArray.create(0)
+		var exits = BlockIdArray.create(local.scopeEnds.count(), zeroed: false)
 
 		for exit in local.scopeEnds 'eachScopeExit'
 			exits.push(self.blockHoldingTheExitOf(func, byId: byId, start: exit))
@@ -910,11 +910,11 @@ end 'SpliceScratch'
 // those two inherited methods. The array move + reference rewrite are
 // entry-typed and stay on the module; the index arithmetic is shared here.
 type OpCompactionPlan
-	export var forward as OpIndexArray
+	export var forward as FixedOpIndexArray
 	export let liveCount as ElementIndex
 	export let deadMarker as ElementIndex
 
-	static function create(forward OpIndexArray, liveCount ElementIndex, deadMarker ElementIndex) returns OpCompactionPlan
+	static function create(forward FixedOpIndexArray, liveCount ElementIndex, deadMarker ElementIndex) returns OpCompactionPlan
 		return Self{forward: forward, liveCount: liveCount, deadMarker: deadMarker}
 	end 'create'
 end 'OpCompactionPlan'
@@ -928,10 +928,9 @@ end 'OpCompactionPlan'
 // are consumed by the time index `old` is reached), which is what makes the
 // leftward in-place move in `compactOps`/`compactBlocks` clobber-free. Orphans
 // (entries with `live[i] == false`) are left at `deadMarker` (= `count`).
-function assignCompactionSlots(live BoolArray, count ElementIndex) returns OpCompactionPlan
+function assignCompactionSlots(live FixedBoolArray, count ElementIndex) returns OpCompactionPlan
 	let deadMarker = count
-	var forward = OpIndexArray.create(0)
-	forward.resize(count)
+	var forward = FixedOpIndexArray.create(count)
 	var nextSlot = 0 as ElementIndex
 
 	for oldIdx in 0 upto count 'assign'
@@ -955,8 +954,7 @@ end 'assignCompactionSlots'
 // forwarding) are the only allocations and are dwarfed by the orphan bytes
 // reclaimed.
 function computeOpCompaction(functions IrFunctionArray, blocks IrBlockArray, opCount ElementIndex) returns OpCompactionPlan
-	var live = BoolArray.create(0)
-	live.resize(opCount)
+	var live = FixedBoolArray.create(opCount)
 
 	for func in functions 'markFunc'
 		for blockRef in func.blockRefs 'markBlock'
@@ -1036,8 +1034,7 @@ end 'rewriteBlockOpRefs'
 // the shared `assignCompactionSlots`. O(total blockRefs); the two blockCount-
 // sized arrays (live flags + forwarding) are the only allocations.
 function computeBlockCompaction(functions IrFunctionArray, blockCount ElementIndex) returns OpCompactionPlan
-	var live = BoolArray.create(0)
-	live.resize(blockCount)
+	var live = FixedBoolArray.create(blockCount)
 
 	for func in functions 'markFunc'
 		for blockRef in func.blockRefs 'markRef'

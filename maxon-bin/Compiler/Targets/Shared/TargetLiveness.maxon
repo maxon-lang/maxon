@@ -34,10 +34,12 @@
 // deliberately generic OVER those spaces and has no one purpose to name — the column builders, which
 // fill a colour column and a Hall matching alike.
 export typealias DenseInt = int(0 to u64.max)
+module typealias FixedDenseColumn = FixedArray with DenseInt
 export typealias DenseColumn = Array with DenseInt
 
 export typealias ColumnLengthColumn = Array with ElementIndex
 
+export typealias FixedCfgIndexArray = FixedArray with ElementIndex
 export typealias CfgIndexArray = Array with ElementIndex
 
 // @generated library-cache begin
@@ -51,8 +53,7 @@ end 'cacheWriteCfgIndexArray'
 
 module function cacheReadCfgIndexArray(reader LibraryCacheReader) returns CfgIndexArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = CfgIndexArray.create(0)
-	result.reserve(count)
+	var result = CfgIndexArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ElementIndex
@@ -68,7 +69,7 @@ end 'cacheReadCfgIndexArray'
 // it — a COLD spill may only be placed where this is 0 — so it is not a block index and must not be
 // mistaken for one.
 export typealias LoopDepth = int(0 to u64.max)
-export typealias LoopDepthArray = Array with LoopDepth
+export typealias LoopDepthArray = FixedArray with LoopDepth
 
 // The FORWARD LAYOUT SEQUENCE number of an op within one function: blocks in `func.blockRefs` order,
 // each block's body ops then its terminator (the `collectOpsInRunOrder` numbering). It is the ONE
@@ -149,6 +150,7 @@ function seqLimitFor(numBlocks ElementIndex) returns OpSeq
 	return (numBlocks as OpSeq) * SeqStride
 end 'seqLimitFor'
 
+typealias FixedUseRecordIndexArray = FixedArray with ElementIndex
 export typealias UseRecordIndexArray = Array with ElementIndex
 
 // HOW MANY uses one value has, or one block holds — the BOUND of a walk of the `UseIndex`'s threads
@@ -156,6 +158,7 @@ export typealias UseRecordIndexArray = Array with ElementIndex
 // `ElementIndex`; there is no "k-th use" address, because the uses of one value are a linked thread
 // rather than a contiguous run, and an addressable k would be an O(k) walk pretending to be an index.
 export typealias UseOrdinal = int(0 to u64.max) implements ElementIndex
+typealias FixedUseOrdinalArray = FixedArray with UseOrdinal
 export typealias UseOrdinalArray = Array with UseOrdinal
 typealias UnrolledChainArray = Array with UseRecordIndexArray
 
@@ -192,6 +195,8 @@ typealias VersionStampColumn = Array with VersionStamp
 // coloring, a fixed-register hint, or an edge-move operand list.
 export typealias RegNumColumn = Array with RegNum
 export typealias RegisterColumn = OptionalIndexColumn with RegNum
+
+export typealias FixedRegCountColumn = FixedArray with RegCount
 
 // A dense column of REGISTER COUNTS (a pressure, an effective-pool size, a dead-phi tally), indexed
 // by value id, by block, or by pool size. Its entries are quantities of REGISTERS, which is why it is
@@ -256,28 +261,26 @@ export function classRowIndex(local ElementIndex, class RegClass) returns Elemen
 end 'classRowIndex'
 
 // A zeroed per-CLASS row: one entry per register file, indexed by `RegClass.ordinal`.
-export function zeroClassRow() returns RegCountColumn
-	var row = RegCountColumn.create(0)
-	row.resize(RegClassCount)
+export function zeroClassRow() returns FixedRegCountColumn
+	let row = FixedRegCountColumn.create(RegClassCount)
 	return row
 end 'zeroClassRow'
 
 // One zeroed class row per block — the per-block pressure tables' shape (`classRowIndex`).
-function zeroClassRows(numBlocks ElementIndex) returns RegCountColumn
-	var rows = RegCountColumn.create(0)
-	rows.resize(numBlocks * RegClassCount)
+function zeroClassRows(numBlocks ElementIndex) returns FixedRegCountColumn
+	let rows = FixedRegCountColumn.create(numBlocks * RegClassCount)
 	return rows
 end 'zeroClassRows'
 
-export function classRowGet(row RegCountColumn, class RegClass) returns RegCount
+export function classRowGet(row FixedRegCountColumn, class RegClass) returns RegCount
 	return try row.get(class.ordinal) otherwise panic("classRowGet: row has no entry for the {class.name} file")
 end 'classRowGet'
 
-export function classRowSet(row RegCountColumn, class RegClass, value RegCount)
+export function classRowSet(row FixedRegCountColumn, class RegClass, value RegCount)
 	try row.set(class.ordinal, value: value) otherwise panic("classRowSet: row has no entry for the {class.name} file")
 end 'classRowSet'
 
-export function classRowZero(row RegCountColumn)
+export function classRowZero(row FixedRegCountColumn)
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
 		classRowSet(row, class: class, value: 0)
@@ -287,7 +290,7 @@ end 'classRowZero'
 // The largest entry across every file — the "how hard was this?" summary, for a REPORT. It is never a
 // feasibility test: two files do not pool their registers, so a max is a description and never a
 // denominator.
-export function classRowMax(row RegCountColumn) returns RegCount
+export function classRowMax(row FixedRegCountColumn) returns RegCount
 	var widest = 0 as RegCount
 
 	for n in row 'eachClass'
@@ -342,7 +345,7 @@ end 'valueClass'
 // The underflow panic mirrors `RegPoolCensus.remove`'s and exists for the same reason: this tally is
 // MAINTAINED, never rebuilt, so a drift from the row it mirrors would silently corrupt every pressure
 // figure downstream of it rather than fail where it happened.
-export function stepClassLive(liveByClass RegCountColumn, classes ValueClassColumn, v ValueId, entering bool)
+export function stepClassLive(liveByClass FixedRegCountColumn, classes ValueClassColumn, v ValueId, entering bool)
 	let class = try classes.get(v) otherwise panic("stepClassLive: value {v} has no recorded register class — the lowering's class column does not cover it")
 	let cur = classRowGet(liveByClass, class: class)
 
@@ -360,7 +363,7 @@ end 'stepClassLive'
 
 // Seed a per-class live tally from a sparse live list — the O(live) counterpart of seeding the bit
 // row, and the only honest way to start a tally whose decrements panic on underflow.
-export function seedClassLive(liveByClass RegCountColumn, classes ValueClassColumn, values ValueIdArray)
+export function seedClassLive(liveByClass FixedRegCountColumn, classes ValueClassColumn, values ValueIdArray)
 	classRowZero(liveByClass)
 
 	for v in values 'eachLive'
@@ -379,13 +382,11 @@ end 'seedClassLive'
 // It is a METHOD because a free function cannot be generic over an array's element type; a method
 // knows its own, so one of it serves every column here.
 
-// A dense column of `count` ZEROES — just the resize: a lengthening `resize` exposes zeroes by the
-// capacity-slot invariant (ManagedMemoryRuntime.maxon: every slot in [length, capacity) reads zero, upheld by
-// zeroing on the way out), so a fill would store zeroes over zeroes. Reach for `refill` when every entry
-// must hold a NON-zero value (a sentinel) or the length must shrink too.
-function zeroColumn(count ElementIndex) returns DenseColumn
-	var col = DenseColumn.create(0)
-	col.resize(count)
+// A dense column of `count` ZEROES — just `create(count)`, which hands back zeroed slots, so a fill
+// would store zeroes over zeroes. Reach for `refill` when every entry must hold a NON-zero value (a
+// sentinel) or the length must shrink too.
+function zeroColumn(count ElementIndex) returns FixedDenseColumn
+	let col = FixedDenseColumn.create(count)
 	return col
 end 'zeroColumn'
 
@@ -484,7 +485,7 @@ export typealias ValueIdListColumn = Array with ValueIdArray
 // never grows afterwards: blocks are fixed by the time liveness runs, and it is the VALUE space a
 // split extends, which is not keyed here (see the alias).
 function emptyListColumn(count ElementIndex) returns ValueIdListColumn
-	var lists = ValueIdListColumn.create(0)
+	var lists = ValueIdListColumn.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachKey'
 		lists.push(ValueIdArray.create(0))
@@ -551,11 +552,11 @@ export typealias RegMaskColumn = Array with RegMask
 export type FuncTopology
 	export var numBlocks as ElementIndex
 	export var blockRefByLocal as BlockRefArray
-	export var localByBlockId as CfgIndexArray
+	export var localByBlockId as FixedCfgIndexArray
 	export var succ as CsrGraph
 	export var pred as CsrGraph
 
-	export static function create(numBlocks ElementIndex, blockRefByLocal BlockRefArray, localByBlockId CfgIndexArray, succ CsrGraph, pred CsrGraph) returns FuncTopology
+	export static function create(numBlocks ElementIndex, blockRefByLocal BlockRefArray, localByBlockId FixedCfgIndexArray, succ CsrGraph, pred CsrGraph) returns FuncTopology
 		return Self{numBlocks: numBlocks, blockRefByLocal: blockRefByLocal, localByBlockId: localByBlockId, succ: succ, pred: pred}
 	end 'create'
 end 'FuncTopology'
@@ -644,8 +645,7 @@ export type LiveSets
 		cover.begin(numBlocks)
 		var clobbers = BlockClobbers.create()
 		clobbers.begin(numBlocks)
-		var firstEntry = CfgIndexArray.create(0)
-		firstEntry.refill(valueCount, value: 0)
+		var firstEntry = CfgIndexArray.create(valueCount)
 		return Self{inSets: emptyListColumn(numBlocks), outSets: emptyListColumn(numBlocks), ledger: LiveOutLedger.create(), high: CfgIndexArray.create(0), runs: runs, cover: cover, clobbers: clobbers, entryBlock: CfgIndexArray.create(0), entryIsOut: BoolArray.create(0), entryNext: CfgIndexArray.create(0), firstEntry: firstEntry, freeEntries: CfgIndexArray.create(0)}
 	end 'create'
 
@@ -946,7 +946,7 @@ export type LivenessResult
 
 	// Peak simultaneous register demand PER CLASS (a class row) — the exact χ = ω each register file
 	// must satisfy on its own.
-	export var maxPressure as RegCountColumn
+	export var maxPressure as FixedRegCountColumn
 
 	// Block-marking steps taken by the SSA path exploration — the honest cost counter. (There is
 	// no fixpoint, so there is no iteration count to report.)
@@ -964,7 +964,7 @@ export type LivenessResult
 	//
 	// A 2-WIDE ROW PER BLOCK (`classRowIndex`), not a column per class: same allocation count as the
 	// single column it replaces, and the stride is derived from the enum.
-	export var deadPhis as RegCountColumn
+	export var deadPhis as FixedRegCountColumn
 
 	// Per-block, PER-CLASS REGISTER DEMAND: the block's peak simultaneous live count of that file
 	// (carrying the reuse-copy transient, in the file the transient's own destination register
@@ -974,7 +974,7 @@ export type LivenessResult
 	// It is kept as a column, and not merely folded away, because a split changes the demand of only
 	// the blocks it touched — so the splitter re-derives those few and takes the max ONCE, at the end,
 	// instead of re-sweeping every block to learn a number that did not move (`refreshMaxPressure`).
-	export var blockPressure as RegCountColumn
+	export var blockPressure as FixedRegCountColumn
 
 	// The function's per-value index — def sites, use sites, per-value flags, the layout op
 	// numbering. The liveness walk builds it (it needs the use lists), and the cold-spill splitter
@@ -990,7 +990,7 @@ export type LivenessResult
 	// The runs of every cold block (`ColdRunTable`), rebuilt for the blocks a split touches.
 	export var coldRuns as ColdRunTable
 
-	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow ElementIndex, rowWordsVisited EventCount, live LiveSets, forbidden RegMaskColumn, establishedAtDef RegMaskColumn, valueClass ValueClassColumn, registerFile RegisterFile, maxPressure RegCountColumn, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex, opFacts OpVariantFacts, coldRuns ColdRunTable) returns LivenessResult
+	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow ElementIndex, rowWordsVisited EventCount, live LiveSets, forbidden RegMaskColumn, establishedAtDef RegMaskColumn, valueClass ValueClassColumn, registerFile RegisterFile, maxPressure FixedRegCountColumn, livenessMarkSteps EventCount, deadPhis FixedRegCountColumn, blockPressure FixedRegCountColumn, useIndex UseIndex, opFacts OpVariantFacts, coldRuns ColdRunTable) returns LivenessResult
 		return Self{coldRuns: coldRuns, cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, rowWordsVisited: rowWordsVisited, live: live, forbidden: forbidden, establishedAtDef: establishedAtDef, valueClass: valueClass, registerFile: registerFile, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts}
 	end 'create'
 
@@ -1319,8 +1319,7 @@ end 'computeLivenessOn'
 
 // A zeroed per-value register-mask column.
 module function makeRegMaskColumn(valueCount ValueId) returns RegMaskColumn
-	var col = RegMaskColumn.create(0)
-	col.resize(valueCount)
+	let col = RegMaskColumn.create(valueCount)
 	return col
 end 'makeRegMaskColumn'
 
@@ -1382,10 +1381,8 @@ export function reorderFuncBlocksRpo(module TargetModule, func IrFunction) retur
 		return topo
 	end 'empty'
 
-	var visited = BoolArray.create(0)
-	visited.resize(topo.numBlocks)
-	var postorder = CfgIndexArray.create(0)
-	postorder.reserve(topo.numBlocks)
+	var visited = FixedBoolArray.create(topo.numBlocks)
+	var postorder = CfgIndexArray.create(topo.numBlocks, zeroed: false)
 	rpoDfs(topo, root: 0, visited: visited, postorder: postorder)
 
 	var layout = BlockLayout.create(topo)
@@ -1424,10 +1421,8 @@ type BlockLayout
 	var newRefs as BlockRefArray
 
 	static function create(topo FuncTopology) returns BlockLayout
-		var oldByNew = CfgIndexArray.create(0)
-		oldByNew.reserve(topo.numBlocks)
-		var newRefs = BlockRefArray.create(0)
-		newRefs.reserve(topo.numBlocks)
+		var oldByNew = CfgIndexArray.create(topo.numBlocks, zeroed: false)
+		var newRefs = BlockRefArray.create(topo.numBlocks, zeroed: false)
 		return Self{topo: topo, oldByNew: oldByNew, newRefs: newRefs}
 	end 'create'
 
@@ -1443,10 +1438,10 @@ type BlockLayout
 end 'BlockLayout'
 
 type EdgeRiders
-	var rider as BoolArray
+	var rider as FixedBoolArray
 	var ridersOf as CsrGraph
 
-	static function of(rider BoolArray, ridersOf CsrGraph) returns EdgeRiders
+	static function of(rider FixedBoolArray, ridersOf CsrGraph) returns EdgeRiders
 		return Self{rider: rider, ridersOf: ridersOf}
 	end 'of'
 
@@ -1461,9 +1456,8 @@ type EdgeRiders
 	end 'placeRidersOf'
 end 'EdgeRiders'
 
-function coldDeadEndBlocks(module TargetModule, topo FuncTopology) returns BoolArray
-	var sunk = BoolArray.create(0)
-	sunk.resize(topo.numBlocks)
+function coldDeadEndBlocks(module TargetModule, topo FuncTopology) returns FixedBoolArray
+	var sunk = FixedBoolArray.create(topo.numBlocks)
 	var anyCold = false
 
 	for b in 1 upto topo.numBlocks 'eachBlock'
@@ -1494,7 +1488,7 @@ function coldDeadEndBlocks(module TargetModule, topo FuncTopology) returns BoolA
 	return sunk
 end 'coldDeadEndBlocks'
 
-function unsinkPredecessors(topo FuncTopology, block ElementIndex, sunk BoolArray, pending CfgIndexArray)
+function unsinkPredecessors(topo FuncTopology, block ElementIndex, sunk FixedBoolArray, pending CfgIndexArray)
 	for k in 0 upto topo.pred.degree(block as CsrIndex) 'eachPred'
 		let p = topo.pred.neighbour(block as CsrIndex, k: k)
 
@@ -1506,15 +1500,13 @@ function unsinkPredecessors(topo FuncTopology, block ElementIndex, sunk BoolArra
 end 'unsinkPredecessors'
 
 function edgeBlocksBeforeTheirTarget(module TargetModule, topo FuncTopology, postorder CfgIndexArray) returns EdgeRiders
-	var rank = CfgIndexArray.create(0)
-	rank.refill(topo.numBlocks, value: 0)
+	var rank = IndexColumn.create(topo.numBlocks)
 
 	for ri in 0 upto postorder.count() 'eachRanked'
 		try rank.set(try postorder.get(postorder.count() - 1 - ri) otherwise panic("edgeBlocksBeforeTheirTarget: postorder.get OOB"), value: ri) otherwise panic("edgeBlocksBeforeTheirTarget: rank.set OOB")
 	end 'eachRanked'
 
-	var rider = BoolArray.create(0)
-	rider.resize(topo.numBlocks)
+	var rider = FixedBoolArray.create(topo.numBlocks)
 	var targets = CsrColumn.create(0)
 	var riders = CsrColumn.create(0)
 
@@ -1562,8 +1554,7 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
 		try newByOld.set(o, value: i as DenseInt) otherwise panic("permuteTopology: newByOld.set OOB")
 	end 'invert'
 
-	var blockRefByLocal = BlockRefArray.create(0)
-	blockRefByLocal.reserve(numBlocks)
+	var blockRefByLocal = BlockRefArray.create(numBlocks, zeroed: false)
 
 	for i in 0 upto numBlocks 'permuteColumns'
 		let o = try oldByNew.get(i) otherwise panic("permuteTopology: oldByNew.get OOB")
@@ -1573,8 +1564,8 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
 	// BlockId -> new local. The id space is unchanged (the same blocks are present), and
 	// `numBlocks` stays the "not in this function" sentinel, so only real entries are remapped.
 	let idSpace = old.localByBlockId.count()
-	var localByBlockId = CfgIndexArray.create(0)
-	localByBlockId.refill(idSpace, value: numBlocks)
+	var localByBlockId = FixedCfgIndexArray.create(idSpace)
+	localByBlockId.refill(numBlocks)
 
 	for bid in 0 upto idSpace 'remapIds'
 		let oldLocal = try old.localByBlockId.get(bid) otherwise panic("permuteTopology: localByBlockId.get OOB")
@@ -1587,10 +1578,8 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
 		try localByBlockId.set(bid, value: newLocal as ElementIndex) otherwise panic("permuteTopology: localByBlockId.set OOB")
 	end 'remapIds'
 
-	var edgeFrom = CsrColumn.create(0)
-	edgeFrom.reserve(old.succ.list.count())
-	var edgeTo = CsrColumn.create(0)
-	edgeTo.reserve(old.succ.list.count())
+	var edgeFrom = CsrColumn.create(old.succ.list.count(), zeroed: false)
+	var edgeTo = CsrColumn.create(old.succ.list.count(), zeroed: false)
 
 	for u in 0 upto numBlocks 'eachNewBlock'
 		let oldU = try oldByNew.get(u) otherwise panic("permuteTopology: oldByNew.get OOB")
@@ -1617,11 +1606,9 @@ end 'permuteTopology'
 // program, not by anything we control, so no traversal here may recurse. The stack holds a
 // (node, next-successor-index) pair per open node — the explicit form of a recursive call's resume
 // point — so a node is emitted to the postorder only once its whole subtree is done.
-module function rpoDfs(topo FuncTopology, root ElementIndex, visited BoolArray, postorder CfgIndexArray)
-	var stackNode = CfgIndexArray.create(0)
-	stackNode.reserve(topo.numBlocks)
-	var stackNextSucc = CsrColumn.create(0)
-	stackNextSucc.reserve(topo.numBlocks)
+module function rpoDfs(topo FuncTopology, root ElementIndex, visited FixedBoolArray, postorder CfgIndexArray)
+	var stackNode = CfgIndexArray.create(topo.numBlocks, zeroed: false)
+	var stackNextSucc = CsrColumn.create(topo.numBlocks, zeroed: false)
 
 	try visited.set(root, value: true) otherwise panic("rpoDfs: visited.set(root) OOB")
 	stackNode.push(root)
@@ -1656,10 +1643,8 @@ end 'rpoDfs'
 // RPO reorder and the critical-edge split need, and it is deliberately all they can get — see
 // `FuncTopology`. The allocator's `buildFuncCfg` adds the two analyses on top.
 export function buildFuncTopology(module TargetModule, func IrFunction) returns FuncTopology
-	var blockRefByLocal = BlockRefArray.create(0)
-	blockRefByLocal.reserve(func.blockRefs.count())
-	var blockIdByLocal = CfgIndexArray.create(0)
-	blockIdByLocal.reserve(func.blockRefs.count())
+	var blockRefByLocal = BlockRefArray.create(func.blockRefs.count(), zeroed: false)
+	var blockIdByLocal = CfgIndexArray.create(func.blockRefs.count(), zeroed: false)
 	var maxBlockId = 0 as BlockId
 
 	for blockRef in func.blockRefs 'eachRef'
@@ -1682,8 +1667,8 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns 
 	// program has. Liveness, loop depth and pressure all follow it off a cliff, so the failure
 	// surfaces far away (values from one loop appearing live inside another) and looks like an
 	// allocator bug. Assert it here, at the one place the collision would be absorbed.
-	var localByBlockId = CfgIndexArray.create(0)
-	localByBlockId.refill(((maxBlockId + 1) as ElementIndex), value: numBlocks)
+	var localByBlockId = FixedCfgIndexArray.create(((maxBlockId + 1) as ElementIndex))
+	localByBlockId.refill(numBlocks)
 
 	for i in 0 upto numBlocks 'mapIds'
 		let bid = try blockIdByLocal.get(i) otherwise panic("buildFuncTopology: blockIdByLocal.get OOB")
@@ -1711,10 +1696,8 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns 
 	end 'countEdges'
 
 	// Edge list (fromLocal, toLocal), then CSR for succ and its inverse for pred.
-	var edgeFrom = CsrColumn.create(0)
-	edgeFrom.reserve(edgeCount)
-	var edgeTo = CsrColumn.create(0)
-	edgeTo.reserve(edgeCount)
+	var edgeFrom = CsrColumn.create(edgeCount, zeroed: false)
+	var edgeTo = CsrColumn.create(edgeCount, zeroed: false)
 
 	for i in 0 upto numBlocks 'eachBlock'
 		let block = try module.blocks.get(try blockRefByLocal.get(i) otherwise panic("buildFuncTopology: blockRefByLocal.get OOB")) otherwise panic("buildFuncTopology: block ref not in blocks")
@@ -2223,9 +2206,9 @@ end 'collectBlockSuccessorIds'
 // armed at its rows and a loop header armed only where control falls into it stops once rather
 // than on every iteration.
 module function lineEntryColumn(module TargetModule, func IrFunction, encoding FunctionEncodingFacts) returns BoolArray
-	var firstSpans = SpanIdArray.create(0)
-	firstSpans.refill(func.nextBlockId, value: NoSpanId)
-	var openingSites = InlineSiteRefArray.create(0)
+	var firstSpans = FixedSpanIdArray.create(func.nextBlockId)
+	firstSpans.refill(NoSpanId)
+	var openingSites = InlineSiteRefArray.create(func.nextBlockId, zeroed: false)
 	openingSites.refill(func.nextBlockId, value: InlineSiteRef.none)
 
 	for blockRef in func.blockRefs 'eachBlockOpening'
@@ -2236,8 +2219,7 @@ module function lineEntryColumn(module TargetModule, func IrFunction, encoding F
 
 	let blockSites = openingSites
 
-	var entered = BoolArray.create(0)
-	entered.refill(func.nextBlockId, value: false)
+	var entered = BoolArray.create(func.nextBlockId)
 
 	if not someSpanIn(firstSpans) 'noLineToEnter'
 		return entered
@@ -2264,7 +2246,7 @@ module function lineEntryColumn(module TargetModule, func IrFunction, encoding F
 	return entered
 end 'lineEntryColumn'
 
-function someSpanIn(spans SpanIdArray) returns bool
+function someSpanIn(spans FixedSpanIdArray) returns bool
 	for span in spans 'eachSpan'
 		if span != NoSpanId 'positioned'
 			return true
@@ -2279,7 +2261,7 @@ typealias LineClassKey = int(0 to u64.max)
 typealias BlockLineClassArray = Array with BlockLineClass
 typealias LineClassMap = Map with (LineClassKey, EntryCount)
 typealias JoinGeneration = int(0 to u64.max)
-typealias JoinGenerationArray = Array with JoinGeneration
+typealias JoinGenerationArray = FixedArray with JoinGeneration
 
 union BlockLineClass
 	positionless
@@ -2297,21 +2279,21 @@ type LineWays
 	var encoding as FunctionEncodingFacts
 	export let entry as BlockId
 	var frontiers as LineFrontierArray
-	var reachesEntry as BoolArray
+	var reachesEntry as FixedBoolArray
 	var classStamps as JoinGenerationArray
 	var joinGeneration as JoinGeneration
 
 	static function of(module TargetModule, func IrFunction, sites InlineSiteRefArray, encoding FunctionEncodingFacts) returns LineWays
 		var leaving = CsrColumn.create(0)
 		var entering = CsrColumn.create(0)
-		var lineClasses = BlockLineClassArray.create(0)
+		var lineClasses = BlockLineClassArray.create(func.nextBlockId, zeroed: false)
 		lineClasses.refill(func.nextBlockId, value: BlockLineClass.positionless)
 		var sourceLineOrdinals = LineClassMap.create()
 		var classIds = LineClassMap.create()
 		let siteSlots = encoding.siteCount as LineClassKey + FirstSplicedSiteSlot
 		var successors = BlockIdArray.create(0)
 		var entry = 0 as BlockId
-		var layout = BlockIdArray.create(0)
+		var layout = BlockIdArray.create(func.blockRefs.count(), zeroed: false)
 
 		for (iter, blockRef) in func.blockRefs.withIterator() 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("LineWays.of: blockRef from func.blockRefs not in module.blocks")
@@ -2334,12 +2316,10 @@ type LineWays
 			end 'eachTarget'
 		end 'eachBlock'
 
-		var frontiers = LineFrontierArray.create(0)
+		var frontiers = LineFrontierArray.create(func.nextBlockId, zeroed: false)
 		frontiers.refill(func.nextBlockId, value: BlockIdArray.create(0))
-		var reachesEntry = BoolArray.create(0)
-		reachesEntry.refill(func.nextBlockId, value: false)
-		var classStamps = JoinGenerationArray.create(0)
-		classStamps.refill(classIds.count(), value: 0)
+		var reachesEntry = FixedBoolArray.create(func.nextBlockId)
+		var classStamps = JoinGenerationArray.create(classIds.count())
 
 		var ways = Self{successors: buildCsr(leaving, to: entering, nodeCount: func.nextBlockId as CsrIndex), predecessors: buildCsr(entering, to: leaving, nodeCount: func.nextBlockId as CsrIndex), sites: sites, lineClasses: lineClasses, encoding: encoding, entry: entry, frontiers: frontiers, reachesEntry: reachesEntry, classStamps: classStamps, joinGeneration: 0}
 		ways.settleFrontiers(func, layout: layout)
@@ -2348,8 +2328,7 @@ type LineWays
 	end 'of'
 
 	function settleFrontiers(func IrFunction, layout BlockIdArray)
-		var queued = BoolArray.create(0)
-		queued.refill(func.nextBlockId, value: false)
+		var queued = FixedBoolArray.create(func.nextBlockId)
 		var pending = CsrColumn.create(0)
 
 		// Seeded in layout order: BlockIds are creation order, so an edge-split block sits far from its
@@ -2393,7 +2372,7 @@ type LineWays
 		return false
 	end 'frontierChanged'
 
-	function queueIfTransparent(block BlockId, queued BoolArray, pending CsrColumn)
+	function queueIfTransparent(block BlockId, queued FixedBoolArray, pending CsrColumn)
 		let alreadyQueued = try queued.get(block) otherwise panic("LineWays.queueIfTransparent: block {block} is past the {queued.count()} this function numbers")
 
 		if self.positionless(block) and not alreadyQueued 'transparent'
@@ -2443,7 +2422,7 @@ type LineWays
 		return grew
 	end 'refreshedFrontier'
 
-	function requeueTransparentSuccessors(block CsrIndex, queued BoolArray, pending CsrColumn)
+	function requeueTransparentSuccessors(block CsrIndex, queued FixedBoolArray, pending CsrColumn)
 		for k in 0 upto self.successors.degree(block) 'eachWayOut'
 			self.queueIfTransparent(self.successors.neighbour(block, k: k) as BlockId, queued: queued, pending: pending)
 		end 'eachWayOut'
@@ -2710,8 +2689,7 @@ end 'scanFunctionValueCount'
 // header states the reducibility premise both rest on. What is this function's own is the DEPTH: one
 // increment per natural loop a block belongs to.
 function computeLoopDepth(succ CsrGraph, pred CsrGraph, numBlocks ElementIndex) returns LoopDepthArray
-	var depth = LoopDepthArray.create(0)
-	depth.resize(numBlocks)
+	var depth = LoopDepthArray.create(numBlocks)
 
 	if numBlocks == 0 'empty'
 		return depth
@@ -2763,11 +2741,10 @@ end 'computeLoopDepth'
 // message that is emitted on a compile that is already failing would be a cost on every build. This
 // costs the same shape as `computeLoopDepth` itself — one DFS plus one BFS per distinct header — and
 // runs at most once per compile.
-export function enclosingLoopBlocks(topo FuncTopology, blockLocal ElementIndex) returns BoolArray
+export function enclosingLoopBlocks(topo FuncTopology, blockLocal ElementIndex) returns FixedBoolArray
 	let loops = NaturalLoops.find(topo.succ, nodeCount: topo.numBlocks as CsrIndex)
 
-	var nest = BoolArray.create(0)
-	nest.resize(topo.numBlocks)
+	var nest = FixedBoolArray.create(topo.numBlocks)
 	var found = false
 	var member = LoopMembership.create()
 
@@ -2962,8 +2939,8 @@ export type UseIndex
 	// one for a live use, because no record carries its value and no walk of this thread reaches one —
 	// but a consumer that wants the LIVE uses of a block would need a per-record liveness flag, which
 	// does not exist because nothing needs it yet.
-	var useCountInBlock as UseOrdinalArray
-	var firstUseInBlock as UseRecordIndexArray
+	var useCountInBlock as FixedUseOrdinalArray
+	var firstUseInBlock as FixedUseRecordIndexArray
 	var nextUseInBlock as UseRecordIndexArray
 
 	// Def site: an op def (`hasOpDef` + where), a phi (`isPhi` + its block), or neither.
@@ -3011,24 +2988,15 @@ export type UseIndex
 	// An EMPTY index over a `valueCount`-value, `numBlocks`-block function — the shape `buildUseIndex`
 	// fills in place, through the very same mutators a split edits it with.
 	static function create(valueCount ValueId, numBlocks ElementIndex) returns UseIndex
-		var useCountOfValue = UseOrdinalArray.create(0)
-		useCountOfValue.resize(valueCount)
-		var lastUseOfValue = UseRecordIndexArray.create(0)
-		lastUseOfValue.resize(valueCount)
-		var useCountInBlock = UseOrdinalArray.create(0)
-		useCountInBlock.resize(numBlocks)
-		var firstUseInBlock = UseRecordIndexArray.create(0)
-		firstUseInBlock.resize(numBlocks)
-		var defOpIdx = OpIndexArray.create(0)
-		defOpIdx.resize(valueCount)
-		var defOpBlock = CfgIndexArray.create(0)
-		defOpBlock.resize(valueCount)
-		var phiBlock = CfgIndexArray.create(0)
-		phiBlock.resize(valueCount)
-		var spillSlot = SpillSlotArray.create(0)
-		var unrolledSlotOf = CfgIndexArray.create(0)
-		unrolledSlotOf.resize(valueCount)
-		spillSlot.resize(valueCount)
+		var useCountOfValue = UseOrdinalArray.create(valueCount)
+		var lastUseOfValue = UseRecordIndexArray.create(valueCount)
+		var useCountInBlock = FixedUseOrdinalArray.create(numBlocks)
+		var firstUseInBlock = FixedUseRecordIndexArray.create(numBlocks)
+		var defOpIdx = OpIndexArray.create(valueCount)
+		var defOpBlock = CfgIndexArray.create(valueCount)
+		var phiBlock = CfgIndexArray.create(valueCount)
+		var spillSlot = SpillSlotArray.create(valueCount)
+		var unrolledSlotOf = CfgIndexArray.create(valueCount)
 
 		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(0), useSeq: OpSeqArray.create(0), useOnEdge: BoolArray.create(0), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(0), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(0), hasOpDef: falseColumn(valueCount), constDef: falseColumn(valueCount), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn(valueCount), phiBlock: phiBlock, edgePassed: falseColumn(valueCount), spillStored: falseColumn(valueCount), slotResident: falseColumn(valueCount), spillSlot: spillSlot, touchesHotLoop: falseColumn(valueCount), unrolledSlotOf: unrolledSlotOf, unrolledChains: UnrolledChainArray.create(0)}
 	end 'create'
@@ -3578,10 +3546,9 @@ export type UseIndex
 	end 'growTo'
 end 'UseIndex'
 
-// A fresh BoolArray of `count` false entries (`resize` zero-fills).
+// A fresh BoolArray of `count` false entries (`create(count)` zero-fills).
 function falseColumn(count ElementIndex) returns BoolArray
-	var col = BoolArray.create(0)
-	col.resize(count)
+	let col = BoolArray.create(count)
 	return col
 end 'falseColumn'
 
@@ -4672,9 +4639,9 @@ export type PressureSweepScratch
 	// running max. Allocated once per function and reused across every block and every op — the same
 	// scratch discipline the rest of the allocator follows, and the reason a per-class figure costs no
 	// allocation at all.
-	export var liveByClass as RegCountColumn
-	export var opPressure as RegCountColumn
-	export var blockMax as RegCountColumn
+	export var liveByClass as FixedRegCountColumn
+	export var opPressure as FixedRegCountColumn
+	export var blockMax as FixedRegCountColumn
 
 	// The cold block being swept, when the block is one (`ColdRunSweep`).
 	export var coldRun as ColdRunSweep
@@ -4839,7 +4806,7 @@ end 'pendingAfter'
 // residue neither can prevent — greedy is not exact for list colouring — is repaired by
 // `SplitDriver.repairAtExhaustion` / `repairByEvictingOccupant`. Restating that argument here would be
 // the same one-fact-written-twice `HallCondition.hallVerdictAt`'s own header warns about.
-function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal ElementIndex, runs ColdBlockRuns, live LiveSets, forbidden RegMaskColumn, classes ValueClassColumn, deadPhis RegCountColumn, scratch PressureSweepScratch, demandOut RegCountColumn, opFacts OpVariantFacts)
+function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal ElementIndex, runs ColdBlockRuns, live LiveSets, forbidden RegMaskColumn, classes ValueClassColumn, deadPhis FixedRegCountColumn, scratch PressureSweepScratch, demandOut FixedRegCountColumn, opFacts OpVariantFacts)
 	let block = blockAt(module, topo: topo, local: blockLocal)
 	var liveRow = scratch.liveRow
 	var buf = scratch.buf
@@ -4929,7 +4896,7 @@ end 'sweepBlockPressure'
 //
 // It WRITES the row rather than returning a count, because the answer is per class and a per-op
 // return value would be a heap object on the sweep's hottest path.
-function countDeadPhis(block IrBlock, liveRow BitRow, classes ValueClassColumn, deadPhis RegCountColumn, blockLocal ElementIndex)
+function countDeadPhis(block IrBlock, liveRow BitRow, classes ValueClassColumn, deadPhis FixedRegCountColumn, blockLocal ElementIndex)
 	for classOrdinal in 0 upto RegClassCount 'zeroRow'
 		let class = regClassAt(classOrdinal)
 		try deadPhis.set(classRowIndex(blockLocal, class: class), value: 0) otherwise panic("countDeadPhis: deadPhis.set OOB for block {blockLocal}")
@@ -5256,7 +5223,7 @@ end 'nonSweptForbidOf'
 // receives the pressure this op contributes — the live-before population, PLUS this op's
 // transient register (see `addOpTransientPressure`); the op's clobber mask is returned for the
 // block's whole-block OR (`BlockClobbers`).
-function stepBackwardOverOp(module TargetModule, opIdx ElementIndex, heat BlockHeat, pos ElementIndex, runs ColdBlockRuns, liveRow BitRow, forbidden RegMaskColumn, buf OperandList, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn, opFacts OpVariantFacts, coldRun ColdRunSweep, events ClobberEvents) returns RegMask
+function stepBackwardOverOp(module TargetModule, opIdx ElementIndex, heat BlockHeat, pos ElementIndex, runs ColdBlockRuns, liveRow BitRow, forbidden RegMaskColumn, buf OperandList, liveBuf ValueIdArray, liveByClass FixedRegCountColumn, classes ValueClassColumn, pressureOut FixedRegCountColumn, opFacts OpVariantFacts, coldRun ColdRunSweep, events ClobberEvents) returns RegMask
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
 
 	// This also fills `buf` with the op's operands, which everything below reads.
@@ -5881,7 +5848,7 @@ end 'transientDefOperand'
 // this pass call the ONE implementation and cannot disagree about where the transient lands — they
 // must agree or the splitter false-panics (see SplitLiveRanges.analyzePressure). At most one is added,
 // which `opTransientDefOf` below decides and states once.
-export function addOpTransientPressure(buf OperandList, liveRow BitRow, classes ValueClassColumn, pressureOut RegCountColumn)
+export function addOpTransientPressure(buf OperandList, liveRow BitRow, classes ValueClassColumn, pressureOut FixedRegCountColumn)
 	let transient = opTransientDefOf(buf)
 
 	if not transient.found 'noVirtualDef'
@@ -6062,7 +6029,7 @@ end 'anyVirtualUseDiesAt'
 // `liveByClass` IS the population — the caller reads it after the step, and the total is
 // `classRowTotal`. There is no separate count to return and therefore no second counter to disagree
 // with the row it summarises.
-export function stepRowBackwardOverOperands(row BitRow, buf OperandList, liveByClass RegCountColumn, classes ValueClassColumn)
+export function stepRowBackwardOverOperands(row BitRow, buf OperandList, liveByClass FixedRegCountColumn, classes ValueClassColumn)
 	for o in buf 'removeDefs'
 		if operandIsDef(o) and operandIsVirtual(o) 'vd'
 			let v = operandValueId(o)

@@ -174,7 +174,7 @@ end 'PhaseCost'
 // `addPhaseCost`/`costOf` take and return a PhaseCost, which is a stack value. Nothing can
 // credit a phase in one unit and forget the other, and nothing allocates to do it.
 export typealias DurationNanosArray = Array with DurationNanos
-export typealias CpuTicksArray = Array with CpuTicks
+export typealias CpuTicksArray = FixedArray with CpuTicks
 
 // The phases the compile is attributed to.
 //
@@ -590,22 +590,15 @@ export type CompileTimings
 	// live inside is the double-count this file exists to prevent.
 	export var regAlloc as RegAllocStats
 
-	// Both columns are scalars, so `resize` zero-fills them correctly. (An `Array with
-	// PhaseCost` would need seeding by `push` instead — resize sets the length of a struct
-	// array without giving the slots storage, so `count()` answers while `get` reports OOB.
-	// That is a trap worth knowing about; it is not one this type falls into any more.)
 	export static function create() returns CompileTimings
-		var phaseNanos = DurationNanosArray.create(0)
-		phaseNanos.resize(CompilePhase.allCases.count())
-		var phaseCpuTicks = CpuTicksArray.create(0)
-		phaseCpuTicks.resize(CompilePhase.allCases.count())
-		var rowKinds = PhaseRowKindArray.create(0)
+		let phaseCount = CompilePhase.allCases.count()
+		var rowKinds = PhaseRowKindArray.create(phaseCount, zeroed: false)
 
 		for _ in CompilePhase.allCases 'eachPhase'
 			rowKinds.push(PhaseRowKind.bracketedOnTheMainThread)
 		end 'eachPhase'
 
-		return Self{phaseNanos: phaseNanos, phaseCpuTicks: phaseCpuTicks, rowKinds: rowKinds, total: PhaseCost.zero(), regAlloc: RegAllocStats.create()}
+		return Self{phaseNanos: DurationNanosArray.create(phaseCount), phaseCpuTicks: CpuTicksArray.create(phaseCount), rowKinds: rowKinds, total: PhaseCost.zero(), regAlloc: RegAllocStats.create()}
 	end 'create'
 
 	// Takes the two quantities as SCALARS rather than a PhaseCost, and that is the hot path
@@ -669,7 +662,7 @@ export type CompileTimings
 	// The pool rows as the mask the memory table selects by (`PhaseMemoryColumns.totalDeltaWhere`): every
 	// one, or those breaking `driver` down.
 	export function poolRowMask() returns BoolArray
-		var mask = BoolArray.create(0)
+		var mask = BoolArray.create(CompilePhase.allCases.count(), zeroed: false)
 
 		for phase in CompilePhase.allCases 'eachPhase'
 			mask.push(self.isMeasuredOnAPool(phase))
@@ -679,7 +672,7 @@ export type CompileTimings
 	end 'poolRowMask'
 
 	export function poolRowsUnder(driver CompilePhase) returns BoolArray
-		var mask = BoolArray.create(0)
+		var mask = BoolArray.create(CompilePhase.allCases.count(), zeroed: false)
 
 		for phase in CompilePhase.allCases 'eachPhase'
 			mask.push(self.isPoolBreakdownOf(phase, driver: driver))

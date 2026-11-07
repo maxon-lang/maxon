@@ -125,7 +125,7 @@ let InlineContLabel = b"__il_cont"
 let InlineBodyLabel = b"__il_body"
 
 typealias SiteCount = int(0 to u64.max)
-typealias SiteCountArray = Array with SiteCount
+typealias SiteCountArray = FixedArray with SiteCount
 typealias FuncIndexSet = Set with ElementIndex
 
 // How many parameter cascades one callee carries — its arity at most, and one in nearly every case.
@@ -616,50 +616,42 @@ type LeafPlan
 	// One past the highest ValueId each ELIGIBLE callee's body uses — the width of the value column a
 	// splice builds — and the block count it was admitted with. Zero for every other function;
 	// `nextFreeValueId` walks the body, so it is asked only where an answer will be spent.
-	var valueBounds as ValueIdArray
-	var blockCounts as BlockPositionColumn
+	var valueBounds as FixedValueIdArray
+	var blockCounts as FixedBlockPositionColumn
 
 	// The functions whose origin rows a splice may re-file, in the shape
 	// `ValueOriginTable.indexRowsOfFunctions` takes: every eligible callee, and every flippable one,
 	// whose rows a follow-up round needs once it is eligible. Built in the same walk as the verdicts
 	// rather than derived later, so the two cannot disagree.
-	export var rowIndexedFuncs as BoolArray
+	export var rowIndexedFuncs as FixedBoolArray
 
-	var flippableFuncs as BoolArray
+	var flippableFuncs as FixedBoolArray
 
 	// A callee a site can refuse for size — `tooManyOps`, or eligible only where its entry cascades are
 	// declined — whose ops, cascades included, fit `ReportedLargerLeafBudget`. A BIT rather than the op
 	// count it is derived from, because the count has exactly one reader and this is what that reader asks.
-	var withinLargerBudget as BoolArray
-	var reliesOnDeclinedCascades as BoolArray
+	var withinLargerBudget as FixedBoolArray
+	var reliesOnDeclinedCascades as FixedBoolArray
 	export var eligibleCount as ElementIndex
 	export var tooManyOpsCount as ElementIndex
 	export var tooManyOpsWithinLargerBudget as ElementIndex
 	var tableUsesByCallee as TableUsesByCallee
 	export var slots as RdataSlotIndex
-	var wrapperFuncs as BoolArray
+	var wrapperFuncs as FixedBoolArray
 	export var wrapperCount as ElementIndex
-	var refusedWrapperFuncs as BoolArray
+	var refusedWrapperFuncs as FixedBoolArray
 	var waitings as WaitingOnArray
 	export var gate as WrapperGate
 
 	static function create(funcCount ElementIndex, gate WrapperGate) returns LeafPlan
-		var valueBounds = ValueIdArray.create(0)
-		valueBounds.resize(funcCount)
-		var blockCounts = BlockPositionColumn.create(0)
-		blockCounts.resize(funcCount)
-		var rowIndexedFuncs = BoolArray.create(0)
-		rowIndexedFuncs.resize(funcCount)
-		var flippableFuncs = BoolArray.create(0)
-		flippableFuncs.resize(funcCount)
-		var withinLargerBudget = BoolArray.create(0)
-		withinLargerBudget.resize(funcCount)
-		var reliesOnDeclinedCascades = BoolArray.create(0)
-		reliesOnDeclinedCascades.resize(funcCount)
-		var wrapperFuncs = BoolArray.create(0)
-		wrapperFuncs.resize(funcCount)
-		var refusedWrapperFuncs = BoolArray.create(0)
-		refusedWrapperFuncs.resize(funcCount)
+		var valueBounds = FixedValueIdArray.create(funcCount)
+		var blockCounts = FixedBlockPositionColumn.create(funcCount)
+		var rowIndexedFuncs = FixedBoolArray.create(funcCount)
+		var flippableFuncs = FixedBoolArray.create(funcCount)
+		var withinLargerBudget = FixedBoolArray.create(funcCount)
+		var reliesOnDeclinedCascades = FixedBoolArray.create(funcCount)
+		var wrapperFuncs = FixedBoolArray.create(funcCount)
+		var refusedWrapperFuncs = FixedBoolArray.create(funcCount)
 		return Self{
 			verdicts: LeafVerdictArray.create(0),
 			conventions: ConventionArray.create(0),
@@ -851,7 +843,7 @@ type LeafPlan
 	end 'blockCountOf'
 end 'LeafPlan'
 
-function buildLeafPlan(project Project, module StdModule, namedByIrRequest BoolArray, meta StdOpMetaMemo, round SpliceRound, runtimeTier FunctionNameSet, byName FunctionNameIndex) returns LeafPlan
+function buildLeafPlan(project Project, module StdModule, namedByIrRequest FixedBoolArray, meta StdOpMetaMemo, round SpliceRound, runtimeTier FunctionNameSet, byName FunctionNameIndex) returns LeafPlan
 	var gate = WrapperGate.create(project, funcCount: module.funcCount(), byName: byName, meta: meta, namedByIrRequest: namedByIrRequest, round: round)
 	var plan = LeafPlan.create(module.funcCount(), gate: gate)
 	var reference = StdFunctionReference.create()
@@ -890,7 +882,7 @@ function buildLeafPlan(project Project, module StdModule, namedByIrRequest BoolA
 	return plan
 end 'buildLeafPlan'
 
-function promoteWrappers(module StdModule, byName FunctionNameIndex, plan LeafPlan, namedByIrRequest BoolArray, round SpliceRound, runtimeTier FunctionNameSet, meta StdOpMetaMemo, reference StdFunctionReference, probe TableCallProbe, joins FallThroughJoins) returns FuncIndexArray
+function promoteWrappers(module StdModule, byName FunctionNameIndex, plan LeafPlan, namedByIrRequest FixedBoolArray, round SpliceRound, runtimeTier FunctionNameSet, meta StdOpMetaMemo, reference StdFunctionReference, probe TableCallProbe, joins FallThroughJoins) returns FuncIndexArray
 	var promoted = FuncIndexArray.create(0)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFlippableFunc'
@@ -906,7 +898,7 @@ function promoteWrappers(module StdModule, byName FunctionNameIndex, plan LeafPl
 	return promoted
 end 'promoteWrappers'
 
-function settleFlippable(module StdModule, byName FunctionNameIndex, plan LeafPlan, funcIndex ElementIndex, namedByIrRequest BoolArray, round SpliceRound, runtimeTier FunctionNameSet, meta StdOpMetaMemo, reference StdFunctionReference, probe TableCallProbe, joins FallThroughJoins) returns bool
+function settleFlippable(module StdModule, byName FunctionNameIndex, plan LeafPlan, funcIndex ElementIndex, namedByIrRequest FixedBoolArray, round SpliceRound, runtimeTier FunctionNameSet, meta StdOpMetaMemo, reference StdFunctionReference, probe TableCallProbe, joins FallThroughJoins) returns bool
 	view func = module.getFunc(funcIndex)
 	var scan = leafBodyScanOf(module, func: func, funcIndex: funcIndex, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: runtimeTier, meta: meta, byName: byName, reference: reference, probe: probe, joins: joins, standing: StandingCallees.known(plan))
 	let refused = scan.wrapper and not plan.gate.canHoldItsValues(module, func: func)
@@ -937,7 +929,7 @@ function calleeStands(standing StandingCallees, calleeIndex ElementIndex) return
 	end 'standing'
 end 'calleeStands'
 
-function leafBodyScanOf(module StdModule, func IrFunction, funcIndex ElementIndex, namedByIrRequest BoolArray, round SpliceRound, runtimeTier FunctionNameSet, meta StdOpMetaMemo, byName FunctionNameIndex, reference StdFunctionReference, probe TableCallProbe, joins FallThroughJoins, standing StandingCallees) returns LeafBodyScan
+function leafBodyScanOf(module StdModule, func IrFunction, funcIndex ElementIndex, namedByIrRequest FixedBoolArray, round SpliceRound, runtimeTier FunctionNameSet, meta StdOpMetaMemo, byName FunctionNameIndex, reference StdFunctionReference, probe TableCallProbe, joins FallThroughJoins, standing StandingCallees) returns LeafBodyScan
 	if isIrRequested(namedByIrRequest, funcIndex: funcIndex) or not roundAdmitsCallee(round, callee: func, runtimeTier: runtimeTier) 'declined'
 		return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0)
 	end 'declined'
@@ -1625,11 +1617,9 @@ type DeclinedGuards
 	// Seeded at the first decline and nowhere else. `forward` is seeded
 	// to the IDENTITY so that "this block is not forwarded" needs no second column to say so.
 	function seedColumns()
-		var declineColumn = BoolArray.create(0)
-		declineColumn.resize(self.blockIdSpace)
+		var declineColumn = BoolArray.create(self.blockIdSpace)
 		self.declined = declineColumn
-		var forwardColumn = BlockIdArray.create(0)
-		forwardColumn.resize(self.blockIdSpace)
+		var forwardColumn = BlockIdArray.create(self.blockIdSpace)
 
 		for id in 0 upto self.blockIdSpace 'eachBlockId'
 			try forwardColumn.set(id, value: id) otherwise panic("DeclinedGuards.seedColumns: forwardColumn.set OOB at {id} inside the space it was just resized to")
@@ -1694,8 +1684,7 @@ type SpliceBlocks
 	export var siteSubst as InlineSiteRefArray
 
 	static function create(blockIdSpace BlockId, guards DeclinedGuards, spliceSite InlineSiteRef) returns SpliceBlocks
-		var blockSubst = BlockIdArray.create(0)
-		blockSubst.resize(blockIdSpace)
+		var blockSubst = BlockIdArray.create(blockIdSpace)
 		return Self{blockSubst: blockSubst, copiedRefs: BlockRefArray.create(0), guards: guards, spliceSite: spliceSite, siteSubst: InlineSiteRefArray.create(0)}
 	end 'create'
 
@@ -1751,9 +1740,8 @@ end 'inlineWithNameIndex'
 // `--emit-ir-runtime=` (a ```RequiredRuntime block) asks the printer for that body after the
 // pipeline; a callee whose every site was spliced is dropped by dead-function elimination, and the
 // printer would then have nothing to render. Function index -> named by the request.
-function irRequestedFunctions(project Project, module StdModule, byName FunctionNameIndex) returns BoolArray
-	var named = BoolArray.create(0)
-	named.resize(module.funcCount())
+function irRequestedFunctions(project Project, module StdModule, byName FunctionNameIndex) returns FixedBoolArray
+	var named = FixedBoolArray.create(module.funcCount())
 
 	for name in project.requestedRuntimeBodies 'eachRequested'
 		let funcIndex = try byName.byName.get(name.toByteArray()) otherwise continue
@@ -1775,7 +1763,7 @@ enum AlwaysSplicedWalkState
 	done
 end 'AlwaysSplicedWalkState'
 
-typealias AlwaysSplicedWalkStateColumn = Array with AlwaysSplicedWalkState
+typealias AlwaysSplicedWalkStateColumn = FixedArray with AlwaysSplicedWalkState
 
 // A cycle of declared rows, rendered, or none through the body asked about.
 union AlwaysSplicedCycle
@@ -1846,8 +1834,7 @@ type AlwaysSplicedPlan
 	// and let a cycle one link longer through, which is a wrong answer at exactly the boundary the row
 	// cannot afford one.
 	function cycleThrough(module StdModule, start ElementIndex, funcCount ElementIndex) returns AlwaysSplicedCycle
-		var visited = BoolArray.create(0)
-		visited.resize(funcCount)
+		var visited = FlagColumn.create(funcCount)
 		var path = FuncIndexArray.create(0)
 		var nextEdge = CsrColumn.create(0)
 		try visited.set(start, value: true) otherwise panic("AlwaysSplicedPlan.cycleThrough: function index {start} is outside the {funcCount}-function module")
@@ -1887,8 +1874,8 @@ type AlwaysSplicedPlan
 	end 'cycleThrough'
 
 	function orderCalleesFirst(module StdModule, funcCount ElementIndex)
-		var state = AlwaysSplicedWalkStateColumn.create(0)
-		state.growFilled(funcCount, value: AlwaysSplicedWalkState.unvisited)
+		var state = AlwaysSplicedWalkStateColumn.create(funcCount)
+		state.refill(AlwaysSplicedWalkState.unvisited)
 		var stack = FuncIndexArray.create(0)
 		var nextEdge = CsrColumn.create(0)
 
@@ -1962,9 +1949,8 @@ end 'renderAlwaysSplicedCycle'
 // ordinary caller below carries none of them. Answers the bodies the caller walk below must not visit — one
 // it rewrote has no site left to find, and one it deliberately left alone must not be grown by a later
 // splice.
-function spliceAlwaysSplicedCallees(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, always AlwaysSplicedPlan, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, round SpliceRound) returns BoolArray
-	var closedToTheCallerWalk = BoolArray.create(0)
-	closedToTheCallerWalk.resize(module.funcCount())
+function spliceAlwaysSplicedCallees(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, always AlwaysSplicedPlan, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, round SpliceRound) returns FixedBoolArray
+	var closedToTheCallerWalk = FixedBoolArray.create(module.funcCount())
 
 	for funcIndex in always.order 'eachBodyCalleesFirst'
 		if not always.callsAnother(funcIndex) 'nothingToSpliceOutOfIt'
@@ -2002,11 +1988,11 @@ function spliceAlwaysSplicedCallees(project Project, module StdModule, byName Fu
 	return closedToTheCallerWalk
 end 'spliceAlwaysSplicedCallees'
 
-function isClosedToTheCallerWalk(closed BoolArray, funcIndex ElementIndex) returns bool
+function isClosedToTheCallerWalk(closed FixedBoolArray, funcIndex ElementIndex) returns bool
 	return try closed.get(funcIndex) otherwise panic("isClosedToTheCallerWalk: function index {funcIndex} is outside the {closed.count()}-function module")
 end 'isClosedToTheCallerWalk'
 
-function spliceLeaves(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound)
+function spliceLeaves(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByIrRequest FixedBoolArray, round SpliceRound)
 	var plan = buildLeafPlan(project, module: module, namedByIrRequest: namedByIrRequest, meta: meta, round: round, runtimeTier: project.libraryFacts.runtimeTier, byName: byName)
 
 	if plan.eligibleCount == 0 'nothingToInline'
@@ -2075,7 +2061,7 @@ function leafSplicer(project Project, module StdModule, byName FunctionNameIndex
 	return SiteSplicer.create(project, module: module, func: module.getFunc(funcIndex), funcIndex: funcIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: ValueMinter.create(0), seeded: false)
 end 'leafSplicer'
 
-function callerAcceptsSplices(project Project, module StdModule, plan LeafPlan, closedToTheCallerWalk BoolArray, funcIndex ElementIndex) returns bool
+function callerAcceptsSplices(project Project, module StdModule, plan LeafPlan, closedToTheCallerWalk FixedBoolArray, funcIndex ElementIndex) returns bool
 	if project.libraryFacts.bodyIsSwept(module.getFunc(funcIndex).name) 'notInTheProgram'
 		return false
 	end 'notInTheProgram'
@@ -2097,7 +2083,7 @@ union CallerSplice
 	spliced(splicer SiteSplicer)
 end 'CallerSplice'
 
-function spliceCaller(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, closedToTheCallerWalk BoolArray, funcIndex ElementIndex, offer SiteOffer, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo) returns CallerSplice
+function spliceCaller(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, closedToTheCallerWalk FixedBoolArray, funcIndex ElementIndex, offer SiteOffer, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo) returns CallerSplice
 	if not callerAcceptsSplices(project, module: module, plan: plan, closedToTheCallerWalk: closedToTheCallerWalk, funcIndex: funcIndex) 'notACallerToSpliceInto'
 		return CallerSplice.refused
 	end 'notACallerToSpliceInto'
@@ -2118,7 +2104,7 @@ end 'spliceCaller'
 // when this bound ends the loop leaves its calls standing and sets `followUpRoundsExhausted`.
 let MaxLeafFollowRounds = 8 as ElementIndex
 
-function followPromotedLeaves(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, closedToTheCallerWalk BoolArray, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound)
+function followPromotedLeaves(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, closedToTheCallerWalk FixedBoolArray, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByIrRequest FixedBoolArray, round SpliceRound)
 	var reference = StdFunctionReference.create()
 	var probe = TableCallProbe.create(project)
 	var joins = FallThroughJoins.create()
@@ -2183,7 +2169,7 @@ let MaxChainRounds = 8 as ElementIndex
 // A copied body's devirtualized call can name another table-reading leaf, so each round splices
 // only the ops the previous one rewrote or appended. A caller `keepsItsMeasuredBody` is skipped:
 // every later copy of a grown body fails `buildValueColumn`.
-function followTableChains(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, closedToTheCallerWalk BoolArray, callers FuncIndexArray, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo)
+function followTableChains(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, closedToTheCallerWalk FixedBoolArray, callers FuncIndexArray, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo)
 	for callerIndex in callers 'eachCaller'
 		if not callerAcceptsSplices(project, module: module, plan: plan, closedToTheCallerWalk: closedToTheCallerWalk, funcIndex: callerIndex) 'notACallerToSpliceInto'
 			continue
@@ -2511,29 +2497,23 @@ end 'calledOnceRefusalText'
 // caller's facts (`CallerSiteFacts`) are taken before its first.
 type CalledOnceCensus
 	var siteCounts as SiteCountArray
-	var callerOf as FuncIndexArray
-	var sitePositions as BlockPositionColumn
-	var siteOpPositions as BlockOpPosArray
-	var referencedElsewhere as BoolArray
-	var siteIsTryCall as BoolArray
+	var callerOf as FixedFuncIndexArray
+	var sitePositions as FixedBlockPositionColumn
+	var siteOpPositions as FixedBlockOpPosArray
+	var referencedElsewhere as FixedBoolArray
+	var siteIsTryCall as FixedBoolArray
 
 	// The enumerator's sink, refilled per op of the walk.
 	var reference as StdFunctionReference
 
 	static function take(project Project, module StdModule, byName FunctionNameIndex) returns CalledOnceCensus
 		let funcCount = module.funcCount()
-		var siteCounts = SiteCountArray.create(0)
-		siteCounts.resize(funcCount)
-		var siteIsTryCall = BoolArray.create(0)
-		siteIsTryCall.resize(funcCount)
-		var callerOf = FuncIndexArray.create(0)
-		callerOf.resize(funcCount)
-		var sitePositions = BlockPositionColumn.create(0)
-		sitePositions.resize(funcCount)
-		var siteOpPositions = BlockOpPosArray.create(0)
-		siteOpPositions.resize(funcCount)
-		var referencedElsewhere = BoolArray.create(0)
-		referencedElsewhere.resize(funcCount)
+		var siteCounts = SiteCountArray.create(funcCount)
+		var siteIsTryCall = FixedBoolArray.create(funcCount)
+		var callerOf = FixedFuncIndexArray.create(funcCount)
+		var sitePositions = FixedBlockPositionColumn.create(funcCount)
+		var siteOpPositions = FixedBlockOpPosArray.create(funcCount)
+		var referencedElsewhere = FixedBoolArray.create(funcCount)
 		var census = Self{siteCounts: siteCounts, callerOf: callerOf, sitePositions: sitePositions, siteOpPositions: siteOpPositions, referencedElsewhere: referencedElsewhere, siteIsTryCall: siteIsTryCall, reference: StdFunctionReference.create()}
 		census.markRoots(project, byName: byName)
 
@@ -2697,17 +2677,14 @@ end 'CalledOnceCensus'
 // The called-once callees one wave admits — those whose every called-once callee is already spliced — and
 // the value-space width and block count each copy was admitted at.
 type CalledOnceWave
-	var admitted as BoolArray
-	var valueBounds as ValueIdArray
-	var blockCounts as BlockPositionColumn
+	var admitted as FixedBoolArray
+	var valueBounds as FixedValueIdArray
+	var blockCounts as FixedBlockPositionColumn
 
 	static function create(funcCount ElementIndex) returns CalledOnceWave
-		var admitted = BoolArray.create(0)
-		admitted.resize(funcCount)
-		var valueBounds = ValueIdArray.create(0)
-		valueBounds.resize(funcCount)
-		var blockCounts = BlockPositionColumn.create(0)
-		blockCounts.resize(funcCount)
+		var admitted = FixedBoolArray.create(funcCount)
+		var valueBounds = FixedValueIdArray.create(funcCount)
+		var blockCounts = FixedBlockPositionColumn.create(funcCount)
 		return Self{admitted: admitted, valueBounds: valueBounds, blockCounts: blockCounts}
 	end 'create'
 
@@ -2766,7 +2743,7 @@ type CallerSiteFacts
 
 	static function of(module StdModule, func IrFunction, callerIndex ElementIndex, census CalledOnceCensus, calleesOfCallers CsrGraph, byName FunctionNameIndex, budget HoistPressureBudget, liveness StdLiveness, calls CallProbe) returns CallerSiteFacts
 		let valueBound = nextFreeValueId(module, func: func)
-		var sites = SiteAcrossArray.create(0)
+		var sites = SiteAcrossArray.create(calleesOfCallers.degree(callerIndex as CsrIndex), zeroed: false)
 		var siteIndexOfCallee = SiteIndexMap.create()
 		var sitesAtBlock = IndexGroupMap.create()
 
@@ -2795,7 +2772,7 @@ type CallerSiteFacts
 end 'CallerSiteFacts'
 
 function collectRegisterFacts(module StdModule, func IrFunction, callerIndex ElementIndex, sites SiteAcrossArray, cap RegCount, valueBound ValueId, frameMatters bool, liveness StdLiveness, calls CallProbe)
-	var cuts = AcrossCutArray.create(0)
+	var cuts = AcrossCutArray.create(sites.count(), zeroed: false)
 
 	for site in sites 'eachSite'
 		cuts.push(site.cut)
@@ -2852,15 +2829,15 @@ type SiteAcrossCensus implements LiveRangeVisitor
 	var settled as ElementIndex
 
 	static function collect(module StdModule, func IrFunction, cuts AcrossCutArray, cap RegCount, valueBound ValueId, liveness StdLiveness)
-		var cutSites = AcrossCutArray.create(0)
+		var cutSites = AcrossCutArray.create(cuts.count(), zeroed: false)
 
 		for cut in cuts 'eachCut'
 			cutSites.push(cut)
 		end 'eachCut'
 
 		sortByCoordinates(cutSites)
-		var cutBlock = BlockPositionColumn.create(0)
-		var cutOp = BlockPositionColumn.create(0)
+		var cutBlock = BlockPositionColumn.create(cutSites.count(), zeroed: false)
+		var cutOp = BlockPositionColumn.create(cutSites.count(), zeroed: false)
 
 		for cut in cutSites 'eachSortedCut'
 			cutBlock.push(cut.position)
@@ -2995,10 +2972,10 @@ type FunctionLoops
 	var loops as NaturalLoops
 
 	// Block position -> the header of the innermost loop holding it; `blockCount` for a block in no loop.
-	var innermostHeaderOf as BlockPositionColumn
+	var innermostHeaderOf as FixedBlockPositionColumn
 
 	// Header -> the header of the loop directly around it; `blockCount` for an outermost loop.
-	var parentHeaderOf as BlockPositionColumn
+	var parentHeaderOf as FixedBlockPositionColumn
 
 	// Header -> its preorder number and the last preorder number in its nest, and value id -> the preorder
 	// numbers of the loops whose own blocks read it, ascending. Built on the first question.
@@ -3245,9 +3222,8 @@ type FunctionLoops
 	end 'numberNest'
 end 'FunctionLoops'
 
-function filledPositions(count ElementIndex, value ElementIndex) returns BlockPositionColumn
-	var column = BlockPositionColumn.create(0)
-	column.resize(count)
+function filledPositions(count ElementIndex, value ElementIndex) returns FixedBlockPositionColumn
+	var column = FixedBlockPositionColumn.create(count)
 
 	for position in 0 upto count 'each'
 		try column.set(position, value: value) otherwise panic("filledPositions: column.set OOB at {position}")
@@ -3257,8 +3233,7 @@ function filledPositions(count ElementIndex, value ElementIndex) returns BlockPo
 end 'filledPositions'
 
 function filledTours(count ElementIndex) returns NestTourColumn
-	var column = NestTourColumn.create(0)
-	column.resize(count)
+	let column = NestTourColumn.create(count)
 	return column
 end 'filledTours'
 
@@ -3288,16 +3263,13 @@ end 'collectBlockReads'
 // none left unprocessed is ready, and the ready candidates of one wave are spliced caller by caller in one
 // walk of each caller. A candidate never ready when the ready list drains lies on a cycle of candidates,
 // or calls into one: the cycle's members are refused and their callers counted down, and the waves go on.
-function spliceCalledOnceCallees(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound)
+function spliceCalledOnceCallees(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByIrRequest FixedBoolArray, round SpliceRound)
 	let funcCount = module.funcCount()
 	let census = CalledOnceCensus.take(project, module: module, byName: byName)
 	var refusals = OrdinalTally.create(CalledOnceRefusal.allCaseNames.count())
-	var candidate = BoolArray.create(0)
-	candidate.resize(funcCount)
-	var pendingCallees = SiteCountArray.create(0)
-	pendingCallees.resize(funcCount)
-	var processed = BoolArray.create(0)
-	processed.resize(funcCount)
+	var candidate = FixedBoolArray.create(funcCount)
+	var pendingCallees = SiteCountArray.create(funcCount)
+	var processed = FixedBoolArray.create(funcCount)
 	var ready = FuncIndexArray.create(0)
 	var candidateCount = 0 as ElementIndex
 
@@ -3390,7 +3362,7 @@ end 'spliceCalledOnceCallees'
 
 // Caller -> the candidates whose one site it holds, so a caller's facts are taken from the census's
 // coordinates rather than by searching the caller for its sites.
-function groupCandidatesByCaller(census CalledOnceCensus, candidate BoolArray, funcCount ElementIndex) returns CsrGraph
+function groupCandidatesByCaller(census CalledOnceCensus, candidate FixedBoolArray, funcCount ElementIndex) returns CsrGraph
 	var callerCol = CsrColumn.create(0)
 	var calleeCol = CsrColumn.create(0)
 
@@ -3406,18 +3378,18 @@ end 'groupCandidatesByCaller'
 
 // Count `calleeIndex` as a candidate, and as one more callee its caller waits for. `candidateCount` is
 // the caller's running total, advanced by reference.
-function admitCandidate(calleeIndex ElementIndex, census CalledOnceCensus, candidate BoolArray, pendingCallees SiteCountArray, candidateCount mutable ElementIndex)
+function admitCandidate(calleeIndex ElementIndex, census CalledOnceCensus, candidate FixedBoolArray, pendingCallees SiteCountArray, candidateCount mutable ElementIndex)
 	try candidate.set(calleeIndex, value: true) otherwise panic("admitCandidate: function index {calleeIndex} is outside the candidate column")
 	let callerIndex = census.callerOfCallee(calleeIndex)
 	try pendingCallees.set(callerIndex, value: pendingCalleesOf(pendingCallees, funcIndex: callerIndex) + 1) otherwise panic("admitCandidate: function index {callerIndex} is outside the pending column")
 	candidateCount = candidateCount + 1
 end 'admitCandidate'
 
-function isIrRequested(namedByIrRequest BoolArray, funcIndex ElementIndex) returns bool
+function isIrRequested(namedByIrRequest FixedBoolArray, funcIndex ElementIndex) returns bool
 	return try namedByIrRequest.get(funcIndex) otherwise panic("isIrRequested: function index {funcIndex} is outside the IR-requested column")
 end 'isIrRequested'
 
-function isCandidate(candidate BoolArray, funcIndex ElementIndex) returns bool
+function isCandidate(candidate FixedBoolArray, funcIndex ElementIndex) returns bool
 	return try candidate.get(funcIndex) otherwise panic("isCandidate: function index {funcIndex} is outside the candidate column")
 end 'isCandidate'
 
@@ -3427,7 +3399,7 @@ end 'pendingCalleesOf'
 
 // One candidate is done, spliced or refused: its caller has one fewer callee to wait for, and joins the
 // ready list when that was the last.
-function retireCandidate(calleeIndex ElementIndex, census CalledOnceCensus, candidate BoolArray, processed BoolArray, pendingCallees SiteCountArray, ready FuncIndexArray)
+function retireCandidate(calleeIndex ElementIndex, census CalledOnceCensus, candidate FixedBoolArray, processed FixedBoolArray, pendingCallees SiteCountArray, ready FuncIndexArray)
 	try processed.set(calleeIndex, value: true) otherwise panic("retireCandidate: function index {calleeIndex} is outside the processed column")
 	let callerIndex = census.callerOfCallee(calleeIndex)
 	let pending = pendingCalleesOf(pendingCallees, funcIndex: callerIndex)
@@ -3447,12 +3419,10 @@ end 'retireCandidate'
 // one cycle of candidates exists. Walking each unprocessed candidate up its caller chain finds the cycle it
 // leads to or lies on; the members are refused and retired, which frees whatever hangs off them. Answers
 // how many candidates it retired.
-function refuseCandidateCycles(module StdModule, census CalledOnceCensus, candidate BoolArray, processed BoolArray, pendingCallees SiteCountArray, ready FuncIndexArray, refusals OrdinalTally) returns ElementIndex
+function refuseCandidateCycles(module StdModule, census CalledOnceCensus, candidate FixedBoolArray, processed FixedBoolArray, pendingCallees SiteCountArray, ready FuncIndexArray, refusals OrdinalTally) returns ElementIndex
 	let funcCount = module.funcCount()
-	var walkStamp = FuncIndexArray.create(0)
-	walkStamp.resize(funcCount)
-	var onCycle = BoolArray.create(0)
-	onCycle.resize(funcCount)
+	var walkStamp = FixedFuncIndexArray.create(funcCount)
+	var onCycle = FixedBoolArray.create(funcCount)
 
 	// Stamps count from 1 so a zeroed column reads as "never walked".
 	for start in 0 upto funcCount 'eachStart'
@@ -3494,7 +3464,7 @@ end 'refuseCandidateCycles'
 
 // Follow the caller chain from `start` through unprocessed candidates under one stamp; meeting the stamp
 // again closes a cycle, and every node from that point back to the meeting one is on it.
-function markCycleFrom(start ElementIndex, stamp ElementIndex, census CalledOnceCensus, candidate BoolArray, processed BoolArray, walkStamp FuncIndexArray, onCycle BoolArray)
+function markCycleFrom(start ElementIndex, stamp ElementIndex, census CalledOnceCensus, candidate FixedBoolArray, processed FixedBoolArray, walkStamp FixedFuncIndexArray, onCycle FixedBoolArray)
 	var path = FuncIndexArray.create(0)
 	var at = start
 
@@ -3516,7 +3486,7 @@ function markCycleFrom(start ElementIndex, stamp ElementIndex, census CalledOnce
 	end 'eachLink'
 end 'markCycleFrom'
 
-function markCycleMembers(path FuncIndexArray, closingAt ElementIndex, onCycle BoolArray)
+function markCycleMembers(path FuncIndexArray, closingAt ElementIndex, onCycle FixedBoolArray)
 	var inside = false
 
 	for member in path 'eachOnPath'
@@ -3528,19 +3498,19 @@ function markCycleMembers(path FuncIndexArray, closingAt ElementIndex, onCycle B
 	end 'eachOnPath'
 end 'markCycleMembers'
 
-function isOnCycle(onCycle BoolArray, funcIndex ElementIndex) returns bool
+function isOnCycle(onCycle FixedBoolArray, funcIndex ElementIndex) returns bool
 	return try onCycle.get(funcIndex) otherwise panic("isOnCycle: onCycle.get OOB at {funcIndex}")
 end 'isOnCycle'
 
-function isProcessed(processed BoolArray, funcIndex ElementIndex) returns bool
+function isProcessed(processed FixedBoolArray, funcIndex ElementIndex) returns bool
 	return try processed.get(funcIndex) otherwise panic("isProcessed: function index {funcIndex} is outside the processed column")
 end 'isProcessed'
 
 // One wave: every ready candidate is checked against the frame rule (`CallProbe.frameOf`) and the
 // pressure budget at its site, the admitted ones are spliced caller by caller, and all of them are
 // retired. Answers how many candidates it retired.
-function spliceWave(project Project, module StdModule, byName FunctionNameIndex, census CalledOnceCensus, calleesOfCallers CsrGraph, budget HoistPressureBudget, candidate BoolArray, processed BoolArray, pendingCallees SiteCountArray, ready FuncIndexArray, refusals OrdinalTally, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, origins ValueOriginRowIndex, wave CalledOnceWave, callerFacts CallerSiteFactsMap, liveness StdLiveness, across StdValueUseSet, calls CallProbe) returns ElementIndex
-	var retiring = FuncIndexArray.create(0)
+function spliceWave(project Project, module StdModule, byName FunctionNameIndex, census CalledOnceCensus, calleesOfCallers CsrGraph, budget HoistPressureBudget, candidate FixedBoolArray, processed FixedBoolArray, pendingCallees SiteCountArray, ready FuncIndexArray, refusals OrdinalTally, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, origins ValueOriginRowIndex, wave CalledOnceWave, callerFacts CallerSiteFactsMap, liveness StdLiveness, across StdValueUseSet, calls CallProbe) returns ElementIndex
+	var retiring = FuncIndexArray.create(ready.count(), zeroed: false)
 	var calleesByCaller = IndexGroupMap.create()
 
 	// The ready list is consumed whole, then refilled by the retirements below — a caller made ready by
@@ -3557,9 +3527,9 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 		view caller = module.getFunc(callerIndex)
 		var facts = siteFactsOf(callerFacts, module: module, caller: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, budget: budget, liveness: liveness, calls: calls)
 		var admittedAny = false
-		var sites = SiteAcrossArray.create(0)
-		var valueBounds = ValueIdArray.create(0)
-		var calleeHolds = BoolArray.create(0)
+		var sites = SiteAcrossArray.create(callees.count(), zeroed: false)
+		var valueBounds = ValueIdArray.create(callees.count(), zeroed: false)
+		var calleeHolds = BoolArray.create(callees.count(), zeroed: false)
 
 		for calleeIndex in callees 'eachCandidate'
 			view callee = module.getFunc(calleeIndex)
@@ -3637,17 +3607,17 @@ enum SiteVerdict
 	overBudget
 end 'SiteVerdict'
 
-typealias SiteVerdictArray = Array with SiteVerdict
+typealias SiteVerdictArray = FixedArray with SiteVerdict
 
 function judgeSites(module StdModule, budget HoistPressureBudget, callerIndex ElementIndex, sites SiteAcrossArray, valueBounds ValueIdArray, calleeHolds BoolArray, across StdValueUseSet, liveness StdLiveness, calls CallProbe) returns SiteVerdictArray
-	var planned = CalleeFrameArray.create(0)
+	var planned = CalleeFrameArray.create(sites.count(), zeroed: false)
 
 	for index in 0 upto sites.count() 'eachPlan'
 		planned.push(calls.frameOf(plannedSiteAt(sites, index: index), callerIndex: callerIndex, calleeHoldsRegisters: try calleeHolds.get(index) otherwise panic("judgeSites: no frame fact for site {index}")))
 	end 'eachPlan'
 
-	var verdicts = SiteVerdictArray.create(0)
-	verdicts.growFilled(sites.count(), value: SiteVerdict.undecided)
+	var verdicts = SiteVerdictArray.create(sites.count())
+	verdicts.refill(SiteVerdict.undecided)
 
 	// Fillers go first: once one is admitted the caller saves registers on every path, and a body
 	// that would have widened the frame then widens nothing. The outcome does not depend on the
@@ -3792,29 +3762,24 @@ typealias CalleeFrameArray = Array with CalleeFrame
 type CallProbe
 	var meta as StdOpMetaMemo
 	var byName as FunctionNameIndex
-	let namedByIrRequest as BoolArray
+	let namedByIrRequest as FixedBoolArray
 	let round as SpliceRound
 	let runtimeTier as FunctionNameSet
 	var reference as StdFunctionReference
 	var tables as TableCallProbe
 	var joins as FallThroughJoins
-	var decided as BoolArray
-	var inlinable as BoolArray
-	var lean as BoolArray
-	var heldKnown as BoolArray
-	var held as BoolArray
+	var decided as FixedBoolArray
+	var inlinable as FixedBoolArray
+	var lean as FixedBoolArray
+	var heldKnown as FixedBoolArray
+	var held as FixedBoolArray
 
-	static function create(project Project, funcCount ElementIndex, byName FunctionNameIndex, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound) returns CallProbe
-		var decided = BoolArray.create(0)
-		decided.resize(funcCount)
-		var inlinable = BoolArray.create(0)
-		inlinable.resize(funcCount)
-		var lean = BoolArray.create(0)
-		lean.resize(funcCount)
-		var heldKnown = BoolArray.create(0)
-		heldKnown.resize(funcCount)
-		var held = BoolArray.create(0)
-		held.resize(funcCount)
+	static function create(project Project, funcCount ElementIndex, byName FunctionNameIndex, meta StdOpMetaMemo, namedByIrRequest FixedBoolArray, round SpliceRound) returns CallProbe
+		var decided = FixedBoolArray.create(funcCount)
+		var inlinable = FixedBoolArray.create(funcCount)
+		var lean = FixedBoolArray.create(funcCount)
+		var heldKnown = FixedBoolArray.create(funcCount)
+		var held = FixedBoolArray.create(funcCount)
 
 		return Self{meta: meta, byName: byName, namedByIrRequest: namedByIrRequest, round: round, runtimeTier: project.libraryFacts.runtimeTier, reference: StdFunctionReference.create(), tables: TableCallProbe.create(project), joins: FallThroughJoins.create(), decided: decided, inlinable: inlinable, lean: lean, heldKnown: heldKnown, held: held}
 	end 'create'
@@ -3986,7 +3951,7 @@ type WrapperGate
 	export var across as StdValueUseSet
 	export var calls as CallProbe
 
-	static function create(project Project, funcCount ElementIndex, byName FunctionNameIndex, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound) returns WrapperGate
+	static function create(project Project, funcCount ElementIndex, byName FunctionNameIndex, meta StdOpMetaMemo, namedByIrRequest FixedBoolArray, round SpliceRound) returns WrapperGate
 		var calls = CallProbe.create(project, funcCount: funcCount, byName: byName, meta: meta, namedByIrRequest: namedByIrRequest, round: round)
 		calls.decideEveryCallFromThePlan()
 		return Self{budget: hoistPressureBudgetFor(project.target), liveness: StdLiveness.create(), across: StdValueUseSet.createRecordingIds(), calls: calls}
@@ -4049,11 +4014,10 @@ end 'blockLeavesOnTheHotPath'
 // the entry's dominators in the reversed hot graph: node 0 is a virtual exit every hot exit hangs from
 // and block `p` is node `p + 1`. A function with no hot exit has no path to avoid anything, so every
 // block is marked.
-function blocksOnEveryHotPath(module StdModule, func IrFunction, meta StdOpMetaMemo) returns BoolArray
+function blocksOnEveryHotPath(module StdModule, func IrFunction, meta StdOpMetaMemo) returns FixedBoolArray
 	let blockCount = func.blockRefs.count()
 	let forward = buildStdSuccessorGraph(module, func: func, blockCount: blockCount)
-	var hot = BoolArray.create(0)
-	hot.resize(blockCount)
+	var hot = FlagColumn.create(blockCount)
 
 	for position in 0 upto blockCount 'eachBlock'
 		try hot.set(position, value: module.blockAtPosition(func, position: position).heat != BlockHeat.cold) otherwise panic("blocksOnEveryHotPath: hot.set OOB at {position}")
@@ -4086,8 +4050,7 @@ function blocksOnEveryHotPath(module StdModule, func IrFunction, meta StdOpMetaM
 
 	let reversed = buildCsr(edgeFrom, to: edgeTo, nodeCount: (blockCount + ReversedNodeOffset) as CsrIndex)
 	let tree = StdDominatorTree.buildFromSuccessors(reversed, blockCount: blockCount + ReversedNodeOffset)
-	var onEveryPath = BoolArray.create(0)
-	onEveryPath.resize(blockCount)
+	var onEveryPath = FixedBoolArray.create(blockCount)
 	let entryNode = StdEntryBlockPosition + ReversedNodeOffset
 
 	if not tree.canReach(entryNode) 'noHotExit'
@@ -4140,15 +4103,14 @@ function largestBodyLiveIn(module StdModule, func IrFunction, valueBound ValueId
 	return peakBodyLiveIn(module, func: func, valueBound: valueBound, heldParams: heldAcross, cap: cap, liveness: liveness)
 end 'largestBodyLiveIn'
 
-function noParamsHeld(func IrFunction) returns BoolArray
-	var held = BoolArray.create(0)
-	held.resize(func.paramCount)
+function noParamsHeld(func IrFunction) returns FixedBoolArray
+	let held = FixedBoolArray.create(func.paramCount)
 	return held
 end 'noParamsHeld'
 
 // A one-block body is answered without a liveness: every value it holds is defined in that block, so
 // nothing is live into it, loop header or not.
-function peakBodyLiveIn(module StdModule, func IrFunction, valueBound ValueId, heldParams BoolArray, cap RegCount, liveness StdLiveness) returns RegCount
+function peakBodyLiveIn(module StdModule, func IrFunction, valueBound ValueId, heldParams FixedBoolArray, cap RegCount, liveness StdLiveness) returns RegCount
 	if func.blockRefs.count() == 1 'everyValueDefinedInTheOneBlock'
 		return 0
 	end 'everyValueDefinedInTheOneBlock'
@@ -4203,7 +4165,7 @@ type CollectedSites
 		return try self.ops.get(index) otherwise panic("CollectedSites.opAt: ops.get OOB at {index}")
 	end 'opAt'
 
-	function without(refused BoolArray) returns CollectedSites
+	function without(refused FixedBoolArray) returns CollectedSites
 		var kept = CollectedSites.create()
 
 		for index in 0 upto self.count() 'eachSite'
@@ -4500,8 +4462,7 @@ type SiteSplicer
 		// value, which this tier does not refuse.
 		_ = self.valueIds()
 
-		var contRefs = BlockRefArray.create(0)
-		contRefs.resize(siteCount)
+		var contRefs = IndexColumn.create(siteCount)
 		var k = siteCount
 
 		while k > 0 'eachSiteBackwards'
@@ -4740,9 +4701,9 @@ type SiteSplicer
 			return
 		end 'noWrapperInTheProgram'
 
-		var sites = SiteAcrossArray.create(0)
-		var siteIndices = FuncIndexArray.create(0)
-		var valueBounds = ValueIdArray.create(0)
+		var sites = SiteAcrossArray.create(self.found.count(), zeroed: false)
+		var siteIndices = FuncIndexArray.create(self.found.count(), zeroed: false)
+		var valueBounds = ValueIdArray.create(self.found.count(), zeroed: false)
 
 		for index in 0 upto self.found.count() 'eachCollectedSite'
 			let calleeIndex = self.found.calleeAt(index)
@@ -4776,8 +4737,7 @@ type SiteSplicer
 
 		let verdicts = judgeSites(self.module, budget: plan.gate.budget, callerIndex: self.funcIndex, sites: sites, valueBounds: valueBounds, calleeHolds: calleeHolds, across: plan.gate.across, liveness: plan.gate.liveness, calls: plan.gate.calls)
 		self.stats.noteWrapperSitesJudged(sites.count() as SiteCount)
-		var refused = BoolArray.create(0)
-		refused.resize(self.found.count())
+		var refused = FixedBoolArray.create(self.found.count())
 
 		for index in 0 upto sites.count() 'eachVerdict'
 			match try verdicts.get(index) otherwise panic("SiteSplicer.judgeWrapperSites: no verdict for site {index}") 'verdict'
@@ -4791,7 +4751,7 @@ type SiteSplicer
 		self.found = self.found.without(refused)
 	end 'judgeWrapperSites'
 
-	function refuseWrapperSite(collectedIndex ElementIndex, refused BoolArray, frame bool)
+	function refuseWrapperSite(collectedIndex ElementIndex, refused FixedBoolArray, frame bool)
 		try refused.set(collectedIndex, value: true) otherwise panic("SiteSplicer.refuseWrapperSite: refused.set OOB at {collectedIndex}")
 
 		if frame 'widensTheFrame'
@@ -5146,8 +5106,7 @@ type SiteSplicer
 			panic("SiteSplicer.buildValueColumn: '{String.from(calleeFunc.name)}' holds {calleeFunc.blockRefs.count()} block(s) but was admitted with {self.blockCountOf(calleeIndex)} — something spliced into it between its admission and this copy")
 		end 'theBodyGrewSinceAdmission'
 
-		var subst = ValueIdArray.create(0)
-		subst.resize(bound)
+		var subst = ValueIdArray.create(bound)
 
 		for i in 0 upto calleeFunc.paramCount 'eachParam'
 			let arg = try args.get(i) otherwise panic("SiteSplicer.buildValueColumn: args.get OOB at {i} despite the arity check")
@@ -5415,7 +5374,7 @@ type SiteSplicer
 			return
 		end 'noPhis'
 
-		var blockArgs = IrBlockArgArray.create(0)
+		var blockArgs = IrBlockArgArray.create(calleeBlock.blockArgs.count(), zeroed: false)
 
 		for arg in calleeBlock.blockArgs 'each'
 			let cloned = clonedValue(arg.valueId, subst: subst)
@@ -5653,10 +5612,10 @@ type SiteSplicer
 		let cloned = self.cloner.clone(term, valueSubst: subst, blockSubst: blocks.blockSubst, payloads: ClonePayloads.shared)
 		self.module.setTerminator(self.blockAt(freshRef), op: cloned)
 
-		var edges = BranchEdgeArray.create(0)
+		var edges = BranchEdgeArray.create(calleeBlock.branchEdges.count(), zeroed: false)
 
 		for edge in calleeBlock.branchEdges 'eachEdge'
-			var argIds = ValueIdArray.create(0)
+			var argIds = ValueIdArray.create(edge.argIds.count(), zeroed: false)
 
 			for argId in edge.argIds 'eachArg'
 				argIds.push(clonedValue(argId, subst: subst))

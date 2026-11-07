@@ -3684,7 +3684,8 @@ array without changing `count()`. `resize(n)` changes the length and fills new s
 `create(n)` are available only for elements stored inline — integers, floats, `bool`, payload-free enums and
 unions — whose type admits zero. For an array of records, strings or other managed values, of an alias whose
 range excludes 0 (`int(1 to 100)`), or of an enum or union whose raw values (tags) include no 0, `resize` and
-`create(n)` are **E3106**, as are `create(n, zeroed: true)` and `FixedArray.create`; create with
+`create(n)` are **E3106**, as are `create(n, zeroed: true)` and `FixedArray.create` (which takes
+`value: v` for such an element, as [runtime-sized fixed arrays](#runtime-sized-fixed-arrays) states); create with
 `create(n, zeroed: false)`, grow with `push` or `growFilled(n, value:)` naming a case, and shrink with
 `truncate(n)`:
 
@@ -3754,8 +3755,9 @@ end 'main'
 
 A `FixedArray with T` with no count is **runtime-sized**: its length is chosen when it is built and belongs
 to the value, not to the type. `Buf.create(n)` through `typealias Buf = FixedArray with Int` builds one
-zeroed heap record of `n` elements. The length is fixed at creation, so `push` and `reserve` are refused. `count()`
-loads the record's length, and `get` and `set` check against it at run time: no index is proven inside a
+zeroed heap record of `n` elements, and `Buf.create(n, value: v)` one whose every element starts as `v`. The
+length is fixed at creation, so `push` and `reserve` are refused. `refill(v)` writes `v` into every element of an
+existing fixed array in place. `count()` loads the record's length, and `get` and `set` check against it at run time: no index is proven inside a
 runtime-sized array, so both need `try` (a bare call is **E3057**).
 
 - **The length `n`** is checked as `Array.create(n)`'s is. A plain integer, an `ElementIndex` or a `Count`
@@ -3766,17 +3768,18 @@ runtime-sized array, so both need `try` (a bare call is **E3057**).
   bound to a constant, a top-level `let`, a folded `countof(...)` expression, or a `var` read where it holds a
   constant. A constant `0`, or one above `4294967295`, is **E2069**.
 - **The element** is an integer, a `bool` or a float. A managed element is **E2015**, and an element whose
-  range excludes 0, or an enum or union whose raw values include no 0, is **E3106**, because every slot
-  starts as zero. A generic type holding a `FixedArray with N T` over its type parameter `T` is **E3106** at
+  range excludes 0, or an enum or union whose raw values include no 0, is **E3106** unless `value: v` is
+  given, because otherwise every slot starts as zero. A generic type holding a `FixedArray with N T` over its type parameter `T` is **E3106** at
   its `create()` when any instantiation of it is at such an element.
 - **A sized array widens to a runtime-sized one.** A `FixedArray with N T` is accepted where a
   `FixedArray with T` is declared, in an argument, a return or a field store; the reverse is **E3005**. A
   conditional, a `match`, a `try ... otherwise` and the type arguments inferred for a generic type that meet
   a sized and a runtime-sized array give the runtime-sized type, whichever is written first.
 - **A literal through a runtime-sized alias is sized.** `Buf from [10, 20, 30]` is a `FixedArray with 3 Int`.
-- **`create` takes the form its type has (E3194).** A type-sized alias takes no length (`Vec3.create()`), a
-  runtime-sized alias takes exactly one (`Buf.create(n)`), and a second argument is refused: for a growable
-  buffer write `Array.create(n, zeroed: false)`.
+- **`create` takes the form its type has (E3194).** A type-sized alias takes no length (`Vec3.create()`, or
+  `Vec3.create(value: v)`), a runtime-sized alias takes one and an optional `value:` (`Buf.create(n)`,
+  `Buf.create(n, value: v)`), and any other argument is refused: for a growable buffer write
+  `Array.create(n, zeroed: false)`.
 - **A count is an integer literal.** `FixedArray with K Int`, `with -3 Int` and `with 3.5 Int` are **E2069**.
 
 ```maxon

@@ -170,8 +170,7 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 	// rather than a compile error: the check says the name will render, the skip rule renders nothing, the
 	// pin is minted without the body, and the test claiming the gate goes green for ever. An edit to
 	// the skip rule cannot bypass the refusal, because there is no second rule to bypass.
-	var rendered = BoolArray.create(0)
-	rendered.resize(runtimeNames.count())
+	var rendered = FixedBoolArray.create(runtimeNames.count())
 
 	for func in module.functions 'eachFunc'
 		let named = markNamedBy(runtimeNames, name: func.name, rendered: rendered)
@@ -241,7 +240,7 @@ end 'printTargetModule'
 //
 // A linear scan over a list a spec author typed by hand (one or two entries, never more), against the
 // caller's own `ByteArray`.
-function markNamedBy(runtimeNames RuntimeFunctionNameArray, name ByteArray, rendered BoolArray) returns bool
+function markNamedBy(runtimeNames RuntimeFunctionNameArray, name ByteArray, rendered FixedBoolArray) returns bool
 	var isNew = false
 
 	for (iter, requested) in runtimeNames.withIterator() 'each'
@@ -515,7 +514,7 @@ end 'escapedPayloadByte'
 // BYTES rather than refused (see `printChunkBytes`). Every reason a name renders nothing is repairable
 // — a different spelling, or a program whose runtime includes the piece — and the message must not
 // send a reader after a spelling that will never work.
-function requireEveryNameRendered(runtimeNames RuntimeFunctionNameArray, rendered BoolArray) throws CompileError
+function requireEveryNameRendered(runtimeNames RuntimeFunctionNameArray, rendered FixedBoolArray) throws CompileError
 	for (iter, name) in runtimeNames.withIterator() 'eachName'
 		let didRender = try rendered.get(iter.index()) otherwise panic("requireEveryNameRendered: flag read at {iter.index()} is outside a column sized by the same list")
 

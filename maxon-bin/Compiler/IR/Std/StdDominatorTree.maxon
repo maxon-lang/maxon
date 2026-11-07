@@ -23,6 +23,8 @@
 // `foldConstants.dropUnreachableBlocks` also rests on, and the one thing about `blockRefs` order that IS
 // guaranteed.
 
+module typealias FixedBlockPositionColumn = FixedArray with ElementIndex
+
 // A dense column of block POSITIONS — the same `ElementIndex` as `IrModule.blockIndexById` holds
 // and as `CsrGraph`'s own key space, so a column of them is
 // the `CsrColumn` `buildCsr` takes with no conversion at any call site.
@@ -171,8 +173,7 @@ export type StdDominatorTree
 	end 'buildReversePostorder'
 
 	export static function reversePostorder(succ CsrGraph, blockCount ElementIndex) returns BlockPositionColumn
-		var reachable = BoolArray.create(0)
-		reachable.growFilled(blockCount, value: false)
+		var reachable = BoolArray.create(blockCount)
 		return Self.buildReversePostorder(succ, blockCount: blockCount, reachable: reachable).order
 	end 'reversePostorder'
 
@@ -193,8 +194,7 @@ export type StdDominatorTree
 		end 'noBlocks'
 
 		try self.idom.set(StdEntryBlockPosition, value: StdEntryBlockPosition) otherwise panic("StdDominatorTree.solveImmediateDominators: idom.set OOB at the entry")
-		var solved = BoolArray.create(0)
-		solved.growFilled(self.blockCount, value: false)
+		var solved = FixedBoolArray.create(self.blockCount)
 		try solved.set(StdEntryBlockPosition, value: true) otherwise panic("StdDominatorTree.solveImmediateDominators: solved.set OOB at the entry")
 
 		var changed = true
@@ -218,7 +218,7 @@ export type StdDominatorTree
 
 	// Recompute one block's immediate dominator from its solved predecessors, answering whether it
 	// MOVED — which is the whole of what the fixpoint loop above needs to know.
-	function meetSolvedPredecessorsOf(position ElementIndex, predecessors CsrGraph, rpo RpoOrder, solved BoolArray) returns bool
+	function meetSolvedPredecessorsOf(position ElementIndex, predecessors CsrGraph, rpo RpoOrder, solved FixedBoolArray) returns bool
 		var candidate = StdEntryBlockPosition
 		var haveCandidate = false
 
@@ -273,7 +273,7 @@ export type StdDominatorTree
 	// holding that block's immediate dominator. Paired with `RpoOrder.copyOfReachableNonEntryBlocks`,
 	// which walks the same order and so produces the matching `to` column.
 	function idomOfEachNonEntryReachableBlock(rpo RpoOrder) returns CsrColumn
-		var parents = CsrColumn.create(0)
+		var parents = CsrColumn.create(rpo.order.count(), zeroed: false)
 
 		for position in rpo.order 'eachReachableBlock'
 			if position == StdEntryBlockPosition 'theEntryHasNoParent'
@@ -458,8 +458,7 @@ type RpoOrder
 	// Reverse a DFS postorder into a reverse postorder, recording each block's place as it goes.
 	static function fromPostorder(postorder BlockPositionColumn, blockCount ElementIndex) returns RpoOrder
 		var order = BlockPositionColumn.create(0)
-		var rpoIndex = BlockPositionColumn.create(0)
-		rpoIndex.resize(blockCount)
+		var rpoIndex = BlockPositionColumn.create(blockCount)
 
 		var remaining = postorder.count()
 
@@ -480,7 +479,7 @@ type RpoOrder
 	// Every reachable block except the entry, in reverse postorder — the `to` column of the dominator
 	// tree's edge list.
 	function copyOfReachableNonEntryBlocks() returns CsrColumn
-		var blocks = CsrColumn.create(0)
+		var blocks = CsrColumn.create(self.order.count(), zeroed: false)
 
 		for position in self.order 'eachReachableBlock'
 			if position == StdEntryBlockPosition 'theEntryIsNobodysChild'

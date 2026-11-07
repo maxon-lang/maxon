@@ -131,7 +131,7 @@ export type LibraryCacheWriter
 end 'LibraryCacheWriter'
 
 function headerWordBytes(word CacheWord) returns ByteArray
-	var bytes = ByteArray.create(0)
+	var bytes = ByteArray.create(HeaderWordByteCount, zeroed: false)
 
 	for position in 0 upto HeaderWordByteCount 'eachByte'
 		bytes.push(((word shr (position * ByteBitWidth)) and ByteMask) as Byte)
@@ -443,10 +443,8 @@ export type LibraryPack
 	export static function open(image ByteArray) returns LibraryPack throws LibraryCacheDamage
 		var reader = try LibraryCacheReader.open(image)
 		let count = try reader.count()
-		var rows = PackRowKeyArray.create(0)
-		var lengths = PackOffsetArray.create(0)
-		rows.reserve(count)
-		lengths.reserve(count)
+		var rows = PackRowKeyArray.create(count, zeroed: false)
+		var lengths = PackOffsetArray.create(count, zeroed: false)
 
 		for _ in 0 upto count 'eachRow'
 			let first = (try reader.unsigned()) as HashDigest
@@ -456,10 +454,8 @@ export type LibraryPack
 			lengths.push(try reader.count())
 		end 'eachRow'
 
-		var starts = PackOffsetArray.create(0)
-		var ends = PackOffsetArray.create(0)
-		starts.reserve(count)
-		ends.reserve(count)
+		var starts = PackOffsetArray.create(count, zeroed: false)
+		var ends = PackOffsetArray.create(count, zeroed: false)
 		var at = reader.offset()
 
 		for length in lengths 'eachLength'

@@ -62,8 +62,7 @@ export type NaturalLoops
 		findRetreatingEdges(succ, nodeCount: nodeCount, tails: tails, heads: heads)
 
 		var headers = CsrColumn.create(0)
-		var seen = BoolArray.create(0)
-		seen.resize(nodeCount)
+		var seen = FlagColumn.create(nodeCount)
 
 		for h in heads 'eachBackEdge'
 			let already = try seen.get(h) otherwise panic("NaturalLoops.find: seen.get OOB at {h}")
@@ -120,8 +119,7 @@ function findRetreatingEdges(succ CsrGraph, nodeCount CsrIndex, tails CsrColumn,
 		return
 	end 'noNodes'
 
-	var colors = DfsColorArray.create(0)
-	colors.resize(nodeCount)
+	var colors = DfsColorColumn.create(nodeCount)
 	var stackNode = CsrColumn.create(0)
 	var stackNextSucc = CsrColumn.create(0)
 
@@ -237,7 +235,7 @@ end 'LoopMembership'
 // path (an edge to one is a retreating edge, i.e. a back edge in a reducible CFG), BLACK = closed.
 // Three states and no more, which is the whole bound.
 typealias DfsColor = int(0 to 2)
-typealias DfsColorArray = Array with DfsColor
+typealias DfsColorColumn = FixedArray with DfsColor
 
 let DfsWhite = 0
 let DfsGray = 1 as DfsColor

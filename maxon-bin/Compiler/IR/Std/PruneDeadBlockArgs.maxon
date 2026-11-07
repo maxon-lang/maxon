@@ -67,7 +67,7 @@
 // Exported with its constructor and its setter: `dropBlockArgs` is shared with
 // `elimTrivialBlockArgs`, and the column that tells it which block-args SURVIVE is what both passes
 // hand it.
-export typealias ValueFlagColumn = Array with bool
+export typealias ValueFlagColumn = FixedArray with bool
 
 // The pass's summary line, from the tally its runs over every function summed into (`StdPassPool`).
 module function pruneDeadBlockArgsSummary(tally StdPassTally, funcCount ElementIndex) returns String
@@ -134,8 +134,7 @@ export function blockArgIdBound(module StdModule, func IrFunction) returns Value
 end 'blockArgIdBound'
 
 export function flagColumn(count ValueId) returns ValueFlagColumn
-	var col = ValueFlagColumn.create(0)
-	col.resize(count)
+	let col = ValueFlagColumn.create(count)
 	return col
 end 'flagColumn'
 
@@ -225,8 +224,7 @@ end 'incomingArgAt'
 // Exported, and used by `elimTrivialBlockArgs` too: it is the same index over the same id space,
 // and two copies of it were two chances to resolve an edge onto the wrong block.
 export function buildBlockIdIndex(module StdModule, func IrFunction) returns ValueIdArray
-	var refByBlockId = ValueIdArray.create(0)
-	refByBlockId.resize(func.nextBlockId)
+	var refByBlockId = ValueIdArray.create(func.nextBlockId)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("buildBlockIdIndex: blockRef from func.blockRefs not in module.blocks")
@@ -323,7 +321,7 @@ end 'markUseful'
 export function dropBlockArgs(module StdModule, func IrFunction, refByBlockId ValueIdArray, kept ValueFlagColumn) returns ValueId
 	for blockRef in func.blockRefs 'eachPred'
 		var pred = try module.blocks.get(blockRef) otherwise panic("dropBlockArgs: blockRef from func.blockRefs not in module.blocks")
-		var newEdges = BranchEdgeArray.create(0)
+		var newEdges = BranchEdgeArray.create(pred.branchEdges.count(), zeroed: false)
 
 		for edge in pred.branchEdges 'eachEdge'
 			view target = blockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)

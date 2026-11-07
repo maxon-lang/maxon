@@ -178,17 +178,15 @@ typealias RecordConstructorArray = Array with RecordConstructor
 // own extra rule — a PARAMETER that is dropped has been retained and released by the callee and so escapes,
 // while a RECORD that is not dropped is one whose ownership this pass does not model.
 type PointerScan
-	var escapedLocally as BoolArray
-	var dropSites as ValueIdArray
+	var escapedLocally as FixedBoolArray
+	var dropSites as FixedValueIdArray
 	export var forwardedPointers as ValueIdArray
 	export var forwardedCallees as FuncIndexArray
 	export var forwardedPositions as ParamCountArray
 
 	static function create(valueBound ValueId) returns PointerScan
-		var escapedLocally = BoolArray.create(0)
-		escapedLocally.growFilled(valueBound, value: false)
-		var dropSites = ValueIdArray.create(0)
-		dropSites.growFilled(valueBound, value: 0)
+		var escapedLocally = FixedBoolArray.create(valueBound)
+		var dropSites = FixedValueIdArray.create(valueBound)
 		return Self{escapedLocally: escapedLocally, dropSites: dropSites, forwardedPointers: ValueIdArray.create(0), forwardedCallees: FuncIndexArray.create(0), forwardedPositions: ParamCountArray.create(0)}
 	end 'create'
 
@@ -321,7 +319,7 @@ function promoteWithNameIndex(module StdModule, byName FunctionNameIndex)
 	// parameter-escape summary — one scan and five columns per function that HAS parameters — is then pure
 	// dead work. Most programs in the corpus are exactly that module.
 	var constructors = buildRecordConstructors(module)
-	var frameAllocs = FrameAllocTable.create(0)
+	var frameAllocs = FrameAllocTable.create(module.funcCount(), zeroed: false)
 	var anyFrameAlloc = false
 
 	for funcIndex in 0 upto module.funcCount() 'eachFuncAllocating'
@@ -360,7 +358,7 @@ function anyConstructor(constructors RecordConstructorArray) returns bool
 end 'anyConstructor'
 
 function buildRecordConstructors(module StdModule) returns RecordConstructorArray
-	var table = RecordConstructorArray.create(0)
+	var table = RecordConstructorArray.create(module.funcCount(), zeroed: false)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		table.push(recognizeRecordConstructor(module, func: module.getFunc(funcIndex)))
@@ -850,7 +848,7 @@ type ParamNodeSpace
 	export var nodeCount as CsrIndex
 
 	static function create(module StdModule) returns ParamNodeSpace
-		var base = CsrColumn.create(0)
+		var base = CsrColumn.create(module.funcCount(), zeroed: false)
 		var next = 0 as CsrIndex
 
 		for funcIndex in 0 upto module.funcCount() 'eachFunc'
@@ -885,8 +883,7 @@ end 'ParamNodeSpace'
 function buildParamEscapeMasks(module StdModule, byName FunctionNameIndex) returns ParamPositionMaskArray
 	let nodes = ParamNodeSpace.create(module)
 
-	var seeds = BoolArray.create(0)
-	seeds.growFilled(nodes.nodeCount, value: false)
+	var seeds = BoolArray.create(nodes.nodeCount)
 
 	// Edges point from the CALLEE's parameter to the CALLER's, so the mark propagates BACKWARD from a real
 	// escape site to every parameter that can reach one — the direction `reverseReachabilityMark` walks.
@@ -912,7 +909,7 @@ function buildParamEscapeMasks(module StdModule, byName FunctionNameIndex) retur
 	return publishParamMasks(module, nodes: nodes, marked: marked)
 end 'buildParamEscapeMasks'
 
-function seedEscapingParams(seeds BoolArray, nodes ParamNodeSpace, funcIndex ElementIndex, func IrFunction, tracked BoolArray, scan PointerScan)
+function seedEscapingParams(seeds BoolArray, nodes ParamNodeSpace, funcIndex ElementIndex, func IrFunction, tracked FixedBoolArray, scan PointerScan)
 	for param in 0 upto func.paramCount 'eachParam'
 		// ⚠ A parameter the CALLEE DROPS has escaped: `__mm_decref` releases an ownership stake, and
 		// releasing a frame address would hand live stack memory to the slab's free (and fill it, in a
@@ -946,7 +943,7 @@ function collectParamForwardEdges(edgeFrom CsrColumn, edgeTo CsrColumn, nodes Pa
 end 'collectParamForwardEdges'
 
 function publishParamMasks(module StdModule, nodes ParamNodeSpace, marked BoolArray) returns ParamPositionMaskArray
-	var masks = ParamPositionMaskArray.create(0)
+	var masks = ParamPositionMaskArray.create(module.funcCount(), zeroed: false)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
@@ -968,9 +965,8 @@ end 'publishParamMasks'
 
 // The tracked column for a parameter scan: which of `func`'s parameter values were found, through the
 // `param` ops that define them.
-function parameterValues(module StdModule, liveOps OpIndexArray, func IrFunction) returns BoolArray
-	var tracked = BoolArray.create(0)
-	tracked.growFilled(func.paramCount, value: false)
+function parameterValues(module StdModule, liveOps OpIndexArray, func IrFunction) returns FixedBoolArray
+	var tracked = FixedBoolArray.create(func.paramCount)
 
 	for opIdx in liveOps 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("parameterValues: live op index {opIdx} not in module.ops")
@@ -996,7 +992,7 @@ end 'parameterValues'
 // A `param` op whose result id is not its index breaks the Std tier's parameter contract (parameters occupy
 // `0..paramCount-1`), and every column here is indexed by that identity. Not marking it leaves the position
 // seeded escaping, which is the safe direction.
-function markParameterValue(tracked BoolArray, resultId ValueId, index ParamCount)
+function markParameterValue(tracked FixedBoolArray, resultId ValueId, index ParamCount)
 	if resultId != valueIdAtParamPosition(index) or resultId >= tracked.count() as ValueId 'notTheContractsIdentity'
 		return
 	end 'notTheContractsIdentity'
@@ -1017,7 +1013,7 @@ end 'markParameterValue'
 //
 // The accumulating `StdValueUseSet` is not a shortcut: "some non-admitted op read this value" is exactly
 // what one set accumulated across the whole walk means, which is why the walk allocates nothing per op.
-function scanPointerUses(module StdModule, func IrFunction, liveOps OpIndexArray, tracked BoolArray, byName FunctionNameIndex) returns PointerScan
+function scanPointerUses(module StdModule, func IrFunction, liveOps OpIndexArray, tracked FixedBoolArray, byName FunctionNameIndex) returns PointerScan
 	var scan = PointerScan.create(tracked.count() as ValueId)
 	var readByOtherOps = StdValueUseSet.create()
 
@@ -1056,7 +1052,7 @@ function scanPointerUses(module StdModule, func IrFunction, liveOps OpIndexArray
 	return scan
 end 'scanPointerUses'
 
-function isTracked(tracked BoolArray, v ValueId) returns bool
+function isTracked(tracked FixedBoolArray, v ValueId) returns bool
 	if v >= tracked.count() as ValueId 'outsideTheTrackedSpace'
 		return false
 	end 'outsideTheTrackedSpace'
@@ -1064,13 +1060,13 @@ function isTracked(tracked BoolArray, v ValueId) returns bool
 	return try tracked.get(v) otherwise panic("isTracked: tracked.get OOB at {v} after a bounds test")
 end 'isTracked'
 
-function markIfTracked(tracked BoolArray, v ValueId, scan PointerScan)
+function markIfTracked(tracked FixedBoolArray, v ValueId, scan PointerScan)
 	if isTracked(tracked, v: v) 'ours'
 		scan.markEscaped(v)
 	end 'ours'
 end 'markIfTracked'
 
-function scanOneOp(module StdModule, opIdx ElementIndex, tracked BoolArray, byName FunctionNameIndex, scan PointerScan, readByOtherOps StdValueUseSet)
+function scanOneOp(module StdModule, opIdx ElementIndex, tracked FixedBoolArray, byName FunctionNameIndex, scan PointerScan, readByOtherOps StdValueUseSet)
 	let op = try module.ops.get(opIdx) otherwise panic("scanOneOp: opIdx {opIdx} not in module.ops")
 
 	match op 'shape'
@@ -1218,7 +1214,7 @@ end 'scanOneOp'
 // every one of those releases something a promoted record cannot have (a destructor cascade, a witness, a
 // buffer), and a record whose drop is any of them fails phase 1's `destructor == 0` test anyway. They fall
 // through to the unknown-callee escape below, which is where they belong.
-function scanCallOperands(module StdModule, callee ByteArray, args ValueIdArray, tracked BoolArray, byName FunctionNameIndex, scan PointerScan)
+function scanCallOperands(module StdModule, callee ByteArray, args ValueIdArray, tracked FixedBoolArray, byName FunctionNameIndex, scan PointerScan)
 	if let dropped = try trivialDropBoxOf(callee, args: args) 'theDrop'
 		if isTracked(tracked, v: dropped) 'ours'
 			scan.noteDrop(dropped)
@@ -1234,13 +1230,13 @@ function scanCallOperands(module StdModule, callee ByteArray, args ValueIdArray,
 	end 'callee'
 end 'scanCallOperands'
 
-function markEveryTrackedArg(args ValueIdArray, tracked BoolArray, scan PointerScan)
+function markEveryTrackedArg(args ValueIdArray, tracked FixedBoolArray, scan PointerScan)
 	for argId in args 'eachArg'
 		markIfTracked(tracked, v: argId, scan: scan)
 	end 'eachArg'
 end 'markEveryTrackedArg'
 
-function forwardCallArguments(args ValueIdArray, tracked BoolArray, calleeFuncIndex ElementIndex, calleeParamCount ParamCount, scan PointerScan)
+function forwardCallArguments(args ValueIdArray, tracked FixedBoolArray, calleeFuncIndex ElementIndex, calleeParamCount ParamCount, scan PointerScan)
 	for position in 0 upto args.count() 'eachArg'
 		let argId = try args.get(position) otherwise panic("forwardCallArguments: args.get OOB at {position}")
 
@@ -1297,9 +1293,8 @@ function promoteInFunction(module StdModule, func IrFunction, byName FunctionNam
 end 'promoteInFunction'
 
 // The tracked column for a call-site scan: every value defined by a call to a record constructor.
-function collectConstructorResults(module StdModule, liveOps OpIndexArray, valueBound ValueId, byName FunctionNameIndex, constructors RecordConstructorArray) returns BoolArray
-	var candidates = BoolArray.create(0)
-	candidates.growFilled(valueBound, value: false)
+function collectConstructorResults(module StdModule, liveOps OpIndexArray, valueBound ValueId, byName FunctionNameIndex, constructors RecordConstructorArray) returns FixedBoolArray
+	var candidates = FixedBoolArray.create(valueBound)
 
 	for opIdx in liveOps 'eachOp'
 		match constructorCallAt(module, opIdx: opIdx, byName: byName, constructors: constructors) 'site'
@@ -1577,9 +1572,10 @@ function frameAllocVerdictOf(call StdCallOperands, consts ConstValueMap) returns
 end 'frameAllocVerdictOf'
 
 function zeroedRecordFields(sizeBytes ByteOffset) returns RecordFieldArray
-	var fields = RecordFieldArray.create(0)
+	let slotCount = (sizeBytes as StackSize) / SpillSlotBytes
+	var fields = RecordFieldArray.create(slotCount as ElementIndex, zeroed: false)
 
-	for slot in 0 upto ((sizeBytes as StackSize) / SpillSlotBytes) 'eachSlot'
+	for slot in 0 upto slotCount 'eachSlot'
 		fields.push(RecordField.create((slot * SpillSlotBytes) as ByteOffset, storeType: StdType.i64, source: RecordFieldSource.fromConstant(0, constType: StdType.i64)))
 	end 'eachSlot'
 
@@ -1587,9 +1583,8 @@ function zeroedRecordFields(sizeBytes ByteOffset) returns RecordFieldArray
 end 'zeroedRecordFields'
 
 // Which tracked pointers were handed to a callee that RETAINS the position they filled.
-function retainedByACallee(valueBound ValueId, scan PointerScan, escapingParams ParamPositionMaskArray) returns BoolArray
-	var retained = BoolArray.create(0)
-	retained.growFilled(valueBound, value: false)
+function retainedByACallee(valueBound ValueId, scan PointerScan, escapingParams ParamPositionMaskArray) returns FixedBoolArray
+	var retained = FixedBoolArray.create(valueBound)
 
 	for edge in 0 upto scan.forwardedPointers.count() 'eachForward'
 		let callee = try scan.forwardedCallees.get(edge) otherwise panic("retainedByACallee: forwardedCallees.get OOB at {edge}")
@@ -1607,7 +1602,7 @@ function retainedByACallee(valueBound ValueId, scan PointerScan, escapingParams 
 	return retained
 end 'retainedByACallee'
 
-function planOnePromotion(opIdx ElementIndex, resultId ValueId, sizeBytes ByteOffset, fields RecordFieldArray, args ValueIdArray, scan PointerScan, retained BoolArray, plans RecordPromotionArray)
+function planOnePromotion(opIdx ElementIndex, resultId ValueId, sizeBytes ByteOffset, fields RecordFieldArray, args ValueIdArray, scan PointerScan, retained FixedBoolArray, plans RecordPromotionArray)
 	if not recordIsFrameLocal(resultId, scan: scan, retained: retained) 'escapes'
 		return
 	end 'escapes'
@@ -1642,7 +1637,7 @@ end 'assignFrameSlots'
 // ⭐ **THE DECISION, IN ONE PLACE.** A record may be promoted iff nothing in its frame let it escape, every
 // callee it was handed to leaves it alone, and the frame drops it at least once (see the header on why a
 // record with no drop is refused).
-function recordIsFrameLocal(record ValueId, scan PointerScan, retained BoolArray) returns bool
+function recordIsFrameLocal(record ValueId, scan PointerScan, retained FixedBoolArray) returns bool
 	if scan.escapedLocallyAt(record) 'escapedHere'
 		return false
 	end 'escapedHere'
@@ -1674,8 +1669,7 @@ function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, 
 	// A dense column over the function's value space, NOT a `StdValueUseSet`: that type's whole contract is
 	// "the ids a function's ops READ" (it is `collectStdOpUses`' output), and this is a different question —
 	// which records this pass is promoting. Same representation, and `valueBound` is already in hand.
-	var promoted = BoolArray.create(0)
-	promoted.growFilled(valueBound, value: false)
+	var promoted = FixedBoolArray.create(valueBound)
 
 	for planIndex in 0 upto plans.count() 'eachPlan'
 		let plan = try plans.get(planIndex) otherwise panic("applyPromotions: plans.get OOB at {planIndex}")
@@ -1700,7 +1694,7 @@ end 'applyPromotions'
 //
 // ⚠ A TERMINATOR IS NEVER EITHER OF THOSE — both are `call` ops, which are body ops — so rebuilding
 // `opRefs` alone reaches every site.
-function appendRewrittenOp(module StdModule, opIdx ElementIndex, plans RecordPromotionArray, planAtOp PlanIndexByOpIndex, promoted BoolArray, mint ValueMinter, rebuilt OpIndexArray)
+function appendRewrittenOp(module StdModule, opIdx ElementIndex, plans RecordPromotionArray, planAtOp PlanIndexByOpIndex, promoted FixedBoolArray, mint ValueMinter, rebuilt OpIndexArray)
 	let planIndex = try planAtOp.get(opIdx) otherwise 'notAConstruction'
 		if opDropsAPromotedRecord(module, opIdx: opIdx, promoted: promoted) 'theDrop'
 			return
@@ -1745,7 +1739,7 @@ function emitFieldConstant(module StdModule, value FullRangeInt, constType StdTy
 	return id
 end 'emitFieldConstant'
 
-function opDropsAPromotedRecord(module StdModule, opIdx ElementIndex, promoted BoolArray) returns bool
+function opDropsAPromotedRecord(module StdModule, opIdx ElementIndex, promoted FixedBoolArray) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("opDropsAPromotedRecord: opIdx {opIdx} not in module.ops")
 	return match op 'op'
 		const or
@@ -1874,7 +1868,7 @@ function opDropsAPromotedRecord(module StdModule, opIdx ElementIndex, promoted B
 	end 'op'
 end 'opDropsAPromotedRecord'
 
-function callDropsAPromotedRecord(callee ByteArray, args ValueIdArray, promoted BoolArray) returns bool
+function callDropsAPromotedRecord(callee ByteArray, args ValueIdArray, promoted FixedBoolArray) returns bool
 	let dropped = try trivialDropBoxOf(callee, args: args) otherwise return false
 
 	if dropped >= promoted.count() as ValueId 'outsideTheValueSpace'

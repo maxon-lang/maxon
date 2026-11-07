@@ -201,9 +201,8 @@ end 'emittedCoveragePointOffsets'
 // statement it counts, so the first row at or past it is that statement's. Two points legitimately land on
 // one row: an arm's counter and its first statement's counter are adjacent, and the line really is counted
 // by both.
-function coverageCountedRows(codeResult CodeResult, emitted CovPointOffsetMap) returns BoolArray
-	var counted = BoolArray.create(0)
-	counted.refill(codeResult.debugLineRows.count(), value: false)
+function coverageCountedRows(codeResult CodeResult, emitted CovPointOffsetMap) returns FixedBoolArray
+	var counted = FixedBoolArray.create(codeResult.debugLineRows.count())
 
 	for (_, codeOffset) in emitted 'eachEmittedPoint'
 		markRowAtOrPast(codeResult.debugLineRows, counted: counted, codeOffset: codeOffset)
@@ -215,7 +214,7 @@ end 'coverageCountedRows'
 // ⚠ **BINARY SEARCH, WHICH THE TABLE'S ASCENDING ORDER IS WHAT PERMITS** (`MxdbgWriter` refuses one that is
 // not). A scan per point would be Θ(points × rows) on a table with one row per statement in the program.
 // A point past the last row marks nothing: its statement emitted no row at all.
-function markRowAtOrPast(rows DebugLineRowArray, counted BoolArray, codeOffset MxdbgCodeOffset)
+function markRowAtOrPast(rows DebugLineRowArray, counted FixedBoolArray, codeOffset MxdbgCodeOffset)
 	var low = 0 as Count
 	var high = rows.count()
 
@@ -235,7 +234,7 @@ function markRowAtOrPast(rows DebugLineRowArray, counted BoolArray, codeOffset M
 	end 'itsStatementEmittedARow'
 end 'markRowAtOrPast'
 
-function lineRowFlags(counted BoolArray, at ElementIndex, entersTheLine bool) returns MxdbgIndex
+function lineRowFlags(counted FixedBoolArray, at ElementIndex, entersTheLine bool) returns MxdbgIndex
 	let coverage = MxdbgLineFlagCoverage if (try counted.get(at) otherwise panic("debug info: counted.get OOB at {at} of a column sized to the line table")) else 0
 	let lineEntry = MxdbgLineFlagLineEntry if entersTheLine else 0
 
@@ -311,8 +310,7 @@ function writeFunctionLocals(project Project, signatures ProgramSignatures, writ
 		return
 	end 'noBindings'
 
-	var records = MxdbgLocalDraftArray.create(0)
-	records.reserve(func.debugLocals.count())
+	var records = MxdbgLocalDraftArray.create(func.debugLocals.count(), zeroed: false)
 
 	let runs = DebugRunsByOrdinal.over(range.localRanges, ordinalCount: func.debugLocalLocations.count())
 	var at = 0 as ElementIndex
@@ -556,7 +554,7 @@ function resolveContestedPlaces(records MxdbgLocalDraftArray)
 end 'resolveContestedPlaces'
 
 function resolveContestedPlacesOfOneName(records MxdbgLocalDraftArray, from ElementIndex, past ElementIndex)
-	var order = CfgIndexArray.create(0)
+	var order = CfgIndexArray.create(past - from, zeroed: false)
 
 	for at in from upto past 'eachRecord'
 		order.push(at)
@@ -839,10 +837,8 @@ type DebugRunsByOrdinal
 	var ranges as DebugLocalCodeRangeArray
 
 	static function over(localRanges DebugLocalCodeRangeArray, ordinalCount ElementIndex) returns DebugRunsByOrdinal
-		var ordinals = CsrColumn.create(0)
-		var runs = CsrColumn.create(0)
-		ordinals.reserve(localRanges.count())
-		runs.reserve(localRanges.count())
+		var ordinals = CsrColumn.create(localRanges.count(), zeroed: false)
+		var runs = CsrColumn.create(localRanges.count(), zeroed: false)
 
 		for (iter, span) in localRanges.withIterator() 'eachRange'
 			ordinals.push(runOrdinalOf(span, ordinalCount: ordinalCount) as CsrIndex)

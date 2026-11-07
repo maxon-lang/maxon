@@ -1628,7 +1628,7 @@ export type PressureIndex
 	// — a value live straight through the block is counted by `LiveSets.cover` instead. It is the
 	// number every suffix sum in the block runs through, so every `liveBefore` in that block is offset
 	// by it. `rebuild` sets it here; a split moves it one value at a time (`applyLiveOutLedger`).
-	export function setExitPopulation(blockLocal ElementIndex, population RegCountColumn)
+	export function setExitPopulation(blockLocal ElementIndex, population FixedRegCountColumn)
 		let exit = self.exitSlotOf(blockLocal)
 
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
@@ -2607,8 +2607,8 @@ export type PressureIndex
 	end 'rebuildSparse'
 
 	function verifySparseBuild()
-		var sums = PressureDeltaColumn.create(0)
-		var bests = PressureDeltaColumn.create(0)
+		var sums = PressureDeltaColumn.create(self.nodeSum.count(), zeroed: false)
+		var bests = PressureDeltaColumn.create(self.nodeSum.count(), zeroed: false)
 		var ops = BlockOpPosArray.create(0)
 		var clobbers = RegMaskColumn.create(0)
 
@@ -3881,7 +3881,7 @@ export type SplitScratch
 	//
 	// (A third, one block's DEMAND, needs no buffer: it is read off the index in O(1) and written
 	// straight into `LivenessResult.blockPressure`, with no row in between.)
-	export var opEffective as RegCountColumn
+	export var opEffective as FixedRegCountColumn
 
 	// The ops one split's index rebuild has to re-read, as slots, and the merge buffer that sorts them.
 	export var reindexCandidates as DenseColumn
@@ -6528,7 +6528,7 @@ function peakOutranks(fullOverflow bool, atFixedRegisterOp bool, pressure RegCou
 end 'peakOutranks'
 
 // Record each block-arg's def-point live count — the block's live-in population (see the caller).
-function recordPhiDefLiveAfter(defLiveAfter DefPressureColumn, block IrBlock, liveInByClass RegCountColumn, classes ValueClassColumn)
+function recordPhiDefLiveAfter(defLiveAfter DefPressureColumn, block IrBlock, liveInByClass FixedRegCountColumn, classes ValueClassColumn)
 	for arg in block.blockArgs 'eachPhi'
 		let class = try classes.get(arg.valueId) otherwise panic("recordPhiDefLiveAfter: phi {arg.valueId} has no recorded register class")
 		defLiveAfter.set(arg.valueId, value: classRowGet(liveInByClass, class: class))
@@ -6543,7 +6543,7 @@ end 'recordPhiDefLiveAfter'
 // fourteen idle GPRs do not provide one. Recorded as the MIXED total, the question becomes "does the
 // whole machine have a register spare", which is both too weak (30 is never exceeded, so every value
 // looks anchorable) and about the wrong thing.
-function recordDefLiveAfter(defLiveAfter DefPressureColumn, buf OperandList, liveByClass RegCountColumn, classes ValueClassColumn)
+function recordDefLiveAfter(defLiveAfter DefPressureColumn, buf OperandList, liveByClass FixedRegCountColumn, classes ValueClassColumn)
 	for o in buf 'eachOperand'
 		if operandIsDef(o) and operandIsVirtual(o) 'def'
 			defLiveAfter.set(operandValueId(o), value: classRowGet(liveByClass, class: operandClass(o, classes: classes)))

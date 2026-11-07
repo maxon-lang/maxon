@@ -345,7 +345,7 @@ export type MxdbgWriter
 		let layoutTableOff = globalTableOff + (self.globals.count() * MxdbgGlobalEntrySize) as ByteOffset
 		let stringPoolOff = layoutTableOff + (self.layoutFigures.count() * MxdbgLayoutEntrySize) as ByteOffset
 
-		var buf = ByteArray.create(0)
+		var buf = ByteArray.create(stringPoolOff + (self.stringPool.count() as ByteOffset), zeroed: false)
 		writeMxdbgMagic(buf)
 		writeZeros(buf, n: (MxdbgHeaderSize - buf.count()) as BytePos)
 		patchDword(buf, offset: MxdbgOffVersion, value: MxdbgFormatVersion as MachineWord)
@@ -518,8 +518,7 @@ export type MxdbgWriter
 	// MEASURED on this compiler compiling itself: that shape spent 23.4 G CPU ticks in the sidecar
 	// phase, against 28.0 G for the WHOLE register allocator.
 	function lineWindows() returns MxdbgLineWindowArray
-		var windows = MxdbgLineWindowArray.create(0)
-		windows.reserve(self.funcs.count())
+		var windows = MxdbgLineWindowArray.create(self.funcs.count(), zeroed: false)
 
 		var at = 0 as ElementIndex
 
@@ -570,7 +569,7 @@ export type MxdbgWriter
 	end 'requireAggregateWindowFits'
 
 	function poolBytes(slice MxdbgPoolSlice) returns ByteArray
-		var bytes = ByteArray.create(0)
+		var bytes = ByteArray.create(slice.length, zeroed: false)
 
 		for i in slice.offset upto slice.offset + slice.length 'eachByte'
 			bytes.push(try self.stringPool.get(i as ElementIndex) otherwise panic("MxdbgWriter.poolBytes: byte {i} of a slice this writer interned is past the {self.stringPool.count()}-byte pool it interned it into"))

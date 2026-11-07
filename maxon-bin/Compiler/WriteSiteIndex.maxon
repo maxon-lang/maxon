@@ -22,8 +22,8 @@ export type WriteSiteIndex
 
 	export static function build(tokens TokenIndexArray, names NameRoster) returns WriteSiteIndex
 		var groupByName = WriteGroupByName.create()
-		var groupOfSite = CsrColumn.create(0)
-		var siteOrdinals = CsrColumn.create(0)
+		var groupOfSite = CsrColumn.create(names.count(), zeroed: false)
+		var siteOrdinals = CsrColumn.create(names.count(), zeroed: false)
 
 		for site in 0 upto names.count() 'eachSite'
 			let name = try names.get(site) otherwise panic("WriteSiteIndex.build: names.get OOB at {site}")
@@ -40,7 +40,7 @@ export type WriteSiteIndex
 		end 'eachSite'
 
 		let rows = buildCsr(groupOfSite, to: siteOrdinals, nodeCount: groupByName.count() as CsrIndex)
-		var rowTokens = TokenIndexArray.create(0)
+		var rowTokens = TokenIndexArray.create(rows.list.count(), zeroed: false)
 
 		for ordinal in rows.list 'eachRowEntry'
 			rowTokens.push(try tokens.get(ordinal) otherwise panic("WriteSiteIndex.build: tokens.get OOB at {ordinal}"))

@@ -273,7 +273,7 @@ end 'EffectivePools'
 // remove.
 export type RegPoolCensus
 	// effective-pool size (0 .. RegisterFileSize) -> how many live values have it.
-	var byPoolSize as RegCountColumn
+	var byPoolSize as FixedRegCountColumn
 
 	// Which buckets of `byPoolSize` are NON-EMPTY, as a bitmask. Exists so the SMALLEST effective
 	// pool among the live values is a trailing-zero count instead of a scan for the first non-empty
@@ -286,11 +286,10 @@ export type RegPoolCensus
 
 	// The allocatable pool size of each file — this function's constants, set once at `reset` so the
 	// per-value "is it constrained?" test is a row read rather than a popcount at every flip.
-	var classPoolSizes as RegCountColumn
+	var classPoolSizes as FixedRegCountColumn
 
 	export static function create() returns RegPoolCensus
-		var byPoolSize = RegCountColumn.create(0)
-		byPoolSize.resize(RegisterFileSize + 1)
+		var byPoolSize = FixedRegCountColumn.create(RegisterFileSize + 1)
 		return Self{byPoolSize: byPoolSize, occupied: 0, constrained: 0, classPoolSizes: zeroClassRow()}
 	end 'create'
 
@@ -425,7 +424,7 @@ end 'RegPoolCensus'
 // sweep. The snapshot DEDUPES: an op may name one value twice (`x + x`, or a reuse def whose input
 // is also its use), and counting a single flip twice would corrupt the census for the rest of the
 // block.
-export function stepCensusBackwardOverOp(row BitRow, buf OperandList, census RegPoolCensus, effPoolSizes RegCountColumn, classes ValueClassColumn, liveByClass RegCountColumn, ids ValueIdArray, wasLive BoolArray)
+export function stepCensusBackwardOverOp(row BitRow, buf OperandList, census RegPoolCensus, effPoolSizes RegCountColumn, classes ValueClassColumn, liveByClass FixedRegCountColumn, ids ValueIdArray, wasLive BoolArray)
 	ids.clear()
 	wasLive.clear()
 

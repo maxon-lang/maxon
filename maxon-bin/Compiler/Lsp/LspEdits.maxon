@@ -160,9 +160,10 @@ function codeActionAnswer(request LspRequest, tokens TokenArray, blocks LspDocum
 	let selectionEnd = index.offsetOf(request.text, position: try lspPositionMember(request.incoming, of: range, key: LspEndKey))
 
 	var doc = JsonDoc.create()
-	var actions = JsonNodeIdArray.create(0)
+	let unused = unusedLocalNamesIn(tokens, blocks: blocks, selectionStart: selectionStart, selectionEnd: selectionEnd)
+	var actions = JsonNodeIdArray.create(unused.count(), zeroed: false)
 
-	for name in unusedLocalNamesIn(tokens, blocks: blocks, selectionStart: selectionStart, selectionEnd: selectionEnd) 'eachUnused'
+	for name in unused 'eachUnused'
 		actions.push(removeBindingActionNode(doc, uri: request.uri, name: name))
 	end 'eachUnused'
 

@@ -120,10 +120,8 @@ function analyseReturnedParameter(module StdModule, func IrFunction, funcIndex E
 	let defs = StdValueDefs.build(module, func: func)
 	let bound = defs.valueBound()
 	let flows = valueFlowsOf(module, func: func)
-	var seeds = BoolArray.create(0)
-	seeds.growFilled(bound, value: false)
-	var carriers = BoolArray.create(0)
-	carriers.growFilled(bound, value: false)
+	var seeds = BoolArray.create(bound)
+	var carriers = BoolArray.create(bound)
 
 	for flow in flows 'eachFlow'
 		markValue(carriers, v: flow.carrier)
@@ -363,7 +361,7 @@ function rewriteFunction(module StdModule, funcIndex ElementIndex, candidates Re
 	var func = module.getFunc(funcIndex)
 	let bound = nextFreeValueId(module, func: func)
 	var minter = ValueMinter.resuming(bound)
-	var subst = ValueIdArray.create(0)
+	var subst = ValueIdArray.create(bound, zeroed: false)
 
 	for id in 0 upto bound 'identity'
 		subst.push(id)

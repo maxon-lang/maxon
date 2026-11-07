@@ -708,8 +708,7 @@ end 'cacheWriteFuncSignatureEntryArray'
 
 function cacheReadFuncSignatureEntryArray(reader LibraryCacheReader) returns FuncSignatureEntryArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FuncSignatureEntryArray.create(0)
-	result.reserve(count)
+	var result = FuncSignatureEntryArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try FuncSignatureEntry.cacheRead(reader)
@@ -769,8 +768,7 @@ end 'cacheWriteFunctionRangeCheckEntryArray'
 
 function cacheReadFunctionRangeCheckEntryArray(reader LibraryCacheReader) returns FunctionRangeCheckEntryArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FunctionRangeCheckEntryArray.create(0)
-	result.reserve(count)
+	var result = FunctionRangeCheckEntryArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try FunctionRangeCheckEntry.cacheRead(reader)
@@ -823,8 +821,7 @@ end 'cacheWriteUnbuiltBodyArray'
 
 function cacheReadUnbuiltBodyArray(reader LibraryCacheReader) returns UnbuiltBodyArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = UnbuiltBodyArray.create(0)
-	result.reserve(count)
+	var result = UnbuiltBodyArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try UnbuiltBody.cacheRead(reader)
@@ -1132,7 +1129,7 @@ export type FileParseArtifact
 	// File what the parse that built this artifact wrote into the signature index, with each instance row known
 	// by the band id the parse handed it.
 	export function recordParseMints(mints LocalInstanceMints)
-		var bandIds = GenericInstanceIdArray.create(0)
+		var bandIds = GenericInstanceIdArray.create(mints.rows.count(), zeroed: false)
 
 		for position in 0 upto mints.rows.count() 'eachRow'
 			bandIds.push(BandInstanceIdBase + position)
@@ -1953,7 +1950,7 @@ module function reportTypeNameCollisions(project Project, collisions TypeNameCol
 end 'reportTypeNameCollisions'
 
 module function sourceFilesInPathOrder(paths FilePathArray) returns SourceFileInPathOrderArray
-	var ordered = SourceFileInPathOrderArray.create(0)
+	var ordered = SourceFileInPathOrderArray.create(paths.count(), zeroed: false)
 	let workingDirectory = Directory.currentPath()
 
 	for (iter, path) in paths.withIterator() 'eachSourcePath'
@@ -2140,7 +2137,7 @@ type InstantiationClaim
 end 'InstantiationClaim'
 
 function reportContestedTypeNames(project Project, signatures ProgramSignatures, contested ContestedTypeNameMap)
-	var names = NameRoster.create(0)
+	var names = NameRoster.create(contested.count(), zeroed: false)
 
 	for (compiled, _) in contested 'eachContestedName'
 		names.push(compiled.clone())
@@ -2150,7 +2147,7 @@ function reportContestedTypeNames(project Project, signatures ProgramSignatures,
 
 	for compiled in names 'eachInOrder'
 		let members = try contested.get(compiled) otherwise panic("reportContestedTypeNames: '{String.from(compiled)}' was filed contested by the walk that built this map")
-		var claims = InstantiationClaimArray.create(0)
+		var claims = InstantiationClaimArray.create(members.count(), zeroed: false)
 
 		for gid in members 'eachMember'
 			claims.push(InstantiationClaim.of(project, signatures: signatures, gid: gid))
@@ -2588,7 +2585,7 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 		entry.returnType = remapMaxonReturnType(entry.returnType, remap: remap)
 	end 'eachSignatureEntry'
 
-	var aliases = FunctionTypeAliasArray.create(0)
+	var aliases = FunctionTypeAliasArray.create(artifact.functionTypeAliases.count(), zeroed: false)
 
 	for alias in artifact.functionTypeAliases 'eachFunctionAlias'
 		aliases.push(alias.withInstancesRenumbered(remap))
@@ -2596,7 +2593,7 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 
 	artifact.functionTypeAliases = aliases
 
-	var renumberedInterfaces = IrInterfaceArray.create(0)
+	var renumberedInterfaces = IrInterfaceArray.create(artifact.interfaces.count(), zeroed: false)
 
 	for iface in artifact.interfaces 'eachInterface'
 		renumberedInterfaces.push(iface.withInstancesRenumbered(remap))
@@ -2604,7 +2601,7 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 
 	artifact.interfaces = renumberedInterfaces
 
-	var renumberedConformances = ConformanceDeclArray.create(0)
+	var renumberedConformances = ConformanceDeclArray.create(artifact.conformances.count(), zeroed: false)
 
 	for decl in artifact.conformances 'eachConformance'
 		renumberedConformances.push(decl.withInstancesRenumbered(remap))
@@ -2620,7 +2617,7 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 		remapEnumLayoutPayloadTypes(layout, remap: remap)
 	end 'eachEnum'
 
-	var sites = GenericInstantiationSiteArray.create(0)
+	var sites = GenericInstantiationSiteArray.create(artifact.inferredInstantiationSites.count(), zeroed: false)
 
 	for site in artifact.inferredInstantiationSites 'eachInferredSite'
 		sites.push(GenericInstantiationSite.create(remap.applyInstance(site.gid), nameLine: site.nameLine, nameColumn: site.nameColumn, filePath: site.filePath))

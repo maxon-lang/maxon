@@ -30,7 +30,7 @@ export function cellPositionsAsWords(declared MaxonTypeArray, byReference ParamP
 		return declared
 	end 'everyPositionIsAValue'
 
-	var words = MaxonTypeArray.create(0)
+	var words = MaxonTypeArray.create(declared.count(), zeroed: false)
 
 	for i in 0 upto declared.count() 'eachPosition'
 		words.push(wordAtCellPosition(try declared.get(i) otherwise panic("cellPositionsAsWords: declared.get OOB at {i}"), isCell: maskHasParam(byReference, param: i as ParamCount)))
@@ -130,8 +130,7 @@ export function registerFunctionRecord(globalData GlobalDataTable, funcName Byte
 end 'registerFunctionRecord'
 
 function functionRecordSeedBytes() returns ByteArray
-	var record = ByteArray.create(0)
-	record.growFilled(FunctionRecordCaptureBase, value: 0)
+	let record = ByteArray.create(FunctionRecordCaptureBase)
 	return record
 end 'functionRecordSeedBytes'
 
@@ -555,7 +554,7 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	emitTypedParams(module, block: entry, paramTypes: paramTypes)
 
 	var values = ValueMinter.create(thunkParamCount)
-	var userArgs = ValueIdArray.create(0)
+	var userArgs = ValueIdArray.create(userParamCount + 1, zeroed: false)
 
 	for i in 0 upto userParamCount 'eachArg'
 		userArgs.push(valueIdAtParamPosition(i))

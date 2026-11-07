@@ -1151,7 +1151,7 @@ type RangeCheckEmitter
 		// A mutable alias to the head block (a parameter binding is immutable; field writes need a `var`).
 		// It is the SAME heap object — IrBlock is a reference type — so these writes land on the real block.
 		var headBlock = site.block
-		var segment = OpIndexArray.create(0)
+		var segment = OpIndexArray.create(site.position, zeroed: false)
 
 		for i in base upto base + site.position 'carveSegment'
 			let opIdx = try source.get(i) otherwise panic("splitChainEnd: block {sourceBlockId} of '{String.from(self.func.name)}' holds {source.count()} pre-split ops but its chain begins at {base} and the guard splits {site.position} ops into it")
@@ -1697,7 +1697,7 @@ let RangeCheckPanicLabel = b"__rc_panic"
 // `splitChainEnd` then.
 export function splitBlockInPlace(module StdModule, func IrFunction, head IrBlock, position ElementIndex, label ByteArray) returns IrBlock
 	var headBlock = head
-	var tailOps = OpIndexArray.create(0)
+	var tailOps = OpIndexArray.create(headBlock.bodyOpCount() - position, zeroed: false)
 
 	for i in position upto headBlock.bodyOpCount() 'moveTail'
 		let opIdx = try headBlock.bodyOpAt(i) otherwise panic("splitBlockInPlace: bodyOpAt OOB at {i}")

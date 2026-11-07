@@ -309,8 +309,8 @@ function renderSequence(tree DebugValueTree, memory DebugMemory, symbols DebugSy
 		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugLayoutNotDescribedReason))
 	end 'noElementLayout'
 
-	var children = DebugValueIndexArray.create(0)
 	let shown = length if length < MaxRenderedChildren else MaxRenderedChildren
+	var children = DebugValueIndexArray.create(shown as ElementIndex, zeroed: false)
 
 	for i in 0 upto shown 'eachElement'
 		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: "[{i}]", typeId: record.elementTypeId, source: DebugValueSource.address(buffer + (i as DebugAddress) * (stride as DebugAddress))) as DebugValueIndex)
@@ -337,7 +337,7 @@ function renderStruct(tree DebugValueTree, memory DebugMemory, symbols DebugSymb
 end 'renderStruct'
 
 function fieldsAt(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, record MxdbgTypeInfo, base DebugAddress) returns DebugValueIndexArray
-	var children = DebugValueIndexArray.create(0)
+	var children = DebugValueIndexArray.create(record.fieldCount, zeroed: false)
 
 	for k in record.fieldFirst upto record.fieldFirst + record.fieldCount 'eachField'
 		let field = symbols.fieldRecordOf(k as MxdbgIndex)
@@ -399,7 +399,7 @@ function renderFoldedStruct(tree DebugValueTree, memory DebugMemory, symbols Deb
 		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugLayoutNotDescribedReason))
 	end 'theWindowDoesNotHoldTheFields'
 
-	var children = DebugValueIndexArray.create(0)
+	var children = DebugValueIndexArray.create(words.count(), zeroed: false)
 
 	for (iter, word) in words.withIterator() 'eachWord'
 		let field = symbols.fieldRecordOf(record.fieldFirst + (iter.index() as MxdbgIndex))

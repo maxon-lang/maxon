@@ -47,8 +47,7 @@ end 'SlabClassRow'
 typealias SlabClassRowArray = Array with SlabClassRow
 
 function slabClassRows(sizes SlabClassSizeArray) returns SlabClassRowArray
-	var rows = SlabClassRowArray.create(0)
-	rows.reserve(sizes.count())
+	var rows = SlabClassRowArray.create(sizes.count(), zeroed: false)
 
 	for position in 0 upto sizes.count() 'eachClass'
 		let idx = position as SlabClassIndex
@@ -211,8 +210,7 @@ end 'slabSizeToClass128Table'
 // how one of the two ends up stepping by the other's stride.
 function slabReverseTable(entries FullRangeInt, base FullRangeInt, step FullRangeInt) returns ByteArray
 	let rows = slabClassRows(slabClassSizes())
-	var out = ByteArray.create(0)
-	out.reserve(entries as ElementIndex)
+	var out = ByteArray.create(entries as ElementIndex, zeroed: false)
 
 	for i in 0 upto entries 'eachEntry'
 		out.push(slabSmallestClassHolding(base + i * step, rows: rows) as Byte)
@@ -244,8 +242,7 @@ end 'slabSmallestClassHolding'
 export function slabClassGeometryTable() returns ByteArray
 	let sizes = slabClassSizes()
 	let pages = slabClassPages()
-	var out = ByteArray.create(0)
-	out.reserve(sizes.count() * SlabClassGeometryEntryBytes)
+	var out = ByteArray.create(sizes.count() * SlabClassGeometryEntryBytes, zeroed: false)
 
 	for row in slabClassRows(sizes) 'eachClass'
 		let objects = slabObjectsPerSpanIn(row.index, sizes: sizes, pages: pages) as MachineWord

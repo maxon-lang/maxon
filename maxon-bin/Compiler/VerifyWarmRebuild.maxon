@@ -783,9 +783,10 @@ function partDigests(artifact FileParseArtifact) returns PartDigestArray
 	var first = 0 as ElementIndex
 
 	while first < artifact.module.blocks.count() 'eachBlockChunk'
-		var chunk = IrBlockArray.create(0)
+		let limit = chunkLimit(first, size: BlocksPerDigest, total: artifact.module.blocks.count())
+		var chunk = IrBlockArray.create(limit - first, zeroed: false)
 
-		for position in first upto chunkLimit(first, size: BlocksPerDigest, total: artifact.module.blocks.count()) 'eachBlock'
+		for position in first upto limit 'eachBlock'
 			chunk.push(try artifact.module.blocks.get(position) otherwise panic("partDigests: blocks.get OOB at {position}"))
 		end 'eachBlock'
 

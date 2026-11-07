@@ -41,10 +41,8 @@ function elideInFunction(project Project, module StdModule, func IrFunction, liv
 
 	let bound = defs.valueBound()
 	let flows = valueFlowsOf(module, func: func)
-	var tracked = BoolArray.create(0)
-	tracked.growFilled(bound, value: false)
-	var escaped = BoolArray.create(0)
-	escaped.growFilled(bound, value: false)
+	var tracked = BoolArray.create(bound)
+	var escaped = BoolArray.create(bound)
 
 	for image in images 'eachSeed'
 		markValue(tracked, v: image.result)
@@ -156,7 +154,7 @@ function opOnlyDropsOrMeasures(op StdOp, call StdCallOperands, load StdLoadOpera
 end 'opOnlyDropsOrMeasures'
 
 function applyElisions(module StdModule, func IrFunction, bound ValueId, images ImageRetainArray, escaped BoolArray)
-	var subst = ValueIdArray.create(0)
+	var subst = ValueIdArray.create(bound, zeroed: false)
 
 	for id in 0 upto bound 'identity'
 		subst.push(id as ValueId)

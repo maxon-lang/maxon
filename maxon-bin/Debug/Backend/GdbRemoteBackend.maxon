@@ -295,7 +295,7 @@ export type GdbRemoteBackend
 	// The driver spawns the program suspended and the stub attaches to it, so the program is the driver's
 	// child here as on every lane, and a program left running after a detach reports its own exit code.
 	function attachedThrough(door TcpListener, program Pid) returns BackendAdoption
-		var argv = StringArray.create(0)
+		var argv = StringArray.create(4, zeroed: false)
 		argv.push(GdbReverseConnectOption)
 		argv.push("{GdbListenHost}:{self.port}")
 		argv.push("{GdbAttachOption}{program}")
@@ -456,7 +456,7 @@ export type GdbRemoteBackend
 	// --- the stop loop ---
 
 	export function listThreads() returns BackendThreadIdArray
-		var ids = BackendThreadIdArray.create(0)
+		var ids = BackendThreadIdArray.create(self.threads.count(), zeroed: false)
 
 		for spelled in self.threads 'eachThread'
 			match gdbHexValueOf(spelled) 'read'
@@ -648,7 +648,7 @@ export type GdbRemoteBackend
 			return
 		end 'theStubDoesNotAnswerIt'
 
-		var asked = StringArray.create(0)
+		var asked = StringArray.create(self.threads.count(), zeroed: false)
 
 		for spelled in self.threads 'eachThread'
 			if spelled != self.reporter 'anotherThread'
@@ -721,7 +721,7 @@ export type GdbRemoteBackend
 		end 'nothingIsQueued'
 
 		var taken = GdbWithheldStopLookup.none
-		var kept = GdbWithheldStopArray.create(0)
+		var kept = GdbWithheldStopArray.create(self.withheld.count(), zeroed: false)
 
 		for stop in self.withheld 'eachWithheld'
 			match taken 'already'
@@ -772,7 +772,7 @@ export type GdbRemoteBackend
 	end 'holdEndedWithItsStepper'
 
 	function threadsWithout(departed BackendThreadId) returns StringArray
-		var kept = StringArray.create(0)
+		var kept = StringArray.create(self.threads.count(), zeroed: false)
 
 		for known in self.threads 'eachKnown'
 			if self.threadIdOf(known) != departed 'anotherThread'
@@ -1219,7 +1219,7 @@ export type GdbRemoteBackend
 	end 'liftTrap'
 
 	function forgetArmed(address DebugAddress)
-		var kept = DebugAddressArray.create(0)
+		var kept = DebugAddressArray.create(self.armed.count(), zeroed: false)
 
 		for armedAt in self.armed 'eachArmed'
 			if armedAt != address 'anotherAddress'
@@ -1503,7 +1503,7 @@ end 'gdbStopIsATrap'
 // exception mask and answers each as handled, so the faulting thread re-executes its instruction
 // forever and the program's own handler never runs.
 function gdbStubTakesUnmaskSignals(stub FilePath) returns bool
-	var arguments = StringArray.create(0)
+	var arguments = StringArray.create(1, zeroed: false)
 	arguments.push(GdbUnmaskSignalsOption)
 
 	let asked = try Subprocess.run(Executable.path(stub), arguments: arguments, workingDirectory: Directory.currentPath(), timeoutMs: GdbUnmaskProbeMs) otherwise 'theProbeCouldNotRun'

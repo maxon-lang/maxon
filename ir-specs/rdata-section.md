@@ -532,3 +532,465 @@ func @main {
     arm64.ret
 }
 ```
+
+<!-- test: witness-table-header-holds-the-method-count -->
+A conformer's witness table starts with `methodCount@0`, the count of the interface's method slots, and this program's table opens its read-only image. `Seq` has two requirements, so the first word of the image is 2; a header written after the table's zero-filled body would leave it 0.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Seq uses Element
+	function current() returns Element
+	function advance(mutable self) throws IterationError
+end 'Seq'
+
+type Upto implements Seq with Integer
+	var pos as Integer
+	let limit as Integer
+
+	static function create(limit Integer) returns Self
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	function current() returns Integer
+		return self.pos
+	end 'current'
+
+	function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+
+		self.pos = self.pos + 1
+	end 'advance'
+end 'Upto'
+
+typealias IntegerSeq = Seq with Integer
+
+function total(source IntegerSeq) returns Integer
+	var sum = 0 as Integer
+
+	for item in source 'walk'
+		sum = sum + item
+	end 'walk'
+
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	return total(Upto.create(3)) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+```RequiredRdata
+i64 2
+```
+```TargetIr:x64-windows
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
+}
+
+func @Upto.current {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Upto.advance {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc less, ifcont
+  atTheLast:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.aluBaseDispImm32.add [rcx + 0], 1
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 3
+  __il_body#6:
+    x64.movRegImm32 r12, 1
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+  __il_body#7:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rax, 0
+    x64.jmp forhdr
+  __il_body#13:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+  __il_cont#12:
+    x64.leaRegRegReg rbx, rbx, rax
+  __il_body#15:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, ifcont
+  atTheLast:
+    x64.movRegImm32 rax, 1
+    x64.jmp forhdr
+  ifcont:
+    x64.aluBaseDispImm32.add [r8 + 0], 1
+    x64.movRegImm32 rax, 0
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#13
+  __il_cont#4:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at witness-table-header-holds-the-method-count.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @Upto.current {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Upto.advance {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc less, ifcont
+  atTheLast:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.aluBaseDispImm32.add [rcx + 0], 1
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 3
+  __il_body#6:
+    x64.movRegImm32 r12, 1
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+  __il_body#7:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rax, 0
+    x64.jmp forhdr
+  __il_body#13:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+  __il_cont#12:
+    x64.leaRegRegReg rbx, rbx, rax
+  __il_body#15:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, ifcont
+  atTheLast:
+    x64.movRegImm32 rax, 1
+    x64.jmp forhdr
+  ifcont:
+    x64.aluBaseDispImm32.add [r8 + 0], 1
+    x64.movRegImm32 rax, 0
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#13
+  __il_cont#4:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at witness-table-header-holds-the-method-count.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @Upto.current {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Upto.advance {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.b.lt ifcont
+  atTheLast:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 3
+  __il_body#6:
+    arm64.movImm x20, 1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x20
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+  __il_body#7:
+    arm64.movImm x19, 0
+    arm64.movImm x1, 0
+    arm64.b forhdr
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+  __il_cont#12:
+    arm64.add x19, x19, x1
+  __il_body#15:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.b.lt ifcont
+  atTheLast:
+    arm64.movImm x1, 1
+    arm64.b forhdr
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 0
+  forhdr:
+    arm64.cmp x1, 0
+    arm64.b.eq __il_body#13
+  __il_cont#4:
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at witness-table-header-holds-the-method-count.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
+}
+
+func @Upto.current {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Upto.advance {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.b.lt ifcont
+  atTheLast:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 3
+  __il_body#6:
+    arm64.movImm x20, 1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x20
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+  __il_body#7:
+    arm64.movImm x19, 0
+    arm64.movImm x1, 0
+    arm64.b forhdr
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+  __il_cont#12:
+    arm64.add x19, x19, x1
+  __il_body#15:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.b.lt ifcont
+  atTheLast:
+    arm64.movImm x1, 1
+    arm64.b forhdr
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 0
+  forhdr:
+    arm64.cmp x1, 0
+    arm64.b.eq __il_body#13
+  __il_cont#4:
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at witness-table-header-holds-the-method-count.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+```

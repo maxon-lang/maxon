@@ -99,8 +99,7 @@ module function settleBrandAdoption(project Project, module MaxonModule, signatu
 end 'settleBrandAdoption'
 
 function handedParametersOf(project Project, context HandOverContext) returns HandedParameterArray
-	var handed = HandedParameterArray.create(0)
-	handed.reserve(project.pendingBrandRecords.count())
+	var handed = HandedParameterArray.create(project.pendingBrandRecords.count(), zeroed: false)
 
 	for record in project.pendingBrandRecords 'eachRecord'
 		handed.push(handedParameterOf(project, context: context, record: record))
@@ -118,7 +117,7 @@ type BrandResolver
 	let firstOf as RecordIndexMap
 	let nextOf as RecordIndexArray
 	export var carried as NameRoster
-	var known as BoolArray
+	var known as FixedBoolArray
 	export var adopted as AdoptedBrandMap
 	var done as BrandKeySet
 	var active as BrandKeySet
@@ -127,9 +126,9 @@ type BrandResolver
 		let count = project.pendingBrandRecords.count()
 		var firstOf = RecordIndexMap.create()
 		var lastOf = RecordIndexMap.create()
-		var nextOf = RecordIndexArray.create(0)
-		var carried = NameRoster.create(0)
-		var known = BoolArray.create(0)
+		var nextOf = RecordIndexArray.create(count, zeroed: false)
+		var carried = NameRoster.create(count, zeroed: false)
+		let known = FixedBoolArray.create(count)
 
 		for index in 0 upto count 'eachRecord'
 			let record = try project.pendingBrandRecords.get(index) otherwise panic("BrandResolver.create: pendingBrandRecords.get OOB at {index}")
@@ -145,7 +144,6 @@ type BrandResolver
 
 			lastOf.upsert(record.key, value: index)
 			carried.push(brandOfStoringRecord(record, handed: try handed.get(index) otherwise panic("BrandResolver.create: handed.get OOB at {index} — one parameter is derived per record")))
-			known.push(false)
 		end 'eachRecord'
 
 		return Self{firstOf: firstOf, nextOf: nextOf, carried: carried, known: known, adopted: AdoptedBrandMap.create(), done: BrandKeySet.create(), active: BrandKeySet.create()}

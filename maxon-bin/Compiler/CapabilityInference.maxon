@@ -202,9 +202,9 @@ end 'functionValueIsMutable'
 
 module function inferCapabilities(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, provenance ProvenanceTracer, provenanceWrites ProvenanceReceiverWrites, edges CallParamEdges, byCallee CsrGraph) returns CapabilityFacts
 	let funcCount = funcNames.functions.count()
-	var mutableMasks = ParamPositionMaskArray.create(0)
-	var frozenMasks = ParamPositionMaskArray.create(0)
-	var waitSeeds = BoolArray.create(0)
+	var mutableMasks = ParamPositionMaskArray.create(funcCount, zeroed: false)
+	var frozenMasks = ParamPositionMaskArray.create(funcCount, zeroed: false)
+	var waitSeeds = BoolArray.create(funcCount, zeroed: false)
 
 	for i in 0 upto funcCount 'seed'
 		let func = try funcNames.functions.get(i) otherwise panic("inferCapabilities: functions.get OOB at {i} below its own count")
@@ -234,7 +234,7 @@ module function inferCapabilities(project Project, module MaxonModule, signature
 	propagateParamMasks(frozenMasks, edges: edges, byCallee: byCallee)
 
 	let mayWait = blockingEdges.markCallers(waitSeeds, nodeCount: funcCount as CsrIndex, waits: true)
-	var yieldSeeds = BoolArray.create(0)
+	var yieldSeeds = BoolArray.create(funcCount, zeroed: false)
 
 	for i in 0 upto funcCount 'yieldSeed'
 		let func = try funcNames.functions.get(i) otherwise panic("inferCapabilities: functions.get OOB at {i} below its own count")
@@ -398,6 +398,7 @@ type BlockingEdges
 	end 'markCallers'
 end 'BlockingEdges'
 
+module typealias FixedCallEdgeKindArray = FixedArray with CallEdgeKind
 module typealias CallEdgeKindArray = Array with CallEdgeKind
 
 function collectCapabilitySeeds(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, provenance ProvenanceTracer, mutableMasks ParamPositionMaskArray, frozenMasks ParamPositionMaskArray, blockingEdges BlockingEdges)

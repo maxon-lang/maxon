@@ -171,8 +171,7 @@ export function minimalExitElf(cpu CpuArch) returns ByteArray
 	let codeOffset = ElfHeaderSize + ElfMinimalProgramHeaderCount * ElfProgramHeaderSize
 	let imageSize = codeOffset + code.count()
 
-	var elf = ByteArray.create(0)
-	elf.reserve(imageSize)
+	var elf = ByteArray.create(imageSize, zeroed: false)
 
 	writeElfFileHeader(elf, elfMachine: elfMachineFor(cpu), entryPoint: (ElfLoadAddr + codeOffset) as MachineWord, programHeaderCount: ElfMinimalProgramHeaderCount)
 	writeElfProgramHeader(elf, flags: ElfPfRead or ElfPfExec, fileOffset: 0, vaddr: ElfLoadAddr, fileSize: imageSize as MachineWord, memSize: imageSize as MachineWord)
@@ -389,8 +388,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// exactly the same path x64-linux does. Only PIE images need the rebase channel instead (see MachOWriter).
 	bakeFuncAbs64Relocs(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, textBaseVa: textVAddr)
 
-	var elf = ByteArray.create(0)
-	elf.reserve(dataFileOffset + dataSegmentSize)
+	var elf = ByteArray.create(dataFileOffset + dataSegmentSize, zeroed: false)
 
 	// === Elf64_Ehdr (64 bytes) ===
 	writeElfFileHeader(elf, elfMachine: elfMachine, entryPoint: entryPoint, programHeaderCount: programHeaderCount)
@@ -483,7 +481,7 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	// `.strtab` — the function names, in symbol order. The leading NUL is ELF's reserved empty name.
 	var strtab = ByteArray.create(0)
 	strtab.push(0)
-	var symbolNameOffsets = ByteOffsetArray.create(0)
+	var symbolNameOffsets = ByteOffsetArray.create(codeResult.debugSymbols.count(), zeroed: false)
 
 	for sym in codeResult.debugSymbols 'eachSym'
 		symbolNameOffsets.push(appendElfStringTableName(strtab, name: sym.name))

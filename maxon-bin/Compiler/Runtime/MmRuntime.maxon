@@ -1522,7 +1522,7 @@ export function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, 
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 
 	var entryValues = argsOf(from)
-	var carried = ValueIdArray.create(0)
+	var carried = ValueIdArray.create(initial.count(), zeroed: false)
 
 	for initialValue in initial 'eachCarried'
 		let arg = ids.mint()
@@ -1706,7 +1706,7 @@ export function openCopyRunSplit(module StdModule, func IrFunction, cur IrBlock,
 		end 'usedChunk'
 	end 'eachChunk'
 
-	var runs = CopyRunArray.create(0)
+	var runs = CopyRunArray.create(used.count(), zeroed: false)
 	var lower = emitConst(module, block: run, value: 0, ids: ids)
 
 	for (iter, chunk) in used.withIterator() 'eachRun'
@@ -2306,7 +2306,7 @@ end 'CascadeCursor'
 
 // Append one i64 block argument to `block` per value `template` holds, answering the argument ids in order.
 export function appendCarriedBlockArgs(block IrBlock, template ValueIdArray, ids ValueMinter) returns ValueIdArray
-	var args = ValueIdArray.create(0)
+	var args = ValueIdArray.create(template.count(), zeroed: false)
 
 	for _ in template 'eachCarried'
 		let arg = ids.mint()
@@ -2372,7 +2372,7 @@ end 'WalkBody'
 // its depth is the program's data graph, not the runtime's.
 export function beginWalkBody(module StdModule, name ByteArray, scope WalkScope, walksElements bool, recursesPerLevel bool) returns WalkBody
 	let paramCount = walkEntryParamCount(scope, walksElements: walksElements)
-	var paramTypes = StdTypeArray.create(0)
+	var paramTypes = StdTypeArray.create(paramCount, zeroed: false)
 
 	for _ in 0 upto paramCount 'eachParam'
 		paramTypes.push(StdType.i64)

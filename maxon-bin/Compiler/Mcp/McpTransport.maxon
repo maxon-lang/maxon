@@ -98,7 +98,7 @@ export function copyJsonNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns
 end 'copyJsonNode'
 
 function copyJsonArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
-	var ids = JsonNodeIdArray.create(0)
+	var ids = JsonNodeIdArray.create(node.children.count(), zeroed: false)
 
 	for childId in node.children 'each'
 		ids.push(copyJsonNode(src, srcId: childId, dst: dst))
@@ -371,7 +371,7 @@ function byteAt(bytes ByteArray, at BytePos) returns Byte
 end 'byteAt'
 
 export function sliceBytes(bytes ByteArray, from BytePos, until BytePos) returns String
-	var out = ByteArray.create(0)
+	var out = ByteArray.create(until - from, zeroed: false)
 
 	for i in from upto until 'copy'
 		out.push(byteAt(bytes, at: i))

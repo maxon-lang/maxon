@@ -675,7 +675,7 @@ export type CallParamEdges
 	// callee. The `to` column is the row number itself, which is what makes the other three columns readable
 	// straight off a neighbour.
 	export function byCallee(funcCount CsrIndex) returns CsrGraph
-		var rows = CsrColumn.create(0)
+		var rows = CsrColumn.create(self.count(), zeroed: false)
 
 		for k in 0 upto self.count() 'eachEdge'
 			rows.push(k)
@@ -704,9 +704,9 @@ function buildParamMutationSummary(project Project, signatures ProgramSignatures
 	// Seeded from the INDEX's own array, not the module's: the masks are addressed by POSITION and
 	// `funcIndexByName` resolves a name TO that position, so a seed walk over any other array would leave every
 	// edge pointing at the wrong function's mask.
-	var masks = ParamPositionMaskArray.create(0)
-	var recordWriteMasks = ParamPositionMaskArray.create(0)
-	var byRefWriteMasks = ParamPositionMaskArray.create(0)
+	var masks = ParamPositionMaskArray.create(funcNames.functions.count(), zeroed: false)
+	var recordWriteMasks = ParamPositionMaskArray.create(funcNames.functions.count(), zeroed: false)
+	var byRefWriteMasks = ParamPositionMaskArray.create(funcNames.functions.count(), zeroed: false)
 
 	// ⭐ A receiver written through a value that may BE a parameter's record writes that parameter
 	// (`ProvenanceTracer.stageParamEdges`), in every column that asks whether the record is written. One that
@@ -1000,12 +1000,7 @@ type UnknownBodyWrites
 	var byReferencePosition as ParamPositionMaskArray
 
 	static function create(funcCount ElementIndex) returns Self
-		var anyPosition = ParamPositionMaskArray.create(0)
-		anyPosition.refill(funcCount, value: NoParamPositions)
-		var byReferencePosition = ParamPositionMaskArray.create(0)
-		byReferencePosition.refill(funcCount, value: NoParamPositions)
-
-		return Self{anyPosition: anyPosition, byReferencePosition: byReferencePosition}
+		return Self{anyPosition: ParamPositionMaskArray.create(funcCount), byReferencePosition: ParamPositionMaskArray.create(funcCount)}
 	end 'create'
 
 	function note(callerIndex ElementIndex, callerParam ParamCount, byReference bool)
@@ -1423,7 +1418,7 @@ end 'addFunctionValueBodiesEdges'
 // terminate rather than spin. No hashing: the CSR is keyed by function index throughout.
 module function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges, byCallee CsrGraph)
 	var worklist = FuncIndexArray.create(0)
-	var queued = BoolArray.create(0)
+	var queued = BoolArray.create(masks.count(), zeroed: false)
 
 	for i in 0 upto masks.count() 'seedWorklist'
 		let mask = try masks.get(i) otherwise panic("propagateParamMasks: masks.get OOB at {i}")
@@ -4003,7 +3998,7 @@ end 'WitnessDispatchTargets'
 // about; under-accepting REFUSES A CORRECT PROGRAM, and a false rejection is not something the author can work
 // around. Every unknown therefore resolves toward "yields".
 function buildYieldingSummary(module MaxonModule, funcNames FunctionNameIndex, runtimeTier FunctionNameSet) returns BoolArray
-	var seeds = BoolArray.create(0)
+	var seeds = BoolArray.create(funcNames.functions.count(), zeroed: false)
 	var edges = CallGraphEdges.create()
 
 	for i in 0 upto funcNames.functions.count() 'eachFunc'
@@ -5803,8 +5798,8 @@ function functionShapeThroughCallInstance(project Project, func IrFunction, subj
 	// ⚠ `var` for `paramTypeThroughCallInstance`'s reason — the substitution INTERNS the instance and the tuple
 	// it produces, so the identity the comparison is about has to exist by the time it is compared.
 	var signatures = programSignaturesIn(project, asker: "functionShapeThroughCallInstance")
-	var substituted = MaxonTypeArray.create(0)
-	var identities = NameRoster.create(0)
+	var substituted = MaxonTypeArray.create(shape.paramTypes.count(), zeroed: false)
+	var identities = NameRoster.create(shape.paramTypes.count(), zeroed: false)
 	var moved = false
 
 	for i in 0 upto shape.paramTypes.count() 'eachParam'

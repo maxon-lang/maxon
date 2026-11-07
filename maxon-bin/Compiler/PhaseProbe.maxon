@@ -45,7 +45,9 @@ export typealias AllocCount = int(0 to u64.max)
 // caller can reach. One declaration cannot carry both bounds.
 export typealias HeapByteCount = int(0 to u64.max)
 
+export typealias FixedAllocCountArray = FixedArray with AllocCount
 export typealias AllocCountArray = Array with AllocCount
+export typealias FixedByteCountArray = FixedArray with HeapByteCount
 export typealias ByteCountArray = Array with HeapByteCount
 
 // The phase spans a compile has OPENED and not yet closed, innermost LAST (`Project.openPhaseSpans`).
@@ -468,25 +470,15 @@ end 'foldPoolPhaseDelta'
 export type PoolPhaseCosts
 	var nanos as DurationNanosArray
 	var cpuTicks as CpuTicksArray
-	var allocs as AllocCountArray
-	var frees as AllocCountArray
-	var bytes as ByteCountArray
+	var allocs as FixedAllocCountArray
+	var frees as FixedAllocCountArray
+	var bytes as FixedByteCountArray
 
 	// The one delta every `record` closes its probe into, so closing a bracket allocates nothing.
 	var closing as PhaseDelta
 
 	export static function create(width ElementIndex) returns PoolPhaseCosts
-		var spentNanos = DurationNanosArray.create(0)
-		spentNanos.resize(width)
-		var spentCpu = CpuTicksArray.create(0)
-		spentCpu.resize(width)
-		var spentAllocs = AllocCountArray.create(0)
-		spentAllocs.resize(width)
-		var spentFrees = AllocCountArray.create(0)
-		spentFrees.resize(width)
-		var spentBytes = ByteCountArray.create(0)
-		spentBytes.resize(width)
-		return Self{nanos: spentNanos, cpuTicks: spentCpu, allocs: spentAllocs, frees: spentFrees, bytes: spentBytes, closing: PhaseDelta.zero()}
+		return Self{nanos: DurationNanosArray.create(width), cpuTicks: CpuTicksArray.create(width), allocs: FixedAllocCountArray.create(width), frees: FixedAllocCountArray.create(width), bytes: FixedByteCountArray.create(width), closing: PhaseDelta.zero()}
 	end 'create'
 
 	// A record nothing else holds, with `source`'s figures — what a worker hands back through a reply,

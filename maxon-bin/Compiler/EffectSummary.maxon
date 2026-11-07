@@ -1,6 +1,7 @@
 typealias ValueOriginCode = int(0 to u64.max)
 typealias ValueOriginColumn = Array with ValueOriginCode
 typealias ValueIdSet = Set with ValueId
+typealias MergePhiFlags = FixedArray with bool
 typealias FunctionRefNames = Map with (ValueId, readonly ByteArray)
 typealias ClosureBindingArray = Array with ClosureBinding
 typealias SpecializedNodeArray = Array with SpecializedNode
@@ -180,34 +181,30 @@ end 'noteMergeEdges'
 
 type CalleeFacts
 	let funcIndexByName as FuncIndexByName
-	var flags as BoolArray
+	var flags as FixedBoolArray
 	var retMasks as ParamPositionMaskArray
-	var retBottoms as BoolArray
+	var retBottoms as FixedBoolArray
 
 	// For a returned minted record: the parameters whose own record, and whose graph beyond it, may
 	// sit directly in its fields, and whether anything else foreign may.
 	var directOwns as ParamPositionMaskArray
 	var directDeeps as ParamPositionMaskArray
-	var directBottoms as BoolArray
+	var directBottoms as FixedBoolArray
 	var importsOwn as ParamPositionMaskArray
 	var importsBelow as ParamPositionMaskArray
 
 	static function create(funcIndexByName FuncIndexByName, functionCount ElementIndex) returns CalleeFacts
-		var flags = BoolArray.create(0)
-		flags.refill(functionCount, value: false)
-		var retMasks = ParamPositionMaskArray.create(0)
-		retMasks.refill(functionCount, value: NoParamPositions)
-		var retBottoms = BoolArray.create(0)
-		retBottoms.refill(functionCount, value: true)
-		var directOwns = ParamPositionMaskArray.create(0)
-		directOwns.refill(functionCount, value: NoParamPositions)
-		var directDeeps = ParamPositionMaskArray.create(0)
-		directDeeps.refill(functionCount, value: NoParamPositions)
-		var directBottoms = BoolArray.create(0)
-		directBottoms.refill(functionCount, value: true)
-		var importsOwn = ParamPositionMaskArray.create(0)
+		let flags = FixedBoolArray.create(functionCount)
+		let retMasks = ParamPositionMaskArray.create(functionCount)
+		var retBottoms = FixedBoolArray.create(functionCount)
+		retBottoms.refill(true)
+		let directOwns = ParamPositionMaskArray.create(functionCount)
+		let directDeeps = ParamPositionMaskArray.create(functionCount)
+		var directBottoms = FixedBoolArray.create(functionCount)
+		directBottoms.refill(true)
+		var importsOwn = ParamPositionMaskArray.create(functionCount, zeroed: false)
 		importsOwn.refill(functionCount, value: everyParamPosition())
-		var importsBelow = ParamPositionMaskArray.create(0)
+		var importsBelow = ParamPositionMaskArray.create(functionCount, zeroed: false)
 		importsBelow.refill(functionCount, value: everyParamPosition())
 		return Self{funcIndexByName: funcIndexByName, flags: flags, retMasks: retMasks, retBottoms: retBottoms, directOwns: directOwns, directDeeps: directDeeps, directBottoms: directBottoms, importsOwn: importsOwn, importsBelow: importsBelow}
 	end 'create'
@@ -363,8 +360,7 @@ type ValueOrigins
 	// No op defines the error flags of `tryCall`, `tryAwait` and `witnessTryDispatch`. Left unvisited,
 	// a merge would read them as "no information" and take its other incoming's answer.
 	function settleUndefined()
-		var isMerge = BoolArray.create(0)
-		isMerge.refill(self.codes.count(), value: false)
+		var isMerge = MergePhiFlags.create(self.codes.count())
 
 		for index in 0 upto self.merges.count() 'eachMerge'
 			try isMerge.set(self.merges.phiAt(index), value: true) otherwise panic("ValueOrigins.settleUndefined: phi {self.merges.phiAt(index)} is past the {self.codes.count()} values")
@@ -1089,7 +1085,7 @@ type EffectNodes
 			self.bindOwnerParameters(try declared.maxonParamTypes.get(index) otherwise panic("instanceFromArguments: maxonParamTypes.get OOB at {index} below its own count"), actual: argument, func: func, owner: owner, positions: positions, bound: bound)
 		end 'eachParameter'
 
-		var ordered = MaxonTypeArray.create(0)
+		var ordered = MaxonTypeArray.create(arity, zeroed: false)
 
 		for position in 0 upto arity 'eachOwnerParameter'
 			var found = false
@@ -1953,7 +1949,7 @@ type EffectSummaryBuilder
 			return
 		end 'anotherShape'
 
-		var userArguments = ValueIdArray.create(0)
+		var userArguments = ValueIdArray.create(targetParamCount, zeroed: false)
 
 		for position in 0 upto targetParamCount 'eachUserArgument'
 			userArguments.push(try args.get(position) otherwise panic("EffectSummaryBuilder.callThroughValue: args.get OOB at {position}"))
@@ -2022,7 +2018,7 @@ type EffectSummaryBuilder
 	// bounded number of times; a round-based rescan would cost the call graph's depth on top.
 	function settle()
 		let nodeCount = self.nodes.totalCount()
-		var siteIds = CsrColumn.create(0)
+		var siteIds = CsrColumn.create(self.siteCallers.count(), zeroed: false)
 
 		for site in 0 upto self.siteCallers.count() 'eachSite'
 			siteIds.push(site as CsrIndex)
@@ -2030,7 +2026,7 @@ type EffectSummaryBuilder
 
 		let sitesByCallee = buildCsr(self.siteCallees, to: siteIds, nodeCount: nodeCount as CsrIndex)
 		var queue = CsrColumn.create(0)
-		var queued = BoolArray.create(0)
+		var queued = BoolArray.create(nodeCount, zeroed: false)
 
 		for node in 0 upto nodeCount 'seed'
 			let known = self.isHard(node) or summaryMaskAt(self.shallow, index: node) != NoParamPositions or summaryMaskAt(self.near, index: node) != NoParamPositions or summaryMaskAt(self.far, index: node) != NoParamPositions or summaryMaskAt(self.imports, index: node) != NoParamPositions or summaryMaskAt(self.importsBelow, index: node) != NoParamPositions
@@ -2206,7 +2202,7 @@ type EffectSummaryBuilder
 	// A function that returns nothing exists for its effects, so it is never effect-free itself. Callers
 	// inherit what its body does, not that it returns nothing.
 	function verdicts() returns BoolArray
-		var effectFree = BoolArray.create(0)
+		var effectFree = BoolArray.create(self.nodes.baseCount(), zeroed: false)
 
 		for index in 0 upto self.nodes.baseCount() 'eachFunction'
 			let func = try self.nodes.functions.get(index) otherwise panic("EffectSummaryBuilder.verdicts: functions.get OOB at {index}")

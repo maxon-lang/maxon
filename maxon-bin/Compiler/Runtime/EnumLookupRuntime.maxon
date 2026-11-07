@@ -97,7 +97,7 @@ function qualifiedEnumMember(callee ByteArray, prefixLength ElementIndex, member
 
 	let separator = try EnumFromNameCaseSeparator.get(0) otherwise panic("qualifiedEnumMember: get(0) failed on the one-byte separator the guard above just measured")
 
-	var declarationName = ByteArray.create(0)
+	var declarationName = ByteArray.create(callee.count() - prefixLength, zeroed: false)
 
 	for i in prefixLength upto callee.count() 'eachByte'
 		let b = try callee.get(i) otherwise panic("qualifiedEnumMember: callee.get OOB at {i} below its own count")
@@ -401,7 +401,7 @@ end 'synthesizeEnumFromName'
 function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseIndex CaseIndex, project Project, representation UnionRepresentation)
 	let arity = layout.payloadArityAt(caseIndex)
 	let paramCount = (1 + arity) as ParamCount
-	var paramTypes = StdTypeArray.create(0)
+	var paramTypes = StdTypeArray.create(paramCount, zeroed: false)
 
 	for _ in 0 upto paramCount 'eachParam'
 		paramTypes.push(StdType.i64)

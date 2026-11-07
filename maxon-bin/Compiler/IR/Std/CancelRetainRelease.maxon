@@ -502,7 +502,7 @@ function retargetPastTheRelease(module StdModule, state FusionState, join IrBloc
 	view targetBlock = state.blockOf(module, id: target)
 	view passedToTarget = edgeArgsTo(join, targetId: target, takesArgs: targetBlock.blockArgs.count() != 0)
 	view passedToJoin = edgeArgsTo(incoming, targetId: join.id, takesArgs: join.blockArgs.count() != 0)
-	var mapped = ValueIdArray.create(0)
+	var mapped = ValueIdArray.create(passedToTarget.count(), zeroed: false)
 
 	for passed in passedToTarget 'eachPassedArg'
 		mapped.push(argumentOrItself(join, value: passed, supplied: passedToJoin))
@@ -521,8 +521,8 @@ function splitAfterTheRelease(module StdModule, state FusionState, joinId BlockI
 	var join = state.blockOf(module, id: joinId)
 	var incoming = state.blockOf(module, id: state.partner.incomingBlockId)
 	var originalArgs = join.blockArgs
-	var freshArgs = IrBlockArgArray.create(0)
-	var passed = ValueIdArray.create(0)
+	var freshArgs = IrBlockArgArray.create(originalArgs.count(), zeroed: false)
+	var passed = ValueIdArray.create(originalArgs.count(), zeroed: false)
 
 	for arg in originalArgs 'eachArg'
 		let id = state.minter.mint()

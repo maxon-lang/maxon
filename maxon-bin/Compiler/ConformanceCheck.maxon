@@ -91,7 +91,7 @@ end 'checkConformance'
 // `FunctionNameIndex.create` would be one more O(functions) map build per compile for an answer already in
 // hand.
 function checkGrantedEnumConformance(project Project, functionsByName FunctionNameIndex, signatures ProgramSignatures)
-	var enumNames = NameRoster.create(0)
+	var enumNames = NameRoster.create(project.enumTypes.count(), zeroed: false)
 
 	for (enumName, _) in project.enumTypes 'eachDeclaredEnum'
 		enumNames.push(enumName)
@@ -1780,7 +1780,7 @@ function collectInterfaceMethods(project Project, signatures ProgramSignatures, 
 	end 'nothingToSubstituteOrExpand'
 
 	let clauseNames = pairableAssociatedTypeNames(iface.associatedTypeNames, boundTypeNames: entry.withArgs)
-	var substituted = CollectedInterfaceMethodArray.create(0)
+	var substituted = CollectedInterfaceMethodArray.create(slots.count(), zeroed: false)
 
 	for i in 0 upto slots.count() 'eachSlot'
 		let slot = try slots.get(i) otherwise panic("collectInterfaceMethods: slots.get OOB at {i} below count {slots.count()}")
@@ -1918,8 +1918,8 @@ end 'pairableAssociatedTypeNames'
 // positionally, so a concatenation would have to be two arrays anyway, and it would allocate a pair per
 // requirement of every binding conformance to say what four already-built lists say.
 function substituteAssociatedTypes(method InterfaceMethodSig, under RequirementSubstitution) returns InterfaceMethodSig
-	var paramTypeNames = NameRoster.create(0)
-	var paramTypes = RequirementTypeArray.create(0)
+	var paramTypeNames = NameRoster.create(method.paramTypes.count(), zeroed: false)
+	var paramTypes = RequirementTypeArray.create(method.paramTypes.count(), zeroed: false)
 
 	for i in 0 upto method.paramTypes.count() 'eachParam'
 		view display = try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i} — an InterfaceMethodSig's type columns are parallel")
@@ -1966,7 +1966,7 @@ function expandedAliasRequirement(requirement RequirementType, name ByteArray, d
 		return (requirement.clone(), display.clone())
 	end 'theComparedCopy'
 
-	var boundSpellings = NameRoster.create(0)
+	var boundSpellings = NameRoster.create(under.ownerNames.count(), zeroed: false)
 
 	for ownerName in under.ownerNames 'eachAssociatedType'
 		boundSpellings.push(boundAssociatedTypeName(ownerName, under: under))
@@ -1981,7 +1981,7 @@ function aliasExpansionScope(under RequirementSubstitution) returns AliasExpansi
 		return sharedNoAliasExpansion
 	end 'declaresNoAlias'
 
-	var bound = RequirementTypeArray.create(0)
+	var bound = RequirementTypeArray.create(under.ownerNames.count(), zeroed: false)
 
 	for ownerName in under.ownerNames 'eachAssociatedType'
 		bound.push(boundOwnerType(ownerName, under: under))
@@ -2565,8 +2565,9 @@ end 'builtinMeetsType'
 function formatActualSignature(project Project, methodName ByteArray, conformingType ByteArray, implFunc IrFunction, implSig FuncSignature, typeParamNames NameRoster, signatures ProgramSignatures) returns String
 	let implIsStatic = not implSig.takesReceiver()
 	let selfOffset = 0 if implIsStatic else 1
-	var paramNames = NameRoster.create(0)
-	var paramTypes = NameRoster.create(0)
+	let declaredCount = implFunc.maxonParamTypes.count() - selfOffset
+	var paramNames = NameRoster.create(declaredCount, zeroed: false)
+	var paramTypes = NameRoster.create(declaredCount, zeroed: false)
 
 	for i in selfOffset upto implFunc.maxonParamTypes.count() 'eachParam'
 		paramNames.push(try implSig.paramNames.get(i) otherwise panic("formatActualSignature: paramNames.get OOB at {i}"))
@@ -2612,7 +2613,7 @@ function interfaceParamDisplays(method InterfaceMethodSig) returns NameRoster
 		return method.paramTypeNames
 	end 'nothingIsMarked'
 
-	var shown = NameRoster.create(0)
+	var shown = NameRoster.create(method.paramTypeNames.count(), zeroed: false)
 
 	for i in 0 upto method.paramTypeNames.count() 'eachParam'
 		shown.push(markedTypeDisplay(try method.paramTypeNames.get(i) otherwise panic("interfaceParamDisplays: paramTypeNames.get OOB at {i}"), marked: maskHasParam(method.byRefParams, param: i as ParamCount)))

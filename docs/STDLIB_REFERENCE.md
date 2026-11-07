@@ -890,11 +890,14 @@ implements `Iterable`. The growable array is [`Array`](#array).
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `FixedArray.create()` | `FixedArray` | Every element zero; refused (E3106) for an element alias whose range excludes 0 and for an enum or union whose raw values include no 0. A pure call: discarding the result with `_ =` is E3064. A fixed array is one allocation at any size. Called through an alias that states a count (`Vec3.create()`); a length argument is **E3194**. |
-| `FixedArray.create(n)` | `FixedArray` | Through a runtime-sized alias (`typealias Buf = FixedArray with Coord`): `n` zero elements in one allocation, `n` an `ElementIndex`. A constant `n` gives the sized type `FixedArray with n Coord`. The length is fixed at creation, so `push` and `reserve` are refused; a second argument, or no `n`, is **E3194**. |
+| `FixedArray.create(n)` | `FixedArray` | Through a runtime-sized alias (`typealias Buf = FixedArray with Coord`): `n` zero elements in one allocation, `n` an `ElementIndex`. A constant `n` gives the sized type `FixedArray with n Coord`. The length is fixed at creation, so `push` and `reserve` are refused; an argument other than `n` and `value:`, or no `n`, is **E3194**. |
+| `FixedArray.create(value: v)` | `FixedArray` | Through an alias that states a count (`Vec3.create(value: v)`): every element starts as `v`. The element may be a ranged alias that excludes 0 or an enum whose raw values include no 0, which `Vec3.create()` refuses (E3106). A managed element is **E2015**. A length argument is **E3194**. |
+| `FixedArray.create(n, value: v)` | `FixedArray` | Through a runtime-sized alias: `n` elements, each starting as `v`, in one allocation. Legal for an element with no zero value, as `create(value: v)` is. A constant `n` gives the sized type `FixedArray with n Coord`. |
 | `FixedArray from [a, b, c]` | `FixedArray` | A literal; the count is the literal's length, through a runtime-sized alias too. |
 | `count()` | `Count` | The fixed size: answered from the type, and for a runtime-sized value read from the record's length. |
 | `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds` at or past the fixed size, unless the index is proven inside it. |
 | `set(index, value Element)` | — | Throws `ArrayError.indexOutOfBounds` at or past the fixed size, unless the index is proven inside it. |
+| `refill(value Element)` | — | Writes `value` into every element in place; the length is unchanged. |
 | `createIterator()` | `ArrayIterator` | Throws `IterationError.exhausted` when the fixed array is empty. |
 
 A fixed array's length is set when it is built, by the count its type states or by `create(n)`, and holds for

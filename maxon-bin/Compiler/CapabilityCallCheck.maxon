@@ -154,7 +154,7 @@ function leafNeedPhrase(project Project, funcNames FunctionNameIndex, index Elem
 	return "takes `immutable` {target}" if declared == ParamCapability.immutable else "needs {target} frozen"
 end 'leafNeedPhrase'
 
-function nextNeedHop(facts CapabilityFacts, edges CallParamEdges, index ElementIndex, position ParamCount, mutable bool, visited ParamPositionMaskArray) returns (ElementIndex, ParamCount) throws AbsentError
+function nextNeedHop(facts CapabilityFacts, edges CallParamEdges, index ElementIndex, position ParamCount, mutable bool, visited FixedParamPositionMaskArray) returns (ElementIndex, ParamCount) throws AbsentError
 	if let direct = try needHopMatching(facts, edges: edges, index: index, position: position, mutable: mutable, visited: visited, directOnly: true) 'aDirectCause'
 		return direct
 	end 'aDirectCause'
@@ -162,7 +162,7 @@ function nextNeedHop(facts CapabilityFacts, edges CallParamEdges, index ElementI
 	return try needHopMatching(facts, edges: edges, index: index, position: position, mutable: mutable, visited: visited, directOnly: false)
 end 'nextNeedHop'
 
-function needHopMatching(facts CapabilityFacts, edges CallParamEdges, index ElementIndex, position ParamCount, mutable bool, visited ParamPositionMaskArray, directOnly bool) returns (ElementIndex, ParamCount) throws AbsentError
+function needHopMatching(facts CapabilityFacts, edges CallParamEdges, index ElementIndex, position ParamCount, mutable bool, visited FixedParamPositionMaskArray, directOnly bool) returns (ElementIndex, ParamCount) throws AbsentError
 	let column = facts.mutableOnly if mutable else facts.immutableOnly
 	let direct = facts.directMutable if mutable else facts.directImmutable
 
@@ -197,8 +197,7 @@ function needChainText(project Project, funcNames FunctionNameIndex, facts Capab
 		return ""
 	end 'ownUse'
 
-	var visited = ParamPositionMaskArray.create(0)
-	visited.refill(funcNames.functions.count(), value: NoParamPositions)
+	var visited = FixedParamPositionMaskArray.create(funcNames.functions.count())
 	var text = " ("
 	var currentIndex = index
 	var currentPosition = position
@@ -929,12 +928,11 @@ end 'blockingMarkOf'
 
 function blockingPath(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, waits bool) returns (FuncIndexArray, CallEdgeKindArray) throws AbsentError
 	let count = funcNames.functions.count()
-	var seen = BoolArray.create(0)
-	seen.refill(count, value: false)
-	var parents = FuncIndexArray.create(0)
-	parents.refill(count, value: index)
-	var viaKinds = CallEdgeKindArray.create(0)
-	viaKinds.refill(count, value: CallEdgeKind.call)
+	var seen = FixedBoolArray.create(count)
+	var parents = FixedFuncIndexArray.create(count)
+	parents.refill(index)
+	var viaKinds = FixedCallEdgeKindArray.create(count)
+	viaKinds.refill(CallEdgeKind.call)
 	var queue = FuncIndexArray.create(0)
 	queue.push(index)
 	try seen.set(index, value: true) otherwise panic("blockingPath: seen.set OOB at {index}")
@@ -971,7 +969,7 @@ function blockingPath(project Project, module MaxonModule, funcNames FunctionNam
 	throw AbsentError.absent
 end 'blockingPath'
 
-function blockingPathTo(leaf ElementIndex, index ElementIndex, parents FuncIndexArray, viaKinds CallEdgeKindArray) returns (FuncIndexArray, CallEdgeKindArray)
+function blockingPathTo(leaf ElementIndex, index ElementIndex, parents FixedFuncIndexArray, viaKinds FixedCallEdgeKindArray) returns (FuncIndexArray, CallEdgeKindArray)
 	var backwards = FuncIndexArray.create(0)
 	var backwardKinds = CallEdgeKindArray.create(0)
 	var current = leaf
@@ -984,8 +982,8 @@ function blockingPathTo(leaf ElementIndex, index ElementIndex, parents FuncIndex
 		backwardKinds.push(try viaKinds.get(current) otherwise panic("blockingPathTo: viaKinds.get OOB at {current}"))
 	end 'eachParent'
 
-	var path = FuncIndexArray.create(0)
-	var kinds = CallEdgeKindArray.create(0)
+	var path = FuncIndexArray.create(backwards.count(), zeroed: false)
+	var kinds = CallEdgeKindArray.create(backwards.count(), zeroed: false)
 
 	for position in 0 upto backwards.count() 'eachStep'
 		let reversed = backwards.count() - 1 - position

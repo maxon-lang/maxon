@@ -2152,7 +2152,7 @@ end 'emitLoadCurrentPOrBail'
 function emitBailIfZero(module StdModule, block IrBlock, tested ValueId, bail IrBlock, bailValues FullRangeIntArray, otherwise IrBlock, ids ValueMinter)
 	let isZero = emitCompareWithConstant(module, block: block, value: tested, pred: StdCmpPred.eq, against: 0, ids: ids)
 
-	var edgeArgs = ValueIdArray.create(0)
+	var edgeArgs = ValueIdArray.create(bailValues.count(), zeroed: false)
 
 	for value in bailValues 'eachBailValue'
 		edgeArgs.push(emitConst(module, block: block, value: value, ids: ids))
@@ -4734,9 +4734,9 @@ export function assertPublishedWordAccessIsOrdered(module StdModule, entries Dat
 		return
 	end 'noSlotClaimsTheClass'
 
-	var present = BoolArray.create(0)
-	var releases = BoolArray.create(0)
-	var acquires = BoolArray.create(0)
+	var present = BoolArray.create(labels.count(), zeroed: false)
+	var releases = BoolArray.create(labels.count(), zeroed: false)
+	var acquires = BoolArray.create(labels.count(), zeroed: false)
 
 	for _ in labels 'eachWord'
 		present.push(false)
@@ -4760,7 +4760,7 @@ function publishedFromTheLockLabels(entries DataSectionEntryArray) returns NameR
 
 	for entry in entries 'eachSlot'
 		if entryIsPublishedFromTheLock(entry) 'itClaimsTheClass'
-			var label = ByteArray.create(0)
+			var label = ByteArray.create(entry.label.byteLength() as ElementIndex, zeroed: false)
 
 			for labelByte in entry.label.bytes() 'eachByte'
 				label.push(labelByte)

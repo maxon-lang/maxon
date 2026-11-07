@@ -129,9 +129,10 @@ export function debugCommandVocabulary() returns StringArray
 end 'debugCommandVocabulary'
 
 function debugHelpLines() returns StringArray
-	var lines = StringArray.create(0)
+	let rows = debugCommandRows()
+	var lines = StringArray.create(rows.count(), zeroed: false)
 
-	for row in debugCommandRows() 'eachRow'
+	for row in rows 'eachRow'
 		var spelling = "{row.canonical}"
 
 		for alias in row.aliases 'eachAlias'
@@ -366,7 +367,7 @@ function debugWalkModeWord(mode DebugWalkMode) returns String
 end 'debugWalkModeWord'
 
 export function debugWalkModeWords() returns StringArray
-	var words = StringArray.create(0)
+	var words = StringArray.create(DebugWalkMode.allCases.count(), zeroed: false)
 
 	for mode in DebugWalkMode.allCases 'eachMode'
 		words.push(debugWalkModeWord(mode))
@@ -376,7 +377,7 @@ export function debugWalkModeWords() returns StringArray
 end 'debugWalkModeWords'
 
 export function debugWalkModePhrases() returns StringArray
-	var phrases = StringArray.create(0)
+	var phrases = StringArray.create(DebugWalkMode.allCases.count(), zeroed: false)
 
 	for mode in DebugWalkMode.allCases 'eachMode'
 		phrases.push("`{debugWalkModeWord(mode)}` {debugWalkModeMeaning(mode)}")
@@ -510,7 +511,7 @@ function traceLimitOf(spelling String) returns DebugTraceTally
 end 'traceLimitOf'
 
 function repliedWith(reply DebugReply) returns DebugReplyArray
-	var replies = DebugReplyArray.create(0)
+	var replies = DebugReplyArray.create(1, zeroed: false)
 	replies.push(reply)
 
 	return replies
@@ -991,7 +992,7 @@ export type DebugConversation
 	end 'reportExpiry'
 
 	export function localsOfFrame(frame DebugFrame, onTheStoppedThread bool) returns DebugReplyArray
-		var replies = DebugReplyArray.create(0)
+		var replies = DebugReplyArray.create(1, zeroed: false)
 
 		if not targetIsRunning(self.outcome) 'nothingLeftToAsk'
 			replies.push(DebugReply.failed(ProgramGoneMessage, suggestion: StatedText.unstated))
@@ -1162,9 +1163,10 @@ export type DebugConversation
 	end 'rearmedHeldByte'
 
 	function notedRearmed(attempt DebugArmingAttempt, candidate DebugLineCandidate) returns bool
-		var reconditioned = DebugArmPurposes.create(0)
+		view held = try self.armPurposes.get(candidate.offset) otherwise panic("DebugConversation.notedRearmed: offset 0x{candidate.offset:x} carried a condition a moment ago")
+		var reconditioned = DebugArmPurposes.create(held.count(), zeroed: false)
 
-		for purpose in try self.armPurposes.get(candidate.offset) otherwise panic("DebugConversation.notedRearmed: offset 0x{candidate.offset:x} carried a condition a moment ago") 'eachPurpose'
+		for purpose in held 'eachPurpose'
 			reconditioned.push(DebugArmPurpose.create(purpose.hidden, identity: purpose.identity, condition: attempt.condition))
 		end 'eachPurpose'
 
@@ -1784,7 +1786,7 @@ export type DebugConversation
 			return ReturnPlanting.declined
 		end 'walkedAnInstructionAtATime'
 
-		var points = DebugReturnPointArray.create(0)
+		var points = DebugReturnPointArray.create(indirectCalls.count() + 1, zeroed: false)
 		points.push(leaving)
 
 		// Each indirect call site gets a point: its target is known only when the call is reached, and a
@@ -2179,9 +2181,10 @@ export type DebugConversation
 	end 'letItFinish'
 
 	function refuseToFinish(replies DebugReplyArray)
-		var spelled = StringArray.create(0)
+		let standing = self.engine.standingBreakpointOffsets()
+		var spelled = StringArray.create(standing.count(), zeroed: false)
 
-		for offset in self.engine.standingBreakpointOffsets() 'eachStanding'
+		for offset in standing 'eachStanding'
 			spelled.push("0x{offset:x}")
 		end 'eachStanding'
 

@@ -46,24 +46,18 @@ let MemSubPhaseIndent = "    "
 // `phaseNanos` and RegAllocStats' `phaseNanos`, so a new CompilePhase extends all of them
 // identically and none can silently fall behind.
 export type PhaseMemoryColumns
-	export var allocs as AllocCountArray
-	export var frees as AllocCountArray
-	export var bytes as ByteCountArray
+	export var allocs as FixedAllocCountArray
+	export var frees as FixedAllocCountArray
+	export var bytes as FixedByteCountArray
 
 	export static function create(phaseCount PhaseIndex) returns PhaseMemoryColumns
-		var allocs = AllocCountArray.create(0)
-		var frees = AllocCountArray.create(0)
-		var bytes = ByteCountArray.create(0)
-		allocs.resize(phaseCount)
-		frees.resize(phaseCount)
-		bytes.resize(phaseCount)
-		return Self{allocs: allocs, frees: frees, bytes: bytes}
+		return Self{allocs: FixedAllocCountArray.create(phaseCount), frees: FixedAllocCountArray.create(phaseCount), bytes: FixedByteCountArray.create(phaseCount)}
 	end 'create'
 
 	// The index, not the phase's NAME. `phase.name` builds a String, and a parameter is
 	// evaluated EAGERLY — so naming the phase here cost one heap String per phase record,
 	// on every compile, purely to decorate a panic that cannot fire (the columns are
-	// resized to the enum's own case count and indexed by its `ordinal`). The instrument
+	// created at the enum's own case count and indexed by its `ordinal`). The instrument
 	// was polluting the very number it exists to report. CompileTimings never had the bug:
 	// it interpolates `{phase.name}` INSIDE the panic string, where it stays lazy.
 	//
@@ -215,11 +209,11 @@ export type PhaseResidencyColumns
 
 	export static function create(phaseCount PhaseIndex) returns PhaseResidencyColumns
 		return Self{
-			live: phaseColumn(phaseCount),
-			free: phaseColumn(phaseCount),
-			cachedFree: phaseColumn(phaseCount),
-			parked: phaseColumn(phaseCount),
-			committed: phaseColumn(phaseCount)
+			live: PhaseColumnArray.create(phaseCount),
+			free: PhaseColumnArray.create(phaseCount),
+			cachedFree: PhaseColumnArray.create(phaseCount),
+			parked: PhaseColumnArray.create(phaseCount),
+			committed: PhaseColumnArray.create(phaseCount)
 		}
 	end 'create'
 
@@ -239,12 +233,6 @@ export type PhaseResidencyColumns
 		return PhaseResidency.create(readColumn(self.live, index: slot) as HeapByteCount, freeBytes: readColumn(self.free, index: slot) as HeapByteCount, cachedFreeBytes: readColumn(self.cachedFree, index: slot) as HeapByteCount, parkedBytes: readColumn(self.parked, index: slot) as HeapByteCount, committedBytes: readColumn(self.committed, index: slot) as HeapByteCount)
 	end 'at'
 end 'PhaseResidencyColumns'
-
-function phaseColumn(cells ElementIndex) returns PhaseColumnArray
-	var column = PhaseColumnArray.create(0)
-	column.resize(cells)
-	return column
-end 'phaseColumn'
 
 function raiseColumn(column PhaseColumnArray, index ElementIndex, value ColumnCell)
 	if value > readColumn(column, index: index) 'higher'
@@ -346,7 +334,7 @@ export type PhaseTagCensus
 	end 'empty'
 
 	export static function sized() returns PhaseTagCensus
-		return Self{counts: phaseColumn(SlabCensusTagBuckets), bytes: phaseColumn(SlabCensusTagBuckets), tallyBytes: 0, liveBytes: 0, rawLiveSlots: 0}
+		return Self{counts: PhaseColumnArray.create(SlabCensusTagBuckets), bytes: PhaseColumnArray.create(SlabCensusTagBuckets), tallyBytes: 0, liveBytes: 0, rawLiveSlots: 0}
 	end 'sized'
 
 	// `sized()` gave the columns their full width, because a sampling that grew an array would enter the
@@ -384,8 +372,8 @@ export type TagBucketColumns
 		requireTagCensusRangesCoverTheTable()
 
 		self.mode = tallyMode
-		self.counts = phaseColumn((phaseCount * SlabCensusTagBuckets) as ElementIndex)
-		self.bytes = phaseColumn((phaseCount * SlabCensusTagBuckets) as ElementIndex)
+		self.counts = PhaseColumnArray.create((phaseCount * SlabCensusTagBuckets) as ElementIndex)
+		self.bytes = PhaseColumnArray.create((phaseCount * SlabCensusTagBuckets) as ElementIndex)
 		self.sampled.resize(phaseCount)
 		self.names = tagCensusNames(tallyMode)
 	end 'size'
@@ -459,9 +447,9 @@ export type PhaseTagCensusColumns
 		self.enabled = true
 		self.requested = wanted
 		self.buckets.size(phaseCount, tallyMode: tallyMode)
-		self.liveBytes = phaseColumn(phaseCount)
-		self.rawLiveSlots = phaseColumn(phaseCount)
-		self.tallyBytes = phaseColumn(phaseCount)
+		self.liveBytes = PhaseColumnArray.create(phaseCount)
+		self.rawLiveSlots = PhaseColumnArray.create(phaseCount)
+		self.tallyBytes = PhaseColumnArray.create(phaseCount)
 		self.scratch = PhaseTagCensus.sized()
 	end 'enable'
 
@@ -530,7 +518,7 @@ export type PhaseAllocTally
 	end 'empty'
 
 	export static function sized() returns PhaseAllocTally
-		return Self{counts: phaseColumn(SlabCensusTagBuckets), bytes: phaseColumn(SlabCensusTagBuckets), runTotal: 0}
+		return Self{counts: PhaseColumnArray.create(SlabCensusTagBuckets), bytes: PhaseColumnArray.create(SlabCensusTagBuckets), runTotal: 0}
 	end 'sized'
 
 	export function take()

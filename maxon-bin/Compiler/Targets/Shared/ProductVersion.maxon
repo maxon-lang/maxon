@@ -79,7 +79,7 @@ export function releaseVersionComponents(dotted String) returns VersionComponent
 end 'releaseVersionComponents'
 
 function releaseVersionLayout() returns VersionFieldLayout
-	var limits = VersionComponentArray.create(0)
+	var limits = VersionComponentArray.create(ReleaseVersionComponentCount, zeroed: false)
 
 	for _ in 0 upto ReleaseVersionComponentCount 'eachComponent'
 		limits.push(LargestVersionComponent)
@@ -117,7 +117,7 @@ function componentsFitting(components StringArray, layout VersionFieldLayout) re
 		throw ProductVersionError.tooManyComponents(components.count(), held: layout.limits.count(), fieldName: layout.name)
 	end 'tooMany'
 
-	var fitted = VersionComponentArray.create(0)
+	var fitted = VersionComponentArray.create(components.count(), zeroed: false)
 
 	for (iter, component) in components.withIterator() 'eachComponent'
 		let limit = try layout.limits.get(iter.index()) otherwise panic("componentsFitting: a component past the field's last was refused above")

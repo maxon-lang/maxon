@@ -1,3 +1,5 @@
+typealias FixedHoldIndexColumn = FixedArray with ElementIndex
+
 // Each counted read is a `holdValue` marker and its `holdEnd`. Both are lowered to the retain and release,
 // or deleted when no op in the window between them may release or displace anything on the read's chain of
 // field and element hops back to its source. Every effect this file cannot place counts as a release.
@@ -7,6 +9,7 @@ typealias HoldKindArray = Array with HoldKind
 typealias HoldKey = int(0 to u64.max)
 typealias HoldKeyColumn = Array with HoldKey
 typealias HoldWord = bits(64)
+typealias FixedHoldWordColumn = FixedArray with HoldWord
 typealias HoldWordColumn = Array with HoldWord
 typealias HoldEventIds = Map with (HoldKey, ElementIndex)
 
@@ -633,34 +636,30 @@ enum HoldReachState
 	whole
 end 'HoldReachState'
 
-typealias HoldReachStateColumn = Array with HoldReachState
+typealias HoldReachStateColumn = FixedArray with HoldReachState
 
 type HoldEventSummary
 	export let eventIds as HoldEventIds
-	let flags as HoldWordColumn
+	let flags as FixedHoldWordColumn
 	let callers as CsrGraph
-	let ranks as CsrColumn
+	let ranks as FixedCsrColumn
 	let storers as CsrGraph
 	var reachStates as HoldReachStateColumn
-	var reachFloors as HoldIndexColumn
-	var reachBegin as HoldIndexColumn
-	var reachEnd as HoldIndexColumn
+	var reachFloors as FixedHoldIndexColumn
+	var reachBegin as FixedHoldIndexColumn
+	var reachEnd as FixedHoldIndexColumn
 	var reachNodes as HoldIndexColumn
-	var reachStamps as HoldIndexColumn
+	var reachStamps as FixedHoldIndexColumn
 	var reachStamp as ElementIndex
 	var reachQueue as HoldIndexColumn
 
-	static function create(eventIds HoldEventIds, flags HoldWordColumn, callers CsrGraph, ranks CsrColumn, storers CsrGraph) returns HoldEventSummary
-		var reachStates = HoldReachStateColumn.create(0)
-		reachStates.growFilled(eventIds.count(), value: HoldReachState.uncomputed)
-		var reachFloors = HoldIndexColumn.create(0)
-		reachFloors.growFilled(eventIds.count(), value: 0)
-		var reachBegin = HoldIndexColumn.create(0)
-		reachBegin.growFilled(eventIds.count(), value: 0)
-		var reachEnd = HoldIndexColumn.create(0)
-		reachEnd.growFilled(eventIds.count(), value: 0)
-		var reachStamps = HoldIndexColumn.create(0)
-		reachStamps.growFilled(flags.count(), value: 0)
+	static function create(eventIds HoldEventIds, flags FixedHoldWordColumn, callers CsrGraph, ranks FixedCsrColumn, storers CsrGraph) returns HoldEventSummary
+		var reachStates = HoldReachStateColumn.create(eventIds.count())
+		reachStates.refill(HoldReachState.uncomputed)
+		let reachFloors = FixedHoldIndexColumn.create(eventIds.count())
+		let reachBegin = FixedHoldIndexColumn.create(eventIds.count())
+		let reachEnd = FixedHoldIndexColumn.create(eventIds.count())
+		let reachStamps = FixedHoldIndexColumn.create(flags.count())
 		return Self{eventIds: eventIds, flags: flags, callers: callers, ranks: ranks, storers: storers, reachStates: reachStates, reachFloors: reachFloors, reachBegin: reachBegin, reachEnd: reachEnd, reachNodes: HoldIndexColumn.create(0), reachStamps: reachStamps, reachStamp: 0, reachQueue: HoldIndexColumn.create(0)}
 	end 'create'
 
@@ -919,8 +918,7 @@ type HoldEventBuilder
 
 		self.directBegin.push(self.directEvents.count())
 
-		var flags = HoldWordColumn.create(0)
-		flags.growFilled(functionCount, value: 0)
+		var flags = FixedHoldWordColumn.create(functionCount)
 
 		for i in 0 upto functionCount 'eachRow'
 			self.seedRow(flags, row: i)
@@ -934,7 +932,7 @@ type HoldEventBuilder
 		return HoldEventSummary.create(eventIds, flags: flags, callers: callersOf, ranks: callerFirstRanks(graph, callers: callersOf), storers: storers)
 	end 'build'
 
-	function seedRow(flags HoldWordColumn, row ElementIndex)
+	function seedRow(flags FixedHoldWordColumn, row ElementIndex)
 		if (try self.topFlags.get(row) otherwise panic("HoldEventBuilder.seedRow: topFlags.get OOB at {row}")) 'everything'
 			_ = raiseRowFlags(flags, row: row, bits: eventBit(EverythingEvent))
 		end 'everything'
@@ -974,7 +972,7 @@ type HoldEventBuilder
 		return buildCsr(events, to: nodes, nodeCount: eventIds.count() as CsrIndex)
 	end 'eventStorers'
 
-	function propagate(flags HoldWordColumn, graph CsrGraph, module MaxonModule, funcNames FunctionNameIndex, judge HoldJudge, eventIds HoldEventIds)
+	function propagate(flags FixedHoldWordColumn, graph CsrGraph, module MaxonModule, funcNames FunctionNameIndex, judge HoldJudge, eventIds HoldEventIds)
 		let edgeGraph = buildCsr(self.callers, to: self.edgeIds, nodeCount: graph.nodeCount())
 		let order = postorderOf(graph)
 
@@ -997,7 +995,7 @@ type HoldEventBuilder
 		end 'untilStable'
 	end 'propagate'
 
-	function mergeEdge(flags HoldWordColumn, node ElementIndex, callee ElementIndex, edge ElementIndex, module MaxonModule, funcNames FunctionNameIndex, judge HoldJudge, eventIds HoldEventIds) returns bool
+	function mergeEdge(flags FixedHoldWordColumn, node ElementIndex, callee ElementIndex, edge ElementIndex, module MaxonModule, funcNames FunctionNameIndex, judge HoldJudge, eventIds HoldEventIds) returns bool
 		let calleeFlags = try flags.get(callee) otherwise panic("HoldEventBuilder.mergeEdge: flags.get OOB at {callee}")
 
 		if calleeFlags == 0 'nothingToMerge'
@@ -1027,7 +1025,7 @@ type HoldEventBuilder
 		return raised or grew
 	end 'mergeEdge'
 
-	function raiseEdgeEvents(flags HoldWordColumn, node ElementIndex, edge ElementIndex) returns bool
+	function raiseEdgeEvents(flags FixedHoldWordColumn, node ElementIndex, edge ElementIndex) returns bool
 		let first = try self.edgeEventBegin.get(edge) otherwise panic("HoldEventBuilder.raiseEdgeEvents: edgeEventBegin.get OOB at {edge}")
 		let stop = try self.edgeEventEnd.get(edge) otherwise panic("HoldEventBuilder.raiseEdgeEvents: edgeEventEnd.get OOB at {edge}")
 
@@ -1082,7 +1080,7 @@ function eventBit(event ElementIndex) returns HoldWord
 	return 1 shl FirstInternedEvent
 end 'eventBit'
 
-function raiseRowFlags(flags HoldWordColumn, row ElementIndex, bits HoldWord) returns bool
+function raiseRowFlags(flags FixedHoldWordColumn, row ElementIndex, bits HoldWord) returns bool
 	let word = try flags.get(row) otherwise panic("raiseRowFlags: flags.get OOB at {row}")
 	let raised = word or bits
 
@@ -1199,20 +1197,17 @@ type HoldResolver
 	var rangePositions as RangeSitePositionArray
 
 	var functions as IrFunctionArray
-	var projectionRead as BoolArray
-	var projectionBegin as HoldIndexColumn
-	var projectionEnd as HoldIndexColumn
+	var projectionRead as FixedBoolArray
+	var projectionBegin as FixedHoldIndexColumn
+	var projectionEnd as FixedHoldIndexColumn
 	var projectionOffsets as HoldIndexColumn
 	var receiverLoadResults as ValueIdArray
 	var receiverLoadOffsets as HoldIndexColumn
 
 	static function create(project Project, module MaxonModule, judge HoldJudge, events HoldEventSummary, functions IrFunctionArray) returns HoldResolver
-		var projectionRead = BoolArray.create(0)
-		projectionRead.growFilled(functions.count(), value: false)
-		var projectionBegin = HoldIndexColumn.create(0)
-		projectionBegin.growFilled(functions.count(), value: 0)
-		var projectionEnd = HoldIndexColumn.create(0)
-		projectionEnd.growFilled(functions.count(), value: 0)
+		let projectionRead = FixedBoolArray.create(functions.count())
+		let projectionBegin = FixedHoldIndexColumn.create(functions.count())
+		let projectionEnd = FixedHoldIndexColumn.create(functions.count())
 		return Self{functions: functions, projectionRead: projectionRead, projectionBegin: projectionBegin, projectionEnd: projectionEnd, projectionOffsets: HoldIndexColumn.create(0), receiverLoadResults: ValueIdArray.create(0), receiverLoadOffsets: HoldIndexColumn.create(0), project: project, module: module, judge: judge, events: events, tally: HoldTally.create(), entryOps: HoldIndexColumn.create(0), entryBlocks: HoldIndexColumn.create(0), entryPositions: HoldIndexColumn.create(0), entryHelds: ValueIdArray.create(0), entryIsEnd: BoolArray.create(0), siteEntries: HoldIndexColumn.create(0), siteSources: ValueIdArray.create(0), siteReplacing: BoolArray.create(0), siteKinds: HoldKindArray.create(0), siteVerdicts: HoldVerdictColumn.create(0), siteOfHeld: HoldIndexColumn.create(0), isSiteResult: BoolArray.create(0), defKnown: BoolArray.create(0), defOps: HoldIndexColumn.create(0), isBlockArg: BoolArray.create(0), chainCursor: 0, chainTop: false, chainHasElement: false, chainHasWildElement: false, hopEvents: HoldIndexColumn.create(0), nodeKeys: HoldKeyColumn.create(0), visited: HoldIndexColumn.create(0), stack: HoldIndexColumn.create(0), stackFroms: HoldIndexColumn.create(0), successors: BlockIdArray.create(0), blockIndex: BlockIndexById.create(), deletedKeys: HoldKeyColumn.create(0), siteMasks: HoldWordColumn.create(0), siteTokenBegin: HoldIndexColumn.create(0), siteTokens: HoldIndexColumn.create(0), chainStamp: 0, hopLocals: HoldStampedIndex.create(), nodeSlots: HoldEventIds.create(), nodeLocals: HoldStampedIndex.create(), hopLocalEvents: HoldIndexColumn.create(0), hopLocalBits: HoldIndexColumn.create(0), localCount: 0, wordsPerSummary: 0, summaryWords: HoldWordColumn.create(0), summaryFlags: HoldWordColumn.create(0), summaryEarlierEnds: HoldIndexColumn.create(0), summaryEndBegin: HoldIndexColumn.create(0), summaryEndStop: HoldIndexColumn.create(0), jumpedStamps: HoldIndexColumn.create(0), endBlocks: HoldIndexColumn.create(0), endPositions: HoldIndexColumn.create(0), calleeTokenSlots: HoldStampedIndex.create(), calleeTokenBegin: HoldIndexColumn.create(0), calleeTokenStop: HoldIndexColumn.create(0), calleeTokens: HoldIndexColumn.create(0), accWords: HoldWordColumn.create(0), accFlags: 0, accEarlierEnds: 0, prober: 0, rangePositions: RangeSitePositionArray.create(0)}
 	end 'create'
 
@@ -2204,7 +2199,7 @@ type HoldResolver
 			let first = try self.deletedKeys.get(cursor) otherwise panic("HoldResolver.removeDeletedOps: deletedKeys.get OOB at {cursor}")
 			let blockPosition = holdKeyBlock(first)
 			var block = self.module.blockAtPosition(func, position: blockPosition)
-			var kept = OpIndexArray.create(0)
+			var kept = OpIndexArray.create(block.bodyOpCount(), zeroed: false)
 			var next = cursor
 
 			for position in 0 upto block.bodyOpCount() 'eachOp'

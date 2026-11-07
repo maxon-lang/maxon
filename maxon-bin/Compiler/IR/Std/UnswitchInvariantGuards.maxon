@@ -259,16 +259,14 @@ type UnswitchFunction
 	export let valueBound as ValueId
 
 	// Per position: a member of a loop versioned in this run, and a header of one.
-	var insideVersioned as BoolArray
-	var versionedHeader as BoolArray
+	var insideVersioned as FixedBoolArray
+	var versionedHeader as FixedBoolArray
 
 	static function gather(module StdModule, func IrFunction, tree StdDominatorTree, scratch UnswitchScratch) returns UnswitchFunction
 		let reader = StdShapeReader.create(module, func: func)
 		let valueBound = reader.defs.valueBound()
-		var insideVersioned = BoolArray.create(0)
-		insideVersioned.resize(tree.blockCount)
-		var versionedHeader = BoolArray.create(0)
-		versionedHeader.resize(tree.blockCount)
+		var insideVersioned = FixedBoolArray.create(tree.blockCount)
+		var versionedHeader = FixedBoolArray.create(tree.blockCount)
 		return Self{tree: tree, stamps: DominatorStamps.build(tree), reader: reader, sites: ReadSites.collect(module, func: func, valueBound: valueBound, scratch: scratch), valueBound: valueBound, insideVersioned: insideVersioned, versionedHeader: versionedHeader}
 	end 'gather'
 
@@ -444,7 +442,7 @@ type UnswitchPlan
 	export var exitPhis as ValueIdArray
 
 	static function create(header ElementIndex, members CsrColumn) returns UnswitchPlan
-		var positions = BlockPositionColumn.create(0)
+		var positions = BlockPositionColumn.create(members.count(), zeroed: false)
 
 		for member in members 'eachMember'
 			positions.push(member)
@@ -1306,13 +1304,13 @@ type RewriteColumns
 	var origins as DerivedOrigins
 
 	static function identity(valueBound ValueId, blockBound BlockId, origins DerivedOrigins) returns RewriteColumns
-		var valueSubst = ValueIdArray.create(0)
+		var valueSubst = ValueIdArray.create(valueBound, zeroed: false)
 
 		for valueId in 0 upto valueBound 'eachValue'
 			valueSubst.push(valueId)
 		end 'eachValue'
 
-		var blockSubst = BlockIdArray.create(0)
+		var blockSubst = BlockIdArray.create(blockBound, zeroed: false)
 
 		for blockId in 0 upto blockBound 'eachBlock'
 			blockSubst.push(blockId)
@@ -1380,7 +1378,7 @@ function applyPlan(module StdModule, func IrFunction, plan UnswitchPlan, analysi
 end 'applyPlan'
 
 function copyLoop(module StdModule, func IrFunction, plan UnswitchPlan, analysis UnswitchFunction, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
-	var copyRefs = BlockRefArray.create(0)
+	var copyRefs = BlockRefArray.create(plan.members.count(), zeroed: false)
 
 	for index in 0 upto plan.members.count() 'eachMember'
 		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
@@ -1711,7 +1709,7 @@ function copyMember(module StdModule, func IrFunction, plan UnswitchPlan, positi
 	var copy = module.getBlock(copyRef)
 
 	if original.blockArgs.count() != 0 'hasPhis'
-		var blockArgs = IrBlockArgArray.create(0)
+		var blockArgs = IrBlockArgArray.create(original.blockArgs.count(), zeroed: false)
 
 		for blockArg in original.blockArgs 'eachPhi'
 			blockArgs.push(IrBlockArg.create(clonedValue(blockArg.valueId, subst: columns.valueSubst), argType: blockArg.argType))
@@ -1751,7 +1749,7 @@ end 'copyMember'
 // targets and args remapped. An exiting member's edge into the exit already carries the escaping
 // values — `attachExitPhis` runs before any copy — and the column maps each to the copy's own.
 function copiedEdges(original IrBlock, folded bool, keptTargetId BlockId, columns RewriteColumns) returns BranchEdgeArray
-	var edges = BranchEdgeArray.create(0)
+	var edges = BranchEdgeArray.create(original.branchEdges.count(), zeroed: false)
 
 	for edge in original.branchEdges 'eachEdge'
 		if folded and edge.targetBlockId != keptTargetId 'theRefusedArm'
@@ -1768,7 +1766,7 @@ end 'copiedEdges'
 // value itself — the copy's edges, remapped from these, then carry the copy's.
 function attachExitPhis(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, columns RewriteColumns, minter ValueMinter)
 	var exit = module.blockAtPosition(func, position: plan.exit)
-	var blockArgs = IrBlockArgArray.create(0)
+	var blockArgs = IrBlockArgArray.create(exit.blockArgs.count() + plan.escapingTypes.count(), zeroed: false)
 
 	for blockArg in exit.blockArgs 'eachExisting'
 		blockArgs.push(blockArg)
@@ -1797,7 +1795,7 @@ function attachExitPhis(module StdModule, func IrFunction, analysis UnswitchFunc
 end 'attachExitPhis'
 
 function edgesWithEscapingAppended(member IrBlock, exitId BlockId, plan UnswitchPlan) returns BranchEdgeArray
-	var edges = BranchEdgeArray.create(0)
+	var edges = BranchEdgeArray.create(member.branchEdges.count(), zeroed: false)
 	var exitEdgeCarried = false
 
 	for edge in member.branchEdges 'eachEdge'

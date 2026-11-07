@@ -585,7 +585,7 @@ end 'abiStackSlotsBefore'
 // is ever coloured for them).
 export function buildFunctionValueClasses(stdModule StdModule, targetModule TargetModule, funcIndex ElementIndex, abi CalleeAbiTable) returns ValueClassColumn
 	let srcFunc = stdModule.getFunc(funcIndex)
-	var column = ValueClassColumn.create(0)
+	var column = ValueClassColumn.create(scanFunctionValueCount(targetModule, func: srcFunc), zeroed: false)
 	column.refill(scanFunctionValueCount(targetModule, func: srcFunc), value: RegClass.gpr)
 
 	for blockRef in srcFunc.blockRefs 'eachBlock'
@@ -2329,7 +2329,7 @@ end 'socketServeOperand'
 
 // The operands a POSIX lane's `osNetpoll` chunk is called with — the prefix `posixNetpollOperandCount` names.
 export function posixNetpollChunkArgs(verb NetpollVerb, operands ValueIdArray) returns ValueIdArray
-	var args = ValueIdArray.create(0)
+	var args = ValueIdArray.create(posixNetpollOperandCount(verb), zeroed: false)
 
 	for index in 0 upto posixNetpollOperandCount(verb) 'eachRead'
 		args.push(netpollOperand(operands, index: index))

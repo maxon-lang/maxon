@@ -191,8 +191,7 @@ export function debugSiteKeyOf(site InlineSiteRef) returns DebugSiteKey
 end 'debugSiteKeyOf'
 
 function siteParentKeysOf(func IrFunction) returns DebugSiteKeyColumn
-	var parentKeys = DebugSiteKeyColumn.create(0)
-	parentKeys.reserve(func.inlineSites.count())
+	var parentKeys = DebugSiteKeyColumn.create(func.inlineSites.count(), zeroed: false)
 
 	for (iter, site) in func.inlineSites.withIterator() 'eachSite'
 		requireParentRecordedEarlier(site.parent, site: iter.index())
@@ -238,28 +237,18 @@ export type DebugValueRoster
 			return Self.empty()
 		end 'nothingNamed'
 
-		var valueIds = ValueIdArray.create(0)
-		var siteKeys = DebugSiteKeyColumn.create(0)
-		var groups = DebugNameGroupColumn.create(0)
-		var versionKinds = DebugVersionKindArray.create(0)
-		var versionBlocks = BlockIdArray.create(0)
-		var versionAnchors = ValueIdArray.create(0)
-		var decls = DebugDeclColumn.create(0)
-		var scopeFirst = DebugDeclColumn.create(0)
-		var scopeCount = DebugDeclColumn.create(0)
-		var scopeLost = BoolArray.create(0)
+		var valueIds = ValueIdArray.create(tally, zeroed: false)
+		var siteKeys = DebugSiteKeyColumn.create(tally, zeroed: false)
+		var groups = DebugNameGroupColumn.create(tally, zeroed: false)
+		var versionKinds = DebugVersionKindArray.create(tally, zeroed: false)
+		var versionBlocks = BlockIdArray.create(tally, zeroed: false)
+		var versionAnchors = ValueIdArray.create(tally, zeroed: false)
+		var decls = DebugDeclColumn.create(tally, zeroed: false)
+		var scopeFirst = DebugDeclColumn.create(tally, zeroed: false)
+		var scopeCount = DebugDeclColumn.create(tally, zeroed: false)
+		var scopeLost = BoolArray.create(tally, zeroed: false)
 		var scopeEndBlocks = BlockIdArray.create(0)
 		var groupByNameAndSite = DebugNameGroupByKey.create()
-		valueIds.reserve(tally)
-		siteKeys.reserve(tally)
-		groups.reserve(tally)
-		versionKinds.reserve(tally)
-		versionBlocks.reserve(tally)
-		versionAnchors.reserve(tally)
-		decls.reserve(tally)
-		scopeFirst.reserve(tally)
-		scopeCount.reserve(tally)
-		scopeLost.reserve(tally)
 		let byId = module.blockIndexById(func) if debugLocalsLeaveTheirScopes(func) else BlockIndexById.create()
 
 		for (declAt, local) in func.debugLocals.withIterator() 'eachBinding'

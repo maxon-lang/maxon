@@ -374,7 +374,7 @@ function utf8PinBytes(valueText String) returns ByteArray throws TypedValueError
 
 	let raw = valueText.toByteArray()
 	let bodyEnd = raw.count() - 1
-	var out = ByteArray.create(0)
+	var out = ByteArray.create(bodyEnd, zeroed: false)
 	var i = 1 as ByteOffset
 
 	while i < bodyEnd as ByteOffset 'eachByte'
@@ -431,7 +431,7 @@ end 'pinEscapeByte'
 
 // How an escape reads back in a diagnostic — the backslash plus what followed it.
 function pinEscapeText(marker Byte) returns String
-	var text = ByteArray.create(0)
+	var text = ByteArray.create(2, zeroed: false)
 	text.push(PinBackslash)
 	text.push(marker)
 	return String.from(text)
@@ -535,9 +535,10 @@ end 'typedValueTypes'
 // The roster's names as the `unknownType` message lists them — the SECOND reader of the table, and the
 // reason the table exists at all.
 function typedValueTypeRoster() returns String
-	var names = StringArray.create(0)
+	let rows = typedValueTypes()
+	var names = StringArray.create(rows.count(), zeroed: false)
 
-	for row in typedValueTypes() 'eachRow'
+	for row in rows 'eachRow'
 		names.push(row.name)
 	end 'eachRow'
 
@@ -576,7 +577,7 @@ end 'appendLittleEndian'
 // call out here, so the one spelling sits on the lower side.
 
 export function formatHexBytes(bytes ByteArray) returns String
-	var hexes = StringArray.create(0)
+	var hexes = StringArray.create(bytes.count(), zeroed: false)
 
 	for b in bytes 'each'
 		hexes.push(hexByte(b as MachineWord))

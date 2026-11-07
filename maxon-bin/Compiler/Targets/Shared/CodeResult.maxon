@@ -277,10 +277,10 @@ export typealias JumpTablePendingArray = Array with JumpTablePending
 // crux note asked to expose to concat: the chunk's own `BlockOffsetTable`, read per slot. Shared by the x64 and
 // arm64 chunk emitters.
 export function resolveJumpTableRelocs(jumpTables JumpTablePendingArray, blockOffsets BlockOffsetTable) returns JumpTableRelocArray
-	var out = JumpTableRelocArray.create(0)
+	var out = JumpTableRelocArray.create(jumpTables.count(), zeroed: false)
 
 	for pending in jumpTables 'eachTable'
-		var targetOffsets = CodeOffsetArray.create(0)
+		var targetOffsets = CodeOffsetArray.create(pending.caseTargets.count(), zeroed: false)
 
 		for target in pending.caseTargets 'eachSlot'
 			targetOffsets.push(try blockOffsets.get(target) otherwise panic("resolveJumpTableRelocs: jump-table slot targets block {target}, which was never laid out in this chunk — every case target is a block in this function"))
@@ -295,7 +295,7 @@ end 'resolveJumpTableRelocs'
 // One jump-table reloc with its per-slot target offsets shifted from chunk-local to whole-`.text` by the
 // chunk's start. Shared by the x64 and arm64 concat passes (the reloc format is target-neutral).
 export function rebaseJumpTableReloc(reloc JumpTableReloc, funcStart CodeOffset) returns JumpTableReloc
-	var rebased = CodeOffsetArray.create(0)
+	var rebased = CodeOffsetArray.create(reloc.targetTextOffsets.count(), zeroed: false)
 
 	for off in reloc.targetTextOffsets 'each'
 		rebased.push(funcStart + off)
@@ -531,8 +531,8 @@ export type DebugRunOffsets
 
 	function resolveSpans(func IrFunction, blockStarts BlockOffsetTable, blockEnds BlockOffsetTable, into DebugLocalCodeRangeArray)
 		let rows = func.debugLocalSpans
-		var viewOfSpan = CsrColumn.create(0)
-		var spanIndices = CsrColumn.create(0)
+		var viewOfSpan = CsrColumn.create(rows.spans.count(), zeroed: false)
+		var spanIndices = CsrColumn.create(rows.spans.count(), zeroed: false)
 
 		for (iter, span) in rows.spans.withIterator() 'eachSpan'
 			viewOfSpan.push(span.view as CsrIndex)

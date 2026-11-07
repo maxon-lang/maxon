@@ -105,17 +105,14 @@
 // DENSE COLUMNS, indexed by ValueId, NOT a Map: block-arg ids are function-local and dense, which is
 // the same discipline the register allocator's columns follow.
 export type CarriedValues
-	var seen as BoolArray
-	var only as ValueIdArray
-	var differs as BoolArray
+	var seen as FixedBoolArray
+	var only as FixedValueIdArray
+	var differs as FixedBoolArray
 
 	export static function create(bound ValueId) returns CarriedValues
-		var seen = BoolArray.create(0)
-		var only = ValueIdArray.create(0)
-		var differs = BoolArray.create(0)
-		seen.resize(bound)
-		only.resize(bound)
-		differs.resize(bound)
+		var seen = FixedBoolArray.create(bound)
+		var only = FixedValueIdArray.create(bound)
+		var differs = FixedBoolArray.create(bound)
 		return Self{seen: seen, only: only, differs: differs}
 	end 'create'
 
@@ -194,14 +191,12 @@ type FeedTriggers
 	// Slot index PLUS ONE, in both columns, so a zero-filled column reads as "feeds nothing" and
 	// "end of list" with no sentinel carved out of the slot-index space. Same discipline as
 	// `buildBlockIdIndex`, and for the same reason.
-	var head as ValueIdArray
-	var next as ValueIdArray
+	var head as FixedValueIdArray
+	var next as FixedValueIdArray
 
 	static function create(pairs PhiOperandPairs, bound ValueId) returns FeedTriggers
-		var head = ValueIdArray.create(0)
-		var next = ValueIdArray.create(0)
-		head.resize(bound)
-		next.resize(pairs.count())
+		var head = FixedValueIdArray.create(bound)
+		var next = FixedValueIdArray.create(pairs.count())
 
 		var triggers = Self{head: head, next: next}
 
@@ -280,8 +275,7 @@ module function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) re
 	// accumulator merges a different value on each path, every time). It stops before the feeder
 	// index, the user index, the fold chain and the whole-function rewrite are ever allocated, which
 	// is what keeps this pass's cost on ordinary code where the old re-sweep had it.
-	var queued = BoolArray.create(0)
-	queued.resize(bound)
+	var queued = FixedBoolArray.create(bound)
 
 	var worklist = ValueIdArray.create(0)
 
@@ -309,15 +303,13 @@ module function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) re
 	let feeders = buildCsr(pairs.args, to: pairs.incoming, nodeCount: bound as CsrIndex)
 	var triggers = FeedTriggers.create(pairs, bound: bound)
 
-	var parent = ValueIdArray.create(0)
-	parent.resize(bound)
+	var parent = ValueIdArray.create(bound)
 
 	for v in 0 upto bound 'identity'
 		try parent.set(v, value: v) otherwise panic("elimTrivialBlockArgs: parent.set({v}) OOB against a column of {bound}")
 	end 'identity'
 
-	var folded = BoolArray.create(0)
-	folded.resize(bound)
+	var folded = FixedBoolArray.create(bound)
 
 	while worklist.count() > 0 'settle'
 		let arg = try worklist.pop() otherwise panic("elimTrivialBlockArgs: pop from a non-empty worklist")
@@ -363,7 +355,7 @@ end 'elimTrivialBlockArgsInFunc'
 // discover — and then RE-FILE their operand slots onto `arg`'s new root, so the NEXT fold in the
 // chain re-asks them too. Dropping the re-file is what leaves a trivial phi standing; see the
 // `FeedTriggers` header.
-function relayFold(triggers FeedTriggers, pairs PhiOperandPairs, carried CarriedValues, feeders CsrGraph, parent ValueIdArray, folded BoolArray, worklist ValueIdArray, queued BoolArray, arg ValueId, bound ValueId)
+function relayFold(triggers FeedTriggers, pairs PhiOperandPairs, carried CarriedValues, feeders CsrGraph, parent ValueIdArray, folded FixedBoolArray, worklist ValueIdArray, queued FixedBoolArray, arg ValueId, bound ValueId)
 	// The value `arg` HAS BECOME, and therefore the value its readers now read. It is a root in one
 	// step, not a walk: a fold that moves the root of anything `arg` reads re-reads `arg` first —
 	// that is what the migrating trigger list guarantees — so `carried.targetOf` was already a root
@@ -407,7 +399,7 @@ end 'reread'
 
 // Push `arg` unless it is already waiting. Without the `queued` column a phi fed by many edges
 // would be pushed once per edge, and the worklist — not the work — would be what grew.
-function enqueue(arg ValueId, worklist ValueIdArray, queued BoolArray)
+function enqueue(arg ValueId, worklist ValueIdArray, queued FixedBoolArray)
 	let waiting = try queued.get(arg) otherwise panic("elimTrivialBlockArgs: queued.get({arg}) OOB")
 
 	if waiting 'alreadyWaiting'
@@ -470,6 +462,6 @@ function compressAll(parent ValueIdArray, bound ValueId)
 	end 'each'
 end 'compressAll'
 
-function isFolded(folded BoolArray, v ValueId) returns bool
+function isFolded(folded FixedBoolArray, v ValueId) returns bool
 	return try folded.get(v) otherwise panic("elimTrivialBlockArgs: folded.get({v}) is outside the block-arg id space")
 end 'isFolded'

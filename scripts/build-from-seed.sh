@@ -22,8 +22,8 @@
 # ⛔ **A TREE DECLARING WHAT THE PINNED SEED DOES NOT KNOW CANNOT BE BUILT BY IT**, and the seed is the one
 # compiler nothing here can regenerate — every CI lane and every release runner starts with this script,
 # so a refusal is four red lanes that no later commit can fix. The cure is a new seed.
-# `scripts/seed-shim/` holds the patches that withdraw such a declaration until one is pinned; they
-# are staged only after a plain build has been tried and refused. A patch there is what makes CI
+# `scripts/seed-shim/` is where a patch withdrawing such a declaration lives until a seed that accepts it
+# is pinned; patches there are staged only after a plain build has been tried and refused. A patch there is what makes CI
 # freeze and pin the next seed, and the pin deletes every patch (`docs/RELEASING.md`).
 #
 # ⛔ **THE SHIM IS WITHDRAWN BEFORE `C1` BUILDS `C2`, AND THAT IS WHAT MAKES IT SOUND.** A patch

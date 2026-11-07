@@ -474,7 +474,7 @@ let AsciiColon = 0x3A
 // which is what the two drops are for.
 function splitRow(line String) returns StringArray
 	let raw = line.split("|")
-	var cells = StringArray.create(0)
+	var cells = StringArray.create(raw.count(), zeroed: false)
 
 	for i in 1 upto raw.count() - 1 'eachCell'
 		cells.push((try raw.get(i) otherwise panic("splitRow: i < count-1 but get({i}) failed")).trim())
@@ -700,7 +700,7 @@ end 'indexAt'
 typealias ParsedCountArray = Array with ParsedCount
 
 function rungCells(cells StringArray, source String) returns ParsedCountArray throws ScaleError
-	var counts = ParsedCountArray.create(0)
+	var counts = ParsedCountArray.create(cells.count(), zeroed: false)
 
 	for i in LeadingColumns upto cells.count() 'eachRung'
 		counts.push(try parseGroupedCount(try cellAt(cells, index: i, source: source), source: source, column: i))
@@ -712,7 +712,7 @@ end 'rungCells'
 // A parsed row as the column its table holds. Two builders because the two columns are two
 // instances and a function cannot be generic over which.
 function allocColumnOf(cells ParsedCountArray) returns AllocCountArray
-	var column = AllocCountArray.create(0)
+	var column = AllocCountArray.create(cells.count(), zeroed: false)
 
 	for cell in cells 'eachRung'
 		column.push(cell as AllocCount)
@@ -722,7 +722,7 @@ function allocColumnOf(cells ParsedCountArray) returns AllocCountArray
 end 'allocColumnOf'
 
 function byteColumnOf(cells ParsedCountArray) returns ByteCountArray
-	var column = ByteCountArray.create(0)
+	var column = ByteCountArray.create(cells.count(), zeroed: false)
 
 	for cell in cells 'eachRung'
 		column.push(cell as HeapByteCount)
@@ -959,7 +959,7 @@ let MarkerSplitParts = 2
 // third table of them would be a near-duplicate paid for in width. They are measured, reported, and
 // carried in `--result-json` for anyone who wants them.
 function renderMemoryRow(results RungResultArray, note String, mintedAt String, date String, measure ScaleMeasure) returns String
-	var cells = StringArray.create(0)
+	var cells = StringArray.create(results.count() + LeadingColumns, zeroed: false)
 	cells.push(date)
 	cells.push(mintedAt)
 	cells.push(note)

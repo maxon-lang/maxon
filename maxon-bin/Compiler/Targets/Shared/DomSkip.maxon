@@ -16,23 +16,19 @@ export type DominatorTree
 
 	export static function of(topo FuncTopology) returns DominatorTree
 		let n = topo.numBlocks
-		var visited = BoolArray.create(0)
-		visited.resize(n)
-		var postorder = CfgIndexArray.create(0)
-		postorder.reserve(n)
+		var visited = FixedBoolArray.create(n)
+		var postorder = CfgIndexArray.create(n, zeroed: false)
 		rpoDfs(topo, root: EntryBlockLocal, visited: visited, postorder: postorder)
 
-		var postIndex = CfgIndexArray.create(0)
-		postIndex.refill(n, value: 0)
+		var postIndex = FixedCfgIndexArray.create(n)
 
 		for (position, block) in postorder.withIterator() 'eachReached'
 			try postIndex.set(block, value: position.index()) otherwise panic("DominatorTree.of: postIndex.set OOB at {block}")
 		end 'eachReached'
 
-		var idom = CfgIndexArray.create(0)
+		var idom = CfgIndexArray.create(n, zeroed: false)
 		idom.refill(n, value: EntryBlockLocal)
-		var settled = BoolArray.create(0)
-		settled.resize(n)
+		var settled = BoolArray.create(n)
 		try settled.set(EntryBlockLocal, value: true) otherwise panic("DominatorTree.of: settled.set OOB at the entry")
 		var changed = true
 
@@ -84,12 +80,10 @@ export type DominatorTree
 		end 'eachDominated'
 
 		let tree = buildCsr(childOf, to: children, nodeCount: n as CsrIndex)
-		var pre = CfgIndexArray.create(0)
-		pre.refill(n, value: 0)
-		var size = CfgIndexArray.create(0)
+		var pre = CfgIndexArray.create(n)
+		var size = CfgIndexArray.create(n, zeroed: false)
 		size.refill(n, value: 1)
-		var blockAt = CfgIndexArray.create(0)
-		blockAt.reserve(postorder.count())
+		var blockAt = CfgIndexArray.create(postorder.count(), zeroed: false)
 		var stack = CfgIndexArray.create(0)
 		stack.push(EntryBlockLocal)
 
@@ -117,7 +111,7 @@ export type DominatorTree
 		return tree
 	end 'of'
 
-	function everyRetreatingEdgeIsABackEdge(topo FuncTopology, postIndex CfgIndexArray, postorder CfgIndexArray) returns bool
+	function everyRetreatingEdgeIsABackEdge(topo FuncTopology, postIndex FixedCfgIndexArray, postorder CfgIndexArray) returns bool
 		for block in postorder 'eachReached'
 			let blockPost = try postIndex.get(block) otherwise panic("DominatorTree.everyRetreatingEdgeIsABackEdge: postIndex.get OOB at {block}")
 
@@ -214,7 +208,7 @@ export type DomSkip
 	end 'coverFloor'
 end 'DomSkip'
 
-function intersectDominators(idom CfgIndexArray, postIndex CfgIndexArray, a ElementIndex, b ElementIndex) returns ElementIndex
+function intersectDominators(idom CfgIndexArray, postIndex FixedCfgIndexArray, a ElementIndex, b ElementIndex) returns ElementIndex
 	var finger = a
 	var other = b
 
@@ -244,10 +238,8 @@ export type LayoutBounds
 	static function build(topo FuncTopology) returns LayoutBounds
 		let n = topo.numBlocks
 		let leafBase = roundUpToPowerOfTwo(n as BytePos)
-		var highestPred = CfgIndexArray.create(0)
-		highestPred.refill(leafBase + leafBase, value: 0)
-		var nearestForwardSucc = CfgIndexArray.create(0)
-		nearestForwardSucc.refill(leafBase + leafBase, value: 0)
+		var highestPred = CfgIndexArray.create(leafBase + leafBase)
+		var nearestForwardSucc = CfgIndexArray.create(leafBase + leafBase)
 
 		for y in 0 upto n 'eachBlock'
 			var highest = 0 as ElementIndex
@@ -316,15 +308,14 @@ export type PredLevels
 			levelCount = levelCount + 1
 		end 'eachLevel'
 
-		var blockStart = CfgIndexArray.create(0)
+		var blockStart = CfgIndexArray.create(leafBase + 1, zeroed: false)
 		blockStart.refill(leafBase + 1, value: edgeCount)
 
 		for z in 0 upto n 'eachBlockStart'
 			try blockStart.set(z, value: try topo.pred.start.get(z) otherwise panic("PredLevels.build: pred.start.get OOB at block {z}")) otherwise panic("PredLevels.build: blockStart.set OOB at block {z}")
 		end 'eachBlockStart'
 
-		var sorted = CfgIndexArray.create(0)
-		sorted.refill(levelCount * edgeCount, value: 0)
+		var sorted = CfgIndexArray.create(levelCount * edgeCount)
 
 		for z in 0 upto n 'eachBlock'
 			let degree = topo.pred.degree(z as CsrIndex)

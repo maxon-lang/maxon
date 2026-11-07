@@ -58,6 +58,7 @@ let EveryLengthFloor = u64.max as LengthFloor
 let OnePastTheIndex = 1
 
 module typealias RecordSlot = int(0 to u64.max) implements ElementIndex
+typealias FixedRecordSlotColumn = FixedArray with RecordSlot
 typealias RecordSlotColumn = Array with RecordSlot
 
 typealias FactIndexColumn = Array with ElementIndex
@@ -224,15 +225,13 @@ end 'EstablishedFunction'
 
 // The tracked record values, numbered densely. ValueId 0 is a real id, so membership is its own column.
 type RecordIndex
-	var slotOf as RecordSlotColumn
-	var tracked as BoolArray
+	var slotOf as FixedRecordSlotColumn
+	var tracked as FixedBoolArray
 	export var count = 0 as RecordSlot
 
 	static function sized(valueBound ValueId) returns RecordIndex
-		var slotOf = RecordSlotColumn.create(0)
-		slotOf.resize(valueBound)
-		var tracked = BoolArray.create(0)
-		tracked.resize(valueBound)
+		var slotOf = FixedRecordSlotColumn.create(valueBound)
+		var tracked = FixedBoolArray.create(valueBound)
 		return Self{slotOf: slotOf, tracked: tracked}
 	end 'sized'
 

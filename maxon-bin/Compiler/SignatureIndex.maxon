@@ -60,7 +60,7 @@ let TypeArgumentSeparator = ", "
 let WrittenInstanceMarker = " with "
 
 function rosterOfOneName(name ByteArray) returns NameRoster
-	var roster = NameRoster.create(0)
+	var roster = NameRoster.create(1, zeroed: false)
 	roster.push(name)
 	return roster
 end 'rosterOfOneName'
@@ -238,7 +238,7 @@ enum SignatureDiscriminator
 	// `create(0, zeroed: …)` (`FieldDefault.emptyCreateHelper`) — a FOURTH constant
 	// beside the three above, and the only one whose EXPRESSION a reader in another file depends on: the empty
 	// container that call builds is laid down as bytes, so an edit between `IntArray.create()` and
-	// `IntArray.withCapacity(4)` changes what every reader emits and must move every reader's memo.
+	// `IntArray.create(4, zeroed: false)` changes what every reader emits and must move every reader's memo.
 	fieldShapeDefaultEmptyCreate = 115
 
 	// ⭐ Whether a LITERAL default's number was written with a leading minus, above `i64.max`, or
@@ -850,8 +850,7 @@ end 'cacheWriteNameInFileArray'
 
 function cacheReadNameInFileArray(reader LibraryCacheReader) returns NameInFileArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = NameInFileArray.create(0)
-	result.reserve(count)
+	var result = NameInFileArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try NameInFile.cacheRead(reader)
@@ -1395,7 +1394,7 @@ end 'pushImageBoxNode'
 
 // The contested names, in table order — a `match` arm may not open a `for`, so the walk is its own function.
 function keysOfCrossKindContests(byName CrossKindContestMap) returns NameRoster
-	var names = NameRoster.create(0)
+	var names = NameRoster.create(byName.count(), zeroed: false)
 
 	for (name, _) in byName 'eachContestedName'
 		names.push(name)
@@ -2070,7 +2069,7 @@ function declRunsProgramCode(decl TopLevelDecl) returns bool
 end 'declRunsProgramCode'
 
 function nameRosterOf(name ByteArray) returns NameRoster
-	var roster = NameRoster.create(0)
+	var roster = NameRoster.create(1, zeroed: false)
 	roster.push(name)
 	return roster
 end 'nameRosterOf'
@@ -2104,8 +2103,7 @@ end 'cacheWriteTopLevelDeclArray'
 
 function cacheReadTopLevelDeclArray(reader LibraryCacheReader) returns TopLevelDeclArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = TopLevelDeclArray.create(0)
-	result.reserve(count)
+	var result = TopLevelDeclArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try TopLevelDecl.cacheRead(reader)
@@ -3956,8 +3954,7 @@ end 'ImageScalarSlot'
 typealias ImageScalarSlotArray = Array with ImageScalarSlot
 
 function structBoxImageBytes(sizeBytes ByteOffset, fields ImageScalarSlotArray) returns ByteArray
-	var image = ByteArray.create(0)
-	image.growFilled(sizeBytes, value: 0)
+	var image = ByteArray.create(sizeBytes)
 
 	for field in fields 'eachSlot'
 		writeImageSlot(image, offset: field.offset, value: field.payload, byteCount: stdTypeStorageBytes(maxonTypeToStdType(field.storageType)))
@@ -4100,8 +4097,7 @@ end 'cacheWriteTypeParamPositionArray'
 
 function cacheReadTypeParamPositionArray(reader LibraryCacheReader) returns TypeParamPositionArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = TypeParamPositionArray.create(0)
-	result.reserve(count)
+	var result = TypeParamPositionArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ElementIndex
@@ -4428,8 +4424,7 @@ end 'cacheWriteTypeParamFeedArray'
 
 function cacheReadTypeParamFeedArray(reader LibraryCacheReader) returns TypeParamFeedArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = TypeParamFeedArray.create(0)
-	result.reserve(count)
+	var result = TypeParamFeedArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadTypeParamFeed(reader)
@@ -4547,8 +4542,7 @@ end 'cacheWriteForwardedStoreArray'
 
 function cacheReadForwardedStoreArray(reader LibraryCacheReader) returns ForwardedStoreArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ForwardedStoreArray.create(0)
-	result.reserve(count)
+	var result = ForwardedStoreArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try ForwardedStore.cacheRead(reader)
@@ -4876,8 +4870,7 @@ end 'cacheWriteForwardCallArray'
 
 function cacheReadForwardCallArray(reader LibraryCacheReader) returns ForwardCallArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ForwardCallArray.create(0)
-	result.reserve(count)
+	var result = ForwardCallArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadForwardCall(reader)
@@ -5541,8 +5534,7 @@ end 'cacheWriteParamDefaultProducerArray'
 
 function cacheReadParamDefaultProducerArray(reader LibraryCacheReader) returns ParamDefaultProducerArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ParamDefaultProducerArray.create(0)
-	result.reserve(count)
+	var result = ParamDefaultProducerArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadParamDefaultProducer(reader)
@@ -6163,8 +6155,7 @@ end 'cacheWriteFreshReturnForwardArray'
 
 function cacheReadFreshReturnForwardArray(reader LibraryCacheReader) returns FreshReturnForwardArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FreshReturnForwardArray.create(0)
-	result.reserve(count)
+	var result = FreshReturnForwardArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadFreshReturnForward(reader)
@@ -8373,8 +8364,7 @@ end 'cacheWriteDeclaredSurface'
 
 module function cacheReadDeclaredSurface(reader LibraryCacheReader) returns DeclaredSurface throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DeclaredSurface.create(0)
-	result.reserve(count)
+	var result = DeclaredSurface.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as DeclaredSurfaceNode
@@ -8401,8 +8391,7 @@ end 'cacheWriteDeclaredSurfaceArray'
 
 module function cacheReadDeclaredSurfaceArray(reader LibraryCacheReader) returns DeclaredSurfaceArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DeclaredSurfaceArray.create(0)
-	result.reserve(count)
+	var result = DeclaredSurfaceArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadDeclaredSurface(reader)
@@ -8492,7 +8481,7 @@ end 'surfaceNodeSlotCount'
 export function surfaceSlot(surface DeclaredSurface, slot FieldIndex) returns DeclaredSurface
 	let start = surfaceSlotStart(surface, slot: slot)
 	let stop = start + surfaceSubtreeSize(surface, at: start)
-	var out = DeclaredSurface.create(0)
+	var out = DeclaredSurface.create(stop - start, zeroed: false)
 
 	for i in start upto stop 'eachNode'
 		out.push(surfaceNodeAt(surface, at: i))
@@ -8512,7 +8501,7 @@ end 'surfaceSlot'
 // one would be a second copy of the copy-the-tree-and-OR-the-root rule — free to disagree the day
 // the node grows a third bit.
 function surfaceWithRootBits(surface DeclaredSurface, bits DeclaredSurfaceNode) returns DeclaredSurface
-	var out = DeclaredSurface.create(0)
+	var out = DeclaredSurface.create(surface.count() + 1, zeroed: false)
 	out.push(surfaceRootNode(surface) or bits)
 
 	for i in 1 upto surface.count() 'eachRemainingNode'
@@ -9358,7 +9347,7 @@ export let FullRangeFloatAliasName = b"FullRangeFloat"
 // The one-element `[integer]` argument list of the `Array with integer` literal instance — built fresh
 // per call (a `MaxonTypeArray` is owned by the instance it is interned into).
 function singletonInteger() returns MaxonTypeArray
-	var args = MaxonTypeArray.create(0)
+	var args = MaxonTypeArray.create(1, zeroed: false)
 	args.push(MaxonType.integer)
 	return args
 end 'singletonInteger'
@@ -9602,7 +9591,7 @@ function tupleStructLayout(name ByteArray, elements MaxonTypeArray, brands NameR
 end 'tupleStructLayout'
 
 function tupleItemCapabilitiesOf(layout StructLayout) returns ParamCapabilityArray
-	var capabilities = ParamCapabilityArray.create(0)
+	var capabilities = ParamCapabilityArray.create(layout.fieldCount(), zeroed: false)
 
 	for i in 0 upto layout.fieldCount() 'eachItem'
 		capabilities.push(layout.fieldTypeSites.capabilityAt(i))
@@ -9636,7 +9625,7 @@ function rowMentions(baseId TypeNameId, args MaxonTypeArray) returns TypeIdRemap
 end 'rowMentions'
 
 function instanceBrandsOf(elements MaxonTypeArray, written NameRoster) returns NameRoster
-	var brands = NameRoster.create(0)
+	var brands = NameRoster.create(elements.count(), zeroed: false)
 
 	for i in 0 upto elements.count() 'eachElement'
 		let element = try elements.get(i) otherwise panic("instanceBrandsOf: elements.get OOB at {i} below count {elements.count()}")
@@ -10058,8 +10047,7 @@ end 'cacheWriteGenericInstanceIdArray'
 
 module function cacheReadGenericInstanceIdArray(reader LibraryCacheReader) returns GenericInstanceIdArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = GenericInstanceIdArray.create(0)
-	result.reserve(count)
+	var result = GenericInstanceIdArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as GenericInstanceId
@@ -11627,8 +11615,7 @@ end 'cacheWriteTopLevelBindingSiteArray'
 
 function cacheReadTopLevelBindingSiteArray(reader LibraryCacheReader) returns TopLevelBindingSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = TopLevelBindingSiteArray.create(0)
-	result.reserve(count)
+	var result = TopLevelBindingSiteArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try TopLevelBindingSite.cacheRead(reader)
@@ -11686,8 +11673,7 @@ end 'cacheWriteFixedSizeArray'
 
 function cacheReadFixedSizeArray(reader LibraryCacheReader) returns FixedSizeArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FixedSizeArray.create(0)
-	result.reserve(count)
+	var result = FixedSizeArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.boundedUnsigned(1, high: u32.max)) as FixedElementCount
@@ -11727,8 +11713,7 @@ end 'cacheWriteReadOnlyArgMaskArray'
 
 function cacheReadReadOnlyArgMaskArray(reader LibraryCacheReader) returns ReadOnlyArgMaskArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ReadOnlyArgMaskArray.create(0)
-	result.reserve(count)
+	var result = ReadOnlyArgMaskArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ReadOnlyArgMask
@@ -12058,19 +12043,19 @@ export type GenericInstanceRegistry
 	// The rows the open parse minted, in mint order, and the baseline rows it named — handed back before the registry is cut
 	// back to its baseline. A row's arguments are copied: a mint may have been handed types this registry's baseline rows hold.
 	function closeParseBand() returns ParseBandInstances
-		var rows = LocalInstanceRowArray.create(0)
+		var rows = LocalInstanceRowArray.create((self.baseIds.count() as GenericInstanceId) - self.baselineCount, zeroed: false)
 
 		for position in self.baselineCount upto self.baseIds.count() as GenericInstanceId 'eachMinted'
 			rows.push(LocalInstanceRow.create(try self.baseIds.get(position as ElementIndex) otherwise panic("closeParseBand: baseIds desync at {position}"), args: (try self.argLists.get(position as ElementIndex) otherwise panic("closeParseBand: argLists desync at {position}")).clone(), shape: self.shapeAtPosition(position as ElementIndex), speculative: try self.speculative.get(position as ElementIndex) otherwise panic("closeParseBand: speculative desync at {position}")))
 		end 'eachMinted'
 
-		var named = GenericInstanceIdArray.create(0)
+		var named = GenericInstanceIdArray.create(self.parseNamedRows.count(), zeroed: false)
 
 		for id in self.parseNamedRows 'eachNamed'
 			named.push(id)
 		end 'eachNamed'
 
-		var demanded = GenericInstanceIdArray.create(0)
+		var demanded = GenericInstanceIdArray.create(self.parseCopyDemandedRows.count(), zeroed: false)
 
 		for id in self.parseCopyDemandedRows 'eachCopyDemanded'
 			demanded.push(id)
@@ -12189,7 +12174,7 @@ export type GenericInstanceRegistry
 	end 'markCopyDemanded'
 
 	export function copyDemandedIds() returns GenericInstanceIdArray
-		var ids = GenericInstanceIdArray.create(0)
+		var ids = GenericInstanceIdArray.create(self.copyDemanded.count() + self.parseCopyDemandedRows.count(), zeroed: false)
 
 		for id in self.copyDemanded 'eachMerged'
 			ids.push(id)
@@ -12529,8 +12514,7 @@ end 'cacheWriteGenericArgNodeArray'
 
 function cacheReadGenericArgNodeArray(reader LibraryCacheReader) returns GenericArgNodeArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = GenericArgNodeArray.create(0)
-	result.reserve(count)
+	var result = GenericArgNodeArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadGenericArgNode(reader)
@@ -12837,8 +12821,7 @@ end 'cacheWriteGenericAliasEntryArray'
 
 function cacheReadGenericAliasEntryArray(reader LibraryCacheReader) returns GenericAliasEntryArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = GenericAliasEntryArray.create(0)
-	result.reserve(count)
+	var result = GenericAliasEntryArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try GenericAliasEntry.cacheRead(reader)
@@ -12863,8 +12846,7 @@ end 'cacheWriteGenericAliasDeclIndexArray'
 
 function cacheReadGenericAliasDeclIndexArray(reader LibraryCacheReader) returns GenericAliasDeclIndexArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = GenericAliasDeclIndexArray.create(0)
-	result.reserve(count)
+	var result = GenericAliasDeclIndexArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ElementIndex
@@ -13062,8 +13044,7 @@ end 'cacheWriteGenericInstantiationSiteArray'
 
 module function cacheReadGenericInstantiationSiteArray(reader LibraryCacheReader) returns GenericInstantiationSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = GenericInstantiationSiteArray.create(0)
-	result.reserve(count)
+	var result = GenericInstantiationSiteArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try GenericInstantiationSite.cacheRead(reader)
@@ -13181,8 +13162,7 @@ end 'cacheWriteInnerAliasMemberArray'
 
 function cacheReadInnerAliasMemberArray(reader LibraryCacheReader) returns InnerAliasMemberArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = InnerAliasMemberArray.create(0)
-	result.reserve(count)
+	var result = InnerAliasMemberArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadInnerAliasMember(reader)
@@ -13460,8 +13440,7 @@ end 'cacheWriteInterfaceDeclSiteArray'
 
 function cacheReadInterfaceDeclSiteArray(reader LibraryCacheReader) returns InterfaceDeclSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = InterfaceDeclSiteArray.create(0)
-	result.reserve(count)
+	var result = InterfaceDeclSiteArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try InterfaceDeclSite.cacheRead(reader)
@@ -13558,8 +13537,7 @@ end 'cacheWriteExtensionDeclSiteArray'
 
 function cacheReadExtensionDeclSiteArray(reader LibraryCacheReader) returns ExtensionDeclSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ExtensionDeclSiteArray.create(0)
-	result.reserve(count)
+	var result = ExtensionDeclSiteArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try ExtensionDeclSite.cacheRead(reader)
@@ -13644,8 +13622,7 @@ end 'cacheWriteConformanceClauseDeclSiteArray'
 
 function cacheReadConformanceClauseDeclSiteArray(reader LibraryCacheReader) returns ConformanceClauseDeclSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ConformanceClauseDeclSiteArray.create(0)
-	result.reserve(count)
+	var result = ConformanceClauseDeclSiteArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try ConformanceClauseDeclSite.cacheRead(reader)
@@ -13721,8 +13698,7 @@ end 'cacheWriteDescriptorScanSiteArray'
 
 function cacheReadDescriptorScanSiteArray(reader LibraryCacheReader) returns DescriptorScanSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DescriptorScanSiteArray.create(0)
-	result.reserve(count)
+	var result = DescriptorScanSiteArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try DescriptorScanSite.cacheRead(reader)
@@ -14121,8 +14097,7 @@ end 'cacheWriteAssociatedHoldingArray'
 
 function cacheReadAssociatedHoldingArray(reader LibraryCacheReader) returns AssociatedHoldingArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = AssociatedHoldingArray.create(0)
-	result.reserve(count)
+	var result = AssociatedHoldingArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadAssociatedHolding(reader)
@@ -14253,7 +14228,7 @@ end 'DeclaredTypeMeaning'
 // comparison and not by this function having to enumerate it.
 export function compilerOwnedTypeMeaning(name ByteArray) returns DeclaredTypeMeaning
 	if name.equals(CharacterMemberSetAliasName) 'theCharacterMemberSet'
-		var args = GenericArgNodeArray.create(0)
+		var args = GenericArgNodeArray.create(1, zeroed: false)
 		args.push(GenericArgNode.leaf(MaxonType.character))
 		return DeclaredTypeMeaning.genericInstance(SetBuiltinBaseName, args: args, argCount: 1)
 	end 'theCharacterMemberSet'
@@ -14882,7 +14857,7 @@ function operandAliasAnswerMembers(answer ByteArray) returns NameRoster
 		return operandAliasSetMembers(answer)
 	end 'anOperandSet'
 
-	var members = NameRoster.create(0)
+	var members = NameRoster.create(1, zeroed: false)
 	members.push(answer)
 	return members
 end 'operandAliasAnswerMembers'
@@ -15514,8 +15489,7 @@ end 'cacheWriteMisclosedBlockSiteArray'
 
 function cacheReadMisclosedBlockSiteArray(reader LibraryCacheReader) returns MisclosedBlockSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = MisclosedBlockSiteArray.create(0)
-	result.reserve(count)
+	var result = MisclosedBlockSiteArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try MisclosedBlockSite.cacheRead(reader)
@@ -17368,7 +17342,7 @@ export type ProgramSignatures
 			footprint.nameBytes.push(self.nameOfId(name).clone())
 		end 'eachNameInTheFootprint'
 
-		var declared = InterfaceIndexArray.create(0)
+		var declared = InterfaceIndexArray.create(dispatchedInterfaces.count(), zeroed: false)
 
 		for index in dispatchedInterfaces 'eachDispatchedInterface'
 			declared.push(index)
@@ -17384,7 +17358,7 @@ export type ProgramSignatures
 	end 'footprintOf'
 
 	function footprintRemap(names NameIdMap, highest TypeNameId, instances GenericInstanceIdMap) returns TypeIdRemap
-		var dense = TypeNameIdArray.create(0)
+		var dense = TypeNameIdArray.create(highest + 1, zeroed: false)
 
 		for id in 0 to highest 'eachSlot'
 			dense.push(try names.get(id) otherwise id)
@@ -17521,7 +17495,7 @@ export type ProgramSignatures
 	end 'declTokensOf'
 
 	export function declTokenStreamPaths() returns FilePathArray
-		var paths = FilePathArray.create(0)
+		var paths = FilePathArray.create(self.settledDeclarations().declTokenStreams.count(), zeroed: false)
 
 		for (path, _) in self.settledDeclarations().declTokenStreams 'eachStream'
 			paths.push(try FilePath.from(path) otherwise panic("ProgramSignatures.declTokenStreamPaths: '{path}' keys a token stream and is not a path, and every key is spelled from the path of the file the fold kept"))
@@ -18963,9 +18937,10 @@ export type ProgramSignatures
 	// times. Each protocol is spelled through `IrInterfaceMap.spellingOf`, so under a contest the list names
 	// the library's protocols and never an author's interface of the same name.
 	export function arrayConformanceProtocolNames() returns NameRoster
-		var names = NameRoster.create(0)
+		let protocols = intrinsicConformanceProtocols(self.arrayRecordBaseName(), discovered: DiscoveredConformer.arrayRecord)
+		var names = NameRoster.create(protocols.count(), zeroed: false)
 
-		for protocol in intrinsicConformanceProtocols(self.arrayRecordBaseName(), discovered: DiscoveredConformer.arrayRecord) 'eachProtocol'
+		for protocol in protocols 'eachProtocol'
 			names.push(self.settledDeclarations().interfaces.spellingOf(protocol))
 		end 'eachProtocol'
 
@@ -19181,7 +19156,7 @@ export type ProgramSignatures
 
 		self.noteAuthorMintSpellings(spellings, spelled: spelled)
 
-		var familySpellings = StdlibShadowSpellingArray.create(0)
+		var familySpellings = StdlibShadowSpellingArray.create(self.mainThreadSettled().aliasFamiliesBesideNominals.count(), zeroed: false)
 
 		for family in self.mainThreadSettled().aliasFamiliesBesideNominals 'eachAliasFamily'
 			familySpellings.push(StdlibShadowSpelling.create(aliasFamilyMint(family), qualified: self.aliasFamilyAuthorSpelling(family), bare: family))
@@ -20231,8 +20206,8 @@ export type ProgramSignatures
 
 	function propagateForwardedStores(forwarders ForwarderArray, siteIndex ForwarderSiteMap)
 		let members = self.instanceMethodsByMemberName() if self.anyStoreResolvesByMemberName(forwarders) else DeclarationsByMemberName.create()
-		var handed = ParamBitColumnArray.create(0)
-		var targets = StoreTargetColumnArray.create(0)
+		var handed = ParamBitColumnArray.create(forwarders.count(), zeroed: false)
+		var targets = StoreTargetColumnArray.create(forwarders.count(), zeroed: false)
 		var waiters = FreshReturnWaiterMap.create()
 		var ready = FreshReturnForwarderIndexArray.create(0)
 
@@ -20898,7 +20873,7 @@ export type ProgramSignatures
 			end 'aMutableFormal'
 		end 'eachFormal'
 
-		var declarations = ByRefDeclarationArray.create(0)
+		var declarations = ByRefDeclarationArray.create(1, zeroed: false)
 		declarations.push(ByRefDeclaration.create(ParamReassignInfo.create(paramNames, writtenParams: formals, markerHeads: NameRoster.create(0), bareName: methodName, callability: DeclCallability.methodOf(interfaceName))))
 		return ByRefConvention.of(declarations)
 	end 'witnessRequirementConvention'
@@ -20946,7 +20921,7 @@ export type ProgramSignatures
 		end 'anInstanceNothingFiled'
 
 		view sites = try self.settledDeclarations().byRefSitesOfKey.get(callee) otherwise return allByValueConvention
-		var declarations = ByRefDeclarationArray.create(0)
+		var declarations = ByRefDeclarationArray.create(sites.count(), zeroed: false)
 
 		for site in sites 'eachDeclaration'
 			self.appendByRefDeclarationAt(site, into: declarations)
@@ -20965,7 +20940,7 @@ export type ProgramSignatures
 			return allByValueConvention
 		end 'statesNothing'
 
-		var declarations = ByRefDeclarationArray.create(0)
+		var declarations = ByRefDeclarationArray.create(1, zeroed: false)
 		self.appendByRefDeclarationAt(site, into: declarations)
 		return ByRefConvention.of(declarations)
 	end 'byRefOfDeclaration'
@@ -21359,8 +21334,8 @@ export type ProgramSignatures
 			return
 		end 'nothingForwards'
 
-		var forwarderNames = NameRoster.create(0)
-		var unsettled = UnsettledTargetCountArray.create(0)
+		var forwarderNames = NameRoster.create(self.settledDeclarations().funcFreshReturnForwards.count(), zeroed: false)
+		var unsettled = UnsettledTargetCountArray.create(self.settledDeclarations().funcFreshReturnForwards.count(), zeroed: false)
 		var waiters = FreshReturnWaiterMap.create()
 		var ready = FreshReturnForwarderIndexArray.create(0)
 
@@ -22046,9 +22021,10 @@ export type ProgramSignatures
 	end 'expandedInterfaceAliasDisplay'
 
 	function substitutedInstanceName(id GenericInstanceId, associatedTypeNames NameRoster, boundSpellings NameRoster, declaringInterfaceName ByteArray) returns ByteArray
-		var args = StringArray.create(0)
+		view instanceArgs = self.genericInstances.instanceArgs(id)
+		var args = StringArray.create(instanceArgs.count(), zeroed: false)
 
-		for (iter, arg) in self.genericInstances.instanceArgs(id).withIterator() 'eachArg'
+		for (iter, arg) in instanceArgs.withIterator() 'eachArg'
 			args.push("{self.readOnlyArgMarker(id, position: iter.index(), form: InstanceNameForm.written)}{self.substitutedArgName(arg, associatedTypeNames: associatedTypeNames, boundSpellings: boundSpellings, declaringInterfaceName: declaringInterfaceName)}")
 		end 'eachArg'
 
@@ -22110,7 +22086,7 @@ export type ProgramSignatures
 	// ONE loop the top-level alias args and a nested instance's args share (they differ only in whether the
 	// cursor is fresh or their parent's). A nested instance is interned before the outer arg that holds it.
 	function resolveArgList(nodes GenericArgNodeArray, count FieldIndex, cursor ArgCursor, remap TypeIdRemap) returns MaxonTypeArray
-		var out = MaxonTypeArray.create(0)
+		var out = MaxonTypeArray.create(count, zeroed: false)
 
 		for _ in 0 upto count 'each'
 			out.push(self.resolveArgNode(nodes, cursor: cursor, remap: remap))
@@ -22240,7 +22216,7 @@ export type ProgramSignatures
 	// ⭐⭐ **THE HELPER ARM MIXES ITS PRESENCE AND NOTHING ELSE, AND THAT IS THE `recordParamDefaults`
 	// RULING APPLIED VERBATIM.** What a READER of `type Bag` copies out of an expression default is
 	// exactly one thing — `call __fieldDefault#Bag#items` — and those bytes are byte-identical whether the
-	// default is `IntArray.create()` or `IntArray.withCapacity(4)`. The expression itself reaches only the
+	// default is `IntArray.create(4)` or `IntArray.create(8, zeroed: false)`. The expression itself reaches only the
 	// DECLARING file's own helper body, which re-parses on that file's own content hash. So mixing it would
 	// be sound and WRONG: every keystroke inside any default would re-parse the whole program.
 	//
@@ -23590,7 +23566,7 @@ export type ProgramSignatures
 			return ProbedImage.none
 		end 'aPayloadCarryingCase'
 
-		var nodes = ImmortalBoxNodeArray.create(0)
+		var nodes = ImmortalBoxNodeArray.create(1, zeroed: false)
 		let root = pushImageBoxNode(nodes, node: ImmortalBoxNode.create(self.boxedUnionCaseImageBytes(typeName, caseName: caseName), columns: sharedEmptyImmortalBoxColumns))
 
 		return ProbedImage.box(nodes, root: root, typeName: typeName, tag: ValueTypeTag.named)
@@ -24061,7 +24037,7 @@ export type ProgramSignatures
 	function recordCycle(index ElementIndex, stack TopLevelDeclIndexArray) returns ConstEvalOutcome
 		let arcStart = self.stackPositionOf(index, stack: stack)
 
-		var arc = DeclarationSiteArray.create(0)
+		var arc = DeclarationSiteArray.create(stack.count() - arcStart, zeroed: false)
 
 		for i in arcStart upto stack.count() 'eachMember'
 			let member = try stack.get(i) otherwise panic("ProgramSignatures.recordCycle: stack.get OOB at {i}")
@@ -24573,7 +24549,7 @@ export type ProgramSignatures
 			storedPositions.push(DeclarationPosition.of(fileRanks, path: candidate.declFilePath, line: candidate.nameLine, column: candidate.nameColumn, kind: "the global", name: candidate.name))
 		end 'eachDeclaration'
 
-		var ordered = DeclarationOrder.create(0)
+		var ordered = DeclarationOrder.create(storedPositions.count(), zeroed: false)
 
 		for slot in declarationsInPositionOrder(storedPositions) 'each'
 			ordered.push(try stored.get(slot) otherwise panic("ProgramSignatures.storedDeclarationsInPositionOrder: stored.get OOB at {slot}"))
@@ -24584,13 +24560,13 @@ export type ProgramSignatures
 
 	function liveWinningDefaultsInPositionOrder(fileRanks FileEmissionRankMap) returns DefaultDeclarationArray
 		let winning = self.liveWinningDefaults()
-		var positions = DeclarationPositionArray.create(0)
+		var positions = DeclarationPositionArray.create(winning.count(), zeroed: false)
 
 		for declaration in winning 'eachWinningDefault'
 			positions.push(DeclarationPosition.of(fileRanks, path: declaration.declFilePath, line: declaration.keyLine, column: declaration.keyColumn, kind: "the default", name: declaration.key))
 		end 'eachWinningDefault'
 
-		var ordered = DefaultDeclarationArray.create(0)
+		var ordered = DefaultDeclarationArray.create(positions.count(), zeroed: false)
 
 		for slot in declarationsInPositionOrder(positions) 'each'
 			ordered.push(try winning.get(slot) otherwise panic("ProgramSignatures.liveWinningDefaultsInPositionOrder: winning.get OOB at {slot}"))
@@ -24968,7 +24944,7 @@ export type ProgramSignatures
 	// zero is load-bearing: a NULL managed slot is what the destructor cascade's null-guard skips.
 	function boxedUnionCaseImageBytes(typeName ByteArray, caseName ByteArray) returns ByteArray
 		let layout = self.unionCaseLayoutOf(typeName, caseName: caseName)
-		var fields = ImageScalarSlotArray.create(0)
+		var fields = ImageScalarSlotArray.create(1, zeroed: false)
 		fields.push(unionTagSlot(layout, caseIndex: requireUnionCaseIndex(layout, caseName: caseName)))
 
 		return structBoxImageBytes(layout.boxSizeBytes(), fields: fields)
@@ -26150,7 +26126,7 @@ export type ProgramSignatures
 			return self.otherFormAmbiguityClaims(name)
 		end 'noRangedAliasOfThisNameIsContested'
 
-		var claims = TypeNameClaimArray.create(0)
+		var claims = TypeNameClaimArray.create(contested.count(), zeroed: false)
 
 		for (_, alias) in contested 'eachDeclaringFile'
 			claims.push(self.typeNameClaim(TypeDeclKind.rangedAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
@@ -26197,7 +26173,7 @@ export type ProgramSignatures
 		view functionAliases = self.settledDeclarations().functionTypeAliases.contestedDeclarations(name)
 
 		if functionAliases.count() > 0 'severalFilesDeclareTheFunctionAlias'
-			var claims = TypeNameClaimArray.create(0)
+			var claims = TypeNameClaimArray.create(functionAliases.count(), zeroed: false)
 
 			for (_, alias) in functionAliases 'eachDeclaringFile'
 				claims.push(self.typeNameClaim(TypeDeclKind.functionAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
@@ -26207,7 +26183,7 @@ export type ProgramSignatures
 		end 'severalFilesDeclareTheFunctionAlias'
 
 		if let byFile = try self.multiplyDeclaredTupleAliases.get(name) 'severalFilesDeclareTheTupleAlias'
-			var claims = TypeNameClaimArray.create(0)
+			var claims = TypeNameClaimArray.create(byFile.count(), zeroed: false)
 
 			for (_, tuple) in byFile 'eachDeclaringFile'
 				claims.push(tuple.claim)
@@ -26226,8 +26202,8 @@ export type ProgramSignatures
 	function genericAliasClaimsOf(name ByteArray) returns TypeNameClaimArray
 		self.indexGenericAliasDeclarations()
 
-		var claims = TypeNameClaimArray.create(0)
-		view held = try self.settledDeclarations().genericAliasDeclIndexByName.get(name) otherwise return claims
+		view held = try self.settledDeclarations().genericAliasDeclIndexByName.get(name) otherwise return sharedEmptyTypeNameClaims
+		var claims = TypeNameClaimArray.create(held.count(), zeroed: false)
 
 		for at in held 'eachDeclaration'
 			view decl = try self.settledDeclarations().genericAliasDecls.get(at) otherwise panic("ProgramSignatures.genericAliasClaimsOf: genericAliasDecls.get OOB at {at}, an index only `indexGenericAliasDeclarations` minted")
@@ -26495,7 +26471,7 @@ export type ProgramSignatures
 			self.noteCrossKindContest(aliasName, offeredAs: TypeDeclKind.functionAlias)
 		end 'eachFunctionAlias'
 
-		var genericAliasNames = NameRoster.create(0)
+		var genericAliasNames = NameRoster.create(self.settledDeclarations().genericAliasDecls.count(), zeroed: false)
 
 		for entry in self.settledDeclarations().genericAliasDecls 'eachGenericAliasName'
 			genericAliasNames.push(entry.aliasName)
@@ -26954,7 +26930,7 @@ export type ProgramSignatures
 			return ScopedGenericAliasDecl.undeclared
 		end 'noDeclarationHeld'
 
-		var claims = TypeNameClaimArray.create(0)
+		var claims = TypeNameClaimArray.create(held.count(), zeroed: false)
 
 		for at in held 'eachDeclaration'
 			claims.push(self.genericAliasDeclClaim(self.indexedGenericAliasDecl(at)))
@@ -28379,7 +28355,7 @@ export type ProgramSignatures
 			occupant = index
 		end 'eachField'
 
-		var types = MaxonTypeArray.create(0)
+		var types = MaxonTypeArray.create(1, zeroed: false)
 		types.push(self.fieldTypeOf(layout, index: occupant, into: into))
 		return types
 	end 'slotDeclaredTypes'
@@ -28435,7 +28411,7 @@ export type ProgramSignatures
 			return index
 		end 'alreadyBuilt'
 
-		var extensionNames = NameRoster.create(0)
+		var extensionNames = NameRoster.create(self.settledDeclarations().extensionDeclaredConformances.count(), zeroed: false)
 
 		for (typeName, _) in self.settledDeclarations().extensionDeclaredConformances 'eachExtensionConformer'
 			extensionNames.push(typeName)
@@ -28447,7 +28423,7 @@ export type ProgramSignatures
 	end 'conformerIndexWithExtensions'
 
 	function declaredEnumNames() returns NameRoster
-		var enumNames = NameRoster.create(0)
+		var enumNames = NameRoster.create(self.settledDeclarations().enumTypes.count(), zeroed: false)
 
 		for (enumName, _) in self.settledDeclarations().enumTypes 'eachDeclaredEnum'
 			enumNames.push(enumName)
@@ -28798,7 +28774,7 @@ export type ProgramSignatures
 			return declared
 		end 'unconditional'
 
-		var reserved = WhereConstraintArray.create(0)
+		var reserved = WhereConstraintArray.create(declared.count() + extensionConstraints.count(), zeroed: false)
 		reserved.append(declared)
 
 		for constraint in extensionConstraints 'eachExtra'
@@ -28976,7 +28952,7 @@ export type ProgramSignatures
 			return existing
 		end 'alreadyHoldsSomething'
 
-		var fresh = AssociatedHoldingArray.create(0)
+		var fresh = AssociatedHoldingArray.create(associatedCount, zeroed: false)
 
 		for _ in 0 upto associatedCount 'eachPosition'
 			fresh.push(AssociatedHolding.unheld)
@@ -29680,7 +29656,7 @@ export type ProgramSignatures
 	// `typealias CharSet = Set with Character` interns, so the instance a `from` literal builds and the one the
 	// corpus alias names share ONE gid and are type-identical. Idempotent.
 	export function setInstanceForCharacter() returns GenericInstanceId
-		var args = MaxonTypeArray.create(0)
+		var args = MaxonTypeArray.create(1, zeroed: false)
 		args.push(MaxonType.character)
 		return self.genericInstances.intern(self.typeNames.intern(SetBuiltinBaseName), args: args)
 	end 'setInstanceForCharacter'
@@ -29740,7 +29716,7 @@ export type ProgramSignatures
 	// and an element naming a CONTESTED generic alias means what that file means by it. See
 	// `tupleStructLayout` for why the minted layout carries it too.
 	export function internTupleType(elements MaxonTypeArray, written NameRoster, capabilities ParamCapabilityArray, from TypeNameInterner, slotScopeFilePath FilePath) returns ByteArray throws TupleElementRejection
-		var interned = MaxonTypeArray.create(0)
+		var interned = MaxonTypeArray.create(elements.count(), zeroed: false)
 
 		for i in 0 upto elements.count() 'eachElement'
 			let adopted = self.adoptTypeFrom(try elements.get(i) otherwise panic("internTupleType: elements.get OOB at {i} below count {elements.count()}"), from: from)
@@ -29848,7 +29824,7 @@ export type ProgramSignatures
 	end 'settleSweptTupleElementBrands'
 
 	function tupleElementBrands(elements MaxonTypeArray, instanceBrands NameRoster, declFilePath FilePath) returns NameRoster
-		var brands = NameRoster.create(0)
+		var brands = NameRoster.create(elements.count(), zeroed: false)
 
 		for i in 0 upto elements.count() 'eachElement'
 			let element = try elements.get(i) otherwise panic("tupleElementBrands: elements.get OOB at {i} below count {elements.count()}")
@@ -29866,7 +29842,7 @@ export type ProgramSignatures
 	end 'tupleElementBrands'
 
 	function writtenBrandsOf(layout StructLayout, types MaxonTypeArray) returns NameRoster
-		var written = NameRoster.create(0)
+		var written = NameRoster.create(types.count(), zeroed: false)
 
 		for i in 0 upto types.count() 'eachElement'
 			let element = try types.get(i) otherwise panic("writtenBrandsOf: types.get OOB at {i} below count {types.count()}")
@@ -30272,7 +30248,7 @@ export type ProgramSignatures
 		// elements and this is the walk that resolves them.** It is the file that wrote the element list
 		// — see `tupleStructLayout` — and it rides on to the canonical layout so a re-entrant walk scopes the
 		// same way the first one did.
-		var canonical = MaxonTypeArray.create(0)
+		var canonical = MaxonTypeArray.create(layout.fieldTypes.count(), zeroed: false)
 
 		for element in layout.fieldTypes 'eachElement'
 			canonical.push(self.canonicalTupleElement(element, slotScopeFilePath: layout.declFilePath))
@@ -30456,7 +30432,7 @@ export type ProgramSignatures
 	end 'scopedTupleAlias'
 
 	function scopedTupleClaimant(byFile TupleAliasByDeclaringFile, readerFilePath FilePath) returns DeclaredTupleAlias
-		var claims = TypeNameClaimArray.create(0)
+		var claims = TypeNameClaimArray.create(byFile.count(), zeroed: false)
 
 		for (_, claimant) in byFile 'eachClaimant'
 			claims.push(claimant.claim)
@@ -30474,7 +30450,7 @@ export type ProgramSignatures
 	// an artifact layout's field types in place, so the index's copy may never be shared with it).
 	export function adoptTupleLayout(name ByteArray, into TypeNameInterner) returns StructLayout
 		view layout = try self.registeredLayout(name) otherwise panic("ProgramSignatures.adoptTupleLayout: `{String.from(name)}` is not registered — every caller reached here with a name `internTupleType` handed back")
-		var adopted = MaxonTypeArray.create(0)
+		var adopted = MaxonTypeArray.create(layout.fieldTypes.count(), zeroed: false)
 
 		for element in layout.fieldTypes 'eachElement'
 			adopted.push(self.adoptType(element, into: into))
@@ -30870,7 +30846,7 @@ export type ProgramSignatures
 	// `scopeOwner` is whose parameters they cite — see the door's header for why those are two arguments and
 	// not one, and why a positional pairing would be a silently wrong type.
 	function instanceOverScopeParams(name ByteArray, scopeOwner ByteArray, params NameRoster) returns GenericInstanceId
-		var args = MaxonTypeArray.create(0)
+		var args = MaxonTypeArray.create(params.count(), zeroed: false)
 
 		for paramName in params 'eachParam'
 			args.push(MaxonType.typeParameter(typeParamTokenFor(scopeOwner, paramName: paramName)))
@@ -31813,7 +31789,7 @@ export type ProgramSignatures
 	// land in its band (`GenericInstanceRegistry.parseBandOpen`), which the merge renumbers into the
 	// one registry, so one instance has one id across files.
 	export function fixedArrayInstanceForElement(element MaxonType, size FixedElementCount) returns GenericInstanceId
-		var args = MaxonTypeArray.create(0)
+		var args = MaxonTypeArray.create(1, zeroed: false)
 		args.push(element)
 		return self.genericInstances.intern(self.typeNames.intern(FixedArrayBuiltinBaseName), args: args, shape: InstanceShape.sized(size))
 	end 'fixedArrayInstanceForElement'
@@ -32160,7 +32136,7 @@ export type ProgramSignatures
 			panic("ProgramSignatures.tupleDisplayNoted: '{shown}' and '{otherShown}' print alike, so both tuples hold one element count — these hold {layout.fieldCount()} and {otherLayout.fieldCount()}")
 		end 'twoShapesPrintAlike'
 
-		var names = StringArray.create(0)
+		var names = StringArray.create(layout.fieldCount(), zeroed: false)
 
 		for i in 0 upto layout.fieldCount() 'eachElement'
 			let elementShown = self.tupleElementDisplayName(layout, index: i as FieldIndex)
@@ -32187,7 +32163,7 @@ export type ProgramSignatures
 
 	export function typeDisplayName(t MaxonType) returns String
 		view layout = try self.tupleLayoutOf(t) otherwise return maxonTypeDisplayName(t, typeNames: self.typeNames, signatures: self)
-		var names = StringArray.create(0)
+		var names = StringArray.create(layout.fieldCount(), zeroed: false)
 
 		for i in 0 upto layout.fieldCount() 'eachElement'
 			names.push(self.tupleElementDisplayName(layout, index: i as FieldIndex))
@@ -33401,7 +33377,7 @@ export type ProgramSignatures
 			return self.arrayByteInstance
 		end 'alreadyMinted'
 
-		var args = MaxonTypeArray.create(0)
+		var args = MaxonTypeArray.create(1, zeroed: false)
 		args.push(MaxonType.named(self.typeNames.intern(self.aliasFamilyIdentity(ByteElementTypeName))))
 		self.arrayByteInstance = self.genericInstances.intern(self.typeNames.intern(self.arrayRecordBaseName()), args: args)
 		self.arrayByteInstanceComputed = true
@@ -33535,7 +33511,7 @@ export type ProgramSignatures
 	end 'anythingNeedsScoping'
 
 	function fileScopedArgs(args MaxonTypeArray, filePath FilePath) returns MaxonTypeArray
-		var scoped = MaxonTypeArray.create(0)
+		var scoped = MaxonTypeArray.create(args.count(), zeroed: false)
 
 		for arg in args 'eachArg'
 			scoped.push(self.fileScopedArg(arg, filePath: filePath))
@@ -33889,9 +33865,8 @@ export type ProgramSignatures
 			self.mainThreadSettled().genericAliases.upsert(entry.aliasName, value: self.fileScopedInstance(entry.internedInstance(), filePath: entry.filePath))
 		end 'eachDeclaration'
 
-		var scoped = GenericInstantiationSiteArray.create(0)
-
 		view sites = self.mainThreadSettled().genericAliasSites
+		var scoped = GenericInstantiationSiteArray.create(sites.count(), zeroed: false)
 
 		for site in sites 'eachSite'
 			scoped.push(GenericInstantiationSite.create(self.fileScopedInstance(site.gid, filePath: site.filePath), nameLine: site.nameLine, nameColumn: site.nameColumn, filePath: site.filePath))
@@ -34126,7 +34101,7 @@ export type ProgramSignatures
 			declaredInterface then throw MapError.keyNotFound
 		end 'rule'
 
-		var rebuilt = MaxonTypeArray.create(0)
+		var rebuilt = MaxonTypeArray.create(decl.paramTypes.count(), zeroed: false)
 		var claimed = false
 
 		for declared in decl.paramTypes 'eachParameter'
@@ -34329,8 +34304,7 @@ export type ProgramSignatures
 
 		self.inlineGeometrySettled = true
 
-		var byId = BoolArray.create(0)
-		byId.reserve(self.typeNames.count())
+		var byId = BoolArray.create(self.typeNames.count(), zeroed: false)
 
 		for id in 0 upto self.typeNames.count() 'eachInternedTypeName'
 			byId.push(self.nameIsInlineRecord(self.nameOfId(id)))
@@ -34380,8 +34354,7 @@ export type ProgramSignatures
 			return InlineRecordShape.notInline
 		end 'pastTheWord'
 
-		var bitWidths = BitWidthArray.create(0)
-		bitWidths.reserve(layout.fieldCount())
+		var bitWidths = BitWidthArray.create(layout.fieldCount(), zeroed: false)
 
 		for index in 0 upto layout.fieldCount() 'eachAcceptedField'
 			bitWidths.push(try self.inlineRecordFieldBits(layout, index: index) otherwise panic("ProgramSignatures.inlineRecordShapeOf: field {index} of `type {String.from(layout.name)}` was accepted by the width pass and has no width in the collection pass — both read `inlineRecordFieldBits`"))
@@ -34594,7 +34567,7 @@ export type ProgramSignatures
 	// replaced wholesale (`PayloadField` holds `let` columns), where a struct field column is retyped in place.
 	function rewriteRecordedPayloadTypes(rule RecordedReturnTypeRule, layout EnumLayout, caseIndex CaseIndex)
 		view payloads = layout.payloadsAt(caseIndex)
-		var rewritten = PayloadFieldArray.create(0)
+		var rewritten = PayloadFieldArray.create(payloads.count(), zeroed: false)
 		var changed = false
 
 		for field in payloads 'eachSlot'
@@ -34802,7 +34775,7 @@ export type ProgramSignatures
 	end 'promiseAggregateArgAsName'
 
 	export function internSynthesizedByteInstance() returns GenericInstanceId
-		var args = MaxonTypeArray.create(0)
+		var args = MaxonTypeArray.create(1, zeroed: false)
 		args.push(MaxonType.named(self.typeNames.intern(SynthesizedByteElementName)))
 		return self.genericInstances.intern(self.typeNames.intern(self.arrayRecordBaseName()), args: args)
 	end 'internSynthesizedByteInstance'
@@ -34898,7 +34871,7 @@ export type ProgramSignatures
 	// since a genuine row is only ever mistaken for a guess by saying so explicitly. The sole `true` is
 	// `internAggregateElementInstances`, whose whole output is guesses.
 	export function builtinInstanceForElement(baseName ByteArray, element MaxonType, asSpeculative bool = false) returns GenericInstanceId
-		var args = MaxonTypeArray.create(0)
+		var args = MaxonTypeArray.create(1, zeroed: false)
 		args.push(self.canonicalInstanceArg(element))
 		return self.genericInstances.intern(self.typeNames.intern(baseName), args: args, asSpeculative: asSpeculative)
 	end 'builtinInstanceForElement'
@@ -34937,7 +34910,7 @@ export type ProgramSignatures
 	// then `MapValueArgPosition`, which `mapKeyType`/`mapValueType` read back — so the two are named parameters
 	// rather than an array a caller could fill in the wrong order.
 	export function builtinInstanceForColumns(baseName ByteArray, key MaxonType, value MaxonType) returns GenericInstanceId
-		var args = MaxonTypeArray.create(0)
+		var args = MaxonTypeArray.create(2, zeroed: false)
 		args.push(self.canonicalInstanceArg(key))
 		args.push(self.canonicalInstanceArg(value))
 		return self.genericInstances.intern(self.typeNames.intern(baseName), args: args)
@@ -36246,9 +36219,10 @@ export type ProgramSignatures
 	// cannot look up.** `Array_Byte` is recognizable: some file declares `Byte`. `Array_int$0_255` names
 	// nothing an author can search for, and the `$` is a separator no source may contain.
 	function renderedInstanceWith(id GenericInstanceId, spelling InstanceArgSpelling) returns ByteArray
-		var names = StringArray.create(0)
+		view instanceArgs = self.genericInstances.instanceArgs(id)
+		var names = StringArray.create(instanceArgs.count(), zeroed: false)
 
-		for (iter, arg) in self.genericInstances.instanceArgs(id).withIterator() 'eachArg'
+		for (iter, arg) in instanceArgs.withIterator() 'eachArg'
 			names.push("{self.readOnlyArgMarker(id, position: iter.index(), form: InstanceNameForm.written)}{String.from(self.displayedTypeArgName(arg, spelling: spelling))}")
 		end 'eachArg'
 
@@ -36948,7 +36922,7 @@ export type ProgramSignatures
 
 	function substituteInstanceArgsThrough(nested GenericInstanceId, through GenericInstanceId, aliasHops AliasHopCount) returns MaxonType
 		view args = self.genericInstances.instanceArgs(nested)
-		var substituted = MaxonTypeArray.create(0)
+		var substituted = MaxonTypeArray.create(args.count(), zeroed: false)
 		var moved = false
 
 		for arg in args 'eachArg'
@@ -37098,8 +37072,8 @@ export type ProgramSignatures
 	export function substituteTupleThroughInstance(tupleName ByteArray, id GenericInstanceId) returns ByteArray
 		view layout = try self.registeredLayout(self.canonicalNameOfStruct(tupleName)) otherwise panic("ProgramSignatures.substituteTupleThroughInstance: `{String.from(tupleName)}` is not registered — every tuple `structRef` in the compiler was minted by `internTupleType`, which registers the layout before it hands the name back")
 
-		var substituted = MaxonTypeArray.create(0)
-		var substitutedBrands = NameRoster.create(0)
+		var substituted = MaxonTypeArray.create(layout.fieldCount(), zeroed: false)
+		var substitutedBrands = NameRoster.create(layout.fieldCount(), zeroed: false)
 		var substitutedCapabilities = tupleItemCapabilitiesOf(layout)
 		let written = self.writtenBrandsOf(layout, types: layout.fieldTypes)
 		var moved = false
@@ -37470,7 +37444,7 @@ export type ProgramSignatures
 		end 'notGeneric'
 
 		let fieldType = self.denotedType(try self.declaredSlotTypeOfField(owner, fieldName: fieldName) otherwise return false)
-		var ownParameters = MaxonTypeArray.create(0)
+		var ownParameters = MaxonTypeArray.create(paramNames.count(), zeroed: false)
 
 		for paramName in paramNames 'eachParameter'
 			ownParameters.push(MaxonType.typeParameter(typeParamTokenFor(owner, paramName: paramName)))
@@ -37583,9 +37557,10 @@ export type ProgramSignatures
 			return false
 		end 'wrongArity'
 
-		var args = MaxonTypeArray.create(0)
+		let argCount = self.genericInstanceArgCount(id)
+		var args = MaxonTypeArray.create(argCount, zeroed: false)
 
-		for position in 0 upto self.genericInstanceArgCount(id) 'eachArgument'
+		for position in 0 upto argCount 'eachArgument'
 			args.push(self.denotedArg(id, position: position))
 		end 'eachArgument'
 
@@ -38889,7 +38864,7 @@ export type ProgramSignatures
 			return sharedEmptyReturnExistentialSites
 		end 'namesNoInstance'
 
-		var sites = GenericInstanceIdArray.create(0)
+		var sites = GenericInstanceIdArray.create(1, zeroed: false)
 		sites.push(self.genericAliasInstanceFrom(key, readerFilePath: layout.declFilePath))
 		return sites
 	end 'existentialSitesSpelled'
@@ -39678,7 +39653,7 @@ export type ProgramSignatures
 	end 'rememberUniqueHolding'
 
 	function uniqueHoldingKeyOf(name ByteArray) returns ByteArray
-		var key = ByteArray.create(0)
+		var key = ByteArray.create(UniqueHoldingKeyPrefix.count() + name.count(), zeroed: false)
 		key.append(UniqueHoldingKeyPrefix)
 		key.append(name)
 
@@ -43181,7 +43156,7 @@ export type ProgramSignatures
 					continue
 				end 'alreadyRegistered'
 
-				var elements = MaxonTypeArray.create(0)
+				var elements = MaxonTypeArray.create(layout.fieldTypes.count(), zeroed: false)
 
 				for element in layout.fieldTypes 'eachElement'
 					elements.push(self.adoptRequestedTupleElement(element, from: from, instances: instances))
@@ -43246,7 +43221,7 @@ export type ProgramSignatures
 	end 'requireRowNamesAreListed'
 
 	export function genericTemplateKeys() returns NameRoster
-		var keys = NameRoster.create(0)
+		var keys = NameRoster.create(self.settledDeclarations().genericTemplates.count(), zeroed: false)
 
 		for (key, _) in self.settledDeclarations().genericTemplates 'eachTemplate'
 			keys.push(key)
@@ -43586,25 +43561,25 @@ export type ProgramSignatures
 	export function closeParseBand(filePath FilePath) returns LocalInstanceMints
 		let typeNameBaseline = self.typeNames.baselineNameCount()
 		let bandNames = self.typeNames.namesSinceBaseline()
-		var tupleLayouts = StructLayoutArray.create(0)
+		var tupleLayouts = StructLayoutArray.create(self.journal.tupleNames.count(), zeroed: false)
 
 		for name in self.journal.tupleNames 'eachMintedTuple'
 			tupleLayouts.push((try self.registeredLayout(name) otherwise panic("ProgramSignatures.closeParseBand: the journal lists tuple `{String.from(name)}` and `structSlots` does not hold it")).clone())
 		end 'eachMintedTuple'
 
-		var origins = SubstitutionOriginArray.create(0)
+		var origins = SubstitutionOriginArray.create(self.journal.originIds.count(), zeroed: false)
 
 		for instance in self.journal.originIds 'eachOrigin'
 			origins.push(SubstitutionOrigin.create(instance, through: try self.substitutedInstanceOrigins.get(instance) otherwise panic("ProgramSignatures.closeParseBand: the journal lists an origin for {instance} and the map does not hold it")))
 		end 'eachOrigin'
 
-		var constantReads = NameInFileArray.create(0)
+		var constantReads = NameInFileArray.create(self.crossFileConstantReads.count() - self.baseline.crossFileConstantReadCount, zeroed: false)
 
 		for position in self.baseline.crossFileConstantReadCount upto self.crossFileConstantReads.count() 'eachRead'
 			constantReads.push(try self.crossFileConstantReads.get(position) otherwise panic("ProgramSignatures.closeParseBand: crossFileConstantReads.get OOB at {position}"))
 		end 'eachRead'
 
-		var bandAliases = TupleAliasRecordArray.create(0)
+		var bandAliases = TupleAliasRecordArray.create(self.journal.tupleAliasWrites.count(), zeroed: false)
 
 		for write in self.journal.tupleAliasWrites 'eachAliasWrite'
 			bandAliases.push(TupleAliasRecord.create(write.name.clone(), alias: (try self.tupleAliases.get(write.name) otherwise panic("ProgramSignatures.closeParseBand: the journal lists tuple alias `{String.from(write.name)}` and the map does not hold it")).clone()))
@@ -43758,14 +43733,14 @@ export type ProgramSignatures
 	// structure, so a row two files minted is one row and its id is the first minter's — the numbering a
 	// serial parse in source-path order gives. Answers the id each row now has, in row order.
 	export function adoptParseMints(mints LocalInstanceMints) returns GenericInstanceIdArray
-		var names = TypeNameIdArray.create(0)
+		var names = TypeNameIdArray.create(mints.typeNames.count(), zeroed: false)
 
 		for name in mints.typeNames 'eachName'
 			names.push(self.typeNames.intern(name))
 		end 'eachName'
 
 		var instances = GenericInstanceIdMap.create()
-		var adopted = GenericInstanceIdArray.create(0)
+		var adopted = GenericInstanceIdArray.create(mints.rows.count(), zeroed: false)
 
 		// Shares `instances`, so a row's arguments are remapped through every row adopted before it.
 		var remap = TypeIdRemap.create(names, namesBase: mints.typeNameBaseline, instances: instances)
@@ -44256,6 +44231,7 @@ end 'ProgramSignatures'
 
 typealias ConformerSlotByInterface = Map with (ByteArray, ElementIndex)
 typealias ConformerPairArray = Array with ElementIndex
+typealias PlacedPairColumn = FixedArray with ElementIndex
 typealias ConformerRosterMap = Map with (ByteArray, NameRoster)
 
 // @generated library-cache begin
@@ -44433,7 +44409,7 @@ function groupConformersByInterface(names NameRoster, swept DeclaredConformanceM
 		end 'eachReachedInterface'
 	end 'eachDeclaredName'
 
-	var slotStarts = ConformerPairArray.create(0)
+	var slotStarts = ConformerPairArray.create(slotCursors.count() + 1, zeroed: false)
 	var running = 0 as ElementIndex
 
 	for slot in 0 upto slotCursors.count() 'eachSlotSize'
@@ -44445,8 +44421,7 @@ function groupConformersByInterface(names NameRoster, swept DeclaredConformanceM
 
 	slotStarts.push(running)
 
-	var placedPairs = ConformerPairArray.create(0)
-	placedPairs.refill(pairSlots.count(), value: 0)
+	var placedPairs = PlacedPairColumn.create(pairSlots.count())
 
 	for pair in 0 upto pairSlots.count() 'eachPair'
 		let slot = try pairSlots.get(pair) otherwise panic("groupConformersByInterface: pairSlots.get OOB at {pair}")
@@ -44458,9 +44433,9 @@ function groupConformersByInterface(names NameRoster, swept DeclaredConformanceM
 	var rosters = ConformerRosterMap.create()
 
 	for slot in 0 upto interfaceNames.count() 'eachInterface'
-		var roster = NameRoster.create(0)
 		let start = try slotStarts.get(slot) otherwise panic("groupConformersByInterface: slotStarts.get OOB at {slot}")
 		let finish = try slotStarts.get(slot + 1) otherwise panic("groupConformersByInterface: slotStarts.get OOB past slot {slot}")
+		var roster = NameRoster.create(finish - start, zeroed: false)
 
 		for position in start upto finish 'eachPlacedPair'
 			let pair = try placedPairs.get(position) otherwise panic("groupConformersByInterface: placedPairs.get OOB at {position}")
@@ -44812,8 +44787,7 @@ end 'cacheWriteLocalInstanceRowArray'
 
 function cacheReadLocalInstanceRowArray(reader LibraryCacheReader) returns LocalInstanceRowArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = LocalInstanceRowArray.create(0)
-	result.reserve(count)
+	var result = LocalInstanceRowArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try LocalInstanceRow.cacheRead(reader)
@@ -44877,8 +44851,7 @@ end 'cacheWriteSubstitutionOriginArray'
 
 function cacheReadSubstitutionOriginArray(reader LibraryCacheReader) returns SubstitutionOriginArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = SubstitutionOriginArray.create(0)
-	result.reserve(count)
+	var result = SubstitutionOriginArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try SubstitutionOrigin.cacheRead(reader)
@@ -44932,8 +44905,7 @@ end 'cacheWriteTupleAliasRecordArray'
 
 function cacheReadTupleAliasRecordArray(reader LibraryCacheReader) returns TupleAliasRecordArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = TupleAliasRecordArray.create(0)
-	result.reserve(count)
+	var result = TupleAliasRecordArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try TupleAliasRecord.cacheRead(reader)
@@ -44972,9 +44944,9 @@ export type LocalInstanceMints
 	end 'watchedBy'
 
 	export function rebased(rebase ParseRebase) returns LocalInstanceMints
-		var names = TypeNameIdArray.create(0)
 		let newBaseline = rebase.nameBaseline
 		let bandCount = self.typeNames.count() as TypeNameId
+		var names = TypeNameIdArray.create(self.typeNameBaseline + bandCount, zeroed: false)
 
 		for id in 0 upto self.typeNameBaseline + bandCount 'eachName'
 			if id < self.typeNameBaseline 'aBaselineName'
@@ -44989,25 +44961,25 @@ export type LocalInstanceMints
 	end 'rebased'
 
 	function remappedThrough(remap TypeIdRemap, baseline TypeNameId) returns LocalInstanceMints
-		var rebasedRows = LocalInstanceRowArray.create(0)
+		var rebasedRows = LocalInstanceRowArray.create(self.rows.count(), zeroed: false)
 
 		for row in self.rows 'eachRow'
 			rebasedRows.push(LocalInstanceRow.create(remap.applyName(row.baseId), args: remapMaxonTypes(row.args, remap: remap), shape: row.shape, speculative: row.speculative))
 		end 'eachRow'
 
-		var named = GenericInstanceIdArray.create(0)
+		var named = GenericInstanceIdArray.create(self.namedRows.count(), zeroed: false)
 
 		for id in self.namedRows 'eachNamedRow'
 			named.push(remap.applyInstance(id))
 		end 'eachNamedRow'
 
-		var demanded = GenericInstanceIdArray.create(0)
+		var demanded = GenericInstanceIdArray.create(self.copyDemandedRows.count(), zeroed: false)
 
 		for id in self.copyDemandedRows 'eachCopyDemandedRow'
 			demanded.push(remap.applyInstance(id))
 		end 'eachCopyDemandedRow'
 
-		var layouts = StructLayoutArray.create(0)
+		var layouts = StructLayoutArray.create(self.tupleLayouts.count(), zeroed: false)
 
 		for layout in self.tupleLayouts 'eachTuple'
 			var copy = layout.clone()
@@ -45015,7 +44987,7 @@ export type LocalInstanceMints
 			layouts.push(copy)
 		end 'eachTuple'
 
-		var origins = SubstitutionOriginArray.create(0)
+		var origins = SubstitutionOriginArray.create(self.substitutionOrigins.count(), zeroed: false)
 
 		for origin in self.substitutionOrigins 'eachOrigin'
 			origins.push(SubstitutionOrigin.create(remap.applyInstance(origin.instance), through: remap.applyInstance(origin.through)))

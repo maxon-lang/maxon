@@ -237,7 +237,7 @@ function declarationsInSourceOrder(path FilePath, tokens TokenArray, order Sourc
 		return tokens
 	end 'nothingToReorder'
 
-	var reordered = TokenArray.create(0)
+	var reordered = TokenArray.create(tokens.count() + starts.count(), zeroed: false)
 	let lastToken = try tokens.get(tokens.count() - 1) otherwise panic("declarationsInSourceOrder: a stream holding declarations is not empty")
 	var chunkEnd = ((tokens.count() - 1) if lastToken.kind == TokenKind.eof else tokens.count()) as ElementIndex
 	let firstStart = try starts.get(0) otherwise panic("declarationsInSourceOrder: starts is not empty")
@@ -460,7 +460,7 @@ function foldedUserFilesOf(project Project, recordingClaims bool) returns UserFi
 		signatures.recordTypeClaims()
 	end 'aClaimsFold'
 
-	var userPaths = MaxonSourcePathArray.create(0)
+	var userPaths = MaxonSourcePathArray.create(project.db.sourcePaths.count(), zeroed: false)
 
 	for path in project.db.sourcePaths 'eachFile'
 		userPaths.push(path)
@@ -783,7 +783,7 @@ module type ProgramPartition
 	end 'create'
 
 	module function stdlibTierPaths() returns MaxonSourcePathArray
-		var paths = MaxonSourcePathArray.create(0)
+		var paths = MaxonSourcePathArray.create(self.stdlibPaths.count() + self.scriptlibPaths.count(), zeroed: false)
 		paths.append(self.stdlibPaths)
 		paths.append(self.scriptlibPaths)
 
@@ -890,7 +890,7 @@ function declarationsFoldedOntoTheLibraryBaseline(project Project) returns Basel
 
 	// Scriptlib packages fold here and are never in the baseline: that is cached per compiler and
 	// target, and the user edits a package under it.
-	var deferred = FilePathArray.create(0)
+	var deferred = FilePathArray.create(start.remainder.count() + partition.scriptlibPaths.count(), zeroed: false)
 	deferred.append(start.remainder)
 	deferred.append(partition.scriptlibPaths)
 	try foldLibraryRemainder(project, signatures: signatures, deferred: deferred)
@@ -2152,8 +2152,7 @@ module function dropExplainedParseConsequences(project Project, signatures Progr
 		return
 	end 'nothingIsHeld'
 
-	var explained = BoolArray.create(0)
-	explained.growFilled(held.count(), value: false)
+	var explained = FixedBoolArray.create(held.count())
 	var progressed = true
 	var anyExplained = false
 
@@ -2211,7 +2210,7 @@ module enum ConsequenceDropStage
 	afterTypeResolution
 end 'ConsequenceDropStage'
 
-function unexplainedAfterTheDrop(held PendingConsequenceArray, explained BoolArray) returns PendingConsequenceArray
+function unexplainedAfterTheDrop(held PendingConsequenceArray, explained FixedBoolArray) returns PendingConsequenceArray
 	var remaining = PendingConsequenceArray.create(0)
 	var removed = 0 as ElementIndex
 
@@ -2229,7 +2228,7 @@ function unexplainedAfterTheDrop(held PendingConsequenceArray, explained BoolArr
 	return remaining
 end 'unexplainedAfterTheDrop'
 
-function consequenceIsExplained(explained BoolArray, position ElementIndex) returns bool
+function consequenceIsExplained(explained FixedBoolArray, position ElementIndex) returns bool
 	return try explained.get(position) otherwise panic("consequenceIsExplained: explained.get OOB at {position}")
 end 'consequenceIsExplained'
 
@@ -2639,9 +2638,10 @@ function emissionComponentsOf(project Project, path FilePath, tier SourceTier, c
 	let resolved = path.resolve(cwd)
 	let anchor = namespaceAnchorFor(project, cwd: cwd, tier: tier)
 	let relative = try resolved.relativeTo(anchor) otherwise resolved
-	var components = NameRoster.create(0)
+	let pieces = relative.toString().replace(FilePath.separator(), with: EmissionPathSeparator).split(EmissionPathSeparator)
+	var components = NameRoster.create(pieces.count(), zeroed: false)
 
-	for component in relative.toString().replace(FilePath.separator(), with: EmissionPathSeparator).split(EmissionPathSeparator) 'eachComponent'
+	for component in pieces 'eachComponent'
 		components.push(component.toByteArray())
 	end 'eachComponent'
 
@@ -2656,7 +2656,7 @@ end 'emissionComponentsOf'
 // order.
 function sourceFilesInEmissionOrder(project Project) returns EmissionSlotArray
 	let cwd = Directory.currentPath()
-	var slots = EmissionSlotArray.create(0)
+	var slots = EmissionSlotArray.create(project.db.sourcePaths.count(), zeroed: false)
 
 	for (iter, path) in project.db.sourcePaths.withIterator() 'eachSourcePath'
 		let tier = sourceTierOf(project, path: path)
@@ -2759,7 +2759,7 @@ export typealias DeclarationPositionArray = Array with DeclarationPosition
 export typealias DeclarationOrder = Array with ElementIndex
 
 export function declarationsInPositionOrder(positions DeclarationPositionArray) returns DeclarationOrder
-	var order = DeclarationOrder.create(0)
+	var order = DeclarationOrder.create(positions.count(), zeroed: false)
 	var ascending = true
 
 	for i in 0 upto positions.count() 'eachPosition'
@@ -3243,7 +3243,7 @@ function armFnTypeDisplay(project Project, name ByteArray) returns String
 
 	let alias = try project.functionTypeAliases.get(name) otherwise panic("armFnTypeDisplay: '{String.from(name)}' is armFnTypeResolvable but in neither registry — this and armFnTypeResolvable disagree")
 
-	var paramTypes = MaxonTypeArray.create(0)
+	var paramTypes = MaxonTypeArray.create(alias.paramTypes.count(), zeroed: false)
 
 	for param in alias.paramTypes 'eachParam'
 		paramTypes.push(maxonTypeOfStoredAliasParam(param, typeNames: project.typeNames))

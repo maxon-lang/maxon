@@ -30,11 +30,12 @@ module type AsyncArgumentSlots
 		let mask = Self.floatMaskOf(paramTypes, byReference: byReference)
 		let userCount = paramTypes.count() as ParamCount
 		let witnessParams = Self.witnessParamsOf(paramTypes, byReference: byReference)
-		var offsets = ByteOffsetArray.create(0)
+		let slotCount = userCount + (witnessParams.count() as ParamCount)
+		var offsets = ByteOffsetArray.create(slotCount, zeroed: false)
 		var stackPositions = ParamCountArray.create(0)
 		var usesImage = false
 
-		for position in 0 upto userCount + (witnessParams.count() as ParamCount) 'eachSlot'
+		for position in 0 upto slotCount 'eachSlot'
 			let slot = abiFileSlotIndex(mask, index: position)
 
 			if abiArgIsOnStack(mask, index: position, capacity: capacity) 'onTheStack'
@@ -66,9 +67,10 @@ module type AsyncArgumentSlots
 	module static function recorded(paramTypes MaxonTypeArray, byReference ParamPositionMask) returns Self
 		let userCount = paramTypes.count() as ParamCount
 		let witnessParams = Self.witnessParamsOf(paramTypes, byReference: byReference)
-		var offsets = ByteOffsetArray.create(0)
+		let slotCount = userCount + (witnessParams.count() as ParamCount)
+		var offsets = ByteOffsetArray.create(slotCount, zeroed: false)
 
-		for position in 0 upto userCount + (witnessParams.count() as ParamCount) 'eachSlot'
+		for position in 0 upto slotCount 'eachSlot'
 			offsets.push((position as ByteOffset) * GtArgSlotBytes)
 		end 'eachSlot'
 
@@ -76,9 +78,10 @@ module type AsyncArgumentSlots
 	end 'recorded'
 
 	static function floatMaskOf(paramTypes MaxonTypeArray, byReference ParamPositionMask) returns ArgFloatMask
-		var stdTypes = StdTypeArray.create(0)
+		let words = cellPositionsAsWords(paramTypes, byReference: byReference)
+		var stdTypes = StdTypeArray.create(words.count(), zeroed: false)
 
-		for word in cellPositionsAsWords(paramTypes, byReference: byReference) 'eachWord'
+		for word in words 'eachWord'
 			stdTypes.push(maxonTypeToStdType(word))
 		end 'eachWord'
 

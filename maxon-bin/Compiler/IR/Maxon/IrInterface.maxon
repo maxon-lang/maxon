@@ -592,8 +592,7 @@ end 'cacheWriteValueCapabilityArray'
 
 export function cacheReadValueCapabilityArray(reader LibraryCacheReader) returns ValueCapabilityArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ValueCapabilityArray.create(0)
-	result.reserve(count)
+	var result = ValueCapabilityArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadValueCapability(reader)
@@ -618,8 +617,7 @@ end 'cacheWriteParamCapabilityArray'
 
 export function cacheReadParamCapabilityArray(reader LibraryCacheReader) returns ParamCapabilityArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ParamCapabilityArray.create(0)
-	result.reserve(count)
+	var result = ParamCapabilityArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadParamCapability(reader)
@@ -632,7 +630,7 @@ end 'cacheReadParamCapabilityArray'
 // @generated library-cache end
 
 export function unmarkedParams(count ParamCount) returns ParamCapabilityArray
-	var out = ParamCapabilityArray.create(0)
+	var out = ParamCapabilityArray.create(count as ElementIndex, zeroed: false)
 	out.refill(count as ElementIndex, value: ParamCapability.unmarked)
 	return out
 end 'unmarkedParams'
@@ -865,8 +863,7 @@ end 'cacheWriteRequirementTypeArray'
 
 export function cacheReadRequirementTypeArray(reader LibraryCacheReader) returns RequirementTypeArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = RequirementTypeArray.create(0)
-	result.reserve(count)
+	var result = RequirementTypeArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try RequirementType.cacheRead(reader)
@@ -1180,8 +1177,7 @@ end 'cacheWriteInterfaceMethodSigArray'
 
 function cacheReadInterfaceMethodSigArray(reader LibraryCacheReader) returns InterfaceMethodSigArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = InterfaceMethodSigArray.create(0)
-	result.reserve(count)
+	var result = InterfaceMethodSigArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try InterfaceMethodSig.cacheRead(reader)
@@ -1311,7 +1307,7 @@ export type IrInterface
 	end 'create'
 
 	export function withInstancesRenumbered(remap TypeIdRemap) returns IrInterface
-		var renumbered = InterfaceMethodSigArray.create(0)
+		var renumbered = InterfaceMethodSigArray.create(self.methods.count(), zeroed: false)
 
 		for method in self.methods 'eachMethod'
 			renumbered.push(method.withInstancesRenumbered(remap))
@@ -1709,8 +1705,7 @@ end 'cacheWriteIrInterfaceArray'
 
 export function cacheReadIrInterfaceArray(reader LibraryCacheReader) returns IrInterfaceArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = IrInterfaceArray.create(0)
-	result.reserve(count)
+	var result = IrInterfaceArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try IrInterface.cacheRead(reader)
@@ -1738,7 +1733,7 @@ export function renumberedRequirements(requirements RequirementTypeArray, remap 
 		return requirements
 	end 'nothingToRenumber'
 
-	var renumbered = RequirementTypeArray.create(0)
+	var renumbered = RequirementTypeArray.create(requirements.count(), zeroed: false)
 
 	for requirement in requirements 'eachRequirement'
 		renumbered.push(requirement.withInstancesRenumbered(remap))
@@ -1811,8 +1806,7 @@ end 'cacheWriteInterfaceConformanceArray'
 
 function cacheReadInterfaceConformanceArray(reader LibraryCacheReader) returns InterfaceConformanceArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = InterfaceConformanceArray.create(0)
-	result.reserve(count)
+	var result = InterfaceConformanceArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try InterfaceConformance.cacheRead(reader)
@@ -1838,7 +1832,7 @@ export type ConformanceDecl
 	end 'create'
 
 	export function withInstancesRenumbered(remap TypeIdRemap) returns ConformanceDecl
-		var renumbered = InterfaceConformanceArray.create(0)
+		var renumbered = InterfaceConformanceArray.create(self.interfaces.count(), zeroed: false)
 
 		for entry in self.interfaces 'eachEntry'
 			renumbered.push(entry.withInstancesRenumbered(remap))
@@ -1886,8 +1880,7 @@ end 'cacheWriteConformanceDeclArray'
 
 export function cacheReadConformanceDeclArray(reader LibraryCacheReader) returns ConformanceDeclArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ConformanceDeclArray.create(0)
-	result.reserve(count)
+	var result = ConformanceDeclArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try ConformanceDecl.cacheRead(reader)
@@ -1967,8 +1960,7 @@ end 'cacheWriteLiteralInitSiteArray'
 
 export function cacheReadLiteralInitSiteArray(reader LibraryCacheReader) returns LiteralInitSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = LiteralInitSiteArray.create(0)
-	result.reserve(count)
+	var result = LiteralInitSiteArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try LiteralInitSite.cacheRead(reader)
@@ -3472,7 +3464,7 @@ export function builtinConformerDispatchMethodNames(typeName ByteArray) returns 
 		names.push(loweredName)
 	end 'eachLowered'
 
-	var phrases = StringArray.create(0)
+	var phrases = StringArray.create(names.count(), zeroed: false)
 
 	for methodName in names 'eachMethod'
 		phrases.push("`{String.from(methodName)}`")

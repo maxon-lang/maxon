@@ -152,7 +152,7 @@ export type PtraceBackend
 	end 'exitStatus'
 
 	export function listThreads() returns BackendThreadIdArray
-		var ids = BackendThreadIdArray.create(0)
+		var ids = BackendThreadIdArray.create(self.threads.count(), zeroed: false)
 
 		for entry in self.threads 'eachThread'
 			ids.push(entry.id)
@@ -365,7 +365,7 @@ export type PtraceBackend
 	// driver to read a process that is not there.
 	function takeTheHeldStop() returns PtraceHeldStopLookup
 		var taken = PtraceHeldStopLookup.none
-		var kept = PtraceHeldStopArray.create(0)
+		var kept = PtraceHeldStopArray.create(self.held.count(), zeroed: false)
 		let leaderLeft = self.holdsTheLeadersDeparture()
 
 		for stop in self.held 'eachHeld'
@@ -749,7 +749,7 @@ export type PtraceBackend
 	// The reporter resumes last, giving every thread held through the stop a head start on it.
 	function resumableRoster() returns PtraceThreadEntryArray
 		let reporter = self.stoppedThread()
-		var roster = PtraceThreadEntryArray.create(0)
+		var roster = PtraceThreadEntryArray.create(self.threads.count(), zeroed: false)
 
 		for entry in self.threads 'eachThread'
 			if entry.id != reporter and self.resumable(entry) 'anotherThreadResumes'
@@ -821,7 +821,7 @@ export type PtraceBackend
 
 	export function retireStopRequest()
 		self.stopRequested = false
-		var kept = PtraceHeldStopArray.create(0)
+		var kept = PtraceHeldStopArray.create(self.held.count(), zeroed: false)
 
 		for stop in self.held 'eachHeld'
 			if not stop.isARequestedStop() 'notTheDriversPause'
@@ -845,7 +845,7 @@ export type PtraceBackend
 			return
 		end 'theKernelRefused'
 
-		var leaderAlone = BackendThreadIdArray.create(0)
+		var leaderAlone = BackendThreadIdArray.create(1, zeroed: false)
 		leaderAlone.push(leader)
 		self.awaitStops(leaderAlone)
 	end 'driverTrapTaken'
@@ -898,7 +898,7 @@ export type PtraceBackend
 			return PtraceStopBorrow.alreadyStopped
 		end 'theLeaderStandsAlready'
 
-		var leaderAlone = BackendThreadIdArray.create(0)
+		var leaderAlone = BackendThreadIdArray.create(1, zeroed: false)
 		leaderAlone.push(leader)
 
 		return PtraceStopBorrow.taken if self.threadsBroughtToAStop(leaderAlone) else PtraceStopBorrow.unavailable
@@ -1033,7 +1033,7 @@ export type PtraceBackend
 	end 'entryOf'
 
 	function withEntryReplaced(updated PtraceThreadEntry)
-		var kept = PtraceThreadEntryArray.create(0)
+		var kept = PtraceThreadEntryArray.create(self.threads.count(), zeroed: false)
 
 		for entry in self.threads 'eachThread'
 			if entry.id == updated.id 'thisOne'
@@ -1095,7 +1095,7 @@ export type PtraceBackend
 
 	function forgotEndingTheHold(id BackendThreadId) returns bool
 		let holdEnded = self.stepping.forgetEndingTheHold(id)
-		var kept = PtraceThreadEntryArray.create(0)
+		var kept = PtraceThreadEntryArray.create(self.threads.count(), zeroed: false)
 
 		for entry in self.threads 'eachThread'
 			if entry.id != id 'anotherThread'

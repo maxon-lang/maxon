@@ -23,6 +23,8 @@
 
 export typealias ValueId = int(0 to u64.max) implements ElementIndex
 
+export typealias FixedValueIdArray = FixedArray with ValueId
+
 // Dense value-operand list — call arguments, enum payloads, match bindings, and
 // the block-arg lists on `BranchEdge`. A flat i64 array, NOT an array of heap
 // name objects: that is the whole point of minting ValueIds in the parser.
@@ -39,8 +41,7 @@ end 'cacheWriteValueIdArray'
 
 module function cacheReadValueIdArray(reader LibraryCacheReader) returns ValueIdArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ValueIdArray.create(0)
-	result.reserve(count)
+	var result = ValueIdArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ValueId
@@ -67,8 +68,7 @@ end 'cacheWriteBlockIdArray'
 
 export function cacheReadBlockIdArray(reader LibraryCacheReader) returns BlockIdArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = BlockIdArray.create(0)
-	result.reserve(count)
+	var result = BlockIdArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as BlockId
@@ -239,8 +239,8 @@ export function distinctSwitchTargets(caseTargets BlockIdArray, exclude BlockId)
 	// rather than the function's id space, because it is built once per jump-table block and an
 	// id-space column makes that quadratic.
 	let capacity = ((caseTargets.count() + 1) * SwitchSlotsPerTarget + 1) as ElementIndex
-	var slots = SwitchSlotArray.create(0)
-	slots.refill(capacity, value: EmptySwitchSlot)
+	var slots = SwitchSlotArray.create(capacity)
+	slots.refill(EmptySwitchSlot)
 
 	// Seeding with `exclude` drops every default/hole slot in the same membership test that dedups the
 	// real targets — no separate `!= exclude` compare per slot.
@@ -258,7 +258,7 @@ end 'distinctSwitchTargets'
 let SwitchSlotsPerTarget = 2
 let EmptySwitchSlot = 0 as ElementIndex
 
-typealias SwitchSlotArray = Array with ElementIndex
+typealias SwitchSlotArray = FixedArray with ElementIndex
 
 function claimSwitchSlot(slots SwitchSlotArray, id BlockId) returns bool
 	let held = id + 1
@@ -311,8 +311,7 @@ end 'cacheWriteBlockRefArray'
 
 module function cacheReadBlockRefArray(reader LibraryCacheReader) returns BlockRefArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = BlockRefArray.create(0)
-	result.reserve(count)
+	var result = BlockRefArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ElementIndex
@@ -367,8 +366,7 @@ end 'cacheWriteParamCountArray'
 
 export function cacheReadParamCountArray(reader LibraryCacheReader) returns ParamCountArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ParamCountArray.create(0)
-	result.reserve(count)
+	var result = ParamCountArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ParamCount
@@ -393,8 +391,7 @@ end 'cacheWriteStdTypeArray'
 
 module function cacheReadStdTypeArray(reader LibraryCacheReader) returns StdTypeArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = StdTypeArray.create(0)
-	result.reserve(count)
+	var result = StdTypeArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadStdType(reader)
@@ -428,6 +425,7 @@ export function allocValueId(ref ValueIdRef) returns ValueId
 	return id
 end 'allocValueId'
 
+export typealias FixedOpIndexArray = FixedArray with ElementIndex
 export typealias OpIndexArray = Array with ElementIndex
 
 // @generated library-cache begin
@@ -441,8 +439,7 @@ end 'cacheWriteOpIndexArray'
 
 module function cacheReadOpIndexArray(reader LibraryCacheReader) returns OpIndexArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = OpIndexArray.create(0)
-	result.reserve(count)
+	var result = OpIndexArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ElementIndex
@@ -454,4 +451,5 @@ end 'cacheReadOpIndexArray'
 
 // @generated library-cache end
 
+module typealias FixedBlockOpPosArray = FixedArray with ElementIndex
 export typealias BlockOpPosArray = Array with ElementIndex

@@ -92,7 +92,7 @@ export type ManifestVoice
 	end 'sayEntryWords'
 
 	export function asOneMessage() returns StringArray
-		var message = StringArray.create(0)
+		var message = StringArray.create(1, zeroed: false)
 		message.push(joinedWith(self.said, separator: "\n"))
 		return message
 	end 'asOneMessage'
@@ -461,7 +461,7 @@ function targetInputs(projectFile FilePath, projectDir FilePath, target String, 
 end 'targetInputs'
 
 function absolutePaths(paths MaxonSourcePathArray) returns MaxonSourcePathArray
-	var absolute = MaxonSourcePathArray.create(0)
+	var absolute = MaxonSourcePathArray.create(paths.count(), zeroed: false)
 
 	for path in paths 'eachPath'
 		absolute.push(path.resolve(Directory.currentPath()))
@@ -738,9 +738,10 @@ function manifestInputs(doc JsonDoc, build JsonNodeId, base ManifestBase) return
 end 'manifestInputs'
 
 function manifestPaths(doc JsonDoc, list JsonNodeId, base ManifestBase) returns MaxonSourcePathArray throws ManifestFieldError
-	var paths = MaxonSourcePathArray.create(0)
+	let spellings = try manifestStrings(doc, list: doc.get(list))
+	var paths = MaxonSourcePathArray.create(spellings.count(), zeroed: false)
 
-	for spelling in try manifestStrings(doc, list: doc.get(list)) 'eachPath'
+	for spelling in spellings 'eachPath'
 		let stated = rebasedOnManifest(spelling, base: base)
 		paths.push(try FilePath.from(stated) otherwise throw ManifestFieldError.notAPath(spelling))
 	end 'eachPath'
@@ -861,10 +862,11 @@ end 'manifestVersion'
 // Refused whole on the first bad entry: a build missing a define its manifest computed is a binary
 // claiming the constant's written-out default, and nothing would say so.
 export function manifestDefines(doc JsonDoc, build JsonNodeId) returns DefineArray throws ManifestFieldError
-	var defines = DefineArray.create(0)
-	let listId = try doc.getChild(build, key: ManifestDefinesKey) otherwise return defines
+	let listId = try doc.getChild(build, key: ManifestDefinesKey) otherwise return DefineArray.create(0)
+	let pairs = try manifestStrings(doc, list: doc.get(listId))
+	var defines = DefineArray.create(pairs.count(), zeroed: false)
 
-	for pair in try manifestStrings(doc, list: doc.get(listId)) 'eachDefine'
+	for pair in pairs 'eachDefine'
 		defines.push(try defineFromPair(pair) otherwise throw ManifestFieldError.notADefinePair(pair))
 	end 'eachDefine'
 
@@ -884,7 +886,7 @@ function manifestStrings(doc JsonDoc, list JsonNode) returns ManifestStringArray
 		throw ManifestFieldError.notAListOfStrings
 	end 'notAList'
 
-	var strings = ManifestStringArray.create(0)
+	var strings = ManifestStringArray.create(list.children.count(), zeroed: false)
 
 	for entryId in list.children 'eachEntry'
 		let entry = doc.get(entryId)

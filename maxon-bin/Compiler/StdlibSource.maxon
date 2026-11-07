@@ -808,8 +808,7 @@ end 'classifyLibraryReach'
 function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster) returns FunctionNameSet throws CompileError
 	let byName = (try FunctionNameIndex.create(module.functions, project: project)).byName
 
-	var reached = BoolArray.create(0)
-	reached.resize(module.funcCount())
+	var reached = FixedBoolArray.create(module.funcCount())
 	var worklist = FuncIndexArray.create(0)
 	var names = FunctionNameSet.create()
 
@@ -1007,7 +1006,7 @@ end 'recordEnumWitnessCredit'
 // second copy of the drain is a second place for a marking to be added to one side only.
 // ⚠ **EVERY REACHED FUNCTION IS ASKED, WITH NO SKIP ONCE AN ANSWER IS KNOWN**: the interface a later
 // function names is one the seed still owes. The ask is a qualified-name split and a handful of map lookups.
-function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, seedConformers NameRoster, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, witnessInterfaces InterfaceNameSet, witnessInterfaceOrder NameRoster, creditedServices CreditedServiceSet, ownerLedger ConstrainedOwnerLedger)
+function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, seedConformers NameRoster, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet, witnessInterfaces InterfaceNameSet, witnessInterfaceOrder NameRoster, creditedServices CreditedServiceSet, ownerLedger ConstrainedOwnerLedger)
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("drainReachableWorklist: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
@@ -1197,7 +1196,7 @@ function witnessConstraintsOfReachedFunction(func IrFunction, signatures Program
 	return signatures.witnessConstraintsOfMethod(func.name, extensionConstraints: signatures.extensionMethodConstraintsOf(func.name))
 end 'witnessConstraintsOfReachedFunction'
 
-module function markOneReachable(name ByteArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+module function markOneReachable(name ByteArray, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	let idx = try byName.get(name) otherwise 'notAModuleFunction'
 		return
 	end 'notAModuleFunction'
@@ -1225,7 +1224,7 @@ end 'markOneReachable'
 // COMPUTES: a walk of its own would re-derive, on every compile, a callee name this one already holds. The
 // corpus has no such callee — see `functionDeclaresAWitnessPosition`'s header for the two routes that
 // remain.
-function markMaxonCallees(module MaxonModule, signatures ProgramSignatures, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
+function markMaxonCallees(module MaxonModule, signatures ProgramSignatures, func IrFunction, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("markMaxonCallees: blockRef from func.blockRefs not in module.blocks")
 
@@ -1251,7 +1250,7 @@ end 'markMaxonCallees'
 // A `functionValue` target is credited alongside a `direct` callee: a `functionRef`'s target is reachable
 // code even though no `call` op names it. `indirectCall` calls through the code POINTER that `functionRef`
 // already credited, and `maxonOpCalleeKind` answers `noCallee` for it.
-module function markMaxonCalleeEdge(op MaxonOp, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+module function markMaxonCalleeEdge(op MaxonOp, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match maxonOpCalleeKind(op) 'kind'
 		direct or
 		functionValue then markOneReachable(maxonOpCalleeName(op), byName: byName, reached: reached, worklist: worklist, names: names)
@@ -1267,7 +1266,7 @@ end 'markMaxonCalleeEdge'
 //
 // ⚡ Credited once per TYPE: the spawn sites and the messages of one service both grow with the program, and
 // their product would not.
-function markServiceBehaviourHandlers(op MaxonOp, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
+function markServiceBehaviourHandlers(op MaxonOp, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet, creditedServices CreditedServiceSet)
 	if not maxonOpIsServiceSpawn(op) 'startsNoService'
 		return
 	end 'startsNoService'
@@ -1353,7 +1352,7 @@ end 'markServiceBehaviourHandlers'
 //     of a program whose only constraint is `Hashable`.
 //     Crediting them HERE as well would undo exactly that: the seed marks `int.hash`, the drain reaches it,
 //     and a total credit on `int` pulls in every other impl the type declares.
-module function markConformerWitnessImpls(func IrFunction, project Project, signatures ProgramSignatures, seedConformers NameRoster, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+module function markConformerWitnessImpls(func IrFunction, project Project, signatures ProgramSignatures, seedConformers NameRoster, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match splitQualifiedName(func.name) 'owner'
 		// A FREE function belongs to no type, so reaching it produces no conformer and implies no table.
 		notQualified then break
@@ -1362,7 +1361,7 @@ module function markConformerWitnessImpls(func IrFunction, project Project, sign
 end 'markConformerWitnessImpls'
 
 // The total credit above, for a type the seed does not own.
-function markEveryDeclaredWitnessImplOf(typeName ByteArray, project Project, signatures ProgramSignatures, seedConformers NameRoster, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markEveryDeclaredWitnessImplOf(typeName ByteArray, project Project, signatures ProgramSignatures, seedConformers NameRoster, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	if seedConformers.contains(typeName) 'theSeedOwnsThisConformer'
 		return
 	end 'theSeedOwnsThisConformer'
@@ -1380,7 +1379,7 @@ end 'markEveryDeclaredWitnessImplOf'
 // constraint to. Lowering names those conformances' witness tables — at a call site, or stamped
 // into a layout descriptor — a DATA edge dead-function elimination follows, so a walk that missed
 // them would call live library code dead and `requireUnreachableLibraryStayedDead` panics.
-function markConstraintArgumentImpls(ledger ConstrainedOwnerLedger, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markConstraintArgumentImpls(ledger ConstrainedOwnerLedger, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	for owner in ledger.pending 'eachNewlyReachedOwner'
 		view instances = try ledger.instancesByBase.get(owner) otherwise panic("markConstraintArgumentImpls: '{String.from(owner)}' was filed because the index holds instances of it")
 
@@ -1410,7 +1409,7 @@ end 'markConstraintArgumentImpls'
 // `typeConformsTo` is the gate rather than a bare membership test because it walks `extends` and admits
 // an INTRINSIC conformance — the two ways a slot can exist without the type's own declaration naming this
 // interface.
-function markWitnessImplsOfConformer(typeName ByteArray, interfaceName ByteArray, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markWitnessImplsOfConformer(typeName ByteArray, interfaceName ByteArray, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	if not typeConformsTo(declaredConformanceIndex(project), interfaces: project.interfaces, typeName: typeName, interfaceName: interfaceName, discovered: signatures.discoveredConformerOf(typeName)) 'thisPairHasNoTable'
 		return
 	end 'thisPairHasNoTable'
@@ -1433,7 +1432,7 @@ end 'markWitnessImplsOfConformer'
 // Stdlib's own bodies are skipped for `userCodeReachesStdlib`'s reason and for `liveGlobalLabels`': an access
 // inside an unreachable stdlib body decides nothing, because that body reaches no back end and its slot is
 // not kept for it.
-function seedCorpusSlotInitCalleesOfUserCode(module MaxonModule, signatures ProgramSignatures, stdlib FunctionNameSet, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function seedCorpusSlotInitCalleesOfUserCode(module MaxonModule, signatures ProgramSignatures, stdlib FunctionNameSet, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	for func in module.functions 'eachFunc'
 		if stdlib.contains(func.name) 'skipStdlibBody'
 			continue
@@ -1464,7 +1463,7 @@ end 'seedCorpusSlotInitCalleesOfUserCode'
 // ⚠ **OVER-CREDITING IS THE SAFE DIRECTION AND THIS DOES IT ONCE:** a read the program never executes
 // still credits the callees, whose bodies are then lowered and dropped by dead-function elimination. A
 // MISSING root is a `requireUnreachableLibraryStayedDead` panic.
-function markCorpusSlotInitCallees(op MaxonOp, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markCorpusSlotInitCallees(op MaxonOp, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	if not maxonOpNamesAGlobalLabel(op) 'namesNoSlot'
 		return
 	end 'namesNoSlot'
@@ -1756,10 +1755,10 @@ end 'stdlibSubstrateEntries'
 type SubstrateFixpoint
 	// Per node: does it (transitively) reach an entry the target lacks? Also the "already queued" test — a node is
 	// marked exactly when it enters the worklist, so it enters at most once.
-	var marked as BoolArray
+	var marked as FixedBoolArray
 
 	// Per MARKED node: the index into `seedEntries` of the seed it inherits its entry from.
-	var seedOf as CsrColumn
+	var seedOf as FixedCsrColumn
 
 	// The runtime entry each seed names, in the order the seeds were found.
 	var seedEntries as NameRoster
@@ -1776,11 +1775,7 @@ type SubstrateFixpoint
 	let target as Target
 
 	static function overNodes(nodeCount CsrIndex, target Target) returns SubstrateFixpoint
-		var marked = BoolArray.create(0)
-		marked.resize(nodeCount)
-		var seedOf = CsrColumn.create(0)
-		seedOf.resize(nodeCount)
-		return Self{marked: marked, seedOf: seedOf, seedEntries: NameRoster.create(0), worklist: CsrColumn.create(0), edgeCallee: CsrColumn.create(0), edgeCaller: CsrColumn.create(0), target: target}
+		return Self{marked: FixedBoolArray.create(nodeCount), seedOf: FixedCsrColumn.create(nodeCount), seedEntries: NameRoster.create(0), worklist: CsrColumn.create(0), edgeCallee: CsrColumn.create(0), edgeCaller: CsrColumn.create(0), target: target}
 	end 'overNodes'
 
 	// `node` names `entry` directly — a SEED.

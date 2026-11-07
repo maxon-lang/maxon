@@ -92,8 +92,7 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 	view index = try FunctionNameIndex.create(module.functions, project: project)
 	view byName = index.byName
 
-	var reached = BoolArray.create(0)
-	reached.resize(module.funcCount())
+	var reached = BoolArray.create(module.funcCount())
 	var worklist = FuncIndexArray.create(0)
 
 	var reference = StdFunctionReference.create()
@@ -770,12 +769,11 @@ function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Pr
 
 	canonicalizeEmissionOrder(module, live: live)
 
-	var kept = IrFunctionArray.create(0)
+	var kept = IrFunctionArray.create(live.count(), zeroed: false)
 
 	// Old index → new index, filled for EVERY old index so the remap can index it directly; the entries
 	// for dropped functions are never read (the remap consults `reached` first).
-	var newIndexOfOld = FuncIndexArray.create(0)
-	newIndexOfOld.resize(total)
+	var newIndexOfOld = FixedFuncIndexArray.create(total)
 
 	// Did the sweep renumber any function that SURVIVES? Only a survivor whose index moved has an origin
 	// row to relocate.
@@ -815,7 +813,7 @@ function canonicalizeEmissionOrder(module StdModule, live FuncIndexArray)
 		end 'extendRun'
 
 		if runEnd - runStart > 1 and not runIsOrdered(module, live: live, from: runStart, upto: runEnd) 'worthSorting'
-			var run = FuncIndexArray.create(0)
+			var run = FuncIndexArray.create(runEnd - runStart, zeroed: false)
 
 			for position in runStart upto runEnd 'eachMember'
 				run.push(try live.get(position) otherwise panic("canonicalizeEmissionOrder: live.get OOB at {position}"))

@@ -1182,7 +1182,8 @@ export enum ErrorCode
 	// they publish `n` zeroed slots. `create(0)` is legal for every element, and `create(n, zeroed: false)`
 	// reserves room for `n` elements and publishes none; append with `push(value)`, or fill with
 	// `growFilled(newLength, value:)` naming a case. An enum or union that gains a case whose raw value is 0 admits
-	// the zeroed forms.
+	// the zeroed forms. A `FixedArray` created with `value:` (`Buf.create(n, value: v)`, `Vec3.create(value: v)`)
+	// publishes `v` in every slot, so it is legal for such an element.
 	// In a generic body the element is a type parameter and one body serves every instantiation, so the
 	// instantiations decide: `create(n)` over the parameter and a `FixedArray with N <type parameter>`'s
 	// `create()` are refused when any instantiation of the type is at such an element or a managed one, and
@@ -2365,10 +2366,11 @@ export enum ErrorCode
 	semanticInstanceMethodCalledWithoutReceiver = "E3193"
 
 	// A fixed array's 'create' is called with the wrong arguments for the form of its type. A type
-	// that states its length ('Vec3' for 'FixedArray with 3 Int') takes none: write 'Vec3.create()'. A
-	// runtime-sized type ('Buf' for 'FixedArray with Int') needs its length and only that: write
-	// 'Buf.create(n)'. A second argument is refused, because a fixed array is always zeroed and never
-	// grows; for a growable buffer write 'Array.create(n, zeroed: false)'.
+	// that states its length ('Vec3' for 'FixedArray with 3 Int') takes none: write 'Vec3.create()', or
+	// 'Vec3.create(value: v)' to start every element at 'v'. A runtime-sized type ('Buf' for
+	// 'FixedArray with Int') needs its length and takes an optional 'value:': write 'Buf.create(n)' or
+	// 'Buf.create(n, value: v)'. Any other argument is refused, because a fixed array never grows; for a
+	// growable buffer write 'Array.create(n, zeroed: false)'.
 	fixedArrayCreateLengthForm = "E3194"
 
 	// An `Array` or `ByteArray` is created with no capacity: `Items.create()`. Every array states how much it

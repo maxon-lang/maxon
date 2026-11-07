@@ -1257,7 +1257,7 @@ function arm64AsyncPreemptFlagsSlot() returns MachineWord
 end 'arm64AsyncPreemptFlagsSlot'
 
 function arm64AsyncPreemptVectors() returns Arm64RegisterArray
-	var vectors = Arm64RegisterArray.create(0)
+	var vectors = Arm64RegisterArray.create(vectorRegisterCount(arm64RegisterFile()), zeroed: false)
 
 	for k in 0 upto vectorRegisterCount(arm64RegisterFile()) 'vectors'
 		vectors.push(try Arm64Register.fromRawValue((Arm64FirstVectorRegister + k) as RegNum) otherwise panic("arm64AsyncPreemptVectors: {k} vector registers past the boundary is inside a file of {vectorRegisterCount(arm64RegisterFile())}"))
@@ -1371,7 +1371,7 @@ function emitArm64AsyncPreemptGprs(asm Arm64RuntimeAsm, gprs Arm64RegisterArray,
 		pop gives gprs.count() - 1
 	end 'count'
 
-	var moved = Arm64RegisterArray.create(0)
+	var moved = Arm64RegisterArray.create(restored, zeroed: false)
 
 	for k in 0 upto restored 'gprs'
 		moved.push(try gprs.get(k) otherwise panic("emitArm64AsyncPreemptGprs: index derived from count is in range"))

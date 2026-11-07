@@ -730,7 +730,7 @@ function runtimeFatalReason(fatal RuntimeFatal) returns String
 end 'runtimeFatalReason'
 
 function allRuntimeAbortReasons() returns RuntimeAbortReasonArray
-	var reasons = RuntimeAbortReasonArray.create(0)
+	var reasons = RuntimeAbortReasonArray.create(RuntimeAbort.allCases.count() + RuntimeFatal.allCases.count(), zeroed: false)
 
 	for abort in RuntimeAbort.allCases 'eachAbort'
 		reasons.push(RuntimeAbortReason.abort(abort))
@@ -748,8 +748,7 @@ end 'allRuntimeAbortReasons'
 // deterministic.
 export function registerReachedRuntimeAbortMessages(module StdModule, globalData GlobalDataTable, survivors FunctionNameIndex)
 	let reasons = allRuntimeAbortReasons()
-	var reached = BoolArray.create(0)
-	reached.refill(reasons.count(), value: false)
+	var reached = FlagColumn.create(reasons.count())
 
 	for site in module.runtimeAbortSites 'eachSite'
 		if survivors.byName.contains(site.funcName) 'survived'

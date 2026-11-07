@@ -69,9 +69,10 @@ module function completionAnswer(request LspRequest) returns LspAnswer throws Ls
 	let offset = index.offsetOf(request.text, position: try lspPositionMember(request.incoming, of: request.params, key: LspPositionKey))
 
 	var doc = JsonDoc.create()
-	var items = JsonNodeIdArray.create(0)
+	let offers = offersAt(request.text, tokens: tokens, keywords: request.keywords, blocks: lspDocumentBlocks(tokens), offset: offset, uri: request.uri, workspace: request.workspace)
+	var items = JsonNodeIdArray.create(offers.count(), zeroed: false)
 
-	for offer in offersAt(request.text, tokens: tokens, keywords: request.keywords, blocks: lspDocumentBlocks(tokens), offset: offset, uri: request.uri, workspace: request.workspace) 'eachOffer'
+	for offer in offers 'eachOffer'
 		var item = LspJsonObject.create(doc)
 		item.put(LabelKey, value: JsonNode.stringNode(offer.label))
 		item.put(LspKindKey, value: JsonNode.numberNode(offer.kind as JsonFloat))

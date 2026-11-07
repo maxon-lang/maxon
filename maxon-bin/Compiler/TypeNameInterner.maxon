@@ -52,7 +52,7 @@ export type TypeNameInterner
 	// Copies, because they cross a thread: a record the worker's own table also holds would give the reply
 	// a second owner.
 	export function namesSinceBaseline() returns NameRoster
-		var added = NameRoster.create(0)
+		var added = NameRoster.create(table.count() - (self.baselineCount as NameId), zeroed: false)
 
 		for id in (self.baselineCount as NameId) upto table.count() 'eachAdded'
 			added.push(table.ownedCopyOf(id))
@@ -141,8 +141,7 @@ export type TypeNameInterner
 	// Fold every name of `source` (a file-local interner) into `self` (the project interner) in id order,
 	// returning the renumbering from each source id to the id it was assigned in `self`.
 	export function foldInto(source TypeNameInterner) returns TypeIdRemap
-		var mapping = TypeNameIdArray.create(0)
-		mapping.reserve(source.table.count())
+		var mapping = TypeNameIdArray.create(source.table.count(), zeroed: false)
 
 		for srcId in 0 upto source.table.count() 'each'
 			mapping.push(self.table.internFrom(source.table, id: srcId) as TypeNameId)
@@ -302,7 +301,7 @@ end 'remapMaxonType'
 // once. ⚠ THE COUNT IS THE CALLER COUNT AND NOTHING ELSE CHECKS IT — the `PayloadField` walk below is a
 // LOOK-ALIKE, not a fourth caller: it rebuilds a different element type and cannot come through here.
 export function remapMaxonTypes(types MaxonTypeArray, remap TypeIdRemap) returns MaxonTypeArray
-	var remapped = MaxonTypeArray.create(0)
+	var remapped = MaxonTypeArray.create(types.count(), zeroed: false)
 
 	for t in types 'each'
 		remapped.push(remapMaxonType(t, remap: remap))
@@ -383,10 +382,10 @@ end 'remapStructLayoutFieldTypes'
 // (`remapArtifact` into `Project`, `ProgramSignatures.foldFile` into the index) go through here, so
 // the two cannot disagree about what a payload's declared type means.
 export function remapEnumLayoutPayloadTypes(layout EnumLayout, remap TypeIdRemap)
-	var remappedCases = PayloadFieldArrayArray.create(0)
+	var remappedCases = PayloadFieldArrayArray.create(layout.casePayloads.count(), zeroed: false)
 
 	for casePayloads in layout.casePayloads 'eachCase'
-		var remappedFields = PayloadFieldArray.create(0)
+		var remappedFields = PayloadFieldArray.create(casePayloads.count(), zeroed: false)
 
 		for field in casePayloads 'eachField'
 			remappedFields.push(PayloadField.create(field.name, declaredType: remapMaxonType(field.declaredType, remap: remap), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand, isLet: field.isLet, typeSite: field.typeSite))

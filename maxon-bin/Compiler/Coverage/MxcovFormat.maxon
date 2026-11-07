@@ -94,7 +94,8 @@ end 'covImageSize'
 // before it reaches its own exit never writes this word, so what a reader finds is what the compiler put
 // there; `MxcovStatusAborted` makes that file report as PARTIAL instead of as a finished measurement.
 export function buildMxcovImage(buildId HashDigest, pointCount MxcovPointIndex) returns ByteArray
-	var image = ByteArray.create(0)
+	let imageSize = covImageSize(pointCount)
+	var image = ByteArray.create(imageSize, zeroed: false)
 	image.push(MxcovMagicByte0)
 	image.push(MxcovMagicByte1)
 	image.push(MxcovMagicByte2)
@@ -108,7 +109,7 @@ export function buildMxcovImage(buildId HashDigest, pointCount MxcovPointIndex) 
 	patchDword(image, offset: MxcovOffPointCount, value: pointCount as MachineWord)
 	patchDword(image, offset: MxcovOffReserved2, value: 0)
 	patchQword(image, offset: MxcovOffStatus, value: MxcovStatusAborted as MachineWord)
-	image.growFilled(covImageSize(pointCount), value: 0 as Byte)
+	image.growFilled(imageSize, value: 0 as Byte)
 
 	return image
 end 'buildMxcovImage'
@@ -172,7 +173,7 @@ export type MxcovData
 			throw MxcovReadError.truncated(pointCount, need: need, held: image.count() as MxcovByteOffset)
 		end 'shorterThanItClaims'
 
-		var counters = MxcovCounterArray.create(0)
+		var counters = MxcovCounterArray.create(pointCount as ElementIndex, zeroed: false)
 
 		for index in 0 upto pointCount 'eachCounter'
 			counters.push(imageReadU64(image, at: covCounterOffset(index as MxcovPointIndex) as ByteOffset) as MxcovCounter)
