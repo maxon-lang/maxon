@@ -1432,11 +1432,13 @@ end 'emitArm64DarwinUniqueThreadId'
 // with none to switch off, which is what lets the Darwin arm reach libSystem through the ordinary
 // door.
 //
-// Slots: 0 = m, 1 = the thread identity across the `getpid` the Linux arm needs.
+// Slots: 0 = m, 1 = the thread identity across the `getpid` either arm's send makes; the Darwin arm's
+// `proc_bsdshortinfo` record follows, from `PreemptFrameSlots` on.
 function buildArm64PreemptMachineChunk(os Os) returns FunctionCodeChunk
 	let SlotMachine = 0
 	let SlotThread = 1
-	var asm = Arm64RuntimeAsm.beginFunction(2)
+	let SlotProcessInfo = PreemptFrameSlots as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(arm64PreemptFrameSlots(os))
 
 	let giveBack = asm.newLabel()
 	let done = asm.newLabel()
@@ -1458,7 +1460,7 @@ function buildArm64PreemptMachineChunk(os Os) returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotThread)
 
 	match arm64OsCallKind(os) 'send'
-		importCall then emitArm64DarwinPreemptSend(asm, thread: Arm64Register.x1, delivered: done)
+		importCall then emitArm64DarwinPreemptSend(asm, threadSlot: SlotThread, infoSlot: SlotProcessInfo, delivered: done, declined: giveBack)
 		syscall then emitArm64LinuxPreemptSend(asm, threadSlot: SlotThread, delivered: done)
 	end 'send'
 
@@ -1471,13 +1473,57 @@ function buildArm64PreemptMachineChunk(os Os) returns FunctionCodeChunk
 	return asm.finishFunction(PreemptMachineName)
 end 'buildArm64PreemptMachineChunk'
 
+let DarwinProcPidtShortBsdInfo = 13
+let DarwinProcBsdShortInfoBytes = 64
+let DarwinProcBsdShortInfoSlots = (DarwinProcBsdShortInfoBytes + SpillSlotBytes - 1) / SpillSlotBytes
+let DarwinProcBsdShortInfoFlagsOffset = 32
+let DarwinProcFlagTraced = 2
+let PreemptFrameSlots = 2
+
+function arm64PreemptFrameSlots(os Os) returns StackSize
+	return match arm64OsCallKind(os) 'frame'
+		importCall gives PreemptFrameSlots + DarwinProcBsdShortInfoSlots
+		syscall gives PreemptFrameSlots as StackSize
+	end 'frame'
+end 'arm64PreemptFrameSlots'
+
 // `pthread_kill(thread, SIGURG)` — 0 on success, an errno otherwise.
-function emitArm64DarwinPreemptSend(asm Arm64RuntimeAsm, thread Arm64Register, delivered BlockId)
-	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: thread)
+function emitArm64DarwinPreemptSend(asm Arm64RuntimeAsm, threadSlot StackSize, infoSlot StackSize, delivered BlockId, declined BlockId)
+	emitArm64DarwinDeclineWhileTraced(asm, infoSlot: infoSlot, declined: declined)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: threadSlot)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinSignalUrg as MachineWord)
 	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.pthreadKill)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: delivered)
 end 'emitArm64DarwinPreemptSend'
+
+// Declines to send while a tracer is attached, handing the claim back so the monitor retries on its
+// next lap. A failed query or an unexpected size sends as before.
+//
+// ⚠ This must hold until the tracer is gone. debugserver detaches by resuming the program and then
+// stopping it with SIGSTOP, and a SIGURG in that window is taken for its own stop: `PT_DETACH` fails
+// with EBUSY yet debugserver answers OK, the program stays traced, and the kernel SIGKILLs it when
+// debugserver exits.
+//
+// Only this lane has the hazard; the Linux arm (ptrace) and the Windows lane (`SuspendThread`) send
+// unconditionally.
+function emitArm64DarwinDeclineWhileTraced(asm Arm64RuntimeAsm, infoSlot StackSize, declined BlockId)
+	let untraced = asm.newLabel()
+
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.getpid)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinProcPidtShortBsdInfo)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: infoSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: DarwinProcBsdShortInfoBytes as MachineWord)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.procPidinfo)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: DarwinProcBsdShortInfoBytes as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: untraced)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: infoSlot)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x1, byteOffset: DarwinProcBsdShortInfoFlagsOffset)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: DarwinProcFlagTraced)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x2)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: declined)
+	asm.placeLabel(untraced)
+end 'emitArm64DarwinDeclineWhileTraced'
 
 // `tgkill(getpid(), tid, SIGURG)` — 0 on success, a negative errno otherwise. The identity rides a frame slot
 // rather than a register, so nothing here depends on which registers an `svc` leaves alone.
