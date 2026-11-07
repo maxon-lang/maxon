@@ -209,6 +209,154 @@ jobs:
           openssl="$(./scripts/openssl-for-interop.sh)"
           echo "MAXON_OPENSSL=$openssl" >> "$GITHUB_ENV"
 
+      # Steps run cheapest first, and a failed step skips every later one: a step added above the
+      # suites at the end makes each red behind it wait for that step.
+
+      # `tests/specHarness` runs a spec batch under the wasm target, and `tests/cli` builds it from this
+      # checkout: wrapping the core module into a component needs `vendor/wasm-tools` (E6005 without it),
+      # and the cross-target suite below runs its programs under `vendor/wasmtime`. `vendor/` is gitignored,
+      # so nothing else stages it.
+      - name: Stage vendor
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./scripts/fetch-vendor.sh ${{ matrix.target }}
+
+      - name: Ladder index
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/ladders
+
+      # These are tree-level gates `spec-test` does not run.
+      - name: Formatter corpus
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/fmt
+
+      - name: Targets table is generated and agrees with the compiler
+        if: steps.seed.outputs.seeded == 'yes' && contains(format(',{0},', matrix.roles), ',targets-gate,')
+        run: ./scripts/targets/generate.sh --check
+
+      - name: Targets corpus
+        if: steps.seed.outputs.seeded == 'yes' && contains(format(',{0},', matrix.roles), ',targets-gate,')
+        run: ./maxon-bin/.maxon/maxon test tests/targets
+
+      # The one step with a timeout: a compile that hangs would otherwise run to the job's six-hour
+      # default and end cancelled, not failed.
+      - name: Multicore stress programs compile
+        if: steps.seed.outputs.seeded == 'yes'
+        timeout-minutes: 10
+        run: bash scripts/multicore-stress/compile-all.sh
+
+      - name: Every script program builds
+        if: steps.seed.outputs.seeded == 'yes'
+        run: bash scripts/build-script-programs.sh
+
+      - name: Every stdlib function compiles for every target
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon check-stdlib
+
+      - name: Emitted runtime corpus
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/emittedRuntime
+
+      - name: Examples corpus
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/examples
+
+      # The emitted-code cases, in their own directory: every case pins the Target IR its program compiles
+      # to on this lane, and a pin the compiler no longer renders fails its case.
+      - name: IR suite
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon spec-test ir-specs
+
+      - name: IR suite in reversed source order
+        if: steps.seed.outputs.seeded == 'yes'
+        env:
+          MAXON_SOURCE_ORDER: reversed
+        run: ./maxon-bin/.maxon/maxon spec-test ir-specs
+
+      - name: Spec harness corpus
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/specHarness
+
+      # Tags exist only in a `--debugstream` compiler. This builds one and fails when an allocation
+      # report names no real tag.
+      - name: Allocation reports name tags on a traced compiler
+        if: steps.seed.outputs.seeded == 'yes'
+        timeout-minutes: 20
+        run: bash scripts/debugstream-stress/tag-reports.sh
+
+      # A lane's `TargetIr` pins are minted on that lane's own host and compared against a COMPILE,
+      # so a lane this runner cannot run is still compiled and compared (reported NOTRUN, which is
+      # not a pass). Running every lane from a second and third host checks that a cross-compile's
+      # output does not depend on the host that compiled it, and catches a pin another lane's change
+      # left stale. Linux only: the harness runs a Linux target under WSL or OrbStack and refuses
+      # without them, while a Linux host runs no foreign lane and only compiles and compares.
+      - name: IR suite, the other native lanes
+        if: steps.seed.outputs.seeded == 'yes' && runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          targets="$(./scripts/targets/matrix.sh list target native)"
+          failed=0
+
+          for target in $targets; do
+            if [ "$target" = "${{ matrix.target }}" ]; then
+              continue
+            fi
+
+            ./maxon-bin/.maxon/maxon spec-test ir-specs --target="$target" || failed=1
+          done
+
+          exit "$failed"
+
+      # Every tracked directory under `tests/` holding a `.maxtest` is built and nothing is run, so a
+      # corpus no job here runs still has to compile; the script derives the set rather than listing it.
+      - name: Every test corpus builds
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./scripts/build-test-corpora.sh
+
+      - name: Build manifest corpus
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/buildManifest
+
+      # ⭐ THE ONLY DEBUGGER CODE CI RUNS. `spec-test` covers the language; the debugger's driver, its
+      # DAP server and its MCP tools are exercised by these three corpora and by nothing else, so a lane
+      # without them reports a green suite over a debugger that does not start. `matrix.debugger` is the
+      # lane's own answer to `BackendChoice.backendForHost`, written once beside the runner rather than
+      # three times as a list of triples.
+      #
+      # ⛔ **THE macOS LANE DEBUGS THROUGH APPLE'S `debugserver`, WHICH IS AUTHORIZED PER MACHINE AND NOT PER
+      # PROCESS.** Without developer mode enabled every debug case on that lane is refused for want of
+      # authorization, and the Xcode command line tools are where the stub itself comes from.
+      - name: Authorize the debug stub
+        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes' && runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          xcode-select --print-path
+          sudo /usr/sbin/DevToolsSecurity -enable
+          /usr/sbin/DevToolsSecurity -status
+
+      - name: Debugger corpus
+        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/debug
+
+      - name: DAP corpus
+        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/dap
+
+      - name: MCP corpus
+        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/mcp
+
+      - name: CLI corpus
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/cli
+
+      # ⭐ IN THE MATRIX RATHER THAN IN A JOB OF ITS OWN, because this area is host-specific where
+      # almost nothing else is: percent-decoding a uri, un-rooting a drive letter, and
+      # `FilePath.equals` being case-insensitive on Windows alone. A single-host lane would leave
+      # three hosts' path handling unexercised, and what it misses are wrong ANSWERS, not breaks.
+      - name: LSP corpus
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/lsp
+
       - name: Suite
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon spec-test
@@ -273,143 +421,6 @@ jobs:
           --filter=where-clauses/
           --filter=witness-by-reference/
 
-      # The emitted-code cases, in their own directory: every case pins the Target IR its program compiles
-      # to on this lane, and a pin the compiler no longer renders fails its case.
-      - name: IR suite
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon spec-test ir-specs
-
-      - name: IR suite in reversed source order
-        if: steps.seed.outputs.seeded == 'yes'
-        env:
-          MAXON_SOURCE_ORDER: reversed
-        run: ./maxon-bin/.maxon/maxon spec-test ir-specs
-
-      # A lane's `TargetIr` pins are minted on that lane's own host and compared against a COMPILE,
-      # so a lane this runner cannot run is still compiled and compared (reported NOTRUN, which is
-      # not a pass). Running every lane from a second and third host checks that a cross-compile's
-      # output does not depend on the host that compiled it, and catches a pin another lane's change
-      # left stale. Linux only: the harness runs a Linux target under WSL or OrbStack and refuses
-      # without them, while a Linux host runs no foreign lane and only compiles and compares.
-      - name: IR suite, the other native lanes
-        if: steps.seed.outputs.seeded == 'yes' && runner.os == 'Linux'
-        run: |
-          set -euo pipefail
-          targets="$(./scripts/targets/matrix.sh list target native)"
-          failed=0
-
-          for target in $targets; do
-            if [ "$target" = "${{ matrix.target }}" ]; then
-              continue
-            fi
-
-            ./maxon-bin/.maxon/maxon spec-test ir-specs --target="$target" || failed=1
-          done
-
-          exit "$failed"
-
-      # ⭐ IN THE MATRIX RATHER THAN IN A JOB OF ITS OWN, because this area is host-specific where
-      # almost nothing else is: percent-decoding a uri, un-rooting a drive letter, and
-      # `FilePath.equals` being case-insensitive on Windows alone. A single-host lane would leave
-      # three hosts' path handling unexercised, and what it misses are wrong ANSWERS, not breaks.
-      - name: LSP corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/lsp
-
-      # These are tree-level gates `spec-test` does not run.
-      - name: Formatter corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/fmt
-
-      # `tests/specHarness` runs a spec batch under the wasm target, and `tests/cli` builds it from this
-      # checkout: wrapping the core module into a component needs `vendor/wasm-tools` (E6005 without it),
-      # and the cross-target suite below runs its programs under `vendor/wasmtime`. `vendor/` is gitignored,
-      # so nothing else stages it.
-      - name: Stage vendor
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./scripts/fetch-vendor.sh ${{ matrix.target }}
-
-      # Every tracked directory under `tests/` holding a `.maxtest` is built and nothing is run, so a
-      # corpus no job here runs still has to compile; the script derives the set rather than listing it.
-      - name: Every test corpus builds
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./scripts/build-test-corpora.sh
-
-      - name: Spec harness corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/specHarness
-
-      - name: Ladder index
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/ladders
-
-      - name: Examples corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/examples
-
-      # The one step with a timeout: a compile that hangs would otherwise run to the job's six-hour
-      # default and end cancelled, not failed.
-      - name: Multicore stress programs compile
-        if: steps.seed.outputs.seeded == 'yes'
-        timeout-minutes: 10
-        run: bash scripts/multicore-stress/compile-all.sh
-
-      - name: Every script program builds
-        if: steps.seed.outputs.seeded == 'yes'
-        run: bash scripts/build-script-programs.sh
-
-      # Tags exist only in a `--debugstream` compiler. This builds one and fails when an allocation
-      # report names no real tag.
-      - name: Allocation reports name tags on a traced compiler
-        if: steps.seed.outputs.seeded == 'yes'
-        timeout-minutes: 20
-        run: bash scripts/debugstream-stress/tag-reports.sh
-
-      - name: Every stdlib function compiles for every target
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon check-stdlib
-
-      - name: Build manifest corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/buildManifest
-
-      - name: Emitted runtime corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/emittedRuntime
-
-      # ⭐ THE ONLY DEBUGGER CODE CI RUNS. `spec-test` covers the language; the debugger's driver, its
-      # DAP server and its MCP tools are exercised by these three corpora and by nothing else, so a lane
-      # without them reports a green suite over a debugger that does not start. `matrix.debugger` is the
-      # lane's own answer to `BackendChoice.backendForHost`, written once beside the runner rather than
-      # three times as a list of triples.
-      #
-      # ⛔ **THE macOS LANE DEBUGS THROUGH APPLE'S `debugserver`, WHICH IS AUTHORIZED PER MACHINE AND NOT PER
-      # PROCESS.** Without developer mode enabled every debug case on that lane is refused for want of
-      # authorization, and the Xcode command line tools are where the stub itself comes from.
-      - name: Authorize the debug stub
-        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes' && runner.os == 'macOS'
-        run: |
-          set -euo pipefail
-          xcode-select --print-path
-          sudo /usr/sbin/DevToolsSecurity -enable
-          /usr/sbin/DevToolsSecurity -status
-
-      - name: Debugger corpus
-        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/debug
-
-      - name: DAP corpus
-        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/dap
-
-      - name: MCP corpus
-        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/mcp
-
-      - name: CLI corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/cli
-
       # One lane: its programs run under `vendor/wasmtime`, staged above, rather than on the runner's
       # OS, so no lane's host changes what they run on.
       - name: Cross-target suites
@@ -420,14 +431,6 @@ jobs:
           for target in $targets; do
             ./maxon-bin/.maxon/maxon spec-test --target="$target"
           done
-
-      - name: Targets table is generated and agrees with the compiler
-        if: steps.seed.outputs.seeded == 'yes' && contains(format(',{0},', matrix.roles), ',targets-gate,')
-        run: ./scripts/targets/generate.sh --check
-
-      - name: Targets corpus
-        if: steps.seed.outputs.seeded == 'yes' && contains(format(',{0},', matrix.roles), ',targets-gate,')
-        run: ./maxon-bin/.maxon/maxon test tests/targets
 
   freeze:
     if: github.repository == 'maxon-lang/maxon' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.freeze_seed))
