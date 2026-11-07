@@ -87,7 +87,7 @@ woken. The front end cannot produce that shape.
 
 Each promise's awaiter word is guarded by a lock word in the record it names, the lock a plain `await` and
 the completer meet under (Go's `hchan.lock`). A K-way wait must hold all K at once, so the registration and
-the withdrawal gather the array's non-zero slots, sort them by address, and lock them in ascending order,
+the withdrawal gather the array's non-zero slots (a slot a consume has emptied holds `0` and takes no lock), sort them by address, and lock them in ascending order,
 releasing them in the reverse order (`__gt_any_lock`, `__gt_any_unlock`) — Go's `sellock`. Every multi-lock
 holder takes the locks in that one order, and a completer only ever holds its own one, so no two holders can
 each wait on a lock the other has: no deadlock, whatever the array's order and however many selects share a
@@ -103,7 +103,7 @@ two in straight-line code.
 
 ### What the scan reads, and the one thing the caller owes it
 
-A slot is skipped when it holds `0` — the zero a `resize` leaves in a slot nobody filled. Every other slot
+A slot is skipped when it holds `0` — the zero a consume leaves when it moves a promise out of the slot it was read from (`await first` after `arr.get(0)`). Every other slot
 is read as a green-thread handle and its status word compared against `completed`.
 
 ⚠ **A promise that has already been AWAITED leaves a stale handle in its slot**, because `await` recycles
@@ -423,36 +423,40 @@ end 'main'
 7
 ```
 
-<!-- test: await-any.a-slot-nobody-filled-is-skipped -->
-⭐ **THE NULL-SLOT GUARD, AND IT IS REACHABLE RATHER THAN DEFENSIVE.** `Array.resize` refuses a MANAGED
-element type at compile time (E3106) — but a `Promise with …` is not managed (its value IS the green-thread
-pointer, `PromiseType.maxon`'s first fact), so `resize` is legal here and publishes length over slots nobody
-filled. Those slots are zero, and a zero in a promise column is an ABSENCE, not a handle: reading a status
-word through it faults on the null page.
+<!-- test: await-any.a-consumed-slot-is-skipped -->
+⭐ **THE NULL-SLOT GUARD, AND IT IS REACHABLE RATHER THAN DEFENSIVE.** Awaiting a promise read out of an
+array slot (`await first` after `arr.get(0)`) finishes the move out of that slot: the array stops naming the
+thread, and the slot inside `[0, length)` holds `0`. A zero in a promise column is an ABSENCE, not a handle:
+reading a status word through it faults on the null page.
 
-The scan therefore skips a `0` slot and keeps going, so the answer is `2` — the only slot with a promise in
-it — and `2 * 10 + 42` says both halves in one number.
+The scan therefore skips a `0` slot and keeps going, so with slots 0 and 1 consumed the answer is `2` — the
+only slot still holding a promise — and `2 * 10 + 30` says both halves in one number.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
-function makeValue() returns Integer
+function makeValue(v Integer) returns Integer
 	Scheduler.yield()
-	return 42
+	return v
 end 'makeValue'
 
 function main() returns ExitCode
 	var arr = IntPromiseArray.create(0)
-	arr.resize(2)
-	arr.push(async makeValue())
+	arr.push(async makeValue(10))
+	arr.push(async makeValue(20))
+	arr.push(async makeValue(30))
+	let first = try arr.get(0) otherwise panic("slot 0 is in range")
+	let second = try arr.get(1) otherwise panic("slot 1 is in range")
+	var consumed = await first
+	consumed = consumed + await second
 	let ready = arr.awaitAny()
 	let p = try arr.get(ready) otherwise panic("awaitAny named a slot that is in range")
-	return ((ready as Integer) * 10 + await p) as ExitCode
+	return ((ready as Integer) * 10 + await p + consumed - 30) as ExitCode
 end 'main'
 ```
 ```exitcode
-62
+50
 ```
 
 <!-- test: await-any.an-empty-array-is-a-scheduler-deadlock -->
