@@ -517,8 +517,12 @@ jobs:
       - name: Build with no shim
         run: ./scripts/build-from-seed.sh --unshimmed
 
+      # The one check on what the seed's compiler does: `pin` waits on this job and not on `suite`.
+      - name: IR suite on the compiler the seed built
+        run: ./maxon-bin/.maxon/maxon spec-test ir-specs
+
   pin:
-    needs: [suite, freeze, prove]
+    needs: [freeze, prove]
     if: needs.freeze.outputs.freeze == 'yes'
     runs-on: ubuntu-latest
     permissions:

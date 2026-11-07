@@ -36,8 +36,10 @@ tree, so **a tree that carries a patch is owed a new seed, and CI freezes and pi
 2. **`prove`.** Each archive is installed on its own target's runner
    (`scripts/fetch-seed.sh <tag> <target> --from=temp/seed/dist`) and must build the tree with
    `scripts/build-from-seed.sh --unshimmed`, which fails at the first refusal: the new seed builds the tree
-   with no patch, on all four architectures, before anything is published.
-3. **`pin`**, once the suite, `freeze` and `prove` are green. `scripts/pin-seed.sh` publishes the pre-release
+   with no patch, on all four architectures, before anything is published. The compiler it built then runs
+   `spec-test ir-specs` on that runner.
+3. **`pin`**, once `freeze` and `prove` are green, whatever the `suite` job reports: a seed only has to build
+   the tree. `scripts/pin-seed.sh` publishes the pre-release
    at the frozen commit, fetches every archive back from it with `scripts/fetch-seed.sh`, then commits the tag
    to `scripts/seed-tag` with every `scripts/seed-shim/*.patch` deleted and pushes that commit to `main` as
    `github-actions[bot]`. GitHub starts no workflow for a push made with `GITHUB_TOKEN`. A pin on the frozen
