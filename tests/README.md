@@ -536,6 +536,10 @@ tests/
     a-pinned-green-thread-stays-on-its-machine-across-a-park.maxtest     a thread that pinned itself runs on the same machine after every park
     a-pinned-green-thread-runs-while-another-sits-in-a-blocking-syscall.maxtest     the pinned thread's owner is woken and given a processor even while another machine is inside a blocking call
     a-program-that-only-pins-lays-out-no-profile-runtime.maxtest     a `MachinePin` program runs, lays out `__gt_pin_destruct` and carries no `__prof_close`, on both arm64 lanes
+    SafePointTable.maxon                    the second shared half: finds `__symtable` in a built executable and reads one symbol's safe-point byte
+    the-cown-queue-publishers-are-never-stopped-by-asynchronous-preemption.maxtest     every cown queue publisher's safe-point byte is `never`, on x64-windows, x64-linux, arm64-linux and arm64-macos
+    the-cown-runner-links-no-queue-node-inline.maxtest     `__cown_run` carries no release store and `__cown_enqueue_finish` exactly one, on both arm64 lanes
+    fixtures/cown/main.maxon.fixture        stored name only - see rule 1
     fixtures/spawn/main.maxon.fixture       stored name only - see rule 1
     fixtures/heap/main.maxon.fixture        stored name only - see rule 1
     fixtures/shared-segment/main.maxon.fixture   stored name only - see rule 1
@@ -1254,7 +1258,7 @@ directory under `temp/consoleWrite/`), and it keeps rule 5: one spawning `test`,
 
 ## `emittedRuntime/` — the ORDERING an emitted runtime body reads another thread's word with, and the machine a pinned green thread runs on
 
-Eight cases. Five read the Target IR, and each one's subject there is a body no author wrote: one the back end synthesizes into every
+Ten cases, two of them about the cown queue (below the list of the others). Five read the Target IR, and each one's subject there is a body no author wrote: one the back end synthesizes into every
 program that spawns, two into every program that allocates, fifteen scheduler, timer and poller
 bodies for the `.data` words published from under `__sched_lock`, the DebugStream producer's two ring
 bodies, and the two shared-segment word accessors. Each of the five builds a fixture — `spawn` for the first three,
@@ -1350,6 +1354,19 @@ address must reach an access before its register is overwritten.
 **`a-shared-segment-word-is-read-with-an-acquire-and-written-with-a-release`** — `__shm_read_word` and
 `__shm_write_word`, the two bodies behind `SharedSegment.readWord`/`writeWord`: no plain word load or
 store in either, and exactly one `ldar` and one `stlr` respectively.
+
+**`the-cown-queue-publishers-are-never-stopped-by-asynchronous-preemption`** — the `cown` fixture (a
+service, one send, and `CownTorture.violations`) is built for four lanes and the case locates `__symtable`
+in each executable (`SafePointTable.maxon`: the header whose entry count, first name offset and flags run
+agree) and reads the safe-point byte of `__cown_send`, `__cown_send_wait`, `__cown_enqueue_finish`,
+`__cown_dequeue_slow`, `__cown_close`, `__cown_acquire_many` and `__cown_multi_release`: each is `0`, never
+stoppable. ⛔ **ITS SELF-PROOF PANICS RATHER THAN PASS**: `__cown_run` runs arbitrary behaviours and must read
+as stoppable, else the byte read is not the one `__gt_preempt_safe` consults. A publisher spliced into
+`__cown_run` would leave that table unchanged, which is what the next case reads.
+
+**`the-cown-runner-links-no-queue-node-inline`** — `__cown_run` and `__cown_enqueue_finish` in the Target IR of
+both arm64 lanes: `__cown_run` carries no `stlr` (the store that links the old tail to the new node), and
+`__cown_enqueue_finish` carries exactly one, so the absence is a reading and not a search that found nothing.
 
 ⭐⭐ **THE TARGET IR IS THE ONLY PLACE THE ANSWER IS.** The victim publishes its tail with a
 read-modify-write and claims a head with a compare-and-swap, so the WRITER's half of the pair is

@@ -1,0 +1,102 @@
+export typealias SymtabWord = int(0 to u32.max)
+export typealias SafePointByte = int(0 to 255)
+
+export let NeverPreemptibleByte = 0 as SafePointByte
+
+let SymtabHeaderBytes = 8 as ElementIndex
+let SymtabEntryBytes = 8
+let SymtabWordBytes = 4 as ElementIndex
+let SymtabFlagsOffsetColumn = 4
+let SymtabNameOffsetColumn = 4
+let SymtabFewestEntries = 16
+let SymtabMostEntries = 1048576
+let SymtabCountHighByteLimit = 16
+let ByteShift = 8
+let SymtabSafeFromMask = 0x7F
+let NameTerminator = 0
+
+export type SafePointTable
+	let image as ByteArray
+	let start as ElementIndex
+	let count as SymtabWord
+	let flagsAt as ElementIndex
+
+	export static function locate(image ByteArray, target String) returns SafePointTable
+		let last = image.count() - SymtabHeaderBytes - SymtabEntryBytes
+
+		for at in 0 upto last 'eachOffset'
+			if looksLikeTableAt(image, at: at) 'found'
+				return SafePointTable{image: image, start: at, count: wordAt(image, at: at), flagsAt: at + (wordAt(image, at: at + SymtabFlagsOffsetColumn) as ElementIndex)}
+			end 'found'
+		end 'eachOffset'
+
+		panic("emitted-runtime tests: the gate could not run — the {target} executable holds no `__symtable`: no offset starts a header whose entry count, first name offset and flags run agree. The table's layout (`BacktraceFormat.buildSymbolTableBytes`) has moved, and this reader no longer finds it.")
+	end 'locate'
+
+	export function safePointByteOf(symbol String, target String) returns SafePointByte
+		for index in 0 upto self.count 'eachEntry'
+			let entryAt = self.start + SymtabHeaderBytes + (index as ElementIndex) * SymtabEntryBytes
+			let nameAt = self.start + (wordAt(self.image, at: entryAt + SymtabNameOffsetColumn) as ElementIndex)
+
+			if nameIs(self.image, at: nameAt, symbol: symbol) 'theSymbol'
+				return (byteAt(self.image, at: self.flagsAt + (index as ElementIndex)) and SymtabSafeFromMask) as SafePointByte
+			end 'theSymbol'
+		end 'eachEntry'
+
+		panic("emitted-runtime tests: the gate could not run — the {target} `__symtable` holds no symbol named `{symbol}`, so the program the case built does not lay that function out.")
+	end 'safePointByteOf'
+end 'SafePointTable'
+
+function byteAt(image ByteArray, at ElementIndex) returns Byte
+	return try image.get(at) otherwise panic("emitted-runtime tests: the gate could not run — the symbol table reader went past the end of a {image.count()}-byte executable at {at}.")
+end 'byteAt'
+
+function wordAt(image ByteArray, at ElementIndex) returns SymtabWord
+	var word = 0 as SymtabWord
+
+	for offset in 0 upto SymtabWordBytes 'eachByte'
+		word = word or ((byteAt(image, at: at + (SymtabWordBytes - 1 - offset)) as SymtabWord) shl (ByteShift * ((SymtabWordBytes - 1 - offset) as Count)))
+	end 'eachByte'
+
+	return word
+end 'wordAt'
+
+function looksLikeTableAt(image ByteArray, at ElementIndex) returns bool
+	if byteAt(image, at: at + 3) != 0 or byteAt(image, at: at + 2) >= SymtabCountHighByteLimit 'notACount'
+		return false
+	end 'notACount'
+
+	let count = wordAt(image, at: at)
+
+	if count < SymtabFewestEntries or count > SymtabMostEntries 'implausible'
+		return false
+	end 'implausible'
+
+	let namesStart = wordAt(image, at: at + SymtabHeaderBytes + SymtabNameOffsetColumn) as ElementIndex
+
+	if namesStart != SymtabHeaderBytes + (count as ElementIndex) * SymtabEntryBytes 'namesDoNotFollowTheEntries'
+		return false
+	end 'namesDoNotFollowTheEntries'
+
+	let flagsAt = at + (wordAt(image, at: at + SymtabFlagsOffsetColumn) as ElementIndex)
+
+	if flagsAt < at + namesStart + (count as ElementIndex) or flagsAt + (count as ElementIndex) > image.count() 'flagsOutOfPlace'
+		return false
+	end 'flagsOutOfPlace'
+
+	return byteAt(image, at: flagsAt - 1) == NameTerminator
+end 'looksLikeTableAt'
+
+function nameIs(image ByteArray, at ElementIndex, symbol String) returns bool
+	var cursor = at
+
+	for one in symbol.bytes() 'eachByte'
+		if cursor >= image.count() or byteAt(image, at: cursor) != one 'differs'
+			return false
+		end 'differs'
+
+		cursor = cursor + 1
+	end 'eachByte'
+
+	return cursor < image.count() and byteAt(image, at: cursor) == NameTerminator
+end 'nameIs'

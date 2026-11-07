@@ -2974,9 +2974,8 @@ function encodeArm64FunctionChunk(module TargetModule, func IrFunction, frameByt
 	chunk.funcAdrpRelocs = funcAdrpRelocs
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: blockOffsets)
 
-	// Stoppable where it stands exactly when the stack guard applies and it does not pin its thread;
 	// `X64Backend.emitFunctionChunk` says why `compilerScaffolding` is asked separately.
-	chunk.asyncPreemptible = guarded and not encoding.pinsItsThread
+	chunk.asyncPreemptible = asyncPreemptionCanStop(greenThreads, skipsStackGuard: encoding.skipsStackGuard, pinsItsThread: encoding.pinsItsThread)
 	chunk.asyncUnsafePrefixBytes = unsafePrefixBytes
 	chunk.compilerScaffolding = encoding.compilerScaffolding
 	chunk.spendsCallerStack(frameBytes, checks: guarded)

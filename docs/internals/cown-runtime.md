@@ -57,8 +57,12 @@ stores its record into the old tail's next pointer. The runner follows next poin
 - The swap is a load and compare-and-swap loop, and the next-pointer store is a store-release that pairs with
   the runner's load-acquire of the same word. Every cross-thread edge in the runtime is one of
   compare-and-swap, store-release and load-acquire.
-- Between the tail swap and the next-pointer store the sender is between two instructions of unguarded code
-  with no park point, so a runner spinning on a next pointer waits a bounded time.
+- Between the tail swap and the next-pointer store the publisher cannot be stopped, so a runner spinning on a
+  next pointer waits a bounded time. Every publisher is a symbol that asynchronous preemption never stops: an
+  unguarded function, or one that pins its thread. The runner's own finish claim publishes through
+  `__cown_enqueue_finish` rather than inline in `__cown_run`, which is stoppable, and the builder refuses to
+  emit a publish into a function that could be stopped. `__cown_multi_release` and `__cown_acquire_many` spin on
+  these links and must never gain a park point.
 - A behaviour record is freed only after the runner has decided to release or hand on, so a late reader of a
   next pointer never reads freed memory. The compare-and-swap that sets `CownOffLast` from the current
   behaviour to 0 can succeed on an address that was reused, and that is harmless: success means that address

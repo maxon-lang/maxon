@@ -92,6 +92,7 @@ export let CownSendName = b"__cown_send"
 let CownSendWaitName = b"__cown_send_wait"
 let CownRunName = b"__cown_run"
 let CownDequeueSlowName = b"__cown_dequeue_slow"
+let CownEnqueueFinishName = b"__cown_enqueue_finish"
 export let CownCloseName = b"__cown_close"
 export let CownSendAbandonName = b"__cown_send_abandon"
 export let CownHandleCloneBoxName = b"__cown_handle_clone_box"
@@ -111,6 +112,7 @@ export function installCownRuntime(module StdModule, requestStagingBytes ByteOff
 	buildCownSendWait(module)
 	buildCownRun(module)
 	buildCownDequeueSlow(module)
+	buildCownEnqueueFinish(module)
 	buildCownClose(module)
 	buildCownSendAbandon(module)
 	buildCownHandleCloneBox(module)
@@ -279,6 +281,10 @@ function emitCownTailSwap(module StdModule, func IrFunction, cur IrBlock, cown V
 end 'emitCownTailSwap'
 
 function emitCownPublish(module StdModule, func IrFunction, cur IrBlock, cown ValueId, beh ValueId, joined IrBlock, ids ValueMinter)
+	if asyncPreemptionCanStop(true, skipsStackGuard: not func.needsGreenThreadStackGuard, pinsItsThread: func.pinsItsThread) 'stoppablePublisher'
+		panic("emitCownPublish: '{String.from(func.name)}' is guarded and does not pin its thread, so asynchronous preemption can stop it between the tail swap and the link store; publish from an unguarded or pinned runtime function such as '{String.from(CownEnqueueFinishName)}'")
+	end 'stoppablePublisher'
+
 	var swapped = module.addBlock(func, label: b"cownswapped", heat: BlockHeat.normal)
 	var idle = module.addBlock(func, label: b"cownidle", heat: BlockHeat.normal)
 	var busy = module.addBlock(func, label: b"cownbusy", heat: BlockHeat.normal)
@@ -306,13 +312,9 @@ function emitCownEnqueueMessage(module StdModule, func IrFunction, cur IrBlock, 
 	emitCownPublish(module, func: func, cur: copied, cown: cown, beh: beh, joined: joined, ids: ids)
 end 'emitCownEnqueueMessage'
 
-function emitCownEnqueueFinish(module StdModule, func IrFunction, cur IrBlock, cown ValueId, joined IrBlock, ids ValueMinter)
-	// The finish is queued at the tail like a message and never run inline, so an acquire slot queued
-	// behind the last message stays correct.
-	let beh = emitSlabAlloc(module, block: cur, bytes: emitConst(module, block: cur, value: BehHeaderBytes, ids: ids), kind: SlabBufferKind.cownBehaviour, ids: ids)
-	emitStoreField(module, block: cur, record: beh, offset: BehOffKind, value: emitConst(module, block: cur, value: CownBehaviourKind.finish.rawValue, ids: ids))
-
-	emitCownPublish(module, func: func, cur: cur, cown: cown, beh: beh, joined: joined, ids: ids)
+function emitCownEnqueueFinish(module StdModule, block IrBlock, cown ValueId, joined IrBlock, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: CownEnqueueFinishName, args: argsOf(cown)))
+	module.setTerminator(block, op: StdOp.branch(joined.id))
 end 'emitCownEnqueueFinish'
 
 function emitCownFinishState(module StdModule, func IrFunction, cur IrBlock, cown ValueId, joined IrBlock, ids ValueMinter)
@@ -607,17 +609,38 @@ function buildCownDequeueSlow(module StdModule)
 	emitCownLockLeave(module, block: settled, cown: cown, holder: CownLockHolder.currentMachine, ids: ids)
 	emitBranchOnCompare(module, block: settled, value: lastOfClosed, pred: StdCmpPred.ne, against: 0, whenTrue: claimFinish, whenFalse: doneBlock, ids: ids)
 
-	emitCownEnqueueFinish(module, func: func, cur: claimFinish, cown: cown, joined: doneBlock, ids: ids)
+	emitCownEnqueueFinish(module, block: claimFinish, cown: cown, joined: doneBlock, ids: ids)
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildCownDequeueSlow'
 
+function buildCownEnqueueFinish(module StdModule)
+	var func = IrFunction.createFromStd(CownEnqueueFinishName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"enqueuefinishdone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let cown = 0
+
+	let beh = emitSlabAlloc(module, block: entry, bytes: emitConst(module, block: entry, value: BehHeaderBytes, ids: ids), kind: SlabBufferKind.cownBehaviour, ids: ids)
+	emitStoreField(module, block: entry, record: beh, offset: BehOffKind, value: emitConst(module, block: entry, value: CownBehaviourKind.finish.rawValue, ids: ids))
+
+	emitCownPublish(module, func: func, cur: entry, cown: cown, beh: beh, joined: doneBlock, ids: ids)
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildCownEnqueueFinish'
+
 // The cown stays held across the `__gt_resched` that ends a batch, so state never changes thread inside
 // a busy period. A behaviour record is freed only after the release decision: freeing it before the
 // `CAS(Last, cur, 0)` would let a recycled address match the tail. A lost CAS means a sender won the
-// tail and has not yet stored `next`; that window lies in unguarded code with no park point, so
-// spinning on `next` is bounded.
+// tail and has not yet stored `next`; every publisher is a symbol asynchronous preemption never
+// stops (`emitCownPublish` refuses to build into one that could be), and this runner's own finish
+// claim publishes through `__cown_enqueue_finish` for the same reason, so spinning on `next` is
+// bounded.
 function buildCownRun(module StdModule)
 	var func = IrFunction.createFromStd(CownRunName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(2)
@@ -685,7 +708,7 @@ function buildCownRun(module StdModule)
 
 	emitBranchOnCompare(module, block: accountWon, value: lastOfClosed, pred: StdCmpPred.ne, against: 0, whenTrue: claimFinish, whenFalse: messageCall, ids: ids)
 
-	emitCownEnqueueFinish(module, func: func, cur: claimFinish, cown: cown, joined: messageCall, ids: ids)
+	emitCownEnqueueFinish(module, block: claimFinish, cown: cown, joined: messageCall, ids: ids)
 
 	module.appendOp(accountSlow, op: StdOp.call(ids.mint(), callee: CownDequeueSlowName, args: argsOf(cown)))
 	module.setTerminator(accountSlow, op: StdOp.branch(messageCall.id))
@@ -828,7 +851,7 @@ function buildCownClose(module StdModule)
 
 	emitBranchOnCompare(module, block: afterSenders, value: nothingQueued, pred: StdCmpPred.ne, against: 0, whenTrue: enqueueFinish, whenFalse: doneBlock, ids: ids)
 
-	emitCownEnqueueFinish(module, func: func, cur: enqueueFinish, cown: cown, joined: doneBlock, ids: ids)
+	emitCownEnqueueFinish(module, block: enqueueFinish, cown: cown, joined: doneBlock, ids: ids)
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 	module.functions.push(func)

@@ -3176,12 +3176,9 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 	var chunk = FunctionCodeChunk.createWith(func.name.clone(), code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: chunkLabelOffsets)
 
-	// A function may be stopped where it stands exactly when the stack guard applies to it
-	// (`mightGuard`) and it does not pin its thread (`GtGuardSite.runtimeEntry`). Not `emitGuard`: a
-	// call-free loop that spills nothing reserves no frame and carries no guard, and it is exactly the
-	// function asynchronous preemption exists to stop. The safe-point predicate tests the stack
+	// Not `emitGuard`: see `asyncPreemptionCanStop`. The safe-point predicate tests the stack
 	// pointer against `GtRuntime.gtAsyncPreemptMargin` itself.
-	chunk.asyncPreemptible = mightGuard and not encoding.pinsItsThread
+	chunk.asyncPreemptible = asyncPreemptionCanStop(usesGt, skipsStackGuard: encoding.skipsStackGuard, pinsItsThread: encoding.pinsItsThread)
 	chunk.asyncUnsafePrefixBytes = unsafePrefixBytes
 
 	// Provenance, not `mightGuard`: a guarded cascade is still scaffolding to the debugger.

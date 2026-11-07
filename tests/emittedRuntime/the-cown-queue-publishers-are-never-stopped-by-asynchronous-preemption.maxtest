@@ -1,0 +1,52 @@
+let TheCownQueuePublishersAreNeverStoppedCaseLabel = "cown-publishers"
+
+let CownFixtureName = "cown"
+let PreemptibleRunnerSymbolName = "__cown_run"
+
+let PublisherSymbolNames = ["__cown_send", "__cown_send_wait", "__cown_enqueue_finish", "__cown_dequeue_slow", "__cown_close", "__cown_acquire_many", "__cown_multi_release"]
+let PublisherTargetNames = ["x64-windows", "x64-linux", "arm64-linux", "arm64-macos"]
+
+let WindowsTargetPrefix = "x64-windows"
+let ExecutableSuffix = ".exe"
+
+let TheCownQueuePublishersAreNeverStoppedReason = "A publisher swaps itself in as the cown's tail and then stores the previous tail's `next`. A runner or a multi-cown release that lost its release CAS spins on that `next` with no way to yield, so a publisher stopped between the swap and the store would hold it there until the publisher is resumed. `__symtable` carries one safe-point byte per symbol, so no publisher may be a symbol asynchronous preemption can stop; the runner's own finish claim publishes through `__cown_enqueue_finish` for that reason."
+
+test 'every cown queue publisher is a symbol asynchronous preemption never stops'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: TheCownQueuePublishersAreNeverStoppedCaseLabel, fixture: CownFixtureName)
+
+	var findings = StringArray.create(0)
+
+	for target in PublisherTargetNames 'eachTarget'
+		notePublishersOf(findings, staged: staged, target: target)
+	end 'eachTarget'
+
+	Expect.isTrue(findings.isEmpty(), message: "a cown queue publisher can be stopped between its tail swap and its link:{renderedFindings(findings)}\n\n  {TheCownQueuePublishersAreNeverStoppedReason}")
+end 'every cown queue publisher is a symbol asynchronous preemption never stops'
+
+function notePublishersOf(findings StringArray, staged FilePath, target String)
+	let table = SafePointTable.locate(builtImage(staged, target: target), target: target)
+
+	for symbol in PublisherSymbolNames 'eachPublisher'
+		if table.safePointByteOf(symbol, target: target) != NeverPreemptibleByte 'stoppable'
+			findings.push("on {target}, `{symbol}` is a symbol asynchronous preemption can stop")
+		end 'stoppable'
+	end 'eachPublisher'
+
+	if table.safePointByteOf(PreemptibleRunnerSymbolName, target: target) == NeverPreemptibleByte 'readerSeesNothing'
+		panic("emitted-runtime tests: the gate could not run — on {target}, `{PreemptibleRunnerSymbolName}` reads as never preemptible, but it runs arbitrary behaviours and is stoppable. The safe-point byte this case reads is not the one `__gt_preempt_safe` consults, and every `never` above means nothing.")
+	end 'readerSeesNothing'
+end 'notePublishersOf'
+
+function builtImage(staged FilePath, target String) returns ByteArray
+	let suffix = ExecutableSuffix if target == WindowsTargetPrefix else ""
+	let executable = staged.join("{OutputFileStem}-{TheCownQueuePublishersAreNeverStoppedCaseLabel}-{target}{suffix}")
+
+	var extraArguments = StringArray.create(0)
+	extraArguments.push("{TargetOptionPrefix}{target}")
+
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: executable, label: TheCownQueuePublishersAreNeverStoppedCaseLabel, extraArguments: extraArguments)
+
+	requireBuiltOrPanic(build, output: executable, what: "`{BuildCommandName} … {TargetOptionPrefix}{target}`, which writes the executable whose `__symtable` is read,")
+
+	return try File.readBinary(executable) otherwise panic("emitted-runtime tests: the gate could not run — could not read back the {target} executable at {executable.toString()}.")
+end 'builtImage'

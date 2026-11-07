@@ -617,6 +617,15 @@ export function skipsGreenThreadStackGuard(func IrFunction, runtimeTier Function
 	return isRuntimeFunction(func, runtimeTier: runtimeTier) and not func.needsGreenThreadStackGuard
 end 'skipsGreenThreadStackGuard'
 
+// Whether asynchronous preemption can stop a thread inside the function: it carries the green-thread
+// stack guard (the function is not exempt from it) and does not pin its thread. Not "emits a guard": a
+// call-free loop that spills nothing reserves no frame and is exactly what preemption exists to stop.
+// The backends set `__symtable`'s safe-point byte from this, and the cown publish builder refuses a
+// function it answers true for.
+export function asyncPreemptionCanStop(usesGreenThreads bool, skipsStackGuard bool, pinsItsThread bool) returns bool
+	return usesGreenThreads and not skipsStackGuard and not pinsItsThread
+end 'asyncPreemptionCanStop'
+
 // --- Block names: the ONE derivation a header and a branch target both read ---
 
 // What separates a colliding block label from the BlockId that disambiguates it. No block label
