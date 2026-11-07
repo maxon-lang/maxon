@@ -130,6 +130,49 @@ function writeRebases(rdata ByteArray, absRelocs AbsRelocArray, funcRelocs FuncR
 	return slots
 end 'writeRebases'
 
+typealias Scaled = bits(64)
+
+let NeverTheBridgeSum = 12345
+
+function carry(n Scaled) returns Scaled
+	let early0 = n * 3
+	let early1 = n * 5
+	let early2 = n * 7
+	let early3 = n * 9
+	let early4 = n * 11
+	let early5 = n * 13
+	let early6 = n * 15
+	let early7 = n * 17
+	let early8 = n * 19
+	let early9 = n * 21
+	let early10 = n * 23
+	let early11 = n * 25
+	let early12 = n * 27
+	let early13 = n * 29
+	let bridge0 = n * 101
+	let bridge1 = n * 103
+	let kept0 = n * 997
+	let kept1 = n * 999
+	let kept2 = n * 1001
+	let kept3 = n * 1003
+	let kept4 = n * 1005
+	let kept5 = n * 1007
+	let kept6 = n * 1009
+	let kept7 = n * 1011
+	let kept8 = n * 1013
+	let kept9 = n * 1015
+	let kept10 = n * 1017
+	let earlySum = early0 + early1 + early2 + early3 + early4 + early5 + early6 + early7 + early8 + early9 + early10 + early11 + early12 + early13
+	let bridgeSum = bridge0 + bridge1
+
+	if bridgeSum == NeverTheBridgeSum 'never'
+		return 1
+	end 'never'
+
+	print("")
+	return earlySum + kept0 + kept1 + kept2 + kept3 + kept4 + kept5 + kept6 + kept7 + kept8 + kept9 + kept10
+end 'carry'
+
 function main() returns ExitCode
 	var rdata = ByteArray.create(0)
 
@@ -150,6 +193,6 @@ function main() returns ExitCode
 	end 'make'
 
 	let slots = writeRebases(rdata, absRelocs: absRelocs, funcRelocs: funcRelocs, names: names, funcTable: funcTable, constImageOffset: 4096, textImageOffset: 8192)
-	print("{slots.count()}")
+	print("{slots.count()} {carry(rdata.count() as Scaled)} {carry(slots.count() as Scaled)}")
 	return 0
 end 'main'
