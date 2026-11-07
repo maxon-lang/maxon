@@ -994,3 +994,169 @@ func @main {
     arm64.ret
 }
 ```
+
+<!-- test: a-constant-fixed-array-of-string-literals-is-a-string-table-in-rdata -->
+A `let` fixed array whose elements are all string literals is image data: its record, its table of three element addresses and each element's own immortal string record are laid down in `.rdata`, so `main` reads the second element through the table and allocates, retains and drops nothing. The three string payloads sit in the read-only image in element order.
+
+```maxon
+typealias Trio = FixedArray with 3 String
+
+let Names = Trio from ["ab", "cde", "f"]
+
+function main() returns ExitCode
+	return Names.get(1).byteLength() as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+```RequiredRdata
+utf8 "ab"
+utf8 "cde"
+utf8 "f"
+```
+```TargetIr:x64-windows
+data {
+  __slab_arena_map_l1@0 = i64 0
+  __slab_state@8 = i64 0
+  __mrt_console_probe_stdin@16 = i8 0
+  __mrt_console_probe_stdout@17 = i8 0
+  __mrt_console_probe_stderr@18 = i8 0
+  __mrt_program_started@19 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rax, [rip + __strtab_rec_8]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_body:
+    x64.loadRegBaseDisp.word64 r8, [rax + 8]
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at a-constant-fixed-array-of-string-literals-is-a-string-table-in-rdata.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rax, [rip + __strtab_rec_8]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_body:
+    x64.loadRegBaseDisp.word64 r8, [rax + 8]
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at a-constant-fixed-array-of-string-literals-is-a-string-table-in-rdata.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __slab_arena_map_l1@0 = i64 0
+  __slab_state@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __strtab_rec_8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at a-constant-fixed-array-of-string-literals-is-a-string-table-in-rdata.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __strtab_rec_8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at a-constant-fixed-array-of-string-literals-is-a-string-table-in-rdata.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+```

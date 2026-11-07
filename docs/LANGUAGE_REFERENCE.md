@@ -3767,9 +3767,10 @@ runtime-sized array, so both need `try` (a bare call is **E3057**).
   applies: `count()` is the constant and indices are proven against it. A constant is a literal, a `let`
   bound to a constant, a top-level `let`, a folded `countof(...)` expression, or a `var` read where it holds a
   constant. A constant `0`, or one above `4294967295`, is **E2069**.
-- **The element** is an integer, a `bool` or a float. A managed element is **E2015**, and an element whose
-  range excludes 0, or an enum or union whose raw values include no 0, is **E3106** unless `value: v` is
-  given, because otherwise every slot starts as zero. A generic type holding a `FixedArray with N T` over its type parameter `T` is **E3106** at
+- **The element** is an integer, a `bool`, a float or a managed value (a `String`, a record, an array or a
+  union); any other element is **E2015**. A managed element, an element whose range excludes 0, and an enum or
+  union whose raw values include no 0 are **E3106** unless `value: v` is given, because otherwise every slot
+  starts as zero. A generic type holding a `FixedArray with N T` over its type parameter `T` is **E3106** at
   its `create()` when any instantiation of it is at such an element.
 - **A sized array widens to a runtime-sized one.** A `FixedArray with N T` is accepted where a
   `FixedArray with T` is declared, in an argument, a return or a field store; the reverse is **E3005**. A

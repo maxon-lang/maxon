@@ -1122,17 +1122,18 @@ refused=2 madeRead=-1 madeCount=3 litCount=3
 ⚠ This is the other half of the shared-body mechanism. A
 `FixedArray with <N> <type parameter>` is created ONCE, in a body every instantiation shares, and `create()`
 publishes all N slots by zeroing them. A zeroed slot is an element for a trivial instantiation and a NULL
-for a managed one, and the shared body cannot branch on which. Ungated, the program below with a
-`for … in` read added has `count()` answer 4 while every `get` reports an empty slot (exit 0, no
-diagnostic), and the loop read **SEGFAULTS**. It is the concrete managed element's refusal
+for a managed one, and the shared body cannot branch on which, so `create()` is refused (E3106) when any
+instantiation has no zero value. It is the concrete element's refusal
 (`error.a-concrete-managed-element-is-refused`, just below) asked of the thing that is knowable inside a
-shared body — the instantiation set — rather than of an element type there is none of.
+shared body — the instantiation set — rather than of an element type there is none of. A shared body that
+starts its fixed array with `create(value: v)` writes every slot, so it is admitted for a managed
+instantiation (`a-generic-body-fills-a-fixed-array-with-a-managed-instantiation`).
 
 <!-- test: a-fixed-array-field-in-a-generic-body-round-trips-its-elements -->
 The CAPABILITY itself, which the two cases above do not reach. Both of them only call `count()`, and a fixed array's count folds to a literal off the instance's
 own size, so **they would both still pass if every slot read and wrote the wrong address.** This one
 drives `set` and `get` through the shared generic body: a written slot reads back, an UNWRITTEN slot
-reads back the published zero (which is the whole reason the managed instantiation is refused), and the
+reads back the published zero (which is the whole reason a plain `create()` is refused for a managed instantiation), and the
 count is unchanged by the writes: `a=10 b=7 zero=0 count=4`, exit 17.
 ```maxon
 typealias Int = int(i64.min to i64.max)
@@ -1177,10 +1178,9 @@ a=10 b=7 zero=0 count=4
 ```
 
 <!-- test: error.a-managed-instantiation-of-a-fixed-array-field-is-refused -->
-A type parameter can be instantiated at a managed type, so a fixed array over one is refused at
-the `create()` that would publish its slots — not at the instantiation, and not at run time.
+A type parameter can be instantiated at a managed type, whose zero is not a value, so a `create()` over one is refused (E3106) at the `create()` that would publish its slots — not at the instantiation, and not at run time. A managed element starts from `create(n, value:)` instead.
 
-⚠ **THE REFUSAL IS A STATED POSITION RATHER THAN AN OVERSIGHT.** Ungated, this exact source compiles and **runs to exit 4**: `count()` answers 4 because four slots were published, and nothing here ever READS one. It is the read that is unsound — a zeroed slot is a value for a trivial element and a NULL for a managed one — so exit 4 is the hazard not yet triggered, not evidence that the hazard does not exist. The compiler refuses at compile time what would otherwise break at run time; the same shape with a `for … in` read **SEGFAULTS (139)** on an ungated the compiler. ⇒ this extends the position the compiler already holds for a CONCRETE managed element (see `error.a-concrete-managed-element-is-refused` below) to the instantiated case, so the two arms of one rule agree. **The corpus `stdlib/FixedArray.maxon` is generic over its element where the compiler's synthesized fixed array is scalar-only**; that gap is owned by the `FixedArray` retirement chain, not by this case.
+⚠ **THE REFUSAL IS A STATED POSITION RATHER THAN AN OVERSIGHT.** A zeroed slot is a value for a trivial element and a NULL for a managed one, so the shared body's `create()` could publish an array whose `count()` answers 4 while every `get` reports an empty slot. This extends the position the compiler holds for a CONCRETE managed element (see `error.a-concrete-managed-element-is-refused` below) to the instantiated case, so the two arms of one rule agree.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
@@ -1206,7 +1206,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:21: Unsupported: `FixedArray with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E3106: <fragment>:10:21: 'FixedArray.create' cannot publish slots of a type parameter: 'StrHolder' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
 ```
 
 <!-- test: error.an-enum-instantiation-whose-raw-values-exclude-zero-refuses-a-fixed-array-field -->
@@ -1516,7 +1516,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:21: Unsupported: `FixedArray with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E3106: <fragment>:10:21: 'FixedArray.create' cannot publish slots of a type parameter: 'StrHolder' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
 ```
 
 <!-- test: error.a-managed-instantiation-another-file-reaches-refuses-the-shared-body-holder-first -->
@@ -1563,7 +1563,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:11:21: Unsupported: `FixedArray with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E3106: <fragment>:11:21: 'FixedArray.create' cannot publish slots of a type parameter: 'StrOuter' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
 ```
 
 <!-- test: error.a-managed-instantiation-another-file-reaches-refuses-the-shared-body-use-first -->
@@ -1606,7 +1606,7 @@ export type Outer uses T
 end 'Outer'
 ```
 ```maxoncstderr
-error E2015: <fragment>:19:21: Unsupported: `FixedArray with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E3106: <fragment>:19:21: 'FixedArray.create' cannot publish slots of a type parameter: 'StrOuter' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
 ```
 
 <!-- test: a-fixed-array-in-an-extension-body-over-an-associated-type -->
@@ -1656,11 +1656,7 @@ end 'main'
 ```
 
 <!-- test: error.a-concrete-managed-element-is-refused -->
-The CONCRETE half of the same invariant. `Parser.requireFixedArrayElementType`'s two arms are one rule about
-one hazard, and without this case the door that refuses a written `FixedArray with 2 String` could be deleted
-with the whole suite staying green. ⚠ `stdlib/FixedArray.maxon` is generic over its element, where the
-compiler's synthesized fixed array is scalar-only; what this case pins is that the compiler's position is a
-stated refusal rather than an accident.
+The CONCRETE half of the same invariant. A `String` has no zero value, so `Vec2.create()` over `FixedArray with 2 String` is E3106 and the array starts from `create(value: v)` instead.
 ```maxon
 typealias Vec2 = FixedArray with 2 String
 
@@ -1670,12 +1666,27 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:10: Unsupported: `FixedArray` holds its elements INLINE and publishes every slot at `create`, so it has no element destructor to stamp and a 'String' element would leak its storage and be read back as a null slot — a fixed array's element is an integer, a bool or a float
+error E3106: <fragment>:5:10: 'FixedArray.create' cannot publish slots of 'String': every slot is zero and zero is not a value of 'String'
+```
+
+<!-- test: error.an-element-that-is-neither-scalar-nor-managed-is-refused -->
+An element must be an integer, a bool, a float or a managed value. A `Promise` is none of them, so the alias over it is E2015, before any slot is published.
+```maxon
+typealias Count = int(0 to 100)
+typealias Waits = FixedArray with 2 Promise with Count
+
+function main() returns ExitCode
+	let waits = Waits.create()
+	return waits.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:14: Unsupported: `FixedArray` cannot hold a 'Promise with Count' element — a fixed array's element is an integer, a bool, a float, or a managed value (a String, a record, an array or a union)
 ```
 
 ## A Fixed Array Can Start From A Value, And Be Overwritten In Place
 
-`create(n, value: v)` builds a runtime-sized fixed array whose every element starts as `v`, and a type-sized alias takes the same `value:` argument with no length (`Pair.create(value: v)`). Because every slot is written before anything can read it, the value form is legal for an element whose zero is not a value (a ranged alias that excludes 0, an enum whose raw values include no 0), which the plain `create` refuses with E3106. `refill(value)` writes `value` into every element of an existing fixed array and changes neither its length nor its identity.
+`create(n, value: v)` builds a runtime-sized fixed array whose every element starts as `v`, and a type-sized alias takes the same `value:` argument with no length (`Pair.create(value: v)`). Because every slot is written before anything can read it, the value form is legal for an element whose zero is not a value (a ranged alias that excludes 0, an enum whose raw values include no 0, a managed element such as a `String` or a record), which the plain `create` refuses with E3106. `refill(value)` writes `value` into every element of an existing fixed array and changes neither its length nor its identity.
 
 <!-- test: create-with-a-value-fills-every-slot -->
 Every slot of the four starts as `7`: `4 28`.
@@ -2041,23 +2052,850 @@ end 'main'
 10 0
 ```
 
-<!-- test: error.a-managed-element-is-refused-with-a-value -->
-A value does not make a managed element inline: the value form keeps the E2015 refusal the plain `create` gives.
+<!-- test: create-with-a-value-holds-a-heap-string-in-every-slot -->
+The value is built at run time, so a literal's immortality cannot hide a missing retain: every slot holds its own reference to the one string, and the program ends with nothing leaked: `3 name7,name7,name7,`.
 ```maxon
+typealias Int = int(i64.min to i64.max)
 typealias Names = FixedArray with String
 
 function launder(n ElementIndex) returns ElementIndex
 	return n
 end 'launder'
 
-function main() returns ExitCode
-	let names = Names.create(launder(2), value: "a")
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
 
-	return names.count() as ExitCode
+function main() returns ExitCode
+	let names = Names.create(launder(3), value: label(7))
+	var joined = ""
+
+	for name in names 'each'
+		joined.append("{name},")
+	end 'each'
+
+	print("{names.count()} {joined}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 name7,name7,name7,
+```
+
+<!-- test: a-managed-element-reads-back-through-get -->
+`get` hands back an element that stays valid after the slot is overwritten, because the read holds its own reference: `name1 name9`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Names = FixedArray with String
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+function main() returns ExitCode
+	var names = Names.create(launder(3), value: label(1))
+	let held = try names.get(1) otherwise "missing"
+
+	try names.set(1, value: label(9)) otherwise panic("set")
+
+	let current = try names.get(1) otherwise "missing"
+
+	print("{held} {current}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+name1 name9
+```
+
+<!-- test: set-over-a-live-managed-element-releases-it-once -->
+Each `set` releases the element it displaces and keeps the new one, whether the displaced string is still shared with other slots or was the last holder: `name4 name5 name1 name1`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Names = FixedArray with String
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+function main() returns ExitCode
+	var names = Names.create(launder(4), value: label(1))
+
+	try names.set(0, value: label(2)) otherwise panic("set")
+	try names.set(0, value: label(3)) otherwise panic("set")
+	try names.set(0, value: label(4)) otherwise panic("set")
+	try names.set(1, value: label(5)) otherwise panic("set")
+
+	let a = try names.get(0) otherwise "missing"
+	let b = try names.get(1) otherwise "missing"
+	let c = try names.get(2) otherwise "missing"
+	let d = try names.get(3) otherwise "missing"
+
+	print("{a} {b} {c} {d}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+name4 name5 name1 name1
+```
+
+<!-- test: refill-releases-every-old-managed-element -->
+`refill` replaces every slot with the new value and releases each old one; an element read before the refill is still valid after it: `name1 name2 name2 name2`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Names = FixedArray with String
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+function main() returns ExitCode
+	var names = Names.create(launder(3), value: label(1))
+	let held = try names.get(0) otherwise "missing"
+
+	names.refill(label(2))
+
+	var joined = ""
+
+	for name in names 'each'
+		joined.append(" {name}")
+	end 'each'
+
+	print("{held}{joined}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+name1 name2 name2 name2
+```
+
+<!-- test: refill-of-an-empty-managed-fixed-array-does-nothing -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Names = FixedArray with String
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+function main() returns ExitCode
+	var names = Names.create(launder(0), value: label(1))
+
+	names.refill(label(2))
+
+	print("{names.count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: clone-of-a-managed-fixed-array-is-independent -->
+The clone owns its own references, so writing one array leaves the other alone and each is released exactly once: `name1 name1 name8 name1`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Names = FixedArray with String
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+function main() returns ExitCode
+	var names = Names.create(launder(2), value: label(1))
+	var copy = names.clone()
+
+	try copy.set(0, value: label(8)) otherwise panic("set")
+
+	let a = try names.get(0) otherwise "missing"
+	let b = try names.get(1) otherwise "missing"
+	let c = try copy.get(0) otherwise "missing"
+	let d = try copy.get(1) otherwise "missing"
+
+	print("{a} {b} {c} {d}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+name1 name1 name8 name1
+```
+
+<!-- test: a-clone-outlives-the-managed-fixed-array-it-came-from -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Names = FixedArray with String
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+function duplicate(n ElementIndex) returns Names
+	let original = Names.create(n, value: label(6))
+
+	return original.clone()
+end 'duplicate'
+
+function main() returns ExitCode
+	let copy = duplicate(launder(2))
+
+	print("{copy.count()} {try copy.get(1) otherwise "missing"}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 name6
+```
+
+<!-- test: with-iterator-walks-a-managed-fixed-array -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Names = FixedArray with String
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+function main() returns ExitCode
+	var names = Names.create(launder(3), value: label(1))
+
+	try names.set(2, value: label(3)) otherwise panic("set")
+
+	var joined = ""
+
+	for (iter, name) in names.withIterator() 'each'
+		joined.append("{iter.index()}={name} ")
+	end 'each'
+
+	print("{joined}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0=name1 1=name1 2=name3 
+```
+
+<!-- test: a-managed-fixed-array-of-count-zero-is-empty -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Names = FixedArray with String
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+function main() returns ExitCode
+	let names = Names.create(launder(0), value: label(1))
+	var seen = 0 as Int
+
+	for _ in names 'each'
+		seen = seen + 1
+	end 'each'
+
+	print("{names.count()} {seen} {names.clone().count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 0 0
+```
+
+<!-- test: a-type-sized-managed-fixed-array-takes-a-value-and-no-length -->
+The count is the type's, so the proven indices need no `try`: `3 name4 name4 name5`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Trio = FixedArray with 3 String
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+function main() returns ExitCode
+	var trio = Trio.create(value: label(4))
+
+	trio.set(2, value: label(5))
+
+	print("{trio.count()} {trio.get(0)} {trio.get(1)} {trio.get(2)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 name4 name4 name5
+```
+
+<!-- test: a-type-sized-managed-fixed-array-refills-and-clones -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Trio = FixedArray with 3 String
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+function main() returns ExitCode
+	var trio = Trio.create(value: label(1))
+	var copy = trio.clone()
+
+	trio.refill(label(2))
+
+	print("{trio.get(0)} {trio.get(2)} {copy.get(0)} {copy.get(2)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+name2 name2 name1 name1
+```
+
+<!-- test: a-managed-fixed-array-literal-holds-heap-strings -->
+Both literal heads build a managed fixed array whose elements are released when it dies: `2 name1 name2 3`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Pair = FixedArray with 2 String
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+function main() returns ExitCode
+	let bare = FixedArray from [label(1), label(2)]
+	let named = Pair from [label(3), label(4)]
+
+	print("{bare.count()} {bare.get(0)} {bare.get(1)} {named.get(0).byteLength() - 2}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 name1 name2 3
+```
+
+<!-- test: a-record-element-is-shared-and-released-with-the-array -->
+A record element is held once per slot, so a field read through one slot sees the same record the others hold: `3 name5 name5 7`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Tag
+	export var text as String
+	export var weight as Int
+
+	static function make(n Int) returns Tag
+		return Tag{text: "name{n}", weight: n + 2}
+	end 'make'
+end 'Tag'
+
+typealias Tags = FixedArray with Tag
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var tags = Tags.create(launder(3), value: Tag.make(5))
+	var first = try tags.get(0) otherwise Tag.make(0)
+	var last = try tags.get(2) otherwise Tag.make(0)
+
+	print("{tags.count()} {first.text} {last.text} {last.weight}\n")
+
+	try tags.set(0, value: Tag.make(1)) otherwise panic("set")
+	try tags.set(2, value: Tag.make(2)) otherwise panic("set")
+
+	print("{first.text} {last.text} {(try tags.get(0) otherwise Tag.make(0)).text}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 name5 name5 7
+name5 name5 name1
+```
+
+<!-- test: an-array-element-is-held-by-a-fixed-array -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Row = Array with Int
+typealias Grid = FixedArray with Row
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function makeRow(n Int) returns Row
+	var row = Row.create(0)
+
+	row.push(n)
+	row.push(n + 1)
+
+	return row
+end 'makeRow'
+
+function main() returns ExitCode
+	var grid = Grid.create(launder(2), value: makeRow(4))
+
+	try grid.set(1, value: makeRow(8)) otherwise panic("set")
+
+	var top = try grid.get(0) otherwise makeRow(0)
+	var bottom = try grid.get(1) otherwise makeRow(0)
+
+	print("{top.count()} {try top.get(1) otherwise 0} {try bottom.get(0) otherwise 0}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 5 8
+```
+
+<!-- test: a-union-element-is-held-by-a-fixed-array -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+union Shape
+	named(label String)
+	sized(width Int, height Int)
+end 'Shape'
+
+typealias Shapes = FixedArray with Shape
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function describe(shape Shape) returns String
+	return match shape 'which'
+		named(label) gives label
+		sized(width, height) gives "{width}x{height}"
+	end 'which'
+end 'describe'
+
+function main() returns ExitCode
+	var shapes = Shapes.create(launder(2), value: Shape.named("sq{launder(4)}"))
+
+	try shapes.set(1, value: Shape.sized(3, height: 4)) otherwise panic("set")
+
+	let a = describe(try shapes.get(0) otherwise Shape.sized(0, height: 0))
+	let b = describe(try shapes.get(1) otherwise Shape.sized(0, height: 0))
+
+	print("{a} {b}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sq4 3x4
+```
+
+<!-- test: a-managed-fixed-array-field-is-released-with-its-owner -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Names = FixedArray with String
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+type Roster
+	var names as Names
+
+	static function build(n ElementIndex) returns Roster
+		return Roster{names: Names.create(n, value: label(5))}
+	end 'build'
+
+	function rename(index ElementIndex, to String)
+		try names.set(index, value: to) otherwise panic("rename")
+	end 'rename'
+
+	function nameAt(index ElementIndex) returns String
+		return try names.get(index) otherwise "missing"
+	end 'nameAt'
+end 'Roster'
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var roster = Roster.build(launder(3))
+
+	roster.rename(1, to: label(6))
+
+	print("{roster.nameAt(0)} {roster.nameAt(1)} {roster.nameAt(2)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+name5 name6 name5
+```
+
+<!-- test: a-managed-fixed-array-is-returned-and-passed-on -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Names = FixedArray with String
+
+function launder(n ElementIndex) returns ElementIndex
+	return n
+end 'launder'
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+function build(n ElementIndex) returns Names
+	var names = Names.create(n, value: label(1))
+
+	try names.set(0, value: label(2)) otherwise panic("set")
+
+	return names
+end 'build'
+
+function first(names Names) returns String
+	return try names.get(0) otherwise "missing"
+end 'first'
+
+function main() returns ExitCode
+	let names = build(launder(2))
+
+	print("{first(names)} {names.count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+name2 2
+```
+
+<!-- test: a-constant-fixed-array-of-string-literals-is-read-cloned-and-dropped -->
+A `let` fixed array of string literals is image data, in a module-level `let` and in a `static let` alike. Reading it allocates nothing, and its `clone()` is a real heap copy that owns its elements: writing and refilling the clone changes none of the image, and dropping the clone frees the heap strings it was given and releases nothing the image owns. Leak-gated and poisoned against a double free: `ab cde changed2 k2 f zzz 2` then `r2 r2 r2 3`.
+```maxon
+typealias Trio = FixedArray with 3 String
+
+let Names = Trio from ["ab", "cde", "f"]
+
+type Registry
+	static let words = Trio from ["x", "yy", "zzz"]
+
+	static function lengthOfSecond() returns Count
+		return Registry.words.get(1).byteLength()
+	end 'lengthOfSecond'
+
+	static function wordsCopy() returns Trio
+		return Registry.words.clone()
+	end 'wordsCopy'
+end 'Registry'
+
+function main() returns ExitCode
+	let n = Registry.lengthOfSecond()
+	var copy = Names.clone()
+	let other = Registry.wordsCopy()
+
+	copy.set(0, value: "changed{n}")
+	copy.set(1, value: "k{n}")
+
+	print("{Names.get(0)} {Names.get(1)} {copy.get(0)} {copy.get(1)} {copy.get(2)} {other.get(2)} {n}\n")
+
+	copy.refill("r{n}")
+
+	print("{copy.get(0)} {copy.get(1)} {copy.get(2)} {Names.count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ab cde changed2 k2 f zzz 2
+r2 r2 r2 3
+```
+
+<!-- test: a-proven-get-in-a-generic-body-holds-a-managed-element -->
+A shared generic body reads slot 0 of its fixed array at a proven index and hands the element back. The caller gets a reference of its own, so reading it more often than the ring has slots, allocating, reading again and dropping the ring leaves nothing freed twice and nothing leaked: the four reads print `abc1` and the last line is `def2 abc1`.
+```maxon
+type Ring uses Element
+	typealias Slots = FixedArray with 3 Element
+
+	var slots as Slots
+
+	static function create(seed Element) returns Self
+		return Self{slots: Slots.create(value: seed)}
+	end 'create'
+
+	function first() returns Element
+		return slots.get(0)
+	end 'first'
+end 'Ring'
+
+typealias NameRing = Ring with String
+
+function main() returns ExitCode
+	let r = NameRing.create("abc{1}")
+
+	print("{r.first()}\n")
+	print("{r.first()}\n")
+	print("{r.first()}\n")
+	print("{r.first()}\n")
+
+	let other = "def{2}"
+
+	print("{other} {r.first()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+abc1
+abc1
+abc1
+abc1
+def2 abc1
+```
+
+<!-- test: a-counted-loop-get-in-a-generic-body-holds-each-managed-element -->
+The index of a `for i in 0 upto 3` loop is proven inside the three slots of a shared generic body, so each read is a proven `get` of an element the body cannot name: `abc1 abc1 abc1`.
+```maxon
+type Ring uses Element
+	typealias Slots = FixedArray with 3 Element
+
+	var slots as Slots
+
+	static function create(seed Element) returns Self
+		return Self{slots: Slots.create(value: seed)}
+	end 'create'
+
+	function at(index ElementIndex) returns Element
+		var found = slots.get(0)
+
+		for i in 0 upto 3 'each'
+			if i == index 'wanted'
+				found = slots.get(i)
+			end 'wanted'
+		end 'each'
+
+		return found
+	end 'at'
+end 'Ring'
+
+typealias NameRing = Ring with String
+
+function main() returns ExitCode
+	let r = NameRing.create("abc{1}")
+
+	print("{r.at(0)} {r.at(1)} {r.at(2)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+abc1 abc1 abc1
+```
+
+<!-- test: a-proven-set-in-a-generic-body-replaces-a-managed-element -->
+A shared generic body writes slot 1 at a proven index over a live managed element: the old element is released once and the new one is kept, and a ring built from a value drops cleanly: `abc1 xyz2 abc1`.
+```maxon
+type Ring uses Element
+	typealias Slots = FixedArray with 3 Element
+
+	var slots as Slots
+
+	static function create(seed Element) returns Self
+		return Self{slots: Slots.create(value: seed)}
+	end 'create'
+
+	function replaceSecond(value Element)
+		slots.set(1, value: value)
+	end 'replaceSecond'
+
+	function at(index ElementIndex) returns Element
+		return try slots.get(index) otherwise panic("at")
+	end 'at'
+end 'Ring'
+
+typealias NameRing = Ring with String
+
+function main() returns ExitCode
+	var r = NameRing.create("abc{1}")
+
+	r.replaceSecond("xyz{2}")
+
+	print("{r.at(0)} {r.at(1)} {r.at(2)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+abc1 xyz2 abc1
+```
+
+<!-- test: a-generic-body-fills-a-fixed-array-with-a-managed-instantiation -->
+A shared generic body starts its fixed array from a value, so a `String` instantiation never needs a zero: it keeps what it was handed through `set`, `get` and `refill`: `name1 name2 name9`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Ring uses Element
+	typealias Slots = FixedArray with 3 Element
+
+	var slots as Slots
+
+	static function create(seed Element) returns Self
+		return Self{slots: Slots.create(value: seed)}
+	end 'create'
+
+	function put(index ElementIndex, value Element)
+		try slots.set(index, value: value) otherwise panic("put")
+	end 'put'
+
+	function reset(value Element)
+		slots.refill(value)
+	end 'reset'
+
+	function at(index ElementIndex) returns Element
+		return try slots.get(index) otherwise panic("at")
+	end 'at'
+end 'Ring'
+
+typealias NameRing = Ring with String
+
+function label(n Int) returns String
+	return "name{n}"
+end 'label'
+
+function main() returns ExitCode
+	var ring = NameRing.create(label(1))
+
+	ring.put(1, value: label(2))
+	ring.put(2, value: label(3))
+
+	let before = ring.at(0)
+	let second = ring.at(1)
+
+	ring.reset(label(9))
+
+	print("{before} {second} {ring.at(2)}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+name1 name2 name9
+```
+
+<!-- test: error.a-type-sized-managed-element-has-no-zero -->
+```maxon
+typealias Trio = FixedArray with 3 String
+
+function main() returns ExitCode
+	let trio = Trio.create()
+
+	return trio.count() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:9:14: Unsupported: `FixedArray` holds its elements INLINE and publishes every slot at `create`, so it has no element destructor to stamp and a 'String' element would leak its storage and be read back as a null slot — a fixed array's element is an integer, a bool or a float
+error E3106: <fragment>:5:13: 'FixedArray.create' cannot publish slots of 'String': every slot is zero and zero is not a value of 'String'
 ```
 
 <!-- test: error.a-value-form-needs-a-length-on-a-runtime-sized-alias -->
@@ -3646,7 +4484,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:14: Unsupported: `FixedArray` holds its elements INLINE and publishes every slot at `create`, so it has no element destructor to stamp and a 'String' element would leak its storage and be read back as a null slot — a fixed array's element is an integer, a bool or a float
+error E3106: <fragment>:5:14: 'FixedArray.create' cannot publish slots of 'String': every slot is zero and zero is not a value of 'String'
 ```
 
 <!-- test: error.a-length-of-another-integer-type-names-the-cast -->

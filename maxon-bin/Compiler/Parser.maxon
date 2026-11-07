@@ -10459,6 +10459,7 @@ end 'tokenKindMayPrecedeAFieldDefaultCast'
 let RangeTypeName = b"Range"
 let OpenRangeTypeName = b"OpenRange"
 let ArrayPushMethod = b"push"
+let RefillMethod = b"refill"
 let ArrayCapacityMethod = b"capacity"
 let ArrayResizeMethod = b"resize"
 
@@ -17785,6 +17786,8 @@ function fromHeadBaseName(container FromHeadContainer) returns ByteArray
 	end 'container'
 end 'fromHeadBaseName'
 
+let FromHeadTokenCount = 2
+
 // The token a form's operand opens with.
 function literalInitOperandKind(form LiteralInitForm) returns TokenKind
 	return match form 'f'
@@ -20679,8 +20682,8 @@ export type Parser
 		// container's `from` — one flag cannot say which instances the file can name: the size is per SITE.
 		// The sizes are collected here off the same token counter the parser will read back
 		// (`arrayLiteralElementCountAt`) and handed whole to the note below, which is why this one need
-		// carries a PAYLOAD where the others carry a bit. A fixed array's element cannot be an aggregate
-		// (`requireFixedArrayElementType`), so there is no declared-type half to walk.
+		// carries a PAYLOAD where the others carry a bit. An aggregate element's instance is minted by the parse
+		// (`parseFixedArrayFromConstruction`), so there is no declared-type half to walk.
 		var fixedArrayFromSizes = FixedSizeArray.create(0)
 
 		// ⭐ **THE HEAD NAMES OF THIS FILE'S `<Name> from […]` CONSTRUCTIONS.** A `FixedArray` ALIAS head builds its
@@ -75758,7 +75761,7 @@ export type Parser
 				let sized = self.signatures.fixedArrayInstanceForElement(self.signatures.containerElementType(giid), size: self.constOf(length) as FixedElementCount)
 				let record = try self.emitOwnedContainerRecord(sized, aliasTok: aliasTok, aliasName: aliasName, range: range, sizing: ValueIdArray.create(0))
 
-				try self.emitCreateFill(func, record: record, fill: fill, count: length, anchor: methodTok, range: range)
+				try self.emitCreateFill(func, record: record, giid: giid, fill: fill, count: length, anchor: methodTok, range: range)
 
 				return record
 			end 'aUsableCount'
@@ -75768,7 +75771,7 @@ export type Parser
 
 		let record = try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: aliasName, range: range, sizing: twoArgs(length, second: length))
 
-		try self.emitCreateFill(func, record: record, fill: fill, count: length, anchor: methodTok, range: range)
+		try self.emitCreateFill(func, record: record, giid: giid, fill: fill, count: length, anchor: methodTok, range: range)
 
 		return record
 	end 'parseRuntimeSizedFixedArrayCreate'
@@ -75798,7 +75801,7 @@ export type Parser
 		self.brandValue(record, brand: self.brandOfSpelling(aliasName, readerFilePath: self.job.path))
 		self.markFreshWhenInputsClean(record, inputs: ValueIdArray.create(0))
 
-		try self.emitCreateFill(func, record: record, fill: fill, count: try self.fixedElementCountValue(giid, anchor: aliasTok), anchor: methodTok, range: range)
+		try self.emitCreateFill(func, record: record, giid: giid, fill: fill, count: try self.fixedElementCountValue(giid, anchor: aliasTok), anchor: methodTok, range: range)
 
 		return record
 	end 'parseTypeSizedFixedArrayCreate'
@@ -75855,14 +75858,19 @@ export type Parser
 		return self.containerElementWord(checked, giid: giid, range: SourceRange.ofToken(self.tokenAt(valueStart)))
 	end 'parseCreateFillValue'
 
-	function emitCreateFill(func IrFunction, record ValueId, fill CreateFill, count ValueId, anchor Token, range SourceRange) throws SourceParseError
+	function emitCreateFill(func IrFunction, record ValueId, giid GenericInstanceId, fill CreateFill, count ValueId, anchor Token, range SourceRange) throws SourceParseError
 		match fill 'fillKind'
 			unfilled then return
-			filled(word) then try self.emitFillCall(func, record: record, count: count, word: word, anchor: anchor, range: range)
+			filled(word) then try self.emitFillCall(func, record: record, giid: giid, count: count, word: word, anchor: anchor, range: range)
 		end 'fillKind'
 	end 'emitCreateFill'
 
-	function emitFillCall(func IrFunction, record ValueId, count ValueId, word ValueId, anchor Token, range SourceRange) throws SourceParseError
+	function emitFillCall(func IrFunction, record ValueId, giid GenericInstanceId, count ValueId, word ValueId, anchor Token, range SourceRange) throws SourceParseError
+		if self.signatures.containerElementIsManaged(giid) or self.signatures.containerElementIsOpaque(giid) 'anOwnedElement'
+			try self.emitContainerLiteralElement(self.signatures.genericInstanceBaseName(giid), method: RefillMethod, container: record, value: word, anchor: anchor, range: range)
+			return
+		end 'anOwnedElement'
+
 		let start = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
 		let targetOpFloor = self.artifact.module.ops.count()
 		let targetDeferralFloor = self.artifact.deferredChains.count()
@@ -82552,7 +82560,7 @@ export type Parser
 	// count, count, elementDestroy)` yields a zeroed buffer of `count` elements and a length of
 	// `count`, which together are exactly *"zero-initialized, N elements"*. `count` is the type's, or
 	// for a runtime-sized instance the `create(n)` argument carried in `sizing`. `element_destroy@40`
-	// stays 0, which `requireFixedArrayElementType` is what makes correct. The call writes nothing but
+	// carries the element's destructor (0 for a scalar element). The call writes nothing but
 	// the record it returns, so `SemanticCheck.containerReadCallee` lists it as effect-free and a
 	// discarded `create()` is E3064.
 	//
@@ -82562,13 +82570,11 @@ export type Parser
 	// every one of `/specs/fixed-array.md`'s cases, which write a bare `create()`.
 	// `__managed_create_fixed` throws nothing.
 	//
-	// ⚠⚠ **IT PUBLISHES ZEROED SLOTS WITHOUT PASSING `requireArrayGrowthHasZeroElement`, WHOSE E3106 IS
-	// THE RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ.** A published slot of a MANAGED element is
-	// a null pointer every accessor will dereference. The source-level rule cannot be reused here (its
-	// diagnostic is about a `resize` call the author wrote, and a fixed array's author wrote `create()`), so
-	// the guarantee is carried by `requireFixedArrayElementType` instead, at
-	// `requireSizedContainerElementType` — the construction door, where the element is concrete. **The two
-	// are one invariant with two doors — do not relax either without the other.**
+	// ⚠⚠ **A MANAGED ELEMENT'S PUBLISHED SLOTS ARE NULL UNTIL THE FILL THAT FOLLOWS THIS CALL WRITES THEM,
+	// AND EVERY ACCESSOR DEREFERENCES A NULL MANAGED SLOT.** A plain `create` of a managed element is
+	// refused (E3106) by `requireSizedContainerElementType`, so the only construction of one that reaches
+	// here is `create(value:)`, whose `emitCreateFill` follows at once. Do not add a caller that publishes
+	// a managed element's slots and reads them before a fill.
 	function emitSizedContainerRecord(giid GenericInstanceId, anchor Token, range SourceRange, sizing ValueIdArray) returns ValueId throws SourceParseError
 		if sizing.count() != 0 'sizedByTheCaller'
 			match self.signatures.elementCountSourceOf(ValueTypeTag.genericInstance, nameId: giid as TypeNameId) 'sizingOwner'
@@ -82662,9 +82668,8 @@ export type Parser
 	// ⭐⭐ **THE SIZED CONTAINER'S ELEMENT RULE, ASKED AT A CONSTRUCTION THAT IS A CALL TO A DECLARED
 	// `create()`.** With `stdlib/FixedArray.maxon` owning that create the gate has no emit to ride on, and the
 	// rule it enforces is untouched by who writes the body — **a zeroed slot is an ELEMENT only for an
-	// element that lives inline in the buffer**, and the corpus `create()` publishes N of them through
-	// `setLength`. Left unasked, the two symptoms `requireFixedArrayElementType`'s own header measures come
-	// straight back: `count()` answering N while every `get` reports an empty slot, and a `for … in` read
+	// element whose zero is a value**, and the corpus `create()` publishes N of them. Left unasked, a managed
+	// element gives `count()` answering N while every `get` reports an empty slot, and a `for … in` read
 	// dereferencing the nulls (0xC0000005).
 	//
 	// ⚠ **IT IS ASKED OF THE INSTANCE BEING CONSTRUCTED AND NOT OF THE STATIC BEING CALLED**, because
@@ -82697,7 +82702,7 @@ export type Parser
 
 		try self.requireFixedArrayElementType(giid, tok: aliasTok)
 
-		try self.requireZeroIsAnElement(giid, tok: aliasTok, refusal: ZeroElementRefusal.fixedArrayCreate)
+		try self.requireArrayGrowthHasZeroElement(giid, tok: aliasTok, refusal: ZeroElementRefusal.fixedArrayCreate)
 	end 'requireSizedContainerElementType'
 
 	// ⭐ **THE ELEMENT/COLUMN GATE ONE CONTAINER'S `create` PASSES.** Its caller has already established that
@@ -84046,12 +84051,11 @@ export type Parser
 	// ==========================================================================================
 
 	// ⭐ **WHAT A FIXED ARRAY MAY HOLD.** Its slot is an inline word of the element's own stride, so any element the
-	// managed-memory runtime already strides fits — an integer of any declared range, a `bool`, a `float`. What it may
-	// NOT hold is anything MANAGED: `create()` PUBLISHES every slot (`__managed_create_fixed`) while
-	// `element_destroy@40` stays 0, so a managed element would leak at teardown and every `set` would
-	// overwrite a live pointer. A `Character` is refused for that same reason and not a separate one. An
-	// element whose zero is no value (a ranged alias that excludes 0, an enum whose raw values include no 0)
-	// is refused for the zeroing itself, by `requireZeroIsAnElement` (E3106).
+	// managed-memory runtime already strides fits — an integer of any declared range, a `bool`, a `float`, or a
+	// MANAGED element, whose slot is a refcounted pointer and whose destructor `emitStampedArrayCreateOp` stamps
+	// into the record. Any other element is E2015. An element whose zero is no value (a managed type, a ranged
+	// alias that excludes 0, an enum whose raw values include no 0) is refused a plain `create()` for the
+	// zeroing itself, by `requireZeroIsAnElement` (E3106); `create(value:)` starts one.
 	//
 	// ⭐⭐ **AN OPAQUE `T` IS ADMITTED, AND WHAT IT IS JUDGED BY IS THE INSTANTIATION SET.** *"A fixed array
 	// inside a generic body has no statically known element stride to size its storage with"* is **false**:
@@ -84066,35 +84070,13 @@ export type Parser
 	// ⛔ **WHAT IS GENUINELY UNSOUND IS ONE INSTANTIATION AT A TIME, AND IT IS THE `create()` THAT PUBLISHES
 	// SLOTS — NOT THE STRIDE.** `emitSizedContainerRecord` grows the record to N by ZEROING it, so all N slots are
 	// readable by the type's own contract; a trivial element's zero IS a value, and a managed element's is a
-	// NULL. A type parameter can be instantiated at a managed type, so the question the concrete arm below
-	// answers off `containerElementIsManaged` is answered here off the INSTANTIATION SET
-	// (`requireEveryInstantiationPublishesAValue`) — the same boundary, asked of the thing that is knowable
-	// at this position. The two are one invariant with two doors, exactly as this function and
-	// `requireArrayGrowthHasZeroElement` already are.
-	//
-	// ⚠⚠ **THE MANAGED TEST IS `containerElementIsManaged`, AND THE TAG WHITELIST BELOW CANNOT STAND IN FOR
-	// IT — THAT IS A MEASURED SEGFAULT, NOT A THEORETICAL GAP.** `tagIsIntegral` answers
-	// TRUE for `named`, whose comment claims a `named` type is a ranged alias; it is not, in general — a
-	// boxed union, a DECLARED STRUCT and a generic-instance ALIAS NAME all carry `named` too. So such a gate
-	// admits `FixedArray with 2 IntArray` (`typealias IntArray = Array with Int`) and the fixed array publishes two
-	// NULL slots: `count()` answers **2** while `try v.get(0)` takes the empty-slot branch — two elements it
-	// does not have, exit 0, no diagnostic — and `for a in v` with a read of `a` dereferences those NULLs
-	// through `__managed_get_unchecked` and **ACCESS-VIOLATES (0xC0000005)**.
-	// `requireArrayGrowthHasZeroElement`'s
-	// E3106 is the rule that normally holds this shut, and `emitSizedContainerRecord` publishes zeroed slots
-	// without passing it; that header predicted this exact failure in these words — *"If this refusal is ever
-	// relaxed, that read becomes a null deref in a function whose own text still looks correct."*
-	// ⇒ The question is asked of the ONE door that answers it (`requireListElementType` opens with the same
-	// door), and the whitelist below stays as the POSITIVE rule for everything that is not managed.
+	// NULL. A type parameter can be instantiated at a managed type, so a plain `create()` over one is judged
+	// off the INSTANTIATION SET (`requireEveryInstantiationHasAZero`, asked by `requireSizedContainerElementType`
+	// after this function) rather than here.
 	function requireFixedArrayElementType(giid GenericInstanceId, tok Token) throws SourceParseError
-		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
-			try self.requireEveryInstantiationPublishesAValue(giid, tok: tok)
+		if self.signatures.containerElementIsOpaque(giid) or self.signatures.containerElementIsManaged(giid) 'anyInstantiationOrManaged'
 			return
-		end 'opaqueElement'
-
-		if self.signatures.containerElementIsManaged(giid) 'managedElement'
-			throw SourceParseError.unsupported(self.fixedArrayElementRefusal(giid), line: tok.line, column: tok.column)
-		end 'managedElement'
+		end 'anyInstantiationOrManaged'
 
 		let tag = maxonTypeTag(self.signatures.containerElementType(giid))
 
@@ -84105,63 +84087,19 @@ export type Parser
 		throw SourceParseError.unsupported(self.fixedArrayElementRefusal(giid), line: tok.line, column: tok.column)
 	end 'requireFixedArrayElementType'
 
-	// ⭐⭐ **EVERY INSTANTIATION OF THE ENCLOSING GENERIC TYPE MUST MAKE THIS FIXED ARRAY'S PUBLISHED SLOTS VALUES
-	// (E2015).** A `FixedArray with <N> <type parameter>` is created ONCE, in a body shared by every
-	// instantiation, and `create()` publishes all N slots by zeroing them — so the slots are elements for a
-	// trivial instantiation and null pointers for a managed one. The shared body cannot branch on that, so
-	// admitting the construct means every instantiation must be trivial, and one managed instantiation
-	// refuses the body. A literal door asks only this; the zeroing `create()` also asks
-	// `requireZeroIsAnElement`, which refuses an instantiation whose zero names no value (E3106).
+	// The wording of "a fixed array cannot hold that". It names the element as the SOURCE spells it
+	// (`arrayElementDisplayName`) — a declared alias, a struct, an instance, or the primitive's own keyword.
 	//
-	// ⛔ **MEASURED, BOTH SYMPTOMS, without this gate** — `type Holder uses Element` with
-	// `typealias Slot = FixedArray with 4 Element`, at `typealias StrHolder = Holder with String`: `slot.count()`
-	// answered **4** while `try slot.get(0)` took `emitLoadElemAndOkReturn`'s empty-slot branch and THREW
-	// (four elements it does not have, exit 0, no diagnostic), and a `for e in slot` returning `e`
-	// **SEGFAULTED (139)** — `__managed_get_unchecked` drops that empty-slot arm, on the guarantee this
-	// refusal supplies. They are `requireFixedArrayElementType`'s own header's two symptoms for the CONCRETE
-	// managed element, re-measured one axis over.
-	//
-	// ⭐ **IT IS `requireOpaqueArrayCopyable`'s SHAPE AND FOR ITS REASON**: the refusal is contingent on the
-	// instance registry, so the construct that forces it is the INSTANTIATION rather than the body's own
-	// line — and when the body is `stdlib/`'s, that line is one no user wrote.
-	// `blameLibraryRefusalOnInstantiation` re-anchors it there; in a user body it already lands on a line its
-	// author wrote and is left alone.
-	function requireEveryInstantiationPublishesAValue(giid GenericInstanceId, tok Token) throws SourceParseError
-		match self.signatures.genericTypeFieldManagedElementInstantiation(typeParamIdOf(self.signatures.containerElementType(giid))) 'managedInstantiation'
-			noInstance then return
-			instance(site) then self.blameLibraryRefusalOnInstantiation(site)
-		end 'managedInstantiation'
-
-		throw SourceParseError.unsupported("`{String.from(FixedArrayBuiltinBaseName)} with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `{String.from(CreateMethod)}` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `{String.from(CountMethod)}()` would answer N while every `{String.from(GetMethod)}` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `{String.from(self.signatures.arrayRecordDeclaredName())} with <type parameter>`, which publishes nothing and grows by `{String.from(ArrayPushMethod)}`", line: tok.line, column: tok.column)
-	end 'requireEveryInstantiationPublishesAValue'
-
-	// The ONE wording of "a fixed array cannot hold that", shared by the two gates that reach it — the managed
-	// door and the tag whitelist — so a reader meets one sentence about one rule however the element was
-	// refused. It names the element as the SOURCE spells it (`arrayElementDisplayName`) — a declared alias, a
-	// struct, an instance, or the primitive's own keyword.
-	//
-	// ⚠ **IT DOES NOT PRINT THE TAG, and that is finding 1's own defect one layer up.** `typeTagName(named)` is
-	// the word `int`, so an `IntArray` element read back as *"'IntArray' (int)"* — a sentence refusing a type
-	// while calling it something it is not, in the very message explaining that the tag was the wrong thing to
-	// judge by.
+	// ⚠ **IT DOES NOT PRINT THE TAG.** `typeTagName(named)` is the word `int`, so a declared alias would read
+	// back as *"'Alias' (int)"* — a sentence refusing a type while calling it something it is not.
 	function fixedArrayElementRefusal(giid GenericInstanceId) returns String
-		return "`{String.from(FixedArrayBuiltinBaseName)}` holds its elements INLINE and publishes every slot at `{String.from(CreateMethod)}`, so it has no element destructor to stamp and a '{self.signatures.arrayElementDisplayName(giid)}' element would leak its storage and be read back as a null slot — a fixed array's element is an integer, a bool or a float"
+		return "`{String.from(FixedArrayBuiltinBaseName)}` cannot hold a '{self.signatures.arrayElementDisplayName(giid)}' element — a fixed array's element is an integer, a bool, a float, or a managed value (a String, a record, an array or a union)"
 	end 'fixedArrayElementRefusal'
 
-	// ⚠⚠ **`stdlib/FixedArray.maxon`'s `create()` IS THE FIXED ARRAY CREATE.** It is the empty record (every index out of bounds)
-	// followed by a resize to `N`, which together are *"zero-initialized, N elements"*; the corpus body spells the
-	// pair as `Self{}` + `managed.grow(countof(Self))` + `managed.setLength(countof(Self))`, which is
-	// `stdlib/Array.maxon`'s own `resize` written against the buffer. `countof(Self)` is what makes that
-	// possible: the answer IS the size, the size is at the CALL, and a `static … returns Self` reads it out
-	// of the hidden slot every call site fills in from the instance it builds.
-	//
-	// ⚠⚠ **THE `create()` PUBLISHES ZEROED SLOTS WITHOUT PASSING `requireArrayGrowthHasZeroElement`,
-	// WHOSE E3106 IS THE RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ, AND THE CORPUS BODY REACHES
-	// `setLength` the same way.** A published slot of a MANAGED element is a null pointer every accessor
-	// dereferences, so the guarantee is carried by `requireFixedArrayElementType` instead — which is why that
-	// gate is asked at `requireConstructedFixedArrayElementType`, the
-	// construction door a declared `create()` arrives through. **The two are one invariant with two doors —
-	// do not relax either without the other.**
+	// ⚠⚠ **`stdlib/FixedArray.maxon`'s `create()` IS THE FIXED ARRAY CREATE.** Its body is `Self{}`, which
+	// `emitSizedContainerRecord` builds already published at `countof(Self)` — *"zero-initialized, N elements"*.
+	// `countof(Self)` is what makes that possible: the answer IS the size, the size is at the CALL, and a
+	// `static … returns Self` reads it out of the hidden slot every call site fills in from the instance it builds.
 
 	// ⚠ **`FixedArray`'S MUTATION ANSWERS ARE THE DECLARATION'S.** `stdlib/FixedArray.maxon`'s `set` writes through `self`
 	// like any other declared method, so a `let` receiver is refused (E3159) off the declaration's own write
@@ -86989,7 +86927,8 @@ export type Parser
 		return self.signatures.isArrayInstanceAt(maxonTypeTag(t), nameId: typeNameIdOf(t))
 	end 'typeIsArrayInstance'
 
-	// ⭐ **THE DENSE-GROWTH GATE for `resize` and for `create(n)` with zeroed slots (E3106).** `__managed_resize`
+	// ⭐ **THE DENSE-GROWTH GATE for `resize`, for `create(n)` with zeroed slots and for a `FixedArray`'s plain
+	// `create` (E3106).** `__managed_resize`
 	// lengthens by publishing a longer `length@8` over slots `__managed_grow` left ZEROED, and `create(n)`
 	// publishes `n` slots of a fresh zeroed buffer; `create(n, zeroed: false)` and a literal-zero capacity
 	// publish none and never reach this gate. A zero is an ELEMENT only while the element lives
@@ -87010,8 +86949,8 @@ export type Parser
 	// ⚠⚠ **A SECOND THING DEPENDS ON THIS REFUSAL, IN ANOTHER FILE.**
 	// `__managed_get_unchecked` — the element read a `for x in arr` loop makes — OMITS the empty-slot arm
 	// `__managed_get` carries, and is safe only because no index in `[0, count)` can hold a NULL managed slot.
-	// That is true precisely because this rule refuses `resize` and a zeroed `create(n)`, the operations that
-	// would create one. If this refusal is ever relaxed, that read becomes a null deref in a function whose own
+	// That is true precisely because this rule refuses `resize`, a zeroed `create(n)` and a managed
+	// `FixedArray`'s plain `create`, the operations that would create one. If this refusal is ever relaxed, that read becomes a null deref in a function whose own
 	// text still looks correct: `ManagedMemoryRuntime.maxon`'s `ManagedGetUncheckedName` header states the
 	// obligation from its end, and this note is the pointer back, so neither side can be changed without
 	// meeting the other.
@@ -87020,7 +86959,8 @@ export type Parser
 			let element = self.signatures.arrayElementDisplayName(giid)
 
 			match refusal 'managedRefusal'
-				arrayCreateZeroed then throw SourceParseError.zeroOutsideElement(refusal, subject: ZeroElementSubject.named(element), line: tok.line, column: tok.column)
+				arrayCreateZeroed or
+				fixedArrayCreate then throw SourceParseError.zeroOutsideElement(refusal, subject: ZeroElementSubject.named(element), line: tok.line, column: tok.column)
 				arrayResize then throw SourceParseError.arrayResizeManagedElement(element, line: tok.line, column: tok.column)
 				default panic("requireArrayGrowthHasZeroElement: only `create` and `resize` publish zeroed slots of a growing array")
 			end 'managedRefusal'
@@ -95181,14 +95121,30 @@ export type Parser
 		return ProbedShape.constBlob(elementSize, elementCount: elementCount, bytes: bytes, bounds: pair.boundsOf(LiteralColumn.first))
 	end 'blobShapeOf'
 
+	function fixedArrayFromHeadLengthAt(index ElementIndex) returns ElementIndex
+		if self.kindAt(index) != TokenKind.identifier or self.kindAt(index + 1) != TokenKind.from 'notAFromHead'
+			return 0
+		end 'notAFromHead'
+
+		view head = self.signatures.bareWrittenKey(self.tokenAt(index).value, readerFilePath: self.job.path)
+
+		if fromHeadIsTheBareBase(head, container: FromHeadContainer.fixedArray) or self.namesContainerInstanceAlias(head, container: FromHeadContainer.fixedArray) 'aFixedArrayHead'
+			return FromHeadTokenCount
+		end 'aFixedArrayHead'
+
+		return 0
+	end 'fixedArrayFromHeadLengthAt'
+
 	function initializerIsAStringTable(decl TopLevelDecl) returns bool
-		if self.kindAt(decl.initStart) != TokenKind.leftBracket or self.kindAt(decl.initEnd - 1) != TokenKind.rightBracket 'notBracketed'
+		let literalStart = decl.initStart + self.fixedArrayFromHeadLengthAt(decl.initStart)
+
+		if self.kindAt(literalStart) != TokenKind.leftBracket or self.kindAt(decl.initEnd - 1) != TokenKind.rightBracket 'notBracketed'
 			return false
 		end 'notBracketed'
 
 		var strings = 0 as ElementIndex
 
-		for q in decl.initStart + 1 upto decl.initEnd - 1 'eachToken'
+		for q in literalStart + 1 upto decl.initEnd - 1 'eachToken'
 			let kind = self.kindAt(q)
 
 			if kind == TokenKind.stringLiteral 'aText'
@@ -99174,9 +99130,11 @@ export type Parser
 		// an adopted managed one is already enrolled by `enrolOwnedCallTemp` above and must not be
 		// dropped on the error edge (see `routeToTryBlock`); an opaque `T` result is enrolled on the same
 		// terms.
+		var produced = result
+
 		match accessProof 'accessProof'
 			notProven then self.routeBareThrowingCall(callee, opIdx: opIdx, result: result)
-			proven(accessor) then self.artifact.recordProvenFixedArrayAccess(opIdx, accessor: accessor)
+			proven(accessor) then produced = self.recordProvenAccess(opIdx, accessor: accessor, args: args, result: result, range: SourceRange.between(anchor, last: rparenTok))
 		end 'accessProof'
 
 		// ⭐⭐ **THE OPAQUE WORD IS READ BACK AS THE FLOAT THE RECEIVER'S INSTANCE SAYS IT IS** —
@@ -99195,14 +99153,48 @@ export type Parser
 		let callRange = SourceRange.between(anchor, last: rparenTok)
 
 		let read = match opaqueWordReading 'reading'
-			asItStands gives result
-			aFloatsBits(alias) gives self.floatReadFromTheOpaqueWord(result, alias: alias, callee: callee, args: args, range: callRange)
-			aNarrowSignedSlot(slotBytes) gives self.emitSignExtendFromSlot(result, slotBytes: slotBytes, valueType: self.typeOf(result), range: callRange)
+			asItStands gives produced
+			aFloatsBits(alias) gives self.floatReadFromTheOpaqueWord(produced, alias: alias, callee: callee, args: args, range: callRange)
+			aNarrowSignedSlot(slotBytes) gives self.emitSignExtendFromSlot(produced, slotBytes: slotBytes, valueType: self.typeOf(produced), range: callRange)
 		end 'reading'
 
 		self.recordBrandHandOvers(args, kind: BrandRecordKind.handOver, first: 0, argLabels: argLabels, opIndex: opIdx, range: callRange)
 		return read
 	end 'emitResolvedCall'
+
+	// A proven `get` lowers to `__managed_get_unchecked`, which loads the slot word without retaining it, while
+	// the call's result is enrolled as an owned temp that releases on drop. A managed or opaque element therefore
+	// takes its own reference here; an element of an immortal image record is not refcounted, so its enrolment
+	// is dropped instead.
+	function recordProvenAccess(opIdx ElementIndex, accessor SizedAccessor, args ValueIdArray, result ValueId, range SourceRange) returns ValueId
+		self.artifact.recordProvenFixedArrayAccess(opIdx, accessor: accessor)
+
+		match accessor.accessor 'which'
+			get then break
+			set then return result
+		end 'which'
+
+		let container = try args.get(0) otherwise panic("recordProvenAccess: a proven fixed-array access takes its receiver first")
+
+		if self.tagOf(result) == ValueTypeTag.typeParameter 'anOpaqueElement'
+			self.releaseOwnedTemp(result)
+			let retained = self.coOwnBorrowedOpaque(result, range: range)
+			self.trackOwnedTemp(retained, exclusivity: OwnedHeapExclusivity.coOwned)
+			return retained
+		end 'anOpaqueElement'
+
+		if not self.valueIsManagedHeap(result) 'aTrivialElement'
+			return result
+		end 'aTrivialElement'
+
+		if self.valueIsAnImmortalImageRecord(container) 'anImmortalElement'
+			self.releaseOwnedTemp(result)
+			return result
+		end 'anImmortalElement'
+
+		self.emitIncref(result, range: range)
+		return result
+	end 'recordProvenAccess'
 
 	function floatReadFromTheOpaqueWord(word ValueId, alias TypeNameId, callee ByteArray, args ValueIdArray, range SourceRange) returns ValueId
 		let reinterpreted = self.emitUnaryOp(word, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: range)

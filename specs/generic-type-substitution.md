@@ -1108,7 +1108,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:21: Unsupported: `FixedArray with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E3106: <fragment>:10:21: 'FixedArray.create' cannot publish slots of a type parameter: 'StrOuter' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
 ```
 
 <!-- test: error.a-managed-instantiation-a-later-body-mints-refuses-the-fixed-array-use-first -->
@@ -1152,7 +1152,7 @@ type Holder uses Element
 end 'Holder'
 ```
 ```maxoncstderr
-error E2015: <fragment>:31:21: Unsupported: `FixedArray with <N> <type parameter>` — a fixed array PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E3106: <fragment>:31:21: 'FixedArray.create' cannot publish slots of a type parameter: 'StrOuter' is instantiated with a type that has no zero value (a managed type, an enum or union whose raw values include no 0, or a ranged alias that excludes 0), and every slot is zero. Instantiate it only with types that admit zero, or hold the elements in an 'Array' and append with 'push(value)'
 ```
 
 <!-- test: own-name-in-a-generic-body-is-still-Self -->

@@ -2648,15 +2648,13 @@ export enum TypeArgInstantiationKind
 	uncopyableElement
 
 	// A HEAP AGGREGATE (`typeIsManaged`): a String, a struct, a boxed union, a nested container — anything
-	// whose slot is a POINTER rather than the value. The front-end reject for the one container that
-	// PUBLISHES its slots at birth (`FixedArray with N <type parameter>`): `create()` zeroes every slot, and
-	// a zeroed pointer is an ABSENCE, not a value.
+	// whose slot is a POINTER rather than the value.
 	//
 	// ⛔ **IT IS NOT `consumeMoved`, AND THE TWO ARE ONE WORD APART IN ENGLISH AND A WHOLE CLASS APART IN
 	// FACT.** That one is the CONSUME boundary (`typeArgIsOwned` — does the box take the caller's value
-	// away), and it answers FALSE for an all-scalar struct, which is BORROWED at the call site. A `FixedArray`
-	// slot standing for one is still a null pointer with a live `destroyFunc@40` behind it, so the boundary
-	// this kind needs is the one `containerElementIsManaged` — the CONCRETE fixed array's own element gate —
+	// away), and it answers FALSE for an all-scalar struct, which is BORROWED at the call site. A container
+	// slot standing for one is still a pointer with a live `destroyFunc@40` behind it, so the boundary
+	// this kind needs is the one `containerElementIsManaged` — the concrete container's own element gate —
 	// already reads. The two gates then agree on what "managed" means, which is what a shared body's refusal
 	// and a concrete instance's refusal must do.
 	managedElement
@@ -23301,7 +23299,7 @@ export type ProgramSignatures
 		return match settled.shape 'shape'
 			opaque gives ProbedImage.none
 			constBlob(elementSize, elementCount, bytes, bounds) gives ProbedImage.record(TopLevelImageRecord.create(ImmortalRecordKind.constBlob, elementSize: elementSize, elementCount: elementCount, bytes: bytes, valueType: settled.valueType, brand: settled.brand, bounds: bounds))
-			stringTable(texts) gives ProbedImage.record(self.stringTableImageOfTexts(texts.clone(), valueType: settled.valueType))
+			stringTable(texts) gives ProbedImage.record(self.stringTableImageOfTexts(texts.clone(), valueType: settled.valueType, brand: settled.brand))
 			emptyContainer gives self.probedEmptyContainerImage(settled)
 			payloadFreeUnionCase(typeName, caseName) gives self.probedUnionCaseImage(typeName, caseName: caseName)
 			construction(nodes) gives self.probedConstructionImage(nodes)
@@ -23518,10 +23516,10 @@ export type ProgramSignatures
 		return ProbedImage.box(nodes, root: root, typeName: typeName, tag: ValueTypeTag.named)
 	end 'probedUnionCaseImage'
 
-	function stringTableImageOfTexts(texts ByteBlobArray, valueType MaxonType) returns TopLevelImageRecord
+	function stringTableImageOfTexts(texts ByteBlobArray, valueType MaxonType, brand ByteArray) returns TopLevelImageRecord
 		let giid = genericInstanceIdOf(valueType)
 
-		return TopLevelImageRecord.create(ImmortalRecordKind.stringTable(texts, elementDestroy: self.imageElementDestroyOf(giid)), elementSize: self.arrayElementSize(giid), elementCount: texts.count() as FullRangeInt, bytes: EmptySourceText, valueType: valueType, brand: EmptySourceText, bounds: ColumnBounds.unknown)
+		return TopLevelImageRecord.create(ImmortalRecordKind.stringTable(texts, elementDestroy: self.imageElementDestroyOf(giid)), elementSize: self.arrayElementSize(giid), elementCount: texts.count() as FullRangeInt, bytes: EmptySourceText, valueType: valueType, brand: brand, bounds: ColumnBounds.unknown)
 	end 'stringTableImageOfTexts'
 
 	// ⭐⭐⭐ **CAN A DECLARED CONTAINER'S WHOLE BOX BE LAID DOWN AS BYTES — `Map`, `Set`, and every generic
@@ -30902,8 +30900,8 @@ export type ProgramSignatures
 	// target from the conformance rather than from a constant, and then this line is the one that goes.
 	//
 	// ⚠ **IT LIVES HERE, NOT IN THE PARSER, BECAUSE THE INDEX ITSELF HAS TO ASK IT.** It serves the
-	// parser's construction doors, and `typeParamOwnershipProtocol` asks the same fact to decide
-	// whether a DESCRIPTOR carries ownership words, and a second spelling of "is this declaration the
+	// parser's construction doors, and `typeParamOwnershipProtocol` asks it (through
+	// `declarationsValueIsTheManagedRecord`) to decide whether a DESCRIPTOR carries ownership words, and a second spelling of "is this declaration the
 	// record?" is exactly how the construction door and the descriptor stamp would come to disagree
 	// about one type — with the disagreement spending itself as a double free rather than a
 	// diagnostic.
@@ -35189,9 +35187,9 @@ export type ProgramSignatures
 			_ = self.builtinInstanceForElement(ListBuiltinBaseName, element: MaxonType.string)
 		end 'listFromConstruction'
 
-		// PER SIZE, because a fixed array's size is half of its instance's identity, and over the three element
-		// types a literal can give one (`Parser.requireFixedArrayElementType` refuses every managed element, so
-		// there is no String or aggregate half to intern).
+		// PER SIZE, because a fixed array's size is half of its instance's identity, and over the three scalar
+		// element types a literal can give one; a managed element's instance is minted by the parse
+		// (`Parser.parseFixedArrayFromConstruction`), so there is no String or aggregate half to intern.
 		for size in self.settledDeclarations().fixedArrayFromSizes 'eachFixedArraySize'
 			_ = self.fixedArrayInstanceForElement(MaxonType.integer, size: size)
 			_ = self.fixedArrayInstanceForElement(MaxonType.float, size: size)
@@ -38098,10 +38096,8 @@ export type ProgramSignatures
 		return self.instanceWithTypeArgKind(param, kind: TypeArgInstantiationKind.greenThreadFeed)
 	end 'typeParamFeedGreenThreadInstantiation'
 
-	// ⭐⭐ **IS `t` A HEAP AGGREGATE — the boundary a PUBLISHED SLOT is judged by.** A container that
-	// zeroes its slots at birth (`FixedArray.create()`'s `__managed_create_fixed`) publishes a VALUE for a trivial
-	// argument and an ABSENCE for a managed one, so this asks the one question `containerElementIsManaged`
-	// asks of a concrete element — `typeIsManaged` — of an instantiation's argument instead.
+	// ⭐⭐ **IS `t` A HEAP AGGREGATE?** It asks the one question `containerElementIsManaged` asks of a
+	// concrete element — `typeIsManaged` — of an instantiation's argument instead.
 	//
 	// ⚠ **A SUPERSEDED SPELLING VOTES NOTHING, exactly as it does for the other REFUSING kind**
 	// (`typeSupportsDeepClone`'s `genericAlias` arm, which carries the measurement): these classifiers are
@@ -38243,30 +38239,6 @@ export type ProgramSignatures
 	export function genericTypeFieldGreenThreadInstantiation(param TypeParamId) returns TypeArgKindMatch
 		return self.instanceWithTypeArgKind(param, kind: TypeArgInstantiationKind.greenThreadElement)
 	end 'genericTypeFieldGreenThreadInstantiation'
-
-	// ⭐⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PUBLISHED SLOT A NULL
-	// POINTER?** The front-end gate for `FixedArray with <N> <type parameter>` inside a generic body.
-	// A fixed array's record PUBLISHES all N slots by zeroing them (`Parser.emitSizedContainerRecord`'s
-	// `__managed_create_fixed`), and every one of the N is then a readable element by the type's own contract —
-	// which is true of a trivial argument, whose zero IS a value, and false of a MANAGED one, whose zero is a
-	// null pointer. The shared body compiles ONCE and serves every instantiation, so it is admissible only if
-	// EVERY instantiation is trivial; one managed instantiation is refused with a positioned E2015 at the
-	// `create()`, blamed back at the instantiation the user wrote.
-	//
-	// ⛔ **AND THE HAZARD IT SHUTS OUT IS MEASURED, ON BOTH ITS HALVES.** With the gate absent,
-	// `type Holder uses Element` + `typealias Slot = FixedArray with 4 Element` at `Holder with String`:
-	// `count()` answers **4** while `try slot.get(0)` takes `emitLoadElemAndOkReturn`'s empty-slot branch and
-	// THROWS — four elements it does not have, exit 0, no diagnostic — and a `for e in slot` reading `e`
-	// SEGFAULTED (139), because `__managed_get_unchecked` dropped that empty-slot arm on the guarantee this
-	// refusal is what supplies. It is the CONCRETE managed refusal's exact twin one axis over
-	// (`Parser.requireFixedArrayElementType`'s managed arm, whose own header records the same two symptoms for
-	// `FixedArray with 2 IntArray`), and the two must not be relaxed apart.
-	//
-	// HOW the instances are found is `instanceWithTypeArgKind`'s business and is described there once; what
-	// this gate adds is the KIND. It hands back a match for `genericTypeFieldUncopyableInstantiation`'s reason.
-	export function genericTypeFieldManagedElementInstantiation(param TypeParamId) returns TypeArgKindMatch
-		return self.instanceWithTypeArgKind(param, kind: TypeArgInstantiationKind.managedElement)
-	end 'genericTypeFieldManagedElementInstantiation'
 
 	export function genericTypeFieldNoZeroInstantiation(param TypeParamId) returns TypeArgKindMatch
 		return self.instanceWithTypeArgKind(param, kind: TypeArgInstantiationKind.noZeroElement)
@@ -39398,19 +39370,20 @@ export type ProgramSignatures
 	//
 	// ⭐⭐⭐ **BUT "AN `Array` HAS NO SHARED BODY" IS FALSE, AND THE GAP IS A DOUBLE FREE.** A gate of
 	// `genericInstanceHasBaseLayout` alone rests on the premise quoted above, that only a declared
-	// NON-builtin generic is compiled once per instantiation. A record-collapsed `type Array uses Element` is
-	// both at once: the record is the compiler's, and the METHODS are a shared body the corpus declares — so
-	// `Array.at`'s `return try managed.get(i)` emits `__retain_type_param(descriptor, element)`, reads a ZERO
+	// NON-builtin generic is compiled once per instantiation. A record-collapsed `type Array uses Element`, and
+	// `type FixedArray uses Element` (a value of it is the same record), is both at once: the record is the
+	// compiler's, and the METHODS are a shared body the corpus declares — so
+	// `Array.at`'s `return try managed.get(i)`, and `FixedArray.get`'s, emits `__retain_type_param(descriptor, element)`, reads a ZERO
 	// `retainFunc@64`, and hands the caller a BORROW where the hand-off convention promises a `+1`.
 	// **MEASURED: `let head = a.at(0)` over an `Array with String` prints the right answer and then takes a
 	// SEGFAULT at teardown** — `main`'s `__str_decref` and the array's own element walk freeing one record
 	// twice. `emitOwnedValueReturn`'s opaque arm does its job; the word it dispatches through is 0.
 	//
 	// ⇒ The gate is "does a shared body read this block?", and a record-collapsed conformer answers yes. The
-	// size argument above is untouched: a program that does not DECLARE `type Array` gets `undeclared` from
-	// `declarationIsTheManagedRecord` and the same zero words it always had.
+	// size argument above is untouched: a program that does not DECLARE `type Array` or `type FixedArray` gets
+	// `undeclared` from `declarationsValueIsTheManagedRecord` and the same zero words it always had.
 	function typeParamOwnershipProtocol(id GenericInstanceId, position ElementIndex) returns ExistentialOwnershipProtocol
-		if not (self.genericInstanceHasBaseLayout(id) or self.declarationIsTheManagedRecord(self.genericInstanceBaseName(id))) 'noSharedBodyReadsThisBlock'
+		if not (self.genericInstanceHasBaseLayout(id) or self.declarationsValueIsTheManagedRecord(self.genericInstanceBaseName(id))) 'noSharedBodyReadsThisBlock'
 			return ExistentialOwnershipProtocol.none
 		end 'noSharedBodyReadsThisBlock'
 
