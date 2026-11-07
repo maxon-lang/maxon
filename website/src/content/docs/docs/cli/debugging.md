@@ -233,7 +233,7 @@ from 1, so line 0, bare or in a file, is an `error` saying so.
 - **The runtime's own code** — the entry stub, the scheduler and the rest of the compiler's scaffolding
   — is refused `inside-runtime-symbol`. Which code is the runtime's is recorded by the build, and code
   the compiler inlined is judged as the body it came from: an offset inside a service's message handler,
-  inlined into the message loop the compiler synthesizes, is armed and stops as the handler. A `test`
+  inlined into the behaviour function the compiler synthesizes, is armed and stops as the handler. A `test`
   body is the program's own, and is named `test '<prose>'` in stops, backtraces and break answers, as
   `maxon test` names it.
 
