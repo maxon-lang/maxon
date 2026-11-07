@@ -1,15 +1,13 @@
-// SERVICE-ASYNC-STRAND torture — services shut down while a coroutine their handler started is parked on a
-// timer: `specs/services.md`'s `a-service-shut-down-with-async-work-in-flight`, run in batches across
-// processors.
+// SERVICE-ASYNC-STRAND torture — a service handler cancels a coroutine it started while that coroutine is
+// parked on a timer, run in batches across processors.
 //
 // ⭐⭐ THE SUBJECT IS BUILT, AND `parked=` WITNESSES IT. `fire` yields after its `async`, which hands the strand
 // to the coroutine: it runs until its sleep parks it, and the handler reads that it started and has not
-// finished. The promise then lives in the service's state, so the one thing that drops it is the shutdown's
-// state drop, with the coroutine still parked on a timer far longer than the program runs. A promise discarded
-// at its own statement is renounced before the coroutine ever runs, and would build none of this. `parked=`
+// finished. The promise is tied to the `Probe` it was given, so the handler cannot keep it in the service's
+// state: it cancels it, with the coroutine still parked on a timer far longer than the program runs. `parked=`
 // counts the subject rounds that reached the shape, and must equal `rounds=`.
 //
-// ⭐⭐ WHY IT READS `Scheduler.counters().threadRecordsCarved`. A coroutine the shutdown fails to reclaim holds its own record, and
+// ⭐⭐ WHY IT READS `Scheduler.counters().threadRecordsCarved`. A coroutine the cancel fails to reclaim holds its own record, and
 // its owner's through the strand reference, for ever — and the exit gate cannot see it, because the drop's
 // consumer half has already debited the GT live count. The heap gate sees it only because the coroutine's
 // `Probe` argument is released by that same reclaim (a 101); the carve count sees it whatever the coroutine
@@ -23,21 +21,19 @@
 // processor's lists plus one batch's spares — `bound` — however many batches run. The phases run until one record lost per round
 // would carry the count to twice the bound. `leaked` is how far the count runs past `bound`, and MUST be 0.
 //
-// ⭐ THE CONTROL IS BUILT IN. `await` batches await their coroutine, so the shutdown finds nothing in flight.
+// ⭐ THE CONTROL IS BUILT IN. `await` batches await their coroutine, so nothing is cancelled in flight.
 // The raw live columns (`rawStrand=`, `rawAwait=`) read the mailbox and envelope side of the same lifecycle.
 
 typealias Integer = int(i64.min to i64.max)
 typealias WorkerHandleArray = Array with Worker.handle
 typealias ReplyPromise = Promise with (Integer)
 typealias ReplyPromiseArray = Array with ReplyPromise
-typealias WorkPromise = Promise with Integer
-typealias WorkPromiseArray = Array with WorkPromise
 
-// Far longer than the program runs: the shutdown's drop cancels the timer, so nothing ever waits it out.
-let ParkedSleepMs = 10000 as Milliseconds
+// Far longer than the program runs: the handler's cancel drops the timer, so nothing ever waits it out.
+let ParkedSleepMs = 10000
 
 // The control's coroutine, which its handler waits out.
-let JoinedSleepMs = 5 as Milliseconds
+let JoinedSleepMs = 5
 
 // Long enough for a batch's services to finish tearing down before the next batch.
 let SettleMs = 20
@@ -75,11 +71,10 @@ function slowWork(n Integer, probe Probe, ms Milliseconds) returns Integer
 end 'slowWork'
 
 type Worker
-	var pending as WorkPromiseArray
 	var probe as Probe
 
 	static function create() returns Self
-		return Self{pending: WorkPromiseArray.create(0), probe: Probe.create()}
+		return Self{probe: Probe.create()}
 	end 'create'
 
 	// THE SUBJECT: answers 1 when the coroutine has started and is parked.
@@ -87,7 +82,7 @@ type Worker
 		let p = async slowWork(v, probe: self.probe, ms: ParkedSleepMs)
 		Scheduler.yield()
 		let parked = self.probe.started and not p.isComplete()
-		self.pending.push(p)
+		p.cancel()
 		return 1 if parked else 0
 	end 'fire'
 
