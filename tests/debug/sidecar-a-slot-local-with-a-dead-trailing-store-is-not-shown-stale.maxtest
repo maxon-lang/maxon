@@ -2,7 +2,6 @@ let DeadStoreCaseLabel = "sidecar-a-slot-local-with-a-dead-trailing-store-is-not
 
 let DeadStoreLocalName = "limit"
 let DeadStoreStaleValue = "5"
-let DeadStoreSlotMark = "[rbp-"
 
 test 'a var held in a stack slot whose last assignment was optimised away is not read as its older value'
 	let staged = builtFixture(DeadStoreCaseLabel, fixture: DeadStoreFixtureName)
@@ -11,7 +10,7 @@ test 'a var held in a stack slot whose last assignment was optimised away is not
 	var slotRows = 0 as Count
 
 	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
-		slotRows = slotRows + 1 if firstToken(row) == DeadStoreLocalName and row.contains(DeadStoreSlotMark) else slotRows
+		slotRows = slotRows + 1 if firstToken(row) == DeadStoreLocalName and row.contains(StackSlotMark) else slotRows
 	end 'eachLocal'
 
 	Expect.notEqual(slotRows, expected: 0, message: "`{DeadStoreLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a SPILLED version. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")

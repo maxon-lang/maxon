@@ -2,7 +2,6 @@ let DeadSplitCaseLabel = "sidecar-a-slot-local-whose-dead-store-sits-beyond-a-sp
 
 let DeadSplitLocalName = "limit"
 let DeadSplitStaleValue = "8"
-let DeadSplitSlotMark = "[rbp-"
 
 test 'a var held in a stack slot whose dead store lies beyond a split block is not read as its older value'
 	let staged = builtFixture(DeadSplitCaseLabel, fixture: DeadSplitFixtureName)
@@ -11,7 +10,7 @@ test 'a var held in a stack slot whose dead store lies beyond a split block is n
 	var slotRows = 0 as Count
 
 	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
-		slotRows = slotRows + 1 if firstToken(row) == DeadSplitLocalName and row.contains(DeadSplitSlotMark) else slotRows
+		slotRows = slotRows + 1 if firstToken(row) == DeadSplitLocalName and row.contains(StackSlotMark) else slotRows
 	end 'eachLocal'
 
 	Expect.notEqual(slotRows, expected: 0, message: "`{DeadSplitLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a SPILLED version. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")

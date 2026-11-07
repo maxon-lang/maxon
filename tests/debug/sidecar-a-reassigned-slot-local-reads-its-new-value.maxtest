@@ -2,7 +2,6 @@ let ReassignedSlotCaseLabel = "sidecar-a-reassigned-slot-local-reads-its-new-val
 
 let ReassignedLocalName = "limit"
 let ReassignedLocalNewValue = "105"
-let StackSlotLocationMark = "[rbp-"
 
 test 'a var the allocator keeps in a stack slot reads its new value after it is assigned again'
 	let staged = builtFixture(ReassignedSlotCaseLabel, fixture: SpilledVarFixtureName)
@@ -11,7 +10,7 @@ test 'a var the allocator keeps in a stack slot reads its new value after it is 
 	var slotRows = 0 as Count
 
 	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
-		slotRows = slotRows + 1 if firstToken(row) == ReassignedLocalName and row.contains(StackSlotLocationMark) else slotRows
+		slotRows = slotRows + 1 if firstToken(row) == ReassignedLocalName and row.contains(StackSlotMark) else slotRows
 	end 'eachLocal'
 
 	Expect.notEqual(slotRows, expected: 0, message: "`{ReassignedLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks what it was written to ask: whether an OLD version of a slot-resident var outranks the NEW one. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")

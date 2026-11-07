@@ -2,7 +2,6 @@ let LoopRivalCaseLabel = "sidecar-a-slot-local-assigned-in-a-loop-is-not-shown-s
 
 let LoopRivalLocalName = "limit"
 let LoopRivalStaleValue = "5"
-let LoopRivalSlotMark = "[rbp-"
 
 test 'a var held in a stack slot that a later loop assigns again is not read as its old value after the loop'
 	let staged = builtFixture(LoopRivalCaseLabel, fixture: RivalLoopFixtureName)
@@ -11,7 +10,7 @@ test 'a var held in a stack slot that a later loop assigns again is not read as 
 	var slotRows = 0 as Count
 
 	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
-		slotRows = slotRows + 1 if firstToken(row) == LoopRivalLocalName and row.contains(LoopRivalSlotMark) else slotRows
+		slotRows = slotRows + 1 if firstToken(row) == LoopRivalLocalName and row.contains(StackSlotMark) else slotRows
 	end 'eachLocal'
 
 	Expect.notEqual(slotRows, expected: 0, message: "`{LoopRivalLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a SPILLED version. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")

@@ -2,7 +2,6 @@ let DeadPhiCaseLabel = "sidecar-a-slot-local-whose-merge-phi-was-pruned-is-not-s
 
 let DeadPhiLocalName = "limit"
 let DeadPhiStaleValue = "5"
-let DeadPhiSlotMark = "[rbp-"
 
 test 'a var held in a stack slot whose merge phi was pruned is not read as its older value after the join'
 	let staged = builtFixture(DeadPhiCaseLabel, fixture: DeadPhiFixtureName)
@@ -11,7 +10,7 @@ test 'a var held in a stack slot whose merge phi was pruned is not read as its o
 	var slotRows = 0 as Count
 
 	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
-		slotRows = slotRows + 1 if firstToken(row) == DeadPhiLocalName and row.contains(DeadPhiSlotMark) else slotRows
+		slotRows = slotRows + 1 if firstToken(row) == DeadPhiLocalName and row.contains(StackSlotMark) else slotRows
 	end 'eachLocal'
 
 	Expect.notEqual(slotRows, expected: 0, message: "`{DeadPhiLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a SPILLED version. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")

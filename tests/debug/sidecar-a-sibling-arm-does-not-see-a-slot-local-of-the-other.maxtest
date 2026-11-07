@@ -2,7 +2,6 @@ let SiblingArmCaseLabel = "sidecar-a-sibling-arm-does-not-see-a-slot-local-of-th
 
 let OtherArmsLocalName = "thenOnly"
 let NotLiveHereAnswer = "not-live-here"
-let SlotMark = "[rbp-"
 
 test 'a stop in one arm of an if reads a slot local of the other arm as not live here'
 	let staged = builtFixture(SiblingArmCaseLabel, fixture: SiblingArmsFixtureName)
@@ -11,7 +10,7 @@ test 'a stop in one arm of an if reads a slot local of the other arm as not live
 	var slotRows = 0 as Count
 
 	for row in localRowsOf(functionRows, name: MainFunctionName) 'eachLocal'
-		slotRows = slotRows + 1 if firstToken(row) == OtherArmsLocalName and row.contains(SlotMark) else slotRows
+		slotRows = slotRows + 1 if firstToken(row) == OtherArmsLocalName and row.contains(StackSlotMark) else slotRows
 	end 'eachLocal'
 
 	Expect.notEqual(slotRows, expected: 0, message: "`{OtherArmsLocalName}` has no stack-slot row in `{MainFunctionName}`, so this case no longer asks about a SPILLED local of a sibling arm. `main`'s locals were: {listedLines(localRowsOf(functionRows, name: MainFunctionName))}")
