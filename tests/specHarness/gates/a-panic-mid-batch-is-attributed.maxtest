@@ -12,18 +12,8 @@ let ExitWord = "exit"
 
 test 'an unexpected crash mid-batch fails only its own case and names the crash'
 	let run = runGateFixtureOnce(StringArray.create(0))
-	let said = everythingSaid(run)
-	var broken = StringArray.create(0)
 
-	collectNotPassed(said, specName: PanicMidBatchSpecName, testNames: [PanicMidBatchOne, PanicMidBatchThree], broken: broken)
-	collectCrashNotAttributed(said, broken: broken)
-	collectMissingSummary(said, expected: batchSummaryLine(2, programs: 1, alone: 1), broken: broken)
-
-	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
-		broken.push("the run exited {SuccessExitCode} with a crashed case in it. It said:\n{said}\n")
-	end 'failureDidNotCount'
-
-	requireNothingBroken(broken, headline: "an unexpected crash mid-batch is attributed to its own case")
+	requireCrashMidBatchAttributed(run, headline: "an unexpected crash mid-batch is attributed to its own case")
 end 'an unexpected crash mid-batch fails only its own case and names the crash'
 
 test 'a wrong expectation after a crash mid-batch fails only its own case'
@@ -60,21 +50,26 @@ test 'a wrong expectation after a crash mid-batch fails only its own case'
 	requireNothingBroken(broken, headline: "a failure after a crash mid-batch is its own case's")
 end 'a wrong expectation after a crash mid-batch fails only its own case'
 
-test 'on a lane that cannot run one case of a batch again, a crash fails only its own case'
+test 'on wasm32-wasi, a crash mid-batch fails only its own case and names the crash'
 	let run = runGateFixtureOnceFromTheCheckout([WasiTargetFlag])
+
+	requireCrashMidBatchAttributed(run, headline: "a crash mid-batch on {WasiTargetFlag} is attributed to its own case")
+end 'on wasm32-wasi, a crash mid-batch fails only its own case and names the crash'
+
+function requireCrashMidBatchAttributed(run CollectedOutput, headline String) throws TestFailure
 	let said = everythingSaid(run)
 	var broken = StringArray.create(0)
 
 	collectNotPassed(said, specName: PanicMidBatchSpecName, testNames: [PanicMidBatchOne, PanicMidBatchThree], broken: broken)
 	collectCrashNotAttributed(said, broken: broken)
-	collectMissingSummary(said, expected: batchSummaryLine(0, programs: 0, alone: 3), broken: broken)
+	collectMissingSummary(said, expected: batchSummaryLine(2, programs: 1, alone: 1), broken: broken)
 
 	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
 		broken.push("the run exited {SuccessExitCode} with a crashed case in it. It said:\n{said}\n")
 	end 'failureDidNotCount'
 
-	requireNothingBroken(broken, headline: "a crash mid-batch on {WasiTargetFlag} is attributed to its own case")
-end 'on a lane that cannot run one case of a batch again, a crash fails only its own case'
+	try requireNothingBroken(broken, headline: headline)
+end 'requireCrashMidBatchAttributed'
 
 function collectCrashNotAttributed(said String, broken StringArray)
 	let prefix = failVerdictPrefix(testLabel(PanicMidBatchSpecName, testName: PanicMidBatchTwo))
