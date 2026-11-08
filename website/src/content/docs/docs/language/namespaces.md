@@ -50,7 +50,9 @@ At most one modifier may be written; combining two is **E2001** (`'export' and '
 (**E3088** for a `module` type), and so is reaching a member through a value of it — a value an exported
 function returns included. That covers its fields, methods, extension methods, accessors and statics, and
 the calls the language makes on the author's behalf: `toString` in an interpolation, `==` and `<`, the
-iteration a `for` performs, and a `match` over an enum or union value. A value held at an interface type that
+iteration a `for` performs, and a `match` over an enum or union value. Inside a
+[generic function](/docs/language/composite-types/#generic-functions)'s copy, the interpolation, `==`, `<` and `for` over a value of a type
+parameter are judged for the caller that instantiated it instead. A value held at an interface type that
 is visible answers that interface's requirements. The standard library follows the same rule: a library type
 or interface without `public` is hidden from a program.
 

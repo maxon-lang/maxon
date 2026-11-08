@@ -108,12 +108,14 @@ stage_shim() {
 
 	echo "build-from-seed.sh: the seed refused this tree — staging $SeedShimDirectory over the first build only" >&2
 
+	# Set before the first apply, so the EXIT trap withdraws every patch already applied when a later one
+	# fails. The checks above proved every touched path clean, so restoring one not yet patched is harmless.
+	shim_staged="$touched"
+
 	while IFS= read -r patch; do
 		[ -n "$patch" ] || continue
 		git apply -- "$patch"
 	done < <(printf '%s\n' "$patches")
-
-	shim_staged="$touched"
 }
 
 if ! "$seed" build maxon-bin --output="$built"; then

@@ -3,7 +3,8 @@
 Patches that withdraw, from the first build only, a declaration the pinned seed (`scripts/seed-tag`) refuses.
 
 `scripts/build-from-seed.sh` applies every `*.patch` here — in sorted order, over a clean worktree —
-when a plain build with the seed fails, and restores the files it touched before the second build runs.
+when a plain build with the seed fails, and restores the files it touched before the second build runs, or
+as soon as a patch fails to apply.
 `docs/RELEASING.md`'s "A tree can declare something its own seed refuses, and a shim is how it is still built" says why that is sound and
 when a patch belongs here.
 

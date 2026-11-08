@@ -403,10 +403,25 @@ end 'tierIsAudited'
 
 // ⭐ **THE NAMES NO SOURCE LINE DECLARES.** A synthesized helper has no `export` an author could drop, so
 // a finding about one is a finding about the compiler.
-module function isSynthesizedName(name ByteArray) returns bool
-	let text = String.from(name)
-	return isCompilerReservedName(name) or isLiftedClosureName(name) or text.contains(".unionCases")
+module function isSynthesizedName(signatures ProgramSignatures, name ByteArray) returns bool
+	return isCompilerReservedName(name) or isLiftedClosureName(name) or namesWithinAUnionCasesCompanion(signatures, name: name)
 end 'isSynthesizedName'
+
+// Asked of the enum registry, not of the text: an author's name can contain `.unionCases`
+// (`Holder.unionCasesFor`), and a text test would exempt it from E3167 and E3092.
+function namesWithinAUnionCasesCompanion(signatures ProgramSignatures, name ByteArray) returns bool
+	let owner = qualifyingTypeName(name)
+
+	if owner.count() == name.count() 'noEnclosingScope'
+		return false
+	end 'noEnclosingScope'
+
+	if name.equals(unionCasesCompanionName(owner)) and signatures.containsEnumInAnyFile(name) 'aRegisteredCompanion'
+		return true
+	end 'aRegisteredCompanion'
+
+	return namesWithinAUnionCasesCompanion(signatures, name: owner)
+end 'namesWithinAUnionCasesCompanion'
 
 // The functions nothing in the source calls. The entry is `Project.entryFunctionName` rather than
 // the literal `main`: a `main` that another entry has displaced needs a caller like any other
@@ -444,7 +459,7 @@ function seedFunctions(module MaxonModule, signatures ProgramSignatures, entryPo
 			continue
 		end 'synthesizedFunction'
 
-		if isSynthesizedName(func.name) or entryPoints.contains(func.name) or signatures.isGenericInstanceName(func.name) 'noSourceLevelCaller'
+		if isSynthesizedName(signatures, name: func.name) or entryPoints.contains(func.name) or signatures.isGenericInstanceName(func.name) 'noSourceLevelCaller'
 			continue
 		end 'noSourceLevelCaller'
 
@@ -500,7 +515,7 @@ function seedTypes(project Project, signatures ProgramSignatures, userFiles File
 end 'seedTypes'
 
 function seedOneTypeName(signatures ProgramSignatures, decl TypeNameDecl, tracked TrackedDecls)
-	if isSynthesizedName(decl.name) 'compilerOwned'
+	if isSynthesizedName(signatures, name: decl.name) 'compilerOwned'
 		return
 	end 'compilerOwned'
 
@@ -572,7 +587,7 @@ function seedBindings(signatures ProgramSignatures, tracked TrackedDecls)
 			continue
 		end 'narrowEnoughAlready'
 
-		if isSynthesizedName(decl.name) 'compilerOwned'
+		if isSynthesizedName(signatures, name: decl.name) 'compilerOwned'
 			continue
 		end 'compilerOwned'
 

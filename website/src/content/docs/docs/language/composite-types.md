@@ -651,7 +651,12 @@ and a record that implements `Comparable` is ordered by `<`, `>`, `<=` and `>=` 
 A copy may call its argument type's `where` requirements — `compare`, `equals`, any method of the
 constraining interface, and a method an extension of that interface declares — whatever their visibility,
 because the caller granted the conformance by passing the type. The grant reaches a closure written inside
-the copy too. Every other member of the type needs ordinary visibility from the declaring file. A generic
+the copy too. The calls the language makes on the author's behalf over a value of a type parameter —
+interpolation's conversion to text (`"{a}"`, `"{a:q}"`), a record's `==` and `<`, and the iteration a `for`
+performs — are judged for the caller that instantiated the copy, so a generic declared in another file, such
+as `Expect.equal`, accepts the caller's file-private type. Every other member of the type, and a `match`,
+accessor or `.rawValue` the body writes over a value of it, needs ordinary visibility from the declaring
+file. A generic
 function is itself visible like any function: a private one called from another file is **E3008**.
 
 A generic function and a non-generic one of the same name in one directory are two declarations of one name

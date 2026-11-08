@@ -365,6 +365,33 @@ end 'main'
 error E3167: api/<fragment>:10:18: public function 'api.Box.get' names file-private typealias 'Slot' in the type of parameter 'index'
 ```
 
+<!-- test: error.a-user-name-containing-union-cases-is-still-checked -->
+`unionCasesFor` is a method its author wrote, whose qualified name only CONTAINS the word a union's
+companion member is named by: it is held to its `export` like any other method.
+```maxon
+// --- file: api/lib.maxon
+typealias Slot = int(0 to 100)
+
+export type Holder
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function unionCasesFor(index Slot) returns bool
+		return index > 3
+	end 'unionCasesFor'
+end 'Holder'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let h = Holder.create()
+	return 7 if h.unionCasesFor(7) else 0
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:10:18: exported function 'api.Holder.unionCasesFor' names file-private typealias 'Slot' in the type of parameter 'index'
+```
+
 <!-- test: error.a-public-interface-member-names-a-file-private-type -->
 An interface member writes no modifier of its own, so it takes the INTERFACE's: a caller reaches the
 requirement through `Sized`, and whatever can name `Sized` must be able to name what `size` returns.

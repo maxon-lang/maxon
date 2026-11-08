@@ -2601,6 +2601,14 @@ enum EnumSelectDomain
 	wordKey
 end 'EnumSelectDomain'
 
+// Whose file judges a tag read: `written` (a `match`, accessor or `.rawValue` an author spelled) for the
+// file the code is in, `languageMade` for the caller that supplied a bound type argument. See
+// `reachedOnTheInstantiatorsBehalf`.
+enum EnumTagReach
+	written
+	languageMade
+end 'EnumTagReach'
+
 // ⭐ **WHAT AN INTERPOLATED ENUM VALUE RENDERS AS.** Three answers rather than a bool, because the two that
 // produce TEXT select from different columns (`caseNames` vs `caseRawValues`) and the third produces no text
 // at all — it hands the tag to the ordinary decimal renderer. See `enumInterpRendering`.
@@ -57178,7 +57186,7 @@ export type Parser
 			// member was statically known, which is the only place a boxed member's tag COULD be read.
 			dispatchSubject = requireErrorUnionInfo(errorUnion).fusedOrdinal
 		end 'fusedOrdinalIsTheSubject' else if isEnumMatch 'enumDispatchSubject'
-			dispatchSubject = try self.emitEnumDispatchKey(scrut, layout: requireEnumLayout(enumMatch), anchor: matchTok, range: SourceRange.ofToken(matchTok))
+			dispatchSubject = try self.emitEnumDispatchKey(scrut, layout: requireEnumLayout(enumMatch), anchor: matchTok, range: SourceRange.ofToken(matchTok), reach: EnumTagReach.written)
 		end 'enumDispatchSubject'
 
 		// ⭐ **MATCH-CONSUME BOOKKEEPING.** A managed payload BINDING takes its field out of
@@ -65564,7 +65572,7 @@ export type Parser
 			if self.atEnumAccessorHopOn(current) 'enumAccessorHop'
 				view hopLayout = requireEnumLayout(self.enumMatchFor(current))
 				let hopAnchor = self.current()
-				current = try self.consumeEnumAccessorHop(hopLayout, tag: try self.emitEnumTagOf(current, layout: hopLayout, anchor: self.tokenAt(self.pos + 1), range: SourceRange.ofToken(hopAnchor)), anchorTok: hopAnchor)
+				current = try self.consumeEnumAccessorHop(hopLayout, tag: try self.emitEnumTagOf(current, layout: hopLayout, anchor: self.tokenAt(self.pos + 1), range: SourceRange.ofToken(hopAnchor), reach: EnumTagReach.written), anchorTok: hopAnchor)
 				continue
 			end 'enumAccessorHop'
 
@@ -67627,7 +67635,7 @@ export type Parser
 		end 'aDifferentDomain'
 
 		let range = SourceRange.ofToken(opTok)
-		return try self.emitEnumRawValue(layout, tag: try self.emitEnumTagOf(value, layout: layout, anchor: opTok, range: range), anchor: opTok, range: range)
+		return try self.emitEnumRawValue(layout, tag: try self.emitEnumTagOf(value, layout: layout, anchor: opTok, range: range, reach: EnumTagReach.written), anchor: opTok, range: range)
 	end 'enumCaseRawValueAgainst'
 
 	function emitComparableCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws SourceParseError
@@ -70455,7 +70463,7 @@ export type Parser
 	// `00000404`, while `"{p:6}"` on a plain enum gives `green` and `"{t:6}"` on a string-backed one
 	// gives `Active` — both IGNORING the specifier, exactly as the bool and byte-record arms above do.
 	function materializeEnumPart(layout EnumLayout, value ValueId, exprTok Token, format InterpFormat, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) throws SourceParseError
-		let tag = try self.emitEnumTagOf(value, layout: layout, anchor: exprTok, range: range)
+		let tag = try self.emitEnumTagOf(value, layout: layout, anchor: exprTok, range: range, reach: EnumTagReach.languageMade)
 
 		match enumInterpRendering(layout) 'rendering'
 			caseName then self.materializeStringRecordPart(try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.caseName, valueType: MaxonType.string, anchor: exprTok, range: range), partBufs: partBufs, partLens: partLens, range: range)
@@ -75119,8 +75127,8 @@ export type Parser
 
 	// A case's declaration index, read by `.ordinal` and the enum accessors: the dispatch key, mapped
 	// back from the word key for a word union.
-	function emitEnumTagOf(value ValueId, layout EnumLayout, anchor Token, range SourceRange) returns ValueId throws SourceParseError
-		let key = try self.emitEnumDispatchKey(value, layout: layout, anchor: anchor, range: range)
+	function emitEnumTagOf(value ValueId, layout EnumLayout, anchor Token, range SourceRange, reach EnumTagReach) returns ValueId throws SourceParseError
+		let key = try self.emitEnumDispatchKey(value, layout: layout, anchor: anchor, range: range, reach: reach)
 
 		match self.signatures.unionRepresentation(layout) 'representation'
 			word then return try self.emitDeclarationIndexOfWordKey(key, layout: layout, anchor: anchor, range: range)
@@ -75160,7 +75168,7 @@ export type Parser
 	//
 	// A caller that has not already established the value IS an enum keeps that guard at its own site — the
 	// `match` dispatch's `isEnumMatch`, which is a question about the SCRUTINEE and not about the layout.
-	function emitEnumDispatchKey(value ValueId, layout EnumLayout, anchor Token, range SourceRange) returns ValueId throws SourceParseError
+	function emitEnumDispatchKey(value ValueId, layout EnumLayout, anchor Token, range SourceRange, reach EnumTagReach) returns ValueId throws SourceParseError
 		// ⭐⭐ **THIS FILE REACHED INTO A VALUE OF `layout.name`, AND THIS IS THE ONE LINE THAT KNOWS IT** —
 		// `requireFieldAccessible`'s twin for enums and unions, recorded through the same one-writer channel and
 		// for the same reason. A `match` arm spells CASE names (`small`, `big(n)`), `.ordinal` spells a member,
@@ -75181,7 +75189,10 @@ export type Parser
 		// ⚠ Written BEFORE the representation split: a bare-tag enum's value IS its tag and emits
 		// nothing, but the file reached the layout either way. A cure behind the load would pass the
 		// union cases and still report every plain `enum`.
-		try self.requireMembersReachable(layout.name, visibility: layout.visibility, declFilePath: layout.declFilePath, memberTok: anchor)
+		match reach 'reach'
+			written then try self.requireMembersReachable(layout.name, visibility: layout.visibility, declFilePath: layout.declFilePath, memberTok: anchor)
+			languageMade then try self.requireMembersReachableToTheLanguage(layout.name, visibility: layout.visibility, declFilePath: layout.declFilePath, memberTok: anchor)
+		end 'reach'
 
 		match self.signatures.unionRepresentation(layout) 'representation'
 			bareTag then return value
@@ -90206,7 +90217,37 @@ export type Parser
 		throw hiddenMembersRefusal(typeName, visibility: visibility, memberTok: anchor)
 	end 'requireMethodReachable'
 
+	// Inside a generic instance, a call the language makes over a value of a bound type argument
+	// (interpolation's conversion, struct `==`/`<`, `for`'s protocol calls) is judged for the instantiating
+	// caller, who supplied the type and could name it; so a generic in another file accepts the caller's
+	// file-private type. Only struct and enum arguments count: a ranged alias's name can equal a nominal's.
+	// A caller answered `true` still records the member-access credit, or E3092 tells it to drop an
+	// `export` the instantiation needs.
+	function reachedOnTheInstantiatorsBehalf(typeName ByteArray) returns bool
+		for argument in self.genericBindings.bound 'eachBoundArgument'
+			if argument.denotesNominalType() and argument.name.equals(typeName) 'aSuppliedType'
+				return true
+			end 'aSuppliedType'
+		end 'eachBoundArgument'
+
+		return false
+	end 'reachedOnTheInstantiatorsBehalf'
+
+	function requireMembersReachableToTheLanguage(typeName ByteArray, visibility Visibility, declFilePath FilePath, memberTok Token) throws SourceParseError
+		if self.reachedOnTheInstantiatorsBehalf(typeName) 'suppliedByTheCaller'
+			self.recordMemberAccessedTypeName(typeName)
+			return
+		end 'suppliedByTheCaller'
+
+		try self.requireMembersReachable(typeName, visibility: visibility, declFilePath: declFilePath, memberTok: memberTok)
+	end 'requireMembersReachableToTheLanguage'
+
 	function requireImplicitMethodReachable(typeName ByteArray, methodName ByteArray, anchor Token) throws SourceParseError
+		if self.reachedOnTheInstantiatorsBehalf(typeName) 'suppliedByTheCaller'
+			self.recordMemberAccessedTypeName(typeName)
+			return
+		end 'suppliedByTheCaller'
+
 		match self.signatures.nominalTypeNameIn(typeName) 'declared'
 			declared(_, visibility, declFilePath) then try self.requireMethodReachable(self.bodyFunction(), typeName: typeName, visibility: visibility, declFilePath: declFilePath, methodName: methodName, anchor: anchor)
 			undeclared then panic("requireImplicitMethodReachable: an implicit `{String.from(methodName)}` call is lowered onto '{String.from(typeName)}', which declares no type — every caller names the type the call resolves its callee against")
@@ -104819,7 +104860,7 @@ export type Parser
 
 		// QUESTION 1 — where the tag is, asked through the door the `match` dispatch asks it through, and the
 		// one thing this spelling knows that the type-qualified one does not: there IS a value here.
-		return try self.emitEnumInstanceAccessor(layout, tag: try self.emitEnumTagOf(baseValue, layout: layout, anchor: memberTok, range: range), memberTok: memberTok, range: range)
+		return try self.emitEnumInstanceAccessor(layout, tag: try self.emitEnumTagOf(baseValue, layout: layout, anchor: memberTok, range: range, reach: EnumTagReach.written), memberTok: memberTok, range: range)
 	end 'parseEnumAccessor'
 
 	function enumAccessorBaseValue(base EnumAccessorBase, baseTok Token) returns ValueId throws SourceParseError
@@ -105283,7 +105324,7 @@ export type Parser
 		// `enumBackingNamedFieldDomain` admits only for an UNBOXED declaration, so `emitEnumTagOf` is the
 		// identity here. It is still asked rather than assumed: that premise lives at the classifier, and a
 		// reader that spelled the conclusion out would be a second copy of it.
-		return try self.consumeEnumAccessorHop(fieldLayout, tag: try self.emitEnumTagOf(selected, layout: fieldLayout, anchor: fieldTok, range: range), anchorTok: fieldTok)
+		return try self.consumeEnumAccessorHop(fieldLayout, tag: try self.emitEnumTagOf(selected, layout: fieldLayout, anchor: fieldTok, range: range, reach: EnumTagReach.written), anchorTok: fieldTok)
 	end 'emitEnumBackingFieldSelect'
 
 	// ⭐ **AN ADDRESS-VALUED ACCESSOR — the selection, then the ONE line that says what was selected.** The

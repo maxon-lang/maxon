@@ -96,6 +96,31 @@ end 'main'
 error E3092: api/<fragment>:5:17: exported function 'api.unusedHelper' is never referenced outside its declaring file
 ```
 
+<!-- test: error.an-unused-export-whose-name-contains-union-cases-is-reported -->
+`int.unionCasesFor` is an extension method its author wrote, whose qualified name only CONTAINS the word
+a union's companion member is named by: an `export` nothing outside its file calls is reported like any
+other.
+```maxon
+// --- file: api/lib.maxon
+extension int
+	export function unionCasesFor() returns bool
+		return self > 3
+	end 'unionCasesFor'
+end 'int'
+
+export function publicEntry() returns ExitCode
+	return 7 if (7).unionCasesFor() else 0
+end 'publicEntry'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return publicEntry()
+end 'main'
+```
+```maxoncstderr
+error E3092: api/<fragment>:4:18: exported function 'api.int.unionCasesFor' is never referenced outside its declaring file
+```
+
 <!-- test: error.unused-module-function -->
 ```maxon
 // --- file: api/lib.maxon

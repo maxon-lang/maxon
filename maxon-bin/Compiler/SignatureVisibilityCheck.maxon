@@ -166,7 +166,7 @@ function checkDeclaredTypes(project Project, signatures ProgramSignatures)
 end 'checkDeclaredTypes'
 
 function checkTypeDeclaration(project Project, signatures ProgramSignatures, decl TypeNameDecl)
-	if decl.claim.declaredByTheCorpus or isSynthesizedName(decl.name) 'noDeclarationAnAuthorWrote'
+	if decl.claim.declaredByTheCorpus or isSynthesizedName(signatures, name: decl.name) 'noDeclarationAnAuthorWrote'
 		return
 	end 'noDeclarationAnAuthorWrote'
 
@@ -358,7 +358,7 @@ end 'typeParametersOf'
 
 function checkGenericTemplates(project Project, signatures ProgramSignatures)
 	for template in signatures.genericTemplateRoster() 'eachTemplate'
-		if template.visibility == Visibility.file or template.constraints.count() == 0 or isSynthesizedName(template.key) or signatures.declaredByTheCorpus(template.declFilePath) 'noConstraintAnAuthorWroteOnAReachableFunction'
+		if template.visibility == Visibility.file or template.constraints.count() == 0 or isSynthesizedName(signatures, name: template.key) or signatures.declaredByTheCorpus(template.declFilePath) 'noConstraintAnAuthorWroteOnAReachableFunction'
 			continue
 		end 'noConstraintAnAuthorWroteOnAReachableFunction'
 
@@ -408,7 +408,7 @@ function checkDeclaredBindings(project Project, signatures ProgramSignatures)
 			continue
 		end 'noTypeCanBeNarrowerThanAFilePrivateBinding'
 
-		if isSynthesizedName(decl.name) 'noBindingAnAuthorWrote'
+		if isSynthesizedName(signatures, name: decl.name) 'noBindingAnAuthorWrote'
 			continue
 		end 'noBindingAnAuthorWrote'
 
@@ -487,7 +487,7 @@ function checkDeclaredSignature(project Project, signatures ProgramSignatures, f
 		return
 	end 'synthesizedAndSpellsNothingAnAuthorWrote'
 
-	if isSynthesizedName(func.name) 'noSignatureAnAuthorWrote'
+	if isSynthesizedName(signatures, name: func.name) 'noSignatureAnAuthorWrote'
 		return
 	end 'noSignatureAnAuthorWrote'
 

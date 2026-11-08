@@ -49,6 +49,10 @@ release's version as its heading when the release is cut.
   (`exported field 'api.Holder.mode' names file-private enum 'Mode' in its type`).
   Fix: widen the named type to the surface's tier (`export enum Mode`), or narrow the surface (drop the
   `export` from `export var mode as Mode`).
+- A declaration whose name contains `unionCases`, such as a method `Holder.unionCasesFor` or an extension
+  method `int.unionCasesFor`, is held to E3167 and to the unused-export check E3092 like any other.
+  Fix: widen the type its signature names to the declaration's tier, or narrow the declaration; drop the
+  `export` from one nothing outside its file uses.
 - A constant `FixedArray` index at or past the size is E3005 at compile time.
   Fix: correct the index, or pass a deliberate out-of-range index through a value computed at run time.
 - A divide or `mod` whose divisor is proven non-zero by a counted loop's bounds or a range computed from

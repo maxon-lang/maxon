@@ -1485,3 +1485,107 @@ end 'main'
 ```maxoncstderr
 error E3193: <fragment>:16:10: 'describe' is an instance method of 'Tally' and needs a receiver: call it on a value, such as 'value.describe(...)', or make it `static`
 ```
+
+<!-- test: a-generic-in-another-file-compares-and-quotes-the-callers-file-private-enum -->
+`Expect.equal` is declared in `stdlib/` and renders both values with `:q`. Rendering an enum value is a
+conversion the language makes, not a name the generic's author wrote, so the caller's file-private
+`Shade` is no visibility question.
+```maxon
+enum Shade
+	light
+	dark
+end 'Shade'
+
+function main() returns ExitCode
+	try Expect.equal(Shade.dark, expected: Shade.dark) otherwise return 1
+	return 7
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-generic-in-another-file-interpolates-the-callers-file-private-enum -->
+```maxon
+// --- file: l.maxon
+module function describe(a T) uses T returns String
+	return "{a}"
+end 'describe'
+
+// --- file: main.maxon
+enum Shade
+	light
+	dark
+end 'Shade'
+
+function main() returns ExitCode
+	print("{describe(Shade.dark)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+dark
+```
+
+<!-- test: a-generic-in-another-file-quotes-the-callers-file-private-stringable-type -->
+```maxon
+// --- file: l.maxon
+module function describe(a T) uses T returns String
+	return "{a:q}"
+end 'describe'
+
+// --- file: main.maxon
+typealias Code = int(0 to 100)
+
+type Tag implements Stringable
+	let code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function toString() returns String
+		return "tag{code}"
+	end 'toString'
+end 'Tag'
+
+function main() returns ExitCode
+	print("{describe(Tag.create(7))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+tag7
+```
+
+<!-- test: error.a-generic-in-another-file-matching-the-callers-file-private-enum-cases-is-refused -->
+The case names in `code`'s `match` are written by the generic's author, in `l.maxon`, outside the file
+`Shade` is private to: they are names crossing the file boundary, and they stay refused.
+```maxon
+// --- file: l.maxon
+module function code(a T) uses T returns ExitCode
+	return match a 'which'
+		light gives 1
+		dark gives 2
+	end 'which'
+end 'code'
+
+// --- file: main.maxon
+enum Shade
+	light
+	dark
+end 'Shade'
+
+function main() returns ExitCode
+	return code(Shade.dark)
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:4:9: type 'Shade' is not exported
+```
