@@ -21,7 +21,7 @@ import {
 	LookupNotice,
 	watchedCompilers
 } from './compilerLocator';
-import { claudePluginFlag, ClaudePluginChoice, ClaudePluginName, firstRunnable } from './installerOptions';
+import { claudePluginFlag, ClaudePluginChoice, ClaudePluginName, firstRunnable, installMessages, installRoot, isInstalledIn } from './installerOptions';
 import { log, initLogger } from './logger';
 import { RestartCoordinator, systemTimers } from './restartCoordinator';
 import { CompilerExplorerViewProvider } from './compilerExplorerPanel';
@@ -357,7 +357,7 @@ function searchFor(ctx: vscode.ExtensionContext): CompilerSearch {
 		workspaceFolders: workspaceFolderPaths(),
 		trustedWorkspace: vscode.workspace.isTrusted,
 		extensionCheckout: path.join(ctx.extensionPath, '..'),
-		installRoot: installRoot(),
+		installRoot: currentInstallRoot(),
 		binaryName: compilerBinaryName,
 		findOnPath: () => findOnPath(CompilerCommand),
 		isExecutable: isExecutableFile,
@@ -406,9 +406,8 @@ function reportLookupNotice(notice: LookupNotice): void {
 	}
 }
 
-/** Where the install scripts put Maxon: `MAXON_INSTALL`, else `~/.maxon`. */
-function installRoot(): string {
-	return process.env.MAXON_INSTALL || path.join(os.homedir(), '.maxon');
+function currentInstallRoot(): string {
+	return installRoot(process.env, os.homedir());
 }
 
 /** `command` on PATH, or '' — asked of the OS rather than by walking PATH ourselves. */
@@ -443,35 +442,39 @@ async function chooseClaudePlugin(): Promise<ClaudePluginChoice> {
  * No compiler anywhere: offer to get one, rather than reporting a dead end.
  *
  * ⭐ INSTALL RUNS THE SAME ONE-LINE INSTALLER A PERSON WOULD, for this user, so there is no
- * administrator prompt and nothing to click through. Its output goes to the Maxon output channel, and
- * success is judged by finding the compiler afterwards, in the install directory `findCompiler` searches.
+ * administrator prompt and nothing to click through. Its output goes to the Maxon output channel.
+ * Success is the installer reporting it and `findCompiler` then finding the compiler in that install's
+ * `bin`; a compiler found anywhere else is still used, under the failure message.
  */
 async function offerToInstall(ctx: vscode.ExtensionContext): Promise<string> {
 	const Install = 'Install';
 	const Locate = 'Locate…';
+	const root = currentInstallRoot();
+	const messages = installMessages(root);
 	const choice = await vscode.window.showErrorMessage(
 		'Maxon compiler not found. The extension needs it for diagnostics, completion and formatting.',
-		{ modal: true },
+		{ modal: true, detail: messages.prompt },
 		Install,
 		Locate
 	);
 
 	if (choice === Install) {
 		const claudePlugin = await chooseClaudePlugin();
+		log(messages.progress);
 		const ok = await vscode.window.withProgress(
-			{ location: vscode.ProgressLocation.Notification, title: 'Installing Maxon…' },
+			{ location: vscode.ProgressLocation.Notification, title: messages.progress },
 			() => runInstaller(claudePlugin)
 		);
 		const found = await findCompiler(ctx);
-		if (found) {
+		if (ok && found !== '' && isInstalledIn(found, root)) {
+			log(messages.installed);
+			vscode.window.showInformationMessage(messages.installed);
 			return found;
 		}
-		vscode.window.showErrorMessage(
-			ok
-				? 'The Maxon installer finished, but no compiler was found. See the Maxon Language Server output.'
-				: 'The Maxon installer failed. See the Maxon Language Server output, or install from https://maxon.dev/install.'
-		);
-		return '';
+		const failure = ok ? messages.finishedWithoutCompiler : messages.failed;
+		log(failure);
+		vscode.window.showErrorMessage(failure);
+		return found;
 	}
 
 	if (choice === Locate) {

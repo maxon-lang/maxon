@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { installBinDirectory } from './installerOptions';
 
 const isWindows = os.platform() === 'win32';
 
@@ -8,7 +9,6 @@ export const compilerBinaryName = isWindows ? 'maxon.exe' : 'maxon';
 
 export const CheckoutDirectories = ['specs', 'stdlib', 'runtime', 'maxon-bin'];
 const SlotDirectories = ['maxon-bin', '.maxon'];
-const InstallBinDirectory = 'bin';
 
 export type CompilerSource = 'setting' | 'checkout' | 'path' | 'install' | 'extension';
 
@@ -114,7 +114,7 @@ export async function locateCompiler(search: CompilerSearch): Promise<CompilerLo
 		return found(onPath, 'path');
 	}
 
-	const installed = path.join(search.installRoot, InstallBinDirectory, search.binaryName);
+	const installed = path.join(installBinDirectory(search.installRoot), search.binaryName);
 	if (await search.isExecutable(installed)) {
 		return found(installed, 'install');
 	}
