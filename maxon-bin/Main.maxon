@@ -1459,7 +1459,8 @@ end 'exitSucceeded'
 typealias SignalNumber = int(0 to u32.max)
 
 // The child's stdout, stderr and exit code are the command's own (`run`'s program, `upgrade`'s
-// install script). `module` so both commands share one spawn configuration.
+// install script). `module` so every command that forwards to a child shares one spawn
+// configuration.
 //
 // `timeoutMs = 0`: a deadline would kill a long-running child the caller launched deliberately.
 module function spawnForwarding(executable Executable, arguments StringArray, environment Environment, standardInput InputSource, workingDirectory FilePath, speaker String) returns ExitCode
@@ -1472,6 +1473,8 @@ module function spawnForwarding(executable Executable, arguments StringArray, en
 	config.standardError = OutputDestination.inherit
 	config.timeoutMs = 0
 
+	returnIdleHeapToTheOperatingSystem()
+
 	let ran = try Subprocess.runConfiguration(config) otherwise (e) 'unspawnable'
 		printError("{speaker}: could not run {executable.displayName()} ({e.displayReason()})\n")
 		return OwnFailureExit
@@ -1482,6 +1485,14 @@ module function spawnForwarding(executable Executable, arguments StringArray, en
 		signalled(code) gives reportSignalled(executable, signal: code as SignalNumber, speaker: speaker)
 	end 'termination'
 end 'spawnForwarding'
+
+// The compiler never scavenges, so a waiting parent keeps its peak heap committed, and with the
+// child's that can exceed the Windows commit limit. Twice because the first call only marks free
+// granules and the second decommits them (LANGUAGE_REFERENCE.md, `HeapStats.scavenge()`).
+function returnIdleHeapToTheOperatingSystem()
+	_ = HeapStats.scavenge()
+	_ = HeapStats.scavenge()
+end 'returnIdleHeapToTheOperatingSystem'
 
 // A signalled child has no exit code to forward, so the signal is named and the failure is the
 // command's own. Only a POSIX host reports `signalled`; a Windows abnormal termination arrives as
