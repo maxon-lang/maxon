@@ -17,6 +17,10 @@
 # ⛔ `maxon upgrade` RUNS THIS SCRIPT, SO ITS INTERFACE IS A CONTRACT WITH EVERY SHIPPED COMPILER:
 # it honours MAXON_INSTALL and --no-modify-path, and exits 0 when the install is current and non-zero
 # when it is not. Renaming or dropping any of those breaks `maxon upgrade` in every release that has it.
+#
+# The VS Code extension runs it with --print-root and takes its one line of stdout as the directory it
+# offers to install into, before any download so it answers offline. It relies on an unknown option
+# failing, so a script without --print-root fails the ask instead of installing.
 
 # Everything is inside main, so a download cut off partway runs nothing.
 main() {
@@ -29,6 +33,7 @@ main() {
 	modify_path=1
 	force=0
 	claude_plugin_choice="ask"
+	print_root=0
 
 	while [ $# -gt 0 ]; do
 		case "$1" in
@@ -38,10 +43,16 @@ main() {
 			--force)            force=1; shift ;;
 			--claude-plugin)    choose_claude_plugin install; shift ;;
 			--no-claude-plugin) choose_claude_plugin skip; shift ;;
+			--print-root)       print_root=1; shift ;;
 			-h|--help)          usage; exit 0 ;;
 			*)                  fail "unknown option '$1' (see --help)" ;;
 		esac
 	done
+
+	if [ "$print_root" -eq 1 ]; then
+		install_root
+		exit 0
+	fi
 
 	if [ -n "$version" ]; then
 		check_version "$version"
@@ -156,6 +167,8 @@ Options:
   --claude-plugin     install Claude Code's maxon-lsp plugin without asking, when
                       claude is on PATH
   --no-claude-plugin  neither offer nor mention Claude Code's maxon-lsp plugin
+  --print-root        print the directory Maxon would be installed in, and exit
+                      without installing or downloading anything
 
 Environment:
   MAXON_INSTALL       where Maxon is installed (default ~/.maxon)

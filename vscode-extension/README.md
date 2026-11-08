@@ -64,9 +64,10 @@ The extension looks in this order:
    desktop's `PATH`, without your shell profile's additions.
 5. The build in the checkout the extension itself is part of, when you run the extension from source.
 
-If none of those finds one, it offers **Install**, which runs the installer for your account into
-`~/.maxon` (`%USERPROFILE%\.maxon` on Windows), or `$MAXON_INSTALL` when it is set, and names that
-directory in the prompt, the progress notification, the closing message and the output channel; and
+If none of those finds one, it offers **Install**, which runs the installer for your account into the
+directory the installer reports (`~/.maxon`, `%USERPROFILE%\.maxon` on Windows, or `$MAXON_INSTALL`
+when it is set), and names that directory in the prompt, the progress notification, the closing
+message and the output channel; and
 **Locate…**, which lets you pick a compiler you already have. When `claude` is on `PATH`, **Install** first asks
 whether to install Claude Code's `maxon-lsp` plugin too, which gives Claude Code the language server.
 

@@ -20,7 +20,8 @@
 # prints the line that does, in that shell's own syntax.
 #
 # Parameters: -Version X.Y.Z, -Force (reinstall a current install), -NoPathUpdate, -ClaudePlugin
-# (install Claude Code's maxon-lsp plugin without asking), -NoClaudePlugin (neither offer nor mention it).
+# (install Claude Code's maxon-lsp plugin without asking), -NoClaudePlugin (neither offer nor mention it),
+# -PrintRoot (print the install directory and exit, before any download).
 # Environment: MAXON_INSTALL (default %USERPROFILE%\.maxon), MAXON_DOWNLOAD_BASE (a mirror laid out
 # as <base>/v<version>/<asset>; needs -Version).
 # Uninstall: delete %USERPROFILE%\.maxon and remove its bin directory from your user PATH.
@@ -30,21 +31,27 @@
 # 1 when it is not. Renaming or dropping any of those breaks `maxon upgrade` in every release that
 # has it.
 #
+# The VS Code extension runs it with -PrintRoot and takes its one line of stdout as the directory it
+# offers to install into. It relies on [CmdletBinding()] refusing an unknown parameter, so a script
+# without -PrintRoot fails the ask instead of installing.
+#
 # ASCII ONLY: Windows PowerShell 5.1's `irm` decodes a response without a charset as ISO-8859-1.
 # NEVER `exit`: under `irm | iex` this runs in whatever session `iex` is in, and `exit` would close it.
 # So `powershell -c "irm ... | iex"` exits 0 whatever happened; a caller that needs the status runs
 #   & ([scriptblock]::Create((irm https://maxon.dev/install.ps1))); exit $LASTEXITCODE
 
+[CmdletBinding()]
 param(
     [string]$Version = '',
     [switch]$Force,
     [switch]$NoPathUpdate,
     [switch]$ClaudePlugin,
-    [switch]$NoClaudePlugin
+    [switch]$NoClaudePlugin,
+    [switch]$PrintRoot
 )
 
 function Install-Maxon {
-    param([string]$RequestedVersion, [bool]$Reinstall, [bool]$UpdatePath, [bool]$InstallClaudePlugin, [bool]$SkipClaudePlugin)
+    param([string]$RequestedVersion, [bool]$Reinstall, [bool]$UpdatePath, [bool]$InstallClaudePlugin, [bool]$SkipClaudePlugin, [bool]$PrintInstallRoot)
 
     $ErrorActionPreference = 'Stop'
     if ($InstallClaudePlugin -and $SkipClaudePlugin) {
@@ -428,6 +435,13 @@ function Install-Maxon {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
         throw 'this installer is for Windows; on macOS or Linux run: curl -fsSL https://maxon.dev/install.sh | sh'
     }
+
+    if ($PrintInstallRoot) {
+        # `$dir = & $install -PrintRoot` captures the pipeline, which Write-Host bypasses.
+        Write-Output (Get-InstallRoot)
+        return
+    }
+
     $target = "$(Get-Architecture)-windows"
 
     $root = Get-InstallRoot
@@ -565,13 +579,13 @@ function Install-Maxon {
 
 # A script block of its own, so nothing it assigns lands in the session `irm | iex` runs in.
 & {
-    param([string]$RequestedVersion, [bool]$Reinstall, [bool]$UpdatePath, [bool]$InstallClaudePlugin, [bool]$SkipClaudePlugin)
+    param([string]$RequestedVersion, [bool]$Reinstall, [bool]$UpdatePath, [bool]$InstallClaudePlugin, [bool]$SkipClaudePlugin, [bool]$PrintInstallRoot)
     try {
-        Install-Maxon -RequestedVersion $RequestedVersion -Reinstall $Reinstall -UpdatePath $UpdatePath -InstallClaudePlugin $InstallClaudePlugin -SkipClaudePlugin $SkipClaudePlugin
+        Install-Maxon -RequestedVersion $RequestedVersion -Reinstall $Reinstall -UpdatePath $UpdatePath -InstallClaudePlugin $InstallClaudePlugin -SkipClaudePlugin $SkipClaudePlugin -PrintInstallRoot $PrintInstallRoot
         $global:LASTEXITCODE = 0
     } catch {
         $global:LASTEXITCODE = 1
         [Console]::Error.WriteLine("maxon-install: $($_.Exception.Message)")
     }
-} $Version $Force.IsPresent (-not $NoPathUpdate.IsPresent) $ClaudePlugin.IsPresent $NoClaudePlugin.IsPresent
+} $Version $Force.IsPresent (-not $NoPathUpdate.IsPresent) $ClaudePlugin.IsPresent $NoClaudePlugin.IsPresent $PrintRoot.IsPresent
 Remove-Item -Path Function:\Install-Maxon

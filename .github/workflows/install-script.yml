@@ -477,6 +477,27 @@ jobs:
             [ "$(snapshot "$foreign")" = "$before" ] || { echo "::error::the foreign $entry/ was touched"; exit 1; }
           done
 
+      - name: --print-root prints the install directory the install would use, and creates nothing
+        run: |
+          set -euo pipefail
+          home="$(mktemp -d)"
+          out="$(env HOME="$home" PATH="$SYSTEM_PATH" sh -s -- --print-root < website/public/install.sh)"
+          [ "$out" = "$home/.maxon" ] || { echo "::error::the default install directory printed as '$out', not $home/.maxon"; exit 1; }
+
+          custom="$(mktemp -d)/maxon"
+          out="$(env HOME="$home" PATH="$SYSTEM_PATH" MAXON_INSTALL="$custom//" sh -s -- --print-root < website/public/install.sh)"
+          [ "$out" = "$custom" ] || { echo "::error::a MAXON_INSTALL with trailing separators printed as '$out', not $custom"; exit 1; }
+
+          status=0
+          out="$(env HOME="$home" PATH="$SYSTEM_PATH" MAXON_INSTALL=relative/maxon sh -s -- --print-root < website/public/install.sh 2> "$home/stderr")" || status=$?
+          [ "$status" -ne 0 ] || { echo "::error::a relative MAXON_INSTALL was accepted"; exit 1; }
+          [ -z "$out" ] || { echo "::error::a refused MAXON_INSTALL printed '$out'"; exit 1; }
+          grep -q 'MAXON_INSTALL must be an absolute path' "$home/stderr" || { echo "::error::the refusal did not say why: $(cat "$home/stderr")"; exit 1; }
+          rm "$home/stderr"
+
+          [ -z "$(find "$home" -mindepth 1)" ] || { echo "::error::--print-root created: $(find "$home" -mindepth 1)"; exit 1; }
+          [ ! -e "$custom" ] || { echo "::error::--print-root created $custom"; exit 1; }
+
       # ⛔ THE REFUSAL IS THE SCRIPT'S ONE SECURITY CLAIM, SO IT IS MADE TO FIRE. The real archive is
       # served from a mirror whose SHA256SUMS names another hash; the install must refuse and leave the
       # existing one in place.
@@ -595,6 +616,8 @@ jobs:
           Get-Content -Raw website/public/install.ps1 | Invoke-Expression
           if ($LASTEXITCODE -ne 0) { throw "the install failed ($LASTEXITCODE)" }
           if (Get-Command Install-Maxon -ErrorAction SilentlyContinue) { throw 'the script left Install-Maxon defined in the session' }
+          $left = Get-Variable -Name Version, Force, NoPathUpdate, ClaudePlugin, NoClaudePlugin, PrintRoot -ErrorAction SilentlyContinue
+          if ($left) { throw "the script left its parameters in the session: $($left.Name -join ', ')" }
           $found = (Get-Command maxon -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
           if ($found -ine "$HOME\.maxon\bin\maxon.exe") { throw "the session that ran the install finds '$found', not the install" }
 
@@ -917,6 +940,35 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'the custom install failed' }
           & "$env:MAXON_INSTALL\bin\maxon.exe" version
           if ([Environment]::GetEnvironmentVariable('Path', 'User') -ne $before) { throw '-NoPathUpdate changed the user Path' }
+
+      - name: -PrintRoot prints the install directory the install would use, and creates nothing
+        run: |
+          $install = [scriptblock]::Create((Get-Content -Raw website/public/install.ps1))
+
+          $out = & $install -PrintRoot
+          if ($LASTEXITCODE -ne 0) { throw "-PrintRoot failed ($LASTEXITCODE)" }
+          if ($out -ine "$HOME\.maxon") { throw "the default install directory printed as '$out', not $HOME\.maxon" }
+
+          $custom = Join-Path $env:RUNNER_TEMP 'print-root\maxon'
+          $env:MAXON_INSTALL = "$custom\"
+          $out = & $install -PrintRoot
+          if ($LASTEXITCODE -ne 0) { throw "-PrintRoot with a trailing separator failed ($LASTEXITCODE)" }
+          if ($out -ine $custom) { throw "a MAXON_INSTALL with a trailing separator printed as '$out', not $custom" }
+
+          $env:MAXON_INSTALL = 'relative\maxon'
+          $out = & $install -PrintRoot
+          if ($LASTEXITCODE -ne 1) { throw "a relative MAXON_INSTALL exited $LASTEXITCODE, not 1" }
+          if ($null -ne $out) { throw "a refused MAXON_INSTALL printed '$out'" }
+
+          if (Test-Path -LiteralPath (Split-Path $custom)) { throw '-PrintRoot created the install directory' }
+
+          $env:MAXON_INSTALL = $custom
+          $refused = $false
+          try { & $install -NoSuchOption } catch [System.Management.Automation.ParameterBindingException] { $refused = $true }
+          if (-not $refused) { throw 'an unknown parameter was accepted' }
+          if (Test-Path -LiteralPath (Split-Path $custom)) { throw 'an unknown parameter installed' }
+          Remove-Item Env:MAXON_INSTALL
+          $global:LASTEXITCODE = 0
 
       # The script runs in a child PowerShell, so its stderr and exit code are read as a caller reads them.
       - name: MAXON_INSTALL refuses a directory that is not an install, and leaves what it holds untouched

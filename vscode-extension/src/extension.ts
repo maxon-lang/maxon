@@ -21,7 +21,7 @@ import {
 	LookupNotice,
 	watchedCompilers
 } from './compilerLocator';
-import { claudePluginFlag, ClaudePluginChoice, ClaudePluginName, firstRunnable, installMessages, installRoot, isInstalledIn } from './installerOptions';
+import { claudePluginFlag, ClaudePluginChoice, ClaudePluginName, firstRunnable, installMessages, installRoot, installRootUnavailable, installedCompilerPath, parsePrintedRoot, printRootFlag } from './installerOptions';
 import { log, initLogger } from './logger';
 import { RestartCoordinator, systemTimers } from './restartCoordinator';
 import { CompilerExplorerViewProvider } from './compilerExplorerPanel';
@@ -443,17 +443,28 @@ async function chooseClaudePlugin(): Promise<ClaudePluginChoice> {
  *
  * ⭐ INSTALL RUNS THE SAME ONE-LINE INSTALLER A PERSON WOULD, for this user, so there is no
  * administrator prompt and nothing to click through. Its output goes to the Maxon output channel.
- * Success is the installer reporting it and `findCompiler` then finding the compiler in that install's
- * `bin`; a compiler found anywhere else is still used, under the failure message.
+ * Success is the compiler in the `bin` of the directory the script printed. The scripts move the
+ * binary into place last, so a non-zero exit with it there is a completed install, reported as a
+ * warning.
  */
-async function offerToInstall(ctx: vscode.ExtensionContext): Promise<string> {
+async function offerToInstall(): Promise<string> {
 	const Install = 'Install';
 	const Locate = 'Locate…';
-	const root = currentInstallRoot();
+	const asked = await vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Window, title: 'Asking the Maxon installer where it installs…' },
+		askInstallRoot
+	);
+	const root = asked.root;
+	const existing = await compilerInstalledIn(root);
+	if (existing !== '') {
+		log(`Using ${CompilerSourceDescriptions.install}: ${existing}`);
+		return existing;
+	}
+
 	const messages = installMessages(root);
 	const choice = await vscode.window.showErrorMessage(
 		'Maxon compiler not found. The extension needs it for diagnostics, completion and formatting.',
-		{ modal: true, detail: messages.prompt },
+		{ modal: true, detail: asked.failure === undefined ? messages.prompt : installRootUnavailable(root, asked.failure) },
 		Install,
 		Locate
 	);
@@ -461,20 +472,26 @@ async function offerToInstall(ctx: vscode.ExtensionContext): Promise<string> {
 	if (choice === Install) {
 		const claudePlugin = await chooseClaudePlugin();
 		log(messages.progress);
-		const ok = await vscode.window.withProgress(
+		const run = await vscode.window.withProgress(
 			{ location: vscode.ProgressLocation.Notification, title: messages.progress },
-			() => runInstaller(claudePlugin)
+			() => runInstallScript([claudePluginFlag(isWindows, claudePlugin)])
 		);
-		const found = await findCompiler(ctx);
-		if (ok && found !== '' && isInstalledIn(found, root)) {
-			log(messages.installed);
-			vscode.window.showInformationMessage(messages.installed);
+		const ok = run.code === 0;
+		const found = await compilerInstalledIn(root);
+		if (found !== '') {
+			if (ok) {
+				log(messages.installed);
+				vscode.window.showInformationMessage(messages.installed);
+			} else {
+				log(messages.installedWithErrors);
+				vscode.window.showWarningMessage(messages.installedWithErrors);
+			}
 			return found;
 		}
 		const failure = ok ? messages.finishedWithoutCompiler : messages.failed;
 		log(failure);
 		vscode.window.showErrorMessage(failure);
-		return found;
+		return '';
 	}
 
 	if (choice === Locate) {
@@ -494,22 +511,53 @@ async function offerToInstall(ctx: vscode.ExtensionContext): Promise<string> {
 	return '';
 }
 
+async function compilerInstalledIn(root: string): Promise<string> {
+	const candidate = installedCompilerPath(root, compilerBinaryName);
+	return await isExecutableFile(candidate) ? candidate : '';
+}
+
 const INSTALL_SH = 'https://maxon.dev/install.sh';
 const INSTALL_PS1 = 'https://maxon.dev/install.ps1';
 
-/** Run the platform's install script, streaming its output to the log. True when it reports success. */
-async function runInstaller(claudePlugin: ClaudePluginChoice): Promise<boolean> {
-	const pluginFlag = claudePluginFlag(isWindows, claudePlugin);
+interface InstallRootAnswer {
+	root: string;
+	failure?: string;
+}
+
+async function askInstallRoot(): Promise<InstallRootAnswer> {
+	try {
+		const run = await runInstallScript([printRootFlag(isWindows)]);
+		if (run.code !== 0) {
+			throw new Error(describeFailedRun(run));
+		}
+		return { root: parsePrintedRoot(run.stdout) };
+	} catch (err) {
+		const failure = err instanceof Error ? err.message : String(err);
+		log(`Could not ask the installer for its install directory: ${failure}`);
+		return { root: currentInstallRoot(), failure };
+	}
+}
+
+async function runInstallScript(args: string[]): Promise<ScriptRun> {
 	if (isWindows) {
 		// The script-block form, because `irm | iex` leaves the exit code at 0 whatever happened.
-		const command = `& ([scriptblock]::Create((irm ${INSTALL_PS1}))) ${pluginFlag}; exit $LASTEXITCODE`;
-		return (await runLogged('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command])) === 0;
+		// `$LASTEXITCODE` starts at 1 because a failed `irm` never runs the script that sets it. UTF-8,
+		// because powershell.exe writes redirected stdout in the OEM code page, which garbles a
+		// non-ASCII directory printed by `-PrintRoot`.
+		const command = `$LASTEXITCODE = 1; $ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); & ([scriptblock]::Create((irm -TimeoutSec ${ScriptFetchTimeoutSeconds} ${INSTALL_PS1}))) ${args.join(' ')}; exit $LASTEXITCODE`;
+		return runLogged('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command]);
 	}
 
 	// Fetched first and piped second, so a failed download is a failure rather than an empty script
 	// that `sh` runs successfully.
 	const script = await new Promise<string>(resolve => {
-		cp.execFile('curl', ['--proto', '=https', '--tlsv1.2', '-fsSL', INSTALL_SH], { maxBuffer: 1 << 20 }, (err, stdout) => {
+		const curlArgs = [
+			'--proto', '=https', '--tlsv1.2', '-fsSL',
+			'--connect-timeout', String(ScriptConnectTimeoutSeconds),
+			'--max-time', String(ScriptFetchTimeoutSeconds),
+			INSTALL_SH
+		];
+		cp.execFile('curl', curlArgs, { maxBuffer: 1 << 20 }, (err, stdout) => {
 			if (err) {
 				log(`Could not download ${INSTALL_SH}: ${err.message}`);
 				resolve('');
@@ -518,19 +566,46 @@ async function runInstaller(claudePlugin: ClaudePluginChoice): Promise<boolean> 
 			resolve(stdout);
 		});
 	});
-	return script !== '' && (await runLogged('/bin/sh', ['-s', '--', pluginFlag], script)) === 0;
+	if (script === '') {
+		return { code: UnrunExitCode, signal: null, stdout: '' };
+	}
+	return runLogged('/bin/sh', ['-s', '--', ...args], script);
 }
 
-function runLogged(command: string, args: string[], stdin?: string): Promise<number> {
+interface ScriptRun {
+	code: number;
+	signal: NodeJS.Signals | null;
+	stdout: string;
+}
+
+const UnrunExitCode = -1;
+// Bounded because the "compiler not found" prompt waits on the `--print-root` ask.
+const ScriptConnectTimeoutSeconds = 10;
+const ScriptFetchTimeoutSeconds = 60;
+
+function describeFailedRun(run: ScriptRun): string {
+	if (run.signal) {
+		return `the script was killed by ${run.signal}`;
+	}
+	return run.code === UnrunExitCode ? 'the script could not be fetched or run' : `the script exited ${run.code}`;
+}
+
+function runLogged(command: string, args: string[], stdin?: string): Promise<ScriptRun> {
 	return new Promise(resolve => {
 		const child = cp.spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
-		child.stdout.on('data', chunk => log(String(chunk).trimEnd()));
-		child.stderr.on('data', chunk => log(String(chunk).trimEnd()));
+		let stdout = '';
+		child.stdout.setEncoding('utf8');
+		child.stderr.setEncoding('utf8');
+		child.stdout.on('data', (chunk: string) => {
+			stdout += chunk;
+			log(chunk.trimEnd());
+		});
+		child.stderr.on('data', (chunk: string) => log(chunk.trimEnd()));
 		child.on('error', err => {
 			log(`Could not run ${command}: ${err.message}`);
-			resolve(-1);
+			resolve({ code: UnrunExitCode, signal: null, stdout });
 		});
-		child.on('close', code => resolve(code ?? -1));
+		child.on('close', (code, signal) => resolve({ code: code ?? UnrunExitCode, signal, stdout }));
 		child.stdin.end(stdin ?? '');
 	});
 }
@@ -692,7 +767,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	// error naming directories they have never heard of leaves them nothing to do. See
 	// `offerToInstall`.
 	if (!compilerExecutable) {
-		compilerExecutable = await offerToInstall(ctx);
+		compilerExecutable = await offerToInstall();
 	}
 
 	if (!compilerExecutable) {

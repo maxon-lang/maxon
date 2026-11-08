@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { installBinDirectory } from './installerOptions';
+import { installedCompilerPath } from './installerOptions';
 
 const isWindows = os.platform() === 'win32';
 
@@ -114,7 +114,7 @@ export async function locateCompiler(search: CompilerSearch): Promise<CompilerLo
 		return found(onPath, 'path');
 	}
 
-	const installed = path.join(installBinDirectory(search.installRoot), search.binaryName);
+	const installed = installedCompilerPath(search.installRoot, search.binaryName);
 	if (await search.isExecutable(installed)) {
 		return found(installed, 'install');
 	}
