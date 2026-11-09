@@ -6,7 +6,7 @@ description: Cut a release of the compiler — a release branch, the hand-writte
 # Cut a release
 
 **`docs/RELEASING.md` IS THE PROCESS AND THIS IS NOT A SECOND COPY OF IT.** Read it. It carries the
-whole picture — the bootstrap chain, the double self-compile, the platform gotchas, the install
+whole picture — the bootstrap chain, the second self-compile an emitted-runtime change needs, the platform gotchas, the install
 scripts, the package managers, the verification afterwards. This file is the ORDER of operations
 and the checks, and it links out for every "why".
 

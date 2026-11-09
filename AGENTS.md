@@ -45,7 +45,7 @@ the grammar accepts.
 This file holds what binds EVERY tree in the repository. The compiler is a project inside it, with its
 own build, gates and traps, and those rules load with it:
 
-- **`maxon-bin/AGENTS.md`** — the compiler: how to build it, the seed, the two-self-compiles rule, the
+- **`maxon-bin/AGENTS.md`** — the compiler: how to build it, the seed, one self-compile (two only for an emitted-runtime change), the
   `maxon` MCP tools, targets, `spec-test`, `tests/`, `fmt`, the error-code registry, spec fragments.
   `stdlib/`, `specs/`, `tests/`, `scripts/` and `examples/` import it, because work there is compiler work.
 - **the `compiler-workflow` skill** — the long procedures: the `run_scale_test` ladder, `fixpoint.sh`,
