@@ -1,0 +1,343 @@
+typealias ByteSum = int(0 to u64.max)
+
+let RealStubVariable = "MAXON_PROXY_REAL_STUB"
+let ModeVariable = "MAXON_PROXY_MODE"
+let InjectAfterVariable = "MAXON_PROXY_INJECT_AFTER"
+let InjectPayloadVariable = "MAXON_PROXY_INJECT"
+let TraceVariable = "MAXON_PROXY_TRACE"
+let AnswerMode = "answer"
+let LateHaltMode = "late-halt"
+
+let ReverseConnectOption = "-R"
+let Loopback = "127.0.0.1"
+let HostPortSeparator = ":"
+let PacketStart = "$"
+let PacketEnd = "#"
+let ChecksumModulus = 256
+let InterruptByte = 3
+
+let PollMs = 2
+let ConnectBudgetMs = 20000
+let StubExitBudgetMs = 3000
+let ReceiveBytes = 65536
+
+union Pulled
+	data(text String)
+	idle
+	closed
+end 'Pulled'
+
+union Scenario
+	answers(after String, payload String)
+	lateHalt
+end 'Scenario'
+
+type Endpoint
+	export let host as String
+	export let port as NetworkPort
+
+	static function create(host String, port NetworkPort) returns Endpoint
+		return Self{host: host, port: port}
+	end 'create'
+end 'Endpoint'
+
+type Relay
+	var driver as TcpClient
+	var stub as TcpClient
+	let scenario as Scenario
+	let trace as FilePath
+	var done as bool
+	var awaitingHalt as bool
+	var held as String
+
+	static function create(driver TcpClient, stub TcpClient, scenario Scenario, trace FilePath) returns Relay
+		return Self{driver: driver, stub: stub, scenario: scenario, trace: trace, done: false, awaitingHalt: false, held: ""}
+	end 'create'
+
+	function step() returns bool
+		var alive = true
+
+		match pull(self.driver) 'fromDriver'
+			idle then break
+			closed then alive = false
+			data(text) then alive = self.toStub(text)
+		end 'fromDriver'
+
+		match pull(self.stub) 'fromStub'
+			idle then break
+			closed then alive = false
+			data(text) then alive = self.toDriver(text) and alive
+		end 'fromStub'
+
+		return alive
+	end 'step'
+
+	function toStub(text String) returns bool
+		var alive = true
+
+		for piece in packetsOf(text) 'eachPiece'
+			alive = self.routed(piece) and alive
+		end 'eachPiece'
+
+		return alive
+	end 'toStub'
+
+	function routed(piece String) returns bool
+		return match self.scenario 'which'
+			answers(after, payload) gives self.answeredOrForwarded(piece, after: after, payload: payload)
+			lateHalt gives self.forwardedMindingTheHalt(piece)
+		end 'which'
+	end 'routed'
+
+	function answeredOrForwarded(piece String, after String, payload String) returns bool
+		if self.done or not piece.startsWith("{PacketStart}{after}") 'nothingToAnswer'
+			return sent(self.stub, text: piece)
+		end 'nothingToAnswer'
+
+		self.done = true
+		try File.writeText(self.trace, content: "answered {payload} to {piece}") otherwise panic("the stub proxy could not write its trace")
+
+		return sent(self.driver, text: framed(payload))
+	end 'answeredOrForwarded'
+
+	function forwardedMindingTheHalt(piece String) returns bool
+		if not self.done and containsInterrupt(piece) 'theInterrupt'
+			self.awaitingHalt = true
+		end 'theInterrupt'
+
+		var alive = sent(self.stub, text: piece)
+
+		if self.held.isEmpty() or not piece.startsWith(PacketStart) 'nothingToRelease'
+			return alive
+		end 'nothingToRelease'
+
+		self.done = true
+		try File.writeText(self.trace, content: "released {self.held} after {piece}") otherwise panic("the stub proxy could not write its trace")
+		alive = sent(self.driver, text: self.held) and alive
+		self.held = ""
+
+		return alive
+	end 'forwardedMindingTheHalt'
+
+	function toDriver(text String) returns bool
+		if not self.awaitingHalt 'theStubSpeaks'
+			return sent(self.driver, text: text)
+		end 'theStubSpeaks'
+
+		self.awaitingHalt = false
+		self.held = text
+
+		return true
+	end 'toDriver'
+
+	function close()
+		self.driver.close()
+		self.stub.close()
+	end 'close'
+end 'Relay'
+
+function packetsOf(text String) returns StringArray
+	var packets = StringArray.create(0)
+
+	for (iter, piece) in text.split(PacketStart).withIterator() 'eachPiece'
+		if iter.index() == 0 'beforeAnyPacket'
+			if not piece.isEmpty() 'somethingLeads'
+				packets.push(piece)
+			end 'somethingLeads'
+
+			continue
+		end 'beforeAnyPacket'
+
+		packets.push("{PacketStart}{piece}")
+	end 'eachPiece'
+
+	return packets
+end 'packetsOf'
+
+function containsInterrupt(piece String) returns bool
+	for value in piece.bytes() 'eachByte'
+		if value == InterruptByte 'theInterrupt'
+			return true
+		end 'theInterrupt'
+	end 'eachByte'
+
+	return false
+end 'containsInterrupt'
+
+function scenarioFromEnvironment() returns Scenario
+	let mode = setting(ModeVariable)
+
+	if mode == LateHaltMode 'late'
+		return Scenario.lateHalt
+	end 'late'
+
+	if mode == AnswerMode 'answering'
+		return Scenario.answers(setting(InjectAfterVariable), payload: setting(InjectPayloadVariable))
+	end 'answering'
+
+	panic("{ModeVariable} names '{mode}', which is neither {AnswerMode} nor {LateHaltMode}")
+end 'scenarioFromEnvironment'
+
+function pull(source TcpClient) returns Pulled
+	try source.setReadDeadline(PollMs) otherwise return Pulled.closed
+
+	let text = try source.recv(ReceiveBytes) otherwise (e) 'nothing'
+		if e == NetworkError.timedOut 'quiet'
+			return Pulled.idle
+		end 'quiet'
+
+		return Pulled.closed
+	end 'nothing'
+
+	return Pulled.data(text)
+end 'pull'
+
+function sent(target TcpClient, text String) returns bool
+	_ = try target.send(text) otherwise return false
+
+	return true
+end 'sent'
+
+function framed(payload String) returns String
+	var sum = 0 as ByteSum
+
+	for value in payload.bytes() 'eachByte'
+		sum = sum + (value as ByteSum)
+	end 'eachByte'
+
+	let checksum = sum mod ChecksumModulus
+
+	return "{PacketStart}{payload}{PacketEnd}{checksum:02x}"
+end 'framed'
+
+function setting(name String) returns String
+	return try Process.environmentVariable(name) otherwise panic("the stub proxy is started without {name} in its environment")
+end 'setting'
+
+function realStub() returns FilePath
+	let spelled = setting(RealStubVariable)
+
+	return try FilePath.from(spelled) otherwise panic("{RealStubVariable} names '{spelled}', which is not a path")
+end 'realStub'
+
+function traceFile() returns FilePath
+	let spelled = setting(TraceVariable)
+
+	return try FilePath.from(spelled) otherwise panic("{TraceVariable} names '{spelled}', which is not a path")
+end 'traceFile'
+
+function forwardedArguments(arguments StringArray, replacing String, by String) returns StringArray
+	var forwarded = StringArray.create(arguments.count(), zeroed: false)
+	var replaceNext = false
+
+	for (iter, argument) in arguments.withIterator() 'eachArgument'
+		if iter.index() == 0 'theProgram'
+			continue
+		end 'theProgram'
+
+		forwarded.push(by if replaceNext else argument)
+		replaceNext = argument == replacing
+	end 'eachArgument'
+
+	return forwarded
+end 'forwardedArguments'
+
+function driverEndpoint(arguments StringArray) returns Endpoint
+	var next = false
+
+	for argument in arguments 'eachArgument'
+		if next 'theAddress'
+			return endpointOf(argument)
+		end 'theAddress'
+
+		next = argument == ReverseConnectOption
+	end 'eachArgument'
+
+	panic("the stub proxy is started with {ReverseConnectOption} and an address, as the debugger starts its stub")
+end 'driverEndpoint'
+
+function endpointOf(spelled String) returns Endpoint
+	let pieces = spelled.split(HostPortSeparator)
+	let host = try pieces.get(0) otherwise panic("'{spelled}' has no host")
+	let digits = try pieces.get(1) otherwise panic("'{spelled}' has no port")
+	let port = try int.fromString(digits) otherwise panic("'{digits}' is not a port")
+
+	return Endpoint.create(host, port: port as NetworkPort)
+end 'endpointOf'
+
+function carriesReverseConnect(arguments StringArray) returns bool
+	for argument in arguments 'eachArgument'
+		if argument == ReverseConnectOption 'found'
+			return true
+		end 'found'
+	end 'eachArgument'
+
+	return false
+end 'carriesReverseConnect'
+
+function lineArrived(poll LinePoll) returns bool
+	return match poll 'which'
+		none gives false
+		line gives true
+	end 'which'
+end 'lineArrived'
+
+function drainedOutput(stub StreamingSubprocess)
+	var moved = true
+
+	while moved 'eachRound'
+		let out = lineArrived(try stub.tryReadStdoutLine() otherwise panic("the real stub's stdout is out with a reader"))
+		let err = lineArrived(stub.tryReadStderrLine())
+		moved = out or err
+	end 'eachRound'
+end 'drainedOutput'
+
+function probed(arguments StringArray) returns ExitCode
+	let ran = try Subprocess.run(Executable.path(realStub()), arguments: forwardedArguments(arguments, replacing: ReverseConnectOption, by: "")) otherwise panic("the real stub could not run")
+	print(ran.stdout)
+	printError(ran.stderr)
+
+	return 0
+end 'probed'
+
+function served(arguments StringArray) returns ExitCode
+	let driver = driverEndpoint(arguments)
+	let door = try TcpListener.bind(Loopback, port: 0) otherwise panic("the stub proxy could not listen")
+	let proxied = forwardedArguments(arguments, replacing: ReverseConnectOption, by: "{Loopback}{HostPortSeparator}{door.port()}")
+	var stub = try StreamingSubprocess.spawn(Executable.path(realStub()), arguments: proxied) otherwise panic("the real stub could not start")
+	stub.closeStdin()
+
+	try door.setAcceptDeadline(ConnectBudgetMs) otherwise panic("the stub proxy could not put a deadline on its door")
+	let stubSocket = try door.accept() otherwise panic("the real stub did not connect to the proxy")
+
+	return relayed(stub, stubSocket: stubSocket, driver: driver, scenario: scenarioFromEnvironment())
+end 'served'
+
+function relayed(stub StreamingSubprocess, stubSocket TcpClient, driver Endpoint, scenario Scenario) returns ExitCode
+	let driverSocket = try TcpClient.connect(driver.host, port: driver.port, deadlineMs: ConnectBudgetMs) otherwise panic("the stub proxy could not reach the debugger")
+	var relay = Relay.create(driverSocket, stub: stubSocket, scenario: scenario, trace: traceFile())
+
+	while relay.step() 'relaying'
+		drainedOutput(stub)
+	end 'relaying'
+
+	relay.close()
+
+	try stub.waitWithTimeout(StubExitBudgetMs) otherwise 'late'
+		_ = stub.endTree()
+	end 'late'
+
+	stub.release()
+
+	return 0
+end 'relayed'
+
+function main() returns ExitCode
+	let arguments = CommandLine.args()
+
+	if not carriesReverseConnect(arguments) 'theProbe'
+		return probed(arguments)
+	end 'theProbe'
+
+	return served(arguments)
+end 'main'

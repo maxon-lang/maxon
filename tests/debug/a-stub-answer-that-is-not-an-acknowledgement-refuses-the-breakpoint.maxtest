@@ -1,0 +1,28 @@
+let NotAcknowledgedBreakpointCaseLabel = "a-stub-answer-that-is-not-an-acknowledgement-refuses-the-breakpoint"
+
+let NotAcknowledgedHotAnchorName = "hot"
+let PlantRequestPrefix = "Z0"
+let AnotherRequestsAnswer = "PacketSize=4000"
+let PlantTraceFileName = "proxy-trace.txt"
+let RemoteStubLaneTriple = "arm64-macos"
+
+test 'a breakpoint request the stub answers with anything but an acknowledgement is refused, never reported as set'
+	#if os(Macos)
+		let staged = builtFixture(NotAcknowledgedBreakpointCaseLabel, fixture: HeaplessFixtureName)
+		let proxies = stubProxyDirectory(NotAcknowledgedBreakpointCaseLabel)
+		let trace = staged.join(PlantTraceFileName)
+		let hotLine = anchorLine(staged.join(StagedProgramFileName), anchor: NotAcknowledgedHotAnchorName)
+		let commands = debugCommandLine(["{BreakCommand} {lineTarget(hotLine)}"])
+		let session = boundedDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0), environment: answeringProxyEnvironment(proxies, trace: trace, after: PlantRequestPrefix, answer: AnotherRequestsAnswer), timeoutMs: ProxiedSessionBoundMs)
+		let events = batchEvents(session.stdoutText())
+		let kinds = eventKinds(events)
+		let said = renderedEvents(session.stdoutText(), stderr: session.stderrText())
+
+		Expect.isTrue(session.endedInTime(), message: "the session {session.exitText()}. It printed: {listedLines(kinds)}. {said}")
+		Expect.isTrue(File.exists(trace), message: "the stub proxy never answered a `{PlantRequestPrefix}` request with {AnotherRequestsAnswer}, so the case measured nothing. It printed: {listedLines(kinds)}. {said}")
+		Expect.equal(breakpointAnswersWithAction(events, action: SetAction), expected: 0, message: "⭐ ONLY AN ACKNOWLEDGEMENT PLANTS A BREAKPOINT. The stub answered the request to plant it with a reply that belongs to another request and the debugger reported the breakpoint set. It printed: {listedLines(kinds)}. {said}")
+		Expect.equal(breakpointAnswersWithAction(events, action: RefusedAction), expected: 1, message: "the breakpoint the stub did not acknowledge must be answered refused. It printed: {listedLines(kinds)}. {said}")
+	#else
+		Expect.isFalse(hostTargetTriple() == RemoteStubLaneTriple, message: "only the arm64-macos lane drives a program through a stub it can be put in front of, and runs the case above.")
+	#endif
+end 'a breakpoint request the stub answers with anything but an acknowledgement is refused, never reported as set'

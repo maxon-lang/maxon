@@ -1,0 +1,25 @@
+let ProcessListingTool = "ps"
+let ProcessListingMs = 10000
+let ProcessListingColumns = "pid,ppid,pgid,stat,etime,args"
+let ProcessListingOption = "-axo"
+let StubProcessName = "debugserver"
+
+export function processSnapshot(matching String) returns String
+	#if os(Windows)
+		return "(this host has no process listing to search for {matching})"
+	#else
+		let listed = try Subprocess.run(Executable.name(ProcessListingTool), arguments: [ProcessListingOption, ProcessListingColumns], timeoutMs: ProcessListingMs) otherwise (e) 'noListing'
+			return "(the process listing could not run: {e.displayReason()})"
+		end 'noListing'
+
+		var kept = StringArray.create(0)
+
+		for line in outputLines(listed.stdout) 'eachProcess'
+			if line.contains(matching) or line.contains(StubProcessName) 'relevant'
+				kept.push(line)
+			end 'relevant'
+		end 'eachProcess'
+
+		return "{kept.count()} process(es) name {matching} or {StubProcessName}:{LineFeed}{listedLines(kept)}"
+	#endif
+end 'processSnapshot'

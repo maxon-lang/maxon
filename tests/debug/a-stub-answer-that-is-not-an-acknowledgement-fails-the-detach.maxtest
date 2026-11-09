@@ -1,0 +1,34 @@
+let NotAcknowledgedDetachCaseLabel = "a-stub-answer-that-is-not-an-acknowledgement-fails-the-detach"
+
+let NotAcknowledgedDetachAnchorName = "hot"
+let DetachRequestPrefix = "D"
+let AnotherRequestsDetachAnswer = "PacketSize=4000"
+let DetachTraceFileName = "proxy-trace.txt"
+let DetachRemoteStubLaneTriple = "arm64-macos"
+
+test 'a detach the stub answers with anything but an acknowledgement is reported as failed, never as the program let go'
+	#if os(Macos)
+		let staged = builtFixture(NotAcknowledgedDetachCaseLabel, fixture: HeaplessFixtureName)
+		let proxies = stubProxyDirectory(NotAcknowledgedDetachCaseLabel)
+		let trace = staged.join(DetachTraceFileName)
+		let hotLine = anchorLine(staged.join(StagedProgramFileName), anchor: NotAcknowledgedDetachAnchorName)
+		let commands = debugCommandLine(["{BreakCommand} {lineTarget(hotLine)}", RunCommand, DetachCommand])
+		let session = boundedDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0), environment: answeringProxyEnvironment(proxies, trace: trace, after: DetachRequestPrefix, answer: AnotherRequestsDetachAnswer), timeoutMs: ProxiedSessionBoundMs)
+		let events = batchEvents(session.stdoutText())
+		let kinds = eventKinds(events)
+		let said = renderedEvents(session.stdoutText(), stderr: session.stderrText())
+
+		Expect.isTrue(session.endedInTime(), message: "⭐ A PROGRAM THE DEBUGGER BELIEVES IT HAS LET GO MUST BE ONE THE STUB HAS RELEASED. The session {session.exitText()}. It printed: {listedLines(kinds)}. {said}")
+		Expect.isTrue(File.exists(trace), message: "the stub proxy never answered a `{DetachRequestPrefix}` request with {AnotherRequestsDetachAnswer}, so the case measured nothing. It printed: {listedLines(kinds)}. {said}")
+		Expect.equal(eventsOfKind(events, kind: StopEventName).count(), expected: 1, message: "the program must be stopped at its breakpoint when the detach is asked for. It printed: {listedLines(kinds)}. {said}")
+
+		let errors = eventsOfKind(events, kind: ErrorEventName)
+		Expect.equal(errors.count(), expected: 1, message: "⭐ ONLY AN ACKNOWLEDGEMENT LETS A PROGRAM GO. The stub answered the detach with a reply that belongs to another request and the debugger reported the program released. It printed: {listedLines(kinds)}. {said}")
+
+		let refusal = eventAt(errors, index: 0)
+		Expect.contains(textOf(refusal, node: refusal.root, key: MessageKey), needle: DetachCommand, message: "the refusal names the command that failed. {said}")
+		Expect.contains(session.stderrText(), needle: AnotherRequestsDetachAnswer, message: "the session must say what the stub answered in place of an acknowledgement, so a recurrence carries its own evidence. {said}")
+	#else
+		Expect.isFalse(hostTargetTriple() == DetachRemoteStubLaneTriple, message: "only the arm64-macos lane drives a program through a stub it can be put in front of, and runs the case above.")
+	#endif
+end 'a detach the stub answers with anything but an acknowledgement is reported as failed, never as the program let go'

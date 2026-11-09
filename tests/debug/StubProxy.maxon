@@ -1,0 +1,76 @@
+let StubProxyFixtureName = "stubproxy"
+export let ProxiedSessionBoundMs = 60000
+
+let DebugServerName = "debugserver"
+let RealStubVariable = "MAXON_PROXY_REAL_STUB"
+let InjectAfterVariable = "MAXON_PROXY_INJECT_AFTER"
+let InjectPayloadVariable = "MAXON_PROXY_INJECT"
+let TraceVariable = "MAXON_PROXY_TRACE"
+let ModeVariable = "MAXON_PROXY_MODE"
+let AnswerMode = "answer"
+let LateHaltMode = "late-halt"
+let PathVariableName = "PATH"
+let PathEntrySeparator = ":"
+
+let CommandLineToolsStub = "/Library/Developer/CommandLineTools/Library/PrivateFrameworks/LLDB.framework/Versions/A/Resources/debugserver"
+let DeveloperDirectoryCommand = "xcode-select"
+let DeveloperDirectoryOption = "--print-path"
+let DeveloperStubTail = "/../SharedFrameworks/LLDB.framework/Versions/A/Resources/debugserver"
+
+export function stubProxyDirectory(caseLabel String) returns FilePath
+	let staged = builtFixture("{caseLabel}-proxy", fixture: StubProxyFixtureName)
+	let bytes = try File.readBinary(builtExecutable(staged)) otherwise panic("the gate could not run — the built stub proxy cannot be read.")
+
+	try File.writeBinary(staged.join(DebugServerName), content: bytes, mode: FilePermission.executable) otherwise panic("the gate could not run — the stub proxy cannot be named {DebugServerName} beside its build.")
+
+	return staged
+end 'stubProxyDirectory'
+
+export function answeringProxyEnvironment(proxyDirectory FilePath, trace FilePath, after String, answer String) returns Environment
+	var overrides = proxyOverrides(proxyDirectory, trace: trace, mode: AnswerMode)
+	overrides.upsert(InjectAfterVariable, value: after)
+	overrides.upsert(InjectPayloadVariable, value: answer)
+
+	return Environment.inheritUpdating(overrides)
+end 'answeringProxyEnvironment'
+
+export function lateHaltProxyEnvironment(proxyDirectory FilePath, trace FilePath) returns Environment
+	return Environment.inheritUpdating(proxyOverrides(proxyDirectory, trace: trace, mode: LateHaltMode))
+end 'lateHaltProxyEnvironment'
+
+function proxyOverrides(proxyDirectory FilePath, trace FilePath, mode String) returns EnvMap
+	let inherited = try Process.environmentVariable(PathVariableName) otherwise ""
+	var overrides = EnvMap.create()
+	overrides.upsert(PathVariableName, value: "{proxyDirectory.toString()}{PathEntrySeparator}{inherited}")
+	overrides.upsert(RealStubVariable, value: realDebugServer().toString())
+	overrides.upsert(TraceVariable, value: trace.toString())
+	overrides.upsert(ModeVariable, value: mode)
+
+	return overrides
+end 'proxyOverrides'
+
+function realDebugServer() returns FilePath
+	for candidate in realStubCandidates() 'eachCandidate'
+		let path = try FilePath.from(candidate) otherwise continue
+
+		if File.exists(path) 'thisOne'
+			return path
+		end 'thisOne'
+	end 'eachCandidate'
+
+	panic("the gate could not run — this host has no {DebugServerName} to put the stub proxy in front of.")
+end 'realDebugServer'
+
+function realStubCandidates() returns StringArray
+	var candidates = StringArray.create(2, zeroed: false)
+	candidates.push(CommandLineToolsStub)
+
+	let asked = try Subprocess.run(Executable.name(DeveloperDirectoryCommand), arguments: [DeveloperDirectoryOption]) otherwise return candidates
+	let developer = asked.stdout.trim()
+
+	if not developer.isEmpty() 'thereIsADeveloperDirectory'
+		candidates.push("{developer}{DeveloperStubTail}")
+	end 'thereIsADeveloperDirectory'
+
+	return candidates
+end 'realStubCandidates'

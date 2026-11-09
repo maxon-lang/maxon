@@ -285,7 +285,7 @@ end 'CodeRangeLookup'
 // SPAWNING THE DRIVER'S THREE FACES
 // ============================================================================================
 
-export function spawnDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray) returns CollectedOutput
+function debugBatchArguments(executable FilePath, commands String, extraOptions StringArray) returns StringArray
 	var arguments = StringArray.create(0)
 	arguments.push(DebugSubcommandName)
 	arguments.push(DebugBatchOption)
@@ -297,8 +297,78 @@ export function spawnDebugBatch(executable FilePath, staged FilePath, commands S
 
 	arguments.push(executable.toString())
 
-	return spawnCompiler(arguments, staged: staged, what: "`{DebugSubcommandName} {DebugBatchOption}`")
+	return arguments
+end 'debugBatchArguments'
+
+export function spawnDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray, environment Environment = Environment.inherit, timeoutMs DurationMs = NoTimeoutMs) returns CollectedOutput
+	return spawnCompiler(debugBatchArguments(executable, commands: commands, extraOptions: extraOptions), staged: staged, what: "`{DebugSubcommandName} {DebugBatchOption}`", environment: environment, timeoutMs: timeoutMs)
 end 'spawnDebugBatch'
+
+export union BoundedSession
+	finished(run CollectedOutput)
+	cutOff(stdout String, stderr String, elapsedMs DurationMs)
+
+	export function endedInTime() returns bool
+		return match self 'which'
+			finished gives true
+			cutOff gives false
+		end 'which'
+	end 'endedInTime'
+
+	export function stdoutText() returns String
+		return match self 'which'
+			finished(run) gives run.stdout
+			cutOff(out, _, _) gives out
+		end 'which'
+	end 'stdoutText'
+
+	export function stderrText() returns String
+		return match self 'which'
+			finished(run) gives run.stderr
+			cutOff(_, err, _) gives err
+		end 'which'
+	end 'stderrText'
+
+	export function elapsedMs() returns DurationMs
+		return match self 'which'
+			finished(run) gives run.durationMs
+			cutOff(_, _, elapsedMs) gives elapsedMs
+		end 'which'
+	end 'elapsedMs'
+
+	export function exitText() returns String
+		return match self 'which'
+			finished(run) gives "exited {run.exitCode()} after {run.durationMs} ms"
+			cutOff(_, _, elapsedMs) gives "was still running at its {elapsedMs} ms deadline and was killed with its process tree"
+		end 'which'
+	end 'exitText'
+end 'BoundedSession'
+
+export function boundedDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray, environment Environment, timeoutMs DurationMs) returns BoundedSession
+	var config = Configuration.create(Executable.path(testedCompilerPath()), workingDirectory: staged)
+	config.arguments = debugBatchArguments(executable, commands: commands, extraOptions: extraOptions)
+	config.environment = environment
+	config.timeoutMs = timeoutMs
+
+	let run = try config.run() otherwise (failure) 'notFinished'
+		return cutOffBy(failure)
+	end 'notFinished'
+
+	return BoundedSession.finished(run)
+end 'boundedDebugBatch'
+
+function cutOffBy(failure SubprocessError) returns BoundedSession
+	match failure 'which'
+		timeout(elapsedMs, out, err) then return BoundedSession.cutOff(out, stderr: err, elapsedMs: elapsedMs)
+		treeNotEnded(elapsedMs, out, err, _) then return BoundedSession.cutOff(out, stderr: err, elapsedMs: elapsedMs)
+		executableNotFound or
+		spawnFailed or
+		ioFailed or
+		detachRefused or
+		inputTooLarge or
+		endOfStream then panic("the gate could not run — the debug session could not run ({failure.displayReason()}).")
+	end 'which'
+end 'cutOffBy'
 
 export function spawnDebugComplete(executable FilePath, staged FilePath, partial String) returns CollectedOutput
 	var arguments = StringArray.create(0)

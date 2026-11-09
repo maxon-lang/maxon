@@ -1,0 +1,29 @@
+let EndedDetachCaseLabel = "a-stub-report-that-the-program-ended-fails-a-waiting-detach-at-once"
+
+let EndedDetachAnchorName = "hot"
+let EndedDetachRequestPrefix = "D"
+let ExitReportInPlaceOfTheAnswer = "W2a"
+let EndedDetachTraceFileName = "proxy-trace.txt"
+let EndedDetachPatienceMs = 15000
+let EndedDetachLaneTriple = "arm64-macos"
+
+test 'a detach whose answer is the stub report that the program ended is refused at once, not after the stub reply budget'
+	#if os(Macos)
+		let staged = builtFixture(EndedDetachCaseLabel, fixture: HeaplessFixtureName)
+		let proxies = stubProxyDirectory(EndedDetachCaseLabel)
+		let trace = staged.join(EndedDetachTraceFileName)
+		let hotLine = anchorLine(staged.join(StagedProgramFileName), anchor: EndedDetachAnchorName)
+		let commands = debugCommandLine(["{BreakCommand} {lineTarget(hotLine)}", RunCommand, DetachCommand])
+		let session = boundedDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0), environment: answeringProxyEnvironment(proxies, trace: trace, after: EndedDetachRequestPrefix, answer: ExitReportInPlaceOfTheAnswer), timeoutMs: ProxiedSessionBoundMs)
+		let events = batchEvents(session.stdoutText())
+		let kinds = eventKinds(events)
+		let said = renderedEvents(session.stdoutText(), stderr: session.stderrText())
+
+		Expect.isTrue(session.endedInTime(), message: "the session {session.exitText()}. It printed: {listedLines(kinds)}. {said}")
+		Expect.isTrue(File.exists(trace), message: "the stub proxy never answered a `{EndedDetachRequestPrefix}` request with {ExitReportInPlaceOfTheAnswer}, so the case measured nothing. It printed: {listedLines(kinds)}. {said}")
+		Expect.equal(eventsOfKind(events, kind: ErrorEventName).count(), expected: 1, message: "⭐ A REPORT THAT THE PROGRAM ENDED IS NOT AN ACKNOWLEDGEMENT. The detach the stub answered with one must be reported failed. It printed: {listedLines(kinds)}. {said}")
+		Expect.atMost(session.elapsedMs(), than: EndedDetachPatienceMs, message: "⭐ NOTHING MORE IS COMING ONCE THE STUB HAS REPORTED THE PROGRAM ENDED. The detach waited for a reply that could not follow the report, and the session ran {session.elapsedMs()} ms. It printed: {listedLines(kinds)}. {said}")
+	#else
+		Expect.isFalse(hostTargetTriple() == EndedDetachLaneTriple, message: "only the arm64-macos lane drives a program through a stub it can be put in front of, and runs the case above.")
+	#endif
+end 'a detach whose answer is the stub report that the program ended is refused at once, not after the stub reply budget'

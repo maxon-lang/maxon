@@ -181,6 +181,8 @@ tests/
     DebugHarness.maxon                      the shared half: the spawn, the staging, the folds, the event reader
     ImageIdentity.maxon                     the byte-identity half: one source and one output path built repeatedly, each image kept aside and compared
     ImageHeaders.maxon                      the image-format half: where an ELF, a PE or a Mach-O puts `.text`, read from the file's own headers
+    ProcessSnapshot.maxon                   `processSnapshot`: the `ps` rows that name a program or its `debugserver`, for a failure message
+    StubProxy.maxon                         the scripted-stub half: `fixtures/stubproxy` built as an executable named `debugserver`, and the environments that put it first on `PATH` for one session
     sidecar-dump.maxtest                    the sidecar says something TRUE about the binary beside it
     byte-identical-debug-info.maxtest       the sidecar never decides an instruction, so the image is the same with and without it
     byte-identical-debug-info-under-inlining.maxtest      a program full of spliced bodies with folded and dead locals builds the same image with and without its sidecar
@@ -204,6 +206,10 @@ tests/
     a-sidecar-names-the-globals-and-layout-tables.maxtest      the sidecar publishes the `.data` words and the record geometry a foreign debugger reads by
     a-detached-program-runs-to-completion.maxtest      `detach` leaves the program running and the session reports its own ending
     a-detach-removes-the-attachable-copy.maxtest       a session that detaches leaves no re-signed copy of the program beside it
+    a-stub-answer-that-is-not-an-acknowledgement-fails-the-detach.maxtest      through the stub proxy, a `D` answered with another request's reply fails the detach and names the reply on stderr
+    a-stub-answer-that-is-not-an-acknowledgement-refuses-the-breakpoint.maxtest      through the stub proxy, a `Z0` answered with another request's reply is refused and never reported set
+    a-stub-report-that-the-program-ended-fails-a-waiting-detach-at-once.maxtest      through the stub proxy, a `D` answered with an exit report fails at once rather than after the reply budget
+    a-stop-the-stub-reports-late-is-held-and-reported-and-not-taken-for-an-answer.maxtest      through the stub proxy, a halt that follows an abandoned interrupt is held, reported, and not taken for the next request's answer
     a-fault-stops-before-it-is-passed-on.maxtest      a fault stops the debugger first and reaches the runtime at the resume
     a-breakpoint-past-any-fixed-table-size-is-armed.maxtest      the number of instructions armed at once is bounded by the program alone
     a-roster-past-any-fixed-window-lists-every-worker.maxtest      a listing answers for every live green thread, however many there are

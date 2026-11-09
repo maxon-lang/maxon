@@ -102,16 +102,12 @@ module type GdbRemoteConnection
 	end 'close'
 
 	module function ask(payload String) returns GdbAnswer
-		return self.askWithin(payload, budgetMs: GdbReplyBudgetMs)
-	end 'ask'
-
-	module function askWithin(payload String, budgetMs GdbWaitMs) returns GdbAnswer
 		if not self.writePacket(payload) 'theSocketRefused'
 			return GdbAnswer.broken("the debugger could not send '{payload}' to the debug stub")
 		end 'theSocketRefused'
 
-		return self.answerWithin(budgetMs)
-	end 'askWithin'
+		return self.answerWithin(GdbReplyBudgetMs)
+	end 'ask'
 
 	module function answerWithin(budgetMs GdbWaitMs) returns GdbAnswer
 		match self.readPacket(budgetMs) 'read'
@@ -373,7 +369,7 @@ end 'GdbHexRead'
 
 let GdbMaxRegisterRosterSize = 256
 
-let GdbReplyBudgetMs = 20000
+module let GdbReplyBudgetMs = 20000
 
 let GdbPacketOverheadBytes = 4
 
