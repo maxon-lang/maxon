@@ -940,6 +940,75 @@ end 'arm64PosixEmitPpoll'
 // mrt_host_proc_reap(x0 = object, x1 = blocking) -> x0 = signalled
 // ==========================================================================
 
+// `childAndItsTracees` waits on the child's process group with `__WALL`, discarding any other
+// member it reaps, until the child itself is reaped. A thread of the child that died while this
+// process traced it is reported only to its tracer, and Linux withholds the leader's status until
+// every thread is reaped, so a `wait4(pid)` on the leader alone blocks forever. The group holds no
+// other child of ours, because every child leads its own; a group wait that errors (the child left
+// its group) falls back to the pid. `childAlone` is Darwin's, whose runtime traces no child.
+export enum PosixReapScope
+	childAlone
+	childAndItsTracees
+end 'PosixReapScope'
+
+function arm64PosixEmitNoteGroupWait(asm Arm64RuntimeAsm, scope PosixReapScope, flagSlot StackSize)
+	match scope 'scope'
+		childAlone then return
+		childAndItsTracees then break
+	end 'scope'
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: Win32True as MachineWord)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: flagSlot)
+end 'arm64PosixEmitNoteGroupWait'
+
+function arm64PosixEmitGroupWaitOperands(asm Arm64RuntimeAsm, scope PosixReapScope, flagSlot StackSize)
+	match scope 'scope'
+		childAlone then return
+		childAndItsTracees then break
+	end 'scope'
+
+	let childOnly = asm.newLabel()
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: flagSlot)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: childOnly)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x4, rhs: Arm64Register.x0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: LinuxWaitAllClones as MachineWord)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x2, lhs: Arm64Register.x2, rhs: Arm64Register.x4)
+
+	asm.placeLabel(childOnly)
+end 'arm64PosixEmitGroupWaitOperands'
+
+function arm64PosixEmitGroupWaitVerdict(asm Arm64RuntimeAsm, scope PosixReapScope, flagSlot StackSize, objSlot StackSize, issue BlockId, reaped BlockId)
+	match scope 'scope'
+		childAlone then return
+		childAndItsTracees then break
+	end 'scope'
+
+	let childOnly = asm.newLabel()
+	let groupGone = asm.newLabel()
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: flagSlot)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: childOnly)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: groupGone)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: childOnly)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixChildPidMask)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x3)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: objSlot)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x1, byteOffset: PosixWaitOffChildPid)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: reaped)
+	arm64EmitBranchTo(asm, label: issue)
+
+	asm.placeLabel(groupGone)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: flagSlot)
+	arm64EmitBranchTo(asm, label: issue)
+
+	asm.placeLabel(childOnly)
+end 'arm64PosixEmitGroupWaitVerdict'
+
 // The ONE place a child's status is taken — `PosixWaitOffChildStatus` carries the reap-once rule that makes
 // it one place, and the cache it is taken into.
 //
@@ -949,15 +1018,17 @@ end 'arm64PosixEmitPpoll'
 // ⚠ **x3 IS SET FOR A FOURTH ARGUMENT ONLY ONE ROUTE HAS.** Linux's `wait4` takes a `struct rusage *` there
 // and NULL discards it; Darwin's `waitpid` is a three-argument call that never reads the register. Setting it
 // on both is one instruction and is what lets the two share this body.
-export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns FunctionCodeChunk
+export function buildArm64PosixProcReapChunk(wait PosixHostCall, scope PosixReapScope) returns FunctionCodeChunk
 	let SlotObj = 0
 	let SlotBlocking = 1
 	let SlotStatus = 2
-	var asm = Arm64RuntimeAsm.beginFunction(3)
+	let SlotGroupWait = 3
+	var asm = Arm64RuntimeAsm.beginFunction(4)
 
 	let alreadySignalled = asm.newLabel()
 	let issue = asm.newLabel()
 	let stillRunning = asm.newLabel()
+	let reaped = asm.newLabel()
 	let statusChosen = asm.newLabel()
 	let decode = asm.newLabel()
 	let bySignal = asm.newLabel()
@@ -966,6 +1037,7 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBlocking)
+	arm64PosixEmitNoteGroupWait(asm, scope: scope, flagSlot: SlotGroupWait)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x2, label: alreadySignalled)
 
@@ -979,8 +1051,10 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: PosixReapWithoutBlocking)
 	arm64EmitCset(asm.code, rd: arm64RuntimeReg(Arm64Register.x2), cond: Arm64CondCode.eq)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixReapDiscardsRusage)
+	arm64PosixEmitGroupWaitOperands(asm, scope: scope, flagSlot: SlotGroupWait)
 	arm64PosixEmitHostCall(asm, call: wait)
 	arm64PosixEmitBranchIfCallInterrupted(asm, call: wait, whenInterrupted: issue)
+	arm64PosixEmitGroupWaitVerdict(asm, scope: scope, flagSlot: SlotGroupWait, objSlot: SlotObj, issue: issue, reaped: reaped)
 
 	// The wait answers the reaped pid, 0 (nothing to report yet, `WNOHANG`) or -1. Only the pid means the
 	// child has been taken, and the comparison is on the low 32 bits because `pid_t` is a C `int`.
@@ -991,6 +1065,7 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: stillRunning)
 
+	asm.placeLabel(reaped)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotObj)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotStatus)
 	arm64EmitLoadWord32At(asm, dest: Arm64Register.x3, base: Arm64Register.x2, byteOffset: 0)
@@ -1203,45 +1278,53 @@ end 'arm64PosixEmitReapedField'
 // `TerminateProcess(h, exitCode)` — `kill(-pgid, SIGKILL)`, plus the one thing POSIX cannot carry
 // across a signal: the code the caller named. It is recorded in the object once the kill is
 // delivered or finds the group gone (`ESRCH`), for the reap to report on a SIGKILL status
-// (`PosixSignalExitCodeBase`). A child already reaped, or a group already gone, answers TRUE: there
-// is nothing left to kill.
+// (`PosixSignalExitCodeBase`).
 //
-// ⭐⭐ **THE PID IS NEGATED, AND THAT IS THE WHOLE PROCESS-TREE KILL ON BOTH ARM64 POSIX LANES.** A NEGATIVE
-// pid names a process GROUP, and every child this runtime spawns leads one — a detached child through
-// `setsid`, every other through `setpgid(0, 0)` in the Linux lane's cloned child or `POSIX_SPAWN_SETPGROUP`
-// in the Darwin lane's spawnattr — so its pid IS its group and the signal reaches every descendant it
-// started.
+// A child already reaped still has its group killed: a group outlives its leader, and the kernel
+// hands out no group id while a member lives, so `kill(-pid)` reaches only that group. `ESRCH`
+// means nothing is left. A refused kill answers TRUE with `PosixTerminateTreeIncomplete`, so the
+// caller reports `ioFailed` rather than a clean timeout.
+//
+// A TRUE answer carries `PosixTerminateTreeIncomplete` when `mrt_host_proc_tree_kill` could not
+// end the whole tree. The caller reads FALSE as nothing left to kill and polls rather than waits,
+// so a tree failure must never turn a delivered kill's answer FALSE.
+//
+// The pid is negated: a negative pid names a process group, and every child this runtime spawns
+// leads one — a detached child through `setsid`, every other through `setpgid(0, 0)` in the Linux
+// lane's cloned child or `POSIX_SPAWN_SETPGROUP` in the Darwin lane's spawnattr — so its pid is its
+// group. A descendant leading a group of its own, as every Maxon grandchild does, is out of that
+// group's reach, which is why `mrt_host_proc_tree_kill` runs first.
 //
 // ⛔⛔ **AND A ZERO PID IS SKIPPED RATHER THAN NEGATED.** `kill(0, …)` signals the CALLER's OWN group, so a
 // record whose pid was never filled would kill this process and every sibling it shares a group with.
 export function buildArm64PosixProcTerminateChunk(kill PosixHostCall) returns FunctionCodeChunk
 	let SlotObj = 0
 	let SlotCode = 1
-	var asm = Arm64RuntimeAsm.beginFunction(2)
+	let SlotTreeBit = 2
+	var asm = Arm64RuntimeAsm.beginFunction(3)
 	let noChild = asm.newLabel()
 	let delivered = asm.newLabel()
 	let nothingLeftToKill = asm.newLabel()
+	let reapedGroup = asm.newLabel()
+	let reapedRefused = asm.newLabel()
 	let answered = asm.newLabel()
+	let refused = asm.newLabel()
 
 	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCode)
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
-	arm64EmitCbnzTo(asm, reg: Arm64Register.x2, label: nothingLeftToKill)
-
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: noChild)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
-	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x2, rhs: Arm64Register.x0)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixSigKill)
-	arm64PosixEmitHostCallErrno(asm, call: kill)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotTreeBit)
 
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: delivered)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: delivered)
-	arm64PosixEmitStashFailure(asm, call: kill)
-	arm64EmitWin32BoolFromZeroStatus(asm)
-	arm64EmitBranchTo(asm, label: answered)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x2, label: noChild)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x3, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x3, label: reapedGroup)
+
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x2)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcTreeKillName)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotTreeBit)
+	arm64PosixEmitGroupKillVerdict(asm, kill: kill, objSlot: SlotObj, groupGone: delivered, refusedTo: answered)
 
 	asm.placeLabel(delivered)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
@@ -1254,13 +1337,264 @@ export function buildArm64PosixProcTerminateChunk(kill PosixHostCall) returns Fu
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
 
+	asm.placeLabel(reapedGroup)
+	arm64PosixEmitGroupKillVerdict(asm, kill: kill, objSlot: SlotObj, groupGone: nothingLeftToKill, refusedTo: reapedRefused)
+
+	asm.placeLabel(reapedRefused)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixTerminateTreeIncomplete as MachineWord)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotTreeBit)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
 	asm.placeLabel(noChild)
 	arm64PosixEmitPublishErrno(asm, call: kill, value: PosixErrno.noSuchProcess.rawValue)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
 
 	asm.placeLabel(answered)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: refused)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTreeBit)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpOrr, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+
+	asm.placeLabel(refused)
 	return asm.finishFunction(HostProcTerminateName)
 end 'buildArm64PosixProcTerminateChunk'
+
+function arm64PosixEmitGroupKillVerdict(asm Arm64RuntimeAsm, kill PosixHostCall, objSlot StackSize, groupGone BlockId, refusedTo BlockId)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: objSlot)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x2, rhs: Arm64Register.x0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixSigKill)
+	arm64PosixEmitHostCallErrno(asm, call: kill)
+
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: groupGone)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: groupGone)
+	arm64PosixEmitStashFailure(asm, call: kill)
+	arm64EmitWin32BoolFromZeroStatus(asm)
+	arm64EmitBranchTo(asm, label: refusedTo)
+end 'arm64PosixEmitGroupKillVerdict'
+
+export union PosixTreeLane
+	linux(errnoHome LinuxErrnoHome)
+	macos
+end 'PosixTreeLane'
+
+function posixTreeStopSignal(lane PosixTreeLane) returns MachineWord
+	return match lane 'lane'
+		linux gives posixStopSignalNumber(Os.linux)
+		macos gives posixStopSignalNumber(Os.macos)
+	end 'lane'
+end 'posixTreeStopSignal'
+
+export function arm64PosixEmitTreeStop(asm Arm64RuntimeAsm, kill PosixHostCall, lane PosixTreeLane, pidSlot StackSize)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: pidSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: posixTreeStopSignal(lane))
+	arm64PosixEmitHostCall(asm, call: kill)
+end 'arm64PosixEmitTreeStop'
+
+function arm64PosixEmitSessionOf(asm Arm64RuntimeAsm, lane PosixTreeLane, pidSlot StackSize)
+	match lane 'lane'
+		linux then arm64LinuxEmitSessionOf(asm, pidSlot: pidSlot)
+		macos then arm64DarwinEmitSessionOf(asm, pidSlot: pidSlot)
+	end 'lane'
+end 'arm64PosixEmitSessionOf'
+
+function arm64PosixEmitBranchIfSessionRootGone(asm Arm64RuntimeAsm, lane PosixTreeLane, gone BlockId)
+	match lane 'lane'
+		linux then arm64LinuxEmitBranchIfSessionRootGone(asm, gone: gone)
+		macos then arm64DarwinEmitBranchIfSessionRootGone(asm, gone: gone)
+	end 'lane'
+end 'arm64PosixEmitBranchIfSessionRootGone'
+
+function arm64PosixEmitStashSessionFailure(asm Arm64RuntimeAsm, lane PosixTreeLane)
+	match lane 'lane'
+		linux(errnoHome) then arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
+		macos then arm64DarwinEmitStashIfStatusFailed(asm)
+	end 'lane'
+end 'arm64PosixEmitStashSessionFailure'
+
+export function arm64PosixEmitTreeSessionMismatch(asm Arm64RuntimeAsm, sessionReg Arm64Register, stateSlot StackSize, mismatch BlockId)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: stateSlot)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x5, base: Arm64Register.x4, byteOffset: PosixTreeStateSession as MachineWord)
+	arm64EmitCmpRuntimeReg(asm, lhs: sessionReg, rhs: Arm64Register.x5)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: mismatch)
+end 'arm64PosixEmitTreeSessionMismatch'
+
+export function arm64PosixEmitTreeMembership(asm Arm64RuntimeAsm, valueReg Arm64Register, stateSlot StackSize, found BlockId, missing BlockId)
+	let walk = asm.newLabel()
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: stateSlot)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x5, base: Arm64Register.x4, byteOffset: PosixTreeStateCount as MachineWord)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x4, base: Arm64Register.x4, byteOffset: PosixTreeStateList as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
+
+	asm.placeLabel(walk)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x3, rhs: Arm64Register.x5)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: missing)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x3), sh: PosixTreeEntryShift)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x4, rhs: Arm64Register.x0)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: valueReg)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: found)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x3, base: Arm64Register.x3, imm: 1)
+	arm64EmitBranchTo(asm, label: walk)
+end 'arm64PosixEmitTreeMembership'
+
+export function arm64PosixEmitTreeMarkFailed(asm Arm64RuntimeAsm, stateSlot StackSize)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: stateSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixTreeStatusFailed as MachineWord)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x4, byteOffset: PosixTreeStateStatus as MachineWord)
+end 'arm64PosixEmitTreeMarkFailed'
+
+export function arm64PosixEmitTreeAppend(asm Arm64RuntimeAsm, lane PosixTreeLane, stateSlot StackSize, pidSlot StackSize, refused BlockId)
+	let hasRoom = asm.newLabel()
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: stateSlot)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x3, base: Arm64Register.x4, byteOffset: PosixTreeStateCount as MachineWord)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x5, base: Arm64Register.x4, byteOffset: PosixTreeStateCapacity as MachineWord)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x3, rhs: Arm64Register.x5)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: hasRoom)
+
+	match lane 'grow'
+		linux(errnoHome) then arm64LinuxEmitTreeGrow(asm, errnoHome: errnoHome, stateSlot: stateSlot)
+		macos then arm64DarwinEmitTreeGrow(asm, stateSlot: stateSlot)
+	end 'grow'
+
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: hasRoom)
+	arm64PosixEmitTreeMarkFailed(asm, stateSlot: stateSlot)
+	arm64EmitBranchTo(asm, label: refused)
+
+	asm.placeLabel(hasRoom)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: stateSlot)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x3, base: Arm64Register.x4, byteOffset: PosixTreeStateCount as MachineWord)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x6, base: Arm64Register.x4, byteOffset: PosixTreeStateList as MachineWord)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x5), rn: arm64RuntimeReg(Arm64Register.x3), sh: PosixTreeEntryShift)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x6, lhs: Arm64Register.x6, rhs: Arm64Register.x5)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x7, slot: pidSlot)
+	arm64EmitStoreWord32At(asm, src: Arm64Register.x7, base: Arm64Register.x6, byteOffset: 0)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x3, base: Arm64Register.x3, imm: 1)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x3, base: Arm64Register.x4, byteOffset: PosixTreeStateCount as MachineWord)
+end 'arm64PosixEmitTreeAppend'
+
+// Ends every descendant of the child except the child, which the caller's group kill ends. Every
+// Maxon child leads its own process group so that its own deadline can kill its subtree, so a
+// grandchild's group is out of reach of the child's group kill and descendants are found by parent.
+//
+// The tree is the child's session. A process in another session, as one the child started with
+// `runDetached()` is, is never stopped, adopted or killed, and nothing below it is entered. The
+// root's session is read once; a root already gone (`ESRCH`) has nothing to walk and is not a
+// failed walk.
+//
+// The walk cannot race a fork: a process with a pending SIGSTOP cannot complete one (the kernel
+// restarts the fork), so stopping each process as it is adopted and rescanning until a pass adopts
+// nothing reaches a fixpoint. SIGKILL goes newest first, so a killed ancestor's children are not
+// reparented to init, and reaped by it, before their own kill.
+//
+// The table grows instead of capping: a cap would turn an ordinary wide tree into a failed
+// deadline. A failed listing or allocation marks the walk failed, stashing the failing step's
+// errno, and the answer is `PosixTerminateTreeIncomplete`.
+export function buildArm64PosixProcTreeKillChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
+	let SlotState = 0
+	let SlotRoot = SlotState + PosixTreeStateWords
+	let SlotBefore = SlotRoot + 1
+	let SlotIndex = SlotRoot + 2
+	var asm = Arm64RuntimeAsm.beginFunction(SlotIndex + 1)
+	let allocationFailed = asm.newLabel()
+	let sessionUnreadable = asm.newLabel()
+	let round = asm.newLabel()
+	let finish = asm.newLabel()
+	let killNext = asm.newLabel()
+	let release = asm.newLabel()
+	let answered = asm.newLabel()
+	let incomplete = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotRoot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixTreeStatusComplete as MachineWord)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotState + PosixTreeFieldStatus)
+
+	match lane 'acquire'
+		linux(errnoHome) then arm64LinuxEmitTreeListMap(asm, errnoHome: errnoHome)
+		macos then arm64DarwinEmitTreeListAllocate(asm)
+	end 'acquire'
+
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: allocationFailed)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotState + PosixTreeFieldList)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotRoot)
+	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 1)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotState + PosixTreeFieldCount)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixTreeInitialEntries as MachineWord)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotState + PosixTreeFieldCapacity)
+	arm64PosixEmitTreeStop(asm, kill: kill, lane: lane, pidSlot: SlotRoot)
+	arm64PosixEmitSessionOf(asm, lane: lane, pidSlot: SlotRoot)
+	arm64PosixEmitBranchIfSessionRootGone(asm, lane: lane, gone: finish)
+	arm64PosixEmitStashSessionFailure(asm, lane: lane)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: sessionUnreadable)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotState + PosixTreeFieldSession)
+
+	asm.placeLabel(round)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotState + PosixTreeFieldCount)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBefore)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotState)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcTreeAdoptName)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotState + PosixTreeFieldStatus)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: finish)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotState + PosixTreeFieldCount)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBefore)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: round)
+
+	asm.placeLabel(finish)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotState + PosixTreeFieldCount)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: -1)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotIndex)
+
+	asm.placeLabel(killNext)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotIndex)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: 1)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: release)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotState + PosixTreeFieldList)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x5), rn: arm64RuntimeReg(Arm64Register.x2), sh: PosixTreeEntryShift)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x4, lhs: Arm64Register.x4, rhs: Arm64Register.x5)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x4, byteOffset: 0)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: -1)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotIndex)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixSigKill)
+	arm64PosixEmitHostCall(asm, call: kill)
+	arm64EmitBranchTo(asm, label: killNext)
+
+	asm.placeLabel(release)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotState + PosixTreeFieldList)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotState + PosixTreeFieldCapacity)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x1), rn: arm64RuntimeReg(Arm64Register.x1), sh: PosixTreeEntryShift)
+
+	match lane 'release'
+		linux then arm64LinuxEmitTreeListUnmap(asm)
+		macos then arm64DarwinEmitTreeListFree(asm)
+	end 'release'
+
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(sessionUnreadable)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixTreeStatusFailed as MachineWord)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotState + PosixTreeFieldStatus)
+	arm64EmitBranchTo(asm, label: finish)
+
+	asm.placeLabel(allocationFailed)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixTreeStatusFailed as MachineWord)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotState + PosixTreeFieldStatus)
+
+	asm.placeLabel(answered)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotState + PosixTreeFieldStatus)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: incomplete)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixTerminateTreeIncomplete as MachineWord)
+
+	asm.placeLabel(incomplete)
+	return asm.finishFunction(HostProcTreeKillName)
+end 'buildArm64PosixProcTreeKillChunk'
 
 // `kill(pid, 0)` delivers nothing and answers whether `pid` names a live process: 0, or `-errno` on
 // both lanes (`-ESRCH` once it is gone). No reason is stashed; the answer carries it.

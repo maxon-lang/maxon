@@ -1297,3 +1297,144 @@ module let RenderFunctionName = "render"
 module let JumpRowOfTheBranchLine = 1
 module let StatementRowsOfTheBranchLine = 2
 module let TracedBuildLabel = "debugstream"
+
+let TraceeFixtureName = "tracee"
+let TraceeReadyLine = "ready"
+let TraceeGoLine = "go"
+let TraceeLaunchDeadlineMs = 30000
+let TraceeServiceSliceMs = 50
+let TraceeQuietSlices = 6
+let TraceeThreadsNeeded = 2
+let TraceeSignalTrap = 5
+let TraceeSignalStop = 19
+module let TraceeProcDirectory = "/proc"
+
+typealias TraceeThreadIds = Array with DebuggeeThreadId
+typealias TraceeTally = int(0 to u32.max)
+
+type TraceeRoster
+	var ids as TraceeThreadIds
+
+	static function create() returns TraceeRoster
+		return Self{ids: TraceeThreadIds.create(0)}
+	end 'create'
+
+	function count() returns Count
+		return self.ids.count()
+	end 'count'
+
+	function knows(thread DebuggeeThreadId) returns bool
+		for id in self.ids 'eachThread'
+			if id == thread 'thisOne'
+				return true
+			end 'thisOne'
+		end 'eachThread'
+
+		return false
+	end 'knows'
+
+	function note(thread DebuggeeThreadId)
+		if not self.knows(thread) 'aNewThread'
+			self.ids.push(thread)
+		end 'aNewThread'
+	end 'note'
+
+	function lines() returns StringArray
+		var spelled = StringArray.create(0)
+
+		for id in self.ids 'eachThread'
+			spelled.push("{id}")
+		end 'eachThread'
+
+		return spelled
+	end 'lines'
+end 'TraceeRoster'
+
+export type TracedChild
+	export var child as StreamingSubprocess
+	export var trace as ProcessTrace
+	export let pid as Pid
+	export let threads as StringArray
+
+	static function create(child StreamingSubprocess, trace ProcessTrace, pid Pid, threads StringArray) returns TracedChild
+		return Self{child: child, trace: trace, pid: pid, threads: threads}
+	end 'create'
+
+	export function release()
+		self.child.release()
+		self.trace.close()
+	end 'release'
+end 'TracedChild'
+
+export function startedTracee(caseLabel String) returns TracedChild
+	let staged = builtFixture(caseLabel, fixture: TraceeFixtureName)
+	var child = try StreamingSubprocess.spawnTraceable(Executable.path(builtExecutable(staged)), arguments: StringArray.create(0), workingDirectory: staged, environment: Environment.inherit, traced: true) otherwise panic("tracee: the traced spawn of the built fixture was refused")
+	let process = try child.processId() otherwise panic("tracee: the spawned child recorded no process id")
+	var trace = ProcessTrace.create()
+	let roster = traceeServiced(trace, child: child, process: process as DebuggeeProcessId)
+
+	if roster.count() < TraceeThreadsNeeded 'tooFewThreads'
+		panic("tracee: the case needs a traced child with a second thread alive, and the child reported only {roster.count()} before the {TraceeLaunchDeadlineMs} ms deadline. Its threads: {listedLines(roster.lines())}")
+	end 'tooFewThreads'
+
+	// After `go` the child exits and nothing services its trace, so its threads die traced and stay
+	// unreaped zombies: the state both cases wait on.
+	try child.writeStdinLine(TraceeGoLine) otherwise panic("tracee: the child's stdin refused the go line")
+
+	return TracedChild.create(child, trace: trace, pid: process, threads: roster.lines())
+end 'startedTracee'
+
+function traceeServiced(trace ProcessTrace, child StreamingSubprocess, process DebuggeeProcessId) returns TraceeRoster
+	var roster = TraceeRoster.create()
+	var ready = false
+	var quiet = 0 as TraceeTally
+	var slices = 0 as TraceeTally
+
+	while slices * TraceeServiceSliceMs < TraceeLaunchDeadlineMs and not (ready and roster.count() >= TraceeThreadsNeeded and quiet >= TraceeQuietSlices) 'untilSettled'
+		slices = slices + 1
+
+		let report = trace.wait(TraceeServiceSliceMs as DebuggeeWaitMs, process: process)
+
+		quiet = 0 if report.arrived() else quiet + 1
+		traceeAnswered(trace, report: report, process: process, roster: roster)
+		ready = ready or traceeSaidReady(child)
+	end 'untilSettled'
+
+	return roster
+end 'traceeServiced'
+
+function traceeAnswered(trace ProcessTrace, report TraceReport, process DebuggeeProcessId, roster mutable TraceeRoster)
+	match report 'which'
+		nothing or
+		exited or
+		killed then return
+		stopped(thread, signal, event) then traceeResumed(trace, thread: thread, signal: signal, event: event, process: process, roster: roster)
+	end 'which'
+end 'traceeAnswered'
+
+function traceeResumed(trace ProcessTrace, thread DebuggeeThreadId, signal DebuggeeSignal, event TraceEvent, process DebuggeeProcessId, roster mutable TraceeRoster)
+	if roster.count() == 0 'theExecStop'
+		_ = trace.configure(process)
+	end 'theExecStop'
+
+	roster.note(thread)
+
+	_ = trace.resume(thread, signal: traceeSignalToHandOn(signal, event: event), stepping: false)
+end 'traceeResumed'
+
+function traceeSignalToHandOn(signal DebuggeeSignal, event TraceEvent) returns DebuggeeSignal
+	if event != TraceEvent.signalStop or signal == TraceeSignalTrap or signal == TraceeSignalStop 'ours'
+		return NoTraceSignal
+	end 'ours'
+
+	return signal
+end 'traceeSignalToHandOn'
+
+function traceeSaidReady(child StreamingSubprocess) returns bool
+	let polled = try child.tryReadStdoutLine() otherwise LinePoll.none
+
+	return match polled 'polled'
+		line(text) gives text == TraceeReadyLine
+		none gives false
+	end 'polled'
+end 'traceeSaidReady'

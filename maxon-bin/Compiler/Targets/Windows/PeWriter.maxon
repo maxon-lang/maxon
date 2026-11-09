@@ -546,15 +546,17 @@ export enum IatSlot
 	RegisterWaitForSingleObject = IatSlotMeta{dll: ImportDll.kernel32}
 	UnregisterWaitEx = IatSlotMeta{dll: ImportDll.kernel32}
 
-	// ⭐⭐ **THE PROCESS-TREE KILL'S FOUR.** A spawned child is put in a job object of its own and every
-	// descendant it starts is born inside that job, so `TerminateJobObject` ends the whole tree where
-	// `TerminateProcess` ends one process and orphans the rest. `SetLastError` restores the code
+	// ⭐⭐ **THE PROCESS-TREE KILL'S IMPORTS.** A spawned child is put in a job object of its own and every
+	// descendant it starts, except one started detached, is born inside that job, so `TerminateJobObject`
+	// ends the whole tree where `TerminateProcess` ends one process and orphans the rest. `SetLastError` restores the code
 	// `CreateProcessW` published, which the job calls that follow it would otherwise overwrite before the
 	// runtime can read it. kernel32 again, so they add no import DIRECTORY entry, and they join the
 	// OPTIONAL TRAILING BAND beside the subprocess imports above on the same terms.
 	CreateJobObjectW = IatSlotMeta{dll: ImportDll.kernel32}
 	AssignProcessToJobObject = IatSlotMeta{dll: ImportDll.kernel32}
 	TerminateJobObject = IatSlotMeta{dll: ImportDll.kernel32}
+	SetInformationJobObject = IatSlotMeta{dll: ImportDll.kernel32}
+	QueryInformationJobObject = IatSlotMeta{dll: ImportDll.kernel32}
 	SetLastError = IatSlotMeta{dll: ImportDll.kernel32}
 	VirtualProtect = IatSlotMeta{dll: ImportDll.kernel32}
 	FlushInstructionCache = IatSlotMeta{dll: ImportDll.kernel32}
@@ -755,6 +757,8 @@ export function importAnswerOf(slot IatSlot) returns ImportAnswer
 		UnregisterWaitEx or
 		AssignProcessToJobObject or
 		TerminateJobObject or
+		SetInformationJobObject or
+		QueryInformationJobObject or
 		VirtualProtect or
 		FlushInstructionCache or
 		TerminateProcess or
@@ -905,6 +909,8 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 		CreateJobObjectW or
 		AssignProcessToJobObject or
 		TerminateJobObject or
+		SetInformationJobObject or
+		QueryInformationJobObject or
 		SetLastError or
 		VirtualProtect or
 		FlushInstructionCache or

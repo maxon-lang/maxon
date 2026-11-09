@@ -1,0 +1,30 @@
+let TracedPollCaseLabel = "a-traced-childs-exit-is-polled-though-its-threads-died-unreaped"
+
+let TracedPollDeadlineMs = 10000
+let TracedPollSliceMs = 20
+let TracedPollExitCode = 0
+
+#if os(Linux)
+	typealias TracedPollTally = int(0 to u32.max)
+#endif
+
+test 'a poll of a traced child whose threads died while their tracer was not waiting sees the child exit'
+	#if os(Linux)
+		var tracee = startedTracee(TracedPollCaseLabel)
+		var waitedMs = 0 as TracedPollTally
+		var seen = false
+
+		while not seen and waitedMs < TracedPollDeadlineMs 'untilItIsSeen'
+			match tracee.child.pollExit() 'polled'
+				running then sleep(TracedPollSliceMs)
+				exited(code) then seen = code == TracedPollExitCode
+			end 'polled'
+
+			waitedMs = waitedMs + TracedPollSliceMs
+		end 'untilItIsSeen'
+
+		Expect.isTrue(seen, message: "⛔ THE CHILD EXITED AND ITS THREADS DIED TRACED, SO LINUX HELD BACK THE LEADER'S STATUS UNTIL THEIR TRACER REAPED THEM. A poll that asks for the leader alone answers `running` for ever. After {waitedMs} ms the poll still saw no exit. The child's threads were: {listedLines(tracee.threads)}.")
+
+		tracee.release()
+	#endif
+end 'a poll of a traced child whose threads died while their tracer was not waiting sees the child exit'

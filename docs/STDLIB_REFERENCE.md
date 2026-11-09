@@ -1758,7 +1758,7 @@ With `git` on `PATH`, it prints `true 0 true`.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `Subprocess.run(executable Executable, arguments StringArray, workingDirectory FilePath = FilePath.empty(), timeoutMs DurationMs = 0)` | `CollectedOutput` | Inherit the environment, no stdin, collect stdout and stderr up to 16 MiB each. An empty `workingDirectory` inherits the parent's. A `timeoutMs` deadline kills the child's whole process tree; `0` waits forever. |
+| `Subprocess.run(executable Executable, arguments StringArray, workingDirectory FilePath = FilePath.empty(), timeoutMs DurationMs = 0)` | `CollectedOutput` | Inherit the environment, no stdin, collect stdout and stderr up to 16 MiB each. An empty `workingDirectory` inherits the parent's. A `timeoutMs` deadline kills the child's whole process tree ([SubprocessError](#subprocesserror)); `0` waits forever. |
 | `Subprocess.runConfiguration(config Configuration)` | `CollectedOutput` | Run a configuration; `config.run()` calls this. |
 | `Subprocess.runDetachedConfiguration(config Configuration)` | `Pid` | Start detached; `config.runDetached()` calls this. |
 
@@ -1805,13 +1805,13 @@ an empty path inherits the parent's working directory), assign the fields you ne
 | `standardInput` | `InputSource` | `none` |
 | `standardOutput` | `OutputDestination` | `collect` up to 16 MiB |
 | `standardError` | `OutputDestination` | `collect` up to 16 MiB |
-| `timeoutMs` | `DurationMs` | `0`, no deadline. Non-zero kills the child's whole process tree. |
+| `timeoutMs` | `DurationMs` | `0`, no deadline. Non-zero kills the child's whole process tree ([SubprocessError](#subprocesserror)). |
 | `platformOptions` | `PlatformOptions` | `PlatformOptions.defaults()` |
 
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `run()` | `CollectedOutput` | Run and collect. Throws `SubprocessError`. |
-| `runDetached()` | `Pid` | Start without waiting and return the process id. Standard streams are discarded. Throws `SubprocessError`. |
+| `runDetached()` | `Pid` | Start without waiting and return the process id. Standard streams are discarded. The process is outside the process tree of any deadline ([SubprocessError](#subprocesserror)). Throws `SubprocessError`: `spawnFailed` when the process cannot be detached, on Windows because the job this program runs in does not allow breakaway and on Linux because the child cannot start its own session. |
 
 `PlatformOptions` has two `bool` fields, `windowsHideWindow` and `windowsCreateNewProcessGroup`;
 `PlatformOptions.defaults()` sets both false.
@@ -1926,6 +1926,19 @@ operand.
 text is usually the only evidence of why it hung. Both fields are empty when the layer that threw was not
 collecting output, which is `StreamingSubprocess.waitWithTimeout`.
 
+A deadline ends the child's whole process tree. On Linux and macOS the tree is the child and every process
+in the child's session descended from it by parent at the moment of the kill, however many there are: each
+is stopped as it is found, the search repeats until a full pass finds no new process, and then the
+descendants are killed, newest first, together with the child's process group. The child's process group is
+ended even when the child itself has already exited. A process started with `runDetached()`, any other
+process in another session, and everything such a process starts are outside the tree, as is a process
+already reparented to init, as one that double-forked is. On Windows the tree is the child's job object,
+which a process started with `runDetached()` leaves. When the tree cannot be fully ended (on Linux `/proc`
+cannot be read, on macOS `proc_listchildpids` fails, an allocation fails, or the kill of an exited child's
+process group is refused), the deadline throws `ioFailed` with the reason
+`timed out after 5000ms, but the child's process tree could not be fully ended: os error <n>`. `timedOut()` is
+false for it, and a collected run's partial output is discarded.
+
 `endOfStream` is what a `StreamingSubprocess` line reader throws when the stream it reads has ended.
 
 `displayReason()` renders any case as one line, such as
@@ -1982,7 +1995,7 @@ request after request. A read or a wait parks the calling green thread, so its s
 | `pollTermination()` | `TerminationPoll` | — | As `pollExit()`, answering how the child ended: `signalled(signal)` for a child a signal killed on Linux and macOS, `exited(code)` otherwise. |
 | `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
 | `wait()` | exit code | `SubprocessError` | Park the calling green thread until the child exits. |
-| `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree when the deadline passes; `0` waits forever. The thrown `timeout` carries empty output fields — a streaming child's bytes belong to the caller draining the streams. |
+| `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree ([SubprocessError](#subprocesserror)) when the deadline passes; `0` waits forever. The thrown `timeout` carries empty output fields — a streaming child's bytes belong to the caller draining the streams. |
 | `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. Panics while the stdout side is out with a `StdoutReader`: `reclaimStdout()` first. |
 | `handle`, `released` | fields | — | The raw handle and whether it has been released. |
 

@@ -1201,7 +1201,7 @@ function buildArm64DarwinStashErrnoValueChunk(greenThreads bool) returns Functio
 	return asm.finishFunction(DarwinStashErrnoValueName)
 end 'buildArm64DarwinStashErrnoValueChunk'
 
-function arm64DarwinEmitStashIfStatusFailed(asm Arm64RuntimeAsm)
+module function arm64DarwinEmitStashIfStatusFailed(asm Arm64RuntimeAsm)
 	let succeeded = asm.newLabel()
 
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
@@ -1967,6 +1967,7 @@ end 'buildArm64DarwinDirFindCloseChunk'
 // `buildArm64PosixPipeChunk` takes a `flags` argument and this lane passes it nothing.
 let DarwinSpawnCloexecDefault = 0x4000
 let DarwinPipeNoFlags = 0
+let DarwinChildInitialEntries = 64
 
 // `DETACHED_PROCESS`'s honest twin: a detached child gets its own SESSION, so it outlives the parent's
 // terminal exactly as Win32's flag intends.
@@ -2374,7 +2375,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	end 'envRead'
 
 	if posixUsesHostObjects(usage) 'hostObjects'
-		chunks.push(buildArm64PosixProcReapChunk(PosixHostCall.importCall(OsImportSlot.waitpid)))
+		chunks.push(buildArm64PosixProcReapChunk(PosixHostCall.importCall(OsImportSlot.waitpid), scope: PosixReapScope.childAlone))
 		chunks.push(buildArm64DarwinWaitCloseChunk())
 	end 'hostObjects'
 
@@ -2433,6 +2434,8 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinNetpollArmPipeChunk())
 		chunks.push(buildArm64PosixPipePeekChunk(PosixPollCall.pollImport(OsImportSlot.poll)))
 		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.importCall(OsImportSlot.kill)))
+		chunks.push(buildArm64PosixProcTreeKillChunk(PosixHostCall.importCall(OsImportSlot.kill), lane: PosixTreeLane.macos))
+		chunks.push(buildArm64DarwinProcTreeAdoptChunk(PosixHostCall.importCall(OsImportSlot.kill)))
 	end 'childPipes'
 
 	if posixReadsMonotonicClock(usage) 'clocks'
@@ -2917,3 +2920,188 @@ function arm64DarwinEmitCloseAndAnswerErrno(asm Arm64RuntimeAsm, fdSlot StackSiz
 	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x9)
 	arm64EmitBranchTo(asm, label: answered)
 end 'arm64DarwinEmitCloseAndAnswerErrno'
+
+module function arm64DarwinEmitTreeListAllocate(asm Arm64RuntimeAsm)
+	let allocated = asm.newLabel()
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixTreeInitialBytes as MachineWord)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.malloc)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: allocated)
+	arm64DarwinEmitPublishAndStashErrno(asm, value: PosixErrnoNoMemory)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+
+	asm.placeLabel(allocated)
+end 'arm64DarwinEmitTreeListAllocate'
+
+module function arm64DarwinEmitTreeListFree(asm Arm64RuntimeAsm)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.free)
+end 'arm64DarwinEmitTreeListFree'
+
+module function arm64DarwinEmitTreeGrow(asm Arm64RuntimeAsm, stateSlot StackSize)
+	let failed = asm.newLabel()
+	let done = asm.newLabel()
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: stateSlot)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x4, byteOffset: PosixTreeStateList as MachineWord)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x5, base: Arm64Register.x4, byteOffset: PosixTreeStateCapacity as MachineWord)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x1), rn: arm64RuntimeReg(Arm64Register.x5), sh: PosixTreeEntryShift)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x1)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.realloc)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: failed)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: stateSlot)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x4, byteOffset: PosixTreeStateList as MachineWord)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x5, base: Arm64Register.x4, byteOffset: PosixTreeStateCapacity as MachineWord)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x5, lhs: Arm64Register.x5, rhs: Arm64Register.x5)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x5, base: Arm64Register.x4, byteOffset: PosixTreeStateCapacity as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitBranchTo(asm, label: done)
+
+	asm.placeLabel(failed)
+	arm64DarwinEmitPublishAndStashErrno(asm, value: PosixErrnoNoMemory)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 1)
+
+	asm.placeLabel(done)
+end 'arm64DarwinEmitTreeGrow'
+
+module function arm64DarwinEmitBranchIfSessionRootGone(asm Arm64RuntimeAsm, gone BlockId)
+	let present = asm.newLabel()
+
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: present)
+	arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x1)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: PosixErrno.noSuchProcess.rawValue as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: gone)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixCallFailed)
+
+	asm.placeLabel(present)
+end 'arm64DarwinEmitBranchIfSessionRootGone'
+
+module function arm64DarwinEmitSessionOf(asm Arm64RuntimeAsm, pidSlot StackSize)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: pidSlot)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.getsid)
+end 'arm64DarwinEmitSessionOf'
+
+function buildArm64DarwinProcTreeAdoptChunk(kill PosixHostCall) returns FunctionCodeChunk
+	let SlotState = 0
+	let SlotIndex = 1
+	let SlotMember = 2
+	let SlotChildCapacity = 3
+	let SlotChildBuffer = 4
+	let SlotFound = 5
+	let SlotChildIndex = 6
+	let SlotPid = 7
+	var asm = Arm64RuntimeAsm.beginFunction(SlotPid + 1)
+	let lane = PosixTreeLane.macos
+
+	let members = asm.newLabel()
+	let attempt = asm.newLabel()
+	let children = asm.newLabel()
+	let admit = asm.newLabel()
+	let skipChild = asm.newLabel()
+	let nextMember = asm.newLabel()
+	let releaseBuffer = asm.newLabel()
+	let enlarge = asm.newLabel()
+	let outOfMemory = asm.newLabel()
+	let listFailed = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotState)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotIndex)
+
+	asm.placeLabel(members)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotState)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotIndex)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x3, base: Arm64Register.x4, byteOffset: PosixTreeStateCount as MachineWord)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x2, rhs: Arm64Register.x3)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: answered)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x4, base: Arm64Register.x4, byteOffset: PosixTreeStateList as MachineWord)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x5), rn: arm64RuntimeReg(Arm64Register.x2), sh: PosixTreeEntryShift)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x4, lhs: Arm64Register.x4, rhs: Arm64Register.x5)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x4, byteOffset: 0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotMember)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: DarwinChildInitialEntries as MachineWord)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotChildCapacity)
+
+	asm.placeLabel(attempt)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotChildCapacity)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x0), sh: PosixTreeEntryShift)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.malloc)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: outOfMemory)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotChildBuffer)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotMember)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotChildCapacity)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x2), rn: arm64RuntimeReg(Arm64Register.x2), sh: PosixTreeEntryShift)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.procListChildPids)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFound)
+
+	// `proc_listchildpids` answers a pid count, and a full buffer may have truncated the list, so a
+	// full answer retries at double the size.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotChildCapacity)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: enlarge)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: listFailed)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: releaseBuffer)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotChildIndex)
+	arm64EmitBranchTo(asm, label: children)
+
+	asm.placeLabel(enlarge)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotChildBuffer)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.free)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotChildCapacity)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x2, lhs: Arm64Register.x2, rhs: Arm64Register.x2)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotChildCapacity)
+	arm64EmitBranchTo(asm, label: attempt)
+
+	asm.placeLabel(children)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotChildIndex)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotFound)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x2, rhs: Arm64Register.x3)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: releaseBuffer)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotChildBuffer)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x5), rn: arm64RuntimeReg(Arm64Register.x2), sh: PosixTreeEntryShift)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x4, lhs: Arm64Register.x4, rhs: Arm64Register.x5)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x6, base: Arm64Register.x4, byteOffset: 0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x6, slot: SlotPid)
+	arm64PosixEmitTreeMembership(asm, valueReg: Arm64Register.x6, stateSlot: SlotState, found: skipChild, missing: admit)
+
+	asm.placeLabel(admit)
+	arm64DarwinEmitSessionOf(asm, pidSlot: SlotPid)
+	arm64PosixEmitTreeSessionMismatch(asm, sessionReg: Arm64Register.x0, stateSlot: SlotState, mismatch: skipChild)
+	arm64PosixEmitTreeAppend(asm, lane: lane, stateSlot: SlotState, pidSlot: SlotPid, refused: releaseBuffer)
+	arm64PosixEmitTreeStop(asm, kill: kill, lane: lane, pidSlot: SlotPid)
+
+	asm.placeLabel(skipChild)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotChildIndex)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: 1)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotChildIndex)
+	arm64EmitBranchTo(asm, label: children)
+
+	asm.placeLabel(releaseBuffer)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotChildBuffer)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.free)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotState)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x4, byteOffset: PosixTreeStateStatus as MachineWord)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x2, label: answered)
+
+	asm.placeLabel(nextMember)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotIndex)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: 1)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotIndex)
+	arm64EmitBranchTo(asm, label: members)
+
+	asm.placeLabel(listFailed)
+	arm64DarwinEmitStashIfStatusFailed(asm)
+	arm64PosixEmitTreeMarkFailed(asm, stateSlot: SlotState)
+	arm64EmitBranchTo(asm, label: releaseBuffer)
+
+	asm.placeLabel(outOfMemory)
+	arm64DarwinEmitPublishAndStashErrno(asm, value: PosixErrnoNoMemory)
+	arm64PosixEmitTreeMarkFailed(asm, stateSlot: SlotState)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostProcTreeAdoptName)
+end 'buildArm64DarwinProcTreeAdoptChunk'

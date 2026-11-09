@@ -30,8 +30,8 @@ typealias ExitAnswer = int(-1 to u32.max)
 // door, so it is worth being exact about where the builtins' `-1` is decoded, because it is NOT
 // decoded uniformly:
 //
-//   • `runDetachedConfiguration` gets the pid FROM the spawn, where `-1` means the spawn failed, and
-//     decodes it with an `==` before the value reaches this alias's return door.
+//   • `runDetachedConfiguration` gets the pid FROM the spawn, where a negative answer means the
+//     spawn failed, and decodes it before the value reaches this alias's return door.
 //   • `runConfiguration` does NOT decode — it reads `subprocessGetPid(handle)` and hands the result
 //     straight to `CollectedOutput.create`'s `pid Pid` parameter. That is sound rather than an
 //     oversight, and only because of what the entry answers `-1` FOR: both runtimes return it for a
@@ -315,6 +315,9 @@ end 'RunProcessError'
 /// deadline killed it, because that partial text is usually the only evidence
 /// of why it hung. Both fields are empty where the layer that threw was not
 /// collecting output — see `StreamingSubprocess.waitWithTimeout`.
+///
+/// A deadline whose kill could not fully end the child's process tree throws
+/// `ioFailed`, not `timeout`, so `timedOut()` is false for it.
 public union SubprocessError implements Error
 	executableNotFound(name String)
 	spawnFailed(reason String)
@@ -457,7 +460,10 @@ public type Configuration
 
 	/// Spawn the configured subprocess detached from the parent and return
 	/// its pid. stdin/stdout/stderr are forced to discard since the parent
-	/// won't be around to drain pipe ends.
+	/// won't be around to drain pipe ends. The child is outside every process
+	/// tree a deadline ends. Throws `spawnFailed` when it cannot be detached:
+	/// on Windows when the job this program runs in does not allow breakaway,
+	/// on Linux when the child cannot start its own session.
 	public function runDetached() returns Pid throws SubprocessError
 		return try Subprocess.runDetachedConfiguration(self)
 	end 'runDetached'
@@ -499,8 +505,8 @@ public type Subprocess
 		let pid = __Builtins.subprocessGetPid(handle)
 		let result = __Builtins.subprocessWaitCollect(handle, config.timeoutMs)
 
-		if result == -1 'waitFailed'
-			let reason = lastErrorMessage()
+		if result < 0 'waitFailed'
+			let reason = lastErrorMessage() if result == -1 else treeSurvivedReason(config.timeoutMs, cause: lastErrorMessage())
 			__Builtins.subprocessReleaseHandle(handle)
 			throw SubprocessError.ioFailed(reason)
 		end 'waitFailed'
@@ -522,8 +528,9 @@ public type Subprocess
 	end 'runConfiguration'
 
 	/// Spawn detached. Uses the same 14-arg layout as `subprocessSpawn` with
-	/// the detach flag bit set; the runtime returns the OS pid (or -1) instead
-	/// of an attached handle. stdin/stdout/stderr are forced to discard so the
+	/// the detach flag bit set; the runtime returns the OS pid instead of an
+	/// attached handle, -1 for a failed spawn, or -2 for a detach the job this
+	/// program runs in refuses. stdin/stdout/stderr are forced to discard so the
 	/// child doesn't inherit pipe ends the caller would have to drain.
 	public static function runDetachedConfiguration(config Configuration) returns Pid throws SubprocessError
 		let operands = try SpawnOperands.prepare(config.executable, arguments: config.arguments, workingDirectory: config.workingDirectory, environment: config.environment)
@@ -532,8 +539,8 @@ public type Subprocess
 
 		let pid = __Builtins.subprocessDetach(operands.argv.addressableBytes(), operands.argc, config.workingDirectory.toString().cstr(), operands.environment.block.addressableBytes(), operands.environment.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
 
-		if pid == -1 'spawnFailed'
-			throw spawnFailure(operands.executablePath)
+		if pid < 0 'spawnFailed'
+			throw spawnFailure(operands.executablePath) if pid == -1 else detachRefusal()
 		end 'spawnFailed'
 
 		return pid as Pid
@@ -1135,9 +1142,9 @@ public type StreamingSubprocess
 	/// Returns the exit code on success; throws `SubprocessError.timeout` if
 	/// the timeout fires (the runtime forcibly terminates the child's whole
 	/// process tree in that case) or `SubprocessError.ioFailed` on a wait
-	/// error. The thrown `timeout` carries empty output fields: a streaming
-	/// child's bytes belong to the caller draining the streams, and this layer
-	/// never sees them.
+	/// error or a process tree the kill could not fully end. The thrown
+	/// `timeout` carries empty output fields: a streaming child's bytes belong
+	/// to the caller draining the streams, and this layer never sees them.
 	public function waitWithTimeout(timeoutMs DurationMs) returns ExitInt throws SubprocessError
 		try requireLive()
 		let rc = __Builtins.subprocessWaitExit(handle, timeoutMs)
@@ -1146,8 +1153,8 @@ public type StreamingSubprocess
 			throw SubprocessError.timeout(timeoutMs, stdout: "", stderr: "")
 		end 'timedOut'
 
-		if rc == -1 'failed'
-			throw SubprocessError.ioFailed("wait failed: {lastErrorMessage()}")
+		if rc < 0 'failed'
+			throw SubprocessError.ioFailed("wait failed: {lastErrorMessage()}" if rc == -1 else treeSurvivedReason(timeoutMs, cause: lastErrorMessage()))
 		end 'failed'
 
 		return rc as ExitInt
@@ -1409,3 +1416,11 @@ function stripTrailingCR(s String) returns String
 	let trimmed = try bytes.slice(0, len) otherwise panic("stripTrailingCR: slice OOB — 0..len always valid")
 	return String.init(trimmed)
 end 'stripTrailingCR'
+
+function treeSurvivedReason(timeoutMs DurationMs, cause String) returns String
+	return "timed out after {timeoutMs}ms, but the child's process tree could not be fully ended: {cause}"
+end 'treeSurvivedReason'
+
+function detachRefusal() returns SubprocessError
+	return SubprocessError.spawnFailed("runDetached: the process could not leave the job this program runs in, because that job does not allow breakaway ({lastErrorMessage()}); run the program outside that job or allow breakaway on it")
+end 'detachRefusal'

@@ -1346,6 +1346,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osMapNamedSegment or
 		osTickCountMs or
 		osHandleSetInherit or
+		osCallerJobLimits or
 		osPipePeek or
 		osEnvRead or
 		osProcessTerminate or
@@ -1906,6 +1907,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osMapNamedSegment(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osTickCountMs(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osPipePeek(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osCallerJobLimits(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osEnvRead(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osProcessTerminate(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osSocketStartup(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
@@ -2540,6 +2542,7 @@ type WasmFuncEmitter
 			osMapNamedSegment or
 			osTickCountMs then panic("emitTerminator: a DebugStream host primitive is a body op, never a terminator")
 			osHandleSetInherit or
+			osCallerJobLimits or
 			osPipePeek or
 			osEnvRead or
 			osProcessTerminate then panic("emitTerminator: an attached-subprocess host primitive is a body op, never a terminator")
@@ -2755,6 +2758,7 @@ type WasmFuncEmitter
 			// `TargetFacilities.calleeNeedsFacilityTargetLacks` refuses a program that reaches one at its own
 			// source span (E3104), so this is the backstop for a compiler bug that got past that gate.
 			osHandleSetInherit or
+			osCallerJobLimits or
 			osPipePeek or
 			osEnvRead or
 			osProcessTerminate then panic("emitBodyOp: the attached-subprocess host primitives have no wasm32-wasi lowering — WASI has no process-spawn primitive, and SemanticCheck refuses such a program at its own source span (E3104)")

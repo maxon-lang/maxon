@@ -1039,9 +1039,10 @@ let StartupInfoSize = 0x68
 let StartupInfoCbOffset = 0
 
 // PROCESS_INFORMATION is 0x18 bytes: hProcess@0, hThread@8, dwProcessId@16, dwThreadId@20. The record a spawn is
-// handed is three words longer, for `SpawnFailedPreparationOffset`, `ProcInfoTreeObjectOffset` and
-// `ProcInfoTreeAssignedOffset`, none of which `CreateProcessW` writes.
-let ProcInfoSize = 0x30
+// handed is longer, for `SpawnFailedPreparationOffset`, `ProcInfoTreeObjectOffset`,
+// `ProcInfoTreeAssignedOffset` and the job-limit area at `ProcInfoJobLimitOffset`, none of which
+// `CreateProcessW` writes.
+let ProcInfoSize = ProcInfoJobLimitOffset + ProcInfoJobLimitBytes
 export let ProcInfoHProcessOffset = 0
 export let ProcInfoHThreadOffset = 8
 
@@ -1060,6 +1061,15 @@ export let ProcInfoTreeObjectOffset = 0x20
 
 // 1 where the child was assigned to that job, 0 where the assignment failed.
 export let ProcInfoTreeAssignedOffset = 0x28
+
+// A `JOBOBJECT_EXTENDED_LIMIT_INFORMATION`, handed to both job calls, which refuse any other length.
+export let ProcInfoJobLimitOffset = 0x30
+export let ProcInfoJobLimitBytes = 0x90
+let JobObjectLimitFlagsOffset = 16
+export let JobObjectLimitBreakawayOk = 0x00000800
+let JobObjectLimitSilentBreakawayOk = 0x00001000
+let JobObjectBreakawayPermittedMask = JobObjectLimitBreakawayOk or JobObjectLimitSilentBreakawayOk
+export let ProcInfoJobLimitFlagsOffset = ProcInfoJobLimitOffset + JobObjectLimitFlagsOffset
 
 // ⭐ **A LINUX CHILD THAT CANNOT LAUNCH REPORTS IN THE PARENT's OWN RECORD SHAPE.** The launch happens in a
 // cloned process, so what failed crosses back down the spawn's status pipe: the child writes these bytes of its
@@ -8754,7 +8764,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 
 	// The probe's input is a command LINE too — `__gt_process_run`'s twin note carries the reason.
 	let probeCommand = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf, encoding: module.hostText)
-	afterCopy = emitSubpSpawnInheriting(module, func: func, ids: ids, cur: afterCopy, command: probeCommand, cwd: probeSpawnDefaults, creationFlags: probeSpawnDefaults, startupPtr: startupPtr, procInfoPtr: procInfoPtr, env: probeSpawnDefaults, handles: threeArgs(probeSpawnDefaults, second: writeEnd, third: writeEnd))
+	afterCopy = emitSubpSpawnInheriting(module, func: func, ids: ids, cur: afterCopy, command: probeCommand, cwd: probeSpawnDefaults, creationFlags: probeSpawnDefaults, startupPtr: startupPtr, procInfoPtr: procInfoPtr, env: probeSpawnDefaults, handles: threeArgs(probeSpawnDefaults, second: writeEnd, third: writeEnd), detachable: false)
 	let hProcess = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
 	let hThread = ids.mint()
@@ -9603,9 +9613,11 @@ end 'emitSubpAllocStartupInfo'
 // PROC_THREAD_ATTRIBUTE_HANDLE_LIST. `bInheritHandles=TRUE` alone hands it every inheritable handle
 // in the process, the pipe ends of spawns running concurrently included, and a sibling's pipe then
 // never reaches EOF while this child lives. With nothing to list, the child inherits nothing.
-function emitSubpSpawnInheriting(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, command ValueId, cwd ValueId, creationFlags ValueId, startupPtr ValueId, procInfoPtr ValueId, env ValueId, handles ValueIdArray) returns IrBlock
+function emitSubpSpawnInheriting(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, command ValueId, cwd ValueId, creationFlags ValueId, startupPtr ValueId, procInfoPtr ValueId, env ValueId, handles ValueIdArray, detachable bool) returns IrBlock
+	let breakaway = emitSubpBreakawayRequest(module, block: cur, creationFlags: creationFlags, detachable: detachable, ids: ids)
+
 	if not subpPipesAreNamed(module) 'whole'
-		module.appendOp(cur, op: StdOp.osProcessSpawnInherit(command, cwdPtrId: cwd, creationFlagsId: creationFlags, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: env))
+		module.appendOp(cur, op: StdOp.osProcessSpawnInherit(command, cwdPtrId: cwd, creationFlagsId: emitSubpLaunchFlags(module, block: cur, base: creationFlags, breakaway: breakaway, ids: ids), startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: env))
 		return cur
 	end 'whole'
 
@@ -9650,14 +9662,78 @@ function emitSubpSpawnInheriting(module StdModule, func IrFunction, ids ValueMin
 	let updated = emitNetpoll(module, block: updating, verb: NetpollVerb.spawnAttributesInheritOnly, operands: threeArgs(list, second: handleArray, third: handleBytes), ids: ids)
 	emitBranchOnCompare(module, block: updating, value: updated, pred: StdCmpPred.eq, against: 0, whenTrue: spawned, whenFalse: inheritListed, ids: ids)
 
-	module.appendOp(inheritListed, op: StdOp.osProcessSpawnInherit(command, cwdPtrId: cwd, creationFlagsId: extendedFlags, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: env))
+	module.appendOp(inheritListed, op: StdOp.osProcessSpawnInherit(command, cwdPtrId: cwd, creationFlagsId: emitSubpLaunchFlags(module, block: inheritListed, base: extendedFlags, breakaway: breakaway, ids: ids), startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: env))
 	module.setTerminator(inheritListed, op: StdOp.branch(spawned.id))
 
-	module.appendOp(inheritNothing, op: StdOp.osProcessSpawn(command, cwdPtrId: cwd, creationFlagsId: extendedFlags, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: env))
+	module.appendOp(inheritNothing, op: StdOp.osProcessSpawn(command, cwdPtrId: cwd, creationFlagsId: emitSubpLaunchFlags(module, block: inheritNothing, base: extendedFlags, breakaway: breakaway, ids: ids), startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: env))
 	module.setTerminator(inheritNothing, op: StdOp.branch(spawned.id))
 
 	return spawned
 end 'emitSubpSpawnInheriting'
+
+union SpawnBreakaway
+	notRequested
+	requested(bit ValueId)
+end 'SpawnBreakaway'
+
+// A detached spawn asks for `CREATE_BREAKAWAY_FROM_JOB`, so the child is not born in the job of a
+// Maxon parent, whose deadline would end it.
+function emitSubpBreakawayRequest(module StdModule, block IrBlock, creationFlags ValueId, detachable bool, ids ValueMinter) returns SpawnBreakaway
+	if (not detachable) or (not hostTextIsWide(module)) 'unrequested'
+		return SpawnBreakaway.notRequested
+	end 'unrequested'
+
+	let detachMask = emitConst(module, block: block, value: DetachedProcess, ids: ids)
+	let detached = emitBin(module, block: block, a: creationFlags, b: detachMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let shift = emitConst(module, block: block, value: DetachToBreakawayShift, ids: ids)
+	return SpawnBreakaway.requested(emitBin(module, block: block, a: detached, b: shift, opcode: StdBinOpcode.shl, ids: ids))
+end 'emitSubpBreakawayRequest'
+
+// A detach that cannot leave the caller's job must not report a plain spawn failure, but a directory
+// or a non-executable file answers `ERROR_ACCESS_DENIED` too, so only a caller's job that forbids
+// breakaway makes it a refusal. `GetLastError` is read before the query, which overwrites it.
+function emitSubpBreakawayRefusal(module StdModule, block IrBlock, req ValueId, procInfoPtr ValueId, ids ValueMinter) returns ValueId
+	let err = ids.mint()
+	module.appendOp(block, op: StdOp.osLastError(err))
+	let denied = emitCompareWithConstant(module, block: block, value: err, pred: StdCmpPred.eq, against: ErrorAccessDenied, ids: ids)
+	let detachAsked = emitLoadField(module, block: block, record: req, offset: SubpReqDetach, ids: ids)
+	let asked = emitCompareWithConstant(module, block: block, value: detachAsked, pred: StdCmpPred.ne, against: 0, ids: ids)
+
+	let limitsPtr = emitFieldAddr(module, block: block, record: procInfoPtr, offset: ProcInfoJobLimitOffset, ids: ids)
+	let queryAnswer = ids.mint()
+	module.appendOp(block, op: StdOp.osCallerJobLimits(queryAnswer, bufPtrId: limitsPtr))
+	let inJob = emitCompareWithConstant(module, block: block, value: queryAnswer, pred: StdCmpPred.ne, against: 0, ids: ids)
+	let limitFlags = emitLoadDword(module, block: block, record: procInfoPtr, offset: ProcInfoJobLimitFlagsOffset, ids: ids)
+	let permittedMask = emitConst(module, block: block, value: JobObjectBreakawayPermittedMask, ids: ids)
+	let permitted = emitBin(module, block: block, a: limitFlags, b: permittedMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let forbidden = emitCompareWithConstant(module, block: block, value: permitted, pred: StdCmpPred.eq, against: 0, ids: ids)
+
+	let deniedAndAsked = emitBin(module, block: block, a: denied, b: asked, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let jobForbids = emitBin(module, block: block, a: inJob, b: forbidden, opcode: StdBinOpcode.bitAnd, ids: ids)
+	return emitBin(module, block: block, a: deniedAndAsked, b: jobForbids, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitSubpBreakawayRefusal'
+
+// spawnFail: close every handle this attempt opened (reloaded from the slot + the owned-child scratch) — the
+// slot stays free — give back the setup's scratch, and answer `answer`. Every road here has already published
+// the last error, and nothing below writes it.
+function emitSubpFailedSpawnExit(module StdModule, block IrBlock, ids ValueMinter, table ValueId, slotIdx ValueId, saPtr ValueId, childScratch ValueId, nulName ValueId, answer FullRangeInt)
+	let slotF = emitSubpSlotAddr(module, block: block, ids: ids, table: table, slotIdx: slotIdx)
+	emitSubpCloseSlotHandles(module, block: block, ids: ids, slot: slotF, childScratch: childScratch)
+	emitSubpFreeSetupScratch(module, block: block, saPtr: saPtr, childScratch: childScratch, nulName: nulName, ids: ids)
+
+	// ⭐ **AND GIVE THE CLAIM BACK.** The scan's CAS took this slot before any of the stdio setup ran, so this
+	// — the only way out of this function that produced no handle — is what returns it. Without it the table
+	// would lose one of its sixty-four slots per failed spawn.
+	emitSubpPublishSlotState(module, block: block, slot: slotF, value: SubpSlotFree, ids: ids)
+	module.setTerminator(block, op: StdOp.ret(emitConst(module, block: block, value: answer, ids: ids)))
+end 'emitSubpFailedSpawnExit'
+
+function emitSubpLaunchFlags(module StdModule, block IrBlock, base ValueId, breakaway SpawnBreakaway, ids ValueMinter) returns ValueId
+	return match breakaway 'request'
+		notRequested gives base
+		requested(bit) gives emitBin(module, block: block, a: base, b: bit, opcode: StdBinOpcode.bitOr, ids: ids)
+	end 'request'
+end 'emitSubpLaunchFlags'
 
 function emitSubpAttributeListOf(module StdModule, block IrBlock, attributeBlock ValueId, ids ValueMinter) returns ValueId
 	return emitBin(module, block: block, a: attributeBlock, b: emitConst(module, block: block, value: SubpAttributeBlockHeaderBytes, ids: ids), opcode: StdBinOpcode.add, ids: ids)
@@ -10009,7 +10085,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let cwdPtr = emitLoadField(module, block: afterStderr, record: req, offset: subpSpawnOperandOffset(module, utf8: SubpReqCwd, wide: SubpReqWideCwd), ids: ids)
 	let creationFlags = emitLoadField(module, block: afterStderr, record: req, offset: SubpReqFlags, ids: ids)
 	let envPtr = emitLoadField(module, block: afterStderr, record: req, offset: subpSpawnOperandOffset(module, utf8: SubpReqEnv, wide: SubpReqWideEnv), ids: ids)
-	afterStderr = emitSubpSpawnInheriting(module, func: func, ids: ids, cur: afterStderr, command: cmdlinePtr, cwd: cwdPtr, creationFlags: creationFlags, startupPtr: startupPtr, procInfoPtr: procInfoPtr, env: envPtr, handles: threeArgs(hStdIn, second: hStdOut, third: hStdErr))
+	afterStderr = emitSubpSpawnInheriting(module, func: func, ids: ids, cur: afterStderr, command: cmdlinePtr, cwd: cwdPtr, creationFlags: creationFlags, startupPtr: startupPtr, procInfoPtr: procInfoPtr, env: envPtr, handles: threeArgs(hStdIn, second: hStdOut, third: hStdErr), detachable: true)
 	let hProcess = emitLoadField(module, block: afterStderr, record: procInfoPtr, offset: ProcInfoHProcessOffset, ids: ids)
 	emitBranchOnCompare(module, block: afterStderr, value: hProcess, pred: StdCmpPred.eq, against: 0, whenTrue: launchFail, whenFalse: spawnOk, ids: ids)
 
@@ -10020,25 +10096,27 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let launchStep = emitLoadField(module, block: launchFail, record: procInfoPtr, offset: SpawnFailedPreparationOffset, ids: ids)
 	emitSubpRecordSpawnError(module, block: launchFail, preparation: launchStep, ids: ids)
 
+	var breakawayRefusal = negOne
+
+	if hostTextIsWide(module) 'readRefusal'
+		breakawayRefusal = emitSubpBreakawayRefusal(module, block: launchFail, req: req, procInfoPtr: procInfoPtr, ids: ids)
+	end 'readRefusal'
+
 	launchFail = emitSubpReleaseSpawnAttributeList(module, func: func, ids: ids, cur: launchFail, startupPtr: startupPtr)
 	let launchTree = emitLoadField(module, block: launchFail, record: procInfoPtr, offset: ProcInfoTreeObjectOffset, ids: ids)
 	var afterLaunchTree = emitSubpCloseTreeObject(module, func: func, ids: ids, cur: launchFail, treeObject: launchTree)
 	emitSubpWideRequestStep(module, block: afterLaunchTree, req: req, step: SubpWideRequestStep.release, ids: ids)
 	emitSubpFreeLaunchRecords(module, block: afterLaunchTree, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
-	module.setTerminator(afterLaunchTree, op: StdOp.branch(spawnFail.id))
 
-	// spawnFail: close every handle this attempt opened (reloaded from the slot + the owned-child scratch) — the
-	// slot stays free — give back the setup's scratch, and answer -1. Both roads here have already published the
-	// last error, and nothing below writes it.
-	let slotF = emitSubpSlotAddr(module, block: spawnFail, ids: ids, table: table, slotIdx: slotIdx)
-	emitSubpCloseSlotHandles(module, block: spawnFail, ids: ids, slot: slotF, childScratch: childScratch)
-	emitSubpFreeSetupScratch(module, block: spawnFail, saPtr: saPtr, childScratch: childScratch, nulName: nulName, ids: ids)
+	if hostTextIsWide(module) 'refusalExit'
+		var refusedExit = module.addBlock(func, label: b"detachrefused", heat: BlockHeat.normal)
+		emitBranchOnCompare(module, block: afterLaunchTree, value: breakawayRefusal, pred: StdCmpPred.ne, against: 0, whenTrue: refusedExit, whenFalse: spawnFail, ids: ids)
+		emitSubpFailedSpawnExit(module, block: refusedExit, ids: ids, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, answer: SubpDetachRefusedRc)
+	end 'refusalExit' else 'plainExit'
+		module.setTerminator(afterLaunchTree, op: StdOp.branch(spawnFail.id))
+	end 'plainExit'
 
-	// ⭐ **AND GIVE THE CLAIM BACK.** The scan's CAS took this slot before any of the stdio setup ran, so this
-	// — the only way out of this function that produced no handle — is what returns it. Without it the table
-	// would lose one of its sixty-four slots per failed spawn.
-	emitSubpPublishSlotState(module, block: spawnFail, slot: slotF, value: SubpSlotFree, ids: ids)
-	module.setTerminator(spawnFail, op: StdOp.ret(negOne))
+	emitSubpFailedSpawnExit(module, block: spawnFail, ids: ids, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, answer: SubpFailure)
 
 	// spawnOk: close the child thread handle and the PARENT's copies of the three OWNED child ends; store the
 	// process handle and pid; reset per-stream buffered state; ensure the reusable buffers; mark the slot live.

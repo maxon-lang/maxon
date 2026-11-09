@@ -200,6 +200,79 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/build-from-seed.sh
 
+      # Samples memory and the largest processes for the rest of the job into the log "Resource evidence"
+      # prints: a step killed by its timeout or by the OOM killer leaves no such record in its own log.
+      - name: Start the resource sampler
+        if: steps.seed.outputs.seeded == 'yes' && runner.os != 'Windows'
+        run: |
+          ranked_processes() {
+            ps -eo pid,ppid,pgid,stat,rss,etime,args | cut -c1-240 | { IFS= read -r header; echo "$header"; sort -k5,5nr | head -n 25; }
+          }
+
+          sample() {
+            echo "@ $(date -u +%FT%TZ)"
+
+            case "$RUNNER_OS" in
+              Linux)
+                free -m
+                ranked_processes
+                ;;
+              macOS)
+                vm_stat
+                sysctl vm.swapusage
+                ranked_processes
+                ;;
+              *)
+                echo "no sampler for $RUNNER_OS"
+                ;;
+            esac
+          }
+
+          log="$RUNNER_TEMP/resource-samples.log"
+          (
+            set +e +o pipefail
+            while true; do
+              sample
+              sleep 5
+            done
+          ) > "$log" 2>&1 < /dev/null &
+          disown
+          echo "sampling every 5 s into $log"
+
+      # Detached through `Start-Process`: a Git Bash background job holds the step's stdout pipe open, and
+      # the runner waits for that pipe's EOF, so the step would never end.
+      - name: Start the resource sampler (Windows)
+        if: steps.seed.outputs.seeded == 'yes' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $script = Join-Path $env:RUNNER_TEMP 'resource-sampler.ps1'
+          $log = Join-Path $env:RUNNER_TEMP 'resource-samples.log'
+
+          Set-Content -Path $script -Encoding utf8 -Value '
+          param([string]$Log)
+          $ErrorActionPreference = "SilentlyContinue"
+          $sample = 0
+          while ($true) {
+            try {
+              $os = Get-CimInstance Win32_OperatingSystem
+              $lines = @("@ " + (Get-Date).ToUniversalTime().ToString("o"))
+              $lines += "free={0}MB total={1}MB" -f [int]($os.FreePhysicalMemory / 1024), [int]($os.TotalVisibleMemorySize / 1024)
+              $lines += Get-Process | Sort-Object WS -Descending | Select-Object -First 25 Id, @{n="RssMB";e={[int]($_.WS / 1MB)}}, StartTime, ProcessName | Format-Table -AutoSize | Out-String -Width 400
+              if ($sample % 4 -eq 0) {
+                $lines += Get-CimInstance Win32_Process | Sort-Object WorkingSetSize -Descending | Select-Object -First 25 ProcessId, ParentProcessId, CommandLine | Format-Table -AutoSize | Out-String -Width 400
+              }
+              $lines | Out-File -FilePath $Log -Append -Encoding utf8
+            } catch {
+              "sample failed: $_" | Out-File -FilePath $Log -Append -Encoding utf8
+            }
+            $sample++
+            Start-Sleep -Seconds 15
+          }
+          '
+
+          $sampler = Start-Process -FilePath pwsh -WindowStyle Hidden -PassThru -ArgumentList '-NoProfile', '-File', "`"$script`"", "`"$log`""
+          "sampling every 15 s into $log (pid $($sampler.Id))"
+
       # `specs/tls-interop.md` handshakes with a live `openssl`; the script names the one this lane uses
       # (macOS ships LibreSSL, so it installs Homebrew's) and fails the lane when it is too old.
       - name: OpenSSL for the TLS interop cases
@@ -237,7 +310,7 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes' && contains(format(',{0},', matrix.roles), ',targets-gate,')
         run: ./maxon-bin/.maxon/maxon test tests/targets
 
-      # The one step with a timeout: a compile that hangs would otherwise run to the job's six-hour
+      # A step with a timeout: a compile that hangs would otherwise run to the job's six-hour
       # default and end cancelled, not failed.
       - name: Multicore stress programs compile
         if: steps.seed.outputs.seeded == 'yes'
@@ -333,17 +406,36 @@ jobs:
           sudo /usr/sbin/DevToolsSecurity -enable
           /usr/sbin/DevToolsSecurity -status
 
+      # The debugger corpora's timeouts turn a hang into a failed step, so the evidence steps after them run.
       - name: Debugger corpus
         if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
+        timeout-minutes: 20
         run: ./maxon-bin/.maxon/maxon test tests/debug
 
       - name: DAP corpus
         if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
+        timeout-minutes: 6
         run: ./maxon-bin/.maxon/maxon test tests/dap
 
       - name: MCP corpus
         if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
+        timeout-minutes: 10
         run: ./maxon-bin/.maxon/maxon test tests/mcp
+
+      - name: Processes the debugger corpora left running
+        if: always() && steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
+        run: |
+          case "$RUNNER_OS" in
+            Windows)
+              powershell -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*maxon*" -or $_.CommandLine -like "*$env:GITHUB_WORKSPACE*" -or $_.Name -match "debugserver|gdbserver|lldb" } | Select-Object ProcessId, ParentProcessId, CreationDate, CommandLine | Format-Table -AutoSize | Out-String -Width 400' || true
+              ;;
+            Linux | macOS)
+              ps -axo pid,ppid,pgid,stat,rss,etime,args | cut -c1-240 | grep -E "maxon|$GITHUB_WORKSPACE|debugserver|gdbserver|lldb" | grep -v grep || true
+              ;;
+            *)
+              echo "no process listing for $RUNNER_OS"
+              ;;
+          esac
 
       - name: CLI corpus
         if: steps.seed.outputs.seeded == 'yes'
@@ -431,6 +523,36 @@ jobs:
           for target in $targets; do
             ./maxon-bin/.maxon/maxon spec-test --target="$target"
           done
+
+      - name: Resource evidence
+        if: failure() && steps.seed.outputs.seeded == 'yes'
+        run: |
+          tail -n 400 "$RUNNER_TEMP/resource-samples.log" || true
+
+          case "$RUNNER_OS" in
+            Linux)
+              # `-n`: sudo fails at once rather than waiting for a password.
+              { sudo -n dmesg -T || dmesg -T; } 2>&1 | grep -i -E 'out of memory|oom|killed process' | tail -n 40 || true
+              ps -eo pid,ppid,pgid,stat,rss,etime,args --forest | cut -c1-240 || true
+              ;;
+            macOS)
+              ps -axo pid,ppid,pgid,stat,rss,etime,args | cut -c1-240 | sort -k2,2n || true
+              ;;
+            Windows)
+              echo "the process table is the last sample above"
+              ;;
+            *)
+              echo "no process listing for $RUNNER_OS"
+              ;;
+          esac
+
+      - name: Upload the resource samples
+        if: failure() && steps.seed.outputs.seeded == 'yes'
+        uses: actions/upload-artifact@v6
+        with:
+          name: resource-samples-${{ matrix.target }}
+          path: ${{ runner.temp }}/resource-samples.log
+          if-no-files-found: ignore
 
   freeze:
     if: github.repository == 'maxon-lang/maxon' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.freeze_seed))

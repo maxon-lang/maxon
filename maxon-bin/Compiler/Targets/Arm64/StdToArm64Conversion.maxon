@@ -697,6 +697,7 @@ export type StdToArm64Lowering
 			osMapNamedSegment or
 			osTickCountMs or
 			osHandleSetInherit or
+			osCallerJobLimits or
 			osPipePeek or
 			osEnvRead or
 			osProcessTerminate or
@@ -1044,6 +1045,7 @@ export type StdToArm64Lowering
 			osHostProcess(resultId, service, a0Id, a1Id, a2Id, a3Id, a4Id, _) then self.lowerOsHostProcess(resultId, service: service, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstRef: dstRef)
 			osNetpoll(resultId, verb, a0Id, a1Id, a2Id, a3Id, a4Id) then self.lowerOsNetpoll(resultId, verb: verb, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstRef: dstRef)
 			cryptoRoutine(resultId, routine, a0Id, a1Id, a2Id, a3Id) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(cryptoChunkName(routine)), args: fourArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id), dstRef: dstRef)
+			osCallerJobLimits then panic("StdToArm64Lowering: `osCallerJobLimits` queries the Win32 job the spawning process belongs to and this lane has no job objects — `GtRuntime` emits it only where host text is wide")
 			osSocketOverlapped then panic("StdToArm64Lowering: `osSocketOverlapped` is an OVERLAPPED Winsock transfer and this lane has no Winsock — its sockets are driven by readiness, so `ManagedSocketRuntime.socketWaitShape` answers `polled` and emits none")
 			osPathQuery(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsPathQuery(resultId, verb: verb, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, dstRef: dstRef)
 
@@ -1220,6 +1222,7 @@ export type StdToArm64Lowering
 			osMapNamedSegment or
 			osTickCountMs then panic("StdToArm64Lowering: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops)")
 			osHandleSetInherit or
+			osCallerJobLimits or
 			osPipePeek or
 			osEnvRead or
 			osProcessTerminate then panic("StdToArm64Lowering: an attached-subprocess host primitive appeared as a block terminator (lowering bug — the inherit mark, the pipe peek, the env read and the terminate are all body ops)")

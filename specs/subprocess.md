@@ -474,6 +474,250 @@ end 'main'
 0
 ```
 
+<!-- test: subprocess-a-deadline-ends-the-grandchild-the-child-started -->
+<!-- unsupported-targets: wasm32-wasi -->
+⭐⭐ **A DEADLINE ENDS THE CHILD'S WHOLE PROCESS TREE, A GRANDCHILD THAT LEADS ITS OWN PROCESS GROUP
+INCLUDED.** On Linux and macOS every Maxon program leads a process group
+of its own, so a child that is itself a Maxon program starts its grandchild outside the group the child leads. A kill that reaches only the child's group leaves that grandchild running,
+reparented, after the parent was told the tree had ended.
+
+The case runs itself three ways. The child starts a grandchild that sleeps far past every deadline, prints the
+grandchild's process id and waits for it. The parent passes both deadlines, `waitWithTimeout` on a streaming
+child and `timeoutMs` on a collected run, and after each it gives the grandchild two seconds to be gone.
+```maxon
+let sleeperMs = 30000
+let deadlineMs = 3000
+let graceMs = 2000
+let pollMs = 50
+
+function grandchildIdFrom(line String) returns Pid throws ParseError
+	let parsed = try int.fromString(line.trim())
+	if parsed < 0 'negative'
+		throw ParseError.invalidFormat
+	end 'negative'
+	return parsed
+end 'grandchildIdFrom'
+
+function endsWithinGrace(pid Pid) returns bool
+	var waited = 0 as DurationMs
+	while waited < graceMs 'poll'
+		if not Process.isAlive(pid) 'gone'
+			return true
+		end 'gone'
+		sleep(pollMs)
+		waited = waited + pollMs
+	end 'poll'
+	return not Process.isAlive(pid)
+end 'endsWithinGrace'
+
+function argumentsFor(mode String) returns StringArray
+	var argv = StringArray.create(0)
+	argv.push(mode)
+	return argv
+end 'argumentsFor'
+
+function startGrandchild(me Executable) returns ExitCode
+	var grandchild = try StreamingSubprocess.spawn(me, arguments: argumentsFor("grandchild")) otherwise return 3
+	let pid = try grandchild.processId() otherwise return 4
+	print("{pid}\n")
+	_ = try grandchild.wait() otherwise return 5
+	grandchild.release()
+	return 0
+end 'startGrandchild'
+
+function streamingVerdict(me Executable) returns String throws SubprocessError
+	var child = try StreamingSubprocess.spawn(me, arguments: argumentsFor("child"))
+	let line = try child.readStdoutLine()
+	let pid = try grandchildIdFrom(line) otherwise panic("the child prints the grandchild's id")
+	var timedOut = false
+	try child.waitWithTimeout(deadlineMs) otherwise (e) 'expired'
+		timedOut = e.timedOut()
+	end 'expired'
+	child.release()
+	return "waitWithTimeout: timed out {timedOut}, grandchild ended {endsWithinGrace(pid)}"
+end 'streamingVerdict'
+
+function collectedVerdict(me Executable) returns String
+	var partial = ""
+	var timedOut = false
+	try Subprocess.run(me, arguments: argumentsFor("child"), timeoutMs: deadlineMs) otherwise (e) 'expired'
+		timedOut = e.timedOut()
+		partial = match e 'kind'
+			timeout(_, out, _) gives out
+			executableNotFound or
+				spawnFailed or
+				ioFailed or
+				inputTooLarge or
+				endOfStream gives ""
+		end 'kind'
+	end 'expired'
+	let pid = try grandchildIdFrom(partial) otherwise panic("the child prints the grandchild's id before the deadline")
+	return "timeoutMs: timed out {timedOut}, grandchild ended {endsWithinGrace(pid)}"
+end 'collectedVerdict'
+
+function main() returns ExitCode
+	let me = Executable.path(try Process.executablePath() otherwise return 2)
+	let args = CommandLine.args()
+	let mode = try args.get(1) otherwise ""
+
+	if mode == "grandchild" 'sleeper'
+		sleep(sleeperMs)
+		return 0
+	end 'sleeper'
+
+	if mode == "child" 'child'
+		return startGrandchild(me)
+	end 'child'
+
+	print("{try streamingVerdict(me) otherwise return 6}\n")
+	print("{collectedVerdict(me)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+waitWithTimeout: timed out true, grandchild ended true
+timeoutMs: timed out true, grandchild ended true
+```
+
+<!-- test: subprocess-a-deadline-spares-the-process-the-child-started-detached -->
+<!-- unsupported-targets: wasm32-wasi -->
+**A DEADLINE'S TREE KILL NEVER ENDS A PROCESS THE CHILD STARTED DETACHED.** Detaching is stated at the spawn,
+with `runDetached()`, so the process it starts is no part of the tree a deadline ends, though its parent is
+the child.
+
+The case runs itself three ways. The child starts a detached grandchild, prints its process id and sleeps far
+past the deadline. The parent ends the child with a `timeoutMs` deadline and checks the grandchild is still
+alive half a second later. The grandchild ends by itself, ten seconds after it started, well past the check
+on a loaded host, and the parent waits for it so no process outlives the case.
+```maxon
+let childSleepMs = 30000
+let detachedLifeMs = 10000
+let deadlineMs = 3000
+let graceMs = 500
+let selfEndBoundMs = 30000
+let pollMs = 50
+
+function detachedIdFrom(line String) returns Pid throws ParseError
+	let parsed = try int.fromString(line.trim())
+	if parsed < 0 'negative'
+		throw ParseError.invalidFormat
+	end 'negative'
+	return parsed
+end 'detachedIdFrom'
+
+function endsWithin(pid Pid, boundMs DurationMs) returns bool
+	var waited = 0 as DurationMs
+
+	while waited < boundMs 'poll'
+		if not Process.isAlive(pid) 'gone'
+			return true
+		end 'gone'
+
+		sleep(pollMs)
+		waited = waited + pollMs
+	end 'poll'
+
+	return not Process.isAlive(pid)
+end 'endsWithin'
+
+function argumentsFor(mode String) returns StringArray
+	var argv = StringArray.create(0)
+	argv.push(mode)
+	return argv
+end 'argumentsFor'
+
+function startDetached(me Executable) returns ExitCode
+	var config = Configuration.create(me)
+	config.arguments = argumentsFor("detached")
+	let pid = try config.runDetached() otherwise return 3
+	print("{pid}\n")
+	sleep(childSleepMs)
+	return 0
+end 'startDetached'
+
+function main() returns ExitCode
+	let me = Executable.path(try Process.executablePath() otherwise return 2)
+	let args = CommandLine.args()
+	let mode = try args.get(1) otherwise ""
+
+	if mode == "detached" 'sleeper'
+		sleep(detachedLifeMs)
+		return 0
+	end 'sleeper'
+
+	if mode == "child" 'child'
+		return startDetached(me)
+	end 'child'
+
+	var partial = ""
+	var timedOut = false
+	try Subprocess.run(me, arguments: argumentsFor("child"), timeoutMs: deadlineMs) otherwise (e) 'expired'
+		timedOut = e.timedOut()
+		partial = match e 'kind'
+			timeout(_, out, _) gives out
+			executableNotFound or
+				spawnFailed or
+				ioFailed or
+				inputTooLarge or
+				endOfStream gives ""
+		end 'kind'
+	end 'expired'
+	let pid = try detachedIdFrom(partial) otherwise panic("the child prints the detached grandchild's id before the deadline")
+	sleep(graceMs)
+	let survived = Process.isAlive(pid)
+	let endedByItself = endsWithin(pid, boundMs: selfEndBoundMs)
+	print("timed out {timedOut}, detached grandchild survived {survived}, ended by itself {endedByItself}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+timed out true, detached grandchild survived true, ended by itself true
+```
+
+<!-- test: subprocess-a-detached-launch-of-a-directory-is-access-denied-not-a-job-refusal -->
+<!-- unsupported-targets: wasm32-wasi -->
+A detached launch whose executable is a directory is refused by the operating system as access denied, and
+`runDetached()` throws `spawnFailed` with that refusal as its reason. Only a job that does not allow breakaway
+makes the reason blame the job this program runs in; a launch the operating system itself refuses never does.
+```maxon
+let jobRefusal = "does not allow breakaway"
+
+function verdictOf(e SubprocessError) returns String
+	return match e 'kind'
+		spawnFailed(reason) gives "threw spawnFailed true, blames the job {reason.contains(jobRefusal)}"
+		executableNotFound or
+		ioFailed or
+		timeout or
+		inputTooLarge or
+		endOfStream gives "threw {e.name}"
+	end 'kind'
+end 'verdictOf'
+
+function main() returns ExitCode
+	let config = Configuration.create(Executable.path(Directory.currentPath()))
+	var verdict = "started"
+
+	try config.runDetached() otherwise (e) 'refused'
+		verdict = verdictOf(e)
+	end 'refused'
+
+	print("{verdict}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+threw spawnFailed true, blames the job false
+```
+
 <!-- test: subprocess-run-bare-name-found-on-path -->
 <!-- unsupported-targets: wasm32-wasi -->
 ⭐⭐ **A BARE NAME IS FOUND THROUGH `PATH` ON EVERY LANE.** Every other case here spawns a POSIX tool by
@@ -2431,7 +2675,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Subprocess.maxon:1255: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
+panic at Subprocess.maxon:1262: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
 Stack trace:
   in StreamingSubprocess.release
   in main

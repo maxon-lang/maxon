@@ -227,6 +227,7 @@ let InheritHandlesTrue = 1  // CreateProcessW bInheritHandles=TRUE (the child in
 let CreateSuspended = 0x00000004
 let CreateUnicodeEnvironment = 0x00000400
 let SpawnFixedCreationFlags = CreateSuspended or CreateUnicodeEnvironment
+let JobObjectExtendedLimitInformationClass = 9
 let PipeMessageMode = 0x0  // PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT
 let PipeMaxInstances = 1  // one server instance per uniquely-named pipe
 let PipeBufferSize = 0x10000  // nOutBufferSize / nInBufferSize (64 KB)
@@ -355,6 +356,8 @@ let HostSampleArg6Slot = 1
 // EXPORTED for `X64GtRuntime`'s system-stack shim, which must reserve the same words this lowering writes
 // into — one number, read by the producer and by the shim, exactly as `CreateProcessStackArgWords` is.
 export let PeekPipeStackArgWords = 2 as MachineWord  // args 5-6, both real stack arguments
+export let QueryJobObjectStackArgWords = 1 as MachineWord
+let QueryJobObjectReturnLengthSlot = 0
 
 let CreateProcessInheritHandlesSlot = 0  // arg5 bInheritHandles = FALSE
 let CreateProcessCreationFlagsSlot = 1  // arg6 dwCreationFlags = 0
@@ -1271,6 +1274,7 @@ export type StdToX64Lowering
 
 			// PeekNamedPipe passes its last two of six arguments on the stack.
 			osPipePeek gives win64OutgoingArgBytes(PeekPipeStackArgWords)
+			osCallerJobLimits gives win64OutgoingArgBytes(QueryJobObjectStackArgWords)
 
 			// `getsockopt` takes five arguments and `WSASocketW` six, so their tails are real outgoing stack
 			// arguments. A raw-syscall lane passes everything in registers, and the reservation there costs
@@ -1513,6 +1517,7 @@ export type StdToX64Lowering
 			osProcessSpawn(cmdlinePtrId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(cmdlinePtrId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, inheritHandles: false, dstBlock: dstBlock)
 			osHandleSetInherit(handleId) then self.lowerOsHandleSetInherit(handleId, dstBlock: dstBlock)
 			osPipePeek(resultId, handleId, availPtrId) then self.lowerOsPipePeek(resultId, handleId: handleId, availPtrId: availPtrId, dstBlock: dstBlock)
+			osCallerJobLimits(resultId, bufPtrId) then self.lowerOsCallerJobLimits(resultId, bufPtrId: bufPtrId, dstBlock: dstBlock)
 			osEnvRead(resultId, namePtrId, bufPtrId, bufLenId) then self.lowerOsEnvRead(resultId, namePtrId: namePtrId, bufPtrId: bufPtrId, bufLenId: bufLenId, dstBlock: dstBlock)
 			osEnvBlock(resultId) then self.lowerOsEnvBlock(resultId, dstBlock: dstBlock)
 			osEnvBlockFree(blockPtrId) then self.lowerOsEnvBlockFree(blockPtrId, dstBlock: dstBlock)
@@ -1711,6 +1716,7 @@ export type StdToX64Lowering
 			osWaitHandle or
 			osWaitChild then panic("StdToX64Lowering: a subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
 			osHandleSetInherit or
+			osCallerJobLimits or
 			osPipePeek or
 			osEnvRead or
 			osProcessTerminate then panic("StdToX64Lowering: an attached-subprocess host primitive appeared as a block terminator (lowering bug — the inherit mark, the pipe peek, the env read and the terminate are all body ops)")
@@ -2961,6 +2967,8 @@ export type StdToX64Lowering
 	// The child's own job object, which makes a deadline's kill reach the whole tree: every process a
 	// job's member starts is born inside that job, so one `TerminateJobObject` ends the child and
 	// everything it started, where `TerminateProcess` ends one process and leaves the rest running.
+	// The job allows breakaway, so a process the child starts detached (`CREATE_BREAKAWAY_FROM_JOB`)
+	// leaves it and outlives the deadline.
 	// The job handle goes back in the record's `ProcInfoTreeObjectOffset` word, and whether the
 	// assignment succeeded in `ProcInfoTreeAssignedOffset`, because a job the child is not in cannot
 	// end it.
@@ -2980,6 +2988,15 @@ export type StdToX64Lowering
 		var job = self.mintVirtual()
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.CreateJobObjectW, into: job)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(procInfoPtrId), disp: ProcInfoTreeObjectOffset as Imm32, src: job, width: X64AccessWidth.word64))
+
+		let breakawayOk = self.mintVirtual()
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(breakawayOk, value: JobObjectLimitBreakawayOk))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(procInfoPtrId), disp: ProcInfoJobLimitFlagsOffset as Imm32, src: breakawayOk, width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: job))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: JobObjectExtendedLimitInformationClass))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(x64PhysReg(X64Register.r8), base: TargetVReg.virtual(procInfoPtrId), disp: ProcInfoJobLimitOffset as Imm32))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: ProcInfoJobLimitBytes))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SetInformationJobObject)))
 
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: job))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rdx), base: TargetVReg.virtual(procInfoPtrId), disp: ProcInfoHProcessOffset as Imm32, width: X64AccessWidth.word64))
@@ -3043,6 +3060,22 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.PeekNamedPipe, into: TargetVReg.virtual(resultId))
 	end 'lowerOsPipePeekWin64'
+
+	function lowerOsCallerJobLimits(resultId ValueId, bufPtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsCallerJobLimitsWin64(resultId, bufPtrId: bufPtrId, dstBlock: dstBlock)
+			syscall then panic("StdToX64Lowering: `osCallerJobLimits` queries the Win32 job the spawning process belongs to and the syscall lanes have no job objects — `GtRuntime` emits it only where host text is wide")
+		end 'route'
+	end 'lowerOsCallerJobLimits'
+
+	function lowerOsCallerJobLimitsWin64(resultId ValueId, bufPtrId ValueId, dstBlock IrBlock)
+		self.emitWin64StackArgImm(dstBlock, slot: QueryJobObjectReturnLengthSlot, value: NullPointer)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: JobObjectExtendedLimitInformationClass))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(bufPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: ProcInfoJobLimitBytes))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.QueryInformationJobObject, into: TargetVReg.virtual(resultId))
+	end 'lowerOsCallerJobLimitsWin64'
 
 	// `GetEnvironmentVariableW(name, buf, len)` — three arguments in the same order on both routes, the
 	// character count in RAX. It is a CHUNK on Linux because a static image links no libc: there is no
@@ -3148,7 +3181,8 @@ export type StdToX64Lowering
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsProcessTerminateWin64(resultId, handleId: handleId, exitCodeId: exitCodeId, dstBlock: dstBlock)
 
-			// `kill(-pgid, SIGKILL)`; see `buildX64LinuxProcTerminateChunk` for the code it records.
+			// The tree kill, then `kill(-pgid, SIGKILL)`; see `buildX64LinuxProcTerminateChunk` for the
+			// code it records.
 			syscall then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(HostProcTerminateName), args: twoArgs(handleId, second: exitCodeId), dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsProcessTerminate'
@@ -5423,6 +5457,7 @@ export type StdToX64Lowering
 			osMapNamedSegment or
 			osTickCountMs or
 			osHandleSetInherit or
+			osCallerJobLimits or
 			osPipePeek or
 			osEnvRead or
 			osProcessTerminate or
@@ -5679,6 +5714,7 @@ export type StdToX64Lowering
 			osMapNamedSegment or
 			osTickCountMs panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a DebugStream host primitive, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osHandleSetInherit or
+			osCallerJobLimits or
 			osPipePeek or
 			osEnvRead or
 			osProcessTerminate panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an attached-subprocess host primitive, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")

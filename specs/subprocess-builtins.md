@@ -973,8 +973,15 @@ kind=2 code=3
 `sleep` it left in the background holds the stdout pipe, so the collect cannot finish before the deadline. The
 program waits for the shell's exit before it collects, so the deadline can only fire on a child that has
 already exited: a deadline that fired while the shell was still starting would end it with `SIGKILL` and say
-nothing about the property. The kill reaches only the `sleep`, and the kill's code is reported only for a child
-whose wait status says `SIGKILL` ended it, and this one says it exited with `3`.
+nothing about the property. The kill's code is reported only for a child whose wait status says `SIGKILL`
+ended it, and this one says it exited with `3`.
+
+The deadline still ends the `sleep`. The shell was reaped before the deadline fired, and the `sleep` left its
+tree by parent when the shell exited, so the kill reaches it through the shell's process group: a group
+outlives its leader, and the kernel hands out no group's id while a member of the group lives, so signalling
+the group of a reaped leader cannot reach another process. The shell prints the `sleep`'s id before it exits,
+and after the deadline the program gives the `sleep` two seconds to be gone. The `sleep` outlasts that by far,
+so only a kill can end it in time.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -988,11 +995,33 @@ function appendToken(out ByteArray, token String)
 	out.push(0)
 end 'appendToken'
 
+function memberPid(out String) returns Pid
+	let parsed = try int.fromString(out.trim()) otherwise panic("the shell prints its background member's id before it exits")
+	return parsed as Pid
+end 'memberPid'
+
+function memberEndsWithinGrace(pid Pid) returns bool
+	let graceMs = 2000
+	let pollMs = 50
+	var waited = 0 as DurationMs
+
+	while waited < graceMs 'poll'
+		if not Process.isAlive(pid) 'gone'
+			return true
+		end 'gone'
+
+		sleep(pollMs)
+		waited = waited + pollMs
+	end 'poll'
+
+	return not Process.isAlive(pid)
+end 'memberEndsWithinGrace'
+
 function main() returns ExitCode
 	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
-	appendToken(argv, token: "sleep 3 & exit 3")
+	appendToken(argv, token: "sleep 30 & echo $!; exit 3")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
@@ -1000,9 +1029,10 @@ function main() returns ExitCode
 	let r = __Builtins.subprocessWaitCollect(h, 300)
 	let kind = __Builtins.subprocessResultStatusKind(r)
 	let code = __Builtins.subprocessResultStatusCode(r)
-	print("kind={kind} code={code}")
+	let member = memberPid(String.init(__Builtins.subprocessResultStdout(r)))
 	__Builtins.subprocessResultRelease(r)
 	__Builtins.subprocessReleaseHandle(h)
+	print("kind={kind} code={code} memberEnded={memberEndsWithinGrace(member)}")
 	return 0
 end 'main'
 ```
@@ -1010,24 +1040,27 @@ end 'main'
 0
 ```
 ```stdout
-kind=2 code=3
+kind=2 code=3 memberEnded=true
 
 ```
 
 <!-- test: subprocess-builtins.posix-a-zombie-group-leader-keeps-its-own-code-when-the-deadline-kills-its-group -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: x64-windows, arm64-macos -->
+<!-- unsupported-targets: x64-windows -->
 **A DEADLINE KILL OF A GROUP WHOSE LEADER HAS EXITED UNREAPED REPORTS THE LEADER'S OWN CODE.** The shell exits
 with `3` and the `sleep` it left in the background holds the stdout pipe, so the collect cannot finish before
-the deadline. The program reads `/proc/<pid>/stat` until the shell's state is `Z`, which observes the exit
-without reaping it, and only then collects: the shell is a zombie when the deadline fires. `kill(-pgid, SIGKILL)`
-answers success for a group whose leader is a zombie, because the `sleep` is still in it, and the reap is what
-tells the two apart: the kill's code is reported only for a child whose wait status says `SIGKILL` ended it, and
-this one says it exited with `3`.
+the deadline. The program asks `/bin/ps -o stat= -p <pid>` until the shell's state starts with `Z`, which
+observes the exit without reaping it on Linux and macOS alike, and only then collects; a shell that never
+shows as a zombie within ten seconds stops the program with a panic naming it. The kill's code is reported only for a child whose wait status says
+`SIGKILL` ended it, and this one says it exited with `3`.
+
+The deadline also ends the `sleep`, through the shell's process group, whether the shell is still a zombie
+when it fires or already reaped: a group outlives its leader, and the kernel hands out no group's id while a
+member of the group lives. The shell prints the `sleep`'s id before it exits, and after the deadline the
+program gives the `sleep` two seconds to be gone, which only a kill can do.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
-typealias Pid = int(0 to u32.max)
 
 function appendToken(out ByteArray, token String)
 	let bytes = token.toByteArray()
@@ -1039,30 +1072,65 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function isZombie(pid Pid) returns bool
-	let stat = try File.readText(FilePath from "/proc/{pid}/stat") otherwise panic("/proc/{pid}/stat must stay readable until the child is reaped")
-	return stat.contains(") Z")
+	let ps = Executable.path(try FilePath.from("/bin/ps") otherwise panic("/bin/ps is a valid path"))
+	var argv = StringArray.create(0)
+	argv.push("-o")
+	argv.push("stat=")
+	argv.push("-p")
+	argv.push("{pid}")
+	let result = try Subprocess.run(ps, arguments: argv) otherwise panic("/bin/ps could not run")
+	return result.stdout.trim().startsWith("Z")
 end 'isZombie'
+
+function awaitZombie(pid Pid)
+	let deadlineMs = 10000
+	let started = Clock.nowMs()
+
+	while not isZombie(pid) 'untilExited'
+		if Clock.nowMs() - started > deadlineMs 'late'
+			panic("the shell {pid} never showed as a zombie within {deadlineMs} ms")
+		end 'late'
+	end 'untilExited'
+end 'awaitZombie'
+
+function memberPid(out String) returns Pid
+	let parsed = try int.fromString(out.trim()) otherwise panic("the shell prints its background member's id before it exits")
+	return parsed as Pid
+end 'memberPid'
+
+function memberEndsWithinGrace(pid Pid) returns bool
+	let graceMs = 2000
+	let pollMs = 50
+	var waited = 0 as DurationMs
+
+	while waited < graceMs 'poll'
+		if not Process.isAlive(pid) 'gone'
+			return true
+		end 'gone'
+
+		sleep(pollMs)
+		waited = waited + pollMs
+	end 'poll'
+
+	return not Process.isAlive(pid)
+end 'memberEndsWithinGrace'
 
 function main() returns ExitCode
 	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
-	appendToken(argv, token: "sleep 3 & exit 3")
+	appendToken(argv, token: "sleep 30 & echo $!; exit 3")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
-	let pid = __Builtins.subprocessGetPid(h)
-
-	while not isZombie(pid as Pid) 'untilExited'
-		Scheduler.yield()
-	end 'untilExited'
-
+	awaitZombie(__Builtins.subprocessGetPid(h) as Pid)
 	let r = __Builtins.subprocessWaitCollect(h, 300)
 	let kind = __Builtins.subprocessResultStatusKind(r)
 	let code = __Builtins.subprocessResultStatusCode(r)
-	print("kind={kind} code={code}")
+	let member = memberPid(String.init(__Builtins.subprocessResultStdout(r)))
 	__Builtins.subprocessResultRelease(r)
 	__Builtins.subprocessReleaseHandle(h)
+	print("kind={kind} code={code} memberEnded={memberEndsWithinGrace(member)}")
 	return 0
 end 'main'
 ```
@@ -1070,7 +1138,7 @@ end 'main'
 0
 ```
 ```stdout
-kind=2 code=3
+kind=2 code=3 memberEnded=true
 
 ```
 
