@@ -1,0 +1,36 @@
+let NoMainSpecName = "no-main"
+let MissingMainDiagnostic = "No 'main' function found"
+
+test 'a case whose diagnostic names no case is the one failed for breaking the batch, and its siblings pass'
+	let run = runGateFixtureOnce(StringArray.create(0))
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	collectNotPassed(said, specName: NoMainSpecName, testNames: ["no-main.first", "no-main.second"], broken: broken)
+
+	let culpritFailed = failVerdictPrefix(testLabel(NoMainSpecName, testName: "no-main.declares-no-main"))
+
+	if not said.contains(culpritFailed) 'culpritDidNotFail'
+		broken.push("'no-main.declares-no-main' declares no main the compiler sees, and the run must fail it. Expected '{culpritFailed}', and the run said:\n{said}\n")
+	end 'culpritDidNotFail'
+
+	if not said.contains(MissingMainDiagnostic) 'ownFailureUnsaid'
+		broken.push("the failure of 'no-main.declares-no-main' does not carry its own compile error '{MissingMainDiagnostic}'. The run said:\n{said}\n")
+	end 'ownFailureUnsaid'
+
+	if not said.contains(BrokeTheBatchProgram) 'culpritNotLinked'
+		broken.push("the failure of 'no-main.declares-no-main' does not say it '{BrokeTheBatchProgram}'. The run said:\n{said}\n")
+	end 'culpritNotLinked'
+
+	if said.contains(BatchingChecksMissedThisCase) 'aSiblingWasBlamed'
+		broken.push("a healthy sibling was failed for '{BatchingChecksMissedThisCase}', though it compiles alone and the breaking case is a different one. The run said:\n{said}\n")
+	end 'aSiblingWasBlamed'
+
+	collectMissingSummary(said, expected: batchSummaryLine(2, programs: 1, alone: 0), broken: broken)
+
+	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with a failed case in it. It said:\n{said}\n")
+	end 'failureDidNotCount'
+
+	requireNothingBroken(broken, headline: "a case whose diagnostic names no case is the one failed for breaking the batch")
+end 'a case whose diagnostic names no case is the one failed for breaking the batch, and its siblings pass'

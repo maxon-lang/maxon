@@ -1,0 +1,42 @@
+let AllBreakSpecName = "all-break"
+let AllBreakCaseCount = 16
+
+test 'when every case breaks the batch program the run spends its trial budget, blames no case it did not isolate, and reports once'
+	let run = runGateFixtureOnce(StringArray.create(0))
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	for number in 1 to AllBreakCaseCount 'eachCase'
+		let pad = "0" if number < 10 else ""
+		let name = "all-break.case-{pad}{number}"
+		let failed = failVerdictPrefix(testLabel(AllBreakSpecName, testName: name))
+
+		if not said.contains(failed) 'caseDidNotFail'
+			broken.push("'{name}' declares no main the compiler sees, and the run must fail it. Expected '{failed}', and the run said:\n{said}\n")
+		end 'caseDidNotFail'
+	end 'eachCase'
+
+	if said.split(HarnessErrorMarker).count() != 2 'harnessErrorNotOnce'
+		broken.push("the run must report exactly one '{HarnessErrorMarker}'. It said:\n{said}\n")
+	end 'harnessErrorNotOnce'
+
+	if not said.contains(TrialBudgetSpentText) 'budgetUnsaid'
+		broken.push("the harness error does not say it spent its trial builds ('{TrialBudgetSpentText}'). The run said:\n{said}\n")
+	end 'budgetUnsaid'
+
+	if said.contains(BatchingChecksMissedThisCase) 'aCaseWasBlamed'
+		broken.push("a case was failed for '{BatchingChecksMissedThisCase}'. The run said:\n{said}\n")
+	end 'aCaseWasBlamed'
+
+	let isolated = said.split(BrokeTheBatchProgram).count() - 1
+
+	if isolated >= AllBreakCaseCount or isolated < 1 'isolationCountOff'
+		broken.push("{isolated} of the {AllBreakCaseCount} cases say they '{BrokeTheBatchProgram}': some but not all must, since the budget ends before every case is isolated. The run said:\n{said}\n")
+	end 'isolationCountOff'
+
+	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with failed cases in it. It said:\n{said}\n")
+	end 'failureDidNotCount'
+
+	requireNothingBroken(broken, headline: "when every case breaks the batch program the run spends its trial budget and reports once")
+end 'when every case breaks the batch program the run spends its trial budget, blames no case it did not isolate, and reports once'

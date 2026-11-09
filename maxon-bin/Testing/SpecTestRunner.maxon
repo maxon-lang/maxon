@@ -903,7 +903,8 @@ export type SuiteCpuTally
 	end 'reportLine'
 end 'SuiteCpuTally'
 
-// What one spec's run produced: its verdicts, and what compiling them cost.
+// What one spec's run produced: its verdicts, what compiling them cost, and the harness errors that
+// belong to no test.
 //
 // The two travel together because they are counted together: the tally's `tests()` must equal the
 // result count, and a shape that could return one without the other is a shape in which they can
@@ -912,9 +913,10 @@ export type SpecRun
 	export let results as SpecTestResultArray
 	export let cpu as SuiteCpuTally
 	export let batch as BatchTally
+	export let harnessErrors as StringArray
 
-	export static function create(results SpecTestResultArray, cpu SuiteCpuTally, batch BatchTally) returns SpecRun
-		return Self{results: results, cpu: cpu, batch: batch}
+	export static function create(results SpecTestResultArray, cpu SuiteCpuTally, batch BatchTally, harnessErrors StringArray) returns SpecRun
+		return Self{results: results, cpu: cpu, batch: batch, harnessErrors: harnessErrors}
 	end 'create'
 end 'SpecRun'
 
@@ -962,7 +964,7 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	let tests = testsThatRun(selectedTests(parsed.tests, specName: specName, filterPatterns: filterPatterns, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, assumeNativeHost: false).selected, runs: runs)
 
 	if tests.count() == 0 'selectsNothing'
-		return SpecRun.create(SpecTestResultArray.create(0), cpu: cpu, batch: BatchTally.zero())
+		return SpecRun.create(SpecTestResultArray.create(0), cpu: cpu, batch: BatchTally.zero(), harnessErrors: StringArray.create(0))
 	end 'selectsNothing'
 
 	var results = SpecTestResultArray.create(tests.count(), zeroed: false)
@@ -1023,7 +1025,7 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 
 	clearSharedTiers(tempDir, tests: tests)
 
-	return SpecRun.create(results, cpu: cpu, batch: performed.tally)
+	return SpecRun.create(results, cpu: cpu, batch: performed.tally, harnessErrors: batch.harnessErrors)
 end 'runOneSpec'
 
 function noteFailedBatched(failed TestRunIndexArray, reasons BatchedFailureMap, pending PendingRun, at ElementIndex, observations RunObservationArray, effectiveTarget Target)
@@ -2159,9 +2161,10 @@ typealias BatchedStepSiteMap = Map with (ElementIndex, BatchedStepSite)
 type BatchPreparation
 	export let batches as PreparedBatchArray
 	export let refusals as BatchRefusalMap
+	export let harnessErrors as StringArray
 	let sites as BatchedStepSiteMap
 
-	static function create(batches PreparedBatchArray, refusals BatchRefusalMap) returns BatchPreparation
+	static function create(batches PreparedBatchArray, refusals BatchRefusalMap, harnessErrors StringArray) returns BatchPreparation
 		var sites = BatchedStepSiteMap.create()
 
 		for (batchIter, batch) in batches.withIterator() 'eachBatch'
@@ -2170,7 +2173,7 @@ type BatchPreparation
 			end 'eachMember'
 		end 'eachBatch'
 
-		return Self{batches: batches, refusals: refusals, sites: sites}
+		return Self{batches: batches, refusals: refusals, harnessErrors: harnessErrors, sites: sites}
 	end 'create'
 
 	function stepFor(testIndex ElementIndex) returns BatchStepLookup
@@ -2196,15 +2199,16 @@ end 'batchableMembers'
 function prepareBatch(tests SpecTestArray, actions IrActionArray, specName String, specDirName String, tempDir FilePath, exeExtension String, mode SpecRunMode, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchPreparation
 	var batches = PreparedBatchArray.create(0)
 	var refusals = BatchRefusalMap.create()
+	var harnessErrors = StringArray.create(0)
 
 	if not mode.batchRuns 'batchingOff'
-		return BatchPreparation.create(batches, refusals: refusals)
+		return BatchPreparation.create(batches, refusals: refusals, harnessErrors: harnessErrors)
 	end 'batchingOff'
 
 	let candidates = batchableMembers(tests, actions: actions)
 
 	if candidates.count() < MinBatchedCases 'tooFewToShare'
-		return BatchPreparation.create(batches, refusals: refusals)
+		return BatchPreparation.create(batches, refusals: refusals, harnessErrors: harnessErrors)
 	end 'tooFewToShare'
 
 	let claimed = claimedMembersOf(candidates, tests: tests, specDirName: specDirName, tempDir: tempDir, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
@@ -2216,17 +2220,22 @@ function prepareBatch(tests SpecTestArray, actions IrActionArray, specName Strin
 		// into, so a group that builds nothing must not take one.
 		let outcome = buildBatchDroppingRefused(tempDir, ordinal: batches.count(), tests: tests, members: group.members, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 
-		for (at, diagnostics) in outcome.refusals 'eachRefusal'
-			refusals.upsert(at, value: diagnostics)
+		for (at, refusal) in outcome.refusals 'eachRefusal'
+			refusals.upsert(at, value: refusal)
 		end 'eachRefusal'
 
+		for text in outcome.harnessErrors 'eachHarnessError'
+			harnessErrors.push(text)
+		end 'eachHarnessError'
+
 		match outcome.build 'build'
-			notBuilt then continue
+			notBuilt or
+			unbuildable then continue
 			built(program, ticks) then batches.push(batchedAfter(program, ordinal: batches.count(), tests: tests, specName: specName, specDirName: specDirName, ticks: ticks, effectiveTarget: effectiveTarget))
 		end 'build'
 	end 'eachProgram'
 
-	return BatchPreparation.create(batches, refusals: refusals)
+	return BatchPreparation.create(batches, refusals: refusals, harnessErrors: harnessErrors)
 end 'prepareBatch'
 
 // One front-end pass per candidate, before any program is built: it answers whether the case's
@@ -2269,17 +2278,26 @@ function batchedAfter(program BatchProgram, ordinal ElementIndex, tests SpecTest
 	return PreparedBatch.create(program, steps: batchSteps(program, ordinal: ordinal, tests: tests, specName: specName, specDirName: specDirName, ticks: ticks, effectiveTarget: effectiveTarget))
 end 'batchedAfter'
 
-function refusedBatchStep(step PreparedTest, diagnostics String) returns PreparedTest
+function refusedBatchStep(step PreparedTest, refusal BatchRefusal) returns PreparedTest
 	return match step 'phase'
-		finished gives step
-		awaiting(pending) gives batchRefusalVerdict(pending, diagnostics: diagnostics)
+		finished(run) gives PreparedTest.finished(withBatchBreakNote(run, refusal: refusal))
+		awaiting(pending) gives batchRefusalVerdict(pending, diagnostics: refusal.diagnostics)
 	end 'phase'
 end 'refusedBatchStep'
 
+function withBatchBreakNote(run TestRun, refusal BatchRefusal) returns TestRun
+	return match run.outcome 'outcome'
+		fail(reason) gives TestRun.create(TestOutcome.fail("{reason}\n{refusal.note()}"), cpu: run.cpu, minted: run.minted)
+		pass or
+		skipped or
+		notRunHere gives run
+	end 'outcome'
+end 'withBatchBreakNote'
+
 function preparedAfterBatching(test SpecTest, at ElementIndex, refusals BatchRefusalMap, specName String, specDirName String, tempDir FilePath, exeExtension String, action IrAction, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
 	let step = prepareOneTest(test, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: action, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
-	let diagnostics = try refusals.get(at) otherwise return step
-	return refusedBatchStep(step, diagnostics: diagnostics)
+	let refusal = try refusals.get(at) otherwise return step
+	return refusedBatchStep(step, refusal: refusal)
 end 'preparedAfterBatching'
 
 function batchRefusalVerdict(pending PendingRun, diagnostics String) returns PreparedTest
@@ -5554,7 +5572,7 @@ end 'referenceFragmentPath'
 // `<name>.ir` and no `<name>.metrics`. A `<!-- DebugInfo -->` case DOES write a `<name>.exe.mxdbg`, and it
 // goes here with the executable it describes: the pair is written together and must not outlive it
 // separately, or the next run's `--dump-info` on a stale path would answer from a build that is gone.
-function discardBuild(writtenFiles FilePathArray, exePath FilePath)
+module function discardBuild(writtenFiles FilePathArray, exePath FilePath)
 	deleteWrittenFiles(writtenFiles)
 	discardDebugInfoSidecar(exePath)
 	try File.delete(exePath) otherwise ignore

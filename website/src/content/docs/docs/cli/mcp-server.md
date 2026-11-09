@@ -393,6 +393,8 @@ last 4 KiB of output, starting on a character boundary).
 - The answer is read from the run's [`--result-json`](/docs/cli/compiler-development/#maxon-spec-test) document, written to
   `.spec-tmp/spec-result.<tag>.<start>.<pid>.<serial>.json` in the checkout, one per call, and deleted
   when the call ends. A run that writes no document is answered with a tool error carrying `rawTail`.
+- **`harnessErrors`** lists each `harness error:` line the run printed, `[]` when there was none. A run
+  whose only problem is such a line answers `failed: 0`, `success: false` and `exitCode` 1.
 
 | Argument | Type | Description |
 |----------|------|-------------|

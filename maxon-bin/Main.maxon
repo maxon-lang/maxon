@@ -1333,7 +1333,7 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 	let testsExit = reportResults(run.results, batch: run.batch)
 
 	// After the report, so an unwritable path cannot hide it.
-	let documentExit = writeSpecResultDocument(resultTarget, results: run.results)
+	let documentExit = writeSpecResultDocument(resultTarget, results: run.results, harnessErrors: run.harnessErrors)
 
 	// Stderr for the CPU line's reason below: which worker loads and writes varies with the pool.
 	printError("library cache: {run.library.loaded} loaded, {run.library.written} written, {run.library.rejected} rejected\n")
@@ -1355,6 +1355,11 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 	// the line.
 	reportCompileCpu(run.cpu, poolSize: run.poolSize)
 
+	// Before the exit branches, so a run that also failed cases still lists them.
+	for text in run.harnessErrors 'eachHarnessError'
+		printError("{text}\n")
+	end 'eachHarnessError'
+
 	if not exitSucceeded(testsExit) 'someTestFailed'
 		return testsExit
 	end 'someTestFailed'
@@ -1362,6 +1367,10 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 	if not exitSucceeded(documentExit) 'documentUnwritten'
 		return documentExit
 	end 'documentUnwritten'
+
+	if not run.harnessErrors.isEmpty() 'harnessErrorsStand'
+		return OwnFailureExit
+	end 'harnessErrorsStand'
 
 	// Every test passed — and a worker that exited NON-ZERO is still a suite failure. A worker is
 	// itself a leak-gated Maxon program, so exit 101 means the harness leaked memory while
@@ -1381,15 +1390,15 @@ function reportCompileCpu(cpu SuiteCpuTally, poolSize WorkerPoolSize)
 	end 'sizing'
 end 'reportCompileCpu'
 
-function writeSpecResultDocument(target SpecResultTarget, results SpecTestResultArray) returns ExitCode
+function writeSpecResultDocument(target SpecResultTarget, results SpecTestResultArray, harnessErrors StringArray) returns ExitCode
 	return match target 'asked'
 		unasked gives SucceededExit
-		at(path) gives writeSpecResultDocumentAt(path, results: results)
+		at(path) gives writeSpecResultDocumentAt(path, results: results, harnessErrors: harnessErrors)
 	end 'asked'
 end 'writeSpecResultDocument'
 
-function writeSpecResultDocumentAt(path FilePath, results SpecTestResultArray) returns ExitCode
-	try writeSpecResultJson(path, results: results) otherwise 'unwritten'
+function writeSpecResultDocumentAt(path FilePath, results SpecTestResultArray, harnessErrors StringArray) returns ExitCode
+	try writeSpecResultJson(path, results: results, harnessErrors: harnessErrors) otherwise 'unwritten'
 		printError("error: could not write the result document to {path.toString()}\n")
 		return OwnFailureExit
 	end 'unwritten'

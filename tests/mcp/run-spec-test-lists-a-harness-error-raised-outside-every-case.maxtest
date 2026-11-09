@@ -1,0 +1,31 @@
+let RunSpecTestListsAHarnessErrorStagingCaseDirName = "run-spec-test-lists-a-harness-error"
+let HarnessErrorSpecName = "unbuildable"
+let HarnessErrorScratchDirName = ".spec-tmp"
+let HarnessErrorBatchSourceName = "__batch0.src"
+let HarnessErrorMarker = "harness error:"
+let HarnessErrorCause = "could not create the staging directory"
+
+test 'run_spec_test lists a harness error the run raised outside every case in harnessErrors'
+	let dir = freshOutsideCheckoutDir(RunSpecTestListsAHarnessErrorStagingCaseDirName)
+	stageSpecFile(dir, specName: HarnessErrorSpecName, cases: [passingSpecCase("one"), passingSpecCase("two"), passingSpecCase("three")])
+
+	let scratch = dir.join(HarnessErrorScratchDirName).join(HarnessErrorSpecName)
+
+	if not Directory.create(scratch) 'noScratch'
+		panic("the test could not create {scratch.toString()}")
+	end 'noScratch'
+
+	writeStagedFile(scratch.join(HarnessErrorBatchSourceName), content: "")
+
+	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())}\}", devMode: true)
+	discardOutsideCheckoutDir(dir)
+
+	let errors = payloadArrayStrings(answer, key: "harnessErrors")
+
+	Expect.equal(errors.count(), expected: 1, message: "the unbuildable batch program is one harness error. It answered: {toolCallText(answer)}")
+	Expect.startsWith(try errors.get(0) otherwise panic("the harness error list has one element"), needle: HarnessErrorMarker, message: "the entry is the harness error line. It answered: {toolCallText(answer)}")
+	Expect.contains(try errors.get(0) otherwise panic("the harness error list has one element"), needle: HarnessErrorCause, message: "the entry names the cause. It answered: {toolCallText(answer)}")
+	Expect.equal(payloadInt(answer, key: "passed"), expected: 3, message: "each case passed alone, so no case carries the error. It answered: {toolCallText(answer)}")
+	Expect.equal(payloadInt(answer, key: "failed"), expected: 0, message: "no case failed. It answered: {toolCallText(answer)}")
+	Expect.isTrue(toolCallIsError(answer), message: "a run with a harness error is not a success. It answered: {toolCallText(answer)}")
+end 'run_spec_test lists a harness error the run raised outside every case in harnessErrors'

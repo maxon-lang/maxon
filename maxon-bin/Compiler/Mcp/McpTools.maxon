@@ -900,6 +900,7 @@ function specTestReply(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx
 	payload.addBool(doc, key: "memoryLeak", value: isLeakDetectedExit(res.exitCode() as ExitCode))
 	payload.addNode("failures", node: failureArrayNode(doc, failures: report.failures, listed: listed))
 	payload.addNumber(doc, key: "failuresOmitted", value: (report.failures.count() - listed) as JsonFloat)
+	payload.addNode("harnessErrors", node: harnessErrorArrayNode(doc, harnessErrors: report.harnessErrors))
 
 	if getOptionalBoolArg(reqDoc, args: args, key: CasesOption, defaultVal: false) 'wantsCases'
 		payload.addNode("cases", node: caseArrayNode(doc, tests: report.tests))
@@ -907,6 +908,16 @@ function specTestReply(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx
 
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not res.succeeded())
 end 'specTestReply'
+
+function harnessErrorArrayNode(doc JsonDoc, harnessErrors StringArray) returns JsonNodeId
+	var nodeIds = JsonNodeIdArray.create(harnessErrors.count(), zeroed: false)
+
+	for text in harnessErrors 'eachError'
+		nodeIds.push(doc.add(JsonNode.stringNode(text)))
+	end 'eachError'
+
+	return doc.add(JsonNode.arrayNode(nodeIds))
+end 'harnessErrorArrayNode'
 
 function caseArrayNode(doc JsonDoc, tests SpecTestEntryArray) returns JsonNodeId
 	var nodeIds = JsonNodeIdArray.create(tests.count(), zeroed: false)

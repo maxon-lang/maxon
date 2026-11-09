@@ -18,8 +18,23 @@
 // some case ran code before `main` that the up-front checks missed, and the runner must be fixed to
 // keep it out. A case the batch compile refuses but that compiles alone fails the same way. A batched
 // FAIL is compiled alone only to diagnose it (`withBatchedFailuresDiagnosed`).
+//
+// A refused batch compile fails only the cases that break the program: those the diagnostics name
+// are dropped, and a refusal that names none is bisected over the remaining candidates
+// (`BatchSettling`, at most `MaxBatchIsolationTrials` builds). Every other case is judged by its own
+// run. A failure that belongs to no case (`BatchBuild.unbuildable`: staging, a missing stdlib or
+// runtime, a driver failure; or a spent trial budget) blames nobody: the cases run alone and one
+// run-level `harness error:` line makes the suite exit non-zero.
 module let MinBatchedCases = 2
 let MaxBatchCompileAttempts = 4
+let MaxBatchIsolationTrials = 24
+let SplitInHalves = 2
+let NameListSeparator = ", "
+let HarnessErrorPrefix = "harness error: "
+let BatchBreakNote = "This case also broke the batch program its siblings share: the batch compile refused it, so the other cases of this spec ran without it."
+
+typealias TrialTally = int(0 to 4096)
+
 let BatchProgramName = "__batch"
 let BatchSourceDirSuffix = ".src"
 let BatchCaseDirPrefix = "case"
@@ -676,6 +691,7 @@ end 'BatchProgram'
 module union BatchBuild
 	built(program BatchProgram, ticks CpuTicks)
 	notBuilt(answer CompileAnswer, refused TestRunIndexArray)
+	unbuildable(reason String)
 end 'BatchBuild'
 
 function batchProgramNameOf(ordinal ElementIndex) returns String
@@ -725,11 +741,11 @@ module function batchBuildsWithFreedBoxPoison(tests SpecTestArray, members Batch
 end 'batchBuildsWithFreedBoxPoison'
 
 function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchBuild
-	let stdlibDir = try locateStdlibDir() otherwise return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: missingStdlibReason()), refused: TestRunIndexArray.create(0))
-	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: missingRuntimeReason()), refused: TestRunIndexArray.create(0))
+	let stdlibDir = try locateStdlibDir() otherwise return BatchBuild.unbuildable(missingStdlibReason())
+	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise return BatchBuild.unbuildable(missingRuntimeReason())
 	let facilities = EntryFacilities.of(effectiveTarget)
 	let staged = try stageBatch(tempDir, ordinal: ordinal, tests: tests, members: members, facilities: facilities) otherwise (e) 'notStaged'
-		return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: stagingRefusalReason(e)), refused: TestRunIndexArray.create(0))
+		return BatchBuild.unbuildable(stagingRefusalReason(e))
 	end 'notStaged'
 
 	let exePath = batchExePath(tempDir, ordinal: ordinal, exeExtension: exeExtension)
@@ -737,8 +753,7 @@ function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 	var session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
 	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exePath.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(0), poisonFreed: batchBuildsWithFreedBoxPoison(tests, members: members), stdlibDirOverride: StatedText.stated(stdlibDir.toString()), runtimeDirOverride: StatedText.stated(runtimeDir.toString()), scriptlib: ScriptlibLoad.omitted, entryFunction: BatchEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, session: session) otherwise (e) 'didNotCompile'
 		reportCompileError(e, sink: session.diagnostics)
-		let answer = CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text())
-		return BatchBuild.notBuilt(answer, refused: membersNamedIn(answer.diagnostics, ordinal: ordinal, count: members.count()))
+		return batchBuildAfterError(CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text()), ordinal: ordinal, count: members.count())
 	end 'didNotCompile'
 
 	if product.drivesOtherProcesses 'aGapInPlacement'
@@ -758,28 +773,79 @@ function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 	return BatchBuild.built(BatchProgram.create(exePath, members: members, stdlibDir: stdlibDir.toString(), runtimeDir: runtimeDir.toString(), writtenFiles: written), ticks: product.totalCpuTicks)
 end 'buildBatch'
 
-module typealias BatchRefusalMap = Map with (ElementIndex, String)
+function batchBuildAfterError(answer CompileAnswer, ordinal ElementIndex, count ElementIndex) returns BatchBuild
+	match answer.verdict 'verdict'
+		driverFailed then return BatchBuild.unbuildable(answer.diagnostics.trim())
+		reportedDiagnostics or
+		sourceOrderUnplaceable then return BatchBuild.notBuilt(answer, refused: membersNamedIn(answer.diagnostics, ordinal: ordinal, count: count))
+		built then panic("SpecBatch: a batch compile that raised an error reports a finished build")
+	end 'verdict'
+end 'batchBuildAfterError'
+
+module type BatchRefusal
+	export let diagnostics as String
+	export let partners as StringArray
+
+	module static function create(diagnostics String, partners StringArray) returns BatchRefusal
+		return Self{diagnostics: diagnostics, partners: partners}
+	end 'create'
+
+	module function note() returns String
+		if self.partners.isEmpty() 'noPartner'
+			return BatchBreakNote
+		end 'noPartner'
+
+		return "{BatchBreakNote} It conflicted with {joinedWith(self.partners, separator: NameListSeparator)}, which stay in the shared program."
+	end 'note'
+end 'BatchRefusal'
+
+module typealias BatchRefusalMap = Map with (ElementIndex, BatchRefusal)
 
 module type BatchOutcome
 	export let build as BatchBuild
 	export let refusals as BatchRefusalMap
+	export let harnessErrors as StringArray
 
-	module static function create(build BatchBuild, refusals BatchRefusalMap) returns BatchOutcome
-		return Self{build: build, refusals: refusals}
+	module static function create(build BatchBuild, refusals BatchRefusalMap, harnessErrors StringArray) returns BatchOutcome
+		return Self{build: build, refusals: refusals, harnessErrors: harnessErrors}
 	end 'create'
 end 'BatchOutcome'
 
-function diagnosticsNaming(diagnostics String, ordinal ElementIndex, caseIndex ElementIndex) returns String
+function diagnosticsNaming(diagnostics String, ordinal ElementIndex, positions TestRunIndexArray) returns String
 	var named = StringArray.create(0)
 
 	for line in diagnostics.split(SourceLineBreak) 'eachLine'
-		if namesCase(line, ordinal: ordinal, caseIndex: caseIndex) 'namesIt'
-			named.push(line.trim())
-		end 'namesIt'
+		for position in positions 'eachPosition'
+			if namesCase(line, ordinal: ordinal, caseIndex: position) 'namesIt'
+				named.push(line.trim())
+				break
+			end 'namesIt'
+		end 'eachPosition'
 	end 'eachLine'
 
 	return joinedWith(named, separator: SourceLineBreak)
 end 'diagnosticsNaming'
+
+function diagnosticsInTestNames(diagnostics String, ordinal ElementIndex, members BatchMemberArray, tests SpecTestArray) returns String
+	var translated = diagnostics
+
+	for (iter, member) in members.withIterator() 'eachMember'
+		let name = testNameFor(member, tests: tests)
+
+		for separator in [PathSeparator, WindowsPathSeparator] 'eachSeparator'
+			translated = translated.replace("{batchProgramNameOf(ordinal)}{BatchSourceDirSuffix}{separator}{BatchCaseDirPrefix}{iter.index()}{separator}{BatchCaseFileName}", with: "<{name}>")
+		end 'eachSeparator'
+
+		translated = translated.replace("'{batchCaseName(iter.index())}'", with: "'{name}'")
+	end 'eachMember'
+
+	return translated
+end 'diagnosticsInTestNames'
+
+function testNameFor(member BatchMember, tests SpecTestArray) returns String
+	let test = try tests.get(member.testIndex) otherwise panic("SpecBatch: batch member names test {member.testIndex}, past the {tests.count()} the spec selected")
+	return test.name
+end 'testNameFor'
 
 function membersNamedIn(diagnostics String, ordinal ElementIndex, count ElementIndex) returns TestRunIndexArray
 	var named = TestRunIndexArray.create(0)
@@ -815,6 +881,54 @@ function membersWithout(members BatchMemberArray, positions TestRunIndexArray) r
 	return kept
 end 'membersWithout'
 
+function indexesOf(members BatchMemberArray) returns TestRunIndexArray
+	var indexes = TestRunIndexArray.create(members.count(), zeroed: false)
+
+	for member in members 'eachMember'
+		indexes.push(member.testIndex)
+	end 'eachMember'
+
+	return indexes
+end 'indexesOf'
+
+function testNamesText(indexes TestRunIndexArray, tests SpecTestArray) returns String
+	var names = StringArray.create(indexes.count(), zeroed: false)
+
+	for index in indexes 'eachIndex'
+		let test = try tests.get(index) otherwise panic("SpecBatch: test {index} is past the {tests.count()} the spec selected")
+		names.push(test.name)
+	end 'eachIndex'
+
+	return joinedWith(names, separator: NameListSeparator)
+end 'testNamesText'
+
+function trialBudgetErrors(unsettled TestRunIndexArray, tests SpecTestArray) returns StringArray
+	var errors = StringArray.create(0)
+
+	if unsettled.isEmpty() 'allSettled'
+		return errors
+	end 'allSettled'
+
+	errors.push("{HarnessErrorPrefix}a case among these breaks the batch program and the harness spent its {MaxBatchIsolationTrials} trial builds without isolating which. These {unsettled.count()} cases ran alone and their own results decide them: {testNamesText(unsettled, tests: tests)}")
+	return errors
+end 'trialBudgetErrors'
+
+function environmentErrors(reason String, affected TestRunIndexArray, tests SpecTestArray) returns StringArray
+	var errors = StringArray.create(0)
+
+	if affected.isEmpty() 'nothingAffected'
+		return errors
+	end 'nothingAffected'
+
+	errors.push("{HarnessErrorPrefix}the batch program could not be built ({reason}), and no case is blamed for it. These {affected.count()} cases ran alone and their own results decide them: {testNamesText(affected, tests: tests)}")
+	return errors
+end 'environmentErrors'
+
+function discardBatchLeftovers(tempDir FilePath, ordinal ElementIndex, exeExtension String)
+	purgeFilesIn(batchSourceRoot(tempDir, ordinal: ordinal))
+	discardBuild(FilePathArray.create(0), exePath: batchExePath(tempDir, ordinal: ordinal, exeExtension: exeExtension))
+end 'discardBatchLeftovers'
+
 module function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchOutcome
 	var remaining = members.clone()
 	var refusals = BatchRefusalMap.create()
@@ -829,7 +943,8 @@ module function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex
 
 		match last 'attempt'
 			built then break 'eachAttempt'
-			notBuilt(answer, refused) then remaining = noteRefused(refusals, answer: answer, ordinal: ordinal, refused: refused, remaining: remaining)
+			notBuilt(answer, refused) then remaining = noteRefused(refusals, answer: answer, ordinal: ordinal, refused: refused, remaining: remaining, tests: tests)
+			unbuildable then break 'eachAttempt'
 		end 'attempt'
 
 		if attemptRefusedNothing(last) 'nothingToDrop'
@@ -837,43 +952,242 @@ module function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex
 		end 'nothingToDrop'
 	end 'eachAttempt'
 
-	noteAllRefused(refusals, last: last, remaining: remaining)
-	return BatchOutcome.create(last, refusals: refusals)
+	return outcomeAfterAttempts(last, remaining: remaining, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 end 'buildBatchDroppingRefused'
 
-function noteRefused(refusals BatchRefusalMap, answer CompileAnswer, ordinal ElementIndex, refused TestRunIndexArray, remaining BatchMemberArray) returns BatchMemberArray
+union BatchPrior
+	fresh
+	refused(answer CompileAnswer)
+end 'BatchPrior'
+
+function priorOf(last BatchBuild) returns BatchPrior
+	return match last 'last'
+		notBuilt(answer, refused) gives BatchPrior.refused(answer) if refused.isEmpty() else BatchPrior.fresh
+		built or
+		unbuildable gives BatchPrior.fresh
+	end 'last'
+end 'priorOf'
+
+function outcomeAfterAttempts(last BatchBuild, remaining BatchMemberArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchOutcome
+	match last 'last'
+		built then return BatchOutcome.create(last, refusals: refusals, harnessErrors: StringArray.create(0))
+		notBuilt then return isolatedOutcome(last, prior: priorOf(last), remaining: remaining, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		unbuildable(reason) then return unbuildableOutcome(last, reason: reason, affected: indexesOf(remaining), refusals: refusals, tempDir: tempDir, ordinal: ordinal, exeExtension: exeExtension, tests: tests)
+	end 'last'
+end 'outcomeAfterAttempts'
+
+union SettledTail
+	noTrial
+	current(build BatchBuild)
+	stale
+	halted(reason String)
+end 'SettledTail'
+
+union HaltState
+	running
+	halted(reason String)
+end 'HaltState'
+
+function latestTail(earlier SettledTail, later SettledTail) returns SettledTail
+	return match later 'later'
+		noTrial gives earlier
+		current or
+		stale or
+		halted gives later
+	end 'later'
+end 'latestTail'
+
+function failureTail(accepted BatchMemberArray) returns SettledTail
+	return SettledTail.noTrial if accepted.isEmpty() else SettledTail.stale
+end 'failureTail'
+
+function isolatedOutcome(last BatchBuild, prior BatchPrior, remaining BatchMemberArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchOutcome
+	var accepted = BatchMemberArray.create(0)
+	var settling = BatchSettling.begin()
+	let tail = settling.settleFrom(prior, accepted: accepted, candidates: remaining, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+	let unsettled = settling.unsettledIndexes()
+	let affected = indexesJoined(indexesOf(accepted), following: unsettled)
+	let spentErrors = trialBudgetErrors(unsettled, tests: tests)
+
+	match tail 'tail'
+		halted(reason) then return unbuildableOutcome(BatchBuild.unbuildable(reason), reason: reason, affected: affected, refusals: refusals, tempDir: tempDir, ordinal: ordinal, exeExtension: exeExtension, tests: tests)
+		noTrial then return BatchOutcome.create(last, refusals: refusals, harnessErrors: spentErrors)
+		current(build) then return BatchOutcome.create(build, refusals: refusals, harnessErrors: spentErrors)
+		stale then return outcomeAfterRebuild(buildBatch(tempDir, ordinal: ordinal, tests: tests, members: accepted, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos), refusals: refusals, spentErrors: spentErrors, affected: affected, tempDir: tempDir, ordinal: ordinal, exeExtension: exeExtension, tests: tests)
+	end 'tail'
+end 'isolatedOutcome'
+
+function indexesJoined(first TestRunIndexArray, following TestRunIndexArray) returns TestRunIndexArray
+	var joined = first.clone()
+	joined.append(following)
+	return joined
+end 'indexesJoined'
+
+function unbuildableOutcome(build BatchBuild, reason String, affected TestRunIndexArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, exeExtension String, tests SpecTestArray) returns BatchOutcome
+	discardBatchLeftovers(tempDir, ordinal: ordinal, exeExtension: exeExtension)
+	return BatchOutcome.create(build, refusals: refusals, harnessErrors: environmentErrors(reason, affected: affected, tests: tests))
+end 'unbuildableOutcome'
+
+function outcomeAfterRebuild(rebuilt BatchBuild, refusals BatchRefusalMap, spentErrors StringArray, affected TestRunIndexArray, tempDir FilePath, ordinal ElementIndex, exeExtension String, tests SpecTestArray) returns BatchOutcome
+	match rebuilt 'rebuilt'
+		built then return BatchOutcome.create(rebuilt, refusals: refusals, harnessErrors: spentErrors)
+		unbuildable(reason) then return unbuildableOutcome(rebuilt, reason: reason, affected: affected, refusals: refusals, tempDir: tempDir, ordinal: ordinal, exeExtension: exeExtension, tests: tests)
+		notBuilt(answer, _) then panic("SpecBatch: members that built together a moment ago were refused on a rebuild:\n{answer.diagnostics}")
+	end 'rebuilt'
+end 'outcomeAfterRebuild'
+
+type BatchSettling
+	var unsettled as BatchMemberArray
+	var trialsLeft as TrialTally
+	var halt as HaltState
+
+	static function begin() returns BatchSettling
+		return Self{unsettled: BatchMemberArray.create(0), trialsLeft: MaxBatchIsolationTrials, halt: HaltState.running}
+	end 'begin'
+
+	function unsettledIndexes() returns TestRunIndexArray
+		return indexesOf(self.unsettled)
+	end 'unsettledIndexes'
+
+	function hasHalted() returns bool
+		return match self.halt 'halt'
+			running gives false
+			halted gives true
+		end 'halt'
+	end 'hasHalted'
+
+	function settleFrom(prior BatchPrior, accepted mutable BatchMemberArray, candidates BatchMemberArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns SettledTail
+		return match prior 'prior'
+			fresh gives self.settle(accepted, candidates: candidates, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+			refused(answer) gives self.refuse(accepted, candidates: candidates, answer: answer, refused: TestRunIndexArray.create(0), refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		end 'prior'
+	end 'settleFrom'
+
+	function settle(accepted mutable BatchMemberArray, candidates BatchMemberArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns SettledTail
+		if candidates.isEmpty() 'nothingToSettle'
+			return SettledTail.noTrial
+		end 'nothingToSettle'
+
+		if self.hasHalted() or self.trialsLeft == 0 'noTrialsRemain'
+			self.unsettled.append(candidates)
+			return SettledTail.noTrial
+		end 'noTrialsRemain'
+
+		self.trialsLeft = self.trialsLeft - 1
+
+		var trial = accepted.clone()
+		trial.append(candidates)
+
+		let attempt = buildBatch(tempDir, ordinal: ordinal, tests: tests, members: trial, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+
+		match attempt 'attempt'
+			built then return self.accepting(accepted, candidates: candidates, attempt: attempt)
+			notBuilt(answer, refused) then return self.refuse(accepted, candidates: candidates, answer: answer, refused: refused, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+			unbuildable(reason) then return self.halting(candidates, reason: reason)
+		end 'attempt'
+	end 'settle'
+
+	function accepting(accepted mutable BatchMemberArray, candidates BatchMemberArray, attempt BatchBuild) returns SettledTail
+		accepted.append(candidates)
+		return SettledTail.current(attempt)
+	end 'accepting'
+
+	function halting(candidates BatchMemberArray, reason String) returns SettledTail
+		self.halt = HaltState.halted(reason)
+		self.unsettled.append(candidates)
+		return SettledTail.halted(reason)
+	end 'halting'
+
+	function refuse(accepted mutable BatchMemberArray, candidates BatchMemberArray, answer CompileAnswer, refused TestRunIndexArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns SettledTail
+		let failure = failureTail(accepted)
+		let partners = heldPartnersNamed(refused, held: accepted, tests: tests)
+		let blamed = namedCandidatePositions(refused, heldCount: accepted.count())
+		var trial = accepted.clone()
+		trial.append(candidates)
+
+		if not blamed.isEmpty() 'someNamed'
+			let rest = fileNamedRefusals(refusals, blamed: blamed, partners: partners, candidates: candidates, trial: trial, answer: answer, heldCount: accepted.count(), ordinal: ordinal, tests: tests)
+			return latestTail(failure, later: self.settle(accepted, candidates: rest, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos))
+		end 'someNamed'
+
+		if candidates.count() == 1 'theCulprit'
+			let culprit = try candidates.get(0) otherwise panic("BatchSettling.refuse: one candidate has a position 0")
+			noteRefusal(refusals, testIndex: culprit.testIndex, diagnostics: diagnosticsInTestNames(answer.diagnostics.trim(), ordinal: ordinal, members: trial, tests: tests), partners: partners)
+			return failure
+		end 'theCulprit'
+
+		let half = (candidates.count() / SplitInHalves) as ElementIndex
+		let front = try candidates.slice(0, endIndex: half) otherwise panic("BatchSettling.refuse: the front half ends at {half}, within the {candidates.count()} candidates")
+		let back = try candidates.slice(half, endIndex: candidates.count()) otherwise panic("BatchSettling.refuse: the back half starts at {half}, within the {candidates.count()} candidates")
+		let frontTail = self.settle(accepted, candidates: front, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		let backTail = self.settle(accepted, candidates: back, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+
+		return latestTail(failure, later: latestTail(frontTail, later: backTail))
+	end 'refuse'
+end 'BatchSettling'
+
+function namedCandidatePositions(refused TestRunIndexArray, heldCount ElementIndex) returns TestRunIndexArray
+	var named = TestRunIndexArray.create(0)
+
+	for position in refused 'eachNamed'
+		if position >= heldCount 'aCandidate'
+			named.push(position - heldCount)
+		end 'aCandidate'
+	end 'eachNamed'
+
+	return named
+end 'namedCandidatePositions'
+
+function heldPartnersNamed(refused TestRunIndexArray, held BatchMemberArray, tests SpecTestArray) returns StringArray
+	var partners = StringArray.create(0)
+
+	for position in refused 'eachNamed'
+		if position < held.count() 'aHeldMember'
+			let partner = try held.get(position) otherwise panic("SpecBatch: the batch compile named case {position}, past the {held.count()} members held")
+			partners.push(testNameFor(partner, tests: tests))
+		end 'aHeldMember'
+	end 'eachNamed'
+
+	return partners
+end 'heldPartnersNamed'
+
+function fileNamedRefusals(refusals BatchRefusalMap, blamed TestRunIndexArray, partners StringArray, candidates BatchMemberArray, trial BatchMemberArray, answer CompileAnswer, heldCount ElementIndex, ordinal ElementIndex, tests SpecTestArray) returns BatchMemberArray
+	for position in blamed 'eachBlamed'
+		let culprit = try candidates.get(position) otherwise panic("SpecBatch: blamed candidate {position} is past the {candidates.count()} candidates")
+		var named = TestRunIndexArray.create(1, zeroed: false)
+		named.push(position + heldCount)
+
+		noteRefusal(refusals, testIndex: culprit.testIndex, diagnostics: diagnosticsInTestNames(diagnosticsNaming(answer.diagnostics, ordinal: ordinal, positions: named), ordinal: ordinal, members: trial, tests: tests), partners: partners)
+	end 'eachBlamed'
+
+	return membersWithout(candidates, positions: blamed)
+end 'fileNamedRefusals'
+
+function noteRefused(refusals BatchRefusalMap, answer CompileAnswer, ordinal ElementIndex, refused TestRunIndexArray, remaining BatchMemberArray, tests SpecTestArray) returns BatchMemberArray
 	for position in refused 'eachRefused'
 		let member = try remaining.get(position) otherwise panic("SpecBatch: the batch compile named case {position}, past the {remaining.count()} it was built from")
-		noteRefusal(refusals, testIndex: member.testIndex, diagnostics: diagnosticsNaming(answer.diagnostics, ordinal: ordinal, caseIndex: position))
+		var named = TestRunIndexArray.create(1, zeroed: false)
+		named.push(position)
+		noteRefusal(refusals, testIndex: member.testIndex, diagnostics: diagnosticsInTestNames(diagnosticsNaming(answer.diagnostics, ordinal: ordinal, positions: named), ordinal: ordinal, members: remaining, tests: tests), partners: StringArray.create(0))
 	end 'eachRefused'
 
 	return membersWithout(remaining, positions: refused)
 end 'noteRefused'
 
-function noteRefusal(refusals BatchRefusalMap, testIndex ElementIndex, diagnostics String)
+// A target refusal (E3104) is not filed: the target merely cannot express the case, and its own run
+// reports that as a skip.
+function noteRefusal(refusals BatchRefusalMap, testIndex ElementIndex, diagnostics String, partners StringArray)
 	match targetRefusalIn(CompileAnswer.create(CompileVerdict.reportedDiagnostics, diagnostics: diagnostics)) 'refusal'
 		refused then return
-		notRefused then refusals.upsert(testIndex, value: diagnostics)
+		notRefused then refusals.upsert(testIndex, value: BatchRefusal.create(diagnostics, partners: partners))
 	end 'refusal'
 end 'noteRefusal'
-
-function noteAllRefused(refusals BatchRefusalMap, last BatchBuild, remaining BatchMemberArray)
-	match last 'last'
-		built then return
-		notBuilt(answer, _) then noteEveryRefused(refusals, answer: answer, remaining: remaining)
-	end 'last'
-end 'noteAllRefused'
-
-function noteEveryRefused(refusals BatchRefusalMap, answer CompileAnswer, remaining BatchMemberArray)
-	for member in remaining 'eachMember'
-		noteRefusal(refusals, testIndex: member.testIndex, diagnostics: answer.diagnostics.trim())
-	end 'eachMember'
-end 'noteEveryRefused'
 
 function attemptRefusedNothing(attempt BatchBuild) returns bool
 	return match attempt 'attempt'
 		built gives false
 		notBuilt(_, refused) gives refused.isEmpty()
+		unbuildable gives true
 	end 'attempt'
 end 'attemptRefusedNothing'
 

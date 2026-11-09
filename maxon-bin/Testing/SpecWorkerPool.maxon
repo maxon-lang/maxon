@@ -75,6 +75,10 @@
 //                                                     order. <verdict> is PASS / FAIL / SKIP / NOTRUN.
 //                                                     <payload> is the verdict's text — a FAIL's reason,
 //                                                     a SKIP's refusals — escaped onto this one line
+//       WORKER_JOB_HARNESS:<payload>                  zero or more per job, after the job's result
+//                                                     records and immediately BEFORE its
+//                                                     WORKER_JOB_BATCH: one run-level error that
+//                                                     belongs to no test, escaped onto this one line
 //       WORKER_JOB_BATCH:<batched>:<programs>:<alone>
 //                                                     exactly once per job, immediately BEFORE that
 //                                                     job's WORKER_JOB_LIBRARY: how many run cases
@@ -161,6 +165,7 @@ let WorkerReadyMarker = "WORKER_READY"
 let WorkerResultMarker = "WORKER_SINGLE_RESULT:"
 let WorkerJobCpuMarker = "WORKER_JOB_CPU:"
 let WorkerJobBatchMarker = "WORKER_JOB_BATCH:"
+let WorkerJobHarnessMarker = "WORKER_JOB_HARNESS:"
 let WorkerJobLibraryMarker = "WORKER_JOB_LIBRARY:"
 let WorkerStepMarker = "WORKER_STEP:"
 let JobSinglesPrefix = "JOB:singles:"
@@ -457,6 +462,7 @@ typealias SpecPlanArray = Array with SpecPlan
 // One bucket of results per plan, filled OUT OF ORDER by whichever worker finished that spec, and
 // concatenated in plan order at the end. This is where worker-count invariance is actually won.
 typealias SpecResultBuckets = Array with SpecTestResultArray
+typealias HarnessErrorBuckets = Array with StringArray
 
 // The parent's whole answer about the run: one plan per spec that has work, and the cases the run left
 // out on purpose across ALL of them. The second half is a run-level fact and belongs to the run-level
@@ -749,6 +755,10 @@ function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatt
 		print("{recordLine(specName, result: result)}\n")
 	end 'eachResult'
 
+	for text in run.harnessErrors 'eachHarnessError'
+		print("{WorkerJobHarnessMarker}{encodeRecordPayload(text)}\n")
+	end 'eachHarnessError'
+
 	// LAST, after every record — the parent takes it off the end of the drained lines before it
 	// checks the records against its plan. See this file's protocol note.
 	print("{jobCountsLine(WorkerJobBatchMarker, first: run.batch.batched as ParsedCount, second: run.batch.programs as ParsedCount, third: run.batch.alone as ParsedCount)}\n")
@@ -1003,6 +1013,23 @@ function takeJobCpuRecord(lines StringArray, specName String) returns SuiteCpuTa
 	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobCpuMarker, names: JobCountNames.create("tick total", second: "reported count", third: "unreported count"))
 	return SuiteCpuTally.create(counts.first as CpuTicks, reported: counts.second as TestTally, unreported: counts.third as TestTally)
 end 'takeJobCpuRecord'
+
+function takeJobHarnessRecords(lines StringArray) returns StringArray
+	var errors = StringArray.create(0)
+
+	while true 'eachRecord'
+		let last = try lines.last() otherwise break
+
+		if not last.startsWith(WorkerJobHarnessMarker) 'notOne'
+			break
+		end 'notOne'
+
+		_ = try lines.pop() otherwise panic("takeJobHarnessRecords: a non-empty list of lines has a last")
+		errors.insert(0, value: decodeRecordPayload(sliceAfterPrefix(last, prefix: WorkerJobHarnessMarker)))
+	end 'eachRecord'
+
+	return errors
+end 'takeJobHarnessRecords'
 
 function takeJobBatchRecord(lines StringArray, specName String) returns BatchTally
 	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobBatchMarker, names: JobCountNames.create("batched count", second: "program count", third: "alone count"))
@@ -1894,6 +1921,7 @@ export type PoolRun
 	export let batch as BatchTally
 	export let library as LibraryCacheTally
 	export let poolSize as WorkerPoolSize
+	export let harnessErrors as StringArray
 
 	// The cases this run passed over and owes the reader a sentence about, from the parent's own plan walk
 	// — see `ExclusionReason` for the two kinds. It rides HERE rather than being re-derived by the reporter
@@ -1904,8 +1932,8 @@ export type PoolRun
 	export let unmatchedPatterns as FilterPatternArray
 	export let refused as bool
 
-	export static function create(results SpecTestResultArray, failedWorkers WorkerTally, cpu SuiteCpuTally, batch BatchTally, library LibraryCacheTally, poolSize WorkerPoolSize, excluded ExcludedCaseArray, unmatchedPatterns FilterPatternArray, refused bool) returns PoolRun
-		return Self{results: results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, poolSize: poolSize, excluded: excluded, unmatchedPatterns: unmatchedPatterns, refused: refused}
+	export static function create(results SpecTestResultArray, failedWorkers WorkerTally, cpu SuiteCpuTally, batch BatchTally, library LibraryCacheTally, poolSize WorkerPoolSize, harnessErrors StringArray, excluded ExcludedCaseArray, unmatchedPatterns FilterPatternArray, refused bool) returns PoolRun
+		return Self{results: results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, poolSize: poolSize, harnessErrors: harnessErrors, excluded: excluded, unmatchedPatterns: unmatchedPatterns, refused: refused}
 	end 'create'
 end 'PoolRun'
 
@@ -1968,7 +1996,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		//
 		// The excluded census rides out here too: a run whose whole selection was live-network reaches
 		// this return, and "no tests selected" alone would hide the cause.
-		return PoolRun.create(SpecTestResultArray.create(0), failedWorkers: 0, cpu: SuiteCpuTally.zero(), batch: BatchTally.zero(), library: LibraryCacheTally.create(), poolSize: WorkerPoolSize.unsized, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns, refused: suitePlan.refused)
+		return PoolRun.create(SpecTestResultArray.create(0), failedWorkers: 0, cpu: SuiteCpuTally.zero(), batch: BatchTally.zero(), library: LibraryCacheTally.create(), poolSize: WorkerPoolSize.unsized, harnessErrors: StringArray.create(0), excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns, refused: suitePlan.refused)
 	end 'selectsNothing'
 
 	try prepareSharedDirs(specDir)
@@ -2047,8 +2075,11 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// where worker-count invariance is won: nothing is reported as it arrives.
 	var buckets = SpecResultBuckets.create(plans.count(), zeroed: false)
 
+	var harnessBuckets = HarnessErrorBuckets.create(plans.count(), zeroed: false)
+
 	for _ in 0 upto plans.count() 'initBuckets'
 		buckets.push(SpecTestResultArray.create(0))
+		harnessBuckets.push(StringArray.create(0))
 	end 'initBuckets'
 
 	// Round-robin cursors. Without them the loop re-dispatches to the slot it just drained and then
@@ -2177,13 +2208,14 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 				try busy.set(readySlot, value: false) otherwise panic("runSpecPool: busy.set({readySlot}) is in bounds by construction")
 			end 'queueDrained'
 
-			// The READY terminator and the compile breadcrumbs come off first, then the CPU record off
-			// the END: what remains is exactly the result records `resultsFromLines` checks against the
+			// The READY terminator and the compile breadcrumbs come off first, then the counts records
+			// and the harness records off the END: what remains is exactly the result records `resultsFromLines` checks against the
 			// plan, one per test with no allowance for a line of any other kind.
 			var records = recordLinesOf(lines)
 			cpu = cpu.plus(takeJobCpuRecord(records, specName: job.specName))
 			library.add(takeJobLibraryRecord(records, specName: job.specName))
 			batch = batch.plus(takeJobBatchRecord(records, specName: job.specName))
+			try harnessBuckets.set(job.planIndex, value: takeJobHarnessRecords(records)) otherwise panic("runSpecPool: harnessBuckets.set({job.planIndex}) is in bounds by construction")
 
 			try buckets.set(job.planIndex, value: resultsFromLines(records, plan: plan)) otherwise panic("runSpecPool: buckets.set({job.planIndex}) is in bounds by construction")
 			completed = completed + 1
@@ -2237,6 +2269,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// but it is never a thing a green run may contain.
 	let failedWorkers = shutdownPool(workers) + deadWorkers
 	let results = concatBuckets(buckets)
+	let harnessErrors = concatHarnessErrors(harnessBuckets)
 
 	// The indicator covers EVERY test this run reported, or it is not an indicator of this run. Each
 	// test contributes exactly one reading (`SpecTestRunner.TestRun` carries the verdict and the cost
@@ -2246,8 +2279,20 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		panic("runSpecPool: the compile-CPU tally covers {cpu.tests()} test(s) but the run reported {results.count()} — a job's {WorkerJobCpuMarker} record was counted against the wrong job")
 	end 'cpuCoverageGap'
 
-	return PoolRun.create(results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, poolSize: WorkerPoolSize.sized(poolSize), excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns, refused: suitePlan.refused)
+	return PoolRun.create(results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, poolSize: WorkerPoolSize.sized(poolSize), harnessErrors: harnessErrors, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns, refused: suitePlan.refused)
 end 'runSpecPool'
+
+function concatHarnessErrors(buckets HarnessErrorBuckets) returns StringArray
+	var errors = StringArray.create(0)
+
+	for bucket in buckets 'eachSpec'
+		for text in bucket 'eachError'
+			errors.push(text)
+		end 'eachError'
+	end 'eachSpec'
+
+	return errors
+end 'concatHarnessErrors'
 
 // The buckets, in plan order — the suite's report, assembled at last from answers that arrived in
 // whatever order the workers happened to finish.

@@ -28,9 +28,10 @@ export enum SpecResultKey
 	test = "test"
 	verdict = "verdict"
 	reason = "reason"
+	harnessErrors = "harnessErrors"
 end 'SpecResultKey'
 
-export function writeSpecResultJson(target FilePath, results SpecTestResultArray) throws SpecResultJsonError
+export function writeSpecResultJson(target FilePath, results SpecTestResultArray, harnessErrors StringArray) throws SpecResultJsonError
 	let tally = tallyResults(results)
 
 	var doc = JsonDoc.create()
@@ -45,6 +46,9 @@ export function writeSpecResultJson(target FilePath, results SpecTestResultArray
 
 	keys.push(SpecResultKey.cases.rawValue)
 	children.push(casesNode(doc, results: results))
+
+	keys.push(SpecResultKey.harnessErrors.rawValue)
+	children.push(harnessErrorsNode(doc, harnessErrors: harnessErrors))
 
 	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
 
@@ -74,3 +78,13 @@ function casesNode(doc JsonDoc, results SpecTestResultArray) returns JsonNodeId
 
 	return doc.add(JsonNode.arrayNode(items))
 end 'casesNode'
+
+function harnessErrorsNode(doc JsonDoc, harnessErrors StringArray) returns JsonNodeId
+	var items = JsonNodeIdArray.create(harnessErrors.count(), zeroed: false)
+
+	for text in harnessErrors 'eachError'
+		items.push(doc.add(JsonNode.stringNode(text)))
+	end 'eachError'
+
+	return doc.add(JsonNode.arrayNode(items))
+end 'harnessErrorsNode'

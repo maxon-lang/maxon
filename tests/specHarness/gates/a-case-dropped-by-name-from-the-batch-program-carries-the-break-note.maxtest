@@ -1,0 +1,36 @@
+let NamedErrorSpecName = "named-error"
+let UnusedBindingDiagnostic = "unused variable: 'unused'"
+
+test 'a case the batch compile names is dropped from the batch program and carries the note that it broke it'
+	let run = runGateFixtureOnce(StringArray.create(0))
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	collectNotPassed(said, specName: NamedErrorSpecName, testNames: ["named-error.first", "named-error.second"], broken: broken)
+
+	let culpritFailed = failVerdictPrefix(testLabel(NamedErrorSpecName, testName: "named-error.binds-nothing-it-reads"))
+
+	if not said.contains(culpritFailed) 'culpritDidNotFail'
+		broken.push("'named-error.binds-nothing-it-reads' holds an unused binding, and the run must fail it. Expected '{culpritFailed}', and the run said:\n{said}\n")
+	end 'culpritDidNotFail'
+
+	if not said.contains(UnusedBindingDiagnostic) 'ownFailureUnsaid'
+		broken.push("the failure of 'named-error.binds-nothing-it-reads' does not carry its own compile error '{UnusedBindingDiagnostic}'. The run said:\n{said}\n")
+	end 'ownFailureUnsaid'
+
+	if not said.contains(BrokeTheBatchProgram) 'culpritNotLinked'
+		broken.push("the failure of 'named-error.binds-nothing-it-reads' does not say it '{BrokeTheBatchProgram}', so it never reached the shared program. The run said:\n{said}\n")
+	end 'culpritNotLinked'
+
+	if said.contains(BatchingChecksMissedThisCase) 'aSiblingWasBlamed'
+		broken.push("a healthy sibling was failed for '{BatchingChecksMissedThisCase}'. The run said:\n{said}\n")
+	end 'aSiblingWasBlamed'
+
+	collectMissingSummary(said, expected: batchSummaryLine(2, programs: 1, alone: 0), broken: broken)
+
+	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with a failed case in it. It said:\n{said}\n")
+	end 'failureDidNotCount'
+
+	requireNothingBroken(broken, headline: "a case the batch compile names is dropped from the batch program and carries the note that it broke it")
+end 'a case the batch compile names is dropped from the batch program and carries the note that it broke it'

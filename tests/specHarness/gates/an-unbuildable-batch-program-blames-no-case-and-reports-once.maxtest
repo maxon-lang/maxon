@@ -1,0 +1,45 @@
+let UnbuildableSpecName = "unbuildable"
+let SpecScratchDir = ".spec-tmp"
+let BatchSourceRootName = "__batch0.src"
+let StagingRefusalText = "could not create the staging directory"
+
+test 'a batch program the harness cannot build blames no case and is reported once while the cases run alone'
+	let staged = stagedGateFixture()
+	let scratch = staged.join(SpecScratchDir).join(UnbuildableSpecName)
+
+	if not Directory.create(scratch) 'noScratch'
+		panic("spec-harness tests: the gate could not run - could not create {scratch.toString()}")
+	end 'noScratch'
+
+	writeStagedFile(scratch.join(BatchSourceRootName), content: "")
+
+	let run = runSpecTest(staged, includeNetwork: false)
+	discardOutsideCheckoutDir(staged)
+
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	collectNotPassed(said, specName: UnbuildableSpecName, testNames: ["unbuildable.first", "unbuildable.second", "unbuildable.third"], broken: broken)
+
+	collectMissingSummary(said, expected: "3 passed, 0 failed", broken: broken)
+
+	if said.split(HarnessErrorMarker).count() != 2 'harnessErrorNotOnce'
+		broken.push("the run must report exactly one '{HarnessErrorMarker}'. It said:\n{said}\n")
+	end 'harnessErrorNotOnce'
+
+	if not said.contains(StagingRefusalText) 'causeUnsaid'
+		broken.push("the harness error does not give the cause '{StagingRefusalText}'. The run said:\n{said}\n")
+	end 'causeUnsaid'
+
+	if said.contains(BatchingChecksMissedThisCase) or said.contains(BrokeTheBatchProgram) 'aCaseWasBlamed'
+		broken.push("a case was blamed for a failure that belongs to no case. The run said:\n{said}\n")
+	end 'aCaseWasBlamed'
+
+	collectMissingSummary(said, expected: batchSummaryLine(0, programs: 0, alone: 3), broken: broken)
+
+	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with a harness error in it. It said:\n{said}\n")
+	end 'failureDidNotCount'
+
+	requireNothingBroken(broken, headline: "a batch program the harness cannot build blames no case and is reported once")
+end 'a batch program the harness cannot build blames no case and is reported once while the cases run alone'

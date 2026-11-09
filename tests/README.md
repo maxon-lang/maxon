@@ -836,7 +836,9 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   calling a library `Iterable` extension method kept in separate programs, the cases that stay out of it, `--batch=off` running every case
   alone, a crash mid-batch attributed to its own case (on `--target=wasm32-wasi` too, where no case of a
   batch can be selected again, so the siblings are recompiled and run alone), a batched case's services finishing before its end
-  marker, a case that passes alone but fails batched reported as a batching gap, a case marked
+  marker, a case that passes alone but fails batched reported as a batching gap, the cases that
+  break the shared batch program failed by name while their siblings pass, a batch program the harness
+  cannot build or isolate reported as a harness error with no case blamed, a case marked
   `process: own` running in a program of its own, output outside the case markers failing every case of
   its program, a case staged below a `.maxonignore`d directory compiling its own files, a shared library
   parse served to a later program leaving that program's index at its baseline, a second run's workers

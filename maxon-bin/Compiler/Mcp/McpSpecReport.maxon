@@ -37,9 +37,10 @@ export type SpecReport
 	export var tally as ResultTally
 	export var tests as SpecTestEntryArray
 	export var failures as SpecFailureSummaryArray
+	export var harnessErrors as StringArray
 
-	static function create(tally ResultTally, tests SpecTestEntryArray, failures SpecFailureSummaryArray) returns SpecReport
-		return Self{tally: tally, tests: tests, failures: failures}
+	static function create(tally ResultTally, tests SpecTestEntryArray, failures SpecFailureSummaryArray, harnessErrors StringArray) returns SpecReport
+		return Self{tally: tally, tests: tests, failures: failures, harnessErrors: harnessErrors}
 	end 'create'
 end 'SpecReport'
 
@@ -80,6 +81,25 @@ function statedTallyIn(doc JsonDoc) returns ResultTally throws SpecDocumentError
 	return stated
 end 'statedTallyIn'
 
+function harnessErrorsIn(doc JsonDoc) returns StringArray throws SpecDocumentError
+	let listId = try doc.getChild(doc.root, key: SpecResultKey.harnessErrors.rawValue) otherwise throw SpecDocumentError.malformed
+	let errorCount = try doc.arrayLength(listId) otherwise throw SpecDocumentError.malformed
+	var errors = StringArray.create(errorCount, zeroed: false)
+
+	for i in 0 upto errorCount 'eachError'
+		let errorId = try doc.arrayAt(listId, index: i) otherwise throw SpecDocumentError.malformed
+		let node = doc.get(errorId)
+
+		if node.kind != JsonKind.jsonString 'notText'
+			throw SpecDocumentError.malformed
+		end 'notText'
+
+		errors.push(node.stringValue)
+	end 'eachError'
+
+	return errors
+end 'harnessErrorsIn'
+
 export function readSpecReport(doc JsonDoc) returns SpecReport throws SpecDocumentError
 	let casesId = try doc.getChild(doc.root, key: SpecResultKey.cases.rawValue) otherwise throw SpecDocumentError.malformed
 	let caseCount = try doc.arrayLength(casesId) otherwise throw SpecDocumentError.malformed
@@ -110,5 +130,5 @@ export function readSpecReport(doc JsonDoc) returns SpecReport throws SpecDocume
 		throw SpecDocumentError.malformed
 	end 'countsDisagree'
 
-	return SpecReport.create(counted, tests: tests, failures: failures)
+	return SpecReport.create(counted, tests: tests, failures: failures, harnessErrors: try harnessErrorsIn(doc))
 end 'readSpecReport'

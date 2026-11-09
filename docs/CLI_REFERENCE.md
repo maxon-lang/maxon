@@ -3068,6 +3068,8 @@ last 4 KiB of output, starting on a character boundary).
 - The answer is read from the run's [`--result-json`](#maxon-spec-test) document, written to
   `.spec-tmp/spec-result.<tag>.<start>.<pid>.<serial>.json` in the checkout, one per call, and deleted
   when the call ends. A run that writes no document is answered with a tool error carrying `rawTail`.
+- **`harnessErrors`** lists each `harness error:` line the run printed, `[]` when there was none. A run
+  whose only problem is such a line answers `failed: 0`, `success: false` and `exitCode` 1.
 
 | Argument | Type | Description |
 |----------|------|-------------|
@@ -3162,6 +3164,11 @@ Every worker starts from the [library cache](#the-library-cache). After the summ
 `library cache: <n> loaded, <n> written, <n> rejected` on stderr: the entries its workers loaded, wrote
 and rejected, summed over the run.
 
+A spec's shared batch program that the harness cannot build for a reason of the environment, or cannot
+isolate the breaking case of within its budget of trial builds, prints a `harness error:` line on stderr
+after the report, naming the cases that ran alone. Their own results decide them, and the run
+exits **1** even when every case passed.
+
 It refuses to start, with exit **2** and nothing run, when the compiler binary is older than the sources
 it was built from, or when another command holds the checkout's [tree lock](#the-tree-lock).
 
@@ -3175,9 +3182,10 @@ selects tests only in other shards is accepted, and a shard holding none of the 
 `0 passed, 0 failed` and exits 0. A refused sharded run lists every case the whole directory left out;
 an accepted shard lists only its own.
 
-`--result-json=<path>` writes `{passed, failed, skipped, notRun, total, cases}`, where `cases` lists every
-case in run order as `{spec, test, verdict}`, `verdict` is `PASS`, `FAIL`, `SKIP` or `NOTRUN`, and a
-`FAIL` also carries its `reason`. A relative `<path>` is resolved against the working directory. A
+`--result-json=<path>` writes `{passed, failed, skipped, notRun, total, cases, harnessErrors}`, where
+`cases` lists every case in run order as `{spec, test, verdict}`, `verdict` is `PASS`, `FAIL`, `SKIP` or
+`NOTRUN`, a `FAIL` also carries its `reason`, and `harnessErrors` holds each `harness error:` line the run
+printed. A relative `<path>` is resolved against the working directory. A
 `<path>` that is not a valid path exits 1 before any test runs; a document that cannot be written exits
 1 after the report.
 

@@ -518,8 +518,15 @@ again ALONE from the same binary with `--select=<n>`, and its verdict comes from
 compile refuses is dropped from the program so the rest still run, and compiled alone: when it builds, the
 case FAILS with the batch compile's diagnostic and a message saying the batching checks missed it, which is
 a batching gap the runner must close; when it does not build alone either (a target refusal such as E3104,
-or a real error), its own compile decides it as for any case. A program that does not compile at all is
-treated the same way for every case it held. Output outside the markers belongs to no single case: a
+or a real error), its own compile decides it as for any case. When the refusal names no case (an error in
+the generated entry file, say), the harness bisects the remaining cases by trial builds, within a fixed
+budget, until it has isolated each case that breaks the program. An isolated case that fails alone keeps its
+own compile error and gains a note that it broke the batch program its siblings share, naming any case it
+conflicted with; every other case is judged by its own run, in a program built without the isolated ones.
+A program the harness cannot build for a reason of the environment (a staging directory it cannot create, a
+missing standard library or runtime, a driver failure), and a spent trial budget, leave every case involved
+to its own run alone. Each such program prints one `harness error:` line on stderr, after the report,
+naming those cases and the cause, and the run exits 1 even when every case passed. Output outside the markers belongs to no single case: a
 `static` or module-level initializer runs before `main` for every case of a program, so what it prints
 lands ahead of the first marker, and a `--select=` rerun of the same binary prints it too. A program whose
 run left such output FAILS every one of its cases, and so does a case whose alone rerun died before the

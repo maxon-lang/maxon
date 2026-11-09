@@ -1,0 +1,33 @@
+let MixedSpecName = "mixed"
+
+test 'a case a trial names after the unnamed culprit is isolated is dropped by that name and both culprits carry the note'
+	let run = runGateFixtureOnce(StringArray.create(0))
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	collectNotPassed(said, specName: MixedSpecName, testNames: ["mixed.first", "mixed.second"], broken: broken)
+
+	for culprit in ["mixed.declares-no-main", "mixed.binds-nothing-it-reads"] 'eachCulprit'
+		let culpritFailed = failVerdictPrefix(testLabel(MixedSpecName, testName: culprit))
+
+		if not said.contains(culpritFailed) 'culpritDidNotFail'
+			broken.push("'{culprit}' breaks the batch program, and the run must fail it. Expected '{culpritFailed}', and the run said:\n{said}\n")
+		end 'culpritDidNotFail'
+	end 'eachCulprit'
+
+	if said.split(BrokeTheBatchProgram).count() != 3 'culpritsNotBothLinked'
+		broken.push("both failing cases must say they '{BrokeTheBatchProgram}', exactly twice in all. The run said:\n{said}\n")
+	end 'culpritsNotBothLinked'
+
+	if said.contains(BatchingChecksMissedThisCase) or said.contains(HarnessErrorMarker) 'aCaseWasBlamed'
+		broken.push("a healthy case was blamed, or the harness reported an error it should not have. The run said:\n{said}\n")
+	end 'aCaseWasBlamed'
+
+	collectMissingSummary(said, expected: batchSummaryLine(2, programs: 1, alone: 0), broken: broken)
+
+	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with failed cases in it. It said:\n{said}\n")
+	end 'failureDidNotCount'
+
+	requireNothingBroken(broken, headline: "a case a trial names after the unnamed culprit is isolated is dropped by that name")
+end 'a case a trial names after the unnamed culprit is isolated is dropped by that name and both culprits carry the note'

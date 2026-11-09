@@ -1,0 +1,33 @@
+let TwoNoMainsSpecName = "two-no-mains"
+
+test 'two cases that each break the batch program are both failed for it and the three healthy cases pass'
+	let run = runGateFixtureOnce(StringArray.create(0))
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	collectNotPassed(said, specName: TwoNoMainsSpecName, testNames: ["two-no-mains.first", "two-no-mains.third", "two-no-mains.fifth"], broken: broken)
+
+	for culprit in ["two-no-mains.declares-no-main-early", "two-no-mains.declares-no-main-late"] 'eachCulprit'
+		let culpritFailed = failVerdictPrefix(testLabel(TwoNoMainsSpecName, testName: culprit))
+
+		if not said.contains(culpritFailed) 'culpritDidNotFail'
+			broken.push("'{culprit}' declares no main the compiler sees, and the run must fail it. Expected '{culpritFailed}', and the run said:\n{said}\n")
+		end 'culpritDidNotFail'
+	end 'eachCulprit'
+
+	if said.split(BrokeTheBatchProgram).count() != 3 'culpritsNotBothLinked'
+		broken.push("both failing cases must say they '{BrokeTheBatchProgram}', exactly twice in all. The run said:\n{said}\n")
+	end 'culpritsNotBothLinked'
+
+	if said.contains(BatchingChecksMissedThisCase) 'aSiblingWasBlamed'
+		broken.push("a healthy case was failed for '{BatchingChecksMissedThisCase}'. The run said:\n{said}\n")
+	end 'aSiblingWasBlamed'
+
+	collectMissingSummary(said, expected: batchSummaryLine(3, programs: 1, alone: 0), broken: broken)
+
+	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with failed cases in it. It said:\n{said}\n")
+	end 'failureDidNotCount'
+
+	requireNothingBroken(broken, headline: "two cases that each break the batch program are both failed for it and the healthy cases pass")
+end 'two cases that each break the batch program are both failed for it and the three healthy cases pass'
