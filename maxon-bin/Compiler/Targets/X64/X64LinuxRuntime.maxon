@@ -4801,6 +4801,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	if posixUsesHostObjects(usage) 'hostObjects'
 		chunks.push(buildX64LinuxProcReapChunk())
 		chunks.push(buildX64LinuxWaitCloseChunk())
+		chunks.push(buildX64LinuxSleepChunk(HostSleepMsName, unit: PosixTimeUnit.milliseconds))
 	end 'hostObjects'
 
 	// The main thread's slot block rides the runtime-lock gate, not the band's: a recursive lock reads
@@ -4825,7 +4826,6 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	// read are all reached from `__sched_init_procs` and `__gt_init`, which a green-thread program always
 	// installs together.
 	if usage.usesGt 'greenThreadFloor'
-		chunks.push(buildX64LinuxSleepChunk(HostSleepMsName, unit: PosixTimeUnit.milliseconds))
 		chunks.push(buildX64LinuxThreadYieldChunk())
 		chunks.push(buildX64LinuxWaitNewChunk())
 		chunks.push(buildX64LinuxEventSetChunk())

@@ -3190,6 +3190,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	if posixUsesHostObjects(usage) 'hostObjects'
 		chunks.push(buildArm64PosixProcReapChunk(PosixHostCall.syscall(Arm64LinuxSyscallWait4, errnoHome: errnoHome), scope: PosixReapScope.childAndItsTracees(PosixHostCall.syscall(Arm64LinuxSyscallWaitid, errnoHome: errnoHome))))
 		chunks.push(buildArm64LinuxWaitCloseChunk())
+		chunks.push(buildArm64LinuxSleepChunk(HostSleepMsName, unit: PosixTimeUnit.milliseconds))
 	end 'hostObjects'
 
 	// The main thread's slot block rides the runtime-lock gate, not the band's: a recursive lock reads
@@ -3214,7 +3215,6 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// `MAXON_MAX_PROCS` read are all reached from `__sched_init_procs` and `__gt_init`, which a green-thread
 	// program always installs together.
 	if usage.usesGt 'greenThreadFloor'
-		chunks.push(buildArm64LinuxSleepChunk(HostSleepMsName, unit: PosixTimeUnit.milliseconds))
 		chunks.push(buildArm64PosixSpinPauseChunk())
 		chunks.push(buildArm64LinuxThreadYieldChunk())
 		chunks.push(buildArm64LinuxWaitNewChunk(globalData))

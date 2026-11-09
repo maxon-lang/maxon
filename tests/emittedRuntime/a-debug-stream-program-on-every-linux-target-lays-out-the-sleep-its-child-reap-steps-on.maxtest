@@ -1,0 +1,22 @@
+let ADebugStreamProgramOnEveryLinuxTargetLaysOutTheSleepItsChildReapStepsOnCaseLabel = "debug-stream-reap-sleep"
+
+let ReserveFunctionName = "__ds_reserve"
+let LinuxTargetNames = ["x64-linux", "arm64-linux"]
+
+let ADebugStreamProgramOnEveryLinuxTargetLaysOutTheSleepItsChildReapStepsOnReason = "A program that reaches the debug stream and no scheduler lays out the host-object band, whose child reap polls on the millisecond sleep while a traced child is stopped. The sleep rides the same gate as the reap, so a link of such a program must resolve every call the reap makes on every Linux target."
+
+test 'a debug stream program on every Linux target lays out the sleep its child reap steps on'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ADebugStreamProgramOnEveryLinuxTargetLaysOutTheSleepItsChildReapStepsOnCaseLabel, fixture: HeapFixtureName)
+
+	var findings = StringArray.create(0)
+
+	for target in LinuxTargetNames 'eachTarget'
+		let body = functionBody(irLines(buildStagedProgram(staged, caseLabel: "{ADebugStreamProgramOnEveryLinuxTargetLaysOutTheSleepItsChildReapStepsOnCaseLabel}-{target}", target: target, functionName: ReserveFunctionName, debugStream: true)), functionName: ReserveFunctionName, target: target)
+
+		if body.isEmpty() 'empty'
+			findings.push("on {target}, the emitted `{ReserveFunctionName}` of a debug stream program is empty")
+		end 'empty'
+	end 'eachTarget'
+
+	Expect.isTrue(findings.isEmpty(), message: "a debug stream program did not link on every Linux target:{renderedFindings(findings)}\n\n  {ADebugStreamProgramOnEveryLinuxTargetLaysOutTheSleepItsChildReapStepsOnReason}")
+end 'a debug stream program on every Linux target lays out the sleep its child reap steps on'
