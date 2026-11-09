@@ -6,18 +6,19 @@
 
 typealias UnitTally = int(0 to 100000)
 typealias UnitValue = int(0 to u32.max)
+typealias UnitSum = int(0 to u64.max)
 
 let RegallocAFunctionSplitPast65536TimesCompilesAndRunsCaseDirName = "regalloc-split-past-65536"
 
-let Units = 1150 as UnitTally
+let Units = 1190 as UnitTally
 let ValuesPerUnit = 80 as UnitTally
 let SplitsTheFixtureMustNeed = 65537 as ReportedTally
 
 let Low16 = 0xFFFF as UnitValue
-let OpaqueThreshold = 100
+let ValueMultiplier = 40503 as UnitValue
 let PathLengthMask = 0xFF as UnitValue
 
-let FixtureHeader = "typealias Word = int(0 to u32.max)\n\nfunction opaque(x Word) returns Word\n\tif x > 100 'big'\n\t\treturn (x - 100) and 0xFFFF\n\tend 'big'\n\n\treturn x + 1\nend 'opaque'\n\nfunction work(seed Word) returns Word\n\tvar total = seed\n"
+let FixtureHeader = "typealias Word = int(0 to u32.max)\n\nfunction work(seed Word) returns Word\n\tvar total = seed\n"
 let RegallocAFunctionSplitPast65536TimesCompilesAndRunsFixtureFooter = "\treturn total\nend 'work'\n\nfunction main() returns ExitCode\n\tlet spelled = try Process.environmentVariable(\"PATH\") otherwise \"\"\n\tprint(\"\{work((spelled.byteLength() and 0xFF) as Word)\}\")\n\treturn 0\nend 'main'\n"
 
 function splitCountFixtureSource() returns String
@@ -25,10 +26,10 @@ function splitCountFixtureSource() returns String
 
 	for unit in 0 upto Units 'eachUnit'
 		for k in 0 upto ValuesPerUnit 'eachValue'
-			out.append("\tlet a{unit}_{k} = opaque(total + {k})\n")
+			out.append("\tlet a{unit}_{k} = ((total and 0xFFFF) + {k}) * {ValueMultiplier}\n")
 		end 'eachValue'
 
-		out.append("\ttotal = opaque(total)\n\ttotal = (total")
+		out.append("\ttotal = (total")
 
 		for k in 0 upto ValuesPerUnit 'eachSummand'
 			out.append(" + a{unit}_{k}")
@@ -41,26 +42,19 @@ function splitCountFixtureSource() returns String
 	return out
 end 'splitCountFixtureSource'
 
-function opaque(x UnitValue) returns UnitValue
-	if x > OpaqueThreshold 'big'
-		return (x - OpaqueThreshold) and Low16
-	end 'big'
-
-	return x + 1
-end 'opaque'
-
 function expectedAnswer() returns UnitValue
 	let spelled = try Process.environmentVariable("PATH") otherwise ""
 	var total = (spelled.byteLength() as UnitValue) and PathLengthMask
 
 	for _ in 0 upto Units 'eachUnit'
-		var sum = 0 as UnitValue
+		let low = total and Low16
+		var sum = 0 as UnitSum
 
 		for k in 0 upto ValuesPerUnit 'eachValue'
-			sum = sum + opaque(total + (k as UnitValue))
+			sum = sum + ((low + (k as UnitValue)) * ValueMultiplier) as UnitSum
 		end 'eachValue'
 
-		total = (opaque(total) + sum) and Low16
+		total = (((total as UnitSum) + sum) and (Low16 as UnitSum)) as UnitValue
 	end 'eachUnit'
 
 	return total
@@ -80,7 +74,7 @@ type SplitPast65536 implements OutsideCheckoutCase
 		writeStagedFile(app.join(StagedProgramFileName), content: splitCountFixtureSource())
 
 		let built = spawnCompiler([BuildCommandWord, AppDirName, LogFlag], staged: dir)
-		try Expect.equal(built.exitCode(), expected: 0, message: "a function of {Units} units, each holding {ValuesPerUnit} call results live across a call, did not build. It wrote to stderr: {built.stderr}")
+		try Expect.equal(built.exitCode(), expected: 0, message: "a function of {Units} units, each holding {ValuesPerUnit} values live at once, did not build. It wrote to stderr: {built.stderr}")
 
 		let splits = codegenLogCount(built.stderr, field: ValuesSplitField)
 
