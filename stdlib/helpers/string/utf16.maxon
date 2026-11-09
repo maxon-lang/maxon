@@ -24,18 +24,18 @@ end 'utf16Width'
 /// Check if a code unit is a high (lead) surrogate
 /// High surrogates are in the range 0xD800 to 0xDBFF
 public function utf16IsLeadSurrogate(codeUnit CodeUnit16) returns bool
-	return codeUnit >= 55296 and codeUnit <= 56319
+	return codeUnit >= SurrogateFirst and codeUnit <= LeadSurrogateLast
 end 'utf16IsLeadSurrogate'
 
 /// Check if a code unit is a low (trail) surrogate
 /// Low surrogates are in the range 0xDC00 to 0xDFFF
 public function utf16IsTrailSurrogate(codeUnit CodeUnit16) returns bool
-	return codeUnit >= 56320 and codeUnit <= 57343
+	return codeUnit >= TrailSurrogateFirst and codeUnit <= SurrogateLast
 end 'utf16IsTrailSurrogate'
 
 /// Check if a code unit is any type of surrogate
 public function utf16IsSurrogate(codeUnit CodeUnit16) returns bool
-	return codeUnit >= 55296 and codeUnit <= 57343
+	return codeUnit >= SurrogateFirst and codeUnit <= SurrogateLast
 end 'utf16IsSurrogate'
 
 /// Check if a codepoint is in the Basic Multilingual Plane
@@ -62,10 +62,16 @@ end 'utf16TrailSurrogate'
 
 /// Decode a surrogate pair to a codepoint
 /// Formula: 0x10000 + ((high - 0xD800) shl 10) + (low - 0xDC00)
+/// `high` must be a lead surrogate and `low` a trail surrogate (see `utf16IsValidSurrogatePair`);
+/// any other pair panics.
 public function utf16DecodeSurrogates(high CodeUnit16, low CodeUnit16) returns Codepoint
-	let highOffset = high - 55296  // high - 0xD800
-	let lowOffset = low - 56320  // low - 0xDC00
-	return (65536 + (highOffset * 1024) + lowOffset) as Codepoint  // 0x10000 + combined
+	if not utf16IsValidSurrogatePair(high, low: low) 'notPair'
+		panic("utf16DecodeSurrogates: {high} and {low} are not a lead surrogate followed by a trail surrogate")
+	end 'notPair'
+
+	let highOffset = high - SurrogateFirst
+	let lowOffset = low - TrailSurrogateFirst
+	return (65536 + (highOffset * 1024) + lowOffset) as Codepoint
 end 'utf16DecodeSurrogates'
 
 /// Check if high and low form a valid surrogate pair

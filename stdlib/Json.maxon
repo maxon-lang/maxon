@@ -580,9 +580,9 @@ type JsonParser
 	end 'decodeEscape'
 
 	function decodeUnicodeEscape(out ByteArray) throws JsonError
-		let cu = try parseHex4()
+		let cu = try parseHex4() as CodeUnit16
 
-		if cu >= 0xD800 and cu <= 0xDBFF 'high'
+		if utf16IsLeadSurrogate(cu) 'high'
 			let nextSlash = try peek()
 
 			if nextSlash != 0x5C 'noBs'
@@ -597,20 +597,19 @@ type JsonParser
 			end 'noU'
 
 			try advance()
-			let low = try parseHex4()
+			let low = try parseHex4() as CodeUnit16
 
-			if low < 0xDC00 or low > 0xDFFF 'badLow'
+			if not utf16IsTrailSurrogate(low) 'badLow'
 				throw JsonError.invalidSurrogate
 			end 'badLow'
 
-			let cp = 0x10000 + (cu - 0xD800) * 0x400 + (low - 0xDC00)
-			utf8AppendCodepoint(cp as Codepoint, out: out)
+			utf8AppendCodepoint(utf16DecodeSurrogates(cu, low: low), out: out)
 			return
 		end 'high'
 
 		// Unpaired low-surrogate is rejected outright rather than substituted —
 		// silent U+FFFD would let bad input pass round-trip checks unnoticed.
-		if cu >= 0xDC00 and cu <= 0xDFFF 'lowAlone'
+		if utf16IsTrailSurrogate(cu) 'lowAlone'
 			throw JsonError.invalidSurrogate
 		end 'lowAlone'
 

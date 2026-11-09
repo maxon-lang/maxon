@@ -407,33 +407,109 @@ lead4-two-continuations len=3 count=2 cps=[240,2008,] utf16=[240,2008,]
 well-formed-3byte len=3 count=1 cps=[20013,] utf16=[20013,]
 ```
 
-<!-- test: codepoint-range-panic-names-the-alias -->
-### `Codepoint` is a RANGE and not merely an erasure, and the panic names it
-`Codepoint` is `int(0 to 1114111)` in `stdlib/Character.maxon`, a module the compiler cannot load — so the
-compiler declares the alias for itself rather than answering only "it erases to `integer`". Without the
-range, this call would be silent: `utf16DecodeSurrogates` on two
-non-surrogates computes **-56613888** and hands it back as a `Codepoint`, whose declared range starts
-at 0. One stdlib module, one kind of precondition violation, and it must not matter which alias the
-compiler happened to get from a registry and which it synthesized.
-
-`7` is what an UNGUARDED build returns — the answer it computes is negative — so the exit code separates
-a fired guard from the silent wrong answer, and the message shows the alias reaching the diagnostic
-under its own name, which is what a bare erasure to `integer` could never have produced.
+<!-- test: utf16-decode-refuses-two-non-surrogates -->
+### `utf16DecodeSurrogates` refuses two code units that are not surrogates
+The pair arithmetic over two non-surrogates is **-56613888**, a number outside `Codepoint`'s range. The helper
+checks `utf16IsValidSurrogatePair` first and panics naming the two units, so no call hands back a value that is
+not the pair's codepoint.
 ```maxon
 function main() returns ExitCode
 	let cp = utf16DecodeSurrogates(0, low: 0)
-	return 7 if cp < 0 else 9
+	print("{cp}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at utf16.maxon:68: Range check failed: value outside typealias 'Codepoint'
+panic at utf16.maxon:67: utf16DecodeSurrogates: 0 and 0 are not a lead surrogate followed by a trail surrogate
 Stack trace:
   in utf16DecodeSurrogates
   in main
   in mrt_start
+```
+
+<!-- test: utf16-decode-refuses-a-lead-followed-by-a-lead -->
+### A lead surrogate followed by another lead surrogate is not a pair
+Both units are surrogates, so only the lead/trail split refuses it: the pair arithmetic over `(55296, low: 55296)`
+is U+FC00 (64512), a valid-looking codepoint belonging to neither unit.
+```maxon
+function main() returns ExitCode
+	let cp = utf16DecodeSurrogates(55296, low: 55296)
+	print("{cp}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at utf16.maxon:67: utf16DecodeSurrogates: 55296 and 55296 are not a lead surrogate followed by a trail surrogate
+Stack trace:
+  in utf16DecodeSurrogates
+  in main
+  in mrt_start
+```
+
+<!-- test: utf16-decode-refuses-a-lead-followed-by-a-non-surrogate -->
+### A lead surrogate followed by a unit below the trail range is not a pair
+The pair arithmetic over `(55296, low: 46080)` is 55296, a codepoint inside the surrogate block, which no `Character` can hold.
+```maxon
+function main() returns ExitCode
+	let cp = utf16DecodeSurrogates(55296, low: 46080)
+	print("{cp}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at utf16.maxon:67: utf16DecodeSurrogates: 55296 and 46080 are not a lead surrogate followed by a trail surrogate
+Stack trace:
+  in utf16DecodeSurrogates
+  in main
+  in mrt_start
+```
+
+<!-- test: utf16-decode-refuses-a-pair-in-the-wrong-order -->
+### A trail surrogate followed by a lead surrogate is not a pair
+`(56320, low: 55296)` is both units in the wrong places; the pair arithmetic over it is U+10FC00 (1113088).
+```maxon
+function main() returns ExitCode
+	let cp = utf16DecodeSurrogates(56320, low: 55296)
+	print("{cp}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at utf16.maxon:67: utf16DecodeSurrogates: 56320 and 55296 are not a lead surrogate followed by a trail surrogate
+Stack trace:
+  in utf16DecodeSurrogates
+  in main
+  in mrt_start
+```
+
+<!-- test: utf16-decode-accepts-the-first-and-last-pair -->
+### The first and last pairs decode to the ends of the supplementary planes
+The refusal leaves the whole valid range alone.
+```maxon
+function main() returns ExitCode
+	print("{utf16DecodeSurrogates(55296, low: 56320)}\n")
+	print("{utf16DecodeSurrogates(56319, low: 57343)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+65536
+1114111
 ```
 
 <!-- test: ranged-codepoint-alias-stays-legal -->
