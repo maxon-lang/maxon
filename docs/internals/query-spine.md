@@ -157,6 +157,10 @@ the generator runs again.
 
 The tier is bounded: each kind keeps its 4 newest entries (16 for parses), a process holds at most 4
 baselines, and the 16 most recently written compiler lineages (one per compiler path and target) are kept.
+The sweep that enforces the lineage bound, and removes builds of the same lineage and cache formats a
+newer compiler superseded, runs when a compiler build first creates its own directory in the cache, so a
+compile in steady state does not walk the host's shared cache directories and its allocation counts do not
+depend on what other compilers have put there.
 `verify-warm-rebuild` runs without the disk tier, because its memo counters assume every memo lives in the
 process.
 

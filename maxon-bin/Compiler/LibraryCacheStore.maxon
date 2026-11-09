@@ -350,13 +350,16 @@ function resolvedLibraryDirectory(target Target) returns LibraryCacheDirectory
 	let formats = root.join(LibraryCacheDirName)
 	let lineage = formats.join(cacheFormatDirectoryName(LibraryCacheFormat)).join(identity.lineage())
 	let entries = lineage.join(identity.build())
+	let firstUseOfThisBuild = not Directory.exists(entries)
 
 	if not Directory.create(entries) 'notCreated'
 		noteLibraryCacheTrouble("no library cache: {entries.toString()} could not be created")
 		return LibraryCacheDirectory.unavailable
 	end 'notCreated'
 
-	discardSupersededLibraryCaches(formats, lineage: lineage, current: entries)
+	if firstUseOfThisBuild 'creatingTheBuildsDirectory'
+		discardSupersededLibraryCaches(formats, lineage: lineage, current: entries)
+	end 'creatingTheBuildsDirectory'
 
 	return LibraryCacheDirectory.available(entries)
 end 'resolvedLibraryDirectory'
