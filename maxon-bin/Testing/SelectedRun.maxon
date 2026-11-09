@@ -100,9 +100,11 @@ end 'launchSelected'
 function launchFailureOf(error SubprocessError) returns SelectedLaunch
 	return match error 'why'
 		timeout(_, stdout, stderr) gives SelectedLaunch.deadlineExpired(stdout, stderr: stderr)
+		treeNotEnded(_, stdout, stderr, _) gives SelectedLaunch.deadlineExpired(stdout, stderr: stderr)
 		executableNotFound or
 		spawnFailed or
 		ioFailed or
+		detachRefused or
 		inputTooLarge or
 		endOfStream gives SelectedLaunch.couldNotStart(error.displayReason())
 	end 'why'

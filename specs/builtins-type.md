@@ -46,7 +46,7 @@ User code should use the `Subprocess` stdlib type rather than calling these buil
 - `__Builtins.subprocessKill(handle, force)` returns int - Terminate the child
 - `__Builtins.subprocessSendSignal(handle, signum)` returns int - Send a console-control signal (Windows: SIGINT/SIGBREAK)
 - `__Builtins.subprocessReleaseHandle(handle)` - Free the handle struct and its OS handles
-- `__Builtins.subprocessResultStatusKind(resultPtr)` returns int - 0=exited, 1=signalled, 2=timedOut
+- `__Builtins.subprocessResultStatusKind(resultPtr)` returns int - 0=exited, 1=signalled, 2=timedOut, 3=treeNotEnded (the deadline fired and the tree could not be fully ended)
 - `__Builtins.subprocessResultStatusCode(resultPtr)` returns int - Exit/signal code from the result struct
 - `__Builtins.subprocessResultStdout(resultPtr)` returns __ManagedMemory - Captured stdout
 - `__Builtins.subprocessResultStderr(resultPtr)` returns __ManagedMemory - Captured stderr

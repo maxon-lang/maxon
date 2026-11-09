@@ -15,6 +15,12 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- `SubprocessError` has two more cases, `treeNotEnded(elapsedMs, stdout, stderr, osError)` and
+  `detachRefused(osError)`: a deadline whose kill could not fully end the child's process tree, which threw
+  `ioFailed`, and a `runDetached()` the enclosing Windows job refuses breakaway to, which threw `spawnFailed`,
+  throw these. A `match` over `SubprocessError` that lists every case is no longer exhaustive (E2026).
+  Fix: add arms for `treeNotEnded` and `detachRefused`; code that told these failures apart by the reason text
+  of `ioFailed` or `spawnFailed` matches the cases.
 - An `Array` or `ByteArray` is created with a capacity: `Items.create()` with no argument is E3195.
   Fix: write `create(0)` for an empty array, `create(n)` for `n` zero elements in one allocation, or
   `create(n, zeroed: false)` for an empty array with room for `n`; a collection whose length is fixed after the

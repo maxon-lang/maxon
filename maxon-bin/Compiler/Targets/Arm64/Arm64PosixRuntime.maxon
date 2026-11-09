@@ -548,6 +548,22 @@ function arm64PosixEmitErrnoAnswer(asm Arm64RuntimeAsm, call PosixHostCall)
 	end 'route'
 end 'arm64PosixEmitErrnoAnswer'
 
+function arm64PosixEmitHostCallUnstashedErrno(asm Arm64RuntimeAsm, call PosixHostCall)
+	arm64PosixEmitHostCall(asm, call: call)
+
+	match call 'route'
+		importCall then arm64DarwinEmitUnstashedStatusOrErrno(asm)
+		syscall then break
+	end 'route'
+end 'arm64PosixEmitHostCallUnstashedErrno'
+
+function arm64PosixEmitStashUnstashedFailure(asm Arm64RuntimeAsm, call PosixHostCall)
+	match call 'route'
+		importCall then arm64DarwinEmitStashIfStatusFailed(asm)
+		syscall(_, errnoHome) then arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
+	end 'route'
+end 'arm64PosixEmitStashUnstashedFailure'
+
 function arm64PosixEmitStashFailure(asm Arm64RuntimeAsm, call PosixHostCall)
 	match call 'route'
 		importCall then break
@@ -1283,7 +1299,7 @@ end 'arm64PosixEmitReapedField'
 // A child already reaped still has its group killed: a group outlives its leader, and the kernel
 // hands out no group id while a member lives, so `kill(-pid)` reaches only that group. `ESRCH`
 // means nothing is left. A refused kill answers TRUE with `PosixTerminateTreeIncomplete`, so the
-// caller reports `ioFailed` rather than a clean timeout.
+// caller reports `treeNotEnded` rather than a clean timeout.
 //
 // A TRUE answer carries `PosixTerminateTreeIncomplete` when `mrt_host_proc_tree_kill` could not
 // end the whole tree. The caller reads FALSE as nothing left to kill and polls rather than waits,
@@ -1365,12 +1381,15 @@ function arm64PosixEmitGroupKillVerdict(asm Arm64RuntimeAsm, kill PosixHostCall,
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
 	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x2, rhs: Arm64Register.x0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixSigKill)
-	arm64PosixEmitHostCallErrno(asm, call: kill)
+
+	// The `ESRCH` compare precedes any `GtOffLastError` store: a stashed `ESRCH` from an already-empty
+	// group would overwrite the error a failed tree walk recorded, and `treeNotEnded` would report it.
+	arm64PosixEmitHostCallUnstashedErrno(asm, call: kill)
 
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: groupGone)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: groupGone)
-	arm64PosixEmitStashFailure(asm, call: kill)
+	arm64PosixEmitStashUnstashedFailure(asm, call: kill)
 	arm64EmitWin32BoolFromZeroStatus(asm)
 	arm64EmitBranchTo(asm, label: refusedTo)
 end 'arm64PosixEmitGroupKillVerdict'
@@ -1602,7 +1621,7 @@ export function buildArm64PosixProcProbeChunk(kill PosixHostCall) returns Functi
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixProbeSignal)
-	arm64PosixEmitHostCallErrno(asm, call: kill)
+	arm64PosixEmitHostCallUnstashedErrno(asm, call: kill)
 
 	return asm.finishFunction(HostProcProbeName)
 end 'buildArm64PosixProcProbeChunk'

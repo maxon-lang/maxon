@@ -2897,9 +2897,24 @@ end 'arm64DarwinEmitStatusOrErrno'
 function arm64DarwinEmitNegatedErrno(asm Arm64RuntimeAsm)
 	arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x0)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoValueName)
+	arm64DarwinEmitNegateX0(asm)
+end 'arm64DarwinEmitNegatedErrno'
+
+module function arm64DarwinEmitUnstashedStatusOrErrno(asm Arm64RuntimeAsm)
+	let answered = asm.newLabel()
+
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: answered)
+	arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x0)
+	arm64DarwinEmitNegateX0(asm)
+
+	asm.placeLabel(answered)
+end 'arm64DarwinEmitUnstashedStatusOrErrno'
+
+function arm64DarwinEmitNegateX0(asm Arm64RuntimeAsm)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: 0)
 	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x9, rhs: Arm64Register.x0)
-end 'arm64DarwinEmitNegatedErrno'
+end 'arm64DarwinEmitNegateX0'
 
 function arm64DarwinEmitPublishErrno(asm Arm64RuntimeAsm, value FullRangeInt)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)

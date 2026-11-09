@@ -23,6 +23,10 @@
 
 public typealias ExitInt = int(0 to u32.max)
 
+/// The Windows error code a `SubprocessError` case carries: `GetLastError` on Windows; on Linux and
+/// macOS the errno mapped onto its Windows equivalent, 31 when it has none.
+public typealias OsErrorCode = int(0 to u32.max)
+
 typealias ExitAnswer = int(-1 to u32.max)
 
 // An OS process id, which is a `pid_t` on POSIX and a DWORD on Windows — never negative, and never
@@ -95,6 +99,7 @@ enum ResultStatusKind
 	exited = 0
 	signalled = 1
 	timedOut = 2
+	treeNotEnded = 3
 end 'ResultStatusKind'
 
 // =============================================================================
@@ -316,13 +321,16 @@ end 'RunProcessError'
 /// of why it hung. Both fields are empty where the layer that threw was not
 /// collecting output — see `StreamingSubprocess.waitWithTimeout`.
 ///
-/// A deadline whose kill could not fully end the child's process tree throws
-/// `ioFailed`, not `timeout`, so `timedOut()` is false for it.
+/// `treeNotEnded` is a deadline whose kill could not fully end the child's
+/// process tree. It carries the output as `timeout` does; `deadlineFired()` is
+/// true for it and `timedOut()` false.
 public union SubprocessError implements Error
 	executableNotFound(name String)
 	spawnFailed(reason String)
 	ioFailed(reason String)
 	timeout(elapsedMs DurationMs, stdout String, stderr String)
+	treeNotEnded(elapsedMs DurationMs, stdout String, stderr String, osError OsErrorCode)
+	detachRefused(osError OsErrorCode)
 	inputTooLarge
 	endOfStream
 
@@ -335,6 +343,8 @@ public union SubprocessError implements Error
 			spawnFailed(reason) gives "spawn failed: {reason}"
 			ioFailed(reason) gives "I/O failed: {reason}"
 			timeout(elapsedMs, _, _) gives "timed out after {elapsedMs}ms, and the kill was sent to the child's whole process tree"
+			treeNotEnded(elapsedMs, _, _, osError) gives "timed out after {elapsedMs}ms, but the child's process tree could not be fully ended: os error {osError}"
+			detachRefused(osError) gives "runDetached: the process could not leave the job this program runs in, because that job does not allow breakaway (os error {osError}); run the program outside that job or allow breakaway on it"
 			inputTooLarge gives "stdin payload too large"
 			endOfStream gives "end of stream"
 		end 'e'
@@ -347,10 +357,27 @@ public union SubprocessError implements Error
 			executableNotFound or
 			spawnFailed or
 			ioFailed or
+			treeNotEnded or
+			detachRefused or
 			inputTooLarge or
 			endOfStream gives false
 		end 'e'
 	end 'timedOut'
+
+	/// True for `timeout` and `treeNotEnded`: the deadline fired, whether or not
+	/// the child's process tree ended.
+	public function deadlineFired() returns bool
+		return match self 'e'
+			timeout or
+			treeNotEnded gives true
+			executableNotFound or
+			spawnFailed or
+			ioFailed or
+			detachRefused or
+			inputTooLarge or
+			endOfStream gives false
+		end 'e'
+	end 'deadlineFired'
 
 	/// True for `endOfStream`: a line reader met the end of the child's stream.
 	public function endedTheStream() returns bool
@@ -360,6 +387,8 @@ public union SubprocessError implements Error
 			spawnFailed or
 			ioFailed or
 			timeout or
+			treeNotEnded or
+			detachRefused or
 			inputTooLarge gives false
 		end 'e'
 	end 'endedTheStream'
@@ -461,9 +490,9 @@ public type Configuration
 	/// Spawn the configured subprocess detached from the parent and return
 	/// its pid. stdin/stdout/stderr are forced to discard since the parent
 	/// won't be around to drain pipe ends. The child is outside every process
-	/// tree a deadline ends. Throws `spawnFailed` when it cannot be detached:
-	/// on Windows when the job this program runs in does not allow breakaway,
-	/// on Linux when the child cannot start its own session.
+	/// tree a deadline ends. Throws `detachRefused` on Windows when the job this
+	/// program runs in does not allow breakaway, and `spawnFailed` on Linux when
+	/// the child cannot start its own session.
 	public function runDetached() returns Pid throws SubprocessError
 		return try Subprocess.runDetachedConfiguration(self)
 	end 'runDetached'
@@ -505,8 +534,10 @@ public type Subprocess
 		let pid = __Builtins.subprocessGetPid(handle)
 		let result = __Builtins.subprocessWaitCollect(handle, config.timeoutMs)
 
+		let osError = lastOsErrorCode()
+
 		if result < 0 'waitFailed'
-			let reason = lastErrorMessage() if result == -1 else treeSurvivedReason(config.timeoutMs, cause: lastErrorMessage())
+			let reason = lastErrorMessage()
 			__Builtins.subprocessReleaseHandle(handle)
 			throw SubprocessError.ioFailed(reason)
 		end 'waitFailed'
@@ -523,7 +554,7 @@ public type Subprocess
 		__Builtins.subprocessReleaseHandle(handle)
 
 		let statusKind = try ResultStatusKind.fromRawValue(statusKindRaw) otherwise panic("Subprocess.runConfiguration: runtime returned unexpected statusKind raw={statusKindRaw}")
-		let status = try terminationStatusFromKind(statusKind, statusCode: statusCode as ExitInt, durationMs: durationMs, stdout: stdout, stderr: stderr)
+		let status = try terminationStatusFromKind(statusKind, statusCode: statusCode as ExitInt, durationMs: durationMs, stdout: stdout, stderr: stderr, osError: osError)
 		return CollectedOutput.create(status, stdout: stdout, stderr: stderr, pid: pid as Pid, durationMs: durationMs)
 	end 'runConfiguration'
 
@@ -540,7 +571,7 @@ public type Subprocess
 		let pid = __Builtins.subprocessDetach(operands.argv.addressableBytes(), operands.argc, config.workingDirectory.toString().cstr(), operands.environment.block.addressableBytes(), operands.environment.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
 
 		if pid < 0 'spawnFailed'
-			throw spawnFailure(operands.executablePath) if pid == -1 else detachRefusal()
+			throw spawnFailure(operands.executablePath) if pid == -1 else SubprocessError.detachRefused(lastOsErrorCode())
 		end 'spawnFailed'
 
 		return pid as Pid
@@ -825,18 +856,16 @@ function appendBytesOf(out ByteArray, source String)
 end 'appendBytesOf'
 
 /// Convert a runtime-reported `ResultStatusKind` + payload into the
-/// user-facing TerminationStatus, or throw `SubprocessError.timeout` for
-/// the `timedOut` arm. The collected output is threaded in so that arm can
-/// carry it: a killed child's `CollectedOutput` is never returned, so the
+/// user-facing TerminationStatus, or throw `SubprocessError.timeout` or
+/// `treeNotEnded` for a deadline. The collected output is threaded in so those
+/// arms can carry it: a killed child's `CollectedOutput` is never returned, so the
 /// throw is the only thing that can hand back what it had written.
-/// Pulled out of `runConfiguration` so the
-/// match-statement form is available — match-expressions in stdlib don't
-/// yet accept `panic(...)` arm bodies.
-function terminationStatusFromKind(statusKind ResultStatusKind, statusCode ExitInt, durationMs DurationMs, stdout String, stderr String) returns TerminationStatus throws SubprocessError
+function terminationStatusFromKind(statusKind ResultStatusKind, statusCode ExitInt, durationMs DurationMs, stdout String, stderr String, osError OsErrorCode) returns TerminationStatus throws SubprocessError
 	match statusKind 's'
 		exited then return TerminationStatus.exited(statusCode)
 		signalled then return TerminationStatus.signalled(statusCode)
 		timedOut then throw SubprocessError.timeout(durationMs, stdout: stdout, stderr: stderr)
+		treeNotEnded then throw SubprocessError.treeNotEnded(durationMs, stdout: stdout, stderr: stderr, osError: osError)
 	end 's'
 end 'terminationStatusFromKind'
 
@@ -913,7 +942,7 @@ let osErrorCodeMask = 0xFFFFFFFF
 function spawnFailure(launchPath String) returns SubprocessError
 	let word = __Builtins.subprocessLastErrorCode()
 	let preparation = try SpawnPreparation.fromRawValue(word shr spawnPreparationShift) otherwise panic("Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know")
-	let code = word and osErrorCodeMask
+	let code = lastOsErrorCode()
 	let fileMissing = code == spawnErrorFileNotFound or code == spawnErrorPathNotFound
 
 	if fileMissing and preparation == SpawnPreparation.none 'executableAbsent'
@@ -922,6 +951,10 @@ function spawnFailure(launchPath String) returns SubprocessError
 
 	return SubprocessError.spawnFailed(lastErrorMessage())
 end 'spawnFailure'
+
+function lastOsErrorCode() returns OsErrorCode
+	return (__Builtins.subprocessLastErrorCode() and osErrorCodeMask) as OsErrorCode
+end 'lastOsErrorCode'
 
 function lastErrorMessage() returns String
 	let managed = __Builtins.subprocessLastErrorMessage()
@@ -1141,9 +1174,9 @@ public type StreamingSubprocess
 	/// the same strand included, keep running meanwhile.
 	/// Returns the exit code on success; throws `SubprocessError.timeout` if
 	/// the timeout fires (the runtime forcibly terminates the child's whole
-	/// process tree in that case) or `SubprocessError.ioFailed` on a wait
-	/// error or a process tree the kill could not fully end. The thrown
-	/// `timeout` carries empty output fields: a streaming child's bytes belong
+	/// process tree in that case), `SubprocessError.treeNotEnded` if the kill
+	/// could not fully end that tree, or `SubprocessError.ioFailed` on a wait
+	/// error. Both deadline errors carry empty output fields: a streaming child's bytes belong
 	/// to the caller draining the streams, and this layer never sees them.
 	public function waitWithTimeout(timeoutMs DurationMs) returns ExitInt throws SubprocessError
 		try requireLive()
@@ -1154,7 +1187,7 @@ public type StreamingSubprocess
 		end 'timedOut'
 
 		if rc < 0 'failed'
-			throw SubprocessError.ioFailed("wait failed: {lastErrorMessage()}" if rc == -1 else treeSurvivedReason(timeoutMs, cause: lastErrorMessage()))
+			throw SubprocessError.ioFailed("wait failed: {lastErrorMessage()}") if rc == -1 else SubprocessError.treeNotEnded(timeoutMs, stdout: "", stderr: "", osError: lastOsErrorCode())
 		end 'failed'
 
 		return rc as ExitInt
@@ -1416,11 +1449,3 @@ function stripTrailingCR(s String) returns String
 	let trimmed = try bytes.slice(0, len) otherwise panic("stripTrailingCR: slice OOB — 0..len always valid")
 	return String.init(trimmed)
 end 'stripTrailingCR'
-
-function treeSurvivedReason(timeoutMs DurationMs, cause String) returns String
-	return "timed out after {timeoutMs}ms, but the child's process tree could not be fully ended: {cause}"
-end 'treeSurvivedReason'
-
-function detachRefusal() returns SubprocessError
-	return SubprocessError.spawnFailed("runDetached: the process could not leave the job this program runs in, because that job does not allow breakaway ({lastErrorMessage()}); run the program outside that job or allow breakaway on it")
-end 'detachRefusal'

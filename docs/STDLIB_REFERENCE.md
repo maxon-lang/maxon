@@ -116,6 +116,7 @@ alias reaches a `FullRangeFloat` or `JsonFloat` parameter through `as`; a float 
 | `HttpAcceptRetryMs` | `int(0 to 1000)` | HttpServer |
 | `Pid`, `ByteLimit` | `int(0 to u64.max)` | Subprocess |
 | `ExitInt` | `int(0 to u32.max)` | Subprocess |
+| `OsErrorCode` | `int(0 to u32.max)` — the Windows error code a `SubprocessError` case carries: `GetLastError` on Windows; on Linux and macOS the errno mapped onto its Windows equivalent, 31 when it has none | Subprocess |
 | `EnvSourceValue` | `int(0 to 1)` | Subprocess |
 | `StdioKindValue` | `int(0 to 5)` | Subprocess |
 | `SpawnEnvironment`, `StdioRuntimeTriple` | the records `Subprocess` hands the runtime | Subprocess |
@@ -1811,7 +1812,7 @@ an empty path inherits the parent's working directory), assign the fields you ne
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `run()` | `CollectedOutput` | Run and collect. Throws `SubprocessError`. |
-| `runDetached()` | `Pid` | Start without waiting and return the process id. Standard streams are discarded. The process is outside the process tree of any deadline ([SubprocessError](#subprocesserror)). Throws `SubprocessError`: `spawnFailed` when the process cannot be detached, on Windows because the job this program runs in does not allow breakaway and on Linux because the child cannot start its own session. |
+| `runDetached()` | `Pid` | Start without waiting and return the process id. Standard streams are discarded. The process is outside the process tree of any deadline ([SubprocessError](#subprocesserror)). Throws `SubprocessError`: `detachRefused` on Windows when the job this program runs in does not allow breakaway, and `spawnFailed` on Linux when the child cannot start its own session. |
 
 `PlatformOptions` has two `bool` fields, `windowsHideWindow` and `windowsCreateNewProcessGroup`;
 `PlatformOptions.defaults()` sets both false.
@@ -1906,6 +1907,8 @@ union SubprocessError implements Error
 	spawnFailed(reason String)
 	ioFailed(reason String)
 	timeout(elapsedMs DurationMs, stdout String, stderr String)
+	treeNotEnded(elapsedMs DurationMs, stdout String, stderr String, osError OsErrorCode)
+	detachRefused(osError OsErrorCode)
 	inputTooLarge
 	endOfStream
 end 'SubprocessError'
@@ -1934,16 +1937,23 @@ ended even when the child itself has already exited. A process started with `run
 process in another session, and everything such a process starts are outside the tree, as is a process
 already reparented to init, as one that double-forked is. On Windows the tree is the child's job object,
 which a process started with `runDetached()` leaves. When the tree cannot be fully ended (on Linux `/proc`
-cannot be read, on macOS `proc_listchildpids` fails, an allocation fails, or the kill of an exited child's
-process group is refused), the deadline throws `ioFailed` with the reason
-`timed out after 5000ms, but the child's process tree could not be fully ended: os error <n>`. `timedOut()` is
-false for it, and a collected run's partial output is discarded.
+cannot be read or listed, on macOS `proc_listchildpids` fails, an allocation fails, or the kill of an exited
+child's process group is refused), the deadline throws `treeNotEnded`, after the child itself is reaped. It
+carries the output `timeout` carries on the same path and the error code of the step that failed as an
+[`OsErrorCode`](#names-a-library-signature-asks-for), and its reason is
+`timed out after 5000ms, but the child's process tree could not be fully ended: os error <n>`. `deadlineFired()`
+is true for it and `timedOut()` false.
+
+`detachRefused` is what `runDetached()` throws on Windows when the job this program runs in does not allow
+breakaway. It carries the `GetLastError` code, and its reason says to run the program outside that job or allow
+breakaway on it.
 
 `endOfStream` is what a `StreamingSubprocess` line reader throws when the stream it reads has ended.
 
 `displayReason()` renders any case as one line, such as
 `timed out after 5000ms, and the kill was sent to the child's whole process tree`. `timedOut()` is true for
-`timeout` and `endedTheStream()` for `endOfStream`, so a caller can test for either without a `match`.
+`timeout`, `deadlineFired()` for `timeout` and `treeNotEnded`, and `endedTheStream()` for `endOfStream`, so a
+caller can test for any of them without a `match`.
 
 `SpawnPreparation` — `none`, `standardStream`, `workingDirectory` — names the step of a spawn the runtime
 records a failure at; a not-found code at `none` is what makes a failure `executableNotFound`.
@@ -1995,7 +2005,7 @@ request after request. A read or a wait parks the calling green thread, so its s
 | `pollTermination()` | `TerminationPoll` | — | As `pollExit()`, answering how the child ended: `signalled(signal)` for a child a signal killed on Linux and macOS, `exited(code)` otherwise. |
 | `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
 | `wait()` | exit code | `SubprocessError` | Park the calling green thread until the child exits. |
-| `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree ([SubprocessError](#subprocesserror)) when the deadline passes; `0` waits forever. The thrown `timeout` carries empty output fields — a streaming child's bytes belong to the caller draining the streams. |
+| `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree ([SubprocessError](#subprocesserror)) when the deadline passes, or `treeNotEnded` when that tree cannot be fully ended; `0` waits forever. Both carry empty output fields — a streaming child's bytes belong to the caller draining the streams. |
 | `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. Panics while the stdout side is out with a `StdoutReader`: `reclaimStdout()` first. |
 | `handle`, `released` | fields | — | The raw handle and whether it has been released. |
 

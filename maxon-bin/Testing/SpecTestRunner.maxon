@@ -4324,9 +4324,11 @@ end 'spawnExecution'
 function runFailureReason(e SubprocessError) returns String
 	return match e 'why'
 		timeout(_, out, err) gives "program {e.displayReason()}{partialOutputBeforeTheKill(out, stderr: err)}"
+		treeNotEnded(_, out, err, _) gives "program {e.displayReason()}{partialOutputBeforeTheKill(out, stderr: err)}"
 		executableNotFound or
 		spawnFailed or
 		ioFailed or
+		detachRefused or
 		inputTooLarge gives "program spawn failed: {e.displayReason()}"
 		endOfStream gives "program output ended early: {e.displayReason()}"
 	end 'why'

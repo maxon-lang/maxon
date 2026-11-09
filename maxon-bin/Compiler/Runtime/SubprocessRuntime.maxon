@@ -109,7 +109,7 @@ let SubpStreamSpawnParamCount = 6
 let SubpTimedOutRc = -2
 
 // The third: the deadline fired and the child was reaped, but part of its tree may still run.
-// `stdlib/Subprocess.maxon` reports it as `ioFailed` through `treeSurvivedReason`.
+// `waitWithTimeout` maps it to `SubprocessError.treeNotEnded`.
 let SubpTreeSurvivedRc = -3
 
 // The `ResultStatusKind` discriminator `stdlib/Subprocess.maxon` decodes. Its raw values are declared THERE
@@ -117,6 +117,7 @@ let SubpTreeSurvivedRc = -3
 let SubpStatusExited = 0
 let SubpStatusSignalled = 1
 let SubpStatusTimedOut = 2
+let SubpStatusTreeNotEnded = 3
 export let SubpNoExitSignal = 0 as FullRangeInt
 
 let SubprocessStdlibFileName = "Subprocess.maxon"
@@ -1391,14 +1392,14 @@ function emitSubpAbandonWait(module StdModule, func IrFunction, ids ValueMinter,
 end 'emitSubpAbandonWait'
 
 // Ordered as `emitSubpAbandonWait` is, for its reason.
-function emitSubpAbandonCollection(module StdModule, func IrFunction, ids ValueMinter, entry IrBlock, abandon IrBlock, target Target, state ValueId, answer FullRangeInt)
+function emitSubpAbandonCollection(module StdModule, func IrFunction, ids ValueMinter, entry IrBlock, abandon IrBlock, target Target, state ValueId)
 	emitSubpRecordLastError(module, block: entry, ids: ids)
 	emitSubpCloseChildSource(module, func: func, block: entry, target: target, state: state, cont: abandon, ids: ids)
 	emitRawFree(module, block: abandon, ptr: emitLoadField(module, block: abandon, record: state, offset: WcOutBuf, ids: ids), ids: ids)
 	emitRawFree(module, block: abandon, ptr: emitLoadField(module, block: abandon, record: state, offset: WcErrBuf, ids: ids), ids: ids)
 	emitSubpCollectorFree(module, block: abandon, slot: emitSubpSlotOf(module, block: abandon, ids: ids, handle: emitLoadField(module, block: abandon, record: state, offset: WcHandle, ids: ids)), ids: ids)
 	emitSlabFree(module, block: abandon, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
-	module.setTerminator(abandon, op: StdOp.ret(emitConst(module, block: abandon, value: answer, ids: ids)))
+	module.setTerminator(abandon, op: StdOp.ret(emitConst(module, block: abandon, value: SubpFailure, ids: ids)))
 end 'emitSubpAbandonCollection'
 
 function emitSubpWaitForTheChild(module StdModule, block IrBlock, hProcess ValueId, timeoutMs FullRangeInt, ended IrBlock, stillRunning IrBlock, ids ValueMinter)
@@ -1407,7 +1408,8 @@ function emitSubpWaitForTheChild(module StdModule, block IrBlock, hProcess Value
 	emitBranchOnCompare(module, block: block, value: settled, pred: StdCmpPred.eq, against: WaitObjectSignalled, whenTrue: ended, whenFalse: stillRunning, ids: ids)
 end 'emitSubpWaitForTheChild'
 
-// `__gt_subp_wait_exit(handle, timeoutMs) -> exitCode | -2 (timed out) | -1 (bad handle)` —
+// `__gt_subp_wait_exit(handle, timeoutMs) -> exitCode | -2 (timed out) | -3 (timed out, tree not
+// ended) | -1 (bad handle)` —
 // `__Builtins.subprocessWaitExit`. `timeoutMs == 0` means wait for ever,
 // `stdlib/Subprocess.maxon`'s convention for the whole family.
 //
@@ -1639,7 +1641,6 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	var killUnconfirmed = module.addBlock(func, label: b"wckillunconfirmed", heat: BlockHeat.normal)
 	var treeUnended = module.addBlock(func, label: b"wctreeunended", heat: BlockHeat.normal)
 	var abandon = module.addBlock(func, label: b"wcabandon", heat: BlockHeat.normal)
-	var treeAbandon = module.addBlock(func, label: b"wctreeabandon", heat: BlockHeat.normal)
 	var idleCheck = module.addBlock(func, label: b"wcidle", heat: BlockHeat.normal)
 	var doSleep = module.addBlock(func, label: b"wcsleep", heat: BlockHeat.normal)
 	var finish = module.addBlock(func, label: b"wcfinish", heat: BlockHeat.normal)
@@ -1754,9 +1755,12 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	emitStoreField(module, block: killed, record: state, offset: WcStatus, value: timedOutStatus)
 	module.setTerminator(killed, op: StdOp.branch(finish.id))
 
-	emitSubpAbandonCollection(module, func: func, ids: ids, entry: killUnconfirmed, abandon: abandon, target: target, state: state, answer: SubpFailure)
+	emitSubpAbandonCollection(module, func: func, ids: ids, entry: killUnconfirmed, abandon: abandon, target: target, state: state)
 
-	emitSubpAbandonCollection(module, func: func, ids: ids, entry: treeUnended, abandon: treeAbandon, target: target, state: state, answer: SubpTreeSurvivedRc)
+	emitSubpRecordLastError(module, block: treeUnended, ids: ids)
+	let treeNotEndedStatus = emitConst(module, block: treeUnended, value: SubpStatusTreeNotEnded, ids: ids)
+	emitStoreField(module, block: treeUnended, record: state, offset: WcStatus, value: treeNotEndedStatus)
+	module.setTerminator(treeUnended, op: StdOp.branch(finish.id))
 
 	// idleCheck: a pass that moved bytes goes straight round again; one that moved none yields.
 	let progress = emitLoadField(module, block: idleCheck, record: state, offset: WcProgress, ids: ids)

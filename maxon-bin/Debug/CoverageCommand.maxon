@@ -192,8 +192,8 @@ end 'launchTarget'
 // ⚠ The recourse is offered only for the DEADLINE, which is the one failure here a caller can act on:
 // telling someone whose executable does not exist to lengthen a timeout is a refusal nobody can act on.
 function launchFailureText(request CoverageRequest, error SubprocessError) returns String
-	if error.timedOut() 'deadlineExpired'
-		return "{request.exePath()} did not finish within {reportWholeNumberText(request.deadline.seconds() as ReportNumber)}s and was killed. It wrote no counters. Raise the deadline with {TimeoutFlag}<seconds> and run again."
+	if error.deadlineFired() 'deadlineExpired'
+		return "{request.exePath()} did not finish within {reportWholeNumberText(request.deadline.seconds() as ReportNumber)}s ({error.displayReason()}). It wrote no counters. Raise the deadline with {TimeoutFlag}<seconds> and run again."
 	end 'deadlineExpired'
 
 	return "could not run {request.exePath()}: {error.displayReason()}"

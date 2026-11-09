@@ -121,6 +121,7 @@ alias reaches a `FullRangeFloat` or `JsonFloat` parameter through `as`; a float 
 | `HttpAcceptRetryMs` | `int(0 to 1000)` | HttpServer |
 | `Pid`, `ByteLimit` | `int(0 to u64.max)` | Subprocess |
 | `ExitInt` | `int(0 to u32.max)` | Subprocess |
+| `OsErrorCode` | `int(0 to u32.max)` — the Windows error code a `SubprocessError` case carries: `GetLastError` on Windows; on Linux and macOS the errno mapped onto its Windows equivalent, 31 when it has none | Subprocess |
 | `EnvSourceValue` | `int(0 to 1)` | Subprocess |
 | `StdioKindValue` | `int(0 to 5)` | Subprocess |
 | `SpawnEnvironment`, `StdioRuntimeTriple` | the records `Subprocess` hands the runtime | Subprocess |

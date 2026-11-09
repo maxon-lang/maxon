@@ -409,6 +409,8 @@ function main() returns ExitCode
 			spawnFailed then sawTimeout = false
 			ioFailed then sawTimeout = false
 			inputTooLarge then sawTimeout = false
+			treeNotEnded then sawTimeout = false
+			detachRefused then sawTimeout = false
 			endOfStream then sawTimeout = false
 		end 'kind'
 	end 'handler'
@@ -461,6 +463,8 @@ function main() returns ExitCode
 				spawnFailed or
 				ioFailed or
 				inputTooLarge or
+				treeNotEnded or
+				detachRefused or
 				endOfStream gives ""
 		end 'kind'
 	end 'handler'
@@ -548,6 +552,8 @@ function collectedVerdict(me Executable) returns String
 				spawnFailed or
 				ioFailed or
 				inputTooLarge or
+				treeNotEnded or
+				detachRefused or
 				endOfStream gives ""
 		end 'kind'
 	end 'expired'
@@ -662,6 +668,8 @@ function main() returns ExitCode
 				spawnFailed or
 				ioFailed or
 				inputTooLarge or
+				treeNotEnded or
+				detachRefused or
 				endOfStream gives ""
 		end 'kind'
 	end 'expired'
@@ -684,27 +692,14 @@ timed out true, detached grandchild survived true, ended by itself true
 <!-- unsupported-targets: wasm32-wasi -->
 A detached launch whose executable is a directory is refused by the operating system as access denied, and
 `runDetached()` throws `spawnFailed` with that refusal as its reason. Only a job that does not allow breakaway
-makes the reason blame the job this program runs in; a launch the operating system itself refuses never does.
+throws `detachRefused`; a launch the operating system itself refuses never does.
 ```maxon
-let jobRefusal = "does not allow breakaway"
-
-function verdictOf(e SubprocessError) returns String
-	return match e 'kind'
-		spawnFailed(reason) gives "threw spawnFailed true, blames the job {reason.contains(jobRefusal)}"
-		executableNotFound or
-		ioFailed or
-		timeout or
-		inputTooLarge or
-		endOfStream gives "threw {e.name}"
-	end 'kind'
-end 'verdictOf'
-
 function main() returns ExitCode
 	let config = Configuration.create(Executable.path(Directory.currentPath()))
 	var verdict = "started"
 
 	try config.runDetached() otherwise (e) 'refused'
-		verdict = verdictOf(e)
+		verdict = "threw {e.name}"
 	end 'refused'
 
 	print("{verdict}\n")
@@ -715,7 +710,80 @@ end 'main'
 0
 ```
 ```stdout
-threw spawnFailed true, blames the job false
+threw spawnFailed
+```
+
+<!-- test: subprocess-error-tree-not-ended-names-its-cause -->
+A deadline whose kill reaped the child but could not end the rest of its process tree throws
+`treeNotEnded(timeoutMs, stdout, stderr, osError)`: the output the child had produced, as `timeout` carries
+it, and the operating system's error code for the part of the tree that could not be ended. It is not a
+timeout the kill completed, so `timedOut()` is false for it.
+```maxon
+function main() returns ExitCode
+	let e = SubprocessError.treeNotEnded(300, stdout: "", stderr: "", osError: 13)
+	print("{e.displayReason()}\n")
+	print("timedOut {e.timedOut()}\n")
+	print("name {e.name}\n")
+
+	let payload = match e 'kind'
+		treeNotEnded(timeoutMs, stdout, stderr, osError) gives "timeoutMs {timeoutMs}, stdout [{stdout}], stderr [{stderr}], osError {osError}"
+		executableNotFound or
+		spawnFailed or
+		ioFailed or
+		timeout or
+		inputTooLarge or
+		detachRefused or
+		endOfStream gives "other {e.name}"
+	end 'kind'
+
+	print("{payload}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+timed out after 300ms, but the child's process tree could not be fully ended: os error 13
+timedOut false
+name treeNotEnded
+timeoutMs 300, stdout [], stderr [], osError 13
+```
+
+<!-- test: subprocess-error-detach-refused-names-its-cause -->
+On Windows, `runDetached()` starts the child outside the job this program runs in. A job that does not
+allow breakaway refuses that, and `runDetached()` throws `detachRefused(osError)` carrying the operating
+system's error code.
+```maxon
+function main() returns ExitCode
+	let e = SubprocessError.detachRefused(5)
+	print("{e.displayReason()}\n")
+	print("timedOut {e.timedOut()}\n")
+	print("name {e.name}\n")
+
+	let payload = match e 'kind'
+		detachRefused(osError) gives "osError {osError}"
+		executableNotFound or
+		spawnFailed or
+		ioFailed or
+		timeout or
+		inputTooLarge or
+		treeNotEnded or
+		endOfStream gives "other {e.name}"
+	end 'kind'
+
+	print("{payload}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+runDetached: the process could not leave the job this program runs in, because that job does not allow breakaway (os error 5); run the program outside that job or allow breakaway on it
+timedOut false
+name detachRefused
+osError 5
 ```
 
 <!-- test: subprocess-run-bare-name-found-on-path -->
@@ -771,6 +839,8 @@ function main() returns ExitCode
 				timeout or
 				ioFailed or
 				inputTooLarge or
+				treeNotEnded or
+				detachRefused or
 				endOfStream then refused = false
 		end 'kind'
 	end 'handler'
@@ -1116,6 +1186,8 @@ function main() returns ExitCode
 				timeout or
 				ioFailed or
 				inputTooLarge or
+				treeNotEnded or
+				detachRefused or
 				endOfStream then sawNotFound = false
 		end 'kind'
 	end 'handler'
@@ -1150,6 +1222,8 @@ function main() returns ExitCode
 				timeout or
 				ioFailed or
 				inputTooLarge or
+				treeNotEnded or
+				detachRefused or
 				endOfStream then sawNotFound = false
 		end 'kind'
 	end 'handler'
@@ -1181,6 +1255,8 @@ function verdictOf(config Configuration) returns String
 			timeout or
 				ioFailed or
 				inputTooLarge or
+				treeNotEnded or
+				detachRefused or
 				endOfStream then verdict = "other"
 		end 'kind'
 	end 'handler'
@@ -1246,6 +1322,8 @@ function verdictOf(executable Executable, workingDirectory FilePath) returns Str
 			timeout or
 				ioFailed or
 				inputTooLarge or
+				treeNotEnded or
+				detachRefused or
 				endOfStream then verdict = "other"
 		end 'kind'
 	end 'handler'
@@ -1335,6 +1413,8 @@ function main() returns ExitCode
 			timeout or
 				ioFailed or
 				inputTooLarge or
+				treeNotEnded or
+				detachRefused or
 				endOfStream then verdict = "other"
 		end 'kind'
 	end 'handler'
@@ -2675,7 +2755,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Subprocess.maxon:1262: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
+panic at Subprocess.maxon:1295: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
 Stack trace:
   in StreamingSubprocess.release
   in main
