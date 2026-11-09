@@ -302,7 +302,18 @@ jobs:
       # `tests/specHarness` runs a spec batch under the wasm target, and `tests/cli` builds it from this
       # checkout: wrapping the core module into a component needs `vendor/wasm-tools` (E6005 without it),
       # and the cross-target suite runs its programs under `vendor/wasmtime`. `vendor/` is gitignored,
-      # so nothing else stages it.
+      # so nothing else stages it. The cache key is the script, which pins every version and SHA-256, so
+      # a hit restores exactly what the script would fetch and its stamps make the fetch a no-op.
+      - &vendorcache
+        name: Restore vendor
+        if: steps.seed.outputs.seeded == 'yes'
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/wasmtime
+            vendor/wasm-tools
+          key: vendor-${{ matrix.target }}-${{ hashFiles('scripts/fetch-vendor.sh') }}
+
       - &vendor
         name: Stage vendor
         if: steps.seed.outputs.seeded == 'yes'
@@ -448,6 +459,7 @@ jobs:
       - *sampler
       - *sampler-windows
       - *openssl
+      - *vendorcache
       - *vendor
 
       # ⭐ THE ONLY DEBUGGER CODE CI RUNS. `spec-test` covers the language; the debugger's driver, its
@@ -529,6 +541,7 @@ jobs:
       - *sampler
       - *sampler-windows
       - *openssl
+      - *vendorcache
       - *vendor
 
       - name: Suite
@@ -615,6 +628,7 @@ jobs:
       - *sampler
       - *sampler-windows
       - *openssl
+      - *vendorcache
       - *vendor
 
       - name: Cross-target suites

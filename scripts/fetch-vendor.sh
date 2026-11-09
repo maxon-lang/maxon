@@ -147,7 +147,7 @@ for tool in $tools; do
 
 	echo "fetch-vendor.sh: fetching $tool $version for $target"
 	archive="$work/$(basename "$url")"
-	curl -fsSL -o "$archive" "$url" \
+	curl -fsSL --retry 5 --retry-delay 10 -o "$archive" "$url" \
 		|| { echo "fetch-vendor.sh: download failed: $url" >&2; exit 1; }
 
 	# ⛔ VERIFY OR REFUSE, and DELETE what failed. Leaving a mismatched archive on disk invites a
