@@ -1,0 +1,83 @@
+let ReachableFieldsRootName = "temp/lsp/completion-offers-only-reachable-fields"
+let ReachableFieldsMainFileName = "main.maxon"
+let ReachableFieldsGaugeFileName = "gauge.maxon"
+let ReachableFieldsDialFileName = "dial.maxon"
+let ReachableFieldsHiddenFieldLine = 3
+let ReachableFieldsHiddenFieldCharacter = 18
+let ReachableFieldsVisibleFieldLine = 4
+let ReachableFieldsVisibleFieldCharacter = 17
+let ReachableFieldsHiddenMethodLine = 5
+let ReachableFieldsHiddenMethodCharacter = 19
+let ReachableFieldsVisibleMethodLine = 6
+let ReachableFieldsVisibleMethodCharacter = 18
+
+test 'completion offers only the members a reader may reach'
+	let root = stagedCorpusDirectory(ReachableFieldsRootName)
+	writeCorpusFile(root, fileName: ReachableFieldsGaugeFileName, content: reachableFieldsGaugeSource())
+	writeCorpusFile(root, fileName: ReachableFieldsDialFileName, content: reachableFieldsDialSource())
+	writeCorpusFile(root, fileName: ReachableFieldsMainFileName, content: reachableFieldsMainSource())
+
+	let uri = fileUriOf(root.join(ReachableFieldsMainFileName))
+
+	let hiddenFields = completionLabelsForAtUri(uri, source: reachableFieldsMainSource(), line: ReachableFieldsHiddenFieldLine, character: ReachableFieldsHiddenFieldCharacter, after: "`gauge.`, where `Gauge` is a file-private type of a sibling file")
+
+	Expect.isFalse(completionOffersLabel(hiddenFields, label: "level"), message: "completion after `gauge.` offered `level`. `Gauge` is declared with no visibility modifier in a sibling file, so this file may not name it and the compiler refuses every field read through a `Gauge` value, whatever the field's own tier says.")
+
+	let hiddenMethods = completionLabelsForAtUri(uri, source: reachableFieldsMainSource(), line: ReachableFieldsHiddenMethodLine, character: ReachableFieldsHiddenMethodCharacter, after: "`gauge.`, where `Gauge` is a file-private type of a sibling file")
+
+	Expect.isFalse(completionOffersLabel(hiddenMethods, label: "describe"), message: "completion after `gauge.` offered `describe`. `Gauge` is declared with no visibility modifier in a sibling file, so the compiler refuses every method call on a `Gauge` value, whatever the method's own tier says.")
+
+	let visibleFields = completionLabelsForAtUri(uri, source: reachableFieldsMainSource(), line: ReachableFieldsVisibleFieldLine, character: ReachableFieldsVisibleFieldCharacter, after: "`dial.`, where `Dial` is an `export`ed type of a sibling file")
+
+	Expect.isTrue(completionOffersLabel(visibleFields, label: "level"), message: "completion after `dial.` did not offer `level`, which `Dial` declares `export var`, so the negatives above are passing on an empty list rather than on a filter.")
+
+	Expect.isFalse(completionOffersLabel(visibleFields, label: "needle"), message: "completion after `dial.` offered `needle`, which `Dial` declares with no visibility modifier: only `Dial`'s own body may reach it (E3014).")
+
+	let visibleMethods = completionLabelsForAtUri(uri, source: reachableFieldsMainSource(), line: ReachableFieldsVisibleMethodLine, character: ReachableFieldsVisibleMethodCharacter, after: "`dial.`, where `Dial` is an `export`ed type of a sibling file")
+
+	Expect.isTrue(completionOffersLabel(visibleMethods, label: "describe"), message: "completion after `dial.` did not offer `describe`, which `Dial` declares `export function`, so the method negative above is passing on an empty list rather than on a filter.")
+end 'completion offers only the members a reader may reach'
+
+function reachableFieldsGaugeSource() returns String
+	return String.from(b"type Gauge
+    export var level as ExitCode
+
+    export static function make() returns Gauge
+        return Gauge{level: 0}
+    end 'make'
+
+    export function describe() returns ExitCode
+        return self.level
+    end 'describe'
+end 'Gauge'
+")
+end 'reachableFieldsGaugeSource'
+
+function reachableFieldsDialSource() returns String
+	return String.from(b"export type Dial
+    export var level as ExitCode
+    var needle as ExitCode
+
+    export static function make() returns Dial
+        return Dial{level: 0, needle: 0}
+    end 'make'
+
+    export function describe() returns ExitCode
+        return self.level
+    end 'describe'
+end 'Dial'
+")
+end 'reachableFieldsDialSource'
+
+function reachableFieldsMainSource() returns String
+	return String.from(b"function main() returns ExitCode
+    let gauge = Gauge.make()
+    let dial = Dial.make()
+    let g = gauge.level
+    let d = dial.level
+    let gm = gauge.describe()
+    let dm = dial.describe()
+    return 0
+end 'main'
+")
+end 'reachableFieldsMainSource'

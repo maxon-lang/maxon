@@ -21,6 +21,13 @@ export union RawSurfaceDoor
 	handleType(let written ByteArray)
 end 'RawSurfaceDoor'
 
+// The one formula for which readers are refused the raw surface: `Parser.rawSurfaceIsRefusedHere` and
+// `ProgramSignatures.rawSurfaceIsRefusedIn` both ask it, so the language server offers a raw field only
+// where the parser accepts it.
+export function tierRefusesTheRawSurface(livesUnderStdlibDirectory bool, isRuntimeSource bool) returns bool
+	return not livesUnderStdlibDirectory and not isRuntimeSource
+end 'tierRefusesTheRawSurface'
+
 function rawHandleTypeMessage(written ByteArray) returns String
 	return match rawHandleNamed(written) 'lookup'
 		named(kind) gives rawHandleKindMessage(kind, written: written)

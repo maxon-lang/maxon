@@ -1,0 +1,28 @@
+let RawSurfaceDefinitionDirName = "temp/lsp/definition-refuses-a-raw-surface-field"
+let RawSurfaceDefinitionFileName = "main.maxon"
+let RawSurfaceDefinitionSource = "function main() returns ExitCode\n\tvar arr = [1, 2, 3]\n\tarr.push(4)\n\tlet raw = arr.managed\n\treturn 0\nend 'main'\n"
+let RawSurfaceDefinitionPushLine = 2
+let RawSurfaceDefinitionPushCharacter = 6
+let RawSurfaceDefinitionManagedLine = 3
+let RawSurfaceDefinitionManagedCharacter = 16
+let RawSurfaceDefinitionStdlibDirName = "stdlib"
+let RawSurfaceDefinitionArrayFileName = "Array.maxon"
+let RawSurfaceDefinitionArrayTail = "stdlib/Array.maxon"
+let RawSurfaceDefinitionPushNeedle = "	public function push"
+
+test 'definition refuses a field the compiler refuses as raw surface'
+	let directory = stagedCorpusDirectory(RawSurfaceDefinitionDirName)
+
+	let managed = probeCorpusDefinition(directory, fileName: RawSurfaceDefinitionFileName, content: RawSurfaceDefinitionSource, line: RawSurfaceDefinitionManagedLine, character: RawSurfaceDefinitionManagedCharacter)
+
+	expectNoDefinitionInProject(managed, note: "a cursor on `managed` in `arr.managed` jumped to its declaration. `stdlib/Array.maxon` declares it `public`, but a program outside the library tier that writes `arr.managed` is refused as raw surface (E3185), so there is no declaration the reader may reach.")
+
+	let control = probeCorpusDefinition(directory, fileName: RawSurfaceDefinitionFileName, content: RawSurfaceDefinitionSource, line: RawSurfaceDefinitionPushLine, character: RawSurfaceDefinitionPushCharacter)
+
+	expectDefinitionInFile(control, fileTail: RawSurfaceDefinitionArrayTail, startLine: corpusLineDeclaring(corpusStdlibArrayPath(), needle: RawSurfaceDefinitionPushNeedle), note: "a cursor on `push` in `arr.push(4)` did not resolve into `stdlib/Array.maxon`, so the negative above is passing on silence rather than on a filter.")
+end 'definition refuses a field the compiler refuses as raw surface'
+
+function corpusStdlibArrayPath() returns FilePath
+	let directory = try FilePath.from(RawSurfaceDefinitionStdlibDirName) otherwise panic("raw surface definition: '{RawSurfaceDefinitionStdlibDirName}' is not a spellable path")
+	return directory.resolve(Directory.currentPath()).join(RawSurfaceDefinitionArrayFileName)
+end 'corpusStdlibArrayPath'

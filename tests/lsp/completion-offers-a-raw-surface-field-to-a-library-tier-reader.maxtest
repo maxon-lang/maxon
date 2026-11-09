@@ -1,0 +1,33 @@
+let LibraryReaderStdlibDirName = "stdlib"
+let LibraryReaderStdlibFileName = "URL.maxon"
+let LibraryReaderRuntimeDirName = "runtime"
+let LibraryReaderRuntimeFileName = "SlabRuntime.maxon"
+let LibraryReaderLine = 2
+let LibraryReaderCharacter = 8
+
+test 'completion in a stdlib file offers a raw surface field'
+	let labels = libraryReaderLabels(LibraryReaderStdlibDirName, fileName: LibraryReaderStdlibFileName)
+
+	Expect.isTrue(completionOffersLabel(labels, label: "managed"), message: "completion after `arr.` in a buffer opened at `{LibraryReaderStdlibDirName}/{LibraryReaderStdlibFileName}` did not offer `managed`. The library tier reads the raw surface (E3185 refuses it only outside `stdlib/` and `runtime/`), so a reader there is offered the `public var managed` of `Array`.")
+end 'completion in a stdlib file offers a raw surface field'
+
+test 'completion in a runtime tier file offers a raw surface field'
+	let labels = libraryReaderLabels(LibraryReaderRuntimeDirName, fileName: LibraryReaderRuntimeFileName)
+
+	Expect.isTrue(completionOffersLabel(labels, label: "managed"), message: "completion after `arr.` in a buffer opened at `{LibraryReaderRuntimeDirName}/{LibraryReaderRuntimeFileName}` did not offer `managed`. The runtime tier reads the raw surface (E3185 refuses it only outside `stdlib/` and `runtime/`), so a reader there is offered the `public var managed` of `Array`.")
+end 'completion in a runtime tier file offers a raw surface field'
+
+function libraryReaderLabels(dirName String, fileName String) returns StringArray throws TestFailure
+	let tier = try FilePath.from(dirName) otherwise panic("library tier reader: '{dirName}' is not a spellable path")
+	let uri = fileUriOf(tier.resolve(Directory.currentPath()).join(fileName))
+
+	return try completionLabelsForAtUri(uri, source: libraryReaderFixture(), line: LibraryReaderLine, character: LibraryReaderCharacter, after: "`arr.`, in a buffer opened at {dirName}/{fileName}")
+end 'libraryReaderLabels'
+
+function libraryReaderFixture() returns String
+	return String.from(b"function main() returns ExitCode
+    var arr = [1, 2, 3]
+    arr.push(4)
+    return 0
+end 'main'")
+end 'libraryReaderFixture'

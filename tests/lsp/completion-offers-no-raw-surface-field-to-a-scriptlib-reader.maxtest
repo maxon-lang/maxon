@@ -1,0 +1,51 @@
+let ScriptlibReaderCaseDirName = "completion-offers-no-raw-surface-field-to-a-scriptlib-reader"
+let ScriptlibReaderPackageName = "probe"
+let ScriptlibReaderPackageFileName = "Probe.maxon"
+let ScriptlibReaderPackageSource = "public function probe() returns ExitCode\n\treturn 0\nend 'probe'\n"
+let ScriptlibReaderLine = 2
+let ScriptlibReaderCharacter = 8
+let ScriptlibReaderTrigger = "."
+
+test 'completion in a scriptlib package file offers no raw surface field'
+	let dir = freshOutsideCheckoutDir(ScriptlibReaderCaseDirName)
+	let tier = dir.join(StagedTierDirName)
+	let compiler = stagedLibraryTierCompiler(tier, staged: dir)
+	writeScriptlibPackageFile(tier, package: ScriptlibReaderPackageName, fileName: ScriptlibReaderPackageFileName, content: ScriptlibReaderPackageSource)
+
+	let uri = fileUriOf(tier.join(ScriptlibDirName).join(ScriptlibReaderPackageName).join(ScriptlibReaderPackageFileName))
+	var client = LspClient.start(compiler)
+
+	if let labels = try scriptlibReaderLabels(client, uri: uri) 'answered'
+		client.release()
+		discardOutsideCheckoutDir(dir)
+
+		Expect.isTrue(completionOffersLabel(labels, label: "push"), message: "completion after `arr.` in a scriptlib package file did not offer `push`, so the negative below is passing on an empty list rather than on a filter.")
+
+		Expect.isFalse(completionOffersLabel(labels, label: "managed"), message: "completion after `arr.` in a scriptlib package file offered `managed`. Only `stdlib/` and `runtime/` read the raw surface; a scriptlib package is refused it (E3185), as any program is.")
+	end 'answered' else (e) 'failed'
+		abandonedStagedSession(client, staged: dir, failure: e, doing: "completion never answered for the scriptlib package file")
+	end 'failed'
+end 'completion in a scriptlib package file offers no raw surface field'
+
+function scriptlibReaderLabels(client LspClient, uri String) returns StringArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(uri, content: scriptlibReaderFixture())
+
+	let answered = try client.completionWithTrigger(uri, line: ScriptlibReaderLine, character: ScriptlibReaderCharacter, triggerCharacter: ScriptlibReaderTrigger)
+	var labels = StringArray.create(0)
+
+	for item in answered.items 'eachItem'
+		labels.push(item.label)
+	end 'eachItem'
+
+	return labels
+end 'scriptlibReaderLabels'
+
+function scriptlibReaderFixture() returns String
+	return String.from(b"function main() returns ExitCode
+    var arr = [1, 2, 3]
+    arr.push(4)
+    return 0
+end 'main'")
+end 'scriptlibReaderFixture'

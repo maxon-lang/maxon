@@ -1126,7 +1126,7 @@ module type HoverDocument
 		end 'bareName'
 
 		match typeOfReceiverEndingAt(nameIndex - TokensBetweenAReceiverAndItsMember, reach: reach) 'receiver'
-			named(base, _, written) then return boundMemberType(methodReturnType(base, method: tokenAt(nameIndex).value), written: written)
+			named(base, _, written) then return boundMemberType(methodReturnType(base, method: tokenAt(nameIndex).value, near: nameIndex), written: written)
 			unknown then return HoverType.unknown
 		end 'receiver'
 	end 'calleeResultType'
@@ -1209,7 +1209,7 @@ module type HoverDocument
 		end 'noReceiver'
 
 		match typeOfReceiverEndingAt(index - TokensBetweenAReceiverAndItsMember, reach: HoverDeclarationHopBudget) 'ofType'
-			named(base, _, _) then return methodRendering(base, method: tokenAt(index).value)
+			named(base, _, _) then return methodRendering(base, method: tokenAt(index).value, near: index)
 			unknown then return HoverRendering.absent
 		end 'ofType'
 	end 'memberRendering'
@@ -1267,7 +1267,7 @@ module type HoverDocument
 
 	function memberTypeEndingAt(last ElementIndex, reach HoverReceiverReach) returns HoverType
 		match typeOfReceiverEndingAt(last - TokensBetweenAReceiverAndItsMember, reach: reach) 'ofType'
-			named(base, _, written) then return boundMemberType(memberType(base, member: tokenAt(last).value, reach: reach), written: written)
+			named(base, _, written) then return boundMemberType(memberType(base, member: tokenAt(last).value, reach: reach, near: last), written: written)
 			unknown then return HoverType.unknown
 		end 'ofType'
 	end 'memberTypeEndingAt'
@@ -1448,24 +1448,24 @@ module type HoverDocument
 		throw HoverLookupError.unclosedBracketGroup
 	end 'beforeBracketedGroup'
 
-	function memberType(owner ByteArray, member ByteArray, reach HoverReceiverReach) returns HoverMemberType
+	function memberType(owner ByteArray, member ByteArray, reach HoverReceiverReach, near ElementIndex) returns HoverMemberType
 		match declarationSite(memberDeclaredHere(owner, member: member), kind: HoverDeclarationKind.binding) 'aFieldHere'
 			at(head) then return memberTypeOrParameter(followedBindingType(head, reach: reach), owner: owner)
-			none then return corpusFieldType(owner, member: member)
+			none then return corpusFieldType(owner, member: member, near: near)
 		end 'aFieldHere'
 	end 'memberType'
 
-	function corpusFieldType(owner ByteArray, member ByteArray) returns HoverMemberType
+	function corpusFieldType(owner ByteArray, member ByteArray, near ElementIndex) returns HoverMemberType
 		var heldCorpus = self.corpus
 
 		match heldCorpus 'held'
-			loaded(_, signatures, readerPath) then return declaredFieldType(signatures, owner: owner, member: member, readerPath: readerPath)
+			loaded(_, signatures, readerPath) then return declaredFieldType(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: lspEnclosingTypeAtToken(tokens, index: near))
 			unavailable then return HoverMemberType.none
 		end 'held'
 	end 'corpusFieldType'
 
-	function declaredFieldType(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns HoverMemberType
-		match lspVisibleFieldOf(signatures, owner: owner, member: member, readerPath: readerPath) 'aField'
+	function declaredFieldType(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns HoverMemberType
+		match lspVisibleFieldOf(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: enclosing) 'aField'
 			declared(layout, index) then return brandedMemberType(signatures, spelling: layout.fieldSpelledName(index), owner: owner, declFilePath: layout.declFilePath)
 			hidden or
 			none then return HoverMemberType.none
@@ -1618,19 +1618,19 @@ module type HoverDocument
 		return self.writtenNamedType(named.value)
 	end 'declaredTypeNameAt'
 
-	function methodRendering(receiver ByteArray, method ByteArray) returns HoverRendering
+	function methodRendering(receiver ByteArray, method ByteArray, near ElementIndex) returns HoverRendering
 		match lookupOwnerOf(receiver, member: method) 'declaringType'
-			at(owner) then return declaredMemberRendering(owner, method: method)
+			at(owner) then return declaredMemberRendering(owner, method: method, near: near)
 			none then return HoverRendering.absent
 		end 'declaringType'
 	end 'methodRendering'
 
-	function declaredMemberRendering(owner ByteArray, method ByteArray) returns HoverRendering
+	function declaredMemberRendering(owner ByteArray, method ByteArray, near ElementIndex) returns HoverRendering
 		if declarationWasFound(memberDeclaredHere(owner, member: method)) 'declaredInThisDocument'
 			return declaredMethodRendering(owner, method: method)
 		end 'declaredInThisDocument'
 
-		var declaringDocument = memberDeclaringDocument(owner, member: method)
+		var declaringDocument = memberDeclaringDocument(owner, member: method, near: near)
 
 		match declaringDocument 'elsewhere'
 			at(declaring) then return declaring.declaredMethodRendering(owner, method: method)
@@ -1732,19 +1732,19 @@ module type HoverDocument
 	// The declared return type of `receiver`'s `method`, resolved through the same owner and the same
 	// declaring document its rendering is. Splitting the two lookups gives an editor a signature from one
 	// declaration and a type from another the day they disagree.
-	function methodReturnType(receiver ByteArray, method ByteArray) returns HoverMemberType
+	function methodReturnType(receiver ByteArray, method ByteArray, near ElementIndex) returns HoverMemberType
 		match lookupOwnerOf(receiver, member: method) 'declaringType'
-			at(owner) then return declaredMemberReturnType(owner, method: method)
+			at(owner) then return declaredMemberReturnType(owner, method: method, near: near)
 			none then return HoverMemberType.none
 		end 'declaringType'
 	end 'methodReturnType'
 
-	function declaredMemberReturnType(owner ByteArray, method ByteArray) returns HoverMemberType
+	function declaredMemberReturnType(owner ByteArray, method ByteArray, near ElementIndex) returns HoverMemberType
 		if declarationWasFound(memberDeclaredHere(owner, member: method)) 'declaredInThisDocument'
 			return declaredMethodReturnType(owner, method: method)
 		end 'declaredInThisDocument'
 
-		match memberDeclaringDocument(owner, member: method) 'elsewhere'
+		match memberDeclaringDocument(owner, member: method, near: near) 'elsewhere'
 			at(declaring) then return declaring.declaredMethodReturnType(owner, method: method)
 			none then return HoverMemberType.none
 		end 'elsewhere'
@@ -1761,9 +1761,9 @@ module type HoverDocument
 		end 'aRoutine'
 	end 'returnTypeOfDeclaration'
 
-	function memberDeclaringDocument(owner ByteArray, member ByteArray) returns HoverDeclaringDocument
+	function memberDeclaringDocument(owner ByteArray, member ByteArray, near ElementIndex) returns HoverDeclaringDocument
 		match corpus 'held'
-			loaded(_, signatures, readerPath) then return declaringDocumentOfAMember(signatures, owner: owner, member: member, readerPath: readerPath)
+			loaded(_, signatures, readerPath) then return declaringDocumentOfAMember(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: lspEnclosingTypeAtToken(tokens, index: near))
 			unavailable then return HoverDeclaringDocument.none
 		end 'held'
 	end 'memberDeclaringDocument'
@@ -1772,8 +1772,8 @@ module type HoverDocument
 	// member the corpus holds to be hidden from this file answers `none`, so that unfiltered road can
 	// never render what the visibility filter refused. With no corpus attached this answers `none` too,
 	// and the corpus pass asks again.
-	function declaringDocumentOfAMember(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns HoverDeclaringDocument
-		match lspMemberDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath) 'declared'
+	function declaringDocumentOfAMember(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns HoverDeclaringDocument
+		match lspMemberDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: enclosing) 'declared'
 			declaredIn(path) then return documentOfCorpusFile(path)
 			hiddenHere then return HoverDeclaringDocument.none
 			nothingDeclaresIt then return stdlibDocumentFor(owner)

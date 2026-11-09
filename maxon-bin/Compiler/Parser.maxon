@@ -36757,7 +36757,7 @@ export type Parser
 	end 'requireNoManagedTypeInRuntimeSource'
 
 	function rawSurfaceIsRefusedHere() returns bool
-		return (self.isTheReportingWalk or self.job.initializerRole != InitializerRole.ordinary) and not self.job.livesUnderStdlibDirectory and not self.job.isRuntimeSource
+		return (self.isTheReportingWalk or self.job.initializerRole != InitializerRole.ordinary) and tierRefusesTheRawSurface(self.job.livesUnderStdlibDirectory, isRuntimeSource: self.job.isRuntimeSource)
 	end 'rawSurfaceIsRefusedHere'
 
 	function rawSurfaceRefusal(door RawSurfaceDoor, anchor Token) returns SourceParseError
@@ -36816,20 +36816,6 @@ export type Parser
 			throw self.rawSurfaceRefusal(RawSurfaceDoor.cstringType, anchor: spelledAt)
 		end 'refused'
 	end 'requireCStringTypeIsLibraryTier'
-
-	function requireFieldIsNotRawSurface(layout StructLayout, index FieldIndex, fieldTok Token) throws SourceParseError
-		if not self.rawSurfaceIsRefusedHere() 'libraryTier'
-			return
-		end 'libraryTier'
-
-		if layout.fieldIsTheInlineManagedRecord(index) 'theBufferField'
-			throw self.rawSurfaceRefusal(RawSurfaceDoor.managedField, anchor: fieldTok)
-		end 'theBufferField'
-
-		if layout.name.equals(PromiseTypeName) and fieldTok.value.equals(PromiseInnerFieldName) 'thePromiseHandle'
-			throw self.rawSurfaceRefusal(RawSurfaceDoor.promiseHandle, anchor: fieldTok)
-		end 'thePromiseHandle'
-	end 'requireFieldIsNotRawSurface'
 
 	function requireArrayMemberIsNotRawSurface(methodTok Token, onABuffer bool) throws SourceParseError
 		if not self.rawSurfaceIsRefusedHere() 'libraryTier'
@@ -90264,7 +90250,7 @@ export type Parser
 	// ⚠ **AND THAT SENTENCE IS PINNED BY A SPEC, BECAUSE THE CORPUS CASES ALONE DO NOT PIN IT.** The
 	// type-vs-file rule is asserted above while **nothing else in the suite could
 	// tell the two apart**: every corpus case reaches the field from `main()`, which is inside no
-	// type, so they pin only *"outside ANY type ⇒ reject"*. Weakening the test below to
+	// type, so they pin only *"outside ANY type ⇒ reject"*. Weakening `memberReaderSite`'s test to
 	// `not self.enclosingType.isEmpty()` — a compiler where every method reads every type's private
 	// state — left `specs` at **392/0**, both corpus E3014 cases included (measured, not
 	// argued). That is the shape in which the reason written down enforces nothing while
@@ -90297,25 +90283,32 @@ export type Parser
 	// holds by construction. The rule is asked wherever it can be broken, which is wherever the
 	// layout came from a BINDING's type rather than from the enclosing declaration.
 	//
-	// The TYPE's own tier is asked first (`requireMembersReachable`): a type this file may not name
-	// hides every field, whatever the field's own tier says.
+	// `fieldReach` (MemberReach.maxon), which the language server asks too, owns the refusal order: the
+	// raw surface, then the TYPE's own tier — a type this file may not name hides every field, whatever
+	// the field's own tier says — then the field's tier.
 	function requireFieldAccessible(layout StructLayout, index FieldIndex, fieldTok Token) throws SourceParseError
-		try self.requireFieldIsNotRawSurface(layout, index: index, fieldTok: fieldTok)
-		try self.requireMembersReachable(layout.name, visibility: layout.visibility, declFilePath: layout.declFilePath, memberTok: fieldTok)
-		try self.requireFieldTierReachable(layout, index: index, fieldTok: fieldTok)
+		let site = self.memberReaderSite(layout.name)
+		let typeReachable = self.membersReachable(layout.name, visibility: layout.visibility, declFilePath: layout.declFilePath)
+
+		match fieldReach(self.signatures, layout: layout, index: index, readerFilePath: self.job.path, site: site, rawSurfaceRefused: self.rawSurfaceIsRefusedHere(), typeReachable: typeReachable) 'reach'
+			reachable then return
+			rawSurface(door) then throw self.rawSurfaceRefusal(door, anchor: fieldTok)
+			typeHidden(tier) then throw hiddenMembersRefusal(layout.name, visibility: tier, memberTok: fieldTok)
+			tierHidden then throw SourceParseError.unexportedFieldAccess(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
+		end 'reach'
 	end 'requireFieldAccessible'
 
-	function requireFieldTierReachable(layout StructLayout, index FieldIndex, fieldTok Token) throws SourceParseError
-		if self.insideTheTypesOwnBody(layout.name) or self.fieldReachableFromOutsideItsType(layout, index: index) 'wideEnough'
-			return
-		end 'wideEnough'
+	function memberReaderSite(typeName ByteArray) returns MemberReaderSite
+		if not self.namesEnclosingType(typeName) 'outsideTheType'
+			return MemberReaderSite.outsideTheType
+		end 'outsideTheType'
 
-		throw SourceParseError.unexportedFieldAccess(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
-	end 'requireFieldTierReachable'
+		if self.enclosingBodySharesTheTypesFile 'typesOwnBody'
+			return MemberReaderSite.typesOwnBody
+		end 'typesOwnBody'
 
-	function insideTheTypesOwnBody(typeName ByteArray) returns bool
-		return self.namesEnclosingType(typeName) and self.enclosingBodySharesTheTypesFile
-	end 'insideTheTypesOwnBody'
+		return MemberReaderSite.extensionBodyInAnotherFile
+	end 'memberReaderSite'
 
 	function requireMembersReachable(typeName ByteArray, visibility Visibility, declFilePath FilePath, memberTok Token) throws SourceParseError
 		if not self.membersReachable(typeName, visibility: visibility, declFilePath: declFilePath) 'typeHidden'
@@ -90380,32 +90373,14 @@ export type Parser
 	end 'requireImplicitMethodReachable'
 
 	function membersReachable(typeName ByteArray, visibility Visibility, declFilePath FilePath) returns bool
-		if self.namesEnclosingType(typeName) 'insideDeclaringType'
-			return true
-		end 'insideDeclaringType'
+		let site = self.memberReaderSite(typeName)
 
-		self.recordMemberAccessedTypeName(typeName)
-		return self.signatures.isVisibleFrom(visibility, declFilePath: declFilePath, readerFilePath: self.job.path)
+		if site == MemberReaderSite.outsideTheType 'aReaderOutsideTheType'
+			self.recordMemberAccessedTypeName(typeName)
+		end 'aReaderOutsideTheType'
+
+		return typeMembersReachable(self.signatures, visibility: visibility, declFilePath: declFilePath, readerFilePath: self.job.path, site: site)
 	end 'membersReachable'
-
-	// ⭐ **THE THREE FIELD TIERS, AND THE ONE THAT IS NOT THE ORDINARY MEANING OF ITS NAME.** A field's
-	// DEFAULT tier answers `false` here and is then rescued by the caller's enclosing-type test, so `file`
-	// means "this type's own body" for a field where it means "this file" everywhere else — which is the
-	// measurement `requireFieldAccessible`'s header records, not a choice made here. The two WIDER tiers mean
-	// exactly what they mean for every other declaration, and `module` therefore has to ask about the FILE the
-	// type was declared in, which is why `StructLayout` carries one.
-	//
-	// ⚠ It is a separate predicate rather than an inlined `match` because the caller's rescue must apply to
-	// the `module` tier too: a type's own body may read its `module` field from OUTSIDE the declaring
-	// subtree, since the body IS the declaring file.
-	function fieldReachableFromOutsideItsType(layout StructLayout, index FieldIndex) returns bool
-		return match layout.fieldTier(index) 'tier'
-			file gives false
-			module gives self.signatures.isVisibleFrom(Visibility.module, declFilePath: layout.declFilePath, readerFilePath: self.job.path)
-			global or
-			public gives true
-		end 'tier'
-	end 'fieldReachableFromOutsideItsType'
 
 	// ⭐ **A MOVED-FROM BINDING IS DEAD AT EVERY USE, AND THIS IS THE ONE PREDICATE THAT SAYS SO.** Its
 	// owned heap value was transferred to another binding by a `let u = t` / `s = t` whose RHS was a

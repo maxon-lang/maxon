@@ -1,0 +1,43 @@
+let BufferFieldsOwnBodyLine = 5
+let BufferFieldsOwnBodyCharacter = 21
+let BufferFieldsSelfLine = 9
+let BufferFieldsSelfCharacter = 20
+let BufferFieldsOtherTypeLine = 15
+let BufferFieldsOtherTypeCharacter = 21
+
+test 'completion offers no unexported field of another type declared in the buffer'
+	let ownBody = completionLabelsFor(bufferFieldsFixture(), line: BufferFieldsOwnBodyLine, character: BufferFieldsOwnBodyCharacter, after: "`other.`, inside the body of `Vault`, where `other` is a `Vault`")
+
+	Expect.isTrue(completionOffersLabel(ownBody, label: "secret"), message: "completion after `other.` inside `Vault`'s own body did not offer `secret`, which `Vault` declares with no visibility modifier: a type's own body reaches it.")
+
+	let viaSelf = completionLabelsFor(bufferFieldsFixture(), line: BufferFieldsSelfLine, character: BufferFieldsSelfCharacter, after: "`self.`, inside the body of `Vault`")
+
+	Expect.isTrue(completionOffersLabel(viaSelf, label: "secret"), message: "completion after `self.` inside `Vault` did not offer `secret`, which `Vault` declares with no visibility modifier: a type's own body reaches it.")
+
+	let otherType = completionLabelsFor(bufferFieldsFixture(), line: BufferFieldsOtherTypeLine, character: BufferFieldsOtherTypeCharacter, after: "`vault.`, inside the body of `Visitor`, where `vault` is a `Vault`")
+
+	Expect.isTrue(completionOffersLabel(otherType, label: "label"), message: "completion after `vault.` inside `Visitor` did not offer `label`, which `Vault` declares `export var`, so the negative below is passing on an empty list rather than on a filter.")
+
+	Expect.isFalse(completionOffersLabel(otherType, label: "secret"), message: "completion after `vault.` inside `Visitor` offered `secret`. `Vault` declares it with no visibility modifier, so only `Vault`'s own body may reach it and the compiler refuses the read from another type even in the same file (E3014).")
+end 'completion offers no unexported field of another type declared in the buffer'
+
+function bufferFieldsFixture() returns String
+	return String.from(b"type Vault
+    var secret as ExitCode
+    export var label as ExitCode
+
+    function peek(other Vault) returns ExitCode
+        return other.label
+    end 'peek'
+
+    function mine() returns ExitCode
+        return self.label
+    end 'mine'
+end 'Vault'
+
+type Visitor
+    function look(vault Vault) returns ExitCode
+        return vault.label
+    end 'look'
+end 'Visitor'")
+end 'bufferFieldsFixture'

@@ -1,0 +1,81 @@
+let ReachableDefinitionRootName = "temp/lsp/definition-resolves-only-reachable-fields"
+let ReachableDefinitionMainFileName = "main.maxon"
+let ReachableDefinitionGaugeFileName = "gauge.maxon"
+let ReachableDefinitionDialFileName = "dial.maxon"
+let ReachableDefinitionDialTail = "definition-resolves-only-reachable-fields/dial.maxon"
+let ReachableDefinitionHiddenFieldLine = 3
+let ReachableDefinitionHiddenFieldCharacter = 19
+let ReachableDefinitionVisibleFieldLine = 4
+let ReachableDefinitionVisibleFieldCharacter = 18
+let ReachableDefinitionHiddenMethodLine = 5
+let ReachableDefinitionHiddenMethodCharacter = 20
+let ReachableDefinitionVisibleMethodLine = 6
+let ReachableDefinitionVisibleMethodCharacter = 19
+let ReachableDefinitionLevelDeclarationLine = 1
+let ReachableDefinitionDescribeDeclarationLine = 8
+
+test 'definition resolves only the members a reader may reach'
+	let root = stagedCorpusDirectory(ReachableDefinitionRootName)
+	writeCorpusFile(root, fileName: ReachableDefinitionGaugeFileName, content: reachableDefinitionGaugeSource())
+	writeCorpusFile(root, fileName: ReachableDefinitionDialFileName, content: reachableDefinitionDialSource())
+
+	let hiddenField = probeCorpusDefinition(root, fileName: ReachableDefinitionMainFileName, content: reachableDefinitionMainSource(), line: ReachableDefinitionHiddenFieldLine, character: ReachableDefinitionHiddenFieldCharacter)
+
+	expectNoDefinitionInProject(hiddenField, note: "a cursor on `level` in `gauge.level` jumped to its declaration. `Gauge` is declared with no visibility modifier in a sibling file, so this file may not name it and the compiler refuses every field read through a `Gauge` value.")
+
+	let hiddenMethod = probeCorpusDefinition(root, fileName: ReachableDefinitionMainFileName, content: reachableDefinitionMainSource(), line: ReachableDefinitionHiddenMethodLine, character: ReachableDefinitionHiddenMethodCharacter)
+
+	expectNoDefinitionInProject(hiddenMethod, note: "a cursor on `describe` in `gauge.describe()` jumped to its declaration. `Gauge` is declared with no visibility modifier in a sibling file, so the compiler refuses every method call on a `Gauge` value.")
+
+	let visibleField = probeCorpusDefinition(root, fileName: ReachableDefinitionMainFileName, content: reachableDefinitionMainSource(), line: ReachableDefinitionVisibleFieldLine, character: ReachableDefinitionVisibleFieldCharacter)
+
+	expectDefinitionInFile(visibleField, fileTail: ReachableDefinitionDialTail, startLine: ReachableDefinitionLevelDeclarationLine, note: "a cursor on `level` in `dial.level` did not resolve to the `export var level` of the `export`ed `Dial`, so the negatives above are passing on silence rather than on a filter.")
+
+	let visibleMethod = probeCorpusDefinition(root, fileName: ReachableDefinitionMainFileName, content: reachableDefinitionMainSource(), line: ReachableDefinitionVisibleMethodLine, character: ReachableDefinitionVisibleMethodCharacter)
+
+	expectDefinitionInFile(visibleMethod, fileTail: ReachableDefinitionDialTail, startLine: ReachableDefinitionDescribeDeclarationLine, note: "a cursor on `describe` in `dial.describe()` did not resolve to the `export function describe` of the `export`ed `Dial`, so the method negative above is passing on silence rather than on a filter.")
+end 'definition resolves only the members a reader may reach'
+
+function reachableDefinitionGaugeSource() returns String
+	return String.from(b"type Gauge
+    export var level as ExitCode
+
+    export static function make() returns Gauge
+        return Gauge{level: 0}
+    end 'make'
+
+    export function describe() returns ExitCode
+        return self.level
+    end 'describe'
+end 'Gauge'
+")
+end 'reachableDefinitionGaugeSource'
+
+function reachableDefinitionDialSource() returns String
+	return String.from(b"export type Dial
+    export var level as ExitCode
+    var needle as ExitCode
+
+    export static function make() returns Dial
+        return Dial{level: 0, needle: 0}
+    end 'make'
+
+    export function describe() returns ExitCode
+        return self.level
+    end 'describe'
+end 'Dial'
+")
+end 'reachableDefinitionDialSource'
+
+function reachableDefinitionMainSource() returns String
+	return String.from(b"function main() returns ExitCode
+    let gauge = Gauge.make()
+    let dial = Dial.make()
+    let g = gauge.level
+    let d = dial.level
+    let gm = gauge.describe()
+    let dm = dial.describe()
+    return 0
+end 'main'
+")
+end 'reachableDefinitionMainSource'

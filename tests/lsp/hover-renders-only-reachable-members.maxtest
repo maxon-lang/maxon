@@ -1,0 +1,73 @@
+let ReachableHoverRootName = "temp/lsp/hover-renders-only-reachable-members"
+let ReachableHoverMainFileName = "main.maxon"
+let ReachableHoverGaugeFileName = "gauge.maxon"
+let ReachableHoverDialFileName = "dial.maxon"
+let ReachableHoverHiddenFieldLine = 3
+let ReachableHoverHiddenFieldCharacter = 19
+let ReachableHoverVisibleFieldLine = 4
+let ReachableHoverVisibleFieldCharacter = 18
+let ReachableHoverHiddenMethodLine = 5
+let ReachableHoverHiddenMethodCharacter = 20
+let ReachableHoverVisibleMethodLine = 6
+let ReachableHoverVisibleMethodCharacter = 19
+
+test 'hover renders only the members a reader may reach'
+	let root = stagedCorpusDirectory(ReachableHoverRootName)
+	writeCorpusFile(root, fileName: ReachableHoverGaugeFileName, content: reachableHoverGaugeSource())
+	writeCorpusFile(root, fileName: ReachableHoverDialFileName, content: reachableHoverDialSource())
+	writeCorpusFile(root, fileName: ReachableHoverMainFileName, content: reachableHoverMainSource())
+
+	let uri = fileUriOf(root.join(ReachableHoverMainFileName))
+
+	expectNoHoverAtUri(uri, source: reachableHoverMainSource(), line: ReachableHoverHiddenFieldLine, character: ReachableHoverHiddenFieldCharacter, note: "hovering `level` in `gauge.level` rendered a declaration. `Gauge` is declared with no visibility modifier in a sibling file, so the compiler refuses every field read through a `Gauge` value.")
+
+	expectNoHoverAtUri(uri, source: reachableHoverMainSource(), line: ReachableHoverHiddenMethodLine, character: ReachableHoverHiddenMethodCharacter, note: "hovering `describe` in `gauge.describe()` rendered a declaration. `Gauge` is declared with no visibility modifier in a sibling file, so the compiler refuses every method call on a `Gauge` value.")
+
+	let visibleMethod = hoverRenderingAtUri(uri, source: reachableHoverMainSource(), line: ReachableHoverVisibleMethodLine, character: ReachableHoverVisibleMethodCharacter)
+
+	Expect.contains(visibleMethod, needle: "function describe", message: "hovering `describe` in `dial.describe()` did not render the `export function describe` of the `export`ed `Dial`, so the negatives above are passing on silence rather than on a filter. It rendered: {visibleMethod}")
+end 'hover renders only the members a reader may reach'
+
+function reachableHoverGaugeSource() returns String
+	return String.from(b"type Gauge
+    export var level as ExitCode
+
+    export static function make() returns Gauge
+        return Gauge{level: 0}
+    end 'make'
+
+    export function describe() returns ExitCode
+        return self.level
+    end 'describe'
+end 'Gauge'
+")
+end 'reachableHoverGaugeSource'
+
+function reachableHoverDialSource() returns String
+	return String.from(b"export type Dial
+    export var level as ExitCode
+    var needle as ExitCode
+
+    export static function make() returns Dial
+        return Dial{level: 0, needle: 0}
+    end 'make'
+
+    export function describe() returns ExitCode
+        return self.level
+    end 'describe'
+end 'Dial'
+")
+end 'reachableHoverDialSource'
+
+function reachableHoverMainSource() returns String
+	return String.from(b"function main() returns ExitCode
+    let gauge = Gauge.make()
+    let dial = Dial.make()
+    let g = gauge.level
+    let d = dial.level
+    let gm = gauge.describe()
+    let dm = dial.describe()
+    return 0
+end 'main'
+")
+end 'reachableHoverMainSource'

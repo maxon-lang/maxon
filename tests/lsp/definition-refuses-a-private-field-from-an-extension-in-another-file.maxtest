@@ -1,0 +1,49 @@
+let ExtensionFieldRootName = "temp/lsp/definition-refuses-a-private-field-from-an-extension-in-another-file"
+let ExtensionFieldMainFileName = "main.maxon"
+let ExtensionFieldDialFileName = "dial.maxon"
+let ExtensionFieldDialTail = "definition-refuses-a-private-field-from-an-extension-in-another-file/dial.maxon"
+let ExtensionFieldPrivateLine = 2
+let ExtensionFieldPrivateCharacter = 22
+let ExtensionFieldExportedLine = 3
+let ExtensionFieldExportedCharacter = 22
+let ExtensionFieldLevelDeclarationLine = 1
+
+test 'definition refuses a private field read from an extension in another file'
+	let root = stagedCorpusDirectory(ExtensionFieldRootName)
+	writeCorpusFile(root, fileName: ExtensionFieldDialFileName, content: extensionFieldDialSource())
+
+	let privateField = probeCorpusDefinition(root, fileName: ExtensionFieldMainFileName, content: extensionFieldMainSource(), line: ExtensionFieldPrivateLine, character: ExtensionFieldPrivateCharacter)
+
+	expectNoDefinitionInProject(privateField, note: "a cursor on `needle` in `self.needle`, inside an `extension Dial` written in another file than `Dial`, jumped to its declaration. `Dial` declares it with no visibility modifier, so only the body written beside `Dial` may reach it (E3014).")
+
+	let exportedField = probeCorpusDefinition(root, fileName: ExtensionFieldMainFileName, content: extensionFieldMainSource(), line: ExtensionFieldExportedLine, character: ExtensionFieldExportedCharacter)
+
+	expectDefinitionInFile(exportedField, fileTail: ExtensionFieldDialTail, startLine: ExtensionFieldLevelDeclarationLine, note: "a cursor on `level` in `self.level`, inside an `extension Dial` written in another file than `Dial`, did not resolve to the `export var level` of `Dial`, so the negative above is passing on silence rather than on a filter.")
+end 'definition refuses a private field read from an extension in another file'
+
+function extensionFieldDialSource() returns String
+	return String.from(b"export type Dial
+    export var level as ExitCode
+    var needle as ExitCode
+
+    export static function make() returns Dial
+        return Dial{level: 0, needle: 0}
+    end 'make'
+end 'Dial'
+")
+end 'extensionFieldDialSource'
+
+function extensionFieldMainSource() returns String
+	return String.from(b"extension Dial
+    function peek() returns ExitCode
+        let n = self.needle
+        let l = self.level
+        return 0
+    end 'peek'
+end 'Dial'
+
+function main() returns ExitCode
+    return 0
+end 'main'
+")
+end 'extensionFieldMainSource'

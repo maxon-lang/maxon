@@ -1,0 +1,18 @@
+let RawSurfaceCompletionLine = 2
+let RawSurfaceCompletionCharacter = 8
+
+test 'completion offers no field the compiler refuses as raw surface'
+	let labels = completionLabelsFor(rawSurfaceCompletionFixture(), line: RawSurfaceCompletionLine, character: RawSurfaceCompletionCharacter, after: "`arr.`, where `arr` is an `Array` and `stdlib/Array.maxon` declares `public var managed`")
+
+	Expect.isFalse(completionOffersLabel(labels, label: "managed"), message: "completion after `arr.` offered `managed`. `stdlib/Array.maxon` declares it `public`, but a program outside the library tier that writes `arr.managed` is refused as raw surface (E3185), so an editor offering it teaches an author to write a field read the compiler rejects.")
+
+	Expect.isTrue(completionOffersLabel(labels, label: "push"), message: "completion after `arr.` did not offer `push`, so the negative above is passing on an empty list rather than on a filter.")
+end 'completion offers no field the compiler refuses as raw surface'
+
+function rawSurfaceCompletionFixture() returns String
+	return String.from(b"function main() returns ExitCode
+    var arr = [1, 2, 3]
+    arr.push(4)
+    return 0
+end 'main'")
+end 'rawSurfaceCompletionFixture'

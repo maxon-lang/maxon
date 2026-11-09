@@ -33,12 +33,16 @@ end 'hoverRenderingAtUri'
 // not an empty string. `isPresent` is the one shape both hover and definition use to say so; an
 // empty-string sentinel would fail silently the day a real rendering is empty.
 export function expectNoHover(source String, line LspCoordinate, character LspCoordinate, note String) throws TestFailure
-	match probeHover(HoverDocumentUri, source: source, line: line, character: character) 'outcome'
+	try expectNoHoverAtUri(HoverDocumentUri, source: source, line: line, character: character, note: note)
+end 'expectNoHover'
+
+export function expectNoHoverAtUri(uri String, source String, line LspCoordinate, character LspCoordinate, note String) throws TestFailure
+	match probeHover(uri, source: source, line: line, character: character) 'outcome'
 		answered(result) then try Expect.isFalse(result.isPresent, message: "{note} It answered: {result.contents}")
 		refused(code, message) then try Expect.fail(refusalNote(code, message: message))
 		broke(detail) then try Expect.fail(breakageNote(detail))
 	end 'outcome'
-end 'expectNoHover'
+end 'expectNoHoverAtUri'
 
 // What one hover probe observed.
 union HoverProbe

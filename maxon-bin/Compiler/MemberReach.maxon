@@ -1,0 +1,66 @@
+export enum MemberReaderSite
+	outsideTheType
+	extensionBodyInAnotherFile
+	typesOwnBody
+end 'MemberReaderSite'
+
+export union FieldReach
+	reachable
+	rawSurface(door RawSurfaceDoor)
+	typeHidden(tier Visibility)
+	tierHidden
+end 'FieldReach'
+
+// Only a reader outside the type is held to the type's tier; its own body and its extensions always
+// reach it.
+export function typeMembersReachable(signatures ProgramSignatures, visibility Visibility, declFilePath FilePath, readerFilePath FilePath, site MemberReaderSite) returns bool
+	return site != MemberReaderSite.outsideTheType or signatures.isVisibleFrom(visibility, declFilePath: declFilePath, readerFilePath: readerFilePath)
+end 'typeMembersReachable'
+
+// The verdicts are ordered raw surface, type tier, field tier, and the parser reports the first one
+// that holds. `typeReachable` is the caller's `typeMembersReachable` answer: the parser asks it
+// through `membersReachable`, which also records the accessed type for the reporting walk.
+export function fieldReach(signatures ProgramSignatures, layout StructLayout, index FieldIndex, readerFilePath FilePath, site MemberReaderSite, rawSurfaceRefused bool, typeReachable bool) returns FieldReach
+	if rawSurfaceRefused and layout.fieldIsTheInlineManagedRecord(index) 'theBufferField'
+		return FieldReach.rawSurface(RawSurfaceDoor.managedField)
+	end 'theBufferField'
+
+	if rawSurfaceRefused and layout.name.equals(PromiseTypeName) and layout.fieldNameAt(index).equals(PromiseInnerFieldName) 'thePromiseHandle'
+		return FieldReach.rawSurface(RawSurfaceDoor.promiseHandle)
+	end 'thePromiseHandle'
+
+	if not typeReachable 'typeHidden'
+		return FieldReach.typeHidden(layout.visibility)
+	end 'typeHidden'
+
+	let tier = layout.fieldTier(index)
+	let moduleTierVisible = tier == Visibility.module and signatures.isVisibleFrom(Visibility.module, declFilePath: layout.declFilePath, readerFilePath: readerFilePath)
+
+	if memberTierReachable(tier, site: site, moduleTierVisible: moduleTierVisible) 'wideEnough'
+		return FieldReach.reachable
+	end 'wideEnough'
+
+	return FieldReach.tierHidden
+end 'fieldReach'
+
+// ⭐ **THE THREE FIELD TIERS, AND THE ONE THAT IS NOT THE ORDINARY MEANING OF ITS NAME.** A field's
+// DEFAULT tier answers `false` here unless the reader is in the type's own body, so `file` means
+// "this type's own body" for a field where it means "this file" everywhere else — the rule
+// `Parser.requireFieldAccessible`'s header owns. The two WIDER tiers mean exactly what they mean for
+// every other declaration, and `module` therefore has to ask about the FILE the type was declared in,
+// which is why `StructLayout` carries one.
+//
+// ⚠ The own-body test comes before the tier, so it rescues the `module` tier too: a type's own body
+// may read its `module` field from OUTSIDE the declaring subtree, since the body IS the declaring file.
+module function memberTierReachable(tier Visibility, site MemberReaderSite, moduleTierVisible bool) returns bool
+	if site == MemberReaderSite.typesOwnBody 'insideTheTypesOwnBody'
+		return true
+	end 'insideTheTypesOwnBody'
+
+	return match tier 'byTier'
+		file gives false
+		module gives moduleTierVisible
+		global or
+		public gives true
+	end 'byTier'
+end 'memberTierReachable'

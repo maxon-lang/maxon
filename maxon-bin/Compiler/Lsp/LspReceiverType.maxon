@@ -56,6 +56,39 @@ module function lspSubjectIsStatic(subject LspSubject) returns bool
 	end 'subject'
 end 'lspSubjectIsStatic'
 
+module union LspEnclosingType
+	inside(typeName ByteArray)
+	atFileScope
+end 'LspEnclosingType'
+
+function lspEnclosingTypeAtLine(blocks LspDocumentBlockArray, line LspLineNumber) returns LspEnclosingType
+	var enclosing = LspEnclosingType.atFileScope
+	var enclosingDepth = 0 as LspBlockDepth
+
+	for block in blocks 'eachBlock'
+		if not lspBlockDeclaresMembers(block.kind) or not lspBlockHoldsLine(block, line: line) 'notAnEnclosingType'
+			continue
+		end 'notAnEnclosingType'
+
+		if block.depth >= enclosingDepth 'deeper'
+			enclosing = LspEnclosingType.inside(block.name)
+			enclosingDepth = block.depth
+		end 'deeper'
+	end 'eachBlock'
+
+	return enclosing
+end 'lspEnclosingTypeAtLine'
+
+module function lspEnclosingTypeAtToken(tokens TokenArray, index ElementIndex) returns LspEnclosingType
+	return lspEnclosingTypeAtLine(lspDocumentBlocks(tokens), line: lspLineOf(lspTokenAt(tokens, index: index).line))
+end 'lspEnclosingTypeAtToken'
+
+module function lspEnclosingTypeAtCursor(tokens TokenArray, blocks LspDocumentBlockArray, offset ByteOffset) returns LspEnclosingType
+	let receiver = try receiverIndexBefore(tokens, offset: offset) otherwise return LspEnclosingType.atFileScope
+
+	return lspEnclosingTypeAtLine(blocks, line: lspLineOf(lspTokenAt(tokens, index: receiver).line))
+end 'lspEnclosingTypeAtCursor'
+
 module function lspBlockDeclaresMembers(kind LspBlockKind) returns bool
 	return kind == LspBlockKind.structBody or kind == LspBlockKind.enumBody or kind == LspBlockKind.unionBody or kind == LspBlockKind.interfaceBody or kind == LspBlockKind.extensionBody
 end 'lspBlockDeclaresMembers'
