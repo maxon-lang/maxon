@@ -203,3 +203,109 @@ end 'main'
 ```maxoncstderr
 error E2004: <fragment>:10:10: Undefined variable 'n'
 ```
+
+<!-- test: error.an-extension-method-refused-only-by-the-second-conformer-is-reported-once -->
+An extension method that only the second conformer refuses is abandoned for both conformers and reported once. `Square0` has the field `bad` reads, `Square1` does not, and `good` is still read for both.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+interface Shape
+	function side() returns Int
+end 'Shape'
+
+type Square0 implements Shape
+	var edge as Int
+	var spare as Int
+
+	static function create(edge Int) returns Self
+		return Self{edge: edge, spare: 1}
+	end 'create'
+
+	function side() returns Int
+		return self.edge
+	end 'side'
+end 'Square0'
+
+type Square1 implements Shape
+	var edge as Int
+
+	static function create(edge Int) returns Self
+		return Self{edge: edge}
+	end 'create'
+
+	function side() returns Int
+		return self.edge
+	end 'side'
+end 'Square1'
+
+extension Shape
+	function good() returns Int
+		return self.side()
+	end 'good'
+
+	function bad() returns Int
+		return self.spare
+	end 'bad'
+end 'Shape'
+
+function main() returns ExitCode
+	let s = Square0.create(3)
+	return (s.good() + s.bad()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3018: <fragment>:39:15: type 'Square1' has no field named 'spare'
+```
+
+<!-- test: error.an-extension-method-refused-only-by-the-first-conformer-is-reported-once -->
+The same with the refusing conformer read first: the method is reported once, for `Square1`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+interface Shape
+	function side() returns Int
+end 'Shape'
+
+type Square1 implements Shape
+	var edge as Int
+
+	static function create(edge Int) returns Self
+		return Self{edge: edge}
+	end 'create'
+
+	function side() returns Int
+		return self.edge
+	end 'side'
+end 'Square1'
+
+type Square0 implements Shape
+	var edge as Int
+	var spare as Int
+
+	static function create(edge Int) returns Self
+		return Self{edge: edge, spare: 1}
+	end 'create'
+
+	function side() returns Int
+		return self.edge
+	end 'side'
+end 'Square0'
+
+extension Shape
+	function good() returns Int
+		return self.side()
+	end 'good'
+
+	function bad() returns Int
+		return self.spare
+	end 'bad'
+end 'Shape'
+
+function main() returns ExitCode
+	let s = Square0.create(3)
+	return (s.good() + s.bad()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3018: <fragment>:39:15: type 'Square1' has no field named 'spare'
+```

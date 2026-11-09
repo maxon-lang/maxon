@@ -12040,9 +12040,11 @@ export type GenericInstanceRegistry
 	var copyDemanded as GenericInstanceIdSet
 	var parseCopyDemandedRows as GenericInstanceIdSet
 	var mergeCopyDemandedRows as GenericInstanceIdArray
+	var parseNamedOrder as GenericInstanceIdArray
+	var parseCopyDemandedOrder as GenericInstanceIdArray
 
 	export static function create() returns GenericInstanceRegistry
-		return Self{baseIds: TypeNameIdArray.create(0), argLists: MaxonTypeArrayArray.create(0), fixedSizes: FixedElementCountColumn.create(), readOnlyArgs: ReadOnlyArgMaskArray.create(0), frozenArgs: ReadOnlyArgMaskArray.create(0), runtimeSized: BoolArray.create(0), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create(0), baselineCount: 0, parseBandOpen: false, parseNamedRows: GenericInstanceIdSet.create(), mergeNamedRows: GenericInstanceIdArray.create(0), copyDemanded: GenericInstanceIdSet.create(), parseCopyDemandedRows: GenericInstanceIdSet.create(), mergeCopyDemandedRows: GenericInstanceIdArray.create(0)}
+		return Self{baseIds: TypeNameIdArray.create(0), argLists: MaxonTypeArrayArray.create(0), fixedSizes: FixedElementCountColumn.create(), readOnlyArgs: ReadOnlyArgMaskArray.create(0), frozenArgs: ReadOnlyArgMaskArray.create(0), runtimeSized: BoolArray.create(0), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create(0), baselineCount: 0, parseBandOpen: false, parseNamedRows: GenericInstanceIdSet.create(), mergeNamedRows: GenericInstanceIdArray.create(0), copyDemanded: GenericInstanceIdSet.create(), parseCopyDemandedRows: GenericInstanceIdSet.create(), mergeCopyDemandedRows: GenericInstanceIdArray.create(0), parseNamedOrder: GenericInstanceIdArray.create(0), parseCopyDemandedOrder: GenericInstanceIdArray.create(0)}
 	end 'create'
 
 	export function settleBaseline()
@@ -12061,6 +12063,8 @@ export type GenericInstanceRegistry
 		self.parseBandOpen = true
 		self.parseNamedRows = GenericInstanceIdSet.create()
 		self.parseCopyDemandedRows = GenericInstanceIdSet.create()
+		self.parseNamedOrder = GenericInstanceIdArray.create(0)
+		self.parseCopyDemandedOrder = GenericInstanceIdArray.create(0)
 	end 'openParseBand'
 
 	// The rows the open parse minted, in mint order, and the baseline rows it named — handed back before the registry is cut
@@ -12088,38 +12092,38 @@ export type GenericInstanceRegistry
 		self.parseBandOpen = false
 		self.parseNamedRows = GenericInstanceIdSet.create()
 		self.parseCopyDemandedRows = GenericInstanceIdSet.create()
+		self.parseNamedOrder = GenericInstanceIdArray.create(0)
+		self.parseCopyDemandedOrder = GenericInstanceIdArray.create(0)
 		return ParseBandInstances.create(rows, namedRows: named, copyDemandedRows: demanded)
 	end 'closeParseBand'
 
+	module function markParseBand() returns InstanceBandMark
+		return InstanceBandMark.create(self.baseIds.count() as GenericInstanceId, named: self.parseNamedOrder.count(), copyDemanded: self.parseCopyDemandedOrder.count())
+	end 'markParseBand'
+
+	module function baselineMark() returns InstanceBandMark
+		return InstanceBandMark.create(self.baselineCount, named: 0, copyDemanded: 0)
+	end 'baselineMark'
+
+	module function rewindParseBand(mark InstanceBandMark)
+		self.cutRowsBackTo(mark.rows)
+
+		for position in mark.named upto self.parseNamedOrder.count() 'eachNamedSince'
+			_ = self.parseNamedRows.remove(try self.parseNamedOrder.get(position) otherwise panic("rewindParseBand: parseNamedOrder.get OOB at {position}"))
+		end 'eachNamedSince'
+
+		self.parseNamedOrder.truncate(mark.named)
+
+		for position in mark.copyDemanded upto self.parseCopyDemandedOrder.count() 'eachCopyDemandedSince'
+			_ = self.parseCopyDemandedRows.remove(try self.parseCopyDemandedOrder.get(position) otherwise panic("rewindParseBand: parseCopyDemandedOrder.get OOB at {position}"))
+		end 'eachCopyDemandedSince'
+
+		self.parseCopyDemandedOrder.truncate(mark.copyDemanded)
+	end 'rewindParseBand'
+
 	// Cut every row added since the baseline and put back every speculative mark a merge cleared.
 	export function restoreBaseline()
-		var position = self.baseIds.count()
-
-		while position as GenericInstanceId > self.baselineCount 'eachAddedRowFromTheEnd'
-			position = position - 1
-			let id = self.idAtPosition(position as GenericInstanceId)
-			let baseId = try self.baseIds.get(position) otherwise panic("restoreBaseline: baseIds desync at {position}")
-			_ = self.index.remove(self.instanceKey(baseId, args: try self.argLists.get(position) otherwise panic("restoreBaseline: argLists desync at {position}"), shape: self.shapeAtPosition(position)))
-
-			var siblings = try self.byBase.get(baseId) otherwise panic("restoreBaseline: row {id} has no bucket under its own base")
-			let last = try siblings.pop() otherwise panic("restoreBaseline: row {id}'s bucket is empty")
-
-			if last != id 'bucketOutOfOrder'
-				panic("restoreBaseline: the last row of base {baseId}'s bucket is {last}, not {id} — buckets are appended in intern order, so the newest row is always last")
-			end 'bucketOutOfOrder'
-
-			if siblings.isEmpty() 'lastRowOfItsBase'
-				_ = self.byBase.remove(baseId)
-			end 'lastRowOfItsBase'
-		end 'eachAddedRowFromTheEnd'
-
-		self.baseIds.truncate(self.baselineCount)
-		self.argLists.truncate(self.baselineCount)
-		self.fixedSizes.truncate(self.baselineCount)
-		self.readOnlyArgs.truncate(self.baselineCount)
-		self.frozenArgs.truncate(self.baselineCount)
-		self.runtimeSized.truncate(self.baselineCount)
-		self.speculative.truncate(self.baselineCount)
+		self.cutRowsBackTo(self.baselineCount)
 
 		for id in self.mergeNamedRows 'eachNamedByAMerge'
 			try self.speculative.set(id, value: true) otherwise panic("restoreBaseline: a merge-named row {id} is below the baseline, so the column holds it")
@@ -12136,6 +12140,36 @@ export type GenericInstanceRegistry
 		self.mergeCopyDemandedRows = GenericInstanceIdArray.create(0)
 	end 'restoreBaseline'
 
+	function cutRowsBackTo(keep GenericInstanceId)
+		var position = self.baseIds.count()
+
+		while position as GenericInstanceId > keep 'eachAddedRowFromTheEnd'
+			position = position - 1
+			let id = self.idAtPosition(position as GenericInstanceId)
+			let baseId = try self.baseIds.get(position) otherwise panic("cutRowsBackTo: baseIds desync at {position}")
+			_ = self.index.remove(self.instanceKey(baseId, args: try self.argLists.get(position) otherwise panic("cutRowsBackTo: argLists desync at {position}"), shape: self.shapeAtPosition(position)))
+
+			var siblings = try self.byBase.get(baseId) otherwise panic("cutRowsBackTo: row {id} has no bucket under its own base")
+			let last = try siblings.pop() otherwise panic("cutRowsBackTo: row {id}'s bucket is empty")
+
+			if last != id 'bucketOutOfOrder'
+				panic("cutRowsBackTo: the last row of base {baseId}'s bucket is {last}, not {id} — buckets are appended in intern order, so the newest row is always last")
+			end 'bucketOutOfOrder'
+
+			if siblings.isEmpty() 'lastRowOfItsBase'
+				_ = self.byBase.remove(baseId)
+			end 'lastRowOfItsBase'
+		end 'eachAddedRowFromTheEnd'
+
+		self.baseIds.truncate(keep)
+		self.argLists.truncate(keep)
+		self.fixedSizes.truncate(keep)
+		self.readOnlyArgs.truncate(keep)
+		self.frozenArgs.truncate(keep)
+		self.runtimeSized.truncate(keep)
+		self.speculative.truncate(keep)
+	end 'cutRowsBackTo'
+
 	export function noteFingerprint(fingerprint IndexFingerprint, group String)
 		fingerprint.openGroup(group)
 		fingerprint.note("baseIds", value: self.baseIds.count() as EntryCount)
@@ -12148,6 +12182,8 @@ export type GenericInstanceRegistry
 		fingerprint.note("index", value: self.index.count())
 		fingerprint.note("byBase", value: self.byBase.count())
 		fingerprint.note("parseNamedRows", value: self.parseNamedRows.count())
+		fingerprint.note("parseNamedOrder", value: self.parseNamedOrder.count() as EntryCount)
+		fingerprint.note("parseCopyDemandedOrder", value: self.parseCopyDemandedOrder.count() as EntryCount)
 		fingerprint.note("mergeNamedRows", value: self.mergeNamedRows.count() as EntryCount)
 		fingerprint.note("copyDemanded", value: self.copyDemanded.count())
 		fingerprint.note("parseCopyDemandedRows", value: self.parseCopyDemandedRows.count())
@@ -12164,7 +12200,12 @@ export type GenericInstanceRegistry
 	end 'baseInstantiatedAtBaseline'
 
 	export function noteBaselineRowNamed(id GenericInstanceId)
+		if self.parseNamedRows.contains(id) 'alreadyNamed'
+			return
+		end 'alreadyNamed'
+
 		self.parseNamedRows.insert(id)
+		self.parseNamedOrder.push(id)
 	end 'noteBaselineRowNamed'
 
 	export function namedByThisParse(id GenericInstanceId) returns bool
@@ -12188,7 +12229,11 @@ export type GenericInstanceRegistry
 
 	export function noteCopyDemanded(id GenericInstanceId)
 		if self.parseBandOpen 'aParseIsAsking'
-			self.parseCopyDemandedRows.insert(id)
+			if not self.parseCopyDemandedRows.contains(id) 'firstAsk'
+				self.parseCopyDemandedRows.insert(id)
+				self.parseCopyDemandedOrder.push(id)
+			end 'firstAsk'
+
 			return
 		end 'aParseIsAsking'
 
@@ -12327,7 +12372,7 @@ export type GenericInstanceRegistry
 	function noteNamed(existing GenericInstanceId)
 		if self.parseBandOpen and existing < BandInstanceIdBase 'aBaselineRowNamedByAParse'
 			if self.instanceIsSpeculative(existing) 'stillAGuess'
-				self.parseNamedRows.insert(existing)
+				self.noteBaselineRowNamed(existing)
 			end 'stillAGuess'
 
 			return
@@ -12438,6 +12483,8 @@ export type GenericInstanceRegistry
 		cacheWriteGenericInstanceIdSet(writer, value: self.copyDemanded)
 		cacheWriteGenericInstanceIdSet(writer, value: self.parseCopyDemandedRows)
 		cacheWriteGenericInstanceIdArray(writer, value: self.mergeCopyDemandedRows)
+		cacheWriteGenericInstanceIdArray(writer, value: self.parseNamedOrder)
+		cacheWriteGenericInstanceIdArray(writer, value: self.parseCopyDemandedOrder)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns GenericInstanceRegistry throws LibraryCacheDamage
@@ -12457,12 +12504,14 @@ export type GenericInstanceRegistry
 		let f_copyDemanded = try cacheReadGenericInstanceIdSet(reader)
 		let f_parseCopyDemandedRows = try cacheReadGenericInstanceIdSet(reader)
 		let f_mergeCopyDemandedRows = try cacheReadGenericInstanceIdArray(reader)
+		let f_parseNamedOrder = try cacheReadGenericInstanceIdArray(reader)
+		let f_parseCopyDemandedOrder = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{baseIds: f_baseIds, argLists: f_argLists, fixedSizes: f_fixedSizes, readOnlyArgs: f_readOnlyArgs, frozenArgs: f_frozenArgs, runtimeSized: f_runtimeSized, index: f_index, byBase: f_byBase, speculative: f_speculative, baselineCount: f_baselineCount, parseBandOpen: f_parseBandOpen, parseNamedRows: f_parseNamedRows, mergeNamedRows: f_mergeNamedRows, copyDemanded: f_copyDemanded, parseCopyDemandedRows: f_parseCopyDemandedRows, mergeCopyDemandedRows: f_mergeCopyDemandedRows}
+		return Self{baseIds: f_baseIds, argLists: f_argLists, fixedSizes: f_fixedSizes, readOnlyArgs: f_readOnlyArgs, frozenArgs: f_frozenArgs, runtimeSized: f_runtimeSized, index: f_index, byBase: f_byBase, speculative: f_speculative, baselineCount: f_baselineCount, parseBandOpen: f_parseBandOpen, parseNamedRows: f_parseNamedRows, mergeNamedRows: f_mergeNamedRows, copyDemanded: f_copyDemanded, parseCopyDemandedRows: f_parseCopyDemandedRows, mergeCopyDemandedRows: f_mergeCopyDemandedRows, parseNamedOrder: f_parseNamedOrder, parseCopyDemandedOrder: f_parseCopyDemandedOrder}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize128
-		return sizeof(GenericInstanceRegistry) as CacheSize128
+	static function cacheLayoutBytes() returns CacheSize144
+		return sizeof(GenericInstanceRegistry) as CacheSize144
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -34399,7 +34448,7 @@ export type ProgramSignatures
 
 	function requireInlineRecordMemoIsWithinTheBaseline()
 		if self.settledDeclarations().inlineRecordByTypeNameId.count() as TypeNameId > self.typeNames.baselineNameCount() 'memoPastTheBaseline'
-			panic("ProgramSignatures.requireInlineRecordMemoIsWithinTheBaseline: the inline-record memo holds {self.settledDeclarations().inlineRecordByTypeNameId.count()} row(s) against an interner baseline of {self.typeNames.baselineNameCount()} — `TypeNameInterner.restoreBaseline` recycles every id above the baseline after each parse, so a memoized row above it would answer about a name the id no longer denotes")
+			panic("ProgramSignatures.requireInlineRecordMemoIsWithinTheBaseline: the inline-record memo holds {self.settledDeclarations().inlineRecordByTypeNameId.count()} row(s) against an interner baseline of {self.typeNames.baselineNameCount()} — `TypeNameInterner.rewindTo(baselineTableMark())` recycles every id above the baseline after each parse, so a memoized row above it would answer about a name the id no longer denotes")
 		end 'memoPastTheBaseline'
 	end 'requireInlineRecordMemoIsWithinTheBaseline'
 
@@ -40615,7 +40664,7 @@ export type ProgramSignatures
 	// that index and of its watermark, so "which ids are in it" is one fact rather than two.
 	//
 	// ⚠ A write past the settled baseline — a parse's own rows, or a merge's — is journaled with the entry it
-	// replaced, so `restoreJournaledWrites` puts the index back exactly.
+	// replaced, so `rewindJournaledWrites` puts the index back exactly.
 	function indexCanonicalInstanceNames()
 		while self.canonicalNamesIndexedThrough < self.rowCount() 'eachNewInstance'
 			let id = self.rowIdAt(self.canonicalNamesIndexedThrough)
@@ -44066,7 +44115,7 @@ export type ProgramSignatures
 		if self.baseline.overlaid 'overlaid'
 			self.resetOverlayTables()
 		end 'overlaid' else 'onTheIndexItself'
-			self.restoreJournaledWrites()
+			self.rewindJournaledWrites(self.baselineBandMark())
 			self.requireAtBaseline("the parse of {filePath.toString()}")
 		end 'onTheIndexItself'
 
@@ -44076,7 +44125,7 @@ export type ProgramSignatures
 	// Undo every merge since the settle, so the fold that follows redoes them from its artifacts.
 	export function restoreBaseline()
 		self.genericInstances.restoreBaseline()
-		self.restoreJournaledWrites()
+		self.rewindJournaledWrites(self.baselineBandMark())
 		self.holdsAMerge = false
 		self.requireAtBaseline("the start of a fold")
 	end 'restoreBaseline'
@@ -44098,61 +44147,94 @@ export type ProgramSignatures
 		end 'moved'
 	end 'requireAtBaseline'
 
-	function restoreJournaledWrites()
-		self.restoreCanonicalIndex()
+	module function markParseBand() returns ParseBandMark
+		return ParseBandMark.create(self.genericInstances.markParseBand(), journal: self.journal.mark(), crossFileConstantReads: self.crossFileConstantReads.count(), mintedTupleLayouts: self.mintedTupleLayouts.count(), typeNames: self.typeNames.markTable(), told: self.rowSetLog.told.order.count(), canonicalNamesIndexedThrough: self.canonicalNamesIndexedThrough, arrayByteInstance: self.arrayByteInstance, arrayByteInstanceComputed: self.arrayByteInstanceComputed, deepCloneWalkReadInstances: self.deepCloneWalkReadInstances, someRecordHoldsAnInterfaceValue: self.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: self.recordsHoldingAnInterfaceValueCounted)
+	end 'markParseBand'
 
-		for id in self.journal.compiledNameIds 'eachCompiledName'
-			_ = self.compiledInstanceNames.remove(id)
+	function baselineBandMark() returns ParseBandMark
+		return ParseBandMark.create(self.genericInstances.baselineMark(), journal: JournalMark.empty(), crossFileConstantReads: self.baseline.crossFileConstantReadCount, mintedTupleLayouts: 0, typeNames: self.typeNames.baselineTableMark(), told: 0, canonicalNamesIndexedThrough: self.baseline.canonicalNamesIndexedThrough, arrayByteInstance: self.baseline.arrayByteInstance, arrayByteInstanceComputed: self.baseline.arrayByteInstanceComputed, deepCloneWalkReadInstances: self.baseline.deepCloneWalkReadInstances, someRecordHoldsAnInterfaceValue: self.baseline.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: self.baseline.recordsHoldingAnInterfaceValueCounted)
+	end 'baselineBandMark'
+
+	module function rewindParseBand(mark ParseBandMark)
+		self.genericInstances.rewindParseBand(mark.instances)
+		self.rewindJournaledWrites(mark)
+
+		for position in mark.told upto self.rowSetLog.told.order.count() 'eachQuestionSince'
+			_ = self.rowSetLog.told.records.remove(try self.rowSetLog.told.order.get(position) otherwise panic("ProgramSignatures.rewindParseBand: told.order.get OOB at {position}"))
+		end 'eachQuestionSince'
+
+		self.rowSetLog.told.order.truncate(mark.told)
+		self.requireBandIsAt(mark)
+	end 'rewindParseBand'
+
+	function requireBandIsAt(mark ParseBandMark)
+		let now = self.markParseBand()
+		requireRewoundCount("journal", now: now.journal.total(), marked: mark.journal.total())
+		requireRewoundCount("instance rows", now: now.instances.rows, marked: mark.instances.rows)
+		requireRewoundCount("named instance rows", now: now.instances.named, marked: mark.instances.named)
+		requireRewoundCount("copy-demanded instance rows", now: now.instances.copyDemanded, marked: mark.instances.copyDemanded)
+		requireRewoundCount("crossFileConstantReads", now: now.crossFileConstantReads, marked: mark.crossFileConstantReads)
+		requireRewoundCount("mintedTupleLayouts", now: now.mintedTupleLayouts, marked: mark.mintedTupleLayouts)
+		requireRewoundCount("typeNames", now: now.typeNames, marked: mark.typeNames)
+		requireRewoundCount("row-set questions", now: now.told, marked: mark.told)
+	end 'requireBandIsAt'
+
+	function rewindJournaledWrites(mark ParseBandMark)
+		self.restoreCanonicalIndex(mark.journal.canonicalIndexWrites)
+
+		for position in mark.journal.compiledNameIds upto self.journal.compiledNameIds.count() 'eachCompiledName'
+			_ = self.compiledInstanceNames.remove(try self.journal.compiledNameIds.get(position) otherwise panic("ProgramSignatures.rewindJournaledWrites: compiledNameIds.get OOB at {position}"))
 		end 'eachCompiledName'
 
-		for id in self.journal.canonicalNameIds 'eachCanonicalName'
-			_ = self.canonicalInstanceNames.remove(id)
+		for position in mark.journal.canonicalNameIds upto self.journal.canonicalNameIds.count() 'eachCanonicalName'
+			_ = self.canonicalInstanceNames.remove(try self.journal.canonicalNameIds.get(position) otherwise panic("ProgramSignatures.rewindJournaledWrites: canonicalNameIds.get OOB at {position}"))
 		end 'eachCanonicalName'
 
-		for id in self.journal.originIds 'eachOrigin'
-			_ = self.substitutedInstanceOrigins.remove(id)
+		for position in mark.journal.originIds upto self.journal.originIds.count() 'eachOrigin'
+			_ = self.substitutedInstanceOrigins.remove(try self.journal.originIds.get(position) otherwise panic("ProgramSignatures.rewindJournaledWrites: originIds.get OOB at {position}"))
 		end 'eachOrigin'
 
-		self.restoreTupleAliases()
+		self.restoreTupleAliases(mark.journal.tupleAliasWrites)
 
-		for name in self.journal.tupleNames 'eachTuple'
+		for position in mark.journal.tupleNames upto self.journal.tupleNames.count() 'eachTuple'
+			let name = try self.journal.tupleNames.get(position) otherwise panic("ProgramSignatures.rewindJournaledWrites: tupleNames.get OOB at {position}")
 			_ = self.structSlots.remove(name)
 			_ = self.tupleElementTokenOwners.remove(tupleElementTokenFor(name))
 			_ = self.tupleElementTokens.remove(name)
 		end 'eachTuple'
 
-		self.mintedTupleLayouts.clear()
+		self.mintedTupleLayouts.truncate(mark.mintedTupleLayouts)
 
-		for token in self.journal.separatorBearingTokens 'eachSeparatorBearingToken'
-			_ = self.tupleElementTokenOwners.remove(token)
+		for position in mark.journal.separatorBearingTokens upto self.journal.separatorBearingTokens.count() 'eachSeparatorBearingToken'
+			_ = self.tupleElementTokenOwners.remove(try self.journal.separatorBearingTokens.get(position) otherwise panic("ProgramSignatures.rewindJournaledWrites: separatorBearingTokens.get OOB at {position}"))
 		end 'eachSeparatorBearingToken'
 
-		for name in self.journal.canonicalTupleNames 'eachCanonicalTuple'
-			_ = self.tupleCanonicalNames.remove(name)
+		for position in mark.journal.canonicalTupleNames upto self.journal.canonicalTupleNames.count() 'eachCanonicalTuple'
+			_ = self.tupleCanonicalNames.remove(try self.journal.canonicalTupleNames.get(position) otherwise panic("ProgramSignatures.rewindJournaledWrites: canonicalTupleNames.get OOB at {position}"))
 		end 'eachCanonicalTuple'
 
-		for name in self.journal.deepCloneNames 'eachDeepCloneAnswer'
-			_ = self.deepCloneAnswers.remove(name)
+		for position in mark.journal.deepCloneNames upto self.journal.deepCloneNames.count() 'eachDeepCloneAnswer'
+			_ = self.deepCloneAnswers.remove(try self.journal.deepCloneNames.get(position) otherwise panic("ProgramSignatures.rewindJournaledWrites: deepCloneNames.get OOB at {position}"))
 		end 'eachDeepCloneAnswer'
 
-		for name in self.journal.soleWalkNames 'eachSoleWalkAnswer'
-			_ = self.soleWalkAnswers.remove(name)
+		for position in mark.journal.soleWalkNames upto self.journal.soleWalkNames.count() 'eachSoleWalkAnswer'
+			_ = self.soleWalkAnswers.remove(try self.journal.soleWalkNames.get(position) otherwise panic("ProgramSignatures.rewindJournaledWrites: soleWalkNames.get OOB at {position}"))
 		end 'eachSoleWalkAnswer'
 
-		for name in self.journal.shareWalkNames 'eachShareWalkAnswer'
-			_ = self.shareWalkAnswers.remove(name)
+		for position in mark.journal.shareWalkNames upto self.journal.shareWalkNames.count() 'eachShareWalkAnswer'
+			_ = self.shareWalkAnswers.remove(try self.journal.shareWalkNames.get(position) otherwise panic("ProgramSignatures.rewindJournaledWrites: shareWalkNames.get OOB at {position}"))
 		end 'eachShareWalkAnswer'
 
-		for name in self.journal.interfaceCloneNames 'eachInterfaceCloneAnswer'
-			_ = self.interfaceCloneAnswers.remove(name)
+		for position in mark.journal.interfaceCloneNames upto self.journal.interfaceCloneNames.count() 'eachInterfaceCloneAnswer'
+			_ = self.interfaceCloneAnswers.remove(try self.journal.interfaceCloneNames.get(position) otherwise panic("ProgramSignatures.rewindJournaledWrites: interfaceCloneNames.get OOB at {position}"))
 		end 'eachInterfaceCloneAnswer'
 
-		for name in self.journal.uniqueTypeNames 'eachUniqueTypeAnswer'
-			_ = self.uniqueTypeAnswers.remove(name)
+		for position in mark.journal.uniqueTypeNames upto self.journal.uniqueTypeNames.count() 'eachUniqueTypeAnswer'
+			_ = self.uniqueTypeAnswers.remove(try self.journal.uniqueTypeNames.get(position) otherwise panic("ProgramSignatures.rewindJournaledWrites: uniqueTypeNames.get OOB at {position}"))
 		end 'eachUniqueTypeAnswer'
 
-		self.restoreScalarsToBaseline()
-	end 'restoreJournaledWrites'
+		self.restoreScalarsTo(mark)
+	end 'rewindJournaledWrites'
 
 	function resetOverlayTables()
 		self.structSlots = StructSlotMap.create()
@@ -44171,26 +44253,26 @@ export type ProgramSignatures
 		self.deepCloneAnswers = DeepCloneAnswerMap.create()
 		self.soleWalkAnswers = DeepCloneAnswerMap.create()
 		self.shareWalkAnswers = DeepCloneAnswerMap.create()
-		self.restoreScalarsToBaseline()
+		self.restoreScalarsTo(self.baselineBandMark())
 	end 'resetOverlayTables'
 
-	function restoreScalarsToBaseline()
-		self.crossFileConstantReads.truncate(self.baseline.crossFileConstantReadCount)
-		self.canonicalNamesIndexedThrough = self.baseline.canonicalNamesIndexedThrough
-		self.arrayByteInstance = self.baseline.arrayByteInstance
-		self.arrayByteInstanceComputed = self.baseline.arrayByteInstanceComputed
-		self.deepCloneWalkReadInstances = self.baseline.deepCloneWalkReadInstances
-		self.someRecordHoldsAnInterfaceValue = self.baseline.someRecordHoldsAnInterfaceValue
-		self.recordsHoldingAnInterfaceValueCounted = self.baseline.recordsHoldingAnInterfaceValueCounted
-		self.typeNames.restoreBaseline()
-		self.journal = IndexJournal.create()
-	end 'restoreScalarsToBaseline'
+	function restoreScalarsTo(mark ParseBandMark)
+		self.crossFileConstantReads.truncate(mark.crossFileConstantReads)
+		self.canonicalNamesIndexedThrough = mark.canonicalNamesIndexedThrough
+		self.arrayByteInstance = mark.arrayByteInstance
+		self.arrayByteInstanceComputed = mark.arrayByteInstanceComputed
+		self.deepCloneWalkReadInstances = mark.deepCloneWalkReadInstances
+		self.someRecordHoldsAnInterfaceValue = mark.someRecordHoldsAnInterfaceValue
+		self.recordsHoldingAnInterfaceValueCounted = mark.recordsHoldingAnInterfaceValueCounted
+		self.typeNames.rewindTo(mark.typeNames)
+		self.journal.truncateTo(mark.journal)
+	end 'restoreScalarsTo'
 
 	// In reverse, so a name written twice ends at the value it held before the first write.
-	function restoreCanonicalIndex()
+	function restoreCanonicalIndex(first ElementIndex)
 		var position = self.journal.canonicalIndexWrites.count()
 
-		while position > 0 'eachWriteFromTheEnd'
+		while position > first 'eachWriteFromTheEnd'
 			position = position - 1
 			let write = try self.journal.canonicalIndexWrites.get(position) otherwise panic("ProgramSignatures.restoreCanonicalIndex: canonicalIndexWrites.get OOB at {position}")
 
@@ -44213,10 +44295,10 @@ export type ProgramSignatures
 	end 'restoreTupleAliasClaimant'
 
 	// In reverse, for `restoreCanonicalIndex`'s reason.
-	function restoreTupleAliases()
+	function restoreTupleAliases(first ElementIndex)
 		var position = self.journal.tupleAliasWrites.count()
 
-		while position > 0 'eachWriteFromTheEnd'
+		while position > first 'eachWriteFromTheEnd'
 			position = position - 1
 			let write = try self.journal.tupleAliasWrites.get(position) otherwise panic("ProgramSignatures.restoreTupleAliases: tupleAliasWrites.get OOB at {position}")
 
@@ -45290,6 +45372,26 @@ type IndexJournal
 		self.uniqueTypeNames.push(name)
 	end 'noteUniqueTypeAnswer'
 
+	function mark() returns JournalMark
+		return JournalMark.create(self.tupleNames.count(), separatorBearingTokens: self.separatorBearingTokens.count(), canonicalTupleNames: self.canonicalTupleNames.count(), compiledNameIds: self.compiledNameIds.count(), canonicalNameIds: self.canonicalNameIds.count(), canonicalIndexWrites: self.canonicalIndexWrites.count(), originIds: self.originIds.count(), tupleAliasWrites: self.tupleAliasWrites.count(), deepCloneNames: self.deepCloneNames.count(), interfaceCloneNames: self.interfaceCloneNames.count(), uniqueTypeNames: self.uniqueTypeNames.count(), soleWalkNames: self.soleWalkNames.count(), shareWalkNames: self.shareWalkNames.count())
+	end 'mark'
+
+	function truncateTo(mark JournalMark)
+		self.tupleNames.truncate(mark.tupleNames)
+		self.separatorBearingTokens.truncate(mark.separatorBearingTokens)
+		self.canonicalTupleNames.truncate(mark.canonicalTupleNames)
+		self.compiledNameIds.truncate(mark.compiledNameIds)
+		self.canonicalNameIds.truncate(mark.canonicalNameIds)
+		self.canonicalIndexWrites.truncate(mark.canonicalIndexWrites)
+		self.originIds.truncate(mark.originIds)
+		self.tupleAliasWrites.truncate(mark.tupleAliasWrites)
+		self.deepCloneNames.truncate(mark.deepCloneNames)
+		self.interfaceCloneNames.truncate(mark.interfaceCloneNames)
+		self.uniqueTypeNames.truncate(mark.uniqueTypeNames)
+		self.soleWalkNames.truncate(mark.soleWalkNames)
+		self.shareWalkNames.truncate(mark.shareWalkNames)
+	end 'truncateTo'
+
 	function noteFingerprint(fingerprint IndexFingerprint, group String)
 		fingerprint.openGroup(group)
 		fingerprint.note("tupleNames", value: self.tupleNames.count() as EntryCount)
@@ -45308,6 +45410,63 @@ type IndexJournal
 		fingerprint.closeGroup()
 	end 'noteFingerprint'
 end 'IndexJournal'
+
+module type JournalMark
+	module let tupleNames as ElementIndex
+	module let separatorBearingTokens as ElementIndex
+	module let canonicalTupleNames as ElementIndex
+	module let compiledNameIds as ElementIndex
+	module let canonicalNameIds as ElementIndex
+	module let canonicalIndexWrites as ElementIndex
+	module let originIds as ElementIndex
+	module let tupleAliasWrites as ElementIndex
+	module let deepCloneNames as ElementIndex
+	module let interfaceCloneNames as ElementIndex
+	module let uniqueTypeNames as ElementIndex
+	module let soleWalkNames as ElementIndex
+	module let shareWalkNames as ElementIndex
+
+	module static function create(tupleNames ElementIndex, separatorBearingTokens ElementIndex, canonicalTupleNames ElementIndex, compiledNameIds ElementIndex, canonicalNameIds ElementIndex, canonicalIndexWrites ElementIndex, originIds ElementIndex, tupleAliasWrites ElementIndex, deepCloneNames ElementIndex, interfaceCloneNames ElementIndex, uniqueTypeNames ElementIndex, soleWalkNames ElementIndex, shareWalkNames ElementIndex) returns JournalMark
+		return Self{tupleNames: tupleNames, separatorBearingTokens: separatorBearingTokens, canonicalTupleNames: canonicalTupleNames, compiledNameIds: compiledNameIds, canonicalNameIds: canonicalNameIds, canonicalIndexWrites: canonicalIndexWrites, originIds: originIds, tupleAliasWrites: tupleAliasWrites, deepCloneNames: deepCloneNames, interfaceCloneNames: interfaceCloneNames, uniqueTypeNames: uniqueTypeNames, soleWalkNames: soleWalkNames, shareWalkNames: shareWalkNames}
+	end 'create'
+
+	module static function empty() returns JournalMark
+		return Self.create(0, separatorBearingTokens: 0, canonicalTupleNames: 0, compiledNameIds: 0, canonicalNameIds: 0, canonicalIndexWrites: 0, originIds: 0, tupleAliasWrites: 0, deepCloneNames: 0, interfaceCloneNames: 0, uniqueTypeNames: 0, soleWalkNames: 0, shareWalkNames: 0)
+	end 'empty'
+
+	module function total() returns ElementIndex
+		return self.tupleNames + self.separatorBearingTokens + self.canonicalTupleNames + self.compiledNameIds + self.canonicalNameIds + self.canonicalIndexWrites + self.originIds + self.tupleAliasWrites + self.deepCloneNames + self.interfaceCloneNames + self.uniqueTypeNames + self.soleWalkNames + self.shareWalkNames
+	end 'total'
+end 'JournalMark'
+
+module type InstanceBandMark
+	module let rows as GenericInstanceId
+	module let named as ElementIndex
+	module let copyDemanded as ElementIndex
+
+	module static function create(rows GenericInstanceId, named ElementIndex, copyDemanded ElementIndex) returns InstanceBandMark
+		return Self{rows: rows, named: named, copyDemanded: copyDemanded}
+	end 'create'
+end 'InstanceBandMark'
+
+module type ParseBandMark
+	module let instances as InstanceBandMark
+	module let journal as JournalMark
+	module let crossFileConstantReads as ElementIndex
+	module let mintedTupleLayouts as ElementIndex
+	module let typeNames as NameId
+	module let told as ElementIndex
+	module let canonicalNamesIndexedThrough as GenericInstanceId
+	module let arrayByteInstance as GenericInstanceId
+	module let arrayByteInstanceComputed as bool
+	module let deepCloneWalkReadInstances as bool
+	module let someRecordHoldsAnInterfaceValue as bool
+	module let recordsHoldingAnInterfaceValueCounted as bool
+
+	module static function create(instances InstanceBandMark, journal JournalMark, crossFileConstantReads ElementIndex, mintedTupleLayouts ElementIndex, typeNames NameId, told ElementIndex, canonicalNamesIndexedThrough GenericInstanceId, arrayByteInstance GenericInstanceId, arrayByteInstanceComputed bool, deepCloneWalkReadInstances bool, someRecordHoldsAnInterfaceValue bool, recordsHoldingAnInterfaceValueCounted bool) returns ParseBandMark
+		return Self{instances: instances, journal: journal, crossFileConstantReads: crossFileConstantReads, mintedTupleLayouts: mintedTupleLayouts, typeNames: typeNames, told: told, canonicalNamesIndexedThrough: canonicalNamesIndexedThrough, arrayByteInstance: arrayByteInstance, arrayByteInstanceComputed: arrayByteInstanceComputed, deepCloneWalkReadInstances: deepCloneWalkReadInstances, someRecordHoldsAnInterfaceValue: someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: recordsHoldingAnInterfaceValueCounted}
+	end 'create'
+end 'ParseBandMark'
 
 // One instance row a parse minted, in the parse's own id space: `baseId` and every type-name id inside
 // `args` index the signature index's interner, past its baseline for a name the parse interned itself

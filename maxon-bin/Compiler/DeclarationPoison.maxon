@@ -53,6 +53,32 @@ export type PendingConsequence
 			handlerBody(message) gives poison.holdsABackedAbandonedBodyNamed(message)
 		end 'consequence'
 	end 'isExplainedBy'
+
+	function namesRead() returns NameRoster
+		var names = NameRoster.create(0)
+
+		match self.consequence 'consequence'
+			unrelated then break
+			unknownType(name) then addRefusalKeys(name, into: names)
+			subject(subjects) then addEachRefusalKeys(subjects, into: names)
+			handlerBody(message) then names.push(message)
+		end 'consequence'
+
+		return names
+	end 'namesRead'
+
+	function qualifiersRead() returns NameRoster
+		var qualifiers = NameRoster.create(0)
+
+		match self.consequence 'consequence'
+			subject(subjects) then addExtensionQualifiers(subjects, into: qualifiers)
+			unrelated or
+			unknownType or
+			handlerBody then break
+		end 'consequence'
+
+		return qualifiers
+	end 'qualifiersRead'
 end 'PendingConsequence'
 
 type PoisonedDeclaration
@@ -109,9 +135,10 @@ export type DeclarationPoison
 	var extended as PoisonedDeclarationsByName
 	var heldConsequences as PendingConsequenceArray
 	var deferredConsequences as PendingConsequenceArray
+	var backedNames as BackedNameArray
 
 	export static function create() returns Self
-		return Self{files: FailedFileSet.create(), backedFiles: FailedFileSet.create(), declared: PoisonedDeclarationsByName.create(), abandonedBodies: PoisonedDeclarationsByName.create(), duplicated: DuplicatedFunctionSet.create(), lostHeads: LostHeadNameSet.create(), unreadable: false, unreadableTypeUniverse: false, extended: PoisonedDeclarationsByName.create(), heldConsequences: PendingConsequenceArray.create(0), deferredConsequences: PendingConsequenceArray.create(0)}
+		return Self{files: FailedFileSet.create(), backedFiles: FailedFileSet.create(), declared: PoisonedDeclarationsByName.create(), abandonedBodies: PoisonedDeclarationsByName.create(), duplicated: DuplicatedFunctionSet.create(), lostHeads: LostHeadNameSet.create(), unreadable: false, unreadableTypeUniverse: false, extended: PoisonedDeclarationsByName.create(), heldConsequences: PendingConsequenceArray.create(0), deferredConsequences: PendingConsequenceArray.create(0), backedNames: BackedNameArray.create(0)}
 	end 'create'
 
 	export function snapshot() returns Self
@@ -134,6 +161,7 @@ export type DeclarationPoison
 		self.extended = copiedPoisonedDeclarations(source.extended)
 		self.heldConsequences = copiedPendingConsequences(source.heldConsequences)
 		self.deferredConsequences = copiedPendingConsequences(source.deferredConsequences)
+		self.backedNames = copiedBackedNames(source.backedNames)
 	end 'restore'
 
 	export function holdConsequence(consequence PendingConsequence)
@@ -176,7 +204,7 @@ export type DeclarationPoison
 
 	export function refusesAnExtensionReaching(qualifier ByteArray, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted) returns bool
 		for (target, held) in self.extended 'eachExtendedType'
-			if not (target.equals(qualifier) or signatures.typeImplementsInterface(qualifier, interfaceName: target)) 'notReachedByIt'
+			if not extensionReaches(target, qualifier: qualifier, signatures: signatures) 'notReachedByIt'
 				continue
 			end 'notReachedByIt'
 
@@ -196,11 +224,7 @@ export type DeclarationPoison
 
 	export function refusesAnExtensionQualifying(names NameRoster, reader FilePath, signatures ProgramSignatures) returns bool
 		for name in names 'eachName'
-			let qualifier = qualifyingTypeName(name)
-
-			if qualifier.count() == name.count() 'notQualified'
-				continue
-			end 'notQualified'
+			let qualifier = try extensionQualifierOf(name) otherwise continue
 
 			if self.refusesAnExtensionReaching(qualifier, reader: reader, signatures: signatures, counting: PoisonEntriesCounted.backedEntries) 'anExtensionOfTheQualifierIsRefused'
 				return true
@@ -251,7 +275,7 @@ export type DeclarationPoison
 		return self.unreadableTypeUniverse
 	end 'typeUniverseIsUnreadable'
 
-	export function noteFailedFile(path FilePath, tokens TokenArray, backing PoisonBacking)
+	export function noteFailedFile(path FilePath, heads DeclarationHeadIndex, backing PoisonBacking)
 		if self.backedFiles.contains(path) or (backing == PoisonBacking.provisional and self.files.contains(path)) 'alreadyNoted'
 			return
 		end 'alreadyNoted'
@@ -262,17 +286,23 @@ export type DeclarationPoison
 			self.backedFiles.insert(path)
 		end 'aBackedFailure'
 
-		for position in 0 upto tokens.count() 'eachToken'
-			view token = try tokens.get(position) otherwise panic("DeclarationPoison.noteFailedFile: tokens.get OOB at {position} below count {tokens.count()}")
-
-			if token.column == DeclarationHeadColumn 'aDeclarationHead'
-				self.noteDeclarationAt(path, tokens: tokens, position: position, backing: backing)
-			end 'aDeclarationHead'
-		end 'eachToken'
+		for position in 0 upto heads.headCount() 'eachHead'
+			match heads.readingAt(position) 'reading'
+				region(found) then self.noteDeclaredRegion(found, file: path, backing: backing)
+				opensNothing then continue
+			end 'reading'
+		end 'eachHead'
 	end 'noteFailedFile'
 
-	export function noteRefusedDeclarationAt(path FilePath, line LineNumber, tokens TokenArray, backing PoisonBacking)
-		let region = try enclosingRegionAt(tokens, line: line) otherwise return
+	function noteDeclaredRegion(region EnclosingRegion, file FilePath, backing PoisonBacking)
+		match region 'region'
+			declaration(head) then self.noteHead(head, file: file, backing: backing)
+			lostHead then return
+		end 'region'
+	end 'noteDeclaredRegion'
+
+	export function noteRefusedDeclarationAt(path FilePath, line LineNumber, heads DeclarationHeadIndex, backing PoisonBacking)
+		let region = try heads.regionAt(line) otherwise return
 
 		match region 'region'
 			declaration(enclosing) then self.noteHead(enclosing, file: path, backing: backing)
@@ -287,22 +317,40 @@ export type DeclarationPoison
 		return self.lostHeads.contains(name)
 	end 'holdsALostHeadNamed'
 
-	export function noteAbandonedBodyAt(path FilePath, line LineNumber, tokens TokenArray, backing PoisonBacking)
-		let region = try enclosingRegionAt(tokens, line: line) otherwise return
+	export function noteAbandonedBodyAt(path FilePath, line LineNumber, heads DeclarationHeadIndex, backing PoisonBacking)
+		let region = try heads.regionAt(line) otherwise return
 
 		match region 'region'
-			declaration(enclosing) then self.noteAbandonedBodyUnder(enclosing, path: path, line: line, tokens: tokens, backing: backing)
+			declaration(enclosing) then self.noteAbandonedBodyUnder(enclosing, path: path, line: line, heads: heads, backing: backing)
 			lostHead then return
 		end 'region'
 	end 'noteAbandonedBodyAt'
 
-	function noteAbandonedBodyUnder(enclosing DeclarationHead, path FilePath, line LineNumber, tokens TokenArray, backing PoisonBacking)
-		fileHeadUnder(self.abandonedBodies, head: enclosing, file: path, backing: backing)
+	function noteAbandonedBodyUnder(enclosing DeclarationHead, path FilePath, line LineNumber, heads DeclarationHeadIndex, backing PoisonBacking)
+		self.fileAbandonedBody(enclosing, file: path, backing: backing)
 
-		let member = try enclosingMemberAt(tokens, line: line) otherwise return
+		let member = try heads.memberAt(line) otherwise return
 		let message = DeclarationHead.create(qualifiedMethodName(enclosing.name, methodName: member), reach: enclosing.reach, nominal: false, extendsAType: false)
-		fileHeadUnder(self.abandonedBodies, head: message, file: path, backing: backing)
+		self.fileAbandonedBody(message, file: path, backing: backing)
 	end 'noteAbandonedBodyUnder'
+
+	function fileAbandonedBody(head DeclarationHead, file FilePath, backing PoisonBacking)
+		fileHeadUnder(self.abandonedBodies, head: head, file: file, backing: backing)
+		self.noteBacked(head, backing: backing)
+	end 'fileAbandonedBody'
+
+	function noteBacked(head DeclarationHead, backing PoisonBacking)
+		if backing == PoisonBacking.backed 'aNameNowExplainsMore'
+			self.backedNames.push(BackedName.create(head.name, extendsAType: head.extendsAType))
+		end 'aNameNowExplainsMore'
+	end 'noteBacked'
+
+	module function takeBackedNames() returns BackedNameArray
+		var taken = self.backedNames
+		self.backedNames = BackedNameArray.create(0)
+
+		return taken
+	end 'takeBackedNames'
 
 	export function holdsABackedAbandonedBodyNamed(qualifiedName ByteArray) returns bool
 		let held = try self.abandonedBodies.get(qualifiedName) otherwise return false
@@ -316,17 +364,13 @@ export type DeclarationPoison
 		return false
 	end 'holdsABackedAbandonedBodyNamed'
 
-	function noteDeclarationAt(path FilePath, tokens TokenArray, position ElementIndex, backing PoisonBacking)
-		let head = try declarationHeadAt(tokens, position: position) otherwise return
-		self.noteHead(head, file: path, backing: backing)
-	end 'noteDeclarationAt'
-
 	function noteHead(head DeclarationHead, file FilePath, backing PoisonBacking)
 		if head.extendsAType 'anExtensionReachesItsTarget'
 			fileHeadUnder(self.extended, head: head, file: file, backing: backing)
 		end 'anExtensionReachesItsTarget'
 
 		fileHeadUnder(self.declared, head: head, file: file, backing: backing)
+		self.noteBacked(head, backing: backing)
 	end 'noteHead'
 
 	export function fileFailed(path FilePath) returns bool
@@ -376,14 +420,13 @@ export type DeclarationPoison
 	end 'refusesAnyPartOfFrom'
 
 	export function refusesAPartOfFrom(callee ByteArray, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted) returns bool
-		if self.refusesANamedFrom(callee, reader: reader, signatures: signatures, counting: counting, within: DeclaredWithin.anywhere) or self.refusesANamedFrom(qualifyingTypeName(callee), reader: reader, signatures: signatures, counting: counting, within: DeclaredWithin.anywhere) 'declaredUnderItsSpelling'
-			return true
-		end 'declaredUnderItsSpelling'
+		for key in refusalKeysOf(callee) 'eachKey'
+			if self.refusesANamedFrom(key.spelling(), reader: reader, signatures: signatures, counting: counting, within: key.scope()) 'aKeyIsRefused'
+				return true
+			end 'aKeyIsRefused'
+		end 'eachKey'
 
-		return match splitQualifiedName(callee) 'shape'
-			parts(prefix, member) gives self.refusesANamedFrom(member, reader: reader, signatures: signatures, counting: counting, within: DeclaredWithin.namespace(prefix))
-			notQualified gives false
-		end 'shape'
+		return false
 	end 'refusesAPartOfFrom'
 
 	function refusesANamedFrom(name ByteArray, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted, within DeclaredWithin) returns bool
@@ -406,6 +449,351 @@ export type DeclarationPoison
 		return false
 	end 'refusesANamedFrom'
 end 'DeclarationPoison'
+
+module type BackedName
+	let name as ByteArray
+	let extendsAType as bool
+
+	static function create(name ByteArray, extendsAType bool) returns BackedName
+		return Self{name: name, extendsAType: extendsAType}
+	end 'create'
+
+	function spelling() returns ByteArray
+		return self.name
+	end 'spelling'
+
+	function isAnExtension() returns bool
+		return self.extendsAType
+	end 'isAnExtension'
+end 'BackedName'
+
+module typealias BackedNameArray = Array with BackedName
+typealias ConsequencePositionArray = Array with ElementIndex
+typealias ConsequencePositionsByName = Map with (ByteArray, ConsequencePositionArray)
+
+// Files each held consequence under the poison names `isExplainedBy` tests, derived by the same
+// `refusalKeysOf`, `extensionQualifierOf` and `extensionReaches` rules. A name a predicate reads
+// that is not a key here never wakes its consequence, which then stays held though a backed refusal
+// explains it.
+module type ConsequenceWorklist
+	var byName as ConsequencePositionsByName
+	var byQualifier as ConsequencePositionsByName
+	var queue as ConsequencePositionArray
+	var queued as FixedBoolArray
+	var next as ElementIndex
+
+	module static function over(held PendingConsequenceArray) returns ConsequenceWorklist
+		var byName = ConsequencePositionsByName.create()
+		var byQualifier = ConsequencePositionsByName.create()
+		var queue = ConsequencePositionArray.create(held.count(), zeroed: false)
+		var queued = FixedBoolArray.create(held.count())
+
+		for position in 0 upto held.count() 'eachHeld'
+			view consequence = try held.get(position) otherwise panic("ConsequenceWorklist.over: held.get OOB at {position} below count {held.count()}")
+
+			for name in consequence.namesRead() 'eachNameRead'
+				filePositionUnder(byName, name: name, position: position)
+			end 'eachNameRead'
+
+			for qualifier in consequence.qualifiersRead() 'eachQualifierRead'
+				filePositionUnder(byQualifier, name: qualifier, position: position)
+			end 'eachQualifierRead'
+
+			queue.push(position)
+			try queued.set(position, value: true) otherwise panic("ConsequenceWorklist.over: queued.set OOB at {position} below count {queued.count()}")
+		end 'eachHeld'
+
+		return Self{byName: byName, byQualifier: byQualifier, queue: queue, queued: queued, next: 0}
+	end 'over'
+
+	module function hasNext() returns bool
+		return self.next < self.queue.count()
+	end 'hasNext'
+
+	module function takeNext() returns ElementIndex
+		let position = try self.queue.get(self.next) otherwise panic("ConsequenceWorklist.takeNext: queue.get OOB at {self.next} below count {self.queue.count()}")
+		self.next = self.next + 1
+		try self.queued.set(position, value: false) otherwise panic("ConsequenceWorklist.takeNext: queued.set OOB at {position} below count {self.queued.count()}")
+
+		return position
+	end 'takeNext'
+
+	module function wake(backed BackedNameArray, signatures ProgramSignatures, explained FixedBoolArray)
+		for name in backed 'eachBackedName'
+			if let positions = try self.byName.get(name.spelling()) 'someReadsTheName'
+				self.enqueueUnexplained(positions, explained: explained)
+			end 'someReadsTheName'
+
+			if name.isAnExtension() 'anExtensionWasBacked'
+				self.wakeSubjectsReachedBy(name.spelling(), signatures: signatures, explained: explained)
+			end 'anExtensionWasBacked'
+		end 'eachBackedName'
+	end 'wake'
+
+	function wakeSubjectsReachedBy(target ByteArray, signatures ProgramSignatures, explained FixedBoolArray)
+		for (qualifier, positions) in self.byQualifier 'eachQualifier'
+			if extensionReaches(target, qualifier: qualifier, signatures: signatures) 'theExtensionReachesIt'
+				self.enqueueUnexplained(positions, explained: explained)
+			end 'theExtensionReachesIt'
+		end 'eachQualifier'
+	end 'wakeSubjectsReachedBy'
+
+	function enqueueUnexplained(positions ConsequencePositionArray, explained FixedBoolArray)
+		for position in positions 'eachPosition'
+			let settled = try explained.get(position) otherwise panic("ConsequenceWorklist.enqueueUnexplained: explained.get OOB at {position} below count {explained.count()}")
+			let waiting = try self.queued.get(position) otherwise panic("ConsequenceWorklist.enqueueUnexplained: queued.get OOB at {position} below count {self.queued.count()}")
+
+			if settled or waiting 'nothingToEvaluate'
+				continue
+			end 'nothingToEvaluate'
+
+			self.queue.push(position)
+			try self.queued.set(position, value: true) otherwise panic("ConsequenceWorklist.enqueueUnexplained: queued.set OOB at {position} below count {self.queued.count()}")
+		end 'eachPosition'
+	end 'enqueueUnexplained'
+end 'ConsequenceWorklist'
+
+function filePositionUnder(table ConsequencePositionsByName, name ByteArray, position ElementIndex)
+	var held = try table.get(name) otherwise ConsequencePositionArray.create(0)
+	held.push(position)
+	table.upsert(name, value: held)
+end 'filePositionUnder'
+
+type RefusalKey
+	let name as ByteArray
+	let within as DeclaredWithin
+
+	static function create(name ByteArray, within DeclaredWithin) returns RefusalKey
+		return Self{name: name, within: within}
+	end 'create'
+
+	function spelling() returns ByteArray
+		return self.name
+	end 'spelling'
+
+	function scope() returns DeclaredWithin
+		return self.within
+	end 'scope'
+end 'RefusalKey'
+
+typealias RefusalKeyArray = Array with RefusalKey
+
+function refusalKeysOf(callee ByteArray) returns RefusalKeyArray
+	var keys = RefusalKeyArray.create(3, zeroed: false)
+	keys.push(RefusalKey.create(callee, within: DeclaredWithin.anywhere))
+	keys.push(RefusalKey.create(qualifyingTypeName(callee), within: DeclaredWithin.anywhere))
+
+	match splitQualifiedName(callee) 'shape'
+		parts(prefix, member) then keys.push(RefusalKey.create(member, within: DeclaredWithin.namespace(prefix)))
+		notQualified then break
+	end 'shape'
+
+	return keys
+end 'refusalKeysOf'
+
+function extensionQualifierOf(name ByteArray) returns ByteArray throws AbsentError
+	let qualifier = qualifyingTypeName(name)
+
+	if qualifier.count() == name.count() 'notQualified'
+		throw AbsentError.absent
+	end 'notQualified'
+
+	return qualifier
+end 'extensionQualifierOf'
+
+function extensionReaches(target ByteArray, qualifier ByteArray, signatures ProgramSignatures) returns bool
+	return target.equals(qualifier) or signatures.typeImplementsInterface(qualifier, interfaceName: target)
+end 'extensionReaches'
+
+function addRefusalKeys(callee ByteArray, into NameRoster)
+	for key in refusalKeysOf(callee) 'eachKey'
+		into.push(key.spelling())
+	end 'eachKey'
+end 'addRefusalKeys'
+
+function addEachRefusalKeys(callees NameRoster, into NameRoster)
+	for callee in callees 'eachCallee'
+		addRefusalKeys(callee, into: into)
+	end 'eachCallee'
+end 'addEachRefusalKeys'
+
+function addExtensionQualifiers(names NameRoster, into NameRoster)
+	for name in names 'eachName'
+		let qualifier = try extensionQualifierOf(name) otherwise continue
+		into.push(qualifier)
+	end 'eachName'
+end 'addExtensionQualifiers'
+
+union HeadReading
+	region(found EnclosingRegion)
+	opensNothing
+end 'HeadReading'
+
+typealias HeadReadingArray = Array with HeadReading
+typealias LineKeyArray = Array with LineKey
+
+type LineKey
+	let line as LineNumber
+	let ordinal as ElementIndex
+
+	static function create(line LineNumber, ordinal ElementIndex) returns LineKey
+		return Self{line: line, ordinal: ordinal}
+	end 'create'
+
+	function isAfter(other LineNumber) returns bool
+		return self.line > other
+	end 'isAfter'
+
+	function position() returns ElementIndex
+		return self.ordinal
+	end 'position'
+
+	function startsBefore(other LineKey) returns bool
+		return self.line < other.line
+	end 'startsBefore'
+
+	function compared(other LineKey) returns Ordering
+		if self.line != other.line 'differentLines'
+			return self.line.compare(other.line)
+		end 'differentLines'
+
+		return self.ordinal.compare(other.ordinal)
+	end 'compared'
+end 'LineKey'
+
+// A stream's lines need not ascend (`MAXON_SOURCE_ORDER=reversed` keeps the original line numbers),
+// so `seal` sorts by line. A tie keeps stream order, so of two keys on one line the later one
+// answers.
+type LineOrder
+	var keys as LineKeyArray
+	var ascending as bool
+
+	static function create() returns LineOrder
+		return Self{keys: LineKeyArray.create(0), ascending: true}
+	end 'create'
+
+	function add(line LineNumber)
+		if self.ascending and self.keys.count() > 0 'mayBreakTheOrder'
+			let last = try self.keys.get(self.keys.count() - 1) otherwise panic("LineOrder.add: keys.get OOB at {self.keys.count() - 1} below count {self.keys.count()}")
+
+			if last.isAfter(line) 'outOfOrder'
+				self.ascending = false
+			end 'outOfOrder'
+		end 'mayBreakTheOrder'
+
+		self.keys.push(LineKey.create(line, ordinal: self.keys.count()))
+	end 'add'
+
+	function seal()
+		if self.ascending 'alreadyOrdered'
+			return
+		end 'alreadyOrdered'
+
+		self.keys.sortBy(function(left LineKey, right LineKey) gives left.compared(right))
+		self.ascending = true
+	end 'seal'
+
+	function lastAtOrBefore(line LineNumber) returns LineKey throws AbsentError
+		var low = 0 as Count
+		var high = self.keys.count()
+
+		while low < high 'search'
+			let middle = low + ((high - low) shr 1)
+			let key = try self.keys.get(middle) otherwise panic("LineOrder.lastAtOrBefore: keys.get OOB at {middle} inside the search window")
+
+			if key.isAfter(line) 'outside'
+				high = middle
+			end 'outside' else 'inside'
+				low = middle + 1
+			end 'inside'
+		end 'search'
+
+		if low == 0 'nothingAtOrBefore'
+			throw AbsentError.absent
+		end 'nothingAtOrBefore'
+
+		return (try self.keys.get(low - 1) otherwise panic("LineOrder.lastAtOrBefore: keys.get OOB at {low - 1} below the window's end")).clone()
+	end 'lastAtOrBefore'
+end 'LineOrder'
+
+export type DeclarationHeadIndex
+	let readings as HeadReadingArray
+	let headOrder as LineOrder
+	let memberNames as NameRoster
+	let memberOrder as LineOrder
+
+	export static function build(tokens TokenArray) returns DeclarationHeadIndex
+		var readings = HeadReadingArray.create(0)
+		var headOrder = LineOrder.create()
+		var memberNames = NameRoster.create(0)
+		var memberOrder = LineOrder.create()
+		var lineStartColumn = 1 as ColumnNumber
+		var previousLine = 0 as LineNumber
+
+		for position in 0 upto tokens.count() 'eachToken'
+			view token = try tokens.get(position) otherwise panic("DeclarationHeadIndex.build: tokens.get OOB at {position} below count {tokens.count()}")
+
+			if tokenKindIsSkippedLayout(token.kind) 'layout'
+				continue
+			end 'layout'
+
+			if token.column == DeclarationHeadColumn 'aHead'
+				readings.push(headReadingAt(tokens, position: position))
+				headOrder.add(token.line)
+			end 'aHead'
+
+			if token.line != previousLine 'aLineStarts'
+				previousLine = token.line
+				lineStartColumn = token.column
+			end 'aLineStarts'
+
+			if token.kind == TokenKind.function and lineStartColumn > DeclarationHeadColumn and functionDeclarationShapeIn(tokens, index: position) 'aNestedFunction'
+				view name = try tokens.get(position + 1) otherwise panic("DeclarationHeadIndex.build: the name of the function at {position} is missing, though its shape was just read")
+				memberNames.push(name.value.clone())
+				memberOrder.add(token.line)
+			end 'aNestedFunction'
+		end 'eachToken'
+
+		headOrder.seal()
+		memberOrder.seal()
+
+		return Self{readings: readings, headOrder: headOrder, memberNames: memberNames, memberOrder: memberOrder}
+	end 'build'
+
+	function headCount() returns Count
+		return self.readings.count()
+	end 'headCount'
+
+	function readingAt(position ElementIndex) returns HeadReading
+		return try self.readings.get(position) otherwise panic("DeclarationHeadIndex.readingAt: readings.get OOB at {position} below count {self.readings.count()}")
+	end 'readingAt'
+
+	function regionAt(line LineNumber) returns EnclosingRegion throws AbsentError
+		let head = try self.headOrder.lastAtOrBefore(line)
+
+		match self.readingAt(head.position()) 'reading'
+			region(found) then return found.clone()
+			opensNothing then throw AbsentError.absent
+		end 'reading'
+	end 'regionAt'
+
+	function memberAt(line LineNumber) returns ByteArray throws AbsentError
+		let head = try self.headOrder.lastAtOrBefore(line)
+		let member = try self.memberOrder.lastAtOrBefore(line)
+
+		if member.startsBefore(head) 'outsideTheEnclosingDeclaration'
+			throw AbsentError.absent
+		end 'outsideTheEnclosingDeclaration'
+
+		return (try self.memberNames.get(member.position()) otherwise panic("DeclarationHeadIndex.memberAt: memberNames.get OOB at {member.position()} below count {self.memberNames.count()}")).clone()
+	end 'memberAt'
+end 'DeclarationHeadIndex'
+
+function headReadingAt(tokens TokenArray, position ElementIndex) returns HeadReading
+	let found = try regionHeadAt(tokens, position: position) otherwise return HeadReading.opensNothing
+
+	return HeadReading.region(found)
+end 'headReadingAt'
 
 function declarationIsWithin(declaration PoisonedDeclaration, within DeclaredWithin, signatures ProgramSignatures) returns bool
 	return match within 'within'
@@ -461,6 +849,16 @@ function copiedPoisonedDeclarations(table PoisonedDeclarationsByName) returns Po
 	return copied
 end 'copiedPoisonedDeclarations'
 
+function copiedBackedNames(names BackedNameArray) returns BackedNameArray
+	var copied = BackedNameArray.create(names.count(), zeroed: false)
+
+	for name in names 'eachName'
+		copied.push(name.clone())
+	end 'eachName'
+
+	return copied
+end 'copiedBackedNames'
+
 function copiedPendingConsequences(held PendingConsequenceArray) returns PendingConsequenceArray
 	var copied = PendingConsequenceArray.create(held.count(), zeroed: false)
 
@@ -476,39 +874,6 @@ function fileHeadUnder(table PoisonedDeclarationsByName, head DeclarationHead, f
 	held.push(PoisonedDeclaration.create(file, reach: head.reach, nominal: head.nominal, backing: backing))
 	table.upsert(head.name, value: held)
 end 'fileHeadUnder'
-
-// Scans every token rather than stopping at the first greater line: the stream's lines need not
-// ascend (`MAXON_SOURCE_ORDER=reversed` keeps the original line numbers), so an early exit would
-// settle on a head that is not the nearest.
-function enclosingHeadPositionAt(tokens TokenArray, line LineNumber) returns ElementIndex throws AbsentError
-	var head = 0 as ElementIndex
-	var headLine = 0 as LineNumber
-	var found = false
-
-	for position in 0 upto tokens.count() 'eachToken'
-		view token = try tokens.get(position) otherwise panic("enclosingHeadPositionAt: tokens.get OOB at {position} below count {tokens.count()}")
-
-		if token.line > line or token.column != DeclarationHeadColumn or tokenKindIsSkippedLayout(token.kind) 'notAHeadAtOrBeforeTheLine'
-			continue
-		end 'notAHeadAtOrBeforeTheLine'
-
-		if not found or token.line >= headLine 'theNearestHeadSoFar'
-			head = position
-			headLine = token.line
-			found = true
-		end 'theNearestHeadSoFar'
-	end 'eachToken'
-
-	if not found 'noDeclarationEncloses'
-		throw AbsentError.absent
-	end 'noDeclarationEncloses'
-
-	return head
-end 'enclosingHeadPositionAt'
-
-function enclosingRegionAt(tokens TokenArray, line LineNumber) returns EnclosingRegion throws AbsentError
-	return try regionHeadAt(tokens, position: try enclosingHeadPositionAt(tokens, line: line))
-end 'enclosingRegionAt'
 
 function regionHeadAt(tokens TokenArray, position ElementIndex) returns EnclosingRegion throws AbsentError
 	if declarationOpensIn(tokens, index: position) 'aDeclaration'
@@ -529,41 +894,6 @@ function lostFunctionHeadAt(tokens TokenArray, position ElementIndex) returns By
 
 	return name.value.clone()
 end 'lostFunctionHeadAt'
-
-function enclosingMemberAt(tokens TokenArray, line LineNumber) returns ByteArray throws AbsentError
-	var member = ByteArray.create(0)
-	var named = false
-	var memberLine = 0 as LineNumber
-	var lineStartColumn = 1 as ColumnNumber
-	var previousLine = 0 as LineNumber
-	let headLine = (try tokens.get(try enclosingHeadPositionAt(tokens, line: line)) otherwise throw AbsentError.absent).line
-
-	for position in 0 upto tokens.count() 'eachToken'
-		view token = try tokens.get(position) otherwise panic("enclosingMemberAt: tokens.get OOB at {position} below count {tokens.count()}")
-
-		if token.line > line or token.line < headLine or tokenKindIsSkippedLayout(token.kind) 'outsideTheEnclosingDeclaration'
-			continue
-		end 'outsideTheEnclosingDeclaration'
-
-		if token.line != previousLine 'aLineStarts'
-			previousLine = token.line
-			lineStartColumn = token.column
-		end 'aLineStarts'
-
-		if token.kind == TokenKind.function and lineStartColumn > DeclarationHeadColumn and token.line >= memberLine and functionDeclarationShapeIn(tokens, index: position) 'aNestedFunction'
-			view name = try tokens.get(position + 1) otherwise panic("enclosingMemberAt: the name of the function at {position} is missing, though its shape was just read")
-			member = name.value.clone()
-			memberLine = token.line
-			named = true
-		end 'aNestedFunction'
-	end 'eachToken'
-
-	if not named 'noMemberEncloses'
-		throw AbsentError.absent
-	end 'noMemberEncloses'
-
-	return member
-end 'enclosingMemberAt'
 
 function declarationHeadAt(tokens TokenArray, position ElementIndex) returns DeclarationHead throws AbsentError
 	if not declarationOpensIn(tokens, index: position) 'notADeclaration'

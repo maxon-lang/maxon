@@ -1996,6 +1996,209 @@ end 'main'
 error E2010: <fragment>:10:2: Expected ')' but got 'return'
 ```
 
+<!-- test: error.a-file-with-many-independent-refusals-reports-every-one -->
+Fourteen independent errors in one file, in all three kinds of region a parse refusal can be confined to (a function body, a declaration head, a top-level binding) and in a body that reads an undefined name, are each reported once and in source order. The valid declarations between them, which instantiate a generic type, build closures and take parameter defaults, are read in full, and the functions whose bodies were abandoned still accept the calls `main` makes to them.
+```maxon
+typealias Tally = int(0 to 1000000)
+typealias Digit = int(0 to 9)
+
+type Pair uses T
+	var first as T
+	var second as T
+
+	static function create(first T, second T) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+
+	function sum() returns Tally
+		return 1
+	end 'sum'
+end 'Pair'
+
+type Crate
+	var weight as Tally
+
+	static function create(weight Tally) returns Crate
+		return Crate{weight: weight}
+	end 'create'
+
+	function heavy(extra Tally = 1) returns Tally
+		return self.weight + extra
+	end 'heavy'
+end 'Crate'
+
+typealias CrateArray = Array with Crate
+typealias CratePair = Pair with Crate
+
+let CrateBase = 3
+
+function totalCrates(scale Tally = 2) returns Tally
+	var crates = CrateArray.create(0)
+	crates.push(Crate.create(CrateBase))
+
+	let bump = function(n Tally) gives n + scale
+	var sum = 0 as Tally
+
+	for crate in crates 'eachCrate'
+		sum = bump(crate.heavy())
+	end 'eachCrate'
+
+	return sum
+end 'totalCrates'
+
+function brokenBody0() returns Tally
+	let x: int = 0
+	return CrateBase
+end 'brokenBody0'
+
+function brokenHead0( returns Tally
+	return CrateBase
+end 'brokenHead0'
+
+let BadDigit0 = 10 as Digit
+
+function missingName0() returns Tally
+	return missing0
+end 'missingName0'
+
+type Sack
+	var weight as Tally
+
+	static function create(weight Tally) returns Sack
+		return Sack{weight: weight}
+	end 'create'
+
+	function heavy(extra Tally = 1) returns Tally
+		return self.weight + extra
+	end 'heavy'
+end 'Sack'
+
+typealias SackArray = Array with Sack
+typealias SackPair = Pair with Sack
+
+let SackBase = 4
+
+function totalSacks(scale Tally = 2) returns Tally
+	var sacks = SackArray.create(0)
+	sacks.push(Sack.create(SackBase))
+
+	let bump = function(n Tally) gives n + scale
+	var sum = 0 as Tally
+
+	for sack in sacks 'eachSack'
+		sum = bump(sack.heavy())
+	end 'eachSack'
+
+	return sum
+end 'totalSacks'
+
+function brokenBody1() returns Tally
+	let y: int = 1
+	return SackBase
+end 'brokenBody1'
+
+function brokenHead1 returns Tally
+	return SackBase
+end 'brokenHead1'
+
+let BadDigit1 = 11 as Digit
+
+function brokenBody2() returns Tally
+	let z: int = 2
+	return CrateBase
+end 'brokenBody2'
+
+function brokenHead2( returns Tally
+	return SackBase
+end 'brokenHead2'
+
+let BadDigit2 = 12 as Digit
+
+function missingName1() returns Tally
+	return missing1
+end 'missingName1'
+
+type Bundle
+	var weight as Tally
+
+	static function create(weight Tally) returns Bundle
+		return Bundle{weight: weight}
+	end 'create'
+
+	function heavy(extra Tally = 1) returns Tally
+		return self.weight + extra
+	end 'heavy'
+end 'Bundle'
+
+typealias BundleArray = Array with Bundle
+typealias BundlePair = Pair with Bundle
+
+let BundleBase = 5
+
+function totalBundles(scale Tally = 2) returns Tally
+	var bundles = BundleArray.create(0)
+	bundles.push(Bundle.create(BundleBase))
+
+	let bump = function(n Tally) gives n + scale
+	var sum = 0 as Tally
+
+	for bundle in bundles 'eachBundle'
+		sum = bump(bundle.heavy())
+	end 'eachBundle'
+
+	return sum
+end 'totalBundles'
+
+function brokenBody3() returns Tally
+	let w: int = 3
+	return BundleBase
+end 'brokenBody3'
+
+function brokenHead3( returns Tally
+	return BundleBase
+end 'brokenHead3'
+
+let BadDigit3 = 13 as Digit
+
+function pairWeights() returns Tally
+	let crates = CratePair.create(Crate.create(1), second: Crate.create(2))
+	let sacks = SackPair.create(Sack.create(1), second: Sack.create(2))
+	let bundles = BundlePair.create(Bundle.create(1), second: Bundle.create(2))
+	return crates.sum() + sacks.sum() + bundles.sum()
+end 'pairWeights'
+
+function main() returns ExitCode
+	var acc = 0 as Tally
+	acc = (acc + totalCrates()) and 7
+	acc = (acc + totalSacks(scale: 3)) and 7
+	acc = (acc + totalBundles()) and 7
+	acc = (acc + pairWeights()) and 7
+	acc = (acc + brokenBody0()) and 7
+	acc = (acc + brokenBody1()) and 7
+	acc = (acc + brokenBody2()) and 7
+	acc = (acc + brokenBody3()) and 7
+	acc = (acc + missingName0()) and 7
+	acc = (acc + missingName1()) and 7
+	return (acc and 7) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:50:7: Expected '=' but got ':'
+error E2010: <fragment>:55:2: Expected ')' but got 'return'
+error E3005: <fragment>:58:20: Value 10 is outside the range of 'Digit' (int(0 to 9))
+error E2004: <fragment>:61:9: Undefined variable 'missing0'
+error E2010: <fragment>:96:7: Expected '=' but got ':'
+error E2010: <fragment>:100:22: Expected '(' but got 'returns'
+error E3005: <fragment>:104:20: Value 11 is outside the range of 'Digit' (int(0 to 9))
+error E2010: <fragment>:107:7: Expected '=' but got ':'
+error E2010: <fragment>:112:2: Expected ')' but got 'return'
+error E3005: <fragment>:115:20: Value 12 is outside the range of 'Digit' (int(0 to 9))
+error E2004: <fragment>:118:9: Undefined variable 'missing1'
+error E2010: <fragment>:153:7: Expected '=' but got ':'
+error E2010: <fragment>:158:2: Expected ')' but got 'return'
+error E3005: <fragment>:161:20: Value 13 is outside the range of 'Digit' (int(0 to 9))
+```
+
 <!-- test: error.a-constant-reading-a-refused-call-constant-reports-the-call-once -->
 `H` reads `G`, whose initializer is a refused call: the call is reported once, and `H` is not given a value.
 ```maxon

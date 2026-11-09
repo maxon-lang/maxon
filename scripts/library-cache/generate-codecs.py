@@ -10,6 +10,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import codec_config as config
+import codec_rewind
 from codec_emit import CONTAINER_KINDS, Emitter, Unresolved
 from maxon_source import DECLARATION, ALIAS, REGION_BEGIN, REGION_END, load_tree, relative, strip_comment, without_regions
 
@@ -270,7 +271,7 @@ def alias_line(lines, name):
     raise ValueError("no typealias %s" % name)
 
 
-def with_generated(source, items, emitted):
+def with_generated(source, items, emitted, rewind):
     lines = without_regions(source.lines)
     inserts = {}
 
@@ -291,6 +292,11 @@ def with_generated(source, items, emitted):
             addition = [""] + region(block[1:], "")
 
         inserts.setdefault(anchor, []).extend(addition)
+
+    if rewind is not None and NORMALIZED(source.path) == NORMALIZED(rewind.path):
+        _, end = declaration_span(lines, rewind.type_name)
+        inserts.setdefault(end, []).extend([""] + region(rewind.record_block, "\t"))
+        inserts.setdefault(end + 1, []).extend([""] + region(rewind.mark_block, ""))
 
     for anchor in sorted(inserts, reverse=True):
         lines[anchor:anchor] = inserts[anchor]
@@ -484,7 +490,7 @@ def host_lines(items, emitted, leading, trailing, fingerprint):
     return region(body, "") + [""]
 
 
-def desired_text(plan, order, emitted):
+def desired_text(plan, order, emitted, rewind):
     by_file = {}
 
     for item in order:
@@ -504,7 +510,7 @@ def desired_text(plan, order, emitted):
         if path == config.GENERATED_HOST:
             lines = host_lines(items, emitted, leading, trailing, fingerprint)
         else:
-            lines = with_generated(source, items, emitted)
+            lines = with_generated(source, items, emitted, rewind)
 
         text = "\n".join(lines)
         desired[path] = text.replace("\n", "\r\n") if source.carriage_returns else text
@@ -537,6 +543,12 @@ def main():
         return EXIT_FAILED
 
     order, emitted, errors = plan.build()
+    rewind = None
+
+    try:
+        rewind = codec_rewind.rewind_plan(plan.tree, plan.item_path(("type", config.ARTIFACT_REWIND_TYPE)))
+    except Unresolved as failure:
+        errors.append((("type", config.ARTIFACT_REWIND_TYPE), str(failure)))
 
     if errors:
         for item, reason in errors:
@@ -544,7 +556,7 @@ def main():
 
         return EXIT_FAILED
 
-    desired = desired_text(plan, order, emitted)
+    desired = desired_text(plan, order, emitted, rewind)
     drifted = drift_report(plan, desired)
 
     if arguments.check:

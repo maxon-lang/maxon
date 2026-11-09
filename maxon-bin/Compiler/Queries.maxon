@@ -92,7 +92,7 @@ end 'conditionalSpellingsOf'
 function validMemoValue(cache TokenCacheMap, path FilePath, entry SourceFileEntry) returns TokenArray throws TokenMemoMiss
 	let memo = try cache.get(path) otherwise throw TokenMemoMiss.absent
 
-	if not memoStampedFor(memo, entry: entry) 'stale'
+	if not memo.isStampedFor(entry) 'stale'
 		throw TokenMemoMiss.stale
 	end 'stale'
 
@@ -101,12 +101,8 @@ end 'validMemoValue'
 
 function memoHolds(cache TokenCacheMap, path FilePath, entry SourceFileEntry) returns bool
 	let memo = try cache.get(path) otherwise return false
-	return memoStampedFor(memo, entry: entry)
+	return memo.isStampedFor(entry)
 end 'memoHolds'
-
-function memoStampedFor(memo TokenMemo, entry SourceFileEntry) returns bool
-	return memo.keyHash == entry.contentHash
-end 'memoStampedFor'
 
 function lexedTokens(project Project, content String, lexing LexSource) returns TokenArray throws LexerError
 	return match lexing 'source'
@@ -194,6 +190,22 @@ module function queryActiveTokens(project Project, path FilePath, lexing LexSour
 
 	return filtered.value
 end 'queryActiveTokens'
+
+module function queryDeclarationHeads(project Project, path FilePath) returns DeclarationHeadIndex throws CompileError
+	view entry = try sourceEntryOf(project, path: path)
+
+	if let memo = try project.db.declarationHeadCache.get(path) 'held'
+		if memo.isStampedFor(entry) 'current'
+			return memo.value
+		end 'current'
+	end 'held'
+
+	view tokens = try queryActiveTokens(project, path: path)
+	let heads = DeclarationHeadIndex.build(tokens)
+	project.db.declarationHeadCache.upsert(path, value: DeclarationHeadMemo.create(heads, keyHash: entry.contentHash))
+
+	return heads
+end 'queryDeclarationHeads'
 
 function sharedActiveTokensServed(project Project, path FilePath, entry SourceFileEntry, buildKey BuildKey) returns TokenArray throws SharedMemoMiss
 	let shared = try sharedActiveTokensOf(project, contentHash: entry.contentHash, buildKey: buildKey)
@@ -2168,29 +2180,28 @@ module function dropExplainedParseConsequences(project Project, signatures Progr
 	end 'nothingIsHeld'
 
 	var explained = FixedBoolArray.create(held.count())
-	var progressed = true
 	var anyExplained = false
+	var worklist = ConsequenceWorklist.over(held)
+	_ = project.poison.takeBackedNames()
 
 	// A dropped consequence backs its own region's poison, which can explain another held one.
-	while progressed 'untilNothingMoreIsExplained'
-		progressed = false
+	while worklist.hasNext() 'untilNothingMoreIsExplained'
+		let position = worklist.takeNext()
 
-		for position in 0 upto held.count() 'eachHeld'
-			if consequenceIsExplained(explained, position: position) 'alreadyExplained'
-				continue
-			end 'alreadyExplained'
+		if consequenceIsExplained(explained, position: position) 'alreadyExplained'
+			continue
+		end 'alreadyExplained'
 
-			view consequence = try held.get(position) otherwise panic("dropExplainedParseConsequences: held.get OOB at {position} below count {held.count()}")
+		view consequence = try held.get(position) otherwise panic("dropExplainedParseConsequences: held.get OOB at {position} below count {held.count()}")
 
-			if not consequence.isExplainedBy(project.poison, signatures: signatures, reports: reports) 'stillUnexplained'
-				continue
-			end 'stillUnexplained'
+		if not consequence.isExplainedBy(project.poison, signatures: signatures, reports: reports) 'stillUnexplained'
+			continue
+		end 'stillUnexplained'
 
-			try explained.set(position, value: true) otherwise panic("dropExplainedParseConsequences: explained.set OOB at {position} below count {explained.count()}")
-			noteConsequenceExplained(project, consequence: consequence)
-			progressed = true
-			anyExplained = true
-		end 'eachHeld'
+		try explained.set(position, value: true) otherwise panic("dropExplainedParseConsequences: explained.set OOB at {position} below count {explained.count()}")
+		noteConsequenceExplained(project, consequence: consequence)
+		worklist.wake(project.poison.takeBackedNames(), signatures: signatures, explained: explained)
+		anyExplained = true
 	end 'untilNothingMoreIsExplained'
 
 	if stage == ConsequenceDropStage.beforeTypeResolution 'theRestAreJudgedOnceTypesResolve'
@@ -2255,8 +2266,8 @@ function noteConsequenceExplained(project Project, consequence PendingConsequenc
 end 'noteConsequenceExplained'
 
 function noteFailedFileBacked(project Project, path FilePath)
-	view tokens = try queryActiveTokens(project, path: path) otherwise return
-	project.poison.noteFailedFile(path, tokens: tokens, backing: PoisonBacking.backed)
+	view heads = try queryDeclarationHeads(project, path: path) otherwise return
+	project.poison.noteFailedFile(path, heads: heads, backing: PoisonBacking.backed)
 end 'noteFailedFileBacked'
 
 // A failed parse is never cached. What IS returned is what an aborted parse still knows — see
@@ -2266,8 +2277,8 @@ function reportFailedParse(project Project, path FilePath, error SourceParseErro
 	let sinkStart = project.diagnostics.count()
 	reportParseFailure(project, path: path, error: error, blame: blame)
 	let backing = holdAsAConsequence(project, path: path, consequence: consequence, lost: LostDeclaration.file, sinkStart: sinkStart)
-	view tokens = try queryActiveTokens(project, path: path) otherwise panic("reportFailedParse: the active tokens of '{path.toString()}' are not memoized, though the parse that just failed read them")
-	project.poison.noteFailedFile(path, tokens: tokens, backing: backing)
+	view heads = try queryDeclarationHeads(project, path: path) otherwise panic("reportFailedParse: the declaration heads of '{path.toString()}' cannot be read, though the parse that just failed read its tokens")
+	project.poison.noteFailedFile(path, heads: heads, backing: backing)
 	noteTypeUniverseLostWith(project, path: path)
 	return salvaged
 end 'reportFailedParse'

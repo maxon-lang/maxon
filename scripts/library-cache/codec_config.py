@@ -91,3 +91,87 @@ BUILTIN_STRING = FIELD_STRING_TYPE
 BUILTIN_PATH = "FilePath"
 BUILTIN_BYTES = "ByteArray"
 BUILTIN_BOOL = FIELD_BOOL_TYPE
+
+
+ARTIFACT_REWIND_TYPE = "FileParseArtifact"
+
+ARTIFACT_MARK_TYPE = "ArtifactMark"
+
+ELEMENT_INDEX = "ElementIndex"
+
+ARTIFACT_REWIND = {
+    "filePath": ("kept", "the file's identity"),
+    "livesUnderStdlibDirectory": ("kept", "a fact of the file"),
+    "typeIdsAreProjectGlobal": ("kept", "false until a merge, which runs after the parse"),
+    "module": ("custom", {
+        "marks": [
+            ("ops", ELEMENT_INDEX, "artifact.module.opCount()"),
+            ("blocks", ELEMENT_INDEX, "artifact.module.blocks.count()"),
+            ("functions", ELEMENT_INDEX, "artifact.module.funcCount()"),
+        ],
+        "rewind": ["self.module.truncateTo(mark.ops, blockCount: mark.blocks, functionCount: mark.functions)"],
+        "require": [
+            ("artifact ops", "artifact.module.opCount()", "ops"),
+            ("artifact blocks", "artifact.module.blocks.count()", "blocks"),
+            ("artifact functions", "artifact.module.funcCount()", "functions"),
+        ],
+    }),
+    "opRanges": ("parallel", "ops"),
+    "covPoints": ("counted",),
+    "asyncSpawnSites": ("opKeyed",),
+    "serviceAwaitSites": ("opKeyed",),
+    "registryUseSites": ("custom", {
+        "marks": [],
+        "rewind": ["self.forgetRegistryUseSitesFrom(mark.ops, limit: opLimit)"],
+        "require": [],
+    }),
+    "allocTagSites": ("opKeyed",),
+    "debugStreamNameSites": ("opKeyed",),
+    "immortalConstArraySites": ("opKeyed",),
+    "provenFixedArrayAccesses": ("opKeyed",),
+    "valueOrigins": ("custom", {
+        "marks": [
+            ("valueOrigins", "ValueOriginMark", "artifact.valueOrigins.mark()"),
+            ("valueOriginRows", ELEMENT_INDEX, "artifact.valueOrigins.count()"),
+        ],
+        "rewind": ["self.valueOrigins.truncate(mark.valueOrigins)"],
+        "require": [("artifact valueOrigins", "artifact.valueOrigins.count()", "valueOriginRows")],
+    }),
+    "deferredChains": ("counted",),
+    "funcSignatures": ("counted",),
+    "pendingFnMergeChecks": ("counted",),
+    "pendingFunctionTypeDoors": ("counted",),
+    "pendingBrandRecords": ("counted",),
+    "pendingDiscardedResults": ("counted",),
+    "rangeChecks": ("counted",),
+    "typeAliases": ("counted",),
+    "functionTypeAliases": ("counted",),
+    "structTypes": ("counted",),
+    "writtenTupleTypes": ("counted",),
+    "enumTypes": ("counted",),
+    "interfaces": ("counted",),
+    "typeNameDecls": ("counted",),
+    "genericInstanceRequests": ("kept", "a request outlives the region that made it, so the instance is still built"),
+    "usedTypeNames": ("kept", "published from the parser's rewindable roster at the end of the parse"),
+    "memberAccessedTypeNames": ("kept", "published from the parser's rewindable roster at the end of the parse"),
+    "unbuiltBodies": ("counted",),
+    "conformances": ("counted",),
+    "literalInitSites": ("counted",),
+    "inferredInstantiationSites": ("counted",),
+    "typeNames": ("custom", {
+        "marks": [("typeNames", "NameId", "artifact.typeNames.markTable()")],
+        "rewind": ["self.typeNames.rewindTo(mark.typeNames)"],
+        "require": [("artifact typeNames", "artifact.typeNames.markTable()", "typeNames")],
+    }),
+    "currentFuncIndex": ("custom", {
+        "marks": [("currentFuncIndex", ELEMENT_INDEX, "artifact.currentFuncIndex")],
+        "rewind": ["self.currentFuncIndex = mark.currentFuncIndex"],
+        "require": [("artifact currentFuncIndex", "artifact.currentFuncIndex", "currentFuncIndex")],
+    }),
+    "diagnostics": ("counted",),
+    "unusedTypeAliases": ("kept", "recorded after the last region, by the end-of-file report"),
+    "hiddenTypeNames": ("kept", "a name this file could not see stays unseen whichever region named it"),
+    "bindingHygieneDiagnostics": ("counted",),
+    "parseMints": ("kept", "filed once, when the parse ends"),
+    "instanceIdsInUse": ("kept", "filed once, when the parse ends"),
+}

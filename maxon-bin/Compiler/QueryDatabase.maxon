@@ -21,15 +21,22 @@
 // query ever does need a dynamic edge, add the index WITH its reader, in one commit, and let the
 // two be reviewed together.
 
-// Per-file memo: the tokenized form, stamped with the source hash it came from.
-export type TokenMemo
-	export let value as TokenArray
+// Per-file memo: a value derived from one file's bytes, stamped with the source hash it came from.
+export type StampedMemo uses Value
+	export let value as Value
 	export let keyHash as HashDigest
 
-	export static function create(value TokenArray, keyHash HashDigest) returns TokenMemo
+	export static function create(value Value, keyHash HashDigest) returns Self
 		return Self{value: value, keyHash: keyHash}
 	end 'create'
-end 'TokenMemo'
+
+	export function isStampedFor(entry SourceFileEntry) returns bool
+		return self.keyHash == entry.contentHash
+	end 'isStampedFor'
+end 'StampedMemo'
+
+export typealias TokenMemo = StampedMemo with TokenArray
+module typealias DeclarationHeadMemo = StampedMemo with DeclarationHeadIndex
 
 // Per-file memo: the parsed artifact (this file's IR fragment + registry
 // contributions), stamped with the source hash it came from.
@@ -379,6 +386,7 @@ export type SharedLibraryParse
 
 	function rebasedOnto(signatures ProgramSignatures, overrides RowSetOverrideTable, consuming bool) returns RebasedParse throws SharedMemoMiss
 		let rebase = try signatures.rebaseFor(self.footprint)
+
 		// Before the told answers are re-asked: their clone walk interns rows, which this check would read as
 		// the baseline's own.
 		let rebasedMints = try self.rebasedMintsAbsentFromTheBaseline(signatures, rebase: rebase)
@@ -728,6 +736,7 @@ module typealias LibraryNameRosterMap = Map with (String, LibraryNameRoster)
 
 export typealias SourceFileMap = Map with (FilePath, SourceFileEntry)
 export typealias TokenCacheMap = Map with (FilePath, TokenMemo)
+module typealias DeclarationHeadCacheMap = Map with (FilePath, DeclarationHeadMemo)
 export typealias ParseCacheMap = Map with (FilePath, ParseMemo)
 
 // Running count of cache hits/misses. Wide range: unbounded over a long-lived
@@ -846,6 +855,11 @@ export type QueryDatabase
 	// build READS. Keeping the raw stream memoized separately is also what lets the `lex` phase
 	// probe keep bracketing `tokenize` alone (see `queryTokens`).
 	export var activeTokenCache as TokenCacheMap
+
+	// Here and not on `DeclarationPoison`, whose every field `FoldCheckpoint` copies on each fold: the
+	// index is a fact of the file's tokens, so a fold has nothing to roll back in it.
+	module var declarationHeadCache as DeclarationHeadCacheMap
+
 	export var parseCache as ParseCacheMap
 
 	// ⭐⭐ **THE STDLIB FILES THIS COMPILE BUILDS FUNCTION BODIES FOR** — empty until `queryAllModule`'s
@@ -931,6 +945,7 @@ export type QueryDatabase
 			shareableTokenHashes: HashDigestSet.create(),
 			tokenCache: TokenCacheMap.create(),
 			activeTokenCache: TokenCacheMap.create(),
+			declarationHeadCache: DeclarationHeadCacheMap.create(),
 			parseCache: ParseCacheMap.create(),
 			demandedLibraryBodyFiles: MaxonSourcePathSet.create(),
 			rowSetOverrides: RowSetOverrides.create(),
@@ -950,6 +965,7 @@ export type QueryDatabase
 	export function releaseFrontEndCaches()
 		self.tokenCache = TokenCacheMap.create()
 		self.activeTokenCache = TokenCacheMap.create()
+		self.declarationHeadCache = DeclarationHeadCacheMap.create()
 		self.parseCache = ParseCacheMap.create()
 		self.rowSetOverrides = RowSetOverrides.create()
 	end 'releaseFrontEndCaches'

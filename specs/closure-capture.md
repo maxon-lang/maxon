@@ -4285,3 +4285,131 @@ end 'main'
 ```maxoncstderr
 error E3183: <fragment>:20:12: this value holds a closure that captures 'h' and is stored into a record 'h' holds, so 'h' would hold the closure and the closure would hold 'h', and neither would ever be released. Store it somewhere 'h' does not reach, or capture what the closure needs instead of 'h' itself
 ```
+
+<!-- test: closure-capture.error.a-closure-cycle-is-found-after-a-refused-function-body-first-named-a-closure-free-type -->
+The type `Plain`, which holds no closure, is first named inside the function body that is refused, and `Wrap`, which holds one, is the next type the file names. The closure reference cycle through `Wrap` is still found.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function refused()
+	var s = Slot.create()
+	s.plain = Plain.create()
+	let x: int = 0
+	s.plain = Plain.create()
+end 'refused'
+
+type Wrap
+	export var read as Thunk
+
+	static function create(read Thunk) returns Self
+		return Self{read: read}
+	end 'create'
+end 'Wrap'
+
+type Counter
+	export var n as Integer
+	export var wrap as Wrap
+
+	static function create() returns Self
+		return Self{n: 1, wrap: Wrap.create(function() gives 0)}
+	end 'create'
+
+	export function arm()
+		self.wrap = Wrap.create(function() gives self.n)
+	end 'arm'
+end 'Counter'
+
+type Plain
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Plain'
+
+type Slot
+	export var plain as Plain
+
+	static function create() returns Self
+		return Self{plain: Plain.create()}
+	end 'create'
+end 'Slot'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	c.arm()
+	refused()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:8:7: Expected '=' but got ':'
+error E3183: <fragment>:29:15: this value holds a closure that captures 'self' and is stored into a record 'self' holds, so 'self' would hold the closure and the closure would hold 'self', and neither would ever be released. Store it somewhere 'self' does not reach, or capture what the closure needs instead of 'self' itself
+```
+
+<!-- test: closure-capture.error.a-closure-cycle-is-found-after-a-refused-function-body-first-built-a-closure-free-instance -->
+The same with generic instances: `Box with Plain`, which holds no closure, is first built inside the function body that is refused, and `Box with Wrap`, which holds one, is the next instance the file builds. The closure reference cycle through `Box with Wrap` is still found.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+type Box uses T
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+type Plain
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Plain'
+
+type Pocket uses T
+	export var item as T
+	export var size as Integer
+
+	static function create(item T) returns Self
+		return Self{item: item, size: 1}
+	end 'create'
+
+	function reader() returns Thunk
+		return function() gives self.size
+	end 'reader'
+end 'Pocket'
+
+type Wrap
+	export var read as Thunk
+
+	static function create(read Thunk) returns Self
+		return Self{read: read}
+	end 'create'
+end 'Wrap'
+
+function refused()
+	var pocket = Pocket.create(Box.create(Plain.create()))
+	pocket.item = Box.create(Plain.create())
+	let x: int = 0
+	pocket.item = Box.create(Plain.create())
+end 'refused'
+
+function cycle()
+	var pocket = Pocket.create(Box.create(Wrap.create(function() gives 0)))
+	pocket.item = Box.create(Wrap.create(pocket.reader()))
+end 'cycle'
+
+function main() returns ExitCode
+	refused()
+	cycle()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:45:7: Expected '=' but got ':'
+error E3183: <fragment>:51:16: this value holds a closure that captures 'pocket' and is stored into a record 'pocket' holds, so 'pocket' would hold the closure and the closure would hold 'pocket', and neither would ever be released. Store it somewhere 'pocket' does not reach, or capture what the closure needs instead of 'pocket' itself
+```

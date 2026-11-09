@@ -2312,3 +2312,18 @@ A union of at most seven cases, each with no payload or one managed record, and 
 ### Result — 2026-11-09, `+`, `-` and `*` over a full-width unsigned alias are range-checked at the operation
 
 `+`, `-` and `*` over `int(0 to u64.max)` aliases (`Count`, `ElementIndex`, `BytePos`) test for a carry, a borrow or an overflow where they are computed, unless the parser proves the result fits (an identity operand, constants that do not wrap, a counted loop's interval). An addition compares the sum with its left operand, a subtraction compares the operands, a multiplication by a constant compares the other factor with `floor(u64.max / k)`, and a general multiplication takes one high multiply (`mulHighUnsigned`) on x64 and arm64 and a portable witness built from 32-bit halves on wasm32-wasi. The one high multiply takes `genwrapsites.sh` `onefunc` at n = 4096 from 755,170 to 484,856 isel allocations and from 5.70e9 to 4.78e9 total CPU ticks against the witness. The standing ladder's growth is unchanged (rung 5 allocations +0.54%, bytes +0.66%), because the standing corpus reaches no unsigned guard. The new ladder `tests/ladders/genwrapsites.sh`, read at n = 256 to 4096, is linear in every operation and shape, with `insertRangeChecks` allocations doubling per doubling. The self-compile, measured as 3 interleaved rounds, is within noise: 103.1, 121.2 and 116.3 s for the compiler without the checks against 103.0, 107.1 and 108.3 s with them. The compiler's code grows 1.38% (27,215,980 to 27,591,916 bytes) and the standard library benchmarks' code 1.5%. The fannkuch-redux n = 11 idle medians are 1.852 s without the checks and 1.862 s with them, which is noise.
+### Result — 2026-11-09, parse-error recovery is one parse per file however many regions it abandons
+
+A refusal confined to a declaration, a binding or a function body was recovered by parsing the whole file again with that region skipped, so N independent errors in one file cost N+1 parses, and each reported error also scanned every token up to three times to find its enclosing declaration. Recovery now rewinds the parser, the artifact, the signature band and the interner to a mark taken at the region's entry and skips the region in the same parse. The enclosing-declaration lookup reads a per-file head index built once, and explained consequences are dropped by a worklist. An extension with several conformers replays its conformer loop at most once per refusal raised by a later conformer. Diagnostics are byte-identical to the previous compiler on 320 programs: spec programs pinning two or more diagnostics, every `generrors.sh` shape, compiler and example sources with errors injected, and extension conformer orders.
+
+Measured on `tests/ladders/generrors.sh <N> <shape>`, wall seconds for `maxon build`, single runs on an idle machine:
+
+| N | `body`, previous compiler | `body` | `decl` | `semantic` (no recovery) |
+|---:|---:|---:|---:|---:|
+| 200 | 82.5 | – | – | 2.6 |
+| 400 | 373.2 | 4.21 | 4.07 | 3.08 |
+| 800 | – | 9.98 | 9.02 | 6.82 |
+| 1600 | – | 26.64 | 25.85 | 19.74 |
+| 3200 | – | 85.93 | 86.82 | 75.52 |
+
+The previous compiler grew ×4.5 to ×5.9 per doubling at N = 200 → 400 in every recovering shape. The rest of the bend is in the `semantic` control too, which recovers nothing, so it is not recovery's. An error-free compile costs the same (`valid`, 33.37 → 33.16 s at N = 1600). On the `run_scale_test` corpus, measured with `--metrics` against the parent commit's compiler, the change costs +115,818 allocations at rung 0 and +546,802 at rung 5 (0.45%), mostly in `signatures` and `parse`: a few containers per `Parser` plus the always-on memo logs and region marks. The part above the per-parser constant doubles each rung.

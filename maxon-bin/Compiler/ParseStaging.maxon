@@ -13,6 +13,8 @@
 
 export typealias FileParseArtifactArray = Array with FileParseArtifact
 
+typealias RenderedDiagnosticSet = Set with String
+
 export typealias SourceByteCount = int(0 to u32.max)
 
 // Calibrated so no file of this tree regrows its table;
@@ -183,80 +185,35 @@ end 'AbandonedRegion'
 
 export typealias AbandonedRegionArray = Array with AbandonedRegion
 
-union ParseAttempt
-	parsed(artifact FileParseArtifact)
-	failed(error SourceParseError, blame LibraryBlame, salvaged FileParseArtifact, consequence ConsequenceOf)
-	retry(region AbandonedRegion, salvaged FileParseArtifact)
-end 'ParseAttempt'
-
 // ⭐⭐ **ONE FILE'S PARSE, AS A FUNCTION OF WHAT IT IS HANDED** — the job, the file's tokens, the
 // row-set answers it is told and the settled index, which it leaves as it found them. It reaches no
 // `Project`, so a pool worker may run it; the caller reports the outcome. Its parser's anchors are
 // its own, so the artifact holds no record from outside itself.
-//
-// A refusal confined to one region (`Parser.openRegion`) is recovered by parsing the file again
-// with that region skipped. The loop ends because a refusal in a region an earlier attempt already
-// abandoned fails the file (`recoverableRegionOf`), so every retry abandons a region none before it
-// did.
 export function parseFile(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, signatures ProgramSignatures) returns FileParseOutcome
-	var recovered = AbandonedRegionArray.create(0)
-	var salvages = FileParseArtifactArray.create(0)
-
-	while true 'eachAttempt'
-		let attempt = parseAttempt(job, tokens: tokens, overrides: overrides, signatures: signatures, recovered: recovered, salvages: salvages)
-
-		match attempt 'attempt'
-			parsed(artifact) then return FileParseOutcome.parsed(artifact, abandoned: recovered)
-			failed(error, blame, salvaged, consequence) then return FileParseOutcome.failed(error, blame: blame, salvaged: salvaged, consequence: consequence, abandoned: recovered)
-			retry(region, salvaged) then keepRecovery(region, salvaged: salvaged, recovered: recovered, salvages: salvages)
-		end 'attempt'
-	end 'eachAttempt'
-end 'parseFile'
-
-function keepRecovery(region AbandonedRegion, salvaged FileParseArtifact, recovered AbandonedRegionArray, salvages FileParseArtifactArray)
-	recovered.push(region)
-	salvages.push(salvaged)
-end 'keepRecovery'
-
-function parseAttempt(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, signatures ProgramSignatures, recovered AbandonedRegionArray, salvages FileParseArtifactArray) returns ParseAttempt
 	var parser = Parser.create(tokens, job: job, signatures: signatures, anchors: ParserAnchors.create())
-	parser.abandonRegions(recovered)
-	parser.adoptRetryStatesOf(salvages)
 	signatures.openParseBand(overrides)
 
 	// A refusal and its blame may hold records the index owns (a `throws` clause's name, a recorded constant's
 	// error, an instantiation's file), and the outcome crosses back from a pool worker, so it carries copies.
 	var artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		_ = signatures.closeParseBand(job.path)
-
-		if let region = try recoverableRegionOf(parseErr, parser: parser, job: job, signatures: signatures, recovered: recovered) 'aRecoverableRefusal'
-			return ParseAttempt.retry(region, salvaged: parser.abortedParseArtifact())
-		end 'aRecoverableRefusal'
-
-		return ParseAttempt.failed(parseErr.clone(), blame: parser.libraryBlame.clone(), salvaged: parser.abortedParseArtifact(), consequence: consequenceOfRefusal(parseErr, parser: parser, job: job, signatures: signatures))
+		return FileParseOutcome.failed(parseErr.clone(), blame: parser.libraryBlame.clone(), salvaged: parser.abortedParseArtifact(), consequence: consequenceOfRefusal(parseErr, parser: parser, job: job, signatures: signatures), abandoned: parser.regionsRecovered())
 	end 'parseFail'
 
 	artifact.recordParseMints(signatures.closeParseBand(job.path))
-	return ParseAttempt.parsed(artifact)
-end 'parseAttempt'
+	return FileParseOutcome.parsed(artifact, abandoned: parser.regionsRecovered())
+end 'parseFile'
 
-function recoverableRegionOf(error SourceParseError, parser Parser, job ParseJob, signatures ProgramSignatures, recovered AbandonedRegionArray) returns AbandonedRegion throws AbsentError
-	if not refusalIsLocal(parser, job: job, signatures: signatures) 'theFileCannotBeReadPastIt'
+module function abandonedRegionFor(error SourceParseError, blame LibraryBlame, openRegion AbandonableRegion, isLocal bool, path FilePath) returns AbandonedRegion throws AbsentError
+	if not isLocal 'theFileCannotBeReadPastIt'
 		throw AbsentError.absent
 	end 'theFileCannotBeReadPastIt'
 
-	let part = try parser.openRegion.partRefusedAt(try refusalPositionOf(error, path: job.path))
+	let part = try openRegion.partRefusedAt(try refusalPositionOf(error, path: path))
+	return AbandonedRegion.create(error.clone(), blame: blame.clone(), part: part, consequence: consequenceNamedBy(error))
+end 'abandonedRegionFor'
 
-	for region in recovered 'eachRecovered'
-		if region.key == part.key 'alreadyAbandoned'
-			throw AbsentError.absent
-		end 'alreadyAbandoned'
-	end 'eachRecovered'
-
-	return AbandonedRegion.create(error.clone(), blame: parser.libraryBlame.clone(), part: part, consequence: consequenceOfRefusal(error, parser: parser, job: job, signatures: signatures))
-end 'recoverableRegionOf'
-
-function refusalIsLocal(parser Parser, job ParseJob, signatures ProgramSignatures) returns bool
+module function refusalIsLocal(parser Parser, job ParseJob, signatures ProgramSignatures) returns bool
 	return job.readsAuthorSource() and not parser.blockStructureMisread and not signatures.hasMisclosedBlocks()
 end 'refusalIsLocal'
 
@@ -833,6 +790,12 @@ end 'cacheReadUnbuiltBodyArray'
 
 // @generated library-cache end
 
+module function requireRewoundCount(field String, now ElementIndex, marked ElementIndex)
+	if now != marked 'moved'
+		panic("parse rewind: {field} holds {now} after a rewind to {marked} — a write the rewind does not undo")
+	end 'moved'
+end 'requireRewoundCount'
+
 export type FileParseArtifact
 	// The file this artifact was parsed from (its identity + merge order anchor).
 	export var filePath as FilePath
@@ -994,7 +957,7 @@ export type FileParseArtifact
 	// `checkUnusedExports` reads it beside `usedTypeNames` above, so its "is this reached from outside?" IS
 	// the resolver's answer: without it E3092 would advise dropping an `export` that E4006 then requires, and
 	// the program would have no legal spelling. Two sets and not one because they hold two facts — see
-	// `Parser.memberAccessedTypeNames`.
+	// `ParseMemos.memberAccessedTypeNames`.
 	export var memberAccessedTypeNames as UsedTypeNameRoster
 
 	// The token ranges `[first, limit)` of this file's active stream whose bodies the parse skipped: a
@@ -1139,6 +1102,21 @@ export type FileParseArtifact
 		self.instanceIdsInUse = bandIds
 	end 'recordParseMints'
 
+	// Inclusive of `limit`, for the reason `scripts/library-cache/codec_rewind.py`'s `record_lines`
+	// gives.
+	function forgetRegistryUseSitesFrom(first ElementIndex, limit ElementIndex)
+		match self.registryUseSites 'state'
+			unwritten then return
+			entries then break
+		end 'state'
+
+		var byOp = self.registryUseSitesForWrite()
+
+		for opIndex in first to limit 'eachOpWithAUse'
+			_ = byOp.remove(opIndex)
+		end 'eachOpWithAUse'
+	end 'forgetRegistryUseSitesFrom'
+
 	// Record an alias this file declared and never named, and a type name this file cannot see. Each
 	// installs its own list on the first entry (`DeferredNameDiagnosticRoster`, `DeferredDiagnosticRoster`).
 	export function recordUnusedTypeAlias(entry DeferredNameDiagnostic)
@@ -1159,29 +1137,19 @@ export type FileParseArtifact
 	end 'adoptHiddenTypeNames'
 
 	function recordHiddenTypeNames(entries DiagnosticArray)
+		var rendered = RenderedDiagnosticSet.create()
+
 		for entry in entries 'eachEntry'
-			if self.holdsHiddenTypeName(entry) 'alreadyHeld'
+			let text = entry.render()
+
+			if rendered.contains(text) 'alreadyHeld'
 				continue
 			end 'alreadyHeld'
 
+			rendered.insert(text)
 			self.recordHiddenTypeName(entry)
 		end 'eachEntry'
 	end 'recordHiddenTypeNames'
-
-	function holdsHiddenTypeName(entry Diagnostic) returns bool
-		match self.hiddenTypeNames 'held'
-			unwritten then return false
-			entries(recorded) then return hiddenTypeNameIsAmong(recorded, entry: entry)
-		end 'held'
-	end 'holdsHiddenTypeName'
-
-	export function adoptRetryState(source FileParseArtifact)
-		for instance in source.genericInstanceRequests 'eachRequest'
-			self.recordGenericInstanceRequest(instance)
-		end 'eachRequest'
-
-		self.adoptHiddenTypeNames(source)
-	end 'adoptRetryState'
 
 	// THE emit choke point for a Maxon body op — the only way the parser creates
 	// one. Appending the op and recording its span happen together here, so
@@ -1387,34 +1355,6 @@ export type FileParseArtifact
 		self.interfaces.push(iface.clone())
 	end 'recordInterface'
 
-	export function recordGenericInstanceRequest(instance GenericFunctionInstance)
-		if self.requestsGenericInstance(instance.instanceName) 'requestedAlready'
-			return
-		end 'requestedAlready'
-
-		self.genericInstanceRequests.push(instance)
-	end 'recordGenericInstanceRequest'
-
-	export function requestedGenericInstanceSiteKey(instanceName ByteArray) returns ByteArray throws AbsentError
-		for requested in self.genericInstanceRequests 'eachRequested'
-			if requested.instanceName.equals(instanceName) 'thisInstance'
-				return requested.siteKey.clone()
-			end 'thisInstance'
-		end 'eachRequested'
-
-		throw AbsentError.absent
-	end 'requestedGenericInstanceSiteKey'
-
-	export function requestsGenericInstance(instanceName ByteArray) returns bool
-		for requested in self.genericInstanceRequests 'eachRequested'
-			if requested.instanceName.equals(instanceName) 'thisInstance'
-				return true
-			end 'thisInstance'
-		end 'eachRequested'
-
-		return false
-	end 'requestsGenericInstance'
-
 	// Record a `type X implements …` conformance as this file's contribution to `project.conformances`.
 	// The type-name position travels with it so `checkConformance` anchors on the name.
 	export function recordConformance(conformance ConformanceDecl)
@@ -1544,19 +1484,121 @@ export type FileParseArtifact
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
+
+	// @generated library-cache begin
+	module function rewindTo(mark ArtifactMark)
+		let opLimit = self.module.opCount()
+
+		for opIndex in mark.ops to opLimit 'eachOpSince'
+			_ = self.asyncSpawnSites.remove(opIndex)
+			_ = self.serviceAwaitSites.remove(opIndex)
+			_ = self.allocTagSites.remove(opIndex)
+			_ = self.debugStreamNameSites.remove(opIndex)
+			_ = self.immortalConstArraySites.remove(opIndex)
+			_ = self.provenFixedArrayAccesses.remove(opIndex)
+		end 'eachOpSince'
+
+		self.module.truncateTo(mark.ops, blockCount: mark.blocks, functionCount: mark.functions)
+		self.opRanges.truncate(mark.ops)
+		self.covPoints.truncate(mark.covPoints)
+		self.forgetRegistryUseSitesFrom(mark.ops, limit: opLimit)
+		self.valueOrigins.truncate(mark.valueOrigins)
+		self.deferredChains.truncate(mark.deferredChains)
+		self.funcSignatures.truncate(mark.funcSignatures)
+		self.pendingFnMergeChecks.truncate(mark.pendingFnMergeChecks)
+		self.pendingFunctionTypeDoors.truncate(mark.pendingFunctionTypeDoors)
+		self.pendingBrandRecords.truncate(mark.pendingBrandRecords)
+		self.pendingDiscardedResults.truncate(mark.pendingDiscardedResults)
+		self.rangeChecks.truncate(mark.rangeChecks)
+		self.typeAliases.truncate(mark.typeAliases)
+		self.functionTypeAliases.truncate(mark.functionTypeAliases)
+		self.structTypes.truncate(mark.structTypes)
+		self.writtenTupleTypes.truncate(mark.writtenTupleTypes)
+		self.enumTypes.truncate(mark.enumTypes)
+		self.interfaces.truncate(mark.interfaces)
+		self.typeNameDecls.truncate(mark.typeNameDecls)
+		self.unbuiltBodies.truncate(mark.unbuiltBodies)
+		self.conformances.truncate(mark.conformances)
+		self.literalInitSites.truncate(mark.literalInitSites)
+		self.inferredInstantiationSites.truncate(mark.inferredInstantiationSites)
+		self.typeNames.rewindTo(mark.typeNames)
+		self.currentFuncIndex = mark.currentFuncIndex
+		self.diagnostics.truncate(mark.diagnostics)
+		self.bindingHygieneDiagnostics.truncate(mark.bindingHygieneDiagnostics)
+		mark.requireHeldBy(self)
+	end 'rewindTo'
+
+	// @generated library-cache end
 end 'FileParseArtifact'
 
-function hiddenTypeNameIsAmong(recorded DiagnosticArray, entry Diagnostic) returns bool
-	let rendered = entry.render()
+// @generated library-cache begin
+module type ArtifactMark
+	module let ops as ElementIndex
+	module let blocks as ElementIndex
+	module let functions as ElementIndex
+	module let covPoints as ElementIndex
+	module let valueOrigins as ValueOriginMark
+	module let valueOriginRows as ElementIndex
+	module let deferredChains as ElementIndex
+	module let funcSignatures as ElementIndex
+	module let pendingFnMergeChecks as ElementIndex
+	module let pendingFunctionTypeDoors as ElementIndex
+	module let pendingBrandRecords as ElementIndex
+	module let pendingDiscardedResults as ElementIndex
+	module let rangeChecks as ElementIndex
+	module let typeAliases as ElementIndex
+	module let functionTypeAliases as ElementIndex
+	module let structTypes as ElementIndex
+	module let writtenTupleTypes as ElementIndex
+	module let enumTypes as ElementIndex
+	module let interfaces as ElementIndex
+	module let typeNameDecls as ElementIndex
+	module let unbuiltBodies as ElementIndex
+	module let conformances as ElementIndex
+	module let literalInitSites as ElementIndex
+	module let inferredInstantiationSites as ElementIndex
+	module let typeNames as NameId
+	module let currentFuncIndex as ElementIndex
+	module let diagnostics as ElementIndex
+	module let bindingHygieneDiagnostics as ElementIndex
 
-	for held in recorded 'eachHeld'
-		if held.render() == rendered 'sameDiagnostic'
-			return true
-		end 'sameDiagnostic'
-	end 'eachHeld'
+	module static function of(artifact FileParseArtifact) returns ArtifactMark
+		return Self{ops: artifact.module.opCount(), blocks: artifact.module.blocks.count(), functions: artifact.module.funcCount(), covPoints: artifact.covPoints.count(), valueOrigins: artifact.valueOrigins.mark(), valueOriginRows: artifact.valueOrigins.count(), deferredChains: artifact.deferredChains.count(), funcSignatures: artifact.funcSignatures.count(), pendingFnMergeChecks: artifact.pendingFnMergeChecks.count(), pendingFunctionTypeDoors: artifact.pendingFunctionTypeDoors.count(), pendingBrandRecords: artifact.pendingBrandRecords.count(), pendingDiscardedResults: artifact.pendingDiscardedResults.count(), rangeChecks: artifact.rangeChecks.count(), typeAliases: artifact.typeAliases.count(), functionTypeAliases: artifact.functionTypeAliases.count(), structTypes: artifact.structTypes.count(), writtenTupleTypes: artifact.writtenTupleTypes.count(), enumTypes: artifact.enumTypes.count(), interfaces: artifact.interfaces.count(), typeNameDecls: artifact.typeNameDecls.count(), unbuiltBodies: artifact.unbuiltBodies.count(), conformances: artifact.conformances.count(), literalInitSites: artifact.literalInitSites.count(), inferredInstantiationSites: artifact.inferredInstantiationSites.count(), typeNames: artifact.typeNames.markTable(), currentFuncIndex: artifact.currentFuncIndex, diagnostics: artifact.diagnostics.count(), bindingHygieneDiagnostics: artifact.bindingHygieneDiagnostics.count()}
+	end 'of'
 
-	return false
-end 'hiddenTypeNameIsAmong'
+	module function requireHeldBy(artifact FileParseArtifact)
+		requireRewoundCount("artifact ops", now: artifact.module.opCount(), marked: self.ops)
+		requireRewoundCount("artifact blocks", now: artifact.module.blocks.count(), marked: self.blocks)
+		requireRewoundCount("artifact functions", now: artifact.module.funcCount(), marked: self.functions)
+		requireRewoundCount("artifact opRanges", now: artifact.opRanges.count(), marked: self.ops)
+		requireRewoundCount("artifact covPoints", now: artifact.covPoints.count(), marked: self.covPoints)
+		requireRewoundCount("artifact valueOrigins", now: artifact.valueOrigins.count(), marked: self.valueOriginRows)
+		requireRewoundCount("artifact deferredChains", now: artifact.deferredChains.count(), marked: self.deferredChains)
+		requireRewoundCount("artifact funcSignatures", now: artifact.funcSignatures.count(), marked: self.funcSignatures)
+		requireRewoundCount("artifact pendingFnMergeChecks", now: artifact.pendingFnMergeChecks.count(), marked: self.pendingFnMergeChecks)
+		requireRewoundCount("artifact pendingFunctionTypeDoors", now: artifact.pendingFunctionTypeDoors.count(), marked: self.pendingFunctionTypeDoors)
+		requireRewoundCount("artifact pendingBrandRecords", now: artifact.pendingBrandRecords.count(), marked: self.pendingBrandRecords)
+		requireRewoundCount("artifact pendingDiscardedResults", now: artifact.pendingDiscardedResults.count(), marked: self.pendingDiscardedResults)
+		requireRewoundCount("artifact rangeChecks", now: artifact.rangeChecks.count(), marked: self.rangeChecks)
+		requireRewoundCount("artifact typeAliases", now: artifact.typeAliases.count(), marked: self.typeAliases)
+		requireRewoundCount("artifact functionTypeAliases", now: artifact.functionTypeAliases.count(), marked: self.functionTypeAliases)
+		requireRewoundCount("artifact structTypes", now: artifact.structTypes.count(), marked: self.structTypes)
+		requireRewoundCount("artifact writtenTupleTypes", now: artifact.writtenTupleTypes.count(), marked: self.writtenTupleTypes)
+		requireRewoundCount("artifact enumTypes", now: artifact.enumTypes.count(), marked: self.enumTypes)
+		requireRewoundCount("artifact interfaces", now: artifact.interfaces.count(), marked: self.interfaces)
+		requireRewoundCount("artifact typeNameDecls", now: artifact.typeNameDecls.count(), marked: self.typeNameDecls)
+		requireRewoundCount("artifact unbuiltBodies", now: artifact.unbuiltBodies.count(), marked: self.unbuiltBodies)
+		requireRewoundCount("artifact conformances", now: artifact.conformances.count(), marked: self.conformances)
+		requireRewoundCount("artifact literalInitSites", now: artifact.literalInitSites.count(), marked: self.literalInitSites)
+		requireRewoundCount("artifact inferredInstantiationSites", now: artifact.inferredInstantiationSites.count(), marked: self.inferredInstantiationSites)
+		requireRewoundCount("artifact typeNames", now: artifact.typeNames.markTable(), marked: self.typeNames)
+		requireRewoundCount("artifact currentFuncIndex", now: artifact.currentFuncIndex, marked: self.currentFuncIndex)
+		requireRewoundCount("artifact diagnostics", now: artifact.diagnostics.count(), marked: self.diagnostics)
+		requireRewoundCount("artifact bindingHygieneDiagnostics", now: artifact.bindingHygieneDiagnostics.count(), marked: self.bindingHygieneDiagnostics)
+	end 'requireHeldBy'
+end 'ArtifactMark'
+
+// @generated library-cache end
 
 // ⭐⭐ **THE OP AS THE ARTIFACT KEEPS IT: every record in its payload the artifact's own.** A name, a label, a
 // constant's bytes or a type in a payload is often a record the signature index holds, and an artifact built on a
@@ -1865,13 +1907,13 @@ module function noteDeclarationLostTo(project Project, filePath FilePath, poison
 end 'noteDeclarationLostTo'
 
 function noteDeclarationRefusedAt(project Project, filePath FilePath, line LineNumber, backing PoisonBacking)
-	view tokens = try queryActiveTokens(project, path: filePath) otherwise return
-	project.poison.noteRefusedDeclarationAt(filePath, line: line, tokens: tokens, backing: backing)
+	view heads = try queryDeclarationHeads(project, path: filePath) otherwise return
+	project.poison.noteRefusedDeclarationAt(filePath, line: line, heads: heads, backing: backing)
 end 'noteDeclarationRefusedAt'
 
 function noteBodyAbandonedAt(project Project, filePath FilePath, line LineNumber, backing PoisonBacking)
-	view tokens = try queryActiveTokens(project, path: filePath) otherwise return
-	project.poison.noteAbandonedBodyAt(filePath, line: line, tokens: tokens, backing: backing)
+	view heads = try queryDeclarationHeads(project, path: filePath) otherwise return
+	project.poison.noteAbandonedBodyAt(filePath, line: line, heads: heads, backing: backing)
 end 'noteBodyAbandonedAt'
 
 // ⭐ **COMMIT EVERY TYPE-NAME DECLARATION, AND REPORT A NAME DECLARED TWICE.** The whole-program

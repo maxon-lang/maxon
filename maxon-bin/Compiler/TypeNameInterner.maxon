@@ -93,7 +93,7 @@ export type TypeNameInterner
 	// Copies, because they cross a thread: a record the worker's own table also holds would give the reply
 	// a second owner.
 	export function namesSinceBaseline() returns NameRoster
-		let first = self.tableBaseline()
+		let first = self.baselineTableMark()
 		var added = NameRoster.create(table.count() - first, zeroed: false)
 
 		for id in first upto table.count() 'eachAdded'
@@ -103,13 +103,17 @@ export type TypeNameInterner
 		return added
 	end 'namesSinceBaseline'
 
-	export function restoreBaseline()
-		table.truncateTo(self.tableBaseline())
-	end 'restoreBaseline'
+	module function markTable() returns NameId
+		return table.count()
+	end 'markTable'
 
-	function tableBaseline() returns NameId
+	module function baselineTableMark() returns NameId
 		return (self.baselineCount - self.idOffset) as NameId
-	end 'tableBaseline'
+	end 'baselineTableMark'
+
+	module function rewindTo(mark NameId)
+		table.truncateTo(mark)
+	end 'rewindTo'
 
 	export function baselineNameCount() returns TypeNameId
 		return self.baselineCount

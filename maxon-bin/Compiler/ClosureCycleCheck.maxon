@@ -20,8 +20,10 @@ typealias OriginNameMap = Map with (OriginIndex, readonly ByteArray)
 typealias OriginLabelMap = Map with (OriginIndex, readonly ByteArray)
 typealias OriginByLabel = Map with (ByteArray, OriginIndex)
 typealias ListMembership = Set with OriginKey
-typealias FunctionHoldingMemo = Map with (TypeNameId, bool)
-typealias InstanceHoldingMemo = Map with (GenericInstanceId, bool)
+module typealias FunctionHoldingMemo = RewindableMemo with (TypeNameId, bool)
+module typealias InstanceHoldingMemo = RewindableMemo with (GenericInstanceId, bool)
+module typealias PlainFunctionHoldingMemo = Map with (TypeNameId, bool)
+module typealias PlainInstanceHoldingMemo = Map with (GenericInstanceId, bool)
 typealias ReportedPositionSet = Set with String
 typealias GlobalLabelSet = Set with ByteArray
 typealias HeldGlobalsByLabel = Map with (ByteArray, GlobalLabelSet)
@@ -198,16 +200,38 @@ function anyClosureCaptures(module MaxonModule) returns bool
 	return false
 end 'anyClosureCaptures'
 
+module union HoldingMemos
+	plain(aggregates PlainFunctionHoldingMemo, instances PlainInstanceHoldingMemo)
+	rewindable(aggregates FunctionHoldingMemo, instances InstanceHoldingMemo)
+end 'HoldingMemos'
+
 // The aggregate memo is keyed by type-name id, so one instance is asked with one `from` interner
 // for its whole life: an id from another interner names another type.
 module type FunctionHoldingAnswers
-	var aggregates as FunctionHoldingMemo
-	var instances as InstanceHoldingMemo
+	var memos as HoldingMemos
 	var settledFree as ClonerSet
 
-	module static function create() returns FunctionHoldingAnswers
-		return Self{aggregates: FunctionHoldingMemo.create(), instances: InstanceHoldingMemo.create(), settledFree: ClonerSet.create()}
-	end 'create'
+	module static function plain() returns FunctionHoldingAnswers
+		return Self{memos: HoldingMemos.plain(PlainFunctionHoldingMemo.create(), instances: PlainInstanceHoldingMemo.create()), settledFree: ClonerSet.create()}
+	end 'plain'
+
+	module static function rewindable(claims RewindClaims) returns FunctionHoldingAnswers
+		return Self{memos: HoldingMemos.rewindable(FunctionHoldingMemo.create(claims, table: MemoTable.functionHoldingAggregates), instances: InstanceHoldingMemo.create(claims, table: MemoTable.functionHoldingInstances)), settledFree: ClonerSet.create()}
+	end 'rewindable'
+
+	module function rewindableAggregates() returns FunctionHoldingMemo
+		match self.memos 'which'
+			plain then panic("FunctionHoldingAnswers.rewindableAggregates: a plain FunctionHoldingAnswers keeps no log to mark or rewind")
+			rewindable(aggregates, _) then return aggregates
+		end 'which'
+	end 'rewindableAggregates'
+
+	module function rewindableInstances() returns InstanceHoldingMemo
+		match self.memos 'which'
+			plain then panic("FunctionHoldingAnswers.rewindableInstances: a plain FunctionHoldingAnswers keeps no log to mark or rewind")
+			rewindable(_, instances) then return instances
+		end 'which'
+	end 'rewindableInstances'
 
 	module function mayHoldAFunction(tag ValueTypeTag, nameId TypeNameId, signatures ProgramSignatures, from TypeNameInterner) returns bool
 		if tag == ValueTypeTag.function or tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.interfaceRef 'opaqueOrAFunction'
@@ -226,22 +250,50 @@ module type FunctionHoldingAnswers
 	end 'mayHoldAFunction'
 
 	function instanceMayHoldAFunction(id GenericInstanceId, signatures ProgramSignatures, from TypeNameInterner) returns bool
-		if let memoized = try self.instances.get(id) 'asked'
+		if let memoized = try self.askedInstance(id) 'asked'
 			return memoized
 		end 'asked'
 
 		let holds = signatures.typeMayHoldAFunction(MaxonType.genericInstance(id), from: from, settledFree: self.settledFree)
-		self.instances.upsert(id, value: holds)
+		self.fileInstance(id, holds: holds)
 		return holds
 	end 'instanceMayHoldAFunction'
 
+	function askedInstance(id GenericInstanceId) returns bool throws MapError
+		match self.memos 'which'
+			plain(_, instances) then return try instances.get(id)
+			rewindable(_, instances) then return try instances.get(id)
+		end 'which'
+	end 'askedInstance'
+
+	function fileInstance(id GenericInstanceId, holds bool)
+		match self.memos 'which'
+			plain(_, instances) then instances.upsert(id, value: holds)
+			rewindable(_, instances) then instances.file(id, value: holds)
+		end 'which'
+	end 'fileInstance'
+
+	function askedAggregate(nameId TypeNameId) returns bool throws MapError
+		match self.memos 'which'
+			plain(aggregates, _) then return try aggregates.get(nameId)
+			rewindable(aggregates, _) then return try aggregates.get(nameId)
+		end 'which'
+	end 'askedAggregate'
+
+	function fileAggregate(nameId TypeNameId, holds bool)
+		match self.memos 'which'
+			plain(aggregates, _) then aggregates.upsert(nameId, value: holds)
+			rewindable(aggregates, _) then aggregates.file(nameId, value: holds)
+		end 'which'
+	end 'fileAggregate'
+
 	function aggregateMayHoldAFunction(tag ValueTypeTag, nameId TypeNameId, signatures ProgramSignatures, from TypeNameInterner) returns bool
-		if let memoized = try self.aggregates.get(nameId) 'asked'
+		if let memoized = try self.askedAggregate(nameId) 'asked'
 			return memoized
 		end 'asked'
 
 		let holds = signatures.typeMayHoldAFunction(maxonTypeOfTag(tag, nameId: nameId), from: from, settledFree: self.settledFree)
-		self.aggregates.upsert(nameId, value: holds)
+		self.fileAggregate(nameId, holds: holds)
 		return holds
 	end 'aggregateMayHoldAFunction'
 end 'FunctionHoldingAnswers'
@@ -269,7 +321,7 @@ type ClosureCycleChecker implements SummarizedBodies
 	static function create(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, resolution CallSummaryIndex) returns ClosureCycleChecker
 		let funcCount = funcNames.functions.count()
 		let relevant = FixedBoolArray.create(funcCount)
-		return Self{project: project, module: module, signatures: signatures, funcNames: funcNames, calls: CallSiteCursor.create(resolution), summary: CycleSummary.create(funcCount), relevant: relevant, holdings: FunctionHoldingAnswers.create(), heldGlobals: HeldGlobalsByLabel.create(), globalsGrew: false, reported: ReportedPositionSet.create(), noSites: ProvenanceSites.create(ProvenanceColumns.create()), listPool: OriginListArray.create(0), bodyIndexes: CycleBodyIndexByFunction.create(), noOrigins: OriginList.create(0)}
+		return Self{project: project, module: module, signatures: signatures, funcNames: funcNames, calls: CallSiteCursor.create(resolution), summary: CycleSummary.create(funcCount), relevant: relevant, holdings: FunctionHoldingAnswers.plain(), heldGlobals: HeldGlobalsByLabel.create(), globalsGrew: false, reported: ReportedPositionSet.create(), noSites: ProvenanceSites.create(ProvenanceColumns.create()), listPool: OriginListArray.create(0), bodyIndexes: CycleBodyIndexByFunction.create(), noOrigins: OriginList.create(0)}
 	end 'create'
 
 	function settle() throws CompileError
