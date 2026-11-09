@@ -1,0 +1,30 @@
+typealias ExitCode = int(0 to 255)
+
+let ChildMode = "child"
+let ModeArgument = 1
+let ParentLabel = "parent"
+let ChildLabel = "child"
+
+function attachedLine(label String) returns String
+	return "{label} attached={__DebugStream.enabled()}\n"
+end 'attachedLine'
+
+function main() returns ExitCode
+	let mode = try CommandLine.args().get(ModeArgument) otherwise ""
+
+	if mode == ChildMode 'asTheChild'
+		print(attachedLine(ChildLabel))
+		return 0
+	end 'asTheChild'
+
+	let me = try Process.executablePath() otherwise return 2
+	var arguments = StringArray.create(0)
+	arguments.push(ChildMode)
+
+	let child = try Subprocess.run(Executable.path(me), arguments: arguments) otherwise return 3
+
+	print(attachedLine(ParentLabel))
+	print(child.stdout)
+
+	return child.exitCode() as ExitCode
+end 'main'

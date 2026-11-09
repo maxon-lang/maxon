@@ -431,7 +431,8 @@ cross-compiled binary.
 Launches an executable built with `--debugstream` and prints the trace events it writes into a
 shared-memory ring. Each event line is prefixed with the time since start as `[+SSSS.mmm]`. The monitor
 creates the ring and passes its name to the program in the `MAXON_DEBUGSTREAM` environment variable.
-The program's own stdout and stderr pass through unchanged.
+Only the program itself reports events; the processes it starts report none. The program's own stdout
+and stderr pass through unchanged.
 
 ```bash
 maxon monitor [--filter=mm|sched|log] <exe> [args...]

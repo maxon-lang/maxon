@@ -87,18 +87,17 @@ export let DsOffWriteCursor = 24 as ByteOffset
 export let DsOffReadCursor = 32 as ByteOffset
 export let DsOffFlags = 40 as ByteOffset
 
-// The producer's process id. NOTHING WRITES IT — no emitter below stores here — and the consumer
-// still has to seed it, because a slot left at whatever the section's
-// pages last held is a number a reader would believe.
-export let DsOffProcessId = 0x30 as ByteOffset
+export let DsOffProducerClaim = 0x30 as ByteOffset
+export let DsProducerUnclaimed = 0
+let DsProducerClaimed = 1
 
 export let DsOffStartTimestamp = 56 as ByteOffset
 export let DsOffTotalEvents = 64 as ByteOffset
 export let DsOffDroppedEvents = 72 as ByteOffset
 
 // The v1 in-band tag table's base and length. The names travel in the executable's `.symtab` now (see the
-// MXDS_TAGS blob below) and nothing reads these two, but the consumer seeds them for `DsOffProcessId`'s
-// reason: a stale number in a slot a reader knows the meaning of is worse than a zero.
+// MXDS_TAGS blob below) and nothing reads these two, but the consumer seeds them: a stale number in a
+// slot a reader knows the meaning of is worse than a zero.
 export let DsOffTagTableOffset = 0x50 as ByteOffset
 export let DsOffTagTableCount = 0x58 as ByteOffset
 
@@ -823,6 +822,7 @@ function buildDsInit(module StdModule, envNameLabel ByteArray)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var checkMagic = module.addBlock(func, label: b"checkMagic", heat: BlockHeat.normal)
 	var checkVersion = module.addBlock(func, label: b"checkVersion", heat: BlockHeat.normal)
+	var claim = module.addBlock(func, label: b"claim", heat: BlockHeat.normal)
 	var attach = module.addBlock(func, label: b"attach", heat: BlockHeat.normal)
 	var dark = module.addBlock(func, label: b"dark", heat: BlockHeat.normal)
 
@@ -855,7 +855,16 @@ function buildDsInit(module StdModule, envNameLabel ByteArray)
 	let ourVersion = emitConst(module, block: checkVersion, value: DsSchemaVersion, ids: ids)
 	module.appendOp(checkVersion, op: StdOp.storeIndirect(base, offset: DsOffProducerVersion, valueId: ourVersion, valueType: StdType.i64))
 	let monitorVersion = emitLoadField(module, block: checkVersion, record: base, offset: DsOffVersion, ids: ids)
-	emitBranchOnCompareValues(module, block: checkVersion, a: monitorVersion, pred: StdCmpPred.eq, b: ourVersion, whenTrue: attach, whenFalse: dark, ids: ids)
+	emitBranchOnCompareValues(module, block: checkVersion, a: monitorVersion, pred: StdCmpPred.eq, b: ourVersion, whenTrue: claim, whenFalse: dark, ids: ids)
+
+	// One producer per segment: a process the program starts inherits `MAXON_DEBUGSTREAM`, and two
+	// processes writing one ring hold two separate locks, so their entries tear. The loser stays dark.
+	// The claim is never released, so a process started after the owner exited stays dark too.
+	let claimAddr = emitFieldAddr(module, block: claim, record: base, offset: DsOffProducerClaim, ids: ids)
+	let unclaimed = emitConst(module, block: claim, value: DsProducerUnclaimed, ids: ids)
+	let claimed = emitConst(module, block: claim, value: DsProducerClaimed, ids: ids)
+	let won = emitCasAt(module, block: claim, addr: claimAddr, expected: unclaimed, replacement: claimed, ids: ids)
+	emitBranchOnCompare(module, block: claim, value: won, pred: StdCmpPred.eq, against: AtomicCasSucceeded, whenTrue: attach, whenFalse: dark, ids: ids)
 
 	let bufSize = emitLoadField(module, block: attach, record: base, offset: DsOffBufferSize, ids: ids)
 	emitStoreGlobalWord(module, block: attach, label: DsBufSizeLabel, value: bufSize, ids: ids)

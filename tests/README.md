@@ -344,6 +344,8 @@ tests/
     trace-slice-at-stop.maxtest             `trace` shows the DebugStream events committed before the stop
     trace-unavailable-without-debugstream.maxtest      a build with no producer says so, and answers no list
     trace-unavailable-without-the-flag.maxtest         the same build without `--trace` names the other reason
+    a-process-a-debug-stream-program-starts-does-not-attach-to-its-ring.maxtest      a process a monitored program starts finds the ring claimed and reports no events into it
+    fixtures/ownring/main.maxon.fixture     the ring-ownership program: it prints whether it is attached to the ring, runs itself as a child that prints the same - stored name only, see rule 1
     fixtures/<name>/main.maxon.fixture      stored names only - see rule 1
   dap/
     DapClient.maxon                         the shared half: a DAP client over a spawned `dap-server`, the staging of `debug/fixtures/`, the message readers

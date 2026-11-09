@@ -28,6 +28,7 @@ the same length. An entry at absolute cursor position `c` lives at `base + 128 +
 | 24 | write cursor (absolute; never wraps) |
 | 32 | read cursor |
 | 40 | flags: bit 0 is "producer alive" |
+| 48 (`0x30`) | producer claim: 0 until the one process that writes this ring sets it to 1 |
 | 56 | start timestamp, in the tick-count milliseconds the producer's clock uses |
 | 64, 72 | total and dropped events |
 | 96 | peak ring use |
@@ -57,8 +58,13 @@ executable.
 ## The producer
 
 A build carries the producer only with `--debugstream` and only if the program uses the heap. It stays dark
-until `__ds_init` finds a segment named by `MAXON_DEBUGSTREAM`, checks the magic and version, and only then
-arms `__ds_base`.
+until `__ds_init` finds a segment named by `MAXON_DEBUGSTREAM`, checks the magic and version, wins the claim
+at offset 48 and only then arms `__ds_base`.
+
+A segment serves exactly one producer process for its life. The first process to compare-and-swap the claim
+from 0 to 1 writes the ring; any other process that finds the segment emits nothing. The claim is never
+released, so a process the program starts, which inherits `MAXON_DEBUGSTREAM`, stays dark whether the
+program is still running or has exited.
 
 - **Without the flag**, emit sites compile to nothing: no load, no call.
 - **With the flag but no monitor**, a memory-manager or scheduler site costs a load of `__ds_base`, a compare
@@ -80,7 +86,9 @@ each other only. On x64 the ordered accesses are plain loads and stores.
 
 `maxon monitor` creates and seeds the segment — magic, version, ring size, start timestamp — before it
 spawns the program with `MAXON_DEBUGSTREAM` naming it (`mds.<tag>.<start>.<pid>.<serial>`, 31 bytes),
-because a program that attaches to a half-written header traces nothing. It refuses a producer announcing another schema version.
+because a program that attaches to a half-written header traces nothing. It seeds the producer claim
+unclaimed. It refuses a producer announcing another schema version. Only the program the monitor spawns
+reports into the ring; the processes that program starts report none.
 
 Each drain reads the committed prefix of the ring, stops at the first uncommitted entry, copies it out in at
 most two pieces across the wrap, and publishes the read cursor. An uncommitted entry left by a producer that
