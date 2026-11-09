@@ -1,0 +1,33 @@
+let ARawSurrogateLiteralCaseDirName = "raw-surrogate-literal"
+let ARawSurrogateLiteralRefusal = "Malformed UTF-8 in "
+let ARawSurrogateLiteralHead = "function main() returns ExitCode\n\tlet c = "
+let ARawSurrogateLiteralTail = "\n\treturn c.byteLength()\nend 'main'\n"
+
+test 'a character literal and a string literal holding a surrogate or a malformed sequence in raw bytes are refused'
+	try requireRawLiteralRefused("surrogate in a character literal", quote: "'", body: ByteArray from [0xED, 0xA0, 0x80])
+	try requireRawLiteralRefused("surrogate in a string literal", quote: "\"", body: ByteArray from [0xED, 0xBF, 0xBF])
+	try requireRawLiteralRefused("truncated sequence in a character literal", quote: "'", body: ByteArray from [0xC3])
+	try requireRawLiteralRefused("lone continuation byte in a string literal", quote: "\"", body: ByteArray from [0x61, 0x80])
+	try requireRawLiteralRefused("byte beyond UTF-8 in a character literal", quote: "'", body: ByteArray from [0xFF])
+end 'a character literal and a string literal holding a surrogate or a malformed sequence in raw bytes are refused'
+
+function requireRawLiteralRefused(what String, quote String, body ByteArray) throws TestFailure
+	let dir = freshCaseDir(ARawSurrogateLiteralCaseDirName)
+	let sourcePath = dir.join("literal.maxon")
+	let outputPath = dir.join("literal")
+	var source = "{ARawSurrogateLiteralHead}{quote}".toByteArray()
+
+	for b in body 'eachBodyByte'
+		source.push(b)
+	end 'eachBodyByte'
+
+	for b in "{quote}{ARawSurrogateLiteralTail}".bytes() 'eachTailByte'
+		source.push(b)
+	end 'eachTailByte'
+
+	writeStagedFile(sourcePath, content: String.from(source))
+	let run = spawnCompiler(["build", sourcePath.toString(), "--output={outputPath.toString()}"])
+
+	try Expect.equal(run.exitCode(), expected: 1, message: "{what} was not refused. It said: {run.stdout}{run.stderr}")
+	try Expect.contains(run.stderr, needle: ARawSurrogateLiteralRefusal, message: "{what} is not refused as malformed UTF-8. It said: {run.stderr}")
+end 'requireRawLiteralRefused'

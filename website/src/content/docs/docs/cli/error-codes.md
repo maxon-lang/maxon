@@ -17,7 +17,7 @@ A string literal reached end-of-line or end-of-file with no closing quote.
 
 ### E1004 — `lexerInvalidEscape`
 
-A backslash escape in a string or character literal names no known escape.
+A backslash escape in a string or character literal names no known escape. A character or string literal whose text is not well-formed UTF-8 is refused too: `\uD800`, or a surrogate or malformed byte sequence typed into the source, is not a Unicode scalar value. Write `\uFFFD` where a placeholder is meant; bytes that are not text belong in a `b"..."` literal.
 
 ### E1006 — `lexerUnescapedBrace`
 

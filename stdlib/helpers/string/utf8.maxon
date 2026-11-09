@@ -219,8 +219,13 @@ enum Utf8Malformation implements Error
 	malformed
 end 'Utf8Malformation'
 
-/// Append the UTF-8 encoding of `codepoint` to `out`.
+/// Append the UTF-8 encoding of `codepoint` to `out`. A surrogate (U+D800 to U+DFFF) has no encoding
+/// and panics.
 public function utf8AppendCodepoint(codepoint Codepoint, out ByteArray)
+	if codepointIsSurrogate(codepoint) 'notScalar'
+		panic("utf8AppendCodepoint: a surrogate (U+D800 to U+DFFF) is not a Unicode scalar value")
+	end 'notScalar'
+
 	let width = utf8EncodeLength(codepoint)
 	let continuations = (width as Count) - 1
 	let marker = try Utf8LeadMarkers.get(width as ElementIndex) otherwise panic("a UTF-8 width is 1 to 4")

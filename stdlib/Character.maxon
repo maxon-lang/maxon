@@ -10,6 +10,16 @@ public typealias Codepoint = int(0 to 1114111)
 // negative here is a backwards step rather than the mistake it would be there.
 public typealias CodepointDelta = int(-1114111 to 1114111)
 
+typealias ScalarRank = int(0 to 1112063)
+
+module let SurrogateFirst = 0xD800
+module let SurrogateLast = 0xDFFF
+let SurrogateBlockSize = 0x800
+
+module function codepointIsSurrogate(codepoint Codepoint) returns bool
+	return codepoint >= SurrogateFirst and codepoint <= SurrogateLast
+end 'codepointIsSurrogate'
+
 // CharacterError - errors for character operations
 public enum CharacterError implements Error
 	notAscii
@@ -165,7 +175,17 @@ public type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	end 'codepoint'
 
 	public function advanceBy(n CodepointDelta) returns Character
-		return Character.fromCodepoint(((codepoint() as CodepointDelta) + n) as Codepoint)
+		let current = codepoint()
+
+		if codepointIsSurrogate(current) 'notScalar'
+			panic("Character.advanceBy: this character holds a surrogate, which is not a Unicode scalar value")
+		end 'notScalar'
+
+		let rank = ((current - SurrogateBlockSize) if current > SurrogateLast else current) as ScalarRank
+		let target = ((rank as CodepointDelta) + n) as ScalarRank
+		let scalar = ((target + SurrogateBlockSize) if target >= SurrogateFirst else target) as Codepoint
+
+		return Character.fromCodepoint(scalar)
 	end 'advanceBy'
 
 	// Returns ASCII value (0-127) for single-byte ASCII characters, throws otherwise
@@ -190,6 +210,10 @@ public type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	// Create a Character from a Unicode codepoint value
 	// Uses bit shifts instead of division (int / int produces float in Maxon)
 	static function fromCodepoint(cp Codepoint) returns Character
+		if codepointIsSurrogate(cp) 'notScalar'
+			panic("Character.fromCodepoint: a surrogate is not a Unicode scalar value")
+		end 'notScalar'
+
 		if cp < 128 'enc_ascii'
 			var m = try ByteMemory.create(1, 1) otherwise 'createErr1'
 				panic("Character.fromCodepoint: create(1,1) — positive count always valid")

@@ -913,6 +913,8 @@ export union SourceParseError implements Error
 	// with the codepoint hex-formatted at the decode site).
 	byteStringCodepointRange(message String, line LineNumber, column ColumnNumber)
 
+	malformedLiteralText(message String, line LineNumber, column ColumnNumber)
+
 	// A top-level binding name DECLARED more than once in one DIRECTORY — `let A = 1` then `let A = 2` in one
 	// file, a `let`/`var` collision on one name, or two files of one directory that each `export let LIMIT`.
 	// A binding another directory declares under the same name is a different binding (a contested name is
@@ -2927,6 +2929,8 @@ type ForSourceFacts
 	// A `'a' to 'z'` header, whose element is a Character rather than an integer.
 	export var isCharacterRange as bool
 
+	export var skipsSurrogateBlock as bool
+
 	// A String source, iterated by grapheme.
 	export var isString as bool
 
@@ -2947,7 +2951,7 @@ type ForSourceFacts
 	export var elementQualifier as GenericArgQualifier
 
 	static function create(limit ValueId, testAnchorIndex ElementIndex) returns ForSourceFacts
-		return Self{isRange: false, rangeInclusive: false, limit: limit, testAnchorIndex: testAnchorIndex, isCharacterRange: false, isString: false, sourceIsDeferred: false, cursorSurface: MethodSurface.none, cursorEntrySeed: CursorEntrySeed.atTheFirstElement, claimsWithIteratorPromise: false, elementQualifier: GenericArgQualifier.plain}
+		return Self{isRange: false, rangeInclusive: false, limit: limit, testAnchorIndex: testAnchorIndex, isCharacterRange: false, skipsSurrogateBlock: false, isString: false, sourceIsDeferred: false, cursorSurface: MethodSurface.none, cursorEntrySeed: CursorEntrySeed.atTheFirstElement, claimsWithIteratorPromise: false, elementQualifier: GenericArgQualifier.plain}
 	end 'create'
 end 'ForSourceFacts'
 
@@ -11708,6 +11712,8 @@ union CharLiteralValue
 	// its digit count is wrong, and the canonical corpus pins a distinct diagnostic for it (E1004,
 	// `specs/unicode-escape.md:151`, `specs/hex-escape.md:147`) where an unrecognized `\q` is E2016.
 	badDigitEscape(text String, offset ByteOffset, marker Byte)
+
+	malformedText
 end 'CharLiteralValue'
 
 // Decode a character-literal body. There is no split on width: every literal is a `Character` and an
@@ -11720,6 +11726,7 @@ function decodeCharLiteral(raw ByteArray) returns CharLiteralValue
 		bytes(buf) then return charValueOf(buf)
 		unknownEscape(text) then return CharLiteralValue.badEscape(text)
 		badDigitEscape(text, offset, marker) then return CharLiteralValue.badDigitEscape(text, offset: offset, marker: marker)
+		malformedText then return CharLiteralValue.malformedText
 	end 'd'
 end 'decodeCharLiteral'
 
@@ -11744,6 +11751,8 @@ union DecodedLiteral
 	// A `\xNN`/`\uNNNN` escape with the wrong number of hex digits — see `CharLiteralValue.badDigitEscape`
 	// for why the digit count gets a case of its own rather than riding `unknownEscape`.
 	badDigitEscape(text String, offset ByteOffset, marker Byte)
+
+	malformedText
 end 'DecodedLiteral'
 
 // The escape sequences a quoted literal accepts, decoded to their bytes. One set serves both forms, so a
@@ -11762,12 +11771,14 @@ function decodeEscapes(raw ByteArray, kind LiteralEscapeKind) returns DecodedLit
 	var buf = ByteArray.create(0)
 	let len = raw.count()
 	var i = 0 as ByteOffset
+	var hasNonAscii = false
 
 	while i < len as ByteOffset 'decode'
 		let ch = try raw.get(i) otherwise panic("decodeEscapes: i < len just held but get({i}) failed")
 
 		if ch != Backslash or i + 1 >= len as ByteOffset 'literalByte'
 			buf.push(ch)
+			hasNonAscii = hasNonAscii or ch >= AsciiCeiling
 			i = i + 1
 			continue
 		end 'literalByte'
@@ -11800,6 +11811,7 @@ function decodeEscapes(raw ByteArray, kind LiteralEscapeKind) returns DecodedLit
 			end 'malformed'
 
 			appendUtf8Encoded(buf, codepoint: digitEscapeValue(raw, at: i, form: form))
+			hasNonAscii = true
 			i = i + form.width
 			continue
 		end 'digitEscape'
@@ -11811,6 +11823,10 @@ function decodeEscapes(raw ByteArray, kind LiteralEscapeKind) returns DecodedLit
 
 		i = i + 2
 	end 'decode'
+
+	if hasNonAscii and not utf8IsWellFormed(buf) 'malformed'
+		return DecodedLiteral.malformedText
+	end 'malformed'
 
 	return DecodedLiteral.bytes(buf)
 end 'decodeEscapes'
@@ -11937,6 +11953,10 @@ function invalidDigitEscapeError(text String, kind LiteralEscapeKind, offset Byt
 	return SourceParseError.invalidDigitEscape("Invalid {form.noun} escape '{text}': expected {form.digitCount} hex digits in {literalEscapeKindPhrase(kind)}", line: tok.line, column: tok.column + (offset as ColumnNumber))
 end 'invalidDigitEscapeError'
 
+function malformedLiteralTextError(kind LiteralEscapeKind, tok Token) returns SourceParseError
+	return SourceParseError.malformedLiteralText("Malformed UTF-8 in {literalEscapeKindPhrase(kind)}: a surrogate (U+D800 to U+DFFF) or an invalid byte sequence is not a Unicode scalar value", line: tok.line, column: tok.column)
+end 'malformedLiteralTextError'
+
 // ⭐ **WHICH LITERAL FORM A MALFORMED DIGIT ESCAPE WAS WRITTEN IN — AN ENUM, NOT THREE LOOSE STRINGS.**
 // The three forms that admit a digit escape are one closed set, so they are one type rather than three
 // constants a caller may or may not reach for: `kind` has no default at any of the five call sites, and
@@ -12030,6 +12050,7 @@ let NulByte = 0 as Byte
 // The high-bit threshold: a source byte `< AsciiCeiling` is a bare ASCII byte; `>= AsciiCeiling` opens a
 // multi-byte UTF-8 sequence. A byte-string codepoint must fit in `[0, ByteCodepointMax]` (Latin-1).
 let AsciiCeiling = 128
+let WordSignBitShift = 63
 let ByteCodepointMax = 255
 
 // The low byte of a codepoint (its Latin-1 encoding for a valid one; a harmless recovery value otherwise).
@@ -53839,6 +53860,7 @@ export type Parser
 			// binding rather than a literal, or a multi-codepoint cluster — and `requireCountableRangeBound`
 			// below refuses it in its own words rather than this flag promising an element it cannot mint.
 			src.isCharacterRange = bothWereCharacters and tagIsIntegral(self.tagOf(source)) and tagIsIntegral(self.tagOf(src.limit))
+			src.skipsSurrogateBlock = src.isCharacterRange and self.constIsKnown(source) and self.constIsKnown(src.limit) and self.constOf(source) < SurrogateFloor and self.constOf(src.limit) >= SurrogateFloor
 		end 'rangeHeader'
 
 		// ⭐ **A COUNTED RANGE'S BOUNDS MUST BE INTEGERS**, asked here — the moment both are in hand and
@@ -54322,6 +54344,10 @@ export type Parser
 			if not src.isString 'ordinalStep'
 				let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
 				nextIndex = self.emitMachineWordBinOp(indexPhi, rhs: one, op: MaxonBinOp.add, resultType: MaxonType.integer, range: SourceRange.ofToken(forTok))
+
+				if src.skipsSurrogateBlock 'skipSurrogateBlock'
+					nextIndex = self.emitSurrogateBlockSkip(nextIndex, range: SourceRange.ofToken(forTok))
+				end 'skipSurrogateBlock'
 			end 'ordinalStep'
 		end 'builtinSourceStep'
 
@@ -70167,6 +70193,7 @@ export type Parser
 			empty then throw SourceParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column)
 			badEscape(text) then throw SourceParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
 			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: LiteralEscapeKind.characterLiteral, offset: offset, marker: marker, tok: tok)
+			malformedText then throw malformedLiteralTextError(LiteralEscapeKind.characterLiteral, tok: tok)
 		end 'decoded'
 	end 'charLiteralBytes'
 
@@ -70370,6 +70397,7 @@ export type Parser
 			bytes(buf) then return buf
 			unknownEscape(text) then throw SourceParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
 			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: LiteralEscapeKind.stringInterpolation, offset: offset, marker: marker, tok: tok)
+			malformedText then throw malformedLiteralTextError(LiteralEscapeKind.stringInterpolation, tok: tok)
 		end 'decoded'
 	end 'decodedStringLiteralBytes'
 
@@ -70627,6 +70655,7 @@ export type Parser
 			bytes(buf) then self.materializeFragmentBytes(buf, partBufs: partBufs, partLens: partLens, range: range)
 			unknownEscape(text) then throw SourceParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
 			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: LiteralEscapeKind.stringInterpolation, offset: offset, marker: marker, tok: tok)
+			malformedText then throw malformedLiteralTextError(LiteralEscapeKind.stringInterpolation, tok: tok)
 		end 'decoded'
 	end 'materializeLiteralFragment'
 
@@ -71145,6 +71174,20 @@ export type Parser
 		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.binOp(result, lhs: lhs, rhs: rhs, op: op), range: range)
 		return result
 	end 'emitMachineWordBinOp'
+
+	function emitSurrogateBlockSkip(next ValueId, range SourceRange) returns ValueId
+		let blockShift = self.emitLiteral(SurrogateBlockShift, valueType: MaxonType.integer, range: range)
+		let blockNumberOfSurrogates = self.emitLiteral(SurrogateFloor shr SurrogateBlockShift, valueType: MaxonType.integer, range: range)
+		let one = self.emitLiteral(1, valueType: MaxonType.integer, range: range)
+		let signShift = self.emitLiteral(WordSignBitShift, valueType: MaxonType.integer, range: range)
+		let blockNumber = self.emitMachineWordBinOp(next, rhs: blockShift, op: MaxonBinOp.shr, resultType: MaxonType.integer, range: range)
+		let blockDifference = self.emitMachineWordBinOp(blockNumber, rhs: blockNumberOfSurrogates, op: MaxonBinOp.bitXor, resultType: MaxonType.integer, range: range)
+		let belowOne = self.emitMachineWordBinOp(blockDifference, rhs: one, op: MaxonBinOp.sub, resultType: MaxonType.integer, range: range)
+		let insideBlock = self.emitMachineWordBinOp(belowOne, rhs: signShift, op: MaxonBinOp.shrLogical, resultType: MaxonType.integer, range: range)
+		let skipped = self.emitMachineWordBinOp(insideBlock, rhs: blockShift, op: MaxonBinOp.shl, resultType: MaxonType.integer, range: range)
+
+		return self.emitMachineWordBinOp(next, rhs: skipped, op: MaxonBinOp.add, resultType: MaxonType.integer, range: range)
+	end 'emitSurrogateBlockSkip'
 
 	// Load an 8-byte field of a String record — `buffer@0`, `length@8`. Integer-tagged: the values are a raw
 	// pointer and a byte count. The `rec` addr is a String pointer, read by the Std tier as an i64.

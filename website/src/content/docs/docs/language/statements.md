@@ -147,6 +147,8 @@ for c in 'a' to 'z' 'letters'
 end 'letters'
 ```
 
+A character range visits scalar values, so one whose bounds straddle U+D800 to U+DFFF skips that block.
+
 In a `for` header a range compiles to a counted loop with no allocation. The counter is immutable inside
 the body (assigning it is **E2013**) and takes its type from the bounds: a literal bound adopts the other
 bound's alias, so `for i in 0 upto xs.count()` counts in `Count`. Between two literal bounds the counter

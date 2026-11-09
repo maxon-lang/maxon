@@ -279,6 +279,12 @@ end 'main'
 An empty literal `''`, or one holding two characters, is **E2016**. A character literal beside an integer
 operand is its codepoint, a `Codepoint` (`cp - '0'`).
 
+A `Character` is made of Unicode scalar values, U+0000 to U+D7FF and U+E000 to U+10FFFF. The surrogate block
+U+D800 to U+DFFF has no UTF-8 spelling, so a character or string literal that spells one (`'\uD800'`) or holds
+malformed UTF-8 is **E1004**. `Character.advanceBy` counts scalar values and steps over the block, and a
+character range such as `'\uD7FF' to '\uE000'` skips it. `Codepoint` is an integer range, so it can hold a
+surrogate as a number; a `Character` or `String` is built from scalar values only.
+
 ### String Literals
 
 ```maxon
@@ -299,10 +305,11 @@ A string literal cannot contain a raw newline; use `\n`.
 | `\\` `\"` `\'` | backslash, double quote, single quote |
 | `\{` `\}` | literal braces (string literals only) |
 | `\xNN` | the codepoint `U+00NN` (exactly two hex digits) |
-| `\uXXXX` | the codepoint `U+XXXX` (exactly four hex digits) |
+| `\uXXXX` | the codepoint `U+XXXX` (exactly four hex digits, outside the surrogates U+D800 to U+DFFF) |
 
 In a `String`, `\xNN` is a codepoint, not a raw byte: `"\xFF"` is the character `ÿ`, two bytes in UTF-8. Use a
-byte string for raw bytes. A malformed escape is **E1004**.
+byte string for raw bytes. A malformed escape is **E1004**, and so is a literal whose text is not well-formed
+UTF-8.
 
 ### String Interpolation
 

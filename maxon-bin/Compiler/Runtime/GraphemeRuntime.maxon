@@ -58,6 +58,10 @@ export let Utf8OneByteCeiling = 128 as FullRangeInt
 export let Utf8TwoByteCeiling = 2048 as FullRangeInt
 export let Utf8ThreeByteCeiling = 65536 as FullRangeInt
 export let Utf8ContinuationFloor = 0x80 as FullRangeInt
+export let SurrogateFloor = 0xD800 as FullRangeInt
+// Shifted right by this, every number from U+D800 to U+DFFF gives the same value and no other number
+// does, which is how `Parser.emitSurrogateBlockSkip` finds the block without a branch.
+export let SurrogateBlockShift = 11 as FullRangeInt
 
 let Utf8OneByteLength = 1
 
@@ -240,9 +244,9 @@ end 'buildCharAt'
 // inherited-and-conservative: the encoder knows which arm it took, so the one-byte arm publishes `true` and
 // the three wide arms publish `false`.
 //
-// ⚠ **NO ARM VALIDATES `cp`.** Its one caller decodes a character LITERAL, so the value is a codepoint the
-// lexer already accepted; a surrogate or an out-of-range number would encode to the same bytes the reference
-// encoder produces for it, which is the reference's behaviour too (`fromCodepoint` has no guard either).
+// ⚠ **NO ARM VALIDATES `cp`.** Its callers hand it a codepoint of a character LITERAL, which is
+// well-formed UTF-8, or one a character range counted, which steps over U+D800 to U+DFFF. A surrogate
+// reaching here would encode to bytes that are not UTF-8; `fromCodepoint` is the guarded door.
 function buildCharFromCodepoint(module StdModule)
 	var func = IrFunction.createFromStd(CharFromCodepointName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)

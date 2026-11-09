@@ -312,7 +312,7 @@ same pattern and exports a small set of cross-cutting aliases:
 | `ExitCode` | target-dependent (see above) | process exit codes |
 | `Byte` | `int(0 to u8.max)` | one byte; `ByteArray` is `Array with Byte` |
 | `HashValue` | `int(0 to u32.max)` | `Hashable.hash()` results |
-| `Codepoint` | `int(0 to 1114111)` | Unicode scalar values |
+| `Codepoint` | `int(0 to 1114111)` | Unicode codepoints (see [Character Literals](/docs/language/overview/#character-literals) for the surrogate block) |
 | `Count` | `int(0 to u64.max) implements ElementIndex` | a collection's `count()` |
 | `SourceLineNumber` | `int(1 to i32.max)` | caller line numbers (`__line__`) |
 | `FullRangeFloat` | `float(f64.min to f64.max)` | general floating-point values |

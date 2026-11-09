@@ -123,8 +123,6 @@ let derPrintablePunctuation = ByteArray from [0x20, 0x27, 0x28, 0x29, 0x2B, 0x2C
 let derTeletexUnitBytes = 1
 let derBmpUnitBytes = 2
 let derUniversalUnitBytes = 4
-let derSurrogateFirst = 0xD800
-let derSurrogateLast = 0xDFFF
 let derLastCodepoint = 0x10FFFF
 
 /// The identifier and length octets of one element.
@@ -602,7 +600,7 @@ function derUnitAt(content ByteArray, start ElementIndex, unitBytes DerUnitBytes
 		value = (value shl derBitsPerByte) + ((try content.get(start + offset) otherwise panic("the content holds whole units")) as DerLength)
 	end 'eachOctet'
 
-	if value > derLastCodepoint or (value >= derSurrogateFirst and value <= derSurrogateLast) 'notScalar'
+	if value > derLastCodepoint or (value >= SurrogateFirst and value <= SurrogateLast) 'notScalar'
 		throw DerError.invalidString
 	end 'notScalar'
 

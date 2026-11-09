@@ -526,6 +526,10 @@ release's version as its heading when the release is cut.
   a call to either is E3004.
   Fix: write `b < 128` for `utf8IsAscii(b)` and `cp < 0xD800 or cp > 0xDFFF` for `utf8IsValidCodepoint(cp)`;
   to test whether a whole `String` is ASCII, call `isAscii()`.
+- A character or string literal whose bytes are not well-formed UTF-8 is E1004: `'\uD800'`, `"a\uDFFFb"`, and
+  a surrogate or a malformed byte sequence typed into the source. UTF-8 has no spelling for a surrogate
+  (U+D800 to U+DFFF), and such a literal used to build a `Character` or `String` holding one.
+  Fix: write `\uFFFD` where a placeholder is meant; bytes that are not text are a `b"…"` literal.
 
 ## 0.5.0 — 2026-10-08
 
