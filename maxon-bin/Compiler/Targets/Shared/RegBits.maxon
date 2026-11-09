@@ -62,9 +62,6 @@ function summaryBitOf(word ElementIndex) returns MachineWord
 	return 1 shl (word and BitIndexMask)
 end 'summaryBitOf'
 
-typealias BitJournal = Array with BitIndex
-typealias BitJournalStates = Array with bool
-
 // A dense bit row over the value space, with two levels of occupancy summary above it: one
 // `summary` bit per 64 row words, one `topSummary` bit per 64 summary words. INVARIANT: a level's
 // bit is set exactly when the word below it is nonzero (`requireSummaryIsExact` checks it). A lost
@@ -79,48 +76,10 @@ export type BitRow
 	var summary as BitWordArray
 	var topSummary as BitWordArray
 	var wordsVisited as EventCount
-	var journaling as bool
-	var journal as BitJournal
-	var journalWasSet as BitJournalStates
 
 	export static function create() returns BitRow
-		return Self{words: BitWordArray.create(0), summary: BitWordArray.create(0), topSummary: BitWordArray.create(0), wordsVisited: 0, journaling: false, journal: BitJournal.create(0), journalWasSet: BitJournalStates.create(0)}
+		return Self{words: BitWordArray.create(0), summary: BitWordArray.create(0), topSummary: BitWordArray.create(0), wordsVisited: 0}
 	end 'create'
-
-	export function beginJournal()
-		if self.journaling 'alreadyJournaling'
-			panic("BitRow.beginJournal: a journal is already open — a row is rolled back to ONE earlier state, so journals do not nest")
-		end 'alreadyJournaling'
-
-		self.journal.clear()
-		self.journalWasSet.clear()
-		self.journaling = true
-	end 'beginJournal'
-
-	export function rollBackJournal()
-		if not self.journaling 'noJournal'
-			panic("BitRow.rollBackJournal: no journal is open, so there is no earlier state to return to")
-		end 'noJournal'
-
-		self.journaling = false
-		var k = self.journal.count()
-
-		while k > 0 'newestFirst'
-			k = k - 1
-			let bit = try self.journal.get(k) otherwise panic("BitRow.rollBackJournal: journal.get OOB at {k}")
-
-			let wasSet = try self.journalWasSet.get(k) otherwise panic("BitRow.rollBackJournal: journalWasSet.get OOB at {k}")
-
-			if wasSet 'itWasSet'
-				self.add(bit)
-			end 'itWasSet' else 'itWasClear'
-				self.remove(bit)
-			end 'itWasClear'
-		end 'newestFirst'
-
-		self.journal.clear()
-		self.journalWasSet.clear()
-	end 'rollBackJournal'
 
 	// GROWN, never `resize`d: a split widens the value space by a handful of ids, and `resize` takes
 	// the ask at face value, so a row extended a word at a time is reallocated and copied IN FULL at
@@ -145,12 +104,6 @@ export type BitRow
 	export function add(bit BitIndex)
 		let idx = wordIndexOf(bit)
 		let w = try self.words.get(idx) otherwise panic("BitRow.add: word index out of range (bit={bit}, words={self.words.count()})")
-
-		if self.journaling 'noteTheOldState'
-			self.journal.push(bit)
-			self.journalWasSet.push((w and bitOf(bit)) != 0)
-		end 'noteTheOldState'
-
 		try self.words.set(idx, value: w or bitOf(bit)) otherwise panic("BitRow.add: word index out of range on set")
 
 		if w != 0 'theWordWasAlreadyOccupied'
@@ -173,12 +126,6 @@ export type BitRow
 	export function remove(bit BitIndex)
 		let idx = wordIndexOf(bit)
 		let w = try self.words.get(idx) otherwise panic("BitRow.remove: word index out of range (bit={bit}, words={self.words.count()})")
-
-		if self.journaling 'noteTheOldState'
-			self.journal.push(bit)
-			self.journalWasSet.push((w and bitOf(bit)) != 0)
-		end 'noteTheOldState'
-
 		let left = w and not bitOf(bit)
 		try self.words.set(idx, value: left) otherwise panic("BitRow.remove: word index out of range on set")
 
@@ -240,10 +187,6 @@ export type BitRow
 	end 'collect'
 
 	export function clear()
-		if self.journaling 'aJournalIsOpen'
-			panic("BitRow.clear: a journal is open — `clear` writes words without journaling them, so `rollBackJournal` could not restore the bits it drops")
-		end 'aJournalIsOpen'
-
 		let topCount = self.topSummary.count()
 		var visited = topCount as EventCount
 

@@ -248,13 +248,6 @@ typealias MergingBlockColumn = OptionalIndexColumn with BlockId
 union PathStep
 	field(offset AccessStep)
 	element
-
-	function fieldOffset() returns AccessStep throws AbsentError
-		match self 'step'
-			field(offset) then return offset
-			element then throw AbsentError.absent
-		end 'step'
-	end 'fieldOffset'
 end 'PathStep'
 
 typealias PathStepArray = Array with PathStep
@@ -6418,10 +6411,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 	end 'indexCallDefinition'
 
-	function noteWordDefinition(result ValueId, opIdx ElementIndex, valueCount ElementIndex, word ValueId)
-		_ = self.noteDefiningOp(result, opIdx: opIdx, valueCount: valueCount, kind: AccessHopKind.same, base: word)
-	end 'noteWordDefinition'
-
 	function noteHeldDefinition(result ValueId, opIdx ElementIndex, valueCount ElementIndex, held ValueId)
 		_ = self.noteDefiningOp(result, opIdx: opIdx, valueCount: valueCount, kind: AccessHopKind.same, base: held)
 	end 'noteHeldDefinition'
@@ -7540,13 +7529,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		return false
 	end 'anOperandIsOrHolds'
-
-	// The op whose result `value` is, out of the function's definitions (`indexDefinitions`).
-	function definingOpOf(func IrFunction, ir MaxonModule, value ValueId) returns DefiningOp
-		self.indexDefinitions(func, ir: ir)
-		let opIdx = try self.definingOpIndexOf(value) otherwise return DefiningOp.notAnOp
-		return DefiningOp.op(opIdx)
-	end 'definingOpOf'
 
 	function isTracked(value ValueId) returns bool
 		return try self.tracked.get(value) otherwise panic("ProvenanceTracer.isTracked: v{value} is past the traced function's value count")
@@ -9989,10 +9971,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return found
 	end 'uniqueSiteIndicesOf'
 
-	module function argumentHoldsAUnique(func IrFunction, value ValueId, call SourceRange) returns bool
-		return self.uniqueSiteIndicesOf(func, value: value, call: call).count() > 0
-	end 'argumentHoldsAUnique'
-
 	module function moveUniqueArgument(func IrFunction, value ValueId, call SourceRange, parameter ArgumentParameter, callee ByteArray)
 		for siteIndex in self.uniqueSiteIndicesOf(func, value: value, call: call) 'eachDoor'
 			view site = try func.provenanceSites(self.noSites).moveSites.get(siteIndex) otherwise panic("ProvenanceTracer.moveUniqueArgument: moveSites.get OOB at {siteIndex}")
@@ -11359,11 +11337,6 @@ end 'mayBeOneRecord'
 module function tagIsOpaqueRecord(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.interfaceRef
 end 'tagIsOpaqueRecord'
-
-union DefiningOp
-	notAnOp
-	op(index ElementIndex)
-end 'DefiningOp'
 
 // What an op does with a field slot: reads it, stores into it, or retains a value — which a `let` bound out of a
 // rebindable slot is — or none of these.

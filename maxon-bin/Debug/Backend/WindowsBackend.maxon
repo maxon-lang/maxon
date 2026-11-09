@@ -62,10 +62,9 @@ export type WindowsBackend
 	var imageEnd as BackendWord
 	var breakInThreads as BackendThreadIdArray
 	var breakInsOwed as BackendWord
-	var status as BackendExitStatus
 
 	export static function create() returns WindowsBackend
-		return Self{port: DebugPort.create(), process: BackendProcessHandle.absent, processId: 0, threads: BackendThreadEntryArray.create(0), pendingUnowned: false, stopOutstanding: false, sawFirstBreakpoint: false, stopRequested: false, stepping: BackendStepRoster.create(), suspended: BackendThreadIdArray.create(0), imageBase: 0, imageEnd: 0, breakInThreads: BackendThreadIdArray.create(0), breakInsOwed: 0, status: BackendExitStatus.running}
+		return Self{port: DebugPort.create(), process: BackendProcessHandle.absent, processId: 0, threads: BackendThreadEntryArray.create(0), pendingUnowned: false, stopOutstanding: false, sawFirstBreakpoint: false, stopRequested: false, stepping: BackendStepRoster.create(), suspended: BackendThreadIdArray.create(0), imageBase: 0, imageEnd: 0, breakInThreads: BackendThreadIdArray.create(0), breakInsOwed: 0}
 	end 'create'
 
 	export function holdsItsScratch() returns bool
@@ -75,10 +74,6 @@ export type WindowsBackend
 	export function close()
 		self.port.close()
 	end 'close'
-
-	export function exitStatus() returns BackendExitStatus
-		return self.status
-	end 'exitStatus'
 
 	export function listThreads() returns BackendThreadIdArray
 		var ids = BackendThreadIdArray.create(self.threads.count(), zeroed: false)
@@ -174,7 +169,6 @@ export type WindowsBackend
 
 	function processLeft(exitCode DebuggeeExitCode) returns BackendEventClass
 		let ending = exitCode as BackendExitCode
-		self.status = BackendExitStatus.ended(ending)
 		self.stepping.clear()
 		self.suspended = BackendThreadIdArray.create(0)
 		_ = self.port.continueEvent(DebugDisposition.handled)

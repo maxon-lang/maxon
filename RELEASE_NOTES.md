@@ -522,6 +522,10 @@ release's version as its heading when the release is cut.
   since an enum body declares none.
   Fix: correct what the extension now reports, declare a `static function` as a free function and a
   `typealias` at the top level, and delete an extension that was meant to add nothing.
+- The standard library functions `utf8IsAscii(b Byte)` and `utf8IsValidCodepoint(cp Codepoint)` are removed;
+  a call to either is E3004.
+  Fix: write `b < 128` for `utf8IsAscii(b)` and `cp < 0xD800 or cp > 0xDFFF` for `utf8IsValidCodepoint(cp)`;
+  to test whether a whole `String` is ASCII, call `isAscii()`.
 
 ## 0.5.0 — 2026-10-08
 

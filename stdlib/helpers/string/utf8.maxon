@@ -64,11 +64,6 @@ public function utf8IsLead(b Byte) returns bool
 	return b < 128 or b >= 192
 end 'utf8IsLead'
 
-/// Check if a byte is ASCII (0-127)
-public function utf8IsAscii(b Byte) returns bool
-	return b < 128
-end 'utf8IsAscii'
-
 /// Get the number of bytes needed to encode a codepoint in UTF-8
 public function utf8EncodeLength(codepoint Codepoint) returns ByteWidth
 	if codepoint < 128 'ascii'
@@ -85,29 +80,6 @@ public function utf8EncodeLength(codepoint Codepoint) returns ByteWidth
 
 	return 4
 end 'utf8EncodeLength'
-
-/// Is this codepoint one UTF-8 may encode? Answers false for the surrogate pairs (0xD800-0xDFFF),
-/// which are a UTF-16 encoding artefact and are not scalar values.
-///
-/// ⚠ **IT DOES NOT ANSWER FOR A VALUE OUTSIDE `Codepoint` — SUCH A VALUE CANNOT ARRIVE.** A promise
-/// of *"returns false for negative values, values > 0x10FFFF"*, kept by a `cp < 0 or cp > 1114111`
-/// body, could not run: `Codepoint` is `int(0 to 1114111)` (`stdlib/Character.maxon`), a NARROWED
-/// range, so its parameter is guarded at this function's own ENTRY — MEASURED, a laundered `-1`
-/// panics `Range check failed: value outside typealias 'Codepoint'` in `utf8IsValidCodepoint`,
-/// uncatchably, before the first statement runs. A promise the door makes unkeepable is worse than
-/// no promise, and a dead disjunct is not a guard — the same reading that empties
-/// `Array.isOutsideLiveRange`'s negative half.
-///
-/// ⇒ The bound `1114111` is therefore stated ONCE, on `Codepoint`: a second copy here, in another
-/// file, would have nothing comparing the two.
-public function utf8IsValidCodepoint(cp Codepoint) returns bool
-	// Exclude surrogate pairs
-	if cp >= 55296 and cp <= 57343 'surrogate_check'
-		return false
-	end 'surrogate_check'
-
-	return true
-end 'utf8IsValidCodepoint'
 
 // ============================================
 // String helpers (for internal use by string views and grapheme scanning)

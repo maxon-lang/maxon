@@ -564,72 +564,6 @@ export type IrModule uses Op
 		rewriteBlockOpRefs(self.functions, blocks: self.blocks, plan: plan)
 	end 'compactOps'
 
-	// Reclaim orphaned blocks from `self.blocks` in place.
-	//
-	// A pass that drops a function (`eliminateDeadFunctions`) or a block leaves
-	// the blocks it dropped resident in the shared `self.blocks` array — they
-	// are simply no longer referenced by any function. Like the orphan ops
-	// `compactOps` reclaims, these accumulate and inflate the committed-but-live
-	// block storage during the long backend phase of a large compile (the
-	// compiler compiling itself). This compactor drops them.
-	//
-	// ⚠ NOTHING CALLS IT YET, and nor does `compactOps`. Both stand ahead of
-	// the pass that will want them; dead-function elimination deliberately does
-	// NOT, because an O(ops) walk plus two ops-sized arrays to release memory the
-	// module frees milliseconds later at the end of the compile is a bad trade
-	// (see DeadFunctionElimination's header).
-	//
-	// In-place, mirroring `compactOps`: live blocks are swapped leftward within
-	// the existing `self.blocks` array and the tail
-	// truncated, so no second blocks-sized array is ever allocated. The only
-	// extra allocations are the two `blockCount`-sized maps (live flags +
-	// forwarding).
-	//
-	// Block renumbering is byte-identical to a no-op for codegen: `func.blockRefs`
-	// holds FLAT `self.blocks[]` indices (rewritten here), while every other
-	// block reference — branch terminators, CFG edges — keys off the function-
-	// local `BlockId` (stored inside the op / the block), which this never
-	// touches. Only the flat-index layer is renumbered; the live blocks keep
-	// their relative order, so even the flat order is preserved modulo the
-	// dropped orphans.
-	export function compactBlocks()
-		let oldCount = self.blocks.count()
-		let plan = computeBlockCompaction(self.functions, blockCount: oldCount)
-
-		if plan.liveCount == oldCount 'noOrphans'
-			// No function dropped a block since the last compaction — skip the
-			// move/truncate/rewrite and pay only the O(total blockRefs) walk.
-			return
-		end 'noOrphans'
-
-		// Swap each live block leftward into its compacted slot. `forward[old] <= old` (dense ascending
-		// assignment), so the slot at `old` still holds original block `old` when
-		// we reach it — the same clobber-free property `compactOps` relies on. Swap
-		// (not set) so the displaced orphan is parked at `old` for truncation
-		// rather than being dropped here (its teardown happens in the pop loop).
-		for oldIdx in 0 upto oldCount 'move'
-			let newIdx = try plan.forward.get(oldIdx) otherwise panic("compactBlocks: forward.get OOB at {oldIdx}")
-
-			if newIdx == plan.deadMarker 'orphan'
-				continue
-			end 'orphan'
-
-			if newIdx != oldIdx 'needsSwap'
-				self.blocks.swap(newIdx, j: oldIdx as ElementIndex)
-			end 'needsSwap'
-		end 'move'
-
-		// Every orphan now sits in the contiguous tail `[liveCount, oldCount)`.
-		// Pop each off `blocks` and drop it
-		// (releasing the orphan block's `opRefs`/`blockArgs`/`branchEdges` array
-		// payloads).
-		for _ in plan.liveCount upto oldCount 'dropOrphan'
-			_ = try self.blocks.pop() otherwise panic("compactBlocks: blocks.pop on non-empty tail failed")
-		end 'dropOrphan'
-
-		rewriteFuncBlockRefs(self.functions, plan: plan)
-	end 'compactBlocks'
-
 	export function appendOps(source Self)
 		for op in source.ops 'eachSourceOp'
 			self.ops.push(op)
@@ -905,12 +839,9 @@ end 'SpliceScratch'
 // `deadMarker` when that entry is an orphan (nothing references it). `liveCount`
 // is the number of survivors — the new array length after compaction.
 // `deadMarker` is the old count (one past every valid new index), so a live
-// entry can never collide with it. Despite the `Op` in the name, the plan is
-// index-type-agnostic and drives both of `IrModule`'s in-place compactors:
-// `compactOps` (the ops array) and `compactBlocks` (the blocks array). Every
-// tier — including `TargetModule`, now just `IrModule with TargetOp` — shares
-// those two inherited methods. The array move + reference rewrite are
-// entry-typed and stay on the module; the index arithmetic is shared here.
+// entry can never collide with it. It drives `IrModule.compactOps`, which every
+// tier, `TargetModule` included, inherits; the array move and reference rewrite
+// stay on the module and the index arithmetic is here.
 type OpCompactionPlan
 	export var forward as FixedOpIndexArray
 	export let liveCount as ElementIndex
@@ -921,14 +852,12 @@ type OpCompactionPlan
 	end 'create'
 end 'OpCompactionPlan'
 
-// Turn a liveness bitmap into a compaction forwarding map. Shared by the op and
-// block compaction planners, which differ only in how they MARK liveness — the
-// slot-assignment arithmetic is identical for both.
+// Turn a liveness bitmap into a compaction forwarding map.
 //
 // Assigns compacted slots in ASCENDING old-index order: scanning ascending
 // guarantees `forward[old] <= old` for every live entry (at most `old + 1` slots
 // are consumed by the time index `old` is reached), which is what makes the
-// leftward in-place move in `compactOps`/`compactBlocks` clobber-free. Orphans
+// leftward in-place move in `compactOps` clobber-free. Orphans
 // (entries with `live[i] == false`) are left at `deadMarker` (= `count`).
 function assignCompactionSlots(live FixedBoolArray, count ElementIndex) returns OpCompactionPlan
 	let deadMarker = count
@@ -978,9 +907,8 @@ end 'computeOpCompaction'
 
 // Rewrite every block's `opRefs` entries and `opIndex` terminator through a
 // compaction plan's forwarding map, IN PLACE — an entry is replaced by its
-// forwarded index, so no second array is built and nothing is allocated. Shared by
-// both module compactors. Must run AFTER the op-array move + truncate so the
-// renumbered indices line up with the relocated ops.
+// forwarded index, so no second array is built and nothing is allocated. Must run AFTER the
+// op-array move + truncate so the renumbered indices line up with the relocated ops.
 function rewriteBlockOpRefs(functions IrFunctionArray, blocks IrBlockArray, plan OpCompactionPlan)
 	for func in functions 'rewriteFunc'
 		for blockRef in func.blockRefs 'rewriteBlock'
@@ -1027,45 +955,6 @@ function rewriteBlockOpRefs(functions IrFunctionArray, blocks IrBlockArray, plan
 		end 'rewriteBlock'
 	end 'rewriteFunc'
 end 'rewriteBlockOpRefs'
-
-// Compute the in-place compaction forwarding map for a module's `blocks` array.
-// Mirrors `computeOpCompaction` but keys liveness off `func.blockRefs` (the flat
-// `blocks[]` indices each function still references) instead of `block.opRefs`:
-// every flat block index appearing in any `func.blockRefs` is live; DCE-pruned
-// blocks appear in no function's refs and stay unmarked. The bitmap then goes to
-// the shared `assignCompactionSlots`. O(total blockRefs); the two blockCount-
-// sized arrays (live flags + forwarding) are the only allocations.
-function computeBlockCompaction(functions IrFunctionArray, blockCount ElementIndex) returns OpCompactionPlan
-	var live = FixedBoolArray.create(blockCount)
-
-	for func in functions 'markFunc'
-		for blockRef in func.blockRefs 'markRef'
-			try live.set(blockRef, value: true) otherwise panic("computeBlockCompaction: live.set OOB at blockRef {blockRef} (blockCount={blockCount})")
-		end 'markRef'
-	end 'markFunc'
-
-	return assignCompactionSlots(live, count: blockCount)
-end 'computeBlockCompaction'
-
-// Rewrite every function's `blockRefs` (flat `blocks[]` indices) through a block
-// compaction plan's forwarding map, IN PLACE. Must run AFTER the blocks-array move +
-// truncate so the renumbered indices line up with the relocated blocks.
-function rewriteFuncBlockRefs(functions IrFunctionArray, plan OpCompactionPlan)
-	for funcIdx in 0 upto functions.count() 'rewriteFunc'
-		var func = try functions.get(funcIdx) otherwise panic("rewriteFuncBlockRefs: functions.get OOB at {funcIdx}")
-
-		for pos in 0 upto func.blockRefs.count() 'eachRef'
-			let oldRef = try func.blockRefs.get(pos) otherwise panic("rewriteFuncBlockRefs: blockRefs.get OOB at {pos}")
-			let newRef = try plan.forward.get(oldRef) otherwise panic("rewriteFuncBlockRefs: forward.get OOB at blockRef {oldRef}")
-
-			if newRef == plan.deadMarker 'orphanRef'
-				panic("rewriteFuncBlockRefs: func '{String.from(func.name)}' references orphaned block {oldRef} — live block marked dead")
-			end 'orphanRef'
-
-			try func.blockRefs.set(pos, value: newRef) otherwise panic("rewriteFuncBlockRefs: blockRefs.set OOB at {pos}")
-		end 'eachRef'
-	end 'rewriteFunc'
-end 'rewriteFuncBlockRefs'
 
 // RELOCATE a block into a destination module: a copy whose op indices are shifted by `opOffset`
 // (`IrBlock.shiftOpIndices`), because `merge` appended the source's ops after the destination's.

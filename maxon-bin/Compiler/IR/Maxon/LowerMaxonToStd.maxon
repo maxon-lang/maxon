@@ -5607,7 +5607,7 @@ type MaxonToStdLowering
 		// `__cs_*` runtime. Every corpus replacement is a declared generic method, so its witnesses are
 		// ordinary dictionary PARAMETERS filled by `appendWitnessArgs`.
 		// ⇒ **No compiler-owned runtime callee threads a witness table today**, and a new one would rebuild the
-		// arm here — see `materializeWitnessTableAddr`, which holds what such an arm must not get wrong.
+		// arm here — see `emitWitnessTableAddr`, which holds what such an arm must not get wrong.
 		// ⚠ The descriptor append runs FIRST and may itself emit ops into `dstBlock`, so the index the call is
 		// about to occupy is read AFTER it and immediately before the append — the same discipline
 		// `Parser.emitRuntimeCallInto` states for its own op index.
@@ -5700,12 +5700,6 @@ type MaxonToStdLowering
 	// whatever the ABI registers happen to hold, and the fused `witnessCall` inside the probe's `hash()` jumps
 	// through it — `create` + `upsert` + `contains` all correct and the first `try m.get(k)` faulting with
 	// 0xC0000005.
-	function materializeWitnessTableAddr(conformerType ByteArray, instance WitnessTableInstance, interfaceName ByteArray, dstBlock IrBlock) returns ValueId
-		let addrId = self.mintStdValueId()
-		self.emitWitnessTableAddr(addrId, conformerType: conformerType, instance: instance, interfaceName: interfaceName, dstBlock: dstBlock)
-		return addrId
-	end 'materializeWitnessTableAddr'
-
 	function emitWitnessTableAddr(result ValueId, conformerType ByteArray, instance WitnessTableInstance, interfaceName ByteArray, dstBlock IrBlock)
 		let label = self.ensureWitnessTable(conformerType, instance: instance, interfaceName: interfaceName)
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: self.globalData.labelBytesOf(label)))
@@ -7254,7 +7248,7 @@ type MaxonToStdLowering
 			// ⚠ **NO COMPILER-OWNED RUNTIME CALLEE THREADS A WITNESS TABLE**, so no arm here appends one. One
 			// added later — throwing or not — builds its appender ONCE and reaches it from here as well as from
 			// `lowerRuntimeCall`; forgetting that costs a measured 0xC0000005, which
-			// `materializeWitnessTableAddr` holds with the one-door rule it proves.
+			// `emitWitnessTableAddr` holds with the one-door rule it proves.
 			// The throwing OPAQUE-`T` `slice` (`__managed_slice_opaque`) takes the enclosing instance's descriptor as
 			// its last argument, appended here exactly as the non-throwing clone/append do in `lowerRuntimeCall`.
 			// The element facts are `appendRuntimeCall`'s, asked here for the THREE throwing element primitives

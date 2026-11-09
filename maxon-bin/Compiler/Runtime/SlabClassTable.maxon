@@ -5,23 +5,14 @@
 // generated file that also carried logic could not be regenerated without re-reviewing the logic, so
 // the two would drift or the generator would stop being run. Data there, reasoning here.
 
-// Objects one span of `class` holds. DERIVED, never stored: `pages * 8192 / size`.
+// Objects one span of `class` holds: `pages * SlabChunkBytes / size`, derived and never stored.
 //
-// ⚠ Derived rather than stored because a stored copy is only a way to disagree: the derivation reproduces
-// Go's own `objects` column exactly for all 67 real classes.
-function slabObjectsPerSpan(class SlabClassIndex) returns SlabObjectCount
-	return slabObjectsPerSpanIn(class, sizes: slabClassSizes(), pages: slabClassPages())
-end 'slabObjectsPerSpan'
-
-// ⚠ **THE TWO ARRAYS ARE PARAMETERS BECAUSE EVERY CALLER IS A LOOP OVER THE WHOLE LADDER.** The entry
-// point above loads them per call, which is right for the one-off question — and wrong 68 times over for
-// `checkSlabClassTable` and `slabClassGeometryTable`, which ask it once per class and were rebuilding
-// BOTH 68-element arrays each time: 9,248 pushes to answer 68 divisions, at every compile that touches
-// the heap. Splitting the load out of the arithmetic is what makes the sweep linear in the ladder rather
-// than quadratic in it.
+// ⚠ **THE TWO ARRAYS ARE PARAMETERS BECAUSE EVERY CALLER IS A LOOP OVER THE WHOLE LADDER.** Loading
+// them per call would rebuild both arrays once per class, which makes the sweep quadratic in the
+// ladder instead of linear.
 function slabObjectsPerSpanIn(class SlabClassIndex, sizes SlabClassSizeArray, pages SlabSpanPagesArray) returns SlabObjectCount
-	let size = try sizes.get(class) otherwise panic("slabObjectsPerSpan: class {class} is outside the table")
-	let np = try pages.get(class) otherwise panic("slabObjectsPerSpan: class {class} has no page count")
+	let size = try sizes.get(class) otherwise panic("slabObjectsPerSpanIn: class {class} is outside the table")
+	let np = try pages.get(class) otherwise panic("slabObjectsPerSpanIn: class {class} has no page count")
 
 	if size == 0 'sentinel'
 		// Class 0 allocates nothing, so it holds no objects. Answering 0 rather than dividing keeps the
@@ -32,7 +23,7 @@ function slabObjectsPerSpanIn(class SlabClassIndex, sizes SlabClassSizeArray, pa
 	// The guard above proves `size != 0`, but `SlabClassSize` includes 0 so the type cannot know it.
 	// `otherwise panic` is the project's form for a `try` that must not fail (E3057 demands one of the two).
 	let spanBytes = (np as FullRangeInt) * SlabChunkBytes
-	return try (spanBytes / (size as FullRangeInt)) otherwise panic("slabObjectsPerSpan: class {class} divided by zero past its own sentinel guard")
+	return try (spanBytes / (size as FullRangeInt)) otherwise panic("slabObjectsPerSpanIn: class {class} divided by zero past its own sentinel guard")
 end 'slabObjectsPerSpanIn'
 
 type SlabClassRow

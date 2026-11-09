@@ -300,18 +300,6 @@ export function classRowMax(row FixedRegCountColumn) returns RegCount
 	return widest
 end 'classRowMax'
 
-// The population across every file. Derived rather than carried alongside, so there is no second
-// counter to drift out of step with the per-class row it summarises.
-function classRowTotal(row RegCountColumn) returns RegCount
-	var total = 0 as RegCount
-
-	for n in row 'eachClass'
-		total = total + n
-	end 'eachClass'
-
-	return total
-end 'classRowTotal'
-
 // The register FILE a VIRTUAL operand's value lives in — its declared class.
 //
 // ⚠ ONLY VIRTUAL OPERANDS REACH HERE, AND THAT IS WHY IT NEEDS NO TARGET FILE. Every caller guards
@@ -6013,7 +6001,7 @@ end 'anyVirtualUseDiesAt'
 // (`stepBackwardOverOp`) and the colorer's per-block death computation — an identical
 // backward SSA transfer that must not drift between the two.
 
-// Takes the row's live POPULATION before the step and returns it after — maintained INCREMENTALLY,
+// Keeps the row's per-class live POPULATION current across the step — maintained INCREMENTALLY,
 // by counting only the bits that actually flip. Recomputing it with a popcount over the whole row
 // instead would be O(values/64) at EVERY op — O(ops × values/64) per function, the last quadratic in
 // the allocator and, on a large function, the single biggest remaining cost. A step flips at most
@@ -6026,9 +6014,8 @@ end 'anyVirtualUseDiesAt'
 // into a second place and let the two drift silently apart. That drift is the class of pressure bug
 // the whole sparse design exists to end.
 //
-// `liveByClass` IS the population — the caller reads it after the step, and the total is
-// `classRowTotal`. There is no separate count to return and therefore no second counter to disagree
-// with the row it summarises.
+// `liveByClass` IS the population — the caller reads it after the step. There is no separate count to
+// return and therefore no second counter to disagree with the row it summarises.
 export function stepRowBackwardOverOperands(row BitRow, buf OperandList, liveByClass FixedRegCountColumn, classes ValueClassColumn)
 	for o in buf 'removeDefs'
 		if operandIsDef(o) and operandIsVirtual(o) 'vd'

@@ -1422,11 +1422,10 @@ end 'isCompilerOwnedTypeName'
 // denotes nothing. THE one list of the sources a named type can come from; see this file's header
 // for its three readers and for why it reads the signature index rather than `Project`.
 //
-// It THROWS rather than answering with a union case, and the reason is measured rather than
-// stylistic: a Maxon union with an associated value is heap-boxed, this is asked once per named type
-// reference in the whole program, and `RangedAliasRegistry.underlyingInAnyFile` already records what
-// one such box per reference cost (+36 × 2^n allocations across the scale ladder — a term that grows
-// with the PROGRAM, where every other cost of alias resolution grows only with the DECLARATIONS).
+// It THROWS rather than answering with a union case, and the reason is cost rather than
+// style: a Maxon union with an associated value is heap-boxed and this is asked once per named type
+// reference in the whole program, so a box per reference would be an allocation term that grows
+// with the PROGRAM, where every other cost of alias resolution grows only with the DECLARATIONS.
 // `UnknownTypeName` is payload-free, so it is a scalar; the caller already holds the name.
 // ⭐⭐ **`readerFilePath` IS WHICH FILE IS ASKING, AND IT IS NOT DECORATION.** Two declarations of one name
 // may now stand at once when neither can see the other (`typeNamePairMayCoexist`), and at that point the
@@ -1559,13 +1558,10 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// primitive: the NAME and the RANGE are both erased here, and both were already spent — the name at the
 	// coercion doors, the range at the guards `InsertRangeChecks` plans.
 	//
-	// ⚠ Bare-name (`underlyingInAnyFile`), and that is exactly right HERE rather than a gap: this arm
-	// wants only `underlying`, and it DROPS the range — which is the erasure the whole type system
-	// rests on. The RANGE is resolved per declaring file, where it is actually enforced
-	// (`InsertRangeChecks`). A file to scope by is also genuinely absent on one of the two paths in:
-	// `checkStructFieldTypes` resolves a `StructLayout`'s field types, and a layout records no
-	// declaring file. This is the HOTTEST reader of the registry — once per named type reference in
-	// the program — which is why the door it asks through hands back the primitive rather than a
+	// ⚠ This arm wants only `underlying`, and it DROPS the range — which is the erasure the whole type
+	// system rests on. The RANGE is resolved per declaring file, where it is actually enforced
+	// (`InsertRangeChecks`). This is the HOTTEST reader of the registry — once per named type reference
+	// in the program — which is why the door it asks through hands back the primitive rather than a
 	// `DeclaredAlias` that would be heap-boxed per call.
 	//
 	// ⚠ **AND IT ANSWERS ONLY WHERE A *RANGED* ALIAS IS WHAT THE READER MEANS.** The registry is bare and

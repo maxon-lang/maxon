@@ -3045,8 +3045,7 @@ end 'cacheReadUnderlyingContestedAliasSet'
 typealias AliasPredicate = function(RangedTypeAlias) returns bool
 
 export type RangedAliasRegistry
-	// Every alias under its BARE name — the fallback, and on its own exactly the pre-existing
-	// whole-program behaviour, which is what makes the bare probe safe to keep.
+	// Every alias under its BARE name — the fallback `lookup` answers from for a name only one file declares.
 	var byName as RangedTypeAliasMap
 
 	// ⭐ ONLY the names MORE THAN ONE FILE declares, each holding EVERY declaration of that name.
@@ -3327,43 +3326,6 @@ export type RangedAliasRegistry
 		return DeclaredAlias.undeclared
 	end 'declarationInAnyFile'
 
-	// ⚠ **THE BARE PROBE, for the readers that HAVE no file to ask from** — type resolution's erasure
-	// of a `named` to its primitive (`resolveNamedType`, reached for a `StructLayout` field type,
-	// which records no declaring file), conformance-signature canonicalization, union payload
-	// classification reached from the emitted runtime (`MmRuntime`/`ManagedMemoryRuntime` walk
-	// `project.enumTypes`, which records no declaring file) and generic type-argument canonicalization
-	// (`conformerTypeArgName`, which holds an instance id).
-	//
-	// It is spelled separately, and named for what it does, so that "this site cannot scope its
-	// lookup" is greppable rather than hidden behind a path that LOOKS scoped.
-	//
-	// ⭐ **IT HANDS BACK `underlying` AND NOT THE ALIAS, and that is a CONTRACT, not a convenience.**
-	// All four readers want the `int`/`float` keyword and none may read the RANGE — the range is
-	// per-file and enforced where the file is known (`InsertRangeChecks`), so a reader with no file
-	// reading it would be reading a stranger's bounds. The contract is stated HERE rather than once
-	// per reader.
-	//
-	// ⚠ Two files may declare one file-scoped name over `int` and `float`, and then no file-independent
-	// answer exists: a reader that answered anyway would hand the emitter an xmm value in a gpr slot.
-	// Such a name is `underlyingContested` and this door panics on it, so a reader that holds a file
-	// and asks here instead of `underlyingFor` fails loudly.
-	//
-	// ⚠ It also costs NOTHING, where a `DeclaredAlias` answer cost one allocation per call: a union
-	// with an associated value is HEAP-BOXED, and `resolveNamedType` asks this once per named TYPE
-	// REFERENCE. Measured on the scale ladder, that box was +36 x 2^n allocations — a term that grew
-	// with the PROGRAM, where every other cost of alias resolution grows only with the DECLARATIONS.
-	// Returning a field that already holds a `MaxonType` constructs nothing. The `throws` channel is
-	// `Map.get`'s own and is likewise free.
-	export function underlyingInAnyFile(name ByteArray) returns MaxonType throws MapError
-		let any = try self.byName.get(name)
-
-		if self.underlyingContested.contains(name) 'itsFilesDisagreeAboutThePrimitive'
-			panic("RangedAliasRegistry.underlyingInAnyFile: '{String.from(name)}' is declared over different underlying types by different files, so only a reader's own file can answer — this reader must ask `underlyingFor`")
-		end 'itsFilesDisagreeAboutThePrimitive'
-
-		return any.underlying
-	end 'underlyingInAnyFile'
-
 	export function underlyingFor(name ByteArray, readerFilePath FilePath) returns MaxonType throws MapError
 		if not self.byName.contains(name) 'noFileDeclaresIt'
 			throw MapError.keyNotFound
@@ -3385,15 +3347,14 @@ export type RangedAliasRegistry
 		return rangeSourceSpelling(try self.byName.get(name))
 	end 'uncontestedRangeSourceSpelling'
 
-	// Does SOME file declare `name` as a ranged typealias — the membership half of `underlyingInAnyFile`,
-	// over the identical table, so the two cannot come to disagree about what this registry holds. It is the
-	// FORM question (`ProgramSignatures.declaredFormOf`) and deliberately not the bounds one: which file's
+	// Does SOME file declare `name` as a ranged typealias? It is the FORM question
+	// (`ProgramSignatures.declaredFormOf`) and deliberately not the bounds one: which file's
 	// bounds a reader gets is `lookup`'s answer and needs a reader file, while "is this name a ranged alias
 	// at all" is the same for every reader.
 	//
-	// ⚠ It does NOT answer for the builtin `ExitCode`, exactly as `underlyingInAnyFile` does not: the
-	// builtin range is `lookup`'s LAST fallback, supplied for the name no file declares. A form derived
-	// from it would report a `typealias` no program contains.
+	// ⚠ It does NOT answer for the builtin `ExitCode`: the builtin range is `lookup`'s LAST fallback,
+	// supplied for the name no file declares. A form derived from it would report a `typealias` no
+	// program contains.
 	export function containsInAnyFile(name ByteArray) returns bool
 		return self.byName.contains(name)
 	end 'containsInAnyFile'
@@ -3403,12 +3364,11 @@ export type RangedAliasRegistry
 		return tagIsFloat(maxonTypeTag(any.underlying)) or self.underlyingContested.contains(name)
 	end 'declaredAsFloatInAnyFile'
 
-	// ⭐ **THE STORAGE WIDTH THAT HOLDS EVERY FILE'S DECLARATION OF `name` — the other file-less door, and
+	// ⭐ **THE STORAGE WIDTH THAT HOLDS EVERY FILE'S DECLARATION OF `name` — a file-less door, and
 	// the one range question a file-less reader IS allowed to ask.**
 	//
-	// `underlyingInAnyFile` above refuses to hand out bounds, and its reason is exact: a reader with no
-	// file reading A file's bounds is reading a STRANGER's bounds. That reason does not reach this
-	// question, because this answer is not any one file's — it is a width correct for every file's bounds
+	// A reader with no file reading A file's bounds is reading a STRANGER's bounds. That reason does
+	// not reach this question, because this answer is not any one file's — it is a width correct for every file's bounds
 	// at once, and it is the MAX that makes it so. A wider slot holds a narrower one's values, so no
 	// file's range is ever truncated by another file's width.
 	//
@@ -3536,12 +3496,11 @@ export type RangedAliasRegistry
 	end 'spansEveryIntInEveryFile'
 
 	// ⭐⭐ **CAN A VALUE OF `name` HOLD EVERY BYTE — 0 THROUGH 255 — WHICHEVER FILE'S DECLARATION YOU
-	// READ?** The THIRD file-less door, and it is one for the SAME reason `storageBytesInEveryFile`
+	// READ?** A file-less door, and it is one for the SAME reason `storageBytesInEveryFile`
 	// is: the answer is not any one file's. Where that door folds to the WIDEST width so no file's
 	// range is truncated, this one demands the property of EVERY declaration, so no file's range is
-	// over-promised. `underlyingInAnyFile`'s refusal to hand out bounds is untouched — a reader with
-	// no file may not learn what SOME file's `low` and `high` are, and this reader never does; it
-	// learns only whether they all clear one fixed bar.
+	// over-promised. A reader with no file may not learn what SOME file's `low` and `high` are, and
+	// this reader never does; it learns only whether they all clear one fixed bar.
 	//
 	// ⚠ **THE BAR IS THE VALUE SET AND NOT THE WIDTH, AND THE TWO ARE A WRONG ANSWER APART.**
 	// `rangedAliasStorageBytes` gives EVERY non-negative range that fits `u8.max` a ONE-BYTE slot, so
@@ -3597,7 +3556,7 @@ export type RangedAliasRegistry
 	//
 	// ⭐ **THE MINT IS AN ORDINARY REGISTRY DECLARATION, AND THAT IS THE WHOLE DESIGN.** Every door this
 	// registry already has then answers for the qualified name with no new code and no special case: the
-	// whole-program width (`storageBytesInEveryFile`), the erasure (`underlyingInAnyFile`), the scoped
+	// whole-program width (`storageBytesInEveryFile`), the erasure (`underlyingFor`), the scoped
 	// `lookup` a range check resolves through. A bare synthesized STRING would miss all of them, and
 	// `undeclaredNamedElementSlot` would stride the element at 8.
 	//

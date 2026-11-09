@@ -133,10 +133,9 @@ export type PtraceBackend
 	var driverTrapInFlight as bool
 	var stepping as BackendStepRoster
 	var held as PtraceHeldStopArray
-	var status as BackendExitStatus
 
 	export static function create() returns PtraceBackend
-		return Self{trace: ProcessTrace.create(), process: 0, threads: PtraceThreadEntryArray.create(0), pendingThreadId: 0, stopOutstanding: false, sawFirstStop: false, stopRequested: false, driverTrapInFlight: false, stepping: BackendStepRoster.create(), held: PtraceHeldStopArray.create(0), status: BackendExitStatus.running}
+		return Self{trace: ProcessTrace.create(), process: 0, threads: PtraceThreadEntryArray.create(0), pendingThreadId: 0, stopOutstanding: false, sawFirstStop: false, stopRequested: false, driverTrapInFlight: false, stepping: BackendStepRoster.create(), held: PtraceHeldStopArray.create(0)}
 	end 'create'
 
 	export function holdsItsScratch() returns bool
@@ -146,10 +145,6 @@ export type PtraceBackend
 	export function close()
 		self.trace.close()
 	end 'close'
-
-	export function exitStatus() returns BackendExitStatus
-		return self.status
-	end 'exitStatus'
 
 	export function listThreads() returns BackendThreadIdArray
 		var ids = BackendThreadIdArray.create(self.threads.count(), zeroed: false)
@@ -242,15 +237,6 @@ export type PtraceBackend
 		end 'anotherThreadOfTheGroup'
 
 		self.stopOutstanding = false
-
-		match event 'ending'
-			exited(code) then self.status = BackendExitStatus.ended(code)
-			threadStarted or
-			threadExited or
-			signalled or
-			stopped or
-			timedOut then break
-		end 'ending'
 
 		return BackendEventClass.ended(event)
 	end 'departed'

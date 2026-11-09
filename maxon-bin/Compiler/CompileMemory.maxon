@@ -86,17 +86,6 @@ export type PhaseMemoryColumns
 		return try self.bytes.get(index) otherwise panic("PhaseMemoryColumns.bytesAt: phase index {index} OOB — the bytes column holds {self.bytes.count()}, so it was not sized to its phase enum")
 	end 'bytesAt'
 
-	// What the instrumentation actually claimed, summed over every phase.
-	export function totalDelta() returns PhaseDelta
-		var sum = PhaseDelta.zero()
-
-		for index in 0 upto self.allocs.count() 'eachPhase'
-			sum = deltaSum(sum, other: self.deltaAt(index as PhaseIndex))
-		end 'eachPhase'
-
-		return sum
-	end 'totalDelta'
-
 	// The same sum over the phases `selected` flags — one half of the table, for a table whose other half
 	// is a breakdown of a row already in it (`CompileTimings.poolRowMask`).
 	export function totalDeltaWhere(selected BoolArray, wanted bool) returns PhaseDelta

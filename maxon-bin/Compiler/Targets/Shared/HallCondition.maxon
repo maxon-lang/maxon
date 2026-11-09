@@ -293,20 +293,6 @@ export type RegPoolCensus
 		return Self{byPoolSize: byPoolSize, occupied: 0, constrained: 0, classPoolSizes: zeroClassRow()}
 	end 'create'
 
-	export function assignFrom(other RegPoolCensus)
-		for size in 0 upto RegisterFileSize + 1 'eachSize'
-			try self.byPoolSize.set(size, value: try other.byPoolSize.get(size) otherwise panic("RegPoolCensus.assignFrom: byPoolSize.get OOB at {size}")) otherwise panic("RegPoolCensus.assignFrom: byPoolSize.set OOB at {size}")
-		end 'eachSize'
-
-		self.occupied = other.occupied
-		self.constrained = other.constrained
-
-		for classOrdinal in 0 upto RegClassCount 'eachClass'
-			let class = regClassAt(classOrdinal)
-			classRowSet(self.classPoolSizes, class: class, value: classRowGet(other.classPoolSizes, class: class))
-		end 'eachClass'
-	end 'assignFrom'
-
 	export function reset(pool RegMask, file RegisterFile)
 		for size in 0 upto RegisterFileSize + 1 'eachSize'
 			try self.byPoolSize.set(size, value: 0) otherwise panic("RegPoolCensus.reset: byPoolSize.set OOB at {size}")

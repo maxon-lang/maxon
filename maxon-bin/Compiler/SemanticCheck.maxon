@@ -578,20 +578,13 @@ export type ParamMutationSummary
 		return self.maskAt(self.masks, callee: callee)
 	end 'maskOf'
 
-	// ⭐ **WHICH PARAMETERS' RECORDS A CALL TO `callee` WRITES BY ANY MEANS** — the widest answer, with
-	// nothing exempted, and what `StorageProvenance` asks of a value. ⚠ It is neither a superset nor a
-	// subset of `maskOf`; see `IrFunction`'s table, which carries one row per question.
-	export function recordWriteMaskOf(callee ByteArray) returns ParamPositionMask
-		return self.maskAt(self.recordWriteMasks, callee: callee)
-	end 'recordWriteMaskOf'
-
 	export function writesOf(callee ByteArray) returns (ParamPositionMask, ParamPositionMask)
 		let index = try self.funcIndexByName.get(callee) otherwise return (NoParamPositions, NoParamPositions)
 		return (self.maskAtIndex(self.masks, index: index), self.maskAtIndex(self.recordWriteMasks, index: index))
 	end 'writesOf'
 
 	// Which parameters a call landing on any of `indices` writes, or writes the record of — `maskOf` and
-	// `recordWriteMaskOf` together, by function index.
+	// the record-write mask together, by function index.
 	export function writtenMaskAtAnyOf(indices FuncIndexArray) returns ParamPositionMask
 		var written = NoParamPositions
 
@@ -602,10 +595,6 @@ export type ParamMutationSummary
 		return written
 	end 'writtenMaskAtAnyOf'
 
-	// The one NAME-keyed read every column shares. `NoParamPositions` for a name the module does not declare —
-	// a compiler-internal runtime entry, or an undeclared callee `validateCall` has already reported as E3004
-	// — the same "absence is the answer" `buildThrowsMap` uses, and the reason no caller needs a membership
-	// test first.
 	function maskAt(column ParamPositionMaskArray, callee ByteArray) returns ParamPositionMask
 		let index = try self.funcIndexByName.get(callee) otherwise return NoParamPositions
 		return self.maskAtIndex(column, index: index)

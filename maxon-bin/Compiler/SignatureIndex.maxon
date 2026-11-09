@@ -4606,26 +4606,6 @@ export type ParamConsumeInfo
 		return not anyBitSet(self.bits) and not anyBitSet(self.handedOn) and self.forwardedStores.count() == 0 and not self.anyFeed(FeedSinkQuery.anySink)
 	end 'isEmpty'
 
-	export function promiseFactsDifferFrom(other ParamConsumeInfo) returns bool
-		if self.forwardedStores.count() != other.forwardedStores.count() 'differentStores'
-			return true
-		end 'differentStores'
-
-		let reach = self.handedOn.count() if self.handedOn.count() > other.handedOn.count() else other.handedOn.count()
-
-		for position in 0 upto reach 'eachPosition'
-			if self.isHandedOn(position as ParamCount) != other.isHandedOn(position as ParamCount) 'differentBit'
-				return true
-			end 'differentBit'
-		end 'eachPosition'
-
-		return false
-	end 'promiseFactsDifferFrom'
-
-	export function transfersAParameter() returns bool
-		return anyBitSet(self.bits) or self.anyFeed(FeedSinkQuery.anySink)
-	end 'transfersAParameter'
-
 	export function anyFeed(query FeedSinkQuery) returns bool
 		for feed in self.feeds 'each'
 			if feed.answers(query) 'aMatchingFeed'
@@ -4962,14 +4942,6 @@ export union DeclCallability
 	// A method of `typeName`: a bare call (implicit `self` reaches a sibling — MEASURED), any
 	// receiver-qualified call, and a `self.`/`Self.`-qualified call inside `typeName`'s own body.
 	methodOf(let typeName ByteArray)
-
-	function methodTypeName() returns ByteArray throws AbsentError
-		match self 'callability'
-			bareCallOnly or
-			bareCallOrDirectoryRoute then throw AbsentError.absent
-			methodOf(typeName) then return typeName
-		end 'callability'
-	end 'methodTypeName'
 end 'DeclCallability'
 
 // @generated library-cache begin
@@ -6374,10 +6346,6 @@ type ByRefDeclaration
 	function takesArgumentByRef(argIndex ParamCount, label ByteArray) returns bool
 		return self.isByRef(try argSlotPosition(self.info.paramNames, argIndex: argIndex, label: label) otherwise return false)
 	end 'takesArgumentByRef'
-
-	function takesAnyParamByRef() returns bool
-		return self.info.mutableParams != NoParamPositions
-	end 'takesAnyParamByRef'
 end 'ByRefDeclaration'
 
 typealias ByRefDeclarationArray = Array with ByRefDeclaration
@@ -6412,16 +6380,6 @@ export type ByRefConvention
 
 		return false
 	end 'paramIsByRef'
-
-	export function takesAnyParamByRef() returns bool
-		for declaration in self.declarations 'eachDeclaration'
-			if declaration.takesAnyParamByRef() 'byReferenceSomewhere'
-				return true
-			end 'byReferenceSomewhere'
-		end 'eachDeclaration'
-
-		return false
-	end 'takesAnyParamByRef'
 end 'ByRefConvention'
 
 export typealias ByRefConventionArray = Array with ByRefConvention
@@ -11881,10 +11839,6 @@ export union InstanceShape
 	export function argIsReadOnly(position ElementIndex) returns bool
 		return self.argQualifierAt(position) != GenericArgQualifier.plain
 	end 'argIsReadOnly'
-
-	export function argIsFrozen(position ElementIndex) returns bool
-		return self.argQualifierAt(position) == GenericArgQualifier.frozen
-	end 'argIsFrozen'
 
 	export function sameAs(other InstanceShape) returns bool
 		match self 'shape'
@@ -25221,10 +25175,6 @@ export type ProgramSignatures
 		return try self.settledDeclarations().decls.get(index) otherwise panic("ProgramSignatures.declAt: decls.get OOB at {index} — every index handed out is one this arena minted")
 	end 'declAt'
 
-	export function declCount() returns ElementIndex
-		return self.settledDeclarations().decls.count()
-	end 'declCount'
-
 	function ownDeclAt(index ElementIndex) returns TopLevelDecl
 		return try self.mainThreadSettled().decls.get(index) otherwise panic("ProgramSignatures.ownDeclAt: decls.get OOB at {index} — every index handed out is one this arena minted")
 	end 'ownDeclAt'
@@ -27035,7 +26985,7 @@ export type ProgramSignatures
 	//
 	// ⚠ **IT DOES *NOT* ASK WHETHER `form`'s REGISTRY HOLDS THE NAME**, and that is what makes it shareable:
 	// each caller keeps its own registry probe in front — `functionTypeAliases.contains`,
-	// `aliasUnderlyingInAnyFile` — and that probe is what keeps the common answer free, since a name no
+	// `aliasUnderlyingFor` — and that probe is what keeps the common answer free, since a name no
 	// registry of that form holds never reaches here at all.
 	export function readerMeansKind(name ByteArray, readerFilePath FilePath, kind TypeDeclKind) returns bool
 		if self.crossKindContested(name) 'bothKindsMayStand'
@@ -27073,7 +27023,7 @@ export type ProgramSignatures
 	// ⭐ **`isFunctionAliasInAnyFile`, WITH THE CONTEST APPLIED** — the door every FORM probe that has a reader file
 	// asks, so `a.maxon`'s `5 as Handler` means `a.maxon`'s ranged alias while `b.maxon`'s `f Handler`
 	// means `b.maxon`'s function one. The bare twin stays, and stays correct, for the readers that hold no
-	// file (a `StructLayout`'s field types record none — see `aliasUnderlyingInAnyFile`).
+	// file.
 	export function isFunctionAliasFor(name ByteArray, readerFilePath FilePath) returns bool
 		return self.settledDeclarations().functionTypeAliases.contains(name) and self.readerMeansKind(name, readerFilePath: readerFilePath, kind: TypeDeclKind.functionAlias)
 	end 'isFunctionAliasFor'
@@ -27137,13 +27087,6 @@ export type ProgramSignatures
 	export function constInitializerTypeSiteAt(index ElementIndex) returns NameInFile
 		return try self.settledDeclarations().constInitializerTypeSites.get(index) otherwise panic("ProgramSignatures.constInitializerTypeSiteAt: OOB at {index} — the caller walks this list's own count()")
 	end 'constInitializerTypeSiteAt'
-
-	// The bare-name door, for the readers that have no file to ask from — see
-	// `RangedAliasRegistry.underlyingInAnyFile`, which is where the (narrow) residual is written down
-	// and why it hands back the primitive rather than the alias.
-	export function aliasUnderlyingInAnyFile(name ByteArray) returns MaxonType throws MapError
-		return try self.settledDeclarations().typeAliases.underlyingInAnyFile(name)
-	end 'aliasUnderlyingInAnyFile'
 
 	export function aliasUnderlyingFor(name ByteArray, readerFilePath FilePath) returns MaxonType throws MapError
 		return try self.settledDeclarations().typeAliases.underlyingFor(name, readerFilePath: readerFilePath)
@@ -28283,10 +28226,9 @@ export type ProgramSignatures
 	// a lossy-narrowing diagnostic about a program in which nothing narrows — while the BARE spelling of the
 	// same element (`[1.5, 2.5]`, whose instance argument IS `float`) passed the check.
 	//
-	// ⚠ **AN INT ALIAS IS DELIBERATELY LEFT ALONE, which is why this is not `canonicalizeRangedAlias`.** That
-	// door erases BOTH domains to their underlying primitive, and an int alias's NAME is what carries the
-	// range the argument check reads (`checkArgAgainstDeclaredTag` is handed the substituted type for exactly
-	// that). A FLOAT alias is the one `named` type whose VALUE lives in a different register file — see
+	// ⚠ **AN INT ALIAS IS DELIBERATELY LEFT ALONE.** Erasing it to its underlying primitive would drop
+	// its NAME, and the name is what carries the range the argument check reads
+	// (`checkArgAgainstDeclaredTag` is handed the substituted type for exactly that). A FLOAT alias is the one `named` type whose VALUE lives in a different register file — see
 	// `isFloatAliasFor` — so it is the one that may not stay overloaded.
 	export function floatAliasResolved(t MaxonType, readerFilePath FilePath) returns MaxonType
 		if maxonTypeTag(t) != ValueTypeTag.named 'notANamedLeaf'
@@ -35797,8 +35739,7 @@ export type ProgramSignatures
 
 	// The conformer a declared NAME reduces to: a ranged int/float alias collapses to its underlying
 	// primitive's name (`Integer` -> `int`), which is what its intrinsic conformance and its `__witness_int.*`
-	// tables are keyed by; every other name is its own conformer. The name half of `canonicalizeRangedAlias`,
-	// split out so the reduction is stated once whether the caller arrived with a type or with a name.
+	// tables are keyed by; every other name is its own conformer.
 	export function conformerNameOfDeclaredName(name ByteArray, readerFilePath FilePath) returns String
 		if let underlying = try self.aliasUnderlyingFor(name, readerFilePath: readerFilePath) 'rangedAlias'
 			return primitiveTypeTagName(maxonTypeTag(underlying))
@@ -35877,23 +35818,6 @@ export type ProgramSignatures
 
 		return self.instanceDisplayName(try self.renderedInstanceOfUnclaimedName(name) otherwise return name)
 	end 'displaySpellingOfDeclaredName'
-
-	// A ranged numeric alias resolves to its underlying primitive `MaxonType` (`int(0 to u32.max)` -> `integer`),
-	// exactly as `resolveNamedType` does (`alias.underlying`, range dropped); every other type passes through.
-	// The one step that lets `conformerTypeArgName` name a primitive-bound argument by its primitive.
-	//
-	// ⚠ Bare-name for `classifyUnionPayload`'s reason: the file that governs a generic INSTANCE's type
-	// argument is the one that wrote the instantiation, and a `GenericInstanceId` does not carry it.
-	// Only `underlying` is reachable through that door, never the range.
-	function canonicalizeRangedAlias(t MaxonType, slotScopeFilePath FilePath) returns MaxonType
-		if maxonTypeTag(t) == ValueTypeTag.named 'named'
-			if let underlying = try self.aliasUnderlyingFor(self.nameOfId(typeNameIdOf(t)), readerFilePath: slotScopeFilePath) 'rangedAlias'
-				return underlying
-			end 'rangedAlias'
-		end 'named'
-
-		return t
-	end 'canonicalizeRangedAlias'
 
 	// The structural mangling of a generic instance itself — `Box_Integer` for `Box with Integer` — the
 	// base name joined to each argument's mangling. Shared by `mangleTypeArg` (a nested-instance argument)
@@ -44384,14 +44308,6 @@ export type ProgramSignatures
 		self.rowSetLog.note(key, query: query, answer: answer)
 		return answer
 	end 'rowSetAnswer'
-
-	function rowSetFlag(query RowSetQuery) returns bool
-		match self.rowSetAnswer(query) 'answer'
-			holds(value) then return value
-			noInstance or
-			instance then panic("ProgramSignatures.rowSetFlag: a flag query was answered with an instance match")
-		end 'answer'
-	end 'rowSetFlag'
 
 	function answerOverTheRows(query RowSetQuery) returns RowSetAnswer
 		match query 'query'

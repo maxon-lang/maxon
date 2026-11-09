@@ -13609,15 +13609,6 @@ union ValueBaseBinding
 		end 'binding'
 	end 'isFrameValue'
 
-	function isThisFrame() returns bool
-		return match self 'binding'
-			thisFrame gives true
-			captured or
-			unbound or
-			alwaysAType gives false
-		end 'binding'
-	end 'isThisFrame'
-
 	function isUnbound() returns bool
 		return match self 'binding'
 			unbound gives true
@@ -28785,7 +28776,7 @@ export type Parser
 	// so one push here reaches BOTH ranged-alias registries (`ProgramSignatures.typeAliases` via `foldFile`,
 	// `Project.typeAliases` via `commitTypeAliases`) and every door they already have answers for the qualified
 	// key with no new code: the scoped `lookup`, the visibility test `aliasVisibleFrom`, the erasure
-	// `underlyingInAnyFile`, the whole-program stride `storageBytesInEveryFile`, the parse-memo hash. A
+	// `underlyingFor`, the whole-program stride `storageBytesInEveryFile`, the parse-memo hash. A
 	// dedicated qualified index would have had to re-implement each of those, and would have been free to
 	// disagree with them.
 	//
@@ -30298,8 +30289,8 @@ export type Parser
 		// already in its result — and this call was being made anyway, its value discarded into `_`. The
 		// obvious alternative, `resolveFloatAliasType`, reaches the registry through `aliasOf`, which hands
 		// back a payload union Maxon HEAP-BOXES per call; `denotedNamedType` deliberately goes through
-		// `aliasUnderlyingInAnyFile` instead, whose header states that exact reason ("hands back the
-		// primitive rather than a `DeclaredAlias` that would be heap-boxed per call"). MEASURED on the scale
+		// `aliasUnderlyingFor` instead, which hands back the primitive rather than a `DeclaredAlias`
+		// that would be heap-boxed per call. MEASURED on the scale
 		// ladder: the separate lookup cost **+16 / +30 / +58 allocations of 16 bytes** over three steps — one
 		// box per named type argument, linear in the program — and reading it off the cascade is delta-ZERO.
 		//
@@ -43842,7 +43833,7 @@ export type Parser
 	// A ranged INT alias reduces to `integer` FIRST, which is what makes `Integer`, `Byte`, `HashValue` and
 	// a bare `int` one conformer rather than four: `Byte.compare` does not exist and never will — the
 	// witness path already collapses a ranged type ARGUMENT the same way
-	// (`ProgramSignatures.conformerTypeArgName` → `canonicalizeRangedAlias`), so both dispatch paths key the
+	// (`ProgramSignatures.conformerTypeArgName` → `conformerNameOfDeclaredName`), so both dispatch paths key the
 	// same `int.compare` symbol off the same type. A ranged FLOAT alias reduces to `float` by the very same
 	// step, so `Percent.compare` is `float.compare`.
 	//
@@ -104297,54 +104288,6 @@ export type Parser
 
 		return TupleAssignTarget.rebinds
 	end 'tupleAssignTargetAt'
-
-	// ⭐⭐ **`assignsAt` PLUS THE ONE QUALIFIER A *REBIND* NEEDS AND A LOOP PHI DOES NOT: a name
-	// preceded by `.` is a FIELD, not a binding.** `hh.op = op` writes a field OF `hh` and rebinds nothing
-	// called `op` — but the token `op` is followed by `=`, so the bare textual test answers yes.
-	//
-	// ⚠ **MEASURED, and it was not merely wasteful.** `first-class-function.capturing-closure-name-not-leaked`
-	// declares `storeIt(h Handler, op UnaryOp)` whose body is `hh.op = op`: the field name and the PARAMETER
-	// name coincide, so the seed marked `op` reassigned. That opened the program-wide gate, made `op`
-	// by-reference, and put a cell under a parameter nothing ever writes — correct output, and
-	// codegen that moved for no reason a reader could find.
-	//
-	// ⚠ **IT IS NOT FOLDED INTO `assignsAt`, BECAUSE THAT PREDICATE ANSWERS A DIFFERENT QUESTION.** The
-	// loop-phi scan asks "does this token sequence look like a write to a carried name", where a false
-	// positive costs a phi that `ElimTrivialBlockArgs` folds away; this asks "does this body REBIND its own
-	// parameter", where a false positive costs an ABI. Same tokens, different tolerance — so the shared half
-	// stays shared and the qualifier lives with the stricter reader.
-	function rebindsANameAt(index ElementIndex) returns bool
-		if not self.assignsAt(index) 'notAnAssignmentAtAll'
-			return false
-		end 'notAnAssignmentAtAll'
-
-		return index == 0 or self.kindAt(index - 1) != TokenKind.dot
-	end 'rebindsANameAt'
-
-	// ⭐⭐ **THE SAME QUESTION `rebindsANameAt` ANSWERS, ASKED OF THE ONE WRITE FORM WHOSE TARGET CARRIES NO
-	// `=`.** `(x, _) = pair(x)` writes `x`; the token after `x` is a comma, so the `identifier =` shape cannot
-	// see it. THREE readers decide "does this statement write this name", and each must see this form, or
-	// `x = f()` and `(x, _) = f()` on a by-reference parameter get two answers for one operation.
-	//
-	// ⭐ **THE ENCLOSING `(` COSTS NOTHING TO FIND, because both callers already track it.** They walk forward
-	// keeping `openBrackets` (`trackBracketAt`, called before the name test in both), so the innermost opener
-	// is an O(1) read — the same one `bareCallArgumentAt` takes. No backward scan, and no second grammar: this
-	// only LOCATES a candidate `(`, and `tupleAssignEqualsIn` decides whether it opens a target list. A `(`
-	// that opens a call, a group, a `{` on the stack, or a DECLARING destructure is declined there.
-	function tupleAssignRebindsANameAt(index ElementIndex, openBrackets TokenIndexArray) returns bool
-		if self.kindAt(index) != TokenKind.identifier or openBrackets.count() == 0 'notANameInsideAnOpenBracket'
-			return false
-		end 'notANameInsideAnOpenBracket'
-
-		// A bare target is always followed by the `,` or `)` of its list. One token, and it keeps an ordinary
-		// argument list from paying the forward walk below on every name it holds.
-		if self.kindAt(index + 1) != TokenKind.comma and self.kindAt(index + 1) != TokenKind.rightParen 'notInAList'
-			return false
-		end 'notInAList'
-
-		let opener = try openBrackets.get(openBrackets.count() - 1) otherwise panic("tupleAssignRebindsANameAt: openBrackets is empty though its count was just read as non-zero")
-		return index < tupleAssignEqualsIn(self.tokens, open: opener) and tupleAssignTargetRebinds(self.tupleAssignTargetAt(index))
-	end 'tupleAssignRebindsANameAt'
 
 	// ⭐ **THE BRACKET BOOKKEEPING EVERY PEEK-ONLY BODY WALK KEEPS** — `scanBodyFacts` (the sweep's, over a
 	// whole declaration), `scanOneMethodFeedSignals`, and through `stepBodyWalk` the walks over one body:

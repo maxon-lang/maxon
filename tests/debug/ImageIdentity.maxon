@@ -60,18 +60,4 @@ export type ImageIdentityCase
 			differsAt then try Expect.fail("{why} The two images differ ({firstBytes.count()} bytes against {secondBytes.count()}).")
 		end 'compared'
 	end 'requireSameImage'
-
-	export function requireDifferentImage(first FilePath, second FilePath, why String) throws TestFailure
-		let firstBytes = fileBytes(first)
-		let secondBytes = fileBytes(second)
-
-		try Expect.notEqual(firstBytes.count(), expected: 0, message: "positive control: {first.toString()} is empty, so this comparison would report a difference whatever the other side held.")
-		try Expect.notEqual(secondBytes.count(), expected: 0, message: "positive control: {second.toString()} is empty, so this comparison would report a difference whatever the other side held.")
-
-		match compareBytes(firstBytes, second: secondBytes) 'compared'
-			identical then try Expect.fail("{why}")
-			differentLengths or
-			differsAt then break
-		end 'compared'
-	end 'requireDifferentImage'
 end 'ImageIdentityCase'
