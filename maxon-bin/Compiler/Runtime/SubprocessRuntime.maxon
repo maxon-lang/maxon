@@ -157,6 +157,7 @@ let SpawnFlagTracedShift = 3
 // timer resolves at all.
 let SubpPollMs = 1
 let SubpNoWaitMs = 0
+let SubpTracedChildRepollMs = 20
 
 // The initial size of each collected stream's buffer, and the growth policy. It doubles past what a pass
 // needs, exactly as the streaming line buffer does, so a child producing N bytes costs O(log N) reallocations.
@@ -1943,17 +1944,32 @@ end 'emitSubpWaitForAnySource'
 // ⚠ **THE TWO CLOCKS ARE NOT THE SAME ONE.** The drain's deadline is in `osTickCountMs` milliseconds and the
 // timer store keys on `__gt_now_ns`, so the REMAINDER is converted rather than the deadline: what the two
 // agree about is an interval, never an instant.
+//
+// A traced child's park is capped at `SubpTracedChildRepollMs` even with no deadline: Linux withholds
+// the leader's status until its traced threads are reaped, so the child's poll source can stay silent
+// for ever, and only the loop's return to the reap sees the exit.
 function emitSubpGroupDeadline(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, group ValueId) returns IrBlock
 	var bounded = module.addBlock(func, label: b"wcgdl", heat: BlockHeat.normal)
 	var cont = module.addBlock(func, label: b"wcgdldone", heat: BlockHeat.normal)
 
 	let deadlineMs = emitLoadField(module, block: cur, record: state, offset: WcDeadline, ids: ids)
 	emitNetpollGroupSetDeadline(module, block: cur, group: group, deadline: emitConst(module, block: cur, value: 0, ids: ids))
-	emitBranchOnCompare(module, block: cur, value: deadlineMs, pred: StdCmpPred.eq, against: 0, whenTrue: cont, whenFalse: bounded, ids: ids)
+	let hasDeadline = emitCompareWithConstant(module, block: cur, value: deadlineMs, pred: StdCmpPred.ne, against: 0, ids: ids)
+	let childArmed = emitCompareWithConstant(module, block: cur, value: emitLoadField(module, block: cur, record: state, offset: WcChildMemberBit, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
+	let childTraced = emitLoadField(module, block: cur, record: emitSubpStateSlot(module, block: cur, ids: ids, state: state), offset: SubpSlotTraced, ids: ids)
+	let repollsChild = emitBin(module, block: cur, a: childArmed, b: childTraced, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let parkIsBounded = emitBin(module, block: cur, a: hasDeadline, b: repollsChild, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(parkIsBounded, thenBlockId: bounded.id, elseBlockId: cont.id))
 
 	let nowMs = ids.mint()
 	module.appendOp(bounded, op: StdOp.osTickCountMs(nowMs))
-	let remainingMs = emitBin(module, block: bounded, a: deadlineMs, b: nowMs, opcode: StdBinOpcode.sub, ids: ids)
+	let untilDeadlineMs = emitBin(module, block: bounded, a: deadlineMs, b: nowMs, opcode: StdBinOpcode.sub, ids: ids)
+	let repollMs = emitConst(module, block: bounded, value: SubpTracedChildRepollMs, ids: ids)
+	let deadlineIsLater = emitCmp(module, block: bounded, a: untilDeadlineMs, b: repollMs, pred: StdCmpPred.gt, ids: ids)
+	let noDeadline = emitBin(module, block: bounded, a: emitConst(module, block: bounded, value: 1, ids: ids), b: hasDeadline, opcode: StdBinOpcode.sub, ids: ids)
+	let repollSooner = emitBin(module, block: bounded, a: deadlineIsLater, b: noDeadline, opcode: StdBinOpcode.bitOr, ids: ids)
+	let repolls = emitBin(module, block: bounded, a: repollsChild, b: repollSooner, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let remainingMs = emitSelectWord(module, block: bounded, cond: repolls, whenSet: repollMs, whenClear: untilDeadlineMs, ids: ids)
 	let remainingNs = emitBin(module, block: bounded, a: remainingMs, b: emitConst(module, block: bounded, value: NanosPerMilli, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
 	emitNetpollGroupSetDeadline(module, block: bounded, group: group, deadline: emitBin(module, block: bounded, a: emitGtNowNs(module, block: bounded, ids: ids), b: remainingNs, opcode: StdBinOpcode.add, ids: ids))
 	module.setTerminator(bounded, op: StdOp.branch(cont.id))

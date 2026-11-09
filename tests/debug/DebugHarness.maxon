@@ -1366,22 +1366,27 @@ export type TracedChild
 	end 'release'
 end 'TracedChild'
 
-export function startedTracee(caseLabel String) returns TracedChild
+export function unservicedTracee(caseLabel String) returns TracedChild
 	let staged = builtFixture(caseLabel, fixture: TraceeFixtureName)
 	var child = try StreamingSubprocess.spawnTraceable(Executable.path(builtExecutable(staged)), arguments: StringArray.create(0), workingDirectory: staged, environment: Environment.inherit, traced: true) otherwise panic("tracee: the traced spawn of the built fixture was refused")
 	let process = try child.processId() otherwise panic("tracee: the spawned child recorded no process id")
-	var trace = ProcessTrace.create()
-	let roster = traceeServiced(trace, child: child, process: process as DebuggeeProcessId)
+
+	return TracedChild.create(child, trace: ProcessTrace.create(), pid: process, threads: StringArray.create(0))
+end 'unservicedTracee'
+
+export function startedTracee(caseLabel String) returns TracedChild
+	var spawned = unservicedTracee(caseLabel)
+	let roster = traceeServiced(spawned.trace, child: spawned.child, process: spawned.pid as DebuggeeProcessId)
 
 	if roster.count() < TraceeThreadsNeeded 'tooFewThreads'
 		panic("tracee: the case needs a traced child with a second thread alive, and the child reported only {roster.count()} before the {TraceeLaunchDeadlineMs} ms deadline. Its threads: {listedLines(roster.lines())}")
 	end 'tooFewThreads'
 
 	// After `go` the child exits and nothing services its trace, so its threads die traced and stay
-	// unreaped zombies: the state both cases wait on.
-	try child.writeStdinLine(TraceeGoLine) otherwise panic("tracee: the child's stdin refused the go line")
+	// unreaped zombies: the state each case waits on.
+	try spawned.child.writeStdinLine(TraceeGoLine) otherwise panic("tracee: the child's stdin refused the go line")
 
-	return TracedChild.create(child, trace: trace, pid: process, threads: roster.lines())
+	return TracedChild.create(spawned.child, trace: spawned.trace, pid: spawned.pid, threads: roster.lines())
 end 'startedTracee'
 
 function traceeServiced(trace ProcessTrace, child StreamingSubprocess, process DebuggeeProcessId) returns TraceeRoster
@@ -1438,3 +1443,62 @@ function traceeSaidReady(child StreamingSubprocess) returns bool
 		none gives false
 	end 'polled'
 end 'traceeSaidReady'
+
+#if os(Linux)
+	module let TraceeWaitDeadlineMs = 10000
+	let TraceeHeldObserveBudgetMs = 5000
+
+	typealias TraceeWaitReturnedCell = SharedValue with bool
+
+	function traceeWaitedOn(child StreamingSubprocess, timeoutMs DurationMs, returned TraceeWaitReturnedCell) returns ExitInt
+		let code = try child.waitWithTimeout(timeoutMs) otherwise panic("tracee: the wait on the traced child failed")
+
+		returned.publish(true)
+
+		return code
+	end 'traceeWaitedOn'
+
+	export function traceeWaitOutcome(tracee TracedChild, timeoutMs DurationMs) returns (bool, ExitInt)
+		let returned = TraceeWaitReturnedCell.create(false)
+		let waiting = async traceeWaitedOn(tracee.child, timeoutMs: timeoutMs, returned: returned.clone())
+		var waitedMs = 0 as TraceeTally
+
+		while not returned.current() and waitedMs < TraceeWaitDeadlineMs 'untilItReturns'
+			sleep(TraceeServiceSliceMs)
+
+			waitedMs = waitedMs + TraceeServiceSliceMs
+		end 'untilItReturns'
+
+		let returnedInTime = returned.current()
+
+		if not returnedInTime 'unstick'
+			_ = tracee.child.pollExit()
+		end 'unstick'
+
+		let code = await waiting
+
+		return (returnedInTime, code)
+	end 'traceeWaitOutcome'
+
+	export function heldTraceeWaitOutcome(tracee TracedChild, settleMs Milliseconds) returns (bool, bool)
+		let returned = TraceeWaitReturnedCell.create(false)
+		let waiting = async traceeWaitedOn(tracee.child, timeoutMs: 0, returned: returned.clone())
+
+		sleep(settleMs)
+
+		let returnedWhileHeld = returned.current()
+		let report = tracee.trace.wait(TraceeHeldObserveBudgetMs as DebuggeeWaitMs, process: tracee.pid as DebuggeeProcessId)
+		let stopStillPending = match report 'which'
+			stopped gives true
+			nothing or
+			exited or
+			killed gives false
+		end 'which'
+
+		_ = tracee.child.endTree()
+
+		waiting.cancel()
+
+		return (returnedWhileHeld, stopStillPending)
+	end 'heldTraceeWaitOutcome'
+#endif

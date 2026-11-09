@@ -1,0 +1,15 @@
+let HeldCaseLabel = "a-traced-child-held-at-a-stop-is-not-reported-as-exited"
+
+let HeldSettleMs = 300
+
+test 'an unbounded wait on a traced child held at a ptrace stop keeps waiting and leaves the stop for its tracer'
+	#if os(Linux)
+		var tracee = unservicedTracee(HeldCaseLabel)
+		let (returnedWhileHeld, stopStillPending) = heldTraceeWaitOutcome(tracee, settleMs: HeldSettleMs)
+
+		Expect.isFalse(returnedWhileHeld, message: "⛔ THE CHILD IS ALIVE, HELD AT THE STOP ITS TRACER HAS NOT YET COLLECTED. A tracer is told of a stop without asking for stopped children, so a reap that takes whatever status the child's pid answers reads that stop as an exit. The unbounded wait on process {tracee.pid} returned within {HeldSettleMs} ms.")
+		Expect.isTrue(stopStillPending, message: "⛔ THE CHILD'S STOP BELONGS TO ITS TRACER. The subprocess layer's reap took it, so the tracer's wait on process {tracee.pid} found nothing to collect.")
+
+		tracee.release()
+	#endif
+end 'an unbounded wait on a traced child held at a ptrace stop keeps waiting and leaves the stop for its tracer'

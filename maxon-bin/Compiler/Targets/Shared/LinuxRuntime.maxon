@@ -256,6 +256,20 @@ export let LinuxSiginfoBytes = 128
 export let LinuxNoDescriptor = 0xFFFFFFFFFFFFFFFF as MachineWord
 export let LinuxWaitidByPid = 1
 export let LinuxWaitidExitedNoWaitNoHang = 0x01000005
+export let LinuxWaitidByPgid = 2
+let LinuxWaitExited = 4
+let LinuxWaitNoWait = 0x01000000
+export let LinuxWaitidPeekExited = LinuxWaitExited + LinuxWaitNoWait + LinuxWaitAllClones
+export let LinuxWaitidPeekExitedNoHang = LinuxWaitidPeekExited + LinuxWaitNoHang
+export let LinuxWaitConsumeOne = LinuxWaitAllClones + LinuxWaitNoHang
+
+// Smaller than `LinuxSiginfoBytes` on purpose: the proc reap holds this buffer on an unguarded call
+// chain, and a larger frame fails the build with E5004.
+export let LinuxWaitidInfoBytes = 32
+export let LinuxSiginfoOffCode = 8
+export let LinuxSiginfoOffPid = 16
+export let LinuxChildCodeExited = 1
+export let LinuxChildCodeDumped = 3
 
 // SIGSEGV (an unmapped address, a stack run into its guard gap) and SIGBUS (a mapped address the access is
 // illegal for) — 11 and 7 on both Linux architectures this compiler targets.
@@ -726,8 +740,8 @@ export let LinuxSleepDiscardsRemainder = 0
 export let LinuxPtraceTraceMe = 0
 
 export let LinuxWaitAnyChild = 0 - 1
-export let LinuxWaitAllClones = 0x40000000
-export let LinuxWaitNoHang = 1
+let LinuxWaitAllClones = 0x40000000
+let LinuxWaitNoHang = 1
 export let LinuxWaitNoResourceUsage = 0
 export let LinuxAwaitOneSliceMs = 1
 

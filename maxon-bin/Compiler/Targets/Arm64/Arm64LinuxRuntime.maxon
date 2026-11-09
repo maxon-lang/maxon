@@ -3034,7 +3034,7 @@ function buildArm64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns Funct
 
 	asm.placeLabel(selected)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotStatusOut)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: (LinuxWaitAllClones + LinuxWaitNoHang) as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxWaitConsumeOne as MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxWaitNoResourceUsage as MachineWord)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallWait4)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
@@ -3188,7 +3188,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	end 'envRead'
 
 	if posixUsesHostObjects(usage) 'hostObjects'
-		chunks.push(buildArm64PosixProcReapChunk(PosixHostCall.syscall(Arm64LinuxSyscallWait4, errnoHome: errnoHome), scope: PosixReapScope.childAndItsTracees))
+		chunks.push(buildArm64PosixProcReapChunk(PosixHostCall.syscall(Arm64LinuxSyscallWait4, errnoHome: errnoHome), scope: PosixReapScope.childAndItsTracees(PosixHostCall.syscall(Arm64LinuxSyscallWaitid, errnoHome: errnoHome))))
 		chunks.push(buildArm64LinuxWaitCloseChunk())
 	end 'hostObjects'
 
@@ -3509,6 +3509,12 @@ function buildArm64LinuxNetpollChildPollChunk() returns FunctionCodeChunk
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotInfo)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: answered)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotInfo)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x3, base: Arm64Register.x2, byteOffset: LinuxSiginfoOffCode)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: LinuxChildCodeExited as MachineWord)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x3, lhs: Arm64Register.x3, rhs: Arm64Register.x4)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x3, imm: (LinuxChildCodeDumped - LinuxChildCodeExited) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hi, label: answered)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 1)
 
 	asm.placeLabel(answered)

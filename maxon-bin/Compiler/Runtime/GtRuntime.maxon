@@ -8873,7 +8873,7 @@ end 'buildGtIoRead'
 let SubpTableLabel = b"__subp_table"
 let SubpMaxHandles = 64
 
-let SubpSlotBytes = 216
+let SubpSlotBytes = 224
 
 // A live handle is `generation * SubpHandleSlotSpan + slotIndex`: the index in the low bits, the slot's
 // `SubpSlotGeneration` above it. The generation is bumped before the handle is minted, so every live handle
@@ -8961,6 +8961,8 @@ let SubpStdinClosing = 3
 // one, so the release cannot double-close.
 let SubpSlotOwnedTreeObject = 184
 
+export let SubpSlotTraced = 208 as ByteOffset
+
 // ⛔⛔ **THE COLLECT INTERLOCK — the one word a collect and a release contend for, and the last word of the
 // slot.** Nothing else serialises `__gt_subp_wait_collect` against `__gt_subp_release`: the release closes the
 // pipes, zeroes the handles and clears `inUse` under no lock, so a collect on another processor can pass any
@@ -8969,7 +8971,7 @@ let SubpSlotOwnedTreeObject = 184
 // takes `free -> released` for good, and either party finding the word taken stops at
 // `RuntimeAbort.subpCollectSlotReleased`. The spawn's claim stores `free`, so a reused slot is collectable
 // again.
-let SubpSlotCollector = 208
+let SubpSlotCollector = 216
 let SubpCollectorFree = 0
 export let SubpCollectorHeld = 1 as FullRangeInt
 let SubpCollectorReleased = 2
@@ -10135,6 +10137,9 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotHProcess, value: hProcess)
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotPid, value: pid)
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotOwnedTreeObject, value: treeObject)
+	let requestedFlags = emitLoadField(module, block: spawnOk, record: req, offset: SubpReqFlags, ids: ids)
+	let tracedBits = emitBin(module, block: spawnOk, a: requestedFlags, b: emitConst(module, block: spawnOk, value: DebugOnlyThisProcess, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotTraced, value: emitCompareWithConstant(module, block: spawnOk, value: tracedBits, pred: StdCmpPred.ne, against: 0, ids: ids))
 
 	// A job the child was not assigned to cannot end it, so the tree a deadline kills falls back to
 	// the child itself; the job is still owned and closed at release.

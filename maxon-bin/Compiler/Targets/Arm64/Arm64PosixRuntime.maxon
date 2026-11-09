@@ -956,16 +956,28 @@ end 'arm64PosixEmitPpoll'
 // mrt_host_proc_reap(x0 = object, x1 = blocking) -> x0 = signalled
 // ==========================================================================
 
-// `childAndItsTracees` waits on the child's process group with `__WALL`, discarding any other
-// member it reaps, until the child itself is reaped. A thread of the child that died while this
-// process traced it is reported only to its tracer, and Linux withholds the leader's status until
-// every thread is reaped, so a `wait4(pid)` on the leader alone blocks forever. The group holds no
-// other child of ours, because every child leads its own; a group wait that errors (the child left
-// its group) falls back to the pid. `childAlone` is Darwin's, whose runtime traces no child.
-export enum PosixReapScope
+let PosixReapBaseSlots = 4 as StackSize
+
+// `childAndItsTracees` reaps a child this process may trace. A thread of the child that died while
+// traced is reported only to its tracer, and Linux withholds the leader's status until every thread
+// is reaped, so a `wait4(pid)` on the leader alone blocks forever. The reap peeks the child's group
+// with `peek` (`waitid`, `WNOWAIT`, `__WALL`) instead: a stop or trap stays pending for the tracer
+// and answers "not exited", and an exit is consumed by a `wait4` aimed at the peeked pid, so the
+// exit of any member other than the child is discarded and the reap goes round again. The group
+// holds no other child of ours, because every child leads its own. A peek that errors (the child
+// left its group) falls back to the pid, and a blocking reap that sees a stop sleeps
+// `PosixChildPollMs` before peeking again. `childAlone` is Darwin's, whose runtime traces no child.
+export union PosixReapScope
 	childAlone
-	childAndItsTracees
+	childAndItsTracees(peek PosixHostCall)
 end 'PosixReapScope'
+
+function arm64PosixReapFrameSlots(scope PosixReapScope) returns StackSize
+	return match scope 'scope'
+		childAlone gives PosixReapBaseSlots
+		childAndItsTracees gives PosixReapBaseSlots + LinuxWaitidInfoBytes / SpillSlotBytes
+	end 'scope'
+end 'arm64PosixReapFrameSlots'
 
 function arm64PosixEmitNoteGroupWait(asm Arm64RuntimeAsm, scope PosixReapScope, flagSlot StackSize)
 	match scope 'scope'
@@ -977,53 +989,88 @@ function arm64PosixEmitNoteGroupWait(asm Arm64RuntimeAsm, scope PosixReapScope, 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: flagSlot)
 end 'arm64PosixEmitNoteGroupWait'
 
-function arm64PosixEmitGroupWaitOperands(asm Arm64RuntimeAsm, scope PosixReapScope, flagSlot StackSize)
-	match scope 'scope'
-		childAlone then return
-		childAndItsTracees then break
-	end 'scope'
+function arm64PosixEmitOwnChildReapOperands(asm Arm64RuntimeAsm, objSlot StackSize, statusSlot StackSize, blockingSlot StackSize)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: objSlot)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: statusSlot)
 
-	let childOnly = asm.newLabel()
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: blockingSlot)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: PosixReapWithoutBlocking)
+	arm64EmitCset(asm.code, rd: arm64RuntimeReg(Arm64Register.x2), cond: Arm64CondCode.eq)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixReapDiscardsRusage)
+end 'arm64PosixEmitOwnChildReapOperands'
 
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: flagSlot)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: childOnly)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
-	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x4, rhs: Arm64Register.x0)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: LinuxWaitAllClones as MachineWord)
-	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x2, lhs: Arm64Register.x2, rhs: Arm64Register.x4)
-
-	asm.placeLabel(childOnly)
-end 'arm64PosixEmitGroupWaitOperands'
-
-function arm64PosixEmitGroupWaitVerdict(asm Arm64RuntimeAsm, scope PosixReapScope, flagSlot StackSize, objSlot StackSize, issue BlockId, reaped BlockId)
-	match scope 'scope'
-		childAlone then return
-		childAndItsTracees then break
-	end 'scope'
-
-	let childOnly = asm.newLabel()
+function arm64PosixEmitTraceeReapOperands(asm Arm64RuntimeAsm, peek PosixHostCall, objSlot StackSize, statusSlot StackSize, blockingSlot StackSize, flagSlot StackSize, infoSlot StackSize, issue BlockId, stillRunning BlockId)
+	let byPid = asm.newLabel()
+	let targetChosen = asm.newLabel()
+	let blockingPeek = asm.newLabel()
+	let optionsChosen = asm.newLabel()
+	let peekFailed = asm.newLabel()
 	let groupGone = asm.newLabel()
+	let notAnExit = asm.newLabel()
+	let consume = asm.newLabel()
 
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: flagSlot)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: childOnly)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: groupGone)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: childOnly)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixChildPidMask)
-	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x3)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: infoSlot + LinuxSiginfoOffPid / SpillSlotBytes)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: objSlot)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x1, byteOffset: PosixWaitOffChildPid)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: reaped)
-	arm64EmitBranchTo(asm, label: issue)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: flagSlot)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: byPid)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxWaitidByPgid as MachineWord)
+	arm64EmitBranchTo(asm, label: targetChosen)
+
+	asm.placeLabel(byPid)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxWaitidByPid as MachineWord)
+
+	asm.placeLabel(targetChosen)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: infoSlot)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: blockingSlot)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x4, label: blockingPeek)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxWaitidPeekExitedNoHang as MachineWord)
+	arm64EmitBranchTo(asm, label: optionsChosen)
+
+	asm.placeLabel(blockingPeek)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxWaitidPeekExited as MachineWord)
+
+	asm.placeLabel(optionsChosen)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: PosixReapDiscardsRusage)
+	arm64PosixEmitHostCall(asm, call: peek)
+	arm64PosixEmitBranchIfCallInterrupted(asm, call: peek, whenInterrupted: issue)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: peekFailed)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: infoSlot)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x2, byteOffset: LinuxSiginfoOffPid)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: stillRunning)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x3, base: Arm64Register.x2, byteOffset: LinuxSiginfoOffCode)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: LinuxChildCodeExited as MachineWord)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x3, lhs: Arm64Register.x3, rhs: Arm64Register.x4)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x3, imm: (LinuxChildCodeDumped - LinuxChildCodeExited) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hi, label: notAnExit)
+	arm64EmitBranchTo(asm, label: consume)
+
+	asm.placeLabel(peekFailed)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: flagSlot)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: stillRunning)
 
 	asm.placeLabel(groupGone)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: flagSlot)
 	arm64EmitBranchTo(asm, label: issue)
 
-	asm.placeLabel(childOnly)
-end 'arm64PosixEmitGroupWaitVerdict'
+	asm.placeLabel(notAnExit)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: blockingSlot)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: stillRunning)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixChildPollMs)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
+	arm64EmitBranchTo(asm, label: issue)
+
+	asm.placeLabel(consume)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: statusSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxWaitConsumeOne as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixReapDiscardsRusage)
+end 'arm64PosixEmitTraceeReapOperands'
 
 // The ONE place a child's status is taken — `PosixWaitOffChildStatus` carries the reap-once rule that makes
 // it one place, and the cache it is taken into.
@@ -1039,7 +1086,8 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall, scope PosixReap
 	let SlotBlocking = 1
 	let SlotStatus = 2
 	let SlotGroupWait = 3
-	var asm = Arm64RuntimeAsm.beginFunction(4)
+	let SlotInfo = PosixReapBaseSlots
+	var asm = Arm64RuntimeAsm.beginFunction(arm64PosixReapFrameSlots(scope))
 
 	let alreadySignalled = asm.newLabel()
 	let issue = asm.newLabel()
@@ -1058,19 +1106,14 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall, scope PosixReap
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x2, label: alreadySignalled)
 
 	asm.placeLabel(issue)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
-	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStatus)
 
-	// `options = blocking ? 0 : WNOHANG`, as a compare and a `cset` — no branch for a two-valued argument.
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotBlocking)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: PosixReapWithoutBlocking)
-	arm64EmitCset(asm.code, rd: arm64RuntimeReg(Arm64Register.x2), cond: Arm64CondCode.eq)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixReapDiscardsRusage)
-	arm64PosixEmitGroupWaitOperands(asm, scope: scope, flagSlot: SlotGroupWait)
+	match scope 'operands'
+		childAlone then arm64PosixEmitOwnChildReapOperands(asm, objSlot: SlotObj, statusSlot: SlotStatus, blockingSlot: SlotBlocking)
+		childAndItsTracees(peek) then arm64PosixEmitTraceeReapOperands(asm, peek: peek, objSlot: SlotObj, statusSlot: SlotStatus, blockingSlot: SlotBlocking, flagSlot: SlotGroupWait, infoSlot: SlotInfo, issue: issue, stillRunning: stillRunning)
+	end 'operands'
+
 	arm64PosixEmitHostCall(asm, call: wait)
 	arm64PosixEmitBranchIfCallInterrupted(asm, call: wait, whenInterrupted: issue)
-	arm64PosixEmitGroupWaitVerdict(asm, scope: scope, flagSlot: SlotGroupWait, objSlot: SlotObj, issue: issue, reaped: reaped)
 
 	// The wait answers the reaped pid, 0 (nothing to report yet, `WNOHANG`) or -1. Only the pid means the
 	// child has been taken, and the comparison is on the low 32 bits because `pid_t` is a C `int`.
@@ -1079,7 +1122,13 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall, scope PosixReap
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotObj)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x1, byteOffset: PosixWaitOffChildPid)
 	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: stillRunning)
+
+	let otherPid = match scope 'otherPid'
+		childAlone gives stillRunning
+		childAndItsTracees gives issue
+	end 'otherPid'
+
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: otherPid)
 
 	asm.placeLabel(reaped)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotObj)

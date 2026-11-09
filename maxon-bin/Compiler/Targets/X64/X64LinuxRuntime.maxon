@@ -3183,14 +3183,16 @@ end 'buildX64LinuxPipePeekChunk'
 // ⚠ A killed child keeps the code the kill named only when its status says SIGKILL; see
 // `PosixSignalExitCodeBase`.
 //
-// It waits on the child's process group with `__WALL` for the reason
-// `PosixReapScope.childAndItsTracees` gives.
+// It reaps as `PosixReapScope.childAndItsTracees` describes.
 function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 	let SlotObj = 0
 	let SlotBlocking = 1
 	let SlotStatus = 2
 	let SlotGroupWait = 3
-	var asm = X64RuntimeAsm.beginFunction(4)
+	let SlotInfo = 4
+	let InfoSlots = LinuxWaitidInfoBytes / SpillSlotBytes
+	var asm = X64RuntimeAsm.beginFunction(SlotInfo + InfoSlots)
+	let infoDisp = x64LinuxBufferDisp(asm, firstSlot: SlotInfo, slotCount: InfoSlots)
 
 	let alreadySignalled = asm.newLabel()
 	let issue = asm.newLabel()
@@ -3200,10 +3202,12 @@ function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 	let decode = asm.newLabel()
 	let bySignal = asm.newLabel()
 	let publish = asm.newLabel()
-	let blockingWait = asm.newLabel()
-	let haveOptions = asm.newLabel()
-	let childOnly = asm.newLabel()
-	let childOnlyVerdict = asm.newLabel()
+	let blockingPeek = asm.newLabel()
+	let peekOptionsChosen = asm.newLabel()
+	let peekByPid = asm.newLabel()
+	let peekTargetChosen = asm.newLabel()
+	let peekFailed = asm.newLabel()
+	let notAnExit = asm.newLabel()
 	let groupGone = asm.newLabel()
 	let answered = asm.newLabel()
 
@@ -3216,37 +3220,53 @@ function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: alreadySignalled)
 
 	asm.placeLabel(issue)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: (infoDisp + LinuxSiginfoOffPid) as Imm32, srcReg: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatus))
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: infoDisp)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: PosixReapDiscardsRusage)
 
-	// `options = blocking ? 0 : WNOHANG`.
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotBlocking), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: blockingWait)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixWaitNoHang)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: haveOptions)
-
-	asm.placeLabel(blockingWait)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxReapUntilItExits)
-
-	asm.placeLabel(haveOptions)
-	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixReapDiscardsRusage)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotGroupWait), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: childOnly)
-	encodeGrp3Reg(asm.code, ext: Grp3ExtNeg, reg: X64Register.rdi)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtOr, reg: X64Register.rdx, imm: LinuxWaitAllClones as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: peekByPid)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxWaitidByPgid as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: peekTargetChosen)
 
-	asm.placeLabel(childOnly)
+	asm.placeLabel(peekByPid)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxWaitidByPid as MachineWord)
+
+	asm.placeLabel(peekTargetChosen)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotBlocking), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: blockingPeek)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxWaitidPeekExitedNoHang as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: peekOptionsChosen)
+
+	asm.placeLabel(blockingPeek)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxWaitidPeekExited as MachineWord)
+
+	asm.placeLabel(peekOptionsChosen)
+	x64LinuxEmitSyscallRestartingOnEintr(asm, number: X64LinuxSyscallWaitid)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: peekFailed)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: (infoDisp + LinuxSiginfoOffPid) as Imm32, wide: false)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdi, src: X64Register.rdi, wide: false)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: stillRunning)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: (infoDisp + LinuxSiginfoOffCode) as Imm32, wide: false)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rax, imm: LinuxChildCodeExited as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: (LinuxChildCodeDumped - LinuxChildCodeExited) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.above, targetBlockId: notAnExit)
+
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatus))
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxWaitConsumeOne as MachineWord)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixReapDiscardsRusage)
 	x64LinuxEmitSyscallRestartingOnEintr(asm, number: X64LinuxSyscallWait4)
 
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotGroupWait), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: childOnlyVerdict)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: groupGone)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: childOnlyVerdict)
+	// The wait answers the reaped pid, 0 (nothing to report yet, `WNOHANG`) or -1. Only the child's own
+	// pid means the child has been taken, and the comparison is on the low 32 bits because `pid_t` is a
+	// C `int`.
 	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: PosixChildPidMask)
 	encodeRmRegDirect(asm.code, opcode: OpcodeAndRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
@@ -3255,21 +3275,24 @@ function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: reaped)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: issue)
 
+	asm.placeLabel(peekFailed)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotGroupWait), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: groupGone)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: stillRunning)
+
 	asm.placeLabel(groupGone)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotGroupWait), srcReg: X64Register.rax, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: issue)
 
-	asm.placeLabel(childOnlyVerdict)
-
-	// The wait answers the reaped pid, 0 (nothing to report yet, `WNOHANG`) or -1. Only the pid means the
-	// child has been taken, and the comparison is on the low 32 bits because `pid_t` is a C `int`.
-	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: PosixChildPidMask)
-	encodeRmRegDirect(asm.code, opcode: OpcodeAndRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: stillRunning)
+	asm.placeLabel(notAnExit)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotBlocking), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: stillRunning)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixChildPollMs)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: issue)
 
 	asm.placeLabel(reaped)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStatus), wide: false)
@@ -3967,7 +3990,7 @@ function buildX64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns Functio
 
 	asm.placeLabel(selected)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusOut), wide: true)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxWaitAllClones + LinuxWaitNoHang)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxWaitConsumeOne)
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxWaitNoResourceUsage)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallWait4)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
@@ -5112,6 +5135,11 @@ function buildX64LinuxNetpollChildPollChunk() returns FunctionCodeChunk
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: answered)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: (infoDisp + LinuxSiginfoOffCode) as Imm32, wide: false)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rcx, imm: LinuxChildCodeExited as Imm32)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	emitCmpRegImm(asm, reg: X64Register.rcx, imm: (LinuxChildCodeDumped - LinuxChildCodeExited) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.above, targetBlockId: answered)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 1)
 
 	asm.placeLabel(answered)
