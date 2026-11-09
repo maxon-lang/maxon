@@ -1157,9 +1157,8 @@ end 'suppliedConstraintBinding'
 // symmetric: a false `satisfied` at the suppression merely leaves an over-refusal standing, which
 // is loud; a false `unmet` withholds a refusal the report then does NOT raise, which is a program that
 // should be refused compiling in silence. The swept index ALONE is strictly weaker than the merged one — it
-// never holds an `extension <T> implements <I>` — and this header once argued the opposite direction was the
-// safe one. See `ProgramSignatures.instantiationViolatesItsOwnWhereClause` for the access violation that
-// measured it.
+// holds no conditional `extension <T> implements <I>`. See
+// `ProgramSignatures.instantiationViolatesItsOwnWhereClause`.
 //
 // The CANONICAL conformer name (`Integer` -> `int`) is what the conformance test compares by — the same
 // name the witness table is keyed by — while the E3017 MESSAGE still prints the source spelling.
@@ -1498,46 +1497,45 @@ function buildDeclaredConformanceMap(project Project) returns DeclaredConformanc
 	var declared = DeclaredConformanceMap.create()
 
 	for conformance in project.conformances 'eachDecl'
-		var interfaces = InterfaceNameSet.create()
-		copyDeclaredInterfaces(declared, typeName: conformance.typeName, into: interfaces)
-
-		for i in 0 upto conformance.interfaces.count() 'eachIface'
-			interfaces.insert((try conformance.interfaces.get(i) otherwise panic("buildDeclaredConformanceMap: interfaces.get OOB at {i}")).interfaceName)
-		end 'eachIface'
-
-		declared.upsert(conformance.typeName, value: interfaces)
+		declared.upsert(conformance.typeName, value: interfaceNamesDeclaredBy(declared, conformer: conformance.typeName, declares: conformance.interfaces))
 	end 'eachDecl'
 
 	return declared
 end 'buildDeclaredConformanceMap'
 
-// ⭐⭐ **A CONFORMER'S ENTRY IS THE UNION OF ITS DECLARATIONS, AND THE REPLACE THIS REPAIRS LET DECLARATION
-// ORDER DECIDE WHICH CONFORMANCES A PROGRAM HAD.** The header this replaces argued that a fresh set per decl
-// was enough because *"one `type X implements A, B` clause is ONE ConformanceDecl"* and a second `implements`
-// on one type is E3006 — true of the `type` clause alone, and FALSE the moment an `extension` could add one:
-// `Parser.recordExtensionConformance` records a SECOND `ConformanceDecl` under the same conformer name, which
-// is not a redeclaration and is not E3006. MEASURED on the merge base, one file, two declarations:
-// `type Thing implements Shower` plus `extension Thing implements Sizer` compiles the `Sizer` call and refuses
-// the `Shower` one with *"E3005 … type 'Thing' does not implement interface 'Shower'"* — and swapping which
-// is written first swaps which of the two is refused. The last decl won; every earlier one was dropped.
+// ⭐⭐ **A CONFORMER'S ENTRY IS THE UNION OF ITS DECLARATIONS, NOT THE LAST ONE'S, OR DECLARATION ORDER
+// DECIDES WHICH CONFORMANCES A PROGRAM HAS.** A `type` clause and an `extension <T> implements …` each record
+// a `ConformanceDecl` under one conformer name (`Parser.recordExtensionConformance`), and a second is not a
+// redeclaration and not E3006. A fresh set per declaration would keep only the one written last.
 //
 // ⚠ It is also load-bearing for the reachability walk that reads this map to credit a conformer's witness
 // impls (`StdlibSource.markWitnessImplsOfConformer`): `stdlib/Array.maxon` declares `Iterable`/`Cloneable` on
-// the type and `Hashable`/`Equatable` on an extension, so under the replace one of those pairs was invisible
-// to the credit and its impls would be filed unreachable behind a witness slot that names them.
+// the type and `Hashable`/`Equatable` on an extension, so a replace would leave one of those pairs invisible
+// to the credit and its impls filed unreachable behind a witness slot that names them.
 //
 // ⚠ **THE SET IS COPIED RATHER THAN ADDED TO, for `recordDispatchedSlot`'s reason stated in full
 // there** — a value fetched out of a `Map` and bound by `let` is read-only, so an `insert` on it is
 // E3159. The copy is paid once per DECLARATION and copies only what an earlier declaration
 // of the SAME conformer already put there, which is nothing for every type in the corpus but the handful
 // carrying both a `type` clause and an `extension` one.
-function copyDeclaredInterfaces(declared DeclaredConformanceMap, typeName ByteArray, into InterfaceNameSet)
+module function copyDeclaredInterfaces(declared DeclaredConformanceMap, typeName ByteArray, into InterfaceNameSet)
 	if let already = try declared.get(typeName) 'declaredEarlierToo'
 		for interfaceName in already 'eachEarlier'
 			into.insert(interfaceName)
 		end 'eachEarlier'
 	end 'declaredEarlierToo'
 end 'copyDeclaredInterfaces'
+
+module function interfaceNamesDeclaredBy(declared DeclaredConformanceMap, conformer ByteArray, declares InterfaceConformanceArray) returns InterfaceNameSet
+	var interfaces = InterfaceNameSet.create()
+	copyDeclaredInterfaces(declared, typeName: conformer, into: interfaces)
+
+	for i in 0 upto declares.count() 'eachIface'
+		interfaces.insert((try declares.get(i) otherwise panic("interfaceNamesDeclaredBy: declares.get OOB at {i} below count {declares.count()}")).interfaceName)
+	end 'eachIface'
+
+	return interfaces
+end 'interfaceNamesDeclaredBy'
 
 // Does `typeName` declare `implements interfaceName`, DIRECTLY OR THROUGH `extends`? A type with no
 // conformance declaration answers false — the E3017 case.
@@ -1550,7 +1548,7 @@ end 'copyDeclaredInterfaces'
 //
 // ⭐ Exported for `ProgramSignatures.typeImplementsInterface` and the parser, which reach it with
 // `ProgramSignatures.sweptConformanceIndex()` — the `type -> declared interfaces` relation built
-// from `StructLayout.conformsTo`.
+// from the declarations' `implements` clauses and an extension's unconditional ones.
 export function typeDeclaresInterface(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray) returns bool
 	if let declaredInterfaces = try declared.get(typeName) 'hasDecl'
 		return declaredInterfacesReach(interfaces, declaredNames: declaredInterfaces, wanted: interfaceName)

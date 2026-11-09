@@ -424,7 +424,9 @@ type_base     = IDENTIFIER { '.' IDENTIFIER } | 'int' | 'float' | 'bool'   (* th
 
                 (* an extension body declares no stored members: a `var` or `let`, static or not,
                    is E2015; a type extension's member with the name of a member of the
-                   type's own, static or instance, is E3006 *)
+                   type's own, static or instance, is E3006; the type is a declared `type`,
+                   `enum`, `union` or interface, or a primitive, and a `static` method or a nested
+                   typealias in the body of an `enum` or `union` extension is refused *)
 ```
 
 ### 3.7 Type Alias Declaration

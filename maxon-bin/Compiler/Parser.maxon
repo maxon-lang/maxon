@@ -25787,6 +25787,23 @@ export type Parser
 		end 'eachConformer'
 	end 'publishExtensionInnerAliases'
 
+	export function foldExtensionConformanceInto(index ProgramSignatures, site ExtensionDeclSite)
+		self.pos = site.tokenPos
+
+		try self.consume(TokenKind.extension) otherwise return
+		let nameTok = try self.consumeExtensionTargetName() otherwise return
+		try index.typeExtensionTargetOf(nameTok.value) otherwise return
+		let interfaces = try self.readImplementsList() otherwise return
+
+		// A conditional conformance holds only for the conformers its clause admits, which the real parse
+		// decides per conformer; filed here it would be declared for all of them.
+		if self.at(TokenKind.where) 'aConditionalConformance'
+			return
+		end 'aConditionalConformance'
+
+		index.recordConformancesOfATypeExtension(nameTok.value, declares: interfaces)
+	end 'foldExtensionConformanceInto'
+
 	// ⭐⭐ **PUBLISH THE `extension` AT `tokenPos` ONTO EVERY CONFORMER, IN THE WHOLE-PROGRAM INDEX.** The
 	// second half of `recordScannedExtension`, driven by `Queries.foldExtensionDeclarations` once every file
 	// has folded — which is the whole point of the split.
@@ -25860,7 +25877,7 @@ export type Parser
 
 		for conformer in extensionTargetConformers(header.target) 'eachConformer'
 			self.pos = bodyStart
-			self.enterTypeScope(conformer, isEnum: false)
+			self.enterTypeScopeOf(conformer)
 			self.scannedFunctionAliases = functionAliasesOfTheBody
 			self.openExtensionBodyScope(header, conformer: conformer, index: index)
 
@@ -26262,8 +26279,13 @@ export type Parser
 	function conformerIsDeclaredInThisFile(conformer ByteArray, index ProgramSignatures) returns bool
 		match index.structInAnyFile(conformer) 'conformerLayout'
 			declared(layout) then return layout.declFilePath.toString() == self.job.path.toString()
-			undeclared then return false
+			undeclared then break
 		end 'conformerLayout'
+
+		match index.enumInAnyFile(conformer) 'conformerEnum'
+			declared(layout) then return layout.declFilePath.toString() == self.job.path.toString()
+			undeclared then return false
+		end 'conformerEnum'
 	end 'conformerIsDeclaredInThisFile'
 
 	function extensionConformerLayout(conformer ByteArray, index ProgramSignatures) returns StructLayout
@@ -26495,6 +26517,10 @@ export type Parser
 		self.advance()
 		return TypeHeader.create(nameTok, isUnique: true)
 	end 'readTypeHeader'
+
+	function enterTypeScopeOf(name ByteArray)
+		self.enterTypeScope(name, isEnum: self.signatures.containsEnumFor(name, readerFilePath: self.job.path))
+	end 'enterTypeScopeOf'
 
 	// ⭐ **ENTER THE SCOPE OF A NAMED DECLARATION — ITS NAME AND ITS KIND, WRITTEN IN ONE PLACE.** The
 	// opening half of `closeTypeParamScope`, called by every door that reads a declaration's header: the
@@ -30879,13 +30905,9 @@ export type Parser
 		// door tagged `integer`. So an `extension byte` body would publish `byte.<method>` symbols nothing can
 		// ever dispatch.
 		//
-		// ⚠ **WITHOUT THIS IT IS NOT AN ERROR, IT IS SILENCE — WHICH IS THE WORSE HALF OF THE TRADE.** `byte`
-		// falls to `undeclaredTarget`, whose zero conformers mean the body is never parsed at all, so the whole
-		// declaration compiles to nothing with no diagnostic (MEASURED without this gate: exit 0,
-		// the extension inert, and its body's own `Integer` reported unused because nothing ever read it).
-		// That general silence is DELIBERATE and stays — an `extension <Interface>` no type implements is a
-		// legal, documented no-op (see this function's ⚠) — so the refusal is narrowed to the one case where
-		// the author named something the compiler DOES recognize as a primitive and cannot honour.
+		// ⚠ **WITHOUT THIS `byte` FALLS TO `undeclaredTarget` AND IS REFUSED AS AN UNKNOWN TYPE NAME (E3011),
+		// which denies a name the compiler DOES recognize as a primitive.** An unknown name or a typealias is
+		// refused below; this refusal says why the one primitive name that cannot be extended cannot.
 		//
 		// ⇒ Written as the DIFFERENCE between the two tables, not as `b"byte"`: the day a fifth primitive
 		// joins `namesAPrimitiveType` without a value representation it is refused here automatically, and the
@@ -30893,6 +30915,12 @@ export type Parser
 		if namesAPrimitiveType(header.nameTok.value) and primitiveTagOfTypeName(header.nameTok.value) == ValueTypeTag.unresolved 'aPrimitiveWithNoValuesOfItsOwn'
 			throw SourceParseError.unsupported("`extension {String.from(header.nameTok.value)}` — `{String.from(header.nameTok.value)}` is the qualifier of a static (`{String.from(header.nameTok.value)}.fromString`) and names no type of its own, so it has no values for these methods to be dispatched on; a byte-sized value is an `int` range (`typealias Byte = int(0 to u8.max)`), so extend `int`", line: header.nameTok.line, column: header.nameTok.column)
 		end 'aPrimitiveWithNoValuesOfItsOwn'
+
+		match header.target 'target'
+			undeclaredTarget then throw self.undeclaredExtensionTargetRefusal(header.nameTok)
+			interfaceExtension or
+			typeExtension then break
+		end 'target'
 
 		let bodyStart = self.pos
 
@@ -30923,7 +30951,7 @@ export type Parser
 			self.recordExtensionConformance(header, conformer: conformer)
 
 			self.pos = bodyStart
-			self.enterTypeScope(conformer, isEnum: false)
+			self.enterTypeScopeOf(conformer)
 			self.openExtensionBodyScope(header, conformer: conformer, index: self.signatures)
 
 			// Where the sibling-receiver walk begins for a bare call in these bodies — the EXTENSION's member
@@ -30990,6 +31018,15 @@ export type Parser
 		self.advanceToOutermostBlockEnd()
 		try self.consumeBlockEnd(header.nameTok.value, labelIsRequired: false)
 	end 'parseExtensionDeclaration'
+
+	function undeclaredExtensionTargetRefusal(nameTok Token) returns SourceParseError
+		let written = self.signatures.aliasIdentityDisplay(nameTok.value)
+
+		match self.signatures.declaredTypeNameIn(nameTok.value, readerFilePath: self.job.path) 'declaration'
+			undeclared then return SourceParseError.unknownTypeName(written, line: nameTok.line, column: nameTok.column)
+			declared then return SourceParseError.unsupported("`extension {written}` — '{written}' is a typealias, which declares no methods of its own; extend the `type`, `enum`, `union`, `interface` or primitive it names", line: nameTok.line, column: nameTok.column)
+		end 'declaration'
+	end 'undeclaredExtensionTargetRefusal'
 
 	// ⭐ **THE METHOD NAME AN EXTENSION MEMBER STARTING AT `index` DECLARES, as a PEEK** —
 	// `AbsentError` for a nested typealias, for a malformed member, and for anything that is not a
@@ -31995,12 +32032,22 @@ export type Parser
 		let visibility = try self.consumeOptionalVisibility()
 
 		if self.at(TokenKind.static) 'staticMethod'
-			let tok = self.current()
-			throw SourceParseError.unsupported("a `static function` on `{layout.kindWord()} {String.from(layout.name)}` (an INSTANCE method is supported — a static one has no receiver to name the enum through, and no `enum`/`union` in the corpus declares one)", line: tok.line, column: tok.column)
+			throw self.staticFunctionOnEnumRefusal(layout, tok: self.current())
 		end 'staticMethod'
 
 		try self.parseFunction(visibility, takesReceiver: true, form: DeclaredHeadForm.declaredFunction)
 	end 'parseEnumMethod'
+
+	function staticFunctionOnEnumRefusal(layout EnumLayout, tok Token) returns SourceParseError
+		return SourceParseError.unsupported("a `static function` on `{layout.kindWord()} {String.from(layout.name)}` (an INSTANCE method is supported — a static one has no receiver to name the enum through, and no `enum`/`union` in the corpus declares one)", line: tok.line, column: tok.column)
+	end 'staticFunctionOnEnumRefusal'
+
+	function enumBeingExtended() returns EnumLayout
+		match self.signatures.enumInAnyFile(self.enclosingTypeName()) 'extendedEnum'
+			declared(layout) then return layout
+			undeclared then panic("Parser.enumBeingExtended: '{String.from(self.enclosingTypeName())}' is marked an enum by `enterTypeScope` and no enum registry holds it")
+		end 'extendedEnum'
+	end 'enumBeingExtended'
 
 	// Is the token at `index` the `end` that CLOSES an enum/union body — as opposed to a case NAMED `end`?
 	//
@@ -33119,6 +33166,10 @@ export type Parser
 		let isStatic = self.at(TokenKind.static)
 
 		if isStatic 'staticMember'
+			if self.enclosingTypeIsEnum and self.kindAt(self.pos + 1) == TokenKind.function 'aStaticFunctionOnAnEnum'
+				throw self.staticFunctionOnEnumRefusal(self.enumBeingExtended(), tok: self.current())
+			end 'aStaticFunctionOnAnEnum'
+
 			self.advance()
 		end 'staticMember'
 
@@ -33145,8 +33196,9 @@ export type Parser
 		// `export` (visibility) is already consumed above; a nested typealias takes no `static`. Its
 		// visibility is its OWN modifier, as any member's is: unmarked is file-private, and another file
 		// naming a file-private inner alias is E3008 (`requireInnerAliasNameable`). An interface's inner alias
-		// takes the interface's visibility instead.
-		if self.at(TokenKind.typealias) 'nestedTypeAlias'
+		// takes the interface's visibility instead. An extension of an enum or union declares none:
+		// the member reaches the `function` check below and is refused there (E2010).
+		if self.at(TokenKind.typealias) and not self.enclosingTypeIsEnum 'nestedTypeAlias'
 			if isStatic 'staticInnerAlias'
 				let tok = self.current()
 				throw SourceParseError.unsupported("a nested typealias cannot be `static` — it is a per-type declaration, not a member function", line: tok.line, column: tok.column)
@@ -35102,7 +35154,7 @@ export type Parser
 			return
 		end 'writtenAtFileScope'
 
-		self.enterTypeScope(declaringType, isEnum: self.signatures.containsEnumFor(declaringType, readerFilePath: self.job.path))
+		self.enterTypeScopeOf(declaringType)
 
 		// An ENUM declares no `uses` clause and no `where` clause, and an undeclared name reaches here only
 		// from a program the real parse is already refusing — both leave the empty scopes `enterTypeScope`
@@ -95371,7 +95423,7 @@ export type Parser
 	function seatInDeclaringTypeBody(decl TopLevelDecl)
 		match decl.scope 'declaredIn'
 			fileScope then break
-			typeBody(typeName) then self.enterTypeScope(typeName, isEnum: self.signatures.containsEnumFor(typeName, readerFilePath: self.job.path))
+			typeBody(typeName) then self.enterTypeScopeOf(typeName)
 		end 'declaredIn'
 	end 'seatInDeclaringTypeBody'
 
@@ -106079,7 +106131,7 @@ type ShadowRenamedTokens
 	end 'create'
 end 'ShadowRenamedTokens'
 
-function conformanceInterfaceNames(interfaces InterfaceConformanceArray) returns NameRoster
+module function conformanceInterfaceNames(interfaces InterfaceConformanceArray) returns NameRoster
 	if interfaces.isEmpty() 'declaresNothing'
 		return NameRoster.create(0)
 	end 'declaresNothing'

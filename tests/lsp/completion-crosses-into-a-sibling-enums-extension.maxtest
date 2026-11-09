@@ -1,0 +1,39 @@
+let SiblingEnumDirName = "temp/lsp/completion-crosses-into-a-sibling-enums-extension"
+let SiblingEnumDeclarationFileName = "suite.maxon"
+let SiblingEnumExtensionFileName = "widths.maxon"
+let SiblingEnumMainFileName = "main.maxon"
+let SiblingEnumCallLine = 1
+let SiblingEnumMemberListCharacter = 17
+
+test 'completion crosses into a sibling enums extension'
+	let directory = stagedCorpusDirectory(SiblingEnumDirName)
+	writeCorpusFile(directory, fileName: SiblingEnumDeclarationFileName, content: siblingEnumDeclarationSource())
+	writeCorpusFile(directory, fileName: SiblingEnumExtensionFileName, content: siblingEnumExtensionSource())
+	writeCorpusFile(directory, fileName: SiblingEnumMainFileName, content: siblingEnumMainSource())
+
+	let uri = fileUriOf(directory.join(SiblingEnumMainFileName))
+	let labels = completionLabelsForAtUri(uri, source: siblingEnumMainSource(), line: SiblingEnumCallLine, character: SiblingEnumMemberListCharacter, after: "`suite.`, where `enum Suite` is `export`ed by one sibling file and extended by another in the same staged project")
+
+	assertCompletionOffersEach(labels, wanted: ["width"], after: "`suite.`, whose enum is extended by a sibling file of the same staged project")
+end 'completion crosses into a sibling enums extension'
+
+function siblingEnumDeclarationSource() returns String
+	return String.from(b"export enum Suite
+    hearts
+    spades
+end 'Suite'")
+end 'siblingEnumDeclarationSource'
+
+function siblingEnumExtensionSource() returns String
+	return String.from(b"extension Suite
+    export function width() returns ExitCode
+        return 3
+    end 'width'
+end 'Suite'")
+end 'siblingEnumExtensionSource'
+
+function siblingEnumMainSource() returns String
+	return String.from(b"function widthOf(suite Suite) returns ExitCode
+    return suite.width()
+end 'widthOf'")
+end 'siblingEnumMainSource'

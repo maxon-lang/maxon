@@ -508,6 +508,7 @@ function foldExtensionsOfUserFiles(project Project, signatures ProgramSignatures
 	signatures.settleInlineRecordGeometry()
 	try foldInterfaceDeclarations(project, signatures: signatures)
 	try foldConformanceClauses(project, signatures: signatures)
+	try foldExtensionConformances(project, signatures: signatures)
 	try foldExtensionDeclarations(project, signatures: signatures)
 end 'foldExtensionsOfUserFiles'
 
@@ -1048,6 +1049,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// between these two lines: after the interface fold because that is the arity, before the
 	// extension fold because `conformsTo` is the relation that pass expands over.
 	try foldConformanceClauses(project, signatures: signatures)
+	try foldExtensionConformances(project, signatures: signatures)
 	signatures.attributeHashEventsTo(HashEventSource.whole)
 	signatures.settleSynthesizedNominals()
 
@@ -1909,14 +1911,26 @@ end 'foldInterfaceDeclarations'
 // `publishExtensionInnerAliases` takes the member names from the tokens alone, for every site,
 // before the first body is read.
 function foldExtensionDeclarations(project Project, signatures ProgramSignatures) throws CompileError
-	try walkExtensionSitesPerFile(project, signatures: signatures, namesOnly: true)
-	try walkExtensionSitesPerFile(project, signatures: signatures, namesOnly: false)
+	try walkExtensionSitesPerFile(project, signatures: signatures, walk: ExtensionSiteWalk.innerAliasNames)
+	try walkExtensionSitesPerFile(project, signatures: signatures, walk: ExtensionSiteWalk.methodSignatures)
 end 'foldExtensionDeclarations'
 
-// The two passes differ only in what they do at each site, so the grouping, the reader construction
-// and the OOB sentences are written once: two copies of this loop would be two chances for the
+// ⚠ Strictly before `foldExtensionDeclarations`: a conditional extension's `where` verdict reads
+// `sweptConformanceIndex`, and a conformance filed after that read is a conformer the verdict withheld.
+function foldExtensionConformances(project Project, signatures ProgramSignatures) throws CompileError
+	try walkExtensionSitesPerFile(project, signatures: signatures, walk: ExtensionSiteWalk.conformances)
+end 'foldExtensionConformances'
+
+enum ExtensionSiteWalk
+	conformances
+	innerAliasNames
+	methodSignatures
+end 'ExtensionSiteWalk'
+
+// The passes differ only in what they do at each site, so the grouping, the reader construction
+// and the OOB sentences are written once: a copy of this loop per pass would be a chance for the
 // passes to disagree about which sites they visit.
-function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures, namesOnly bool) throws CompileError
+function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures, walk ExtensionSiteWalk) throws CompileError
 	view sites = signatures.settledDeclarations().extensionDeclSites
 	var i = 0 as ElementIndex
 
@@ -1931,11 +1945,11 @@ function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures
 				break
 			end 'nextFile'
 
-			if namesOnly 'thePrePass'
-				reader.publishExtensionInnerAliases(signatures, site: site)
-			end 'thePrePass' else 'theFold'
-				reader.foldExtensionDeclarationInto(signatures, site: site)
-			end 'theFold'
+			match walk 'bySite'
+				conformances then reader.foldExtensionConformanceInto(signatures, site: site)
+				innerAliasNames then reader.publishExtensionInnerAliases(signatures, site: site)
+				methodSignatures then reader.foldExtensionDeclarationInto(signatures, site: site)
+			end 'bySite'
 
 			i = i + 1
 		end 'eachSiteInFile'
@@ -1964,10 +1978,11 @@ end 'siteFileReader'
 // per-file sweep cannot have. So the sweep stops at the first unparenthesized `with` and this pass
 // finishes the read.
 //
-// ⚠ Runs between the interface fold and the extension fold, and both bounds are tight: after the
-// first, because that is the arity; before the second, because `sweptConformanceIndex` memoizes the
-// conformance relation on first ask, and a re-record after that ask would be a correction nothing
-// reads.
+// ⚠ Runs between the interface fold and `foldExtensionConformances`, and both bounds are tight: after
+// the first, because that is the arity; before the second, because that fold appends an extension's
+// `implements` to an enum's re-read list and this one replaces the list, and because
+// `sweptConformanceIndex` memoizes the conformance relation on first ask, so a re-record after that ask
+// would be a correction nothing reads.
 //
 // The same loop shape as the other site walks in this file, and deliberately not factored with
 // them: these walk different site types, and the only thing a shared driver would need — the

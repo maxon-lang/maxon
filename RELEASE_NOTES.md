@@ -496,6 +496,16 @@ release's version as its heading when the release is cut.
   promises are E3106, as they are for a `String`, and so is `create(n)` in a generic body that some
   instantiation makes an array of promises.
   Fix: create with `create(n, zeroed: false)` and fill with `push`.
+- An `extension` whose name is not a declared `type`, `enum`, `union`, `interface` or primitive is refused:
+  an unknown name is E3011, and a typealias (`extension WideBox` over `typealias WideBox = Box with Wide`) is
+  E2015. Both compiled to an extension that added nothing.
+  Fix: extend the declaration the name stands for, or delete the extension.
+- An `extension` of an `enum` or a `union` adds its methods, where it added nothing and its body was never
+  checked. The body is now compiled, so a method that repeats one the enum declares is E3006, an error in a
+  body is reported, a `static function` is E2015 as in the enum's own body, and a nested `typealias` is E2010,
+  since an enum body declares none.
+  Fix: correct what the extension now reports, declare a `static function` as a free function and a
+  `typealias` at the top level, and delete an extension that was meant to add nothing.
 
 ## 0.5.0 — 2026-10-08
 

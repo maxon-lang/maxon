@@ -384,6 +384,11 @@ let ReceiverKindEditAfter = "interface WarmRebuildProbeInterface\n\tstatic funct
 let MethodReceiverKindEditBefore = "type WarmRebuildProbeHost\n\texport function warmRebuildProbeMethod() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeMethod'\nend 'WarmRebuildProbeHost'"
 let MethodReceiverKindEditAfter = "type WarmRebuildProbeHost\n\texport static function warmRebuildProbeMethod() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeMethod'\nend 'WarmRebuildProbeHost'"
 
+// The extension's body is the same on both sides, so only the `implements` clause moves.
+let ExtensionConformanceHostDecl = "interface WarmRebuildProbeMarker\n\tfunction warmRebuildProbeMark() returns bool\nend 'WarmRebuildProbeMarker'\nenum WarmRebuildProbeMarked\n\tfirst\nend 'WarmRebuildProbeMarked'"
+let ExtensionConformanceEditBefore = "extension WarmRebuildProbeMarked\n\tfunction warmRebuildProbeMark() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeMark'\nend 'WarmRebuildProbeMarked'"
+let ExtensionConformanceEditAfter = "extension WarmRebuildProbeMarked implements WarmRebuildProbeMarker\n\tfunction warmRebuildProbeMark() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeMark'\nend 'WarmRebuildProbeMarked'"
+
 let ModuleModifierText = "module "
 let ExportModifierText = "export "
 let PublicModifierText = "public "
@@ -392,7 +397,7 @@ let TopLevelDeclarationLead = ""
 let WarmRebuildProbeStaticsLead = "type WarmRebuildProbeStatics\n\t"
 
 let MovedDeclarationText = "export typealias WarmRebuildProbeMoved = int(0 to 9)"
-let MethodHostDeclarationText = "export enum WarmRebuildProbeVessel\n\tfirst\n\tsecond\nend 'WarmRebuildProbeVessel'"
+let MethodHostDeclarationText = "export type WarmRebuildProbeVessel\n\texport let first as bool\n\tstatic function create(first bool) returns WarmRebuildProbeVessel\n\t\treturn Self\{first: first\}\n\tend 'create'\nend 'WarmRebuildProbeVessel'"
 let MovedMethodText = "extension WarmRebuildProbeVessel\n\tstatic function warmRebuildProbeCarried() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeCarried'\nend 'WarmRebuildProbeVessel'"
 
 type VisibilityFlipProbe
@@ -532,13 +537,16 @@ let MinFilesForInvalidation = 2 as Count
 //   (g) MOVE A DECLARATION TO ANOTHER FILE ⇒ EVERY file's parse must be invalidated. The program
 //       declares the same names before and after; only the declaring file moves, and which files
 //       may name a declaration is decided against it. See `measureDeclarationMoves`.
+//   (h) EDIT AN `extension`'S `implements` CLAUSE ⇒ EVERY file's parse must be invalidated. No name,
+//       value or keyword moves; the clause alone changes which types conform. See
+//       `ExtensionConformanceEditBefore`.
 //
-// All seven are asserted here, on ONE fresh project, by editing real files in the query database
+// All of these are asserted here, on ONE fresh project, by editing real files in the query database
 // and re-querying.
 //
 // ⚠ AND ON A SINGLE-FILE INPUT THIS PROPERTY PROVES NOTHING, SO IT REFUSES TO CLAIM IT DID.
 // With `fileCount == 1` the assertions above collapse into the SAME assertion — (a), (c), (d),
-// (f), (g) and (e)'s imaged half expect `fileCount` re-parses while (b) and (e)'s stored half
+// (f), (g), (h) and (e)'s imaged half expect `fileCount` re-parses while (b) and (e)'s stored half
 // expect 1, and those are the same number — so a key that tracks only the file's own bytes, which
 // is EXACTLY the bug this property exists to catch, sails through every one of them.
 // **A gate you cannot see fail is not a gate**, so this one FAILS on a single-file input rather than
@@ -630,6 +638,12 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: "{original}\n{MethodReceiverKindEditAfter}\n")
 	let methodReceiverKindEditMisses = try parseMissesOnRequery(project)
 
+	fileChanged(project, path: editedPath, content: "{original}\n{ExtensionConformanceHostDecl}\n{ExtensionConformanceEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	fileChanged(project, path: editedPath, content: "{original}\n{ExtensionConformanceHostDecl}\n{ExtensionConformanceEditAfter}\n")
+	let extensionConformanceEditMisses = try parseMissesOnRequery(project)
+
 	let visibilityFlips = try measureVisibilityFlips(project, editedPath: editedPath, original: original)
 	let receiver = try lastAuthoredSourceOf(project)
 
@@ -664,13 +678,15 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	let receiverKindEditInvalidatesEveryFile = assertParseMisses("an interface requirement's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: receiverKindEditMisses, expectedDelta: fileCount as QueryCount, project: project)
 	let methodReceiverKindEditInvalidatesEveryFile = assertParseMisses("a method's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: methodReceiverKindEditMisses, expectedDelta: fileCount as QueryCount, project: project)
 
+	let extensionConformanceEditInvalidatesEveryFile = assertParseMisses("an `extension`'s `implements` clause edit re-parses EVERY file (parseMisses)", probe: extensionConformanceEditMisses, expectedDelta: fileCount as QueryCount, project: project)
+
 	let visibilityFlipsInvalidate = measurementsInvalidateEveryFile(visibilityFlips, fileCount: fileCount as QueryCount, project: project)
 	let declarationMovesInvalidate = measurementsInvalidateEveryFile(declarationMoves, fileCount: fileCount as QueryCount, project: project)
 
-	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and arraySignEditInvalidatesEveryFile and structFieldEditInvalidatesEveryFile and storedStructEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile and visibilityFlipsInvalidate and declarationMovesInvalidate
+	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and arraySignEditInvalidatesEveryFile and structFieldEditInvalidatesEveryFile and storedStructEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile and extensionConformanceEditInvalidatesEveryFile and visibilityFlipsInvalidate and declarationMovesInvalidate
 
 	if allOk 'passed'
-		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array, constant-array-sign and imaged-struct edits each re-parsed all {fileCount}; a stored-struct edit re-parsed 1 file; a requirement's and a method's `static`-flag edits each re-parsed all {fileCount}; {visibilityFlips.count()} visibility edits each re-parsed all {fileCount}; {declarationMoves.count()} declarations moved to another file each re-parsed all {fileCount}\n")
+		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array, constant-array-sign and imaged-struct edits each re-parsed all {fileCount}; a stored-struct edit re-parsed 1 file; a requirement's and a method's `static`-flag edits and an extension's `implements` edit each re-parsed all {fileCount}; {visibilityFlips.count()} visibility edits each re-parsed all {fileCount}; {declarationMoves.count()} declarations moved to another file each re-parsed all {fileCount}\n")
 		return true
 	end 'passed'
 

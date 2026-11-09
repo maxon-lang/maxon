@@ -66,6 +66,29 @@ end 'main'
   `self.x`, and any assignment through `self`, is **E2015**.
 - `static function` is not supported on an enum (**E2015**).
 
+An `extension` of an enum adds methods the same way, in any file, and each is the enum's own at every
+call:
+
+```maxon
+typealias Width = int(0 to 9)
+
+enum Suite
+	hearts
+	spades
+end 'Suite'
+
+extension Suite
+	function width() returns Width
+		return 3
+	end 'width'
+end 'Suite'
+```
+
+A method name belongs to the enum once, so an extension method that repeats one the enum declares is
+**E3006**. An extension member is an instance method: a `static function` is **E2015**, and a nested
+`typealias` is **E2010**. The header may declare [`implements`](#enum-interface-conformance), which joins the
+enum's own.
+
 ### Enum Properties
 
 Every enum case has:
@@ -202,6 +225,10 @@ A union conformer carrying a payload widens the same way; the widened value rele
 
 A requirement no method of the enum matches is **E3016**, and a clause naming an interface that does not
 exist is **E3015** — both reported at the enum's name, exactly as for a `type`.
+
+`extension Step implements Greeter` declares the same conformance from an extension, on an enum or a union,
+and it is checked and dispatched like the enum's own clause. The extension's methods, or the enum's, satisfy
+the requirements, and a requirement none matches is **E3016**.
 
 A payload-free enum may also name [`Hashable`](/docs/language/composite-types/#hashable-and-hasher) or `Equatable` explicitly. The
 compiler grants both to every payload-free enum already, and the granted implementation satisfies the
@@ -571,7 +598,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-As with enums, a method carries its own visibility, and `static function` is not supported. Through
+As with enums, a method carries its own visibility, and `static function` is not supported. An `extension`
+of a union adds methods under the rules of an [enum's extension](#enum-methods). Through
 `self`, a method reads `self.name`, `self.ordinal`, `self.rawValue` and a
 [struct-backed](#struct-backed-unions) union's backing field; a case's payload (`self.radius`) is
 **E2015**, and `match self` binds it.
@@ -580,8 +608,8 @@ As with enums, a method carries its own visibility, and `static function` is not
 
 A union with no payload is a bare tag. A union with at most seven payload cases and at most 32767
 cases in all, whose every case carries no payload or exactly one heap record (a `String`, a `Character`, a
-struct, or an array, map or other generic-instance record), and that declares no `implements` clause, is one
-machine word: the payload's address with the case key in its low three bits. Constructing one allocates nothing beyond the
+struct, or an array, map or other generic-instance record), and that declares no `implements`, in its header
+or in an `extension`, is one machine word: the payload's address with the case key in its low three bits. Constructing one allocates nothing beyond the
 payload, and dropping one releases the payload it holds. Every other union with a payload is a heap box
 holding the tag and one slot per payload field, and a union that declares `implements` is always a box. The
 two forms behave alike: the same ownership, the same `match`, the same diagnostics. The word layout is

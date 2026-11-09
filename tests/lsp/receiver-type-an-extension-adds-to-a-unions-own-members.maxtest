@@ -1,0 +1,25 @@
+let UnionExtensionMemberLine = 12
+let UnionExtensionMemberCharacter = 17
+
+test 'receiver type: an extension adds to the unions own members'
+	let labels = completionLabelsFor(unionExtensionSurfaceFixture(), line: UnionExtensionMemberLine, character: UnionExtensionMemberCharacter, after: "`shape.`, where `Shape` is declared by a `union` and extended by an `extension` in the same buffer")
+
+	Expect.isTrue(completionOffersLabel(labels, label: "span"), message: "completion after `shape.` did not offer `span`, which `extension Shape` declares. An extension of a union adds methods exactly as an extension of a type does.")
+end 'receiver type: an extension adds to the unions own members'
+
+function unionExtensionSurfaceFixture() returns String
+	return String.from(b"union Shape
+    dot
+    line(length ExitCode)
+end 'Shape'
+
+extension Shape
+    function span() returns ExitCode
+        return 3
+    end 'span'
+end 'Shape'
+
+function spanOf(shape Shape) returns ExitCode
+    return shape.span()
+end 'spanOf'")
+end 'unionExtensionSurfaceFixture'

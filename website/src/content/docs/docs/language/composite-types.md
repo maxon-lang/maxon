@@ -760,6 +760,14 @@ parameters, `Box with T`. A member `typealias Peers = Array with Self` is theref
 instantiation: an `IntBox`'s `Peers` is an `Array with IntBox` and is **E3005** where a `FlagBox`'s is
 expected, and an element read out of it is a `Self`.
 
+### Extension Targets
+
+`extension Name` names a declared `type`, `enum`, `union` or `interface`, or a primitive. A name that
+declares none of these is refused: an unknown name is
+[E3011](/docs/cli/error-codes/#e3011--unknowntype), and a `typealias` is **E2015**, to be replaced
+by the declaration it names. An extension of an `enum` or a `union` adds methods and may declare
+`implements`; see [Enum Methods](/docs/language/enums-unions/#enum-methods).
+
 ### Interface Extensions
 
 `extension InterfaceName` adds methods to **every** type that conforms to the interface, with one

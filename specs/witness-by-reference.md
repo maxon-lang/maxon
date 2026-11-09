@@ -1122,6 +1122,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E2015: <fragment>:19:11: Unsupported: `extension WideBox` — 'WideBox' is a typealias, which declares no methods of its own; extend the `type`, `enum`, `union`, `interface` or primitive it names
 error E3017: <fragment>:39:11: Type 'WideBox' does not satisfy constraint 'Bumper' required by type parameter 'T' of 'Holder'
 ```
 

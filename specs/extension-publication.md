@@ -504,3 +504,176 @@ end 'main'
 ```exitcode
 42
 ```
+
+### An extension's conformance is the type's conformance to every reader
+
+<!-- test: a-type-extension-conformance-satisfies-a-generic-constraint -->
+`T is Sizer` is decided from the declarations, and an `implements` an `extension` declares is one of them.
+```maxon
+interface Sizer
+	function size() returns ExitCode
+end 'Sizer'
+
+type Tag
+	let v as ExitCode
+
+	static function create(v ExitCode) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Tag'
+
+extension Tag implements Sizer
+	function size() returns ExitCode
+		return self.v
+	end 'size'
+end 'Tag'
+
+function sizeOf(item T) uses T returns ExitCode where T is Sizer
+	return item.size()
+end 'sizeOf'
+
+function main() returns ExitCode
+	return sizeOf(Tag.create(42))
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-type-extension-conformance-satisfies-a-conditional-type-extension -->
+`extension Container where Element is Sizer` is available on `Container with Tag` when
+`extension Tag implements Sizer` is what makes `Tag` a `Sizer`.
+```maxon
+interface Sizer
+	function size() returns ExitCode
+end 'Sizer'
+
+type Tag
+	let v as ExitCode
+
+	static function create(v ExitCode) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Tag'
+
+extension Tag implements Sizer
+	function size() returns ExitCode
+		return self.v
+	end 'size'
+end 'Tag'
+
+type Container uses Element
+	var item as Element
+
+	static function create(item Element) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Container'
+
+extension Container where Element is Sizer
+	function total() returns ExitCode
+		return self.item.size() + 2
+	end 'total'
+end 'Container'
+
+typealias TagContainer = Container with Tag
+
+function main() returns ExitCode
+	let c = TagContainer.create(Tag.create(40))
+	return c.total()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-type-extension-conformance-satisfies-a-conditional-interface-extension -->
+`extension HasItems where Element is Sizer` is available on a conformer that binds `Element` to `Tag`.
+```maxon
+interface Sizer
+	function size() returns ExitCode
+end 'Sizer'
+
+type Tag
+	let v as ExitCode
+
+	static function create(v ExitCode) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Tag'
+
+extension Tag implements Sizer
+	function size() returns ExitCode
+		return self.v
+	end 'size'
+end 'Tag'
+
+interface HasItems uses Element
+	function current() returns Element
+end 'HasItems'
+
+extension HasItems where Element is Sizer
+	function currentSize() returns ExitCode
+		return self.current().size()
+	end 'currentSize'
+end 'HasItems'
+
+type TagList implements HasItems with Tag
+	let first as Tag
+
+	static function create(first Tag) returns Self
+		return Self{first: first}
+	end 'create'
+
+	function current() returns Tag
+		return self.first
+	end 'current'
+end 'TagList'
+
+function main() returns ExitCode
+	let list = TagList.create(Tag.create(42))
+	return list.currentSize()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.a-type-conformer-through-an-extension-writing-a-let-argument-is-refused -->
+The requirement's `mutable` reaches a `type` conformer that an extension declares, as it reaches one its own
+clause declares (`where-clauses.md`'s `witness-mutation-of-let-argument-refused`).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+interface Grower
+	function grow(dest mutable IntArray)
+end 'Grower'
+
+type Step
+	let n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Step'
+
+extension Step implements Grower
+	function grow(dest mutable IntArray)
+		dest.push(9)
+	end 'grow'
+end 'Step'
+
+function through(g Grower, dest IntArray)
+	g.grow(dest)
+end 'through'
+
+function main() returns ExitCode
+	let a = IntArray.create(0)
+	through(Step.create(), dest: a)
+	return try a.get(0) otherwise 55
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:29:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in main); pass a clone()
+```

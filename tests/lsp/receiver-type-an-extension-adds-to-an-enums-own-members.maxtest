@@ -1,0 +1,25 @@
+let EnumExtensionMemberLine = 12
+let EnumExtensionMemberCharacter = 17
+
+test 'receiver type: an extension adds to the enums own members'
+	let labels = completionLabelsFor(enumExtensionSurfaceFixture(), line: EnumExtensionMemberLine, character: EnumExtensionMemberCharacter, after: "`suite.`, where `Suite` is declared by an `enum` and extended by an `extension` in the same buffer")
+
+	Expect.isTrue(completionOffersLabel(labels, label: "width"), message: "completion after `suite.` did not offer `width`, which `extension Suite` declares. An extension of an enum adds methods exactly as an extension of a type does.")
+end 'receiver type: an extension adds to the enums own members'
+
+function enumExtensionSurfaceFixture() returns String
+	return String.from(b"enum Suite
+    hearts
+    spades
+end 'Suite'
+
+extension Suite
+    function width() returns ExitCode
+        return 3
+    end 'width'
+end 'Suite'
+
+function widthOf(suite Suite) returns ExitCode
+    return suite.width()
+end 'widthOf'")
+end 'enumExtensionSurfaceFixture'
