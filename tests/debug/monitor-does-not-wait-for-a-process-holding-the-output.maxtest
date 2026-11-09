@@ -1,0 +1,22 @@
+let MonitorHeldPipeCaseLabel = "monitor-held-pipe"
+let MonitorHeldPipeBuildLabel = "debugstream"
+
+test 'monitor ends within a bound when its program exits while a process it started holds its output, and forwards all of that output'
+	let staged = stagedHeldPipe(StagingRootDirName, caseLabel: MonitorHeldPipeCaseLabel)
+
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: staged.join(OutputFileStem), label: MonitorHeldPipeBuildLabel, extraArguments: [DebugStreamBuildOption])
+
+	if build.exitCode() != 0 'buildFailed'
+		panic("monitor-does-not-wait-for-a-process-holding-the-output: the gate could not run — the `{DebugStreamBuildOption}` build failed with exit {build.exitCode()}: {build.stdout}{build.stderr}")
+	end 'buildFailed'
+
+	let monitored = spawnCompiler(["monitor", builtExecutable(staged).toString()], staged: staged, what: "`monitor`")
+	endHeldPipeHolder(staged, forwarded: monitored.stdout)
+
+	let said = "It wrote to stdout: {withoutCarriageReturns(monitored.stdout)} and to stderr: {withoutCarriageReturns(monitored.stderr)}"
+	let missing = heldPipeLinesMissingFrom(monitored.stdout)
+
+	Expect.equal(monitored.exitCode(), expected: HeldPipeExitStatus, message: "the monitored program's exit code was not the monitor's. {said}")
+	Expect.isTrue(missing.isEmpty(), message: "the monitor did not forward these lines of the program's output, which a process it started wrote after the program exited: {listedLines(missing)}. {said}")
+	Expect.lessThan(monitored.durationMs, than: HeldPipePromptMs, message: "`monitor` took {monitored.durationMs} ms to end a run whose program had already exited: it waited for a process the program started, which still holds the program's output. {said}")
+end 'monitor ends within a bound when its program exits while a process it started holds its output, and forwards all of that output'

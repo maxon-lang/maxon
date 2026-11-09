@@ -1,8 +1,3 @@
-export enum ChildStream
-	stdout
-	stderr
-end 'ChildStream'
-
 export type ChildOutputLine
 	export let stream as ChildStream
 	export let text as String
@@ -142,10 +137,16 @@ export let MaxTargetSeconds = 922337203685.0 as TargetSeconds
 export let LeastTargetSeconds = 0.001 as TargetSeconds
 
 let TreeNotEndedNotice = "maxon: the target's process tree is not known to have ended, so the rest of its output is not waited for: "
-let EndedTailBoundNotice = "maxon: a process the target started and left outside its process tree still holds its output, so the rest of it is not waited for\n"
-let EndedTailBoundMs = 1000
-let EndedTailPollMs = 5
+let KilledTailBoundNotice = "maxon: a process the target started and left outside its process tree still holds its output, so the rest of it is not waited for\n"
+let ExitedTailBoundNotice = "maxon: the target's output is still held open after it exited, so the rest of it is not waited for\n"
+let EndedTailSilenceMs = 1000
+let EndedTailCapMs = 10000
 let UnendedTailLines = 64
+
+export union TailEnding
+	afterKill
+	afterExit
+end 'TailEnding'
 
 // Emptiness is not the stopping rule and cannot be: a child's own blank line and a pipe with
 // nothing in it are the same string once the terminator is off, so a loop keyed off the text drops
@@ -192,69 +193,59 @@ function forwardOneLineEach(child StreamingSubprocess, routing ChildOutputRoutin
 	return ChildPass.create(moved, faulted: faulted)
 end 'forwardOneLineEach'
 
-// Everything the child left behind, including a last line it wrote with no terminator — the poll above
-// stops at a newline that never arrives. The reads block until each stream ends, so a process still
-// holding a pipe, a descendant the child left behind, blocks them for as long as it lives: a caller
-// needs the child's whole tree ended, and `endChildAndForwardTail` is the form that bounds the wait.
-// A read that refuses ends its stream exactly as end of stream does.
-export function forwardChildTail(child StreamingSubprocess, routing ChildOutputRouting) returns bool
-	var faulted = forwardChildOutput(child, routing: routing, budget: ChildLineBudget.unbounded)
-
-	for stream in ChildStream.allCases 'eachStream'
-		faulted = forwardChildStreamToItsEnd(child, stream: stream, routing: routing) or faulted
-	end 'eachStream'
-
-	return faulted
-end 'forwardChildTail'
-
-function forwardChildStreamToItsEnd(child StreamingSubprocess, stream ChildStream, routing ChildOutputRouting) returns bool
-	var faulted = false
-
-	while true 'eachLine'
-		let line = try readChildStreamLine(child, stream: stream) otherwise break
-		faulted = emitChildStreamLine(line, stream: stream, routing: routing) or faulted
-	end 'eachLine'
-
-	return faulted
-end 'forwardChildStreamToItsEnd'
-
 export function endChildAndForwardTail(child StreamingSubprocess, routing ChildOutputRouting) returns bool
 	let treeEnd = child.endTree()
 
 	match treeEnd 'tree'
-		ended then return forwardEndedChildTail(child, routing: routing)
+		ended then return forwardEndedChildTail(child, routing: routing, ending: TailEnding.afterKill)
 		survived or
 		unconfirmed then return forwardUnendedChildOutput(child, treeEnd: treeEnd, routing: routing)
 	end 'tree'
 end 'endChildAndForwardTail'
 
-// A confirmed kill ends the child's tree, not a process the child started outside it, which can hold
-// the pipes open for good: the drain stops at `EndedTailBoundMs` instead of waiting for their end.
-function forwardEndedChildTail(child StreamingSubprocess, routing ChildOutputRouting) returns bool
+// A process the target started and left behind can hold its pipes open for good, so the wait ends
+// when no output has moved for `EndedTailSilenceMs` (the clock restarts whenever output moves, so a
+// holder that keeps printing is still forwarded) or `EndedTailCapMs` after entry, which bounds a
+// holder that never stops. The streams' end is checked before the bound, so a tail that finishes on
+// the bound's tick prints no notice. The notice states what the caller knows: after a kill only a
+// process outside the target's tree can hold the output, after an exit the holder may be anywhere.
+export function forwardEndedChildTail(child StreamingSubprocess, routing ChildOutputRouting, ending TailEnding) returns bool
 	let start = Clock.nowMs()
+	var lastMoved = start
 	var faulted = false
 
-	while Clock.elapsedMs(start) < EndedTailBoundMs 'untilItEnds'
+	while true 'untilItEnds'
 		let pass = forwardOneLineEach(child, routing: routing)
 		faulted = pass.faulted or faulted
 
-		if not pass.moved and childStreamsEnded(child) 'drained'
+		if pass.moved 'somethingArrived'
+			lastMoved = Clock.nowMs()
+		end 'somethingArrived'
+
+		if childStreamsEnded(child) 'drained'
 			return faulted
 		end 'drained'
 
+		if Clock.elapsedMs(lastMoved) >= EndedTailSilenceMs or Clock.elapsedMs(start) >= EndedTailCapMs 'boundReached'
+			printError(tailBoundNotice(ending))
+
+			return faulted
+		end 'boundReached'
+
 		if not pass.moved 'idle'
-			sleep(EndedTailPollMs)
+			sleep(ChildPollMs)
 		end 'idle'
 	end 'untilItEnds'
 
-	printError(EndedTailBoundNotice)
-
-	return faulted
+	panic("forwardEndedChildTail: the tail loop leaves only by returning")
 end 'forwardEndedChildTail'
 
-function childStreamsEnded(child StreamingSubprocess) returns bool
-	return child.streamHasEnded(StdioStream.stdout) and child.streamHasEnded(StdioStream.stderr)
-end 'childStreamsEnded'
+function tailBoundNotice(ending TailEnding) returns String
+	return match ending 'which'
+		afterKill gives KilledTailBoundNotice
+		afterExit gives ExitedTailBoundNotice
+	end 'which'
+end 'tailBoundNotice'
 
 function forwardUnendedChildOutput(child StreamingSubprocess, treeEnd TreeEnd, routing ChildOutputRouting) returns bool
 	printError("{TreeNotEndedNotice}{treeEnd.displayReason()}\n")
@@ -341,20 +332,6 @@ function withinBudget(budget ChildLineBudget, taken ChildLineTally) returns bool
 		atMost(lines) gives taken < lines
 	end 'which'
 end 'withinBudget'
-
-function pollChildStreamLine(child StreamingSubprocess, stream ChildStream) returns LinePoll
-	return match stream 'which'
-		stdout gives try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader")
-		stderr gives child.tryReadStderrLine()
-	end 'which'
-end 'pollChildStreamLine'
-
-function readChildStreamLine(child StreamingSubprocess, stream ChildStream) returns String throws SubprocessError
-	match stream 'which'
-		stdout then return try child.readStdoutLine()
-		stderr then return try child.readStderrLine()
-	end 'which'
-end 'readChildStreamLine'
 
 function emitChildStreamLine(text String, stream ChildStream, routing ChildOutputRouting) returns bool
 	match routing 'where'

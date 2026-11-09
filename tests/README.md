@@ -66,6 +66,9 @@ tests/
     Host.maxon                   the compiler under test (`TestedCompilerStem`, `testedCompilerPath`), the host's suffix and temp area
     Staging.maxon                `stagingDir`, `clearStagedFiles`/`clearStagedTree`, `stageStoredTree`, `stagedFixtureTree`, `filesUnder`, `filesUnderEndingWith`
     Spawn.maxon                  `spawnIn`, `spawnCompiler`, `spawnBuild`, `runSystemTool`, `requireBuiltOrPanic`, `requireTreeEnded`, `endedProcessId`, `backdatedToTheYear2000`
+    FedProcess.maxon             `runFedAfterLine`, `FedRun`, `StagedRunEnd`: a child fed after it prints a line, pumped without blocking, its exit followed by a tail drain bounded by silence and by a cap
+    HeldPipe.maxon               `stagedHeldPipe`, `heldPipeLinesMissingFrom`, `endHeldPipeHolder`: the program that exits while a process it started holds its output, and the cleanup of that process
+    fixtures/heldpipe/main.maxon.fixture   the held-pipe program: it prints a line, starts a holder that prints eight lines 400 ms apart and then holds the pipe until told to stop - stored name only, see rule 1
     ScratchNames.maxon           `scratchNameProbe`, `mintedScratchName`, `debugStreamSegmentPrefix`: the scratch-name probe below, built from the checkout's `maxon-bin/Run/ScratchName.maxon`
     scratch-name/main.maxon.fixture   the probe program: `mint` prints a name for given fields, any other word runs one check - stored name only, see rule 1
     OutsideCheckout.maxon        directories under the host's temp area, outside any checkout
@@ -195,6 +198,7 @@ tests/
     sidecar-array-element-type.maxtest      an Array local names its element type
     sidecar-generic-and-clone-lines.maxtest      a per-type generic body and a synthesized clone carry line rows
     monitor-sched-events.maxtest            `monitor --filter=sched` shows a green thread's spawn and await
+    monitor-does-not-wait-for-a-process-holding-the-output.maxtest   `monitor` ends at once when its program exits while a process it started holds its output, forwarding that output
     x64-classifies-each-instruction-class.maxtest      `debug --classify=` gives a length and a class per class
     arm64-classifies-each-instruction-class.maxtest      `debug --classify=arm64:` gives a length, a class, a target, a control register and a frame step per class
     classify-refuses-a-repeated-hex-prefix.maxtest      a second `0x` inside a sequence is refused, never stripped
@@ -215,6 +219,7 @@ tests/
     a-roster-past-any-fixed-window-lists-every-worker.maxtest      a listing answers for every live green thread, however many there are
     a-program-with-no-green-threads-lists-an-empty-roster.maxtest      a program that carves none holds no roster word in its `.data`, and `threads` answers an empty list beside a layout section that does describe the contract
     batch-run-to-exit.maxtest               a completed session exits 0 and reports the program's code as data
+    batch-run-to-exit-does-not-wait-for-a-process-holding-the-output.maxtest   a program that exits while a process it started holds its output ends the session at once, with the exit reported and the output forwarded
     crash-exits-nonzero.maxtest             a fault is a `crash` event and a failed session
     timeout-before-run.maxtest              a program that never stops times out and is not left running
     timeout-during-step.maxtest             a `finish` out of a frame that never returns times out
@@ -489,6 +494,8 @@ tests/
     profile-runs-an-ordinary-build.maxtest               an ordinary build is measured with no flag and no rebuild
     profile-a-program-that-ends-at-once.maxtest          a program gone before the attach is reported as ended, never as an access refusal
     profile-a-deadline-does-not-wait-for-a-process-outside-the-targets-tree.maxtest   on Linux, a deadline ends a run whose target left a process in a session of its own holding its output, without waiting for that process
+    profile-a-completed-run-does-not-wait-for-a-process-holding-the-targets-output.maxtest   a program that exits while a process it started holds its output ends the profile at once, with the output forwarded to stderr
+    profile-forwards-a-last-line-the-program-wrote-with-no-newline.maxtest   the last line of a finished program, written with no newline, reaches stderr
     profile-launches-a-signed-copy.maxtest               on macOS, the image the profiler launches grants `get-task-allow` in both blobs and the built one does not
     profile-launches-a-copy-beside-the-original.maxtest  the launched copy sits in the original's directory, and the program sees that directory, its own path and argv[0]
     profile-refuses-a-directory-it-cannot-write-a-copy-in.maxtest   on macOS, a read-only directory is refused, naming it, and leaves no copy
@@ -501,6 +508,7 @@ tests/
     fixtures/selfcopy/main.maxon.fixture    stored name only - see rule 1
     fixtures/endsatonce/main.maxon.fixture  stored name only - see rule 1
     fixtures/heldpipe/main.maxon.fixture    stored name only - see rule 1
+    fixtures/unterminatedtail/main.maxon.fixture   stored name only - see rule 1
   execute/
     ExecuteHarness.maxon                        the shared half: the staging, the private cache, the spawn, the slot readers
     corpus.maxtest                          the fixture roster, and the corpus's own file rules
@@ -544,6 +552,7 @@ tests/
     a-shared-segment-word-is-read-with-an-acquire-and-written-with-a-release.maxtest     `__shm_read_word` is one `ldar` and `__shm_write_word` one `stlr`, on both arm64 lanes
     a-pinned-green-thread-stays-on-its-machine-across-a-park.maxtest     a thread that pinned itself runs on the same machine after every park
     a-pinned-green-thread-runs-while-another-sits-in-a-blocking-syscall.maxtest     the pinned thread's owner is woken and given a processor even while another machine is inside a blocking call
+    a-fed-run-ends-at-its-childs-exit-though-a-process-it-started-holds-its-output.maxtest     a fed run returns an exited child's whole output, a process it started still printing after the exit included, within a bound instead of waiting for that process to end
     a-program-that-only-pins-lays-out-no-profile-runtime.maxtest     a `MachinePin` program runs, lays out `__gt_pin_destruct` and carries no `__prof_close`, on both arm64 lanes
     SafePointTable.maxon                    the second shared half: finds `__symtable` in a built executable and reads one symbol's safe-point byte
     the-cown-queue-publishers-are-never-stopped-by-asynchronous-preemption.maxtest     every cown queue publisher's safe-point byte is `never`, on x64-windows, x64-linux, arm64-linux and arm64-macos
@@ -1273,7 +1282,7 @@ directory under `temp/consoleWrite/`), and it keeps rule 5: one spawning `test`,
 
 ## `emittedRuntime/` — the ORDERING an emitted runtime body reads another thread's word with, and the machine a pinned green thread runs on
 
-Ten cases, two of them about the cown queue (below the list of the others). Five read the Target IR, and each one's subject there is a body no author wrote: one the back end synthesizes into every
+Two of the cases are about the cown queue (below the list of the others). Five read the Target IR, and each one's subject there is a body no author wrote: one the back end synthesizes into every
 program that spawns, two into every program that allocates, fifteen scheduler, timer and poller
 bodies for the `.data` words published from under `__sched_lock`, the DebugStream producer's two ring
 bodies, and the two shared-segment word accessors. Each of the five builds a fixture — `spawn` for the first three,
@@ -1317,6 +1326,13 @@ nothing but its pinned thread, and this program feeds an unrelated green thread 
 20 parks still finished inside their budget; `rounds slow` is an owner captured by somebody else's
 syscall. The fed line arrives late on purpose, so the kernel call is in progress while the pinned thread
 becomes runnable.
+
+**`a-fed-run-ends-at-its-childs-exit-though-a-process-it-started-holds-its-output`** — builds the
+`heldpipe` fixture for this host and runs it through the fed run of `support/FedProcess.maxon`. The
+program prints a line, starts a process that keeps printing on the same stdout and holds it open, and
+exits 7. The run must return the program's whole output, the process's lines after the exit included,
+in under `HeldPipePromptMs`: it ends on the silence bound after the last of them, not when the holder
+ends.
 
 **`steal-reads-the-victim-ring-with-acquire-loads`** — `__sched_steal`, the green-thread scheduler's
 thief, and the victim's `runqHead`, `runqTail` and `runnext`.

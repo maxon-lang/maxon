@@ -1,0 +1,21 @@
+let HeldPipeBatchCaseLabel = "batch-run-to-exit-held-pipe"
+
+test 'a batch session whose program exits while a process it started holds its output ends within a bound and reports all of that output'
+	let staged = stagedHeldPipe(StagingRootDirName, caseLabel: HeldPipeBatchCaseLabel)
+	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: "{HeldPipeFixtureName} for case {HeldPipeBatchCaseLabel}")
+
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: RunCommand, extraOptions: StringArray.create(0))
+	endHeldPipeHolder(staged, forwarded: session.stderr)
+
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	let missing = heldPipeLinesMissingFrom(session.stderr)
+
+	Expect.equal(exits.count(), expected: 1, message: "`{DebugBatchOption} {DebugCommandsOptionPrefix}{RunCommand}` printed {exits.count()} `{ExitEventName}` events for one program that ran to completion. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: HeldPipeExitStatus, message: "the `{ExitEventName}` event does not carry the program's own exit code under `{CodeKey}`. {said}")
+	Expect.isTrue(missing.isEmpty(), message: "the session did not forward these lines of the program's output, which a process it started wrote after the program exited: {listedLines(missing)}. {said}")
+	Expect.lessThan(session.durationMs, than: HeldPipePromptMs, message: "the session took {session.durationMs} ms to end a run whose program had already exited: it waited for a process the program started, which still holds the program's output. {said}")
+end 'a batch session whose program exits while a process it started holds its output ends within a bound and reports all of that output'

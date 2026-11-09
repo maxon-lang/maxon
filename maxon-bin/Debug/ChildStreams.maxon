@@ -1,0 +1,17 @@
+export let ChildPollMs = 5
+
+export enum ChildStream
+	stdout
+	stderr
+end 'ChildStream'
+
+export function pollChildStreamLine(child StreamingSubprocess, stream ChildStream) returns LinePoll
+	return match stream 'which'
+		stdout gives try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader")
+		stderr gives child.tryReadStderrLine()
+	end 'which'
+end 'pollChildStreamLine'
+
+export function childStreamsEnded(child StreamingSubprocess) returns bool
+	return child.streamHasEnded(StdioStream.stdout) and child.streamHasEnded(StdioStream.stderr)
+end 'childStreamsEnded'

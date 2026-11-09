@@ -1,0 +1,64 @@
+// The lines, prefixes, tick count and exit status below are the fixture's own, which a stored
+// fixture cannot share; keep them equal.
+public let HeldPipeFixturesDirName = "tests/support/fixtures"
+public let HeldPipeFixtureName = "heldpipe"
+public let HeldPipeOutputLine = "heldpipe: the program's own output"
+public let HeldPipeExitStatus = 7
+
+// Under the fixture's `HolderLifeMs`, so a run that waited for the holder to end overruns it.
+public let HeldPipePromptMs = 15000 as DurationMs
+
+let HeldPipeHolderLinePrefix = "heldpipe: holder "
+let HeldPipeTickPrefix = "heldpipe: tick "
+let HeldPipeTickCount = 8
+let HeldPipeStopFileName = "heldpipe.stop"
+let HeldPipeHolderEndMs = 10000 as DurationMs
+let HeldPipeHolderPollMs = 20
+
+public function stagedHeldPipe(stagingRootDir String, caseLabel String) returns FilePath
+	return stagedFixtureTree(HeldPipeFixturesDirName, stagingRootDir: stagingRootDir, caseLabel: caseLabel, fixture: HeldPipeFixtureName)
+end 'stagedHeldPipe'
+
+public function heldPipeLinesMissingFrom(forwarded String) returns StringArray
+	var missing = StringArray.create(0)
+
+	if not forwarded.contains(HeldPipeOutputLine) 'ownLine'
+		missing.push(HeldPipeOutputLine)
+	end 'ownLine'
+
+	for tick in 1 to HeldPipeTickCount 'eachTick'
+		let line = "{HeldPipeTickPrefix}{tick}"
+
+		if not forwarded.contains(line) 'tickLine'
+			missing.push(line)
+		end 'tickLine'
+	end 'eachTick'
+
+	return missing
+end 'heldPipeLinesMissingFrom'
+
+function heldPipeHolderIn(forwarded String) returns Pid throws ParseError
+	for line in withoutCarriageReturns(forwarded).split("\n") 'eachLine'
+		if line.startsWith(HeldPipeHolderLinePrefix) 'found'
+			return try int.fromString(line.replaceFirst(HeldPipeHolderLinePrefix, with: "").trim())
+		end 'found'
+	end 'eachLine'
+
+	throw ParseError.invalidFormat
+end 'heldPipeHolderIn'
+
+public function endHeldPipeHolder(staged FilePath, forwarded String)
+	let holder = try heldPipeHolderIn(forwarded) otherwise return
+
+	writeStagedFile(staged.join(HeldPipeStopFileName), content: "stop")
+
+	let begun = Clock.nowMs()
+
+	while Process.isAlive(holder) and Clock.elapsedMs(begun) < HeldPipeHolderEndMs 'waiting'
+		sleep(HeldPipeHolderPollMs)
+	end 'waiting'
+
+	if Process.isAlive(holder) 'stillThere'
+		panic("the gate could not clean up — the process the held-pipe program started ({holder}) is still alive {HeldPipeHolderEndMs} ms after it was told to stop, and a later run cannot clear the staging directory it runs in.")
+	end 'stillThere'
+end 'endHeldPipeHolder'

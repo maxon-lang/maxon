@@ -1,0 +1,81 @@
+typealias Tally = int(0 to 1000)
+
+#if os(Windows)
+	let HolderShell = "cmd"
+#else
+	let HolderShell = "sh"
+#endif
+
+let ModeArgument = 1
+let HolderMode = "hold"
+let HolderTitle = "heldpipe holder"
+let OwnOutputLine = "heldpipe: the program's own output"
+let HolderLinePrefix = "heldpipe: holder "
+let TickPrefix = "heldpipe: tick "
+let StopFileName = "heldpipe.stop"
+let TickCount = 8
+let TickMs = 400
+let HolderLifeMs = 25000
+let HolderPollMs = 100
+let SettleMs = 400
+let ProgramExitStatus = 7
+
+function startHolder(me FilePath)
+	var config = Configuration.create(Executable.name(HolderShell))
+	var arguments = StringArray.create(0)
+
+	#if os(Windows)
+		arguments.push("/c")
+		arguments.push("start")
+		arguments.push(HolderTitle)
+		arguments.push("/b")
+		arguments.push(me.toString())
+		arguments.push(HolderMode)
+	#else
+		arguments.push("-c")
+		arguments.push("\"$0\" {HolderMode} &")
+		arguments.push(me.toString())
+	#endif
+
+	config.arguments = arguments
+	config.standardOutput = OutputDestination.inherit
+	config.standardError = OutputDestination.inherit
+	_ = try config.run() otherwise panic("the holder could not be started")
+end 'startHolder'
+
+function runHolder(me FilePath) returns ExitCode
+	let stop = (try me.parent() otherwise return 2).join(StopFileName)
+
+	print("{HolderLinePrefix}{Process.id()}\n")
+
+	var tick = 1 as Tally
+
+	while tick <= TickCount 'ticking'
+		print("{TickPrefix}{tick}\n")
+		sleep(TickMs)
+		tick = tick + 1
+	end 'ticking'
+
+	let begun = Clock.nowMs()
+
+	while Clock.elapsedMs(begun) < HolderLifeMs and not File.exists(stop) 'holding'
+		sleep(HolderPollMs)
+	end 'holding'
+
+	return 0
+end 'runHolder'
+
+function main() returns ExitCode
+	let me = try Process.executablePath() otherwise return 2
+	let mode = try CommandLine.args().get(ModeArgument) otherwise ""
+
+	if mode == HolderMode 'asTheHolder'
+		return runHolder(me)
+	end 'asTheHolder'
+
+	startHolder(me)
+	print("{OwnOutputLine}\n")
+	sleep(SettleMs)
+
+	return ProgramExitStatus
+end 'main'

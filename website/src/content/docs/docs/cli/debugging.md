@@ -294,6 +294,12 @@ program has ended is an `error`, and the verdict stands.
 **Without `--batch`** the same commands are read from stdin, one per line, and answered as text for a
 person; end of input quits. The debugged program's streams pass through to this driver's own.
 
+**After the program exits** the driver forwards the rest of its output until both streams end. A process
+the program started can hold them open, so the wait ends once no output has moved for 1 second, or 10
+seconds after the exit, whichever comes first. Then stderr gets
+`maxon: the target's output is still held open after it exited, so the rest of it is not waited for`, and
+the session reports the exit as usual.
+
 **`--classify=`** is the door onto the instruction classifier the step planner and the stack unwinder
 read. It reads no program:
 
@@ -453,6 +459,9 @@ points=1000 worker=42
 
 Events go to stdout; the closing `[debugstream]` summary goes to stderr.
 
+After the program exits, its remaining output is forwarded under the bound and with the stderr notice
+described under [`maxon debug`](#maxon-debug).
+
 A binary built without `--debugstream` is refused before it starts:
 
 ```text
@@ -483,7 +492,8 @@ Each event line names the green thread and processor that emitted it (`gt=0x0 P0
 
 Launches a program and samples where its CPU time goes. The program needs no instrumentation: only its
 `.mxdbg` sidecar is read, so you measure the code you ship. The program's own output goes to stderr, so
-stdout is only the report.
+stdout is only the report. After a run that completes, the program's remaining output is forwarded under
+the bound and with the stderr notice described under [`maxon debug`](#maxon-debug).
 
 It runs on every native host — `x64-windows`, `arm64-macos`, `arm64-linux` and `x64-linux` — and profiles
 a program built for that host. Each tick stops a thread, reads its registers, copies its stack and lets it
