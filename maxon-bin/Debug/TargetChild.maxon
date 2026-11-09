@@ -141,8 +141,11 @@ export let MaxTargetSeconds = 922337203685.0 as TargetSeconds
 // to zero.
 export let LeastTargetSeconds = 0.001 as TargetSeconds
 
-// One tick, because the point of the wait is the TERMINATION it performs and not the waiting.
-let KillDeadlineMs = 1
+let TreeNotEndedNotice = "maxon: the target's process tree is not known to have ended, so the rest of its output is not waited for: "
+let EndedTailBoundNotice = "maxon: a process the target started and left outside its process tree still holds its output, so the rest of it is not waited for\n"
+let EndedTailBoundMs = 1000
+let EndedTailPollMs = 5
+let UnendedTailLines = 64
 
 // Emptiness is not the stopping rule and cannot be: a child's own blank line and a pipe with
 // nothing in it are the same string once the terminator is off, so a loop keyed off the text drops
@@ -155,26 +158,45 @@ export function forwardChildOutput(child StreamingSubprocess, routing ChildOutpu
 	var buffered = true
 
 	while buffered and withinBudget(budget, taken: taken) 'interleaved'
-		buffered = false
-
-		for stream in ChildStream.allCases 'eachStream'
-			match pollChildStreamLine(child, stream: stream) 'polled'
-				none then continue
-				line(text) then faulted = emitChildStreamLine(text, stream: stream, routing: routing) or faulted
-			end 'polled'
-
-			buffered = true
-		end 'eachStream'
-
+		let pass = forwardOneLineEach(child, routing: routing)
+		faulted = pass.faulted or faulted
+		buffered = pass.moved
 		taken = taken + 1
 	end 'interleaved'
 
 	return faulted
 end 'forwardChildOutput'
 
+type ChildPass
+	export let moved as bool
+	export let faulted as bool
+
+	static function create(moved bool, faulted bool) returns ChildPass
+		return Self{moved: moved, faulted: faulted}
+	end 'create'
+end 'ChildPass'
+
+function forwardOneLineEach(child StreamingSubprocess, routing ChildOutputRouting) returns ChildPass
+	var moved = false
+	var faulted = false
+
+	for stream in ChildStream.allCases 'eachStream'
+		match pollChildStreamLine(child, stream: stream) 'polled'
+			none then continue
+			line(text) then faulted = emitChildStreamLine(text, stream: stream, routing: routing) or faulted
+		end 'polled'
+
+		moved = true
+	end 'eachStream'
+
+	return ChildPass.create(moved, faulted: faulted)
+end 'forwardOneLineEach'
+
 // Everything the child left behind, including a last line it wrote with no terminator — the poll above
-// stops at a newline that never arrives. Asked only once the child has ended, which is what makes the
-// blocking reads safe, and a read that refuses ends its stream exactly as end of stream does.
+// stops at a newline that never arrives. The reads block until each stream ends, so a process still
+// holding a pipe, a descendant the child left behind, blocks them for as long as it lives: a caller
+// needs the child's whole tree ended, and `endChildAndForwardTail` is the form that bounds the wait.
+// A read that refuses ends its stream exactly as end of stream does.
 export function forwardChildTail(child StreamingSubprocess, routing ChildOutputRouting) returns bool
 	var faulted = forwardChildOutput(child, routing: routing, budget: ChildLineBudget.unbounded)
 
@@ -196,9 +218,52 @@ function forwardChildStreamToItsEnd(child StreamingSubprocess, stream ChildStrea
 	return faulted
 end 'forwardChildStreamToItsEnd'
 
+export function endChildAndForwardTail(child StreamingSubprocess, routing ChildOutputRouting) returns bool
+	let treeEnd = child.endTree()
+
+	match treeEnd 'tree'
+		ended then return forwardEndedChildTail(child, routing: routing)
+		survived or
+		unconfirmed then return forwardUnendedChildOutput(child, treeEnd: treeEnd, routing: routing)
+	end 'tree'
+end 'endChildAndForwardTail'
+
+// A confirmed kill ends the child's tree, not a process the child started outside it, which can hold
+// the pipes open for good: the drain stops at `EndedTailBoundMs` instead of waiting for their end.
+function forwardEndedChildTail(child StreamingSubprocess, routing ChildOutputRouting) returns bool
+	let start = Clock.nowMs()
+	var faulted = false
+
+	while Clock.elapsedMs(start) < EndedTailBoundMs 'untilItEnds'
+		let pass = forwardOneLineEach(child, routing: routing)
+		faulted = pass.faulted or faulted
+
+		if not pass.moved and childStreamsEnded(child) 'drained'
+			return faulted
+		end 'drained'
+
+		if not pass.moved 'idle'
+			sleep(EndedTailPollMs)
+		end 'idle'
+	end 'untilItEnds'
+
+	printError(EndedTailBoundNotice)
+
+	return faulted
+end 'forwardEndedChildTail'
+
+function childStreamsEnded(child StreamingSubprocess) returns bool
+	return child.streamHasEnded(StdioStream.stdout) and child.streamHasEnded(StdioStream.stderr)
+end 'childStreamsEnded'
+
+function forwardUnendedChildOutput(child StreamingSubprocess, treeEnd TreeEnd, routing ChildOutputRouting) returns bool
+	printError("{TreeNotEndedNotice}{treeEnd.displayReason()}\n")
+
+	return forwardChildOutput(child, routing: routing, budget: ChildLineBudget.atMost(UnendedTailLines))
+end 'forwardUnendedChildOutput'
+
 export function endChild(child StreamingSubprocess, routing ChildOutputRouting) returns bool
-	_ = try child.waitWithTimeout(KillDeadlineMs) otherwise 0
-	let faulted = forwardChildTail(child, routing: routing)
+	let faulted = endChildAndForwardTail(child, routing: routing)
 	child.release()
 
 	return faulted

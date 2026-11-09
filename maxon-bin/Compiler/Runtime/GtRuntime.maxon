@@ -10786,10 +10786,10 @@ end 'LineReadWait'
 // establish first that bytes are already there; a peek that answers N then makes the overlapped read complete
 // SYNCHRONOUSLY, which is the same structure the collect loop drains two pipes with.
 //
-// ⚠ **A FAILED PEEK ANSWERS "" AND LATCHES NOTHING.** A broken pipe is what a peek fails with once the child
-// has closed its write end, and the stream's state word is `emitSubpTopUpStream`'s to write from a read that
-// really happened — so a caller that wants the end-of-stream verdict asks `subprocessStdoutState` for it
-// rather than inferring it from an empty answer.
+// ⚠ **A FAILED PEEK CONTINUES TO THE REFILL.** A broken pipe is what a peek fails with once the child has
+// closed its write end, and the stream's state word is `emitSubpTopUpStream`'s to write from a read that
+// really happened — so the refill's read is what finds the end and latches it. Answering "" instead would
+// leave the stream `open` for good.
 //
 // Answers the block `readMore` must branch to; `refill` is where a pipe with bytes ready continues.
 function emitSubpPeekBeforeRefill(module StdModule, func IrFunction, ids ValueMinter, readEnd ValueId, bytesOutPtr ValueId, refill IrBlock) returns IrBlock
@@ -10799,7 +10799,7 @@ function emitSubpPeekBeforeRefill(module StdModule, func IrFunction, ids ValueMi
 
 	let peekOk = ids.mint()
 	module.appendOp(gate, op: StdOp.osPipePeek(peekOk, handleId: readEnd, availPtrId: bytesOutPtr))
-	emitBranchOnCompare(module, block: gate, value: peekOk, pred: StdCmpPred.eq, against: 0, whenTrue: nothing, whenFalse: ready, ids: ids)
+	emitBranchOnCompare(module, block: gate, value: peekOk, pred: StdCmpPred.eq, against: 0, whenTrue: refill, whenFalse: ready, ids: ids)
 
 	let avail = emitLoadDword(module, block: ready, record: bytesOutPtr, offset: 0, ids: ids)
 	emitBranchOnCompare(module, block: ready, value: avail, pred: StdCmpPred.eq, against: 0, whenTrue: nothing, whenFalse: refill, ids: ids)

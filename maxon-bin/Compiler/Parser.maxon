@@ -8953,8 +8953,8 @@ end 'isDebugStreamCallee'
 //   • the STREAMING child — `subprocessSpawnStreaming`, `subprocessWriteStdinAll` /
 //     `subprocessWriteStdinBytes`, the two `subprocessRead*Line` readers,
 //     `subprocessReadStdoutBytes` (the EXACT-COUNT reader a framed body needs, whose second argument
-//     is a length where the line readers’ is a ceiling), `subprocessCloseStdin` and
-//     `subprocessWaitExit`, which sit on the `__gt_subp_*` handle table rather than on a second
+//     is a length where the line readers’ is a ceiling), `subprocessCloseStdin`,
+//     `subprocessWaitExit` and `subprocessEndTree`, which sit on the `__gt_subp_*` handle table rather than on a second
 //     CreateProcess path;
 //   • the HELPERS a caller needs around either — `subprocessResolveOnPath` (PATH + PATHEXT) and
 //     `subprocessLastErrorMessage`, plus `managedIsNull`, which is not a subprocess entry at all (it is a
@@ -8982,6 +8982,7 @@ let BuiltinsSubprocessReadStderrLineName = b"__Builtins.subprocessReadStderrLine
 let BuiltinsSubprocessReadStdoutBytesName = b"__Builtins.subprocessReadStdoutBytes"
 let BuiltinsSubprocessCloseStdinName = b"__Builtins.subprocessCloseStdin"
 let BuiltinsSubprocessWaitExitName = b"__Builtins.subprocessWaitExit"
+let BuiltinsSubprocessEndTreeName = b"__Builtins.subprocessEndTree"
 
 // ⭐ **THE THREE NON-BLOCKING STREAMING MEMBERS.** A parent that drives a child AND stays responsive cannot
 // use their blocking twins: `subprocessWaitExit` with a zero timeout waits FOR EVER (the corpus's own
@@ -96558,6 +96559,10 @@ export type Parser
 			if callee.equals(BuiltinsSubprocessWaitExitName) 'subprocessWaitExit'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpWaitExitName, arity: SubprocessTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessWaitExit'
+
+			if callee.equals(BuiltinsSubprocessEndTreeName) 'subprocessEndTree'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpEndTreeName, arity: SubprocessOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor)
+			end 'subprocessEndTree'
 
 			if callee.equals(BuiltinsSubprocessExitSignalName) 'subprocessExitSignal'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpExitSignalName, arity: SubprocessOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor)

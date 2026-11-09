@@ -478,3 +478,110 @@ line[first] line[] line[last] code=0
 ```exitcode
 27
 ```
+
+<!-- test: streaming-subprocess-nonblocking.the-ends-of-both-streams-are-seen-without-a-blocking-read -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+⭐ **A PARENT THAT NEVER BLOCKS CAN STILL TELL THAT A STREAM HAS ENDED.** `streamHasEnded(StdioStream.stdout)`
+and `streamHasEnded(StdioStream.stderr)` answer `false` while a read of that stream may still produce bytes and
+`true` once a read has found its end, so a loop of `tryRead*Line` calls knows when to stop without a blocking
+read that a process still holding the pipe would never end.
+
+The child writes `first`, `second` and a last line with no terminator, `tail`. Before any read both streams
+are open. The loop reads both streams with the two non-blocking doors until both report their end: the
+unterminated `tail` is handed over as a line when the end is found, so the text is the three lines in order
+and the loop ends on its own. A pipe the poll could not see the end of would leave the loop spinning until the
+case is reported TIMED OUT.
+```maxon
+function linesArguments() returns StringArray
+	var argv = StringArray.create(0)
+	argv.push("/c")
+	argv.push("echo")
+	argv.push("first&")
+	argv.push("echo")
+	argv.push("second&")
+	argv.push("set")
+	argv.push("/p=tail<nul")
+	return argv
+end 'linesArguments'
+
+function bothEnded(child StreamingSubprocess) returns bool
+	return child.streamHasEnded(StdioStream.stdout) and child.streamHasEnded(StdioStream.stderr)
+end 'bothEnded'
+
+function main() returns ExitCode
+	var child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: linesArguments()) otherwise return 3
+	let openAtStart = not bothEnded(child)
+	var seen = ""
+
+	while not bothEnded(child) 'spin'
+		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polledOut'
+			line(text) then seen.append("{text}|")
+			none then sleep(5)
+		end 'polledOut'
+
+		match child.tryReadStderrLine() 'polledErr'
+			line(text) then seen.append("err[{text}]|")
+			none then sleep(5)
+		end 'polledErr'
+	end 'spin'
+
+	_ = try child.wait() otherwise return 4
+	child.release()
+
+	print("openAtStart={openAtStart} seen={seen}\n")
+	return 0
+end 'main'
+```
+```stdout
+openAtStart=true seen=first|second|tail|
+```
+```exitcode
+0
+```
+
+<!-- test: streaming-subprocess-nonblocking.posix-the-ends-of-both-streams-are-seen-without-a-blocking-read -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+`the-ends-of-both-streams-are-seen-without-a-blocking-read` on a POSIX lane, with the child a shell that writes
+`first`, `second` and an unterminated `tail`.
+```maxon
+function linesArguments() returns StringArray
+	var argv = StringArray.create(0)
+	argv.push("-c")
+	argv.push("echo first; echo second; printf tail")
+	return argv
+end 'linesArguments'
+
+function bothEnded(child StreamingSubprocess) returns bool
+	return child.streamHasEnded(StdioStream.stdout) and child.streamHasEnded(StdioStream.stderr)
+end 'bothEnded'
+
+function main() returns ExitCode
+	var child = try StreamingSubprocess.spawn(Executable.name("sh"), arguments: linesArguments()) otherwise return 3
+	let openAtStart = not bothEnded(child)
+	var seen = ""
+
+	while not bothEnded(child) 'spin'
+		match try child.tryReadStdoutLine() otherwise panic("the child's stdout is out with a StdoutReader") 'polledOut'
+			line(text) then seen.append("{text}|")
+			none then sleep(5)
+		end 'polledOut'
+
+		match child.tryReadStderrLine() 'polledErr'
+			line(text) then seen.append("err[{text}]|")
+			none then sleep(5)
+		end 'polledErr'
+	end 'spin'
+
+	_ = try child.wait() otherwise return 4
+	child.release()
+
+	print("openAtStart={openAtStart} seen={seen}\n")
+	return 0
+end 'main'
+```
+```stdout
+openAtStart=true seen=first|second|tail|
+```
+```exitcode
+0
+```

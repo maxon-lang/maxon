@@ -1,0 +1,221 @@
+// Drives `runProcessFedAfter` from `maxon-bin/Testing/SpecFedRun.maxon`, staged beside this file as it stands
+// in the checkout.
+//
+// `holder` runs a child that exits after it is fed while a process it started still holds its standard output.
+// `chatty` is `holder` with a survivor that writes without pause.
+// `clean` runs a child that exits after it is fed with every one of its pipes closed.
+// A scenario prints one line, and the line is what the gate pins.
+
+export typealias ExitCodeValue = int(0 to u32.max)
+
+export type ProcessCapture
+	export let exitCode as ExitCodeValue
+	export let stdout as String
+	export let stderr as String
+
+	export static function create(exitCode ExitCodeValue, stdout String, stderr String) returns ProcessCapture
+		return Self{exitCode: exitCode, stdout: stdout, stderr: stderr}
+	end 'create'
+end 'ProcessCapture'
+
+let ModeArgument = 1
+let HolderScenario = "holder"
+let ChattyScenario = "chatty"
+let CleanScenario = "clean"
+let ChildMode = "child"
+let ChattyChildMode = "chatty-child"
+let SurvivorMode = "survivor"
+let ChattySurvivorMode = "chatty-survivor"
+let NoiseLine = "noise"
+let QuietChildMode = "quiet-child"
+let AnchorLine = "anchor"
+let FeedWord = "hello"
+let SurvivorLine = "survivor "
+let SurvivorLifeMs = 90000
+let HolderDeadlineMs = 4000
+let CleanDeadlineMs = 60000
+let PromptBoundMs = 30000
+let EndedGraceMs = 3000
+let PollMs = 20
+let FinalLineWithoutTerminator = "tail"
+
+function survivorIdIn(stdout String) returns Pid throws ParseError
+	for line in stdout.split("\n") 'eachLine'
+		if line.startsWith(SurvivorLine) 'found'
+			return try int.fromString(line.replaceFirst(SurvivorLine, with: "").trim())
+		end 'found'
+	end 'eachLine'
+
+	throw ParseError.invalidFormat
+end 'survivorIdIn'
+
+function endsWithinGrace(pid Pid) returns bool
+	var waited = 0 as DurationMs
+
+	while waited < EndedGraceMs 'poll'
+		if not Process.isAlive(pid) 'gone'
+			return true
+		end 'gone'
+
+		sleep(PollMs)
+		waited = waited + PollMs
+	end 'poll'
+
+	return not Process.isAlive(pid)
+end 'endsWithinGrace'
+
+function writeNoiseFor(lifeMs DurationMs)
+	let begun = Clock.nowMs()
+
+	while Clock.elapsedMs(begun) < lifeMs 'noise'
+		print("{NoiseLine}\n")
+	end 'noise'
+end 'writeNoiseFor'
+
+function survivorModeFor(chatty bool) returns String
+	return ChattySurvivorMode if chatty else SurvivorMode
+end 'survivorModeFor'
+
+function startSurvivor(me FilePath, chatty bool)
+	var config = Configuration.create(Executable.name("sh"))
+	var arguments = StringArray.create(0)
+
+	#if os(Windows)
+		config = Configuration.create(Executable.name("cmd"))
+		arguments.push("/c")
+		arguments.push("start")
+		arguments.push("fed run survivor")
+		arguments.push("/b")
+		arguments.push(me.toString())
+		arguments.push(survivorModeFor(chatty))
+	#else
+		arguments.push("-c")
+		arguments.push("\"$0\" {survivorModeFor(chatty)} &")
+		arguments.push(me.toString())
+	#endif
+
+	config.arguments = arguments
+	config.standardOutput = OutputDestination.inherit
+	config.standardError = OutputDestination.inherit
+	_ = try config.run() otherwise panic("the survivor could not be started")
+end 'startSurvivor'
+
+function runChild(mode String) returns ExitCode
+	if mode == ChildMode or mode == ChattyChildMode 'withSurvivor'
+		startSurvivor(try Process.executablePath() otherwise return 2, chatty: mode == ChattyChildMode)
+	end 'withSurvivor'
+
+	print("{AnchorLine}\n")
+	_ = try Console.stdin().readLine() otherwise ""
+	print("done\n")
+
+	if mode == QuietChildMode 'unterminated'
+		print(FinalLineWithoutTerminator)
+	end 'unterminated'
+
+	return 0
+end 'runChild'
+
+function holderChild(chatty bool) returns StringArray
+	var argv = StringArray.create(0)
+
+	#if os(Windows)
+		argv.push(ChattyChildMode if chatty else ChildMode)
+	#else
+		argv.push("-c")
+		argv.push("\"$0\" {survivorModeFor(chatty)} & echo {AnchorLine}; read line; echo done")
+		argv.push((try Process.executablePath() otherwise panic("the probe has no path")).toString())
+	#endif
+
+	return argv
+end 'holderChild'
+
+function holderExecutable() returns Executable
+	#if os(Windows)
+		return Executable.path(try Process.executablePath() otherwise panic("the probe has no path"))
+	#else
+		return Executable.name("sh")
+	#endif
+end 'holderExecutable'
+
+function holderVerdict(chatty bool) returns String
+	var timedOut = false
+	var partial = ""
+
+	let begun = Clock.nowMs()
+
+	try runProcessFedAfter(holderExecutable(), argv: holderChild(chatty),workingDirectory: Directory.currentPath(), timeoutMs: HolderDeadlineMs, environment: Environment.inherit, anchor: AnchorLine, feed: FeedWord) otherwise (e) 'expired'
+		timedOut = e.timedOut()
+		partial = match e 'kind'
+			timeout(_, out, _) gives out
+			treeNotEnded(_, out, _, _) gives out
+			executableNotFound or
+				spawnFailed or
+				ioFailed or
+				inputTooLarge or
+				detachRefused or
+				endOfStream gives ""
+		end 'kind'
+	end 'expired'
+
+	let elapsed = Clock.elapsedMs(begun)
+
+	if not timedOut 'returned'
+		return "the run returned after {elapsed} ms without a deadline error"
+	end 'returned'
+
+	let survivor = try survivorIdIn(partial) otherwise panic("the survivor prints its id before the deadline: {partial}")
+
+	return "deadline error after the deadline {elapsed >= HolderDeadlineMs}, before the survivor's life ends {elapsed < PromptBoundMs}, survivor ended {endsWithinGrace(survivor)}"
+end 'holderVerdict'
+
+function cleanVerdict(me FilePath) returns String
+	let begun = Clock.nowMs()
+
+	let capture = try runProcessFedAfter(Executable.path(me), argv: StringArray from [QuietChildMode], workingDirectory: Directory.currentPath(), timeoutMs: CleanDeadlineMs, environment: Environment.inherit, anchor: AnchorLine, feed: FeedWord) otherwise (e) 'failed'
+		return "the run threw: {e.displayReason()}"
+	end 'failed'
+
+	let elapsed = Clock.elapsedMs(begun)
+
+	return "exit {capture.exitCode}, stdout {capture.stdout.replace("\n", with: "|")}, prompt {elapsed < PromptBoundMs}"
+end 'cleanVerdict'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let mode = try args.get(ModeArgument) otherwise ""
+
+	if mode == SurvivorMode 'survivor'
+		print("{SurvivorLine}{Process.id()}\n")
+		sleep(SurvivorLifeMs)
+
+		return 0
+	end 'survivor'
+
+	if mode == ChattySurvivorMode 'chattySurvivor'
+		print("{SurvivorLine}{Process.id()}\n")
+		writeNoiseFor(SurvivorLifeMs)
+
+		return 0
+	end 'chattySurvivor'
+
+	if mode == ChildMode or mode == ChattyChildMode or mode == QuietChildMode 'child'
+		return runChild(mode)
+	end 'child'
+
+	let me = try Process.executablePath() otherwise return 2
+
+	if mode == HolderScenario 'holder'
+		print("{holderVerdict(false)}\n")
+	end 'holder' else if mode == ChattyScenario 'chatty'
+		print("{holderVerdict(true)}\n")
+	end 'chatty' else if mode == CleanScenario 'clean'
+		print("{cleanVerdict(me)}\n")
+	end 'clean' else 'unknown'
+		print("unknown scenario {mode}\n")
+
+		return 3
+	end 'unknown'
+
+	return 0
+end 'main'

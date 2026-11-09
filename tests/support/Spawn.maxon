@@ -66,6 +66,22 @@ public function spawnBuild(source FilePath, staged FilePath, output FilePath, la
 	return spawnCompiler(buildArguments(source, output: output, extraArguments: extraArguments), staged: staged, what: "the '{label}' build", binary: binary, environment: environment)
 end 'spawnBuild'
 
+public function requireTreeEnded(child StreamingSubprocess, what String)
+	let treeEnd = child.endTree()
+
+	match treeEnd 'tree'
+		ended then return
+		survived or
+		unconfirmed then panic("the gate could not run — the process tree of {what} could not be ended ({treeEnd.displayReason()}).")
+	end 'tree'
+end 'requireTreeEnded'
+
+public function requireDeadlineKill(failure SubprocessError, what String)
+	if not failure.timedOut() 'notAKill'
+		panic("the gate could not run — waiting for {what} to exit ended in {failure.displayReason()}, not in the kill its deadline sends.")
+	end 'notAKill'
+end 'requireDeadlineKill'
+
 public function endedProcessId() returns Pid
 	#if os(Windows)
 		let exe = Executable.name("cmd")

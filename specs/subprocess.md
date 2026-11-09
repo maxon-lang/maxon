@@ -588,6 +588,98 @@ waitWithTimeout: timed out true, grandchild ended true
 timeoutMs: timed out true, grandchild ended true
 ```
 
+<!-- test: subprocess-endtree-ends-the-grandchild-the-child-started -->
+<!-- unsupported-targets: wasm32-wasi -->
+**`endTree()` ENDS THE CHILD'S WHOLE PROCESS TREE AT ONCE, THE KILL A DEADLINE SENDS WITHOUT WAITING FOR ONE.**
+The case runs itself three ways. The child starts a grandchild that sleeps far past the case, prints the
+grandchild's process id and waits for it. The parent reads the id, calls `endTree()` on the still-running child, and
+gives the grandchild two seconds to be gone. The call answers only once the child itself is gone, so the parent's own
+`pollExit()` right after it reports the child as exited.
+```maxon
+let sleeperMs = 30000
+let graceMs = 2000
+let pollMs = 50
+
+function grandchildIdFrom(line String) returns Pid throws ParseError
+	let parsed = try int.fromString(line.trim())
+	if parsed < 0 'negative'
+		throw ParseError.invalidFormat
+	end 'negative'
+	return parsed
+end 'grandchildIdFrom'
+
+function endsWithinGrace(pid Pid) returns bool
+	var waited = 0 as DurationMs
+	while waited < graceMs 'poll'
+		if not Process.isAlive(pid) 'gone'
+			return true
+		end 'gone'
+		sleep(pollMs)
+		waited = waited + pollMs
+	end 'poll'
+	return not Process.isAlive(pid)
+end 'endsWithinGrace'
+
+function argumentsFor(mode String) returns StringArray
+	var argv = StringArray.create(0)
+	argv.push(mode)
+	return argv
+end 'argumentsFor'
+
+function startGrandchild(me Executable) returns ExitCode
+	var grandchild = try StreamingSubprocess.spawn(me, arguments: argumentsFor("grandchild")) otherwise return 3
+	let pid = try grandchild.processId() otherwise return 4
+	print("{pid}\n")
+	_ = try grandchild.wait() otherwise return 5
+	grandchild.release()
+	return 0
+end 'startGrandchild'
+
+function exited(poll ExitPoll) returns bool
+	return match poll 'seen'
+		running gives false
+		exited gives true
+	end 'seen'
+end 'exited'
+
+function treeEndedCleanly(found TreeEnd) returns bool
+	return match found 'seen'
+		ended gives true
+		survived or
+		unconfirmed gives false
+	end 'seen'
+end 'treeEndedCleanly'
+
+function main() returns ExitCode
+	let me = Executable.path(try Process.executablePath() otherwise return 2)
+	let args = CommandLine.args()
+	let mode = try args.get(1) otherwise ""
+
+	if mode == "grandchild" 'sleeper'
+		sleep(sleeperMs)
+		return 0
+	end 'sleeper'
+
+	if mode == "child" 'child'
+		return startGrandchild(me)
+	end 'child'
+
+	var child = try StreamingSubprocess.spawn(me, arguments: argumentsFor("child")) otherwise return 6
+	let line = try child.readStdoutLine() otherwise return 7
+	let pid = try grandchildIdFrom(line) otherwise panic("the child prints the grandchild's id")
+	let treeEnded = treeEndedCleanly(child.endTree())
+	print("tree ended {treeEnded}, child exited {exited(child.pollExit())}, grandchild ended {endsWithinGrace(pid)}\n")
+	child.release()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+tree ended true, child exited true, grandchild ended true
+```
+
 <!-- test: subprocess-a-deadline-spares-the-process-the-child-started-detached -->
 <!-- unsupported-targets: wasm32-wasi -->
 **A DEADLINE'S TREE KILL NEVER ENDS A PROCESS THE CHILD STARTED DETACHED.** Detaching is stated at the spawn,
@@ -2755,7 +2847,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Subprocess.maxon:1295: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
+panic at Subprocess.maxon:1332: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
 Stack trace:
   in StreamingSubprocess.release
   in main

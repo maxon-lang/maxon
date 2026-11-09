@@ -556,7 +556,10 @@ public type LspClient
 	// inherits a machine with one more orphan on it.
 	public function release()
 		self.server.closeStdin()
-		try self.server.waitWithTimeout(ServerExitDeadlineMs) otherwise ignore
+		try self.server.waitWithTimeout(ServerExitDeadlineMs) otherwise (failure) 'notExited'
+			requireDeadlineKill(failure, what: "the language server")
+		end 'notExited'
+
 		self.server.release()
 	end 'release'
 

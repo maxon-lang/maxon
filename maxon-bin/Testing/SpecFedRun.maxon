@@ -1,7 +1,11 @@
 let FedRunPollMs = 5
-let FedRunKillWaitMs = 1
 let FedRunSurvivorDrainMs = 100
 let FedRunLineEnd = "\n"
+
+union FedRunProgress
+	finished(status TerminationStatus)
+	waiting
+end 'FedRunProgress'
 
 type FedRun
 	var child as StreamingSubprocess
@@ -16,12 +20,11 @@ type FedRun
 	end 'begin'
 
 	function conclude(timeoutMs DurationMs) returns ProcessCapture throws SubprocessError
-		let status = try self.runToExit(timeoutMs) otherwise (e) 'unfinished'
+		let status = try self.pump(timeoutMs) otherwise (e) 'unfinished'
 			self.child.release()
 			throw e
 		end 'unfinished'
 
-		self.drainRemaining()
 		self.child.release()
 
 		return ProcessCapture.create(status.code() as ExitCodeValue, stdout: self.stdout, stderr: self.stderr)
@@ -66,66 +69,62 @@ type FedRun
 		self.fed = true
 	end 'noteStdout'
 
-	function runToExit(timeoutMs DurationMs) returns TerminationStatus throws SubprocessError
+	function pump(timeoutMs DurationMs) returns TerminationStatus throws SubprocessError
 		let start = Clock.nowMs()
 
 		while true 'pump'
+			try self.requireTimeLeft(start, timeoutMs: timeoutMs)
+
 			if self.absorbAvailable() 'moved'
 				continue
 			end 'moved'
 
-			match self.child.pollTermination() 'polled'
-				ended(status) then return status
-				running then try self.restUnlessExpired(start, timeoutMs: timeoutMs)
-			end 'polled'
+			match self.progress() 'progress'
+				finished(status) then return status
+				waiting then sleep(FedRunPollMs)
+			end 'progress'
 		end 'pump'
 
-		panic("FedRun.runToExit: the pump loop leaves only by returning or throwing")
-	end 'runToExit'
+		panic("FedRun.pump: the pump loop leaves only by returning or throwing")
+	end 'pump'
 
-	function restUnlessExpired(start InstantMs, timeoutMs DurationMs) throws SubprocessError
+	function progress() returns FedRunProgress
+		if not (self.child.streamHasEnded(StdioStream.stdout) and self.child.streamHasEnded(StdioStream.stderr)) 'stillOpen'
+			return FedRunProgress.waiting
+		end 'stillOpen'
+
+		return match self.child.pollTermination() 'polled'
+			ended(status) gives FedRunProgress.finished(status)
+			running gives FedRunProgress.waiting
+		end 'polled'
+	end 'progress'
+
+	function requireTimeLeft(start InstantMs, timeoutMs DurationMs) throws SubprocessError
 		if Clock.elapsedMs(start) >= timeoutMs 'expired'
 			throw self.endedByDeadline(Clock.elapsedMs(start))
 		end 'expired'
-
-		sleep(FedRunPollMs)
-	end 'restUnlessExpired'
+	end 'requireTimeLeft'
 
 	function endedByDeadline(elapsedMs DurationMs) returns SubprocessError
-		// A wait that times out kills the child's whole process tree, which is how the deadline ends it.
-		_ = try self.child.waitWithTimeout(FedRunKillWaitMs) otherwise (waitFailure) 'killWaitFailed'
-			return self.errorAfterKillWait(waitFailure, elapsedMs: elapsedMs)
-		end 'killWaitFailed'
+		return match self.child.endTree() 'tree'
+			ended gives self.timeoutOf(elapsedMs)
+			survived(osError) gives self.treeNotEndedOf(elapsedMs, osError: osError)
 
+			// No kill was confirmed: reporting a timeout would claim the tree ended, which nothing confirmed.
+			unconfirmed(reason) gives SubprocessError.ioFailed(reason)
+		end 'tree'
+	end 'endedByDeadline'
+
+	function timeoutOf(elapsedMs DurationMs) returns SubprocessError
 		self.absorbWithinSurvivorWindow()
 
 		return SubprocessError.timeout(elapsedMs, stdout: self.stdout, stderr: self.stderr)
-	end 'endedByDeadline'
+	end 'timeoutOf'
 
-	function errorAfterKillWait(waitFailure SubprocessError, elapsedMs DurationMs) returns SubprocessError
-		match waitFailure 'why'
-			timeout then return self.timeoutOfEndedTree(elapsedMs)
-			treeNotEnded(_, _, _, osError) then return self.treeNotEndedOf(elapsedMs, osError: osError)
-			// No kill was confirmed: reporting `timeout` would claim the tree ended, and its blocking drain
-			// could wait on a live child.
-			ioFailed then return waitFailure
-			executableNotFound or
-			spawnFailed or
-			detachRefused or
-			inputTooLarge or
-			endOfStream then panic("FedRun.errorAfterKillWait: waitWithTimeout never throws {waitFailure.name}")
-		end 'why'
-	end 'errorAfterKillWait'
-
-	function timeoutOfEndedTree(elapsedMs DurationMs) returns SubprocessError
-		self.drainRemaining()
-
-		return SubprocessError.timeout(elapsedMs, stdout: self.stdout, stderr: self.stderr)
-	end 'timeoutOfEndedTree'
-
-	// Never `drainRemaining`: no kill confirmed the tree ended, so a surviving descendant may hold the
-	// pipes open forever. The `FedRunSurvivorDrainMs` bound stops a descendant that writes continuously
-	// from keeping this loop running and growing the captured output without limit.
+	// A survivor, or a process the child started outside its tree, may hold the pipes open forever, so
+	// nothing waits for their end here. The
+	// `FedRunSurvivorDrainMs` bound stops a descendant that writes continuously from keeping this loop
+	// running and growing the captured output without limit.
 	function absorbWithinSurvivorWindow()
 		let start = Clock.nowMs()
 		var moved = true
@@ -140,18 +139,6 @@ type FedRun
 
 		return SubprocessError.treeNotEnded(elapsedMs, stdout: self.stdout, stderr: self.stderr, osError: osError)
 	end 'treeNotEndedOf'
-
-	function drainRemaining()
-		while true 'eachStdoutLine'
-			let text = try self.child.readStdoutLine() otherwise break
-			self.noteStdout(text)
-		end 'eachStdoutLine'
-
-		while true 'eachStderrLine'
-			let text = try self.child.readStderrLine() otherwise break
-			self.stderr.append("{text}{FedRunLineEnd}")
-		end 'eachStderrLine'
-	end 'drainRemaining'
 end 'FedRun'
 
 export function runProcessFedAfter(exe Executable, argv StringArray, workingDirectory FilePath, timeoutMs DurationMs, environment Environment, anchor String, feed String) returns ProcessCapture throws SubprocessError

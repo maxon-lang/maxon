@@ -81,9 +81,6 @@
 	// stream per tick, so a chatty child cannot starve the sampler while an idle one costs two polls.
 	let MaxDrainedLinesPerTick = 4 as ChildLineTally
 
-	// The kill a deadline performs: the shortest wait that still terminates the child.
-	let KillWaitMs = 1
-
 	let NanosPerMilli = 1000000.0
 
 	// What one `profile` command line asked for. A record rather than a local per flag, for `MaxonArgs`'
@@ -456,13 +453,11 @@
 
 		let seconds = profileSecondsOf(Clock.elapsedNanos(started))
 
-		if not completed 'stillRunning'
-			// A deadline that fired leaves a live child, and the only wait this surface has that ends one is
-			// the one that terminates it at its own timeout.
-			_ = try child.waitWithTimeout(KillWaitMs) otherwise 0
+		if completed 'itExited'
+			_ = forwardChildTail(child, routing: ChildOutputRouting.allToStandardError)
+		end 'itExited' else 'stillRunning'
+			_ = endChildAndForwardTail(child, routing: ChildOutputRouting.allToStandardError)
 		end 'stillRunning'
-
-		_ = forwardChildTail(child, routing: ChildOutputRouting.allToStandardError)
 
 		return emitProfileReport(request, report: accumulator.finish(reportSpelledPathDisplay(request.exePath()), targetStatus: status, runCompleted: completed, requestedRateHz: request.rateHz, ticks: session.ticks, durationSeconds: seconds, minPercent: request.minPercent))
 	end 'runProfileTicks'
@@ -501,9 +496,13 @@
 	// A refusal reached with a child already running: it is this tool's orphan, so it is ended before the
 	// refusal is printed.
 	function refuseProfileAfterKilling(child StreamingSubprocess, reason String) returns ExitCode
-		_ = try child.waitWithTimeout(KillWaitMs) otherwise 0
+		let treeEnd = child.endTree()
 
-		return refuseProfile(reason)
+		match treeEnd 'tree'
+			ended then return refuseProfile(reason)
+			survived or
+			unconfirmed then return refuseProfile("{reason} ({treeEnd.displayReason()})")
+		end 'tree'
 	end 'refuseProfileAfterKilling'
 
 	// ========================================================================================

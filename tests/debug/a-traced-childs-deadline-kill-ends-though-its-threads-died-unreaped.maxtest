@@ -6,7 +6,9 @@ test 'a deadline wait on a traced child whose threads died while their tracer wa
 	#if os(Linux)
 		var tracee = startedTracee(TracedKillCaseLabel)
 
-		_ = try tracee.child.waitWithTimeout(TracedKillDeadlineMs) otherwise 0
+		try tracee.child.waitWithTimeout(TracedKillDeadlineMs) otherwise (failure) 'deadline'
+			Expect.isTrue(failure.timedOut(), message: "THE DEADLINE WAIT ON THE TRACED CHILD ENDED IN {failure.displayReason()}, NOT IN THE KILL ITS DEADLINE SENDS.")
+		end 'deadline'
 
 		Expect.isFalse(File.exists(try FilePath.from("{TraceeProcDirectory}/{tracee.pid}") otherwise panic("the process directory is a spellable path")), message: "⛔ THE WAIT ENDED BUT THE CHILD IS STILL IN THE PROCESS TABLE. A traced thread's death is reported only to its tracer, and Linux withholds the leader's own until every thread is reaped, so a reap that asks for the leader alone is never answered. The child was process {tracee.pid}; its threads were: {listedLines(tracee.threads)}.")
 

@@ -56,6 +56,8 @@ let GdbUnmaskProbeMs = 10000
 
 let GdbStubExitBudgetMs = 5000
 
+let GdbStubNotEndedNotice = "maxon debug: the debug stub's process tree could not be fully ended: "
+
 let GdbUnmaskUnavailableNotice = "maxon debug: this host's `debugserver` does not take `--unmask-signals`, so a hardware fault cannot be passed on to the program: the debugger will report the fault and the program's own handler will not run\n"
 
 let GdbImagesKey = "images"
@@ -1448,9 +1450,20 @@ function gdbReplyEndsTheProgram(payload String) returns bool
 end 'gdbReplyEndsTheProgram'
 
 function gdbStubEnded(child StreamingSubprocess)
-	_ = try child.waitWithTimeout(GdbStubExitBudgetMs) otherwise 0
+	try child.waitWithTimeout(GdbStubExitBudgetMs) otherwise (failure) 'notExited'
+		gdbStubWaitFailed(failure)
+	end 'notExited'
+
 	child.release()
 end 'gdbStubEnded'
+
+function gdbStubWaitFailed(failure SubprocessError)
+	if failure.timedOut() 'killedAtTheBudget'
+		return
+	end 'killedAtTheBudget'
+
+	printError("{GdbStubNotEndedNotice}{failure.displayReason()}\n")
+end 'gdbStubWaitFailed'
 
 function gdbSlottedAmong(registers GdbRegisterInfoArray) returns GdbSlottedRegisterArray
 	var slotted = GdbSlottedRegisterArray.create(0)

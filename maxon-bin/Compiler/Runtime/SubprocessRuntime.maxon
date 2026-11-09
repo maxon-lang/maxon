@@ -48,6 +48,7 @@ export let SubpStreamSpawnName = b"__gt_subp_stream_spawn"
 export let SubpGetPidName = b"__gt_subp_get_pid"
 export let SubpWaitCollectName = b"__gt_subp_wait_collect"
 export let SubpWaitExitName = b"__gt_subp_wait_exit"
+export let SubpEndTreeName = b"__gt_subp_end_tree"
 
 // ⭐ **THE EXIT POLL, AND IT CANNOT BE THE WAIT ABOVE WITH A ZERO TIMEOUT.** `__gt_subp_wait_exit` reads a
 // zero as INFINITE — the corpus's convention for this whole family — and TERMINATES the child when any other
@@ -108,9 +109,11 @@ let SubpStreamSpawnParamCount = 6
 // `SubprocessError.timeout` and maps -1 to `ioFailed`, so the two must stay distinct.
 let SubpTimedOutRc = -2
 
-// The third: the deadline fired and the child was reaped, but part of its tree may still run.
-// `waitWithTimeout` maps it to `SubprocessError.treeNotEnded`.
+// The third: the child was reaped, but part of its tree may still run. `waitWithTimeout` maps it to
+// `SubprocessError.treeNotEnded` and `endTree` to `TreeEnd.survived`.
 let SubpTreeSurvivedRc = -3
+
+let SubpTreeEndedRc = 0
 
 // The `ResultStatusKind` discriminator `stdlib/Subprocess.maxon` decodes. Its raw values are declared THERE
 // and travel across the builtin boundary unchanged, exactly as the stdio kinds do.
@@ -1341,7 +1344,7 @@ function buildSubpReadBytes(module StdModule, name ByteArray, readerName ByteArr
 	module.functions.push(func)
 end 'buildSubpReadBytes'
 
-// A timeout terminates the child's whole tree, as `waitWithTimeout`'s doc comment promises;
+// A timeout, or `endTree`, terminates the child's whole tree, as their doc comments promise;
 // otherwise live processes hold the write ends of pipes nobody drains. Terminating only starts the
 // teardown, so the wait holds the caller until the child is gone, and an exit code read afterwards
 // is the kill's. A refused terminate is confirmed by a wait that does not block, so a child the
@@ -1521,6 +1524,37 @@ function buildSubpWaitExit(module StdModule, target Target)
 
 	module.functions.push(func)
 end 'buildSubpWaitExit'
+
+// `__gt_subp_end_tree(handle) -> 0 | -3 (child gone, tree not ended) | -1 (bad handle, or no kill
+// confirmed)` — `__Builtins.subprocessEndTree`. The kill a `__gt_subp_wait_exit` deadline sends, with no
+// deadline to wait for.
+function buildSubpEndTree(module StdModule, target Target)
+	var func = IrFunction.createFromStd(SubpEndTreeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var bad = module.addBlock(func, label: b"subpbad", heat: BlockHeat.normal)
+	var unconfirmed = module.addBlock(func, label: b"subpendunconfirmed", heat: BlockHeat.normal)
+	var treeUnended = module.addBlock(func, label: b"subpendtreeunended", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let handle = 0
+
+	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
+	module.setTerminator(bad, op: StdOp.ret(failure))
+
+	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
+	var ended = emitSubpTerminateChild(module, func: func, cur: good, ids: ids, handle: handle, unconfirmed: unconfirmed, treeUnended: treeUnended, target: target)
+	module.setTerminator(ended, op: StdOp.ret(emitConst(module, block: ended, value: SubpTreeEndedRc, ids: ids)))
+
+	emitSubpRecordLastError(module, block: unconfirmed, ids: ids)
+	module.setTerminator(unconfirmed, op: StdOp.ret(emitConst(module, block: unconfirmed, value: SubpFailure, ids: ids)))
+
+	emitSubpRecordLastError(module, block: treeUnended, ids: ids)
+	module.setTerminator(treeUnended, op: StdOp.ret(emitConst(module, block: treeUnended, value: SubpTreeSurvivedRc, ids: ids)))
+
+	module.functions.push(func)
+end 'buildSubpEndTree'
 
 enum SubpExitTail
 	exitCode
@@ -3212,6 +3246,7 @@ export function installSubprocessRuntime(module StdModule, target Target)
 	buildSubpReadBytes(module, name: SubpTryReadOutBytesName, readerName: SubpTryReadLineName)
 	buildSubpReadBytes(module, name: SubpTryReadErrBytesName, readerName: SubpTryReadErrLineName)
 	buildSubpWaitExit(module, target: target)
+	buildSubpEndTree(module, target: target)
 	buildSubpExitPoll(module, tail: SubpExitTail.exitCode)
 	buildSubpExitPoll(module, tail: SubpExitTail.exitSignal)
 	buildSubpWaitCollect(module, target: target)

@@ -1929,7 +1929,8 @@ operand.
 text is usually the only evidence of why it hung. Both fields are empty when the layer that threw was not
 collecting output, which is `StreamingSubprocess.waitWithTimeout`.
 
-A deadline ends the child's whole process tree. On Linux and macOS the tree is the child and every process
+A deadline ends the child's whole process tree, and so does [`StreamingSubprocess.endTree()`](#streamingsubprocess).
+On Linux and macOS the tree is the child and every process
 in the child's session descended from it by parent at the moment of the kill, however many there are: each
 is stopped as it is found, the search repeats until a full pass finds no new process, and then the
 descendants are killed, newest first, together with the child's process group. The child's process group is
@@ -2003,9 +2004,11 @@ request after request. A read or a wait parks the calling green thread, so its s
 | `tryReadStderrLine()` | `LinePoll` | — | As above, for stderr. |
 | `pollExit()` | `ExitPoll` | — | Whether the child has exited, without blocking or killing it. A released handle answers `running`. On Linux and macOS a child a signal killed reports `exited(128 + signal)`. |
 | `pollTermination()` | `TerminationPoll` | — | As `pollExit()`, answering how the child ended: `signalled(signal)` for a child a signal killed on Linux and macOS, `exited(code)` otherwise. |
+| `streamHasEnded(stream StdioStream)` | `bool` | — | Whether a read of the child's `stdout` or `stderr` has found the end of that stream, answering at once. A read latches the end, so a loop of `tryReadStdoutLine` / `tryReadStderrLine` calls moves this to `true`. A read that failed and a released handle answer `true`. |
 | `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
 | `wait()` | exit code | `SubprocessError` | Park the calling green thread until the child exits. |
 | `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree ([SubprocessError](#subprocesserror)) when the deadline passes, or `treeNotEnded` when that tree cannot be fully ended; `0` waits forever. Both carry empty output fields — a streaming child's bytes belong to the caller draining the streams. |
+| `endTree()` | `TreeEnd` | — | Ends the child's whole process tree at once, the kill a `waitWithTimeout` deadline sends but with no wait to expire, and returns once the child itself is gone. The child may already have exited: what it left running is the tree. The answer is `ended` when the tree is gone, `survived(osError)` when the child is gone but part of its tree could not be ended, and `unconfirmed(reason)` when no kill was confirmed or the handle is released. |
 | `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. Panics while the stdout side is out with a `StdoutReader`: `reclaimStdout()` first. |
 | `handle`, `released` | fields | — | The raw handle and whether it has been released. |
 
@@ -2024,10 +2027,24 @@ union TerminationPoll
 	running
 	ended(status TerminationStatus)
 end 'TerminationPoll'
+
+union TreeEnd
+	ended
+	survived(osError OsErrorCode)
+	unconfirmed(reason String)
+end 'TreeEnd'
+
+enum StdioStream
+	stdout
+	stderr
+end 'StdioStream'
 ```
 
 `LinePoll` exists because a blank line from the child and "nothing buffered" are both `""` once the
-terminator is removed. `none` says nothing about whether the stream has ended; ask `pollExit()`.
+terminator is removed. `none` says nothing about whether the stream has ended; ask `pollExit()` for the
+child, or `streamHasEnded(stream)` for the stream.
+
+`TreeEnd.displayReason()` renders the answer as one line for a diagnostic.
 
 ### StdoutReader
 

@@ -1,0 +1,47 @@
+let FedRunProbeFixtureDir = "tests/specHarness/gates/a-fed-run-whose-child-leaves-a-process-holding-its-pipes-ends-at-the-deadline"
+let FedRunProbeStagingDir = "temp/fed-run-probe"
+let FedRunProbeSourcePath = "maxon-bin/Testing/SpecFedRun.maxon"
+let FedRunProbeExecuteWord = "execute"
+let FedRunProbeCacheDirName = "cache"
+let FedRunProbeSourcesDirName = "sources"
+let FedRunHolderScenario = "holder"
+let FedRunChattyScenario = "chatty"
+let FedRunCleanScenario = "clean"
+let FedRunHolderVerdict = "deadline error after the deadline true, before the survivor's life ends true, survivor ended true"
+let FedRunCleanVerdict = "exit 0, stdout anchor|done|tail|, prompt true"
+
+function fedRunProbe(scenario String) returns CollectedOutput
+	let caseDir = stagingDir("{FedRunProbeStagingDir}/{scenario}")
+	let sources = freshStagingDir("{FedRunProbeStagingDir}/{scenario}/{FedRunProbeSourcesDirName}")
+	let cache = stagingDir("{FedRunProbeStagingDir}/{scenario}/{FedRunProbeCacheDirName}")
+
+	stageStoredTree(fixtureDir(FedRunProbeFixtureDir), into: sources)
+
+	let source = Directory.currentPath().join(FedRunProbeSourcePath)
+	writeStagedFile(sources.join(source.filename()), content: fileText(source))
+
+	var argv = StringArray.create(0)
+	argv.push(FedRunProbeExecuteWord)
+	argv.push(sources.toString())
+	argv.push(scenario)
+
+	return spawnCompiler(argv, staged: caseDir, what: "the fed-run probe", environment: Environment.inheritUpdating([CacheRootVariable: cache.toString()]))
+end 'fedRunProbe'
+
+function collectUnlessSaid(scenario String, verdict String, broken StringArray)
+	let run = fedRunProbe(scenario)
+
+	if not run.stdout.contains(verdict) 'unsaid'
+		broken.push("the `{scenario}` probe did not say '{verdict}'. It said:\n{everythingSaid(run)}\n")
+	end 'unsaid'
+end 'collectUnlessSaid'
+
+test 'a fed run whose child leaves a process holding its pipes stops at its deadline and ends that process'
+	var broken = StringArray.create(0)
+
+	collectUnlessSaid(FedRunCleanScenario, verdict: FedRunCleanVerdict, broken: broken)
+	collectUnlessSaid(FedRunHolderScenario, verdict: FedRunHolderVerdict, broken: broken)
+	collectUnlessSaid(FedRunChattyScenario, verdict: FedRunHolderVerdict, broken: broken)
+
+	requireNothingBroken(broken, headline: "a fed run whose child leaves a process holding its pipes stops at its deadline and ends that process")
+end 'a fed run whose child leaves a process holding its pipes stops at its deadline and ends that process'

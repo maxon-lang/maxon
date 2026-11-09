@@ -397,7 +397,6 @@ let HeaderNameSeparator = ": "
 let RecvChunkBytes = 65536
 let RecvAttemptBudget = 4096
 let ServerExitDeadlineMs = 5000
-let TerminateWaitMs = 1
 let ContentLengthHeaderName = "content-length"
 let NoContentStatus = 204
 let NotModifiedStatus = 304
@@ -683,7 +682,7 @@ export type StreamingHttpMcpServer
 	// For a server started without `endsWithItsStdin`: the HTTP transport has no shutdown route, so
 	// `release` ends it and its exit code says nothing. No case may assert one.
 	export function terminate()
-		_ = try self.server.waitWithTimeout(TerminateWaitMs) otherwise 0
+		requireTreeEnded(self.server, what: "the HTTP `mcp-server`")
 		self.server.release()
 	end 'terminate'
 end 'StreamingHttpMcpServer'

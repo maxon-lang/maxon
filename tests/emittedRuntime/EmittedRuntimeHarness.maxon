@@ -145,7 +145,6 @@ export function runStagedForHost(executable FilePath, staged FilePath, procs Pro
 end 'runStagedForHost'
 
 let FeedPollMs = 5
-let DeadlineKillGraceMs = 1000
 
 export union StagedRunEnd
 	exited(code ExitInt)
@@ -208,7 +207,7 @@ type FedChild
 	end 'take'
 
 	function killAtDeadline()
-		_ = try self.child.waitWithTimeout(DeadlineKillGraceMs) otherwise 0
+		requireTreeEnded(self.child, what: "the staged program")
 	end 'killAtDeadline'
 
 	function finish(ending StagedRunEnd) returns FedRun

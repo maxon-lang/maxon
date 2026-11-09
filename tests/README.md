@@ -65,7 +65,7 @@ tests/
   support/                       not a corpus: the helpers every corpus shares, all `public`, listed by each `<corpus>.maxproj`
     Host.maxon                   the compiler under test (`TestedCompilerStem`, `testedCompilerPath`), the host's suffix and temp area
     Staging.maxon                `stagingDir`, `clearStagedFiles`/`clearStagedTree`, `stageStoredTree`, `stagedFixtureTree`, `filesUnder`, `filesUnderEndingWith`
-    Spawn.maxon                  `spawnIn`, `spawnCompiler`, `spawnBuild`, `runSystemTool`, `requireBuiltOrPanic`, `endedProcessId`, `backdatedToTheYear2000`
+    Spawn.maxon                  `spawnIn`, `spawnCompiler`, `spawnBuild`, `runSystemTool`, `requireBuiltOrPanic`, `requireTreeEnded`, `endedProcessId`, `backdatedToTheYear2000`
     ScratchNames.maxon           `scratchNameProbe`, `mintedScratchName`, `debugStreamSegmentPrefix`: the scratch-name probe below, built from the checkout's `maxon-bin/Run/ScratchName.maxon`
     scratch-name/main.maxon.fixture   the probe program: `mint` prints a name for given fields, any other word runs one check - stored name only, see rule 1
     OutsideCheckout.maxon        directories under the host's temp area, outside any checkout
@@ -106,7 +106,7 @@ tests/
     refusals/<case>.maxtest      one malformed spec `spec-test` must REFUSE, found through `__file__`
     refusals/<case>/             refusal.md  expected-refusal.txt
     gates/<case>.maxtest         a well-formed spec it must ACCEPT, then REPORT something about
-    gates/<case>/                the gate's one or two `.md`
+    gates/<case>/                the gate's one or two `.md`, or the program it runs as `main.maxon.fixture` (stored name only - see rule 1)
   lsp/
     LspClient.maxon              a live JSON-RPC client the tests import - see rule 1; `abandonedSession` and `abandonedStagedSession` release a session that failed, then fail the test naming what it was doing; `start` takes the server's environment; `stageRecordedProject`, `startedOverRecordedCache` and `recordedManifestDiagnostics` build a project into a private cache, rewrite its compiler-version record and read its `.maxproj` diagnostics, `buildRecordedProject` builds it again, and `expectBreakingChangeNotices` checks those diagnostics carry the record's notices
     <area>.maxtest               one LSP method area per file
@@ -482,6 +482,7 @@ tests/
     profile-ordinary-build-has-no-entitlement.maxtest    an ordinary arm64-macos build names no `get-task-allow`
     profile-runs-an-ordinary-build.maxtest               an ordinary build is measured with no flag and no rebuild
     profile-a-program-that-ends-at-once.maxtest          a program gone before the attach is reported as ended, never as an access refusal
+    profile-a-deadline-does-not-wait-for-a-process-outside-the-targets-tree.maxtest   on Linux, a deadline ends a run whose target left a process in a session of its own holding its output, without waiting for that process
     profile-launches-a-signed-copy.maxtest               on macOS, the image the profiler launches grants `get-task-allow` in both blobs and the built one does not
     profile-launches-a-copy-beside-the-original.maxtest  the launched copy sits in the original's directory, and the program sees that directory, its own path and argv[0]
     profile-refuses-a-directory-it-cannot-write-a-copy-in.maxtest   on macOS, a read-only directory is refused, naming it, and leaves no copy
@@ -493,6 +494,7 @@ tests/
     fixtures/greenthreads/main.maxon.fixture   stored name only - see rule 1
     fixtures/selfcopy/main.maxon.fixture    stored name only - see rule 1
     fixtures/endsatonce/main.maxon.fixture  stored name only - see rule 1
+    fixtures/heldpipe/main.maxon.fixture    stored name only - see rule 1
   execute/
     ExecuteHarness.maxon                        the shared half: the staging, the private cache, the spawn, the slot readers
     corpus.maxtest                          the fixture roster, and the corpus's own file rules
@@ -843,8 +845,9 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   `AsyncTrace` case passing on ids that differ from the run's but name the same threads and failing on a
   trace that names different ones, a `scriptlib/` package beside the compiler that does not parse leaving
   every case untouched, a run case whose marker leaves `wasm32-wasi` its only lane failing there on an
-  E3104 while cases with more lanes skip, an exit-code mismatch reporting the child's stdout and stderr, the
-  shards of `--shard=K/N` running each spec exactly once with `--filter` judged against the whole directory
+  E3104 while cases with more lanes skip, an exit-code mismatch reporting the child's stdout and stderr, a fed run
+  whose child leaves a process holding its pipes ending at its deadline with that process ended while a clean
+  child's run returns promptly with its whole output, the shards of `--shard=K/N` running each spec exactly once with `--filter` judged against the whole directory
   and a refused shard naming the live-network cases the whole directory left out, and a
   `--result-json` document holding every case in run order with its verdict, a failure's reason, and the
   counts.

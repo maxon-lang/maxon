@@ -1193,6 +1193,25 @@ public type StreamingSubprocess
 		return rc as ExitInt
 	end 'waitWithTimeout'
 
+	/// End the child's whole process tree at once, the kill a `waitWithTimeout` deadline sends but with no
+	/// wait to expire, and return once the child itself is gone. The child may already have exited: what it
+	/// left running is the tree. A process started with `runDetached()` is outside it. A handle
+	/// `release()` has given back answers `unconfirmed`.
+	public function endTree() returns TreeEnd
+		if released 'gone'
+			return TreeEnd.unconfirmed("the child was released")
+		end 'gone'
+
+		let rc = __Builtins.subprocessEndTree(handle)
+
+		match rc 'ended'
+			0 then return TreeEnd.ended
+			-1 then return TreeEnd.unconfirmed(lastErrorMessage())
+			-3 then return TreeEnd.survived(lastOsErrorCode())
+			default panic("StreamingSubprocess.endTree: the runtime answered {rc}, which is none of 0, -1 and -3")
+		end 'ended'
+	end 'endTree'
+
 	/// The child's operating-system process id. Throws once the handle is released.
 	public function processId() returns Pid throws SubprocessError
 		try requireLive()
@@ -1229,6 +1248,24 @@ public type StreamingSubprocess
 			exited(code) gives TerminationPoll.ended(self.terminationAfterExit(code))
 		end 'polled'
 	end 'pollTermination'
+
+	/// Has a read of this child's `stream` found its end? Never blocks and never kills.
+	///
+	/// A stream's end is latched by a read, so a loop of `tryReadStdoutLine` or `tryReadStderrLine` calls
+	/// is what moves this to `true`; a stream nothing reads stays `false`. A read that failed and a
+	/// released handle also answer `true`.
+	public function streamHasEnded(stream StdioStream) returns bool
+		if released 'gone'
+			return true
+		end 'gone'
+
+		return match streamState(handle, stream: stream) 'state'
+			open gives false
+			atEof or
+			readFailed or
+			noSuchChild gives true
+		end 'state'
+	end 'streamHasEnded'
 
 	function terminationAfterExit(code ExitInt) returns TerminationStatus
 		return match exitPollOf(__Builtins.subprocessExitSignal(handle) as ExitAnswer) 'signal'
@@ -1302,6 +1339,24 @@ public type StreamingSubprocess
 	end 'release'
 end 'StreamingSubprocess'
 
+/// What `StreamingSubprocess.endTree` found. `ended`: the child and everything it left running are gone.
+/// `survived`: the child is gone but part of its tree could not be ended, with the operating-system code of
+/// the refusal. `unconfirmed`: no kill was confirmed, so the child may still run, with the reason.
+public union TreeEnd
+	ended
+	survived(osError OsErrorCode)
+	unconfirmed(reason String)
+
+	/// One-line description for diagnostics.
+	public function displayReason() returns String
+		return match self 'e'
+			ended gives "the process tree ended"
+			survived(osError) gives "the process tree could not be fully ended: os error {osError}"
+			unconfirmed(reason) gives "no kill of the process tree was confirmed: {reason}"
+		end 'e'
+	end 'displayReason'
+end 'TreeEnd'
+
 /// What `pollExit` found. A union rather than a code-plus-sentinel because "it has not finished" is not an
 /// exit code and there is no number that could stand for it: a Windows exit code is a full DWORD. A child a
 /// signal killed on Linux or macOS is `exited(128 + signal)`; `pollTermination` names the signal.
@@ -1356,8 +1411,8 @@ end 'bufferedLineIn'
 // runaway worker can't OOM the parent by emitting one enormous line.
 let defaultReadLineCap = 1024 * 1024 as ByteLimit
 
-// Which of a streaming child's two output streams a read is being decided for.
-enum StdioStream
+/// One of a streaming child's two output streams.
+public enum StdioStream
 	stdout
 	stderr
 end 'StdioStream'
