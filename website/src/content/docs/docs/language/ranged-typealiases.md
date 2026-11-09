@@ -203,7 +203,7 @@ Two subtypes of one parent make a *mixed* expression. It lands in any destinatio
 aliases satisfies — a parameter, a field, an `otherwise` or `match` merge — computed into a temporary of the
 destination's alias, so the result is range-checked there. Anywhere else its type is the operands' nearest
 common ancestor, and a diagnostic names that ancestor.
-Unary `-`, `not`, `or` and `xor` keep the operand's alias only where its range is closed under the operator: a full-width unsigned alias (`int(0 to u64.max)`, `bits(64)`) wraps modulo 2^64 and keeps it, and a range symmetric about zero keeps it under `-`. Over any other alias the result is an unnamed signed value carrying the range it computes (`-b` over `int(0 to 100)` is `[-100, 0]`), and it needs `as` to reach an alias slot. `and` always keeps the alias.
+Unary `-`, `not`, `or` and `xor` keep the operand's alias only where its range is closed under the operator: a full-width unsigned alias (`int(0 to u64.max)`) keeps it under `not`, `or` and `xor`, a `bits(64)` pattern keeps it under all four and wraps modulo 2^64, and a range symmetric about zero keeps it under `-`. Unary `-` over a full-width unsigned alias is **E3218**: the negation of any value above 0 is outside `int(0 to u64.max)`, so write the wrapping negation over a `bits(64)` alias, or convert the value to a signed alias first with `as`. Over any other alias the result is an unnamed signed value carrying the range it computes (`-b` over `int(0 to 100)` is `[-100, 0]`), and it needs `as` to reach an alias slot. `and` always keeps the alias.
 
 ```maxon
 typealias Score = int(0 to 100)
@@ -223,7 +223,8 @@ end 'main'
 ```
 
 The alias is a name, not a proof: `a + b` over `Score` is a `Score` that may hold 130. Range checks apply
-where the value lands (next section). All integer arithmetic is 64-bit and wraps on overflow.
+where the value lands (next section). All integer arithmetic is 64-bit and wraps on overflow, except `+`,
+`-` and `*` over a full-width unsigned alias, which panic when the result leaves the range.
 
 ## Range Checks
 
@@ -240,12 +241,19 @@ an interface is checked at compile time against the interface's own parameter ty
   compile error, **E3005** (`Value 101 is outside the range of 'Percent' (int(0 to 100))`).
 - Any other value gets a run-time check where needed. A check is omitted when the value's own range
   provably fits.
-- A full-unsigned quantity (`int(0 to u64.max)`) is checked only for a negative from a signed source.
-  A value from an unsigned alias, `u64.max`, a literal above `i64.max`, or `+ * and or xor shl shr` and
-  unsigned `/` `mod` over unsigned operands passes unchecked. An unsigned subtraction panics when it
-  borrows (the left operand is smaller than the right); its difference passed through a merge or further
-  arithmetic is tested for a negative. A constant expression folds with the same two's-complement
-  wrapping as the run time and is judged by that same rule.
+- A full-unsigned quantity (`int(0 to u64.max)`) is checked at its door only for a negative from a
+  signed source. A value from an unsigned alias, `u64.max`, a literal above `i64.max`, or `and or xor shl
+  shr` and unsigned `/` `mod` over unsigned operands passes its door unchecked; `shl` drops the bits
+  shifted past bit 63 over every alias, and bit work is written over a `bits(64)` alias.
+- `+`, `-` and `*` over a full-unsigned alias are checked where they are computed, because every 64-bit
+  pattern is a value of the alias and a wrapped result looks like a real one at any later door. A sum that
+  carries past `u64.max`, a difference that borrows (the left operand is smaller than the right) and a
+  product past `u64.max` each panic at the operation, in a `let`, a loop bound or an argument alike. The
+  check is omitted where the compiler proves the result fits: an identity operand (`x + 0`, `x - 0`,
+  `x * 0`, `x * 1`), constants that do not wrap, or a counted loop's interval. A constant expression that
+  wraps is a compile error, **E3005** (`The result of 2 - 3 is outside the range of 'Count'
+  (int(0 to 18446744073709551615))`). Arithmetic over a narrower alias is checked where its result
+  reaches a door.
 - A full-unsigned parameter is checked at the call: a direct call, a call through a function value, an
   interface method call, an `async` call and a service send each check the argument they pass, so a
   negative is refused there and a value above `i64.max` passes. Its function checks it on entry as well

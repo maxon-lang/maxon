@@ -15,6 +15,22 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- `+`, `-` and `*` over a full-width unsigned alias (`int(0 to u64.max)`, which `Count`, `ElementIndex` and
+  `BytePos` are) are range-checked where they are computed: a carry out of bit 63, a borrow
+  (`a.count() - b.count()` with `b` larger) or a product past `u64.max` panics with `Range check failed:
+  value outside typealias 'T'`, in a `let`, a loop bound or an argument alike. They used to wrap to a valid
+  bit pattern that no later check could tell from a real count. A check is omitted where the compiler proves
+  the result fits, and a result it can compute that leaves the range (both operands constants) is E3005
+  (`The result of 2 - 3 is outside the range of 'Count' …`).
+  Fix: guard the computation (`if a.count() >= b.count()`), or write `for i in 0 to n - 1` as `for i in 0 upto n`; arithmetic that
+  is meant to wrap modulo 2^64 (hashes, generators, address distances) is written over a `bits(64)` alias.
+- Unary `-` over a value of a full-width unsigned alias (`-n` with `n` a `Count`) is E3218: the negation of any
+  value above 0 is outside `int(0 to u64.max)`, and it used to wrap to a different positive number.
+  Fix: convert to a signed alias first (`-(n as Delta)` for an `int(-1000 to 1000)` `Delta`), or, where the
+  wrap is meant, do the arithmetic over a `bits(64)` alias.
+- A cast to an alias that the arithmetic result already has, such as `(at - 1) as ElementIndex` over an
+  `ElementIndex`, is E3010: the result of arithmetic on a full-width unsigned alias is already that alias.
+  Fix: delete the `as`.
 - `SubprocessError` has two more cases, `treeNotEnded(elapsedMs, stdout, stderr, osError)` and
   `detachRefused(osError)`: a deadline whose kill could not fully end the child's process tree, which threw
   `ioFailed`, and a `runDetached()` the enclosing Windows job refuses breakaway to, which threw `spawnFailed`,

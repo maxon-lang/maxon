@@ -97,15 +97,8 @@ func @__clock_now_unix_s {
     x64.movRegImm rax, 116444736000000000
     x64.movRegReg rcx, r8
     x64.subRegReg rcx, r8, rax
-    x64.movRegReg rdx, r8
-    x64.xorRegImm32 rdx, r8, -1
-    x64.andRegReg rdx, rdx, rax
-    x64.xorRegReg r8, r8, rax
-    x64.xorRegImm32 r8, r8, -1
-    x64.andRegReg r8, r8, rcx
-    x64.orRegReg rdx, rdx, r8
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
+    x64.cmpRegReg r8, rax
+    x64.jcc below, __rc_panic
   __il_cont:
     x64.movRegImm rax, 15474250491067253437
     x64.mulHighReg rcx
@@ -170,15 +163,8 @@ func @__clock_now_unix_s {
     x64.movRegImm rax, 116444736000000000
     x64.movRegReg rcx, r8
     x64.subRegReg rcx, r8, rax
-    x64.movRegReg rdx, r8
-    x64.xorRegImm32 rdx, r8, -1
-    x64.andRegReg rdx, rdx, rax
-    x64.xorRegReg r8, r8, rax
-    x64.xorRegImm32 r8, r8, -1
-    x64.andRegReg r8, r8, rcx
-    x64.orRegReg rdx, rdx, r8
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
+    x64.cmpRegReg r8, rax
+    x64.jcc below, __rc_panic
   __il_cont:
     x64.movRegImm rax, 15474250491067253437
     x64.mulHighReg rcx
@@ -236,16 +222,8 @@ func @__clock_now_unix_s {
     arm64.bl __clock_now_filetime
     arm64.movImm x1, 116444736000000000
     arm64.sub x2, x0, x1
-    arm64.movImm x16, 18446744073709551615
-    arm64.eor x3, x0, x16
-    arm64.and x3, x3, x1
-    arm64.eor x0, x0, x1
-    arm64.movImm x16, 18446744073709551615
-    arm64.eor x0, x0, x16
-    arm64.and x0, x0, x2
-    arm64.orr x0, x3, x0
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
+    arm64.cmp x0, x1
+    arm64.b.lo __rc_panic
   __il_cont:
     arm64.movImm x0, 15474250491067253437
     arm64.umulh x0, x0, x2
@@ -303,16 +281,8 @@ func @__clock_now_unix_s {
     arm64.bl __clock_now_filetime
     arm64.movImm x1, 116444736000000000
     arm64.sub x2, x0, x1
-    arm64.movImm x16, 18446744073709551615
-    arm64.eor x3, x0, x16
-    arm64.and x3, x3, x1
-    arm64.eor x0, x0, x1
-    arm64.movImm x16, 18446744073709551615
-    arm64.eor x0, x0, x16
-    arm64.and x0, x0, x2
-    arm64.orr x0, x3, x0
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
+    arm64.cmp x0, x1
+    arm64.b.lo __rc_panic
   __il_cont:
     arm64.movImm x0, 15474250491067253437
     arm64.umulh x0, x0, x2

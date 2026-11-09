@@ -449,7 +449,9 @@ function roundUpToMod(base StackSize, targetMod StackSize, modulus StackSize) re
 	// `modulus` is a power-of-two stack alignment, never zero; `otherwise panic` is the project's form
 	// for a `try` that must not fail (integer `mod` throws for a possibly-zero divisor).
 	let residue = try (base mod modulus) otherwise panic("roundUpToMod: a stack alignment of 0 — it is a power of two")
-	let delta = try (((targetMod - residue) + modulus) mod modulus) otherwise panic("roundUpToMod: a stack alignment of 0 — it is a power of two")
+
+	// `targetMod + modulus` goes first: `StackSize` subtraction panics when it borrows.
+	let delta = try (((targetMod + modulus) - residue) mod modulus) otherwise panic("roundUpToMod: a stack alignment of 0 — it is a power of two")
 	return base + delta
 end 'roundUpToMod'
 

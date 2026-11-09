@@ -9,6 +9,7 @@ end 'RandomError'
 public typealias RandomDraw = int(0 to u64.max)
 public typealias RandomBound = int(1 to u64.max) implements RandomDraw
 public typealias RandomByteCount = int(0 to u64.max) implements ElementIndex
+typealias RandomWord = bits(64)
 
 let RandomWordBytes = 8
 let RandomFillSucceeded = 0
@@ -57,18 +58,24 @@ public type Random
 			return word and mask
 		end 'powerOfTwo'
 
-		// The answer is the high half of the 128-bit product `word * bound`, and `word * bound` itself
-		// wraps to the low half. A draw whose low half is below `2^64 mod bound` is drawn again, or the
-		// low answers would be likelier; testing `< bound` first spares that division, because the
-		// threshold is below it.
+		// The answer is the high half of the 128-bit product `word * bound`, and `lowHalfOfProduct` is the
+		// low half: it multiplies as `RandomWord`, because `*` over a `RandomDraw` panics on overflow. A
+		// draw whose low half is below `2^64 mod bound` is drawn again, or the low answers would be
+		// likelier; testing `< bound` first spares that division, because the threshold is below it.
 		var word = try draw()
+		var lowHalf = lowHalfOfProduct(word, factor: bound)
 
-		while word * bound < bound and word * bound < rejectionThreshold(bound) 'inTheBiasedTail'
+		while lowHalf < bound and lowHalf < rejectionThreshold(bound) 'inTheBiasedTail'
 			word = try draw()
+			lowHalf = lowHalfOfProduct(word, factor: bound)
 		end 'inTheBiasedTail'
 
 		return highHalfOfProduct(word, factor: bound)
 	end 'below'
+
+	static function lowHalfOfProduct(left RandomDraw, factor RandomDraw) returns RandomDraw
+		return ((left as RandomWord) * (factor as RandomWord)) as RandomDraw
+	end 'lowHalfOfProduct'
 
 	static function rejectionThreshold(bound RandomBound) returns RandomDraw
 		return ((u64.max - bound + 1) mod bound) as RandomDraw

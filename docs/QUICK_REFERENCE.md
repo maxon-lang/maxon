@@ -29,6 +29,11 @@ An upper bound above `i64.max` makes a range unsigned: it compares, divides, ran
 unsigned. An integer literal reaches `u64.max`; one above `i64.max` needs a type that admits it
 (`18446744073709551615 as Tally`, or a `Tally` parameter), and is **E2011** anywhere else.
 
+`+`, `-` and `*` over a quantity of `int(0 to u64.max)` are range-checked where they are computed: a carry
+past `u64.max`, a borrow (`a.count() - b.count()` with `b` larger) or an overflowing product panics, and a
+constant expression that leaves the range is **E3005**. Unary `-` over one is **E3218**. Arithmetic meant to
+wrap modulo 2^64, and bit work with `shl`, is written over a `bits(64)` alias.
+
 A raw bit pattern is a different thing from a quantity and has its own spelling. `bits(n)` admits
 every value `n` bits can hold, so `bits(64)` is unguarded — which is what an address, a hash or a
 mask needs — while any narrower width is checked like a narrow range. Legal widths: 1, 2, 4, 8, 16,

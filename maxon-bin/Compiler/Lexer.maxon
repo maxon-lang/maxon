@@ -472,7 +472,7 @@ function kindBefore(tokens TokenArray, index ElementIndex) returns TokenKind
 		return TokenKind.newline
 	end 'atFileStart'
 
-	return tokenKindAt(tokens, index: (index - 1) as ElementIndex)
+	return tokenKindAt(tokens, index: index - 1)
 end 'kindBefore'
 
 module function tokenFollowsAMemberDot(tokens TokenArray, index ElementIndex) returns bool
@@ -765,7 +765,7 @@ function modifyOpensABlockAt(tokens TokenArray, index ElementIndex) returns bool
 		end 'opens' else if tokenKindClosesABracket(kind) 'closes'
 			depth = depth - 1
 		end 'closes' else if kind == TokenKind.newline and depth == 0 'lineEnds'
-			return tokenKindAt(tokens, index: (at - 1) as ElementIndex) == TokenKind.charLiteral
+			return tokenKindAt(tokens, index: at - 1) == TokenKind.charLiteral
 		end 'lineEnds'
 
 		at = at + 1
@@ -2670,7 +2670,7 @@ module function keywordSpellsAMatchArmCaseIn(tokens TokenArray, groups ParenGrou
 end 'keywordSpellsAMatchArmCaseIn'
 
 function elseFollowsALabelledCloserIn(tokens TokenArray, index ElementIndex) returns bool
-	return index >= 2 and labelledBlockCloserAt(tokens, index: (index - 2) as ElementIndex)
+	return index >= 2 and labelledBlockCloserAt(tokens, index: index - 2)
 end 'elseFollowsALabelledCloserIn'
 
 function opensAKeptBlock(tokens TokenArray, groups ParenGroups, index ElementIndex, atStatementLevel bool) returns bool
@@ -2725,7 +2725,7 @@ function restoreLineEndBefore(tokens TokenArray, index ElementIndex, kept TokenA
 	end 'nothingWasDropped'
 
 	let last = try kept.get(kept.count() - 1) otherwise panic("restoreLineEndBefore: kept.get OOB below the count just read")
-	let previous = try tokens.get((index - 1) as ElementIndex) otherwise panic("restoreLineEndBefore: tokens.get OOB below an index a bracket was open at")
+	let previous = try tokens.get(index - 1) otherwise panic("restoreLineEndBefore: tokens.get OOB below an index a bracket was open at")
 
 	if previous.kind == TokenKind.newline and last.kind != TokenKind.newline 'theLineEndWasDropped'
 		kept.push(previous)

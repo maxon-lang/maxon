@@ -9696,7 +9696,7 @@ module function spawnTargetCallIn(tokens TokenArray, targetIndex ElementIndex) r
 		throw NoServiceSpawn.notOne
 	end 'notACall'
 
-	return SpawnTargetCall.create(chainSpellingAt(tokens, at: targetIndex, segments: (memberSegment - 1) as ElementIndex), member: chainMemberAt(tokens, at: targetIndex, segment: memberSegment))
+	return SpawnTargetCall.create(chainSpellingAt(tokens, at: targetIndex, segments: memberSegment - 1), member: chainMemberAt(tokens, at: targetIndex, segment: memberSegment))
 end 'spawnTargetCallIn'
 
 function tokenIsTheNameIn(tokens TokenArray, index ElementIndex, wanted ByteArray) returns bool
@@ -9830,7 +9830,7 @@ module function defaultDeclarationAt(tokens TokenArray, index ElementIndex) retu
 		return false
 	end 'notTheKeyword'
 
-	if index > 0 and tokenKindIn(tokens, index: (index - 1) as ElementIndex) != TokenKind.newline 'notAtAStatementStart'
+	if index > 0 and tokenKindIn(tokens, index: index - 1) != TokenKind.newline 'notAtAStatementStart'
 		return false
 	end 'notAtAStatementStart'
 
@@ -15707,15 +15707,15 @@ end 'tokensDeclareGenericFunctionTemplate'
 function declarationBeginsStatementIn(tokens TokenArray, index ElementIndex) returns bool
 	var start = index
 
-	while start > 0 and declarationModifierIn(tokens, index: (start - 1) as ElementIndex) 'pastModifiers'
-		start = (start - 1) as ElementIndex
+	while start > 0 and declarationModifierIn(tokens, index: start - 1) 'pastModifiers'
+		start = start - 1
 	end 'pastModifiers'
 
 	if start == 0 'atFileStart'
 		return true
 	end 'atFileStart'
 
-	return (try tokens.get((start - 1) as ElementIndex) otherwise panic("declarationBeginsStatementIn: tokens.get OOB at {start - 1}, below an index the walk read")).kind == TokenKind.newline
+	return (try tokens.get(start - 1) otherwise panic("declarationBeginsStatementIn: tokens.get OOB at {start - 1}, below an index the walk read")).kind == TokenKind.newline
 end 'declarationBeginsStatementIn'
 
 // A modifier that may stand between a statement's start and the keyword opening its declaration: a
@@ -18536,7 +18536,7 @@ type FunctionBodyState
 	// say so (E3010)** — see `ValueDeclaredAliasMap` for the two cases and for why the cast writer is gated.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
 	export var valueDeclaredAlias as ValueDeclaredAliasTable
-	export var borrowOperands as BorrowOperandsColumn
+	export var wrapOperands as WrapOperandsColumn
 
 	export var literalCasts as LiteralCastTable
 	export var literalCastArguments as LiteralCastArgumentTable
@@ -19171,7 +19171,7 @@ type FunctionBodyState
 			pendingOverlaps: PendingOverlapColumn.unwritten,
 			loopScans: LoopMoveScanArray.create(0),
 			dropCascade: DropCascadeState.unbuilt,
-			borrowOperands: noBorrowOperands,
+			wrapOperands: noWrapOperands,
 			countedValueRanges: noProvenIntRanges,
 			charLiteralOps: noCharLiteralOps,
 			plainConstantArrays: noPlainConstantArrays,
@@ -21370,7 +21370,7 @@ export type Parser
 			return Visibility.file
 		end 'atFileStart'
 
-		let modifier = (keyword - 1) as ElementIndex
+		let modifier = keyword - 1
 
 		if self.kindAt(modifier) == TokenKind.export 'exported'
 			return Visibility.global
@@ -21434,8 +21434,8 @@ export type Parser
 			return Visibility.file
 		end 'noKeywordBeforeTheName'
 
-		let keyword = (self.pos - 1) as ElementIndex
-		return self.visibilityBefore((keyword - 1) as ElementIndex) if hasStaticModifier else self.visibilityBefore(keyword)
+		let keyword = self.pos - 1
+		return self.visibilityBefore(keyword - 1) if hasStaticModifier else self.visibilityBefore(keyword)
 	end 'declaredFunctionVisibility'
 
 	// ⭐⭐ **RECORD A DROPPED SIGNATURE — BUT ONLY WHEN NOTHING ELSE WILL REPORT THE FAILURE.**
@@ -21480,7 +21480,7 @@ export type Parser
 	function readGenericTemplateAt(nameIndex ElementIndex) returns GenericFunctionTemplate throws SourceParseError
 		let resume = self.pos
 		let nameTok = self.tokenAt(nameIndex)
-		let hasStaticModifier = nameIndex >= 1 and self.functionDeclIsStatic((nameIndex - 1) as ElementIndex)
+		let hasStaticModifier = nameIndex >= 1 and self.functionDeclIsStatic(nameIndex - 1)
 		let takesReceiver = self.declarationTakesReceiver(hasStaticModifier)
 		let key = self.declaredMethodName(nameTok)
 		self.pos = nameIndex
@@ -21623,7 +21623,7 @@ export type Parser
 		// SHARED `functionDeclIsStatic` (the `pos >= 1` guard keeps the `pos - 1` at the very start of a file from
 		// underflowing; such a top-level `function` has an empty `enclosingType` anyway) so this scan and the
 		// implicit-self sibling walk answer "does this method take `self`?" from one token-level test.
-		let hasStaticModifier = self.pos >= 1 and self.functionDeclIsStatic((self.pos - 1) as ElementIndex)
+		let hasStaticModifier = self.pos >= 1 and self.functionDeclIsStatic(self.pos - 1)
 
 		// ⭐ **THE DECLARATION'S OWN VISIBILITY TIER, from the SAME backwards read every other declaration
 		// gets** — and it is captured here for `hasStaticModifier`'s reason, while the cursor still sits on the
@@ -22690,7 +22690,7 @@ export type Parser
 				return false
 			end 'aClosureLiteral'
 
-			if q > bodyStart and kind == TokenKind.identifier and self.kindAt((q - 1) as ElementIndex) != TokenKind.dot 'aNameThatIsNotAMember'
+			if q > bodyStart and kind == TokenKind.identifier and self.kindAt(q - 1) != TokenKind.dot 'aNameThatIsNotAMember'
 				for local in locals 'eachLocal'
 					if local.name.equals(self.tokenAt(q).value) and not self.localMentionKeepsItFresh(q, local: local, depth: depth, labelsAreSpelledHere: innermostGroupSpellsLabels(openGroupIsBracket), forwards: forwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt, binding: binding) 'aSecondReference'
 						return false
@@ -22724,7 +22724,7 @@ export type Parser
 	// admit-list. Its binding's value is judged where the binding is met, so a local bound to anything else — a
 	// scalar counter is the common case — ends the walk there.
 	function localMentionKeepsItFresh(at ElementIndex, local ReturnedLocal, depth BlockDepth, labelsAreSpelledHere bool, forwards FreshReturnForwardArray, forwardHeads NameRoster, forwardHeadsAt TokenIndexArray, binding ReturnedLocalBinding) returns bool
-		let before = self.kindAt((at - 1) as ElementIndex)
+		let before = self.kindAt(at - 1)
 		let after = self.kindAt(at + 1)
 
 		// Inside a `[` the same spelling is a map literal's KEY, which stores the record.
@@ -22735,7 +22735,7 @@ export type Parser
 		if bindingKeywordSpells(before) and after == TokenKind.equals 'itsBinding'
 			// A binding that does not open its line is a `match` arm's, scoped to that arm where the block depth
 			// would carry it across the sibling arms.
-			if local.bound or not tokenKindIsSkippedLayout(self.kindAt((at - 2) as ElementIndex)) or not self.bindingValueIsAdmitted(at + 2, binding: binding, forwards: forwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt) 'aSecondBindingOrNotAFreshValue'
+			if local.bound or not tokenKindIsSkippedLayout(self.kindAt(at - 2)) or not self.bindingValueIsAdmitted(at + 2, binding: binding, forwards: forwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt) 'aSecondBindingOrNotAFreshValue'
 				return false
 			end 'aSecondBindingOrNotAFreshValue'
 
@@ -23160,7 +23160,7 @@ export type Parser
 				break
 			end 'bodyEnds'
 
-			if q > bodyStart and tokenCanBeAName(self.tokenAt(q)) and kindBindsTheNameAfterIt(self.kindAt((q - 1) as ElementIndex)) 'aBinderPosition'
+			if q > bodyStart and tokenCanBeAName(self.tokenAt(q)) and kindBindsTheNameAfterIt(self.kindAt(q - 1)) 'aBinderPosition'
 				markBoundHead(returnedHeads, bound: bound, returnedAt: returnedAt, name: self.tokenAt(q).value, binderIndex: q)
 			end 'aBinderPosition'
 
@@ -23485,7 +23485,7 @@ export type Parser
 				callees.push(self.tokenAt(q + 2).value)
 			end 'selfCall'
 
-			if insideTheSizedContainer and kind == TokenKind.dot and self.memberCallFollows(q) and q != 0 and self.kindAt((q - 1) as ElementIndex) == TokenKind.rightParen 'aChainedSelfCallInTheSizedContainer'
+			if insideTheSizedContainer and kind == TokenKind.dot and self.memberCallFollows(q) and q != 0 and self.kindAt(q - 1) == TokenKind.rightParen 'aChainedSelfCallInTheSizedContainer'
 				chainedCallees.push(qualifiedMethodName(self.enclosingTypeName(), methodName: self.tokenAt(q + 1).value))
 			end 'aChainedSelfCallInTheSizedContainer'
 
@@ -23604,7 +23604,7 @@ export type Parser
 	// methods take `self`. The FORWARD twin is `parseTypeMember`'s `not isStatic`, which mints the actual
 	// `SelfParamName` parameter every later reader recovers the fact from (`FuncSignature.takesReceiver`).
 	function functionDeclIsStatic(functionTok ElementIndex) returns bool
-		return functionTok > 0 and self.kindAt((functionTok - 1) as ElementIndex) == TokenKind.static
+		return functionTok > 0 and self.kindAt(functionTok - 1) == TokenKind.static
 	end 'functionDeclIsStatic'
 
 	// ⛔ **DOES A DECLARATION CARRYING `hasStaticModifier` TAKE A RECEIVER — the ONE place that conjunction is
@@ -23654,7 +23654,7 @@ export type Parser
 	// sweep running before the body is parsed cannot do. Each caller pairs this shape with its own
 	// method-name set.
 	function isDotMethodCallHeadAt(q ElementIndex) returns bool
-		return q != 0 and self.kindAt((q - 1) as ElementIndex) == TokenKind.dot and self.kindAt(q + 1) == TokenKind.leftParen
+		return q != 0 and self.kindAt(q - 1) == TokenKind.dot and self.kindAt(q + 1) == TokenKind.leftParen
 	end 'isDotMethodCallHeadAt'
 
 	function containerMoveOutMethodAt(q ElementIndex) returns bool
@@ -23815,7 +23815,7 @@ export type Parser
 			return false
 		end 'notANamePosition'
 
-		let prev = self.kindAt((q - 1) as ElementIndex)
+		let prev = self.kindAt(q - 1)
 
 		if bindingKeywordSpells(prev) or prev == TokenKind.for 'aDeclarationKeyword'
 			return true
@@ -23838,7 +23838,7 @@ export type Parser
 			return false
 		end 'nothingInFrontOfIt'
 
-		let before = self.kindAt((opener - 1) as ElementIndex)
+		let before = self.kindAt(opener - 1)
 		return bindingKeywordSpells(before) or before == TokenKind.for or before == TokenKind.otherwise
 	end 'binderListIsOpen'
 
@@ -23879,7 +23879,7 @@ export type Parser
 	end 'patternBinderListClosedAt'
 
 	function patternBinderAt(p ElementIndex) returns bool
-		let prev = self.kindAt((p - 1) as ElementIndex)
+		let prev = self.kindAt(p - 1)
 		return (prev == TokenKind.leftParen or prev == TokenKind.comma) and tokenCanBeAName(self.tokenAt(p))
 	end 'patternBinderAt'
 
@@ -23912,8 +23912,8 @@ export type Parser
 		// argument list pins the shape; `tokenCanBeAName` at the receiver rejects a chain
 		// (`xs.get(0).cancel()` stands on a `)`), and the `.` test rejects a qualified one (`self.p.cancel()`),
 		// neither of which names a parameter slot. The index floor keeps both probes inside the token array.
-		if q >= PromiseCancelQualifierBack and self.isDotMethodCallHeadAt(q) and self.tokenAt(q).value.equals(PromiseCancelMethodName) and self.kindAt(q + 2) == TokenKind.rightParen and self.kindAt((q - PromiseCancelQualifierBack) as ElementIndex) != TokenKind.dot 'cancelDoor'
-			return try self.bareParamReferenceAt((q - PromiseCancelReceiverBack) as ElementIndex, paramNames: paramNames)
+		if q >= PromiseCancelQualifierBack and self.isDotMethodCallHeadAt(q) and self.tokenAt(q).value.equals(PromiseCancelMethodName) and self.kindAt(q + 2) == TokenKind.rightParen and self.kindAt(q - PromiseCancelQualifierBack) != TokenKind.dot 'cancelDoor'
+			return try self.bareParamReferenceAt(q - PromiseCancelReceiverBack, paramNames: paramNames)
 		end 'cancelDoor'
 
 		throw MapError.keyNotFound
@@ -24031,7 +24031,7 @@ export type Parser
 		let column = self.functionValueSlotAt(head + 1, argument: arg.valuePos).position
 		let label = self.argLabelBefore(arg.valuePos)
 
-		if self.kindAt((head - 1) as ElementIndex) != TokenKind.dot 'noReceiver'
+		if self.kindAt(head - 1) != TokenKind.dot 'noReceiver'
 			if let ownParameter = try bodyParamPosition(paramNames, name: member) 'aFunctionTypedParameter'
 				return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.throughParameter, typeName: EmptySourceText, memberName: member, column: column, label: label, calleeParam: ownParameter as ParamCount)
 			end 'aFunctionTypedParameter'
@@ -24039,7 +24039,7 @@ export type Parser
 			return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.bare, typeName: EmptySourceText, memberName: member, column: column, label: label, calleeParam: 0)
 		end 'noReceiver'
 
-		let receiver = self.kindAt((head - 2) as ElementIndex)
+		let receiver = self.kindAt(head - 2)
 
 		if receiver == TokenKind.self and self.enclosingType.isType() 'theReceiverItself'
 			return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.throughSelf, typeName: self.enclosingTypeName(), memberName: member, column: column, label: label, calleeParam: 0)
@@ -24049,27 +24049,27 @@ export type Parser
 			return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.throughSelfType, typeName: self.enclosingTypeName(), memberName: member, column: column, label: label, calleeParam: 0)
 		end 'theEnclosingType'
 
-		if receiver == TokenKind.identifier and not self.isMemberAccessAt((head - 2) as ElementIndex) 'aLoneName'
-			return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.qualified, typeName: self.tokenAt((head - 2) as ElementIndex).value, memberName: member, column: column, label: label, calleeParam: 0)
+		if receiver == TokenKind.identifier and not self.isMemberAccessAt(head - 2) 'aLoneName'
+			return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.qualified, typeName: self.tokenAt(head - 2).value, memberName: member, column: column, label: label, calleeParam: 0)
 		end 'aLoneName'
 
 		return ForwardedStore.create(arg.paramIndex, shape: ForwardShape.throughReceiver, typeName: EmptySourceText, memberName: member, column: column, label: label, calleeParam: 0)
 	end 'forwardedStoreOf'
 
 	function isMemberAccessAt(namePos ElementIndex) returns bool
-		return namePos > 0 and self.kindAt((namePos - 1) as ElementIndex) == TokenKind.dot
+		return namePos > 0 and self.kindAt(namePos - 1) == TokenKind.dot
 	end 'isMemberAccessAt'
 
 	function isCallHeadAt(headPos ElementIndex) returns bool
-		return headPos > 0 and self.kindAt(headPos) == TokenKind.identifier and self.kindAt(headPos + 1) == TokenKind.leftParen and self.kindAt((headPos - 1) as ElementIndex) != TokenKind.function
+		return headPos > 0 and self.kindAt(headPos) == TokenKind.identifier and self.kindAt(headPos + 1) == TokenKind.leftParen and self.kindAt(headPos - 1) != TokenKind.function
 	end 'isCallHeadAt'
 
 	function assignmentHeadEndsAt(equalsPos ElementIndex, inMethod bool) returns bool
-		if equalsPos < 2 or not tokenCanBeAName(self.tokenAt((equalsPos - 1) as ElementIndex)) 'noTargetName'
+		if equalsPos < 2 or not tokenCanBeAName(self.tokenAt(equalsPos - 1)) 'noTargetName'
 			return false
 		end 'noTargetName'
 
-		let before = self.kindAt((equalsPos - 2) as ElementIndex)
+		let before = self.kindAt(equalsPos - 2)
 
 		if before == TokenKind.dot 'aFieldOfSomething'
 			return true
@@ -24083,7 +24083,7 @@ export type Parser
 			return false
 		end 'noPrecedingToken'
 
-		let before = self.kindAt((openPos - 1) as ElementIndex)
+		let before = self.kindAt(openPos - 1)
 		return before == TokenKind.from or before == TokenKind.leftBracket or self.tupleLiteralOpensAt(openPos)
 	end 'bracketOpensALiteralAt'
 
@@ -24092,7 +24092,7 @@ export type Parser
 			return false
 		end 'noPrecedingToken'
 
-		let before = self.kindAt((openPos - 1) as ElementIndex)
+		let before = self.kindAt(openPos - 1)
 		return before == TokenKind.equals or before == TokenKind.return or before == TokenKind.comma or before == TokenKind.leftParen or before == TokenKind.colon or before == TokenKind.gives or before == TokenKind.then
 	end 'tupleLiteralOpensAt'
 
@@ -24497,8 +24497,8 @@ export type Parser
 	// as EMPTY, which means "the first POSITIONAL argument": the forward edge would resolve to the callee's
 	// parameter 0 instead of the one actually named, and the fixpoint would mark the wrong parameter a feed.
 	function argLabelBefore(valuePos ElementIndex) returns ByteArray
-		if self.kindAt((valuePos - 1) as ElementIndex) == TokenKind.colon and tokenCanBeAName(self.tokenAt((valuePos - 2) as ElementIndex)) 'labelled'
-			return self.tokenAt((valuePos - 2) as ElementIndex).value
+		if self.kindAt(valuePos - 1) == TokenKind.colon and tokenCanBeAName(self.tokenAt(valuePos - 2)) 'labelled'
+			return self.tokenAt(valuePos - 2).value
 		end 'labelled'
 
 		return EmptySourceText
@@ -26843,7 +26843,7 @@ export type Parser
 		let afterModifier = pastVisibilityModifiers(self.tokens, index: index)
 		let kind = self.kindAt(afterModifier)
 
-		if afterModifier > 0 and self.kindAt((afterModifier - 1) as ElementIndex) == TokenKind.static 'aWordAfterStatic'
+		if afterModifier > 0 and self.kindAt(afterModifier - 1) == TokenKind.static 'aWordAfterStatic'
 			return false
 		end 'aWordAfterStatic'
 
@@ -27041,7 +27041,7 @@ export type Parser
 			throw AbsentError.absent
 		end 'notAMemberHead'
 
-		return (self.dottedChainLengthAt(start) - 1) as ElementIndex
+		return (self.dottedChainLengthAt(start) - 1)
 	end 'memberHeadQualifierDots'
 
 	function defaultRegionIsAMemberHead(start ElementIndex, regionEnd ElementIndex) returns bool
@@ -32354,7 +32354,7 @@ export type Parser
 			return try self.resolvedFunctionValueName(writtenName, anchor: functionTok, use: BareNameUse.enumCaseBacking)
 		end 'aBareName'
 
-		let headIndex = (self.pos - (qualifierDots * TokensPerQualifierSegment + 1)) as ElementIndex
+		let headIndex = (self.pos - (qualifierDots * TokensPerQualifierSegment + 1))
 
 		match resolveChain(self.tokens, at: headIndex, signatures: self.signatures, readerFilePath: self.job.path, headIsAValue: false, use: ChainUse.memberReference) 'chain'
 			declaredFunction(callee, _) then return callee
@@ -34045,7 +34045,7 @@ export type Parser
 			return true
 		end 'namesADeclarationEverywhere'
 
-		return self.kindAt(index + 2) == TokenKind.as or (index > 0 and declarationModifierIn(self.tokens, index: (index - 1) as ElementIndex)) or self.tokenAt(index).column == 1
+		return self.kindAt(index + 2) == TokenKind.as or (index > 0 and declarationModifierIn(self.tokens, index: index - 1)) or self.tokenAt(index).column == 1
 	end 'declaresANameOutsideABodyAt'
 
 	function labelInNameSpace(label ByteArray) returns ByteArray
@@ -34087,7 +34087,7 @@ export type Parser
 			return
 		end 'noSideData'
 
-		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.job.path, sites: self.bodyState.rangeCheckSites, argSites: self.bodyState.rangeCheckArgSites, returnAlias: self.bodyState.rangeCheckReturnAlias, returnSites: self.bodyState.rangeCheckReturnSites, paramSites: self.bodyState.rangeCheckParamSites, provenValueRanges: self.bodyState.countedValueRanges, provenFloatRanges: self.bodyState.provenFloatRanges, writtenNegativeLiterals: self.bodyState.writtenNegativeLiterals, unsignedMaxLiterals: self.bodyState.unsignedMaxLiterals, unsignedPatternValues: self.bodyState.unsignedPatternValues, checkedCalls: self.bodyState.checkedCalls, borrowOperands: self.bodyState.borrowOperands))
+		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.job.path, sites: self.bodyState.rangeCheckSites, argSites: self.bodyState.rangeCheckArgSites, returnAlias: self.bodyState.rangeCheckReturnAlias, returnSites: self.bodyState.rangeCheckReturnSites, paramSites: self.bodyState.rangeCheckParamSites, provenValueRanges: self.bodyState.countedValueRanges, provenFloatRanges: self.bodyState.provenFloatRanges, writtenNegativeLiterals: self.bodyState.writtenNegativeLiterals, unsignedMaxLiterals: self.bodyState.unsignedMaxLiterals, unsignedPatternValues: self.bodyState.unsignedPatternValues, checkedCalls: self.bodyState.checkedCalls, wrapOperands: self.bodyState.wrapOperands))
 	end 'commitRangeChecks'
 
 	// The function's return type IF it is a ranged alias — integer or float — else `undeclared`
@@ -34407,7 +34407,7 @@ export type Parser
 		var start = index
 
 		while start > 0 and self.tokenAt(start - 1).line == line 'toTheLineStart'
-			start = (start - 1) as ElementIndex
+			start = start - 1
 		end 'toTheLineStart'
 
 		return self.tokenAt(start).column
@@ -39477,7 +39477,7 @@ export type Parser
 			panic("dottedCallNameToken: token {index} opens no name chain — every call-statement door that asks this has already matched a name there")
 		end 'notAName'
 
-		return self.tokenAt((chainEnd - 1) as ElementIndex)
+		return self.tokenAt(chainEnd - 1)
 	end 'dottedCallNameToken'
 
 	// Say which SOURCE member the runtime read just emitted serves (see `lastRuntimeRead`). Called by
@@ -42841,7 +42841,7 @@ export type Parser
 			return true
 		end 'closedOverUnsigned'
 
-		return op == MaxonBinOp.sub and self.constIsKnown(lhs) and self.constIsKnown(rhs) and not unsignedSubtractionBorrows(self.constOf(lhs), rhs: self.constOf(rhs))
+		return op == MaxonBinOp.sub and self.constIsKnown(lhs) and self.constIsKnown(rhs) and not unsignedArithmeticWraps(op, lhs: self.constOf(lhs), rhs: self.constOf(rhs))
 	end 'arithmeticStaysUnsigned'
 
 	function resultDomainOperandsAreUnsigned(lhs ValueId, rhs ValueId, op MaxonBinOp) returns bool
@@ -42864,29 +42864,90 @@ export type Parser
 		return self.valueIsInTheUnsignedDomain(lhs) or self.valueIsInTheUnsignedDomain(rhs)
 	end 'operandsAreInTheUnsignedDomain'
 
-	function recordBorrowOperands(difference ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp)
-		if op != MaxonBinOp.sub or (self.constIsKnown(lhs) and self.constIsKnown(rhs)) 'noRunTimeBorrow'
+	function guardUnsignedArithmetic(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, alias OperandAlias, resultTag ValueTypeTag, opTok Token)
+		if not tagIsInteger(resultTag) or not binOpCanLeaveUnsignedRange(op) 'nothingToGuard'
 			return
-		end 'noRunTimeBorrow'
+		end 'nothingToGuard'
 
-		if not self.operandsAreInTheUnsignedDomain(lhs, rhs: rhs) 'signedSubtraction'
+		let ranged = try self.fullWidthAliasOf(alias) otherwise return
+
+		if self.operandsAreFoldedUnsigned(lhs, rhs: rhs) and unsignedArithmeticWraps(op, lhs: self.constOf(lhs), rhs: self.constOf(rhs)) 'aFoldedWrap'
+			self.recordResolvedRangeCheckSite(result, target: RangeCheckSiteTarget.foldedArithmetic(ranged.clone(), lhs: self.constOf(lhs), rhs: self.constOf(rhs), op: op), line: opTok.line, column: opTok.column)
 			return
-		end 'signedSubtraction'
+		end 'aFoldedWrap'
 
-		var recorded = self.borrowOperandsForWrite()
-		recorded.upsert(difference, value: BorrowOperands.create(lhs, rhs: rhs))
-	end 'recordBorrowOperands'
+		if self.unsignedArithmeticIsProvablyInRange(result, lhs: lhs, rhs: rhs, op: op, target: ranged) 'provablyInRange'
+			return
+		end 'provablyInRange'
 
-	function borrowOperandsForWrite() returns BorrowOperandsMap
-		match self.bodyState.borrowOperands 'state'
+		self.recordWrapOperands(result, lhs: lhs, rhs: rhs, op: op)
+		self.recordResolvedRangeCheckSite(result, target: RangeCheckSiteTarget.arithmetic(ranged.clone()), line: opTok.line, column: opTok.column)
+		self.markUnsignedPattern(result)
+	end 'guardUnsignedArithmetic'
+
+	function namesAFullWidthAlias(alias OperandAlias) returns bool
+		_ = try self.fullWidthAliasOf(alias) otherwise return false
+		return true
+	end 'namesAFullWidthAlias'
+
+	function fullWidthAliasOf(alias OperandAlias) returns RangedTypeAlias throws AbsentError
+		if alias.identity.isEmpty() 'unnamed'
+			throw AbsentError.absent
+		end 'unnamed'
+
+		let ranged = try requireDeclaredAlias(self.castAliasNamedBy(self.artifact.typeNames.intern(alias.identity))) otherwise throw AbsentError.absent
+
+		if not aliasChecksItsArithmetic(ranged) 'notFullWidth'
+			throw AbsentError.absent
+		end 'notFullWidth'
+
+		return ranged
+	end 'fullWidthAliasOf'
+
+	function unsignedArithmeticIsProvablyInRange(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, target RangedTypeAlias) returns bool
+		if self.arithmeticHasANeutralOperand(lhs, rhs: rhs, op: op) 'anIdentity'
+			return true
+		end 'anIdentity'
+
+		if self.operandsAreFoldedUnsigned(lhs, rhs: rhs) 'foldedUnsigned'
+			return not unsignedArithmeticWraps(op, lhs: self.constOf(lhs), rhs: self.constOf(rhs))
+		end 'foldedUnsigned'
+
+		return self.countedRangeCovers(result, target: target)
+	end 'unsignedArithmeticIsProvablyInRange'
+
+	function operandsAreFoldedUnsigned(lhs ValueId, rhs ValueId) returns bool
+		return self.constIsKnown(lhs) and self.constIsKnown(rhs) and self.operandsAreInTheUnsignedDomain(lhs, rhs: rhs)
+	end 'operandsAreFoldedUnsigned'
+
+	function arithmeticHasANeutralOperand(lhs ValueId, rhs ValueId, op MaxonBinOp) returns bool
+		return match op 'op'
+			add gives self.valueIsConstant(lhs, equalTo: 0) or self.valueIsConstant(rhs, equalTo: 0)
+			sub gives self.valueIsConstant(rhs, equalTo: 0)
+			mul gives self.valueIsConstant(lhs, equalTo: 0) or self.valueIsConstant(rhs, equalTo: 0) or self.valueIsConstant(lhs, equalTo: 1) or self.valueIsConstant(rhs, equalTo: 1)
+			default panic("arithmeticHasANeutralOperand: '{op.rawValue}' is not an operator that can leave an unsigned range")
+		end 'op'
+	end 'arithmeticHasANeutralOperand'
+
+	function valueIsConstant(value ValueId, equalTo FullRangeInt) returns bool
+		return self.constIsKnown(value) and self.constOf(value) == equalTo
+	end 'valueIsConstant'
+
+	function recordWrapOperands(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp)
+		var recorded = self.wrapOperandsForWrite()
+		recorded.upsert(result, value: WrapOperands.create(lhs, rhs: rhs, op: op))
+	end 'recordWrapOperands'
+
+	function wrapOperandsForWrite() returns WrapOperandsMap
+		match self.bodyState.wrapOperands 'state'
 			unwritten then break
-			entries(byDifference) then return byDifference
+			entries(byResult) then return byResult
 		end 'state'
 
-		let fresh = BorrowOperandsMap.create()
-		self.bodyState.borrowOperands = BorrowOperandsColumn.entries(fresh)
+		let fresh = WrapOperandsMap.create()
+		self.bodyState.wrapOperands = WrapOperandsColumn.entries(fresh)
 		return fresh
-	end 'borrowOperandsForWrite'
+	end 'wrapOperandsForWrite'
 
 	function valueIsInTheUnsignedDomain(value ValueId) returns bool
 		return self.valueCarriesAnUnsignedPattern(value) or self.valueDeclaresUnsigned(value)
@@ -42917,7 +42978,7 @@ export type Parser
 				depth = depth - 1
 			end 'closes'
 
-			if typeSpellingSeparates(previous, next: kind, previousIsWord: q > start and not self.tokenAt((q - 1) as ElementIndex).value.isEmpty(), nextIsWord: not self.tokenAt(q).value.isEmpty()) 'aSpace'
+			if typeSpellingSeparates(previous, next: kind, previousIsWord: q > start and not self.tokenAt(q - 1).value.isEmpty(), nextIsWord: not self.tokenAt(q).value.isEmpty()) 'aSpace'
 				spelled.append(" ")
 			end 'aSpace'
 
@@ -42964,7 +43025,7 @@ export type Parser
 			if kind == TokenKind.leftParen 'opens'
 				depth = depth + 1
 
-				if rangeDepth == 0 and q > start and keywordIsARangedPrimitive(self.tokenAt((q - 1) as ElementIndex)) 'aRangesBounds'
+				if rangeDepth == 0 and q > start and keywordIsARangedPrimitive(self.tokenAt(q - 1)) 'aRangesBounds'
 					rangeDepth = depth
 				end 'aRangesBounds'
 			end 'opens' else if kind == TokenKind.rightParen 'closes'
@@ -64165,6 +64226,12 @@ export type Parser
 			// be a non-negative ranged alias. The decimal
 			// formatter, a consumer of the domain besides the divide, is what reaches it. Pinned by `enums-simple/float-backed-negation`, whose int-backed
 			// half is exactly this value.
+			let negatedAlias = self.operandAliasName(operand)
+
+			if self.namesAFullWidthAlias(OperandAlias.named(negatedAlias)) 'aFullWidthQuantity'
+				throw SourceParseError.registryRefused(ErrorCode.semanticUnsignedNegation, explanation: unsignedNegationMessage(String.from(negatedAlias)), line: opTok.line, column: opTok.column, note: DiagnosticNote.none)
+			end 'aFullWidthQuantity'
+
 			let negated = self.emitUnaryOp(operand, op: MaxonUnaryOp.neg, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(opTok))
 
 			// ⭐⭐ **A NEGATION KEEPS ITS OPERAND'S TYPEALIAS ONLY WHERE THAT ALIAS HOLDS THE RESULT** — a
@@ -65391,7 +65458,7 @@ export type Parser
 		end 'aBareTypeName'
 
 		let written = self.assembleDottedChainAt(headIndex, dots: dots)
-		let qualifierText = chainSpellingAt(self.tokens, at: headIndex, segments: (dots - 1) as ElementIndex)
+		let qualifierText = chainSpellingAt(self.tokens, at: headIndex, segments: dots - 1)
 
 		match self.resolveChainAt(headIndex, use: ChainUse.memberReference) 'chain'
 			declaredType(declaration, consumed) then return SpawnedType.declared(declaration, consumed: consumed)
@@ -67243,7 +67310,12 @@ export type Parser
 		// The result WEARS its operands' typealias and PROVES nothing about it — see `adoptOperandAlias`.
 		self.adoptBinaryResultAlias(result, lhs: lhs, rhs: rhs, op: op, alias: operandAlias, resultTag: resultTag)
 		self.markUnsignedArithmeticResult(result, lhs: left, rhs: right, op: op)
-		self.recordBorrowOperands(result, lhs: left, rhs: right, op: op)
+
+		if op == MaxonBinOp.sub and not (self.constIsKnown(left) and self.constIsKnown(right)) and self.operandsAreInTheUnsignedDomain(left, rhs: right) 'aRunTimeBorrow'
+			self.recordWrapOperands(result, lhs: left, rhs: right, op: op)
+		end 'aRunTimeBorrow'
+
+		self.guardUnsignedArithmetic(result, lhs: left, rhs: right, op: op, alias: operandAlias, resultTag: resultTag, opTok: opTok)
 
 		// ⭐ **THE ONE OPERATOR WHOSE RESULT INHERITS ITS OPERANDS' RANGED ALIAS AS A PROOF.** See
 		// `bitAndInheritedAliasId` — and `rangeIsClosedUnderBitAnd`, which is the proof that makes the
@@ -73073,7 +73145,7 @@ export type Parser
 	// `identifier` — the same asymmetry `dottedChainLengthAt` draws between a chain's head and its trailing
 	// segments, and for the same reason.
 	function namesStaticMemberAt(baseTok Token, memberIndex ElementIndex) returns bool
-		if not self.signatures.containsStructFor(baseTok.value, readerFilePath: self.typeNameReaderAt((memberIndex - TokensPerQualifierSegment) as ElementIndex)) or not tokenCanBeAName(self.tokenAt(memberIndex)) 'notACandidate'
+		if not self.signatures.containsStructFor(baseTok.value, readerFilePath: self.typeNameReaderAt(memberIndex - TokensPerQualifierSegment)) or not tokenCanBeAName(self.tokenAt(memberIndex)) 'notACandidate'
 			return false
 		end 'notACandidate'
 
@@ -73109,7 +73181,7 @@ export type Parser
 			return StaticRosterVerdict.notADeclaredTypeMember
 		end 'aFormOtherThanAMember'
 
-		let nameReader = self.typeNameReaderAt((memberIndex - TokensPerQualifierSegment) as ElementIndex)
+		let nameReader = self.typeNameReaderAt(memberIndex - TokensPerQualifierSegment)
 		let aliasName = self.genericAliasKeyFor(baseTok.value)
 		let namesAStruct = self.signatures.containsStructFor(baseTok.value, readerFilePath: nameReader)
 
@@ -73117,7 +73189,7 @@ export type Parser
 			return StaticRosterVerdict.notADeclaredTypeMember
 		end 'notATypeBase'
 
-		let found = self.methodVerdictOf(self.resolveStaticMember(baseTok, baseIndex: (memberIndex - TokensPerQualifierSegment) as ElementIndex, aliasName: aliasName))
+		let found = self.methodVerdictOf(self.resolveStaticMember(baseTok, baseIndex: memberIndex - TokensPerQualifierSegment, aliasName: aliasName))
 
 		match found 'method'
 			undeclaredMember then break
@@ -76160,7 +76232,7 @@ export type Parser
 		// `parseTypeReference`, which is why this second hook exists at all (`recordTypeNameUse`).
 		self.recordBaseTypeNameUse(baseIndex, resolved: typeTok)
 
-		if self.signatures.declaresADefault() and self.registryCallAt((self.pos - 1) as ElementIndex) 'aRegistryCall'
+		if self.signatures.declaresADefault() and self.registryCallAt(self.pos - 1) 'aRegistryCall'
 			return try self.parseRegistryCall(func, keyTok: typeTok, resultUsed: resultUsed)
 		end 'aRegistryCall'
 
@@ -84478,7 +84550,7 @@ export type Parser
 		let first = requirementFirstPosition(slot.method)
 
 		for position in first upto args.count() as ParamCount 'eachSourceArgument'
-			let sourcePosition = (position - first) as ParamCount
+			let sourcePosition = position - first
 
 			if requirementCapabilityAt(slot.method, position: position, first: first) != ParamCapability.isolated or maskHasParam(slot.method.byRefParams, param: sourcePosition) 'notAnOwnedPosition'
 				continue
@@ -89344,7 +89416,7 @@ export type Parser
 	// A request is matched by token index, so a door's site must be the last token its read consumed. A
 	// mismatch drops the request and the argument spills a scratch cell, losing the callee's write.
 	function lastConsumedSite() returns CellArgumentToken
-		return CellArgumentToken.at((self.pos - 1) as ElementIndex)
+		return CellArgumentToken.at(self.pos - 1)
 	end 'lastConsumedSite'
 
 	function handOverPlaceStorage(storage ValueId)
@@ -89792,7 +89864,7 @@ export type Parser
 		self.bodyState.operandOrder.stashSince(targetOperands)
 
 		// The place as written, and the record written: everything before the chain's last `. <field>`.
-		let lastDotIndex = (self.pos - 2) as ElementIndex
+		let lastDotIndex = self.pos - 2
 		try self.consume(TokenKind.equals)
 		let index = try self.requireFieldIndex(step.layout, name: step.lastFieldTok.value, anchor: step.lastFieldTok)
 
@@ -95428,8 +95500,8 @@ export type Parser
 	end 'seatInDeclaringTypeBody'
 
 	function writtenSpellingOfMemberAt(memberIndex ElementIndex) returns String
-		let headIndex = self.writtenChainHeadIndex((memberIndex - TokensPerQualifierSegment) as ElementIndex)
-		return String.from(self.assembleDottedChainAt(headIndex, dots: ((memberIndex - headIndex) / TokensPerQualifierSegment) as ElementIndex))
+		let headIndex = self.writtenChainHeadIndex(memberIndex - TokensPerQualifierSegment)
+		return String.from(self.assembleDottedChainAt(headIndex, dots: ((memberIndex - headIndex) / TokensPerQualifierSegment)))
 	end 'writtenSpellingOfMemberAt'
 
 	function writtenChainHeadIndex(baseIndex ElementIndex) returns ElementIndex
@@ -95440,7 +95512,7 @@ export type Parser
 		end 'aPlainBase'
 
 		while head >= TokensPerQualifierSegment and self.kindAt(head - 1) == TokenKind.dot and self.kindAt(head - TokensPerQualifierSegment) == TokenKind.identifier 'eachQualifier'
-			head = (head - TokensPerQualifierSegment) as ElementIndex
+			head = head - TokensPerQualifierSegment
 		end 'eachQualifier'
 
 		return head
@@ -98629,7 +98701,7 @@ export type Parser
 				break
 			end 'atTheFirstToken'
 
-			index = (index - 1) as ElementIndex
+			index = index - 1
 		end 'eachCandidate'
 
 		return displayParamName(root.name)
@@ -104179,7 +104251,7 @@ export type Parser
 			return ByRefHandOff.none
 		end 'notInACallsArguments'
 
-		let before = self.kindAt((q - 1) as ElementIndex)
+		let before = self.kindAt(q - 1)
 
 		if before != TokenKind.colon and self.kindAt(q + 1) == TokenKind.colon 'aLabelNotAValue'
 			return ByRefHandOff.none
@@ -104190,7 +104262,7 @@ export type Parser
 		end 'noByReferenceParameterByThatName'
 
 		let opener = try walk.openBrackets.get(walk.openBrackets.count() - 1) otherwise panic("argumentHandOffAt: openBrackets is empty inside a call's arguments")
-		let label = self.tokenAt((q - 2) as ElementIndex).value if before == TokenKind.colon else EmptySourceText
+		let label = self.tokenAt(q - 2).value if before == TokenKind.colon else EmptySourceText
 
 		if self.handedValueIsATypeParameter(opener, argIndex: walk.argumentIndex(), label: label) 'aTypeParameterValue'
 			return ByRefHandOff.typeParameterValue
@@ -106365,7 +106437,7 @@ type AuthorNameScopeWalk
 			return false
 		end 'atTheFileStart'
 
-		let previous = tokenKindIn(self.tokens, index: (at - 1) as ElementIndex)
+		let previous = tokenKindIn(self.tokens, index: at - 1)
 
 		if kindIntroducesAType(previous) 'afterATypeIntroducer'
 			return true
@@ -106377,8 +106449,8 @@ type AuthorNameScopeWalk
 
 		var q = at
 
-		while q > 0 and tokenKindIn(self.tokens, index: (q - 1) as ElementIndex) != TokenKind.newline 'backToTheLineStart'
-			q = (q - 1) as ElementIndex
+		while q > 0 and tokenKindIn(self.tokens, index: q - 1) != TokenKind.newline 'backToTheLineStart'
+			q = q - 1
 		end 'backToTheLineStart'
 
 		return tokenKindIn(self.tokens, index: pastVisibilityModifiers(self.tokens, index: q)) == TokenKind.typealias
@@ -106457,7 +106529,7 @@ type AuthorNameScopeWalk
 			let ends = kind == TokenKind.eof or kind == TokenKind.newline or kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace or kind == TokenKind.comma or kind == TokenKind.stringInterpEnd
 
 			if depth == 0 and ends 'theClosureEnds'
-				return (at - 1) as ElementIndex
+				return at - 1
 			end 'theClosureEnds'
 
 			if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace or kind == TokenKind.stringInterpStart 'aGroupOpens'
@@ -106551,10 +106623,10 @@ type AuthorNameScopeWalk
 			return
 		end 'notInABody'
 
-		let previous = tokenKindIn(self.tokens, index: (at - 1) as ElementIndex) if at > 0 else TokenKind.newline
+		let previous = tokenKindIn(self.tokens, index: at - 1) if at > 0 else TokenKind.newline
 		let conditionBinding = previous == TokenKind.if or previous == TokenKind.while
 		let start = at if conditionBinding else self.statementEndAfter(at)
-		let scopeEnd = self.extentEndAt((at - 1) as ElementIndex) if conditionBinding else self.innermostScopeEnd()
+		let scopeEnd = self.extentEndAt(at - 1) if conditionBinding else self.innermostScopeEnd()
 		let nextKind = tokenKindIn(self.tokens, index: at + 1)
 
 		if nextKind == TokenKind.identifier 'aSingleName'
@@ -106659,7 +106731,7 @@ type AuthorNameScopeWalk
 				self.declareNameAt(q + 1, start: header, scopeEnd: scopeEnd)
 			end 'aFieldOrStatic' else if kind == TokenKind.typealias and tokenKindIn(self.tokens, index: q + 1) == TokenKind.identifier 'aNestedAlias'
 				self.stops.insert(q + 1)
-			end 'aNestedAlias' else if caseList and kind == TokenKind.identifier and tokenKindIn(self.tokens, index: (q - 1) as ElementIndex) == TokenKind.newline 'aCaseDeclaration'
+			end 'aNestedAlias' else if caseList and kind == TokenKind.identifier and tokenKindIn(self.tokens, index: q - 1) == TokenKind.newline 'aCaseDeclaration'
 				self.declareCaseAt(q)
 			end 'aCaseDeclaration'
 
@@ -106726,7 +106798,7 @@ type AuthorNameScopeWalk
 			return false
 		end 'atTheFileStart'
 
-		return kindIntroducesAType(tokenKindIn(self.tokens, index: (at - 1) as ElementIndex))
+		return kindIntroducesAType(tokenKindIn(self.tokens, index: at - 1))
 	end 'typeIsWrittenAt'
 
 	function isShadowed(spelled ByteArray, at ElementIndex) returns bool
@@ -106744,7 +106816,7 @@ type AuthorNameScopeWalk
 			return false
 		end 'notInAMatch'
 
-		let previous = tokenKindIn(self.tokens, index: (at - 1) as ElementIndex) if at > 0 else TokenKind.newline
+		let previous = tokenKindIn(self.tokens, index: at - 1) if at > 0 else TokenKind.newline
 		let next = tokenKindIn(self.tokens, index: at + 1)
 
 		if previous != TokenKind.newline and previous != TokenKind.or 'notWhereAnArmStarts'

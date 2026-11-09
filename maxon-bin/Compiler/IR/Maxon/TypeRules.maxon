@@ -1598,11 +1598,48 @@ export function binOpKeepsUnsignedOperandsUnsigned(op MaxonBinOp) returns bool
 	end 'op'
 end 'binOpKeepsUnsignedOperandsUnsigned'
 
-export function unsignedSubtractionBorrows(lhs FullRangeInt, rhs FullRangeInt) returns bool
-	let difference = lhs - rhs
-	let witness = ((lhs xor UnsignedFullUpperPattern) and rhs) or (((lhs xor rhs) xor UnsignedFullUpperPattern) and difference)
-	return witness < 0
+function unsignedSubtractionBorrows(lhs FullRangeInt, rhs FullRangeInt) returns bool
+	return (lhs as MachineWord) < (rhs as MachineWord)
 end 'unsignedSubtractionBorrows'
+
+// A `bits(64)` pattern has the same bounds as `int(0 to u64.max)` and is told apart only by its
+// domain; it wraps by design, so only the quantity's `+ - *` are checked at the operation.
+export function aliasChecksItsArithmetic(alias RangedTypeAlias) returns bool
+	return aliasIsUnsignedFullQuantity(alias) and not alias.domain.isPattern()
+end 'aliasChecksItsArithmetic'
+
+export function binOpCanLeaveUnsignedRange(op MaxonBinOp) returns bool
+	return op == MaxonBinOp.add or op == MaxonBinOp.sub or op == MaxonBinOp.mul
+end 'binOpCanLeaveUnsignedRange'
+
+function unsignedAdditionCarries(lhs FullRangeInt, rhs FullRangeInt) returns bool
+	let sum = (lhs + rhs) as MachineWord
+	return sum < (lhs as MachineWord)
+end 'unsignedAdditionCarries'
+
+function unsignedMultiplicationOverflows(lhs FullRangeInt, rhs FullRangeInt) returns bool
+	return (rhs as MachineWord) > (unsignedMultiplicationLimit(lhs) as MachineWord)
+end 'unsignedMultiplicationOverflows'
+
+export function unsignedMultiplicationLimit(factor FullRangeInt) returns FullRangeInt
+	if factor == 0 'nothingOverflows'
+		return UnsignedFullUpperPattern
+	end 'nothingOverflows'
+
+	return (try ((UnsignedFullUpperPattern as MachineWord) / (factor as MachineWord)) otherwise panic("unsignedMultiplicationLimit: divisor was 0 past the zero guard")) as FullRangeInt
+end 'unsignedMultiplicationLimit'
+
+// The verdict for constant operands. `InsertRangeChecks.wrapGuardOf` emits the same test for runtime
+// operands and the two must agree:
+// `range-check-panic.full-unsigned-edge-pairs-agree-on-the-folded-and-the-runtime-path` pins it.
+export function unsignedArithmeticWraps(op MaxonBinOp, lhs FullRangeInt, rhs FullRangeInt) returns bool
+	return match op 'op'
+		add gives unsignedAdditionCarries(lhs, rhs: rhs)
+		sub gives unsignedSubtractionBorrows(lhs, rhs: rhs)
+		mul gives unsignedMultiplicationOverflows(lhs, rhs: rhs)
+		default panic("unsignedArithmeticWraps: '{op.rawValue}' is not an operator that can leave an unsigned range")
+	end 'op'
+end 'unsignedArithmeticWraps'
 
 export function isLegalBitWidth(width FullRangeInt) returns bool
 	return width == 1 or width == 2 or width == 4 or width == 8 or width == 16 or width == 32 or width == 64
@@ -2133,6 +2170,19 @@ end 'rangeCoversDenotedRange'
 export function literalOutOfRangeMessage(value FullRangeInt, aliasName String, low FullRangeInt, high FullRangeInt, isFloat bool, writtenNegative bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
 	return "Value {literalValueText(value, isFloat: isFloat, writtenNegative: writtenNegative)} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat, domain: domain)}"
 end 'literalOutOfRangeMessage'
+
+function unsignedWrapOperatorSymbol(op MaxonBinOp) returns String
+	return match op 'op'
+		add gives "+"
+		sub gives "-"
+		mul gives "*"
+		default panic("unsignedWrapOperatorSymbol: '{op.rawValue}' is not an operator that can leave an unsigned range")
+	end 'op'
+end 'unsignedWrapOperatorSymbol'
+
+export function foldedArithmeticOutOfRangeMessage(op MaxonBinOp, lhs FullRangeInt, rhs FullRangeInt, aliasName String, low FullRangeInt, high FullRangeInt, domain RangedAliasDomain) returns String
+	return "The result of {unsignedScalarText(lhs)} {unsignedWrapOperatorSymbol(op)} {unsignedScalarText(rhs)} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: false, domain: domain)}"
+end 'foldedArithmeticOutOfRangeMessage'
 
 function literalValueText(value FullRangeInt, isFloat bool, writtenNegative bool) returns String
 	if not isFloat and value < 0 and not writtenNegative 'aboveTheSignedTop'

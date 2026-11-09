@@ -530,8 +530,9 @@ export enum StdBinOpcode
 	// constant cannot be replaced without (`StrengthReduceDivision`).** `n * M` at 128 bits, keeping
 	// bits 64..127. x64 spells the pair `imul r/m64` and `mul r/m64` (the ONE-operand group-3 forms,
 	// `TargetOp.mulHighReg`), AArch64 `SMULH` and `UMULH`, and wasm has NO form of either — which is
-	// why the pass that produces them asks `targetLowersMulHigh` and reduces nothing on a target that
-	// cannot spell them.
+	// why the passes that produce them (`StrengthReduceDivision`, and `InsertRangeChecks` for an unsigned
+	// product guard) ask `targetLowersMulHigh` and, on a target that cannot spell them, reduce nothing or
+	// build the high word from 32-bit halves.
 	//
 	// ⚠ **TWO OPCODES AND NOT ONE CARRYING A SIGNEDNESS FIELD, WHICH IS THE OPPOSITE OF WHAT THE TARGET
 	// TIER DOES (`TargetOp.mulHighReg`).** This enum is payload-free, and that is its whole safety

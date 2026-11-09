@@ -38,7 +38,9 @@ Parentheses override precedence: `(2 + 3) * 5` is `25`. A cast applies to the ne
 - Both operands have the same type. An unaliased integer mixed with a float is promoted to float; two
   different typealiases are **E3005** until one side is cast (see
   [Arithmetic](/docs/language/ranged-typealiases/#arithmetic)).
-- Integer arithmetic is 64-bit two's complement and **wraps** on overflow.
+- Integer arithmetic is 64-bit two's complement and **wraps** on overflow, except `+`, `-` and `*` over a
+  full-width unsigned alias, which are range-checked where they are computed (see
+  [Range Checks](/docs/language/ranged-typealiases/#range-checks)).
 - `+` is not defined on `String`; use interpolation or `append`.
 - `bool` values do not take part in arithmetic (**E2004**).
 
@@ -153,6 +155,9 @@ Integer `and`/`or` always evaluate both sides.
 - **`shr` fills according to the left operand's type.** A signed value shifts arithmetically
   (`(0 - 8) shr 1` is `-4`); an unsigned alias or a `bits(n)` pattern fills with zeros
   (`u64.max as Word shr 60` is `15`). `shl` always fills with zeros.
+- **`shl` computes modulo 2^64** over every alias, `int(0 to u64.max)` included: it drops the bits shifted
+  past bit 63 and its result passes an unsigned door unchecked. Bit work is written over a
+  [`bits(64)`](/docs/language/types/#bit-patterns--bitsn) alias.
 - **A count of 64 or more shifts every bit out** — `1 shl 64` is `0`. It is not reduced modulo 64.
 - **A negative count is an error.** A count known at compile time is **E2054**; one that turns out
   negative at run time panics with `negative shift count`.

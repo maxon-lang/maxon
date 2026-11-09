@@ -2242,9 +2242,9 @@ end 'main'
 12
 ```
 
-<!-- test: negating-an-unsigned-alias-keeps-the-alias -->
-`-d` over the signed `Delta` is a `Delta`; `-c` over the unsigned `Count` is still named `Count` although its
-value cannot be one, so it reaches the `Delta` slot beside it only through a cast.
+<!-- test: negating-a-converted-unsigned-value-keeps-the-signed-alias -->
+`-d` over the signed `Delta` is a `Delta`; `-c` over the unsigned `Count` is refused, so the value is converted
+first and the negation of `c as Delta` is a `Delta` too.
 ```maxon
 typealias Delta = int(-100 to 100)
 typealias Count = int(0 to u64.max)
@@ -2253,10 +2253,14 @@ function takesDelta(d Delta) returns Delta
 	return d
 end 'takesDelta'
 
+function seven() returns Count
+	return 7
+end 'seven'
+
 function main() returns ExitCode
 	let d = 5 as Delta
-	let c = 7 as Count
-	print("{takesDelta(-d)} {takesDelta((-c) as Delta)}")
+	let c = seven()
+	print("{takesDelta(-d)} {takesDelta(-(c as Delta))}")
 	return 0
 end 'main'
 ```

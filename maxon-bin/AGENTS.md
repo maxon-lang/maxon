@@ -504,9 +504,15 @@ runs. Fixing such a leak turns exit 101 into an access violation. Follow the fau
 - A literal outside the range is E3005.
 - A value of another named integer type (another alias, `ExitCode`) is E3005, and the message names the crossing:
   `as T`.
-- A value typed `T`, including arithmetic on `T` values (`a - b`, `xs.count() - 1`), a plain unnamed `int`, and a
+- A value typed `T`, including arithmetic on `T` values (`a - b` over a narrower `T`), a plain unnamed `int`, and a
   value cast with `as T` all land in `T` with a range check. That check is elided where the compiler proves the value fits, and panics
   ("Range check failed: value outside typealias 'T'") where it does not.
+- **`+`, `-` and `*` over a full-width unsigned alias are checked AT THE OPERATION, not at a door.** That is
+  `int(0 to u64.max)` (`Count`, `ElementIndex`, `BytePos`; `aliasChecksItsArithmetic`, which excludes `bits(64)`).
+  Every 64-bit pattern is a value of the alias, so a wrapped result is indistinguishable from a real one at any later
+  door. The check is elided where `Parser.unsignedArithmeticIsProvablyInRange` proves the result fits, and a
+  constant expression that wraps is E3005. Unary `-` over one is E3218 and `shl` is unchecked; arithmetic meant to
+  wrap is written over `bits(64)` (`MachineWord`).
 
 "Proves" is a normative spec rule over the parser's analysis (`valueIsProvablyInRange`), never an optimizer
 outcome, so whether a check is emitted is a property of the program. A stronger prover removes checks. It never

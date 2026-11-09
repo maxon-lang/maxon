@@ -138,19 +138,29 @@ func @main {
     x64.callDirect __sched_max_active_workers
     x64.movRegImm32 rax, 1
     x64.subRegReg rax, rax, r8
+    x64.cmpRegImm32 r8, 1
+    x64.jcc above, __rc_panic#2
+  __rc_ok#1:
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#4
   __rc_chk:
     x64.movRegImm32 rcx, 4294967295
     x64.cmpRegReg rax, rcx
-    x64.jcc greater, __rc_panic
-  __rc_ok:
+    x64.jcc greater, __rc_panic#4
+  __rc_ok#3:
     x64.movRegReg r8, rax
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at main.maxon:3: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at main.maxon:3: Range check failed: value outside typealias 'Count'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at main.maxon:3: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

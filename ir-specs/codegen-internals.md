@@ -4935,28 +4935,47 @@ func @main {
     x64.leaRegRdata rax, [rip + __str_rec_1]  ; "hello world"
     x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "hello world"
     x64.leaRegRdata rdx, [rip + __str_rec_1]  ; "hello world"
-  __il_body#7:
+  __il_body#10:
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-  __il_body#8:
+  __il_body#11:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-  __il_cont#5:
-    x64.leaRegRegReg rax, rax, rcx
-  __il_body#9:
-    x64.loadRegBaseDisp.word64 rcx, [rdx + 8]
-  __il_cont#4:
-    x64.leaRegRegReg r8, rax, rcx
+  __il_cont#8:
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.cmpRegReg rcx, rax
+    x64.jcc below, __rc_panic#2
+  __il_body#13:
+    x64.loadRegBaseDisp.word64 rax, [rdx + 8]
+  __il_cont#12:
+    x64.leaRegRegReg r8, rcx, rax
+    x64.cmpRegReg r8, rcx
+    x64.jcc below, __rc_panic#4
+  __rc_ok#3:
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#6
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
+    x64.jcc greater, __rc_panic#6
+  __rc_ok#5:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -4981,27 +5000,46 @@ func @main {
     x64.leaRegRdata rax, [rip + __str_rec_1]  ; "hello world"
     x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "hello world"
     x64.leaRegRdata rdx, [rip + __str_rec_1]  ; "hello world"
-  __il_body#7:
+  __il_body#10:
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-  __il_body#8:
+  __il_body#11:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-  __il_cont#5:
-    x64.leaRegRegReg rax, rax, rcx
-  __il_body#9:
-    x64.loadRegBaseDisp.word64 rcx, [rdx + 8]
-  __il_cont#4:
-    x64.leaRegRegReg r8, rax, rcx
+  __il_cont#8:
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.cmpRegReg rcx, rax
+    x64.jcc below, __rc_panic#2
+  __il_body#13:
+    x64.loadRegBaseDisp.word64 rax, [rdx + 8]
+  __il_cont#12:
+    x64.leaRegRegReg r8, rcx, rax
+    x64.cmpRegReg r8, rcx
+    x64.jcc below, __rc_panic#4
+  __rc_ok#3:
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#6
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-  __rc_ok:
+    x64.jcc greater, __rc_panic#6
+  __rc_ok#5:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -5022,26 +5060,43 @@ func @main {
     arm64.leaRdata x0, __str_rec_1  ; "hello world"
     arm64.leaRdata x1, __str_rec_1  ; "hello world"
     arm64.leaRdata x2, __str_rec_1  ; "hello world"
-  __il_body#7:
+  __il_body#10:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-  __il_body#8:
+  __il_body#11:
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
-  __il_cont#5:
-    arm64.add x0, x0, x1
-  __il_body#9:
-    arm64.loadRegBaseDisp.word64 x1, [x2 + 8]
-  __il_cont#4:
-    arm64.add x0, x0, x1
+  __il_cont#8:
+    arm64.add x1, x0, x1
+    arm64.cmp x1, x0
+    arm64.b.lo __rc_panic#2
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x0, [x2 + 8]
+  __il_cont#12:
+    arm64.add x0, x1, x0
+    arm64.cmp x0, x1
+    arm64.b.lo __rc_panic#4
+  __rc_ok#3:
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
+    arm64.b.lt __rc_panic#6
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
+    arm64.b.gt __rc_panic#6
+  __rc_ok#5:
     arm64.epilogue 16
     arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#6:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -5064,26 +5119,43 @@ func @main {
     arm64.leaRdata x0, __str_rec_1  ; "hello world"
     arm64.leaRdata x1, __str_rec_1  ; "hello world"
     arm64.leaRdata x2, __str_rec_1  ; "hello world"
-  __il_body#7:
+  __il_body#10:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-  __il_body#8:
+  __il_body#11:
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
-  __il_cont#5:
-    arm64.add x0, x0, x1
-  __il_body#9:
-    arm64.loadRegBaseDisp.word64 x1, [x2 + 8]
-  __il_cont#4:
-    arm64.add x0, x0, x1
+  __il_cont#8:
+    arm64.add x1, x0, x1
+    arm64.cmp x1, x0
+    arm64.b.lo __rc_panic#2
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x0, [x2 + 8]
+  __il_cont#12:
+    arm64.add x0, x1, x0
+    arm64.cmp x0, x1
+    arm64.b.lo __rc_panic#4
+  __rc_ok#3:
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
+    arm64.b.lt __rc_panic#6
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
+    arm64.b.gt __rc_panic#6
+  __rc_ok#5:
     arm64.epilogue 16
     arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#6:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at managed-string-literal-deduplication.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16

@@ -399,8 +399,8 @@ function boundaryAtOrBefore(bytes ByteArray, at BytePos) returns BoundarySearch
 			break
 		end 'pastTheStart'
 
-		if isBoundary(bytes, at: (at - back) as BytePos) 'found'
-			return BoundarySearch.found((at - back) as BytePos)
+		if isBoundary(bytes, at: at - back) 'found'
+			return BoundarySearch.found(at - back)
 		end 'found'
 	end 'eachCandidate'
 
@@ -409,8 +409,8 @@ end 'boundaryAtOrBefore'
 
 function boundaryAtOrAfter(bytes ByteArray, at BytePos) returns BoundarySearch
 	for ahead in 0 to MaxContinuationBytes 'eachCandidate'
-		if isBoundary(bytes, at: (at + ahead) as BytePos) 'found'
-			return BoundarySearch.found((at + ahead) as BytePos)
+		if isBoundary(bytes, at: at + ahead) 'found'
+			return BoundarySearch.found(at + ahead)
 		end 'found'
 	end 'eachCandidate'
 
@@ -445,7 +445,7 @@ export function lastBytes(s String, max BytePos) returns String
 		return s
 	end 'fits'
 
-	return sliceBytes(bytes, from: cutPosition(boundaryAtOrAfter(bytes, at: (n - max) as BytePos), raw: (n - max) as BytePos), until: n)
+	return sliceBytes(bytes, from: cutPosition(boundaryAtOrAfter(bytes, at: n - max), raw: n - max), until: n)
 end 'lastBytes'
 
 function truncationMarker(dropped BytePos) returns String
@@ -464,7 +464,7 @@ module function firstBytesMarked(s String, max BytePos) returns String
 		panic("firstBytesMarked: a bound of {max} bytes cannot hold the {reserved}-byte marker that says text was dropped")
 	end 'noRoomForTheMarker'
 
-	let kept = firstBytes(s, max: (max - reserved) as BytePos)
+	let kept = firstBytes(s, max: max - reserved)
 
-	return "{kept}{truncationMarker((s.byteLength() - kept.byteLength()) as BytePos)}"
+	return "{kept}{truncationMarker(s.byteLength() - kept.byteLength())}"
 end 'firstBytesMarked'

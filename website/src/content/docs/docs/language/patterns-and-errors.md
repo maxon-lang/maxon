@@ -322,7 +322,7 @@ Nothing in Maxon is undefined behaviour. At run time:
 | a green-thread stack past 1 GiB, or a recursion that overflows an OS stack | a panic: `stack overflow` |
 | an index past the end of a collection | `get`/`set` throw `ArrayError.indexOutOfBounds`, handled with `try` |
 | division or `mod` by zero | throws `DivisionByZero`, handled with `try` |
-| integer overflow | wraps around (two's complement), with no error |
+| integer overflow | wraps around (two's complement), with no error; `+`, `-` and `*` over a full-width unsigned alias panic as a failed range check |
 | an allocation never released | exit code **101** |
 | a green thread neither awaited nor dropped | exit code **75** |
 | a promise consumed through a second read of one container slot or struct field | exit code **118** |

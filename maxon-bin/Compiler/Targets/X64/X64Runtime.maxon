@@ -423,7 +423,7 @@ export type X64RuntimeAsm
 			panic("X64RuntimeAsm.slotDisp: slot {index} needs {offset} bytes but the frame reserved only {self.slotAreaBytes} — `beginFunction` was asked for too few slots")
 		end 'outOfFrame'
 
-		return -offset as Imm32
+		return -(offset as FullRangeInt) as Imm32
 	end 'slotDisp'
 
 	// ⭐⭐ **THE `[rsp + disp]` DISPLACEMENT OF OUTGOING STACK-ARGUMENT SLOT `index`, BOUNDS-CHECKED — the
@@ -741,7 +741,7 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 
 	// The buffer grows UPWARD in memory from the LAST of the slots it occupies, because slots grow downward
 	// from rbp — `mrt_write_hex64`'s idiom.
-	let wideDisp = asm.slotDisp((WriteStreamSlotWide + wideSlots - 1) as StackSize)
+	let wideDisp = asm.slotDisp(WriteStreamSlotWide + wideSlots - 1)
 
 	let done = asm.newLabel()
 	let cellReady = asm.newLabel()
@@ -992,7 +992,7 @@ function buildWriteHexChunk() returns FunctionCodeChunk
 
 	// The buffer occupies slots SlotBuffer.. upward in memory, so its first byte is at the
 	// LOWEST of them — slots grow downward from rbp, so that is the LAST slot index.
-	let bufferDisp = asm.slotDisp((SlotBuffer + bufferSlots - 1) as StackSize)
+	let bufferDisp = asm.slotDisp(SlotBuffer + bufferSlots - 1)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), srcReg: X64Register.rcx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)

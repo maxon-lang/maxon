@@ -939,7 +939,7 @@ function capturedEnvironmentOf(func IrFunction) returns CapturedEnvironment
 		return CapturedEnvironment.none
 	end 'notAClosure'
 
-	let position = (func.paramCount - 1) as ParamCount
+	let position = func.paramCount - 1
 	return CapturedEnvironment.parameter(position, value: valueIdAtParamPosition(position))
 end 'capturedEnvironmentOf'
 
@@ -990,7 +990,7 @@ function addClosureEnvEdges(project Project, module MaxonModule, func IrFunction
 		return
 	end 'notALiftedClosure'
 
-	edges.record(calleeIndex, callerIndex: callerIndex, callerParam: callerParam, calleeParam: capturedParamPosition((closure.paramCount - 1) as ParamCount, slot: slot))
+	edges.record(calleeIndex, callerIndex: callerIndex, callerParam: callerParam, calleeParam: capturedParamPosition(closure.paramCount - 1, slot: slot))
 end 'addClosureEnvEdges'
 
 type UnknownBodyWrites
@@ -2658,6 +2658,10 @@ end 'provenFixedArrayTryMessage'
 module function fixedArrayIndexPastTheSizeMessage(value String, count FixedElementCount) returns String
 	return "Value {value} is outside the range of the indices of '{String.from(FixedArrayBuiltinBaseName)} with {count}' ({fixedArrayIndexRangeText(count)})"
 end 'fixedArrayIndexPastTheSizeMessage'
+
+module function unsignedNegationMessage(alias String) returns String
+	return "unary '-' cannot negate a value of '{alias}': it holds 0 to u64.max, so the negation of any value above 0 is outside it. Write a deliberately wrapping negation over a `bits(64)` typealias, or convert the value to a signed typealias first with `as`"
+end 'unsignedNegationMessage'
 
 function unprovenFixedArrayIndexMessage(accessor ByteArray, count FixedElementCount) returns String
 	return "{throwingCallRequiresTryMessage(accessor)} — its index is not proven inside the fixed array's {count} elements; wrap it as `try … otherwise …`, or give the index a ranged type within `{fixedArrayIndexRangeText(count)}`"

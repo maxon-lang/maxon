@@ -525,6 +525,10 @@ export enum ErrorCode
 	// (`[-1, u64.max]`) has no common integer type: cast the elements to an alias.
 	// A constant `FixedArray` index at or past the size is reported here too (`Value 3 is outside the
 	// range of the indices of 'FixedArray with 3' (int(0 to 2))`): correct the index.
+	// So is a constant `+`, `-` or `*` over a full-width unsigned alias (`int(0 to u64.max)`) whose result
+	// leaves the range (`The result of 2 - 3 is outside the range of 'Count' (int(0 to
+	// 18446744073709551615))`): correct the constants. The same operation over runtime values is
+	// range-checked where it is computed.
 	// A brand is part of a type. Values of two brands over one instance are compared, merged or stored into
 	// one place only through a cast (`xs == ys` for an `Xs` and a `Ys`); a `Self` parameter takes the
 	// receiver's brand, while inside a generic type a parameter spelled with the bare base (`other Box`) fits
@@ -2545,6 +2549,12 @@ export enum ErrorCode
 	// `SharedValue` cells and a `unique` value need no word. Write `isolated` to give the value away,
 	// built for this one send, or `immutable` to share it frozen (`freeze x.clone()`).
 	semanticMessageNeedsACapability = "E3217"
+
+	// Unary `-` is applied to a value of a full-width unsigned alias (`int(0 to u64.max)`, which `Count`,
+	// `ElementIndex` and `BytePos` are). Such an alias holds 0 to `u64.max`, so the negation of any value
+	// above 0 is outside it. Write a deliberately wrapping negation over a `bits(64)` typealias, or convert
+	// the value to a signed typealias first with `as`.
+	semanticUnsignedNegation = "E3218"
 
 	// A member is used that its type does not have: a method the type does not declare, a method a
 	// conditional extension gives only to types meeting its `where` clause, or `allCases` on a union. The

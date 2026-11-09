@@ -109,18 +109,22 @@ func @main {
     x64.movRegReg rcx, rdi
   trycont:
     x64.leaRegRegReg r12, r12, rcx
-    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.leaRegRegImm32 rcx, rdx, 1
+    x64.cmpRegReg rcx, rdx
+    x64.jcc below, __rc_panic#12
+  __rc_ok#11:
+    x64.movRegReg rdx, rcx
   whilehdr:
     x64.cmpRegImm32 rdx, 4
     x64.jcc below, read
   whileexit:
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#14
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
+    x64.jcc greater, __rc_panic#14
+  __rc_ok#13:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
@@ -143,8 +147,17 @@ func @main {
   critsplit:
     x64.movRegReg rdi, r8
     x64.jmp tryok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at static-2bit-cast-packed.test:13: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 64
@@ -226,17 +239,21 @@ func @main {
     x64.movRegReg rcx, rdi
   trycont:
     x64.leaRegRegReg r12, r12, rcx
-    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.leaRegRegImm32 rcx, rdx, 1
+    x64.cmpRegReg rcx, rdx
+    x64.jcc below, __rc_panic#12
+  __rc_ok#11:
+    x64.movRegReg rdx, rcx
   whilehdr:
     x64.cmpRegImm32 rdx, 4
     x64.jcc below, read
   whileexit:
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#14
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-  __rc_ok:
+    x64.jcc greater, __rc_panic#14
+  __rc_ok#13:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
@@ -259,8 +276,17 @@ func @main {
   critsplit:
     x64.movRegReg rdi, r8
     x64.jmp tryok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at static-2bit-cast-packed.test:13: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 64
@@ -333,17 +359,21 @@ func @main {
     arm64.and x3, x3, 3
   trycont:
     arm64.add x20, x20, x3
-    arm64.add x1, x1, 1
+    arm64.add x3, x1, 1
+    arm64.cmp x3, x1
+    arm64.b.lo __rc_panic#12
+  __rc_ok#11:
+    arm64.movRegReg x1, x3
   whilehdr:
     arm64.cmp x1, 4
     arm64.b.lo read
   whileexit:
     arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
+    arm64.b.lt __rc_panic#14
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
+    arm64.b.gt __rc_panic#14
+  __rc_ok#13:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -364,8 +394,16 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr
     arm64.b trycont
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#12:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at static-2bit-cast-packed.test:13: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic#14:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot3
@@ -440,17 +478,21 @@ func @main {
     arm64.and x3, x3, 3
   trycont:
     arm64.add x20, x20, x3
-    arm64.add x1, x1, 1
+    arm64.add x3, x1, 1
+    arm64.cmp x3, x1
+    arm64.b.lo __rc_panic#12
+  __rc_ok#11:
+    arm64.movRegReg x1, x3
   whilehdr:
     arm64.cmp x1, 4
     arm64.b.lo read
   whileexit:
     arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
+    arm64.b.lt __rc_panic#14
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
+    arm64.b.gt __rc_panic#14
+  __rc_ok#13:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -471,8 +513,16 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr
     arm64.b trycont
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#12:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at static-2bit-cast-packed.test:13: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic#14:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot3

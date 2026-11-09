@@ -42,7 +42,7 @@ export type PendingConsequence
 	end 'create'
 
 	export function shiftedBack(removed ElementIndex) returns PendingConsequence
-		return Self{file: self.file.clone(), consequence: self.consequence.clone(), lost: self.lost.clone(), sinkStart: (self.sinkStart - removed) as ElementIndex, sinkEnd: (self.sinkEnd - removed) as ElementIndex}
+		return Self{file: self.file.clone(), consequence: self.consequence.clone(), lost: self.lost.clone(), sinkStart: self.sinkStart - removed, sinkEnd: self.sinkEnd - removed}
 	end 'shiftedBack'
 
 	export function isExplainedBy(poison DeclarationPoison, signatures ProgramSignatures, reports UnknownTypeReports) returns bool
@@ -585,7 +585,7 @@ function declarationHeadAt(tokens TokenArray, position ElementIndex) returns Dec
 	var reach = Visibility.file
 
 	if keywordAt > position 'aModifierPrecedes'
-		reach = reachOfModifier(tokens, position: (keywordAt - 1) as ElementIndex)
+		reach = reachOfModifier(tokens, position: keywordAt - 1)
 	end 'aModifierPrecedes'
 
 	return DeclarationHead.create(name.value.clone(), reach: reach, nominal: tokenKindDeclaresANominalType(keyword.kind), extendsAType: false)

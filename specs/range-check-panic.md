@@ -2684,8 +2684,8 @@ end 'main'
 error E3005: <fragment>:7:12: Value -1 is outside the range of 'Count' (int(0 to 18446744073709551615))
 ```
 
-<!-- test: a-negative-difference-into-a-generic-cell-panics-where-it-enters -->
-The run-time twin of the refusal above: `args - 2` is a `Count` difference the compiler cannot evaluate, so the borrow is caught where the value enters the cell.
+<!-- test: a-negative-difference-into-a-generic-cell-panics-at-the-subtraction -->
+The run-time twin of the refusal above: `args - 2` is a `Count` difference the compiler cannot evaluate, so the borrow is caught where the difference is computed, before the value reaches the cell.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -2719,7 +2719,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at a-negative-difference-into-a-generic-cell-panics-where-it-enters.test:25: Range check failed: value outside typealias 'Count'
+panic at a-negative-difference-into-a-generic-cell-panics-at-the-subtraction.test:24: Range check failed: value outside typealias 'Count'
 Stack trace:
   in main
   in mrt_start
@@ -2878,4 +2878,760 @@ Stack trace:
   in show
   in main
   in mrt_start
+```
+
+<!-- test: range-check-panic.a-count-subtraction-that-borrows-panics-in-a-let -->
+⛔⛔ **ARITHMETIC ON A FULL-WIDTH UNSIGNED ALIAS IS RANGE-CHECKED WHERE IT IS COMPUTED, NOT WHERE ITS RESULT LANDS.** Every 64-bit pattern is a value of `int(0 to u64.max)`, so a wrapped difference is a perfectly good pattern (`2 - 3` reads as `u64.max`) and no later door can tell it from a real count. A `let` has no door at all, so the check is on the subtraction itself.
+```maxon
+function main() returns ExitCode
+	let a = [1, 2]
+	let b = [1, 2, 3]
+	let d = a.count() - b.count()
+	print("d {d}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-count-subtraction-that-borrows-panics-in-a-let.test:5: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-count-subtraction-that-borrows-panics-in-a-for-bound -->
+The same subtraction as a counted loop's bound: an unchecked wrapped difference reads as `u64.max` and sends the loop over `0 to u64.max`. A loop bound is no door either, so the check is on the subtraction.
+```maxon
+function main() returns ExitCode
+	let a = [1, 2]
+	let b = [1, 2, 3]
+	for i in 0 to (a.count() - b.count()) 'scan'
+		print("i {i}\n")
+
+		if i > 2 'enough'
+			break
+		end 'enough'
+	end 'scan'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-count-subtraction-that-borrows-panics-in-a-for-bound.test:5: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.an-addition-past-the-unsigned-top-panics -->
+`+` is checked for a carry out of bit 63: `u64.max + 1` is `0` as a pattern and `2^64` as a number, and the alias holds numbers.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function grow(base Slot, by Slot) returns Slot
+	return base + by
+end 'grow'
+
+function main() returns ExitCode
+	print("{grow(u64.max, by: 1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.an-addition-past-the-unsigned-top-panics.test:5: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in grow
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-multiplication-past-the-unsigned-top-panics -->
+`*` is checked for a nonzero high word of the 128-bit product: `2^32 * 2^32` is `0` as a pattern.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function scale(base Slot, by Slot) returns Slot
+	return base * by
+end 'scale'
+
+function main() returns ExitCode
+	print("{scale(4294967296, by: 4294967296)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-multiplication-past-the-unsigned-top-panics.test:5: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in scale
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-subtraction-that-borrows-panics-in-a-full-unsigned-function -->
+The same borrow through a parameter and a `return`, which is where a named function's own door would otherwise be the only check: the panic names the typealias and the subtraction's line.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function shrink(base Slot, by Slot) returns Slot
+	return base - by
+end 'shrink'
+
+function main() returns ExitCode
+	print("{shrink(3, by: 4)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-subtraction-that-borrows-panics-in-a-full-unsigned-function.test:5: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in shrink
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.full-unsigned-arithmetic-that-stays-in-range-does-not-panic -->
+The control for the four panics above: each operator at the very edge of the range. `u64.max - 1 + 1` and `3 * (u64.max / 3)` both land on `u64.max`, `7 - 7` on `0`, and `(2^32 - 1) * 2^32` is the largest product of that shape that still fits.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function grow(base Slot, by Slot) returns Slot
+	return base + by
+end 'grow'
+
+function shrink(base Slot, by Slot) returns Slot
+	return base - by
+end 'shrink'
+
+function scale(base Slot, by Slot) returns Slot
+	return base * by
+end 'scale'
+
+function main() returns ExitCode
+	print("{grow(u64.max - 1, by: 1)}\n")
+	print("{shrink(7, by: 7)}\n")
+	print("{scale(6148914691236517205, by: 3)}\n")
+	print("{scale(4294967295, by: 4294967296)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551615
+0
+18446744073709551615
+18446744069414584320
+```
+
+<!-- test: range-check-panic.a-merged-operand-plus-a-value-wraps-and-panics -->
+⛔⛔ **THE OPERATION'S CHECK DOES NOT DEPEND ON WHAT THE COMPILER KNOWS ABOUT ITS OPERANDS.** A value that merges two `Slot`s through a conditional is a `Slot` by name only, so it is not recorded as unsigned; the sum is still tested for a carry out of bit 63, and a sum that wraps to a small number panics.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function lowerPlus(a Slot, b Slot, c Slot) returns Slot
+	let lower = a if a < b else b
+	return lower + c
+end 'lowerPlus'
+
+function main() returns ExitCode
+	print("{lowerPlus(u64.max, b: u64.max, c: 2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-merged-operand-plus-a-value-wraps-and-panics.test:6: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in lowerPlus
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-merged-operand-sum-above-the-signed-top-does-not-panic -->
+The other half of the case above: a sum that is at least `2^63` is a bit-63-set pattern and a legitimate `Slot`, so the operation's check must not read it as a negative.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function lowerPlus(a Slot, b Slot, c Slot) returns Slot
+	let lower = a if a < b else b
+	return lower + c
+end 'lowerPlus'
+
+function main() returns ExitCode
+	print("{lowerPlus(9223372036854775808, b: u64.max, c: 5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9223372036854775813
+```
+
+<!-- test: range-check-panic.a-merged-operand-times-a-constant-wraps-and-panics -->
+A merged operand times a constant factor: `2^62 * 4` is `0` as a pattern and `2^64` as a number.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function quadruple(x Slot, y Slot) returns Slot
+	let larger = x if x > y else y
+	return larger * 4
+end 'quadruple'
+
+function main() returns ExitCode
+	print("{quadruple(4611686018427387904, y: 1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-merged-operand-times-a-constant-wraps-and-panics.test:6: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in quadruple
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-counted-difference-plus-the-top-wraps-and-panics -->
+`(i as Slot) - 1` over a counted loop's counter has a proven interval, so the subtraction carries no check; the sum with `u64.max` has no proof, and it panics on the trip where it carries.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function main() returns ExitCode
+	let top = u64.max as Slot
+	for i in 1 upto 3 'each'
+		let below = (i as Slot) - 1
+		print("{below + top}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+18446744073709551615
+```
+```stderr
+panic at range-check-panic.a-counted-difference-plus-the-top-wraps-and-panics.test:8: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.full-unsigned-edge-pairs-agree-on-the-folded-and-the-runtime-path -->
+The same operand pairs through both paths: folded constants in `main`, and runtime parameters in the functions. The pairs sit on the edges of each operator: the largest sums, differences and products that fit, in the three places a signed reading goes wrong (`2^63 - 1`, `2^63`, `u64.max`), and a factor of `0`, `1`, `2^32` and `u64.max`. Every line is printed twice and the two copies agree.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function plus(a Slot, b Slot) returns Slot
+	return a + b
+end 'plus'
+
+function minus(a Slot, b Slot) returns Slot
+	return a - b
+end 'minus'
+
+function times(a Slot, b Slot) returns Slot
+	return a * b
+end 'times'
+
+function main() returns ExitCode
+	let zero = 0 as Slot
+	let one = 1 as Slot
+	let half = 9223372036854775808 as Slot
+	let halfLess = half - one
+	let top = u64.max as Slot
+	let word = 4294967296 as Slot
+	let wordLess = word - one
+	let wordMore = word + one
+	print("{halfLess + half} {plus(9223372036854775807, b: 9223372036854775808)}\n")
+	print("{top + zero} {plus(top, b: zero)}\n")
+	print("{half - halfLess} {minus(half, b: halfLess)}\n")
+	print("{top - top} {minus(top, b: top)}\n")
+	print("{zero - zero} {minus(zero, b: zero)}\n")
+	print("{wordLess * wordMore} {times(wordLess, b: wordMore)}\n")
+	print("{word * wordLess} {times(word, b: wordLess)}\n")
+	print("{top * one} {times(top, b: one)}\n")
+	print("{top * zero} {times(top, b: zero)}\n")
+	print("{zero * top} {times(zero, b: top)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551615 18446744073709551615
+18446744073709551615 18446744073709551615
+1 1
+0 0
+0 0
+18446744073709551615 18446744073709551615
+18446744069414584320 18446744069414584320
+18446744073709551615 18446744073709551615
+0 0
+0 0
+```
+
+<!-- test: range-check-panic.a-carry-out-of-bit-63-panics-on-the-runtime-path -->
+`2^63 + 2^63` is `0` as a pattern and `2^64` as a number: the two operands are each below `u64.max`, so only the carry can tell.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function plus(a Slot, b Slot) returns Slot
+	return a + b
+end 'plus'
+
+function main() returns ExitCode
+	print("{plus(9223372036854775808, b: 9223372036854775808)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-carry-out-of-bit-63-panics-on-the-runtime-path.test:5: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in plus
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-carry-out-of-bit-63-on-folded-operands-is-refused -->
+The pair above with both operands known to the compiler. A result the compiler can compute that leaves the alias is E3005, as a literal outside it is: the program is refused at the operator, and nothing reaches run time.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function main() returns ExitCode
+	let half = 9223372036854775808 as Slot
+	let sum = half + half
+	print("{sum}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:17: The result of 9223372036854775808 + 9223372036854775808 is outside the range of 'Slot' (int(0 to 18446744073709551615))
+```
+
+<!-- test: range-check-panic.a-borrow-across-the-signed-midpoint-panics-on-the-runtime-path -->
+`2^63 - 1` is below `2^63` read unsigned, though it is the larger number read signed: the borrow is a comparison of the operands as unsigned.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function minus(a Slot, b Slot) returns Slot
+	return a - b
+end 'minus'
+
+function main() returns ExitCode
+	print("{minus(9223372036854775807, b: 9223372036854775808)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-borrow-across-the-signed-midpoint-panics-on-the-runtime-path.test:5: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in minus
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-borrow-across-the-signed-midpoint-on-folded-operands-is-refused -->
+The pair above with both operands known to the compiler: E3005 at the operator, naming the operands.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function main() returns ExitCode
+	let half = 9223372036854775808 as Slot
+	let below = half - 1
+	let difference = below - half
+	print("{difference}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:25: The result of 9223372036854775807 - 9223372036854775808 is outside the range of 'Slot' (int(0 to 18446744073709551615))
+```
+
+<!-- test: range-check-panic.zero-minus-the-top-panics -->
+`0 - u64.max` borrows although the right operand is a negative pattern.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function minus(a Slot, b Slot) returns Slot
+	return a - b
+end 'minus'
+
+function main() returns ExitCode
+	print("{minus(0, b: u64.max)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.zero-minus-the-top-panics.test:5: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in minus
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-constant-factor-at-its-limit-does-not-panic -->
+A multiplication by a constant is a comparison of the other operand with `floor(u64.max / factor)`. At the limit it fits: the factor may be on either side, `2^32`, or the negative pattern `u64.max`.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function timesThree(x Slot) returns Slot
+	return x * 3
+end 'timesThree'
+
+function threeTimes(x Slot) returns Slot
+	return 3 * x
+end 'threeTimes'
+
+function timesTop(x Slot) returns Slot
+	return x * u64.max
+end 'timesTop'
+
+function timesWord(x Slot) returns Slot
+	return x * 4294967296
+end 'timesWord'
+
+function main() returns ExitCode
+	print("{timesThree(6148914691236517205)}\n")
+	print("{threeTimes(6148914691236517205)}\n")
+	print("{timesTop(1)}\n")
+	print("{timesTop(0)}\n")
+	print("{timesWord(4294967295)}\n")
+	print("{timesWord(0)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551615
+18446744073709551615
+18446744073709551615
+0
+18446744069414584320
+0
+```
+
+<!-- test: range-check-panic.a-constant-right-factor-past-its-limit-panics -->
+One past the limit of a constant factor on the right.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function timesThree(x Slot) returns Slot
+	return x * 3
+end 'timesThree'
+
+function main() returns ExitCode
+	print("{timesThree(6148914691236517206)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-constant-right-factor-past-its-limit-panics.test:5: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in timesThree
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-constant-left-factor-past-its-limit-panics -->
+One past the limit of a constant factor on the left.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function threeTimes(x Slot) returns Slot
+	return 3 * x
+end 'threeTimes'
+
+function main() returns ExitCode
+	print("{threeTimes(6148914691236517206)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-constant-left-factor-past-its-limit-panics.test:5: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in threeTimes
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-negative-pattern-factor-admits-only-zero-and-one -->
+The constant `u64.max` is the negative pattern `-1`: its limit is `1`, and the unsigned comparison is what keeps `2` from reading as below it.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function timesTop(x Slot) returns Slot
+	return x * u64.max
+end 'timesTop'
+
+function main() returns ExitCode
+	print("{timesTop(2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-negative-pattern-factor-admits-only-zero-and-one.test:5: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in timesTop
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-two-to-the-32-factor-past-its-limit-panics -->
+`2^32 * 2^32` against a constant `2^32` factor.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function timesWord(x Slot) returns Slot
+	return x * 4294967296
+end 'timesWord'
+
+function main() returns ExitCode
+	print("{timesWord(4294967296)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-two-to-the-32-factor-past-its-limit-panics.test:5: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in timesWord
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-product-of-two-runtime-words-over-the-top-panics -->
+A product of two values neither of which the compiler knows has no constant factor to compare against, so it tests the high word of the 128-bit product: `2^32 * 2^32` has a high word of `1`.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function times(a Slot, b Slot) returns Slot
+	return a * b
+end 'times'
+
+function main() returns ExitCode
+	print("{times(4294967296, b: 4294967296)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-product-of-two-runtime-words-over-the-top-panics.test:5: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in times
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-product-with-the-top-bit-set-panics -->
+`2^63 * 2`, where the product's low word is `0`.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function times(a Slot, b Slot) returns Slot
+	return a * b
+end 'times'
+
+function main() returns ExitCode
+	print("{times(9223372036854775808, b: 2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-product-with-the-top-bit-set-panics.test:5: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in times
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.the-product-of-the-top-with-itself-panics -->
+`u64.max * u64.max`, the largest high word there is.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function times(a Slot, b Slot) returns Slot
+	return a * b
+end 'times'
+
+function main() returns ExitCode
+	print("{times(u64.max, b: u64.max)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.the-product-of-the-top-with-itself-panics.test:5: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in times
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-product-over-the-top-of-folded-operands-is-refused -->
+The factors known to the compiler: the product is E3005 at the operator.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function main() returns ExitCode
+	let word = 4294967296 as Slot
+	let product = word * word
+	print("{product}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:21: The result of 4294967296 * 4294967296 is outside the range of 'Slot' (int(0 to 18446744073709551615))
+```
+
+<!-- test: range-check-panic.a-var-doubled-past-the-top-panics -->
+A `var` operand: the loop doubles `acc` until `2^63 * 2`, which is the 64th trip.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function main() returns ExitCode
+	var acc = 1 as Slot
+	for _ in 0 upto 70 'double'
+		acc = acc * 2
+	end 'double'
+	print("{acc}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-var-doubled-past-the-top-panics.test:7: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-counted-loops-bounded-sum-is-not-a-panic-site -->
+The control for the proof: a counter's interval covers `(i as Slot) + 1`, so the sum is computed with no check, and the loop runs to its end.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function main() returns ExitCode
+	var total = 0 as Slot
+	for i in 0 upto 10 'each'
+		total = total + ((i as Slot) + 1)
+	end 'each'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+55
+```
+
+<!-- test: range-check-panic.negating-a-full-width-unsigned-value-is-refused -->
+⛔ **`-n` OVER A FULL-WIDTH UNSIGNED ALIAS IS A COMPILE ERROR.** `Count` holds `0 to u64.max`, so the negation of any value above 0 is outside it, and a wrapping negation is a different operation. The message names the two spellings that mean something: a `bits(64)` typealias for the deliberate wrap, a signed alias for the number.
+```maxon
+function main() returns ExitCode
+	let n = [1, 2].count()
+	let m = -n
+	print("{m}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3218: <fragment>:4:10: unary '-' cannot negate a value of 'Count': it holds 0 to u64.max, so the negation of any value above 0 is outside it. Write a deliberately wrapping negation over a `bits(64)` typealias, or convert the value to a signed typealias first with `as`
+```
+
+<!-- test: range-check-panic.negating-a-pattern-or-a-signed-value-is-unchanged -->
+A `bits(64)` pattern wraps under `-`, and a signed alias is negated as a number.
+```maxon
+typealias Word = bits(64)
+typealias Delta = int(-100 to 100)
+
+function main() returns ExitCode
+	let w = 5 as Word
+	let d = 7 as Delta
+	print("{-w} {-d}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551611 -7
+```
+
+<!-- test: range-check-panic.a-counted-difference-plus-half-the-range-does-not-panic -->
+A sum that lands at or above `2^63` is a legitimate `Slot` whatever the left operand's proof is: the operation's check is a carry test, never a test of the result's sign.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function main() returns ExitCode
+	let half = 9223372036854775808 as Slot
+	for i in 1 upto 3 'each'
+		let below = (i as Slot) - 1
+		print("{below + half}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9223372036854775808
+9223372036854775809
 ```

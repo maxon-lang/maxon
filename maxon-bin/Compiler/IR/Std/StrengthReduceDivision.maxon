@@ -110,7 +110,7 @@ typealias PositiveModulus = int(1 to u64.max) implements DivisionWord
 // carries against the single `i64.div_s` the reduction would replace.
 //
 // wasm's isel PANICS on the opcode it cannot lower, so a wrong answer here is a loud compiler failure on
-// the first reduced division rather than a silent miscompile.
+// the first reduced division or unsigned product guard rather than a silent miscompile.
 module function targetLowersMulHigh(cpu CpuArch) returns bool
 	return match cpu 'c'
 		x64 or
@@ -252,13 +252,15 @@ type FixedPointRatio
 	// ⚠ Only `quotient` is allowed to wrap here: `r` and `m` are both below `2^63`, so every remainder
 	// term is exact.
 	function raiseByOneBit(modulus DivisionWord)
+		let doubled = (self.quotient as MachineWord) * 2
+
 		if self.remainder >= modulus - self.remainder 'carry'
-			self.quotient = self.quotient * 2 + 1
+			self.quotient = (doubled + 1) as DivisionWord
 			self.remainder = self.remainder - (modulus - self.remainder)
 			return
 		end 'carry'
 
-		self.quotient = self.quotient * 2
+		self.quotient = doubled as DivisionWord
 		self.remainder = self.remainder + self.remainder
 	end 'raiseByOneBit'
 end 'FixedPointRatio'
@@ -329,7 +331,7 @@ function deriveSignedMagic(divisor DivisionWord, out DivisionMagic)
 		let keepRefining = ancRatio.quotient < delta or (ancRatio.quotient == delta and ancRatio.remainder == 0)
 
 		if not keepRefining 'converged'
-			out.multiplier = (divisorRatio.quotient + 1) as FullRangeInt
+			out.multiplier = ((divisorRatio.quotient as MachineWord) + 1) as FullRangeInt
 			out.postShift = (p - ReducedWordBits) as ShiftCount
 			return
 		end 'converged'
@@ -365,13 +367,13 @@ function deriveUnsignedMagic(divisor DivisionWord, out DivisionMagic)
 	let roundUpBound = (1 as DivisionWord) shl (scale as DivisionWord)
 
 	if divisor - ratio.remainder < roundUpBound 'roundUpFitsSixtyFourBits'
-		out.multiplier = (ratio.quotient + 1) as FullRangeInt
+		out.multiplier = ((ratio.quotient as MachineWord) + 1) as FullRangeInt
 		out.addIndicator = false
 		return
 	end 'roundUpFitsSixtyFourBits'
 
 	ratio.raiseByOneBit(divisor)
-	out.multiplier = (ratio.quotient + 1) as FullRangeInt
+	out.multiplier = ((ratio.quotient as MachineWord) + 1) as FullRangeInt
 	out.addIndicator = true
 end 'deriveUnsignedMagic'
 

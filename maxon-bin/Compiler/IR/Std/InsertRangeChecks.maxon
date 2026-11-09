@@ -2,7 +2,9 @@
 // recorded range-check sites (`project.rangeChecks`) into the compile-time E3005s and runtime panics a
 // ranged typealias promises at EVERY position a value meets one: a narrowing `as` cast, a ranged
 // `return`, a struct-literal field, a field store, a field's declared default, an array element and a
-// call argument. It runs right after `lowerMaxonToStd`, before the other Std passes.
+// call argument. It also checks each `+ - *` over a full-width unsigned alias where the operation is
+// computed (`aliasChecksItsArithmetic`). It runs right after `lowerMaxonToStd`, before the other Std
+// passes.
 //
 // ⚠ **WHICH HALVES A POSITION OWES IS `RangeCheckGuard`'S TO SAY, NOT THIS PASS'S.** The compile-time
 // E3005 is owed EVERYWHERE and is raised by the one decision function (`needsRuntimeGuard`); the runtime
@@ -74,22 +76,63 @@ end 'RangeCheckEdge'
 // `createInRange` the one check whose satisfied predicate means IN range (see `RangeCheckEdge`).
 type RangeBoundCheck
 	export var pred as StdCmpPred
-	export var bound as FullRangeInt
+	export var limit as CheckLimit
 	export let onTrue as RangeCheckEdge
 	export let unsigned as bool
 
 	static function create(pred StdCmpPred, bound FullRangeInt) returns RangeBoundCheck
-		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.panic, unsigned: false}
+		return Self{pred: pred, limit: CheckLimit.constant(bound), onTrue: RangeCheckEdge.panic, unsigned: false}
 	end 'create'
 
 	static function createUnsigned(pred StdCmpPred, bound FullRangeInt) returns RangeBoundCheck
-		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.panic, unsigned: true}
+		return Self{pred: pred, limit: CheckLimit.constant(bound), onTrue: RangeCheckEdge.panic, unsigned: true}
 	end 'createUnsigned'
 
+	static function createUnsignedAgainst(pred StdCmpPred, limit ValueId) returns RangeBoundCheck
+		return Self{pred: pred, limit: CheckLimit.operand(limit), onTrue: RangeCheckEdge.panic, unsigned: true}
+	end 'createUnsignedAgainst'
+
 	static function createInRange(pred StdCmpPred, bound FullRangeInt) returns RangeBoundCheck
-		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.inRange, unsigned: false}
+		return Self{pred: pred, limit: CheckLimit.constant(bound), onTrue: RangeCheckEdge.inRange, unsigned: false}
 	end 'createInRange'
 end 'RangeBoundCheck'
+
+union CheckLimit
+	constant(bound FullRangeInt)
+	operand(value ValueId)
+end 'CheckLimit'
+
+union WrapGuard
+	signTest(value ValueId)
+	compare(tested ValueId, check RangeBoundCheck)
+end 'WrapGuard'
+
+enum GuardSource
+	door
+	operation
+end 'GuardSource'
+
+// Whether a guard tests a value through the operands of the arithmetic that made it: never for an alias
+// that does not check its arithmetic (`none`). A door (`ifRecorded`) tests a recorded result that way,
+// because a legitimate result can sit at or above 2^63, where the sign test refuses it, and falls back
+// to the sign test for any other value. The operation's own check (`required`) has nothing to fall
+// back to.
+enum WrapDemand
+	none
+	ifRecorded
+	required
+end 'WrapDemand'
+
+function wrapDemandOf(alias RangedTypeAlias, source GuardSource) returns WrapDemand
+	if not aliasChecksItsArithmetic(alias) 'nothingToWrap'
+		return WrapDemand.none
+	end 'nothingToWrap'
+
+	return match source 'source'
+		door gives WrapDemand.ifRecorded
+		operation gives WrapDemand.required
+	end 'source'
+end 'wrapDemandOf'
 
 typealias RangeBoundCheckArray = Array with RangeBoundCheck
 
@@ -414,8 +457,10 @@ type RangeCheckEmitter
 
 	// A range site: `stdOpPos`, the site's Std position, is where in its block the guard goes. An
 	// `alias` site is guarded against its alias; a `callArgument` site is a full-unsigned
-	// parameter's call-site check (`guardCallArgument`). Every one of them owes the runtime half, so
-	// no site carries a `RangeCheckGuard` to be asked for.
+	// parameter's call-site check (`guardCallArgument`); an `arithmetic` site is the operation's own
+	// wrap check (`guardArithmeticSite`); a `foldedArithmetic` site is a constant result that wrapped,
+	// reported at compile time only (`reportFoldedArithmetic`). Every one of them but `literalUse` and
+	// `foldedArithmetic` owes the runtime half, so no site carries a `RangeCheckGuard` to be asked for.
 	//
 	// The two files are not always one here. The cast and the array element resolve their alias in
 	// this function's own file, a field in its declaring file, and the arm-served index in the
@@ -426,6 +471,8 @@ type RangeCheckEmitter
 			alias(alias) then self.guardSiteAgainst(site, stdOpPos: stdOpPos, alias: alias, filePath: filePath)
 			callArgument(callResult, argIndex, label, sourceMayBeNegative) then self.guardCallArgument(site, stdOpPos: stdOpPos, callResult: callResult, argIndex: argIndex, label: label, sourceMayBeNegative: sourceMayBeNegative, filePath: filePath)
 			literalUse then break
+			arithmetic(alias) then self.guardArithmeticSite(site, stdOpPos: stdOpPos, alias: alias, filePath: filePath)
+			foldedArithmetic(alias, lhs, rhs, op) then self.reportFoldedArithmetic(site, alias: alias, lhs: lhs, rhs: rhs, op: op, filePath: filePath)
 		end 'target'
 	end 'processSite'
 
@@ -459,7 +506,9 @@ type RangeCheckEmitter
 			match site.target 'target'
 				literalUse(alias) then self.checkLiteralUseAgainst(site, alias: alias, low: low, high: high)
 				alias or
-				callArgument then panic("checkLiteralUses: a site that is not a literal use was filed with the literal uses")
+				callArgument or
+				arithmetic or
+				foldedArithmetic then panic("checkLiteralUses: a site that is not a literal use was filed with the literal uses")
 			end 'target'
 		end 'eachProbe'
 	end 'checkLiteralUses'
@@ -501,7 +550,7 @@ type RangeCheckEmitter
 	function guardSiteAgainst(site RangeCheckSite, stdOpPos ElementIndex, alias RangedTypeAlias, filePath FilePath)
 		match self.guardVerdict(site.value, alias: alias, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, filePath: filePath) 'verdict'
 			noGuard then return
-			guard(guarded) then _ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: stdOpPos), operand: GuardedOperand.asIs(site.value), alias: guarded, chain: GuardChain.blockChain(site.block), filePath: filePath, line: site.line, column: site.column)
+			guard(guarded) then _ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: stdOpPos), operand: GuardedOperand.asIs(site.value), alias: guarded, chain: GuardChain.blockChain(site.block), source: GuardSource.door, filePath: filePath, line: site.line, column: site.column)
 		end 'verdict'
 	end 'guardSiteAgainst'
 
@@ -638,7 +687,7 @@ type RangeCheckEmitter
 		// bumps it, so `[firstMintedId, nextBlockId)` is exactly this guard's blocks with no second list
 		// to keep in step.
 		let firstMintedId = self.func.nextBlockId
-		view ok = self.emitGuardAt(guardSite, operand: self.paramOperand(site), alias: alias, chain: GuardChain.blockChain(entryId), filePath: filePath, line: site.line, column: site.column)
+		view ok = self.emitGuardAt(guardSite, operand: self.paramOperand(site), alias: alias, chain: GuardChain.blockChain(entryId), source: GuardSource.door, filePath: filePath, line: site.line, column: site.column)
 
 		if ok.id == headId 'bothBoundsElided'
 			return
@@ -901,7 +950,7 @@ type RangeCheckEmitter
 
 			match self.retBlockOf(site) 'ret'
 				notFound then break
-				found(retBlock) then _ = self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.bodyOpCount()), operand: GuardedOperand.asIs(site.value), alias: alias, chain: GuardChain.retChain, filePath: self.functionChecks.filePath, line: site.line, column: site.column)
+				found(retBlock) then _ = self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.bodyOpCount()), operand: GuardedOperand.asIs(site.value), alias: alias, chain: GuardChain.retChain, source: GuardSource.door, filePath: self.functionChecks.filePath, line: site.line, column: site.column)
 			end 'ret'
 		end 'eachSite'
 	end 'guardReturns'
@@ -999,7 +1048,7 @@ type RangeCheckEmitter
 	//
 	// The guard's ops carry the checked site's span, so a line whose only code is a guard still has a
 	// line row; the span is cleared after, so nothing this pass emits next inherits it.
-	function emitGuardAt(site GuardSite, operand GuardedOperand, alias RangedTypeAlias, chain GuardChain, filePath FilePath, line LineNumber, column ColumnNumber) returns IrBlock
+	function emitGuardAt(site GuardSite, operand GuardedOperand, alias RangedTypeAlias, chain GuardChain, source GuardSource, filePath FilePath, line LineNumber, column ColumnNumber) returns IrBlock
 		let isFloat = aliasIsFloat(alias)
 		let checks = boundChecks(alias.low, high: alias.high, isFloat: isFloat)
 
@@ -1010,13 +1059,13 @@ type RangeCheckEmitter
 		end 'noBoundNeeded'
 
 		self.module.spans.current = sourceSpanOf(self.project, filePath: filePath, line: line, column: column)
-		var ok = self.emitCheckedGuard(site, operand: operand, checks: checks, message: self.rangeCheckMessage(filePath, line: line, alias: alias), chain: chain, isFloat: isFloat, checksBorrow: not isFloat and aliasIsUnsignedFullQuantity(alias))
+		var ok = self.emitCheckedGuard(site, operand: operand, checks: checks, message: self.rangeCheckMessage(filePath, line: line, alias: alias), chain: chain, isFloat: isFloat, wrap: wrapDemandOf(alias, source: source))
 		self.module.spans.current = NoSpanId
 
 		return ok
 	end 'emitGuardAt'
 
-	function emitCheckedGuard(site GuardSite, operand GuardedOperand, checks RangeBoundCheckArray, message ByteArray, chain GuardChain, isFloat bool, checksBorrow bool) returns IrBlock
+	function emitCheckedGuard(site GuardSite, operand GuardedOperand, checks RangeBoundCheckArray, message ByteArray, chain GuardChain, isFloat bool, wrap WrapDemand) returns IrBlock
 		// The split advances the chain inside itself, before `appendPanicBlock`, and that order is
 		// load-bearing — see `extendGuardChain`.
 		var ok = self.splitFor(site, chain: chain)
@@ -1026,31 +1075,105 @@ type RangeCheckEmitter
 		// immediately ahead of the cascade that reads it. It appends an op, never a block, so
 		// `extendGuardChain`'s "the last block registered is the continuation" invariant holds.
 		let compared = self.comparedValue(operand, head: site.block, isFloat: isFloat)
-		let tested = self.borrowWitnessOf(compared, head: site.block) if checksBorrow else compared
 		view panicBlock = appendPanicBlock(self.module, func: self.func, globalData: self.project.globalData, label: RangeCheckPanicLabel, message: message, ids: self.ids)
-		self.emitCascade(site.block, value: tested, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
+
+		match self.wrapGuardOf(compared, head: site.block, demand: wrap) 'guard'
+			signTest(value) then self.emitCascade(site.block, value: value, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
+			compare(tested, check) then self.emitCascade(site.block, value: tested, checks: RangeBoundCheckArray from [check], panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
+		end 'guard'
+
 		return ok
 	end 'emitCheckedGuard'
 
-	// A full-unsigned difference is refused only on a real borrow (lhs < rhs unsigned). Bit 63 of
-	// `(~lhs & rhs) | (~(lhs ^ rhs) & difference)` is that borrow, so the cascade's sign test reads it;
-	// `TypeRules.unsignedSubtractionBorrows` folds the same identity and the two must agree.
-	function borrowWitnessOf(difference ValueId, head IrBlock) returns ValueId
-		view recorded = match self.functionChecks.borrowOperands 'column'
-			unwritten gives sharedNoBorrowOperands
-			entries(byDifference) gives byDifference
+	function guardArithmeticSite(site RangeCheckSite, stdOpPos ElementIndex, alias RangedTypeAlias, filePath FilePath)
+		_ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: stdOpPos), operand: GuardedOperand.asIs(site.value), alias: alias, chain: GuardChain.blockChain(site.block), source: GuardSource.operation, filePath: filePath, line: site.line, column: site.column)
+	end 'guardArithmeticSite'
+
+	function reportFoldedArithmetic(site RangeCheckSite, alias RangedTypeAlias, lhs FullRangeInt, rhs FullRangeInt, op MaxonBinOp, filePath FilePath)
+		reportPositioned(self.project, code: ErrorCode.typeMismatch, message: foldedArithmeticOutOfRangeMessage(op, lhs: lhs, rhs: rhs, aliasName: aliasSpelledForReader(self.project, alias: alias, readerFilePath: filePath, memo: self.spellings), low: alias.low, high: alias.high, domain: alias.domain), line: site.line, column: site.column, filePath: filePath)
+	end 'reportFoldedArithmetic'
+
+	// A wrapped result is itself a valid unsigned pattern, so a recorded `+ - *` result is not tested on
+	// its own bits: the carry (`sum <u lhs`), the borrow (`lhs <u rhs`) or the overflow
+	// (`multiplicationGuard`) is read from its operands. The test must give the verdict
+	// `unsignedArithmeticWraps` folds for constants.
+	function wrapGuardOf(result ValueId, head IrBlock, demand WrapDemand) returns WrapGuard
+		if demand == WrapDemand.none 'noWrapToCheck'
+			return WrapGuard.signTest(result)
+		end 'noWrapToCheck'
+
+		view recorded = match self.functionChecks.wrapOperands 'column'
+			unwritten gives sharedNoWrapOperands
+			entries(byResult) gives byResult
 		end 'column'
 
-		let operands = try recorded.get(difference) otherwise return difference
-		let allOnes = self.mintDerived(difference)
-		self.module.appendOp(head, op: StdOp.const(allOnes, value: UnsignedFullUpperPattern, valueType: StdType.i64))
-		let notLhs = self.appendWordOp(head, lhs: operands.lhs, rhs: allOnes, opcode: StdBinOpcode.bitXor, source: difference)
-		let borrowedByRhs = self.appendWordOp(head, lhs: notLhs, rhs: operands.rhs, opcode: StdBinOpcode.bitAnd, source: difference)
-		let operandsDiffer = self.appendWordOp(head, lhs: operands.lhs, rhs: operands.rhs, opcode: StdBinOpcode.bitXor, source: difference)
-		let operandsAgree = self.appendWordOp(head, lhs: operandsDiffer, rhs: allOnes, opcode: StdBinOpcode.bitXor, source: difference)
-		let borrowedThrough = self.appendWordOp(head, lhs: operandsAgree, rhs: difference, opcode: StdBinOpcode.bitAnd, source: difference)
-		return self.appendWordOp(head, lhs: borrowedByRhs, rhs: borrowedThrough, opcode: StdBinOpcode.bitOr, source: difference)
-	end 'borrowWitnessOf'
+		let operands = try recorded.get(result) otherwise return self.unrecordedWrapGuard(result, demand: demand)
+
+		return match operands.op 'op'
+			add gives WrapGuard.compare(result, check: RangeBoundCheck.createUnsignedAgainst(StdCmpPred.lt, limit: operands.lhs))
+			sub gives WrapGuard.compare(operands.lhs, check: RangeBoundCheck.createUnsignedAgainst(StdCmpPred.lt, limit: operands.rhs))
+			mul gives self.multiplicationGuard(operands, product: result, head: head)
+			default panic("wrapGuardOf: v{result} records operands of '{operands.op.rawValue}', which cannot leave an unsigned range")
+		end 'op'
+	end 'wrapGuardOf'
+
+	function unrecordedWrapGuard(result ValueId, demand WrapDemand) returns WrapGuard
+		if demand == WrapDemand.ifRecorded 'aDoorOverAnyValue'
+			return WrapGuard.signTest(result)
+		end 'aDoorOverAnyValue'
+
+		panic("unrecordedWrapGuard: v{result} is an arithmetic result the parser guards but recorded no operands for, so the operation's check has nothing to compare")
+	end 'unrecordedWrapGuard'
+
+	// A product wraps exactly when its high word is nonzero. A constant factor skips the multiply and
+	// bounds the other factor (`unsignedMultiplicationLimit`); otherwise the high word is one unsigned
+	// high multiply where the target lowers it (`targetLowersMulHigh`) and `overflowWitness` where not.
+	function multiplicationGuard(operands WrapOperands, product ValueId, head IrBlock) returns WrapGuard
+		if self.intConsts.contains(operands.rhs) 'aConstantFactor'
+			return WrapGuard.compare(operands.lhs, check: RangeBoundCheck.createUnsigned(StdCmpPred.gt, bound: unsignedMultiplicationLimit(self.intConsts.constantOf(operands.rhs))))
+		end 'aConstantFactor'
+
+		if self.intConsts.contains(operands.lhs) 'aConstantMultiplicand'
+			return WrapGuard.compare(operands.rhs, check: RangeBoundCheck.createUnsigned(StdCmpPred.gt, bound: unsignedMultiplicationLimit(self.intConsts.constantOf(operands.lhs))))
+		end 'aConstantMultiplicand'
+
+		if targetLowersMulHigh(self.project.target.cpu) 'aHighMultiply'
+			let highWord = self.appendWordOp(head, lhs: operands.lhs, rhs: operands.rhs, opcode: StdBinOpcode.mulHighUnsigned, source: product)
+
+			return WrapGuard.compare(highWord, check: RangeBoundCheck.createUnsigned(StdCmpPred.gt, bound: EmptyHighWord))
+		end 'aHighMultiply'
+
+		return WrapGuard.signTest(self.overflowWitness(operands, product: product, head: head))
+	end 'multiplicationGuard'
+
+	// Builds the high word of the product from 32-bit halves. `high | -high` has bit 63 set exactly when
+	// `high` is nonzero, so the cascade's sign test reads it.
+	function overflowWitness(operands WrapOperands, product ValueId, head IrBlock) returns ValueId
+		let halfWidth = self.appendBoundConst(head, bound: WordHalfBits, source: product, operandType: StdType.i64)
+		let lowMask = self.appendBoundConst(head, bound: LowHalfMask, source: product, operandType: StdType.i64)
+		let lhsHigh = self.appendWordOp(head, lhs: operands.lhs, rhs: halfWidth, opcode: StdBinOpcode.shrLogical, source: product)
+		let lhsLow = self.appendWordOp(head, lhs: operands.lhs, rhs: lowMask, opcode: StdBinOpcode.bitAnd, source: product)
+		let rhsHigh = self.appendWordOp(head, lhs: operands.rhs, rhs: halfWidth, opcode: StdBinOpcode.shrLogical, source: product)
+		let rhsLow = self.appendWordOp(head, lhs: operands.rhs, rhs: lowMask, opcode: StdBinOpcode.bitAnd, source: product)
+		let lowProduct = self.appendWordOp(head, lhs: lhsLow, rhs: rhsLow, opcode: StdBinOpcode.mul, source: product)
+		let crossLeft = self.appendWordOp(head, lhs: lhsHigh, rhs: rhsLow, opcode: StdBinOpcode.mul, source: product)
+		let crossRight = self.appendWordOp(head, lhs: lhsLow, rhs: rhsHigh, opcode: StdBinOpcode.mul, source: product)
+		let highProduct = self.appendWordOp(head, lhs: lhsHigh, rhs: rhsHigh, opcode: StdBinOpcode.mul, source: product)
+		let lowCarry = self.appendWordOp(head, lhs: lowProduct, rhs: halfWidth, opcode: StdBinOpcode.shrLogical, source: product)
+		let crossLeftLow = self.appendWordOp(head, lhs: crossLeft, rhs: lowMask, opcode: StdBinOpcode.bitAnd, source: product)
+		let crossRightLow = self.appendWordOp(head, lhs: crossRight, rhs: lowMask, opcode: StdBinOpcode.bitAnd, source: product)
+		let middleSoFar = self.appendWordOp(head, lhs: lowCarry, rhs: crossLeftLow, opcode: StdBinOpcode.add, source: product)
+		let middle = self.appendWordOp(head, lhs: middleSoFar, rhs: crossRightLow, opcode: StdBinOpcode.add, source: product)
+		let crossLeftHigh = self.appendWordOp(head, lhs: crossLeft, rhs: halfWidth, opcode: StdBinOpcode.shrLogical, source: product)
+		let crossRightHigh = self.appendWordOp(head, lhs: crossRight, rhs: halfWidth, opcode: StdBinOpcode.shrLogical, source: product)
+		let middleCarry = self.appendWordOp(head, lhs: middle, rhs: halfWidth, opcode: StdBinOpcode.shrLogical, source: product)
+		let highSoFar = self.appendWordOp(head, lhs: highProduct, rhs: crossLeftHigh, opcode: StdBinOpcode.add, source: product)
+		let highWithCross = self.appendWordOp(head, lhs: highSoFar, rhs: crossRightHigh, opcode: StdBinOpcode.add, source: product)
+		let high = self.appendWordOp(head, lhs: highWithCross, rhs: middleCarry, opcode: StdBinOpcode.add, source: product)
+		let zero = self.appendBoundConst(head, bound: 0, source: product, operandType: StdType.i64)
+		let negatedHigh = self.appendWordOp(head, lhs: zero, rhs: high, opcode: StdBinOpcode.sub, source: product)
+		return self.appendWordOp(head, lhs: high, rhs: negatedHigh, opcode: StdBinOpcode.bitOr, source: product)
+	end 'overflowWitness'
 
 	function appendWordOp(head IrBlock, lhs ValueId, rhs ValueId, opcode StdBinOpcode, source ValueId) returns ValueId
 		let result = self.mintDerived(source)
@@ -1245,8 +1368,22 @@ type RangeCheckEmitter
 	//
 	// ⭐ The zero's TYPE is `stdDefaultPrimaryReturnType`'s, which is also lowering's THROW-edge answer —
 	// one rule for one fact, in the dialect both passes already read.
+	function limitValueOf(limit CheckLimit, block IrBlock, source ValueId, operandType StdType) returns ValueId
+		return match limit 'limit'
+			constant(bound) gives self.appendBoundConst(block, bound: bound, source: source, operandType: operandType)
+			operand(value) gives value
+		end 'limit'
+	end 'limitValueOf'
+
+	function appendBoundConst(block IrBlock, bound FullRangeInt, source ValueId, operandType StdType) returns ValueId
+		let boundId = self.mintDerived(source)
+		self.module.appendOp(block, op: StdOp.const(boundId, value: bound, valueType: operandType))
+		return boundId
+	end 'appendBoundConst'
+
 	// Emit the compare cascade, `head` first: each check is `const bound; cmp value <pred> bound;
-	// condBranch (predicate TRUE) -> trueTarget, (FALSE) -> next`. The TRUE target is `panicId` for an
+	// condBranch (predicate TRUE) -> trueTarget, (FALSE) -> next`; a check against an operand
+	// (`CheckLimit.operand`) has no `const`. The TRUE target is `panicId` for an
 	// out-of-range check and `okId` for an in-range one (see `RangeCheckEdge`); the FALSE edge falls
 	// through to the next check, or to `okId` for the last one. The `const` is left as a register
 	// operand — `foldConstOperands`, which runs after this pass, folds it into the `cmp`'s immediate.
@@ -1261,8 +1398,7 @@ type RangeCheckEmitter
 
 		for i in 0 upto checks.count() 'eachCheck'
 			let check = try checks.get(i) otherwise panic("emitCascade: checks.get OOB at {i}")
-			let boundId = self.mintDerived(value)
-			self.module.appendOp(current, op: StdOp.const(boundId, value: check.bound, valueType: operandType))
+			let boundId = self.limitValueOf(check.limit, block: current, source: value, operandType: operandType)
 			let condId = self.mintDerived(value)
 			let compareType = unsignedStdTypeOf(operandType) if check.unsigned else operandType
 			self.module.appendOp(current, op: StdOp.cmp(condId, lhs: value, rhs: boundId, pred: check.pred, operandType: compareType))
@@ -1753,6 +1889,12 @@ end 'rangedParamValue'
 // boundary is not a bare `0` sitting beside the range's own bounds.
 let SignBoundary = 0
 
+let WordHalfBits = 32
+
+let LowHalfMask = 0xFFFFFFFF
+
+let EmptyHighWord = 0
+
 // The bound checks a `[low, high]` range needs, in cascade order. See TypeRules'
 // `rangeNeedsLowerCheck` / `rangeNeedsUpperCheck`.
 //
@@ -1775,7 +1917,7 @@ function boundChecks(low FullRangeInt, high FullRangeInt, isFloat bool) returns 
 	// therefore never fire. Falling through to the ordinary path gives it the one check it wants:
 	// `rangeNeedsLowerCheck` is true (`0 > i64.min`) and `rangeNeedsUpperCheck` is false (the unsigned
 	// upper is unbounded), which is exactly `value < 0 → panic`. It is reached only for a value whose
-	// source may be negative, and a recorded unsigned difference is tested through `borrowWitnessOf`.
+	// source may be negative, and a recorded `+ - *` result is tested through `wrapGuardOf` instead.
 	//
 	// ⚠ A FLOAT IS NEVER ELIGIBLE. The shape reinterprets a signed bound as an unsigned one; IEEE-754
 	// ordering is sign-and-magnitude and matches neither, so a float bound whose pattern happens to
@@ -2192,7 +2334,9 @@ let noStdPositions = RangeSitePositionArray.create(0)
 function indexCallArgumentSite(recorded RecordedCallArguments, site RangeCheckSite)
 	match site.target 'target'
 		alias or
-		literalUse then return
+		literalUse or
+		arithmetic or
+		foldedArithmetic then return
 		callArgument(callResult, _, _, _) then appendCallArgumentSite(recorded, callResult: callResult, site: site)
 	end 'target'
 end 'indexCallArgumentSite'
@@ -2212,7 +2356,9 @@ function siteIsALiteralUse(site RangeCheckSite) returns bool
 	return match site.target 'target'
 		literalUse gives true
 		alias or
-		callArgument gives false
+		callArgument or
+		arithmetic or
+		foldedArithmetic gives false
 	end 'target'
 end 'siteIsALiteralUse'
 
@@ -2235,7 +2381,9 @@ end 'callRecordedSlot'
 function siteRecordsSlot(project Project, callee ByteArray, site RangeCheckSite, slot ParamCount) returns bool
 	return match site.target 'target'
 		alias or
-		literalUse gives false
+		literalUse or
+		arithmetic or
+		foldedArithmetic gives false
 		callArgument(_, argIndex, label, _) gives calleeParamSlot(project, callee: callee, argIndex: argIndex, label: label) == slot
 	end 'target'
 end 'siteRecordsSlot'
@@ -2245,4 +2393,4 @@ function denyParamAt(params WaivableParamArray, at ElementIndex)
 	denied.waived = false
 end 'denyParamAt'
 
-let sharedNoBorrowOperands = BorrowOperandsMap.create()
+let sharedNoWrapOperands = WrapOperandsMap.create()

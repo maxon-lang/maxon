@@ -4905,99 +4905,104 @@ export type RangeCheckSite
 	// @generated library-cache end
 end 'RangeCheckSite'
 
-export type BorrowOperands
+// The operands of a `+ - *` result whose wrap `InsertRangeChecks.wrapGuardOf` tests: a wrapped result
+// is a valid unsigned pattern, so only the operands show the wrap.
+export type WrapOperands
 	export let lhs as ValueId
 	export let rhs as ValueId
+	export let op as MaxonBinOp
 
-	export static function create(lhs ValueId, rhs ValueId) returns BorrowOperands
-		return Self{lhs: lhs, rhs: rhs}
+	export static function create(lhs ValueId, rhs ValueId, op MaxonBinOp) returns WrapOperands
+		return Self{lhs: lhs, rhs: rhs, op: op}
 	end 'create'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.unsigned(self.lhs as CacheUnsigned)
 		writer.unsigned(self.rhs as CacheUnsigned)
+		writer.unsigned(self.op.ordinal as CacheUnsigned)
 	end 'cacheWrite'
 
-	static function cacheRead(reader LibraryCacheReader) returns BorrowOperands throws LibraryCacheDamage
+	static function cacheRead(reader LibraryCacheReader) returns WrapOperands throws LibraryCacheDamage
 		let f_lhs = (try reader.unsigned()) as ValueId
 		let f_rhs = (try reader.unsigned()) as ValueId
+		let f_op = try cacheReadMaxonBinOp(reader)
 
-		return Self{lhs: f_lhs, rhs: f_rhs}
+		return Self{lhs: f_lhs, rhs: f_rhs, op: f_op}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize16
-		return sizeof(BorrowOperands) as CacheSize16
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(WrapOperands) as CacheSize24
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
-end 'BorrowOperands'
+end 'WrapOperands'
 
-export typealias BorrowOperandsMap = Map with (ValueId, BorrowOperands)
+export typealias WrapOperandsMap = Map with (ValueId, WrapOperands)
 
 // @generated library-cache begin
-function cacheWriteBorrowOperandsMap(writer LibraryCacheWriter, value BorrowOperandsMap)
+function cacheWriteWrapOperandsMap(writer LibraryCacheWriter, value WrapOperandsMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for (key, entry) in value 'eachEntry'
 		writer.unsigned(key as CacheUnsigned)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
-end 'cacheWriteBorrowOperandsMap'
+end 'cacheWriteWrapOperandsMap'
 
-function cacheReadBorrowOperandsMap(reader LibraryCacheReader) returns BorrowOperandsMap throws LibraryCacheDamage
+function cacheReadWrapOperandsMap(reader LibraryCacheReader) returns WrapOperandsMap throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = BorrowOperandsMap.create()
+	var result = WrapOperandsMap.create()
 
 	for _ in 0 upto count 'eachEntry'
 		let key = (try reader.unsigned()) as ValueId
-		let entry = try BorrowOperands.cacheRead(reader)
+		let entry = try WrapOperands.cacheRead(reader)
 		result.upsert(key, value: entry)
 	end 'eachEntry'
 
 	return result
-end 'cacheReadBorrowOperandsMap'
+end 'cacheReadWrapOperandsMap'
 
 // @generated library-cache end
 
-export union BorrowOperandsColumn
+export union WrapOperandsColumn
 	unwritten
-	entries(byDifference BorrowOperandsMap)
-end 'BorrowOperandsColumn'
+	entries(byResult WrapOperandsMap)
+end 'WrapOperandsColumn'
 
 // @generated library-cache begin
-function cacheWriteBorrowOperandsColumn(writer LibraryCacheWriter, value BorrowOperandsColumn)
+function cacheWriteWrapOperandsColumn(writer LibraryCacheWriter, value WrapOperandsColumn)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
 		unwritten then break
-		entries(a0) then cacheWriteBorrowOperandsColumnEntries(writer, a0: a0)
+		entries(a0) then cacheWriteWrapOperandsColumnEntries(writer, a0: a0)
 	end 'payload'
-end 'cacheWriteBorrowOperandsColumn'
+end 'cacheWriteWrapOperandsColumn'
 
-function cacheWriteBorrowOperandsColumnEntries(writer LibraryCacheWriter, a0 BorrowOperandsMap)
-	cacheWriteBorrowOperandsMap(writer, value: a0)
-end 'cacheWriteBorrowOperandsColumnEntries'
+function cacheWriteWrapOperandsColumnEntries(writer LibraryCacheWriter, a0 WrapOperandsMap)
+	cacheWriteWrapOperandsMap(writer, value: a0)
+end 'cacheWriteWrapOperandsColumnEntries'
 
-function cacheReadBorrowOperandsColumn(reader LibraryCacheReader) returns BorrowOperandsColumn throws LibraryCacheDamage
+function cacheReadWrapOperandsColumn(reader LibraryCacheReader) returns WrapOperandsColumn throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
 	return match tag 'case'
-		0 gives BorrowOperandsColumn.unwritten
-		1 gives try cacheReadBorrowOperandsColumnEntries(reader)
+		0 gives WrapOperandsColumn.unwritten
+		1 gives try cacheReadWrapOperandsColumnEntries(reader)
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
-end 'cacheReadBorrowOperandsColumn'
+end 'cacheReadWrapOperandsColumn'
 
-function cacheReadBorrowOperandsColumnEntries(reader LibraryCacheReader) returns BorrowOperandsColumn throws LibraryCacheDamage
-	let a0 = try cacheReadBorrowOperandsMap(reader)
+function cacheReadWrapOperandsColumnEntries(reader LibraryCacheReader) returns WrapOperandsColumn throws LibraryCacheDamage
+	let a0 = try cacheReadWrapOperandsMap(reader)
 
-	return BorrowOperandsColumn.entries(a0)
-end 'cacheReadBorrowOperandsColumnEntries'
+	return WrapOperandsColumn.entries(a0)
+end 'cacheReadWrapOperandsColumnEntries'
 
 // @generated library-cache end
 
-export let noBorrowOperands = BorrowOperandsColumn.unwritten
+export let noWrapOperands = WrapOperandsColumn.unwritten
 
 // ⭐⭐ **THE DECLARATION AN `alias` SITE RESOLVED — the site's own answer, not a question left for
 // the enforcer to re-ask.** `InsertRangeChecks` reads the bounds off it and never looks the name up
@@ -5012,6 +5017,8 @@ export union RangeCheckSiteTarget
 	alias(alias RangedTypeAlias)
 	callArgument(callResult ValueId, argIndex ParamCount, let label ByteArray, sourceMayBeNegative bool)
 	literalUse(alias RangedTypeAlias)
+	arithmetic(alias RangedTypeAlias)
+	foldedArithmetic(alias RangedTypeAlias, lhs FullRangeInt, rhs FullRangeInt, op MaxonBinOp)
 end 'RangeCheckSiteTarget'
 
 // @generated library-cache begin
@@ -5022,6 +5029,8 @@ function cacheWriteRangeCheckSiteTarget(writer LibraryCacheWriter, value RangeCh
 		alias(a0) then cacheWriteRangeCheckSiteTargetAlias(writer, a0: a0)
 		callArgument(a0, a1, a2, a3) then cacheWriteRangeCheckSiteTargetCallArgument(writer, a0: a0, a1: a1, a2: a2, a3: a3)
 		literalUse(a0) then cacheWriteRangeCheckSiteTargetLiteralUse(writer, a0: a0)
+		arithmetic(a0) then cacheWriteRangeCheckSiteTargetArithmetic(writer, a0: a0)
+		foldedArithmetic(a0, a1, a2, a3) then cacheWriteRangeCheckSiteTargetFoldedArithmetic(writer, a0: a0, a1: a1, a2: a2, a3: a3)
 	end 'payload'
 end 'cacheWriteRangeCheckSiteTarget'
 
@@ -5040,6 +5049,17 @@ function cacheWriteRangeCheckSiteTargetLiteralUse(writer LibraryCacheWriter, a0 
 	a0.cacheWrite(writer)
 end 'cacheWriteRangeCheckSiteTargetLiteralUse'
 
+function cacheWriteRangeCheckSiteTargetArithmetic(writer LibraryCacheWriter, a0 RangedTypeAlias)
+	a0.cacheWrite(writer)
+end 'cacheWriteRangeCheckSiteTargetArithmetic'
+
+function cacheWriteRangeCheckSiteTargetFoldedArithmetic(writer LibraryCacheWriter, a0 RangedTypeAlias, a1 FullRangeInt, a2 FullRangeInt, a3 MaxonBinOp)
+	a0.cacheWrite(writer)
+	writer.signed(a1 as CacheSigned)
+	writer.signed(a2 as CacheSigned)
+	writer.unsigned(a3.ordinal as CacheUnsigned)
+end 'cacheWriteRangeCheckSiteTargetFoldedArithmetic'
+
 function cacheReadRangeCheckSiteTarget(reader LibraryCacheReader) returns RangeCheckSiteTarget throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
@@ -5047,6 +5067,8 @@ function cacheReadRangeCheckSiteTarget(reader LibraryCacheReader) returns RangeC
 		0 gives try cacheReadRangeCheckSiteTargetAlias(reader)
 		1 gives try cacheReadRangeCheckSiteTargetCallArgument(reader)
 		2 gives try cacheReadRangeCheckSiteTargetLiteralUse(reader)
+		3 gives try cacheReadRangeCheckSiteTargetArithmetic(reader)
+		4 gives try cacheReadRangeCheckSiteTargetFoldedArithmetic(reader)
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadRangeCheckSiteTarget'
@@ -5071,6 +5093,21 @@ function cacheReadRangeCheckSiteTargetLiteralUse(reader LibraryCacheReader) retu
 
 	return RangeCheckSiteTarget.literalUse(a0)
 end 'cacheReadRangeCheckSiteTargetLiteralUse'
+
+function cacheReadRangeCheckSiteTargetArithmetic(reader LibraryCacheReader) returns RangeCheckSiteTarget throws LibraryCacheDamage
+	let a0 = try RangedTypeAlias.cacheRead(reader)
+
+	return RangeCheckSiteTarget.arithmetic(a0)
+end 'cacheReadRangeCheckSiteTargetArithmetic'
+
+function cacheReadRangeCheckSiteTargetFoldedArithmetic(reader LibraryCacheReader) returns RangeCheckSiteTarget throws LibraryCacheDamage
+	let a0 = try RangedTypeAlias.cacheRead(reader)
+	let a1 = (try reader.signed()) as FullRangeInt
+	let a2 = (try reader.signed()) as FullRangeInt
+	let a3 = try cacheReadMaxonBinOp(reader)
+
+	return RangeCheckSiteTarget.foldedArithmetic(a0, lhs: a1, rhs: a2, op: a3)
+end 'cacheReadRangeCheckSiteTargetFoldedArithmetic'
 
 // @generated library-cache end
 
@@ -5750,10 +5787,10 @@ export type FunctionRangeChecks
 	export var unsignedPatternValues as ValueMarkColumn
 	export var checkedCalls as ValueMarkColumn
 
-	export var borrowOperands as BorrowOperandsColumn
+	export var wrapOperands as WrapOperandsColumn
 
-	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAlias DeclaredAlias, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, provenValueRanges ProvenIntRangeColumn, provenFloatRanges ProvenFloatRangeColumn, writtenNegativeLiterals ValueMarkColumn, unsignedMaxLiterals ValueMarkColumn, unsignedPatternValues ValueMarkColumn, checkedCalls ValueMarkColumn, borrowOperands BorrowOperandsColumn) returns FunctionRangeChecks
-		return Self{filePath: filePath, sites: sites, argSites: argSites, returnAlias: returnAlias, returnSites: returnSites, paramSites: paramSites, provenValueRanges: provenValueRanges, provenFloatRanges: provenFloatRanges, writtenNegativeLiterals: writtenNegativeLiterals, unsignedMaxLiterals: unsignedMaxLiterals, unsignedPatternValues: unsignedPatternValues, checkedCalls: checkedCalls, borrowOperands: borrowOperands}
+	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAlias DeclaredAlias, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, provenValueRanges ProvenIntRangeColumn, provenFloatRanges ProvenFloatRangeColumn, writtenNegativeLiterals ValueMarkColumn, unsignedMaxLiterals ValueMarkColumn, unsignedPatternValues ValueMarkColumn, checkedCalls ValueMarkColumn, wrapOperands WrapOperandsColumn) returns FunctionRangeChecks
+		return Self{filePath: filePath, sites: sites, argSites: argSites, returnAlias: returnAlias, returnSites: returnSites, paramSites: paramSites, provenValueRanges: provenValueRanges, provenFloatRanges: provenFloatRanges, writtenNegativeLiterals: writtenNegativeLiterals, unsignedMaxLiterals: unsignedMaxLiterals, unsignedPatternValues: unsignedPatternValues, checkedCalls: checkedCalls, wrapOperands: wrapOperands}
 	end 'create'
 
 	export function paramAliasAt(slot ParamCount) returns RangedTypeAlias throws MapError
@@ -5780,7 +5817,7 @@ export type FunctionRangeChecks
 		cacheWriteValueMarkColumn(writer, value: self.unsignedMaxLiterals)
 		cacheWriteValueMarkColumn(writer, value: self.unsignedPatternValues)
 		cacheWriteValueMarkColumn(writer, value: self.checkedCalls)
-		cacheWriteBorrowOperandsColumn(writer, value: self.borrowOperands)
+		cacheWriteWrapOperandsColumn(writer, value: self.wrapOperands)
 	end 'cacheWrite'
 
 	module static function cacheRead(reader LibraryCacheReader) returns FunctionRangeChecks throws LibraryCacheDamage
@@ -5796,9 +5833,9 @@ export type FunctionRangeChecks
 		let f_unsignedMaxLiterals = try cacheReadValueMarkColumn(reader)
 		let f_unsignedPatternValues = try cacheReadValueMarkColumn(reader)
 		let f_checkedCalls = try cacheReadValueMarkColumn(reader)
-		let f_borrowOperands = try cacheReadBorrowOperandsColumn(reader)
+		let f_wrapOperands = try cacheReadWrapOperandsColumn(reader)
 
-		return Self{filePath: f_filePath, sites: f_sites, argSites: f_argSites, returnAlias: f_returnAlias, returnSites: f_returnSites, paramSites: f_paramSites, provenValueRanges: f_provenValueRanges, provenFloatRanges: f_provenFloatRanges, writtenNegativeLiterals: f_writtenNegativeLiterals, unsignedMaxLiterals: f_unsignedMaxLiterals, unsignedPatternValues: f_unsignedPatternValues, checkedCalls: f_checkedCalls, borrowOperands: f_borrowOperands}
+		return Self{filePath: f_filePath, sites: f_sites, argSites: f_argSites, returnAlias: f_returnAlias, returnSites: f_returnSites, paramSites: f_paramSites, provenValueRanges: f_provenValueRanges, provenFloatRanges: f_provenFloatRanges, writtenNegativeLiterals: f_writtenNegativeLiterals, unsignedMaxLiterals: f_unsignedMaxLiterals, unsignedPatternValues: f_unsignedPatternValues, checkedCalls: f_checkedCalls, wrapOperands: f_wrapOperands}
 	end 'cacheRead'
 
 	static function cacheLayoutBytes() returns CacheSize104

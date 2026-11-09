@@ -79,7 +79,10 @@ typealias Tally = int(0 to u64.max)
   [Division by Zero](/docs/language/expressions/#division-by-zero).
 - **Overflow wraps.** Integer arithmetic is two's-complement: `i64.max + 1` is `i64.min`. A range is not
   enforced on every intermediate result; it is checked where a value reaches a place declared with the
-  alias (see [Range Checks](/docs/language/ranged-typealiases/#range-checks)).
+  alias (see [Range Checks](/docs/language/ranged-typealiases/#range-checks)). The exception is `+`, `-` and `*` over a full-width unsigned
+  alias (`int(0 to u64.max)`, which `Count`, `ElementIndex` and `BytePos` are): each is range-checked where
+  it is computed, so a carry past `u64.max`, a borrow or a product past `u64.max` panics. Arithmetic that
+  is meant to wrap modulo 2^64 is written over a [`bits(64)`](#bit-patterns--bitsn) alias.
 - **Bitwise** operations use the word operators `and`, `or`, `xor`, `not`, `shl` and `shr` (see
   [Expressions](/docs/language/expressions/#logical-and-bitwise-operators)).
 - An alias whose lower bound is `0` is **unsigned**: `shr` zero-fills it, and its range check refuses a
@@ -87,8 +90,9 @@ typealias Tally = int(0 to u64.max)
   or `int(0 to 9223372036854775808)` — reads every value as unsigned: it compares, divides, range-checks and
   prints unsigned, and converts to a float as the unsigned value. `int(0 to u64.max)` holds every
   value up to `u64.max`: a value from an unsigned source — an unsigned alias, `u64.max`, a literal above
-  `i64.max`, or arithmetic over unsigned operands — passes its door unchecked (see
-  [Range Checks](/docs/language/ranged-typealiases/#range-checks)). A value that is a pattern rather than a count is a
+  `i64.max`, or the result of `and`, `or`, `xor`, `shl`, `shr` or unsigned `/` and `mod` over unsigned
+  operands — passes its door unchecked, and the result of `+`, `-` or `*` has already been checked where
+  it was computed (see [Range Checks](/docs/language/ranged-typealiases/#range-checks)). A bit pattern is a
   [`bits(64)`](#bit-patterns--bitsn).
 - An array, set, list, fixed-array or map-column literal whose bare elements need both a negative value and a value
   above `i64.max` (`[-1, u64.max]`) has no integer type that holds them all, and is **E3005** at the element

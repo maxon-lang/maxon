@@ -1899,17 +1899,13 @@ end 'main'
 42
 ```
 
-<!-- test: bitwise-operators.a-full-width-unsigned-alias-keeps-its-name-under-negation-and-complement -->
-**A FULL-WIDTH UNSIGNED ALIAS IS CLOSED UNDER `-`, `not`, `or` AND `xor`** — they wrap modulo 2^64 and every
-result is a value of the alias. The result keeps the name, so the quotient and the shift after it are
-UNSIGNED.
+<!-- test: bitwise-operators.a-full-width-unsigned-alias-keeps-its-name-under-complement-and-a-pattern-wraps-under-negation -->
+**A FULL-WIDTH UNSIGNED ALIAS IS CLOSED UNDER `not`, `or` AND `xor`, AND A `bits(64)` PATTERN UNDER `-` TOO** —
+they wrap modulo 2^64 and every result is a value of the alias. The result keeps the name, so the quotient and
+the shift after it are UNSIGNED. (`-c` over a `Count` is refused: see `range-check-panic`.)
 ```maxon
 typealias Count = int(0 to u64.max)
 typealias Wide = bits(64)
-
-function negatedHalf(c Count) returns Count
-	return (-c) / 2
-end 'negatedHalf'
 
 function complementShift(c Count) returns Count
 	return (not c) shr 1
@@ -1928,9 +1924,6 @@ function wideNegatedShift(w Wide) returns Wide
 end 'wideNegatedShift'
 
 function main() returns ExitCode
-	if negatedHalf(3) != 9223372036854775806 'negatedHalf'
-		return 1
-	end 'negatedHalf'
 	if complementShift(0) != 9223372036854775807 'complementShift'
 		return 2
 	end 'complementShift'
