@@ -7,6 +7,8 @@ module let FixtureSpecExtension = ".md"
 let SpecTestCommandWord = "spec-test"
 let NetworkFlag = "--network"
 module let SuccessExitCode = 0
+module let FilterFlagPrefix = "--filter="
+module let UnmatchedPattern = "nosuch"
 
 let StagingDirNamePrefix = "maxon-tests-spec-harness"
 let IgnoredWrapperDirName = "ignored"
@@ -116,6 +118,33 @@ function runOnceThenDiscard(staged FilePath, extraArguments StringArray = String
 	discardOutsideCheckoutDir(staged)
 	return run
 end 'runOnceThenDiscard'
+
+module function filterFlag(pattern String) returns String
+	return "{FilterFlagPrefix}{pattern}"
+end 'filterFlag'
+
+module function filterFlags(patterns StringArray) returns StringArray
+	var flags = StringArray.create(0)
+
+	for pattern in patterns 'eachPattern'
+		flags.push(filterFlag(pattern))
+	end 'eachPattern'
+
+	return flags
+end 'filterFlags'
+
+module function specPrefix(specName String) returns String
+	return testLabel(specName, testName: "")
+end 'specPrefix'
+
+module function selectedLabel(specName String) returns String
+	return testLabel(specName, testName: "{specName}.selected")
+end 'selectedLabel'
+
+module function ranVerdictIn(said String, specName String) returns bool
+	let label = selectedLabel(specName)
+	return said.contains(failVerdictPrefix(label)) or said.contains(passVerdictLine(label))
+end 'ranVerdictIn'
 
 module function everythingSaid(run CollectedOutput) returns String
 	return "{run.stdout}{LineFeed}{run.stderr}"

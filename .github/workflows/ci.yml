@@ -93,13 +93,14 @@ on:
 
 # ⭐ A PULL REQUEST CANCELS ITS OWN OLDER RUNS; `main` NEVER CANCELS. Superseding is right on a
 # branch still being pushed to — the verdict anyone wants is about the commit that gets MERGED, and a
-# run for an intermediate commit spends an hour of runner time on code that will not exist. It is
+# run for an intermediate commit spends runner time on code that will not exist. It is
 # wrong on `main`, where "which commit broke it" is the question this workflow is here to answer:
 # cancelling commit N's run because N+1 landed is how a break becomes unattributable.
 #
 # ⚠ THE `run_id` FALLBACK IS WHAT TURNS CANCELLING OFF, and `cancel-in-progress: false` would not.
 # A group is the thing that supersedes, and a group still discards a run while it is QUEUED — which a
-# `main` run often is, because GitHub Free allows five concurrent macOS jobs and one run uses one.
+# `main` run often is, because GitHub Free allows five concurrent macOS jobs and one run's macOS
+# lane alone needs more.
 # Giving each `main` run a group of its own is the only way it is left alone.
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
@@ -108,11 +109,16 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  SUITE_SHARDS: 4
+
 jobs:
   targets:
     runs-on: ubuntu-latest
     outputs:
       native: ${{ steps.matrix.outputs.native }}
+      shards: ${{ steps.matrix.outputs.shards }}
+      cross-shards: ${{ steps.matrix.outputs.cross-shards }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -125,10 +131,12 @@ jobs:
       - name: Read the native targets from the table
         id: matrix
         run: |
-          matrix="$(./scripts/targets/matrix.sh json native)"
-          echo "native=$matrix" >> "$GITHUB_OUTPUT"
+          shards="$(seq -s, 1 "$SUITE_SHARDS")"
+          echo "native=$(./scripts/targets/matrix.sh json native)" >> "$GITHUB_OUTPUT"
+          echo "shards=$(./scripts/targets/matrix.sh json --with shard="$shards" native)" >> "$GITHUB_OUTPUT"
+          echo "cross-shards=$(./scripts/targets/matrix.sh json --with shard="$shards" native roles=cross-suite)" >> "$GITHUB_OUTPUT"
 
-  suite:
+  corpora:
     needs: targets
     strategy: &lanes
       fail-fast: false
@@ -138,7 +146,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v5
+      - &checkout
+        uses: actions/checkout@v5
 
       # A role is matched with a comma on each side, so a role named inside another cannot select a lane.
       - name: Runner CPU
@@ -179,7 +188,8 @@ jobs:
         run: python3 scripts/test-bench-common.py
 
       # The seed is the binary alone; `scripts/fetch-seed.sh` says why and is the one place that fetches it.
-      - name: Seed from the pinned seed release
+      - &seed
+        name: Seed from the pinned seed release
         id: seed
         env:
           GH_TOKEN: ${{ github.token }}
@@ -196,13 +206,15 @@ jobs:
           fi
 
       # The seed builds `C1` and `C1` builds `C2`: one build would run the suite on the seed's runtime.
-      - name: Build
+      - &build
+        name: Build
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/build-from-seed.sh
 
       # Samples memory and the largest processes for the rest of the job into the log "Resource evidence"
       # prints: a step killed by its timeout or by the OOM killer leaves no such record in its own log.
-      - name: Start the resource sampler
+      - &sampler
+        name: Start the resource sampler
         if: steps.seed.outputs.seeded == 'yes' && runner.os != 'Windows'
         run: |
           ranked_processes() {
@@ -241,7 +253,8 @@ jobs:
 
       # Detached through `Start-Process`: a Git Bash background job holds the step's stdout pipe open, and
       # the runner waits for that pipe's EOF, so the step would never end.
-      - name: Start the resource sampler (Windows)
+      - &sampler-windows
+        name: Start the resource sampler (Windows)
         if: steps.seed.outputs.seeded == 'yes' && runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -275,21 +288,23 @@ jobs:
 
       # `specs/tls-interop.md` handshakes with a live `openssl`; the script names the one this lane uses
       # (macOS ships LibreSSL, so it installs Homebrew's) and fails the lane when it is too old.
-      - name: OpenSSL for the TLS interop cases
+      - &openssl
+        name: OpenSSL for the TLS interop cases
         if: steps.seed.outputs.seeded == 'yes'
         run: |
           set -euo pipefail
           openssl="$(./scripts/openssl-for-interop.sh)"
           echo "MAXON_OPENSSL=$openssl" >> "$GITHUB_ENV"
 
-      # Steps run cheapest first, and a failed step skips every later one: a step added above the
-      # suites at the end makes each red behind it wait for that step.
+      # Steps run cheapest first, and a failed step skips every later one: a slow step added ahead of a
+      # job's checks makes each red behind it wait for that step.
 
       # `tests/specHarness` runs a spec batch under the wasm target, and `tests/cli` builds it from this
       # checkout: wrapping the core module into a component needs `vendor/wasm-tools` (E6005 without it),
-      # and the cross-target suite below runs its programs under `vendor/wasmtime`. `vendor/` is gitignored,
+      # and the cross-target suite runs its programs under `vendor/wasmtime`. `vendor/` is gitignored,
       # so nothing else stages it.
-      - name: Stage vendor
+      - &vendor
+        name: Stage vendor
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/fetch-vendor.sh ${{ matrix.target }}
 
@@ -389,6 +404,52 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/buildManifest
 
+      - &evidence
+        name: Resource evidence
+        if: failure() && steps.seed.outputs.seeded == 'yes'
+        run: |
+          tail -n 400 "$RUNNER_TEMP/resource-samples.log" || true
+
+          case "$RUNNER_OS" in
+            Linux)
+              # `-n`: sudo fails at once rather than waiting for a password.
+              { sudo -n dmesg -T || dmesg -T; } 2>&1 | grep -i -E 'out of memory|oom|killed process' | tail -n 40 || true
+              ps -eo pid,ppid,pgid,stat,rss,etime,args --forest | cut -c1-240 || true
+              ;;
+            macOS)
+              ps -axo pid,ppid,pgid,stat,rss,etime,args | cut -c1-240 | sort -k2,2n || true
+              ;;
+            Windows)
+              echo "the process table is the last sample above"
+              ;;
+            *)
+              echo "no process listing for $RUNNER_OS"
+              ;;
+          esac
+
+      - &upload-samples
+        name: Upload the resource samples
+        if: failure() && steps.seed.outputs.seeded == 'yes'
+        uses: actions/upload-artifact@v6
+        with:
+          name: resource-samples-${{ github.job }}-${{ matrix.target }}${{ matrix.shard && format('-{0}', matrix.shard) || '' }}
+          path: ${{ runner.temp }}/resource-samples.log
+          if-no-files-found: ignore
+
+  tools:
+    needs: targets
+    strategy: *lanes
+    runs-on: ${{ matrix.runner }}
+    defaults: *bash-steps
+    steps:
+      - *checkout
+      - *seed
+      - *build
+      - *sampler
+      - *sampler-windows
+      - *openssl
+      - *vendor
+
       # ⭐ THE ONLY DEBUGGER CODE CI RUNS. `spec-test` covers the language; the debugger's driver, its
       # DAP server and its MCP tools are exercised by these three corpora and by nothing else, so a lane
       # without them reports a green suite over a debugger that does not start. `matrix.debugger` is the
@@ -449,9 +510,30 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/lsp
 
+      - *evidence
+      - *upload-samples
+
+  # Each shard runs its share of both the whole suite and the reversed-order run: a job of their own
+  # for the second would add a shard's worth of macOS jobs against the five GitHub Free allows.
+  suite:
+    needs: targets
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.targets.outputs.shards) }}
+    runs-on: ${{ matrix.runner }}
+    defaults: *bash-steps
+    steps:
+      - *checkout
+      - *seed
+      - *build
+      - *sampler
+      - *sampler-windows
+      - *openssl
+      - *vendor
+
       - name: Suite
         if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon spec-test
+        run: ./maxon-bin/.maxon/maxon spec-test --shard="${{ matrix.shard }}/$SUITE_SHARDS"
 
       - name: Suite in reversed source order
         if: steps.seed.outputs.seeded == 'yes'
@@ -459,6 +541,7 @@ jobs:
           MAXON_SOURCE_ORDER: reversed
         run: >-
           ./maxon-bin/.maxon/maxon spec-test
+          --shard="${{ matrix.shard }}/$SUITE_SHARDS"
           --filter=array-conditional-conformance-withheld/
           --filter=arrays/
           --filter=associated-type-held-at-an-interface/
@@ -513,46 +596,38 @@ jobs:
           --filter=where-clauses/
           --filter=witness-by-reference/
 
-      # One lane: its programs run under `vendor/wasmtime`, staged above, rather than on the runner's
-      # OS, so no lane's host changes what they run on.
+      - *evidence
+      - *upload-samples
+
+  # One lane: its programs run under `vendor/wasmtime`, which `Stage vendor` stages, rather than on
+  # the runner's OS, so no lane's host changes what they run on.
+  cross-suite:
+    needs: targets
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.targets.outputs.cross-shards) }}
+    runs-on: ${{ matrix.runner }}
+    defaults: *bash-steps
+    steps:
+      - *checkout
+      - *seed
+      - *build
+      - *sampler
+      - *sampler-windows
+      - *openssl
+      - *vendor
+
       - name: Cross-target suites
-        if: steps.seed.outputs.seeded == 'yes' && contains(format(',{0},', matrix.roles), ',cross-suite,')
+        if: steps.seed.outputs.seeded == 'yes'
         run: |
           set -euo pipefail
           targets="$(./scripts/targets/matrix.sh list target cross)"
           for target in $targets; do
-            ./maxon-bin/.maxon/maxon spec-test --target="$target"
+            ./maxon-bin/.maxon/maxon spec-test --target="$target" --shard="${{ matrix.shard }}/$SUITE_SHARDS"
           done
 
-      - name: Resource evidence
-        if: failure() && steps.seed.outputs.seeded == 'yes'
-        run: |
-          tail -n 400 "$RUNNER_TEMP/resource-samples.log" || true
-
-          case "$RUNNER_OS" in
-            Linux)
-              # `-n`: sudo fails at once rather than waiting for a password.
-              { sudo -n dmesg -T || dmesg -T; } 2>&1 | grep -i -E 'out of memory|oom|killed process' | tail -n 40 || true
-              ps -eo pid,ppid,pgid,stat,rss,etime,args --forest | cut -c1-240 || true
-              ;;
-            macOS)
-              ps -axo pid,ppid,pgid,stat,rss,etime,args | cut -c1-240 | sort -k2,2n || true
-              ;;
-            Windows)
-              echo "the process table is the last sample above"
-              ;;
-            *)
-              echo "no process listing for $RUNNER_OS"
-              ;;
-          esac
-
-      - name: Upload the resource samples
-        if: failure() && steps.seed.outputs.seeded == 'yes'
-        uses: actions/upload-artifact@v6
-        with:
-          name: resource-samples-${{ matrix.target }}
-          path: ${{ runner.temp }}/resource-samples.log
-          if-no-files-found: ignore
+      - *evidence
+      - *upload-samples
 
   freeze:
     if: github.repository == 'maxon-lang/maxon' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.freeze_seed))

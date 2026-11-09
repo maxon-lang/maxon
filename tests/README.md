@@ -389,6 +389,7 @@ tests/
     upgrade-dry-run-names-the-install.maxtest               `<root>/bin/maxon`: names THAT root, never the caller's MAXON_INSTALL, runs nothing
     upgrade-takes-no-arguments.maxtest                      a positional argument and a foreign option are both refused
     spec-test-refuses-a-batch-value-other-than-on-or-off.maxtest   a `--batch=` value other than on or off, and `--rewrite-drifted-goldens`, are refused, naming the option
+    spec-test-refuses-a-malformed-shard.maxtest   a `--shard=` value that is not `K/N` with 1 ≤ K ≤ N is refused as an invalid option value, naming it
     reference-documents-every-command.maxtest               docs/CLI_REFERENCE.md has a `###` heading naming `maxon <command>` for every command `help` documents, and spells every option it lists
     reference-documents-only-real-options.maxtest           every `--option` that document shows is listed by `help` or a subcommand's own usage (every native lane, as `profile` is)
     build-directory-without-output-names-the-directory.maxtest      `build <dir>` with no `--output=` writes `<dir>/<dirname><ext>`, staged outside the checkout
@@ -626,6 +627,7 @@ tests/
     a-staged-snippet-is-removed-after-its-call.maxtest      a snippet staged for a tool call, and everything built from it, is gone once the call answers
     snippets-an-ended-server-left-are-swept.maxtest      a server sweeps the snippets and snippet builds an ended server left, and keeps a live server's
     run-spec-test-filter-union.maxtest           `run_spec_test` given a filter array runs the union of the specs those filters name
+    run-spec-test-shard.maxtest                  `run_spec_test` given `shard` runs that shard's specs, the shards add up to the whole run, and a malformed `shard` is a tool error naming it
     run-spec-test-answers-its-failures.maxtest      `run_spec_test` answers every failure, with its spec, test and message, under the default cap
     run-spec-test-caps-its-failures.maxtest      `run_spec_test` lists at most `maxFailures` failures and counts the rest in `failuresOmitted`
     run-spec-test-lists-no-failure-at-zero.maxtest      `maxFailures: 0` lists no failure and counts every one
@@ -841,7 +843,9 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   `AsyncTrace` case passing on ids that differ from the run's but name the same threads and failing on a
   trace that names different ones, a `scriptlib/` package beside the compiler that does not parse leaving
   every case untouched, a run case whose marker leaves `wasm32-wasi` its only lane failing there on an
-  E3104 while cases with more lanes skip, an exit-code mismatch reporting the child's stdout and stderr, and a
+  E3104 while cases with more lanes skip, an exit-code mismatch reporting the child's stdout and stderr, the
+  shards of `--shard=K/N` running each spec exactly once with `--filter` judged against the whole directory
+  and a refused shard naming the live-network cases the whole directory left out, and a
   `--result-json` document holding every case in run order with its verdict, a failure's reason, and the
   counts.
   Each fixture's own preamble says what its test asserts.

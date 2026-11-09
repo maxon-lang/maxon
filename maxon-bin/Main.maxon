@@ -129,6 +129,8 @@ module let TargetFlagPrefix = "--target="
 // refused.
 module let WorkersFlagPrefix = "--workers="
 
+let ShardFlagPrefix = "--shard="
+
 module let LogFlagPrefix = "--log="
 let DetailLoggingName = "detail logging"
 
@@ -157,6 +159,10 @@ module function specSelectionArgv(specDir String, filterPatterns FilterPatternAr
 	if includeNetwork 'wantsLiveNetwork'
 		argv.push(NetworkFlag)
 	end 'wantsLiveNetwork'
+
+	if not mode.shard.isWholeSuite() 'runsOneShard'
+		argv.push("{ShardFlagPrefix}{mode.shard.spelling()}")
+	end 'runsOneShard'
 
 	return argv
 end 'specSelectionArgv'
@@ -1051,7 +1057,7 @@ end 'runVerifyRecheck'
 // Every worker count, `--workers=1` included, takes the one path through the pool: a serial branch
 // would be a second implementation of running the suite, free to drift.
 function runSpecTest(args MaxonArgs) returns ExitCode
-	if refusedPositionalBeyond(args, allowed: 1, usage: "maxon spec-test [dir] [--filter=<pattern>]... [--update-required] [--batch=on|off] [--network] [--workers=<n>] [--target=<cpu>-<os>] [{ResultJsonFlagPrefix}<path>]") 'tooManyPaths'
+	if refusedPositionalBeyond(args, allowed: 1, usage: "maxon spec-test [dir] [--filter=<pattern>]... [--update-required] [--batch=on|off] [--network] [--workers=<n>] [{ShardFlagPrefix}<k>/<n>] [--target=<cpu>-<os>] [{ResultJsonFlagPrefix}<path>]") 'tooManyPaths'
 		return OwnFailureExit
 	end 'tooManyPaths'
 
@@ -1311,10 +1317,11 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 		return OwnFailureExit
 	end 'runErr'
 
-	// A run fails when it selected nothing or when any one pattern did: a mistyped member of a set of
-	// patterns would otherwise run nowhere while the run exits 0, and under `--update-required` look as
-	// though it re-minted blocks.
-	if run.results.count() == 0 or run.unmatchedPatterns.count() > 0 'selectedNothing'
+	// A run fails when it selected nothing in the whole directory or when any one pattern did: a
+	// mistyped member of a set of patterns would otherwise run nowhere while the run exits 0, and under
+	// `--update-required` look as though it re-minted blocks. A shard holding none of the selection
+	// is one part of a run that did select, so it reports its empty result and passes.
+	if run.refused 'selectedNothing'
 		// Only here does the exclusion census precede the error, because it may be the only explanation:
 		// a default run's `--filter=http-client.get` selects nothing but live-network cases.
 		reportExclusions(run.excluded, effectiveTarget: effectiveTarget)
@@ -1346,7 +1353,7 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 	// After the summary and before the exit branches, so a red run reports its cost too. Stderr,
 	// because stdout must stay byte-identical between worker counts; `SuiteCpuTally.reportLine` spells
 	// the line.
-	printError("{run.cpu.reportLine(run.poolSize)}\n")
+	reportCompileCpu(run.cpu, poolSize: run.poolSize)
 
 	if not exitSucceeded(testsExit) 'someTestFailed'
 		return testsExit
@@ -1366,6 +1373,13 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 
 	return SucceededExit
 end 'runSpecSuite'
+
+function reportCompileCpu(cpu SuiteCpuTally, poolSize WorkerPoolSize)
+	match poolSize 'sizing'
+		sized(workers) then printError("{cpu.reportLine(workers)}\n")
+		unsized then return
+	end 'sizing'
+end 'reportCompileCpu'
 
 function writeSpecResultDocument(target SpecResultTarget, results SpecTestResultArray) returns ExitCode
 	return match target 'asked'
@@ -1523,9 +1537,9 @@ function reportResults(results SpecTestResultArray, batch BatchTally) returns Ex
 		print("{tally.notRunHere} not run here — COMPILED and checked against their `TargetIr` pins, but this host cannot execute them (see the note on stderr)\n")
 	end 'anyUnrunnable'
 
-	// A run in which nothing ran fails, like `runSpecSuite`'s empty selection: here everything
-	// selected was skipped by the target or cannot execute on this host. It is also the backstop
-	// should every case start answering E3104.
+	// A run that selected cases and ran none fails, like `runSpecSuite`'s empty selection: here
+	// everything selected was skipped by the target or cannot execute on this host. It is also the
+	// backstop should every case start answering E3104.
 	if tally.provedNothing() 'nothingRan'
 		printError("error: every selected test was SKIPPED or NOT RUN on this host, so this run proved nothing — the notes below name the constructs this target has no implementation for and the binaries this host cannot execute\n")
 		return OwnFailureExit
@@ -1994,6 +2008,7 @@ enum HelpOption
 	batch
 	network
 	workers
+	shard
 	rungs
 	repeat
 	note
@@ -2090,6 +2105,7 @@ function optionReference(option HelpOption) returns OptionReference
 		batch gives OptionReference.create("{BatchFlagPrefix}{BatchOnValue}|{BatchOffValue}", description: "{BatchOnValue} (the default) compiles a spec's plain run cases into the fewest programs whose type names do not overlap and runs each once, rerunning alone any case that did not finish cleanly; {BatchOffValue} compiles and runs every case on its own. The summary line says how many run cases ran batched, in how many programs, and how many ran alone.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(BatchFlagPrefix)])
 		network gives OptionReference.create(NetworkFlag, description: "Also run the cases marked `{NetworkMarker} {NetworkLiveValue} -->`, which open a socket to a REAL EXTERNAL HOST. They are OUT of a default run because their verdict measures somebody else's uptime rather than this compiler; a default run NAMES every one it left out.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.exactly(NetworkFlag)])
 		workers gives OptionReference.create("{WorkersFlagPrefix}<n>", description: "Run the suite on <n> persistent worker subprocesses (default {defaultWorkerCount()}, this machine). 1 is this same pool with one worker in it, NOT a serial path: every worker count must print BYTE-IDENTICAL output, and that invariance is the pool's sharpest gate.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(WorkersFlagPrefix)])
+		shard gives OptionReference.create("{ShardFlagPrefix}<k>/<n>", description: "Run only the k-th of n shards of the suite, 1 <= k <= n <= {MaxShardNumber}. A spec file belongs to the shard (H mod n) + 1, where H is the 64-bit FNV-1a digest of the spec's name, so the n shards partition the suite, the split does not depend on the order a directory lists its files, and every host computes the same one. {FilterFlagPrefix} patterns are judged against the whole directory before it is sharded: a pattern that selects cases only in other shards does not refuse the run, and a shard left with no selected case prints the empty report and exits 0.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(ShardFlagPrefix)])
 		rungs gives OptionReference.create("{RungsFlagPrefix}<n>", description: "Climb <n> rungs (default {DefaultRungCount}, range {MinRungCount}-{MaxRungCount}). Each rung DOUBLES the program, so this is exponential in cost.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(RungsFlagPrefix)])
 		repeat gives OptionReference.create("{RepeatFlagPrefix}<n>", description: "Compile every rung <n> times (default {DefaultRepeatCount}, range {MinRepeatCount}-{MaxRepeatCount}) and report the LEAST CPU ticks any of them spent in each phase, the least-disturbed sample:  noise can only ADD to a CPU reading and a mean would be dragged by one stall. The MEMORY columns take nothing from a repeat: they are exact, so they come from the first compile and are CROSS-CHECKED for equality against the rest. A memory number that differs between two compiles of one rung is a BROKEN RUN.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(RepeatFlagPrefix)])
 		note gives OptionReference.create("{NoteFlagPrefix}<text>", description: "Record this run in {OptimizationLogRelativePath}: one dated row of the per-rung allocations and bytes, with <text> as the reason. Without it a run reports and records nothing; WITH it the row is written, moved or not, because it is an INSTRUCTION. The instrument can see exactly WHAT moved and can never see why; you are the only one who knows, and only now.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(NoteFlagPrefix)])
@@ -2437,6 +2453,8 @@ export type MaxonArgs
 	// and a typed count may equal the default this host computed.
 	export var workersOverridden as bool
 
+	export var shard as ShardSelection
+
 	// Set by the parent on a worker's command line and never typed, so absent from the reference;
 	// parsed because an unrecognized flag aborts the run.
 	export var workerPersistent as bool
@@ -2510,7 +2528,7 @@ export type MaxonArgs
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	module static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(0), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, runtimeIrNames: RuntimeFunctionNameArray.create(0), filterPatterns: FilterPatternArray.create(0), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metrics: StatedText.unstated, defines: DefineArray.create(0), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(0), refusedOptions: OptionRefusalArray.create(0), dryRun: false, devMode: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(0), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, runtimeIrNames: RuntimeFunctionNameArray.create(0), filterPatterns: FilterPatternArray.create(0), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, shard: ShardSelection.wholeSuite(), workerPersistent: false, metrics: StatedText.unstated, defines: DefineArray.create(0), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(0), refusedOptions: OptionRefusalArray.create(0), dryRun: false, devMode: false}
 	end 'create'
 
 	// `runFmt` refuses by this, `fmt` being exempt from `main`'s unknown-option gate.
@@ -2529,7 +2547,7 @@ export type MaxonArgs
 	end 'refusedAsUnknown'
 
 	function specRunMode() returns SpecRunMode
-		return SpecRunMode.create(self.updateRequired, batchRuns: self.batchRuns)
+		return SpecRunMode.create(self.updateRequired, batchRuns: self.batchRuns, shard: self.shard)
 	end 'specRunMode'
 
 	module function positionalAt(index ElementIndex) returns String throws AbsentError
@@ -2756,7 +2774,12 @@ export type MaxonArgs
 					valid(count) then parsed.workers = count
 					invalid then parsed.refusedOptions.push(OptionRefusal.badValue(arg))
 				end 'workersArg'
-			end 'workersFlag' else if arg == WorkerPersistentFlag 'workerPersistentFlag'
+			end 'workersFlag' else if arg.startsWith(ShardFlagPrefix) 'shardFlag'
+				match ShardSelection.parse(optionValueOf(arg)) 'shardArg'
+					valid(shard) then parsed.shard = shard
+					invalid then parsed.refusedOptions.push(OptionRefusal.badValue(arg))
+				end 'shardArg'
+			end 'shardFlag' else if arg == WorkerPersistentFlag 'workerPersistentFlag'
 				parsed.workerPersistent = true
 			end 'workerPersistentFlag' else if arg.startsWith(MetricsFlagPrefix) 'metricsFlag'
 				parsed.metrics = parsed.statedValueOf(arg)

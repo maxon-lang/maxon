@@ -12,6 +12,7 @@ let FromArgument = "from"
 
 module let ChildTimeoutOption = "timeoutSeconds"
 module let WorkersOption = "workers"
+module let ShardOption = "shard"
 module let MaxFailuresOption = "maxFailures"
 module let CasesOption = "cases"
 module let RungsOption = "rungs"
@@ -747,35 +748,45 @@ end 'SpecToolArgv'
 function specToolArgv(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext, directory String) returns SpecToolArgv
 	let filterPatterns = getOptionalStringListArg(reqDoc, args: args, key: FilterOption) as FilterPatternArray
 
-	return match specFilterVerdict(filterPatterns) 'filter'
-		usable gives SpecToolArgv.built(specTestArgv(reqDoc, args: args, directory: directory, filterPatterns: filterPatterns))
+	return match specSelectionVerdict(reqDoc, args: args, patterns: filterPatterns) 'selection'
+		usable(shard) gives SpecToolArgv.built(specTestArgv(reqDoc, args: args, directory: directory, filterPatterns: filterPatterns, shard: shard))
 		refused(reason) gives SpecToolArgv.refused(toolErrorText(reqDoc, idNode: idNode, message: reason, repoRoot: ctx.repoRootLabel))
-	end 'filter'
+	end 'selection'
 end 'specToolArgv'
 
-union SpecFilterVerdict
-	usable
+union SpecSelectionVerdict
+	usable(shard ShardSelection)
 	refused(reason String)
-end 'SpecFilterVerdict'
+end 'SpecSelectionVerdict'
 
-function specFilterVerdict(patterns FilterPatternArray) returns SpecFilterVerdict
+function specSelectionVerdict(reqDoc JsonDoc, args OptionalNode, patterns FilterPatternArray) returns SpecSelectionVerdict
 	for pattern in patterns 'eachPattern'
 		if pattern.isEmpty() 'emptyPattern'
-			return SpecFilterVerdict.refused("{SpecTestToolName}: `{FilterOption}` holds an empty pattern, which would select every case.")
+			return SpecSelectionVerdict.refused("{SpecTestToolName}: `{FilterOption}` holds an empty pattern, which would select every case.")
 		end 'emptyPattern'
 	end 'eachPattern'
 
-	return SpecFilterVerdict.usable
-end 'specFilterVerdict'
+	return match statedTextArg(reqDoc, args: args, key: ShardOption) 'requested'
+		unstated gives SpecSelectionVerdict.usable(ShardSelection.wholeSuite())
+		stated(text) gives shardVerdict(text)
+	end 'requested'
+end 'specSelectionVerdict'
 
-function specTestArgv(reqDoc JsonDoc, args OptionalNode, directory String, filterPatterns FilterPatternArray) returns StringArray
+function shardVerdict(text String) returns SpecSelectionVerdict
+	return match ShardSelection.parse(text) 'parsed'
+		valid(shard) gives SpecSelectionVerdict.usable(shard)
+		invalid gives SpecSelectionVerdict.refused("{SpecTestToolName}: `{ShardOption}` is `{text}`, and it must be `K/N` with whole numbers, 1 <= K <= N <= {MaxShardNumber}.")
+	end 'parsed'
+end 'shardVerdict'
+
+function specTestArgv(reqDoc JsonDoc, args OptionalNode, directory String, filterPatterns FilterPatternArray, shard ShardSelection) returns StringArray
 	var argv = StringArray.create(0)
 	argv.push(SpecTestCommandName)
 
 	let updateRequired = getOptionalBoolArg(reqDoc, args: args, key: "updateRequired", defaultVal: false)
 	let batchRuns = getOptionalBoolArg(reqDoc, args: args, key: "batch", defaultVal: true)
 	let includeNetwork = getOptionalBoolArg(reqDoc, args: args, key: "network", defaultVal: false)
-	argv.append(specSelectionArgv(directory, filterPatterns: filterPatterns, mode: SpecRunMode.create(updateRequired, batchRuns: batchRuns), includeNetwork: includeNetwork))
+	argv.append(specSelectionArgv(directory, filterPatterns: filterPatterns, mode: SpecRunMode.create(updateRequired, batchRuns: batchRuns, shard: shard), includeNetwork: includeNetwork))
 
 	argv.append(valuedOptionOf(reqDoc, args: args, key: TargetOption, prefix: TargetFlagPrefix))
 	argv.append(wholeOptionOf(reqDoc, args: args, key: WorkersOption, prefix: WorkersFlagPrefix))

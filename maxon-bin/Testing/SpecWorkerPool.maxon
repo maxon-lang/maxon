@@ -465,9 +465,10 @@ type SuitePlan
 	export let plans as SpecPlanArray
 	export let excluded as ExcludedCaseArray
 	export let unmatchedPatterns as FilterPatternArray
+	export let refused as bool
 
-	static function create(plans SpecPlanArray, excluded ExcludedCaseArray, unmatchedPatterns FilterPatternArray) returns SuitePlan
-		return Self{plans: plans, excluded: excluded, unmatchedPatterns: unmatchedPatterns}
+	static function create(plans SpecPlanArray, excluded ExcludedCaseArray, unmatchedPatterns FilterPatternArray, refused bool) returns SuitePlan
+		return Self{plans: plans, excluded: excluded, unmatchedPatterns: unmatchedPatterns, refused: refused}
 	end 'create'
 end 'SuitePlan'
 
@@ -488,7 +489,9 @@ end 'SuitePlan'
 function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns SuitePlan throws CompileError
 	var plans = SpecPlanArray.create(0)
 	var excluded = ExcludedCaseArray.create(0)
+	var directoryExcluded = ExcludedCaseArray.create(0)
 	var tally = FilterPatternTally.create(filterPatterns, spellings: filterPatterns)
+	var directorySelectsACase = false
 
 	let specPaths = try specFilePaths(specDir)
 
@@ -505,11 +508,17 @@ function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, mode Sp
 
 		let selection = selectedTests(specTests, specName: specName, filterPatterns: filterPatterns, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, assumeNativeHost: false)
 
-		for excludedCase in selection.excluded 'eachExcluded'
-			excluded.push(excludedCase)
-		end 'eachExcluded'
+		let inThisShard = mode.shard.holds(specName)
 
 		tally.absorb(selection.filterTally)
+
+		for excludedCase in selection.excluded 'eachExcluded'
+			directoryExcluded.push(excludedCase)
+
+			if inThisShard 'ownsThisSpec'
+				excluded.push(excludedCase)
+			end 'ownsThisSpec'
+		end 'eachExcluded'
 
 		for runs in SpecRuns.allCases 'eachJob'
 			let tests = testsThatRun(selection.selected, runs: runs)
@@ -517,6 +526,12 @@ function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, mode Sp
 			if tests.count() == 0 'selectsNothing'
 				continue
 			end 'selectsNothing'
+
+			directorySelectsACase = true
+
+			if not inThisShard 'inAnotherShard'
+				continue
+			end 'inAnotherShard'
 
 			var testNames = StringArray.create(tests.count(), zeroed: false)
 			var weight = 0 as JobWeight
@@ -530,7 +545,14 @@ function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, mode Sp
 		end 'eachJob'
 	end 'eachSpec'
 
-	return SuitePlan.create(plans, excluded: excluded, unmatchedPatterns: tally.unmatched())
+	// Refusal is judged on the whole directory before sharding, so a pattern whose specs all sit in
+	// other shards does not refuse this one. A refused run reports the whole directory's census, its
+	// only explanation whichever shard holds the cause; an accepted shard reports only its own, so the
+	// shards of one run do not repeat each other.
+	let unmatchedPatterns = tally.unmatched()
+	let refused = not directorySelectsACase or unmatchedPatterns.count() > 0
+
+	return SuitePlan.create(plans, excluded: directoryExcluded if refused else excluded, unmatchedPatterns: unmatchedPatterns, refused: refused)
 end 'buildPlans'
 
 // ============================================================================================
@@ -1871,7 +1893,7 @@ export type PoolRun
 	export let cpu as SuiteCpuTally
 	export let batch as BatchTally
 	export let library as LibraryCacheTally
-	export let poolSize as WorkerCount
+	export let poolSize as WorkerPoolSize
 
 	// The cases this run passed over and owes the reader a sentence about, from the parent's own plan walk
 	// — see `ExclusionReason` for the two kinds. It rides HERE rather than being re-derived by the reporter
@@ -1880,11 +1902,17 @@ export type PoolRun
 	export let excluded as ExcludedCaseArray
 
 	export let unmatchedPatterns as FilterPatternArray
+	export let refused as bool
 
-	export static function create(results SpecTestResultArray, failedWorkers WorkerTally, cpu SuiteCpuTally, batch BatchTally, library LibraryCacheTally, poolSize WorkerCount, excluded ExcludedCaseArray, unmatchedPatterns FilterPatternArray) returns PoolRun
-		return Self{results: results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, poolSize: poolSize, excluded: excluded, unmatchedPatterns: unmatchedPatterns}
+	export static function create(results SpecTestResultArray, failedWorkers WorkerTally, cpu SuiteCpuTally, batch BatchTally, library LibraryCacheTally, poolSize WorkerPoolSize, excluded ExcludedCaseArray, unmatchedPatterns FilterPatternArray, refused bool) returns PoolRun
+		return Self{results: results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, poolSize: poolSize, excluded: excluded, unmatchedPatterns: unmatchedPatterns, refused: refused}
 	end 'create'
 end 'PoolRun'
+
+export union WorkerPoolSize
+	sized(workers WorkerCount)
+	unsized
+end 'WorkerPoolSize'
 
 // Raised by the slot scans when no slot qualifies. A THROW rather than a sentinel index: "no worker
 // is idle" and "no worker has answered yet" are routine, expected states of the dispatch loop, and
@@ -1934,16 +1962,13 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	let suitePlan = try buildPlans(specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 	let plans = suitePlan.plans
 
-	if plans.count() == 0 or suitePlan.unmatchedPatterns.count() > 0 'selectsNothing'
+	if plans.count() == 0 or suitePlan.refused 'selectsNothing'
 		// Main owns the "no tests selected" diagnostic and reads it off this return; spawning a pool
 		// first would only add a way for that message to go missing.
 		//
-		// `poolSize` is the requested count, a placeholder like `SpecJob.idle()`: no pool was sized, and
-		// Main returns on this refusal before anything reads it.
-		//
 		// The excluded census rides out here too: a run whose whole selection was live-network reaches
 		// this return, and "no tests selected" alone would hide the cause.
-		return PoolRun.create(SpecTestResultArray.create(0), failedWorkers: 0, cpu: SuiteCpuTally.zero(), batch: BatchTally.zero(), library: LibraryCacheTally.create(), poolSize: workerCount, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns)
+		return PoolRun.create(SpecTestResultArray.create(0), failedWorkers: 0, cpu: SuiteCpuTally.zero(), batch: BatchTally.zero(), library: LibraryCacheTally.create(), poolSize: WorkerPoolSize.unsized, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns, refused: suitePlan.refused)
 	end 'selectsNothing'
 
 	try prepareSharedDirs(specDir)
@@ -2221,7 +2246,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		panic("runSpecPool: the compile-CPU tally covers {cpu.tests()} test(s) but the run reported {results.count()} — a job's {WorkerJobCpuMarker} record was counted against the wrong job")
 	end 'cpuCoverageGap'
 
-	return PoolRun.create(results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, poolSize: poolSize, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns)
+	return PoolRun.create(results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, poolSize: WorkerPoolSize.sized(poolSize), excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns, refused: suitePlan.refused)
 end 'runSpecPool'
 
 // The buckets, in plan order — the suite's report, assembled at last from answers that arrived in

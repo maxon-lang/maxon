@@ -38,7 +38,7 @@ tree, so **a tree that carries a patch is owed a new seed, and CI freezes and pi
    `scripts/build-from-seed.sh --unshimmed`, which fails at the first refusal: the new seed builds the tree
    with no patch, on all four architectures, before anything is published. The compiler it built then runs
    `spec-test ir-specs` on that runner.
-3. **`pin`**, once `freeze` and `prove` are green, whatever the `suite` job reports: a seed only has to build
+3. **`pin`**, once `freeze` and `prove` are green, whatever the lane jobs (`corpora`, `tools`, `suite`, `cross-suite`) report: a seed only has to build
    the tree. `scripts/pin-seed.sh` publishes the pre-release
    at the frozen commit, fetches every archive back from it with `scripts/fetch-seed.sh`, then commits the tag
    to `scripts/seed-tag` with every `scripts/seed-shim/*.patch` deleted and pushes that commit to `main` as
@@ -250,10 +250,11 @@ empty cell, and a cell that holds several values is a comma list. Readers find a
 | `channels` | where a release ships it: `release`, `homebrew`, `install-sh`, `install-ps1`, `docker` |
 | `docker` | its Docker platform architecture |
 | `shell` | the login shell `install-script.yml` runs `install.sh` under |
-| `roles` | the single-lane CI steps it hosts: `cpu-probe`, `codecs`, `cross-suite`, `targets-gate` |
+| `roles` | the single-lane CI work it hosts: the steps `cpu-probe`, `codecs` and `targets-gate`, and the `cross-suite` job |
 
 Workflows build their matrices with `scripts/targets/matrix.sh`, which selects rows by `native`, `cross`
-or `COLUMN=VALUE`.
+or `COLUMN=VALUE`. `ci.yml` crosses the native rows with `--with shard=1,…,N` to run the spec suites in
+`SUITE_SHARDS` shards per lane.
 
 ### Adding a target
 

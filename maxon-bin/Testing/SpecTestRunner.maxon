@@ -1122,9 +1122,10 @@ end 'batchingGapVerdict'
 export type SpecRunMode
 	export let updateRequired as bool
 	export let batchRuns as bool
+	export let shard as ShardSelection
 
-	export static function create(updateRequired bool, batchRuns bool) returns SpecRunMode
-		return Self{updateRequired: updateRequired, batchRuns: batchRuns}
+	export static function create(updateRequired bool, batchRuns bool, shard ShardSelection) returns SpecRunMode
+		return Self{updateRequired: updateRequired, batchRuns: batchRuns, shard: shard}
 	end 'create'
 end 'SpecRunMode'
 
@@ -1605,8 +1606,11 @@ export type ResultTally
 	// The filter selecting nothing is refused one step earlier (`runSpecSuite`); this is the same failure
 	// arriving from the far side of the compile — every case refused by the target, or every case
 	// unexecutable on this host. Both would otherwise print `0 passed, 0 failed` and exit 0.
+	//
+	// A tally with no case at all is an empty shard of a run that selected cases in other shards, and
+	// is green; a run that selected none anywhere is refused by `runSpecSuite`.
 	export function provedNothing() returns bool
-		return self.passed == 0 and self.failed == 0
+		return self.total() > 0 and self.passed == 0 and self.failed == 0
 	end 'provedNothing'
 end 'ResultTally'
 

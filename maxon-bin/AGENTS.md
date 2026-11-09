@@ -235,7 +235,7 @@ and no `--debug-info`; it does have `--network`.
 ### Common flags
 
 - `--filter=PATTERN` (repeatable), `--update-required`, `--batch=on|off`, `--log=CATEGORY:LEVEL` (e.g. `--log=ir:debug`),
-  `--workers=<n>`, `--target=ARCH-OS`, `--network`.
+  `--workers=<n>`, `--shard=K/N`, `--target=ARCH-OS`, `--network`.
 - ⛔ **There is no `--mm-trace` on any command.** The driver refuses an unimplemented flag loudly
   (`Main.MaxonArgs.parse`, which cites this very spelling as the reason it must), so a leak is read off
   the RUN: the runtime's leak gate is **exit 101**, and a case pinning `exitcode 0` reddens on one.

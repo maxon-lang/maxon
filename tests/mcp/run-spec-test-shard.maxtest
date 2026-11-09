@@ -1,0 +1,43 @@
+let RunSpecTestShardStagingCaseDirName = "run-spec-test-shard"
+let ShardSpecNames = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+let MalformedShard = "0/2"
+
+function shardedAnswer(dir FilePath, shard String) returns JsonDoc
+	return callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())},\"shard\":{Json.quote(shard)}\}", devMode: true)
+end 'shardedAnswer'
+
+function shardedTotal(dir FilePath, shard String) returns JsonInt throws TestFailure
+	let answer = shardedAnswer(dir, shard: shard)
+
+	try Expect.isFalse(hasChildKey(answer, parent: answer.root, key: "error"), message: "`run_spec_test` rejected `shard: {shard}`: {Json.stringify(answer)}")
+	return payloadInt(answer, key: "total")
+end 'shardedTotal'
+
+test 'run_spec_test runs the specs of one shard and the shards add up to the whole run'
+	let dir = freshOutsideCheckoutDir(RunSpecTestShardStagingCaseDirName)
+
+	for specName in ShardSpecNames 'eachSpec'
+		stageSpecFile(dir, specName: specName, cases: [failingSpecCase("{specName}.selected")])
+	end 'eachSpec'
+
+	let whole = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())}\}", devMode: true)
+	let wholeTotal = payloadInt(whole, key: "total")
+	let firstTotal = shardedTotal(dir, shard: "1/2")
+	let secondTotal = shardedTotal(dir, shard: "2/2")
+	discardOutsideCheckoutDir(dir)
+
+	Expect.equal(wholeTotal, expected: 6, message: "the staged directory holds six one-case specs. It answered: {toolCallText(whole)}")
+	Expect.equal(firstTotal + secondTotal, expected: wholeTotal, message: "`shard: 1/2` ran {firstTotal} cases and `shard: 2/2` ran {secondTotal}; together they must run each of the {wholeTotal} cases once")
+end 'run_spec_test runs the specs of one shard and the shards add up to the whole run'
+
+test 'run_spec_test refuses a malformed shard'
+	let dir = freshOutsideCheckoutDir(RunSpecTestShardStagingCaseDirName)
+
+	stageSpecFile(dir, specName: "alpha", cases: [failingSpecCase("alpha.selected")])
+	let answer = shardedAnswer(dir, shard: MalformedShard)
+	discardOutsideCheckoutDir(dir)
+
+	Expect.isFalse(hasChildKey(answer, parent: answer.root, key: "error"), message: "`run_spec_test` rejected the `shard` argument itself, not its value: {Json.stringify(answer)}")
+	Expect.isTrue(toolCallIsError(answer), message: "`run_spec_test` ran with `shard: {MalformedShard}`, which is not a shard of any run: {toolCallText(answer)}")
+	Expect.contains(toolCallText(answer), needle: MalformedShard, message: "the refusal does not name `{MalformedShard}`: {toolCallText(answer)}")
+end 'run_spec_test refuses a malformed shard'

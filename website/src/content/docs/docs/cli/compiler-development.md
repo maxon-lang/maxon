@@ -29,6 +29,7 @@ case is compiled inside this process, so the compiler under test is the executab
 |--------|-------------|
 | `--filter=<pattern>` | Run only tests whose `<spec>/<test>` label contains `<pattern>`, a case-sensitive substring: a spec name selects that spec, a test name selects that test, and `spec/test` selects exactly one. Repeatable: the run takes every test any pattern selects, in one pool of workers. A comma is part of the pattern. |
 | `--workers=<n>` | Run on `<n>` persistent worker processes (default: this machine's count, shown by `maxon help spec-test`). `1` is the same pool with one worker, not a serial mode, and output is identical for every count. |
+| `--shard=<k>/<n>` | Run only the specs in shard `<k>` of `<n>`, where 1 ≤ `<k>` ≤ `<n>` ≤ 256. A spec file is in shard (H mod `<n>`) + 1, where H is the 64-bit FNV-1a hash of its name, so every host splits the suite the same way and shards 1 to `<n>` together are the whole run. Any other value is refused as an invalid option value. |
 | `--target=<cpu>-<os>` | Cross-compile each selected test for that target and run it: `wasm32-wasi` under the vendored wasmtime; a Linux target under WSL2 on a Windows host of the same CPU, and on a macOS host inside the OrbStack machine `maxon-linux`. There, a target for the Mac's own CPU is compiled and run by a copy of the compiler that `spec-test` builds for the machine, and on Apple silicon `x64-linux` cases are compiled on the Mac and run under Rosetta, which must be enabled in OrbStack (`orb config set rosetta true`, then restart OrbStack). On a host that cannot execute the target, each case is compiled and reported as not run. |
 | `--network` | Also run the cases that open a socket to a real external host. A default run names every case it left out. |
 | `--batch=on\|off` | `on` (the default) compiles a spec's plain run cases into the fewest programs whose type names do not overlap and runs each once, rerunning alone any case that did not finish cleanly. `off` compiles and runs every case on its own. Any other value is refused. |
@@ -57,6 +58,11 @@ each such pattern: `error: no tests selected matching --filter=a, --filter=b`. A
 matches this host leaves out, such as live-network cases, counts as selecting nothing, and the lines
 for the left-out cases say why. An empty `--filter=` is refused as an invalid option value.
 
+Under `--shard`, patterns are judged against the whole directory before it is split. A pattern that
+selects tests only in other shards is accepted, and a shard holding none of the selected tests prints
+`0 passed, 0 failed` and exits 0. A refused sharded run lists every case the whole directory left out;
+an accepted shard lists only its own.
+
 `--result-json=<path>` writes `{passed, failed, skipped, notRun, total, cases}`, where `cases` lists every
 case in run order as `{spec, test, verdict}`, `verdict` is `PASS`, `FAIL`, `SKIP` or `NOTRUN`, and a
 `FAIL` also carries its `reason`. A relative `<path>` is resolved against the working directory. A
@@ -72,6 +78,7 @@ maxon spec-test --target=wasm32-wasi
 maxon spec-test --filter=strings --update-required
 maxon spec-test ir-specs --target=x64-linux
 maxon spec-test --batch=off --filter=arrays/
+maxon spec-test --shard=2/4   # the second of four shards
 ```
 
 ## `maxon scale-test`

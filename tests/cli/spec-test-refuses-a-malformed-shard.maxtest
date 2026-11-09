@@ -1,0 +1,14 @@
+let SpecTestRefusesAMalformedShardCaseDirName = "spec-test-refuses-a-malformed-shard"
+let RefusedCommandLineExitCode = 1
+
+test 'spec-test refuses a --shard value that is not K/N with 1 <= K <= N, naming the value'
+	let dir = freshCaseDir(SpecTestRefusesAMalformedShardCaseDirName)
+
+	for flag in ["--shard=0/4", "--shard=5/4", "--shard=1/0", "--shard=4", "--shard=a/b", "--shard=", "--shard=1/4/2", "--shard=/4"] 'eachFlag'
+		let refused = spawnCompiler([HiddenAnchorCommand, dir.toString(), flag])
+		let said = "It wrote to stdout: {refused.stdout} and to stderr: {refused.stderr}"
+
+		Expect.equal(refused.exitCode(), expected: RefusedCommandLineExitCode, message: "`maxon {HiddenAnchorCommand} {flag}` is a refused command line and must exit {RefusedCommandLineExitCode}. {said}")
+		Expect.contains(refused.stderr, needle: "invalid option value: {flag}", message: "the refusal does not say `invalid option value: {flag}`. {said}")
+	end 'eachFlag'
+end 'spec-test refuses a --shard value that is not K/N with 1 <= K <= N, naming the value'

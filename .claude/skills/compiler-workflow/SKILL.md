@@ -147,7 +147,7 @@ faults on the first load.
 ## Freezing a bootstrap seed
 
 The seed that builds every commit is the `seed-*` pre-release `scripts/seed-tag` pins (`docs/RELEASING.md`
-owns the rule). ⭐ **CI freezes, proves and pins it**, whatever the `suite` job reports, on a `main` push whose tree carries a
+owns the rule). ⭐ **CI freezes, proves and pins it**, whatever the lane jobs (`corpora`, `tools`, `suite`, `cross-suite`) report, on a `main` push whose tree carries a
 `scripts/seed-shim/*.patch`, so the usual cure for E2015 or E3004 from `build-from-seed.sh` is a shim patch
 landed with the change. Freeze by hand only when the pinned seed refuses the tree and no patch covers it.
 

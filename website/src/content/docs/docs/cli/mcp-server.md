@@ -404,6 +404,7 @@ last 4 KiB of output, starting on a character boundary).
 | `network` | boolean | `--network`: also run the cases that reach a real external host |
 | `target` | string | `--target=` value, such as `wasm32-wasi` |
 | `workers` | integer | `--workers=`: the worker process count. A debugging aid; the default is what the suite normally runs at. |
+| `shard` | string | `--shard=` value, `K/N` with 1 ≤ K ≤ N ≤ 256: run only the specs in shard K of N. Any other value is a tool error naming it. |
 | `maxFailures` | integer | Most failing cases listed in `failures` (0–1000, default 20) |
 | `cases` | boolean | Also answer `cases`, the verdict of every case the run covered |
 | `timeoutSeconds` | number | Seconds the run may take (default 600) |

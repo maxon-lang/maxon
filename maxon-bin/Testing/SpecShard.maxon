@@ -1,0 +1,77 @@
+export typealias ShardNumber = int(1 to 256)
+typealias ShardHash = int(0 to u64.max)
+
+export let MaxShardNumber = 256 as ShardNumber
+let FirstShardNumber = 1
+let SoleShardCount = 1
+let ShardSeparator = "/"
+let ShardTermCount = 2
+let ShardIndexTerm = 0
+let ShardCountTerm = 1
+
+enum ShardTermError implements Error
+	malformed
+end 'ShardTermError'
+
+export union ShardArg
+	valid(shard ShardSelection)
+	invalid
+end 'ShardArg'
+
+function shardNumberOf(raw String) returns ShardNumber throws ShardTermError
+	let number = match parsePositiveFlagValue(raw) 'parsed'
+		valid(positive) gives positive
+		invalid throws ShardTermError.malformed
+	end 'parsed'
+
+	if number > (MaxShardNumber as PositiveFlagNumber) 'beyondTheMaximum'
+		throw ShardTermError.malformed
+	end 'beyondTheMaximum'
+
+	return number as ShardNumber
+end 'shardNumberOf'
+
+export type ShardSelection
+	let index as ShardNumber
+	let count as ShardNumber
+
+	export static function wholeSuite() returns ShardSelection
+		return Self{index: FirstShardNumber, count: SoleShardCount}
+	end 'wholeSuite'
+
+	export static function parse(raw String) returns ShardArg
+		let terms = raw.split(ShardSeparator)
+
+		if terms.count() != ShardTermCount 'notIndexAndCount'
+			return ShardArg.invalid
+		end 'notIndexAndCount'
+
+		let indexTerm = try terms.get(ShardIndexTerm) otherwise panic("ShardSelection.parse: term {ShardIndexTerm} is below terms.count() == {ShardTermCount}")
+		let countTerm = try terms.get(ShardCountTerm) otherwise panic("ShardSelection.parse: term {ShardCountTerm} is below terms.count() == {ShardTermCount}")
+		let index = try shardNumberOf(indexTerm) otherwise return ShardArg.invalid
+		let count = try shardNumberOf(countTerm) otherwise return ShardArg.invalid
+
+		if index > count 'indexPastCount'
+			return ShardArg.invalid
+		end 'indexPastCount'
+
+		return ShardArg.valid(Self{index: index, count: count})
+	end 'parse'
+
+	export function isWholeSuite() returns bool
+		return self.count == SoleShardCount
+	end 'isWholeSuite'
+
+	// Every CI job computes this in its own process, so the hash must be unseeded and keyed by the
+	// name alone: shards that disagree about a spec run it twice or not at all.
+	export function holds(specName String) returns bool
+		let digest = Hasher.combinedBytes(Hasher.empty(), bytes: specName.toByteArray())
+		let owner = try ((digest as ShardHash) mod (self.count as ShardHash)) otherwise panic("ShardSelection.holds: a shard count is at least {SoleShardCount}")
+
+		return owner + (FirstShardNumber as ShardHash) == (self.index as ShardHash)
+	end 'holds'
+
+	export function spelling() returns String
+		return "{self.index}{ShardSeparator}{self.count}"
+	end 'spelling'
+end 'ShardSelection'

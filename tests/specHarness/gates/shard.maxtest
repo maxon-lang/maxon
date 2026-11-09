@@ -1,0 +1,189 @@
+typealias ShardNumber = int(1 to 64)
+typealias RunTally = int(0 to u64.max)
+
+let ShardFlagPrefix = "--shard="
+let NoTestsSelected = "no tests selected"
+let InvalidOptionValue = "invalid option value"
+let EmptyShardSummary = "0 passed, 0 failed"
+let CompileCpuLinePrefix = "compile CPU:"
+let FilteredSpecName = "alpha"
+let LiveSpecName = "india"
+let LiveTestName = "india.live"
+let SplitIntoTwo = 2
+let SplitIntoThree = 3
+let WholeSuite = 1
+
+function shardFlag(index ShardNumber, shardCount ShardNumber) returns String
+	return "{ShardFlagPrefix}{index}/{shardCount}"
+end 'shardFlag'
+
+function fixtureSpecNames() returns StringArray
+	return ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"]
+end 'fixtureSpecNames'
+
+function specsRunIn(said String) returns StringArray
+	var ran = StringArray.create(0)
+
+	for specName in fixtureSpecNames() 'eachSpec'
+		if ranVerdictIn(said, specName: specName) 'ranHere'
+			ran.push(specName)
+		end 'ranHere'
+	end 'eachSpec'
+
+	return ran
+end 'specsRunIn'
+
+function shardRun(index ShardNumber, shardCount ShardNumber, patterns StringArray = StringArray.create(0)) returns CollectedOutput
+	var arguments = filterFlags(patterns)
+	arguments.push(shardFlag(index, shardCount: shardCount))
+	return runGateFixtureOnce(arguments)
+end 'shardRun'
+
+function timesNamed(names StringArray, specName String) returns RunTally
+	var times = 0 as RunTally
+
+	for name in names 'eachName'
+		if name == specName 'sameSpec'
+			times = times + 1
+		end 'sameSpec'
+	end 'eachName'
+
+	return times
+end 'timesNamed'
+
+function collectSpecsNotRunExactlyOnce(shardCount ShardNumber, broken StringArray)
+	var ranInShards = StringArray.create(0)
+	var allSaid = StringBuilder.create()
+
+	for index in 1 to shardCount 'eachShard'
+		let said = everythingSaid(shardRun(index, shardCount: shardCount))
+		allSaid.append("--- {shardFlag(index, shardCount: shardCount)} said:\n{said}\n")
+
+		for specName in specsRunIn(said) 'eachRanSpec'
+			ranInShards.push(specName)
+		end 'eachRanSpec'
+	end 'eachShard'
+
+	for specName in fixtureSpecNames() 'eachSpec'
+		let times = timesNamed(ranInShards, specName: specName)
+
+		if times != 1 'notOnce'
+			broken.push("'{selectedLabel(specName)}' ran in {times} of the {shardCount} shards of `{ShardFlagPrefix}K/{shardCount}`; every spec belongs to exactly one shard. The runs said:\n{allSaid.build()}\n")
+		end 'notOnce'
+	end 'eachSpec'
+end 'collectSpecsNotRunExactlyOnce'
+
+function collectFilteredShardFailures(shardCount ShardNumber, broken StringArray)
+	var shardsThatRanIt = 0 as RunTally
+
+	for index in 1 to shardCount 'eachShard'
+		let flag = shardFlag(index, shardCount: shardCount)
+		let run = shardRun(index, shardCount: shardCount, patterns: [specPrefix(FilteredSpecName)])
+		let said = everythingSaid(run)
+
+		if said.contains(NoTestsSelected) 'refused'
+			broken.push("`{flag}` with `{filterFlag(specPrefix(FilteredSpecName))}` refused the run with `{NoTestsSelected}`: a pattern is judged against the whole directory, so a shard that holds none of the selected specs is not an error. It said:\n{said}\n")
+		end 'refused'
+
+		for specName in fixtureSpecNames() 'eachSpec'
+			if specName != FilteredSpecName and ranVerdictIn(said, specName: specName) 'unselectedButRun'
+				broken.push("`{flag}`: '{selectedLabel(specName)}' is selected by no `{FilterFlagPrefix}` pattern and it ran. It said:\n{said}\n")
+			end 'unselectedButRun'
+		end 'eachSpec'
+
+		if ranVerdictIn(said, specName: FilteredSpecName) 'ranTheSpec'
+			shardsThatRanIt = shardsThatRanIt + 1
+		end 'ranTheSpec' else 'leftTheSpecOut'
+			if run.exitCode() != SuccessExitCode 'emptyShardFailed'
+				broken.push("`{flag}` selects none of its specs, which is not an error, but it exited {run.exitCode()} and not {SuccessExitCode}. It said:\n{said}\n")
+			end 'emptyShardFailed'
+
+			if not said.contains(EmptyShardSummary) 'emptyShardSilent'
+				broken.push("`{flag}` selects none of its specs and must print the summary `{EmptyShardSummary}`. It said:\n{said}\n")
+			end 'emptyShardSilent'
+
+			if said.contains(CompileCpuLinePrefix) 'emptyShardReportsCpu'
+				broken.push("`{flag}` selects none of its specs, so no pool ran and it must not print a `{CompileCpuLinePrefix}` line naming one. It said:\n{said}\n")
+			end 'emptyShardReportsCpu'
+		end 'leftTheSpecOut'
+	end 'eachShard'
+
+	if shardsThatRanIt != 1 'notOneShard'
+		broken.push("'{selectedLabel(FilteredSpecName)}' ran in {shardsThatRanIt} of the {shardCount} shards; exactly one shard holds a spec.")
+	end 'notOneShard'
+end 'collectFilteredShardFailures'
+
+test 'every spec runs in exactly one shard'
+	var broken = StringArray.create(0)
+
+	collectSpecsNotRunExactlyOnce(SplitIntoTwo, broken: broken)
+	collectSpecsNotRunExactlyOnce(SplitIntoThree, broken: broken)
+
+	requireNothingBroken(broken, headline: "the shards of `{ShardFlagPrefix}K/N` partition the specs")
+end 'every spec runs in exactly one shard'
+
+test '--shard=1/1 runs every spec'
+	let said = everythingSaid(shardRun(WholeSuite, shardCount: WholeSuite))
+	var broken = StringArray.create(0)
+
+	for specName in fixtureSpecNames() 'eachSpec'
+		if not ranVerdictIn(said, specName: specName) 'notRun'
+			broken.push("'{selectedLabel(specName)}' did NOT run under `{shardFlag(WholeSuite, shardCount: WholeSuite)}`, the one shard of a run split into one. It said:\n{said}\n")
+		end 'notRun'
+	end 'eachSpec'
+
+	requireNothingBroken(broken, headline: "`{shardFlag(WholeSuite, shardCount: WholeSuite)}` runs the whole suite")
+end '--shard=1/1 runs every spec'
+
+test 'a --filter selecting only specs of other shards does not refuse the run'
+	var broken = StringArray.create(0)
+
+	collectFilteredShardFailures(SplitIntoThree, broken: broken)
+
+	requireNothingBroken(broken, headline: "a `{FilterFlagPrefix}` is judged against the whole directory before the run is sharded")
+end 'a --filter selecting only specs of other shards does not refuse the run'
+
+test 'a --filter selecting nothing anywhere still refuses a sharded run'
+	let run = runGateFixtureOnce([shardFlag(WholeSuite, shardCount: SplitIntoTwo), filterFlag(UnmatchedPattern)])
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	if run.exitCode() == SuccessExitCode 'accepted'
+		broken.push("the run exited {SuccessExitCode} although `{filterFlag(UnmatchedPattern)}` selects no case in any shard. It said:\n{said}\n")
+	end 'accepted'
+
+	if not said.contains(filterFlag(UnmatchedPattern)) 'patternUnnamed'
+		broken.push("the output does not name `{filterFlag(UnmatchedPattern)}`, the pattern that selected nothing. It said:\n{said}\n")
+	end 'patternUnnamed'
+
+	if not said.contains(NoTestsSelected) 'wrongRefusal'
+		broken.push("the output does not say `{NoTestsSelected}`. It said:\n{said}\n")
+	end 'wrongRefusal'
+
+	if said.contains(InvalidOptionValue) 'refusedTheShard'
+		broken.push("`{shardFlag(WholeSuite, shardCount: SplitIntoTwo)}` is a well-formed shard and was refused as `{InvalidOptionValue}`. It said:\n{said}\n")
+	end 'refusedTheShard'
+
+	requireNothingBroken(broken, headline: "a `{FilterFlagPrefix}` pattern that selects nothing refuses a sharded run")
+end 'a --filter selecting nothing anywhere still refuses a sharded run'
+
+test 'a sharded run that selects only live-network cases names them in every shard'
+	let label = testLabel(LiveSpecName, testName: LiveTestName)
+	var broken = StringArray.create(0)
+
+	for index in 1 to SplitIntoTwo 'eachShard'
+		let flag = shardFlag(index, shardCount: SplitIntoTwo)
+		let run = shardRun(index, shardCount: SplitIntoTwo, patterns: [specPrefix(LiveSpecName)])
+		let said = everythingSaid(run)
+
+		if run.exitCode() == SuccessExitCode or not said.contains(NoTestsSelected) 'notRefused'
+			broken.push("`{flag}` with `{filterFlag(specPrefix(LiveSpecName))}` selects only a live-network case, so it must refuse with `{NoTestsSelected}` and a failing exit. It exited {run.exitCode()} and said:\n{said}\n")
+		end 'notRefused'
+
+		if not said.contains(resultNoteEntry(label)) 'censusMissing'
+			broken.push("`{flag}` refused the run without naming '{label}', the live-network case that is its only explanation, whichever shard holds it. It said:\n{said}\n")
+		end 'censusMissing'
+	end 'eachShard'
+
+	requireNothingBroken(broken, headline: "a refused sharded run names the cases the whole directory left out")
+end 'a sharded run that selects only live-network cases names them in every shard'
