@@ -214,6 +214,8 @@ tests/
     a-stub-answer-that-is-not-an-acknowledgement-refuses-the-breakpoint.maxtest      through the stub proxy, a `Z0` answered with another request's reply is refused and never reported set
     a-stub-report-that-the-program-ended-fails-a-waiting-detach-at-once.maxtest      through the stub proxy, a `D` answered with an exit report fails at once rather than after the reply budget
     a-stop-the-stub-reports-late-is-held-and-reported-and-not-taken-for-an-answer.maxtest      through the stub proxy, a halt that follows an abandoned interrupt is held, reported, and not taken for the next request's answer
+    a-memory-read-fits-the-packet-size-the-stub-advertises.maxtest      through the stub proxy, a stub advertising a packet size below a memory window is read in requests and replies its buffer takes, and a String longer than the buffer renders whole
+    a-memory-read-fits-the-default-packet-size-of-a-stub-that-advertises-none.maxtest      through the stub proxy, a stub advertising no packet size is spoken to in packets of at most the protocol default
     a-fault-stops-before-it-is-passed-on.maxtest      a fault stops the debugger first and reaches the runtime at the resume
     a-breakpoint-past-any-fixed-table-size-is-armed.maxtest      the number of instructions armed at once is bounded by the program alone
     a-roster-past-any-fixed-window-lists-every-worker.maxtest      a listing answers for every live green thread, however many there are

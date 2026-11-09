@@ -1264,17 +1264,40 @@ export type GdbRemoteBackend
 		end 'size'
 
 		let borrowed = self.borrowedStop()
-		let seen = self.askStub("m{address:x},{bytes:x}", expectsStop: false)
+		let gathered = self.readInPieces(address, bytes: bytes)
 		self.returnedTheBorrowedStop(borrowed)
 
-		match seen 'read'
-			answered(payload) then return gdbMemoryOf(payload, bytes: bytes)
+		return gathered
+	end 'readMemory'
+
+	function readInPieces(address DebugAddress, bytes BackendByteCount) returns BackendMemoryRead
+		var connection = try self.link.connection() otherwise return BackendMemoryRead.unreadable
+		var gathered = ByteArray.create(bytes as ElementIndex, zeroed: false)
+		var done = 0 as BackendByteCount
+
+		while done < bytes 'eachPiece'
+			let piece = try connection.readChunk(bytes - done) otherwise return BackendMemoryRead.unreadable
+
+			match self.readPiece(address + (done as DebugAddress), count: piece) 'read'
+				unreadable then return BackendMemoryRead.unreadable
+				read(raw) then gathered.append(raw)
+			end 'read'
+
+			done = done + (piece as BackendByteCount)
+		end 'eachPiece'
+
+		return BackendMemoryRead.read(gathered)
+	end 'readInPieces'
+
+	function readPiece(address DebugAddress, count GdbChunkBytes) returns BackendMemoryRead
+		match self.askStub("m{address:x},{count:x}", expectsStop: false) 'read'
+			answered(payload) then return gdbMemoryOf(payload, bytes: count as BackendByteCount)
 			unsupported or
 			failed or
 			timedOut or
 			broken then return BackendMemoryRead.unreadable
 		end 'read'
-	end 'readMemory'
+	end 'readPiece'
 
 	// ⛔ **A WRITE OF NOTHING IS NOT SENT.** The stub hangs on a zero-length write rather than refusing one,
 	// and an engine that restores an empty original asks for exactly that.
@@ -1286,11 +1309,32 @@ export type GdbRemoteBackend
 		end 'size'
 
 		let borrowed = self.borrowedStop()
-		let written = self.askedAcknowledgement("M{address:x},{bytes.count():x}:{gdbHexTextOf(bytes)}")
+		let written = self.writeInPieces(address, bytes: bytes)
 		self.returnedTheBorrowedStop(borrowed)
 
 		return written
 	end 'writeMemory'
+
+	function writeInPieces(address DebugAddress, bytes ByteArray) returns bool
+		var connection = try self.link.connection() otherwise return false
+		let total = bytes.count() as BackendByteCount
+		var done = 0 as BackendByteCount
+
+		while done < total 'eachPiece'
+			let at = address + (done as DebugAddress)
+			let piece = try connection.writeChunk(at, remaining: total - done) otherwise return false
+			let until = done + (piece as BackendByteCount)
+			let body = try bytes.slice(done as ElementIndex, endIndex: until as ElementIndex) otherwise panic("GdbRemoteBackend.writeInPieces: {until} is inside the {total} bytes to write")
+
+			if not self.askedAcknowledgement("{gdbWriteHeader(at, count: piece)}{gdbHexTextOf(body)}") 'theStubRefused'
+				return false
+			end 'theStubRefused'
+
+			done = until
+		end 'eachPiece'
+
+		return true
+	end 'writeInPieces'
 
 	// --- registers ---
 

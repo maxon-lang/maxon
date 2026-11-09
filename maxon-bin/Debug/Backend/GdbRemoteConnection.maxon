@@ -1,6 +1,7 @@
 module typealias GdbWireIndex = int(0 to u64.max)
 typealias GdbChecksumByte = int(0 to 0xFF)
 module typealias GdbPayloadBytes = int(1 to 0x4000000)
+module typealias GdbChunkBytes = int(1 to 0x2000000)
 module typealias GdbRegisterNumber = int(0 to 0xFFFF)
 module typealias GdbRegisterBytes = int(0 to 64)
 module typealias GdbSignalNumber = int(0 to 0xFF)
@@ -21,7 +22,9 @@ let GdbRecvCapacity = 65536
 
 let GdbChecksumDigits = 2
 
-let GdbDefaultPayloadBytes = 256
+// The payload limit the GDB remote protocol assumes of a stub that advertises no `PacketSize`, or 0.
+let GdbDefaultPayloadBytes = 399
+let GdbMaxPayloadBytes = 0x4000000
 
 let GdbPacketSizeFeature = "PacketSize="
 
@@ -33,6 +36,10 @@ module let GdbKeyValueSeparator = ":"
 let GdbRegisterInfoNameKey = "name"
 let GdbRegisterInfoBitsizeKey = "bitsize"
 let GdbRegisterInfoContainerKey = "container-regs"
+
+module enum GdbChunkError implements Error
+	limitTooSmall
+end 'GdbChunkError'
 
 module union GdbAnswer
 	answered(payload String)
@@ -88,9 +95,28 @@ module type GdbRemoteConnection
 		return self.suffixed
 	end 'threadSuffixSupported'
 
-	module function transferLimit() returns GdbPayloadBytes
-		return ((self.payloadLimit - GdbPacketOverheadBytes) / HexDigitsPerByte) as GdbPayloadBytes
-	end 'transferLimit'
+	// A reply is held to the same limit as a request, and carries each byte as two hex digits.
+	module function readChunk(remaining BackendByteCount) returns GdbChunkBytes throws GdbChunkError
+		return try gdbChunkWithin(self.payloadLimit as GdbWireIndex, remaining: remaining)
+	end 'readChunk'
+
+	module function writeChunk(address DebugAddress, remaining BackendByteCount) returns GdbChunkBytes throws GdbChunkError
+		let limit = self.payloadLimit as GdbWireIndex
+		let ceiling = try gdbChunkWithin(limit, remaining: remaining)
+		let header = gdbWriteHeader(address, count: ceiling).byteLength() as GdbWireIndex
+
+		if header >= limit 'noRoomForABody'
+			throw GdbChunkError.limitTooSmall
+		end 'noRoomForABody'
+
+		return try gdbChunkWithin(limit - header, remaining: remaining)
+	end 'writeChunk'
+
+	// An over-limit request is refused rather than split: `P` and a `vCont` stepping several threads are
+	// single packets, and a packet past the stub's buffer must never be sent.
+	module function takes(payload String) returns bool
+		return (payload.byteLength() as GdbWireIndex) <= (self.payloadLimit as GdbWireIndex)
+	end 'takes'
 
 	module function close()
 		self.open = false
@@ -98,6 +124,10 @@ module type GdbRemoteConnection
 	end 'close'
 
 	module function ask(payload String) returns GdbAnswer
+		if not self.takes(payload) 'pastTheStubsBuffer'
+			return GdbAnswer.broken("the request '{payload}' is {payload.byteLength()} bytes and the debug stub takes packets of at most {self.payloadLimit}")
+		end 'pastTheStubsBuffer'
+
 		if not self.writePacket(payload) 'theSocketRefused'
 			return GdbAnswer.broken("the debugger could not send '{payload}' to the debug stub")
 		end 'theSocketRefused'
@@ -114,6 +144,10 @@ module type GdbRemoteConnection
 	end 'answerWithin'
 
 	module function writePacket(payload String) returns bool
+		if not self.takes(payload) 'pastTheStubsBuffer'
+			return false
+		end 'pastTheStubsBuffer'
+
 		if not self.writeText("${payload}#{gdbChecksumOf(payload):02x}") 'theSocketRefused'
 			return false
 		end 'theSocketRefused'
@@ -367,15 +401,34 @@ let GdbMaxRegisterRosterSize = 256
 
 module let GdbReplyBudgetMs = 20000
 
-let GdbPacketOverheadBytes = 4
-
+// `PacketSize` bounds the payload alone, not the `$`, `#` and checksum that frame it.
 function gdbPayloadLimitOf(size GdbWireWord) returns GdbPayloadBytes
-	if size <= (GdbDefaultPayloadBytes as GdbWireWord) or size > 0x4000000 'notUsableAsALimit'
+	if size == 0 'noneAdvertised'
 		return GdbDefaultPayloadBytes
-	end 'notUsableAsALimit'
+	end 'noneAdvertised'
+
+	if size > (GdbMaxPayloadBytes as GdbWireWord) 'moreThanTheDebuggerUses'
+		return GdbMaxPayloadBytes
+	end 'moreThanTheDebuggerUses'
 
 	return size as GdbPayloadBytes
 end 'gdbPayloadLimitOf'
+
+function gdbChunkWithin(room GdbWireIndex, remaining BackendByteCount) returns GdbChunkBytes throws GdbChunkError
+	let carried = room / HexDigitsPerByte
+
+	if carried == 0 'noRoomForAByte'
+		throw GdbChunkError.limitTooSmall
+	end 'noRoomForAByte'
+
+	let wanted = remaining as GdbWireIndex
+
+	return (carried if carried < wanted else wanted) as GdbChunkBytes
+end 'gdbChunkWithin'
+
+module function gdbWriteHeader(address DebugAddress, count GdbChunkBytes) returns String
+	return "M{address:x},{count:x}:"
+end 'gdbWriteHeader'
 
 function gdbPushRegister(registers GdbRegisterInfoArray, number GdbRegisterNumber, description String)
 	var name = ""

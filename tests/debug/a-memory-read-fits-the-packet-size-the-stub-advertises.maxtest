@@ -1,0 +1,47 @@
+let AdvertisedSizeCaseLabel = "a-memory-read-fits-the-packet-size-the-stub-advertises"
+
+let AdvertisedSizeTraceFileName = "proxy-trace.txt"
+let AdvertisedSizeLaneTriple = "arm64-macos"
+let AdvertisedPacketBytes = 96
+let AdvertisedSizeAnchorName = "shown"
+let AdvertisedSizeLocalName = "story"
+let AdvertisedSizeTextTens = 20
+let AdvertisedSizeTextUnit = "0123456789"
+
+test 'a read the stub advertises a packet size too small for is split into requests its buffer takes'
+	#if os(Macos)
+		let staged = builtFixture(AdvertisedSizeCaseLabel, fixture: LongTextFixtureName)
+		let proxies = stubProxyDirectory(AdvertisedSizeCaseLabel)
+		let trace = staged.join(AdvertisedSizeTraceFileName)
+		let shownAt = anchorLine(staged.join(StagedProgramFileName), anchor: AdvertisedSizeAnchorName)
+		let commands = debugCommandLine(["{BreakCommand} {lineTarget(shownAt)}", RunCommand, BacktraceCommand, LocalsCommand])
+		let session = boundedDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0), environment: smallBufferProxyEnvironment(proxies, trace: trace, packetBytes: AdvertisedPacketBytes, advertising: ProxiedAdvertising.advertised), timeoutMs: ProxiedSessionBoundMs)
+		let events = batchEvents(session.stdoutText())
+		let kinds = eventKinds(events)
+		let said = renderedEvents(session.stdoutText(), stderr: session.stderrText())
+
+		Expect.isTrue(session.endedInTime(), message: "the session {session.exitText()}. It printed: {listedLines(kinds)}. {said}")
+		Expect.isTrue(File.exists(trace), message: "the stub proxy never answered the handshake, so the case measured nothing. It printed: {listedLines(kinds)}. {said}")
+
+		let traced = try File.readText(trace) otherwise panic("the gate could not run — the stub proxy's trace cannot be read.")
+
+		Expect.contains(traced, needle: "{ProxyAnsweredMarker}qSupported with PacketSize={AdvertisedPacketBytes:x}", message: "the stub proxy answered the handshake with another size. Its trace: {traced}")
+		var expectedText = ""
+
+		for _ in 0 upto AdvertisedSizeTextTens 'eachTen'
+			expectedText.append(AdvertisedSizeTextUnit)
+		end 'eachTen'
+
+		let listings = eventsOfKind(events, kind: LocalsEventName)
+		Expect.equal(listings.count(), expected: 1, message: "`{LocalsCommand}` at a stop printed no `{LocalsEventName}` event. It printed: {listedLines(kinds)}. {said}")
+
+		let listed = eventAt(listings, index: 0)
+		let rows = listedLines(valueRows(listed, node: listed.root, key: LocalsKey))
+
+		Expect.contains(rows, needle: "{AdvertisedSizeLocalName}=\"{expectedText}\" (len={expectedText.byteLength()})", message: "a String longer than the stub's buffer must be read in pieces and rendered whole. The locals were: {rows}. {said}")
+		Expect.equal(eventsOfKind(events, kind: BacktraceEventName).count(), expected: 1, message: "`{BacktraceCommand}` at a stop printed no `{BacktraceEventName}` event. It printed: {listedLines(kinds)}. {said}")
+		Expect.isFalse(traced.contains(ProxyRefusedMarker), message: "⭐ A PACKET SIZE THE STUB ADVERTISES IS THE MOST A REQUEST OR ITS REPLY MAY CARRY. The debugger sent the stub, whose buffer holds {AdvertisedPacketBytes} bytes, a request it had to refuse. Its trace: {traced}")
+	#else
+		Expect.isFalse(hostTargetTriple() == AdvertisedSizeLaneTriple, message: "only the arm64-macos lane drives a program through a stub it can be put in front of, and runs the case above.")
+	#endif
+end 'a read the stub advertises a packet size too small for is split into requests its buffer takes'

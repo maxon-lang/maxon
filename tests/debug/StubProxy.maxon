@@ -7,8 +7,15 @@ let InjectAfterVariable = "MAXON_PROXY_INJECT_AFTER"
 let InjectPayloadVariable = "MAXON_PROXY_INJECT"
 let TraceVariable = "MAXON_PROXY_TRACE"
 let ModeVariable = "MAXON_PROXY_MODE"
+let PacketSizeVariable = "MAXON_PROXY_PACKET_SIZE"
+let AdvertiseVariable = "MAXON_PROXY_ADVERTISE"
 let AnswerMode = "answer"
 let LateHaltMode = "late-halt"
+let SmallBufferMode = "small-buffer"
+let AdvertiseYes = "yes"
+let AdvertiseNo = "no"
+export let ProxyRefusedMarker = "refused "
+export let ProxyAnsweredMarker = "answered "
 let PathVariableName = "PATH"
 let PathEntrySeparator = ":"
 
@@ -33,6 +40,21 @@ export function answeringProxyEnvironment(proxyDirectory FilePath, trace FilePat
 
 	return Environment.inheritUpdating(overrides)
 end 'answeringProxyEnvironment'
+
+export typealias ProxiedPacketBytes = int(1 to 0xFFFF)
+
+export enum ProxiedAdvertising
+	advertised
+	unadvertised
+end 'ProxiedAdvertising'
+
+export function smallBufferProxyEnvironment(proxyDirectory FilePath, trace FilePath, packetBytes ProxiedPacketBytes, advertising ProxiedAdvertising) returns Environment
+	var overrides = proxyOverrides(proxyDirectory, trace: trace, mode: SmallBufferMode)
+	overrides.upsert(PacketSizeVariable, value: "{packetBytes}")
+	overrides.upsert(AdvertiseVariable, value: AdvertiseYes if advertising == ProxiedAdvertising.advertised else AdvertiseNo)
+
+	return Environment.inheritUpdating(overrides)
+end 'smallBufferProxyEnvironment'
 
 export function lateHaltProxyEnvironment(proxyDirectory FilePath, trace FilePath) returns Environment
 	return Environment.inheritUpdating(proxyOverrides(proxyDirectory, trace: trace, mode: LateHaltMode))

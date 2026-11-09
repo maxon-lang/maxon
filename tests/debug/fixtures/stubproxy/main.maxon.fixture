@@ -1,12 +1,33 @@
 typealias ByteSum = int(0 to u64.max)
+typealias PacketBytes = int(1 to 0xFFFF)
+typealias HexValue = int(0 to u64.max)
 
 let RealStubVariable = "MAXON_PROXY_REAL_STUB"
 let ModeVariable = "MAXON_PROXY_MODE"
 let InjectAfterVariable = "MAXON_PROXY_INJECT_AFTER"
 let InjectPayloadVariable = "MAXON_PROXY_INJECT"
 let TraceVariable = "MAXON_PROXY_TRACE"
+let PacketSizeVariable = "MAXON_PROXY_PACKET_SIZE"
+let AdvertiseVariable = "MAXON_PROXY_ADVERTISE"
 let AnswerMode = "answer"
 let LateHaltMode = "late-halt"
+let SmallBufferMode = "small-buffer"
+let AdvertiseYes = "yes"
+let AdvertiseNo = "no"
+
+let SupportedQuery = "qSupported"
+let PacketSizeFeature = "PacketSize="
+let UnadvertisedFeatures = "swbreak+;hwbreak+"
+let MemoryReadRequest = "m"
+let RequestFieldSeparator = ","
+let TooLongRefusal = "E2E"
+let HexDigitsPerByte = 2
+let HexBase = 16
+let AsciiDigitZero = 0x30
+let AsciiLetterA = 0x61
+let LettersBeforeTen = 10
+let AnsweredMarker = "answered "
+let RefusedMarker = "refused "
 
 let ReverseConnectOption = "-R"
 let Loopback = "127.0.0.1"
@@ -30,6 +51,7 @@ end 'Pulled'
 union Scenario
 	answers(after String, payload String)
 	lateHalt
+	smallBuffer(limit PacketBytes, advertised bool)
 end 'Scenario'
 
 type Endpoint
@@ -49,9 +71,10 @@ type Relay
 	var done as bool
 	var awaitingHalt as bool
 	var held as String
+	var log as String
 
 	static function create(driver TcpClient, stub TcpClient, scenario Scenario, trace FilePath) returns Relay
-		return Self{driver: driver, stub: stub, scenario: scenario, trace: trace, done: false, awaitingHalt: false, held: ""}
+		return Self{driver: driver, stub: stub, scenario: scenario, trace: trace, done: false, awaitingHalt: false, held: "", log: ""}
 	end 'create'
 
 	function step() returns bool
@@ -86,8 +109,35 @@ type Relay
 		return match self.scenario 'which'
 			answers(after, payload) gives self.answeredOrForwarded(piece, after: after, payload: payload)
 			lateHalt gives self.forwardedMindingTheHalt(piece)
+			smallBuffer(limit, advertised) gives self.forwardedWithinTheBuffer(piece, limit: limit, advertised: advertised)
 		end 'which'
 	end 'routed'
+
+	function forwardedWithinTheBuffer(piece String, limit PacketBytes, advertised bool) returns bool
+		let request = requestIn(piece)
+
+		if request.startsWith(SupportedQuery) 'theHandshake'
+			let features = "{PacketSizeFeature}{limit:x}" if advertised else UnadvertisedFeatures
+			self.noted("{AnsweredMarker}{SupportedQuery} with {features}")
+
+			return sent(self.driver, text: framed(features))
+		end 'theHandshake'
+
+		let bound = limit as HexValue
+
+		if (request.byteLength() as HexValue) > bound or replyDigitsOf(request) > bound 'theBufferCannotTakeIt'
+			self.noted("{RefusedMarker}{request}")
+
+			return sent(self.driver, text: framed(TooLongRefusal))
+		end 'theBufferCannotTakeIt'
+
+		return sent(self.stub, text: piece)
+	end 'forwardedWithinTheBuffer'
+
+	function noted(line String)
+		self.log.append("{line}\n")
+		try File.writeText(self.trace, content: self.log) otherwise panic("the stub proxy could not write its trace")
+	end 'noted'
 
 	function answeredOrForwarded(piece String, after String, payload String) returns bool
 		if self.done or not piece.startsWith("{PacketStart}{after}") 'nothingToAnswer'
@@ -154,6 +204,38 @@ function packetsOf(text String) returns StringArray
 	return packets
 end 'packetsOf'
 
+function requestIn(piece String) returns String
+	if not piece.startsWith(PacketStart) 'notAPacket'
+		return ""
+	end 'notAPacket'
+
+	let body = try piece.split(PacketEnd).get(0) otherwise panic("a split answers at least the whole of what it was given")
+
+	return body.replaceFirst(PacketStart, with: "")
+end 'requestIn'
+
+function replyDigitsOf(request String) returns HexValue
+	if not request.startsWith(MemoryReadRequest) 'notARead'
+		return 0
+	end 'notARead'
+
+	let fields = request.split(RequestFieldSeparator)
+	let spelled = try fields.get(1) otherwise return 0
+
+	return hexValueOf(spelled) * HexDigitsPerByte
+end 'replyDigitsOf'
+
+function hexValueOf(spelled String) returns HexValue
+	var value = 0 as HexValue
+
+	for digit in spelled.bytes() 'eachDigit'
+		let step = (digit as HexValue) - AsciiDigitZero if digit < AsciiLetterA else (digit as HexValue) - AsciiLetterA + LettersBeforeTen
+		value = value * HexBase + step
+	end 'eachDigit'
+
+	return value
+end 'hexValueOf'
+
 function containsInterrupt(piece String) returns bool
 	for value in piece.bytes() 'eachByte'
 		if value == InterruptByte 'theInterrupt'
@@ -175,8 +257,19 @@ function scenarioFromEnvironment() returns Scenario
 		return Scenario.answers(setting(InjectAfterVariable), payload: setting(InjectPayloadVariable))
 	end 'answering'
 
-	panic("{ModeVariable} names '{mode}', which is neither {AnswerMode} nor {LateHaltMode}")
+	if mode == SmallBufferMode 'small'
+		return Scenario.smallBuffer(packetBytesFromEnvironment(), advertised: setting(AdvertiseVariable) == AdvertiseYes)
+	end 'small'
+
+	panic("{ModeVariable} names '{mode}', which is none of {AnswerMode}, {LateHaltMode} and {SmallBufferMode}")
 end 'scenarioFromEnvironment'
+
+function packetBytesFromEnvironment() returns PacketBytes
+	let spelled = setting(PacketSizeVariable)
+	let size = try int.fromString(spelled) otherwise panic("{PacketSizeVariable} names '{spelled}', which is not a number")
+
+	return size as PacketBytes
+end 'packetBytesFromEnvironment'
 
 function pull(source TcpClient) returns Pulled
 	try source.setReadDeadline(PollMs) otherwise return Pulled.closed
