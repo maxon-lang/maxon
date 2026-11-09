@@ -194,6 +194,17 @@ export union DebugBackend
 		end 'which'
 	end 'liftTrap'
 
+	// The Windows debug port and the macOS remote stub cannot see a held program die, so they never
+	// claim it ended.
+	export function programHasEnded() returns bool
+		return match self 'which'
+			debugPort or
+			remoteStub gives false
+
+			processTrace(backend) gives backend.programHasEnded()
+		end 'which'
+	end 'programHasEnded'
+
 	export function readRegisters(thread BackendThreadId) returns BackendRegisterRead
 		return match self 'which'
 			debugPort(backend) gives backend.readRegisters(thread)

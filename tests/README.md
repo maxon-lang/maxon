@@ -215,6 +215,7 @@ tests/
     a-detach-removes-the-attachable-copy.maxtest       a session that detaches leaves no re-signed copy of the program beside it
     a-program-detached-while-it-starts-threads-runs-to-its-own-end.maxtest      a detach while a program is starting threads releases every one of them, so the program runs to its own end
     a-detach-from-a-program-that-died-while-held-is-not-a-failed-detach.maxtest      a program killed while the session holds it is let go by `detach`, which reports no failure and no refusal
+    a-detach-from-a-program-that-died-with-a-breakpoint-armed-reports-its-end.maxtest      a program killed while held at an armed breakpoint is reported as ended by `detach`, with no refusal for the trap it can no longer have
     a-clone-event-names-the-thread-it-started.maxtest      on Linux a clone event's message is the new thread's id, and the kernel already traces that thread
     a-stub-answer-that-is-not-an-acknowledgement-fails-the-detach.maxtest      through the stub proxy, a `D` answered with another request's reply fails the detach and names the reply on stderr
     a-stub-answer-that-is-not-an-acknowledgement-refuses-the-breakpoint.maxtest      through the stub proxy, a `Z0` answered with another request's reply is refused and never reported set

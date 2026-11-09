@@ -709,8 +709,8 @@ export type DebugEngine implements DebugMemory
 		self.cacheFilled = false
 
 		// The record outlives a refused restore: forgetting it would leave a trap in the program that
-		// nothing owns.
-		if not restored 'theTrapStays'
+		// nothing owns. A restore that failed because the program left is moot: no trap remains to own.
+		if not restored and not self.endingTakenIfTheProgramLeft() 'theTrapStays'
 			return CommandOutcome.refused(DebugUnwritableReason)
 		end 'theTrapStays'
 
@@ -718,6 +718,24 @@ export type DebugEngine implements DebugMemory
 
 		return CommandOutcome.done
 	end 'clearBreakpoint'
+
+	function endingTakenIfTheProgramLeft() returns bool
+		if self.target.hasSettled() 'alreadyTaken'
+			return true
+		end 'alreadyTaken'
+
+		if not self.stopped or not self.backend.programHasEnded() 'stillThere'
+			return false
+		end 'stillThere'
+
+		self.stopped = false
+
+		match self.pollForStop(self.walkBudgetMs()) 'waited'
+			ended then return true
+			stopped or
+			timedOut then panic("DebugEngine.endingTakenIfTheProgramLeft: a backend that answers the program gone holds its ending, and the wait for it answered a stop or nothing")
+		end 'waited'
+	end 'endingTakenIfTheProgramLeft'
 
 	function restoreBytesAt(offset DebugAddress) returns bool
 		match self.breakpointAt(self.textBase + offset) 'known'
@@ -727,6 +745,7 @@ export type DebugEngine implements DebugMemory
 	end 'restoreBytesAt'
 
 	export function clearEveryBreakpoint() returns CommandOutcome
+		_ = self.endingTakenIfTheProgramLeft()
 		_ = self.liftReturnPoint()
 
 		for offset in self.standingBreakpointOffsets() 'eachArmed'
@@ -1052,6 +1071,10 @@ export type DebugEngine implements DebugMemory
 			detachFailed then return self.lookAtAProgramNoLongerHeld()
 			attached then break
 		end 'attachment'
+
+		if self.target.hasSettled() 'theEndingWasTaken'
+			return StopWait.ended(self.target.settle(TargetSettling.polled))
+		end 'theEndingWasTaken'
 
 		if self.stopped 'aStopAlreadyStands'
 			return StopWait.timedOut if self.parkedAtEntry() else StopWait.stopped(self.currentStop())

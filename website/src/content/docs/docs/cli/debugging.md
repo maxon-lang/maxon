@@ -133,7 +133,8 @@ preemption back and lets the program run on under its own steam; the session the
 own ending and reports it. On `arm64-macos` the re-signed copy the program was launched from is removed at
 the detach, and the program keeps running from the file it already has open. While a trap byte cannot be
 written back, `detach` is refused `unwritable` with every breakpoint the debugger could write back
-cleared, and the program stays attached. After a `detach`, every command except `help` and `quit` is
+cleared, and the program stays attached. A program that ended while the session held it has nothing left
+to write back to: `detach` and `quit` report its ending. After a `detach`, every command except `help` and `quit` is
 refused: the session has detached, the program runs on by itself out of the debugger's reach, and
 only `quit` remains. An ending the program reached in the meantime is reported first.
 `quit` leaves a detached program running.

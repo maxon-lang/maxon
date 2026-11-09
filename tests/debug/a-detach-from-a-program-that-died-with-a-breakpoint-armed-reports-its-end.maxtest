@@ -1,0 +1,36 @@
+let DiedArmedCaseLabel = "a-detach-from-a-program-that-died-with-a-breakpoint-armed-reports-its-end"
+
+let DiedArmedDeadlineMs = 120000
+let DiedArmedStopWording = "stopped ("
+let DiedArmedExitedWording = "the program exited with code"
+let DiedArmedCrashedWording = "the program crashed with status"
+let DiedArmedDetachFailureWording = "the detach failed"
+let DiedArmedDetachRefusalWording = "refused to detach"
+let DiedArmedTrapStaysWording = "could not be removed"
+
+test 'a program that dies while the session holds it at an armed breakpoint is reported as ended by the detach, not refused for the trap it can no longer have'
+	#if not os(Macos)
+		let staged = builtFixture(DiedArmedCaseLabel, fixture: ThreadBurstFixtureName)
+		let spinLine = anchorLine(staged.join(StagedProgramFileName), anchor: BurstSpinAnchorName)
+		var session = ReplSession.open(builtExecutable(staged), staged: staged)
+
+		session.say("{BreakCommand} {lineTarget(spinLine)}")
+		session.say(RunCommand)
+
+		Expect.isTrue(session.sayUntilThe(DiedArmedStopWording, deadlineMs: DiedArmedDeadlineMs), message: "the program must be held at its breakpoint before it is killed. {session.said()}")
+
+		killedOutright(burstProcessId(staged))
+
+		session.say(DetachCommand)
+		session.say(QuitCommand)
+
+		let ended = session.finish(DiedArmedDeadlineMs)
+		let spoken = session.said()
+
+		Expect.isTrue(ended, message: "the session must end once it is told to quit. {spoken}")
+		Expect.isFalse(spoken.contains(DiedArmedDetachRefusalWording), message: "⛔ A BREAKPOINT IN A PROGRAM THAT NO LONGER EXISTS NEEDS NO REMOVAL. The detach was refused for a trap byte the debugger could not write back into a process that is gone. The session said: {spoken}")
+		Expect.isFalse(spoken.contains(DiedArmedTrapStaysWording), message: "the session reported a breakpoint it could not remove from a program that is gone. The session said: {spoken}")
+		Expect.isFalse(spoken.contains(DiedArmedDetachFailureWording), message: "a detach from a program that is already gone did not fail. The session said: {spoken}")
+		Expect.isTrue(spoken.contains(DiedArmedExitedWording) or spoken.contains(DiedArmedCrashedWording), message: "the detach must report the program's end. The session said: {spoken}")
+	#endif
+end 'a program that dies while the session holds it at an armed breakpoint is reported as ended by the detach, not refused for the trap it can no longer have'

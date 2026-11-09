@@ -31,6 +31,12 @@ function ptraceFirstSignalOf(owed PtraceOwedSignalArray) returns BackendWord
 	return try owed.get(0) otherwise panic("ptraceFirstSignalOf: {owed.count()} signal(s) are owed, so the first is there to hand on")
 end 'ptraceFirstSignalOf'
 
+enum PtraceGroupStanding
+	held
+	dying
+	gone
+end 'PtraceGroupStanding'
+
 enum PtraceFaultDrain
 	keptForTheDebugger
 	handedToTheProgram
@@ -922,6 +928,42 @@ export type PtraceBackend
 
 		return PtraceRelease.refused
 	end 'release'
+
+	// --- the program's end ---
+
+	export function programHasEnded() returns bool
+		let deadline = debugDeadlineAfter(GroupStopBudgetMs as StopTimeoutMs)
+
+		while not debugDeadlinePassed(deadline) 'untilItSettles'
+			match self.groupStanding() 'standing'
+				held then return false
+				gone then return true
+				dying then sleep(ReleaseRetryMs)
+			end 'standing'
+		end 'untilItSettles'
+
+		return false
+	end 'programHasEnded'
+
+	// A thread in tracing stop is one this session still holds, so the program is alive; a thread
+	// that is neither held nor gone is on its way out and is waited for.
+	function groupStanding() returns PtraceGroupStanding
+		var standing = PtraceGroupStanding.gone
+
+		for entry in self.threads 'eachThread'
+			view state = self.trace.threadState(self.process as DebuggeeProcessId, thread: entry.id as DebuggeeThreadId)
+
+			if state.isTraceStopped() 'itIsHeld'
+				return PtraceGroupStanding.held
+			end 'itIsHeld'
+
+			if not state.hasLeft() 'itIsDying'
+				standing = PtraceGroupStanding.dying
+			end 'itIsDying'
+		end 'eachThread'
+
+		return standing
+	end 'groupStanding'
 
 	// --- memory ---
 

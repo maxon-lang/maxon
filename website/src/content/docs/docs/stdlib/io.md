@@ -1124,7 +1124,8 @@ as byte offsets for the architecture the program is built for:
 | `present(code)` | The thread's record; `code` starts with its state letter. |
 
 `hasLeft()` is true for `absent` and for a thread that is a zombie (`Z`) or dead (`X`).
-`isRunning()` is true for state `R`, and `isUninterruptible()` for state `D`.
+`isRunning()` is true for state `R`, `isUninterruptible()` for state `D`, and `isTraceStopped()` for state `t`, a
+thread stopped for its tracer.
 
 | Type | Definition |
 |------|------------|

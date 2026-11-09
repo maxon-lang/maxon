@@ -2,7 +2,15 @@ export let ThreadBurstFixtureName = "threadburst"
 export let BurstSpinAnchorName = "spin-body"
 export let BurstFinishedMarkerName = "burst-ran-to-its-end.txt"
 let BurstPidFileName = "burst-pid.txt"
-let KillShell = "sh"
+
+#if os(Windows)
+	let KillExecutable = "taskkill"
+	let KillForceFlag = "/F"
+	let KillProcessFlag = "/PID"
+#else
+	let KillExecutable = "sh"
+	let KillScriptFlag = "-c"
+#endif
 
 export function burstProcessId(staged FilePath) returns Pid
 	let text = try File.readText(staged.join(BurstPidFileName)) otherwise panic("the gate could not run — the thread-burst program recorded no process id in {BurstPidFileName}")
@@ -11,12 +19,20 @@ export function burstProcessId(staged FilePath) returns Pid
 	return id as Pid
 end 'burstProcessId'
 
+function killArguments(process Pid) returns StringArray
+	#if os(Windows)
+		return [KillForceFlag, KillProcessFlag, "{process}"]
+	#else
+		return [KillScriptFlag, "kill -9 {process}"]
+	#endif
+end 'killArguments'
+
 export function killedOutright(process Pid)
-	let ran = try Subprocess.run(Executable.name(KillShell), arguments: ["-c", "kill -9 {process}"]) otherwise (e) 'noKill'
+	let ran = try Subprocess.run(Executable.name(KillExecutable), arguments: killArguments(process)) otherwise (e) 'noKill'
 		panic("the gate could not run — killing process {process} failed ({e.displayReason()}).")
 	end 'noKill'
 
 	if not ran.succeeded() 'refused'
-		panic("the gate could not run — `kill -9 {process}` exited {ran.exitCode()}: {ran.stderr}")
+		panic("the gate could not run — killing process {process} exited {ran.exitCode()}: {ran.stderr}")
 	end 'refused'
 end 'killedOutright'

@@ -729,6 +729,7 @@ let TraceProcStateRunning = "R"
 let TraceProcStateUninterruptible = "D"
 let TraceProcStateZombie = "Z"
 let TraceProcStateDead = "X"
+let TraceProcStateTraceStopped = "t"
 
 let WaitSignalMask = 0x7F
 let WaitStoppedMask = 0xFF
@@ -783,6 +784,13 @@ public union TraceThreadState
 			present(code) gives code.startsWith(TraceProcStateUninterruptible)
 		end 'state'
 	end 'isUninterruptible'
+
+	public function isTraceStopped() returns bool
+		return match self 'state'
+			absent gives false
+			present(code) gives code.startsWith(TraceProcStateTraceStopped)
+		end 'state'
+	end 'isTraceStopped'
 end 'TraceThreadState'
 
 /// Drives a debuggee through `ptrace`, on Linux only. It owns a scratch region that `close()`
