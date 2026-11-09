@@ -1046,7 +1046,7 @@ kind=2 code=3 memberEnded=true
 
 <!-- test: subprocess-builtins.posix-a-zombie-group-leader-keeps-its-own-code-when-the-deadline-kills-its-group -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: x64-windows -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
 **A DEADLINE KILL OF A GROUP WHOSE LEADER HAS EXITED UNREAPED REPORTS THE LEADER'S OWN CODE.** The shell exits
 with `3` and the `sleep` it left in the background holds the stdout pipe, so the collect cannot finish before
 the deadline. The program asks `/bin/ps -o stat= -p <pid>` until the shell's state starts with `Z`, which
