@@ -549,17 +549,16 @@ public extension Array where Element is Equatable
 			return true
 		end 'empty'
 
+		if elemLen > selfLen 'longer'
+			return false
+		end 'longer'
+
 		for i in 0 to (selfLen - elemLen) 'scan'
 			var matched = true
 
 			for j in 0 upto elemLen 'cmp'
-				let a = try get(i + j) otherwise 'a'
-					break
-				end 'a'
-
-				let b = try sequence.get(j) otherwise 'b'
-					break
-				end 'b'
+				let a = try get(i + j) otherwise panic("containsSequence: i + j < count() since i <= count() - sequence.count()")
+				let b = try sequence.get(j) otherwise panic("containsSequence: j < sequence.count()")
 
 				if a != b 'ne'
 					matched = false

@@ -248,6 +248,83 @@ end 'main'
 1
 ```
 
+<!-- test: array-subsequence-longer-than-array -->
+```maxon
+function main() returns ExitCode
+	let arr = [1, 2]
+	if arr.containsSequence([1, 2, 3]) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: array-subsequence-empty-array-nonempty-sequence -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	let arr = IntArray.create(0)
+	if arr.containsSequence([1]) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: array-subsequence-equal-length-match -->
+```maxon
+function main() returns ExitCode
+	let arr = [1, 2, 3]
+	if arr.containsSequence([1, 2, 3]) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: array-subsequence-equal-length-mismatch -->
+```maxon
+function main() returns ExitCode
+	let arr = [1, 2, 3]
+	if arr.containsSequence([1, 2, 4]) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: array-subsequence-empty-sequence -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	let arr = IntArray from [1, 2]
+	let none = IntArray.create(0)
+	if arr.containsSequence(none) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
 <!-- test: string-substring-found -->
 ```maxon
 function main() returns ExitCode
