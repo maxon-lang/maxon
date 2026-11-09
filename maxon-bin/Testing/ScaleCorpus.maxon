@@ -1355,15 +1355,6 @@ let NamespacesDriver = "scaleNamespaces"
 // Rung layout on disk
 // ===========================================================================================
 
-// What separates a rung-relative path's segments in `written`, and what marks a recorded entry as a
-// DIRECTORY rather than a file (a trailing one). `pruneRungDir` is the only reader; see there for why the
-// generated set has to name directories at all.
-//
-// ⚠ It is `/` and never the platform separator: these strings are built by this generator and compared
-// against strings this generator built, never against a `FilePath`'s rendering — `FilePath.filename()`
-// hands back one segment on either host, and the prefix is assembled here.
-let RungRelativePathSeparator = "/"
-
 // Shared with the runner, which names each rung's metrics + output file after it — in the corpus
 // ROOT, never in the rung.
 export let RungDirPrefix = "rung"
@@ -1636,11 +1627,11 @@ function pruneRungSubtree(dir FilePath, generated StringArray, prefix String) th
 		let relative = "{prefix}{entry.filename()}"
 
 		if Directory.isDirectory(entry) 'subdir'
-			if not generated.contains("{relative}{RungRelativePathSeparator}") 'staleSubdir'
+			if not generated.contains("{relative}{PortablePathSeparator}") 'staleSubdir'
 				throw ScaleError.reason("{entry.toString()} is a directory inside a rung that this generator did not write, and `build <dir>` walks recursively — so it would be COMPILED as part of this rung and the measurement would be of a program this generator did not write. Delete the corpus root and re-run.")
 			end 'staleSubdir'
 
-			try pruneRungSubtree(entry, generated: generated, prefix: "{relative}{RungRelativePathSeparator}")
+			try pruneRungSubtree(entry, generated: generated, prefix: "{relative}{PortablePathSeparator}")
 			continue
 		end 'subdir'
 
@@ -5075,12 +5066,12 @@ function writeNamespacedModules(dir FilePath, moduleCount KnobSize, written Stri
 		let moduleIndex = m as KnobIndex
 
 		let moduleDir = "{NsModuleDirPrefix}{m}"
-		let innerDir = "{moduleDir}{RungRelativePathSeparator}{NsInnerDirName}"
+		let innerDir = "{moduleDir}{PortablePathSeparator}{NsInnerDirName}"
 		try createRungSubdir(dir, relative: moduleDir, written: written)
 		try createRungSubdir(dir, relative: innerDir, written: written)
 
-		total = total + try writeRungFile(dir, name: "{moduleDir}{RungRelativePathSeparator}mod", source: namespacedModuleSource(moduleIndex), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
-		total = total + try writeRungFile(dir, name: "{innerDir}{RungRelativePathSeparator}deep", source: namespacedInnerSource(moduleIndex), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
+		total = total + try writeRungFile(dir, name: "{moduleDir}{PortablePathSeparator}mod", source: namespacedModuleSource(moduleIndex), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
+		total = total + try writeRungFile(dir, name: "{innerDir}{PortablePathSeparator}deep", source: namespacedInnerSource(moduleIndex), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
 
 		consumer.append(qualifiedReferenceGroup(moduleIndex))
 	end 'eachModule'
@@ -5101,7 +5092,7 @@ function createRungSubdir(dir FilePath, relative String, written StringArray) th
 		throw ScaleError.reason("could not create the module directory {path.toString()}")
 	end 'noDir'
 
-	written.push("{relative}{RungRelativePathSeparator}")
+	written.push("{relative}{PortablePathSeparator}")
 end 'createRungSubdir'
 
 // One module's own file. See `writeNamespacedModules` for what each declaration is here to price.

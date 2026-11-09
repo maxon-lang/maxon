@@ -1,0 +1,23 @@
+// What joins a module directory's segments, and it is `/` and not `.` because the join has to be
+// invertible: `moduleDirectoryContains` is a segment test, and a segment test on a joined string is
+// only sound if no segment can contain the joiner.
+//
+// ⚠ `.` would be a wrong answer, because a directory name may contain one on every host the compiler
+// targets (this repository holds `.maxon/` and `.claude/`). Two silent failures would follow:
+//
+//   - `feature/` and `feature.extra/` are siblings. Joined with `.` the second reads as
+//     `feature.extra`, which starts with `feature.`, so a `module` declaration in `feature/` would be
+//     visible from `feature.extra/`, the widening the separator guard exists to prevent.
+//   - `my.dir/` and `my/dir/` would both join to `my.dir`, so two structurally different directories
+//     would become one module and each could see the other's `module` declarations.
+//
+// `/` cannot appear in a path segment on any host the compiler targets: it is the separator itself on
+// Linux, macOS and WASI, and on Windows it is both an accepted separator and one of the characters a
+// file or directory name may not contain. So the join is injective and the segment test is sound. The
+// `.`-joined spelling the language shows a user is derived from this one
+// (`namespaceForModuleDirectory`) and is never what a visibility question is asked on.
+export let PortablePathSeparator = "/"
+export let WindowsPathSeparator = "\\"
+
+module let PortablePathSeparatorByte = 0x2F
+module let WindowsPathSeparatorByte = 0x5C

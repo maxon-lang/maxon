@@ -24,10 +24,6 @@
 
 let LspFileUriScheme = "file://"
 
-let LspUriRootSlash = "/"
-
-let WindowsDirectorySeparator = "\\"
-
 let HexRadix = 16
 let LastSingleHexDigit = 9
 
@@ -39,7 +35,6 @@ let AsciiLowerA = 97
 let AsciiLowerZ = 122
 let AsciiHyphen = 45
 let AsciiPeriod = 46
-let AsciiSlash = 47
 let AsciiUnderscore = 95
 let AsciiTilde = 126
 
@@ -47,10 +42,10 @@ let AsciiTilde = 126
 // uri that does not re-encode what a request decoded names a document the client cannot match to
 // the one it asked about.
 module function lspFileUri(path FilePath) returns String
-	let slashed = path.toString().replace(WindowsDirectorySeparator, with: LspUriRootSlash)
+	let slashed = path.toString().replace(WindowsPathSeparator, with: PortablePathSeparator)
 	let encoded = percentEncodedUriPath(slashed)
 
-	return "{LspFileUriScheme}{encoded}" if encoded.startsWith(LspUriRootSlash) else "{LspFileUriScheme}{LspUriRootSlash}{encoded}"
+	return "{LspFileUriScheme}{encoded}" if encoded.startsWith(PortablePathSeparator) else "{LspFileUriScheme}{PortablePathSeparator}{encoded}"
 end 'lspFileUri'
 
 function percentEncodedUriPath(text String) returns String
@@ -83,7 +78,7 @@ function literalInAUriPath(pathByte Byte) returns bool
 		return true
 	end 'lowerCaseLetter'
 
-	return pathByte == AsciiHyphen or pathByte == AsciiPeriod or pathByte == AsciiUnderscore or pathByte == AsciiTilde or pathByte == AsciiSlash
+	return pathByte == AsciiHyphen or pathByte == AsciiPeriod or pathByte == AsciiUnderscore or pathByte == AsciiTilde or pathByte == PortablePathSeparatorByte
 end 'literalInAUriPath'
 
 function hexDigitByteOf(amount UrlHexDigitValue) returns Byte

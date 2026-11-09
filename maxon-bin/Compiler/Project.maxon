@@ -230,37 +230,11 @@ end 'cacheReadSpelledFieldNameArray'
 
 // @generated library-cache end
 
-// ⭐⭐ **WHAT JOINS A MODULE DIRECTORY'S SEGMENTS — AND IT IS `/`, NOT `.`, BECAUSE THE JOIN HAS TO BE
-// INVERTIBLE.** `moduleDirectoryContains` is a SEGMENT test, and a segment test on a joined string is
-// only sound if no segment can contain the joiner.
-//
-// ⚠ **`.` WOULD BE A WRONG ANSWER: A DIRECTORY NAME MAY CONTAIN ONE** on every host the compiler
-// targets — this very repository holds `.maxon/` and `.claude/`. Two failures would follow, both
-// silent:
-//
-//   • `feature/` and `feature.extra/` are SIBLINGS. Joined with `.` the second reads as `feature.extra`,
-//     which starts with `feature.` — so a `module` declaration in `feature/` would be visible from
-//     `feature.extra/`, the exact widening the separator guard exists to prevent.
-//   • `my.dir/` and `my/dir/` would both join to `my.dir`, so two structurally different
-//     directories would become ONE module and each could see the other's `module` declarations.
-//
-// `/` cannot appear in a path SEGMENT on any host the compiler targets: it is the separator itself on
-// Linux, macOS and WASI, and on Windows it is both an accepted separator and one of the characters a
-// file or directory name may not contain. So the join is injective and the segment test is sound. The
-// `.`-joined spelling the language shows a user is DERIVED from this one
-// (`namespaceForModuleDirectory`) and is never what a visibility question is asked on.
-module let ModuleDirectorySeparator = "/"
 module let NoModuleDirectoryPrefix = ""
-
-// The one spelling that has to be rewritten: `FilePath` normalizes to the PLATFORM separator on
-// construction, so a Windows host hands back `feature\sub` where a POSIX host hands back `feature/sub`,
-// and a spec fixture's `// --- file: feature/sub/deep.maxon` must derive the same module directory on
-// either. `/` needs no rewrite because it IS the joined form.
-let WindowsPathSeparatorText = "\\"
 
 // What joins a NAMESPACE's segments — the spelling `specs/namespaces.md` gives (`stdlib.fmt`) and the one
 // a qualified reference will be written with. It is a RENDERING of a module directory and nothing reads a
-// visibility answer off it; see `ModuleDirectorySeparator` for why the two cannot be the same character.
+// visibility answer off it; see `PortablePathSeparator` for why the two cannot be the same character.
 let NamespaceSeparator = "."
 
 // ⭐ **A FILE'S MODULE DIRECTORY IS ITS DIRECTORY, RELATIVE TO ITS COMPILE ANCHOR, `/`-JOINED** —
@@ -274,6 +248,11 @@ let NamespaceSeparator = "."
 // ⚠ **THE ANCHOR IS THE ARGUMENT, AND GETTING IT WRONG IS SILENT** — every file would get a plausible
 // module directory and the wrong one. `Queries.namespaceAnchorFor` is its single producer, and states the
 // three anchors it derives.
+//
+// `FilePath` normalizes to the PLATFORM separator on construction, so a Windows host hands back
+// `feature\sub` where a POSIX host hands back `feature/sub`, and a spec fixture's
+// `// --- file: feature/sub/deep.maxon` must derive the same module directory on either. Only
+// `WindowsPathSeparator` is rewritten; `/` needs no rewrite because it is the joined form.
 export function deriveModuleDirectory(filePath FilePath, rootPath FilePath) returns String
 	let relative = try filePath.relativeTo(rootPath) otherwise 'notUnderRoot'
 		let parent = try filePath.parent() otherwise panic("deriveModuleDirectory: '{filePath.toString()}' names no directory it sits in — a source file is always read out of one")
@@ -282,7 +261,7 @@ export function deriveModuleDirectory(filePath FilePath, rootPath FilePath) retu
 
 	// No separator left in the relative path ⇒ the file sits AT the anchor, which is the root module.
 	let directory = try relative.parent() otherwise return ""
-	return directory.toString().replace(WindowsPathSeparatorText, with: ModuleDirectorySeparator)
+	return directory.toString().replace(WindowsPathSeparator, with: PortablePathSeparator)
 end 'deriveModuleDirectory'
 
 // The `.`-joined NAMESPACE a module directory is shown as — `stdlib/fmt` ⇒ `stdlib.fmt`. Derived from the
@@ -293,7 +272,7 @@ export function namespaceForModuleDirectory(moduleDirectory String) returns Stri
 		return ""
 	end 'rootModule'
 
-	return moduleDirectory.replace(ModuleDirectorySeparator, with: NamespaceSeparator)
+	return moduleDirectory.replace(PortablePathSeparator, with: NamespaceSeparator)
 end 'namespaceForModuleDirectory'
 
 export let RootNamespaceQualifier = "export"
@@ -386,7 +365,7 @@ end 'cacheReadDefineProblemArray'
 // ⚠ **THE SEPARATOR IN THE PREFIX IS THE POINT**: without it `feature` would contain `featureX`, a
 // sibling directory that merely shares a character prefix. It is asked of a `/`-joined RELATIVE
 // directory, derived ONCE PER FILE and indexed, rather than of a stringified parent `FilePath`
-// recomputed on both sides of every ask. `ModuleDirectorySeparator` is what keeps the guard sound.
+// recomputed on both sides of every ask. `PortablePathSeparator` is what keeps the guard sound.
 //
 // The empty module directory is the ROOT, and every file in the program is under the root — so a
 // `module` declaration in a root-level file is visible program-wide, which is what "same directory and
@@ -400,7 +379,7 @@ export function moduleDirectoryContains(outer String, inner String) returns bool
 		return true
 	end 'sameDirectory'
 
-	return inner.startsWith("{outer}{ModuleDirectorySeparator}")
+	return inner.startsWith("{outer}{PortablePathSeparator}")
 end 'moduleDirectoryContains'
 
 export function moduleDirectoryRelativeTo(root String, directory String) returns String
@@ -412,9 +391,9 @@ export function moduleDirectoryRelativeTo(root String, directory String) returns
 		return NoModuleDirectoryPrefix
 	end 'theRootItself'
 
-	let prefixBytes = "{root}{ModuleDirectorySeparator}".byteLength()
+	let prefixBytes = "{root}{PortablePathSeparator}".byteLength()
 	let directoryBytes = directory.toByteArray()
-	return String.from(try directoryBytes.slice(prefixBytes, endIndex: directoryBytes.count()) otherwise panic("moduleDirectoryRelativeTo: '{directory}' lies under '{root}' by `moduleDirectoryContains`, so it is longer than the `{root}{ModuleDirectorySeparator}` prefix"))
+	return String.from(try directoryBytes.slice(prefixBytes, endIndex: directoryBytes.count()) otherwise panic("moduleDirectoryRelativeTo: '{directory}' lies under '{root}' by `moduleDirectoryContains`, so it is longer than the `{root}{PortablePathSeparator}` prefix"))
 end 'moduleDirectoryRelativeTo'
 
 export function moduleDirectoryOfRootPath(root FilePath, anchor FilePath) returns String
@@ -422,7 +401,7 @@ export function moduleDirectoryOfRootPath(root FilePath, anchor FilePath) return
 		return NoModuleDirectoryPrefix
 	end 'outsideTheCone'
 
-	return relative.toString().replace(WindowsPathSeparatorText, with: ModuleDirectorySeparator)
+	return relative.toString().replace(WindowsPathSeparator, with: PortablePathSeparator)
 end 'moduleDirectoryOfRootPath'
 
 module enum CandidateReach
@@ -2941,7 +2920,7 @@ export function projectRelativeDisplay(moduleDirectory String, path FilePath) re
 		return path.filename()
 	end 'aRootFile'
 
-	return "{moduleDirectory}{ModuleDirectorySeparator}{path.filename()}"
+	return "{moduleDirectory}{PortablePathSeparator}{path.filename()}"
 end 'projectRelativeDisplay'
 
 export typealias LibraryFilePathSet = Set with String

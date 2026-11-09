@@ -9,9 +9,6 @@
 // standard library — a build that succeeds and answers about a library that is not the caller's. So a
 // tool acting on a tree runs THAT TREE's compiler, and refuses when it has not been built.
 
-let SlashByte = 0x2F
-let BackslashByte = 0x5C
-
 // The three directories a tree must hold to be a checkout this server can act in. `stdlib/` and
 // `runtime/` are both loaded by every compile, so a tree missing either one compiles nothing at all;
 // `maxon-bin/` is where the compiler that would run is built.
@@ -44,7 +41,7 @@ export type ResolvedRoot
 end 'ResolvedRoot'
 
 export function childPath(parent FilePath, segment String) returns FilePath
-	let joined = "{parent.path}/{segment}"
+	let joined = "{parent.path}{PortablePathSeparator}{segment}"
 	return try FilePath.from(joined) otherwise panic("childPath: `{joined}` is not a valid path")
 end 'childPath'
 
@@ -61,7 +58,7 @@ function parentDirOrThrow(path FilePath) returns FilePath throws McpError
 		i = i - 1
 		let b = try bytes.get(i) otherwise panic("parentDirOrThrow: {i} is outside a range derived from the path's own length")
 
-		if b != SlashByte and b != BackslashByte 'notSep'
+		if b != PortablePathSeparatorByte and b != WindowsPathSeparatorByte 'notSep'
 			continue
 		end 'notSep'
 

@@ -1327,8 +1327,8 @@ function headerReadFailure(e SubprocessError) returns String
 end 'headerReadFailure'
 
 export function fileUriOf(file FilePath) returns String
-	let slashed = file.toString().replace(WindowsPathSeparator, with: UriPathSeparator)
-	return "{FileUriScheme}{slashed}" if slashed.startsWith(UriPathSeparator) else "{FileUriScheme}{UriPathSeparator}{slashed}"
+	let slashed = file.toString().replace(WindowsPathSeparator, with: PortablePathSeparator)
+	return "{FileUriScheme}{slashed}" if slashed.startsWith(PortablePathSeparator) else "{FileUriScheme}{PortablePathSeparator}{slashed}"
 end 'fileUriOf'
 
 export function editorUriOf(file FilePath) returns String
@@ -1345,13 +1345,13 @@ export function editorUriOf(file FilePath) returns String
 		return uri
 	end 'notADriveLetter'
 
-	return uri.replaceFirst("{UriPathSeparator}{drive}{DriveColon}", with: "{UriPathSeparator}{drive.toLower()}{EditorEncodedDriveColon}")
+	return uri.replaceFirst("{PortablePathSeparator}{drive}{DriveColon}", with: "{PortablePathSeparator}{drive.toLower()}{EditorEncodedDriveColon}")
 end 'editorUriOf'
 
 function lastUriSegment(uri String) returns String
 	var name = uri
 
-	for segment in uri.split(UriPathSeparator) 'eachSegment'
+	for segment in uri.split(PortablePathSeparator) 'eachSegment'
 		if not segment.isEmpty() 'named'
 			name = segment
 		end 'named'
@@ -1957,8 +1957,6 @@ let TrustedWorkspaceKey = "trustedWorkspace"
 let TrustedKey = "trusted"
 
 let FileUriScheme = "file://"
-let UriPathSeparator = "/"
-let WindowsPathSeparator = "\\"
 let DriveColon = ":"
 let EditorEncodedDriveColon = "%3A"
 let DriveLetterBytes = 1

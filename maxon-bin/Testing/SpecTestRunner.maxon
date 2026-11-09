@@ -1960,7 +1960,7 @@ end 'FragmentPathMapping'
 // expectation is not a claim about the host that ran it. `isSafeRelativeName` normalizes the two
 // separators the same way and for the same reason.
 function sourceDirPrefixOf(fileName String) returns String
-	let segments = fileName.replace(WindowsPathSeparator, with: PathSeparator).split(PathSeparator)
+	let segments = fileName.replace(WindowsPathSeparator, with: PortablePathSeparator).split(PortablePathSeparator)
 
 	if segments.count() < 2 'topLevel'
 		return ""
@@ -1970,7 +1970,7 @@ function sourceDirPrefixOf(fileName String) returns String
 
 	for i in 0 upto segments.count() - 1 'eachDirectory'
 		let segment = try segments.get(i) otherwise panic("sourceDirPrefixOf: segments.get({i}) failed on a {segments.count()}-part split")
-		prefix = "{prefix}{segment}{PathSeparator}"
+		prefix = "{prefix}{segment}{PortablePathSeparator}"
 	end 'eachDirectory'
 
 	return prefix
@@ -3276,7 +3276,7 @@ type StagedSectionWording
 	end 'runtimeFile'
 
 	static function stdlibOverlay() returns StagedSectionWording
-		return Self{marker: StdlibOverlayMarker, stagedRoot: "{StdlibDirName}/", collision: "be written above the first"}
+		return Self{marker: StdlibOverlayMarker, stagedRoot: "{StdlibDirName}{PortablePathSeparator}", collision: "be written above the first"}
 	end 'stdlibOverlay'
 end 'StagedSectionWording'
 
@@ -3294,7 +3294,7 @@ function stagedSectionDestination(wording StagedSectionWording, name String, roo
 
 	// Compared in the corpus's own forward-slash spelling for `sourceDirPrefixOf`'s reason: which
 	// separator a spec wrote is not a claim about the host that runs it.
-	let key = name.replace(WindowsPathSeparator, with: PathSeparator)
+	let key = name.replace(WindowsPathSeparator, with: PortablePathSeparator)
 
 	if seen.contains(key) 'namedTwice'
 		throw TierStagingError.refused("two '{wording.marker}' sections both name '{name}'. The second would {wording.collision}, so neither section's line numbers would be the ones its expectation was written against — merge them into one section")
@@ -3402,13 +3402,13 @@ function isSafeRelativeName(name String) returns bool
 		return false
 	end 'noName'
 
-	let normalized = name.replace(WindowsPathSeparator, with: PathSeparator)
+	let normalized = name.replace(WindowsPathSeparator, with: PortablePathSeparator)
 
-	if normalized.startsWith(PathSeparator) or normalized.contains(DriveLetterSeparator) 'rooted'
+	if normalized.startsWith(PortablePathSeparator) or normalized.contains(DriveLetterSeparator) 'rooted'
 		return false
 	end 'rooted'
 
-	for segment in normalized.split(PathSeparator) 'eachSegment'
+	for segment in normalized.split(PortablePathSeparator) 'eachSegment'
 		if segment == DotSegment or segment == ParentSegment 'escapes'
 			return false
 		end 'escapes'
@@ -4702,7 +4702,7 @@ function batchScript(executions ExecutionArray, launcher BatchLauncher, tempDir 
 	out.append("\t[ -z \"{batchProcsShellVar()}\" ] || export {String.from(MaxProcsEnvName)}=\"{batchProcsShellVar()}\"\n")
 	out.append("\t[ -z \"{batchPreemptShellVar()}\" ] || export {String.from(PreemptEnvName)}=\"{batchPreemptShellVar()}\"\n")
 	out.append("\tc=\"{guestCapturePath(scratch, extension: BatchStatusExtension)}\"\n")
-	out.append("\ta=\"{scratch}{PathSeparator}{batchExeShellVar()}\"\n")
+	out.append("\ta=\"{scratch}{PortablePathSeparator}{batchExeShellVar()}\"\n")
 	out.append("\to=\"{guestCapturePath(scratch, extension: BatchStdoutExtension)}\"\n")
 	out.append("\te=\"{guestCapturePath(scratch, extension: BatchStderrExtension)}\"\n")
 
@@ -4730,12 +4730,12 @@ end 'batchScript'
 // composes for the reader, under the scratch expression `guestScratchExpression` answers, with the
 // shell's own variable where the host puts the key.
 //
-// ⚠ `PathSeparator`, never a literal `/`: the guest is POSIX whatever the host is, and
+// ⚠ `PortablePathSeparator`, never a literal `/`: the guest is POSIX whatever the host is, and
 // `guestScriptPath`, which names the script, already spells the separator from this same constant.
 // Two spellings of one separator is how the writer and the reader come to disagree about a path
 // neither compiler checks.
 function guestCapturePath(scratch String, extension String) returns String
-	return "{scratch}{PathSeparator}{BatchSubdirName}{PathSeparator}{batchKeyShellVar()}{extension}"
+	return "{scratch}{PortablePathSeparator}{BatchSubdirName}{PortablePathSeparator}{batchKeyShellVar()}{extension}"
 end 'guestCapturePath'
 
 // The spec's scratch directory as the script names it, anchored at `$R` because the prologue steps
@@ -4743,7 +4743,7 @@ end 'guestCapturePath'
 // against that directory from then on, silently.
 function guestScratchExpression(launcher BatchLauncher, tempDir FilePath) returns String
 	return match launcher 'launcher'
-		wsl gives "${GuestBaseShellName}{PathSeparator}{guestSpecTempPrefix(tempDir)}"
+		wsl gives "${GuestBaseShellName}{PortablePathSeparator}{guestSpecTempPrefix(tempDir)}"
 		orb gives "${GuestBaseShellName}"
 	end 'launcher'
 end 'guestScratchExpression'
@@ -4773,14 +4773,14 @@ function hostPhysicalDirectory(directory FilePath) returns FilePath
 end 'hostPhysicalDirectory'
 
 function guestScriptPath(tempDir FilePath) returns String
-	return "{guestSpecTempPrefix(tempDir)}{PathSeparator}{BatchSubdirName}{PathSeparator}{BatchScriptName}"
+	return "{guestSpecTempPrefix(tempDir)}{PortablePathSeparator}{BatchSubdirName}{PortablePathSeparator}{BatchScriptName}"
 end 'guestScriptPath'
 
 // The fed line's file, on the guest side — the twin of `launchBatch`'s `stdinPath`, and a pair
 // for the reason `guestCapturePath` and `batchCapturePath` are one: the writer and the reader must
 // name one file.
 function guestStdinPath(scratch String) returns String
-	return "{scratch}{PathSeparator}{BatchSubdirName}{PathSeparator}{BatchStdinFileName}"
+	return "{scratch}{PortablePathSeparator}{BatchSubdirName}{PortablePathSeparator}{BatchStdinFileName}"
 end 'guestStdinPath'
 
 // The `case` token for one arm of `SpecStdin`. EXHAUSTIVE with no bare default: a fourth arm added to the
@@ -4816,7 +4816,7 @@ function guestSpecTempPrefix(tempDir FilePath) returns String
 		panic("SpecTestRunner: the spec scratch directory {tempDir.toString()} is not under the checkout root {root.toString()}, so the guest cannot name it")
 	end 'notUnderRoot'
 
-	return relative.toString().replace(WindowsPathSeparator, with: PathSeparator)
+	return relative.toString().replace(WindowsPathSeparator, with: PortablePathSeparator)
 end 'guestSpecTempPrefix'
 
 // One test's line: the function, the case's processor count, its preemption switch, the binary's own
@@ -5444,7 +5444,7 @@ function rewriteSourceTierPaths(text String, root String) returns String
 end 'rewriteSourceTierPaths'
 
 function tierDirNameOf(root String) returns String
-	let segments = root.replace(WindowsPathSeparator, with: PathSeparator).split(PathSeparator)
+	let segments = root.replace(WindowsPathSeparator, with: PortablePathSeparator).split(PortablePathSeparator)
 	return try segments.get(segments.count() - 1) otherwise panic("SpecTestRunner.tierDirNameOf: '{root}' split into no segments, though a split with no separator found yields the whole string")
 end 'tierDirNameOf'
 
@@ -5465,7 +5465,7 @@ function portableLibraryTail(tail String) returns String
 
 	let relative = tail.slice(tail.startIndex(), endIndex: cut)
 	let position = tail.slice(cut, endIndex: tail.endIndex())
-	return "{relative.replace(WindowsPathSeparator, with: PathSeparator)}{position}"
+	return "{relative.replace(WindowsPathSeparator, with: PortablePathSeparator)}{position}"
 end 'portableLibraryTail'
 
 // The single mapping an EXPECTED text needs: the path a `/specs` expectation names for this test,
@@ -5559,7 +5559,7 @@ end 'rewriteDiagnosticLine'
 // `<spec directory>/<spec>/<test>.maxon` form is what every expectation in the corpus is authored
 // with, and it is what is reconstructed here. No file lives at that path; it only has to be recognized.
 function referenceFragmentPath(specDirName String, specName String, testName String) returns String
-	return "{specDirName}/{specName}/{testName}{ReferenceFragmentExtension}"
+	return "{specDirName}{PortablePathSeparator}{specName}{PortablePathSeparator}{testName}{ReferenceFragmentExtension}"
 end 'referenceFragmentPath'
 
 // Best-effort removal of everything this test wrote: its staged source file(s) and the produced exe.

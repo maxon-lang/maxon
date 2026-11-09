@@ -317,9 +317,7 @@ let DriveColonByte = 58
 let DriveColonIndex = 1
 let DriveSpecBytes = 2
 let WindowsPathListSeparatorByte = 59 as FullRangeInt  // ';'
-let WindowsDirSeparatorByte = 92 as FullRangeInt  // '\'
 let PosixPathListSeparatorByte = 58 as FullRangeInt  // ':'
-let PosixDirSeparatorByte = 47 as FullRangeInt  // '/'
 
 let PosixNoExtensions = b""
 
@@ -449,8 +447,8 @@ end 'pathListSeparator'
 
 function pathDirSeparator(shape PathSearchShape) returns FullRangeInt
 	return match shape 'shape'
-		windowsPathExt gives WindowsDirSeparatorByte
-		posix gives PosixDirSeparatorByte
+		windowsPathExt gives WindowsPathSeparatorByte
+		posix gives PortablePathSeparatorByte
 	end 'shape'
 end 'pathDirSeparator'
 
@@ -2964,9 +2962,9 @@ end 'emitSubpWindowsNameRules'
 function emitSubpBranchOnDirSeparator(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, byte ValueId, whenSeparator IrBlock, otherwise IrBlock)
 	var notBackslash = module.addBlock(func, label: b"rpnamenobs", heat: BlockHeat.normal)
 
-	emitBranchOnCompare(module, block: cur, value: byte, pred: StdCmpPred.eq, against: WindowsDirSeparatorByte, whenTrue: whenSeparator, whenFalse: notBackslash, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: byte, pred: StdCmpPred.eq, against: WindowsPathSeparatorByte, whenTrue: whenSeparator, whenFalse: notBackslash, ids: ids)
 
-	emitBranchOnCompare(module, block: notBackslash, value: byte, pred: StdCmpPred.eq, against: PosixDirSeparatorByte, whenTrue: whenSeparator, whenFalse: otherwise, ids: ids)
+	emitBranchOnCompare(module, block: notBackslash, value: byte, pred: StdCmpPred.eq, against: PortablePathSeparatorByte, whenTrue: whenSeparator, whenFalse: otherwise, ids: ids)
 end 'emitSubpBranchOnDirSeparator'
 
 function emitSubpNameByteAt(module StdModule, block IrBlock, ids ValueMinter, state ValueId, index ValueId) returns ValueId
@@ -3059,7 +3057,7 @@ function emitSubpTrimToDirectory(module StdModule, func IrFunction, ids ValueMin
 	emitStoreField(module, block: scanByte, record: state, offset: RpExeDirLen, value: last)
 	let exe = emitLoadField(module, block: scanByte, record: state, offset: RpExeDir, ids: ids)
 	let byte = emitLoadByte(module, block: scanByte, base: exe, index: last, ids: ids)
-	emitBranchOnCompare(module, block: scanByte, value: byte, pred: StdCmpPred.eq, against: WindowsDirSeparatorByte, whenTrue: cont, whenFalse: scanHdr, ids: ids)
+	emitBranchOnCompare(module, block: scanByte, value: byte, pred: StdCmpPred.eq, against: WindowsPathSeparatorByte, whenTrue: cont, whenFalse: scanHdr, ids: ids)
 	return cont
 end 'emitSubpTrimToDirectory'
 
@@ -3078,7 +3076,7 @@ function emitSubpBuildLegacySystemDir(module StdModule, func IrFunction, ids Val
 	let windows = emitLoadField(module, block: measured, record: state, offset: RpWindowsDir, ids: ids)
 	var afterWindows = emitForwardCopy(module, func: func, cur: measured, dest: legacy, src: windows, byteCount: windowsLen, ids: ids)
 
-	let separator = emitConst(module, block: afterWindows, value: WindowsDirSeparatorByte, ids: ids)
+	let separator = emitConst(module, block: afterWindows, value: WindowsPathSeparatorByte, ids: ids)
 	emitStoreByte(module, block: afterWindows, base: legacy, index: windowsLen, value: separator, ids: ids)
 	let subdirectoryDst = emitBin(module, block: afterWindows, a: legacy, b: prefixLen, opcode: StdBinOpcode.add, ids: ids)
 	var afterSubdirectory = emitForwardCopy(module, func: func, cur: afterWindows, dest: subdirectoryDst, src: subdirectory, byteCount: subdirectoryLen, ids: ids)
