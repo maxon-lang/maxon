@@ -1076,8 +1076,8 @@ end 'main'
 2 2
 ```
 
-<!-- test: error.a-let-list-from-an-array-of-buffers-a-var-still-writes -->
-A `let` may not bind `List from` over an array whose elements are byte buffers a `var` still writes: the list holds those same buffers.
+<!-- test: a-let-list-from-an-array-of-buffers-a-var-still-writes -->
+A `let` may bind `List from` over an array whose elements are byte buffers a `var` still writes: the list holds those same buffers, so the later `push` is seen through the list.
 ```maxon
 typealias Octet = int(0 to 255)
 typealias Buffer = Array with Octet
@@ -1091,11 +1091,12 @@ function main() returns ExitCode
 	buffers.push(buffer)
 	let list = BufferList from buffers
 	buffer.push(2)
-	return list.count()
+	let first = try list.first() otherwise return 9
+	return first.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:12:6: cannot bind `let` 'list' to a value reached through 'buffer', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```exitcode
+2
 ```
 
 <!-- test: a-let-list-from-strings-a-var-string-appends-to-afterwards -->

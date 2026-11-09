@@ -58,15 +58,29 @@ element is the ranged `Byte` (`int(0 to u8.max)`). The two are therefore interch
 position, including when `let`-bound, and elements read out of one may be ordered-compared against
 elements read out of the other.
 
+### Immutable image data
+
+A byte string literal is `immutable` image data, written inline or bound to a `let`: the array lives in
+the program image and is never allocated per use. Reading it is free. A write through it is refused: a
+`var` bound to a literal and then written (`push`, `set`, `remove`, `resize`, …) is E3207, and so is
+passing the literal to a parameter its callee writes. Storing it into a plain `ByteArray` field, array
+element or union payload is E3196, and returning it from a result not marked `returns immutable` is
+E3209. To get a writable array, take `.clone()` of the literal, build one with `ByteArray.create` and
+`push`, or call `"text".toByteArray()`.
+
+```text
+var copy = b"hi".clone()       // a private, writable array
+copy.push(88)
+```
+
 ### At module scope
 
-A byte string literal is a compile-time constant, so it may initialize a module-scope `let` or
-`var`. The array is materialized ONCE at startup and every reference loads it — so a byte string
-constant on a hot path costs no allocation per use, unlike a literal written inline.
+A byte string literal is a compile-time constant, so it may initialize a module-scope `let`. The array
+is materialized ONCE at startup and every reference loads it — so a byte string constant on a hot path
+costs no allocation per use.
 
 ```text
 let Keyword = b"critsplit"     // one ByteArray for the whole program
-var Buffer = b""
 ```
 
 `let X = "lit".toByteArray()` builds the same array before `main` instead, by a call; `let X = b"lit"`
@@ -341,13 +355,12 @@ end 'main'
 
 <!-- test: byte-string-literal.push-grows-off-rdata -->
 
-Pushing onto a byte-string literal grows it off its immortal `.rdata` buffer: the original bytes are
-copied into a fresh heap buffer and the rdata blob is left unfreed — `__managed_grow` must honor the same
-`capacity < 0` rdata sentinel the drop path does, or it `__mm_free`s a never-allocated `.rdata` address
-and the run reports a leak. The grown array then drops leak-free.
+A literal's array lives in `.rdata` and is never written, so the writable array is a `.clone()`: its bytes are
+copied into a heap buffer of its own. Pushing onto it grows that buffer and leaves the `.rdata` blob
+alone — the run reports no leak, and the grown array drops leak-free.
 ```maxon
 function main() returns ExitCode
-		var a = b"hi"
+		var a = b"hi".clone()
 		a.push(88)
 		let g = try a.get(2) otherwise 0
 		print("{a.count()} {g}")
@@ -439,13 +452,12 @@ end 'main'
 
 <!-- test: byte-string-literal.set-detaches-from-rdata -->
 
-An in-place `set` on a byte-string literal writes through `buffer@0`, which points into read-only
-`.rdata` — so it must first DETACH: give the record a private, writable copy of its live bytes. Without
-the detach the store faults (`0xC0000005`, no stderr), because `.rdata` is mapped read-only. Detaching
-copies only `length · element_size` live bytes, so the other elements survive the move.
+An in-place `set` on the `.clone()` of a byte-string literal writes the clone's private buffer, never the
+literal's `.rdata`, which is mapped read-only. The clone copies the `length · element_size` live bytes, so
+the other elements survive the write.
 ```maxon
 function main() returns ExitCode
-		var a = b"hi"
+		var a = b"hi".clone()
 		try a.set(0, value: 88) otherwise panic("test invariant: index 0 is in bounds")
 		let v = try a.get(0) otherwise 0
 		let w = try a.get(1) otherwise 0
@@ -462,12 +474,12 @@ end 'main'
 
 <!-- test: byte-string-literal.clear-detaches-from-rdata -->
 
-`clear` zeroes the whole live region in place, so on a byte-string literal it writes into `.rdata` and
-faults unless the record detaches first. The cleared array must remain a usable, writable array — the
-push below lands in the detached buffer, not back in the blob.
+`clear` zeroes the whole live region in place, so on a byte-string literal itself it would write `.rdata`;
+on the `.clone()` it writes the private buffer. The cleared array must remain a usable, writable array — the
+push below lands in the clone's buffer, not back in the blob.
 ```maxon
 function main() returns ExitCode
-		var a = b"hey"
+		var a = b"hey".clone()
 		a.clear()
 		a.push(65)
 		let z = try a.get(0) otherwise 0
@@ -484,11 +496,11 @@ end 'main'
 
 <!-- test: byte-string-literal.remove-detaches-from-rdata -->
 
-`remove` shifts the tail down one slot — an in-place write — so it detaches before the shift. The
+`remove` shifts the tail down one slot — an in-place write — so it runs on the `.clone()`. The
 removed element is read out of the buffer and the survivors are compacted in the private copy.
 ```maxon
 function main() returns ExitCode
-		var a = b"hey"
+		var a = b"hey".clone()
 		let r = try a.remove(0) otherwise panic("test invariant: index 0 is in bounds")
 		let f = try a.get(0) otherwise 0
 		print("{r} {a.count()} {f}")
@@ -505,10 +517,10 @@ end 'main'
 <!-- test: byte-string-literal.pop-detaches-from-rdata -->
 
 `pop` zeroes the slot it vacates (the `[length, capacity)`-is-zero invariant), so it too writes the
-buffer and must detach first.
+buffer, and so it runs on the `.clone()`.
 ```maxon
 function main() returns ExitCode
-		var a = b"yo"
+		var a = b"yo".clone()
 		let p = try a.pop() otherwise panic("test invariant: a two-element array is not empty")
 		let f = try a.get(0) otherwise 0
 		print("{p} {a.count()} {f}")
@@ -524,13 +536,13 @@ end 'main'
 
 <!-- test: byte-string-literal.detach-happens-once -->
 
-The detach is CONDITIONAL: once the record owns a private buffer it must be left alone. A second write
-that detached again would allocate a fresh buffer and abandon the first one — the leak check would exit
-101 — and the grow below would then be reallocating a buffer that had just been replaced. Both writes
-must land in the same private buffer, and the grow must carry all three earlier bytes forward.
+The clone owns one private buffer for every later write. A second write that copied again would allocate a
+fresh buffer and abandon the first one — the leak check would exit 101 — and the grow below would then be
+reallocating a buffer that had just been replaced. Both writes must land in the same private buffer, and the
+grow must carry all three earlier bytes forward.
 ```maxon
 function main() returns ExitCode
-		var a = b"abc"
+		var a = b"abc".clone()
 		try a.set(0, value: 88) otherwise panic("test invariant: index 0 is in bounds")
 		try a.set(2, value: 90) otherwise panic("test invariant: index 2 is in bounds")
 		a.push(89)
@@ -551,8 +563,8 @@ end 'main'
 
 <!-- test: byte-string-literal.detached-literal-drops-clean -->
 
-A detached literal's `capacity@16` is not the rdata sentinel, so its drop legitimately frees
-the buffer — the one it allocated, never the blob. Five detach-and-drop rounds make either mistake loud:
+A literal's clone has a `capacity@16` that is not the rdata sentinel, so its drop legitimately frees
+the buffer — the one it allocated, never the blob. Five clone-and-drop rounds make either mistake loud:
 a missed free leaks (exit 101) and a freed blob corrupts the allocator.
 
 ⚠ **ITS EMITTED CODE CARRIES A NARROWING GUARD IN A PROGRAM THAT NEVER DECLARES `Byte`.** `stdlib/String.maxon`
@@ -563,7 +575,7 @@ RANGE and `a.set(0, value: n as Byte)` — an `Integer` cast into a `Byte` slot 
 the slot holds only `movRegReg rcx, r12`.
 ```maxon
 function detachAndRead(n Integer) returns Integer
-		var a = b"hi"
+		var a = b"hi".clone()
 		try a.set(0, value: n as Byte) otherwise panic("test invariant: index 0 is in bounds")
 		return try a.get(0) otherwise 0
 end 'detachAndRead'
@@ -615,14 +627,14 @@ end 'main'
 
 <!-- test: byte-string-literal.empty-literal-detaches -->
 
-A ZERO-LENGTH detach must still happen. Skipping it as an optimization leaves the rdata pointer in the
-record with the sentinel capacity still in place, and the next reallocation then reads a header that
-does not exist. `b""` has no writable in-place mutator (`set`/`remove`/`pop` all throw on empty), so the
-zero-byte detach is reached through the grow path: `resize` publishes two zero-filled slots that the
-`set`s below then write.
+A ZERO-LENGTH clone must still own a private buffer. Skipping it as an optimization leaves the rdata pointer
+in the record with the sentinel capacity still in place, and the next reallocation then reads a header that
+does not exist. The clone of `b""` has no writable in-place mutator (`set`/`remove`/`pop` all throw on
+empty), so the zero-byte buffer is reached through the grow path: `resize` publishes two zero-filled slots
+that the `set`s below then write.
 ```maxon
 function main() returns ExitCode
-		var a = b""
+		var a = b"".clone()
 		a.resize(2)
 		try a.set(0, value: 65) otherwise panic("test invariant: index 0 is in bounds")
 		try a.set(1, value: 66) otherwise panic("test invariant: index 1 is in bounds")
@@ -641,12 +653,11 @@ end 'main'
 
 <!-- test: error.byte-string-literal.constant-pushed-into-a-container-is-refused -->
 
-⭐ **THE NINE DETACH CASES ABOVE ALL WRITE AN INLINE `b"…"`, WHOSE RECORD IS AN ORDINARY HEAP BOX. A
-MODULE-LEVEL `let`'s RECORD IS `.rdata` ITSELF**, so a mutation reached through it would write a read-only
-page, and a detach cannot rescue it: a detach republishes `buffer@0` and `capacity@16` IN the record.
+⭐ **THE EIGHT CLONE CASES ABOVE WRITE A HEAP COPY. A LITERAL'S OWN RECORD, INLINE OR BOUND TO A MODULE-LEVEL
+`let`, IS `.rdata` ITSELF**, so a mutation reached through it would write a read-only page.
 
-So the constant may never come to rest in a mutable sink: pushing it into a container's element is refused;
-push a `clone()`.
+So the constant may never come to rest in a mutable sink: pushing it into a container whose element is a
+plain `ByteArray` is E3196; declare the element `immutable ByteArray`, or push a `clone()`.
 ```maxon
 typealias ByteArrayArray = Array with ByteArray
 
@@ -663,13 +674,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:8:5: cannot store 'Keyword', which is read-only (a module-level `let`), into mutable place 'an element of the container push writes'; use clone()
+error E3196: <fragment>:8:10: cannot store an immutable 'ByteArray' into 'an element of the container push writes', which holds a mutable 'ByteArray'; declare the element `immutable ByteArray`
 ```
 
 <!-- test: error.byte-string-literal.constant-handed-to-a-factory-that-keeps-it-is-refused -->
 
-The other durable sink: a field of a record this frame builds. `Holder.create` keeps its argument in a `var`
-field, so handing it the constant is refused; pass a `clone()`.
+The other durable sink: a field of a record this frame builds. `Holder.create` keeps its argument in a
+plain `ByteArray` field, so handing it the constant is refused (E3207); pass a `clone()`, or declare the field
+and the parameter `immutable ByteArray`.
 ```maxon
 let Keyword = b"critsplit"
 
@@ -690,7 +702,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:13:18: cannot pass 'Keyword', which is read-only (a module-level `let`), to parameter 'b' of 'Holder.create', which keeps it where something may write it; pass a clone()
+error E3207: <fragment>:13:25: 'create' writes 'b' (line 8: `return Self{b: b}`); 'Keyword' is immutable
 ```
 
 <!-- test: error.byte-string-literal.constant-appended-to-a-corpus-container-is-refused -->
@@ -705,7 +717,7 @@ let Keyword = b"critsplit"
 function main() returns ExitCode
 		var l = ByteArrayList.create()
 		l.append(Keyword)
-		var e = try l.removeFirst() otherwise b""
+		var e = try l.removeFirst() otherwise panic("test invariant: the list holds one element")
 		e.push(88)
 		let k = try Keyword.get(0) otherwise 0
 		print("{e.count()} {Keyword.count()} {k}")
@@ -713,18 +725,32 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:8:5: cannot store 'Keyword', which is read-only (a module-level `let`), into mutable place 'an element of the container append writes'; use clone()
+error E3196: <fragment>:8:12: cannot store an immutable 'ByteArray' into 'List.append.value', which holds a mutable 'ByteArray'; declare the element `immutable ByteArray`
+```
+
+<!-- test: error.byte-string-literal.a-var-bound-to-a-literal-is-not-writable -->
+
+A `var` bound to a literal holds the literal's `immutable` image data, so writing it is E3207; take a
+`.clone()` for a writable array, as the cases above do.
+```maxon
+function main() returns ExitCode
+		var a = b"hi"
+		a.push(88)
+		return a.count()
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:4:5: 'push' needs a writable receiver; 'a' is immutable
 ```
 
 <!-- test: error.byte-string-literal.negative-resize-is-refused -->
 
-A NEGATIVE `resize` is the one mutator that could write outside its buffer entirely, and the one the detach
-cannot rescue — detaching moves the write to a different allocation, it does not bring it back inside one.
-With the `__ManagedMemory` guard stubbed out, `resize(-2)` on a byte-string literal DOES detach (the detach
-at the head of the grow is unconditional), the growth check is then satisfied (`3 >= -2`) so nothing
-reallocates, and the shrink zeroes from `buffer + n·element_size` — two bytes BELOW the freshly allocated
-private buffer — over the allocation header. Then the process exits 0, the leak gate stays
-green, `capacity()` reads 3 and `count()` publishes -2.
+A NEGATIVE `resize` is the one mutator that could write outside its buffer entirely. With the
+`__ManagedMemory` guard stubbed out, `resize(-2)` on the clone of a byte-string literal takes a private
+buffer at the head of the grow, the growth check is then satisfied (`3 >= -2`) so nothing reallocates, and
+the shrink zeroes from `buffer + n·element_size` — two bytes BELOW the freshly allocated private buffer —
+over the allocation header. Then the process exits 0, the leak gate stays green, `capacity()` reads 3 and
+`count()` publishes -2.
 
 ⚠ **TWO REFUSALS STAND IN FRONT OF THAT, AND THE OUTER ONE IS THE ONE THAT FIRES.** `Array.resize` takes
 an `ElementIndex`, declared `int(0 to i64.max)`, so a negative is refused at the DOOR — a literal at compile
@@ -734,7 +760,7 @@ is the layer that would still be there if a future caller reached `__managed_mem
 `Array`, and this line is why nothing can redden it.
 ```maxon
 function main() returns ExitCode
-		var a = b"hey"
+		var a = b"hey".clone()
 		a.resize(-2)
 		return 0
 end 'main'
@@ -753,7 +779,7 @@ function launder(n Signed) returns Signed
 end 'launder'
 
 function main() returns ExitCode
-		var a = b"hey"
+		var a = b"hey".clone()
 		a.resize(launder(-2) as ElementIndex)
 		return 0
 end 'main'

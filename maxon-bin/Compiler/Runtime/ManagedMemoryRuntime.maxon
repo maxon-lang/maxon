@@ -267,14 +267,16 @@ end 'registerImmortalStringTableRecord'
 
 // The element buffer's bytes: one pointer slot per element, seeded with that element's record offset — see
 // the dedup argument at the door above. Every slot is OVERWRITTEN with a real address by the writers.
-function stringTableBufferBytes(globalData GlobalDataTable, elementLabels StringArray) returns ByteArray
-	var buffer = ByteArray.create(0)
+function stringTableBufferBytes(globalData GlobalDataTable, elementLabels StringArray) returns immutable ByteArray
+	var buffer = ByteArray.create(0) as isolated ByteArray
 
-	for label in elementLabels 'eachSlot'
-		buffer.append(scalarImage(globalData.rdataOffsetOf(label) as FullRangeInt, byteCount: ManagedArrayElementBytes as BytePos))
-	end 'eachSlot'
+	modify buffer 'fill'
+		for label in elementLabels 'eachSlot'
+			buffer.append(scalarImage(globalData.rdataOffsetOf(label) as FullRangeInt, byteCount: ManagedArrayElementBytes as BytePos))
+		end 'eachSlot'
+	end 'fill'
 
-	return buffer
+	return freeze buffer
 end 'stringTableBufferBytes'
 
 // ⭐ **THE ABORT CODES THIS FILE DIVERGES WITH ARE `RuntimeAbort`'s, NOT ITS OWN.** A file-local `let`
@@ -1038,7 +1040,7 @@ end 'isThrowingCursorRuntimeCallee'
 
 // ⭐ **WHAT THE AUTHOR WROTE, for the cursor family** — `managedMemorySourceMethodName`'s twin, read through
 // the same composer and panicking off its own domain for the same reason.
-export function cursorSourceMethodName(callee ByteArray) returns ByteArray
+export function cursorSourceMethodName(callee ByteArray) returns immutable ByteArray
 	if callee.equals(ManagedCursorAdvanceName) 'advance'
 		return CursorAdvanceMethod
 	end 'advance'
@@ -1108,7 +1110,7 @@ end 'isManagedMemoryMemberCallee'
 // map can name them; see that block. Asked only on the
 // COLD path, and only behind `isManagedMemoryMemberCallee` — which is what the panic states rather than
 // answers.
-export function managedMemorySourceMethodName(callee ByteArray) returns ByteArray
+export function managedMemorySourceMethodName(callee ByteArray) returns immutable ByteArray
 	if callee.equals(ManagedMemCreateName) 'create'
 		return ManagedMemoryCreateMethod
 	end 'create'
@@ -1179,7 +1181,7 @@ end 'managedMemorySourceMethodName'
 // opposite shape — ONE callee two authors could have written — and nothing here needs it, because
 // the three slice entries are picked by the ELEMENT's ownership and `__managed_index_refused` by
 // the inliner, and the author spells neither.
-export function arrayAccessorSourceMethodName(callee ByteArray) returns ByteArray
+export function arrayAccessorSourceMethodName(callee ByteArray) returns immutable ByteArray
 	if callee.equals(ManagedGetName) 'get'
 		return GetMethod
 	end 'get'
@@ -1980,9 +1982,9 @@ export function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids 
 end 'emitCowDetach'
 
 function emitCowDetachInto(module StdModule, func IrFunction, entry IrBlock, arr ValueId, continuation IrBlock, prefix String, ids ValueMinter)
-	var checkBuffer = module.addBlock(func, label: "{prefix}dbuf".toByteArray(), heat: BlockHeat.normal)
-	var checkShared = module.addBlock(func, label: "{prefix}dshared".toByteArray(), heat: BlockHeat.normal)
-	var detach = module.addBlock(func, label: "{prefix}ddetach".toByteArray(), heat: BlockHeat.cold)
+	var checkBuffer = module.addBlock(func, label: freeze "{prefix}dbuf".toByteArray(), heat: BlockHeat.normal)
+	var checkShared = module.addBlock(func, label: freeze "{prefix}dshared".toByteArray(), heat: BlockHeat.normal)
+	var detach = module.addBlock(func, label: freeze "{prefix}ddetach".toByteArray(), heat: BlockHeat.cold)
 
 	_ = emitBranchOnDetachNeeded(module, entry: entry, checkBuffer: checkBuffer, checkShared: checkShared, arr: arr, needed: detach, notNeeded: continuation, absent: AbsentBuffer.skipsTheDetach, ids: ids)
 	emitCowDetach(module, block: detach, arr: arr, ids: ids)
@@ -1994,7 +1996,7 @@ end 'emitCowDetachInto'
 // enters only when the detach has work to do. Returns the block to keep emitting into; `block` is
 // terminated.
 export function emitCowDetachWhenNeeded(module StdModule, func IrFunction, block IrBlock, arr ValueId, prefix String, ids ValueMinter) returns IrBlock
-	var detached = module.addBlock(func, label: "{prefix}ddone".toByteArray(), heat: BlockHeat.normal)
+	var detached = module.addBlock(func, label: freeze "{prefix}ddone".toByteArray(), heat: BlockHeat.normal)
 	emitCowDetachInto(module, func: func, entry: block, arr: arr, continuation: detached, prefix: prefix, ids: ids)
 
 	return detached
@@ -2455,7 +2457,7 @@ function singleOpStrideAccessType(stride SingleOpStride) returns StdType
 	end 's'
 end 'singleOpStrideAccessType'
 
-function singleOpStrideLabelSuffix(stride SingleOpStride) returns ByteArray
+function singleOpStrideLabelSuffix(stride SingleOpStride) returns immutable ByteArray
 	return match stride 's'
 		word gives b"word"
 		byte gives b"byte"
@@ -2470,12 +2472,8 @@ function singleOpStrideLabelSuffix(stride SingleOpStride) returns ByteArray
 	end 's'
 end 'singleOpStrideLabelSuffix'
 
-function strideArmLabel(prefix ByteArray, stride SingleOpStride) returns ByteArray
-	var label = ByteArray.create(0)
-	label.append(prefix)
-	label.append(singleOpStrideLabelSuffix(stride))
-
-	return label
+function strideArmLabel(prefix ByteArray, stride SingleOpStride) returns immutable ByteArray
+	return freeze "{String.from(prefix)}{String.from(singleOpStrideLabelSuffix(stride))}".toByteArray()
 end 'strideArmLabel'
 
 export type StrideChainArm
@@ -4873,7 +4871,7 @@ end 'buildManagedIncref'
 
 // Which entry a co-own of a buffer record spends — `plainBoxRetainCallee`'s twin over the record format
 // that has an immortal member, read by `ProgramSignatures.retainCalleeOf`.
-export function managedRecordRetainCallee(result RetainResult) returns ByteArray
+export function managedRecordRetainCallee(result RetainResult) returns immutable ByteArray
 	return match result 'shape'
 		discarded gives ownershipDoorName(OwnershipDoor.managedIncref)
 		freshName or
@@ -5984,8 +5982,8 @@ export let EmptySlotMessageStdlibFileName = "Builtins.maxon"
 let TextTerminator = 0 as Byte
 
 export type EmptySlotText
-	export let prefix as ByteArray
-	export let terminatedSuffix as ByteArray
+	export let prefix as immutable ByteArray
+	export let terminatedSuffix as immutable ByteArray
 
 	export static function create(prefix ByteArray, terminatedSuffix ByteArray) returns EmptySlotText
 		return Self{prefix: prefix, terminatedSuffix: terminatedSuffix}
@@ -5993,10 +5991,15 @@ export type EmptySlotText
 end 'EmptySlotText'
 
 export function emptySlotTextIn(signatures ProgramSignatures, stdlibPath FilePath) returns EmptySlotText
-	var suffix = signatures.byteConstantIn(EmptySlotMessageSuffixName, filePath: stdlibPath).clone()
-	suffix.push(TextTerminator)
+	let suffixText = signatures.byteConstantIn(EmptySlotMessageSuffixName, filePath: stdlibPath)
+	var suffix = ByteArray.create(0) as isolated ByteArray
 
-	return EmptySlotText.create(signatures.byteConstantIn(EmptySlotMessagePrefixName, filePath: stdlibPath), terminatedSuffix: suffix)
+	modify suffix 'fill'
+		suffix.append(suffixText)
+		suffix.push(TextTerminator)
+	end 'fill'
+
+	return EmptySlotText.create(signatures.byteConstantIn(EmptySlotMessagePrefixName, filePath: stdlibPath), terminatedSuffix: freeze suffix)
 end 'emptySlotTextIn'
 
 function emitCursorEmptySlotPanic(module StdModule, func IrFunction, block IrBlock, position ValueId, site ValueId, text EmptySlotText, ids ValueMinter)
@@ -6286,10 +6289,10 @@ end 'ElementRangeLoop'
 // IR dump and nothing else: a `__`-prefixed runtime body is withheld from the rendered Target IR,
 // so a program that both clones and moves is where the two name sets earn their keep.
 export type ElementRangeLabels
-	export let header as ByteArray
-	export let body as ByteArray
-	export let step as ByteArray
-	export let done as ByteArray
+	export let header as immutable ByteArray
+	export let body as immutable ByteArray
+	export let step as immutable ByteArray
+	export let done as immutable ByteArray
 
 	export static function create(header ByteArray, body ByteArray, step ByteArray, done ByteArray) returns ElementRangeLabels
 		return Self{header: header, body: body, step: step, done: done}

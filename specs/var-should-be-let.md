@@ -23,16 +23,14 @@ end 'main'
 error E3077: specs/var-should-be-let/docs-example-1.maxon:3:6: variable 'x' is never reassigned; use 'let' instead of 'var'
 ```
 
-### Nothing may write what a `let` reads (E3078, E3102, E3159)
+### A `let` names a record it never rebinds (E3102)
 
-A `let` is deeply read-only: nothing reachable through it may be written. What is refused is a write that
-reaches a record a `let` names — a `var` bound from a value read out of the `let` (**E3078**), a parameter
-the callee writes (**E3159**), a field write or a mutating call such as `append` (**E3159**). A `String` is
-such a record too; naming a `let` or its field directly (`var x = h.path`) is refused regardless. A result
-that may hand back the `let`'s record — a call that returns its argument — is refused where it is written.
-A bare `let` that is its record's sole owner MOVES into a `var` (a later use is **E3102**), and
-`let b = a` from a `var` `a` moves `a`. A record another name still writes, or a `let` that is read after, is
-refused while that name is live. `clone()` gives the mutable side its own record.
+A `let` is only a name that is never reassigned, so the record it names is written like any other: a `var` bound
+from a value read out of the `let`, a parameter the callee writes, a field write and a mutating call such as
+`append` all reach it, and every name reads the same record. `var b = a` and `let b = a` MOVE the record local
+`a` (a later use of `a` is **E3102**); passing `a` to a call does not. A `String` a call hands back is copied when
+it is bound to a `var`. `clone()` gives the writer its own record. The data a module-level `let` holds is
+`immutable`: writing through it is **E3197**.
 
 ## Tests
 
@@ -115,7 +113,9 @@ end 'main'
 20
 ```
 
-<!-- test: error.var-from-immutable-struct -->
+<!-- test: var-from-a-let-struct-moves-the-record -->
+`var b = a` moves the record `a` names into `b`, which writes it.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -136,8 +136,8 @@ function main() returns ExitCode
 	return b.x
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/error.var-from-immutable-struct.maxon:16:6: cannot assign the read-only 'a' to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```exitcode
+99
 ```
 
 <!-- test: a-clone-of-an-immutable-struct-bound-to-a-var-is-writable -->
@@ -189,7 +189,9 @@ end 'main'
 30
 ```
 
-<!-- test: var-from-immutable-struct-field -->
+<!-- test: var-from-a-let-struct-field-writes-the-record-the-field-holds -->
+`var i = o.inner` names the record the `let` `o` holds in its field, and the write through `i` is accepted.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -217,8 +219,8 @@ function main() returns ExitCode
 	return i.value
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/var-from-immutable-struct-field.maxon:23:6: cannot assign a value read out of the read-only 'o' to mutable binding 'i'; use 'let' instead of 'var', or use clone()
+```exitcode
+99
 ```
 
 <!-- test: var-from-immutable-value-field-ok -->
@@ -306,8 +308,9 @@ end 'main'
 base more base
 ```
 
-<!-- test: returned-alias-of-a-let-struct -->
-The same door for a struct box: the write through `b` would land in `a`.
+<!-- test: returned-alias-of-a-let-struct-is-written-through-the-var -->
+The same door for a struct box: `relay` hands back the record `a` names, and the write through `b` lands in `a`.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -331,8 +334,8 @@ function main() returns ExitCode
 	return a.x
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/returned-alias-of-a-let-struct.maxon:19:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```exitcode
+99
 ```
 
 <!-- test: returned-alias-of-a-let-receiver-field -->
@@ -476,9 +479,9 @@ end 'main'
 cap7 more cap7
 ```
 
-<!-- test: returned-alias-bound-by-if-let-over-a-let-source -->
-An `if let` binding made from a `let`'s record is tied to it: `relayT` may hand `source` back, so `b` may be
-`source`'s record, and `source` is read after the write.
+<!-- test: returned-alias-bound-by-if-let-over-a-let-source-is-written -->
+An `if let` binding made from a `let`'s record names it: `relayT` hands `source` back, `b` is written, and `source` reads the write.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -519,8 +522,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/returned-alias-bound-by-if-let-over-a-let-source.maxon:33:7: cannot assign the result of 'relay', which may share storage with immutable variable 'source', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```exitcode
+99
 ```
 
 <!-- test: returned-alias-bound-by-if-let-over-a-fresh-value-is-writable -->
@@ -568,8 +571,9 @@ end 'main'
 99
 ```
 
-<!-- test: returned-alias-bound-by-if-var -->
-An `if var` binding is a mutable name like any other `var`.
+<!-- test: returned-alias-bound-by-if-var-is-written -->
+An `if var` binding is a mutable name like any other `var`: `relayT` hands `a` back, and the write through `b` is read through `a`.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -616,8 +620,8 @@ function relayT(p Point) returns Point throws PointError
 	return p
 end 'relayT'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/returned-alias-bound-by-if-var.maxon:31:9: cannot assign the result of 'relayT', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```exitcode
+99
 ```
 
 <!-- test: returned-alias-in-an-unreached-function -->
@@ -708,8 +712,8 @@ lit7 long enough to be a real heap string value lit7 long enough to be a real he
 ```
 
 <!-- test: let-record-laundered-through-a-container -->
-A callee that stores its parameter in a container and hands an element back may return that
-parameter's own record, and `a` is read after the call.
+A callee that stores its parameter in a container and hands an element back returns that parameter's own record, and `a` is read after the write through the result.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -737,8 +741,8 @@ function main() returns ExitCode
 	return a.x
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-laundered-through-a-container.maxon:23:10: cannot pass 'a', which is read-only (a `let` binding), to parameter 'p' of 'launder', which keeps it where something may write it; pass a clone()
+```exitcode
+99
 ```
 
 <!-- test: let-record-laundered-through-a-setter -->
@@ -784,12 +788,13 @@ function main() returns ExitCode
 	return a.x
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-laundered-through-a-setter.maxon:37:10: cannot pass 'a', which is read-only (a `let` binding), to parameter 'p' of 'launder', which keeps it where something may write it; pass a clone()
+```exitcode
+99
 ```
 
 <!-- test: let-record-laundered-through-an-array-literal -->
-An array literal stores its elements, so an element read back may be the record that went in.
+An array literal stores its elements, so an element read back is the record that went in.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -814,13 +819,13 @@ function main() returns ExitCode
 	return a.x
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-laundered-through-an-array-literal.maxon:20:10: cannot pass 'a', which is read-only (a `let` binding), to parameter 'p' of 'launder', which keeps it where something may write it; pass a clone()
+```exitcode
+99
 ```
 
 <!-- test: let-record-of-a-let-global-through-a-call -->
-A module-level `let` never moves, and its record is image data, so a write through a value derived
-from it would fault.
+A module-level `let` never moves, and its record is image data, so a write through a value derived from it is refused.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -846,7 +851,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-of-a-let-global-through-a-call.maxon:20:6: cannot assign the result of 'relay', which may share storage with immutable variable 'origin', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:21:2: cannot write 'x' through 'b', which is immutable
 ```
 
 <!-- test: let-record-alias-of-a-parameter-bound-through-a-call -->
@@ -882,8 +887,9 @@ lit7
 lit7?
 ```
 
-<!-- test: error.let-record-assigned-to-a-var -->
-Assignment into a `var` from a `let` is refused, as a `var` binding is, whether or not the `let` is its record's only owner.
+<!-- test: error.let-record-assigned-to-a-var-moves-it -->
+Assignment into a `var` from a `let` moves the record, as a `var` binding does, so the later read of `a` is refused.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -905,11 +911,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/var-should-be-let/error.let-record-assigned-to-a-var.maxon:16:2: cannot assign the read-only 'a' to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3102: <fragment>:18:9: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: let-record-assigned-through-a-call -->
-The assignment door asks of a call's result what the binding door asks.
+The assignment door asks of a call's result what the binding door asks: `relay` hands `a` back, and the write through `b` is read through `a`.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -934,13 +941,13 @@ function relay(p Point) returns Point
 	return p
 end 'relay'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-assigned-through-a-call.maxon:16:2: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```exitcode
+99
 ```
 
 <!-- test: let-record-constructed-into-a-var -->
-A constructor stores its argument, so `box.item` shares `a`'s record: the store is legal, and the
-write through `box.item` is refused because `a` is read after it.
+A constructor stores its argument, so `box.item` shares `a`'s record: the write through `box.item` is read through `a`.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -968,13 +975,13 @@ function main() returns ExitCode
 	return a.x
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-constructed-into-a-var.maxon:23:16: cannot pass 'a', which is read-only (a `let` binding), to parameter 'item' of 'Box.create', which keeps it where something may write it; pass a clone()
+```exitcode
+99
 ```
 
 <!-- test: let-record-pushed-into-a-var-container -->
-A push stores `a`'s record in the container, so an element read back out may be it; with `a` read
-after, a `var` may not be made from it.
+A push stores `a`'s record in the container, so an element read back out is it: a `var` made from the element writes the record `a` names.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -998,13 +1005,13 @@ function main() returns ExitCode
 	return a.x
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-pushed-into-a-var-container.maxon:18:6: cannot store `let` 'a' into mutable place 'an element of the container push writes'; use clone()
+```exitcode
+99
 ```
 
 <!-- test: let-record-stored-into-a-var-field -->
-A store into a field of a `var` co-owns `a`'s record, so a write through the field while `a` is
-live is refused.
+A store into a field of a `var` co-owns `a`'s record, so a write through the field is read through `a`.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1033,12 +1040,13 @@ function main() returns ExitCode
 	return a.x
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-stored-into-a-var-field.maxon:24:6: cannot store `let` 'a' into mutable place 'Box.item'; use clone()
+```exitcode
+99
 ```
 
-<!-- test: error.let-record-bound-to-a-var-is-refused -->
-Binding a `var` from a `let` is refused, whether or not the `let` is its record's only owner.
+<!-- test: error.let-record-bound-to-a-var-moves-it -->
+Binding a `var` from a `let` moves the record, so a later read of the `let` is refused.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1059,12 +1067,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/var-should-be-let/error.let-record-bound-to-a-var-is-refused.maxon:15:6: cannot assign the read-only 'p' to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3102: <fragment>:17:9: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-<!-- test: error.let-record-pushed-and-popped-while-still-read-is-refused-at-the-push -->
-`a` is read after the push, so the push is not its last use and is refused; popping the record back out
-would not make it the `var`'s alone.
+<!-- test: let-record-pushed-and-popped-while-still-read -->
+`a` is read after the push, and popping the record back out gives the `var` the record `a` names: the write through it is read through `a`.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1088,14 +1096,13 @@ function main() returns ExitCode
 	return a.x
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/error.let-record-pushed-and-popped-while-still-read-is-refused-at-the-push.maxon:18:6: cannot store `let` 'a' into mutable place 'an element of the container push writes'; use clone()
+```exitcode
+99
 ```
 
-<!-- test: error.a-let-of-an-element-a-var-of-the-same-element-then-writes-is-refused -->
-An element of a `var` container is a record something may still write: here a `var` read out of the same
-container writes it while `s` reads it. So the `let` is refused at its binding; bind it with `view` to read
-the element as it changes.
+<!-- test: a-let-of-an-element-a-var-of-the-same-element-then-writes-reads-the-write -->
+An element of a `var` container is a record that a `var` read out of the same container writes while `s` reads it: the `let` reads the write.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1119,13 +1126,13 @@ function main() returns ExitCode
 	return s.x
 end 'main'
 ```
-```maxoncstderr
-error E3188: specs/var-should-be-let/error.a-let-of-an-element-a-var-of-the-same-element-then-writes-is-refused.maxon:18:6: cannot bind `let` 's' to a value reached through 'arr', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```exitcode
+9
 ```
 
-<!-- test: error.a-let-of-a-field-of-a-var-written-through-the-var-is-refused -->
-A field of a `var` is a record something may still write, as the write through `box` here does, so a `let`
-bound to it is refused at its binding.
+<!-- test: a-let-of-a-field-of-a-var-written-through-the-var-reads-the-write -->
+A field of a `var` is a record the write through `box` reaches, and a `let` bound to it reads the write.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1153,13 +1160,13 @@ function main() returns ExitCode
 	return p.x
 end 'main'
 ```
-```maxoncstderr
-error E3188: specs/var-should-be-let/error.a-let-of-a-field-of-a-var-written-through-the-var-is-refused.maxon:23:6: cannot bind `let` 'p' to a value reached through 'box', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```exitcode
+99
 ```
 
 <!-- test: let-record-written-through-an-interface-call -->
-A method called through an interface writes whichever conformer's record the value holds, so a `var` that may
-be `a`'s record is written through when a conformer's implementation writes its receiver.
+A method called through an interface writes whichever conformer's record the value holds: `relay` hands `a` back at the interface type, `b.bump()` writes the record, and `a` reads the write.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1191,12 +1198,13 @@ function main() returns ExitCode
 	return a.x
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-written-through-an-interface-call.maxon:27:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```exitcode
+2
 ```
 
 <!-- test: let-record-written-through-a-function-value -->
-A call through a function value writes an argument wherever a body it may land on writes that parameter.
+A call through a function value writes an argument wherever a body it may land on writes that parameter: `f(b)` writes the record `a` names.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1225,13 +1233,13 @@ function main() returns ExitCode
 	return a.x
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-written-through-a-function-value.maxon:23:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```exitcode
+2
 ```
 
-<!-- test: error.a-let-of-an-element-a-var-already-holds-is-refused -->
-The same two names in the other order: `s` would name the element `e` already holds and writes, so the `let`
-is refused at its binding.
+<!-- test: a-let-of-an-element-a-var-already-holds-reads-the-write -->
+The same two names in the other order: `s` names the element `e` already holds and writes.
+
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1255,8 +1263,8 @@ function main() returns ExitCode
 	return s.x
 end 'main'
 ```
-```maxoncstderr
-error E3188: specs/var-should-be-let/error.a-let-of-an-element-a-var-already-holds-is-refused.maxon:19:6: cannot bind `let` 's' to a value reached through 'arr', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```exitcode
+9
 ```
 
 <!-- test: sibling-fields-do-not-alias -->
@@ -1481,8 +1489,8 @@ end 'main'
 1
 ```
 
-<!-- test: a-let-written-only-through-a-callee-argument-is-refused -->
-The same program with `let` is a write through a read-only record.
+<!-- test: a-let-written-only-through-a-callee-argument-is-written -->
+The same program with `let` writes through the record the `let` names.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1514,8 +1522,8 @@ function main() returns ExitCode
 	return holder.bag.items.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/var-should-be-let/a-let-written-only-through-a-callee-argument-is-refused.maxon:27:2: cannot pass 'holder', which is read-only (a `let` binding), to a function that writes parameter 'bag' (in main); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: a-var-written-only-through-a-for-element-is-needed -->
@@ -1562,8 +1570,8 @@ end 'main'
 2
 ```
 
-<!-- test: a-let-written-only-through-a-for-element-is-refused -->
-The same program with `let` iterates read-only elements, so the loop's write is refused.
+<!-- test: a-let-written-only-through-a-for-element-is-written -->
+The same program with `let` iterates the same elements, so the loop's write reaches them.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1602,6 +1610,6 @@ function main() returns ExitCode
 	return total as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/var-should-be-let/a-let-written-only-through-a-for-element-is-refused.maxon:31:3: cannot pass 'bag', which is read-only (a `for` element of a read-only source), to a function that writes parameter 'bag' (in main); pass a clone()
+```exitcode
+2
 ```

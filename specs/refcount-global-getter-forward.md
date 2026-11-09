@@ -96,13 +96,13 @@ let cachedBase = makeBase()
 let cachedMerged = makeMerged()
 
 // Mirrors loadRuntimeModule: returns a BORROW of the cachedBase global.
-function loadBase() returns ItemBox
+function loadBase() returns immutable ItemBox
 	return cachedBase
 end 'loadBase'
 
 // Mirrors buildRuntimeModuleForTarget: `let base = loadBase()` then a multi-path
 // return — the native arm forwards `base`, the merged arm returns a DIFFERENT global.
-function buildFor(wantMerged bool) returns ItemBox
+function buildFor(wantMerged bool) returns immutable ItemBox
 	let base = loadBase()
 	if not wantMerged 'native'
 		return base

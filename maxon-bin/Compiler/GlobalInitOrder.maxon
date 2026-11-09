@@ -78,11 +78,6 @@ end 'GlobalInitVisit'
 
 typealias GlobalInitVisitArray = Array with GlobalInitVisit
 
-// `markConformerWitnessImpls` skips conformers a SEED owns, because in `StdlibSource`'s walk something else
-// credits them. Nothing seeds this walk, so it owns every conformer it meets and the skip list is empty —
-// which over-credits, and over-crediting is the safe direction for the only set that reads it.
-let noSeededConformers = NameRoster.create(0)
-
 // ⭐ **THE GLOBALS, REORDERED SO THAT EVERY GLOBAL FOLLOWS THE ONES ITS INITIALIZER READS**, or a refusal.
 // Called once per compile, on the merged Maxon module, immediately before `installManagedGlobalInit` — the
 // same position `liveGlobalLabels` occupies and for the same reason: `__module_init` opens every global with
@@ -135,7 +130,7 @@ export function dependencyOrderedDefaults(module MaxonModule, project Project, s
 end 'dependencyOrderedDefaults'
 
 type InitOrderNode
-	export let label as ByteArray
+	export let label as immutable ByteArray
 	export let initCallees as NameRoster
 
 	static function create(label ByteArray, initCallees NameRoster) returns InitOrderNode
@@ -424,7 +419,7 @@ end 'markNamedCallee'
 function markWitnessEdges(func IrFunction, project Project, signatures ProgramSignatures, edges EdgeConfidence, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match edges 'edges'
 		named then break
-		possible then markConformerWitnessImpls(func, project: project, signatures: signatures, seedConformers: noSeededConformers, byName: byName, reached: reached, worklist: worklist, names: names)
+		possible then markConformerWitnessImpls(func, project: project, signatures: signatures, seedConformers: NameRoster.create(0), byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'edges'
 end 'markWitnessEdges'
 

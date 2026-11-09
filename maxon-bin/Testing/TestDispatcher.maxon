@@ -313,7 +313,7 @@ function stageOneSource(build GeneratedBuild, source FilePath, stagedPath FilePa
 	// runner, so a group always mints exactly the one name.
 	match groupOfFile(groups, file: source) 'holdsTests'
 		found(group) then try build.addSource(stagedPath, content: "{content}{fileDispatcherSource(group)}", mintedNames: mintedNamesForDispatcher(group))
-		absent then try build.addSource(stagedPath, content: content, mintedNames: NameRoster.create(0))
+		absent then try build.addSource(stagedPath, content: content, mintedNames: freeze NameRoster.create(0))
 	end 'holdsTests'
 
 	build.recordOrigin(StagedSourceOrigin.create(stagedPath, reportedPath: source))
@@ -323,10 +323,10 @@ end 'stageOneSource'
 // a second time.** One name: the per-file runner. It is spelled from `TestFileGroup.runnerName`, which is
 // also what `fileDispatcherSource` declares and what `entrySource` calls, so the declaration door cannot
 // come to admit a spelling the generator has stopped producing.
-function mintedNamesForDispatcher(group TestFileGroup) returns NameRoster
-	var names = NameRoster.create(1, zeroed: false)
-	names.push(group.runnerName.toByteArray())
-	return names
+function mintedNamesForDispatcher(group TestFileGroup) returns immutable NameRoster
+	var names = NameRoster.create(1, zeroed: false) as isolated NameRoster
+	names.push(freeze group.runnerName.toByteArray())
+	return freeze names
 end 'mintedNamesForDispatcher'
 
 // ⭐ **THE RESERVED NAMES THE GENERATED ENTRY FILE DECLARES.** Three, each spelled from the very
@@ -335,12 +335,12 @@ end 'mintedNamesForDispatcher'
 // ⚠ Its non-reserved members (`selection`, `selected`, `began`, `ended`) are deliberately absent: this
 // list answers ONE question — which `__` names the declaration door must admit — and a name no rule refuses
 // has nothing to be admitted from.
-function mintedNamesForEntry() returns NameRoster
-	var names = NameRoster.create(3, zeroed: false)
-	names.push(MaxonTestIndexAlias.toByteArray())
-	names.push(MaxonTestHelperType.toByteArray())
-	names.push(MaxonTestEntrySymbol.toByteArray())
-	return names
+function mintedNamesForEntry() returns immutable NameRoster
+	var names = NameRoster.create(3, zeroed: false) as isolated NameRoster
+	names.push(freeze MaxonTestIndexAlias.toByteArray())
+	names.push(freeze MaxonTestHelperType.toByteArray())
+	names.push(freeze MaxonTestEntrySymbol.toByteArray())
+	return freeze names
 end 'mintedNamesForEntry'
 
 // The handler is the block form of `otherwise` setting a variable: control continues past it, so

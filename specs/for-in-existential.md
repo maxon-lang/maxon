@@ -366,7 +366,9 @@ end 'main'
 
 <!-- test: existential.iterable-factory -->
 The existential requires the `Iterable` half instead. `createIterator()` is dispatched once through the
-witness table, in the preheader, and what it returns is a concrete cursor the loop then walks directly.
+witness table, in the preheader, and what it returns is a concrete cursor the loop then walks directly. The
+cursor holds the receiver's array, so `Numbers.createIterator` counts as writing its receiver and the requirement
+declares `mutable self`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -395,7 +397,7 @@ type IntCursor
 end 'IntCursor'
 
 interface Bag
-	function createIterator() returns IntCursor throws IterationError
+	function createIterator(mutable self) returns IntCursor throws IterationError
 end 'Bag'
 
 type Numbers implements Bag
@@ -405,7 +407,7 @@ type Numbers implements Bag
 		return Self{items: items}
 	end 'create'
 
-	function createIterator() returns IntCursor throws IterationError
+	function createIterator(mutable self) returns IntCursor throws IterationError
 		return try IntCursor.create(self.items)
 	end 'createIterator'
 end 'Numbers'

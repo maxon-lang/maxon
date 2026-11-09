@@ -1,5 +1,5 @@
 type AdoptedBrand
-	export let brand as ByteArray
+	export let brand as immutable ByteArray
 	export let line as LineNumber
 	export let column as ColumnNumber
 	export let filePath as FilePath
@@ -22,10 +22,10 @@ typealias HandOverOwnerMap = Map with (ElementIndex, ElementIndex)
 typealias HandOverOpSet = Set with ElementIndex
 
 export type HandedParameter
-	export let brand as ByteArray
-	export let name as ByteArray
-	export let rival as ByteArray
-	export let otherRival as ByteArray
+	export let brand as immutable ByteArray
+	export let name as immutable ByteArray
+	export let rival as immutable ByteArray
+	export let otherRival as immutable ByteArray
 
 	static function agreeing(brand ByteArray, name ByteArray) returns Self
 		return Self{brand: brand, name: name, rival: EmptySourceText, otherRival: EmptySourceText}
@@ -43,11 +43,11 @@ end 'HandedParameter'
 typealias HandedParameterArray = Array with HandedParameter
 
 type BrandCandidates
-	var agreed as ByteArray
-	var other as ByteArray
+	var agreed as immutable ByteArray
+	var other as immutable ByteArray
 
 	static function create() returns Self
-		return Self{agreed: ByteArray.create(0), other: ByteArray.create(0)}
+		return Self{agreed: EmptySourceText, other: EmptySourceText}
 	end 'create'
 
 	function offer(brand ByteArray)
@@ -56,17 +56,17 @@ type BrandCandidates
 		end 'aParameterThatFitsAnyBrand'
 
 		if self.agreed.isEmpty() 'theFirstDeclaredBrand'
-			self.agreed = brand.clone()
+			self.agreed = brand
 			return
 		end 'theFirstDeclaredBrand'
 
 		if brandsConflict(self.agreed, got: brand) and self.other.isEmpty() 'aSecondBrand'
-			self.other = brand.clone()
+			self.other = brand
 		end 'aSecondBrand'
 	end 'offer'
 
 	function settled(name ByteArray) returns HandedParameter
-		return HandedParameter.disagreeing(self.agreed.clone(), otherRival: self.other.clone()) if not self.other.isEmpty() else HandedParameter.agreeing(self.agreed.clone(), name: name)
+		return HandedParameter.disagreeing(self.agreed, otherRival: self.other) if not self.other.isEmpty() else HandedParameter.agreeing(self.agreed, name: name)
 	end 'settled'
 end 'BrandCandidates'
 
@@ -111,7 +111,7 @@ end 'handedParametersOf'
 typealias RecordIndexArray = Array with ElementIndex
 typealias RecordIndexMap = Map with (ByteArray, ElementIndex)
 typealias BrandKeySet = Set with ByteArray
-typealias MergeBrandMap = Map with (ByteArray, readonly ByteArray)
+typealias MergeBrandMap = Map with (ByteArray, immutable ByteArray)
 
 type BrandResolver
 	let firstOf as RecordIndexMap
@@ -149,7 +149,7 @@ type BrandResolver
 		return Self{firstOf: firstOf, nextOf: nextOf, carried: carried, known: known, adopted: AdoptedBrandMap.create(), done: BrandKeySet.create(), active: BrandKeySet.create()}
 	end 'create'
 
-	function carriedBy(project Project, index ElementIndex) returns ByteArray
+	function carriedBy(project Project, index ElementIndex) returns immutable ByteArray
 		let isKnown = try self.known.get(index) otherwise panic("BrandResolver.carriedBy: known.get OOB at {index}")
 
 		if isKnown 'alreadyCarried'
@@ -197,12 +197,12 @@ type BrandResolver
 
 	function adoptFrom(record PendingBrandRecord, brand ByteArray)
 		let incumbent = try self.adopted.get(record.key) otherwise 'theFirstStore'
-			self.adopted.upsert(record.key.clone(), value: AdoptedBrand.create(brand, line: record.line, column: record.column, filePath: record.filePath))
+			self.adopted.upsert(record.key, value: AdoptedBrand.create(brand, line: record.line, column: record.column, filePath: record.filePath))
 			return
 		end 'theFirstStore'
 
 		if not incumbent.precedes(record) and incumbent.filePath.equals(record.filePath) and not incumbent.isTheStoreAt(record) 'anEarlierStoreOfTheSameFile'
-			self.adopted.upsert(record.key.clone(), value: AdoptedBrand.create(brand, line: record.line, column: record.column, filePath: record.filePath))
+			self.adopted.upsert(record.key, value: AdoptedBrand.create(brand, line: record.line, column: record.column, filePath: record.filePath))
 		end 'anEarlierStoreOfTheSameFile'
 	end 'adoptFrom'
 end 'BrandResolver'
@@ -211,7 +211,7 @@ function resolveBrands(project Project, handed HandedParameterArray) returns Bra
 	var resolver = BrandResolver.create(project, handed: handed)
 
 	for index in 0 upto project.pendingBrandRecords.count() 'eachRecord'
-		resolver.resolve(project, key: (try project.pendingBrandRecords.get(index) otherwise panic("resolveBrands: pendingBrandRecords.get OOB at {index}")).key.clone())
+		resolver.resolve(project, key: (try project.pendingBrandRecords.get(index) otherwise panic("resolveBrands: pendingBrandRecords.get OOB at {index}")).key)
 	end 'eachRecord'
 
 	return resolver
@@ -242,7 +242,7 @@ function ownersOfIndirectHandOvers(project Project, module MaxonModule) returns 
 	return owners
 end 'ownersOfIndirectHandOvers'
 
-function brandOfStoringRecord(record PendingBrandRecord, handed HandedParameter) returns ByteArray
+function brandOfStoringRecord(record PendingBrandRecord, handed HandedParameter) returns immutable ByteArray
 	return match record.kind 'kind'
 		store gives record.brand
 		handOver or
@@ -271,13 +271,13 @@ function directlyHandedParameterOf(project Project, context HandOverContext, rec
 	return HandedParameter.agreeing(declaredParameterBrand(sig, position: position), name: declaredParameterName(sig, position: position))
 end 'directlyHandedParameterOf'
 
-function declaredParameterBrand(sig FuncSignature, position ParamCount) returns ByteArray
+function declaredParameterBrand(sig FuncSignature, position ParamCount) returns immutable ByteArray
 	let paramType = try sig.paramTypes.get(position) otherwise panic("declaredParameterBrand: position {position} is past the {sig.paramTypes.count()} parameters the signature declares")
 	let spelled = try sig.paramDeclaredNames.get(position) otherwise panic("declaredParameterBrand: paramDeclaredNames.get OOB at {position} — a signature's param columns are built in lockstep")
 	return declaredBrandOf(spelled, paramTag: maxonTypeTag(paramType))
 end 'declaredParameterBrand'
 
-function declaredParameterName(sig FuncSignature, position ParamCount) returns ByteArray
+function declaredParameterName(sig FuncSignature, position ParamCount) returns immutable ByteArray
 	return try sig.paramNames.get(position) otherwise panic("declaredParameterName: position {position} is past the {sig.paramNames.count()} parameters the signature declares")
 end 'declaredParameterName'
 
@@ -370,7 +370,7 @@ function judgeReadDoor(project Project, signatures ProgramSignatures, held Adopt
 		return
 	end 'theReadFitsThePlace'
 
-	reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot assign a value of type '{signatures.aliasIdentityDisplay(held.brand)}' to {String.from(record.phrase)}, which holds '{signatures.aliasIdentityDisplay(record.brand.clone())}'", line: record.line, column: record.column, filePath: record.filePath)
+	reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot assign a value of type '{signatures.aliasIdentityDisplay(held.brand)}' to {String.from(record.phrase)}, which holds '{signatures.aliasIdentityDisplay(record.brand)}'", line: record.line, column: record.column, filePath: record.filePath)
 end 'judgeReadDoor'
 
 function judgeAdoptingStore(project Project, signatures ProgramSignatures, held AdoptedBrand, expected ByteArray, record PendingBrandRecord)
@@ -401,19 +401,20 @@ function judgeMergeArm(project Project, signatures ProgramSignatures, adopted Ad
 		return
 	end 'anArmThatHoldsNoBrand'
 
-	let group = "{record.filePath.toString()}|{record.line}|{record.column}".toByteArray()
+	let groupSpelling = "{record.filePath.toString()}|{record.line}|{record.column}"
+	let group = freeze groupSpelling.toByteArray()
 	view first = try firstBrands.get(group) otherwise 'theFirstBrandedArm'
-		firstBrands.upsert(group, value: brand.clone())
+		firstBrands.upsert(group, value: brand)
 		return
 	end 'theFirstBrandedArm'
 
 	if brandsConflict(first, got: brand) and not refused.contains(group) 'aSecondBrand'
-		reportPositioned(project, code: ErrorCode.typeMismatch, message: "the arms of this merge hold '{signatures.aliasIdentityDisplay(first.clone())}' and '{signatures.aliasIdentityDisplay(brand.clone())}', so the merged value has no one brand", line: record.line, column: record.column, filePath: record.filePath)
+		reportPositioned(project, code: ErrorCode.typeMismatch, message: "the arms of this merge hold '{signatures.aliasIdentityDisplay(first)}' and '{signatures.aliasIdentityDisplay(brand)}', so the merged value has no one brand", line: record.line, column: record.column, filePath: record.filePath)
 		refused.insert(group)
 	end 'aSecondBrand'
 end 'judgeMergeArm'
 
-function armBrandOf(record PendingBrandRecord, adopted AdoptedBrandMap) returns ByteArray
+function armBrandOf(record PendingBrandRecord, adopted AdoptedBrandMap) returns immutable ByteArray
 	if not record.brand.isEmpty() 'anAuthoredBrand'
 		return record.brand
 	end 'anAuthoredBrand'

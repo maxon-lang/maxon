@@ -115,7 +115,7 @@ hello! world
 
 ```maxon
 function main() returns ExitCode
-	let ws = CharacterSet.whitespacesAndNewlines()
+	let ws = CharacterSet.whitespacesAndNewlines
 	let nbsp = '\u00A0'
 	let enSpace = '\u2002'
 	let ideoSpace = '\u3000'

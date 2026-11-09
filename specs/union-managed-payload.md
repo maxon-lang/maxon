@@ -547,9 +547,9 @@ end 'main'
 original payload, long enough to be a real heap allocation|original payload, long enough to be a real heap allocation MUTATED
 ```
 
-<!-- test: returned-alias-of-a-let-struct-union-payload -->
-The same escape with a STRUCT payload: the returned `Body` is the very box `m` holds, so binding it to a `var`
-is refused at the binding.
+<!-- test: returned-alias-of-a-let-struct-union-payload-is-written-through -->
+The same escape with a STRUCT payload: the returned `Body` is the very box `slot` holds, and a `let` forbids only
+reassigning `slot`, so the `var` bound to it names that box and the write is seen through the payload.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -581,8 +581,8 @@ function main() returns ExitCode
 	return grab(slot).mass as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:26:6: cannot assign the result of 'grab', which may share storage with immutable variable 'slot', to mutable binding 'escaped'; use 'let' instead of 'var', or use clone()
+```exitcode
+99
 ```
 
 <!-- test: a-clone-of-a-let-union-payload-may-be-written -->

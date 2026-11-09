@@ -220,13 +220,14 @@ end 'main'
   of the receiver (`count` or `self.count`), and a chain of them (`p.a.b`). The rule is exactly the
   assignment rule — an argument the callee writes is accepted here if and only if writing the same thing at
   the call site would be accepted.
-- Passing a [read-only](/docs/language/memory-model/#read-only-values) value to a `mutable` parameter is **E3159** (`cannot pass
-  'y', which is read-only (a `let` binding), to a function that writes parameter 'n'`). A literal or another
-  expression is no storage for the write to reach, so it is **E3159** too (`cannot pass a literal to a
-  function that writes parameter 'n'; pass a `var``). The receiver of a method counts as a parameter, so
-  `let acc = Accumulator.create()` followed by `acc.add(10)`, where `add` writes a field of `acc`, is refused.
-  A `let` field, or anything reached through a read-only value, is refused for the same reason the
-  equivalent assignment is.
+- Passing a `let` to a `mutable` parameter is **E2013** (``'y' is a let and cannot be passed to the `mutable`
+  parameter 'n'; bind it to a `var` ``): the callee reassigns the caller's variable, and a `let` has none to
+  give. A `let` field is refused for the same reason the equivalent assignment is. Other
+  [read-only](/docs/language/memory-model/#read-only-values) data at a `mutable` position, such as a stored `Map` key, is **E3159**. A literal or
+  another expression is no storage for the write to reach, so it is **E3159** too (``cannot pass a literal to
+  a function that writes parameter 'n'; pass a `var` ``). A callee that writes a field of its record parameter
+  or receiver reaches through a `let` argument: `let acc = Accumulator.create()` followed by `acc.add(10)`,
+  where `add` writes a field of `acc`, is legal.
 - A function type spells the marker: `typealias Step = function(mutable Tally)`. A function, closure or
   interface conformer fits a function type or requirement only when every parameter's marker is the same as
   the type's, so a function that reassigns its parameter does not convert to `function(Tally)` (**E3005**),
@@ -234,8 +235,8 @@ end 'main'
   record parameter its function type leaves unmarked is **E3210** (see
   [Capabilities at Function Types and Requirements](/docs/language/regions/#capabilities-at-function-types-and-requirements)). A
   call through a function value or an
-  interface passes the argument's storage at each `mutable` position, and a read-only value handed to such
-  a position is **E3159**, as at a direct call; a literal or another expression is **E3159** too. Through
+  interface passes the argument's storage at each `mutable` position, and a `let` handed to such
+  a position is **E2013**, as at a direct call; a literal or another expression is **E3159**. Through
   a function value or an interface requirement the message names the position (`to a function that writes
   argument 1`).
 - A variable passed by reference is a flow in both directions: the callee reads the variable and may write
@@ -336,8 +337,7 @@ copy, so passing it to a parameter the callee writes is **E3159**.
 A closure that escapes — stored anywhere or returned — keeps every record it captures, so handing a read-only
 value to a function whose parameter such a closure captures is **E3078**. A closure that stays local — it is
 only called, where it is made or by a parameter that only calls it — writes what it writes of a parameter it
-captures, so handing that function a read-only value is **E3159**. A record [view](/docs/language/variables/#views-view) cannot be
-captured (**E3078**); a view of a number can, since the closure captures a copy.
+captures, so handing that function a read-only value is **E3159**.
 
 **A closure can go anywhere a value can.** A function value is one reference to a record holding the code
 and the captures, so a closure may be returned, stored in a field, a container or

@@ -2,7 +2,7 @@ typealias ValueOriginCode = int(0 to u64.max)
 typealias ValueOriginColumn = Array with ValueOriginCode
 typealias ValueIdSet = Set with ValueId
 typealias MergePhiFlags = FixedArray with bool
-typealias FunctionRefNames = Map with (ValueId, readonly ByteArray)
+typealias FunctionRefNames = Map with (ValueId, immutable ByteArray)
 typealias ClosureBindingArray = Array with ClosureBinding
 typealias SpecializedNodeArray = Array with SpecializedNode
 typealias SpecializedNodeKeys = Map with (String, ElementIndex)
@@ -317,11 +317,11 @@ type ValueOrigins
 		return try self.codes.get(value) otherwise OriginUnknown
 	end 'raw'
 
-	function namedFunction(value ValueId) returns ByteArray throws MapError
+	function namedFunction(value ValueId) returns immutable ByteArray throws MapError
 		return try self.valueRefs.get(value)
 	end 'namedFunction'
 
-	function closureCode(value ValueId) returns ByteArray throws AbsentError
+	function closureCode(value ValueId) returns immutable ByteArray throws AbsentError
 		if not originIsLocal(self.originOf(value)) or self.ambiguousBoxes.contains(value) 'notOneClosureBox'
 			throw AbsentError.absent
 		end 'notOneClosureBox'
@@ -1001,7 +1001,7 @@ type SpecializedNode
 	end 'create'
 end 'SpecializedNode'
 
-function ownerTypeOf(qualified ByteArray) returns ByteArray throws AbsentError
+function ownerTypeOf(qualified ByteArray) returns immutable ByteArray throws AbsentError
 	match splitQualifiedName(genericTemplateName(qualified)) 'owner'
 		parts(typeName, _) then return typeName
 		notQualified then throw AbsentError.absent

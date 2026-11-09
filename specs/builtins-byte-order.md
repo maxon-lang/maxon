@@ -32,8 +32,8 @@ exactly as `width` `push` calls would.
 
 An append writes its `output` argument, and `__Builtins.fillRandom`, `__ManagedFile.read`,
 `__ManagedFile.readAppending` and `__ManagedSocket.recv` write their buffer argument. Each follows `push`'s
-rules: a read-only buffer, such as a `let` binding, is E3159, and a function that hands one of them its
-parameter writes that parameter, so passing that function a read-only value is E3159 too.
+rules: a `let` binding only forbids reassigning the name, so the buffer it names is written in place, and a
+function that hands one of them its parameter writes that parameter. A frozen or `immutable` buffer is refused (E3207).
 
 ## Tests
 
@@ -468,9 +468,9 @@ end 'main'
 12: 1 2 3 4 5 6 7 8 9 10 11 12
 ```
 
-<!-- test: builtins-byte-order.an-append-to-a-let-binding-is-refused-as-a-push-is -->
+<!-- test: builtins-byte-order.an-append-to-a-let-binding-is-written-as-a-push-is -->
 <!-- tier: stdlib -->
-An append mutates its `output`, so a `let` binding is refused for it exactly as for `push`.
+An append mutates its `output` in place, so a `let` binding is accepted for it exactly as for `push`.
 ```maxon
 function main() returns ExitCode
 	let out = ByteArray.create(0)
@@ -479,14 +479,17 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:4:13: cannot write through 'out': 'out' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+0
+```
+```stdout
+2
 ```
 
-<!-- test: builtins-byte-order.a-let-handed-to-a-function-that-appends-is-refused-as-for-a-push -->
+<!-- test: builtins-byte-order.a-let-handed-to-a-function-that-appends-is-written-as-for-a-push -->
 <!-- tier: stdlib -->
 A function that writes its `ByteArray` parameter only through an append intrinsic writes that parameter, so handing it
-a `let` binding is refused at the call exactly as for a function that pushes.
+a `let` binding is accepted at the call exactly as for a function that pushes.
 ```maxon
 function grow(output ByteArray)
 	__Builtins.appendLittleEndian(output, 1, 2)
@@ -499,13 +502,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:8:2: cannot pass 'out', which is read-only (a `let` binding), to a function that writes parameter 'output' (in main); pass a clone()
+```exitcode
+0
+```
+```stdout
+2
 ```
 
-<!-- test: builtins-byte-order.fill-random-into-a-let-binding-is-refused-as-a-push-is -->
+<!-- test: builtins-byte-order.fill-random-into-a-let-binding-is-written-as-a-push-is -->
 <!-- tier: stdlib -->
-`fillRandom` writes the buffer it is given, so a `let` binding is refused for it exactly as for `push`.
+`fillRandom` writes the buffer it is given, so a `let` binding is accepted for it exactly as for `push`.
 ```maxon
 function main() returns ExitCode
 	let drawn = ByteArray.create(0)
@@ -514,29 +520,37 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:4:26: cannot write through 'drawn.managed': 'drawn' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+0
+```
+```stdout
+0
 ```
 
-<!-- test: builtins-byte-order.a-file-read-into-a-let-binding-is-refused-as-a-push-is -->
+<!-- test: builtins-byte-order.a-file-read-into-a-let-binding-is-accepted -->
 <!-- tier: stdlib -->
-`read` and `readAppending` fill the buffer they are given, so a `let` binding is refused for each.
+`read` and `readAppending` fill the buffer they are given, so a `let` binding is accepted for each. The function is not
+called: there is no input file, and the case pins that the program compiles.
 ```maxon
-function main() returns ExitCode
+function load() returns ExitCode
 	let file = try __ManagedFile.openRead("input.bin".toByteArray()) otherwise return 1
 	let managed = try __ManagedMemory.create(16, 1) otherwise return 1
 	let got = try file.read(managed, 16) otherwise return 1
 	print("{got}\n")
 	return 0
+end 'load'
+
+function main() returns ExitCode
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:5:21: cannot write through 'managed': 'managed' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+0
 ```
 
-<!-- test: builtins-byte-order.a-socket-recv-into-a-let-binding-is-refused-as-a-push-is -->
+<!-- test: builtins-byte-order.a-socket-recv-into-a-let-binding-is-accepted -->
 <!-- tier: stdlib -->
-`recv` fills the buffer it is given, so a `let` binding is refused for it.
+`recv` fills the buffer it is given, so a `let` binding is accepted for it.
 ```maxon
 function receive(socket __ManagedSocket) returns ExitCode
 	let managed = try __ManagedMemory.create(16, 1) otherwise return 1
@@ -549,13 +563,13 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:4:23: cannot write through 'managed': 'managed' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+0
 ```
 
-<!-- test: builtins-byte-order.a-let-receiver-whose-method-appends-to-its-own-field-is-refused-as-for-a-push -->
+<!-- test: builtins-byte-order.a-let-receiver-whose-method-appends-to-its-own-field-is-written-as-for-a-push -->
 <!-- tier: stdlib -->
-A method that appends to a field of its own receiver writes the receiver, so a `let` receiver is refused at the call
+A method that appends to a field of its own receiver writes the receiver, and a `let` receiver is accepted at the call
 whichever way the field is spelled, exactly as for a method that pushes.
 ```maxon
 type Sink
@@ -572,18 +586,21 @@ type Sink
 	function putBare()
 		__Builtins.appendLittleEndian(bytes, 1, 2)
 	end 'putBare'
+
+	function size() returns Count
+		return bytes.count()
+	end 'size'
 end 'Sink'
 
 function main() returns ExitCode
 	let sink = Sink.create()
 	sink.put()
 	sink.putBare()
-	return 0
+	return sink.size() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:20:7: cannot pass 'sink', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
-error E3159: <fragment>:21:7: cannot pass 'sink', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```exitcode
+4
 ```
 
 <!-- test: builtins-byte-order.width-three-is-refused -->

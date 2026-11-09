@@ -707,7 +707,10 @@ type Bag uses Element
 	end 'create'
 
 	static function wrapping(source Items) returns Self
-		return Self{items: source}
+		var own = Items.create(0)
+		own.append(source)
+
+		return Self{items: own}
 	end 'wrapping'
 
 	function add(value Element)

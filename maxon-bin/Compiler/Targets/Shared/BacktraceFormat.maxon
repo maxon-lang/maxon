@@ -510,7 +510,7 @@ export let FaultLineTerminator = b"\n"
 
 // The one answer to which fault prints what — for every handler in the tree, the quotient guard and
 // the debugger's fault stop.
-export function faultWords(kind HardwareFaultKind) returns ByteArray
+export function faultWords(kind HardwareFaultKind) returns immutable ByteArray
 	return match kind 'kind'
 		divideByZero gives b"integer divide by zero"
 		overflow gives b"integer overflow"
@@ -522,17 +522,21 @@ end 'faultWords'
 let FaultPanicPrefix = b"panic: "
 
 // The whole fixed prefix of `kind`'s fault line, up to the ASLR-dependent hex.
-export function faultPanicLinePrefix(kind HardwareFaultKind) returns ByteArray
+export function faultPanicLinePrefix(kind HardwareFaultKind) returns immutable ByteArray
 	return faultLineOf(kind, tail: FaultRipTag)
 end 'faultPanicLinePrefix'
 
 // A fresh buffer: `faultWords` answers an immortal literal, which is never appended to in place.
-export function faultLineOf(kind HardwareFaultKind, tail ByteArray) returns ByteArray
-	var line = ByteArray.create(0)
-	line.append(FaultPanicPrefix)
-	line.append(faultWords(kind))
-	line.append(tail)
-	return line
+export function faultLineOf(kind HardwareFaultKind, tail ByteArray) returns immutable ByteArray
+	var line = ByteArray.create(0) as isolated ByteArray
+
+	modify line 'fill'
+		line.append(FaultPanicPrefix)
+		line.append(faultWords(kind))
+		line.append(tail)
+	end 'fill'
+
+	return freeze line
 end 'faultLineOf'
 
 // --- The fault line's hex fields ---

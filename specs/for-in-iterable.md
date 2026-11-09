@@ -88,7 +88,7 @@ function main() returns ExitCode
 	a.push(10)
 	a.push(20)
 	a.push(30)
-	var s = IntSeq.create(a)
+	let s = IntSeq.create(a)
 	var sum = 0 as Integer
 	for v in s 'each'
 		sum = sum + v

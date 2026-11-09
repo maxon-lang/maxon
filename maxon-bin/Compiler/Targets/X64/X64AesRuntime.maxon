@@ -449,19 +449,23 @@ function gcmPolynomial() returns ByteArray
 	return polynomial
 end 'gcmPolynomial'
 
-function gcmConstants() returns ByteArray
-	var constants = gcmByteSwapMask()
-	constants.append(gcmPolynomial())
+function gcmConstants() returns immutable ByteArray
+	let polynomial = gcmPolynomial()
+	var constants = gcmByteSwapMask() as isolated ByteArray
 
-	for _ in 0 upto AesBlockBytes 'eachKept'
-		constants.push(0xFF)
-	end 'eachKept'
+	modify constants 'fill'
+		constants.append(polynomial)
 
-	for _ in 0 upto AesBlockBytes 'eachDropped'
-		constants.push(0)
-	end 'eachDropped'
+		for _ in 0 upto AesBlockBytes 'eachKept'
+			constants.push(0xFF)
+		end 'eachKept'
 
-	return constants
+		for _ in 0 upto AesBlockBytes 'eachDropped'
+			constants.push(0)
+		end 'eachDropped'
+	end 'fill'
+
+	return freeze constants
 end 'gcmConstants'
 
 function gcmCopyWidthBytes(width GcmCopyWidth) returns FullRangeInt

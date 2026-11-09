@@ -605,7 +605,7 @@ end 'main'
 ```
 
 <!-- test: a-let-alias-of-a-field-of-the-holder-is-not-another-name-for-its-cell -->
-`g` would name the same cell as `h.a`, and a `let` of a field of a `var` is refused, so no second spelling of the cell reaches the statement.
+`g` names the same record as `h.a`, and a field of a `let` is refused at a `mutable` parameter, so no second spelling of the cell reaches the statement.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -650,8 +650,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3188: <fragment>:37:6: cannot bind `let` 'g' to a value reached through 'h', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
-error E3159: <fragment>:38:39: cannot pass 'g', which is read-only (a `let` binding), to a function that writes parameter 'text' (in main); pass a clone()
+error E2013: <fragment>:38:39: 'g' is a let and cannot be passed to the `mutable` parameter 'text'; bind it to a `var`
 ```
 
 <!-- test: a-ternary-condition-wrapping-a-group-that-holds-the-call-reads-the-local-first -->

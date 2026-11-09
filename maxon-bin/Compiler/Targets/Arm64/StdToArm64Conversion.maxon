@@ -420,7 +420,7 @@ export type StdToArm64Lowering
 	// Every callee's declared ABI (`CalleeAbiTable`): which arguments a call routes to a SIMD register, and
 	// whether its result comes back in d0 or x0 (`callResultRegister`). The one table the value-class
 	// column reads too, so a float result's CAPTURE register and its allocation CLASS are the one fact.
-	var abi as CalleeAbiTable
+	let abi as immutable CalleeAbiTable
 
 	// Fresh virtuals for the function being lowered (`mintVirtual`).
 	var fresh as ValueMinter
@@ -451,7 +451,7 @@ export type StdToArm64Lowering
 	let usesGt as bool
 	var tailCalls as TailCalls
 
-	export static function create(target Target, abi CalleeAbiTable, usesGt bool) returns StdToArm64Lowering
+	export static function create(target Target, abi immutable CalleeAbiTable, usesGt bool) returns StdToArm64Lowering
 		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), displacedAddressFolds: DisplacedAddressFolds.create(), mulScale: MemoryIndexScaleMatch.create(), compareFusion: CompareFusionCensus.create(), abi: abi, usesGt: usesGt, tailCalls: TailCalls.none(), fresh: ValueMinter.create(0)}
 	end 'create'
 
@@ -470,7 +470,7 @@ export type StdToArm64Lowering
 		self.lowerFunction(UnitFunctionIndex)
 
 		let valueClass = buildFunctionValueClasses(self.stdModule, targetModule: self.targetModule, funcIndex: UnitFunctionIndex, abi: self.abi)
-		var lowered = LoweredUnit.create(self.targetModule, valueClass: valueClass, rdata: self.rdata.requests)
+		let lowered = LoweredUnit.create(self.targetModule, valueClass: valueClass, rdata: self.rdata.requests)
 		self.stdModule = StdModule.create()
 		self.targetModule = TargetModule.create()
 		self.rdata = RdataRequestLog.create()
@@ -607,7 +607,7 @@ export type StdToArm64Lowering
 			self.targetModule.spans.current = self.stdModule.spans.at(self.stdBlockTerminatorIndex(blockRef))
 
 			if self.tailCalls.found 'branchToTheCallee'
-				self.emitTerminator(blockRef, op: TargetOp.arm64TailBranch(self.tailCalls.callee.clone()))
+				self.emitTerminator(blockRef, op: TargetOp.arm64TailBranch(self.tailCalls.callee))
 			end 'branchToTheCallee' else 'returnNormally'
 				self.lowerTerminatorOp(termOp, dstRef: blockRef, returnType: returnType)
 			end 'returnNormally'
@@ -2650,7 +2650,7 @@ export type StdToArm64Lowering
 
 	// The accept answers a descriptor and every other verb a status, which is why the Darwin fold
 	// forks on the verb.
-	function socketServeFold(verb SocketServeVerb) returns ByteArray
+	function socketServeFold(verb SocketServeVerb) returns immutable ByteArray
 		return match verb 'v'
 			bind or
 			listen or
@@ -3048,12 +3048,12 @@ end 'StdToArm64Lowering'
 
 union Arm64HostCallee
 	import(slot OsImportSlot)
-	chunk(let name ByteArray)
+	chunk(let name immutable ByteArray)
 	syscall(number MachineWord)
 end 'Arm64HostCallee'
 
 union Arm64LinuxRoute
-	chunk(let name ByteArray)
+	chunk(let name immutable ByteArray)
 	syscall(number MachineWord)
 end 'Arm64LinuxRoute'
 

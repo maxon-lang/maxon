@@ -300,8 +300,8 @@ error E3068: specs/reference-identity/primitive-error.maxon:5:7: 'is' requires r
 A module-level `let` holding a byte string is image data, not a heap object: the whole program reads ONE
 `.rdata` record for it, and the record table pools by bytes. So `is` answers the same way it does for the
 interned string literals above — a constant is itself, and two constants with the same bytes are one
-object. An INLINE `b"…"` is a different storage class (a fresh heap record the statement drops), so it is
-its own object and shares with neither.
+object. An INLINE `b"…"` is image data of the same class, pooled by its bytes with the constants, so
+`A is b"hi"` is true.
 ```maxon
 let A = b"hi"
 let B = b"hi"
@@ -318,9 +318,9 @@ function main() returns ExitCode
 	if A is not C 'otherBytes'
 		result = result + 4
 	end 'otherBytes'
-	if A is not b"hi" 'inlineIsItsOwn'
+	if A is b"hi" 'inlineIsPooled'
 		result = result + 8
-	end 'inlineIsItsOwn'
+	end 'inlineIsPooled'
 	return result
 end 'main'
 ```
@@ -356,14 +356,14 @@ red green blue | green | 3
 DIFFERENCE IS THE POINT.** A module-level `let` is image data on a read-only page. `let b = A` is a borrow
 and shares the one record, so `b is A` — that is `assignment-creates-alias` and it holds here unchanged. But
 a container OUTLIVES the statement and may be written through later, and a write through it would land on
-the image. So a store into a container whose elements are writable is `E3078`: the program takes its
+the image. So a store into a container whose elements are writable is `E3196`: the program takes its
 private copy with `.clone()` (`a-durable-store-of-a-cloned-constant-is-its-own-object`) or declares the
-container's elements `readonly` (`a-readonly-container-accepts-a-constant`).
+container's elements `immutable` or `readonly` (`a-readonly-container-accepts-a-constant`).
 
 ⚠ **THE REFUSAL IS WHAT KEEPS THE PAGE UNWRITTEN.** Push a constant into an array, take the element back
 out and `push` to it: without the refusal that write reaches `.rdata` and faults on x64, or — with no
-read-only section — silently rewrites the constant on wasm32-wasi. The seven `*-detaches-from-rdata` cases
-in `byte-string-literal.md` pin the mutation half.
+read-only section — silently rewrites the constant on wasm32-wasi. The `*-detaches-from-rdata` cases
+in `byte-string-literal.md` pin the write half on a `.clone()`.
 ```maxon
 typealias Num = int(0 to 1000)
 typealias NumArray = Array with Num
@@ -378,7 +378,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:10:4: cannot store 'Anchor', which is read-only (a module-level `let`), into mutable place 'an element of the container push writes'; use clone()
+error E3196: <fragment>:10:9: cannot store an immutable 'NumArray' into 'an element of the container push writes', which holds a mutable 'NumArray'; declare the element `immutable NumArray`
 ```
 
 <!-- test: a-durable-store-of-a-cloned-constant-is-its-own-object -->
@@ -468,7 +468,7 @@ end 'main'
 case above pins the rule with an `Array`; a `Map` is `genericInstance`-tagged and would reach the same sink
 by a different road, holding the module-level `let` itself, where a write through it lands on the image: **a
 panic in `Map.ensureCapacity` on x64, and on wasm32-wasi — which has no read-only section — a SILENT rewrite
-of the constant.** The store is `E3078` for a `Map` as for an `Array`.
+of the constant.** The store is `E3196` for a `Map` as for an `Array`.
 ```maxon
 typealias Key = int(0 to 1000)
 typealias KeyMap = Map with (Key, Key)
@@ -483,7 +483,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:10:6: cannot store 'Shared', which is read-only (a module-level `let`), into mutable place 'an element of the container push writes'; use clone()
+error E3196: <fragment>:10:11: cannot store an immutable 'KeyMap' into 'an element of the container push writes', which holds a mutable 'KeyMap'; declare the element `immutable KeyMap`
 ```
 
 <!-- test: a-durable-store-of-a-cloned-let-map-copies-it -->

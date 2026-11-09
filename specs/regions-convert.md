@@ -438,7 +438,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:24:15: 'call' writes 'bump'; 'function' is immutable
+error E3207: <fragment>:24:15: 'call' writes 'bump' (line 19: it is a function value of 'Bump', which declares `mutates captures`, called here); 'function() gives touch(e)' is immutable
 error E3197: <fragment>:24:38: cannot write 'e' through the closure that captures it: 'e' is immutable
 ```
 
@@ -563,7 +563,7 @@ lessThan
 ```
 
 <!-- test: function-value-storing-its-parameter-to-plain-function-type-refused -->
-`adopt` keeps `box` in the `Holder` it returns, which makes `box` mutable only, and `Keep` declares no `mutable` there, so a caller holding the argument read-only would be stored into a mutable field.
+`adopt` keeps `box` in the `Holder` it returns, so its result holds data reached from its read-only parameter, and `Keep` promises nothing about what a result shares with its argument.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -602,5 +602,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3210: <fragment>:32:16: function value for 'Keep' writes its parameter 'box', but 'Keep' does not declare it `mutable`
+error E3210: <fragment>:32:16: function value for 'Keep' returns data reached from its read-only parameter 'box', which 'Keep' does not allow
 ```

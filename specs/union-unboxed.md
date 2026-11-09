@@ -511,7 +511,7 @@ type Scanner
 	end 'note'
 
 	function takeComments() returns Log
-		var taken = self.comments
+		let taken = self.comments
 		self.comments = Log.discarded
 
 		return taken
@@ -609,7 +609,7 @@ end 'main'
 ```
 
 <!-- test: an-all-let-union-with-a-struct-payload-is-shared-with-a-service -->
-Every payload of `Shape` is a `let`, so the send shares the word with the service while `w` still views it, and the struct payload's header is met by one share walk. Both sides read the payload afterwards.
+Every payload of `Shape` is a `let` and `Point` is value-like (every field is a `let` of a value type), so `Shape` counts as a value: it needs no `freeze` (a `freeze` of it is E3200), and the send hands the word to the service by move, as it hands over a `String`, so `s` is read before the send and not after. The struct payload's header is met by one share walk, and the service reads the payload.
 ```maxon
 typealias Coord = int(0 to 1000)
 
@@ -645,27 +645,26 @@ type Store
 	end 'keep'
 end 'Store'
 
-function main() returns ExitCode
-	let h = spawn Store.create()
-	var s = freeze Shape.dot(Point.create(1, y: 2, label: "ab{1}"))
-	s = freeze Shape.dot(Point.create(10, y: 20, label: "cde{2}"))
-	view w = s
-	let r = try await h.keep(s) otherwise 0
-
-	let mine = match w 'shape'
+function weigh(s Shape) returns Coord
+	return match s 'shape'
 		dot(at) gives at.x + at.y + at.label.byteLength() as Coord
 		nothing gives 0
 	end 'shape'
+end 'weigh'
 
-	let again = try await h.keep(s) otherwise 0
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let s = Shape.dot(Point.create(10, y: 20, label: "cde{2}"))
+	let mine = weigh(s)
+	let r = try await h.keep(s) otherwise 0
 
-	print("{r} {mine} {again}\n")
+	print("{r} {mine}\n")
 
 	return 0
 end 'main'
 ```
 ```stdout
-34 34 34
+34 34
 ```
 ```exitcode
 0
@@ -709,9 +708,8 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var s = freeze Shape.cell(Cell.create(5, label: "ab{1}"))
-	s = freeze Shape.cell(Cell.create(7, label: "cde{2}"))
-	view w = s
+	let s = freeze Shape.cell(Cell.create(7, label: "cde{2}"))
+	let w = s
 	let r = try await h.keep(s) otherwise 0
 
 	let mine = match w 'shape'
@@ -776,10 +774,9 @@ end 'weigh'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var s = freeze Shape.cell(Cell.create(1, label: "x{0}"))
-	s = freeze Shape.cell(Cell.create(5, label: "ab{1}"))
-	view a = s
-	view b = s
+	let s = freeze Shape.cell(Cell.create(5, label: "ab{1}"))
+	let a = s
+	let b = s
 	let r = try await h.keep(s) otherwise 0
 
 	print("{r} {weigh(a)} {weigh(b)} {weigh(s)}\n")
@@ -829,13 +826,15 @@ end 'weigh'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var n = freeze Note.text("x{0}")
-	n = freeze Note.text("abc{1}")
+	let n = Note.text("abc{1}")
 	view a = n
 	view b = n
+	let wa = weigh(a)
+	let wb = weigh(b)
+	let wn = weigh(n)
 	let r = try await h.keep(n) otherwise 0
 
-	print("{r} {weigh(a)} {weigh(b)} {weigh(n)}\n")
+	print("{r} {wa} {wb} {wn}\n")
 
 	return 0
 end 'main'
@@ -944,7 +943,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/union-unboxed/error.payload-assignment-to-a-union-nothing-holds.maxon:13:20: cannot assign to immutable variable: 'name'
+error E2013: specs/union-unboxed/error.payload-assignment-to-a-union-nothing-holds.maxon:13:20: 'name' is a let and cannot be reassigned
 ```
 
 <!-- test: error.payload-assignment-to-a-boxed-union-nothing-holds -->
@@ -981,7 +980,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/union-unboxed/error.payload-assignment-to-a-boxed-union-nothing-holds.maxon:19:18: cannot assign to immutable variable: 'value'
+error E2013: specs/union-unboxed/error.payload-assignment-to-a-boxed-union-nothing-holds.maxon:19:18: 'value' is a let and cannot be reassigned
 ```
 
 <!-- test: a-match-on-a-temporary-word-gives-its-payload -->
@@ -1969,14 +1968,14 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	let spotted = freeze Wide.spot(Point.create(5, label: "ab{1}"))
-	let texted = freeze Wide.text("xyz{2}")
-	var last = freeze Wide.idle
-	last = freeze Wide.ten
-	var first = freeze Wide.eight
-	first = freeze Wide.idle
-	var broken = freeze Wide.nine
-	broken = freeze Wide.failed
+	let spotted = Wide.spot(Point.create(5, label: "ab{1}"))
+	let texted = Wide.text("xyz{2}")
+	var last = Wide.idle
+	last = Wide.ten
+	var first = Wide.eight
+	first = Wide.idle
+	var broken = Wide.nine
+	broken = Wide.failed
 	let a = try await h.keep(last) otherwise 0
 	let b = try await h.keep(spotted) otherwise 0
 	let c = try await h.keep(first) otherwise 0
@@ -2014,34 +2013,36 @@ mm_free InterpolationScratch #7
 mm_alloc Store #9 size=8
 mm_decref ServiceStartRecord #1 rc=0
 mm_free ServiceStartRecord #1
-mm_incref Point #5 rc=2
-mm_decref Point #5 rc=1
-mm_incref StringRecord #8 rc=2
-mm_decref StringRecord #8 rc=1
-mm_alloc InterpolationScratch #10 size=20
-mm_alloc InterpolationScratch #11 size=20
+mm_alloc ElementBuffer #10 size=3
+mm_decref Point #5 rc=0
+mm_decref StringRecord #6 rc=0
+mm_decref ElementBuffer #10 rc=0
+mm_free ElementBuffer #10
+mm_free StringRecord #6
+mm_free Point #5
+mm_alloc ElementBuffer #11 size=4
+mm_decref StringRecord #8 rc=0
+mm_decref ElementBuffer #11 rc=0
+mm_free ElementBuffer #11
+mm_free StringRecord #8
 mm_alloc InterpolationScratch #12 size=20
 mm_alloc InterpolationScratch #13 size=20
 mm_alloc InterpolationScratch #14 size=20
-mm_alloc StringRecord #15 size=67
-mm_decref InterpolationScratch #10 rc=0
-mm_free InterpolationScratch #10
-mm_decref InterpolationScratch #11 rc=0
-mm_free InterpolationScratch #11
+mm_alloc InterpolationScratch #15 size=20
+mm_alloc InterpolationScratch #16 size=20
+mm_alloc StringRecord #17 size=67
 mm_decref InterpolationScratch #12 rc=0
 mm_free InterpolationScratch #12
 mm_decref InterpolationScratch #13 rc=0
 mm_free InterpolationScratch #13
 mm_decref InterpolationScratch #14 rc=0
 mm_free InterpolationScratch #14
-mm_decref StringRecord #15 rc=0
-mm_free StringRecord #15
-mm_decref StringRecord #8 rc=0
-mm_free StringRecord #8
-mm_decref Point #5 rc=0
-mm_decref StringRecord #6 rc=0
-mm_free StringRecord #6
-mm_free Point #5
+mm_decref InterpolationScratch #15 rc=0
+mm_free InterpolationScratch #15
+mm_decref InterpolationScratch #16 rc=0
+mm_free InterpolationScratch #16
+mm_decref StringRecord #17 rc=0
+mm_free StringRecord #17
 mm_decref Store.handle #2 rc=0
 mm_free Store.handle #2
 mm_decref Store #9 rc=0

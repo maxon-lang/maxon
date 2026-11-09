@@ -168,7 +168,7 @@ export function ucdTableStemOf(load UcdTableStride) returns String
 	end 'stride'
 end 'ucdTableStemOf'
 
-export function ucdRuntimeNameOf(load UcdTableStride) returns ByteArray
+export function ucdRuntimeNameOf(load UcdTableStride) returns immutable ByteArray
 	return match load 'stride'
 		byteIndexed gives UcdBmpAtName
 		packedEntry gives UcdSuppAtName
@@ -178,7 +178,7 @@ end 'ucdRuntimeNameOf'
 // `offset` counts BYTES into the directly-indexed BMP table; `index` counts 8-byte ENTRIES into the sorted
 // supplementary table — so the word IS the stride, which is why the name lives here beside it rather than
 // beside the callee spellings in the parser.
-export function ucdIndexParamNameOf(load UcdTableStride) returns ByteArray
+export function ucdIndexParamNameOf(load UcdTableStride) returns immutable ByteArray
 	return match load 'stride'
 		byteIndexed gives UcdByteAtIndexParamName
 		packedEntry gives UcdI64AtIndexParamName
@@ -209,7 +209,7 @@ function buildUcdTableLoad(module StdModule, load UcdTableStride)
 	// A `rdataAddr` naming a label nothing registered is a link failure, so the label comes from the same
 	// stem `installUnicodeCategoryRuntime` registers under.
 	let base = ids.mint()
-	module.appendOp(entry, op: StdOp.rdataAddr(base, label: ucdLabel(ucdTableStemOf(load)).toByteArray()))
+	module.appendOp(entry, op: StdOp.rdataAddr(base, label: freeze ucdLabel(ucdTableStemOf(load)).toByteArray()))
 
 	// The BMP table is one byte per codepoint, indexed DIRECTLY and zero-extended; the supplementary table is
 	// 8-byte packed entries, so its read is `base + index * 8` as a machine word. That difference IS the

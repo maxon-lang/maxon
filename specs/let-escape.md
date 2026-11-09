@@ -1,26 +1,23 @@
 ---
 feature: let-escape
-keywords: [let, immutable, escape, store, keep, write, alias, E3159, E3078, E3188, container, global, holder, await]
+keywords: [let, escape, store, keep, write, alias, container, holder, module let, immutable]
 category: semantics
 ---
 
-# A `let` Record Is Kept Only Where Nothing Can Write It
+# A `let` Names A Record It Never Rebinds
 
 ## Documentation
 
-A `let` names a value nothing may write. It binds a value that is already read-only (another `let`, a `let` field,
-a `readonly` element, a module `let`), a fresh value nothing else holds, or a parameter or a part of one. A `let`
-bound to a value something may still write, such as an element of a `var` container, a record a callee also stored
-elsewhere, or what a getter hands back from a `var` holder, is `E3188`.
+A `let` means the name is never reassigned. The record it names is an ordinary record of the current region: a
+callee may keep it in a container or a `var` field, and any holder, or the `let` itself, may write it. Handing a
+`let` to a parameter the callee writes or keeps, storing it into a `var` field or a container element, and
+binding a `let` to a value something else may write are all accepted, and every name reads the same record, so a
+write through one is read through the others. `clone()` gives the writer a record of its own.
 
-A `let`'s record is stored only where nothing can write it. Storing it into a `var` field, a mutable container
-element or a module variable, or handing it to a parameter the callee keeps in such a place, is `E3078` while the
-`let` is still read afterwards; at its last use a fresh `let` is moved there instead. A write through a `let`, or
-handing it to a parameter the callee writes, is `E3159`.
-
-A module `let` is image data: storing its record anywhere writable, directly, in an array literal or a map value,
-or through a callee that keeps its parameter, is `E3078`; store a `clone()`. A `var` binding of a record a holder
-still holds is writable, so `E3077` does not report it.
+A module `let` is `immutable` image data: nothing may write it, and nothing may store it where something may
+write it. Storing its record into a plain `Array`, `Map`, field or array literal is `E3196` (declare the holder
+`immutable Box`), handing it to a parameter the callee writes or keeps there is `E3207`, and a result that
+returns it is `E3209` until the result is declared `immutable`. Store a `clone()`.
 
 ## Tests
 
@@ -90,8 +87,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-escape.error.a-let-kept-in-a-global-container-of-another-type-and-read-again-is-refused -->
-`register` keeps its parameter in a module container, and `a` is read after the call, so handing `a` to it is refused, whatever type the later write reaches.
+<!-- test: let-escape.a-let-kept-in-a-global-container-of-another-type-and-read-again-is-accepted -->
+`register` keeps its parameter in a container and `a` is read after the call: the call is accepted, whatever type the later write reaches.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -163,12 +160,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:65:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+```stdout
+2
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-kept-in-one-container-of-a-holder-and-read-again-is-refused -->
-`stashLeft` keeps its parameter in one container of the holder, and `a` is read after the call, so it is refused, whichever container is written later.
+<!-- test: let-escape.a-let-kept-in-one-container-of-a-holder-and-read-again-is-accepted -->
+`stashLeft` keeps its parameter in one container of the holder and `a` is read after the call: the call is accepted, whichever container is written later.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -236,8 +236,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:61:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stashLeft', which keeps it where something may write it; pass a clone()
+```stdout
+2
+```
+```exitcode
+0
 ```
 
 <!-- test: let-escape.a-sibling-record-method-that-never-runs-after-the-store-is-accepted -->
@@ -441,8 +444,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-escape.error.a-let-kept-in-a-var-field-of-a-record-with-sixty-five-fields-is-refused -->
-`WideHold.create` keeps `box` in a `var` field, and `a` is read after the call, so it is refused however wide the holder is; `w` is not read again, so it moves into the holder.
+<!-- test: let-escape.a-let-kept-in-a-var-field-of-a-record-with-sixty-five-fields-is-accepted -->
+`WideHold.create` keeps `box` in a `var` field and `a` is read after the call: the call is accepted however wide the holder is.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -579,12 +582,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:130:19: cannot pass 'a', which is read-only (a `let` binding), to parameter 'box' of 'WideHold.create', which keeps it where something may write it; pass a clone()
+```stdout
+2
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-kept-by-a-callee-while-a-task-runs-and-read-again-is-refused -->
-`register` keeps its parameter in a module container and `a` is read afterwards, so the call is refused whatever the task does.
+<!-- test: let-escape.a-let-kept-by-a-callee-while-a-task-runs-and-read-again-is-accepted -->
+`register` keeps its parameter in a container while a task runs and `a` is read afterwards: the call is accepted, whatever the task does.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -645,12 +651,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:54:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+```stdout
+21
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-the-callee-pushes-and-returns-is-refused-at-the-push-though-the-caller-reads-it-before-the-write -->
-`add` pushes `made` and then returns it, so the push is not its last use and is refused, before any write; what `add` returns is its `let`, which is read-only, so `b` may bind it.
+<!-- test: let-escape.a-let-the-callee-pushes-and-returns-is-accepted-at-the-push-though-the-caller-reads-it-before-the-write -->
+`add` pushes `made` and then returns it: the push is accepted, and the `let` that binds the result names the record the container holds.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -691,12 +700,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:22:9: cannot store `let` 'made' into mutable place 'an element of the container push writes'; use clone()
+```stdout
+7
+```
+```exitcode
+0
 ```
 
 <!-- test: let-escape.error.a-module-lets-record-pushed-into-a-global-container-is-refused -->
-A module `let` is read-only, and an element of a `var` container is a place something may write, so pushing the `let`'s record into one is refused; push a `clone()`.
+A module `let` is `immutable` image data, and an element of a plain `Array with Box` is a place something may write, so pushing the `let`'s record into one is refused; declare the element `immutable Box`, or push a `clone()`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -729,7 +741,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:15:11: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the container push writes'; use clone()
+error E3196: <fragment>:15:16: cannot store an immutable 'Box' into 'an element of the container push writes', which holds a mutable 'Box'; declare the element `immutable Box`
 ```
 
 <!-- test: let-escape.error.a-module-lets-record-handed-to-a-callee-that-keeps-it-is-refused -->
@@ -777,11 +789,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:36:2: cannot pass 'shared', which is read-only (a module-level `let`), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
+error E3207: <fragment>:36:8: 'stash' writes 'b' (line 23: `registry.push(b)`); 'shared' is immutable
 ```
 
 <!-- test: let-escape.error.a-module-lets-record-handed-to-a-factory-that-keeps-it-in-a-field-is-refused -->
-`Holder.create` keeps its parameter in a `var` field, so handing it a module `let` is refused.
+`Holder.create` keeps its parameter in a `var` field, so handing it a module `let` is refused; pass a `clone()`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -812,7 +824,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:23:17: cannot pass 'shared', which is read-only (a module-level `let`), to parameter 'box' of 'Holder.create', which keeps it where something may write it; pass a clone()
+error E3197: <fragment>:24:2: cannot write 'n' through 'h.box', which is read-only
 ```
 
 <!-- test: let-escape.error.a-module-lets-record-pushed-into-a-local-array-is-refused -->
@@ -842,11 +854,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:17:8: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the container push writes'; use clone()
+error E3196: <fragment>:17:13: cannot store an immutable 'Box' into 'an element of the container push writes', which holds a mutable 'Box'; declare the element `immutable Box`
 ```
 
 <!-- test: let-escape.error.a-module-lets-record-in-a-literal-a-map-and-a-global-field-is-refused -->
-An array literal's element, a map value and a field of a module variable are each a mutable place, so storing a module `let`'s record into any of them is refused.
+An array literal's element and a field of a `var` holder are each a mutable place, so storing a module `let`'s record into either is refused.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -895,13 +907,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:23:11: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'Holder.box'; use clone()
-error E3078: <fragment>:32:13: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the array literal'; use clone()
-error E3078: <fragment>:37:4: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the container upsert writes'; use clone()
+error E3196: <fragment>:23:17: cannot store an immutable 'Box' into 'box', which holds a mutable 'Box'; declare the field `immutable Box`
+error E3196: <fragment>:32:13: cannot store an immutable 'Box' into 'an element of the array literal', which holds a mutable 'Box'; declare the element `immutable Box`
 ```
 
 <!-- test: let-escape.error.a-module-lets-record-in-a-literal-and-a-map-value-is-refused -->
-The same stores without the module variable: an array literal's element and a value handed to `upsert` are mutable places, so both are refused.
+An array literal's element is a mutable place, so storing a module `let`'s record into it is refused.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -932,12 +943,41 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:16:13: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the array literal'; use clone()
-error E3078: <fragment>:21:4: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the container upsert writes'; use clone()
+error E3196: <fragment>:16:13: cannot store an immutable 'Box' into 'an element of the array literal', which holds a mutable 'Box'; declare the element `immutable Box`
 ```
 
-<!-- test: let-escape.error.a-captured-let-pushed-into-a-holder-is-refused-though-nothing-writes-its-type -->
-`b` is captured after the push, so the push is not its last use and is refused; the element `main` reads back is held by the container, so binding it to a `let` is refused too.
+<!-- test: let-escape.error.a-module-lets-record-in-a-map-value-is-refused -->
+A value handed to `upsert` is stored in a mutable place, so storing a module `let`'s record into a map value is refused.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias BoxMap = Map with (Count, Box)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+let shared = Box.create(7)
+
+function main() returns ExitCode
+	var m = BoxMap.create()
+	m.upsert(1, value: shared)
+	var mv = try m.get(1) otherwise return 1
+	mv.n = 22
+	print("{shared.n} {mv.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3196: <fragment>:17:21: cannot store an immutable 'Box' into 'Map.upsert.value', which holds a mutable 'Box'; declare the element `immutable Box`
+```
+
+<!-- test: let-escape.a-captured-let-pushed-into-a-holder-is-accepted-though-nothing-writes-its-type -->
+`install` pushes `b` into the holder's container and then captures it in a closure, and `main` binds the element it reads back to a `let`: all accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -976,9 +1016,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:25:12: cannot store `let` 'b' into mutable place 'an element of the container push writes'; use clone()
-error E3188: <fragment>:32:6: cannot bind `let` 'w' to a value reached through 'reg', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1 1
+```
+```exitcode
+0
 ```
 
 <!-- test: let-escape.a-string-let-stored-as-a-clone-is-accepted -->
@@ -1019,8 +1061,8 @@ a7
 0
 ```
 
-<!-- test: let-escape.error.a-let-kept-in-a-module-container-across-a-yield-and-read-again-is-refused -->
-`register` keeps its parameter in a module container and `b` is read afterwards, so the call is refused, whatever type the spawned task writes.
+<!-- test: let-escape.a-let-kept-in-a-module-container-across-a-yield-and-read-again-is-accepted -->
+`register` keeps its parameter in a container and `b` is read afterwards: the call is accepted, whatever type the spawned task writes.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1066,12 +1108,15 @@ function main() returns ExitCode
 	return r as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:38:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+```stdout
+2
+```
+```exitcode
+0
 ```
 
 <!-- test: let-escape.a-module-lets-record-a-call-hands-back-is-stored-as-a-clone -->
-Storing `pick().clone()` stores an independent record, so the write through the field leaves the `let` as it was.
+`pick` returns a module `let`, which is `immutable`, so its result is declared `immutable`. Storing `pick().clone()` stores an independent record, so the write through the field leaves the `let` as it was.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1094,7 +1139,7 @@ end 'Holder'
 
 let shared = Box.create(7)
 
-function pick() returns Box
+function pick() returns immutable Box
 	return shared
 end 'pick'
 
@@ -1121,8 +1166,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-escape.error.a-let-bound-to-a-record-a-var-holder-hands-back-is-refused-though-another-container-is-written -->
-`first` hands back an element of the holder's container, and `holder` is a `var`, so the record is one something may still write, and the `let` is refused whichever container is written later.
+<!-- test: let-escape.a-let-bound-to-a-record-a-var-holder-hands-back-is-accepted-though-another-container-is-written -->
+`first` hands back an element of the holder's container, and the `let` bound to it is accepted, whichever container is written later.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1168,12 +1213,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:39:6: cannot bind `let` 'layout' to a value reached through 'holder', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-bound-to-a-record-a-var-holder-hands-back-is-refused-though-another-set-of-its-type-is-written -->
-The same with a second `Set` of the very same type beside the records: the `let` of what `first` hands back from a `var` holder is refused.
+<!-- test: let-escape.a-let-bound-to-a-record-a-var-holder-hands-back-is-accepted-though-another-set-of-its-type-is-written -->
+The same with a second `Set` of the very same type beside the records: the `let` of what `first` hands back from a `var` holder is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1219,12 +1267,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:39:6: cannot bind `let` 'layout' to a value reached through 'holder', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-pushed-into-a-module-holder-and-read-again-is-refused -->
-The `let` record is pushed into a module variable's container and read afterwards, so the push is refused, whichever field of the module variable is written later.
+<!-- test: let-escape.a-let-pushed-into-a-module-holder-and-read-again-is-accepted -->
+The `let` record is pushed into a container of the holder and read afterwards: the push is accepted, whichever field of the holder is written later.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1262,8 +1313,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:31:15: cannot store `let` 'layout' into mutable place 'an element of the container push writes'; use clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
 <!-- test: let-escape.a-getter-that-hands-back-a-clone-of-what-the-factory-minted-is-accepted -->
@@ -1349,8 +1403,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-escape.error.a-let-bound-to-a-field-a-getter-hands-back-from-a-var-holder-is-refused -->
-`grab` hands back the holder's own field, and `holder` is a `var`, so the `let` is refused whichever field `grow` writes.
+<!-- test: let-escape.a-let-bound-to-a-field-a-getter-hands-back-from-a-var-holder-is-accepted -->
+`grab` hands back the holder's own field, and the `let` bound to it is accepted, whichever field `grow` writes.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1381,12 +1435,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:24:6: cannot bind `let` 'names' to a value reached through 'holder', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-kept-by-a-holders-method-and-read-again-is-refused -->
-`Holder.add` keeps its parameter in the holder's container and `layout` is read afterwards, so the call is refused, whatever `touch` writes.
+<!-- test: let-escape.a-let-kept-by-a-holders-method-and-read-again-is-accepted -->
+`Holder.add` keeps its parameter in the holder's container and `layout` is read afterwards: the call is accepted, whatever `touch` writes.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1428,8 +1485,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:35:9: cannot pass 'layout', which is read-only (a `let` binding), to parameter 'layout' of 'Holder.add', which keeps it where something may write it; pass a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
 <!-- test: let-escape.a-let-handed-to-a-factory-that-stores-a-clone-is-accepted -->
@@ -1474,8 +1534,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-escape.error.a-let-kept-two-factories-down-and-read-again-is-refused -->
-`Holder.create` hands `layout` to `Inner.create`, which keeps it in a `var` field, so `Holder.create` keeps it too, and `layout` is read afterwards: the call is refused, whichever record `touch` writes.
+<!-- test: let-escape.a-let-kept-two-factories-down-and-read-again-is-accepted -->
+`Holder.create` hands `layout` to `Inner.create`, which keeps it in a `var` field, and `layout` is read afterwards: the call is accepted, whichever record `touch` writes.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1519,12 +1579,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:37:22: cannot pass 'layout', which is read-only (a `let` binding), to parameter 'layout' of 'Holder.create', which keeps it where something may write it; pass a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-kept-after-the-write-into-a-holder-an-earlier-call-escaped-is-refused -->
-`attach` keeps its `args` in an edge it pushes into the block, and `carried` is read afterwards, so the call is refused, before or after any write.
+<!-- test: let-escape.a-let-kept-after-the-write-into-a-holder-an-earlier-call-escaped-is-accepted -->
+`attach` keeps its `args` in an edge it pushes into the block, and `carried` is read afterwards: the call is accepted, before or after any write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1607,55 +1670,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:70:2: cannot pass 'carried', which is read-only (a `let` binding), to parameter 'args' of 'attach', which keeps it where something may write it; pass a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-var-bound-to-a-record-read-out-of-a-let-holder-is-refused -->
-`holder` is a `let`, so it is read-only all the way down: `holder.grow()` writes through it, and binding the record `holder.grab()` hands back to a `var` would give that record a second writer. Both are refused.
-
-```maxon
-typealias Count = int(0 to 1000)
-
-type Box
-	export var n as Count
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-end 'Box'
-
-type Holder
-	var box as Box
-
-	static function create() returns Holder
-		return Holder{box: Box.create()}
-	end 'create'
-
-	function grab() returns Box
-		return self.box
-	end 'grab'
-
-	function grow()
-		self.box.n = 5
-	end 'grow'
-end 'Holder'
-
-function main() returns ExitCode
-	let holder = Holder.create()
-	var box = holder.grab()
-	holder.grow()
-	print("{box.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:30:6: cannot assign the result of 'grab', which may share storage with immutable variable 'holder', to mutable binding 'box'; use 'let' instead of 'var', or use clone()
-error E3159: <fragment>:31:9: cannot pass 'holder', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
-```
-
-<!-- test: let-escape.error.a-let-minted-in-the-loop-kept-by-a-callee-and-read-again-is-refused -->
-`register` keeps its parameter in a module container and `r` is read after the call, so it is refused on every trip.
+<!-- test: let-escape.a-let-minted-in-the-loop-kept-by-a-callee-and-read-again-is-accepted -->
+`register` keeps its parameter in a container and `r` is read after the call: the call is accepted on every trip.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1693,12 +1716,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:29:3: cannot pass 'r', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+```stdout
+2
+2
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-callee-writing-a-let-through-its-holders-own-method-is-refused -->
-`stash` keeps `a` in the container and `a` is read afterwards, and `bumpIt` writes the `let` it is handed through a method called on it. Both calls are refused.
+<!-- test: let-escape.a-callee-writing-a-let-through-its-holders-own-method-is-accepted -->
+`stash` keeps `a` in the container and `a` is read afterwards, and `bumpIt` writes the `let` it is handed through a method called on it: both calls are accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1745,13 +1772,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:40:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
-error E3159: <fragment>:41:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+```stdout
+3
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-stored-into-a-var-field-and-returned-is-refused-though-only-another-map-is-written -->
-`sigsOf` stores `made` into `world.memo` and then returns it, so the store is not its last use and is refused, whatever `fill` writes.
+<!-- test: let-escape.a-let-stored-into-a-var-field-and-returned-is-accepted-though-only-another-map-is-written -->
+`sigsOf` stores `made` into `world.memo` and then returns it: the store is accepted, whatever `fill` writes.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1808,12 +1837,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:40:13: cannot store `let` 'made' into mutable place 'Memo.sigs'; use clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-stored-into-a-var-field-and-returned-is-refused-though-only-a-long-chain-is-written -->
-The same store of `made` before it is returned, with the written set five records down a chain: the store is refused.
+<!-- test: let-escape.a-let-stored-into-a-var-field-and-returned-is-accepted-though-only-a-long-chain-is-written -->
+The same store of `made` before it is returned, with the written set five records down a chain: the store is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1902,12 +1934,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:72:13: cannot store `let` 'made' into mutable place 'Memo.sigs'; use clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-bound-to-a-record-the-callee-also-stored-in-the-world-is-refused-though-it-holds-copies -->
-`sigsOf` stores the `var` it returns into `world.memo`, so the record it hands back is one something may still write, and the `let` of it is refused, whatever the record holds.
+<!-- test: let-escape.a-let-bound-to-a-record-the-callee-also-stored-in-the-world-is-accepted-though-it-holds-copies -->
+`sigsOf` stores the `var` it returns into `world.memo`, and the `let` that binds the record it hands back is accepted, whatever the record holds.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1999,12 +2034,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:85:6: cannot bind `let` 'sigs' to a value reached through 'world', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-call-writing-two-lets-passed-directly-refuses-both -->
-`bump` writes the records of both of its parameters, and the call passes two `let` records, so both are named.
+<!-- test: let-escape.a-call-writing-two-lets-passed-directly-writes-both -->
+`bump` writes the records of both of its parameters, and the call passes two `let` records: both are written.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2030,9 +2068,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:20:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'a' (in main); pass a clone()
-error E3159: <fragment>:20:2: cannot pass 'b', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+```stdout
+1 2
+```
+```exitcode
+0
 ```
 
 <!-- test: let-escape.a-let-held-by-a-local-holder-that-holds-copies-of-the-worlds-layouts-is-accepted -->
@@ -2131,8 +2171,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-escape.error.a-record-stored-in-a-global-container-is-written-through-the-global -->
-`register` keeps its parameter in a module container, and `a` is read after the call, so handing `a` to it is refused.
+<!-- test: let-escape.a-record-stored-in-a-global-container-is-written-through-the-global -->
+`register` keeps its parameter in a container and `a` is read after the call: the call is accepted, and `a` reads the write made through the container.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2192,12 +2232,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:53:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+```stdout
+99
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-record-stored-into-a-parameters-container-is-written-through-the-parameter -->
-`stash` keeps its parameter in a container its first parameter holds, and `a` is read afterwards, so the call is refused.
+<!-- test: let-escape.a-record-stored-into-a-parameters-container-is-written-through-the-parameter -->
+`stash` keeps its parameter in a container its first parameter holds, and `a` is read afterwards: the call is accepted, and `a` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2257,12 +2300,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:53:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-record-stored-two-fields-down-is-written-through-the-holder -->
-`stash` keeps its parameter two fields below its first parameter, and `a` is read afterwards, so the call is refused.
+<!-- test: let-escape.a-record-stored-two-fields-down-is-written-through-the-holder -->
+`stash` keeps its parameter two fields below its first parameter, and `a` is read afterwards: the call is accepted, and `a` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2322,12 +2368,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:53:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-record-stored-three-fields-down-through-a-loaded-record-is-written -->
-`stash` keeps its parameter in a container reached through a record it loads from its first parameter, and `a` is read afterwards, so the call is refused.
+<!-- test: let-escape.a-record-stored-three-fields-down-through-a-loaded-record-is-written -->
+`stash` keeps its parameter in a container reached through a record it loads from its first parameter, and `a` is read afterwards: the call is accepted, and `a` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2388,12 +2437,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:54:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-record-stored-by-a-callee-into-a-field-container-is-written -->
-`stash` hands its parameter to `put`, which keeps it in a container, so `stash` keeps it too, and `a` is read afterwards: the call is refused.
+<!-- test: let-escape.a-record-stored-by-a-callee-into-a-field-container-is-written -->
+`stash` hands its parameter to `put`, which keeps it in a container, so `stash` keeps it too, and `a` is read afterwards: the call is accepted, and `a` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2457,8 +2509,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:57:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
 <!-- test: let-escape.error.a-record-stored-by-a-callback-is-written -->
@@ -2614,8 +2669,8 @@ end 'main'
 error E3210: <fragment>:52:11: 'ListSink.take' writes its receiver, but 'Sink.take' does not declare `mutable self`
 ```
 
-<!-- test: let-escape.error.a-record-stored-in-a-sibling-record-is-written-by-the-siblings-method -->
-`attach` keeps its parameter in the cursor's `var` field, and `a` is read afterwards, so the call is refused.
+<!-- test: let-escape.a-record-stored-in-a-sibling-record-is-written-by-the-siblings-method -->
+`attach` keeps its parameter in the cursor's `var` field and `a` is read afterwards: the call is accepted, and the cursor's `wipe` writes the record `a` names.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2683,12 +2738,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:61:4: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'Cursor.attach', which keeps it where something may write it; pass a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-record-the-callee-creates-and-stores-is-written-through-its-holder -->
-`add` pushes `made` and then returns it, so the push is not its last use and is refused; what `add` returns is its `let`, which is read-only, so `b` may bind it.
+<!-- test: let-escape.a-record-the-callee-creates-and-stores-is-written-through-its-holder -->
+`add` pushes `made` and then returns it: the `let` that binds the result names the record the container holds, and `touch` writes it.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2729,12 +2787,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:22:9: cannot store `let` 'made' into mutable place 'an element of the container push writes'; use clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.a-var-binding-of-the-record-the-callee-created-may-be-written-through-its-holder -->
-The same program with `var` bindings compiles: the record is written through another route, so the bindings are writable, and neither `var` is reported as one that could be a `let`.
+<!-- test: let-escape.a-var-the-callee-pushed-and-returned-is-written-through-its-holder -->
+`add` pushes its `var` `made` and returns it, and `touch` writes the pushed element: the record the caller binds with a `let` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2769,7 +2830,7 @@ end 'touch'
 
 function main() returns ExitCode
 	var reg = Reg.create()
-	var b = reg.add(7)
+	let b = reg.add(7)
 	touch(reg)
 	print("{b.n}\n")
 	return 0
@@ -2782,8 +2843,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-escape.error.a-record-the-callee-creates-and-makes-current-is-written-through-the-cursor -->
-`open` stores `made` in the cursor's `current` field and then returns it, so the store is refused; what `open` returns is its `let`, which is read-only, so `b` may bind it.
+<!-- test: let-escape.a-record-the-callee-creates-and-makes-current-is-written-through-the-cursor -->
+`open` stores `made` in the cursor's `current` field and then returns it: the `let` that binds the result names the record the cursor holds, and `touch` writes it.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2822,12 +2883,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:21:3: cannot store `let` 'made' into mutable place 'Cursor.current'; use clone()
+```stdout
+6
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-stored-in-a-local-map-is-written-through-the-map -->
-A value handed to `upsert` is stored in a mutable place, and `a` is read afterwards, so the store is refused.
+<!-- test: let-escape.a-let-stored-in-a-local-map-is-written-through-the-map -->
+A value handed to `upsert` is stored in a mutable place, and `a` is read afterwards: the store is accepted, and `a` reads the write made through the map.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2851,12 +2915,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:16:4: cannot store `let` 'a' into mutable place 'an element of the container upsert writes'; use clone()
+```stdout
+9
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-stored-in-an-array-inside-an-array-is-written-through-the-holder -->
-`fill` keeps its parameter in an array it pushes into the holder's array of arrays, and `a` is read afterwards, so the call is refused.
+<!-- test: let-escape.a-let-stored-in-an-array-inside-an-array-is-written-through-the-holder -->
+`fill` keeps its parameter in an array it pushes into the holder's array of arrays, and `a` is read afterwards: the call is accepted, and `a` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2892,12 +2959,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:29:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'fill', which keeps it where something may write it; pass a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-stored-in-an-array-inside-a-map-is-written-through-the-holder -->
-`fill` keeps its parameter in an array it stores as a value of the holder's map, and `a` is read afterwards, so the call is refused.
+<!-- test: let-escape.a-let-stored-in-an-array-inside-a-map-is-written-through-the-holder -->
+`fill` keeps its parameter in an array it stores as a value of the holder's map, and `a` is read afterwards: the call is accepted, and `a` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2941,12 +3011,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:37:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'fill', which keeps it where something may write it; pass a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-stored-three-containers-down-is-written-through-the-holder -->
-`place` keeps its parameter three containers below the holder, and `a` is read afterwards, so the call is refused.
+<!-- test: let-escape.a-let-stored-three-containers-down-is-written-through-the-holder -->
+`place` keeps its parameter three containers below the holder, and `a` is read afterwards: the call is accepted, and `a` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2994,12 +3067,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:41:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'place', which keeps it where something may write it; pass a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-record-stored-in-a-function-typed-field-record-is-written-deep-by-a-callee -->
-`stash` keeps its parameter in a `var` field of the holder, and `s` is read afterwards, so the call is refused; a function-typed field beside it changes nothing.
+<!-- test: let-escape.a-record-stored-in-a-function-typed-field-record-is-written-deep-by-a-callee -->
+`stash` keeps its parameter in a `var` field of the holder, and `s` is read afterwards: the call is accepted, a function-typed field beside it changes nothing, and `s` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3059,12 +3135,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:53:2: cannot pass 's', which is read-only (a `let` binding), to parameter 's' of 'stash', which keeps it where something may write it; pass a clone()
+```stdout
+2
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-captured-let-stored-in-a-container-is-written-after-the-closure-outlives-the-function -->
-`install` pushes `b` into the holder's container and then captures it in a closure, so the push is not its last use and is refused.
+<!-- test: let-escape.a-captured-let-stored-in-a-container-is-written-after-the-closure-outlives-the-function -->
+`install` pushes `b` into the holder's container and then captures it in a closure: both are accepted, and the closure reads the write `main` makes through the container.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3104,12 +3183,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:25:12: cannot store `let` 'b' into mutable place 'an element of the container push writes'; use clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-record-stashed-two-fields-down-is-written-by-a-callee-handed-the-middle-record -->
-`stash` keeps its parameter two fields below its first parameter, and `a` is read afterwards, so the call is refused, whichever callee writes later.
+<!-- test: let-escape.a-record-stashed-two-fields-down-is-written-by-a-callee-handed-the-middle-record -->
+`stash` keeps its parameter two fields below its first parameter, and `a` is read afterwards: the call is accepted, whichever callee writes later.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3157,8 +3239,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:41:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
 <!-- test: let-escape.a-string-let-stored-in-a-field-is-a-value-the-append-does-not-reach -->
@@ -3200,7 +3285,7 @@ a7
 ```
 
 <!-- test: let-escape.error.a-module-lets-record-a-call-hands-back-cannot-be-stored-where-it-is-written -->
-`pick` returns a module `let`, which is image data, so storing the call's result into a `var` field is refused and asks for `clone()`.
+`pick` returns a module `let`, which is `immutable`, so its result is declared `immutable`; storing the call's result into a `var` field is refused and asks for a `clone()`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3223,7 +3308,7 @@ end 'Holder'
 
 let shared = Box.create(7)
 
-function pick() returns Box
+function pick() returns immutable Box
 	return shared
 end 'pick'
 
@@ -3244,11 +3329,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:27:4: cannot store the result of 'pick', which may share storage with a module-level `let`, into mutable place 'Holder.box'; use clone()
+error E3196: <fragment>:27:10: cannot store an immutable 'Box' into 'box', which holds a mutable 'Box'; declare the field `immutable Box`
 ```
 
-<!-- test: let-escape.error.a-callee-two-calls-down-writes-the-module-holder -->
-The `let` record is pushed into a module variable's container and read afterwards, so the push is refused, however deep the later write is.
+<!-- test: let-escape.a-callee-two-calls-down-writes-the-module-holder -->
+The `let` record is pushed into a container and read afterwards, and the write comes two calls down: the push is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3288,12 +3373,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:33:15: cannot store `let` 'b' into mutable place 'an element of the container push writes'; use clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-record-handed-through-a-function-typed-by-an-alias-of-its-instance -->
-`keep` hands back the `let` it is given, so `k` is another name for `b`'s record, and pushing it is refused while `b` is read afterwards; the alias spelling changes nothing.
+<!-- test: let-escape.a-record-handed-through-a-function-typed-by-an-alias-of-its-instance -->
+`keep` hands back the `let` it is given, so `k` is another name for `b`'s record; pushing it is accepted, and the alias spelling changes nothing.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3337,12 +3425,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:37:9: cannot store `let` 'k' into mutable place 'an element of the container push writes'; use clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-record-cast-to-an-alias-of-its-instance -->
-`k` is `b` cast to an alias of its instance, another name for the same record, so pushing it is refused while `b` is read afterwards.
+<!-- test: let-escape.a-record-cast-to-an-alias-of-its-instance -->
+`k` is `b` cast to an alias of its instance, another name for the same record; pushing it is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3382,12 +3473,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:33:9: cannot store `let` 'k' into mutable place 'an element of the container push writes'; use clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-write-to-the-set-a-let-record-holds-through-its-holder -->
-`first` hands back an element of a container the `var` holder keeps, so the `let` of it is refused.
+<!-- test: let-escape.a-write-to-the-set-a-let-record-holds-through-its-holder -->
+`first` hands back an element of a container the `var` holder keeps, the `let` of it is accepted, and `grow` writes the set that record holds.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3438,12 +3532,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:44:6: cannot bind `let` 'layout' to a value reached through 'holder', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-write-to-the-set-a-let-record-holds-through-a-nested-holder -->
-`first` hands back an element of a container the `var` holder keeps, so the `let` of it is refused.
+<!-- test: let-escape.a-write-to-the-set-a-let-record-holds-through-a-nested-holder -->
+The same through a holder that reaches the inner holder: the `let` of what `first` hands back is accepted, and `grow` writes the set that record holds.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3514,12 +3611,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:64:6: cannot bind `let` 'layout' to a value reached through 'holder', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-write-to-the-set-of-its-type-a-let-record-holds-through-its-holder -->
-`first` hands back an element of a container the `var` holder keeps, so the `let` of it is refused.
+<!-- test: let-escape.a-write-to-the-set-of-its-type-a-let-record-holds-through-its-holder -->
+`first` hands back an element of a container the `var` holder keeps, with a second `Set` of the same type beside it: the `let` of the element is accepted, and `grow` writes the set that record holds.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3566,12 +3666,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:40:6: cannot bind `let` 'layout' to a value reached through 'holder', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-record-stored-in-a-module-holder-is-written-through-the-module-holder-beside-a-set-of-its-type -->
-The `let` record is pushed into a module variable's container and read afterwards, so the push is refused.
+<!-- test: let-escape.a-record-stored-in-a-module-holder-is-written-through-the-module-holder-beside-a-set-of-its-type -->
+The `let` record is pushed into a container of the holder and read afterwards: the push is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3610,12 +3713,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:32:15: cannot store `let` 'layout' into mutable place 'an element of the container push writes'; use clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-record-a-factory-minted-into-its-holder-is-written-through-the-holder-after-a-getter-hands-it-back -->
-The getter hands back the field the `var` holder keeps, so the `let` of it is refused.
+<!-- test: let-escape.a-record-a-factory-minted-into-its-holder-is-written-through-the-holder-after-a-getter-hands-it-back -->
+The getter hands back the field the `var` holder keeps, the `let` of it is accepted, and `grow` writes it.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3652,12 +3758,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:30:6: cannot bind `let` 'box' to a value reached through 'holder', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.an-array-a-factory-minted-into-its-holder-is-written-through-the-holder-after-a-getter-hands-it-back -->
-The getter hands back the field the `var` holder keeps, so the `let` of it is refused.
+<!-- test: let-escape.an-array-a-factory-minted-into-its-holder-is-written-through-the-holder-after-a-getter-hands-it-back -->
+The getter hands back the array the `var` holder keeps, the `let` of it is accepted, and `grow` writes it.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3687,12 +3796,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:23:6: cannot bind `let` 'names' to a value reached through 'holder', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-set-a-factory-minted-into-its-holder-is-written-through-the-holder-after-a-getter-hands-it-back -->
-The getter hands back the field the `var` holder keeps, so the `let` of it is refused.
+<!-- test: let-escape.a-set-a-factory-minted-into-its-holder-is-written-through-the-holder-after-a-getter-hands-it-back -->
+The getter hands back the set the `var` holder keeps, the `let` of it is accepted, and `grow` writes it.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3724,12 +3836,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:25:6: cannot bind `let` 'names' to a value reached through 'holder', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-field-record-shared-with-another-holders-field-is-written-through-that-holder -->
-`share` keeps the set its `source` holds in another record's field, and `Holder.add` keeps its parameter in the holder's container; `layout` is read after both calls, so both are refused.
+<!-- test: let-escape.a-field-record-shared-with-another-holders-field-is-written-through-that-holder -->
+`share` keeps the set its `source` holds in another record's field, and `Holder.add` keeps its parameter in the holder's container; `layout` is read after both calls, and both calls are accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3776,13 +3891,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:38:2: cannot pass 'layout', which is read-only (a `let` binding), to parameter 'source' of 'share', which keeps it where something may write it; pass a clone()
-error E3078: <fragment>:40:9: cannot pass 'layout', which is read-only (a `let` binding), to parameter 'layout' of 'Holder.add', which keeps it where something may write it; pass a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-handed-to-a-factory-that-stores-it-is-written-through-the-holder -->
-`Holder.create` keeps its argument in a `var` field of the record it returns, and `layout` is read afterwards, so the call is refused.
+<!-- test: let-escape.a-let-handed-to-a-factory-that-stores-it-is-written-through-the-holder -->
+`Holder.create` keeps its argument in a `var` field of the record it returns, and `layout` is read afterwards: the call is accepted, and `touch` writes the record `layout` names.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3816,12 +3933,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:27:22: cannot pass 'layout', which is read-only (a `let` binding), to parameter 'first' of 'Holder.create', which keeps it where something may write it; pass a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-stored-two-factories-down-is-written-through-the-outer-holder -->
-`Holder.create` hands `layout` to `Inner.create`, which keeps it in a `var` field, so `Holder.create` keeps it too, and `layout` is read afterwards: the call is refused.
+<!-- test: let-escape.a-let-stored-two-factories-down-is-written-through-the-outer-holder -->
+`Holder.create` hands `layout` to `Inner.create`, which keeps it in a `var` field, and `layout` is read afterwards: the call is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3863,12 +3983,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:35:22: cannot pass 'layout', which is read-only (a `let` binding), to parameter 'layout' of 'Holder.create', which keeps it where something may write it; pass a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-and-another-record-sharing-a-set-are-both-held-by-a-factory-and-written-through-the-holder -->
-`share` keeps the set its `source` holds in another record's field, and `Holder.create` keeps both its arguments in `var` fields; `layout` is read after both calls, so both are refused.
+<!-- test: let-escape.a-let-and-another-record-sharing-a-set-are-both-held-by-a-factory-and-written-through-the-holder -->
+`share` keeps the set its `source` holds in another record's field, and `Holder.create` keeps both its arguments in `var` fields; `layout` is read after both calls, and both calls are accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3909,13 +4032,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:33:2: cannot pass 'layout', which is read-only (a `let` binding), to parameter 'source' of 'share', which keeps it where something may write it; pass a clone()
-error E3078: <fragment>:34:22: cannot pass 'layout', which is read-only (a `let` binding), to parameter 'first' of 'Holder.create', which keeps it where something may write it; pass a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-record-stored-before-the-write-into-a-holder-an-earlier-call-escaped-is-written -->
-`attach` keeps its `args` in an edge it pushes into the block, and `carried` is read afterwards, so the call is refused.
+<!-- test: let-escape.a-record-stored-before-the-write-into-a-holder-an-earlier-call-escaped-is-written -->
+`attach` keeps its `args` in an edge it pushes into the block, and `carried` is read afterwards: the call is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3998,12 +4123,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:69:2: cannot pass 'carried', which is read-only (a `let` binding), to parameter 'args' of 'attach', which keeps it where something may write it; pass a clone()
+```stdout
+0
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-bound-to-a-record-read-out-of-a-holder-is-written-by-another-name -->
-`holder` is a `let`, so what `grab` hands back is read-only and `box` may bind it; `holder.grow()` writes through `holder`, and that is refused.
+<!-- test: let-escape.a-let-bound-to-a-record-read-out-of-a-holder-is-written-by-another-name -->
+`holder` is a `let`, and `holder.grow()` writes through it: `box`, bound to the record `holder.grab()` hands back, reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4040,12 +4168,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:31:9: cannot pass 'holder', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.one-call-writing-the-records-of-two-live-lets-refuses-both -->
-`register` keeps its parameter in a module container, and `a` and `b` are both read afterwards, so both calls are refused, each naming its own binding.
+<!-- test: let-escape.one-call-writing-the-records-of-two-live-lets-writes-both -->
+`register` keeps its parameter in a container, and `a` and `b` are both read afterwards: both calls are accepted, and `clobberAll` writes both records.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4081,13 +4212,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:28:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
-error E3078: <fragment>:29:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+```stdout
+99 99
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-lent-a-record-minted-before-the-loop-is-written-on-a-later-trip-through-storage-an-earlier-trip-filled -->
-`same` hands back the record `outer` names, and `outer` is a `var`, so `r` would name a record something may still write, and the `let` is refused.
+<!-- test: let-escape.a-let-lent-a-record-minted-before-the-loop-is-written-on-a-later-trip-through-storage-an-earlier-trip-filled -->
+`same` hands back the record `outer` names, `r` binds it with a `let`, and a later trip writes the record an earlier trip stored: the program is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4130,12 +4263,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:32:7: cannot bind `let` 'r' to a value reached through 'outer', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+2
+99
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-callee-handed-the-let-and-its-holder-writes-the-let-through-the-holder -->
-`stash` keeps `a` in the container and `a` is read afterwards, and `touchBoth` writes the `let` it is handed through a method called on it. Both calls are refused.
+<!-- test: let-escape.a-callee-handed-the-let-and-its-holder-writes-the-let-through-the-holder -->
+`stash` keeps `a` in the container and `a` is read afterwards, and `touchBoth` writes the `let` it is handed through the container and through a method called on it: both calls are accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4180,13 +4317,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:38:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
-error E3159: <fragment>:39:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+```stdout
+6
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-write-through-a-slot-the-let-record-also-holds-is-refused -->
-`Sigs.create` keeps the map `world.cache` holds, so its result is not fresh and `made` is refused.
+<!-- test: let-escape.a-write-through-a-slot-the-let-record-also-holds-is-accepted -->
+`Sigs.create` keeps the map `world.cache` holds, `made` binds the result with a `let`, and `fill` writes the map through the cache: the program is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4243,12 +4382,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:39:6: cannot bind `let` 'made' to a value reached through 'world', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-write-to-a-record-another-holder-shares-with-the-let-is-refused -->
-`sigsOf` builds a record around layouts something may still write and stores it into `world`, so the record it hands back is one something may still write, and the `let` of it is refused.
+<!-- test: let-escape.a-write-to-a-record-another-holder-shares-with-the-let-is-accepted -->
+`sigsOf` builds a record around layouts something else may write and stores it into `world`: the `let` that binds the record it hands back is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4340,12 +4482,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:85:6: cannot bind `let` 'sigs' to a value reached through 'world', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-write-to-a-record-a-callee-built-into-the-let-from-its-argument-is-refused -->
-`sigsOf` builds a record around layouts something may still write and stores it into `world`, so the record it hands back is one something may still write, and the `let` of it is refused.
+<!-- test: let-escape.a-write-to-a-record-a-callee-built-into-the-let-from-its-argument-is-accepted -->
+`sigsOf` builds a record around layouts something else may write and stores it into `world`: the `let` that binds the record it hands back is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4435,12 +4580,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:83:6: cannot bind `let` 'sigs' to a value reached through 'world', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-write-through-a-path-longer-than-the-recorded-hops-reaches-a-record-the-let-holds -->
-`sigsOf` builds a record around layouts something may still write and stores it into `world`, so the record it hands back is one something may still write, and the `let` of it is refused.
+<!-- test: let-escape.a-write-through-a-path-longer-than-the-recorded-hops-reaches-a-record-the-let-holds -->
+`sigsOf` builds a record around layouts reached through a long path and stores it into `world`: the `let` that binds the record it hands back is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4578,12 +4726,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:131:6: cannot bind `let` 'sigs' to a value reached through 'world', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-write-through-a-global-reaches-a-record-the-let-holds-though-the-let-is-stored-in-a-local -->
-`sigsOf` builds a record around layouts something may still write and stores it into `memo`, so the record it hands back is one something may still write, and the `let` of it is refused.
+<!-- test: let-escape.a-write-through-a-global-reaches-a-record-the-let-holds-though-the-let-is-stored-in-a-local -->
+`sigsOf` builds a record around layouts something else may write and stores it into `memo`: the `let` that binds the record it hands back is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4656,12 +4807,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:66:6: cannot bind `let` 'sigs' to a value reached through 'memo', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-field-assigned-a-global-record-in-the-let-is-written-through-the-global-is-refused -->
-`sigsOf` builds a record around layouts something may still write and stores it into `memo`, so the record it hands back is one something may still write, and the `let` of it is refused.
+<!-- test: let-escape.a-field-assigned-a-global-record-in-the-let-is-written-through-the-global-is-accepted -->
+`sigsOf` assigns a layout into a field of a record it builds and stores that record into `memo`: the `let` that binds the record it hands back is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4736,12 +4890,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:68:6: cannot bind `let` 'sigs' to a value reached through 'memo', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-held-by-a-local-holder-that-a-local-world-also-holds-is-written-through-the-world-after-both-are-stored -->
-`made` is a `let`, so pushing into its declarations writes through it, and storing it into the world while it is read afterwards is refused too.
+<!-- test: let-escape.a-let-held-by-a-local-holder-that-a-local-world-also-holds-is-written-through-the-world-after-both-are-stored -->
+`made` is a `let`: pushing into its declarations writes through it, and storing it into the world while it is read afterwards is accepted too.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4826,13 +4983,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:75:14: cannot write through 'made.decls': 'made' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
-error E3078: <fragment>:78:13: cannot store `let` 'made' into mutable place 'Memo.sigs'; use clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.an-interface-typed-let-is-written-through-a-record-it-holds -->
-`Holder.create` keeps the layout `world` holds, so its result is not fresh and `made` is refused.
+<!-- test: let-escape.an-interface-typed-let-is-written-through-a-record-it-holds -->
+`Holder.create` keeps the layout `world` holds, and `made` binds the result with a `let` at an interface type: the program is accepted, and `sized` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4904,12 +5063,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:54:6: cannot bind `let` 'made' to a value reached through 'world', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+8
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-named-let-holding-a-record-read-from-a-world-is-written-through-the-world -->
-`Holder.create` keeps the layout `world` holds, so its result is not fresh and `made` is refused.
+<!-- test: let-escape.a-named-let-holding-a-record-read-from-a-world-is-written-through-the-world -->
+`Holder.create` keeps the layout `world` holds, and `made` binds the result with a `let`: the program is accepted, and `sized` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4981,12 +5143,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:54:6: cannot bind `let` 'made' to a value reached through 'world', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+8
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.an-interface-typed-let-is-written-through-a-deep-path-to-a-record-it-holds -->
-`sigsOf` builds a record around layouts something may still write and stores it into `world`, so the record it hands back is one something may still write, and the `let` of it is refused.
+<!-- test: let-escape.an-interface-typed-let-is-written-through-a-deep-path-to-a-record-it-holds -->
+`sigsOf` builds a record around layouts something else may write and stores it into `world` at an interface type: the `let` that binds it is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -5084,12 +5249,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:91:6: cannot bind `let` 'sigs' to a value reached through 'world', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-record-handed-to-a-generic-method-is-written-through-the-world-in-the-same-call -->
-`world` is a `var`, so its layout is a record something may still write, and the `let` of it is refused.
+<!-- test: let-escape.a-record-handed-to-a-generic-method-is-written-through-the-world-in-the-same-call -->
+`keep` stores its argument in the keeper's container and writes the world in the same call: the program is accepted, and `layout` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -5152,8 +5320,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:56:6: cannot bind `let` 'layout' to a value reached through 'world', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+8
+```
+```exitcode
+0
 ```
 
 <!-- test: let-escape.a-let-bound-to-an-element-moved-out-of-a-field-of-a-generic-type-is-accepted-for-an-integer -->
@@ -5364,8 +5535,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-escape.error.a-let-bound-to-a-borrowed-element-of-a-field-of-a-generic-type-is-refused -->
-`last` borrows the element and leaves it in `self.items`, and `push` can still write that storage while the `let` is read, so the `let` is refused where a moved-out element is accepted.
+<!-- test: let-escape.a-let-bound-to-a-borrowed-element-of-a-field-of-a-generic-type-is-accepted -->
+`last` borrows the element and leaves it in `self.items`, and `push` writes that storage while the `let` is read: the `let` is accepted and names the borrowed element.
 
 ```maxon
 typealias ExitCode = int(0 to 125)
@@ -5400,12 +5571,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:18:7: cannot bind `let` 'v' to a value reached through 'self', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+7
+```
+```exitcode
+0
 ```
 
-<!-- test: let-escape.error.a-let-bound-to-a-borrowed-element-of-a-field-of-a-plain-type-is-refused -->
-The control with no type parameter: a record borrowed by `last` and read after a `push` is refused.
+<!-- test: let-escape.a-let-bound-to-a-borrowed-element-of-a-field-of-a-plain-type-is-accepted -->
+The control with no type parameter: a record borrowed by `last` and read after a `push` is accepted.
 
 ```maxon
 typealias ExitCode = int(0 to 125)
@@ -5447,6 +5621,9 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:27:7: cannot bind `let` 'v' to a value reached through 'self', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+7
+```
+```exitcode
+0
 ```

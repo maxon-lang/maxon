@@ -145,7 +145,7 @@ type Counter
 		return Self{}
 	end 'create'
 
-	export function count(path immutable FilePath) returns isolated Counts throws FileReadError
+	export function count(path FilePath) returns isolated Counts throws FileReadError
 		return try Counts.ofFile(path)
 	end 'count'
 end 'Counter'
@@ -191,7 +191,7 @@ function workersFor(files PathArray) returns WorkerCount
 end 'workersFor'
 
 function submitCount(replies CountPromiseArray, counter Counter.handle, path FilePath)
-	replies.push(try counter.count(freeze path.clone(), sendTimeout: ForeverMs) otherwise (e) 'refused'
+	replies.push(try counter.count(path, sendTimeout: ForeverMs) otherwise (e) 'refused'
 		match e 'why'
 			mailboxFull then panic("submitCount: runs on main's green thread, which no promise names and so nothing cancels, and a send given ForeverMs waits for room — mailboxFull cannot occur")
 			serviceStopped then panic("submitCount: a counter stopped before the files were sent")

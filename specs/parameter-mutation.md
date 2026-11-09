@@ -1,7 +1,7 @@
 ---
 feature: parameter-mutation
 status: experimental
-keywords: [mutation, parameter, let, immutable, call, E3159]
+keywords: [mutation, parameter, let, immutable, call, E2013, E3207]
 category: semantics
 ---
 
@@ -9,9 +9,12 @@ category: semantics
 
 ## Documentation
 
-A function that writes a parameter's data may not be handed a read-only (`let`) value. This is the
-CALL-SITE half of `E3159`; the receiver half — a receiver-writing method called directly on a `let`
-binding — is `immutable-method-call.md`.
+A function may write a parameter's data whichever binding the caller names: `let` forbids only reassigning the
+name, so a `let` local, a `let` alias of a parameter and a `let` field may all be handed to a parameter the
+callee writes, and the write is seen through every name of the record. A `let` bound to a compile-time constant
+is immutable image data instead, and handing it to a parameter the callee writes is `E3207`. A `let` passed to a
+`mutable` parameter, which reassigns the caller's binding, is `E2013`. The receiver-writing methods called
+directly on a `let` binding are in `immutable-method-call.md`.
 
 Whether a parameter is written is a property of the CALLEE, not of the call, so it is answered by a
 whole-program summary: for each function, which of its parameters does its body write? A parameter is
@@ -24,24 +27,15 @@ graph alike. It counts what is passed on BY VALUE, not by spelling: a value that
 own record — the result of a call that hands it back — writes the parameter when it reaches a written
 position, so `var x = pass(p)` followed by `x.append(…)` or `x.push(…)` writes `p`.
 
-A `var` binding, a parameter, and a temporary may all be passed to a mutating parameter: each denotes
-storage the program is allowed to write. Only a read-only value — a `let` local, a `let` alias of a
-parameter, or a top-level `let` — is refused, and only at the positions the callee actually writes. The
-refusal follows the RECORD, not only the name: a value that may be the `let`'s own record — a call result
-that hands it back — is refused at a written position too, blaming the `let`, while that `let` is read
-afterwards (`specs/var-should-be-let.md`).
+### A method writing its receiver
 
-### A method writing its receiver writes the `let`
-
-A `let` on a struct binding refuses a rebind (`acc = other`), a direct field write through it
-(`acc.total = 1`) and a receiver-writing method on it, whether the receiver is a container or a user
-type: `let acc = Accumulator.create(0)` followed by `acc.add(10)` is `E3159` whether `add` writes
-`self.total`, writes the bare `total`, or pushes onto a container held in a field. A `let` holder is read-only
-all the way down, so `h.inner.bump()` on a `let h` is `E3159` too.
+A receiver-writing method on a `let` binding, whether the receiver is a container or a user type, writes the
+record the `let` names: `let acc = Accumulator.create(0)` followed by `acc.add(10)` runs whether `add` writes
+`self.total`, writes the bare `total`, or pushes onto a container held in a field. Reassigning the binding
+(`acc = other`) is `E2013`.
 
 The rule is the same one frame down. A callee that does nothing but call a receiver-writing method on the
-parameter it was handed writes that parameter, so handing it a `let` is `E3159` at the call; the same call
-with a `var` is legal and runs.
+parameter it was handed writes that parameter.
 
 `self.total = self.total + value` and `total = total + value` are the same write in two spellings. The
 compiler has exactly one self-field store for both spellings, so it must give one answer
@@ -51,7 +45,7 @@ for both; it gives the one the corpus pins (`self-keyword.md`'s `self-with-param
 
 `let f = grow` followed by `f(a)` calls a function chosen at run time, so there is no single callee to summarise.
 The call is judged against every function whose type can flow into the value's type: if any of them writes the
-parameter, `f(a)` writes `a`. A `let` argument is then `E3159`, as for a direct call; a `var` runs.
+parameter, `f(a)` writes `a`.
 A function that forwards a parameter to such a value is summarised the same way, so `apply(xs, f)` whose body
 is `f(xs)` writes `xs` when any of those functions does. A position some candidate writes is passed as the
 argument's own storage whichever body the call reaches, so a candidate that writes it updates the caller's
@@ -59,8 +53,8 @@ variable exactly as a direct call does (`pass-by-reference.md` pins the runs).
 
 ## Tests
 
-<!-- test: let-array-to-mutating-param-error -->
-Passing a `let` array to a parameter the callee pushes onto is refused.
+<!-- test: let-array-to-mutating-param-ok -->
+A `let` array may be passed to a parameter the callee pushes onto: `let` forbids only reassigning the name, and the caller observes the push.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -76,8 +70,8 @@ function main() returns ExitCode
 	return try a.get(0) otherwise -1
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/let-array-to-mutating-param-error.maxon:11:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in main); pass a clone()
+```exitcode
+9
 ```
 
 <!-- test: var-array-to-mutating-param-ok -->
@@ -121,9 +115,9 @@ end 'main'
 0
 ```
 
-<!-- test: transitive-let-array-error -->
+<!-- test: transitive-let-array-ok -->
 The mutation is two calls away: `outer` writes nothing itself, but hands its parameter to `inner`, which
-does.
+pushes onto it, and the push reaches the caller's `let`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -143,13 +137,13 @@ function main() returns ExitCode
 	return try a.get(0) otherwise -1
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/transitive-let-array-error.maxon:15:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'd' (in main); pass a clone()
+```exitcode
+7
 ```
 
-<!-- test: let-to-field-writing-callee-error -->
-A `let` is immutable, and a callee writing a FIELD of its parameter writes the caller's record just as an
-assignment to the parameter itself would. The binding is what the rule is about, not the depth of the write.
+<!-- test: let-to-field-writing-callee-ok -->
+A callee writing a FIELD of its parameter writes the caller's record, and a `let` forbids only reassigning
+`a`, not writing the record it names.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -172,13 +166,13 @@ function main() returns ExitCode
 	return a.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/let-to-field-writing-callee-error.maxon:18:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+```exitcode
+99
 ```
 
-<!-- test: transitive-let-field-write-error -->
+<!-- test: transitive-let-field-write-ok -->
 The field write is two calls away: `relay` writes nothing itself and hands its parameter to `poke`, which
-writes a field of it. The whole-program fixpoint carries the bit back to the call the `let` is named at.
+writes a field of it, and the write reaches the record the `let` names.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -205,11 +199,11 @@ function main() returns ExitCode
 	return a.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/transitive-let-field-write-error.maxon:22:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+```exitcode
+99
 ```
 
-<!-- test: async-transitive-let-array-error -->
+<!-- test: async-transitive-let-array-ok -->
 The same mutation, one `async` further away: a spawn hands the coroutine a reference to what its caller was
 handed, so `outer` writes `d` whether the write runs before the await or after it.
 
@@ -233,11 +227,11 @@ function main() returns ExitCode
 	return outer(a) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/async-transitive-let-array-error.maxon:18:9: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'd' (in main); pass a clone()
+```exitcode
+1
 ```
 
-<!-- test: recursive-let-array-error -->
+<!-- test: recursive-let-array-ok -->
 A self-recursive callee: the summary must reach its fixpoint rather than chase the cycle.
 
 ```maxon
@@ -258,11 +252,11 @@ function main() returns ExitCode
 	return try a.get(0) otherwise -1
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/recursive-let-array-error.maxon:15:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'd' (in main); pass a clone()
+```exitcode
+5
 ```
 
-<!-- test: mutually-recursive-let-array-error -->
+<!-- test: mutually-recursive-let-array-ok -->
 `ping` and `pong` call each other; the write is inside `ping`'s base case.
 
 ```maxon
@@ -287,13 +281,12 @@ function main() returns ExitCode
 	return try a.get(0) otherwise -1
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/mutually-recursive-let-array-error.maxon:19:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'd' (in main); pass a clone()
+```exitcode
+4
 ```
 
 <!-- test: mutually-recursive-var-array-ok -->
-The same mutually recursive graph with a `var` argument compiles and runs — the fixpoint terminates on
-the accepting path too.
+The same mutually recursive graph with a `var` argument compiles and runs.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -321,8 +314,8 @@ end 'main'
 4
 ```
 
-<!-- test: labelled-arg-to-mutating-param-error -->
-The mutating parameter is filled by a LABELLED argument, so the check must read the slotted position and
+<!-- test: labelled-arg-to-mutating-param-ok -->
+The mutating parameter is filled by a LABELLED argument, so the call must read the slotted position and
 not the source order.
 
 ```maxon
@@ -339,8 +332,8 @@ function main() returns ExitCode
 	return a.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/labelled-arg-to-mutating-param-error.maxon:11:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in main); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: let-arg-at-unmutated-position-ok -->
@@ -366,8 +359,8 @@ end 'main'
 1
 ```
 
-<!-- test: let-arg-at-mutated-position-error -->
-The same two parameters with the roles swapped: now the `let` lands on the written one.
+<!-- test: let-arg-at-mutated-position-ok -->
+The same two parameters with the roles swapped: now the `let` lands on the written one, and `b` is read.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -384,8 +377,8 @@ function main() returns ExitCode
 	return b.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/let-arg-at-mutated-position-error.maxon:12:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in main); pass a clone()
+```exitcode
+0
 ```
 
 <!-- test: temporary-arg-to-mutating-param-ok -->
@@ -409,8 +402,8 @@ end 'main'
 ```
 
 <!-- test: let-string-to-appending-param-error -->
-A `let` String is the ONE immortal `.rdata` record every read of that literal shares, so appending
-through it writes read-only memory. Refusing the call is what makes that unreachable.
+A `let` cannot be passed to a `mutable` parameter, which would write the caller's binding; bind the value to
+a `var`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -426,7 +419,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/parameter-mutation/let-string-to-appending-param-error.maxon:11:9: cannot pass 't', which is read-only (a `let` binding), to a function that writes parameter 's' (in main); pass a clone()
+error E2013: specs/parameter-mutation/let-string-to-appending-param-error.maxon:11:9: 't' is a let and cannot be passed to the `mutable` parameter 's'; bind it to a `var`
 ```
 
 <!-- test: var-string-to-appending-param-ok -->
@@ -449,10 +442,9 @@ end 'main'
 4
 ```
 
-<!-- test: let-set-to-mutating-param-error -->
-A `Set` parameter obeys the same rule as an `Array` or a `String`: `add`'s `s` counts as written through
-`s.insert(1)` writing the RECEIVER, so a `let` Set handed to it is refused at the call. The receiver twin is
-`immutable-method-call.md`'s `insert-on-let-set-error`.
+<!-- test: let-set-to-mutating-param-ok -->
+A `Set` parameter obeys the same rule as an `Array`: `add`'s `s` counts as written through `s.insert(1)`
+writing the RECEIVER, and a `let` Set handed to it takes the insert.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -468,8 +460,8 @@ function main() returns ExitCode
 	return s.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/let-set-to-mutating-param-error.maxon:11:2: cannot pass 's', which is read-only (a `let` binding), to a function that writes parameter 's' (in main); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: var-set-to-mutating-param-ok -->
@@ -493,10 +485,9 @@ end 'main'
 1
 ```
 
-<!-- test: let-to-callee-calling-a-self-writing-method-error -->
+<!-- test: let-to-callee-calling-a-self-writing-method-ok -->
 The receiver-writing rule survives a frame: `bump` writes `self.n`, and `tick` does nothing but call it on
-the parameter it was handed, so `tick` writes `c` and a `let` handed there is refused at the call, for the
-reason `c.bump()` is refused on it directly.
+the parameter it was handed, so `tick` writes `c`. A `let` handed there takes both bumps.
 
 ```maxon
 typealias Tally = int(0 to 1000)
@@ -524,9 +515,8 @@ function main() returns ExitCode
 	return c.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/let-to-callee-calling-a-self-writing-method-error.maxon:22:2: cannot pass 'c', which is read-only (a `let` binding), to a function that writes parameter 'c' (in main); pass a clone()
-error E3159: specs/parameter-mutation/let-to-callee-calling-a-self-writing-method-error.maxon:23:2: cannot pass 'c', which is read-only (a `let` binding), to a function that writes parameter 'c' (in main); pass a clone()
+```exitcode
+2
 ```
 
 <!-- test: var-to-callee-calling-a-self-writing-method-ok -->
@@ -562,9 +552,9 @@ end 'main'
 2
 ```
 
-<!-- test: let-to-self-writing-method-on-a-field-error -->
+<!-- test: let-to-self-writing-method-on-a-field-ok -->
 The receiver door one record down: `bump` writes its own `self`, and here its `self` is `h.inner`. A `let`
-holder is read-only all the way down, so the call is refused whatever expression fills the receiver slot.
+holder forbids only reassigning `h`, so the call writes the record inside it.
 
 ```maxon
 typealias Tally = int(0 to 1000)
@@ -595,8 +585,8 @@ function main() returns ExitCode
 	return h.inner.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/let-to-self-writing-method-on-a-field-error.maxon:26:10: cannot pass 'h', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: var-to-self-writing-method-on-a-field-ok -->
@@ -635,9 +625,9 @@ end 'main'
 1
 ```
 
-<!-- test: let-to-callee-calling-a-self-writing-method-on-a-field-error -->
+<!-- test: let-to-callee-calling-a-self-writing-method-on-a-field-ok -->
 The same door one frame down: `nudge` writes nothing itself and only calls a self-writing method on a record
-inside what it was handed, so it writes `t` and a `let` handed there is refused at the call.
+inside what it was handed, so it writes `t`, and a `let` handed there takes both bumps.
 
 ```maxon
 typealias Tally = int(0 to 1000)
@@ -673,9 +663,8 @@ function main() returns ExitCode
 	return h.inner.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/let-to-callee-calling-a-self-writing-method-on-a-field-error.maxon:30:2: cannot pass 'h', which is read-only (a `let` binding), to a function that writes parameter 't' (in main); pass a clone()
-error E3159: specs/parameter-mutation/let-to-callee-calling-a-self-writing-method-on-a-field-error.maxon:31:2: cannot pass 'h', which is read-only (a `let` binding), to a function that writes parameter 't' (in main); pass a clone()
+```exitcode
+2
 ```
 
 <!-- test: var-to-callee-calling-a-self-writing-method-on-a-field-ok -->
@@ -738,7 +727,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/parameter-mutation/let-global-string-to-appending-param-error.maxon:12:9: cannot pass 'GREETING', which is read-only (a module-level `let`), to a function that writes parameter 's' (in main); pass a clone()
+error E2013: <fragment>:12:9: 'GREETING' is a let and cannot be passed to the `mutable` parameter 's'; bind it to a `var`
 ```
 
 <!-- test: let-global-array-to-reading-param-ok -->
@@ -762,9 +751,8 @@ end 'main'
 2
 ```
 
-<!-- test: let-alias-of-parameter-to-mutating-param-error -->
-A `let` that ALIASES a parameter carries the parameter's own SSA value while being a `let`, so a rule
-derived from the value rather than from the binding would wrongly accept this.
+<!-- test: let-alias-of-parameter-to-mutating-param-ok -->
+A `let` that ALIASES a parameter names the parameter's record, so the callee's push is seen through it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -785,8 +773,8 @@ function main() returns ExitCode
 	return caller(v) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/let-alias-of-parameter-to-mutating-param-error.maxon:11:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'd' (in caller); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: var-alias-of-parameter-to-mutating-param-ok -->
@@ -841,10 +829,9 @@ end 'main'
 1
 ```
 
-<!-- test: let-struct-to-self-mutating-method-error -->
-A method writing its receiver's field is refused on a `let` struct — see the documentation above for the
-ruling. This is the BARE spelling; the `self.`-prefixed one is
-`self-keyword.md`'s `self-with-params`, and the two must mean the same thing.
+<!-- test: let-struct-to-self-mutating-method-ok -->
+A method writing its receiver's field is legal on a `let` struct. This is the BARE spelling; the
+`self.`-prefixed one is `self-keyword.md`'s `self-with-params`, and the two must mean the same thing.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -867,8 +854,8 @@ function main() returns ExitCode
 	return c.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/let-struct-to-self-mutating-method-error.maxon:18:4: cannot pass 'c', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: var-struct-to-self-mutating-method-ok -->
@@ -897,9 +884,9 @@ end 'main'
 1
 ```
 
-<!-- test: let-struct-to-transitive-self-mutating-method-error -->
-`bumpTwice` writes no field itself; it calls a sibling that does, passing `self` on. Refused for the same
-reason the direct write is: it writes `self`, whichever method reaches the field.
+<!-- test: let-struct-to-transitive-self-mutating-method-ok -->
+`bumpTwice` writes no field itself; it calls a sibling that does, passing `self` on, and a `let` receiver
+takes both writes.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -927,8 +914,8 @@ function main() returns ExitCode
 	return c.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/let-struct-to-transitive-self-mutating-method-error.maxon:23:4: cannot pass 'c', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```exitcode
+2
 ```
 
 <!-- test: self-to-sibling-mutating-method-ok -->
@@ -990,10 +977,9 @@ end 'main'
 7
 ```
 
-<!-- test: let-struct-with-array-field-to-mutating-method-error -->
-A method that pushes onto a container held in a self FIELD is the same ruling once more: there is no
-principled line between writing `self.total` and writing the array `self.items` points at, so both are
-refused on a `let` receiver.
+<!-- test: let-struct-with-array-field-to-mutating-method-ok -->
+A method that pushes onto a container held in a self FIELD is the same ruling once more: writing the array
+`self.items` points at is as legal on a `let` receiver as writing `self.total`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1021,8 +1007,8 @@ function main() returns ExitCode
 	return b.size() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/let-struct-with-array-field-to-mutating-method-error.maxon:23:4: cannot pass 'b', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: var-struct-with-array-field-to-mutating-method-ok -->
@@ -1056,9 +1042,9 @@ end 'main'
 1
 ```
 
-<!-- test: error.function-value-call-writes-a-let -->
+<!-- test: function-value-call-writes-a-let -->
 A call through a function VALUE is judged against every function that may flow into the value's type. `grow`
-writes its parameter, so `f(a)` writes `a`, a `let`.
+writes its parameter, so `f(a)` writes the record `a`, a `let`, names.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1075,12 +1061,12 @@ function main() returns ExitCode
 	return a.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:12:3: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'd' (in main); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: function-value-call-writes-a-var -->
-The accepted twin: the same call with a `var`, which the callee may write.
+The same call with a `var`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1101,7 +1087,7 @@ end 'main'
 1
 ```
 
-<!-- test: error.function-value-forwarded-through-a-parameter-writes-a-let -->
+<!-- test: function-value-forwarded-through-a-parameter-writes-a-let -->
 The function value arrives as a parameter, so `apply` names no callee at all: it writes `d` if any function that
 may flow into `Grower` does, and `grow` does.
 
@@ -1124,8 +1110,8 @@ function main() returns ExitCode
 	return a.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:16:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'd' (in main); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: function-value-call-of-an-unrelated-type-leaves-a-let-alone -->
@@ -1161,10 +1147,10 @@ end 'main'
 ```exitcode
 1
 ```
-<!-- test: error.function-value-call-keeps-its-argument-in-a-let-field -->
+<!-- test: function-value-call-keeps-its-argument-in-a-let-field -->
 The same judgement covers what a function value KEEPS: `shelve` stores its parameter in a `let` field, so the
-call through `build`'s `Maker` keeps `v`, which is read again afterwards. `Maker` and `shelve` both declare the
-parameter `mutable`, so the conversion is allowed and this older door is the one that speaks.
+call through `build`'s `Maker` keeps `v`, which is read again afterwards. The `let` field names the same array
+as `v`, so the later push is seen through the shelf.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1196,13 +1182,13 @@ function main() returns ExitCode
 	return shelf.items.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:26:14: cannot pass the `var` 'v', which is read again, to parameter 'd' of 'build', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+2
 ```
 
 <!-- test: function-value-call-keeps-an-argument-it-is-last-used-in -->
-The accepted twin: `v` is not read after the call, so the `let` field takes it by a move. The function value
-keeps its parameter, so `Maker` and `shelve` declare it `mutable`.
+The same call when `v` is not read after it. The function value keeps its parameter, so `Maker` and
+`shelve` declare it `mutable`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1257,7 +1243,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:12:3: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'd' (in main); pass a clone()
+error E3207: <fragment>:12:3: 'grow' writes 'd' (line 6: `d.push(9)`); 'a' is immutable
 ```
 
 <!-- test: function-value-call-with-a-let-array-to-a-read-only-callback-is-accepted -->
@@ -1327,8 +1313,8 @@ end 'main'
 7
 ```
 
-<!-- test: error.function-value-call-with-a-let-record-to-a-writing-callback-is-refused -->
-A `let` record handed to a callback that writes one of its fields is refused.
+<!-- test: function-value-call-with-a-let-record-to-a-writing-callback-is-accepted -->
+A `let` record handed to a callback that writes one of its fields takes the write.
 
 ```maxon
 type Box
@@ -1350,12 +1336,12 @@ function main() returns ExitCode
 	return b.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:17:3: cannot pass 'b', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+```exitcode
+99
 ```
 
-<!-- test: error.a-closure-literal-callee-that-writes-its-parameter-refuses-a-let -->
-A closure literal is the exact callee, and its body's write counts.
+<!-- test: a-closure-literal-callee-that-writes-its-parameter-accepts-a-let -->
+A closure literal is the exact callee, and its body's write lands in the `let` array.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1372,12 +1358,13 @@ function main() returns ExitCode
 	return f(a) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:13:10: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'd' (in main); pass a clone()
+```exitcode
+1
 ```
 
-<!-- test: error.a-callback-parameter-that-may-write-refuses-a-let-handed-through-the-caller -->
-`apply` forwards its array to an unknown callback; some function of the callback's shape writes it, so `apply` writes its parameter and a `let` handed to `apply` is refused.
+<!-- test: a-callback-parameter-that-may-write-accepts-a-let-handed-through-the-caller -->
+`apply` forwards its array to an unknown callback; some function of the callback's shape writes it, so `apply`
+writes its parameter, and a `let` handed to `apply` takes the write.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1399,8 +1386,8 @@ function main() returns ExitCode
 	return a.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:17:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'xs' (in main); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: a-callback-parameter-whose-candidates-only-read-accepts-a-let -->
@@ -1430,8 +1417,8 @@ end 'main'
 0
 ```
 
-<!-- test: error.a-higher-order-call-is-written-through-two-levels -->
-The write is carried through a second forwarding function.
+<!-- test: a-higher-order-call-is-written-through-two-levels -->
+The write is carried through a second forwarding function, and lands in the `let` array.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1457,8 +1444,8 @@ function main() returns ExitCode
 	return a.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:21:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'ys' (in main); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: var-self-field-passed-to-mutating-param-ok -->
@@ -1502,10 +1489,10 @@ end 'main'
 2
 ```
 
-<!-- test: let-self-field-passed-to-mutating-param-error -->
-The `let` half of the same pair: the field's own `let` is what refuses it, and the diagnostic blames the
-FIELD's name. The receiver half of this (`items.push(v)`) is `immutable-method-call.md`'s
-`push-on-let-self-field-array-error`; both must answer from the same reading of `layout.fieldIsMutable`.
+<!-- test: let-self-field-passed-to-mutating-param-ok -->
+The `let` half of the same pair: a `let` field forbids only reassigning the field, so handing it to a callee
+that writes it is legal. The receiver half of this (`items.push(v)`) is `immutable-method-call.md`'s
+`push-on-let-self-field-array`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1537,15 +1524,14 @@ function main() returns ExitCode
 	return b.size() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:17:3: cannot pass a `let` field of 'items', which is read-only, to a function that writes parameter 'd' (in Bag.add); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: a-returned-string-bound-to-a-var-is-a-copy-the-callee-writes-nothing-through -->
 A `String` a name does not own is copied when it is bound to a `var`, so the `var` made from `pass(p)` is the
-callee's own string: `tag` appends to the copy, writes nothing through `p`, and a `let` argument is accepted.
-The same shape over a record (`let-record-written-through-an-alias-in-the-callee`) names the parameter's record
-and stays refused.
+callee's own string: `tag` appends to the copy and writes nothing through `p`. The same shape over a record
+(`let-record-written-through-an-alias-in-the-callee`) names the parameter's record and writes it.
 
 ```maxon
 function pass(s String) returns String
@@ -1576,7 +1562,7 @@ lit7
 
 <!-- test: let-record-written-through-an-alias-in-the-callee -->
 A container method called through a mutable name made from a call's result writes every parameter
-that result may be, so `tag` writes `p`.
+that result may be, so `tag` writes `p`, and a `let` argument takes the write.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1597,13 +1583,13 @@ function main() returns ExitCode
 	return a.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/let-record-written-through-an-alias-in-the-callee.maxon:16:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'p' (in main); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: a-write-through-a-var-bound-to-a-parameter-writes-that-parameter -->
 A `var` made from a parameter names the caller's record, so writing a field of it writes the parameter and a
-`let` argument is refused at the call.
+`let` argument takes the write.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1627,8 +1613,8 @@ function main() returns ExitCode
 	return a.id as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/a-write-through-a-var-bound-to-a-parameter-writes-that-parameter.maxon:19:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'block' (in main); pass a clone()
+```exitcode
+5
 ```
 
 <!-- test: a-write-through-a-var-bound-to-a-parameter-accepts-a-var-argument -->
@@ -1662,7 +1648,7 @@ end 'main'
 
 <!-- test: a-write-through-a-var-bound-to-a-field-of-a-parameter-writes-that-parameter -->
 A `var` made from a field of a parameter names a record inside the caller's, so writing it writes the
-parameter.
+parameter, and a `let` argument takes the write.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1694,8 +1680,8 @@ function main() returns ExitCode
 	return o.inner.id as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/a-write-through-a-var-bound-to-a-field-of-a-parameter-writes-that-parameter.maxon:27:2: cannot pass 'o', which is read-only (a `let` binding), to a function that writes parameter 'outer' (in main); pass a clone()
+```exitcode
+6
 ```
 
 <!-- test: a-write-through-a-var-bound-to-a-field-of-a-parameter-accepts-a-var-argument -->
@@ -1736,8 +1722,7 @@ end 'main'
 ```
 
 <!-- test: a-write-through-a-merge-of-two-parameters-writes-both -->
-A `var` that is one parameter or the other writes whichever it is, so both parameters are written and a `let`
-argument at either is refused.
+A `var` that is one parameter or the other writes whichever it is, and a `let` argument at either takes the write.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1762,8 +1747,8 @@ function main() returns ExitCode
 	return b.id as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/parameter-mutation/a-write-through-a-merge-of-two-parameters-writes-both.maxon:20:2: cannot pass 'c', which is read-only (a `let` binding), to a function that writes parameter 'first' (in main); pass a clone()
+```exitcode
+7
 ```
 
 <!-- test: a-write-through-a-merge-of-two-parameters-accepts-var-arguments -->
@@ -1796,7 +1781,7 @@ end 'main'
 7
 ```
 
-<!-- test: let-array-in-parentheses-to-mutating-param-error -->
+<!-- test: let-array-in-parentheses-to-mutating-param-ok -->
 Parentheses around the argument change nothing: `grow((g))` hands `g` to the parameter the callee pushes onto, as `grow(g)` does.
 
 ```maxon
@@ -1813,12 +1798,12 @@ function main() returns ExitCode
 	return try g.get(0) otherwise -1
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:11:2: cannot pass 'g', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in main); pass a clone()
+```exitcode
+9
 ```
 
-<!-- test: let-to-callee-appending-to-a-string-field-error -->
-`nudge` appends to a `String` field of its parameter, which writes the parameter's record, so a `let` handed to it is refused. A `String` is a value, but the field that holds it is storage of the record.
+<!-- test: let-to-callee-appending-to-a-string-field-ok -->
+`nudge` appends to a `String` field of its parameter, which writes the parameter's record, and a `let` handed to it takes the write. A `String` is a value, but the field that holds it is storage of the record.
 
 ```maxon
 type Holder
@@ -1840,12 +1825,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:16:2: cannot pass 'h', which is read-only (a `let` binding), to a function that writes parameter 't' (in main); pass a clone()
+```stdout
+abXY
+```
+```exitcode
+0
 ```
 
-<!-- test: let-to-callee-passing-a-string-field-to-an-appending-param-error -->
-`nudge` hands a `String` field of its parameter to `grow`, which appends to its parameter, so the field is passed by reference and `nudge` writes `t`; a `let` handed to it is refused.
+<!-- test: let-to-callee-passing-a-string-field-to-an-appending-param-ok -->
+`nudge` hands a `String` field of its parameter to `grow`, which appends to its parameter, so the field is passed by reference and `nudge` writes `t`; a `let` handed to it takes the write.
 
 ```maxon
 type Holder
@@ -1871,6 +1859,30 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
+```stdout
+abXY
+```
+```exitcode
+0
+```
+
+<!-- test: constant-let-array-to-mutating-param-error -->
+A `let` bound to an array literal is immutable image data, so a callee that pushes onto its parameter is refused.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function grow(d IntArray)
+	d.push(9)
+end 'grow'
+
+function main() returns ExitCode
+	let a = [1 as Integer]
+	grow(a)
+	return a.count() as ExitCode
+end 'main'
+```
 ```maxoncstderr
-error E3159: <fragment>:20:2: cannot pass 'h', which is read-only (a `let` binding), to a function that writes parameter 't' (in main); pass a clone()
+error E3207: <fragment>:11:7: 'grow' writes 'd' (line 6: `d.push(9)`); 'a' is immutable
 ```

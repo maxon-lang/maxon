@@ -34,23 +34,23 @@ let EnumFromNameCaseSeparator = b"#"
 
 // `__enum_from_raw_<Enum>` — the helper's symbol. A dotted enum name (`Shape.unionCases`) rides through
 // unchanged: a `.` is already legal in an emitted symbol here (every method is `Type.method`).
-export function enumFromRawValueSymbol(enumName ByteArray) returns ByteArray
-	return "{String.from(EnumFromRawValuePrefix)}{String.from(enumName)}".toByteArray()
+export function enumFromRawValueSymbol(enumName ByteArray) returns immutable ByteArray
+	return freeze "{String.from(EnumFromRawValuePrefix)}{String.from(enumName)}".toByteArray()
 end 'enumFromRawValueSymbol'
 
 // `__enum_from_name_<Enum>` — the general name lookup: the whole case list for a payload-free
 // declaration, and the PAYLOAD-FREE cases only for a payload-bearing union (see
 // `synthesizeEnumFromName`).
-export function enumFromNameSymbol(enumName ByteArray) returns ByteArray
-	return "{String.from(EnumFromNamePrefix)}{String.from(enumName)}".toByteArray()
+export function enumFromNameSymbol(enumName ByteArray) returns immutable ByteArray
+	return freeze "{String.from(EnumFromNamePrefix)}{String.from(enumName)}".toByteArray()
 end 'enumFromNameSymbol'
 
 // `__enum_from_name_<Union>#<case>` — the per-CASE lookup a LITERAL name naming a PAYLOAD-BEARING case is
 // rewritten to, so the payload arguments reach a fixed-arity constructor while `try` still sees a throwing
 // call. The general helper cannot serve this shape because each case has its own arity, and a dynamic name
 // cannot serve it because nothing would tell the caller how many payload arguments to pass.
-export function enumFromNameCaseSymbol(enumName ByteArray, caseName ByteArray) returns ByteArray
-	return "{String.from(enumFromNameSymbol(enumName))}{String.from(EnumFromNameCaseSeparator)}{String.from(caseName)}".toByteArray()
+export function enumFromNameCaseSymbol(enumName ByteArray, caseName ByteArray) returns immutable ByteArray
+	return freeze "{String.from(enumFromNameSymbol(enumName))}{String.from(EnumFromNameCaseSeparator)}{String.from(caseName)}".toByteArray()
 end 'enumFromNameCaseSymbol'
 
 // Is `callee` one of this family's entry points? Every member of the family throws, so this doubles as the
@@ -70,7 +70,7 @@ end 'isEnumLookupRuntimeCallee'
 // ⚠ **BOTH MEMBERS, NOT JUST THE NEW ONE.** `fromRawValue` shipped with the same fallback; a map added for
 // one half of a two-member family is the asymmetry this file's own `verifyEnumLookupErrorOrdinals` header
 // argues against.
-export function enumLookupSourceMethodName(callee ByteArray) returns ByteArray
+export function enumLookupSourceMethodName(callee ByteArray) returns immutable ByteArray
 	if bytesStartWith(callee, prefix: EnumFromRawValuePrefix) 'fromRawValue'
 		return qualifiedEnumMember(callee, prefixLength: EnumFromRawValuePrefix.count(), member: EnumFromRawValueMemberName)
 	end 'fromRawValue'
@@ -90,7 +90,7 @@ end 'enumLookupSourceMethodName'
 // the companion, and the dots in it are the companion's own name, not a separator this scan may stop at.
 // The `#` is not spellable in a type name (see `EnumFromNameCaseSeparator`), so it is the one byte that can
 // only be the case tail's start.
-function qualifiedEnumMember(callee ByteArray, prefixLength ElementIndex, member ByteArray) returns ByteArray
+function qualifiedEnumMember(callee ByteArray, prefixLength ElementIndex, member ByteArray) returns immutable ByteArray
 	if EnumFromNameCaseSeparator.count() != 1 'separatorIsNotOneByte'
 		panic("qualifiedEnumMember: the case separator is {EnumFromNameCaseSeparator.count()} bytes, and this scan stops at ONE — the join and the split would name different boundaries")
 	end 'separatorIsNotOneByte'
@@ -109,7 +109,7 @@ function qualifiedEnumMember(callee ByteArray, prefixLength ElementIndex, member
 		declarationName.push(b)
 	end 'eachByte'
 
-	return "{String.from(declarationName)}.{String.from(member)}".toByteArray()
+	return freeze "{String.from(declarationName)}.{String.from(member)}".toByteArray()
 end 'qualifiedEnumMember'
 
 // ⭐ **THE `fromName` HALF ON ITS OWN — asked by `RuntimeUsage.recordCallUsage`, which owes this half a
@@ -153,7 +153,7 @@ let EnumLookupNoSuchCaseNameFlag = EnumLookupNoSuchCaseNameOrdinal + ErrorFlagOr
 // `Compiler.maxon` rather than the tail of `installEnumLookupHelpers`, because the installs run AFTER the
 // pipeline, where a diagnostic would have no error gate left to fail against.
 export function verifyEnumLookupErrorOrdinals(project Project)
-	var enumLookupErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinEnumLookupErrorEnum(project.interfaces), installer: b"installEnumLookupHelpers")
+	var enumLookupErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinEnumLookupErrorEnum(project.interfaces.spellingOf(BuiltinInterfaceKind.error)), installer: b"installEnumLookupHelpers")
 	enumLookupErrors.claim(EnumLookupNoSuchRawValueCaseName, ordinal: EnumLookupNoSuchRawValueOrdinal)
 	enumLookupErrors.claim(EnumLookupNoSuchCaseNameCaseName, ordinal: EnumLookupNoSuchCaseNameOrdinal)
 
@@ -461,7 +461,7 @@ end 'synthesizeEnumFromNameCase'
 // of the compare are records of one shaping.
 function emitNameTestBranch(module StdModule, block IrBlock, name ValueId, caseName ByteArray, globalData GlobalDataTable, hit IrBlock, miss IrBlock, ids ValueMinter)
 	let literal = ids.mint()
-	module.appendOp(block, op: StdOp.rdataAddr(literal, label: registerStringLiteralRecord(globalData, bytes: caseName, debugStream: module.debugStream).toByteArray()))
+	module.appendOp(block, op: StdOp.rdataAddr(literal, label: freeze registerStringLiteralRecord(globalData, bytes: caseName, debugStream: module.debugStream).toByteArray()))
 	let isThisCase = ids.mint()
 	module.appendOp(block, op: StdOp.call(isThisCase, callee: StrEqName, args: twoArgs(name, second: literal)))
 	module.setTerminator(block, op: StdOp.condBranch(isThisCase, thenBlockId: hit.id, elseBlockId: miss.id))

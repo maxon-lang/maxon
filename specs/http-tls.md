@@ -183,7 +183,7 @@ type EchoHandler implements HttpHandler
 end 'EchoHandler'
 
 function serving(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze EchoHandler.create())
+	return server.serve(EchoHandler.create())
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
@@ -381,7 +381,7 @@ type EchoHandler implements HttpHandler
 end 'EchoHandler'
 
 function serving(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze EchoHandler.create())
+	return server.serve(EchoHandler.create())
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
@@ -593,7 +593,7 @@ function payload() returns String
 end 'payload'
 
 function serveEcho(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze BodyEchoHandler.create())
+	return server.serve(BodyEchoHandler.create())
 end 'serveEcho'
 
 function exchangeOver(server HttpServer) returns ExitCode
@@ -795,7 +795,7 @@ type EchoHandler implements HttpHandler
 end 'EchoHandler'
 
 function serving(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze EchoHandler.create())
+	return server.serve(EchoHandler.create())
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
@@ -995,7 +995,7 @@ type EchoHandler implements HttpHandler
 end 'EchoHandler'
 
 function serving(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze EchoHandler.create())
+	return server.serve(EchoHandler.create())
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
@@ -1040,7 +1040,7 @@ type ChainHandler implements HttpHandler
 end 'ChainHandler'
 
 function serveChains(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze ChainHandler.create())
+	return server.serve(ChainHandler.create())
 end 'serveChains'
 
 function clientWithCertificate() returns TlsClientOptions
@@ -1244,7 +1244,7 @@ type EchoHandler implements HttpHandler
 end 'EchoHandler'
 
 function serving(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze EchoHandler.create())
+	return server.serve(EchoHandler.create())
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
@@ -1515,7 +1515,7 @@ type EchoHandler implements HttpHandler
 end 'EchoHandler'
 
 function serving(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze EchoHandler.create())
+	return server.serve(EchoHandler.create())
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
@@ -1797,7 +1797,7 @@ type EchoHandler implements HttpHandler
 end 'EchoHandler'
 
 function serving(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze EchoHandler.create())
+	return server.serve(EchoHandler.create())
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
@@ -1835,7 +1835,7 @@ type RedirectHandler implements HttpHandler
 end 'RedirectHandler'
 
 function redirecting(server HttpServer, location String) returns HttpServeEnd
-	return server.serve(freeze RedirectHandler.create(location))
+	return server.serve(RedirectHandler.create(location))
 end 'redirecting'
 
 function main() returns ExitCode
@@ -2023,7 +2023,7 @@ type EchoHandler implements HttpHandler
 end 'EchoHandler'
 
 function serving(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze EchoHandler.create())
+	return server.serve(EchoHandler.create())
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
@@ -2310,7 +2310,7 @@ type EchoHandler implements HttpHandler
 end 'EchoHandler'
 
 function serving(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze EchoHandler.create())
+	return server.serve(EchoHandler.create())
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
@@ -2496,7 +2496,7 @@ type EchoHandler implements HttpHandler
 end 'EchoHandler'
 
 function serving(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze EchoHandler.create())
+	return server.serve(EchoHandler.create())
 end 'serving'
 
 function serverOptions() returns TlsServerOptions
@@ -2853,7 +2853,7 @@ type AnswerHandler implements HttpHandler
 end 'AnswerHandler'
 
 function serveAnswers(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze AnswerHandler.create())
+	return server.serve(AnswerHandler.create())
 end 'serveAnswers'
 
 function fetchOnce(url String, options TlsClientOptions) returns String

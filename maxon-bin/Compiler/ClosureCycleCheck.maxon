@@ -16,8 +16,8 @@ let MaxOriginDepth = 4
 typealias OriginKey = int(0 to u64.max)
 typealias OriginByKey = Map with (OriginKey, OriginIndex)
 typealias HandleByKey = Map with (OriginKey, ElementIndex)
-typealias OriginNameMap = Map with (OriginIndex, readonly ByteArray)
-typealias OriginLabelMap = Map with (OriginIndex, readonly ByteArray)
+typealias OriginNameMap = Map with (OriginIndex, immutable ByteArray)
+typealias OriginLabelMap = Map with (OriginIndex, immutable ByteArray)
 typealias OriginByLabel = Map with (ByteArray, OriginIndex)
 typealias ListMembership = Set with OriginKey
 module typealias FunctionHoldingMemo = RewindableMemo with (TypeNameId, bool)
@@ -79,7 +79,7 @@ function lowHalfOf(key OriginKey) returns ElementIndex
 end 'lowHalfOf'
 
 type GlobalEffect
-	export let label as ByteArray
+	export let label as immutable ByteArray
 	export var storedRecords as ParamPositionMask
 	export var storedHeld as ParamPositionMask
 	export var storedCaptured as ParamPositionMask
@@ -310,7 +310,7 @@ type ClosureCycleChecker implements SummarizedBodies
 	export var heldGlobals as HeldGlobalsByLabel
 	export var globalsGrew as bool
 	var reported as ReportedPositionSet
-	export var noSites as ProvenanceSites
+	export let noSites as immutable ProvenanceSites
 
 	// Every trace's origin lists, kept across traces: a trace's lists are dead once it settles, so the next
 	// trace reuses their storage rather than allocating its own.
@@ -321,7 +321,7 @@ type ClosureCycleChecker implements SummarizedBodies
 	static function create(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, resolution CallSummaryIndex) returns ClosureCycleChecker
 		let funcCount = funcNames.functions.count()
 		let relevant = FixedBoolArray.create(funcCount)
-		return Self{project: project, module: module, signatures: signatures, funcNames: funcNames, calls: CallSiteCursor.create(resolution), summary: CycleSummary.create(funcCount), relevant: relevant, holdings: FunctionHoldingAnswers.plain(), heldGlobals: HeldGlobalsByLabel.create(), globalsGrew: false, reported: ReportedPositionSet.create(), noSites: ProvenanceSites.create(ProvenanceColumns.create()), listPool: OriginListArray.create(0), bodyIndexes: CycleBodyIndexByFunction.create(), noOrigins: OriginList.create(0)}
+		return Self{project: project, module: module, signatures: signatures, funcNames: funcNames, calls: CallSiteCursor.create(resolution), summary: CycleSummary.create(funcCount), relevant: relevant, holdings: FunctionHoldingAnswers.plain(), heldGlobals: HeldGlobalsByLabel.create(), globalsGrew: false, reported: ReportedPositionSet.create(), noSites: freeze ProvenanceSites.create(ProvenanceColumns.create()), listPool: OriginListArray.create(0), bodyIndexes: CycleBodyIndexByFunction.create(), noOrigins: OriginList.create(0)}
 	end 'create'
 
 	function settle() throws CompileError
@@ -407,12 +407,12 @@ type ClosureCycleChecker implements SummarizedBodies
 		end 'aNewHolding'
 	end 'noteHeldGlobal'
 
-	function captureNameAt(closureName ByteArray, offset ByteOffset) returns ByteArray
+	function captureNameAt(closureName ByteArray, offset ByteOffset) returns immutable ByteArray
 		let lifted = self.functionAt(self.calls.resolution.functionIndexOf(closureName))
 
 		for field in lifted.closureEnvFields 'eachCapture'
 			if envSlotOffset(field.slot) == offset 'thisSlot'
-				return displayParamName(field.name).toByteArray()
+				return freeze displayParamName(field.name).toByteArray()
 			end 'thisSlot'
 		end 'eachCapture'
 
@@ -1367,7 +1367,7 @@ type CycleTrace implements SummaryCallWalker
 
 	function nameStoreBase(base ClosureStoreBase)
 		match base 'base'
-			spelled(record, name) then self.nameOriginsOf(record, name: displayParamName(name).toByteArray())
+			spelled(record, name) then self.nameOriginsOf(record, name: freeze displayParamName(name).toByteArray())
 			unspelled then return
 		end 'base'
 	end 'nameStoreBase'
@@ -1762,7 +1762,7 @@ type CycleTrace implements SummaryCallWalker
 		return origin
 	end 'globalOriginOf'
 
-	function globalLabelOf(origin OriginIndex) returns ByteArray
+	function globalLabelOf(origin OriginIndex) returns immutable ByteArray
 		return try self.globalLabels.get(origin) otherwise panic("CycleTrace.globalLabelOf: origin {origin} is no global's")
 	end 'globalLabelOf'
 

@@ -417,7 +417,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:20:8: 'grow' needs a writable parameter 'items'; 'pending' is read-only while 'drain' is open
+error E3207: <fragment>:20:8: 'grow' needs a writable parameter 'items' at line 12; 'pending' is read-only while 'drain' is open
 ```
 
 <!-- test: clearing-the-drained-array-is-refused -->
@@ -447,7 +447,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:16:3: 'clear' needs a writable receiver; 'pending' is read-only while 'drain' is open
+error E3207: <fragment>:16:3: 'clear' needs a writable receiver at line 316; 'pending' is read-only while 'drain' is open
 ```
 
 <!-- test: a-mutable-isolated-parameter-aliased-by-a-let-is-refused -->
@@ -644,6 +644,86 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: a-mutable-isolated-method-parameter-relayed-to-the-same-method-is-accepted -->
+A method's `mutable isolated` parameter lends the caller's region again to the next call, including its own recursion; nothing is moved out, aliased or kept.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+type Ledger
+	var floor as Tally
+
+	static function create(floor Tally) returns Self
+		return Self{floor: floor}
+	end 'create'
+
+	function record(rows mutable isolated TallyArray, depth Tally)
+		rows.push(self.floor + depth)
+
+		if depth > 0 'deeper'
+			self.record(rows, depth: depth - 1)
+		end 'deeper'
+	end 'record'
+end 'Ledger'
+
+function main() returns ExitCode
+	let ledger = Ledger.create(10)
+	var rows = TallyArray.create(0) as isolated TallyArray
+	ledger.record(rows, depth: 2)
+	let frozen = freeze rows
+	print("{frozen.count()}\n")
+	return 0
+end 'main'
+```
+```stdout
+3
+```
+```exitcode
+0
+```
+
+<!-- test: a-mutable-isolated-method-parameter-passed-to-an-isolated-method-parameter-is-refused -->
+A method parameter that is not by reference takes the region, so the caller's variable would then name a region another owner holds.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Box
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Desk
+	var floor as Tally
+
+	static function create(floor Tally) returns Self
+		return Self{floor: floor}
+	end 'create'
+
+	function adopt(box isolated Box) returns Tally
+		return box.n + self.floor
+	end 'adopt'
+
+	function relay(box mutable isolated Box) returns Tally
+		return self.adopt(box)
+	end 'relay'
+end 'Desk'
+
+function main() returns ExitCode
+	let desk = Desk.create(1)
+	var box = Box.create(1) as isolated Box
+	print("{desk.relay(box)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3202: <fragment>:24:21: a `mutable isolated` parameter is by reference: the callee may open, swap or replace it but never move it out, alias it, store it or pass it on, because the caller's variable would then name a region another owner holds
 ```
 
 <!-- test: a-tied-promise-may-live-in-a-local-while-the-caller-keeps-using-the-shared-data -->

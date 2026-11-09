@@ -1,29 +1,20 @@
 ---
 feature: view-binding
-keywords: [view, binding, read-only, alias, await, E3159, E3078, E3138]
+keywords: [view, binding, let, alias, await, E2013, E3102, E3207]
 category: semantics
 ---
 
-# `view`: a Read-Only Name Over Data Others May Write
+# `view`: Another Spelling of `let`
 
 ## Documentation
 
-`view x = e` binds any value read-only through `x`. Unlike a `let`, a `view` makes no promise that nothing else
-writes the data: a write made through another name, including by another coroutine across an `await`, is seen
-through the `view`.
+`view x = e` is `let x = e`. The name is never reassigned (`E2013`), and data written through another name, including
+by another coroutine across an `await`, is seen through it. Writing through a `view`, storing it, handing it to a
+parameter, returning it and capturing it in a closure are as legal as they are for a `let`.
 
-Writing through a `view` is `E3159`. A `view` lives only inside its function: storing it, handing it to a parameter
-that is kept, returning it (or a call's result that is still the `view`) and capturing it in a closure are `E3078`,
-handing it to a parameter the callee writes is `E3159`, and sending it to a service is `E3207` where the message takes
-`immutable` data and `E3200` where it takes `isolated` data. Use a clone() for any of them. A `view` of a number or another value with no capability is copied where it goes, so a closure may capture
-it.
-
-A `view` holds its own reference to the record its value names. A record something may write is refused where it is
-sent to a service (`E3138`) or published (`E3174`) when it may be reached from
-the value of any `view` declared earlier in the function, whether or not the view is read again and whatever the
-view's initializer is: a name, a field or element of it, a ternary, an `otherwise`, a `match` or a call that may hand
-the record back. Reassigning the `var` a fresh record makes it unreached again. A record nothing can write (every field a
-`let`) is shared instead: it is sent or published as it is, and the view stays valid. Returning the `var` is unaffected, since every view of it ends with the function.
+A `view` of a record local binds it as `let` does, moving it (`E3102` where the local is returned afterwards). Sending a `view`
+to a service is `E3207` where the message takes `immutable` data and `E3200` where it takes `isolated` data. `view` binds only a
+local name: a field, a module-level binding, an extension member or a `@heap` binding spelled `view` is `E2077`.
 
 `view` is a contextual word: it begins a binding only where a name follows it, so it stays usable as an ordinary
 variable or parameter name.
@@ -135,8 +126,8 @@ end 'main'
 0
 ```
 
-<!-- test: view-binding.error.a-write-through-a-view-is-refused -->
-A `view` is read-only through its own name.
+<!-- test: view-binding.a-write-through-a-view-is-legal -->
+A `view` is a `let`, so it may be written through; the write lands in the record `h.box` names.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -166,12 +157,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:24:2: cannot write through 'v': 'v' is read-only (a `view`) and nothing reachable through it may be written; use 'var', or write a clone()
+```stdout
+2
+```
+```exitcode
+0
 ```
 
-<!-- test: view-binding.error.a-view-stored-into-a-field-or-pushed-is-refused -->
-A `var` field and an array element are places something may write, so neither may hold a `view`.
+<!-- test: view-binding.a-view-stored-into-a-field-or-pushed-is-legal -->
+A `view` may be stored into a `var` field and pushed onto an array.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -205,13 +199,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:27:8: cannot store view 'v' into mutable place 'Holder.box'; use clone()
-error E3078: <fragment>:28:8: cannot store view 'v' into mutable place 'an element of the container push writes'; use clone()
+```stdout
+3 1
+```
+```exitcode
+0
 ```
 
-<!-- test: view-binding.error.a-view-passed-to-a-parameter-that-is-kept-is-refused -->
-`stash` keeps its parameter in a module array, which would outlive the `view`.
+<!-- test: view-binding.a-view-passed-to-a-parameter-that-is-kept-is-legal -->
+`stash` keeps its parameter in an array, and a `view` may be handed to it.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -247,12 +243,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:30:2: cannot pass 'v', which is read-only (a `view`), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
+```stdout
+1
+```
+```exitcode
+0
 ```
 
-<!-- test: view-binding.error.a-returned-view-is-refused -->
-A `view` cannot outlive the function that binds it.
+<!-- test: view-binding.a-returned-view-is-legal -->
+A `view` may be returned.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -285,12 +284,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:22:9: cannot return view 'v': a `view` cannot outlive its function; return a clone()
+```stdout
+3
+```
+```exitcode
+0
 ```
 
-<!-- test: view-binding.error.a-view-returned-through-a-call-that-hands-it-back-is-refused -->
-`pick` returns its argument, so its result is still the `view`, and returning it is refused as returning `v` is.
+<!-- test: view-binding.a-view-returned-through-a-call-that-hands-it-back-is-legal -->
+`pick` returns its argument, and the result may be returned.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -327,12 +329,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:26:9: cannot return view 'v': a `view` cannot outlive its function; return a clone()
+```stdout
+3
+```
+```exitcode
+0
 ```
 
-<!-- test: view-binding.error.a-view-handed-to-a-function-that-writes-its-parameter-is-refused -->
-`bump` writes its parameter, and nothing may be written through a `view`.
+<!-- test: view-binding.a-view-handed-to-a-function-that-writes-its-parameter-is-legal -->
+`bump` writes its parameter, and a `view` may be handed to it.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -366,12 +371,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:28:2: cannot pass 'v', which is read-only (a `view`), to a function that writes parameter 'b' (in main); pass a clone()
+```stdout
+9
+```
+```exitcode
+0
 ```
 
-<!-- test: view-binding.error.a-view-stored-into-a-let-field-is-refused -->
-A `let` field keeps its record for the holder's whole life, which a `view` cannot outlast.
+<!-- test: view-binding.a-view-stored-into-a-let-field-is-legal -->
+A `view` may be stored into a `let` field.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -413,12 +421,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:25:15: cannot store view 'v' into a `let` field 'Pin.box': a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```stdout
+3
+```
+```exitcode
+0
 ```
 
-<!-- test: view-binding.error.a-view-captured-in-a-closure-is-refused -->
-A closure may outlive the function, so it cannot capture a `view`.
+<!-- test: view-binding.a-view-captured-in-a-closure-is-legal -->
+A closure may capture a `view`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -448,8 +459,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:24:27: cannot capture view 'v' in a closure; capture a clone()
+```stdout
+3
+```
+```exitcode
+0
 ```
 
 <!-- test: view-binding.a-view-of-a-number-captured-in-a-closure-is-accepted -->
@@ -631,8 +645,8 @@ end 'main'
 error E2077: <fragment>:13:2: `view` binds a local name, so it cannot declare a field, a module-level binding, an extension member or a `@heap` binding; use `let` or `var`
 ```
 
-<!-- test: view-binding.a-var-returned-after-it-has-been-viewed-is-accepted -->
-Every view of `b` ends with the function, so returning the `var` after it has been viewed is unaffected by the view.
+<!-- test: view-binding.error.a-view-of-a-record-local-moves-it-like-a-let -->
+`view w = b` is `let w = b`: it moves the record local `b`, so returning `b` afterwards is refused.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -658,45 +672,23 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```stdout
-2
-2
-```
-```exitcode
-0
+```maxoncstderr
+error E3102: <fragment>:17:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-<!-- test: view-binding.every-arm-of-a-chained-ternary-view-is-shared -->
-Every arm of the chained ternary may become `w`'s value, so each is shared with the view rather than moved, and `a`, `b` and `e` are all read afterwards.
+<!-- test: view-binding.error.reassigning-a-view-is-refused -->
+A `view` is a `let`: its name is never reassigned.
 
 ```maxon
 typealias Count = int(0 to 1000)
 
-type Box
-	export var n as Count
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
 function main() returns ExitCode
-	var a = Box.create(1)
-	var b = Box.create(2)
-	var e = Box.create(3)
-	a.n = 4
-	b.n = 5
-	e.n = 6
-	let c = a.n > 0
-	let d = b.n > 0
-	view w = a if c else b if d else e
-	print("{w.n} {a.n} {b.n} {e.n}\n")
+	view n = 1 as Count
+	n = 2
+	print("{n}\n")
 	return 0
 end 'main'
 ```
-```stdout
-4 4 5 6
-```
-```exitcode
-0
+```maxoncstderr
+error E2013: <fragment>:6:2: 'n' is a let and cannot be reassigned
 ```

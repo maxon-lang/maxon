@@ -61,7 +61,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:35:10: 'keep' writes 'p'; 'frozen' is immutable
+error E3207: <fragment>:35:10: 'keep' writes 'p' (line 29: a result read from it is stored in a writable slot (row)); 'frozen' is immutable
 ```
 
 <!-- test: a-returns-mutable-clause-refuses-a-call-result-sourced-from-a-parameter -->
@@ -161,7 +161,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:32:14: cannot store a mutable 'Box' into 'box', which holds an immutable 'Box'; freeze it, or store a copy
+error E3196: <fragment>:32:14: cannot store a mutable 'Box' into 'box', which holds an immutable 'Box'; freeze it
 ```
 
 <!-- test: a-mixed-join-stored-into-an-immutable-field-is-refused -->
@@ -205,7 +205,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:20:15: cannot store a mutable 'Box' into 'held', which holds an immutable 'Box'; freeze it, or store a copy
+error E3196: <fragment>:20:15: cannot store a mutable 'Box' into 'held', which holds an immutable 'Box'; freeze it
 ```
 
 <!-- test: data-of-an-immutable-slot-returned-by-a-plain-result-stays-immutable -->
@@ -399,8 +399,8 @@ end 'main'
 error E3205: <fragment>:22:15: cannot wait inside 'window'; another coroutine could run while 'box' is open. Await before or after the block
 ```
 
-<!-- test: a-constructor-field-fed-a-call-result-pins-the-parameter-it-may-hand-back -->
-`wrap` builds a `Wrapper` over what `pick` may hand back from `p`, so the constructor's mutable field makes `p` mutable only and the frozen argument is refused.
+<!-- test: a-constructor-field-fed-a-call-result-holds-the-parameter-it-may-hand-back -->
+`wrap` returns a `Wrapper` over what `pick` may hand back from `p`, so the result follows `p`: the frozen argument gives a read-only `Wrapper` and `main` reads it.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -440,8 +440,57 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: error.a-write-through-a-wrapper-built-over-a-call-result-of-a-frozen-argument-is-refused -->
+The `Wrapper` holds what `pick` may hand back from the frozen `p`, so writing through it writes frozen data.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Box
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Wrapper
+	export var row as Box
+
+	static function create(row Box) returns Self
+		return Self{row: row}
+	end 'create'
+end 'Wrapper'
+
+function pick(p Box, fresh bool) returns Box
+	if fresh 'makeOne'
+		return Box.create(0)
+	end 'makeOne'
+
+	return p
+end 'pick'
+
+function wrap(p Box) returns Wrapper
+	return Wrapper.create(pick(p, fresh: false))
+end 'wrap'
+
+function main() returns ExitCode
+	var frozen = freeze Box.create(1)
+	let wrapper = wrap(frozen)
+	wrapper.row.n = 5
+	print("{wrapper.row.n}\n")
+	return 0
+end 'main'
+```
 ```maxoncstderr
-error E3207: <fragment>:34:21: 'wrap' writes 'p' (it calls 'create', which writes 'row'); 'frozen' is immutable
+error E3197: <fragment>:35:2: cannot write 'n' through 'wrapper.row', which is read-only
 ```
 
 <!-- test: an-immutable-parameter-fed-a-call-result-pins-the-parameter-it-may-hand-back -->
@@ -477,7 +526,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:21:14: 'take' takes `immutable` 'item'; 'pick' is read-only
+error E3207: <fragment>:21:14: 'take' takes `immutable` 'item'; 'pick(p)' is read-only
 error E3207: <fragment>:26:16: 'relay' needs 'p' frozen (it calls 'take', which takes `immutable` 'item'); 'box' is mutable. Freeze it first
 ```
 
@@ -514,7 +563,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:21:14: 'take' takes `immutable` 'item'; 'pick' is read-only
+error E3207: <fragment>:21:14: 'take' takes `immutable` 'item'; 'pick(p)' is read-only
 ```
 
 <!-- test: a-closure-that-writes-a-captured-call-result-pins-the-parameter-it-may-hand-back -->
@@ -557,7 +606,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:33:16: 'relay' writes 'p'; 'frozen' is immutable
+error E3207: <fragment>:33:16: 'relay' writes 'p' (line 27: a result read from it is stored in a writable slot (r)); 'frozen' is immutable
 ```
 
 <!-- test: a-mixed-join-pushed-into-an-array-of-immutable-elements-is-refused -->
@@ -589,7 +638,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:14:15: cannot store a mutable 'Box' into 'an element of the container push writes', which holds an immutable 'Box'; freeze it, or store a copy
+error E3196: <fragment>:14:15: cannot store a mutable 'Box' into 'an element of the container push writes', which holds an immutable 'Box'; freeze it
 ```
 
 <!-- test: a-function-value-result-stored-into-an-immutable-field-is-refused -->
@@ -633,7 +682,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:33:15: 'adopt' needs 'getPart' frozen; 'function' is mutable. Freeze it first
+error E3207: <fragment>:33:15: 'adopt' needs 'getPart' frozen (line 21: `self.part = getPart()`); 'function() gives held' is mutable. Freeze it first
 ```
 
 <!-- test: an-async-over-a-clone-of-mutable-data-is-not-tied -->
@@ -937,7 +986,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:26:14: 'bump' needs a writable receiver; the argument is read-only while 'window' is open
+error E3207: <fragment>:26:14: 'bump' needs a writable receiver at line 12; the argument is read-only while 'window' is open
 ```
 
 <!-- test: a-field-path-window-of-two-levels-is-written-through-its-own-path -->
@@ -1024,7 +1073,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:23:7: 'keep' writes 'box'; 'freeze' is immutable
+error E3207: <fragment>:23:7: 'keep' writes 'box' (line 18: a result read from it is stored in a writable slot (an element of the container push writes)); 'freeze Box.create(1)' is immutable
 ```
 
 <!-- test: an-immutable-only-parameter-as-the-sole-source-gives-a-read-only-result -->
@@ -1060,7 +1109,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:21:14: 'take' takes `immutable` 'item'; 'same' is read-only
+error E3207: <fragment>:21:14: 'take' takes `immutable` 'item'; 'same(p)' is read-only
 ```
 
 <!-- test: a-fresh-argument-and-a-frozen-argument-mixed-in-a-return-are-refused -->
@@ -1320,7 +1369,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:34:20: 'bump' needs a writable receiver; the argument is read-only while 'right' is open
+error E3207: <fragment>:34:20: 'bump' needs a writable receiver at line 12; the argument is read-only while 'right' is open
 ```
 
 <!-- test: the-clone-of-a-type-parameter-value-is-not-a-clean-input -->
@@ -1692,4 +1741,56 @@ end 'main'
 ```
 ```maxoncstderr
 error E3197: <fragment>:20:2: cannot write 'n' through 'r', which is read-only
+```
+
+<!-- test: error.a-refused-constructor-body-does-not-refuse-its-callers-writes -->
+The literal in `Tracer.create` stores a mutable `Cols` into an `immutable` slot, which refuses the body. `build` writes through the record it gets back; that write is judged against a body that never finished, so it is not refused as well. Only the store is reported.
+
+```maxon
+type Cols
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+end 'Cols'
+
+type Deps
+	export var rows as Count
+
+	static function create() returns Self
+		return Self{rows: 0}
+	end 'create'
+
+	function record()
+		self.rows = self.rows + 1
+	end 'record'
+end 'Deps'
+
+type Tracer
+	export var deps as Deps
+	export var cols as immutable Cols
+
+	static function create(deps Deps) returns Self
+		return Self{deps: deps, cols: Cols.create()}
+	end 'create'
+end 'Tracer'
+
+function settle(deps Deps)
+	deps.record()
+end 'settle'
+
+function build() returns Tracer
+	var tracer = Tracer.create(Deps.create())
+	settle(tracer.deps)
+	return tracer
+end 'build'
+
+function main() returns ExitCode
+	let tracer = build()
+	return tracer.deps.rows as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3196: <fragment>:27:33: cannot store a mutable 'Cols' into 'Tracer.cols', which holds an immutable 'Cols'; freeze it
 ```

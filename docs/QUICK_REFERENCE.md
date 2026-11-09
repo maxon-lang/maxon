@@ -146,13 +146,18 @@ print("Status: {"on" if flag else "off"}")
 
 ## Variables
 
+**`let` means the name is never reassigned; `var` means it may be.** A `let` record can be written through
+(a field store, `push`, a callee that writes its parameter). A number, `bool`, enum or `String` cannot change
+under a `let`, because changing one is reassigning it: use a `var`. `view` is another spelling of `let`.
+
 ```maxon
-let x = 42          // immutable constant: fits any alias its value fits
-var y = 10 as Count // mutable: a var names its alias (E2004 without the cast)
+let x = 42          // never reassigned; a constant: fits any alias its value fits
+var y = 10 as Count // may be reassigned: a var names its alias (E2004 without the cast)
 _ = sideEffect()  // discard: no binding, no unused check
+// x = 1            // E2013: 'x' is a let and cannot be reassigned
 
 // Top-level constants (outside functions)
-let MAX_SIZE = 1024     // immutable constant
+let MAX_SIZE = 1024     // constant
 
 // Static fields (inside types): every initializer runs once, before main,
 // in dependency order, whether or not anything reads the field
@@ -161,7 +166,7 @@ type Origin
 	export var y as Coord
 
 	static let zero = Origin{x: 0, y: 0}                    // struct literal: own type only
-	static let ws = CharacterSet.whitespacesAndNewlines()   // function call
+	static let ws = CharacterSet.whitespacesAndNewlines     // another constant let
 	static let data = [10 as Coord, 20 as Coord, 30 as Coord] // array literal
 	static let MAX = 100                                    // compile-time constant
 end 'Origin'
@@ -178,24 +183,22 @@ var m = a               // a MOVES into m; reading a afterwards is E3102
 // Explicit clone for independent copy (requires Cloneable)
 var c = m.clone()       // deep copy -- c is independent
 c.x = 42                // m.x is still 99
-let frozen = c          // c moves into frozen, read-only all the way down
-// frozen.x = 1         // E3159: 'frozen' is read-only
+let kept = c            // c moves into kept; kept can be written through, not reassigned
+kept.x = 1              // legal: a let fixes the name, not the record
 
-// view: a read-only name over data other names may still write
-view first = try points.get(0) otherwise panic("pushed")   // `let` here is E3188: points is a var
+// view is another spelling of let
+view first = try points.get(0) otherwise panic("pushed")
 points.push(Point.create(3, y: 4))
-print("{first.x}\n")    // reads through the view; first.x = 1 is E3159
+first.x = 7             // legal: first names the record points holds at 0
 ```
 
 All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks; reading a `_` parameter is E2004. Names like `_x` are regular variables and must be used. Self-assignment (`x = x`) is an error (E3067). `_ =` requires a function call on the right-hand side (`_ = 42` is an error).
 
-**Assignment semantics:** A record is stored by reference: a record pushed into a container, stored in a field or passed to a call is shared, and a field write through one holder is visible through every other. `var b = a` and `let b = a` from a `var a` MOVE the record (reading `a` afterwards is E3102). Reassignment (`b = Point.create(...)`) rebinds without affecting the record `b` held. Use `a.clone()` for an independent deep copy (the type must be `Cloneable`). Primitives are always copied by value.
+**Assignment semantics:** A record is stored by reference: a record pushed into a container, stored in a field or passed to a call is shared, and a field write through one holder is visible through every other. `var b = a` and `let b = a` from a `var a` MOVE the record (reading `a` afterwards is E3102); from a `let a`, `b` names the same record and `a` stays usable. Reassignment (`b = Point.create(...)`) rebinds without affecting the record `b` held. Use `a.clone()` for an independent deep copy (the type must be `Cloneable`). Primitives are always copied by value.
 
-**Read-only values:** `let` is read-only all the way down: a `let` binding, a `let` field, a `let` union payload, a module-level `let`, a `SharedValue` or registry read, a stored `Map` key or `Set` element, and an element of `Array with readonly T` / `Map with K, readonly V`. A write through one (a field store, a method that writes its receiver, an argument the callee writes) is E3159; binding one to a `var`, or storing it where something may write it, is E3078 — except a `let` of a fresh record at its last use, which the store consumes (judged per path: one arm of an `if`, `match` or ternary, or a branch that then returns). `clone()` makes a mutable copy. A `for`, `if let` or `match` binding follows its source.
+**Read-only data:** a constant (a `let` bound to a literal, a constant record or array literal, another constant `let`, and every inline `b"…"` literal), a `freeze` result, a module-level `let` built by a call, a `SharedValue` or registry read, a stored `Map` key or `Set` element, and an element of `Array with readonly T` / `Map with K, readonly V`. A write through constant or `immutable` data (a field store, a method that writes its receiver, an argument the callee writes) is E3207; through the others it is E3159. Binding the others to a `var`, or storing them where something may write them, is E3078. `clone()` makes a mutable copy. A `for`, `if let` or `match` binding follows its source.
 
-**What a `let` binds:** a fresh record, a read-only value, or a part of a parameter (as immutable as the caller's argument). A `let` of state something may still write — a field of a writable `self`, an element of a `var` container, a getter's result on a `var` — is E3188: use `view` to read it, `var` to write it, or `let` a `clone()`.
-
-**`view x = e`:** read-only through `x`, while other names may still write it. Writing through it is E3159; storing, keeping, returning or capturing it is E3078; sending it is E3138. Once a view of a `var`'s record exists, that record cannot be sent (E3138), published (E3174) or handed to a parameter the callee keeps (E3078) for the rest of the function, unless every field of its type is a `let`. `view` is contextual: it begins a binding only at a statement's start, or after `if` or `then`, followed by a name.
+**Constant data is `immutable`:** a field, array element or union payload that holds a `b"…"` literal or a constant `let` is declared `immutable ByteArray` (storing it into a plain one is E3196); a result that returns one is declared `immutable` (E3209); a `var` bound to a `b"…"` literal and then written is E3207, so build the array (`ByteArray.create` and `push`, or `"text".toByteArray()`). A `Map` key and a `Set` element are `immutable` slots: a key built at run time is `freeze`d where it is inserted. A union payload takes a capability word: `named(let name immutable ByteArray)`.
 
 **Auto-conformance:** The compiler auto-generates `Cloneable` and `Equatable` conformance for structs whose fields are all Cloneable/Equatable. Primitives, `String`, and `Array` are built-in Cloneable and Equatable types. Use `.clone()` to create independent copies.
 
@@ -281,7 +284,7 @@ end 'check'
 greet("Smith", title: "Dr.")
 ```
 
-**Parameter passing:** A parameter is a `let` passed by value; reassigning it is E2013. A value-type parameter (a number, `bool`, an enum or `String`) the function reassigns is marked `mutable` before its type and is passed by reference -- the write propagates back to the caller's storage: a local `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a read-only value, a literal or an expression to a `mutable` parameter is a compile error (E3159), and the variable's declared type must be the parameter's type, alias included (E3005). A record parameter is never rebound; copy it into a local `var`. `mutable` before a message or factory parameter's type is a parse error (E2010).
+**Parameter passing:** A parameter is a `let` passed by value; reassigning it is E2013. A value-type parameter (a number, `bool`, an enum or `String`) the function reassigns is marked `mutable` before its type and is passed by reference -- the write propagates back to the caller's storage: a local `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a `let` to a `mutable` parameter is E2013 (bind it to a `var`), and passing other read-only data, a literal or an expression is E3159. The variable's declared type must be the parameter's type, alias included (E3005). A record parameter is never rebound; copy it into a local `var`. `mutable` before a message or factory parameter's type is a parse error (E2010).
 
 **Purity and discarded results:** The compiler infers function purity (no side effects). Pure function results must always be used (E3064). Impure function results require `_ =` to explicitly discard (E3065). Chainable methods (returning own type via `self`) can be freely discarded.
 
@@ -1103,9 +1106,9 @@ s.append("{x} more")                     // append interpolation directly into b
 s.trim()                                     // remove whitespace from both ends
 s.trimStart()                                // remove whitespace from start
 s.trimEnd()                                  // remove whitespace from end
-s.trim(CharacterSet.decimalDigits())     // remove matching chars from both ends
+s.trim(CharacterSet.decimalDigits)       // remove matching chars from both ends
 s.trimStart(CharacterSet.from(CharSet from ['x']))     // remove matching chars from start
-s.trimEnd(CharacterSet.punctuation())   // remove matching chars from end
+s.trimEnd(CharacterSet.punctuation)     // remove matching chars from end
 
 // Iteration
 for c in s 'chars' ... end 'chars'           // grapheme clusters

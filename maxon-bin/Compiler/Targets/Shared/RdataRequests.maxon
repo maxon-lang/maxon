@@ -30,7 +30,7 @@ export typealias RdataRequestArray = Array with RdataRequest
 typealias RdataRequestOrdinal = int(0 to u64.max)
 
 // Placeholder label → the label the request was registered under, for one function.
-typealias RdataLabelMap = Map with (ByteArray, readonly ByteArray)
+typealias RdataLabelMap = Map with (ByteArray, immutable ByteArray)
 
 // A prefix no real `.rdata` label carries, so a placeholder can never be mistaken for a registered label
 // the Std tier put into an op — those reach the isel already final and are left alone by the patch.
@@ -45,30 +45,30 @@ export type RdataRequestLog
 	end 'create'
 
 	// The island's label, spelled here by the table's own formula; the registration is deferred.
-	export function floatConstant(bits FullRangeInt) returns ByteArray
+	export function floatConstant(bits FullRangeInt) returns immutable ByteArray
 		self.requests.push(RdataRequest.floatConstant(bits))
-		return floatConstantLabel(bits).toByteArray()
+		return freeze floatConstantLabel(bits).toByteArray()
 	end 'floatConstant'
 
-	export function jumpTable(slotCount ElementIndex) returns ByteArray
+	export function jumpTable(slotCount ElementIndex) returns immutable ByteArray
 		return self.placeholderFor(RdataRequest.jumpTable(slotCount))
 	end 'jumpTable'
 
 	// The bytes are copied: a message is a constant the isel shares with every abort it lowers, and a
 	// request travels home in a reply that must own everything it reaches.
-	export function stringBlob(bytes ByteArray) returns ByteArray
+	export function stringBlob(bytes ByteArray) returns immutable ByteArray
 		return self.placeholderFor(RdataRequest.stringBlob(bytes.clone()))
 	end 'stringBlob'
 
-	function placeholderFor(request RdataRequest) returns ByteArray
+	function placeholderFor(request RdataRequest) returns immutable ByteArray
 		let ordinal = self.requests.count() as RdataRequestOrdinal
 		self.requests.push(request)
 		return placeholderLabel(ordinal)
 	end 'placeholderFor'
 end 'RdataRequestLog'
 
-function placeholderLabel(ordinal RdataRequestOrdinal) returns ByteArray
-	return "{PlaceholderLabelPrefix}{ordinal}".toByteArray()
+function placeholderLabel(ordinal RdataRequestOrdinal) returns immutable ByteArray
+	return freeze "{PlaceholderLabelPrefix}{ordinal}".toByteArray()
 end 'placeholderLabel'
 
 // ⭐ **THE DRIVER'S ONE DOOR: perform one function's requests, then patch its placeholders.** Returns
@@ -112,8 +112,8 @@ function registerRdataRequests(globalData GlobalDataTable, requests RdataRequest
 
 		match request 'request'
 			floatConstant(bits) then _ = globalData.registerFloatConstant(bits)
-			jumpTable(slotCount) then labels.upsert(placeholderLabel(ordinal), value: globalData.registerJumpTable(slotCount).toByteArray())
-			stringBlob(bytes) then labels.upsert(placeholderLabel(ordinal), value: registerStringBlob(globalData, bytes: bytes).toByteArray())
+			jumpTable(slotCount) then labels.upsert(placeholderLabel(ordinal), value: freeze globalData.registerJumpTable(slotCount).toByteArray())
+			stringBlob(bytes) then labels.upsert(placeholderLabel(ordinal), value: freeze registerStringBlob(globalData, bytes: bytes).toByteArray())
 		end 'request'
 	end 'eachRequest'
 

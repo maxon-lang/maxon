@@ -94,3 +94,28 @@ summary can see assume every position written.
 The reads are recorded at the doors that read a name, not at `requireReceiverValue`, because an assignment
 target reads its receiver after the right-hand side. The if-condition frame restarts at the top of
 `parseIfCondition`, so `else if try …` chains restart it.
+
+## `let` and constant data
+
+A `let` binding, a `let` field and a `let` payload are write-through names. `readOnlyBlameOfBinding` answers
+`WriteBlame.rebindOnly` for them: a write through the name is recorded exactly as a write through a `var` is
+(it feeds the mutation summary, `provenanceWrites`, hold resolution and the capability seeds), and the only
+callee that refuses the name is one that reassigns a `mutable` by-reference parameter (E2013), because a `let`
+has no cell to give. `view` is parsed as `let`.
+
+Constant data is the one place a name carries a capability. `recordModuleLetRoot` settles a read of a module
+or `static` constant `immutable`; a local `let` bound to a constant and an inline `b"…"` literal take the same
+capability and are emitted as image data. Everything derived
+from such a value follows by adaptation: a field read off an `immutable` holder, an element of an `immutable`
+slot, a call result computed from `immutable` arguments. Reading an `immutable` slot leaves the capability its holder
+needs unchanged.
+
+The refusals come from the same rules as every other capability mismatch. `storeVerdict` returns
+`immutableIntoMutable` for an immutable value stored into a plain field, element or payload (E3196, with the
+holder noun in the message); `checkCapabilityCalls` refuses it at a parameter the callee writes or stores into
+a plain place (E3207); the result check refuses it at an unmarked result (E3209, `frozenDataForAPlainResult`).
+A write through it is E3207 at the receiver (`'push' needs a writable receiver`).
+
+`ProgramSignatures.aggregateTypeIsImmutable` makes "every field `let`" structural: each field type must itself be
+a value type or an immutable aggregate (`declaredLayoutIsImmutable`, cycle-guarded). The emitted share walk
+reads this predicate, so a record with a `let` array field is walked as an owner, not a view.

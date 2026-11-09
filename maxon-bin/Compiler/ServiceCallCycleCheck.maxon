@@ -82,7 +82,7 @@ type ServiceBlockingGraph
 		return self.serviceNames.count()
 	end 'nodeCount'
 
-	function serviceNameOf(node CsrIndex) returns ByteArray
+	function serviceNameOf(node CsrIndex) returns immutable ByteArray
 		return try self.serviceNames.get(node) otherwise panic("ServiceBlockingGraph.serviceNameOf: serviceNames.get OOB at {node} below count {self.nodeCount()}")
 	end 'serviceNameOf'
 
@@ -128,7 +128,7 @@ type ServiceBlockingGraph
 		panic("ServiceBlockingGraph.edgeIndexBetween: the cycle steps from node {owner} to node {awaited}, but no edge joins them — `shortestCycleThrough` walks the very adjacency these columns were built into")
 	end 'edgeIndexBetween'
 
-	function edgeMessageAt(index CsrIndex) returns ByteArray
+	function edgeMessageAt(index CsrIndex) returns immutable ByteArray
 		return try self.edgeMessages.get(index) otherwise panic("ServiceBlockingGraph.edgeMessageAt: edgeMessages.get OOB at {index} below count {self.edgeMessages.count()}")
 	end 'edgeMessageAt'
 
@@ -188,7 +188,7 @@ end 'buildServiceBlockingGraph'
 // ⚠ `module`, because `ServiceGlobalAccessCheck` seeds its forward closure from the very same question — *"is
 // this function a message, and of which service?"* — and a second spelling of it there would be free to
 // disagree about what a message is.
-module function messageOwnerNameOf(signatures ProgramSignatures, callee ByteArray) returns ByteArray throws AbsentError
+module function messageOwnerNameOf(signatures ProgramSignatures, callee ByteArray) returns immutable ByteArray throws AbsentError
 	if let message = try signatures.serviceMessageOf(callee) 'aMessage'
 		return message.typeName
 	end 'aMessage'
@@ -196,7 +196,7 @@ module function messageOwnerNameOf(signatures ProgramSignatures, callee ByteArra
 	throw AbsentError.absent
 end 'messageOwnerNameOf'
 
-module function serviceFactoryOwnerOf(signatures ProgramSignatures, callee ByteArray) returns ByteArray throws AbsentError
+module function serviceFactoryOwnerOf(signatures ProgramSignatures, callee ByteArray) returns immutable ByteArray throws AbsentError
 	let base = genericTemplateName(callee)
 
 	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'

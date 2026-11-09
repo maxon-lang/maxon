@@ -15,7 +15,7 @@ let DescriptorActionArity = 2
 
 module type RdataSlotTarget
 	export let offset as ByteOffset
-	export let funcName as ByteArray
+	export let funcName as immutable ByteArray
 
 	module static function create(offset ByteOffset, funcName ByteArray) returns RdataSlotTarget
 		return Self{offset: offset, funcName: funcName}
@@ -23,7 +23,7 @@ module type RdataSlotTarget
 end 'RdataSlotTarget'
 
 module union RdataWord
-	callee(name ByteArray)
+	callee(name immutable ByteArray)
 	inert
 	unreadable
 end 'RdataWord'
@@ -43,7 +43,7 @@ module type RdataSlotIndex
 		end 'alreadyBuilt'
 
 		for reloc in globalData.pendingRdataRelocs 'eachSlot'
-			let target = RdataSlotTarget.create(reloc.offsetInLabel, funcName: reloc.funcName.clone())
+			let target = RdataSlotTarget.create(reloc.offsetInLabel, funcName: reloc.funcName)
 
 			if var known = try self.byLabel.get(reloc.rdataLabel) 'sharedLabel'
 				known.push(target)
@@ -89,7 +89,7 @@ module type RdataSlotIndex
 		if let targets = try self.byLabel.get(label) 'hasFunctionSlots'
 			for target in targets 'eachTarget'
 				if target.offset == offset 'thisSlot'
-					return RdataWord.callee(target.funcName.clone())
+					return RdataWord.callee(target.funcName)
 				end 'thisSlot'
 
 				if rdataWordsOverlap(target.offset, second: offset) 'straddlesASlot'
@@ -167,7 +167,7 @@ end 'DescriptorAction'
 
 union DescriptorOutcome
 	inert
-	direct(name ByteArray)
+	direct(name immutable ByteArray)
 end 'DescriptorOutcome'
 
 module union TableUseKind
@@ -396,7 +396,7 @@ end 'resolveDescriptorAction'
 
 function outcomeOfWord(word RdataWord) returns DescriptorOutcome throws AbsentError
 	match word 'word'
-		callee(name) then return DescriptorOutcome.direct(name.clone())
+		callee(name) then return DescriptorOutcome.direct(name)
 		inert then return DescriptorOutcome.inert
 		unreadable then throw AbsentError.absent
 	end 'word'
@@ -417,7 +417,7 @@ function releaseOutcome(retainWord RdataWord, destroyWord RdataWord) returns Des
 	// descriptor, whose retain word is zero.
 	match destroy 'destroy'
 		inert then throw AbsentError.absent
-		direct(name) then return DescriptorOutcome.direct(name.clone())
+		direct(name) then return DescriptorOutcome.direct(name)
 	end 'destroy'
 end 'releaseOutcome'
 
@@ -514,10 +514,10 @@ function descriptorActionOf(callee ByteArray) returns DescriptorAction
 end 'descriptorActionOf'
 
 function devirtualizeWitnessDispatch(project Project, module StdModule, defs StdValueDefs, arith StdArithOperands, slots RdataSlotIndex, byName FunctionNameIndex, witness StdWitnessOperands, opIdx ElementIndex) returns bool
-	var target = ByteArray.create(0)
+	var target = EmptySourceText
 
 	match resolveRdataWord(project, module: module, defs: defs, arith: arith, slots: slots, value: witness.witnessAddr, kind: RdataPayloadKind.witnessTable, wordOffset: witnessMethodSlotOffset(witness.methodIndex)) 'word'
-		callee(name) then target = name.clone()
+		callee(name) then target = name
 		inert or
 		unreadable then return false
 	end 'word'
@@ -547,7 +547,7 @@ end 'devirtualizeDescriptorCall'
 function descriptorReplacement(outcome DescriptorOutcome, call StdCallOperands) returns StdOp
 	return match outcome 'outcome'
 		inert gives StdOp.binOpImm(call.resultId, lhs: call.secondArg, imm: 0, opcode: StdBinOpcode.add, operandType: StdType.i64)
-		direct(name) gives StdOp.call(call.resultId, callee: name.clone(), args: argsOf(call.secondArg))
+		direct(name) gives StdOp.call(call.resultId, callee: name, args: argsOf(call.secondArg))
 	end 'outcome'
 end 'descriptorReplacement'
 

@@ -351,14 +351,14 @@ export let MmCowDetachName = b"__mm_cow_detach"
 // (`recordCallUsage`) and the SYNTHESIS (`installUnionDestructors`) name it identically and cannot drift.
 export let DestructorPrefix = b"__destruct_"
 
-export function destructorSymbol(unionName ByteArray) returns ByteArray
-	return "{String.from(DestructorPrefix)}{String.from(unionName)}".toByteArray()
+export function destructorSymbol(unionName ByteArray) returns immutable ByteArray
+	return freeze "{String.from(DestructorPrefix)}{String.from(unionName)}".toByteArray()
 end 'destructorSymbol'
 
 export let UnionRetainPrefix = b"__uretain_"
 
-export function unionRetainSymbol(unionName ByteArray) returns ByteArray
-	return "{String.from(UnionRetainPrefix)}{String.from(unionName)}".toByteArray()
+export function unionRetainSymbol(unionName ByteArray) returns immutable ByteArray
+	return freeze "{String.from(UnionRetainPrefix)}{String.from(unionName)}".toByteArray()
 end 'unionRetainSymbol'
 
 // ⭐⭐⭐ **THE NAME OF A DECLARATION VIEW'S *DICTIONARY* DESTRUCTOR — `__destruct_dict_<mangled>(descriptor,
@@ -383,11 +383,11 @@ end 'unionRetainSymbol'
 // (`LowerMaxonToStd.lowerRuntimeCall`) and the SYNTHESIS below.
 let DictionaryDestructorPrefix = b"__destruct_dict_"
 
-export function dictionaryDestructorSymbol(mangledInstanceName ByteArray) returns ByteArray
-	return "{String.from(DictionaryDestructorPrefix)}{String.from(mangledInstanceName)}".toByteArray()
+export function dictionaryDestructorSymbol(mangledInstanceName ByteArray) returns immutable ByteArray
+	return freeze "{String.from(DictionaryDestructorPrefix)}{String.from(mangledInstanceName)}".toByteArray()
 end 'dictionaryDestructorSymbol'
 
-export function instanceDictionaryDestructorSymbol(signatures ProgramSignatures, id GenericInstanceId) returns ByteArray
+export function instanceDictionaryDestructorSymbol(signatures ProgramSignatures, id GenericInstanceId) returns immutable ByteArray
 	return dictionaryDestructorSymbol(signatures.mangleGenericInstance(id))
 end 'instanceDictionaryDestructorSymbol'
 
@@ -460,8 +460,8 @@ end 'recordDropOf'
 // `DestructorPrefix`/`destructorSymbol` pair for the drop family.
 export let ClonerPrefix = b"__clone_"
 
-export function clonerSymbol(typeName ByteArray) returns ByteArray
-	return "{String.from(ClonerPrefix)}{String.from(typeName)}".toByteArray()
+export function clonerSymbol(typeName ByteArray) returns immutable ByteArray
+	return freeze "{String.from(ClonerPrefix)}{String.from(typeName)}".toByteArray()
 end 'clonerSymbol'
 
 // ⭐⭐ **THE NAME OF A CONCRETE TYPE'S SYNTHESIZED SOLENESS WALK — `__sole_<TypeName>`**, the THIRD
@@ -474,8 +474,8 @@ end 'clonerSymbol'
 // three parties.
 export let SoleWalkPrefix = b"__sole_"
 
-export function soleWalkSymbol(typeName ByteArray) returns ByteArray
-	return "{String.from(SoleWalkPrefix)}{String.from(typeName)}".toByteArray()
+export function soleWalkSymbol(typeName ByteArray) returns immutable ByteArray
+	return freeze "{String.from(SoleWalkPrefix)}{String.from(typeName)}".toByteArray()
 end 'soleWalkSymbol'
 
 // ⭐⭐ **THE NAME OF A CONCRETE TYPE'S SYNTHESIZED SHARE WALK — `__share_<TypeName>`**, the soleness walk's
@@ -485,8 +485,8 @@ end 'soleWalkSymbol'
 // as the move's walk does: that owner is a path to a write the freeze cannot see.
 export let ShareWalkPrefix = b"__share_"
 
-export function shareWalkSymbol(typeName ByteArray) returns ByteArray
-	return "{String.from(ShareWalkPrefix)}{String.from(typeName)}".toByteArray()
+export function shareWalkSymbol(typeName ByteArray) returns immutable ByteArray
+	return freeze "{String.from(ShareWalkPrefix)}{String.from(typeName)}".toByteArray()
 end 'shareWalkSymbol'
 
 // ⭐ **`__mm_sole_box(box, visits)` / `__mm_share_box(box, visits)` — ONE BOX'S WALK STEP AS AN ENTRY OF ITS
@@ -1132,12 +1132,12 @@ export function emitRuntimeCall(module StdModule, block IrBlock, callee ByteArra
 end 'emitRuntimeCall'
 
 export function emitCallAndReturn(module StdModule, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter)
-	let answer = emitRuntimeCall(module, block: block, callee: callee.clone(), args: args, ids: ids)
+	let answer = emitRuntimeCall(module, block: block, callee: callee, args: args, ids: ids)
 	module.setTerminator(block, op: StdOp.ret(answer))
 end 'emitCallAndReturn'
 
 export function emitCallAndReturnVoid(module StdModule, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter)
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: callee.clone(), args: args))
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: callee, args: args))
 	module.setTerminator(block, op: StdOp.retVoid)
 end 'emitCallAndReturnVoid'
 
@@ -1514,9 +1514,9 @@ end 'CountedLoop'
 // `label` prefixes the three block labels (`<label>h`, `<label>b`, `<label>d`) so a function holding several
 // loops reads back as several loops under `--emit-ir-runtime`.
 export function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, from ValueId, to ValueId, label ByteArray, ids ValueMinter, initial ValueIdArray = ValueIdArray.create(0)) returns CountedLoop
-	var header = module.addBlock(func, label: "{String.from(label)}h".toByteArray(), heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: "{String.from(label)}b".toByteArray(), heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
+	var header = module.addBlock(func, label: freeze "{String.from(label)}h".toByteArray(), heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: freeze "{String.from(label)}b".toByteArray(), heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: freeze "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
@@ -1616,7 +1616,7 @@ export type CopyRun
 	export let chunk as CopyChunk
 	export let lower as ValueId
 	export let upper as ValueId
-	export let label as ByteArray
+	export let label as immutable ByteArray
 
 	export static function create(chunk CopyChunk, lower ValueId, upper ValueId, label ByteArray) returns CopyRun
 		return Self{chunk: chunk, lower: lower, upper: upper, label: label}
@@ -1684,8 +1684,8 @@ end 'CopyRunSplit'
 // is what keeps that from being load-bearing. It absorbs the empty range (a zero-length `__str_copy`, a
 // move of no elements) on the way past.
 export function openCopyRunSplit(module StdModule, func IrFunction, cur IrBlock, byteCount ValueId, widest CopyChunk, label ByteArray, ids ValueMinter) returns CopyRunSplit
-	var run = module.addBlock(func, label: "{String.from(label)}run".toByteArray(), heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
+	var run = module.addBlock(func, label: freeze "{String.from(label)}run".toByteArray(), heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: freeze "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: cur, value: byteCount, pred: StdCmpPred.le, against: 0, whenTrue: done, whenFalse: run, ids: ids)
 
@@ -1712,7 +1712,7 @@ export function openCopyRunSplit(module StdModule, func IrFunction, cur IrBlock,
 	for (iter, chunk) in used.withIterator() 'eachRun'
 		let upper = try ends.get(iter.index()) otherwise panic("every used chunk has an end")
 
-		runs.push(CopyRun.create(chunk, lower: lower, upper: upper, label: "{String.from(label)}{copyChunkShape(chunk).loopLetter}".toByteArray()))
+		runs.push(CopyRun.create(chunk, lower: lower, upper: upper, label: freeze "{String.from(label)}{copyChunkShape(chunk).loopLetter}".toByteArray()))
 		lower = upper
 	end 'eachRun'
 
@@ -3318,7 +3318,7 @@ enum UnboxedPayloadStep
 	retain
 end 'UnboxedPayloadStep'
 
-function unboxedStepSymbol(step UnboxedPayloadStep, layout EnumLayout) returns ByteArray
+function unboxedStepSymbol(step UnboxedPayloadStep, layout EnumLayout) returns immutable ByteArray
 	return match step 'step'
 		release gives destructorSymbol(layout.name)
 		retain gives unionRetainSymbol(layout.name)
@@ -3371,7 +3371,7 @@ function synthesizeUnboxedPayloadStepper(module StdModule, layout EnumLayout, pr
 	module.functions.push(func)
 end 'synthesizeUnboxedPayloadStepper'
 
-function unboxedPayloadRetainCallee(layout EnumLayout, ci CaseIndex, project Project, signatures ProgramSignatures) returns ByteArray
+function unboxedPayloadRetainCallee(layout EnumLayout, ci CaseIndex, project Project, signatures ProgramSignatures) returns immutable ByteArray
 	let field = unboxedCasePayload(layout, ci: ci)
 
 	return match classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath) 'class'
@@ -3412,7 +3412,7 @@ function synthesizeUnboxedUnionCloner(module StdModule, layout EnumLayout, proje
 		emitUnboxedPresenceTest(module, from: caseBlock, pointer: pointer, present: visit, vacant: vacant, ids: ids)
 
 		let field = unboxedCasePayload(layout, ci: ci)
-		let strategy = managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: CascadeAction.clone)
+		let strategy = slotCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, capability: field.capability, action: CascadeAction.clone)
 		let copy = emitCloneCall(module, block: visit, oldPtr: pointer, strategy: strategy, ids: ids)
 		let tagBits = emitConst(module, block: visit, value: layout.wordKeyOfIndex(ci), ids: ids)
 		let cloned = emitBin(module, block: visit, a: copy, b: tagBits, opcode: StdBinOpcode.bitOr, ids: ids)
@@ -3433,7 +3433,7 @@ function emitUnboxedPayloadBelowHeader(module StdModule, func IrFunction, cursor
 	match unboxedCasePayloadShape(layout, field: field, project: project, signatures: signatures) 'shape'
 		leafBox then return cursor
 		recordBytes then return emitWalkedRecordBytes(module, func: func, cursor: cursor, arr: pointer, action: action, ids: ids)
-		recordElements then return emitUnboxedRecordElementsBelowHeader(module, func: func, cursor: cursor, pointer: pointer, strategy: managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: action), action: action, ids: ids)
+		recordElements then return emitUnboxedRecordElementsBelowHeader(module, func: func, cursor: cursor, pointer: pointer, strategy: slotCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, capability: field.capability, action: action), action: action, ids: ids)
 		fieldRecord then return emitFieldCascadesBelowHeader(module, func: func, cur: cursor, box: pointer, walks: payloadFieldCascades(layout, field: field, project: project, signatures: signatures, action: action), action: action, ids: ids)
 	end 'shape'
 end 'emitUnboxedPayloadBelowHeader'
@@ -3477,7 +3477,7 @@ function synthesizeUnboxedUnionWalk(module StdModule, layout EnumLayout, project
 	var body = beginWalkBody(module, name: perTypeCascadeSymbol(action, typeName: layout.name), scope: WalkScope.graph, walksElements: false, recursesPerLevel: true)
 	let word = WalkBoxParam
 	let visits = body.entry.visits()
-	let meeting = ownMeetingOfShareWalk(action, immutable: signatures.aggregateTypeIsImmutable(layout.name))
+	let meeting = ownMeetingOfShareWalk(action, signatures: signatures, subject: CascadeSubject.aggregate(layout.name))
 	let (tag, pointer) = emitUnboxedTagAndPointer(module, block: body.entry.block, word: word, ids: body.ids)
 	var chain = body.entry.block
 
@@ -3499,7 +3499,7 @@ function synthesizeUnboxedUnionWalk(module StdModule, layout EnumLayout, project
 			resume = emitUnboxedPayloadBelowHeader(module, func: body.func, cursor: resume, pointer: pointer, layout: layout, field: field, project: project, signatures: signatures, action: action, ids: body.ids)
 			emitCascadeBranch(module, from: resume, to: body.done)
 		end 'sharedPayload' else 'ownedPayload'
-			let strategy = managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: action)
+			let strategy = slotCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, capability: field.capability, action: action)
 			let walked = emitWalkCall(module, block: resume.block, ptr: pointer, visits: resume.visits(), strategy: strategy, ids: body.ids)
 			emitBranchCarrying(module, from: resume.block, to: body.done.block, values: argsOf(walked))
 		end 'ownedPayload'
@@ -3859,7 +3859,7 @@ end 'closeDestructorNeeds'
 // layout and misresolving its id against `project.typeNames` — the interner mismatch (a panic when the misread
 // name was no declared type, a WRONG destructor when it happened to be one), now unrepresentable rather than
 // re-asserted by a comment at each site. Precondition: the caller checked `structFieldIsManaged`.
-function managedStructFieldDropCallee(layout StructLayout, index FieldIndex, typeNames TypeNameInterner, signatures ProgramSignatures) returns ByteArray
+function managedStructFieldDropCallee(layout StructLayout, index FieldIndex, typeNames TypeNameInterner, signatures ProgramSignatures) returns immutable ByteArray
 	let fieldType = try layout.fieldTypes.get(index) otherwise panic("managedStructFieldDropCallee: fieldTypes.get OOB at {index}")
 	return managedFieldDropCallee(signatures, typeNames: typeNames, fieldType: fieldType)
 end 'managedStructFieldDropCallee'
@@ -4459,7 +4459,7 @@ end 'installGenericInstanceDictionaryDestructors'
 export union FieldDropKind
 	// The ordinary field: one machine word holding a managed pointer, released by a STATICALLY chosen
 	// `(box) -> void` callee — `__str_decref`, `__mm_decref`, `__managed_decref`, a nested `__destruct_<T>`.
-	direct(let callee ByteArray)
+	direct(let callee immutable ByteArray)
 
 	// ⭐ A value held at an INTERFACE TYPE: a fat pointer whose conformer — and therefore whose destructor — is
 	// a RUN-TIME fact, so no static callee exists to name. The witness half at `+witnessDisplacement` from the
@@ -4477,7 +4477,7 @@ export union FieldDropKind
 	//
 	// ⚠ It carries the descriptor's `ValueId` rather than reading a well-known one, because it is a PARAMETER
 	// of the cascade being emitted and nothing outside that emit knows its number.
-	throughDescriptor(let callee ByteArray, descriptor ValueId, blockOffset ByteOffset)
+	throughDescriptor(let callee immutable ByteArray, descriptor ValueId, blockOffset ByteOffset)
 end 'FieldDropKind'
 
 // ⭐ **A FIELD'S RELEASE, OR THAT IT HAS NONE** — the answer `dictionaryFieldDropKind` gives, where
@@ -4727,7 +4727,7 @@ end 'cascadeNeededSet'
 
 // The symbol prefix `action`'s per-type entries wear — what tells a NESTED cascade callee apart from a leaf
 // (`__str_clone`, `__managed_sole`), which names no node in this graph.
-function cascadeSymbolPrefix(action CascadeAction) returns ByteArray
+function cascadeSymbolPrefix(action CascadeAction) returns immutable ByteArray
 	return match action 'action'
 		clone gives ClonerPrefix
 		soleWalk gives SoleWalkPrefix
@@ -4789,7 +4789,7 @@ function noteStructCascadeNeeds(usage RuntimeUsage, layout StructLayout, typeNam
 		end 'scalar'
 
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("noteStructCascadeNeeds: fieldTypes.get OOB at {i}")
-		noteFieldCascadeNeeds(usage, strategy: managedFieldCascadeStrategy(signatures, typeNames: typeNames, fieldType: fieldType, asElement: false, action: action), work: work, action: action)
+		noteFieldCascadeNeeds(usage, strategy: slotCascadeStrategy(signatures, typeNames: typeNames, fieldType: fieldType, capability: layout.fieldTypeSites.capabilityAt(i), action: action), work: work, action: action)
 	end 'eachField'
 end 'noteStructCascadeNeeds'
 
@@ -4805,7 +4805,7 @@ function noteUnionCascadeNeeds(usage RuntimeUsage, layout EnumLayout, project Pr
 				continue
 			end 'scalar'
 
-			noteFieldCascadeNeeds(usage, strategy: managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: action), work: work, action: action)
+			noteFieldCascadeNeeds(usage, strategy: slotCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, capability: field.capability, action: action), work: work, action: action)
 		end 'eachField'
 	end 'eachCase'
 end 'noteUnionCascadeNeeds'
@@ -5031,7 +5031,7 @@ function structManagedFieldCascades(layout StructLayout, typeNames TypeNameInter
 		end 'scalar'
 
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("structManagedFieldCascades: fieldTypes.get OOB at {i}")
-		specs.push(ManagedFieldCascade.create(layout.offsetOfField(i), strategy: managedFieldCascadeStrategy(signatures, typeNames: typeNames, fieldType: fieldType, asElement: false, action: action)))
+		specs.push(ManagedFieldCascade.create(layout.offsetOfField(i), strategy: slotCascadeStrategy(signatures, typeNames: typeNames, fieldType: fieldType, capability: layout.fieldTypeSites.capabilityAt(i), action: action)))
 	end 'eachField'
 
 	return specs
@@ -5060,12 +5060,26 @@ function synthesizeStructCascade(module StdModule, layout StructLayout, typeName
 	match action 'action'
 		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(layout.name), boxSize: layout.sizeBytes(), tagName: layout.name, clones: specs, project: project)
 		soleWalk or
-		shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: layout.name), walks: specs, action: action, meeting: ownMeetingOfShareWalk(action, immutable: signatures.aggregateTypeIsImmutable(layout.name)))
+		shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: layout.name), walks: specs, action: action, meeting: ownMeetingOfShareWalk(action, signatures: signatures, subject: CascadeSubject.aggregate(layout.name)))
 	end 'action'
 end 'synthesizeStructCascade'
 
-function ownMeetingOfShareWalk(action CascadeAction, immutable bool) returns WalkMeeting
-	return WalkMeeting.view if action == CascadeAction.shareWalk and immutable else WalkMeeting.owner
+union CascadeSubject
+	aggregate(let name immutable ByteArray)
+	instance(let id GenericInstanceId)
+end 'CascadeSubject'
+
+function ownMeetingOfShareWalk(action CascadeAction, signatures ProgramSignatures, subject CascadeSubject) returns WalkMeeting
+	if action != CascadeAction.shareWalk 'notAShareWalk'
+		return WalkMeeting.owner
+	end 'notAShareWalk'
+
+	let subjectIsImmutable = match subject 'subject'
+		aggregate(name) gives signatures.aggregateTypeIsImmutable(name)
+		instance(id) gives signatures.genericInstanceIsImmutable(id)
+	end 'subject'
+
+	return WalkMeeting.view if subjectIsImmutable else WalkMeeting.owner
 end 'ownMeetingOfShareWalk'
 
 // ⭐⭐ **THE PER-INSTANCE DEEP-CLONER CASCADE** — the exact clone dual of
@@ -5113,7 +5127,7 @@ function synthesizeGenericInstanceCascade(module StdModule, id GenericInstanceId
 	match action 'action'
 		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(mangled), boxSize: signatures.genericInstanceBoxSize(id), tagName: mangled, clones: specs, project: project)
 		soleWalk or
-		shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: mangled), walks: specs, action: action, meeting: ownMeetingOfShareWalk(action, immutable: signatures.genericInstanceIsImmutable(id)))
+		shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: mangled), walks: specs, action: action, meeting: ownMeetingOfShareWalk(action, signatures: signatures, subject: CascadeSubject.instance(id)))
 	end 'action'
 end 'synthesizeGenericInstanceCascade'
 
@@ -5187,7 +5201,7 @@ function emitManagedFieldCascades(module StdModule, func IrFunction, start Casca
 			continue
 		end 'scalar'
 
-		let strategy = managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: action)
+		let strategy = slotCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, capability: field.capability, action: action)
 		cur = emitManagedFieldCascade(module, func: func, cur: cur, box: box, offset: layout.payloadSlotOffset(fi as PayloadSlotIndex), strategy: strategy, action: action, ids: ids)
 	end 'eachField'
 
@@ -5259,7 +5273,7 @@ function emitWitnessReadClone(module StdModule, block IrBlock, box ValueId, offs
 end 'emitWitnessReadClone'
 
 // The label the guarded field block wears, so a dumped body still says which cascade it belongs to.
-function cascadeFieldBlockLabel(action CascadeAction) returns ByteArray
+function cascadeFieldBlockLabel(action CascadeAction) returns immutable ByteArray
 	return match action 'action'
 		clone gives b"clonefld"
 		soleWalk gives b"solefld"
@@ -5378,7 +5392,8 @@ end 'emitFieldCascadesBelowHeader'
 // box step alone.
 function synthesizeUnionWalk(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures, action CascadeAction)
 	var body = beginWalkBody(module, name: perTypeCascadeSymbol(action, typeName: layout.name), scope: WalkScope.graph, walksElements: false, recursesPerLevel: true)
-	var walked = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: WalkBoxParam, action: action, meeting: ownMeetingOfShareWalk(action, immutable: signatures.aggregateTypeIsImmutable(layout.name)), stop: body.done, ids: body.ids)
+	let meeting = ownMeetingOfShareWalk(action, signatures: signatures, subject: CascadeSubject.aggregate(layout.name))
+	var walked = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: WalkBoxParam, action: action, meeting: meeting, stop: body.done, ids: body.ids)
 	var fellThrough = emitUnionManagedCaseChain(module, func: body.func, cur: walked, box: WalkBoxParam, layout: layout, dest: body.done, project: project, signatures: signatures, action: action, ids: body.ids)
 
 	emitCascadeBranch(module, from: fellThrough, to: body.done)

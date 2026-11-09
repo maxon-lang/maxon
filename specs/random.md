@@ -205,9 +205,9 @@ end 'main'
 error E3036: <fragment>:3:20: '__Builtins.fillRandom' takes exactly 1 argument, but 0 were given
 ```
 
-<!-- test: random.a-let-receiver-whose-method-fills-its-own-field-is-refused-as-for-a-push -->
+<!-- test: random.a-let-receiver-whose-method-fills-its-own-field-is-written-as-for-a-push -->
 <!-- tier: stdlib -->
-`fillRandom` into a field of the receiver writes the receiver, so a `let` receiver is refused at the call.
+`fillRandom` into a field of the receiver writes the receiver in place, and a `let` receiver is accepted at the call.
 ```maxon
 type Sink
 	var bytes as ByteArray
@@ -227,14 +227,14 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:16:7: cannot pass 'sink', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```exitcode
+0
 ```
 
-<!-- test: random.a-let-handed-to-a-function-that-fills-its-parameter-is-refused-as-for-a-push -->
+<!-- test: random.a-let-handed-to-a-function-that-fills-its-parameter-is-written-as-for-a-push -->
 <!-- tier: stdlib -->
-A function that fills its `ByteArray` parameter's buffer writes that parameter, so handing it a `let` binding is refused
-at the call.
+A function that fills its `ByteArray` parameter's buffer writes that parameter, and handing it a `let` binding is
+accepted at the call.
 ```maxon
 function fill(drawn ByteArray)
 	_ = __Builtins.fillRandom(drawn.managed)
@@ -246,8 +246,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:8:2: cannot pass 'drawn', which is read-only (a `let` binding), to a function that writes parameter 'drawn' (in main); pass a clone()
+```exitcode
+0
 ```
 
 <!-- test: random.below-stays-below-large-bounds -->

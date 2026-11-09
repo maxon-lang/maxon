@@ -7,14 +7,14 @@
 export type TailCalls
 	export var found as bool
 	export var opIdx as ElementIndex
-	export var callee as ByteArray
+	export var callee as immutable ByteArray
 	export var args as ValueIdArray
 	var safe as bool
 	var scratch as StdCallOperands
 	var returnsTheCallResult as bool
 
 	export static function none() returns Self
-		return Self{found: false, opIdx: 0, callee: ByteArray.create(0), args: ValueIdArray.create(0), safe: false, scratch: StdCallOperands.create(), returnsTheCallResult: false}
+		return Self{found: false, opIdx: 0, callee: b"", args: ValueIdArray.create(0), safe: false, scratch: StdCallOperands.create(), returnsTheCallResult: false}
 	end 'none'
 
 	export static function forFunction(module StdModule, func IrFunction, permitted bool) returns Self
@@ -90,7 +90,7 @@ export type TailCalls
 
 		self.found = true
 		self.opIdx = lastIdx
-		self.callee = self.scratch.callee.clone()
+		self.callee = self.scratch.callee
 		self.args = tailCallArguments(lastOp)
 		self.returnsTheCallResult = returned.count() == 1
 	end 'recognizeTailShape'

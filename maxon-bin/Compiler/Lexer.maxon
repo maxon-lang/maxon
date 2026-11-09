@@ -872,7 +872,7 @@ export type Token
 	// KEYWORDS, which are lexed as identifiers and only then classified, so they reach
 	// `emitWithSource` carrying their own bytes exactly like any other word token.
 	// ⇒ `tokenDisplayText` is the one reader that resolves which of the two a caller wants.
-	export let value as ByteArray
+	export let value as immutable ByteArray
 	export let line as LineNumber
 	export let column as ColumnNumber
 
@@ -884,7 +884,7 @@ export type Token
 
 	// `value` defaults to the shared empty slice, so a caller emitting a token whose
 	// text its kind already implies simply omits it — and allocates nothing.
-	export static function create(kind TokenKind, line LineNumber, column ColumnNumber, value ByteArray = EmptySourceText, startByte ByteOffset = 0, endByte ByteOffset = 0) returns Token
+	export static function create(kind TokenKind, line LineNumber, column ColumnNumber, value immutable ByteArray = EmptySourceText, startByte ByteOffset = 0, endByte ByteOffset = 0) returns Token
 		return Self{kind: kind, value: value, line: line, column: column, startByte: startByte, endByte: endByte}
 	end 'create'
 
@@ -1259,7 +1259,7 @@ end 'emitFixedToken'
 
 type Lexer
 	var source as String
-	var bytes as ByteArray
+	let bytes as immutable ByteArray
 	var cursor as ByteCursor
 	export var tokens as TokenArray
 	var len as ByteOffset
@@ -1279,17 +1279,17 @@ type Lexer
 	// CursorError because that's the shared "done" channel; the flag lets
 	// run() distinguish "clean completion at EOF" from a truncated token.
 	var emittedAtEof as bool
-	let keywords as KeywordTable
+	let keywords as immutable KeywordTable
 
 	var comments as CommentLog
 	var interpolationDepth as InterpolationDepth
 
-	static function create(source String, bytes ByteArray, cursor ByteCursor, keywords KeywordTable, recording bool) returns Lexer
+	static function create(source String, bytes ByteArray, cursor ByteCursor, keywords immutable KeywordTable, recording bool) returns Lexer
 		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(0), len: bytes.count() as ByteOffset, line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false, keywords: keywords, comments: CommentLog.recorded(CommentSpanArray.create(0)) if recording else CommentLog.discarded, interpolationDepth: 0}
 	end 'create'
 
 	function takeComments() returns CommentLog
-		var taken = self.comments
+		let taken = self.comments
 		self.comments = CommentLog.discarded
 
 		return taken
@@ -1365,7 +1365,7 @@ type Lexer
 	// source, plus the byte range it spans. Used by the identifier, number,
 	// string-literal and directive scanners — every token whose text is not implied
 	// by its kind.
-	function emitWithSource(kind TokenKind, value ByteArray, startLine LineNumber, startCol ColumnNumber, startByte ByteOffset, endByte ByteOffset)
+	function emitWithSource(kind TokenKind, value immutable ByteArray, startLine LineNumber, startCol ColumnNumber, startByte ByteOffset, endByte ByteOffset)
 		tokens.push(Token.create(kind, line: startLine, column: startCol, value: value, startByte: startByte, endByte: endByte))
 	end 'emitWithSource'
 
@@ -1409,14 +1409,14 @@ type Lexer
 	// prefixed forms, so every numeric token carries both.
 	function emitNumber(kind TokenKind, numStart ByteOffset, startLine LineNumber, startCol ColumnNumber)
 		let endByte = sliceNumberEndByte()
-		let value = try bytes.slice(numStart, endIndex: endByte) otherwise panic("Lexer.emitNumber: invariant violated")
+		let value = freeze try bytes.slice(numStart, endIndex: endByte) otherwise panic("Lexer.emitNumber: invariant violated")
 		tokens.push(Token.create(kind, line: startLine, column: startCol, value: value, startByte: numStart, endByte: endByte))
 	end 'emitNumber'
 
 	// Emit a string-literal-shaped token (charLiteral/stringLiteral) capturing its
 	// source byte range and byte slice.
 	function emitStringLit(kind TokenKind, strStart ByteOffset, endByte ByteOffset, startLine LineNumber, startCol ColumnNumber)
-		let value = try bytes.slice(strStart, endIndex: endByte) otherwise panic("Lexer.emitStringLit: invariant violated")
+		let value = freeze try bytes.slice(strStart, endIndex: endByte) otherwise panic("Lexer.emitStringLit: invariant violated")
 		tokens.push(Token.create(kind, line: startLine, column: startCol, value: value, startByte: strStart, endByte: endByte))
 	end 'emitStringLit'
 
@@ -2217,7 +2217,7 @@ type Lexer
 			atEof = true
 		end 'includeDecLast'
 
-		let numBytes = try bytes.slice(numStart, endIndex: endOfs) otherwise panic("Lexer: number-slice invariant violated")
+		let numBytes = freeze try bytes.slice(numStart, endIndex: endOfs) otherwise panic("Lexer: number-slice invariant violated")
 
 		if isFloat 'emitFloat'
 			emitWithSource(TokenKind.floatLiteral, value: numBytes, startLine: startLine, startCol: startCol, startByte: numStart, endByte: endOfs)
@@ -2307,7 +2307,7 @@ type Lexer
 			atEof = true
 		end 'includeLastByte'
 
-		let identBytes = try bytes.slice(startPos, endIndex: identEnd) otherwise panic("Lexer: identifier-slice invariant violated")
+		let identBytes = freeze try bytes.slice(startPos, endIndex: identEnd) otherwise panic("Lexer: identifier-slice invariant violated")
 		let classified = keywords.classify(identBytes)
 
 		// `export` before a `.` is the project-root qualifier, a name to every token consumer: the parser,
@@ -2370,7 +2370,7 @@ type Lexer
 			throw CursorError.exhausted
 		end 'unknown'
 
-		let fullSpanBytes = try bytes.slice(hashStart, endIndex: nameEnd) otherwise panic("Lexer.scanDirective: span slice invariant violated")
+		let fullSpanBytes = freeze try bytes.slice(hashStart, endIndex: nameEnd) otherwise panic("Lexer.scanDirective: span slice invariant violated")
 		emitWithSource(kind, value: fullSpanBytes, startLine: startLine, startCol: startCol, startByte: hashStart, endByte: nameEnd)
 
 		if atEof 'directiveDone'
@@ -2456,7 +2456,7 @@ type Lexer
 		// At EOF the cursor still sits ON the last byte — `advance` refuses to step past it — so that byte
 		// is part of the text and the span runs to the end of the source.
 		let textEnd = len if atEof else cursorByte()
-		let value = try bytes.slice(textStart, endIndex: textEnd) otherwise panic("Lexer.scanDocComment: slice [{textStart}, {textEnd}) outside the {len}-byte source")
+		let value = freeze try bytes.slice(textStart, endIndex: textEnd) otherwise panic("Lexer.scanDocComment: slice [{textStart}, {textEnd}) outside the {len}-byte source")
 		emitWithSource(TokenKind.docComment, value: value, startLine: startLine, startCol: startCol, startByte: startByte, endByte: textEnd)
 
 		if atEof 'docCommentEndsTheFile'
@@ -2544,7 +2544,7 @@ type Lexer
 		self.tokens.push(Token.create(TokenKind.eof, line: line, column: column))
 		markContextualHeads(self.tokens)
 
-		var finished = self.tokens
+		let finished = self.tokens
 		self.tokens = TokenArray.create(0)
 
 		return finished
@@ -2576,7 +2576,7 @@ end 'Lexer'
 // the project's diagnostic sink and stop the pipeline before parsing runs
 // on partial tokens.
 export function tokenize(source String, keywords KeywordTable) returns TokenArray throws LexerError
-	let bytes = source.toByteArray()
+	let bytes = freeze source.toByteArray()
 	let cursor = try bytes.cursor() otherwise 'emptySource'
 		// Empty or whitespace-only source yields an empty token stream.
 		return TokenArray.create(0)
@@ -2804,7 +2804,7 @@ function dropBracketedLayout(tokens TokenArray) returns TokenArray
 end 'dropBracketedLayout'
 
 export function tokenizeWithComments(source String, keywords KeywordTable) returns LexedSource throws LexerError
-	let bytes = source.toByteArray()
+	let bytes = freeze source.toByteArray()
 	let cursor = try bytes.cursor() otherwise 'emptySource'
 		return LexedSource.create(TokenArray.create(0), comments: CommentLog.recorded(CommentSpanArray.create(0)))
 	end 'emptySource'
@@ -2864,7 +2864,7 @@ typealias KeywordInfoMap = Map with (ByteArray, KeywordInfo)
 export type KeywordTable
 	let byName as KeywordInfoMap
 
-	module static function create() returns KeywordTable
+	static function entries() returns KeywordInfoMap
 		let byName = [
 			b"if": KeywordInfo.create(TokenKind.if, helpText: "Conditional statement. Executes code if the condition is true.", canHaveBlockLabel: true),
 			b"else": KeywordInfo.create(TokenKind.else, helpText: "Alternative branch in an if statement. Executed when the condition is false.", canHaveBlockLabel: true),
@@ -2936,7 +2936,11 @@ export type KeywordTable
 			b"cstring": KeywordInfo.create(TokenKind.cstring, helpText: "NUL-terminated UTF-8 byte pointer. Used to pass strings to `__Builtins.*` runtime intrinsics that strlen their buffers. Produce one with `String.cstr()` or `__ManagedMemory.toCString()`.", canHaveBlockLabel: false)
 		]
 
-		return Self{byName: byName}
+		return byName
+	end 'entries'
+
+	module static function create() returns immutable KeywordTable
+		return freeze Self{byName: Self.entries()}
 	end 'create'
 
 	// Keyed on the identifier's raw BYTES, so the hot path never materializes a String:

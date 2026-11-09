@@ -336,7 +336,7 @@ end 'RangeFunction'
 
 module union AnalyzedFunction
 	none
-	named(let name ByteArray)
+	named(let name immutable ByteArray)
 end 'AnalyzedFunction'
 
 // Everything a function's analysis writes into, created ONCE for the module: the interval columns, the
@@ -421,7 +421,7 @@ module type RangeScratch
 	// Drop the reference into the function a run held for its panics. This scratch outlives the function
 	// on a pool worker, and a unit crossing back to the driver must have one owner per record
 	// (`StdUnit`): the name it aliased would be that record's second.
-	function funcName() returns ByteArray
+	function funcName() returns immutable ByteArray
 		match self.analyzed 'analyzed'
 			none then panic("RangeScratch.funcName: a column was read between two functions' analyses")
 			named(name) then return name

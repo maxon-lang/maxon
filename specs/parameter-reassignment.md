@@ -293,7 +293,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:10:2: cannot pass 'n', which is read-only (a `let` binding), to a function that writes parameter 'n' (in main); pass a clone()
+error E2013: <fragment>:10:2: 'n' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
 ```
 
 <!-- test: error.a-literal-handed-to-a-mutable-parameter-is-refused -->

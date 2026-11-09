@@ -130,11 +130,11 @@ end 'main'
 ```
 
 <!-- test: a-store-into-an-immortal-literal-never-reaches-its-image -->
-A byte string literal is an immortal image. Each call reads the literal, writes the copy it was given and
+A byte string literal is an immortal image, written only through its `.clone()`. Each call reads the literal, writes the clone and
 reads the copy back, so a write that reached the image would show on the second call (or fault).
 ```maxon
 function bumped() returns Byte
-	var text = b"abc"
+	var text = b"abc".clone()
 	let before = try text.get(0) otherwise panic("get: index 0 of a three-byte literal")
 	try text.set(0, value: 90) otherwise panic("set: index 0 of a three-byte literal")
 	let after = try text.get(0) otherwise panic("get: index 0 of a three-byte literal")

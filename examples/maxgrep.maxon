@@ -537,7 +537,7 @@ type Searcher
 		return try prepare(request) otherwise panic("main prepares this same request before it spawns a Searcher")
 	end 'create'
 
-	export function search(path immutable FilePath) returns isolated FileReport throws SearchError
+	export function search(path FilePath) returns isolated FileReport throws SearchError
 		let contents = try File.readBinary(path) otherwise throw SearchError.unreadable
 		return searchBuffer(contents)
 	end 'search'
@@ -548,28 +548,28 @@ type Searcher
 		var lineStart = 0 as BufferPos
 		var lineNumber = firstLineNumber as LineNumber
 
-		modify report 'fill'
-			while lineStart < buffer.count() 'eachLine'
-				let lineEnd = lineEndFrom(buffer, lineStart: lineStart)
-				let selected = self.matcher.matchesLine(buffer, lineStart: lineStart, lineEnd: lineEnd) != self.request.invertMatch
+		while lineStart < buffer.count() 'eachLine'
+			let lineEnd = lineEndFrom(buffer, lineStart: lineStart)
+			let selected = self.matcher.matchesLine(buffer, lineStart: lineStart, lineEnd: lineEnd) != self.request.invertMatch
 
-				if selected 'selectLine'
+			if selected 'selectLine'
+				modify report 'fill'
 					report.selectedCount = report.selectedCount + 1
 
 					if self.request.keepsLines and not isBinary 'keepText'
 						let text = try buffer.slice(lineStart, endIndex: lineEnd) otherwise panic("searchBuffer: a line lies inside its buffer")
 						report.lines.push(LineMatch.create(lineNumber, text: String.from(text)))
 					end 'keepText'
+				end 'fill'
 
-					if self.request.stopsAtFirstSelection 'enough'
-						break
-					end 'enough'
-				end 'selectLine'
+				if self.request.stopsAtFirstSelection 'enough'
+					break
+				end 'enough'
+			end 'selectLine'
 
-				lineStart = lineEnd + 1
-				lineNumber = lineNumber + 1
-			end 'eachLine'
-		end 'fill'
+			lineStart = lineEnd + 1
+			lineNumber = lineNumber + 1
+		end 'eachLine'
 
 		return report
 	end 'searchBuffer'
@@ -737,7 +737,7 @@ function findFiles(options Options, summary RunSummary) returns PathArray
 end 'findFiles'
 
 function submitSearch(replies ReportPromiseArray, searcher Searcher.handle, path FilePath)
-	replies.push(try searcher.search(freeze path.clone(), sendTimeout: ForeverMs) otherwise (e) 'refused'
+	replies.push(try searcher.search(path, sendTimeout: ForeverMs) otherwise (e) 'refused'
 		match e 'why'
 			mailboxFull then panic("submitSearch: runs on main's green thread, which no promise names and so nothing cancels, and a send given ForeverMs waits for room — mailboxFull cannot occur")
 			serviceStopped then panic("submitSearch: a searcher stopped before the files were sent")

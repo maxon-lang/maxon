@@ -5,6 +5,11 @@ sidebar:
   order: 6
 ---
 
+A `let` is a name that is never reassigned; a `var` is a name that may be. The keyword says nothing about the
+data behind the name: a field store, a `push` and a callee that writes its parameter reach through a `let`
+to the record it names. A number, `bool`, enum or `String` has no record behind its name, so changing one is
+reassigning it, and it needs a `var`. `view` is another spelling of `let`.
+
 ## Mutable Variables (`var`)
 
 ```maxon
@@ -20,12 +25,12 @@ number, arithmetic over bare numbers (`16 * 1024`), a plain `let` constant, and 
 of bare numbers are refused as its initializer (**E2004**); cast it (`var size = (16 * 1024) as ByteCount`).
 A `var` initialized from a value of some alias is that alias.
 
-## Immutable Variables (`let`)
+## Fixed Variables (`let`)
 
 ```maxon
 let pi = 3.14159
 let name = "Maxon"
-// pi = 3.14            // E2013: cannot assign to immutable variable: 'pi'
+// pi = 3.14            // E2013: 'pi' is a let and cannot be reassigned
 ```
 
 A `let` bound to a bare number, to arithmetic over bare numbers or to a literal container of them is a
@@ -53,43 +58,85 @@ function main() returns ExitCode
 end 'main'
 ```
 
-A `let` is read-only all the way down (see [Read-Only Values](/docs/language/memory-model/#read-only-values)): calling a method that writes
-its receiver (`push`, `append`, `set`, `remove`, `clear`, …) on a `let`, or writing a field of anything it
-reaches, is **E3159**.
+A `let` fixes which record the name holds, not what is in the record. A field store, a method that writes its
+receiver (`push`, `append`, `set`, `remove`, `clear`, …) and a callee that writes its parameter all reach
+through a `let`:
 
 ```maxon
-typealias Tally = int(0 to u64.max)
-typealias TallyArray = Array with Tally
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
 
 function main() returns ExitCode
-	var items = TallyArray.create(0)
-	items.push(1)                    // fine: items is a var
-	// let fixed = TallyArray.create(0)
-	// fixed.push(1)                 // E3159: cannot write through 'fixed': 'fixed' is read-only (a `let` binding)
-	print("{items.count()}\n")
+	let p = Box.create(1)
+	p.n = 2                          // a field store through a let
+	let xs = Counts.create(0)
+	xs.push(p.n)                     // so is a method that writes its receiver
+	// p = Box.create(3)             // E2013: 'p' is a let and cannot be reassigned
+	print("{p.n} {xs.count()}\n")    // 2 1
 	return 0
 end 'main'
 ```
 
-So a `let` binds only a value nothing writes while it lives:
+What a `let` refuses is reassignment:
 
-- a fresh record no other name reaches (`let x = Box.create(1)`), frozen at birth;
-- an element a library `pop`, `remove`, `removeFirst` or `removeLast` moves out of a container
-  (`let x = try self.items.pop() otherwise return`), which the container no longer holds;
-- a read-only value, such as a module-level `let`'s record or a `let` field of a read-only holder;
-- a part of a parameter (`let z = p.child`), which is as immutable as the argument the caller passed. A caller
-  that passes the same record through a second, writable argument may write it while the `let` lives.
+- Assigning to it is **E2013** (`'p' is a let and cannot be reassigned`). The same wording covers a `for`
+  variable, a `match` or `if let` binding and a tuple element bound by `let`. A `let` field is `'version' is a
+  let field and cannot be reassigned`.
+- Passing it to a `mutable` parameter is **E2013** too, because that parameter reassigns the caller's variable:
+  ``'n' is a let and cannot be passed to the `mutable` parameter 'x'; bind it to a `var` ``.
+- A number, `bool`, enum or `String` held by a `let` cannot change at all, since changing one is reassigning
+  it. Declare it `var` when it must.
 
-A `let` bound to state something may still write — a field of a writable `self` or `var`, an element of a `var`
-container, a getter's result on a `var` holder, a parameter the function writes, a `var`'s record that a
-container also holds — is **E3188** (``cannot bind `let` 'b' to a value reached through 'holder', which something
-may still write; use `view` to read it, `var` to write it, or bind a clone()``). A function that returns a
-`let`-bound value returns a read-only value.
+A `var` bound from a `let` names the same record, so a write through either name is seen through the other. A
+`let` bound from state that something else writes sees the writes:
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Holder
+	export var box as Box
+
+	static function create() returns Self
+		return Self{box: Box.create(1)}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let r = Box.create(5)
+	var c = r
+	c.n = 7                   // r names the same record
+	var h = Holder.create()
+	let b = h.box
+	h.box.n = 8               // b sees it
+	print("{r.n} {b.n}\n")    // 7 8
+	return 0
+end 'main'
+```
+
+Data that nothing may write is a separate notion from the keyword: constant data, frozen data, a stored `Map`
+key and a `SharedValue` read stay read-only wherever they are bound (see [Read-Only Values](/docs/language/memory-model/#read-only-values)
+and [Constant Data](/docs/language/regions/#constant-data)).
 
 ## Views (`view`)
 
-`view x = e` binds any value read-only through `x`. Unlike a `let`, a `view` promises nothing about other names: a
-write made through another name, or by another coroutine across an `await`, is seen through the view.
+`view x = e` is another spelling of `let x = e`, with the same meaning wherever a `let` is accepted as a local
+binding:
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -112,28 +159,16 @@ end 'Holder'
 
 function main() returns ExitCode
 	var h = Holder.create()
-	view v = h.box            // `let v = h.box` is E3188: h may still write it
-	h.box.n = 7
-	print("{v.n}\n")          // 7
-	// v.n = 8                // E3159: 'v' is read-only (a `view`)
+	view v = h.box
+	v.n = 9                   // written through, like a `let`
+	print("{h.box.n}\n")      // 9
+	// v = Box.create(2)      // E2013: 'v' is a let and cannot be reassigned
 	return 0
 end 'main'
 ```
 
-- Writing through a view, or handing it to a parameter the callee writes, is **E3159**.
-- A view lives only inside its function. Storing it, handing it to a parameter that keeps it, returning it (or a
-  call's result that is still the view) and capturing it in a closure are **E3078**; sending it to a service is
-  **E3138**. Use a `clone()` for any of them. A view of a number or another scalar is copied where it goes.
-- A view holds its own reference to the record it names. Once a view of a `var` is declared — of the `var`
-  itself, a field or an element of it, or any expression that may hand its record back (a ternary, an
-  `otherwise`, a `match`, a call) — the view co-owns that record for the rest of the function, read again or
-  not: sending it (**E3138**), publishing it (**E3174**) or handing it to a parameter the callee keeps
-  (**E3078**) is refused. The rule follows source order, so inside a loop a view declared earlier in the
-  body counts. Reassigning the `var` a fresh record makes it sole again, and returning the `var` is unaffected.
-- A record nothing can write — a heap type whose fields are all `let` — is shared instead: it is sent, published
-  or handed to a parameter the callee keeps as it is, and the view stays valid. An inline packed record is copied.
-- `view` is a [contextual keyword](/docs/language/overview/#keywords). It declares a local binding only: a `view` field, a module-level
-  `view`, a `view` in an extension body or an `@heap view` is **E2077**.
+`view` is a [contextual keyword](/docs/language/overview/#keywords). It declares a local binding only: a `view` field, a module-level
+`view`, a `view` in an extension body or an `@heap view` is **E2077**.
 
 ## Rules
 
@@ -148,8 +183,9 @@ end 'main'
   holds 'Xs'`). The first store in source order decides. See [Generic-Instance and Function-Type Aliases Are Brands](/docs/language/ranged-typealiases/#generic-instance-and-function-type-aliases-are-brands).
 - Variables are block-scoped.
 - **A `var` that is never reassigned or mutated is E3077** (`variable 'x' is never reassigned; use 'let'
-  instead of 'var'`) when a `let` in its place would compile: its initializer is a fresh record or a
-  read-only value, and nothing stores it where something may write it and reads it again.
+  instead of 'var'`). A `var` counts as used for mutation when it is reassigned, written through (a field
+  store, a method that writes its receiver), passed to a parameter the callee writes, or moved out. A `var`
+  bound from state something else writes (`var node = h.box`) and never touched itself is E3077.
 - **Every variable must be used (E3012).** This covers `let`/`var`, parameters, loop variables, pattern
   bindings and closure parameters. The name `_` discards: it creates no binding and may appear several
   times in one pattern (`for (_, _) in pairs`). A parameter named `_` takes its argument unnamed, so
@@ -161,8 +197,8 @@ end 'main'
   `a.clone()` for an independent copy (see
   [Reference-by-Default Assignment](/docs/language/memory-model/#reference-by-default-assignment)).
   Numbers, `bool` and other scalar values are always independent copies.
-- **A read-only value stays read-only.** `var b = a` moves `a` when `a` is a `var`; from a read-only `a` (a
-  `let` included) it is **E3078**, and `a.clone()` is the mutable copy (see [Read-Only Values](/docs/language/memory-model/#read-only-values)):
+- **`var b = a` and `let b = a` move `a` when `a` is a `var`.** When `a` is a `let`, `b` names the same record
+  and `a` stays usable. `a.clone()` is the independent copy (see [Moves and Sharing](/docs/language/memory-model/#moves-and-sharing)):
 
   ```maxon
   typealias Coord = int(i64.min to i64.max)
@@ -182,11 +218,12 @@ end 'main'
   	b.x = 10
 
   	let c = Point.create(3)
-  	let d = c                 // d shares c's record: both are read-only
-  	// var e = c              // E3078: a read-only value bound to a `var`
+  	let d = c                 // d names c's record
+  	var e = c                 // so does e, and c stays usable
+  	e.x = 30
   	var f = c.clone()         // an independent record
-  	f.x = 30
-  	print("{b.x} {c.x} {d.x} {f.x}\n")   // 10 3 3 30
+  	f.x = 40
+  	print("{b.x} {c.x} {d.x} {f.x}\n")   // 10 30 30 40
   	return 0
   end 'main'
   ```
@@ -236,8 +273,9 @@ end 'main'
   binding. Initializers that depend on each other in a cycle are **E2012**. A `let` whose value is decided at
   compile time — a scalar, a string or byte-string literal, a constant array literal, an empty container, a
   payload-free union case, or a record built from constants — is image data, laid down in read-only memory
-  with nothing to run; any other record is built by the program's `__module_init` before `main`. A static
-  field follows the same rules (see [Static Fields](/docs/language/composite-types/#static-fields)).
+  with nothing to run, and it is `immutable` (see [Constant Data](/docs/language/regions/#constant-data)); any other record is built by
+  the program's `__module_init` before `main`. A static field follows the same rules (see
+  [Static Fields](/docs/language/composite-types/#static-fields)).
 - A struct literal at file scope is **E3076**; call a factory instead, or declare a static field inside the
   type.
 - An initializer whose value has an interface type is **E2015**: an interface value is two words, a value
@@ -250,12 +288,16 @@ end 'main'
   (`static let origin = Holder{step: (7, 9)}`), a factory parameter, a union payload, or an element of another
   tuple — gives each element that slot's type. A tuple literal inside extra parentheses is the same tuple, and a
   `var` born from a tuple of bare numbers is refused as it is in a body.
-- A module-level `let` is [read-only](/docs/language/memory-model/#read-only-values) through everything it reaches, for the program's whole
-  life. A write through it, or through a record a call handed back out of it, is **E3159**; binding it, a field
-  of it (`var m = H.index`) or such a call result, an element accessor's included (`var p = Origins.get(0)`),
-  to a `var` is **E3078**. Read it through a `let`, or bind a
-  `clone()`. Storing its record anywhere something may write it — pushing it into a container, storing it into a `var` field, putting it in an array literal or a map value, or handing it to
-  a function that keeps its parameter — is **E3078** too; store a `clone()`.
+- A module-level `let` whose value is decided at compile time is `immutable` image data (see
+  [Constant Data](/docs/language/regions/#constant-data)): a write through it is **E3207**, and storing it where something may write it
+  is **E3196**.
+- Any other module-level `let` is [read-only](/docs/language/memory-model/#read-only-values) through everything it reaches, for the
+  program's whole life. A write through it, or through a record a call handed back out of it, is **E3159**;
+  binding it, a field of it (`var m = H.index`) or such a call result, an element accessor's included
+  (`var p = Origins.get(0)`), to a `var` is **E3078**. Read it through a `let`, or bind a `clone()`. Storing its
+  record anywhere something may write it — pushing it into a container, storing it into a `var` field, putting
+  it in an array literal or a map value, or handing it to a function that keeps its parameter — is **E3078**
+  too; store a `clone()`.
 - A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
   program-wide one with [`default`](/docs/language/async/#program-wide-defaults--default). A `Key.current()` or `Key.register()`
   reachable from a global initializer is [E3173](/docs/cli/error-codes/#e3173--registryreachedfromglobalinitializer): the

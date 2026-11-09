@@ -43,10 +43,9 @@ and needs no refcount — the ONE drop stays with the owner, which structurally 
 it (an alias can only be declared later, in the owner's scope or one nested inside it).
 
 The mirror shape — a MUTABLE name made from an immutable one (`var u = t`, or `u = t` into a `var`) —
-MOVES `t` when `t` is its record's sole owner, so no `let` is left reading what `u` writes. A `t` that is
-not sole — an alias, a field, an element read out of a container, a module-level `let` — cannot move, so the
-bind is refused as **E3078** while `t` is still read afterwards; so is a value that may be `t`'s record, such as a
-call that hands it back, when `u` goes on to write it. See `specs/var-should-be-let.md`.
+MOVES a `let` local `t`, so no `let` is left reading what `u` writes, and reading `t` afterwards is **E3102**.
+A field of a `let`, or a tuple element, cannot move: the mutable name shares that record. See
+`specs/var-should-be-let.md`.
 
 When a move does happen the source is left MOVED-FROM: reading it is a compile error
 (use-after-move), and its scope-exit drop is SKIPPED — the value drops once, through its new owner. A
@@ -58,9 +57,9 @@ callee keeps, a struct-literal or union-payload field, a container element, a wr
 global's slot, or a by-reference parameter's cell — hands the value to storage that owes a drop of its
 OWN. So the sink takes its own reference and the source stays LIVE, a `let` source included, releasing the
 reference it always held at its own scope exit; the refcount rises by one per sink and falls by one per
-owner (`specs/witness-managed-return.md`). What is refused instead is a later WRITE through the sink that
-may reach a record a `let` still reads (E3159, `specs/var-should-be-let.md`). Only a `var` NAME made from a
-sole `let` moves it.
+owner (`specs/witness-managed-return.md`). A later WRITE through the sink writes the record the `let` still
+reads, which is legal: `let` forbids reassigning the name, not writing through it. A `var` NAME made from a
+`let` local moves it.
 
 ⚠ **A second NAME is not a sink.** `let u = t` from a `var`, or `s = t` into a `var`, gives the new name
 no drop of its own — it inherits the one `t` owed — so it MOVES. The one rebind that IS a durable store
@@ -254,11 +253,11 @@ end 'main'
 error E3102: <fragment>:12:8: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-### An Immutable Source Is Refused at the Assignment Door Too
+### A `let` Source Moves at the Assignment Door Too
 
-`s = t` MOVES `t` when it is a `var` (above). When `t` is a `let` it is **E3078** at the assignment, exactly as
-`var s = t` is: the destination is a mutable name, so it may not take a record a read-only name reads, and
-`clone()` is the way to a mutable copy. A declaration `let u = t` aliases instead: both names are immutable.
+`s = t` MOVES `t` when it is a `var` (above), and it moves a `let` `t` the same way: `let` forbids reassigning
+`t`, not moving the record it holds, so the destination takes the record and `t` is a moved-from name. Reading
+`t` afterwards is **E3102**, whichever keyword declared it. `clone()` is the way to keep both names.
 
 <!-- test: immutable-rebind-on-assign-aliases -->
 ```maxon
@@ -281,14 +280,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:12:2: cannot assign the read-only 't' to mutable binding 'a'; use 'let' instead of 'var', or use clone()
+error E3102: <fragment>:13:6: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 ### The Destination May Outlive the Source, and the Refusal Is What Makes That Sound
 
 `kept` is declared OUTSIDE the block that declares `short`, so a record shared between them would have to
-outlive `short`'s scope while `short` still reads it. `kept = short` is refused instead: a `let` is never handed to
-a `var`, and `short.clone()` is the independent value `kept` may own.
+outlive `short`'s scope while `short` still reads it. `kept = short` moves the record into `kept` instead, so the
+record outlives the block and the read of `short` after the move is **E3102**; `short.clone()` is the
+independent value `kept` may own while `short` stays readable.
 
 <!-- test: immutable-rebind-on-assign-outlives-its-source -->
 ```maxon
@@ -310,13 +310,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:12:3: cannot assign the read-only 'short' to mutable binding 'kept'; use 'let' instead of 'var', or use clone()
+error E3102: <fragment>:13:9: use of moved value 'short': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 ### One Immutable Index, Two Outer Cursors
 
-A per-iteration `let next` handed to two `var`s declared outside the loop: the first assignment is refused,
-and so would the second be.
+A per-iteration `let next` handed to two `var`s declared outside the loop: the first assignment moves it,
+and the second reads the moved-from name (**E3102**).
 
 <!-- test: immutable-rebind-on-assign-two-cursors-in-a-loop -->
 ```maxon
@@ -338,13 +338,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:11:3: cannot assign the read-only 'next' to mutable binding 'segmentStart'; use 'let' instead of 'var', or use clone()
+error E3102: <fragment>:12:9: use of moved value 'next': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-### Assigning an Immutable Source Declared Outside the Loop Is Refused
+### Assigning a `let` Declared Outside the Loop Moves It Once
 
-A `let` assigned into a `var` is **E3078** at the assignment, whether or not a loop repeats it: the refusal does
-not wait for a second trip to read a moved value.
+A `let` assigned into a `var` moves at the assignment, so the second trip of a loop that repeats the assignment
+reads a moved value: **E3102**, `it was moved in an earlier iteration of this loop`.
 
 <!-- test: immutable-rebind-on-assign-from-outside-a-loop -->
 ```maxon
@@ -369,7 +369,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:14:3: cannot assign the read-only 'src' to mutable binding 'dest'; use 'let' instead of 'var', or use clone()
+error E3102: <fragment>:14:10: use of moved value 'src': it was moved in an earlier iteration of this loop
 ```
 
 ### A `for` Element Is Copied, Not Moved
@@ -409,9 +409,9 @@ v2
 
 ### A Write Through the Moved Record Is the New Owner's, and the Old Name Is Gone
 
-`q = p` would hand `q` a record the `let` `p` reads, so `q.x = 99` would write what `p` reads: it is **E3078**
-at the assignment. The declaration spelling, `var q = p`, is refused the same way
-(`error.var-from-sole-immutable-struct-is-refused`).
+`q = p` hands `q` the record the `let` `p` held, so `q.x = 99` writes the record `q` now owns, and reading `p`
+afterwards is **E3102**. The declaration spelling, `var q = p`, moves the same way
+(`var-from-a-let-struct-moves-it`).
 
 <!-- test: immutable-rebind-on-assign-is-a-second-name -->
 ```maxon
@@ -434,7 +434,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:13:2: cannot assign the read-only 'p' to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3102: <fragment>:15:10: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 ### A MUTABLE Source Assigned Away Moves, and a Write Through Its Old Name Is Refused
@@ -909,18 +909,17 @@ owned managed box string long enough to require heap now
 owned managed box string long enough to require heap now
 ```
 
-### A Mutable Binding Never Takes a `let`'s Record
+### A Mutable Binding May Take a `let`'s Record
 
-The mirror of the alias above. A `let` is read-only all the way down, so `let t = …` then `var u = t` is
-**E3078** whether or not `t` is its record's only holder; so is a mutable binding made from a field of a `let`
-(below), an element read out of a container, or a module-level `let`. The message names the two remedies: leave the
-new name immutable, or take an independent value with `clone()`. A `var` source is the one that moves.
+The mirror of the alias above. `let` forbids reassigning the name, not writing through it, so `let t = …` then
+`var u = t` MOVES the record into `u`: `u` owns it and writes it, and `t` is a moved-from name. A mutable binding
+made from a field of a `let` (below) or a tuple element shares that field's record, so a write through the new
+name is a write through the `let`'s record. `clone()` takes an independent value.
 
 ⚠ A **value**-typed source is unaffected — `int`/`float`/`bool`/`byte` copy, and so does a function
-value, so there is no shared storage to reach. A parameter bound to a mutable name is not refused in the
-callee: a write through that name writes the parameter, and the caller's argument answers for it (E3159).
+value, so there is no shared storage to reach.
 
-<!-- test: error.var-from-sole-immutable-struct-is-refused -->
+<!-- test: var-from-a-let-struct-moves-it -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -939,8 +938,8 @@ function main() returns ExitCode
 	return u.value
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:14:6: cannot assign the read-only 't' to mutable binding 'u'; use 'let' instead of 'var', or use clone()
+```exitcode
+9
 ```
 
 <!-- test: a-clone-of-a-let-bound-to-a-var-is-independent -->
@@ -968,13 +967,13 @@ end 'main'
 14
 ```
 
-### The Refusal Follows the Chain, Parentheses and Tuple Positions Included
+### The Share Follows the Chain, Parentheses and Tuple Positions Included
 
-A FIELD of a `let` is not the `let`, so it cannot move: `var u = t.field` is refused, and the spellings that
-reach the same storage get the same answer. Redundant parentheses change nothing about what
+A FIELD of a `let` is not the `let`, so it cannot move: `var u = t.field` shares the field's record, and the
+spellings that reach the same storage get the same answer. Redundant parentheses change nothing about what
 `(t).field` names, and a tuple's positional member `t.0` is its field `_0` under another spelling.
 
-<!-- test: error.var-from-immutable-through-parens -->
+<!-- test: var-from-a-let-field-through-parens-shares-the-field -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1001,11 +1000,11 @@ function main() returns ExitCode
 	return o.inner.value
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:22:6: cannot assign a value read out of the read-only 'o' to mutable binding 'i'; use 'let' instead of 'var', or use clone()
+```exitcode
+9
 ```
 
-<!-- test: error.var-from-immutable-tuple-element -->
+<!-- test: var-from-a-let-tuple-element-shares-the-element -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1024,15 +1023,15 @@ function main() returns ExitCode
 	return b.value
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:14:6: cannot assign a value read out of the read-only 't' to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```exitcode
+9
 ```
 
 ### A Destructuring Is Its Element Bindings
 
-`var (a, b) = t` means `var a = t.0` and `var b = t.1`, so the rule above is asked of each ELEMENT and the
-sentence blames the name the author wrote. Scalars copy, so a tuple of numbers destructures out of an
-immutable source freely — there is no shared storage for the writable names to reach.
+`var (a, b) = t` means `var a = t.0` and `var b = t.1`, so the rule above is asked of each ELEMENT. Scalars copy,
+so a tuple of numbers destructures out of a `let` source with no shared storage for the writable names to reach,
+and a managed element is shared with the source tuple, as `var b = t.0` shares it.
 
 <!-- test: var-destructure-scalars-from-immutable -->
 ```maxon
@@ -1054,7 +1053,7 @@ end 'main'
 30 21
 ```
 
-<!-- test: error.var-destructure-managed-element-from-immutable -->
+<!-- test: var-destructure-managed-element-from-a-let-shares-it -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1067,14 +1066,15 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	let t = (Box.create(5), 7)
+	let t = (Box.create(5), 7 as Integer)
 	var (b, n) = t
 	b.value = 9
+	n = n + 1
 	return b.value + n
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:14:7: cannot assign a value read out of the read-only 't' to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```exitcode
+17
 ```
 
 <!-- test: a-var-moves-where-a-field-read-before-the-loop-cannot-hold-it -->

@@ -104,7 +104,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:35:7: 'poke' writes 'h'; 's' is immutable
+error E3207: <fragment>:35:7: 'poke' writes 'h' (line 30: `p.n = 1`); 's' is immutable
 ```
 
 <!-- test: a-direct-send-that-waits-without-end-inside-a-window-is-refused -->
@@ -234,7 +234,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:19:18: 'wrap' writes 'r'; 'frozen' is immutable
+error E3207: <fragment>:19:18: 'wrap' writes 'r' (line 14: `return function() gives r.n`); 'frozen' is immutable
 ```
 
 <!-- test: a-direct-send-with-a-finite-timeout-inside-a-window-is-refused -->
@@ -332,7 +332,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:20:7: 'poke' writes 'getPart'; 'function' is immutable
+error E3207: <fragment>:20:7: 'poke' writes 'getPart' (line 15: `p.n = 1`); 'function() gives frozen' is immutable
 ```
 
 
@@ -470,7 +470,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:23:22: 'collect' writes 'getPart'; 'function' is immutable
+error E3207: <fragment>:23:22: 'collect' writes 'getPart' (line 16: `parts.push(getPart())`); 'function() gives frozen' is immutable
 ```
 
 <!-- test: a-by-reference-argument-is-not-a-clean-input-to-freeze -->

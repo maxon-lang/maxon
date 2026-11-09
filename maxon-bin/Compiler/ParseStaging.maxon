@@ -96,7 +96,7 @@ export type ParseJob
 	// DISJUNCTION.** The two are different FACTS — "this is one of the two stdlib modules that declare the
 	// reserved space" and "this compile wrote these names" — and folding them into one slot would be a
 	// semantic slot shared by two claims, which is the shape this project's defect log keeps naming.
-	export let compilerMintedNames as NameRoster
+	export let compilerMintedNames as immutable NameRoster
 
 	// ⭐ **IS THIS FILE PHYSICALLY INSIDE `stdlib/`?** True for every module the loader
 	// takes AND for a module named directly on the command line (`maxon build stdlib/URL.maxon`),
@@ -167,8 +167,8 @@ end 'FileParseOutcome'
 export union ConsequenceOf
 	unrelated
 	subject(names NameRoster)
-	handlerBody(message ByteArray)
-	unknownType(name ByteArray)
+	handlerBody(message immutable ByteArray)
+	unknownType(name immutable ByteArray)
 end 'ConsequenceOf'
 
 export type AbandonedRegion
@@ -197,10 +197,12 @@ export function parseFile(job ParseJob, tokens TokenArray, overrides RowSetOverr
 	// error, an instantiation's file), and the outcome crosses back from a pool worker, so it carries copies.
 	var artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		_ = signatures.closeParseBand(job.path)
+		parser.forgetKindVerdicts()
 		return FileParseOutcome.failed(parseErr.clone(), blame: parser.libraryBlame.clone(), salvaged: parser.abortedParseArtifact(), consequence: consequenceOfRefusal(parseErr, parser: parser, job: job, signatures: signatures), abandoned: parser.regionsRecovered())
 	end 'parseFail'
 
 	artifact.recordParseMints(signatures.closeParseBand(job.path))
+	parser.forgetKindVerdicts()
 	return FileParseOutcome.parsed(artifact, abandoned: parser.regionsRecovered())
 end 'parseFile'
 
@@ -232,7 +234,7 @@ function consequenceOfReceiverOrigin(origin ReceiverOrigin) returns ConsequenceO
 	end 'origin'
 end 'consequenceOfReceiverOrigin'
 
-function namedConsequence(name ByteArray) returns ConsequenceOf
+function namedConsequence(name immutable ByteArray) returns ConsequenceOf
 	return ConsequenceOf.subject(singleName(name))
 end 'namedConsequence'
 
@@ -241,15 +243,15 @@ end 'namedConsequence'
 // would go unreported.
 function consequenceNamedBy(error SourceParseError) returns ConsequenceOf
 	return match error 'kind'
-		unknownTypeName(typeName, _, _) gives ConsequenceOf.unknownType(typeName.toByteArray())
-		unknownField(typeName, _, _, _) gives namedConsequence(typeName.toByteArray())
-		undefinedVariable(name, _, _) gives namedConsequence(name.toByteArray())
-		uninferrableClosureParam(_, aliasName, _, _) gives namedConsequence(aliasName.toByteArray())
-		unknownCompilerIntrinsic(callee, _, _, _) gives namedConsequence(callee.toByteArray())
-		undefinedQualifiedFunction(callee, _, _, _) gives namedConsequence(callee.toByteArray())
-		enumMatchNotExhaustive(_, typeName, _, _, _) gives namedConsequence(typeName.toByteArray())
-		serviceTypeNotASpawnTarget(_, typeName, _, _) gives namedConsequence(typeName.toByteArray())
-		serviceReplyGraphNotWalkable(_, message, _, _) gives ConsequenceOf.handlerBody(message.toByteArray())
+		unknownTypeName(typeName, _, _) gives ConsequenceOf.unknownType(freeze typeName.toByteArray())
+		unknownField(typeName, _, _, _) gives namedConsequence(freeze typeName.toByteArray())
+		undefinedVariable(name, _, _) gives namedConsequence(freeze name.toByteArray())
+		uninferrableClosureParam(_, aliasName, _, _) gives namedConsequence(freeze aliasName.toByteArray())
+		unknownCompilerIntrinsic(callee, _, _, _) gives namedConsequence(freeze callee.toByteArray())
+		undefinedQualifiedFunction(callee, _, _, _) gives namedConsequence(freeze callee.toByteArray())
+		enumMatchNotExhaustive(_, typeName, _, _, _) gives namedConsequence(freeze typeName.toByteArray())
+		serviceTypeNotASpawnTarget(_, typeName, _, _) gives namedConsequence(freeze typeName.toByteArray())
+		serviceReplyGraphNotWalkable(_, message, _, _) gives ConsequenceOf.handlerBody(freeze message.toByteArray())
 		spawnStartRequiresTry(_, factory, _, _) gives namedConsequence(genericTemplateName(factory))
 		memberAccessOnNonStruct(_, _, _, origin) gives consequenceOfReceiverOrigin(origin)
 		returnTypeMismatch(_, _, _, _, _, _, origin) gives consequenceOfReceiverOrigin(origin)
@@ -548,7 +550,7 @@ end 'cacheReadParseMintsMinted'
 // `ProgramSignatures.record` in the same act. It is what lets a CALL SITE build the range guard a shared
 // generic body cannot hold for itself (`OpaqueParamInfo`), and it can only come from the sweep: the callee
 // may be declared in another file, and `resolveTypes` has erased the parameter's alias long before any
-// caller asks. It DEFAULTS to `sharedNoOpaqueParams` for the synthesized helpers named above and for every
+// caller asks. It DEFAULTS to `OpaqueParamInfo.none()` for the synthesized helpers named above and for every
 // declaration outside a generic type, which is the overwhelming majority.
 // ⭐⭐ **`paramNames`/`paramTypes` ARE THE DECLARATION'S OWN SOURCE PARAMETER LIST — THE RECEIVER EXCLUDED —
 // AND THEY RIDE HERE FOR `opaqueParams`' REASON: a fifth fact about the SAME declaration, applied by
@@ -557,9 +559,9 @@ end 'cacheReadParseMintsMinted'
 // See `ProgramSignatures.sweptDeclarationOf`. Both default EMPTY for the synthesized helpers named
 // above.
 export type FuncReturnTypeEntry
-	export let name as ByteArray
+	export let name as immutable ByteArray
 	export let returnType as MaxonReturnType
-	export let declaredSurface as DeclaredSurface
+	export let declaredSurface as immutable DeclaredSurface
 	export var visibility as Visibility
 	export let takesReceiver as bool
 	export let opaqueParams as OpaqueParamInfo
@@ -579,7 +581,7 @@ export type FuncReturnTypeEntry
 	export var returnAliasName as ReturnAliasSpelling
 	export let nameLine as LineNumber
 	export let nameColumn as ColumnNumber
-	export let enclosingTypeName as ByteArray
+	export let enclosingTypeName as immutable ByteArray
 	export let selfCapability as ParamCapability
 	export let paramCapabilities as ParamCapabilityArray
 	export let returnCapability as ResultCapability
@@ -587,7 +589,7 @@ export type FuncReturnTypeEntry
 	// ⚠ **THE THREE EMPTY DEFAULTS ARE FRESH, NOT SHARED ANCHORS.** A default naming a module-level `let`
 	// makes that anchor an export nothing calls, which `checkUnusedExports` reports as E3092. An empty
 	// container costs a record; the anchor costs a build.
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames NameRoster = NameRoster.create(0), paramTypes MaxonTypeArray = MaxonTypeArray.create(0), paramSpellings NameRoster = NameRoster.create(0), paramDefaults ParamPositionMask = NoParamPositions, returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, enclosingTypeName ByteArray = EmptySourceText, selfCapability ParamCapability = ParamCapability.unmarked, paramCapabilities ParamCapabilityArray = ParamCapabilityArray.create(0), returnCapability ResultCapability = ResultCapability.unmarked) returns FuncReturnTypeEntry
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface immutable DeclaredSurface, visibility Visibility, takesReceiver bool = false, opaqueParams OpaqueParamInfo = OpaqueParamInfo.none(), paramNames NameRoster = NameRoster.create(0), paramTypes MaxonTypeArray = MaxonTypeArray.create(0), paramSpellings NameRoster = NameRoster.create(0), paramDefaults ParamPositionMask = NoParamPositions, returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, enclosingTypeName immutable ByteArray = EmptySourceText, selfCapability ParamCapability = ParamCapability.unmarked, paramCapabilities ParamCapabilityArray = ParamCapabilityArray.create(0), returnCapability ResultCapability = ResultCapability.unmarked) returns FuncReturnTypeEntry
 		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, paramSpellings: paramSpellings, paramDefaults: paramDefaults, returnAliasName: returnAliasName, nameLine: nameLine, nameColumn: nameColumn, enclosingTypeName: enclosingTypeName, selfCapability: selfCapability, paramCapabilities: paramCapabilities, returnCapability: returnCapability}
 	end 'create'
 end 'FuncReturnTypeEntry'
@@ -601,7 +603,7 @@ export typealias FuncReturnTypeEntryArray = Array with FuncReturnTypeEntry
 // `commitFuncSignatures` can anchor a duplicate-definition diagnostic (E3006) on the blamed
 // declaration.
 export type FuncSignatureEntry
-	export let name as ByteArray
+	export let name as immutable ByteArray
 	export var signature as FuncSignature
 	export let nameLine as LineNumber
 	export let nameColumn as ColumnNumber
@@ -635,7 +637,7 @@ export type FuncSignatureEntry
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns FuncSignatureEntry throws LibraryCacheDamage
-		let f_name = try reader.bytes()
+		let f_name = freeze try reader.bytes()
 		let f_signature = try FuncSignature.cacheRead(reader)
 		let f_nameLine = (try reader.unsigned()) as LineNumber
 		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
@@ -686,7 +688,7 @@ export typealias FuncSignatureFloorMap = Map with (ByteArray, FuncSignatureEntry
 // follow. The alias/site NAMES are plain ByteArrays and the value ids are function-local, so —
 // like a `FunctionTypeAlias` — this rides the merge with NO interner remap.
 export type FunctionRangeCheckEntry
-	export let name as ByteArray
+	export let name as immutable ByteArray
 	export var checks as FunctionRangeChecks
 
 	static function create(name ByteArray, checks FunctionRangeChecks) returns FunctionRangeCheckEntry
@@ -700,7 +702,7 @@ export type FunctionRangeCheckEntry
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns FunctionRangeCheckEntry throws LibraryCacheDamage
-		let f_name = try reader.bytes()
+		let f_name = freeze try reader.bytes()
 		let f_checks = try FunctionRangeChecks.cacheRead(reader)
 
 		return Self{name: f_name, checks: f_checks}
@@ -1210,7 +1212,7 @@ export type FileParseArtifact
 	// Record the compile-time NAME the `__ds_name_id` marker `emitOp` is about to append interns — the same
 	// read-it-through-here contract its two neighbours state, and for their reason.
 	export function recordDebugStreamNameSite(name ByteArray)
-		self.debugStreamNameSites.upsert(self.module.opCount(), value: name.clone())
+		self.debugStreamNameSites.upsert(self.module.opCount(), value: name)
 	end 'recordDebugStreamNameSite'
 
 	// Record that the `constArrayLiteral` `emitOp` is about to append materializes an IMMORTAL `.rdata`
@@ -1283,8 +1285,8 @@ export type FileParseArtifact
 	// after it builds a function — NEVER touching `Project`. The name's source position
 	// travels with the entry so a merge-time duplicate can be positioned on the blamed
 	// declaration.
-	export function recordFuncSignature(name ByteArray, signature FuncSignature, returnType MaxonReturnType, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool)
-		self.funcSignatures.push(FuncSignatureEntry.create(name.clone(), signature: signature.clone(), returnType: returnType.clone(), nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized))
+	export function recordFuncSignature(name immutable ByteArray, signature FuncSignature, returnType MaxonReturnType, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool)
+		self.funcSignatures.push(FuncSignatureEntry.create(name, signature: signature.clone(), returnType: returnType.clone(), nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized))
 	end 'recordFuncSignature'
 
 	// ⭐ **THE INSTALL DOORS.** A `match` arm binds its payload IMMUTABLY and is ONE statement (E3159), so a
@@ -1319,8 +1321,8 @@ export type FileParseArtifact
 	// Called by the parser at function completion, and ONLY when the function actually has
 	// a cast into a ranged alias or a ranged `return` — a function with neither files nothing, so
 	// the registry stays proportional to the range checks a program contains, not its function count.
-	export function recordFunctionRangeChecks(name ByteArray, checks FunctionRangeChecks)
-		self.rangeChecks.push(FunctionRangeCheckEntry.create(name.clone(), checks: checks))
+	export function recordFunctionRangeChecks(name immutable ByteArray, checks FunctionRangeChecks)
+		self.rangeChecks.push(FunctionRangeCheckEntry.create(name, checks: checks))
 	end 'recordFunctionRangeChecks'
 
 	// Record a ranged-typealias declaration as this file's contribution to the
@@ -1655,8 +1657,8 @@ end 'artifactOwnedOp'
 
 function artifactOwnedHold(op MaxonOp) returns MaxonOp
 	match op 'hold'
-		holdValue(result, held, callee, args, kind) then return MaxonOp.holdValue(result, held: held, callee: callee.clone(), args: args, kind: kind)
-		holdEnd(result, held, callee, args, kind) then return MaxonOp.holdEnd(result, held: held, callee: callee.clone(), args: args, kind: kind)
+		holdValue(result, held, callee, args, kind) then return MaxonOp.holdValue(result, held: held, callee: callee, args: args, kind: kind)
+		holdEnd(result, held, callee, args, kind) then return MaxonOp.holdEnd(result, held: held, callee: callee, args: args, kind: kind)
 		default panic("artifactOwnedHold: reached with an op that is not a hold marker — `artifactOwnedOp` routes only `holdValue` and `holdEnd` here")
 	end 'hold'
 end 'artifactOwnedHold'
@@ -1666,15 +1668,15 @@ end 'artifactOwnedHold'
 // match of its own, for `LowerMaxonToStd.lowerIndirectCall`'s reason.
 function artifactOwnedCall(op MaxonOp) returns MaxonOp
 	match op 'call'
-		call(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.call(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
-		tryCall(result, errorFlag, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
-		asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.asyncCall(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
-		serviceSpawn(result, typeName, state, capacity, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint, startReplies) then return MaxonOp.serviceSpawn(result, typeName: typeName.clone(), state: state, capacity: capacity, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint, startReplies: startReplies)
+		call(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.call(result, callee: callee, args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
+		tryCall(result, errorFlag, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
+		asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
+		serviceSpawn(result, typeName, state, capacity, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint, startReplies) then return MaxonOp.serviceSpawn(result, typeName: typeName, state: state, capacity: capacity, callee: callee, args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint, startReplies: startReplies)
 		default panic("artifactOwnedCall: reached with an op that is not a named call — `artifactOwnedOp` routes only `call`, `tryCall`, `asyncCall` and `serviceSpawn` here")
 	end 'call'
 end 'artifactOwnedCall'
 
-// An empty column is kept: most calls share the parser's one empty `NoImmutableArgNames`, which is image data.
+// An empty column is kept rather than cloned.
 function ownedNames(names NameRoster) returns NameRoster
 	return names if names.isEmpty() else names.clone()
 end 'ownedNames'
@@ -2113,7 +2115,7 @@ export function checkTypeSymbolNamespace(project Project, signatures ProgramSign
 			end 'firstCollision'
 
 			members.push(gid)
-			contested.upsert(compiled.clone(), value: members)
+			contested.upsert(compiled, value: members)
 			continue
 		end 'earlierInstantiation'
 
@@ -2183,7 +2185,7 @@ function reportContestedTypeNames(project Project, signatures ProgramSignatures,
 	var names = NameRoster.create(contested.count(), zeroed: false)
 
 	for (compiled, _) in contested 'eachContestedName'
-		names.push(compiled.clone())
+		names.push(compiled)
 	end 'eachContestedName'
 
 	names.sortBy(function(left ByteArray, right ByteArray) gives compareBytesOrdinally(left, right: right))

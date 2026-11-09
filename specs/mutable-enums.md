@@ -33,20 +33,21 @@ match b 'update'
 end 'update'
 ```
 
-When the enum variable is immutable (`let`), match bindings are read-only: a match binding follows its
-scrutinee, and a write through one is `E3159`.
+When the enum variable is immutable (`let`), a match binding cannot be assigned: the assignment is `E2013`
+(`'value' is a let and cannot be reassigned`), because the payload replacement must reach a union that can be
+written. A `let` forbids reassigning the name, not writing through it, so a payload that is a record may still be
+written in place through its binding, and may be handed to a callee that writes it.
 
 ### What counts as a mutable scrutinee
 
 A `var` local is one, and so is a union-typed **parameter**: a parameter is a borrowed reference to the
 caller's record, which the callee may already write — `s.append(…)` on a `String` parameter is ordinary
-Maxon — and the caller's argument answers for that write through `E3159`. A union-typed parameter lets an arm
-write a field of a payload record in place; assigning the payload requires the parameter to be `mutable`
-(`E2013` otherwise).
+Maxon. A union-typed parameter lets an arm write a field of a payload record in place; assigning the payload
+requires the parameter to be `mutable` (`E2013` otherwise).
 
 A TEMPORARY is one too: a union constructed at the `match` has no other holder, so a write through its
-payload binding is a write nobody else can see. A `let` local is not, and neither is a read-only value of
-any other origin.
+payload binding is a write nobody else can see. A `let` local is not one: assigning its payload binding is
+`E2013`, though a write through a record payload is legal.
 
 ## Tests
 
@@ -212,7 +213,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/mutable-enums/error.assign-to-let-enum-binding.maxon:12:20: cannot assign to immutable variable: 'value'
+error E2013: specs/mutable-enums/error.assign-to-let-enum-binding.maxon:12:20: 'value' is a let and cannot be reassigned
 ```
 
 <!-- test: mutate-string-payload -->
@@ -315,7 +316,7 @@ end 'main'
 
 <!-- test: parameter-payload-to-a-writing-callee -->
 The cross-function half of the same rule: the payload is handed to a callee that writes a field of it, which
-is `E3159`'s question rather than the arm's own. A parameter scrutinee's payload may fill that position, for a
+is the callee's question rather than the arm's own. A parameter scrutinee's payload may fill that position, for a
 field write only.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -421,7 +422,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/mutable-enums/error.let-to-a-callee-that-writes-back-a-payload.maxon:18:2: cannot pass 's', which is read-only (a `let` binding), to a function that writes parameter 's' (in main); pass a clone()
+error E2013: specs/mutable-enums/error.let-to-a-callee-that-writes-back-a-payload.maxon:18:2: 's' is a let and cannot be passed to the `mutable` parameter 's'; bind it to a `var`
 ```
 
 <!-- test: error.let-to-a-callee-that-writes-back-a-managed-payload -->
@@ -450,12 +451,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/mutable-enums/error.let-to-a-callee-that-writes-back-a-managed-payload.maxon:16:2: cannot pass 'n', which is read-only (a `let` binding), to a function that writes parameter 'n' (in main); pass a clone()
+error E2013: specs/mutable-enums/error.let-to-a-callee-that-writes-back-a-managed-payload.maxon:16:2: 'n' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
 ```
 
-<!-- test: error.let-scrutinee-payload-is-read-only -->
-⚖ The guard that the ruling moved only what it says: a `let` local is NOT a mutable scrutinee, so its payload
-binding stays read-only and may not fill a parameter the callee writes.
+<!-- test: a-let-scrutinee-payload-record-is-written-by-a-callee -->
+⚖ A `let` local is NOT a mutable scrutinee, so its payload cannot be REASSIGNED, but `let` forbids only
+reassignment: the payload binding names a record, and a callee that writes the record writes it in place.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -476,22 +477,30 @@ function raise(c Counter)
 	c.n = c.n + 32
 end 'raise'
 
+function makeSlot() returns Slot
+	return Slot.holding(Counter.create(10))
+end 'makeSlot'
+
 function main() returns ExitCode
-	let s = Slot.holding(Counter.create(10))
+	let s = makeSlot()
 	match s 'step'
 		holding(c) then raise(c)
 		empty then return 0
 	end 'step'
-	return 0
+	match s 'read'
+		holding(c) then return c.n
+		empty then return 0
+	end 'read'
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/mutable-enums/error.let-scrutinee-payload-is-read-only.maxon:24:19: cannot pass 'c', which is read-only (a `match` binding), to a function that writes parameter 'c' (in main); pass a clone()
+```exitcode
+42
 ```
 
 <!-- test: a-freshly-built-scalar-payload-union-passed-to-a-let-field-keeper-is-sole -->
-A union is a mutable box even when its payload is a scalar, so a `let` field takes one only when nothing
-else can write it. A union built in the argument itself is the only reference to its box.
+A union is a mutable box even when its payload is a scalar. A `let` field forbids reassigning the field, not
+writing the box, so it takes a union however the box is held. A union built in the argument itself is the
+only reference to its box.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -586,8 +595,8 @@ end 'main'
 1
 ```
 
-<!-- test: a-scalar-payload-union-var-read-after-the-call-is-not-sole -->
-A `var` union the program reads again after the call has another reader, so the `let` field refuses it. The final call is the `var`'s last use, which moves it, so only the first call is refused.
+<!-- test: a-scalar-payload-union-var-read-after-the-call-is-kept-too -->
+A `var` union the program reads again after the call has another reader, and the `let` field takes it all the same: the first call shares the box with the later read, the final call is the `var`'s last use and moves it. Both pushes succeed.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -631,12 +640,12 @@ function main() returns ExitCode
 	return registry.held.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/mutable-enums/a-scalar-payload-union-var-read-after-the-call-is-not-sole.maxon:32:8: cannot pass the `var` 'settle', which is read again, to parameter 'settle' of 'Registry.keep', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+2
 ```
 
-<!-- test: a-scalar-payload-union-also-stored-elsewhere-is-not-sole -->
-A union pushed into a collection before the call is held by the collection too, so the `let` field refuses it.
+<!-- test: a-scalar-payload-union-also-stored-elsewhere-is-kept-too -->
+A union pushed into a collection before the call is held by the collection too, and the `let` field takes it all the same.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -684,8 +693,8 @@ function main() returns ExitCode
 	return registry.held.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/mutable-enums/a-scalar-payload-union-also-stored-elsewhere-is-not-sole.maxon:36:8: cannot pass a value other names may still write to parameter 'settle' of 'Registry.keep', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: a-var-scrutinee-from-a-call-writes-through-its-payload-binding -->
@@ -735,8 +744,8 @@ end 'main'
 42
 ```
 
-<!-- test: error.a-let-scrutinee-from-a-call-keeps-its-payload-binding-read-only -->
-The twin: the same call result bound by a `let` gives read-only bindings, so the arm may not write through one.
+<!-- test: a-let-scrutinee-from-a-call-writes-through-its-payload-record -->
+The twin: the same call result bound by a `let` gives bindings that cannot be reassigned, but the record a binding names is written in place all the same.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -777,6 +786,6 @@ function main() returns ExitCode
 	end 'read'
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/mutable-enums/error.a-let-scrutinee-from-a-call-keeps-its-payload-binding-read-only.maxon:30:21: cannot pass 'c', which is read-only (a `match` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```exitcode
+42
 ```

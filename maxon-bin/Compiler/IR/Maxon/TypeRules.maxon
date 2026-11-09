@@ -670,7 +670,7 @@ end 'namedAggregatesConflict'
 // or read under, compared only once the instance identities agree. An UNBRANDED side fits any brand — a
 // `[1, 2]` literal, an inline-spelled instance — so, unlike `namedAggregatesConflict`, one empty side never
 // conflicts; only two different names do. A buffer view's brand is compared as the alias it views.
-export function brandsConflict(expected ByteArray, got ByteArray) returns bool
+export function brandsConflict(expected ByteArray, got immutable ByteArray) returns bool
 	let expectedBeneath = brandBeneathBufferView(expected)
 	return not expectedBeneath.isEmpty() and not got.isEmpty() and not brandBeneathBufferView(got).equals(expectedBeneath)
 end 'brandsConflict'
@@ -2304,7 +2304,7 @@ end 'rawByteWriteSlotDomainMessage'
 // `low`/`high` at all for a `bool` or an enum ordinal, which is why its parser picks the shape and calls
 // this for the one shape that has bounds (`Parser.slotElementDisplay`).
 export function rangedAliasValueSetDisplay(aliasName String, low FullRangeInt, high FullRangeInt, isFloat bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
-	return "'{sourceSpelledAliasText(aliasName.toByteArray())}' ({rangedAliasRangeDisplay(low, high: high, isFloat: isFloat, domain: domain)})"
+	return "'{sourceSpelledAliasText(freeze aliasName.toByteArray())}' ({rangedAliasRangeDisplay(low, high: high, isFloat: isFloat, domain: domain)})"
 end 'rangedAliasValueSetDisplay'
 
 // ⚠ A RAW-PATTERN ALIAS SPELLS ITS WIDTH, because its bounds are not what the author wrote:

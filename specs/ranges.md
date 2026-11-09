@@ -559,7 +559,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:5:3: cannot assign to immutable variable: 'i'
+error E2013: <fragment>:5:3: 'i' is a let and cannot be reassigned
 ```
 
 <!-- test: error.a-both-literal-counter-outside-a-slots-range -->

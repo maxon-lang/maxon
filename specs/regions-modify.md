@@ -87,6 +87,65 @@ end 'main'
 3 9
 ```
 
+<!-- test: a-capability-typealias-over-a-generic-alias-resolves-through-the-alias -->
+A capability word written over the name of a generic alias denotes that alias's instance, so a parameter of the capability alias reads like the instance itself.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Node
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Node'
+
+typealias NodeArray = Array with Node
+typealias FrozenNodes = immutable NodeArray
+
+function total(items FrozenNodes) returns Count
+	return items.count()
+end 'total'
+
+function main() returns ExitCode
+	var nodes = NodeArray.create(0) as isolated NodeArray
+	modify nodes 'fill'
+		nodes.push(Node.create(1))
+		nodes.push(Node.create(2))
+	end 'fill'
+	print("{total(freeze nodes)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```
+
+<!-- test: freeze-of-a-call-that-returns-its-temporary-argument-runs -->
+The temporary the argument was built into is released before the freeze walks the result, so the result is the record's only owner.
+
+```maxon
+function pick(bytes ByteArray) returns ByteArray
+	return bytes
+end 'pick'
+
+function main() returns ExitCode
+	let frozen = freeze pick(ByteArray.create(3))
+	print("{frozen.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
 <!-- test: modify-of-non-isolated-refused -->
 Without `as isolated Counter` the local is ordinary mutable data of this region, and `modify` opens only an isolated value.
 
@@ -316,7 +375,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:37:4: 'noteFile' needs a writable receiver; 'self' is read-only while 'fill' is open
+error E3207: <fragment>:37:4: 'noteFile' needs a writable receiver at line 28; 'self' is read-only while 'fill' is open
 ```
 
 <!-- test: mutable-value-leaves-window-refused -->
@@ -523,7 +582,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:20:17: cannot store a mutable 'Row' into 'pinned', which holds an immutable 'Row'; freeze it, or store a copy
+error E3196: <fragment>:20:17: cannot store a mutable 'Row' into 'pinned', which holds an immutable 'Row'; freeze it
 ```
 
 <!-- test: await-inside-modify-refused -->
@@ -899,7 +958,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:28:19: 'consume' needs a writable parameter 'rename'; 'function' is read-only while 'fill' is open
+error E3207: <fragment>:28:11: 'function() gives row.rename()' writes data it captured, and that data is read-only while 'fill' is open; write it outside the closure or take the data as a parameter
 ```
 
 <!-- test: one-statement-open-refuses-two-isolated-values-of-different-holders -->
@@ -1485,7 +1544,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:16:13: cannot store an immutable 'Box' into 'an element of the container push writes', which holds a mutable 'Box'; store a copy
+error E3196: <fragment>:16:13: cannot store an immutable 'Box' into 'an element of the container push writes', which holds a mutable 'Box'; declare the element `immutable Box`
 ```
 
 <!-- test: container-store-of-isolated-data-into-a-mutable-array-is-refused -->
@@ -1825,7 +1884,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3188: <fragment>:26:6: cannot bind `let` 'frozen' to a value reached through 'x', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
 error E3197: <fragment>:27:12: cannot write 'part' through 'either(x, b: frozen, flag: true).part', which is immutable
 error E3208: <fragment>:27:17: 'either' returns 'a' or 'b'; they must both be mutable or both immutable here
 ```

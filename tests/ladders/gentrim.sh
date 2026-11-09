@@ -273,7 +273,7 @@ emit_sites_program() {
 			# ONE set per function, so the per-SITE cost is the trim call alone and the preset construction
 			# is amortized. Against `sites-trim` at the same site count this isolates, in the COMPILE
 			# columns, exactly what a per-site predefined set costs the parser and the backend.
-			echo -e "\tlet cs = CharacterSet.whitespacesAndNewlines()"
+			echo -e "\tlet cs = CharacterSet.whitespacesAndNewlines"
 		fi
 		n=0
 		while [ "$n" -lt "$SITES_PER_FN" ]; do
@@ -291,7 +291,7 @@ emit_sites_program() {
 			sites-charset)
 				# The set construction with no trim attached — `parseCharacterSetStaticCall`'s eleven-row
 				# table walk, `emitCharacterMemberSet`'s seven literals, and the box.
-				echo -e "\tlet c${n} = CharacterSet.whitespacesAndNewlines()"
+				echo -e "\tlet c${n} = CharacterSet.whitespacesAndNewlines"
 				echo -e "\tlet m${n} = p.trim(c${n})"
 				echo -e "\ttotal = total + (m${n}.byteLength() as Int)"
 				;;
@@ -391,7 +391,7 @@ emit_loop_program() {
 	if [ "$MODE" = "loop-trim-shared" ]; then
 		# HOISTED: one predefined set for the whole loop. Against `loop-trim` — identical but for this one
 		# line — the difference IS the per-call `CharacterSet` construction, in time and in peak RSS alike.
-		echo -e "\tlet cs = CharacterSet.whitespacesAndNewlines()"
+		echo -e "\tlet cs = CharacterSet.whitespacesAndNewlines"
 	fi
 	echo -e "\tlet t0 = Clock.nowNanos()"
 	echo -e "\tvar i = 0 as Int"
@@ -410,7 +410,7 @@ emit_loop_program() {
 		;;
 	loop-charset)
 		# `loop-trim` with the default set built explicitly: the two spellings must read one cost.
-		echo -e "\t\tlet c = CharacterSet.whitespacesAndNewlines()"
+		echo -e "\t\tlet c = CharacterSet.whitespacesAndNewlines"
 		echo -e "\t\tlet cut = subject.trim(c)"
 		echo -e "\t\ttotal = total + (cut.byteLength() as Int)"
 		;;

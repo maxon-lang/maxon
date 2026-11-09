@@ -24327,7 +24327,7 @@ NAMING half and the compiler refuses the block outright. Either way this case go
 what a case that would otherwise only assert an exit code cannot do.
 
 ⚠ `main` calls `String.trim` with its default argument, which the helper `__paramDefault#String.trim#0`
-supplies (`CharacterSet.whitespacesAndNewlines()`). That helper is NOT named here: one body per name,
+supplies (`CharacterSet.whitespacesAndNewlines`). That helper is NOT named here: one body per name,
 and the pin shows the scan this pins rather than the helper.
 
 ```maxon

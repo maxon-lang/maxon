@@ -208,7 +208,7 @@ else:
 | `test` | at the top level, followed by a quoted name (see [Testing](#testing)) |
 | `spawn` | followed by a type's static factory call, optionally after `(capacity: n)` (see [Services](#services--spawn)) |
 | `bits` | followed by `(` on the right-hand side of a typealias |
-| `view` | at the start of a statement, or after `if` or `then`, followed by a name, or by a `( … )` list and `=` (see [Views](#views-view)) |
+| `view` | at the start of a statement, or after `if` or `then`, followed by a name, or by a `( … )` list and `=`; another spelling of `let` (see [Views](#views-view)) |
 | `readonly` | before an element or value type argument of a container (see [Read-Only Values](#read-only-values)) |
 | `mutable` | before a parameter's type, or a function-type parameter's, and as `mutable self` (see [Parameter Passing](#parameter-passing)) |
 | `isolated`, `immutable` | before a type, and before `self` as a receiver capability; `isolated` also after `is` in a `where` constraint (see [Regions and Capabilities](#regions-and-capabilities)) |
@@ -368,6 +368,11 @@ Every character becomes exactly one byte: `\xNN` is the byte `NN`, and a charact
 `U+0000` to `U+00FF` is its Latin-1 byte. A character above `U+00FF` has no single-byte encoding and is
 **E1004**. `\{` and `\}` are not valid in a byte string.
 
+Every `b"..."` literal is `immutable` image data (see [Constant Data](#constant-data)): it allocates nothing at
+run time and nothing may write it. A mutable copy comes from `.clone()`, or from building the array with
+`ByteArray.create` and `push`; `"text".toByteArray()` makes a mutable array from text. Binding a literal with
+`var` and then writing it is refused (**E3207**).
+
 ### Array and Dictionary Literals
 
 ```maxon
@@ -382,8 +387,8 @@ var seen = AgeArray from [36, 41]      // an AgeArray that can grow
 
 The element type comes from the first element (or pair), and every later element is converted to it the
 way an argument is to its parameter: `[1.5, 1]` holds `1.0`, and `["a", 1]` is **E3005**. A `let` bound to a literal of bare numbers is a
-constant: its elements fit any element alias that admits them at each use, and it is immutable — a method
-that writes it is **E3159**. A `var` of such a literal is **E2004**: cast the numbers, or name the alias of an
+constant: its elements fit any element alias that admits them at each use, and it is `immutable` image data
+(see [Constant Data](#constant-data)) — a method that writes it is refused (**E3207**). A `var` of such a literal is **E2004**: cast the numbers, or name the alias of an
 `Array`, `Set`, `List` or `FixedArray` (`AgeArray from [...]`). See
 [Initializing From Literals](#initializing-from-literals) for literals of other collection types.
 
@@ -1189,7 +1194,9 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- `var` fields can be written after construction; `let` fields cannot.
+- `var` fields can be reassigned after construction; `let` fields cannot (**E2013**, `'version' is a let field
+  and cannot be reassigned`). A `let` field's record can still be written through: `self.columns.push(x)` is
+  legal on a `let columns` array.
 - A field without a default names its type after `as` (`var x as Coord`); a field with a default takes its
   type from the default (see [Required Field Initialization](#required-field-initialization)). The type is an
   alias, `bool`, a type, or another named type — a bare `int` or `float` is refused.
@@ -1346,8 +1353,8 @@ belongs in a local `var` passed to a `mutable` parameter, in a field of a value 
   are **E2012**.
 - A `static let` whose value is decided entirely at compile time — a scalar or byte-string literal, an array
   literal of integers, an empty container, a payload-free union case, or a record whose every field is one of
-  these — is **image data**: its bytes are laid down in read-only memory and nothing creates it at run time.
-  Any other `static let` is built before `main`.
+  these — is **image data**: its bytes are laid down in read-only memory and nothing creates it at run time, and
+  it is `immutable` (see [Constant Data](#constant-data)). Any other `static let` is built before `main`.
 - A static declared in `stdlib/` is kept only when reachable code reads it; one nothing reads is not emitted,
   and neither is its initializer.
 - A static field is a top-level binding whose name carries the type as a qualifier, so what its initializer
@@ -2567,20 +2574,26 @@ enum case: `Outcome.pending`.
 Payloads may be integers, floats, booleans, strings, records, other unions and collections. An integer
 literal passed for a `float` payload widens to the float: `Reading.celsius(21)` carries `21.0`.
 
-### Read-Only Payloads
+### Payload Declarations
 
-A payload declared `let` is read-only for the whole life of the value, like a `let` field (see
-[Read-Only Values](#read-only-values)). A value stored into it must be read-only, a value type, or moved in
-(**E3078** otherwise); a match binding of it is read-only, and a write through it is **E3159**. Every payload
-of a read-only union value — one held by a `let` binding, a `let` field or a module-level `let` — is read-only
-too, whatever the payload's own declaration, so binding a record out of it to a `var` is **E3078**. A
-union whose payloads are all `let` and all value types is itself a value type.
+A payload declared `let` is never reassigned for the whole life of the value, like a `let` field: assigning to
+a match binding of it is **E2013** (`'callee' is a let and cannot be reassigned`). Writes reach through it, so
+a field store or a `push` on the record or array it holds is legal. A union whose payloads are all `let` and
+all value types is itself a value type.
+
+A payload takes the capability words a field does, written before its type: `named(let text immutable
+ByteArray)`. An `immutable` payload holds frozen data. What is stored into it must be `immutable` (a `b"…"`
+literal, a constant `let`, a `freeze`d value, or data read from another `immutable` slot); a plain
+`ByteArray` is **E3196**. A payload that is not declared `immutable` cannot hold immutable data: storing a
+constant name into `named(let text ByteArray)` is **E3196** (``cannot store an immutable 'ByteArray' into
+'Label.named.text', which holds a mutable 'ByteArray'; declare the payload `immutable ByteArray` ``). A
+`match` binding of an `immutable` payload is `immutable`, so a write through it is **E3207**.
 
 ```maxon
 typealias Weight = int(0 to 100)
 
 union Op
-	call(let callee ByteArray, weight Weight)
+	call(let callee immutable ByteArray, weight Weight)
 	nop
 end 'Op'
 
@@ -2644,16 +2657,15 @@ end 'main'
 
 Every other scrutinee is **E2013**, and the message names the fix:
 
-- A `let` scrutinee has immutable bindings.
+- A `let` scrutinee: the union is never reassigned, so its bindings are too (`'value' is a let and cannot be
+  reassigned`).
 - An unmarked union parameter: `'value' is a payload of the by-value parameter 'b', so assigning it cannot
   reach the caller's union; mark 'b' mutable or copy it into a local var`.
 - The receiver `self`: copy the union into a local `var` and match on that.
 - A temporary, or any union nothing holds: copy it into a local `var` first.
 
-The bindings of a `let` scrutinee are also [read-only](#read-only-values) all the way down, whatever each
-payload's own declaration, so a write through one is **E3159** and binding a record out of one to a `var` is
-**E3078**. Writing a field of a parameter's payload record in place (`value.count = value.count + 1`) is not
-an assignment of the binding, and it stays legal.
+Writing a field of a payload record in place (`value.count = value.count + 1`) is not an assignment of the
+binding, and it is legal whatever the scrutinee is.
 
 ### Comparing Union Values
 
@@ -2815,6 +2827,11 @@ tags; treat a persisted union as append-only.
 
 ## Variables
 
+A `let` is a name that is never reassigned; a `var` is a name that may be. The keyword says nothing about the
+data behind the name: a field store, a `push` and a callee that writes its parameter reach through a `let`
+to the record it names. A number, `bool`, enum or `String` has no record behind its name, so changing one is
+reassigning it, and it needs a `var`. `view` is another spelling of `let`.
+
 ### Mutable Variables (`var`)
 
 ```maxon
@@ -2830,12 +2847,12 @@ number, arithmetic over bare numbers (`16 * 1024`), a plain `let` constant, and 
 of bare numbers are refused as its initializer (**E2004**); cast it (`var size = (16 * 1024) as ByteCount`).
 A `var` initialized from a value of some alias is that alias.
 
-### Immutable Variables (`let`)
+### Fixed Variables (`let`)
 
 ```maxon
 let pi = 3.14159
 let name = "Maxon"
-// pi = 3.14            // E2013: cannot assign to immutable variable: 'pi'
+// pi = 3.14            // E2013: 'pi' is a let and cannot be reassigned
 ```
 
 A `let` bound to a bare number, to arithmetic over bare numbers or to a literal container of them is a
@@ -2863,43 +2880,85 @@ function main() returns ExitCode
 end 'main'
 ```
 
-A `let` is read-only all the way down (see [Read-Only Values](#read-only-values)): calling a method that writes
-its receiver (`push`, `append`, `set`, `remove`, `clear`, …) on a `let`, or writing a field of anything it
-reaches, is **E3159**.
+A `let` fixes which record the name holds, not what is in the record. A field store, a method that writes its
+receiver (`push`, `append`, `set`, `remove`, `clear`, …) and a callee that writes its parameter all reach
+through a `let`:
 
 ```maxon
-typealias Tally = int(0 to u64.max)
-typealias TallyArray = Array with Tally
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
 
 function main() returns ExitCode
-	var items = TallyArray.create(0)
-	items.push(1)                    // fine: items is a var
-	// let fixed = TallyArray.create(0)
-	// fixed.push(1)                 // E3159: cannot write through 'fixed': 'fixed' is read-only (a `let` binding)
-	print("{items.count()}\n")
+	let p = Box.create(1)
+	p.n = 2                          // a field store through a let
+	let xs = Counts.create(0)
+	xs.push(p.n)                     // so is a method that writes its receiver
+	// p = Box.create(3)             // E2013: 'p' is a let and cannot be reassigned
+	print("{p.n} {xs.count()}\n")    // 2 1
 	return 0
 end 'main'
 ```
 
-So a `let` binds only a value nothing writes while it lives:
+What a `let` refuses is reassignment:
 
-- a fresh record no other name reaches (`let x = Box.create(1)`), frozen at birth;
-- an element a library `pop`, `remove`, `removeFirst` or `removeLast` moves out of a container
-  (`let x = try self.items.pop() otherwise return`), which the container no longer holds;
-- a read-only value, such as a module-level `let`'s record or a `let` field of a read-only holder;
-- a part of a parameter (`let z = p.child`), which is as immutable as the argument the caller passed. A caller
-  that passes the same record through a second, writable argument may write it while the `let` lives.
+- Assigning to it is **E2013** (`'p' is a let and cannot be reassigned`). The same wording covers a `for`
+  variable, a `match` or `if let` binding and a tuple element bound by `let`. A `let` field is `'version' is a
+  let field and cannot be reassigned`.
+- Passing it to a `mutable` parameter is **E2013** too, because that parameter reassigns the caller's variable:
+  ``'n' is a let and cannot be passed to the `mutable` parameter 'x'; bind it to a `var` ``.
+- A number, `bool`, enum or `String` held by a `let` cannot change at all, since changing one is reassigning
+  it. Declare it `var` when it must.
 
-A `let` bound to state something may still write — a field of a writable `self` or `var`, an element of a `var`
-container, a getter's result on a `var` holder, a parameter the function writes, a `var`'s record that a
-container also holds — is **E3188** (``cannot bind `let` 'b' to a value reached through 'holder', which something
-may still write; use `view` to read it, `var` to write it, or bind a clone()``). A function that returns a
-`let`-bound value returns a read-only value.
+A `var` bound from a `let` names the same record, so a write through either name is seen through the other. A
+`let` bound from state that something else writes sees the writes:
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Holder
+	export var box as Box
+
+	static function create() returns Self
+		return Self{box: Box.create(1)}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let r = Box.create(5)
+	var c = r
+	c.n = 7                   // r names the same record
+	var h = Holder.create()
+	let b = h.box
+	h.box.n = 8               // b sees it
+	print("{r.n} {b.n}\n")    // 7 8
+	return 0
+end 'main'
+```
+
+Data that nothing may write is a separate notion from the keyword: constant data, frozen data, a stored `Map`
+key and a `SharedValue` read stay read-only wherever they are bound (see [Read-Only Values](#read-only-values)
+and [Constant Data](#constant-data)).
 
 ### Views (`view`)
 
-`view x = e` binds any value read-only through `x`. Unlike a `let`, a `view` promises nothing about other names: a
-write made through another name, or by another coroutine across an `await`, is seen through the view.
+`view x = e` is another spelling of `let x = e`, with the same meaning wherever a `let` is accepted as a local
+binding:
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -2922,28 +2981,16 @@ end 'Holder'
 
 function main() returns ExitCode
 	var h = Holder.create()
-	view v = h.box            // `let v = h.box` is E3188: h may still write it
-	h.box.n = 7
-	print("{v.n}\n")          // 7
-	// v.n = 8                // E3159: 'v' is read-only (a `view`)
+	view v = h.box
+	v.n = 9                   // written through, like a `let`
+	print("{h.box.n}\n")      // 9
+	// v = Box.create(2)      // E2013: 'v' is a let and cannot be reassigned
 	return 0
 end 'main'
 ```
 
-- Writing through a view, or handing it to a parameter the callee writes, is **E3159**.
-- A view lives only inside its function. Storing it, handing it to a parameter that keeps it, returning it (or a
-  call's result that is still the view) and capturing it in a closure are **E3078**; sending it to a service is
-  **E3138**. Use a `clone()` for any of them. A view of a number or another scalar is copied where it goes.
-- A view holds its own reference to the record it names. Once a view of a `var` is declared — of the `var`
-  itself, a field or an element of it, or any expression that may hand its record back (a ternary, an
-  `otherwise`, a `match`, a call) — the view co-owns that record for the rest of the function, read again or
-  not: sending it (**E3138**), publishing it (**E3174**) or handing it to a parameter the callee keeps
-  (**E3078**) is refused. The rule follows source order, so inside a loop a view declared earlier in the
-  body counts. Reassigning the `var` a fresh record makes it sole again, and returning the `var` is unaffected.
-- A record nothing can write — a heap type whose fields are all `let` — is shared instead: it is sent, published
-  or handed to a parameter the callee keeps as it is, and the view stays valid. An inline packed record is copied.
-- `view` is a [contextual keyword](#keywords). It declares a local binding only: a `view` field, a module-level
-  `view`, a `view` in an extension body or an `@heap view` is **E2077**.
+`view` is a [contextual keyword](#keywords). It declares a local binding only: a `view` field, a module-level
+`view`, a `view` in an extension body or an `@heap view` is **E2077**.
 
 ### Rules
 
@@ -2958,8 +3005,9 @@ end 'main'
   holds 'Xs'`). The first store in source order decides. See [Generic-Instance and Function-Type Aliases Are Brands](#generic-instance-and-function-type-aliases-are-brands).
 - Variables are block-scoped.
 - **A `var` that is never reassigned or mutated is E3077** (`variable 'x' is never reassigned; use 'let'
-  instead of 'var'`) when a `let` in its place would compile: its initializer is a fresh record or a
-  read-only value, and nothing stores it where something may write it and reads it again.
+  instead of 'var'`). A `var` counts as used for mutation when it is reassigned, written through (a field
+  store, a method that writes its receiver), passed to a parameter the callee writes, or moved out. A `var`
+  bound from state something else writes (`var node = h.box`) and never touched itself is E3077.
 - **Every variable must be used (E3012).** This covers `let`/`var`, parameters, loop variables, pattern
   bindings and closure parameters. The name `_` discards: it creates no binding and may appear several
   times in one pattern (`for (_, _) in pairs`). A parameter named `_` takes its argument unnamed, so
@@ -2971,8 +3019,8 @@ end 'main'
   `a.clone()` for an independent copy (see
   [Reference-by-Default Assignment](#reference-by-default-assignment)).
   Numbers, `bool` and other scalar values are always independent copies.
-- **A read-only value stays read-only.** `var b = a` moves `a` when `a` is a `var`; from a read-only `a` (a
-  `let` included) it is **E3078**, and `a.clone()` is the mutable copy (see [Read-Only Values](#read-only-values)):
+- **`var b = a` and `let b = a` move `a` when `a` is a `var`.** When `a` is a `let`, `b` names the same record
+  and `a` stays usable. `a.clone()` is the independent copy (see [Moves and Sharing](#moves-and-sharing)):
 
   ```maxon
   typealias Coord = int(i64.min to i64.max)
@@ -2992,11 +3040,12 @@ end 'main'
   	b.x = 10
 
   	let c = Point.create(3)
-  	let d = c                 // d shares c's record: both are read-only
-  	// var e = c              // E3078: a read-only value bound to a `var`
+  	let d = c                 // d names c's record
+  	var e = c                 // so does e, and c stays usable
+  	e.x = 30
   	var f = c.clone()         // an independent record
-  	f.x = 30
-  	print("{b.x} {c.x} {d.x} {f.x}\n")   // 10 3 3 30
+  	f.x = 40
+  	print("{b.x} {c.x} {d.x} {f.x}\n")   // 10 30 30 40
   	return 0
   end 'main'
   ```
@@ -3046,8 +3095,9 @@ end 'main'
   binding. Initializers that depend on each other in a cycle are **E2012**. A `let` whose value is decided at
   compile time — a scalar, a string or byte-string literal, a constant array literal, an empty container, a
   payload-free union case, or a record built from constants — is image data, laid down in read-only memory
-  with nothing to run; any other record is built by the program's `__module_init` before `main`. A static
-  field follows the same rules (see [Static Fields](#static-fields)).
+  with nothing to run, and it is `immutable` (see [Constant Data](#constant-data)); any other record is built by
+  the program's `__module_init` before `main`. A static field follows the same rules (see
+  [Static Fields](#static-fields)).
 - A struct literal at file scope is **E3076**; call a factory instead, or declare a static field inside the
   type.
 - An initializer whose value has an interface type is **E2015**: an interface value is two words, a value
@@ -3060,12 +3110,16 @@ end 'main'
   (`static let origin = Holder{step: (7, 9)}`), a factory parameter, a union payload, or an element of another
   tuple — gives each element that slot's type. A tuple literal inside extra parentheses is the same tuple, and a
   `var` born from a tuple of bare numbers is refused as it is in a body.
-- A module-level `let` is [read-only](#read-only-values) through everything it reaches, for the program's whole
-  life. A write through it, or through a record a call handed back out of it, is **E3159**; binding it, a field
-  of it (`var m = H.index`) or such a call result, an element accessor's included (`var p = Origins.get(0)`),
-  to a `var` is **E3078**. Read it through a `let`, or bind a
-  `clone()`. Storing its record anywhere something may write it — pushing it into a container, storing it into a `var` field, putting it in an array literal or a map value, or handing it to
-  a function that keeps its parameter — is **E3078** too; store a `clone()`.
+- A module-level `let` whose value is decided at compile time is `immutable` image data (see
+  [Constant Data](#constant-data)): a write through it is **E3207**, and storing it where something may write it
+  is **E3196**.
+- Any other module-level `let` is [read-only](#read-only-values) through everything it reaches, for the
+  program's whole life. A write through it, or through a record a call handed back out of it, is **E3159**;
+  binding it, a field of it (`var m = H.index`) or such a call result, an element accessor's included
+  (`var p = Origins.get(0)`), to a `var` is **E3078**. Read it through a `let`, or bind a `clone()`. Storing its
+  record anywhere something may write it — pushing it into a container, storing it into a `var` field, putting
+  it in an array literal or a map value, or handing it to a function that keeps its parameter — is **E3078**
+  too; store a `clone()`.
 - A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
   program-wide one with [`default`](#program-wide-defaults--default). A `Key.current()` or `Key.register()`
   reachable from a global initializer is [E3173](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3173): the
@@ -3291,13 +3345,14 @@ end 'main'
   of the receiver (`count` or `self.count`), and a chain of them (`p.a.b`). The rule is exactly the
   assignment rule — an argument the callee writes is accepted here if and only if writing the same thing at
   the call site would be accepted.
-- Passing a [read-only](#read-only-values) value to a `mutable` parameter is **E3159** (`cannot pass
-  'y', which is read-only (a `let` binding), to a function that writes parameter 'n'`). A literal or another
-  expression is no storage for the write to reach, so it is **E3159** too (`cannot pass a literal to a
-  function that writes parameter 'n'; pass a `var``). The receiver of a method counts as a parameter, so
-  `let acc = Accumulator.create()` followed by `acc.add(10)`, where `add` writes a field of `acc`, is refused.
-  A `let` field, or anything reached through a read-only value, is refused for the same reason the
-  equivalent assignment is.
+- Passing a `let` to a `mutable` parameter is **E2013** (``'y' is a let and cannot be passed to the `mutable`
+  parameter 'n'; bind it to a `var` ``): the callee reassigns the caller's variable, and a `let` has none to
+  give. A `let` field is refused for the same reason the equivalent assignment is. Other
+  [read-only](#read-only-values) data at a `mutable` position, such as a stored `Map` key, is **E3159**. A literal or
+  another expression is no storage for the write to reach, so it is **E3159** too (``cannot pass a literal to
+  a function that writes parameter 'n'; pass a `var` ``). A callee that writes a field of its record parameter
+  or receiver reaches through a `let` argument: `let acc = Accumulator.create()` followed by `acc.add(10)`,
+  where `add` writes a field of `acc`, is legal.
 - A function type spells the marker: `typealias Step = function(mutable Tally)`. A function, closure or
   interface conformer fits a function type or requirement only when every parameter's marker is the same as
   the type's, so a function that reassigns its parameter does not convert to `function(Tally)` (**E3005**),
@@ -3305,8 +3360,8 @@ end 'main'
   record parameter its function type leaves unmarked is **E3210** (see
   [Capabilities at Function Types and Requirements](#capabilities-at-function-types-and-requirements)). A
   call through a function value or an
-  interface passes the argument's storage at each `mutable` position, and a read-only value handed to such
-  a position is **E3159**, as at a direct call; a literal or another expression is **E3159** too. Through
+  interface passes the argument's storage at each `mutable` position, and a `let` handed to such
+  a position is **E2013**, as at a direct call; a literal or another expression is **E3159**. Through
   a function value or an interface requirement the message names the position (`to a function that writes
   argument 1`).
 - A variable passed by reference is a flow in both directions: the callee reads the variable and may write
@@ -3407,8 +3462,7 @@ copy, so passing it to a parameter the callee writes is **E3159**.
 A closure that escapes — stored anywhere or returned — keeps every record it captures, so handing a read-only
 value to a function whose parameter such a closure captures is **E3078**. A closure that stays local — it is
 only called, where it is made or by a parameter that only calls it — writes what it writes of a parameter it
-captures, so handing that function a read-only value is **E3159**. A record [view](#views-view) cannot be
-captured (**E3078**); a view of a number can, since the closure captures a copy.
+captures, so handing that function a read-only value is **E3159**.
 
 **A closure can go anywhere a value can.** A function value is one reference to a record holding the code
 and the captures, so a closure may be returned, stored in a field, a container or
@@ -4064,9 +4118,10 @@ end 'loop'
 ```
 
 **Notes:**
-- The loop variable cannot be reassigned. It follows its source: read-only all the way down over a
-  [read-only](#read-only-values) source, writable through over a `var` one. Handing it to a parameter the
-  callee reassigns is **E3159**, which names it a `for` loop variable.
+- The loop variable is a `let`: reassigning it is **E2013** (`'item' is a let and cannot be reassigned`), and so
+  is handing it to a `mutable` parameter the callee reassigns. It follows its source for writes through it:
+  writable over a writable source, read-only over [read-only](#read-only-values) data such as a stored `Map`
+  key or an `immutable` array.
 - The loop holds a counted reference to its source, so the body may write the collection. A loop over an
   `Array` or a `String` re-reads the live count each step: a `push` in the body extends the loop, and a
   `clear` ends it.
@@ -5245,8 +5300,8 @@ through a function value hands the promise over to the callee.
 A `mutable` promise parameter the callee reassigns (`q = async work()`) writes into the caller's own variable: the
 callee drops the thread the variable held, the variable takes the new one, and the caller awaits it as any
 other promise name. The same holds through a function that only hands the parameter on, and at a position a
-function type passes by reference. The argument is a `var` the caller owns: a `let`, a `let` field, a name a
-closure captured, or a promise an array still holds is **E3159**. Inside a loop, `await x` after such a call
+function type passes by reference. The argument is a `var` the caller owns: a `let` or a `let` field is
+**E2013**, and a name a closure captured, or a promise an array still holds, is **E3159**. Inside a loop, `await x` after such a call
 spends `x`, so the call on the next iteration is **E3102**.
 
 ```maxon
@@ -5530,7 +5585,7 @@ either side could write, because the two green threads may run at the same time 
   reading the sender's variable afterwards is **E3102**. Replies are moved too, and so is every argument a
   `spawn` hands its factory, whether or not the factory keeps it. The handler owns what it was moved, so it may
   keep it or write it.
-- A [read-only](#read-only-values) value the sender does not own — a module-level `let`, a `let` field, a
+- A [read-only](#read-only-values) value the sender does not own — a module-level `let`, `immutable` data, a
   `SharedValue` or registry read, or a parameter nothing in the sending function writes — is **shared**: its graph is marked shared, so every
   count on it steps atomically, and neither side may write it. Sending a parameter the sending function
   writes, or any shared value the handler writes or keeps, is **E3138**. A borrowed `String` is copied at the
@@ -6130,7 +6185,7 @@ keeps its meaning, and `swap(1, right: 2)`, with the parenthesis against the nam
 
 A capability word written directly on a number, `bool`, an enum, a payload-free union or a `String` is not a
 type there: those values belong to no region. A union with a payload does, and takes `isolated` and
-`immutable` like a record. `mutable` on a parameter or function-type parameter of a value type is the one
+`immutable` like a record, on the union and on each payload (see [Payload Declarations](#payload-declarations)). `mutable` on a parameter or function-type parameter of a value type is the one
 place it is accepted, and it makes the parameter by reference. The same words in other positions fail as any
 stray word does: the cases are in `specs/regions-syntax.md`.
 
@@ -6161,7 +6216,11 @@ typealias SettledIndex = immutable IndexBuilder
 
 A write through frozen data is **E3197** (`cannot write 'numeric' through 'pinned', which is immutable`), and
 storing a mutable value where frozen data is held, or the reverse, is **E3196** (`cannot store a mutable
-'Row' into 'pinned', which holds an immutable 'Row'; freeze it, or store a copy`). A value that joins frozen
+'Row' into 'pinned', which holds an immutable 'Row'; freeze it, or store a copy`). Storing immutable data
+into a plain holder is **E3196** too, and the message names the declaration to change (``cannot store an
+immutable 'ByteArray' into 'Tok.value', which holds a mutable 'ByteArray'; declare the field `immutable
+ByteArray` ``). A method that writes its receiver, called on immutable data, is **E3207** (`'push' needs a
+writable receiver; 'frozen' is immutable`). A value that joins frozen
 and mutable data, through a ternary, a `match` arm, a `try … otherwise` or a `var` assigned both, is
 read-only (**E3197**: `which is read-only, as it joins immutable and mutable data`). The cases are in
 `specs/regions-modify.md` and `specs/regions-inferred.md`.
@@ -6172,6 +6231,64 @@ against it as a store into a slot, so a frozen value into the mutable position a
 `immutable` position are both refused (**E3196** at a store, **E3207** at a call argument that the callee
 stores). `Array with immutable Box` and `Array with readonly Box` are
 different types (`specs/regions-generic-flows.md`).
+
+### Constant Data
+
+A `let` whose initializer is a compile-time constant names **image data**: a literal, a `b"…"` byte string, a
+constant record, array or tuple literal, or another constant `let`. The `let` may be a module-level binding, a
+`static let`, a `let` field or a local, and the data is `immutable`. So is every inline `b"…"` literal, bound
+or not. Image data allocates nothing at run time and is read with plain counts from any thread.
+
+Immutable data goes where it is only read, or where it is held as `immutable`:
+
+- A parameter that only reads it, an `immutable` parameter, and a parameter the callee stores into an
+  `immutable` place all take it.
+- A field, array element or union payload declared `immutable T` holds it. Declared as plain `T`, the holder is
+  one something may write, so storing it there is **E3196** (``cannot store an immutable 'ByteArray' into
+  'Tok.value', which holds a mutable 'ByteArray'; declare the field `immutable ByteArray` ``); the message
+  names the holder to declare.
+- A result that returns it is declared `immutable`; an unmarked result is **E3209** (``a return does not fit the
+  declared result: 'Name' is immutable, the result is not `immutable`; declare the result `immutable` ``).
+- Writing through it, binding it to a `var` and writing, or passing it to a parameter the callee writes is
+  **E3207** (``'push' needs a writable receiver; 'Name' is immutable``; ``'grow' writes 'name' (line 5:
+  `name.push(100)`); 'Name' is immutable``). A mutable copy comes from `.clone()`, or from building the value
+  (`ByteArray.create` and `push`, or `"text".toByteArray()`).
+
+```maxon
+let Name = b"abc"
+
+type Tok
+	export let value as immutable ByteArray
+
+	static function create(value ByteArray) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Tok'
+
+function main() returns ExitCode
+	let t = Tok.create(Name)         // create only stores its parameter into an `immutable` field
+	// Name.push(1)                  // E3207: 'push' needs a writable receiver; 'Name' is immutable
+	print("{t.value.count()}\n")     // 3
+	return 0
+end 'main'
+```
+
+Reading an `immutable` field, payload or element slot yields `immutable` data, whatever holds the slot, and the
+read leaves the holder as it was: `t.value` goes straight into another `immutable` holder, and a `for` over
+an `Array with immutable ByteArray` binds `immutable` names.
+
+Data built at run time is `immutable` once it is frozen, so `freeze` it where it enters an `immutable` holder
+(`Tok.create(freeze ByteArray.create(4))`). A `Map` key and a `Set` element are `immutable` slots: a number, a
+`String` or another value type needs nothing, a constant is inserted as it is, and a record or array built at
+run time needs `freeze` (``'upsert' takes `immutable` 'key'; a fresh value is mutable. Freeze it first``,
+**E3207**). A key read back out of a map is `immutable`, so it goes into an `immutable` holder with no copy.
+
+A record whose fields are all `let` is immutable only structurally: every field is `let` and every field's type
+is a value type or an immutable aggregate. A record with a `let items as Counts` array field is an ordinary
+mutable record, and sending it as `immutable` needs `freeze`.
+
+A record that is an immutable aggregate counts as a value, like a `String`: `immutable` over it means the type
+itself, it enters an `immutable` slot or a service message with no `freeze`, and `freeze` of one is **E3200**.
 
 ### Parameter Capabilities Are Inferred
 
@@ -6211,7 +6328,10 @@ immutable`. `specs/regions-inferred.md` (`read-only-param-takes-mutable-and-froz
 frozen argument only (**E3207**: ``'create' takes `immutable` 'settings'; 's' is mutable. Freeze it first``),
 and a method declared `immutable self` runs on a frozen receiver only.
 
-The classes are computed together over the call graph, so they do not depend on declaration order.
+The classes are computed together over the call graph, so they do not depend on declaration order. A union
+parameter is judged like a record parameter, and a parameter passed on, even through an alias or as an
+interface-typed argument, to a callee that stores or writes it is mutable only, so a read-only argument is
+**E3207**.
 
 **A result's capability comes from the arguments at the parameters some return path comes from**, and from
 no other argument. Every such argument mutable gives a mutable result. Every such argument frozen gives a
@@ -6221,11 +6341,26 @@ plays no part (`specs/regions-results.md`). A call whose return paths return par
 capabilities is **E3208** (`'pick' returns 'a' or 'b'; they must both be mutable or both immutable here`).
 A function that declares `returns immutable T` and returns a mutable value, or declares a plain result and
 returns an `isolated` one, is **E3209** (`a return does not fit the declared result: 'fresh' is mutable, the
-result is immutable; freeze it`).
+result is immutable; freeze it`). So is a plain result that returns immutable data, a constant or an
+`immutable` field read (``'Name' is immutable, the result is not `immutable`; declare the result `immutable` ``).
 
 A value joined from a parameter's data and fresh or local mutable data is judged by the same rule against
 the parameter's final class, and a write through it makes the parameter mutable only. A join with frozen data
 is read-only (`specs/regions-soundness.md`).
+
+A function whose return paths mix frozen data (its own, such as an `immutable` field) with writable data hands
+back a read-only result to every caller, whatever the receiver is: writing through it is **E3197**, and passing
+it to a `mutable` parameter is **E3207**. One `return` whose `if … else`, ternary or `match` joins both counts
+too. Declare the function `returns immutable` when every path is frozen, or return a `.clone()` of the frozen
+path (`specs/settled-results-through-merges.md`).
+
+A record built from a parameter's data and returned (`return Self{field: parameter}`) holds that data and only
+reads it, so the parameter stays any-capability: a frozen argument gives a read-only record, a mutable one a
+writable record. A write through the record that reaches the parameter's data, or handing the record to a callee
+that writes that data, stores the record or returns it, makes the parameter mutable only. A parameter a record is built from takes no argument that
+is merely read-only, such as data an open `modify` block pauses. A function value, an interface requirement and
+a generic method are judged as if they build a record from each unmarked argument they cannot see into
+(`specs/returned-and-local-holders.md`).
 
 ### Separate Regions: `isolated`
 
@@ -6243,8 +6378,9 @@ declare it `as isolated Bag`, or store a copy``).
 
 `isolated` values are linear. Every use of an `isolated` local or parameter moves it except opening it, so
 `let b = a` moves `a` and a later read of `a` is **E3102**. An `isolated` parameter owns the region it is
-handed; `mutable isolated` is by reference, and the callee may open, swap or replace it but never move it out,
-alias it, store it or pass it on (**E3202**). Reading an `isolated` value without opening it, such as
+handed; `mutable isolated` is by reference, and the callee may open, swap or replace it, or lend it on to
+another `mutable isolated` parameter (a method's own recursion included), but never move it out, alias it,
+store it or pass it to an `isolated` parameter (**E3202**). Reading an `isolated` value without opening it, such as
 `self.part` outside a block, is **E3198** (``'self.part' is isolated and cannot be read outside a block; open
 it with `modify`, or take it out with `swap` ``).
 
@@ -6338,8 +6474,8 @@ end 'Ticket'
 A type with a unique field is unique too, with no declaration and no generated `clone()` (**E3214**:
 ``'Wallet' is unique (its field 'ticket' holds a unique 'Ticket') and cannot be cloned``); so is a type that
 holds an array of unique values. A unique value cannot be frozen, and reading one out of a field or an element
-to bind, return or store it is **E3214**: move it out with `pop` or `remove`, read it through a `view`, or
-`swap` it out of an `isolated` field. Handing a unique value to a parameter the callee only reads leaves it
+to bind, return or store it is **E3214**: move it out with `pop` or `remove`, or `swap` it out of an `isolated`
+field. Handing a unique value to a parameter the callee only reads leaves it
 readable. The standard library's `Promise` is unique. The cases are in `specs/regions-unique.md`.
 
 ### Region Bounds
@@ -6398,9 +6534,18 @@ error E3210: function value for 'KeyOf' returns data reached from its read-only 
 A function value that returns its read-only parameter, or throws it in an error payload, converts once it
 returns a `.clone()` of it (`specs/regions-everywhere.md`).
 
+A closure that writes what it captured, or builds a record from it, mutates its captures; the compiler infers
+it, so nothing is written on the closure. It converts only to a function type that declares `mutates captures`,
+and a plain function type refuses it (**E3210**). A closure that writes through a captured iterator writes the
+collection the iterator runs over, which therefore has to be mutable data
+(`specs/closure-captured-iterators.md`). A conformer whose result holds data from its receiver needs
+`mutable self` on the interface requirement (**E3210**).
+
 A conformer or function value whose declaration marks a position the boundary leaves unmarked, or the
 reverse, is refused too. A value of a `mutates captures` type called through frozen or read-only
-data is **E3211** (``'Tallier' mutates captures and cannot be called through immutable data``).
+data is **E3211** (``'Tallier' mutates captures and cannot be called through immutable data``): on frozen data
+anywhere, and inside an open `modify` block when the value was returned from, read out of or stored in the data
+the block holds.
 
 A caller trusts the declaration: an argument at a `mutable` position is writable, and one at an `immutable`
 position is frozen (**E3207**). A result read through an interface or function value is read-only, so a
@@ -6472,6 +6617,11 @@ write is the exception a hold cannot cover, and E3186 refuses it at compile time
 
 ## Memory Model
 
+**`let` means the name is never reassigned; `var` means it may be.** Neither keyword says whether the data
+behind the name can be written: a record held by a `let` can be written through it, and a number, `bool`,
+enum or `String` held by a `let` cannot change, because changing one is reassigning it. Data that nothing may
+write is declared with `immutable`, or is a constant (see [Regions and Capabilities](#regions-and-capabilities)).
+
 Maxon manages memory with **reference counting**. There is no garbage collector and no manual `free`: a
 record is released when its last reference goes away. Programs cannot:
 
@@ -6485,8 +6635,8 @@ Three mechanisms carry this:
 
 - **Reference counting is the safety mechanism.** Every read that could outlive its owner is counted, so a
   record is freed only when nothing can reach it.
-- **Mutable state belongs to one thread; read-only values may be shared.** `let` is deeply read-only, so a
-  read-only value can be shared by any number of holders and threads without copying.
+- **Mutable state belongs to one thread; read-only values may be shared.** `immutable` data and constants can
+  be written by nobody, so any number of holders and threads share them without copying.
 - **Raw memory is reachable only from the library tier** (`stdlib/` and `runtime/`). Programs reach it through
   safe, bounds-checked standard-library APIs.
 
@@ -6501,7 +6651,7 @@ Three mechanisms carry this:
 | Forged values | No integer-to-enum or integer-to-union cast, and no interface-to-interface cast (**E3009**) |
 | Null | There is no null: every variable, field and element holds a value |
 | Uninitialized fields | Every field must be definitely assigned before its struct literal (**E3086**) |
-| Writing through read-only data | Compile error (**E3159**, **E3078**) |
+| Writing through read-only data | Compile error (**E3159**, **E3078**, **E3207**) |
 | Use after move | Compile error (**E3102**) |
 | Data races | Mutable state is owned by one thread, and only read-only values are shared |
 | Stack overflow | Checked function prologues; **E5004** for the unchecked runtime chains; guard pages on OS stacks |
@@ -6579,15 +6729,14 @@ counts are needed. A mistake in that analysis can only add a count, so it costs 
 
 ### Read-Only Values
 
-`let` makes a value **read-only all the way down**: nothing reachable through it may be written, by any holder,
-for as long as it is read-only. That is what makes sharing by reference safe.
+Read-only is a property of the data, whatever keyword names it. Data that can never be written is shared by any
+number of holders and threads without copying, which is what makes sharing by reference safe.
 
-| Read-only root | Read-only through |
+| Read-only data | Read-only through |
 |----------------|-------------------|
-| a `let` binding | everything it reaches |
-| a [`view`](#views-view) binding | everything it reaches, through the view; other names may still write it |
-| a `let` field | everything it reaches, for the record's whole life |
-| a module-level `let` | everything it reaches, for the program's whole life |
+| [constant data](#constant-data): a constant `let`, a `b"…"` literal | itself, for the program's whole life |
+| [`immutable` data](#frozen-data-freeze-and-immutable): a `freeze` result, a read of an `immutable` slot | everything it reaches |
+| a module-level `let` built by a call | everything it reaches, for the program's whole life |
 | a value read from a `SharedValue` or a registry | everything it reaches |
 | a stored Map key or Set element | itself, while stored |
 | an element of a `readonly` element type | itself, while stored |
@@ -6595,37 +6744,29 @@ for as long as it is read-only. That is what makes sharing by reference safe.
 
 The rules:
 
-- **No write through a read-only value.** A field store, a method that writes its receiver, or an argument the
-  callee writes is **E3159**. The diagnostic names the read-only root.
-- **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**. A module-level `let`'s record reaching a `var`
-  through a ternary, a `match … gives` or a `try … otherwise` is the same **E3078**. Storing a read-only value into a `var` field, a
-  mutable container element, or passing it to a parameter that keeps it where something may
-  write it, is **E3078** too. A `let` bound to a fresh record is the one exception, at its last use: the store
-  consumes the name, so no `let` sees what the new holder writes. Stored there and read again afterwards, it is
-  refused. A last use is judged per path: a store on one arm of an `if`, a `match` or a ternary is the last use on
-  that arm when the arm reads the name no more, and so is a store on a branch that then leaves the function
-  (`return`, `throw`, `panic`), whatever the code after the `if` reads. A store on an arm that falls through to a
-  later read is refused. When a callee both keeps and writes a read-only argument, the keep is the error reported.
+- **No write through read-only data.** A field store, a method that writes its receiver, or an argument the
+  callee writes is **E3159** (**E3207** for constant and `immutable` data, whose message names the use that
+  needs it writable). The diagnostic names the read-only root. A `for` over a read-only `List` (frozen, or a
+  module `let`) hands out read-only elements, so writing one is **E3197**; iterate a `.clone()`.
+- **No mutable alias of read-only data.** Binding read-only data to a `var` is **E3078**. A module-level
+  `let`'s record reaching a `var` through a ternary, a `match … gives` or a `try … otherwise` is the same
+  **E3078**. Storing read-only data into a `var` field, a mutable container element, or passing it to a
+  parameter that keeps it where something may write it, is **E3078** too. Constant and `immutable` data is
+  refused by the capability checker instead: storing it into a plain field, element or payload is **E3196**,
+  and passing it to a parameter the callee writes or stores into a plain place is **E3207**.
   [`clone()`](#explicit-cloning) makes an independent mutable copy.
-- **A tuple carries the mark of what it holds.** A tuple literal may hold read-only values, and the tuple is
-  read-only wherever it goes, one a call returns included: `let (a, b) = ends(p)` keeps both names read-only.
-  Binding the tuple, or one of its read-only elements, to a `var`, assigning it to existing `var` names, or storing it into a
-  `var` field or a container is **E3078**, and passing it to a function that writes it is **E3159**.
-- **A `let` binds only what nothing writes.** A `let` bound to state something may still write is **E3188**; see
-  [Immutable Variables](#immutable-variables-let). A `let` bound from a parameter is as immutable as the caller's
-  argument.
-- **A `let` field has no other writer.** A value stored into a `let` field must be:
-  - already read-only;
-  - a value type;
-  - or moved in, either as a sole-owned value or as a `var` at its last use.
-
-  A mutable value that is still shared elsewhere is **E3078**. A sole-owned tuple or record is moved in only
-  when the records it holds are unwritten too: one that holds a record a `var` of the function may still write is **E3078**. The same rule applies to a parameter whose callee
-  stores it into a `let` field; the compiler reads that from the callee's body.
-- **`let b = a`, where `a` is a `var`, moves `a`.** `b` is then the record's only holder, and read-only.
-- **Keys are read-only.** A stored Map key or Set element cannot be written through its container, and a key read
-  back out is read-only. Storing a key follows the `let`-field rule. Map values and Array elements follow their
-  container.
+- **A tuple carries the mark of what it holds.** A tuple literal may hold read-only data, and the tuple is
+  read-only wherever it goes, one a call returns included. Binding the tuple, or one of its read-only
+  elements, to a `var`, assigning it to existing `var` names, or storing it into a `var` field or a container
+  is **E3078**, and passing it to a function that writes it is **E3159**.
+- **A `let` names writable data.** A `let` binding, a `let` field and a `let` payload hold records that stay
+  writable through every name, so a write through a `let` field reaches the record it holds. An `immutable`
+  field takes `immutable` data only.
+- **`let b = a`, where `a` is a `var`, moves `a`.** `b` is then the record's only holder. Where `a` is a `let`,
+  `b` names the same record and `a` stays usable.
+- **Keys are read-only.** A stored Map key or Set element cannot be written through its container, and a key
+  read back out is read-only. Both are `immutable` slots: a key is immutable data or is frozen where it is
+  inserted. Map values and Array elements follow their container.
 - **Read-only element types.** `Array with readonly T` and `Map with K, readonly V` hold read-only values
   without copying:
   - a read-only value can be stored directly;
@@ -6634,9 +6775,11 @@ The rules:
 
   As a type argument, `readonly` appears only on a container's element or value type; bindings and fields use
   `let`.
-- **Value types are exempt.** Scalars, `String`, `Character` and records whose fields are all `let` cannot give a
-  stored value a second writer, so none of these rules apply to them. A `String` or `Character` a name does not
-  own is copied when it is bound to a `var` or stored.
+- **Value types are exempt.** Scalars, `String`, `Character` and records that are immutable aggregates cannot
+  give a stored value a second writer, so none of these rules apply to them. A record is an immutable aggregate
+  when every field is a `let` and every field's type is a value type or an immutable aggregate; a record with
+  a `let` array field is not. A `String` or `Character` a name does not own is copied when it is bound to a
+  `var` or stored.
 
 ```maxon
 typealias Coord = int(i64.min to i64.max)
@@ -6652,12 +6795,8 @@ end 'Point'
 typealias PointArray = Array with Point
 
 function main() returns ExitCode
-	var a = Point.create(1)
-	a.x = 2
-	let frozen = a                       // a moves into frozen, which is read-only
-	let shared = frozen                  // shared names frozen's record, read-only
-	// frozen.x = 3                      // E3159: 'frozen' is read-only
-	// var copy = frozen                 // E3078: 'frozen' is read-only
+	let frozen = freeze Point.create(2)  // frozen data
+	// frozen.x = 3                      // E3197: a write through frozen data
 	var b = frozen.clone()               // an independent, mutable record
 	b.x = 5
 
@@ -6665,7 +6804,7 @@ function main() returns ExitCode
 	points.push(b)                       // the array shares b's record
 	var first = try points.get(0) otherwise panic("pushed")
 	first.x = 9                          // an element follows its container
-	print("{shared.x} {b.x} {first.x}\n")   // 2 9 9
+	print("{frozen.x} {b.x} {first.x}\n")   // 2 9 9
 	return 0
 end 'main'
 ```
@@ -6675,18 +6814,18 @@ end 'main'
 | Where a value goes | What happens |
 |--------------------|--------------|
 | `var b = a`, `a` a `var` | `a` moves into `b` |
-| `let b = a`, `a` a `var` | `a` moves into `b`, and `b` is read-only |
-| `let b = a`, `a` read-only | `b` shares the record, read-only |
-| `let b = e`, `e` state something may still write | **E3188**; `view b = e` reads it, `var b = e` writes it |
-| `view b = e` | `b` names the record read-only; other names may still write it |
-| `var b = a`, `a` read-only (a `let` included) | **E3078**; `a.clone()` is the mutable copy |
+| `let b = a`, `a` a `var` | `a` moves into `b` |
+| `let b = a` or `var b = a`, `a` a `let` | `b` names the same record, and `a` stays usable |
+| `let b = e`, `e` state something may still write | `b` names it, and the writes are seen through `b` |
+| `var b = a`, `a` read-only data (a stored key, a `SharedValue` read) | **E3078**; `a.clone()` is the mutable copy |
+| `var b = a`, `a` constant or `immutable` data | `b` can be reassigned but not written: a write through it is **E3207**; `a.clone()` is the mutable copy |
 | an ordinary call argument | shared with the callee for the call, counted where needed; a `mutable` parameter is the caller's own storage, so the callee's writes reach it |
-| an argument the callee keeps where something may write it | a fresh `let` at its last use moves; any other read-only value is **E3078** |
-| an argument the callee keeps in a `let` field | must be read-only, a value type, or moved (a `var` at its last use) |
+| an argument the callee keeps where something may write it | the holder shares the record; read-only data is **E3078**, and constant or `immutable` data is **E3207** |
+| an argument the callee keeps in an `immutable` field | must be `immutable` data (**E3207** otherwise) |
 | an argument to an [`isolated`](#separate-regions-isolated) parameter | moves: a fresh region, or an `isolated` local; reading it afterwards is **E3102** |
 | an [`async`](#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread, and its promise is [tied](#tied-and-must-use-promises) when the argument is the caller's mutable data; a variable at a `mutable` parameter is lent to the coroutine until its promise is awaited or cancelled; a promise moves to the coroutine |
 | a [closure](#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
-| a [service](#services--spawn) message | a mutable value moves to the service; a read-only value the sender does not own is shared; a tuple of heap-free elements the sender does not solely own is copied; a view, or a record a view declared earlier may reach, is **E3138** |
+| a [service](#services--spawn) message | a mutable value moves to the service; a read-only value the sender does not own is shared; a tuple of heap-free elements the sender does not solely own is copied |
 | a `spawn` factory argument | moves into the service; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
 | `SharedValue.publish`, `Key.register` | the value must be solely owned (**E3174**) or a tuple of heap-free elements, which is copied; every reader sees it read-only |
 
@@ -6721,10 +6860,10 @@ error E3186: argument 'label' is read by another operand of this statement and p
 ```
 
 Where the by-reference cell itself is the operand to move, the cure copies the local into a `var` in an earlier
-statement, passes the copy at that position and stores it back after the call (a `let` there is **E3159**).
+statement, passes the copy at that position and stores it back after the call (a `let` there is **E2013**).
 
 The refusal is judged per **root binding**. It counts reads of the cell's own root variable and of that
-variable's field paths, and all the fields of `self` share one root. Another name for the same record, such as a `view`, a `var` that took the record by move or a `let`
+variable's field paths, and all the fields of `self` share one root. Another name for the same record, such as a `var` that took the record by move or a `let`
 alias of a parameter, is a pending operand of its own, and the runtime hold a read of it takes keeps the value
 alive across the write.
 
@@ -6793,8 +6932,7 @@ decorator of that shape reaches the clone check.
   run in parallel with it or with each other. They switch only at `await`, `sleep`, `Scheduler.yield()`, I/O
   and a service send given a `sendTimeout:` to a full mailbox, so their reference counts are plain and sharing between them needs no synchronization.
 - **Services own their state.** State that more than one thread uses lives in a [service](#services--spawn) and is
-  reached by message. Messages and replies move their mutable arguments. A [view](#views-view) stays on its thread:
-  a send refuses a view, and a writable record a view declared earlier in the function may reach.
+  reached by message. Messages and replies move their mutable arguments.
 - **There is no module-level mutable state.** `var` is a local, a field of a `type`, or a parameter's target; a
   file-scope or `static` `var` is a syntax error. State more than one thread uses is a service's fields or a
   [`SharedValue`](#sharedvalue--a-live-value-made-at-run-time).
@@ -6961,7 +7099,7 @@ awaited or dropped exits with **75** instead (see [Concurrency](#exit-codes)).
 | Code | Meaning |
 |------|---------|
 | [E3009](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3009) | a cast that could forge a value: integer to an enum or a union, or interface to interface |
-| [E3078](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3078) | a read-only value bound or stored where it could be written, or kept by a `let` field while another writer exists |
+| [E3078](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3078) | read-only data bound or stored where it could be written |
 | [E3086](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3086) | a field not definitely assigned before its struct literal |
 | [E3102](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3102) | use of a moved value |
 | [E3152](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3152) | `__Raw` used outside `runtime/` |
@@ -7172,7 +7310,7 @@ end 'compute'                 // E3013: missing return statement: 'compute'
 
 ```maxon
 let x = 5
-x = 10                        // E2013: cannot assign to immutable variable: 'x'
+x = 10                        // E2013: 'x' is a let and cannot be reassigned
 ```
 
 **A `var` started from a bare number**
@@ -7214,11 +7352,11 @@ _ = 42                        // E3067: expected a function call
 parseDigit("7")               // E3057: throwing function requires try: 'parseDigit'
 ```
 
-**Mutating through an immutable name**
+**Writing constant data**
 
 ```maxon
-let items = TallyArray.create(0)
-items.push(1)                 // E3159: cannot write through 'items': 'items' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+let name = b"abc"
+name.push(1)                  // E3207: 'push' needs a writable receiver; 'name' is immutable
 ```
 
 **Moving out of a `var`**
@@ -7230,11 +7368,11 @@ b.x = 2
 print("{a.x}\n")              // E3102: use of moved value 'a'
 ```
 
-**Binding a read-only value to a `var`**
+**Storing constant data where something may write it**
 
 ```maxon
-let a = Point.create(1)
-var c = a                     // E3078: cannot assign the read-only 'a' to mutable binding 'c'; use 'let' instead of 'var', or use clone()
+let name = b"abc"
+let tok = Tok{value: name}    // E3196 when Tok.value is a plain ByteArray: cannot store an immutable 'ByteArray' into 'Tok.value', which holds a mutable 'ByteArray'; declare the field `immutable ByteArray`
 ```
 
 **Reading a local in the statement that hands it to a `mutable` parameter the callee writes**

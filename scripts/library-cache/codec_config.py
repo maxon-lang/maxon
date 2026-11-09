@@ -30,7 +30,7 @@ SKIPPED_FIELDS = {
     ("ProgramSignatures", "rowSetLog"): "RowSetLog.closed()",
     ("ProgramSignatures", "mintedTupleLayouts"): "StructLayoutArray.create(0)",
     ("ProgramSignatures", "published"): "SettledCellArray.create(0)",
-    ("ProgramSignatures", "sharedSettled"): "SettledDeclarations.unused()",
+    ("ProgramSignatures", "sharedSettled"): "freeze SettledDeclarations.unused()",
     ("ProgramSignatures", "readsPublishedView"): "false",
     ("SettledDeclarations", "genericInstanceNameMarker"): "genericInstanceNameMarker()",
     ("SettledDeclarations", "declTokenStreams"): "DeclTokenStreamMap.create()",

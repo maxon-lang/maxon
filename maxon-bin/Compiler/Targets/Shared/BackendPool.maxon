@@ -414,7 +414,7 @@ module union UnitLowering
 	arm64(lowering StdToArm64Lowering)
 end 'UnitLowering'
 
-module function unitLoweringFor(target Target, abi CalleeAbiTable, usesGt bool) returns UnitLowering
+module function unitLoweringFor(target Target, abi immutable CalleeAbiTable, usesGt bool) returns UnitLowering
 	return match target.cpu 'cpu'
 		x64 gives UnitLowering.x64(StdToX64Lowering.create(target, abi: abi, usesGt: usesGt))
 		arm64 gives UnitLowering.arm64(StdToArm64Lowering.create(target, abi: abi, usesGt: usesGt))
@@ -469,7 +469,7 @@ end 'lowerAndSplitUnit'
 // compiled for.
 export type BackendWorker
 	var target as Target
-	var abi as CalleeAbiTable
+	let abi as immutable CalleeAbiTable
 	var usesGt as bool
 	let pool as RegMask
 	let callerSaved as RegMask
@@ -478,7 +478,7 @@ export type BackendWorker
 
 	static function create(cpu CpuArch, os Os, abi isolated CalleeAbiTable, usesGt bool) returns Self
 		let target = Target.create(cpu, os: os)
-		return Self{target: target, abi: merge abi, usesGt: usesGt, pool: allocatablePool(target), callerSaved: callerSavedMaskFor(target), file: registerFileFor(target), slot: BackendUnit.awaitingABody(0)}
+		return Self{target: target, abi: freeze abi, usesGt: usesGt, pool: allocatablePool(target), callerSaved: callerSavedMaskFor(target), file: registerFileFor(target), slot: BackendUnit.awaitingABody(0)}
 	end 'create'
 
 	// The isel is handed a `Target` of its own rather than this worker's: the driver's E5001 re-run builds

@@ -144,12 +144,14 @@ function deepLetWriteStatementMessage(place String, statement String) returns St
 end 'deepLetWriteStatementMessage'
 
 export function deepLetConsumeMessage(door ByteArray, kind ReadOnlyRootKind) returns String
-	return "cannot consume with '{String.from(door)}' a promise held in {readOnlyRootDescription(kind)}: consuming a promise empties the slot it was read from, and nothing reachable through a read-only value may be written; hold it in a `var` field"
+	let reason = "a `let` field is never reassigned" if kind == ReadOnlyRootKind.letField else "nothing reachable through a read-only value may be written"
+
+	return "cannot consume with '{String.from(door)}' a promise held in {readOnlyRootDescription(kind)}: consuming a promise empties the slot it was read from, and {reason}; hold it in a `var` field"
 end 'deepLetConsumeMessage'
 
 // A function type names no parameter, so the witness and function-value routes name the position.
 export union WrittenParameter
-	named(let name ByteArray)
+	named(let name immutable ByteArray)
 	positional(position ParamCount)
 
 	export function display() returns String
@@ -168,6 +170,14 @@ end 'deepLetCallMessage'
 export function deepLetConversionMessage(calleeText String, interfaceName String) returns String
 	return "cannot convert to '{interfaceName}' a type whose values something may write: its method '{calleeText}' keeps a value of its type parameter, and a kept value must have no other writer, which only a type nothing writes guarantees (a number, a String, or a record whose fields are all `let`); use such a type"
 end 'deepLetConversionMessage'
+
+export function letReassignedMessage(name String, holder WriteBlameHolder) returns String
+	if holder == WriteBlameHolder.letField 'aLetField'
+		return "'{name}' is a let field and cannot be reassigned"
+	end 'aLetField'
+
+	return "'{name}' is a let and cannot be reassigned"
+end 'letReassignedMessage'
 
 export function deepLetBindMessage(subject String, binding String) returns String
 	return "cannot assign {subject} to mutable binding '{binding}'; use 'let' instead of 'var', or use clone()"
@@ -259,8 +269,7 @@ end 'letBindsWritableStateMessage'
 function deepLetKeptSlotName(into ReadOnlyRootKind) returns String
 	return match into 'kind'
 		readOnlyElement gives "`readonly` element"
-		letField gives "`let` field"
-		letPayload gives "`let` payload"
+		storedMapKey gives "`Map` key, `Set` element or shared value"
 		default panic("deepLetKeptSlotName: '{into.name}' is not a place a value is kept in")
 	end 'kind'
 end 'deepLetKeptSlotName'
@@ -433,7 +442,7 @@ export function uniqueLenderPhrase(lender UniqueLender) returns String
 end 'uniqueLenderPhrase'
 
 export function uniqueAliasMessage(action String) returns String
-	return "cannot {action} a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read it through a `view`, or move it out with `pop` or `remove`"
+	return "cannot {action} a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`"
 end 'uniqueAliasMessage'
 
 export function uniqueLentMovedMessage(name String, lender String, paramName String, functionName String) returns String

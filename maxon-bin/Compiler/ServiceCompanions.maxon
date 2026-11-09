@@ -36,8 +36,8 @@
 // are needed to decide whether the type is a service: `spawn Calc.bump()` names a declared type and is not a
 // spawn at all, because `bump` is an instance method rather than a static factory returning `Calc`.
 export type ServiceSpawnCandidate
-	export let typeName as ByteArray
-	export let member as ByteArray
+	export let typeName as immutable ByteArray
+	export let member as immutable ByteArray
 	export var gate as SpawnGate
 
 	// ⭐ **WHERE THE `spawn` IS WRITTEN — the note every whole-program service rule needs.** A service
@@ -65,8 +65,8 @@ export type ServiceSpawnCandidate
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns ServiceSpawnCandidate throws LibraryCacheDamage
-		let f_typeName = try reader.bytes()
-		let f_member = try reader.bytes()
+		let f_typeName = freeze try reader.bytes()
+		let f_member = freeze try reader.bytes()
 		let f_gate = try cacheReadSpawnGate(reader)
 		let f_declFilePath = try reader.path()
 		let f_line = (try reader.unsigned()) as LineNumber
@@ -159,7 +159,7 @@ end 'cacheReadSpawnGateDefaultOf'
 // @generated library-cache end
 
 export type DefaultDeclaration
-	export let key as ByteArray
+	export let key as immutable ByteArray
 	export let declFilePath as FilePath
 	export let keyLine as LineNumber
 	export let keyColumn as ColumnNumber
@@ -189,7 +189,7 @@ export type DefaultDeclaration
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns DefaultDeclaration throws LibraryCacheDamage
-		let f_key = try reader.bytes()
+		let f_key = freeze try reader.bytes()
 		let f_declFilePath = try reader.path()
 		let f_keyLine = (try reader.unsigned()) as LineNumber
 		let f_keyColumn = (try reader.unsigned()) as ColumnNumber
@@ -290,14 +290,14 @@ end 'cacheReadServiceSpawnCandidateKeyIndex'
 
 // @generated library-cache end
 
-module function spawnCandidateKey(typeName ByteArray, member ByteArray, gate SpawnGate, directory String) returns ByteArray
+module function spawnCandidateKey(typeName ByteArray, member ByteArray, gate SpawnGate, directory String) returns immutable ByteArray
 	let gateKey = match gate 'gate'
 		always gives SpawnCandidateAlwaysTag
 		libraryBody gives SpawnCandidateLibraryBodyTag
 		defaultOf(declaration) gives "{SpawnCandidateDefaultTag}{SpawnCandidateKeySeparator}{declaration.keyLine}{SpawnCandidateKeySeparator}{declaration.keyColumn}{SpawnCandidateKeySeparator}{declaration.declFilePath.comparisonSpelling()}"
 	end 'gate'
 
-	return "{String.from(typeName)}{SpawnCandidateKeySeparator}{String.from(member)}{SpawnCandidateKeySeparator}{gateKey}{SpawnCandidateKeySeparator}{directory}".toByteArray()
+	return freeze "{String.from(typeName)}{SpawnCandidateKeySeparator}{String.from(member)}{SpawnCandidateKeySeparator}{gateKey}{SpawnCandidateKeySeparator}{directory}".toByteArray()
 end 'spawnCandidateKey'
 
 export type LiveReach
@@ -386,8 +386,8 @@ end 'DefaultSlotKind'
 
 export type DefaultSlot
 	export let declaration as DefaultDeclaration
-	export let label as ByteArray
-	export let initializer as ByteArray
+	export let label as immutable ByteArray
+	export let initializer as immutable ByteArray
 	export let valueType as MaxonType
 	export let kind as DefaultSlotKind
 
@@ -417,22 +417,22 @@ end 'shareWalkIsRefused'
 
 let DefaultSlotLabelPrefix = b"__default."
 
-export function defaultSlotLabel(key ByteArray) returns ByteArray
-	return "{String.from(DefaultSlotLabelPrefix)}{String.from(key)}".toByteArray()
+export function defaultSlotLabel(key ByteArray) returns immutable ByteArray
+	return freeze "{String.from(DefaultSlotLabelPrefix)}{String.from(key)}".toByteArray()
 end 'defaultSlotLabel'
 
 let DefaultInitializerPrefix = b"__default_init."
 
-export function defaultInitializerName(key ByteArray) returns ByteArray
-	return "{String.from(DefaultInitializerPrefix)}{String.from(key)}".toByteArray()
+export function defaultInitializerName(key ByteArray) returns immutable ByteArray
+	return freeze "{String.from(DefaultInitializerPrefix)}{String.from(key)}".toByteArray()
 end 'defaultInitializerName'
 
-export function defaultKeyOfSlotLabel(label ByteArray) returns ByteArray throws MapError
+export function defaultKeyOfSlotLabel(label immutable ByteArray) returns immutable ByteArray throws MapError
 	if not bytesStartWith(label, prefix: DefaultSlotLabelPrefix) 'notASlot'
 		throw MapError.keyNotFound
 	end 'notASlot'
 
-	return try label.slice(DefaultSlotLabelPrefix.count(), endIndex: label.count()) otherwise panic("defaultKeyOfSlotLabel: a label starting with the slot prefix is at least that long")
+	return freeze try label.slice(DefaultSlotLabelPrefix.count(), endIndex: label.count()) otherwise panic("defaultKeyOfSlotLabel: a label starting with the slot prefix is at least that long")
 end 'defaultKeyOfSlotLabel'
 
 // ⭐⭐ **WHY `spawn <T>.<member>(…)` IS OR IS NOT A SERVICE START.** One verdict, TWO askers — the sweep,
@@ -545,11 +545,11 @@ module function serviceOwnerSymbolFor(signatures ProgramSignatures, typeName Byt
 	end 'i'
 end 'serviceOwnerSymbolFor'
 
-module function serviceBehaveSymbolFor(signatures ProgramSignatures, typeName ByteArray, instance ServiceStateInstance) returns ByteArray
+module function serviceBehaveSymbolFor(signatures ProgramSignatures, typeName ByteArray, instance ServiceStateInstance) returns immutable ByteArray
 	return serviceBehaveSymbol(serviceOwnerSymbolFor(signatures, typeName: typeName, instance: instance))
 end 'serviceBehaveSymbolFor'
 
-module function serviceFinishSymbolFor(signatures ProgramSignatures, typeName ByteArray, instance ServiceStateInstance) returns ByteArray
+module function serviceFinishSymbolFor(signatures ProgramSignatures, typeName ByteArray, instance ServiceStateInstance) returns immutable ByteArray
 	return serviceFinishSymbol(serviceOwnerSymbolFor(signatures, typeName: typeName, instance: instance))
 end 'serviceFinishSymbolFor'
 
@@ -562,7 +562,7 @@ module union ServiceRosterVerdict
 
 	// A message parameter of a type that cannot cross to another green thread. `noun` is what it IS, so the
 	// sentence reads as the reason rather than as a spelling (see `untransferableParameterNoun`).
-	messageParameterIsNotTransferable(let methodName ByteArray, let paramName ByteArray, noun String)
+	messageParameterIsNotTransferable(let methodName immutable ByteArray, let paramName immutable ByteArray, noun String)
 
 	// ⭐⭐ **A MESSAGE WHOSE REPLY WILL NOT FIT THE CELL.** A reply travels in TWO WORDS — the value, and
 	// one error word holding the handler's `ordinal + bias` — so a `float`
@@ -573,27 +573,27 @@ module union ServiceRosterVerdict
 	// `__behave` completes a reply for every reply-bearing variant whether or not the program ever sends one,
 	// so a message the cell cannot carry would put `__gt_cell_complete(cell, <a float>, 0)` in a body the
 	// service really runs. Refusing it at the send would leave that body built.
-	messageReplyIsNotCarriable(let methodName ByteArray, noun String)
+	messageReplyIsNotCarriable(let methodName immutable ByteArray, noun String)
 
 	// A reply whose graph, at the type an instantiation substitutes, reaches a type no per-type walk can be
 	// built for. E3138, the refusal the handler's `return` raises for a type its body declares.
-	messageReplyGraphIsNotWalkable(let methodName ByteArray, noun String)
+	messageReplyGraphIsNotWalkable(let methodName immutable ByteArray, noun String)
 
-	messageReplyHoldsAPromise(let methodName ByteArray, noun String)
+	messageReplyHoldsAPromise(let methodName immutable ByteArray, noun String)
 
 	// A reply declared at a bare `T` that hands back the service's own state, at an instantiation resolving
 	// `T` to a managed type. E3137, the refusal a handler's `return` raises for a type its body declares.
-	messageReplyAliasesServiceState(let methodName ByteArray, replyTypeName String)
+	messageReplyAliasesServiceState(let methodName immutable ByteArray, replyTypeName String)
 
-	messageDeclaresTheSendTimeoutLabel(let methodName ByteArray)
+	messageDeclaresTheSendTimeoutLabel(let methodName immutable ByteArray)
 
-	stateFieldHoldsAPromise(let fieldName ByteArray, noun String)
+	stateFieldHoldsAPromise(let fieldName immutable ByteArray, noun String)
 
-	messageParameterNeedsACapability(let methodName ByteArray, let paramName ByteArray, noun String)
+	messageParameterNeedsACapability(let methodName immutable ByteArray, let paramName immutable ByteArray, noun String)
 
-	messageReplyNeedsACapability(let methodName ByteArray, noun String)
+	messageReplyNeedsACapability(let methodName immutable ByteArray, noun String)
 
-	factoryParameterNeedsACapability(let factoryName ByteArray, let paramName ByteArray, noun String)
+	factoryParameterNeedsACapability(let factoryName immutable ByteArray, let paramName immutable ByteArray, noun String)
 
 	function isDispatchable() returns bool
 		return match self 'verdict'
@@ -702,7 +702,7 @@ end 'serviceTypeNames'
 
 // A type-name id resolved against the SIGNATURE INDEX's own interner — the table every id reaching this file
 // was minted in (`ProgramSignatures.foldFile` remaps a file's ids into it). Resolving one anywhere else misreads it, as `indexTypeNames`' header records.
-function serviceIndexTypeName(signatures ProgramSignatures, id TypeNameId) returns ByteArray
+function serviceIndexTypeName(signatures ProgramSignatures, id TypeNameId) returns immutable ByteArray
 	return try signatures.indexTypeNames().nameOf(id) otherwise panic("serviceIndexTypeName: type-name id {id} is not in the signature index's interner — every id a swept declaration carries was remapped into it at `foldFile`")
 end 'serviceIndexTypeName'
 
@@ -793,7 +793,7 @@ end 'classifyServiceRoster'
 
 union UnmarkedParameter
 	allMarkedOrValues
-	needsAWord(let paramName ByteArray, noun String)
+	needsAWord(let paramName immutable ByteArray, noun String)
 end 'UnmarkedParameter'
 
 // Asked last, so a program an earlier rule refuses at the same `spawn` keeps that rule's code. Only
@@ -871,7 +871,7 @@ function typeNeedsACapabilityWord(signatures ProgramSignatures, resolved MaxonTy
 		cstring then return false
 
 		interfaceRef then return true
-		genericInstance then return not signatures.instanceBaseIsServiceHandle(genericInstanceIdOf(resolved)) and not signatures.instanceBaseIsSharedValue(genericInstanceIdOf(resolved)) and ownsHeapDataOfItsRegion(signatures, resolved: resolved)
+		genericInstance then return not signatures.instanceBaseIsServiceHandle(genericInstanceIdOf(resolved)) and not signatures.instanceBaseIsSharedValue(genericInstanceIdOf(resolved)) and not signatures.genericInstanceIsImmutable(genericInstanceIdOf(resolved)) and ownsHeapDataOfItsRegion(signatures, resolved: resolved)
 		structRef or
 		named then return recordNeedsACapabilityWord(signatures, resolved: resolved)
 	end 'tag'
@@ -879,7 +879,7 @@ end 'typeNeedsACapabilityWord'
 
 function recordNeedsACapabilityWord(signatures ProgramSignatures, resolved MaxonType) returns bool
 	let aggregate = signatures.denotedAggregateName(serviceIndexTypeName(signatures, id: typeNameIdOf(resolved)))
-	return not signatures.isAnyServiceHandle(aggregate) and not signatures.nameIsACopyableTuple(aggregate) and ownsHeapDataOfItsRegion(signatures, resolved: resolved)
+	return not signatures.isAnyServiceHandle(aggregate) and not signatures.nameIsACopyableTuple(aggregate) and not signatures.aggregateTypeIsImmutable(aggregate) and ownsHeapDataOfItsRegion(signatures, resolved: resolved)
 end 'recordNeedsACapabilityWord'
 
 // The `unique` inference leaves out the OS-handle builtins, so `slotOwnsAnOsHandle` is asked beside
@@ -1105,7 +1105,7 @@ function uncarriableReplyErrorNoun(signatures ProgramSignatures, messageKey Byte
 		return ServiceCrossing.acceptable
 	end 'notAnErrorType'
 
-	if serviceReplyErrorLayout(signatures, errorName: errorName.toByteArray()).carriesPayloads() 'aBoxedUnion'
+	if serviceReplyErrorLayout(signatures, errorName: freeze errorName.toByteArray()).carriesPayloads() 'aBoxedUnion'
 		return ServiceCrossing.refused("a reply that throws `{errorName}`, a PAYLOAD-CARRYING union whose error flag is a heap box pointer — a reply's one error word holds an `ordinal + bias`, and a pointer is not an ordinal")
 	end 'aBoxedUnion'
 
@@ -1114,7 +1114,7 @@ function uncarriableReplyErrorNoun(signatures ProgramSignatures, messageKey Byte
 		undeclared panic("uncarriableReplyErrorNoun: nothing declares `{String.from(serviceSendErrorCompanionName(messageKey))}` — `synthesizeServiceCompanions` mints one beside every request union, and the roster walk asks only about messages of a minted service")
 	end 'sendError'
 
-	if not serviceReplyHandlerPlacement(signatures, sendLayout: sendLayout, errorName: errorName.toByteArray()).fusable 'tooWideToFuse'
+	if not serviceReplyHandlerPlacement(signatures, sendLayout: sendLayout, errorName: freeze errorName.toByteArray()).fusable 'tooWideToFuse'
 		return ServiceCrossing.refused("a reply that throws `{errorName}`, whose case tags span more of the i64 range than the error line a `try await` fuses with the send's error can hold (a FLOAT-backed enum's tags are IEEE-754 bit patterns, so two cases can be ~1.8e19 apart)")
 	end 'tooWideToFuse'
 
@@ -1254,8 +1254,8 @@ end 'serviceParamTypeByIdentity'
 // compiler-filled slot immediately after its own — adjacent, so every reader reaches it as a struct field's
 // witness is reached (`IrInterface.InterfaceWitnessHalfOffset`), the drop and the walk cascades included. It
 // is named, as the reply slot is, because three readers skip it by that test.
-function serviceWitnessHalfSlotName(paramName ByteArray) returns ByteArray
-	return "{String.from(ServiceWitnessHalfSlotPrefix)}{String.from(paramName)}".toByteArray()
+function serviceWitnessHalfSlotName(paramName ByteArray) returns immutable ByteArray
+	return freeze "{String.from(ServiceWitnessHalfSlotPrefix)}{String.from(paramName)}".toByteArray()
 end 'serviceWitnessHalfSlotName'
 
 let ServiceWitnessHalfSlotPrefix = b"__witness_"
@@ -1320,7 +1320,7 @@ end 'serviceDeclarationOf'
 
 // A declaration's parameter name at `index`. `SweptDeclaration`'s two columns are source-aligned with the
 // receiver excluded, so this index is the one `paramTypes` was read at.
-function serviceParamName(decl SweptDeclaration, index ParamCount) returns ByteArray
+function serviceParamName(decl SweptDeclaration, index ParamCount) returns immutable ByteArray
 	return try decl.paramNames.get(index) otherwise panic("serviceParamName: index {index} is out of range for a declaration carrying {decl.paramNames.count()} parameter name(s) against {decl.paramTypes.count()} type(s) — the two columns of an `SweptDeclaration` are written by one act and are source-aligned")
 end 'serviceParamName'
 
@@ -1613,21 +1613,21 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 		let declared = try decl.paramTypes.get(p) otherwise panic("serviceRequestPayloads: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(key)}'")
 		let paramName = serviceParamName(decl, index: p as ParamCount)
 		let slotType = serviceParamSlotType(signatures, declared: declared, into: into, declFilePath: declFilePath)
-		payloads.push(PayloadField.create(paramName, declaredType: slotType, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: serviceParamBrand(signatures, decl: decl, index: p, slotType: slotType, declFilePath: declFilePath), isLet: false))
+		payloads.push(PayloadField.create(paramName, declaredType: slotType, declaredSurface: plainDeclaredSurface(), declaredBrand: serviceParamBrand(signatures, decl: decl, index: p, slotType: slotType, declFilePath: declFilePath), isLet: false, capability: ParamCapability.unmarked))
 
 		if maxonTypeTag(slotType) == ValueTypeTag.interfaceRef 'aFatPointer'
-			payloads.push(PayloadField.create(serviceWitnessHalfSlotName(paramName), declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, isLet: false))
+			payloads.push(PayloadField.create(serviceWitnessHalfSlotName(paramName), declaredType: MaxonType.integer, declaredSurface: plainDeclaredSurface(), declaredBrand: EmptySourceText, isLet: false, capability: ParamCapability.unmarked))
 		end 'aFatPointer'
 	end 'eachParam'
 
 	if serviceMessageHasAReply(signatures, key: key, decl: decl) 'awaitable'
-		payloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, isLet: false))
+		payloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: plainDeclaredSurface(), declaredBrand: EmptySourceText, isLet: false, capability: ParamCapability.unmarked))
 	end 'awaitable'
 
 	return payloads
 end 'serviceRequestPayloads'
 
-function serviceParamBrand(signatures ProgramSignatures, decl SweptDeclaration, index ElementIndex, slotType MaxonType, declFilePath FilePath) returns ByteArray
+function serviceParamBrand(signatures ProgramSignatures, decl SweptDeclaration, index ElementIndex, slotType MaxonType, declFilePath FilePath) returns immutable ByteArray
 	if maxonTypeTag(slotType) != ValueTypeTag.genericInstance 'noBrandToCarry'
 		return EmptySourceText
 	end 'noBrandToCarry'
@@ -1703,10 +1703,10 @@ module function serviceReplyHandlerPlacement(signatures ProgramSignatures, sendL
 	return fusedPlacementAt(floor, span: enumTagSpan(serviceReplyErrorLayout(signatures, errorName: errorName)))
 end 'serviceReplyHandlerPlacement'
 
-module function serviceReplyErrorLayout(signatures ProgramSignatures, errorName ByteArray) returns EnumLayout
+module function serviceReplyErrorLayout(signatures ProgramSignatures, errorName immutable ByteArray) returns immutable EnumLayout
 	return match signatures.enumInAnyFile(errorName) 'e'
 		declared(layout) gives layout
-		undeclared gives EnumLayout.create(errorName, isUnion: false, conformsTo: NameRoster.create(0), visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
+		undeclared gives freeze EnumLayout.create(errorName, isUnion: false, conformsTo: NameRoster.create(0), visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
 	end 'e'
 end 'serviceReplyErrorLayout'
 
@@ -1715,7 +1715,7 @@ end 'serviceReplyErrorLayout'
 // enum's — a literal here would be a second statement of the position and the two are free to disagree.
 function addServiceRequestCase(request EnumLayout, caseName ByteArray, payloads PayloadFieldArray)
 	let tag = request.caseCount()
-	request.addCase(caseName, tag: tag as FullRangeInt, rawValue: "{tag}", declaresRawValue: false, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
+	request.addCase(caseName, tag: tag as FullRangeInt, rawValue: "{tag}", declaresRawValue: false, payloads: payloads, backingFields: EnumBackingFieldArray.create(0))
 end 'addServiceRequestCase'
 
 // The handle: ONE field holding the cown pointer. On `SignatureIndex.managedFileLayout`'s shape, and for
@@ -1734,7 +1734,7 @@ module function buildServiceHandleStruct(signatures ProgramSignatures, typeName 
 	// produces and no declared slot could hold one. It changes nothing about the LAYOUT: the one field is
 	// the cown pointer at every instantiation, which is why the geometry audit below still holds.
 	handle.recordTypeParams(owner.typeParamNames)
-	handle.addField(ServiceHandleCownFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
+	handle.addField(ServiceHandleCownFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: plainDeclaredSurface(), declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
 
 	// ⭐⭐ **THE AUDIT THAT KEEPS THE RUNTIME'S TWO NUMBERS HONEST.** `__cown_handle_clone_box` allocates
 	// `ServiceHandleBoxSize` bytes and both handle entries load the cown from `ServiceHandleCownOffset`,
@@ -1765,9 +1765,9 @@ module function serviceSpawnSiteOf(signatures ProgramSignatures, typeName ByteAr
 end 'serviceSpawnSiteOf'
 
 module type ServiceMessage
-	export let callee as ByteArray
-	export let typeName as ByteArray
-	export let methodName as ByteArray
+	export let callee as immutable ByteArray
+	export let typeName as immutable ByteArray
+	export let methodName as immutable ByteArray
 
 	static function create(callee ByteArray, typeName ByteArray, methodName ByteArray) returns ServiceMessage
 		return Self{callee: callee, typeName: typeName, methodName: methodName}
@@ -1781,9 +1781,9 @@ module type ServiceMessage
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns ServiceMessage throws LibraryCacheDamage
-		let f_callee = try reader.bytes()
-		let f_typeName = try reader.bytes()
-		let f_methodName = try reader.bytes()
+		let f_callee = freeze try reader.bytes()
+		let f_typeName = freeze try reader.bytes()
+		let f_methodName = freeze try reader.bytes()
 
 		return Self{callee: f_callee, typeName: f_typeName, methodName: f_methodName}
 	end 'cacheRead'
@@ -1860,7 +1860,7 @@ end 'fileFirstServiceMessage'
 // proved the layout exists and says so in its own words; a caller walking the roster over a program that may
 // still be doomed has not, and inventing a layout for it would report a second finding about the first one's
 // wreckage.
-module function serviceRequestLayoutOf(signatures ProgramSignatures, typeName ByteArray) returns EnumLayout throws MapError
+module function serviceRequestLayoutOf(signatures ProgramSignatures, typeName ByteArray) returns immutable EnumLayout throws MapError
 	match signatures.enumInAnyFile(serviceRequestCompanionName(typeName)) 'lookup'
 		declared(layout) then return layout
 		undeclared then throw MapError.keyNotFound
@@ -1890,7 +1890,7 @@ end 'serviceHandleAdmits'
 
 // The request union's layout, or a panic, for a caller that holds a SPAWNED type: its companions were minted
 // before any body was parsed, so a missing union is a compiler bug rather than a program's.
-module function requireServiceRequestLayout(signatures ProgramSignatures, typeName ByteArray) returns EnumLayout
+module function requireServiceRequestLayout(signatures ProgramSignatures, typeName ByteArray) returns immutable EnumLayout
 	return try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise panic("requireServiceRequestLayout: nothing declares `union {String.from(serviceRequestCompanionName(typeName))}` — the companions are minted for every accepted spawn target inside `queryProgramSignatures`, before any body is parsed")
 end 'requireServiceRequestLayout'
 
@@ -1972,8 +1972,8 @@ function serviceRosterOf(signatures ProgramSignatures, liveOnly bool) returns Na
 	return services
 end 'serviceRosterOf'
 
-module function spawnedTypeNameOf(signatures ProgramSignatures, candidate ServiceSpawnCandidate) returns ByteArray
-	return spelledTypeName(signatures, written: candidate.typeName, readerFilePath: candidate.declFilePath).clone()
+module function spawnedTypeNameOf(signatures ProgramSignatures, candidate ServiceSpawnCandidate) returns immutable ByteArray
+	return spelledTypeName(signatures, written: candidate.typeName, readerFilePath: candidate.declFilePath)
 end 'spawnedTypeNameOf'
 
 function candidateStartsAService(signatures ProgramSignatures, candidate ServiceSpawnCandidate, typeName ByteArray, liveOnly bool) returns bool
@@ -2101,7 +2101,7 @@ function adoptedPayloads(signatures ProgramSignatures, payloads PayloadFieldArra
 	var adopted = PayloadFieldArray.create(payloads.count(), zeroed: false)
 
 	for field in payloads 'eachField'
-		adopted.push(PayloadField.create(field.name, declaredType: signatures.adoptType(field.declaredType, into: into), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand, isLet: field.isLet, typeSite: field.typeSite))
+		adopted.push(PayloadField.create(field.name, declaredType: signatures.adoptType(field.declaredType, into: into), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand, isLet: field.isLet, capability: field.capability, typeSite: field.typeSite))
 	end 'eachField'
 
 	return adopted
@@ -2120,13 +2120,13 @@ function serviceSendErrorPayloads(payloads PayloadFieldArray) returns PayloadFie
 end 'serviceSendErrorPayloads'
 
 function buildServiceSendErrorUnion(signatures ProgramSignatures, name ByteArray, payloads PayloadFieldArray, visibility Visibility, declFilePath FilePath) returns EnumLayout
-	var errors = EnumLayout.create(name, isUnion: payloads.count() > 0, conformsTo: builtinErrorConformance(signatures.interfaceMap()), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
+	var errors = EnumLayout.create(name, isUnion: payloads.count() > 0, conformsTo: builtinErrorConformance(signatures.interfaceMap().spellingOf(BuiltinInterfaceKind.error)), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
 	addServiceRequestCase(errors, caseName: ServiceSendMailboxFullCaseName, payloads: payloads)
 	addServiceRequestCase(errors, caseName: ServiceSendServiceStoppedCaseName, payloads: copiedPayloads(payloads))
 	return errors
 end 'buildServiceSendErrorUnion'
 
-function mintInterfaceHandlesOf(signatures ProgramSignatures, typeName ByteArray)
+function mintInterfaceHandlesOf(signatures ProgramSignatures, typeName immutable ByteArray)
 	view service = spawnTargetLayoutOf(signatures, typeName: typeName)
 
 	if not service.typeParamNames.isEmpty() 'aGenericService'
@@ -2153,10 +2153,10 @@ let InterfaceHandleTableFieldName = b"sendTable"
 module let InterfaceHandleTableOffset = 8 as ByteOffset
 module let InterfaceHandleBoxSize = 16 as FullRangeInt
 
-function buildInterfaceHandleStruct(interfaceName ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
+function buildInterfaceHandleStruct(interfaceName immutable ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
 	var handle = StructLayout.create(serviceHandleCompanionName(interfaceName), visibility: visibility, declFilePath: declFilePath)
-	handle.addField(ServiceHandleCownFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
-	handle.addField(InterfaceHandleTableFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
+	handle.addField(ServiceHandleCownFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: plainDeclaredSurface(), declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
+	handle.addField(InterfaceHandleTableFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: plainDeclaredSurface(), declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
 
 	if handle.sizeBytes() != (InterfaceHandleBoxSize as ByteOffset) or handle.offsetOfField(0) != ServiceHandleCownOffset or handle.offsetOfField(1) != InterfaceHandleTableOffset 'geometryDrifted'
 		panic("buildInterfaceHandleStruct: `{String.from(handle.name)}` lays out {handle.sizeBytes()} byte(s) with its cown at {handle.offsetOfField(0)} and its send table at {handle.offsetOfField(1)}, against the {InterfaceHandleBoxSize}/{ServiceHandleCownOffset}/{InterfaceHandleTableOffset} the registry runtime spells")
@@ -2222,7 +2222,7 @@ end 'interfaceServiceImplementers'
 
 // An implementer that declares the requirement but not as an `export` instance method has no request case
 // for it, so its conversion would have no slot to fill; the send is refused (E3136) instead.
-module function interfaceMessageWithholder(signatures ProgramSignatures, interfaceName ByteArray, member ByteArray) returns ByteArray throws MapError
+module function interfaceMessageWithholder(signatures ProgramSignatures, interfaceName ByteArray, member ByteArray) returns immutable ByteArray throws MapError
 	for service in interfaceServiceImplementers(signatures, interfaceName: interfaceName) 'eachImplementer'
 		if signatures.declaresCallee(qualifiedMethodName(service, methodName: member)) and not requireServiceRequestLayout(signatures, typeName: service).hasCase(member) 'withholdsIt'
 			return service
@@ -2237,14 +2237,14 @@ function interfaceMessageIsWithheld(signatures ProgramSignatures, interfaceName 
 	return true
 end 'interfaceMessageIsWithheld'
 
-module function interfaceMessageRepresentative(signatures ProgramSignatures, interfaceName ByteArray, member ByteArray) returns (ByteArray, CaseIndex) throws MapError
+module function interfaceMessageRepresentative(signatures ProgramSignatures, interfaceName ByteArray, member ByteArray) returns (immutable ByteArray, CaseIndex) throws MapError
 	if interfaceMessageIsWithheld(signatures, interfaceName: interfaceName, member: member) 'anImplementerWithholdsIt'
 		throw MapError.keyNotFound
 	end 'anImplementerWithholdsIt'
 
 	for service in interfaceServiceImplementers(signatures, interfaceName: interfaceName) 'eachSender'
 		if let caseIndex = try requireServiceRequestLayout(signatures, typeName: service).indexOfCase(member) 'declaresIt'
-			return (service.clone(), caseIndex)
+			return (service, caseIndex)
 		end 'declaresIt'
 	end 'eachSender'
 

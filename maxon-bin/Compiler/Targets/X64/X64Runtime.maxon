@@ -2240,16 +2240,19 @@ let RegistryTypeOutArgSlot = 0
 let RegistryDataOutArgSlot = 1
 let RegistryBytesOutArgSlot = 2
 
-function utf16LittleEndian(text String) returns ByteArray
-	var wide = ByteArray.create((text.byteLength() * 2 + 1) as ElementIndex, zeroed: false)
+function utf16LittleEndian(text String) returns immutable ByteArray
+	var wide = ByteArray.create((text.byteLength() * 2 + 1) as ElementIndex, zeroed: false) as isolated ByteArray
 
-	for byte in text.bytes() 'eachByte'
-		wide.push(byte)
+	modify wide 'fill'
+		for byte in text.bytes() 'eachByte'
+			wide.push(byte)
+			wide.push(0)
+		end 'eachByte'
+
 		wide.push(0)
-	end 'eachByte'
+	end 'fill'
 
-	wide.push(0)
-	return wide
+	return freeze wide
 end 'utf16LittleEndian'
 
 // `RegGetValueW` fills the caller's buffer with UTF-16, narrowed to ASCII in place: unit `i` is

@@ -32,7 +32,7 @@ export type DiscoveredTest
 	// by a name any author can write (E2051 refuses the prefix). So the symbol IS the callable
 	// spelling, from any file, and a `Namespace`/`ShortSymbol` split would be a rule this compiler
 	// does not have.
-	export let symbol as ByteArray
+	export let symbol as immutable ByteArray
 
 	// The prose name, verbatim — what a report shows a human, and what `test '…'` wrote.
 	export let displayName as String
@@ -57,7 +57,7 @@ export type DiscoveredTest
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns DiscoveredTest throws LibraryCacheDamage
-		let f_symbol = try reader.bytes()
+		let f_symbol = freeze try reader.bytes()
 		let f_displayName = try reader.text()
 		let f_file = try reader.path()
 		let f_line = (try reader.unsigned()) as LineNumber
@@ -131,7 +131,7 @@ export function discoverTests(inputPaths MaxonSourcePathArray, target Target) re
 	var found = DiscoveredTestArray.create(declaredTests.count(), zeroed: false)
 
 	for declared in declaredTests 'eachDeclaredTest'
-		found.push(DiscoveredTest.create(declared.symbol.clone(), displayName: declared.displayName, file: declared.file, line: declared.line))
+		found.push(DiscoveredTest.create(declared.symbol, displayName: declared.displayName, file: declared.file, line: declared.line))
 	end 'eachDeclaredTest'
 
 	return found

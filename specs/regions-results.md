@@ -50,7 +50,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:26:15: 'take' takes `immutable` 'item'; 'pick' is read-only
+error E3207: <fragment>:26:15: 'take' takes `immutable` 'item'; 'pick(frozen, fresh: false)' is read-only
 ```
 
 <!-- test: a-mixed-return-given-frozen-data-is-read -->
@@ -199,6 +199,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:25:14: 'take' takes `immutable` 'item'; 'pick' is read-only
+error E3207: <fragment>:25:14: 'take' takes `immutable` 'item'; 'pick(p, fresh: false)' is read-only
 error E3207: <fragment>:30:19: 'viaParam' needs 'p' frozen (it calls 'take', which takes `immutable` 'item'); 'row' is mutable. Freeze it first
 ```

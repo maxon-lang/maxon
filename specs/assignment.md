@@ -84,7 +84,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:4:2: cannot assign to immutable variable: 'x'
+error E2013: <fragment>:4:2: 'x' is a let and cannot be reassigned
 ```
 
 <!-- test: error.retype-struct-to-other-struct-errors -->

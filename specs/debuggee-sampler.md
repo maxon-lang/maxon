@@ -872,10 +872,10 @@ true
 0
 ```
 
-<!-- test: error.a-function-lending-a-page-reservations-address-is-refused-a-let-holder -->
+<!-- test: a-function-lending-a-page-reservations-address-accepts-a-let-holder -->
 <!-- tier: stdlib -->
 Lending the address of a reservation hands foreign code a way to write the pages, so the function that lends it writes
-its holder, and a `let` holder is refused at the call exactly as it is for a function that writes a word.
+its holder; a `let` only forbids reassignment, so a `let` holder is accepted at the call exactly as it is for a function that writes a word.
 wasm32-wasi has no page reservations.
 
 ```maxon
@@ -898,8 +898,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:16:10: cannot pass 'h', which is read-only (a `let` binding), to a function that writes parameter 'h' (in main); pass a clone()
+```stdout
+true
+```
+```exitcode
+0
 ```
 
 <!-- test: a-debug-port-dropped-without-close-leaks-nothing -->

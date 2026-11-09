@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import collections
 import difflib
 import hashlib
 import os
@@ -22,6 +23,8 @@ CODEC_PARAMETER = re.compile(r"[(,]\s*[A-Za-z_][A-Za-z0-9_]*\s+LibraryCache(?:Wr
 
 CODEC_TYPE_DECLARATION = re.compile(r"^\s*(?:(?:export|module|public)\s+)?(?:extension\s+|typealias\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)LibraryCache(?:Writer|Reader)\b")
 
+ALIAS_KINDS = ("alias", "frozenAlias")
+
 VISIBILITY_RANK = {"private": 0, "module": 1, "export": 2, "public": 3}
 
 EXIT_CLEAN = 0
@@ -31,6 +34,9 @@ EXIT_FAILED = 2
 
 class CodecOutsideHandCodecFiles(Exception):
     pass
+
+
+Dependency = collections.namedtuple("Dependency", ["item", "reads"])
 
 
 class Plan:
@@ -44,50 +50,29 @@ class Plan:
         return text.startswith("stdlib/") or text.startswith("runtime/")
 
     def dependencies(self, item):
-        kind, name = item
         found = []
 
-        if kind == "alias":
-            node = self.emitter.resolve(name)
-
-            if node.kind == "map":
-                found += self.node_dependencies(self.emitter.resolve(node.key)) + self.node_dependencies(self.emitter.resolve(node.value))
-            else:
-                found += self.node_dependencies(self.emitter.resolve(node.elem))
-
-            return found
-
-        declaration = self.tree.types[name]
-
-        if name in config.CUSTOM_TYPES or name in config.REFUSING_TYPES:
-            return found
-
-        if declaration.kind == "type":
-            for field in declaration.fields:
-                node = self.emitter.field_node(declaration, field)
-
-                if node is not None:
-                    found += self.node_dependencies(node)
-        elif declaration.kind == "union":
-            for _, payload in self.emitter.union_cases(declaration):
-                for _, payload_type in payload:
-                    found += self.node_dependencies(self.emitter.resolve(payload_type))
+        for node in self.item_nodes(item):
+            found += self.node_dependencies(node)
 
         return found
 
     def node_dependencies(self, node):
         if node.kind in ("record", "union", "enum", "custom"):
-            return [("type", node.name)]
+            return [Dependency(("type", node.name), reads=True)]
 
         if node.kind in CONTAINER_KINDS:
-            return [("alias", node.alias)]
+            if getattr(node, "frozen", False):
+                return [Dependency(("alias", node.alias), reads=False), Dependency(("frozenAlias", node.alias), reads=True)]
+
+            return [Dependency(("alias", node.alias), reads=True)]
 
         return []
 
     def item_path(self, item):
         kind, name = item
 
-        if kind == "alias":
+        if kind in ALIAS_KINDS:
             path = self.tree.aliases[name].path
 
             return config.GENERATED_HOST if self.is_library_path(path) else path
@@ -162,7 +147,7 @@ class Plan:
                 return
 
             for dependency in self.dependencies(item):
-                visit(dependency)
+                visit(dependency.item)
 
             order.append(item)
 
@@ -173,18 +158,24 @@ class Plan:
 
     def build(self):
         order = self.closure()
+        self.emitter.frozen_records = self.frozen_record_names(order)
         users = {item: set() for item in order}
+        readers = {item: set() for item in order}
 
         for item in order:
             for dependency in self.dependencies(item):
-                if dependency in users:
-                    users[dependency].add(NORMALIZED(self.item_path(item)))
+                if dependency.item in users:
+                    users[dependency.item].add(NORMALIZED(self.item_path(item)))
+
+                if dependency.reads and dependency.item in readers:
+                    readers[dependency.item].add(NORMALIZED(self.item_path(item)))
 
         for root in config.ROOTS + config.HAND_CODEC_ROOTS:
             key = root if isinstance(root, tuple) else ("type", root)
 
             for entry in config.ENTRY_FILES:
                 users.setdefault(key, set()).add(NORMALIZED(entry))
+                readers.setdefault(key, set()).add(NORMALIZED(entry))
 
         emitted = {}
         errors = []
@@ -195,7 +186,9 @@ class Plan:
 
             try:
                 visibility = self.visibility_prefix(item, external, users.get(item, set()))
-                emitted[item] = self.emit(kind, name, visibility)
+                reader_external = any(f != NORMALIZED(self.item_path(item)) for f in readers.get(item, set()))
+                reader_visibility = visibility if reader_external or kind != "alias" else ""
+                emitted[item] = self.emit(kind, name, visibility, reader_visibility)
             except Unresolved as failure:
                 errors.append((item, str(failure)))
 
@@ -203,9 +196,49 @@ class Plan:
 
         return order, emitted, errors
 
-    def emit(self, kind, name, visibility):
+    def frozen_record_names(self, order):
+        frozen = set()
+
+        for item in order:
+            for node in self.item_nodes(item):
+                if node.kind == "record" and getattr(node, "frozen", False):
+                    frozen.add(node.name)
+
+        refused = frozen & (config.REFUSING_TYPES | config.CUSTOM_TYPES)
+
+        if refused:
+            raise Unresolved("%s is read frozen, and its codec is not generated" % ", ".join(sorted(refused)))
+
+        return frozen
+
+    def item_nodes(self, item):
+        kind, name = item
+
+        if kind in ALIAS_KINDS:
+            node = self.emitter.resolve(name)
+            parts = [node.key, node.value] if node.kind == "map" else [node.elem]
+
+            return [self.emitter.resolve(part) for part in parts]
+
+        declaration = self.tree.types[name]
+
+        if name in config.CUSTOM_TYPES or name in config.REFUSING_TYPES:
+            return []
+
+        if declaration.kind == "type":
+            return [node for node in (self.emitter.field_node(declaration, field) for field in declaration.fields) if node is not None]
+
+        if declaration.kind == "union":
+            return [self.emitter.resolve(payload_type) for _, payload in self.emitter.union_cases(declaration) for _, payload_type in payload]
+
+        return []
+
+    def emit(self, kind, name, visibility, reader_visibility):
         if kind == "alias":
-            return ("alias", self.emitter.alias_helpers(name, visibility))
+            return ("alias", self.emitter.alias_helpers(name, visibility, reader_visibility))
+
+        if kind == "frozenAlias":
+            return ("alias", self.emitter.frozen_alias_helpers(name, visibility))
 
         declaration = self.tree.types[name]
 
@@ -279,7 +312,7 @@ def with_generated(source, items, emitted, rewind):
         kind, name = item
         shape, block = emitted[item]
 
-        if kind == "alias":
+        if kind in ALIAS_KINDS:
             anchor = alias_line(lines, name) + 1
             addition = [""] + region(block[1:], "")
         elif shape == "record":

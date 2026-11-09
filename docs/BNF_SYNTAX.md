@@ -385,10 +385,10 @@ union_decl    = visibility_prefix 'union' IDENTIFIER
 union_case    = IDENTIFIER [ '(' assoc_fields ')' ] [ '=' raw_value ]
 
 assoc_fields  = assoc_field { ',' assoc_field }
-assoc_field   = [ 'let' ] IDENTIFIER type_ref
+assoc_field   = [ 'let' ] IDENTIFIER [ capability ] type_ref
 ```
 
-A case's optional `= raw_value` (§3.3) is its explicit tag (`add(dest Id, src Id) = 5`) or its backing record (`= OpMeta{...}`). When struct-backed, every variant must carry an `= struct_raw_literal` of the same backing struct type. The backing struct is accessible via `.rawValue` on a union value; associated-value payloads are still accessed via `match`. An associated value may be of any type, `float` included, and a `static function` in a union is refused (E2015). A payload declared `let` is read-only for the value's whole life, like a `let` field: what is stored into it must be read-only, a value type, or moved in (E3078), and a write through it is E3159.
+A case's optional `= raw_value` (§3.3) is its explicit tag (`add(dest Id, src Id) = 5`) or its backing record (`= OpMeta{...}`). When struct-backed, every variant must carry an `= struct_raw_literal` of the same backing struct type. The backing struct is accessible via `.rawValue` on a union value; associated-value payloads are still accessed via `match`. An associated value may be of any type, `float` included, and a `static function` in a union is refused (E2015). A payload declared `let` is never reassigned for the value's whole life, like a `let` field (E2013), and can be written through. A payload takes a `capability` as a field does: `named(let text immutable ByteArray)` holds `immutable` data only.
 
 ### 3.5 Interface Declaration
 
@@ -613,7 +613,7 @@ var_decl      = 'var' IDENTIFIER '=' ( expression | isolated_init )
 let_decl      = 'let' IDENTIFIER '=' ( expression | isolated_init )
               | 'let' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
 
-view_decl     = 'view' IDENTIFIER '=' expression               (* contextual; a local binding only, E2077 elsewhere *)
+view_decl     = 'view' IDENTIFIER '=' expression               (* contextual; another spelling of let_decl; a local binding only, E2077 elsewhere *)
               | 'view' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
 
 discard_stmt  = '_' '=' expression

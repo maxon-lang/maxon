@@ -1,8 +1,8 @@
 typealias LockSet = int(0 to u32.max)
 typealias LockSetArray = Array with LockSet
 typealias LockSetColumn = FixedArray with LockSet
-typealias ExclusiveLockLabelArray = Array with ByteArray
-typealias ValueLabelMap = Map with (ValueId, readonly ByteArray)
+typealias ExclusiveLockLabelArray = Array with immutable ByteArray
+typealias ValueLabelMap = Map with (ValueId, immutable ByteArray)
 typealias BlockPositionById = Map with (BlockId, ElementIndex)
 typealias BlockPositionArray = Array with ElementIndex
 
@@ -74,7 +74,7 @@ function valueLabelsOf(module StdModule, ops OpIndexArray) returns ValueLabelMap
 		let op = try module.ops.get(opIdx) otherwise panic("valueLabelsOf: live op index {opIdx} not in module.ops")
 
 		if stdOpLabelKindOf(op) == StdOpLabelKind.dataSlot 'aWord'
-			labels.upsert(globalAddrResultOf(op), value: stdOpLabel(op).clone())
+			labels.upsert(globalAddrResultOf(op), value: stdOpLabel(op))
 		end 'aWord'
 	end 'eachOp'
 
@@ -117,7 +117,7 @@ type HeldLockCheck
 			panic("HeldLockCheck.bitOfLabel: more than {MaxExclusiveGlobalLocks} exclusive global locks, which is the width of a `LockSet`")
 		end 'tooMany'
 
-		self.labels.push(label.clone())
+		self.labels.push(label)
 		return OneLock shl (self.labels.count() - 1)
 	end 'bitOfLabel'
 

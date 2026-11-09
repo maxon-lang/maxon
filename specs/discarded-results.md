@@ -1657,8 +1657,8 @@ end 'main'
 0
 ```
 
-<!-- test: error.a-let-whose-method-hands-a-closure-writing-its-captured-self-is-refused -->
-The same program with the recorder bound by `let`: the closure writes the receiver it captured, so the call is refused.
+<!-- test: a-let-whose-method-hands-a-closure-writing-its-captured-self-is-written -->
+The same program with the recorder bound by `let`: the closure writes the receiver it captured, and a `let` forbids only reassigning `recorder`, so the call is accepted and the writes land in the recorder.
 ```maxon
 typealias Position = int(0 to 1000)
 typealias PositionTest = function(Position) returns bool mutates captures
@@ -1710,8 +1710,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:43:19: cannot pass 'recorder', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```exitcode
+0
 ```
 
 <!-- test: a-search-through-a-closure-of-unknown-origin-keeps-its-result-droppable -->

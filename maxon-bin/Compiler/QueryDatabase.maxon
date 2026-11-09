@@ -192,7 +192,7 @@ export type FootprintRow
 	export let args as MaxonTypeArray
 	export let shape as InstanceShape
 	export let speculative as bool
-	export let compiledName as ByteArray
+	export let compiledName as immutable ByteArray
 
 	export static function create(id GenericInstanceId, baseId TypeNameId, args MaxonTypeArray, shape InstanceShape, speculative bool, compiledName ByteArray) returns FootprintRow
 		return Self{id: id, baseId: baseId, args: args, shape: shape, speculative: speculative, compiledName: compiledName}
@@ -214,7 +214,7 @@ export type FootprintRow
 		let f_args = try cacheReadMaxonTypeArray(reader)
 		let f_shape = try cacheReadInstanceShape(reader)
 		let f_speculative = try reader.flag()
-		let f_compiledName = try reader.bytes()
+		let f_compiledName = freeze try reader.bytes()
 
 		return Self{id: f_id, baseId: f_baseId, args: f_args, shape: f_shape, speculative: f_speculative, compiledName: f_compiledName}
 	end 'cacheRead'
@@ -253,7 +253,7 @@ end 'cacheReadFootprintRowArray'
 
 export type FootprintInterface
 	export let declIndex as ElementIndex
-	export let name as ByteArray
+	export let name as immutable ByteArray
 
 	export static function create(declIndex ElementIndex, name ByteArray) returns FootprintInterface
 		return Self{declIndex: declIndex, name: name}
@@ -267,7 +267,7 @@ export type FootprintInterface
 
 	static function cacheRead(reader LibraryCacheReader) returns FootprintInterface throws LibraryCacheDamage
 		let f_declIndex = (try reader.unsigned()) as ElementIndex
-		let f_name = try reader.bytes()
+		let f_name = freeze try reader.bytes()
 
 		return Self{declIndex: f_declIndex, name: f_name}
 	end 'cacheRead'
@@ -539,7 +539,7 @@ export type SharedFileMemo
 	export function parseOf(variant HashDigest, key HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable, consuming bool) returns RebasedParse throws SharedMemoMiss
 		let position = try self.positionAnswering(variant, key: key)
 		var held = try self.parses.get(position) otherwise panic("SharedFileMemo.parseOf: parses.get OOB at {position}, the position just found")
-		var rebased = try held.rebasedOnto(signatures, overrides: overrides, consuming: consuming)
+		let rebased = try held.rebasedOnto(signatures, overrides: overrides, consuming: consuming)
 
 		if consuming 'noLaterCompileWillAsk'
 			_ = try self.parses.remove(position) otherwise panic("SharedFileMemo.parseOf: remove({position}) of {self.parses.count()} held parses")

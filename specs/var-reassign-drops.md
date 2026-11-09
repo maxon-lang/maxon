@@ -324,7 +324,8 @@ end 'main'
 v1
 ```
 
-<!-- test: error.self-assign-through-a-let-is-refused -->
+<!-- test: self-assign-through-a-let -->
+`let t = s` moves the value to `t`, and `s = t` hands it back: `s` is live again and the program is accepted.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -340,6 +341,9 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:11:2: cannot assign the read-only 't' to mutable binding 's'; use 'let' instead of 'var', or use clone()
+```exitcode
+0
+```
+```stdout
+v1
 ```

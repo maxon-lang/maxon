@@ -202,7 +202,7 @@ end 'WritableRecordPromotion'
 
 // The runtime entry each promotion spends. `none` has none, and asking for it is a caller that skipped its
 // own gate rather than a case to answer with an empty name.
-function promotionCallee(promotion WritableRecordPromotion) returns ByteArray
+function promotionCallee(promotion WritableRecordPromotion) returns immutable ByteArray
 	return match promotion 'which'
 		none panic("promotionCallee: the `none` promotion names no runtime entry — every caller gates on `promotionAtWrittenPosition` answering otherwise")
 		copyImmortalRecord gives StrCloneName
@@ -539,7 +539,7 @@ end 'promotionAtWrittenPosition'
 function appendPromotionRuntimeCall(module MaxonModule, project Project, funcIndex ElementIndex, result ValueId, callee ByteArray, arg ValueId, range SourceRange) returns ElementIndex
 	let args = argsOf(arg)
 	let opIndex = module.opCount()
-	module.ops.push(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, defaultedArgs: NoDefaultedArgs, mint: CalleeMint.notMinted))
+	module.ops.push(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: WriteBlameArray.create(0), defaultedArgs: NoDefaultedArgs, mint: CalleeMint.notMinted))
 	project.opRanges.record(opIndex, range: range)
 	project.valueOrigins.record(funcIndex, valueId: result, opIndex: opIndex)
 	return opIndex

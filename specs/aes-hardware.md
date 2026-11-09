@@ -325,8 +325,8 @@ true true true
 
 <!-- test: aes-hardware.a-literal-array-is-copied-before-it-is-written -->
 <!-- tier: stdlib -->
-An output array that shares its buffer with the program image is detached before the block is stored, so the
-call neither faults nor changes the literal it started from.
+An output array copied from a literal is the program's own buffer, so the block is stored into the copy and
+the literal it started from is unchanged.
 ```maxon
 function main() returns ExitCode
 	var key = ByteArray.create(0)
@@ -340,7 +340,7 @@ function main() returns ExitCode
 	__Builtins.aesExpandKey(schedule, key)
 
 	let original = b"0123456789abcdef0123456789abcdef"
-	var output = b"0123456789abcdef0123456789abcdef"
+	var output = b"0123456789abcdef0123456789abcdef".clone()
 	let plain = b"00112233445566778899aabbccddeeff"
 	__Builtins.aesEncryptBlock(output, 3, schedule, plain, 0)
 
@@ -369,6 +369,32 @@ true true 51
 ```
 ```exitcode
 0
+```
+
+<!-- test: aes-hardware.error.a-literal-array-is-refused-as-an-output -->
+<!-- tier: stdlib -->
+A `var` bound to a literal still names the program's constant data, so the block cannot be stored into it.
+```maxon
+function main() returns ExitCode
+	var key = ByteArray.create(0)
+	var schedule = ByteArray.create(0)
+
+	for position in 0 upto 16 'eachKeyByte'
+		key.push(position as Byte)
+	end 'eachKeyByte'
+
+	schedule.resize(352)
+	__Builtins.aesExpandKey(schedule, key)
+
+	var output = b"0123456789abcdef0123456789abcdef"
+	let plain = b"00112233445566778899aabbccddeeff"
+	__Builtins.aesEncryptBlock(output, 3, schedule, plain, 0)
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:15:13: 'aesEncryptBlock' needs a writable argument; 'output' is immutable
 ```
 
 <!-- test: aes-hardware.a-key-of-another-length-ends-the-program -->
@@ -1385,8 +1411,8 @@ end 'main'
 
 <!-- test: aes-hardware.gcm-literal-arrays-are-copied-before-they-are-written -->
 <!-- tier: stdlib -->
-A key block or an output that shares its storage with the program image is detached before it is written, so the calls
-neither fault nor change the literal they started from.
+A key block or an output copied from a literal is the program's own buffer, so the calls write the copies and leave the
+literals they started from unchanged.
 ```maxon
 function main() returns ExitCode
 	var key = ByteArray.create(0)
@@ -1400,7 +1426,7 @@ function main() returns ExitCode
 	__Builtins.aesExpandKey(schedule, key)
 
 	let originalKeys = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	var keyBlock = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	var keyBlock = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".clone()
 	__Builtins.aesGcmInit(keyBlock, schedule)
 
 	var keysChanged = false
@@ -1413,7 +1439,7 @@ function main() returns ExitCode
 
 	let plain = b"0123456789abcdef"
 	let originalBuffer = b"0123456789abcdef0123456789abcdef"
-	var buffer = b"0123456789abcdef0123456789abcdef"
+	var buffer = b"0123456789abcdef0123456789abcdef".clone()
 	__Builtins.aesGcmSeal(buffer, 0, keyBlock, b"0123456789ab", b"hello", plain)
 
 	print("{keysChanged} {buffer.equals(originalBuffer)} {try originalBuffer.get(31) otherwise 0}\n")
@@ -1425,6 +1451,31 @@ true false 102
 ```
 ```exitcode
 0
+```
+
+<!-- test: aes-hardware.error.a-literal-key-block-is-refused-as-the-gcm-init-target -->
+<!-- tier: stdlib -->
+A key block that names a literal cannot be filled by `aesGcmInit`.
+```maxon
+function main() returns ExitCode
+	var key = ByteArray.create(0)
+	var schedule = ByteArray.create(0)
+
+	for position in 0 upto 16 'eachKeyByte'
+		key.push(position as Byte)
+	end 'eachKeyByte'
+
+	schedule.resize(352)
+	__Builtins.aesExpandKey(schedule, key)
+
+	var keyBlock = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	__Builtins.aesGcmInit(keyBlock, schedule)
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:14:13: 'aesGcmInit' needs a writable argument; 'keyBlock' is immutable
 ```
 
 <!-- test: aes-hardware.a-gcm-nonce-of-another-length-ends-the-program -->

@@ -143,11 +143,11 @@ function requireGrantedEnumMemberMatches(project Project, functionsByName Functi
 		view implSig = conformanceImplSignature(project, name: qualifiedName)
 		let expected = formatInterfaceMethodSignature(method, signatures: signatures)
 
-		if signatureMatches(project, method: method, expansion: sharedNoAliasExpansion, conformingType: enumName, implFunc: implFunc, implSig: implSig, typeParamNames: grantedEnumTypeParamNames, signatures: signatures) 'implementsTheRequirement'
+		if signatureMatches(project, method: method, expansion: AliasExpansionScope.none(), conformingType: enumName, implFunc: implFunc, implSig: implSig, typeParamNames: NameRoster.create(0), signatures: signatures) 'implementsTheRequirement'
 			return
 		end 'implementsTheRequirement'
 
-		reportGrantedEnumMemberMismatch(project, anchor: implFunc, enumName: enumName, protocolName: protocolName, methodName: method.name, why: "is declared {formatActualSignature(project, methodName: method.name, conformingType: enumName, implFunc: implFunc, implSig: implSig, typeParamNames: grantedEnumTypeParamNames, signatures: signatures)}", expected: expected)
+		reportGrantedEnumMemberMismatch(project, anchor: implFunc, enumName: enumName, protocolName: protocolName, methodName: method.name, why: "is declared {formatActualSignature(project, methodName: method.name, conformingType: enumName, implFunc: implFunc, implSig: implSig, typeParamNames: NameRoster.create(0), signatures: signatures)}", expected: expected)
 		project.refusedConformanceMembers.insert(implFunc.name)
 	end 'declared'
 end 'requireGrantedEnumMemberMatches'
@@ -159,11 +159,6 @@ end 'requireGrantedEnumMemberMatches'
 function reportGrantedEnumMemberMismatch(project Project, anchor IrFunction, enumName ByteArray, protocolName ByteArray, methodName ByteArray, why String, expected String)
 	reportAtFunctionName(project, func: anchor, code: ErrorCode.semanticGrantedConformanceMemberMismatch, message: "`enum {String.from(enumName)}` conforms to '{String.from(protocolName)}' automatically — an enum without associated values is `Hashable` and `Equatable` with no `implements` clause — and its '{String.from(methodName)}' {why}, which does not implement {expected}. That member is what a `Map`/`Set` keyed by '{String.from(enumName)}' hashes and compares through, so it must implement the requirement; rename it if it means something else")
 end 'reportGrantedEnumMemberMismatch'
-
-// An `enum` declares no `uses` names, so the renderer that re-spells a member's declared types has none to
-// re-spell against. Shared rather than built per member: it is read on a cold path, and an empty
-// array per call is an allocation with no content.
-let grantedEnumTypeParamNames = NameRoster.create(0)
 
 // ⭐⭐ **AN ASSOCIATED TYPE A DISPATCHED REQUIREMENT WRITES IN AN ABI POSITION HAS EXACTLY ONE LEGAL BINDING
 // *WHERE NO DISPATCH SITE SAYS OTHERWISE* (E3119), AND MUST NOT BE MANAGED WHEN IT IS THE RESULT (E3120).**
@@ -295,10 +290,6 @@ type DispatchedAssociatedNames
 	end 'create'
 end 'DispatchedAssociatedNames'
 
-// The answer for an interface no call dispatches — shared, never mutated, so a program whose interfaces are
-// all statically resolved allocates nothing per interface for the two empty sets it would otherwise mint.
-let sharedEmptyDispatchedAssociatedNames = DispatchedAssociatedNames.create(AssociatedTypeNameSet.create(), inAResult: AssociatedTypeNameSet.create())
-
 // ⭐ **EVERY WITNESS SLOT THE PROGRAM ACTUALLY DISPATCHES THROUGH**, read off the two witness-dispatch ops the
 // parser emits. Each carries the `(interfaceDeclIndex, methodIndex)` pair `LowerMaxonToStd` resolves the
 // requirement through — so this asks the identical question the emission asks and cannot come to a different
@@ -413,9 +404,7 @@ function receiverClaimedPositions(func IrFunction, signatures ProgramSignatures,
 	return constrainedParamAssociatedBindings(signatures, token: token as TypeParamId, interfaceName: interfaceName).count()
 end 'receiverClaimedPositions'
 
-// ⚠ **THE INNER MAP IS REBUILT RATHER THAN WRITTEN INTO, BECAUSE A VALUE FETCHED OUT OF A `Map`
-// AND BOUND BY `let` IS READ-ONLY** — an `upsert` on it is E3159 (`buildDeclaredConformanceMap`'s
-// header records the same constraint from the other side). The rebuild is
+// ⚠ **THE INNER MAP IS REBUILT RATHER THAN WRITTEN INTO.** The rebuild is
 // paid once per distinct `(interface, slot)` pair AND once more each time a site claims strictly LESS than
 // every site before it — bounded by the interface's associated-type count, which is a source-written arity,
 // so it is still bounded by the program's requirement count and not by its op count. Every repeat that adds
@@ -471,7 +460,7 @@ end 'copyRecordedSlots'
 // ever carries the error's own type in its signature, this walk is where that becomes a third set.
 function dispatchedAssociatedNamesOf(interfaces IrInterfaceMap, dispatched DispatchedSlotMap, iface IrInterface, signatures ProgramSignatures) returns DispatchedAssociatedNames
 	let slots = try dispatched.get(iface.name) otherwise 'neverDispatched'
-		return sharedEmptyDispatchedAssociatedNames
+		return DispatchedAssociatedNames.create(AssociatedTypeNameSet.create(), inAResult: AssociatedTypeNameSet.create())
 	end 'neverDispatched'
 
 	var inAnAbiPosition = AssociatedTypeNameSet.create()
@@ -510,7 +499,7 @@ end 'dispatchedAssociatedNamesOf'
 // conformers that KEEP the claim may be widened into it; `SemanticCheck.checkExistentialSiteClaimAtArgument`
 // refuses the rest, at the one place a concrete conformer and a claim meet. Narrowing here without that
 // refusal in place would be E3119's own recorded failure with an extra step.
-function unclaimedAssociatedName(iface IrInterface, requirement RequirementType, claimed ElementIndex, signatures ProgramSignatures) returns ByteArray throws MapError
+function unclaimedAssociatedName(iface IrInterface, requirement RequirementType, claimed ElementIndex, signatures ProgramSignatures) returns immutable ByteArray throws MapError
 	let position = try associatedPositionIn(requirement, iface: iface, signatures: signatures)
 
 	if position < claimed 'claimedByEverySite'
@@ -1085,7 +1074,7 @@ end 'checkConstraintAssociatedBindings'
 // The name at one associated POSITION, for a diagnostic that has the position and owes the reader the word
 // the author wrote. Reaching here means a conformance for that interface was already read at that position,
 // so a missing declaration or a short `uses` list is an internal disagreement rather than a user error.
-function associatedTypeNameAt(interfaces IrInterfaceMap, interfaceName ByteArray, position ElementIndex) returns ByteArray
+function associatedTypeNameAt(interfaces IrInterfaceMap, interfaceName ByteArray, position ElementIndex) returns immutable ByteArray
 	match lookupInterface(interfaces, name: interfaceName) 'resolve'
 		notFound then panic("associatedTypeNameAt: interface '{String.from(interfaceName)}' resolves to nothing, and a constraint naming it was just accepted against a conformance")
 		found(iface) then return try iface.associatedTypeNames.get(position) otherwise panic("associatedTypeNameAt: '{String.from(interfaceName)}' declares {iface.associatedTypeNames.count()} associated type(s) and position {position} was bound against it — the `with` clause's length is checked against that same list")
@@ -1099,7 +1088,7 @@ end 'associatedTypeNameAt'
 // inconclusive: a claim the author wrote is a type in the program, a conformer's binding over its own
 // parameters is not.
 function substitutedConstraintBinding(signatures ProgramSignatures, gid GenericInstanceId, baseName ByteArray, binding RequirementType) returns RequirementType
-	return try substitutedBindingIn(signatures, gid: gid, paramNames: signatures.structTypeParamsOf(baseName), binding: binding) otherwise binding.clone()
+	return try substitutedBindingIn(signatures, gid: gid, paramNames: signatures.structTypeParamsOf(baseName), binding: binding) otherwise binding
 end 'substitutedConstraintBinding'
 
 // ⭐ **THE ONE SUBSTITUTION STEP — a binding naming one of `paramNames`, rewritten into the scope `gid`
@@ -1202,7 +1191,7 @@ end 'reportUnsatisfiedConstraint'
 // Read only on the VIOLATION path, and that is deliberate: `structOf` boxes a `DeclaredStruct` per call
 // (a Maxon union value is a heap object in every case), and a conforming instantiation — every one in a
 // program that compiles — must not pay for a diagnostic it does not produce.
-function constrainedTypeParamName(signatures ProgramSignatures, baseName ByteArray, position FieldIndex) returns ByteArray
+function constrainedTypeParamName(signatures ProgramSignatures, baseName ByteArray, position FieldIndex) returns immutable ByteArray
 	match signatures.structInAnyFile(baseName) 'base'
 		declared(layout) then return try layout.typeParamNames.get(position) otherwise panic("constrainedTypeParamName: '{String.from(baseName)}' constrains type-parameter position {position}, outside its own `uses` list of {layout.typeParamNames.count()} — a `where` constraint is recorded against that list")
 		undeclared then panic("constrainedTypeParamName: '{String.from(baseName)}' carries a `where` constraint but is in no struct registry — `structWhereConstraints` read that constraint off the very layout this lookup misses")
@@ -1235,7 +1224,7 @@ end 'typeConformsTo'
 // the interface and the offending type argument because those are the two nouns the refusal quotes.
 export union ExtensionConstraintOnReceiver
 	met
-	unmet(let interfaceName ByteArray, let argDisplayName ByteArray)
+	unmet(let interfaceName immutable ByteArray, let argDisplayName immutable ByteArray)
 end 'ExtensionConstraintOnReceiver'
 
 // ⭐ **DOES A CONCRETE GENERIC INSTANCE SATISFY A CONDITIONAL TYPE EXTENSION'S CLAUSE?** — asked by
@@ -1337,10 +1326,9 @@ end 'opaqueParamDischarge'
 // nothing and the position stays E3119's to decide — a refusal, never a wrong ABI.
 //
 // The empty list is the answer for every unconstrained parameter and every constraint that binds nothing,
-// which is the whole corpus but the shapes this exists for — and it is the SHARED empty, so the common path
-// allocates nothing.
+// which is the whole corpus but the shapes this exists for.
 export function constrainedParamAssociatedBindings(signatures ProgramSignatures, token TypeParamId, interfaceName ByteArray) returns RequirementTypeArray
-	let owner = try signatures.typeParamOwnerOf(token) otherwise return sharedEmptyRequirementTypes
+	let owner = try signatures.typeParamOwnerOf(token) otherwise return RequirementTypeArray.create(0)
 	let constraints = signatures.structWhereConstraints(owner.declaringTypeName)
 
 	for i in 0 upto constraints.count() 'eachOwnerConstraint'
@@ -1353,7 +1341,7 @@ export function constrainedParamAssociatedBindings(signatures ProgramSignatures,
 		return promised.associatedBindingTypes
 	end 'eachOwnerConstraint'
 
-	return sharedEmptyRequirementTypes
+	return RequirementTypeArray.create(0)
 end 'constrainedParamAssociatedBindings'
 
 // Does this verdict discharge the constraint? The bool the union deliberately is not, for the one caller
@@ -1372,7 +1360,7 @@ end 'opaqueConstraintIsDischarged'
 // `satisfied`.
 export union ExtensionConstraintCheck
 	satisfied
-	unmet(let interfaceName ByteArray, let bindingName ByteArray)
+	unmet(let interfaceName immutable ByteArray, let bindingName immutable ByteArray)
 end 'ExtensionConstraintCheck'
 
 // Does this verdict mean the extension gives the conformer NOTHING — no methods, and no nested
@@ -1401,7 +1389,7 @@ let UnboundAssociatedTypePhrase = b"(nothing)"
 // all.
 export function pairableConformanceBindings(bindings ConformanceBinding, associatedTypeNames NameRoster) returns ConformanceBinding
 	if bindings.spellings.count() != associatedTypeNames.count() or bindings.types.count() != associatedTypeNames.count() 'noPositionalMeaning'
-		return sharedEmptyConformanceBinding
+		return ConformanceBinding.none()
 	end 'noPositionalMeaning'
 
 	return bindings
@@ -1513,9 +1501,7 @@ end 'buildDeclaredConformanceMap'
 // the type and `Hashable`/`Equatable` on an extension, so a replace would leave one of those pairs invisible
 // to the credit and its impls filed unreachable behind a witness slot that names them.
 //
-// ⚠ **THE SET IS COPIED RATHER THAN ADDED TO, for `recordDispatchedSlot`'s reason stated in full
-// there** — a value fetched out of a `Map` and bound by `let` is read-only, so an `insert` on it is
-// E3159. The copy is paid once per DECLARATION and copies only what an earlier declaration
+// ⚠ **THE SET IS COPIED RATHER THAN ADDED TO.** The copy is paid once per DECLARATION and copies only what an earlier declaration
 // of the SAME conformer already put there, which is nothing for every type in the corpus but the handful
 // carrying both a `type` clause and an `extension` one.
 module function copyDeclaredInterfaces(declared DeclaredConformanceMap, typeName ByteArray, into InterfaceNameSet)
@@ -1577,7 +1563,7 @@ function checkOneConformance(project Project, functionsByName FunctionNameIndex,
 	//
 	// Neither declares `uses` parameters, which is also what a non-generic type's layout already holds — so
 	// the empty list is not a fallback here, it is the answer.
-	var typeParamNames = conformerTypeParamNames(project, conformance: conformance)
+	let typeParamNames = conformerTypeParamNames(project, conformance: conformance)
 
 	for i in 0 upto conformance.interfaces.count() 'eachIface'
 		let entry = try conformance.interfaces.get(i) otherwise panic("checkOneConformance: interfaces.get OOB at {i}")
@@ -1593,9 +1579,9 @@ function checkOneConformance(project Project, functionsByName FunctionNameIndex,
 	end 'eachIface'
 end 'checkOneConformance'
 
-function conformerTypeParamNames(project Project, conformance ConformanceDecl) returns NameRoster
+function conformerTypeParamNames(project Project, conformance ConformanceDecl) returns immutable NameRoster
 	if primitiveTagOfTypeName(conformance.typeName) != ValueTypeTag.unresolved or project.enumTypes.contains(conformance.typeName) 'declaresNoUses'
-		return NameRoster.create(0)
+		return freeze NameRoster.create(0)
 	end 'declaresNoUses'
 
 	let layout = try project.structTypes.get(conformance.typeName) otherwise panic("conformerTypeParamNames: conforming type '{String.from(conformance.typeName)}' declares `implements` but is in no struct registry — a ConformanceDecl comes from a declared `type` (which commits a StructLayout), from a declared `enum`/`union` (which commits an EnumLayout and was admitted above) or from an `extension` over a primitive (which is not a declared type and was admitted above)")
@@ -1800,10 +1786,10 @@ end 'collectInterfaceMethods'
 type RequirementSubstitution
 	// The entry the walk started from, and this type's own conformance entry for the interface that DECLARED
 	// the requirement. Asked in that order — see `collectInterfaceMethods` for why clause-first is a rule.
-	export let clauseNames as NameRoster
+	export let clauseNames as immutable NameRoster
 	export let clauseArgs as NameRoster
 	export let clauseTypes as RequirementTypeArray
-	export let declaredNames as NameRoster
+	export let declaredNames as immutable NameRoster
 	export let declaredArgs as NameRoster
 	export let declaredTypes as RequirementTypeArray
 
@@ -1811,11 +1797,11 @@ type RequirementSubstitution
 	// `declaredNames` above. The alias expansion pairs them against `associatedBinding`'s answers, which is
 	// defined for every name whether or not an argument list could pair with it — where the substitution
 	// proper indexes an argument list directly and must not be handed a name it cannot reach.
-	export let ownerNames as NameRoster
-	export let ownerInterfaceName as ByteArray
+	export let ownerNames as immutable NameRoster
+	export let ownerInterfaceName as immutable ByteArray
 	export var signatures as ProgramSignatures
-	export let conformerName as ByteArray
-	export var conformerTypeParams as NameRoster
+	export let conformerName as immutable ByteArray
+	export var conformerTypeParams as immutable NameRoster
 	export let form as InstanceNameForm
 
 	static function create(signatures ProgramSignatures, clauseNames NameRoster, clauseArgs NameRoster, clauseTypes RequirementTypeArray, declaredNames NameRoster, declaredArgs NameRoster, declaredTypes RequirementTypeArray, ownerNames NameRoster, ownerInterfaceName ByteArray, conformerName ByteArray, conformerTypeParams NameRoster, form InstanceNameForm) returns RequirementSubstitution
@@ -1864,7 +1850,7 @@ end 'conformanceBindsNothing'
 //
 // A `notFound` is unreachable rather than tolerated: this name came off a slot the walk produced, and the
 // walk produces a slot only for an interface it RESOLVED through this same door.
-function associatedTypeNamesDeclaredBy(project Project, iface IrInterface, interfaceName ByteArray) returns NameRoster
+function associatedTypeNamesDeclaredBy(project Project, iface IrInterface, interfaceName ByteArray) returns immutable NameRoster
 	if interfaceName.equals(iface.name) 'itsOwnRequirement'
 		return iface.associatedTypeNames
 	end 'itsOwnRequirement'
@@ -1906,8 +1892,8 @@ end 'boundConformanceFor'
 // returned before any requirement was collected — and it is what makes it true for a SIBLING entry too,
 // which has had no such gate yet (its own check reports E3016 separately). Stating it HERE rather than
 // relying on the remote guarantee is what turns `associatedBinding`'s panic into an unreachable invariant.
-function pairableAssociatedTypeNames(associatedTypeNames NameRoster, boundTypeNames NameRoster) returns NameRoster
-	return sharedEmptyDeclaredConformances if boundTypeNames.count() < associatedTypeNames.count() else associatedTypeNames
+function pairableAssociatedTypeNames(associatedTypeNames immutable NameRoster, boundTypeNames NameRoster) returns immutable NameRoster
+	return (freeze NameRoster.create(0)) if boundTypeNames.count() < associatedTypeNames.count() else associatedTypeNames
 end 'pairableAssociatedTypeNames'
 
 // One requirement with every associated type replaced by what the conformance bound it to — the
@@ -1916,8 +1902,8 @@ end 'pairableAssociatedTypeNames'
 // positionally, so a concatenation would have to be two arrays anyway, and it would allocate a pair per
 // requirement of every binding conformance to say what four already-built lists say.
 function substituteAssociatedTypes(method InterfaceMethodSig, under RequirementSubstitution) returns InterfaceMethodSig
-	var paramTypeNames = NameRoster.create(method.paramTypes.count(), zeroed: false)
-	var paramTypes = RequirementTypeArray.create(method.paramTypes.count(), zeroed: false)
+	var paramTypeNames = NameRoster.create(method.paramTypes.count(), zeroed: false) as isolated NameRoster
+	var paramTypes = RequirementTypeArray.create(method.paramTypes.count(), zeroed: false) as isolated RequirementTypeArray
 
 	for i in 0 upto method.paramTypes.count() 'eachParam'
 		view display = try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i} — an InterfaceMethodSig's type columns are parallel")
@@ -1928,40 +1914,40 @@ function substituteAssociatedTypes(method InterfaceMethodSig, under RequirementS
 
 	let (returnRequirement, returnShown) = boundRequirement(method.returnType, display: method.returnTypeName, under: under)
 
-	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, paramTypes: paramTypes, returnTypeName: returnShown, returnType: returnRequirement, isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, under: under), paramIsBuffer: method.paramIsBuffer, paramCapabilities: method.paramCapabilities, returnCapability: method.returnCapability, byRefParams: method.byRefParams, nameLine: method.nameLine, nameColumn: method.nameColumn, written: method.written, selfCapability: method.selfCapability)
+	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: freeze paramTypeNames, paramTypes: freeze paramTypes, returnTypeName: returnShown, returnType: returnRequirement, isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, under: under), paramIsBuffer: method.paramIsBuffer, paramCapabilities: method.paramCapabilities, returnCapability: method.returnCapability, byRefParams: method.byRefParams, nameLine: method.nameLine, nameColumn: method.nameColumn, written: method.written, selfCapability: method.selfCapability)
 end 'substituteAssociatedTypes'
 
-function boundRequirement(requirement RequirementType, display ByteArray, under RequirementSubstitution) returns (RequirementType, ByteArray)
+function boundRequirement(requirement RequirementType, display ByteArray, under RequirementSubstitution) returns (RequirementType, immutable ByteArray)
 	return match requirement.identity 'identity'
 		typeParameter gives boundTypeParameter(requirement, display: display, under: under)
 		nominal(name) gives expandedAliasRequirement(requirement, name: name, display: display, under: under)
 		void or
 		selfType or
 		genericInstance or
-		builtin gives (requirement.clone(), display.clone())
+		builtin gives (requirement.clone(), display)
 	end 'identity'
 end 'boundRequirement'
 
-function boundTypeParameter(requirement RequirementType, display ByteArray, under RequirementSubstitution) returns (RequirementType, ByteArray)
+function boundTypeParameter(requirement RequirementType, display ByteArray, under RequirementSubstitution) returns (RequirementType, immutable ByteArray)
 	let name = try associatedNameOf(requirement, signatures: under.signatures) otherwise panic("boundTypeParameter: the type parameter '{String.from(display)}' of a requirement of '{String.from(under.ownerInterfaceName)}' has no owner — `recordInterfaceDeclaration` files every associated type of an interface as the sweep folds")
-	return try associatedBinding(name, under: under) otherwise return (requirement.clone(), display.clone())
+	return try associatedBinding(name, under: under) otherwise return (requirement.clone(), display)
 end 'boundTypeParameter'
 
-function associatedBinding(name ByteArray, under RequirementSubstitution) returns (RequirementType, ByteArray) throws MapError
+function associatedBinding(name ByteArray, under RequirementSubstitution) returns (RequirementType, immutable ByteArray) throws MapError
 	if let clausePosition = try under.clauseNames.positionOfName(name) 'boundByTheClause'
-		return ((try under.clauseTypes.get(clausePosition) otherwise panic("associatedBinding: clauseTypes.get OOB at {clausePosition} — an InterfaceConformance's binding columns are parallel")).clone(), (try under.clauseArgs.get(clausePosition) otherwise panic("associatedBinding: clauseArgs.get OOB at {clausePosition} below name count {under.clauseNames.count()} — `pairableAssociatedTypeNames` empties the NAME list whenever the arguments cannot pair with it positionally")).clone())
+		return ((try under.clauseTypes.get(clausePosition) otherwise panic("associatedBinding: clauseTypes.get OOB at {clausePosition} — an InterfaceConformance's binding columns are parallel")).clone(), (try under.clauseArgs.get(clausePosition) otherwise panic("associatedBinding: clauseArgs.get OOB at {clausePosition} below name count {under.clauseNames.count()} — `pairableAssociatedTypeNames` empties the NAME list whenever the arguments cannot pair with it positionally")))
 	end 'boundByTheClause'
 
 	if let declaredPosition = try under.declaredNames.positionOfName(name) 'boundByItsDeclarer'
-		return ((try under.declaredTypes.get(declaredPosition) otherwise panic("associatedBinding: declaredTypes.get OOB at {declaredPosition} — an InterfaceConformance's binding columns are parallel")).clone(), (try under.declaredArgs.get(declaredPosition) otherwise panic("associatedBinding: declaredArgs.get OOB at {declaredPosition} below name count {under.declaredNames.count()} — the same `pairableAssociatedTypeNames` gate applies to the declaring interface's pair")).clone())
+		return ((try under.declaredTypes.get(declaredPosition) otherwise panic("associatedBinding: declaredTypes.get OOB at {declaredPosition} — an InterfaceConformance's binding columns are parallel")).clone(), (try under.declaredArgs.get(declaredPosition) otherwise panic("associatedBinding: declaredArgs.get OOB at {declaredPosition} below name count {under.declaredNames.count()} — the same `pairableAssociatedTypeNames` gate applies to the declaring interface's pair")))
 	end 'boundByItsDeclarer'
 
 	throw MapError.keyNotFound
 end 'associatedBinding'
 
-function expandedAliasRequirement(requirement RequirementType, name ByteArray, display ByteArray, under RequirementSubstitution) returns (RequirementType, ByteArray)
+function expandedAliasRequirement(requirement RequirementType, name ByteArray, display ByteArray, under RequirementSubstitution) returns (RequirementType, immutable ByteArray)
 	if under.form == InstanceNameForm.canonical 'theComparedCopy'
-		return (requirement.clone(), display.clone())
+		return (requirement.clone(), display)
 	end 'theComparedCopy'
 
 	var boundSpellings = NameRoster.create(under.ownerNames.count(), zeroed: false)
@@ -1970,13 +1956,13 @@ function expandedAliasRequirement(requirement RequirementType, name ByteArray, d
 		boundSpellings.push(boundAssociatedTypeName(ownerName, under: under))
 	end 'eachAssociatedType'
 
-	let shown = try under.signatures.expandedInterfaceAliasDisplay(name, associatedTypeNames: under.ownerNames, boundSpellings: boundSpellings, declaringInterfaceName: under.ownerInterfaceName) otherwise return (requirement.clone(), display.clone())
+	let shown = try under.signatures.expandedInterfaceAliasDisplay(name, associatedTypeNames: under.ownerNames, boundSpellings: boundSpellings, declaringInterfaceName: under.ownerInterfaceName) otherwise return (requirement.clone(), display)
 	return (requirement.clone(), shown)
 end 'expandedAliasRequirement'
 
 function aliasExpansionScope(under RequirementSubstitution) returns AliasExpansionScope
 	if not under.signatures.interfaceDeclaresAlias(under.ownerInterfaceName) 'declaresNoAlias'
-		return sharedNoAliasExpansion
+		return AliasExpansionScope.none()
 	end 'declaresNoAlias'
 
 	var bound = RequirementTypeArray.create(under.ownerNames.count(), zeroed: false)
@@ -1998,7 +1984,7 @@ function unboundOwnerType(ownerName ByteArray, under RequirementSubstitution) re
 	return RequirementType.create(RequirementTypeIdentity.typeParameter(typeParamTokenFor(owner, paramName: ownerName)), brand: EmptySourceText)
 end 'unboundOwnerType'
 
-function boundAssociatedTypeName(name ByteArray, under RequirementSubstitution) returns ByteArray
+function boundAssociatedTypeName(name immutable ByteArray, under RequirementSubstitution) returns immutable ByteArray
 	let (_, spelling) = try associatedBinding(name, under: under) otherwise return name
 	return spelling
 end 'boundAssociatedTypeName'
@@ -2010,7 +1996,7 @@ end 'boundAssociatedTypeName'
 function substituteThrowsClause(clause ThrowsClause, under RequirementSubstitution) returns ThrowsClause
 	match clause 'declared'
 		none then return ThrowsClause.none
-		throwing(name) then return ThrowsClause.throwing(String.from(boundAssociatedTypeName(name.toByteArray(), under: under)))
+		throwing(name) then return ThrowsClause.throwing(String.from(boundAssociatedTypeName(freeze name.toByteArray(), under: under)))
 	end 'declared'
 end 'substituteThrowsClause'
 
@@ -2282,7 +2268,7 @@ end 'ThrowsClauseKind'
 // own file never named. The two callers each have a reader to give: a plain function's is its declaring
 // file, and an interface REQUIREMENT's is its declaring interface's file.
 export function classifyThrowsClauseName(project Project, signatures ProgramSignatures, name String, readerFilePath FilePath) returns ThrowsClauseKind
-	let key = name.toByteArray()
+	let key = freeze name.toByteArray()
 
 	if signatures.containsEnumFor(key, readerFilePath: readerFilePath) 'namesAConcreteError'
 		return ThrowsClauseKind.concreteError
@@ -2577,33 +2563,35 @@ end 'formatActualSignature'
 
 // The alias an impl parameter was DECLARED under — the signature's spelled column for a generic-instance
 // parameter (`Parser.paramDeclaredNamesOf`), empty where it was spelled inline or with a reserved name.
-function implParamSpelling(implSig FuncSignature, position ParamCount) returns ByteArray
+function implParamSpelling(implSig FuncSignature, position ParamCount) returns immutable ByteArray
 	let spelled = try implSig.paramDeclaredNames.get(position) otherwise panic("implParamSpelling: paramDeclaredNames.get OOB at {position} — a signature's param columns are built in lockstep")
 	return brandOfDeclaredSpelling(spelled)
 end 'implParamSpelling'
 
 // How an impl parameter prints in E3016: the alias it was declared under where it was, else the rendered
 // type. The message therefore quotes the same spelling `signatureMatches` compared as a brand.
-function implParamDisplay(project Project, implFunc IrFunction, implSig FuncSignature, position ParamCount, conformingType ByteArray, typeParamNames NameRoster, signatures ProgramSignatures) returns ByteArray
+function implParamDisplay(project Project, implFunc IrFunction, implSig FuncSignature, position ParamCount, conformingType ByteArray, typeParamNames NameRoster, signatures ProgramSignatures) returns immutable ByteArray
 	let implType = try implFunc.maxonParamTypes.get(position) otherwise panic("implParamDisplay: maxonParamTypes.get OOB at {position}")
 
 	if maxonTypeTag(implType) == ValueTypeTag.genericInstance 'maySpellABrand'
 		let spelled = implParamSpelling(implSig, position: position)
 
 		if not spelled.isEmpty() 'declaredThroughAnAlias'
-			return signatures.aliasIdentityDisplay(spelled).toByteArray()
+			return freeze signatures.aliasIdentityDisplay(spelled).toByteArray()
 		end 'declaredThroughAnAlias'
 	end 'maySpellABrand'
 
 	return renderDeclaredTypeName(implType, declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures)
 end 'implParamDisplay'
 
-function markedTypeDisplay(display ByteArray, marked bool) returns ByteArray
+function markedTypeDisplay(display immutable ByteArray, marked bool) returns immutable ByteArray
 	if not marked 'unmarked'
 		return display
 	end 'unmarked'
 
-	return "mutable {String.from(display)}".toByteArray()
+	let text = "mutable {String.from(display)}"
+
+	return freeze text.toByteArray()
 end 'markedTypeDisplay'
 
 function interfaceParamDisplays(method InterfaceMethodSig) returns NameRoster
@@ -2629,9 +2617,9 @@ function formatInterfaceMethodSignature(method InterfaceMethodSig, signatures Pr
 end 'formatInterfaceMethodSignature'
 
 // How an impl's RETURN prints in E3016: `implParamDisplay`'s rule at the return, and `void` for none.
-function implReturnDisplay(project Project, implFunc IrFunction, implSig FuncSignature, conformingType ByteArray, typeParamNames NameRoster, signatures ProgramSignatures) returns ByteArray
+function implReturnDisplay(project Project, implFunc IrFunction, implSig FuncSignature, conformingType ByteArray, typeParamNames NameRoster, signatures ProgramSignatures) returns immutable ByteArray
 	if not implSig.returnBrand.isEmpty() 'declaredThroughAnAlias'
-		return signatures.aliasIdentityDisplay(implSig.returnBrand).toByteArray()
+		return freeze signatures.aliasIdentityDisplay(implSig.returnBrand).toByteArray()
 	end 'declaredThroughAnAlias'
 
 	return match implFunc.maxonReturnType 'r'

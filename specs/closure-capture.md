@@ -884,12 +884,12 @@ end 'main'
 0
 ```
 
-<!-- test: closure-capture.error.a-bare-let-field-in-a-closure-is-read-only -->
-The same bare spelling over a `let` field: the field is read-only, so the closure may not call a writing method on it.
+<!-- test: closure-capture.a-bare-let-field-in-a-closure-is-written-like-self-dot-field -->
+The same bare spelling over a `let` field: the field is only never reassigned, so the closure writes the record it holds through the call, as it does over a `var` field.
 
 ```maxon
 typealias NameArray = Array with String
-typealias Action = function() returns bool
+typealias Action = function() returns bool mutates captures
 
 type Held
 	export var names as NameArray
@@ -926,16 +926,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:30:40: cannot pass a `let` field of 'held', which is read-only, to a function that writes parameter 'self' (in Registry.hold$closure_0); pass a clone()
+```exitcode
+0
 ```
 
-<!-- test: closure-capture.error.a-self-let-field-in-a-closure-is-read-only -->
-The spelled-out twin of the case above, refused identically.
+<!-- test: closure-capture.a-self-let-field-in-a-closure-is-written -->
+The spelled-out twin of the case above, accepted identically.
 
 ```maxon
 typealias NameArray = Array with String
-typealias Action = function() returns bool
+typealias Action = function() returns bool mutates captures
 
 type Held
 	export var names as NameArray
@@ -972,8 +972,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:30:45: cannot pass a value read out of a `let` field, which is read-only, to a function that writes parameter 'self' (in Registry.hold$closure_0); pass a clone()
+```exitcode
+0
 ```
 
 <!-- test: closure-capture.captured-generic-instance-method-and-field -->
@@ -3246,7 +3246,8 @@ error E3183: <fragment>:23:45: this closure captures 'self' and is stored into a
 ```
 
 <!-- test: closure-capture.error.a-closure-capturing-a-borrowed-field-stored-into-that-field -->
-A captured borrow of a field is held too: storing the closure into the borrowed record closes a cycle, and the store writes through a read-only `let`; the write is refused first.
+A captured borrow of a field is held too: storing the closure into the record the borrow names closes a cycle no drop can release, and the cycle check refuses the store.
+
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Thunk = function() returns Integer
@@ -3273,7 +3274,7 @@ type Counter
 
 	export function arm()
 		let held = self.inner
-		held.read = function() gives held.n
+		self.inner.read = function() gives held.n
 	end 'arm'
 end 'Counter'
 
@@ -3284,7 +3285,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:27:3: cannot write through 'held': 'held' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3183: <fragment>:27:21: this closure captures 'held' and is stored into a record 'held' holds, so 'held' would hold the closure and the closure would hold 'held', and neither would ever be released. Store it somewhere 'held' does not reach, or capture what the closure needs instead of 'held' itself
 ```
 
 <!-- test: closure-capture.a-closure-capturing-a-copy-stored-into-the-record-it-was-copied-from -->
@@ -3660,8 +3661,9 @@ end 'main'
 error E3102: <fragment>:20:2: use of moved value 'h': its ownership moved to the closure that captures it
 ```
 
-<!-- test: closure-capture.error.a-closure-writing-a-captured-parameter-writes-the-functions-parameter -->
-A parameter a closure captures is the caller's record, retained: a write through it in the closure's body is a write of the parameter, so a `let` handed to `bump` is refused.
+<!-- test: closure-capture.a-closure-writing-a-captured-parameter-writes-the-functions-parameter -->
+A parameter a closure captures is the caller's record, retained: a write through it in the closure's body is a write of the parameter, so the `let` handed to `bump` is written.
+
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -3690,12 +3692,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:24:10: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+```stdout
+00
+```
+```exitcode
+0
 ```
 
-<!-- test: closure-capture.error.a-captured-parameter-written-through-a-closure-handed-to-a-callee-or-nested-in-another -->
+<!-- test: closure-capture.a-captured-parameter-written-through-a-closure-handed-to-a-callee-or-nested-in-another -->
 The write happens wherever the closure is called, so a closure handed to a callee that calls it, and a closure written inside another closure, write the captured parameter alike.
+
 ```maxon
 typealias Count = int(0 to 1000)
 typealias Thunk = function() returns Count mutates captures
@@ -3735,9 +3741,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:34:10: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
-error E3159: <fragment>:35:10: cannot pass 'c', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+```stdout
+0000
+```
+```exitcode
+0
 ```
 
 <!-- test: closure-capture.a-closure-only-reading-a-captured-parameter-leaves-it-unwritten -->
@@ -3775,7 +3783,7 @@ end 'main'
 ```
 
 <!-- test: closure-capture.error.a-closure-writing-within-a-captured-parameter-writes-a-let-global -->
-A closure that writes the record a captured parameter's field holds writes the graph the parameter denotes, which a `let` global is refused by.
+A closure that writes the record a captured parameter's field holds writes the graph the parameter denotes, which a module `let` is refused by.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3815,7 +3823,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:33:10: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'o' (in main); pass a clone()
+error E3207: <fragment>:33:15: 'bump' writes 'o' (line 28: `let f = function() gives zero(o.inner)`); 'G' is immutable
 ```
 
 <!-- test: closure-capture.error.a-captured-parameter-written-within-by-a-closure-handed-to-a-callee-writes-a-let-global -->
@@ -3865,11 +3873,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:39:10: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'o' (in main); pass a clone()
+error E3207: <fragment>:39:15: 'bump' writes 'o' (line 34: `let f = function() gives zero(o.inner)`); 'G' is immutable
 ```
 
-<!-- test: closure-capture.error.a-closure-writing-within-a-captured-parameter-refuses-a-local-let -->
-A `let` is read-only all the way down, so a closure that writes inside the record a captured `let` holds is refused, as the same write in the body is.
+<!-- test: closure-capture.a-closure-writing-within-a-captured-parameter-writes-a-local-let -->
+A closure that writes inside the record a captured `let` holds writes it, as the same write in the body does.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3907,12 +3915,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:26:27: cannot pass a `let` field of 'o', which is read-only, to a function that writes parameter 'i' (in bump$closure_0); pass a clone()
+```stdout
+00
+```
+```exitcode
+0
 ```
 
-<!-- test: closure-capture.error.an-escaping-closure-that-writes-a-captured-parameter-keeps-it -->
-`arm` returns a closure that captures `b` and writes it, so the parameter outlives the call where something may write it, and the `let` read afterwards is refused at the call.
+<!-- test: closure-capture.an-escaping-closure-that-writes-a-captured-parameter-keeps-it -->
+`arm` returns a closure that captures `b` and writes it, so the parameter outlives the call; handing `arm` a `let` is accepted, and `main` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3943,12 +3954,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:24:10: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```stdout
+9
+```
+```exitcode
+0
 ```
 
-<!-- test: closure-capture.error.an-escaping-closure-that-only-reads-a-captured-parameter-keeps-it -->
-The closure stored in the module holder outlives `arm`, so it keeps every record it captures, though its body only reads `b`; handing it the `let` is refused at the call.
+<!-- test: closure-capture.an-escaping-closure-that-only-reads-a-captured-parameter-keeps-it -->
+The closure stored in the slot outlives `arm`, so it keeps every record it captures, though its body only reads `b`; handing it the `let` is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3982,12 +3996,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:28:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```stdout
+1 1
+```
+```exitcode
+0
 ```
 
-<!-- test: closure-capture.error.a-let-captured-by-an-escaping-closure-that-returns-it-is-refused -->
-The closure stored in the module holder hands back the record it captured, so `main` could write it through `x`; the escaping closure keeps `b`, and handing it the `let` is refused at the call.
+<!-- test: closure-capture.a-let-captured-by-an-escaping-closure-that-returns-it-is-accepted -->
+The closure stored in the slot hands back the record it captured, so `main` writes it through `x`; the escaping closure keeps `b`, and handing it the `let` is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4023,12 +4040,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:28:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
-<!-- test: closure-capture.error.a-let-captured-by-an-escaping-closure-read-through-another-function-is-refused -->
-The same closure called from `fetch`, so nothing in `main`'s body links `x` to `b`; the keep is decided where the `let` is handed over.
+<!-- test: closure-capture.a-let-captured-by-an-escaping-closure-read-through-another-function-is-accepted -->
+The same closure called from `fetch`, so nothing in `main`'s body links `x` to `b`; handing it the `let` is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4068,12 +4088,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:32:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
-<!-- test: closure-capture.error.a-parameter-kept-through-a-recursive-callee-beside-a-closure-is-refused -->
-`arm` captures `b` in an escaping closure and also hands it to `helper`, which pushes it into a module array; each keeps it, and the two functions calling each other changes nothing.
+<!-- test: closure-capture.a-parameter-kept-through-a-recursive-callee-beside-a-closure-is-accepted -->
+`arm` captures `b` in an escaping closure and also hands it to `helper`, which pushes it into an array; each keeps it, and the two functions calling each other changes nothing.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4120,8 +4143,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:39:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
 <!-- test: closure-capture.a-closure-in-a-returned-array-literal-runs-after-its-frame-died -->
@@ -4154,8 +4180,8 @@ end 'main'
 42
 ```
 
-<!-- test: closure-capture.error.a-writing-closure-in-a-returned-array-literal-refuses-a-let-argument -->
-The returned literal carries a closure that writes `b`, so handing `arm` the `let` is refused at the call.
+<!-- test: closure-capture.a-writing-closure-in-a-returned-array-literal-takes-a-let-argument -->
+The returned literal carries a closure that writes `b`; handing `arm` the `let` is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4186,12 +4212,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:25:11: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```stdout
+1 1
+```
+```exitcode
+0
 ```
 
-<!-- test: closure-capture.error.a-reading-closure-in-a-returned-array-literal-refuses-a-let-argument -->
-A closure in the returned literal keeps `b` as a closure returned bare does, whether it reads or writes it, so handing `arm` the `let` is refused at the call.
+<!-- test: closure-capture.a-reading-closure-in-a-returned-array-literal-takes-a-let-argument -->
+A closure in the returned literal keeps `b` as a closure returned bare does, whether it reads or writes it; handing `arm` the `let` is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -4217,8 +4246,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:20:11: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```stdout
+1 1
+```
+```exitcode
+0
 ```
 
 <!-- test: closure-capture.error.a-nested-array-literal-of-closures-pushed-into-what-they-capture -->

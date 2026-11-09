@@ -109,17 +109,53 @@ export enum StoreVerdict
 	pausedIntoMutable
 end 'StoreVerdict'
 
-function storeMismatchMessage(verdict StoreVerdict, fieldName String, valueType String, readOnlyReason String) returns String
+function storeMismatchMessage(verdict StoreVerdict, fieldName String, valueType String, readOnlyReason String, holderNoun String) returns String
 	return match verdict 'verdict'
-		mutableIntoImmutable gives "cannot store a mutable '{valueType}' into '{fieldName}', which holds an immutable '{valueType}'; freeze it, or store a copy"
+		mutableIntoImmutable gives "cannot store a mutable '{valueType}' into '{fieldName}', which holds an immutable '{valueType}'; freeze it"
 		isolatedIntoMutable gives "cannot store an isolated '{valueType}' into '{fieldName}', which holds a mutable '{valueType}'; `merge` it first"
-		immutableIntoMutable gives "cannot store an immutable '{valueType}' into '{fieldName}', which holds a mutable '{valueType}'; store a copy"
+		immutableIntoMutable gives "cannot store an immutable '{valueType}' into '{fieldName}', which holds a mutable '{valueType}'; declare the {holderNoun} `immutable {valueType}`"
 		pausedIntoMutable gives "cannot store a read-only '{valueType}' into '{fieldName}'{readOnlyReason}; store a copy"
 		fits or
 		recovers or
 		notRecoverable panic("storeMismatchMessage: a {verdict.name} verdict is not a mismatch")
 	end 'verdict'
 end 'storeMismatchMessage'
+
+let ItemPlacePrefix = "an item of "
+
+let ValuePlacePrefix = "a value of "
+
+let PayloadPlaceParts = 3
+
+module let ByteLiteralSubject = b"a byte-string literal"
+
+module function holderNounOf(place String) returns String
+	if place.startsWith(ItemPlacePrefix) 'anItem'
+		return "item"
+	end 'anItem'
+
+	if place.startsWith(ValuePlacePrefix) 'aValue'
+		return "value"
+	end 'aValue'
+
+	if place.startsWith("a ") or place.startsWith("an ") 'anElement'
+		return "element"
+	end 'anElement'
+
+	if place.split(".").count() == PayloadPlaceParts 'aPayload'
+		return "payload"
+	end 'aPayload'
+
+	return "field"
+end 'holderNounOf'
+
+module function subjectOfSpelledName(spelled ByteArray) returns String
+	if spelled.equals(ByteLiteralSubject) 'aLiteral'
+		return String.from(ByteLiteralSubject)
+	end 'aLiteral'
+
+	return "'{String.from(spelled)}'"
+end 'subjectOfSpelledName'
 
 module function qualifierSlot(qualifier GenericArgQualifier) returns ParamCapability throws AbsentError
 	match qualifier 'qualifier'
@@ -129,7 +165,7 @@ module function qualifierSlot(qualifier GenericArgQualifier) returns ParamCapabi
 	end 'qualifier'
 end 'qualifierSlot'
 
-module function storeRefusalOf(verdict StoreVerdict, fieldName String, valueType String, readOnlyReason String, subject String) returns (ErrorCode, String) throws AbsentError
+module function storeRefusalOf(verdict StoreVerdict, fieldName String, valueType String, readOnlyReason String, subject String, holderNoun String) returns (ErrorCode, String) throws AbsentError
 	match verdict 'verdict'
 		fits or
 		recovers then throw AbsentError.absent
@@ -137,7 +173,7 @@ module function storeRefusalOf(verdict StoreVerdict, fieldName String, valueType
 		mutableIntoImmutable or
 		isolatedIntoMutable or
 		immutableIntoMutable or
-		pausedIntoMutable then return (ErrorCode.semanticCapabilityMismatchAtStore, storeMismatchMessage(verdict, fieldName: fieldName, valueType: valueType, readOnlyReason: readOnlyReason))
+		pausedIntoMutable then return (ErrorCode.semanticCapabilityMismatchAtStore, storeMismatchMessage(verdict, fieldName: fieldName, valueType: valueType, readOnlyReason: readOnlyReason, holderNoun: holderNoun))
 	end 'verdict'
 end 'storeRefusalOf'
 
@@ -193,6 +229,10 @@ module function adaptedCapability(holder ValueCapability, slot ValueCapability) 
 
 	return slot
 end 'adaptedCapability'
+
+module function windowedReadCapability(window ValueCapability, slot ParamCapability) returns ValueCapability
+	return ValueCapability.immutable if slot == ParamCapability.immutable else window
+end 'windowedReadCapability'
 
 module function joinedCapability(first ValueCapability, second ValueCapability) returns ValueCapability
 	if first == second 'agree'

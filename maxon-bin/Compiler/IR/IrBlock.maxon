@@ -564,7 +564,7 @@ end 'isSite'
 // always has the lower index, because the enclosing splice is recorded before anything is copied
 // into it; `MxdbgReader` refuses a sidecar where that does not hold.
 export type InlineSite
-	export let calleeName as ByteArray
+	export let calleeName as immutable ByteArray
 	export var parent as InlineSiteRef
 	export let callSpan as SpanId
 	export let calleeSourceFile as FilePath
@@ -586,7 +586,7 @@ export type InlineSite
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns InlineSite throws LibraryCacheDamage
-		let f_calleeName = try reader.bytes()
+		let f_calleeName = freeze try reader.bytes()
 		let f_parent = try cacheReadInlineSiteRef(reader)
 		let f_callSpan = (try reader.boundedUnsigned(0, high: u32.max)) as SpanId
 		let f_calleeSourceFile = try reader.path()
@@ -628,7 +628,7 @@ end 'cacheReadInlineSiteArray'
 
 export type IrBlock
 	export let id as BlockId
-	export let label as ByteArray
+	export let label as immutable ByteArray
 	export var heat as BlockHeat
 	export var role as BlockRole
 
@@ -960,7 +960,7 @@ export type IrBlock
 
 	export static function cacheRead(reader LibraryCacheReader) returns IrBlock throws LibraryCacheDamage
 		let f_id = (try reader.unsigned()) as BlockId
-		let f_label = try reader.bytes()
+		let f_label = freeze try reader.bytes()
 		let f_heat = try cacheReadBlockHeat(reader)
 		let f_role = try cacheReadBlockRole(reader)
 		let f_inlineSite = try cacheReadInlineSiteRef(reader)

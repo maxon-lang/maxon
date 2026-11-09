@@ -963,9 +963,9 @@ end 'main'
 a holds: original label long enough for a heap record
 ```
 
-<!-- test: error.a-match-over-the-union-field-of-a-let-clone-is-read-only -->
-The refused twin of the case above: the match binding follows the binding its scrutinee is a field of, so over a
-`let` clone the payload is read-only and `rename` is refused, where over a `var` clone it is written.
+<!-- test: a-match-over-the-union-field-of-a-let-clone-is-written -->
+The twin of the case above: the match binding names the record the payload holds, and a `let` clone forbids only
+reassigning `b`, so over a `let` clone `rename` writes the payload as it does over a `var` clone.
 ```maxon
 type Item
 	export var label as String
@@ -1001,11 +1001,14 @@ function main() returns ExitCode
 		none then return 3
 	end 'mut'
 
-	return 0
+	match b.op 'read'
+		holds(it) then return it.label.byteLength() as ExitCode
+		none then return 4
+	end 'read'
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:32:21: cannot pass 'it', which is read-only (a `match` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```exitcode
+7
 ```
 
 <!-- test: clone-of-a-many-case-union-dispatches-every-tag -->

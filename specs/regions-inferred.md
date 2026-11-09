@@ -484,7 +484,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:19:10: 'rewrite' writes 'rows'; 'frozen' is immutable
+error E3207: <fragment>:19:10: 'rewrite' writes 'rows' (line 14: `first.text = "x"`); 'frozen' is immutable
 ```
 
 <!-- test: writer-through-a-returned-parameter-needs-a-mutable-argument -->
@@ -2898,7 +2898,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:16:21: cannot store an immutable 'Box' into 'held', which holds a mutable 'Box'; store a copy
+error E3196: <fragment>:16:21: cannot store an immutable 'Box' into 'Holder.held', which holds a mutable 'Box'; declare the field `immutable Box`
 ```
 
 <!-- test: frozen-argument-to-a-factory-parameter-that-stores-it-in-a-mutable-field-is-refused -->
@@ -2932,7 +2932,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:22:23: 'build' writes 'item' (line 16: `return Self{held: item}`); 'pinned' is immutable
+error E3197: <fragment>:23:2: cannot write 'n' through 'h.held', which is read-only
 ```
 
 <!-- test: frozen-argument-to-a-method-parameter-assigned-to-a-mutable-field-is-refused -->
@@ -3009,7 +3009,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:26:16: 'relay' writes 'thing' (it calls 'build', which writes 'item'); 'pinned' is immutable
+error E3197: <fragment>:27:2: cannot write 'n' through 'h.held', which is read-only
 ```
 
 <!-- test: frozen-argument-to-a-parameter-pushed-into-an-array-is-refused -->
@@ -3230,7 +3230,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:18:21: cannot store a mutable 'Box' into 'held', which holds an immutable 'Box'; freeze it, or store a copy
+error E3196: <fragment>:18:21: cannot store a mutable 'Box' into 'Wrong.held', which holds an immutable 'Box'; freeze it
 ```
 
 <!-- test: struct-literal-storing-a-parameter-into-an-isolated-field-is-refused -->
@@ -3268,7 +3268,7 @@ error E3200: <fragment>:16:21: 'item' is not isolated: only a clean call, a `swa
 ```
 
 <!-- test: frozen-value-stored-in-a-union-payload-is-refused -->
-A union payload is an ordinary mutable slot, so a frozen record cannot be built into one.
+A union payload is a mutable slot unless it is declared `immutable`, so a frozen record cannot be built into a plain one.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -3298,7 +3298,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:19:22: cannot store an immutable 'Box' into 'Slot.filled.box', which holds a mutable 'Box'; store a copy
+error E3196: <fragment>:19:22: cannot store an immutable 'Box' into 'Slot.filled.box', which holds a mutable 'Box'; declare the payload `immutable Box`
 ```
 
 <!-- test: frozen-argument-to-a-parameter-built-into-a-union-payload-is-refused -->
@@ -3416,7 +3416,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:21:18: cannot store a read-only 'Box' into 'box', as it joins immutable and mutable data; store a copy
+error E3196: <fragment>:21:18: cannot store a read-only 'Box' into 'Holder.box', as it joins immutable and mutable data; store a copy
 ```
 
 <!-- test: loop-store-of-a-variable-the-back-edge-assigns-frozen-data-into-a-tuple-literal -->
@@ -3592,7 +3592,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:33:7: 'bump' writes 'p'; 'frozen' is immutable
+error E3207: <fragment>:33:7: 'bump' writes 'p' (line 28: `h.item = c`); 'frozen' is immutable
 ```
 
 <!-- test: a-parameter-joined-with-local-data-and-pushed-is-mutable-only -->
@@ -3628,7 +3628,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:26:7: 'bump' writes 'p'; 'frozen' is immutable
+error E3207: <fragment>:26:7: 'bump' writes 'p' (line 21: `items.push(c)`); 'frozen' is immutable
 ```
 
 <!-- test: loop-store-of-a-variable-the-back-edge-assigns-a-parameter-pins-it-mutable-only -->
@@ -3665,7 +3665,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:27:7: 'edit' writes 'p'; 'pinned' is immutable
+error E3207: <fragment>:27:7: 'edit' writes 'p' (line 19: `i = i + 1`); 'pinned' is immutable
 ```
 
 <!-- test: a-parameter-returned-on-one-path-and-fresh-data-on-another-accepts-a-frozen-argument-for-reading -->
@@ -3859,13 +3859,14 @@ type Box
 	end 'create'
 end 'Box'
 
-function pick(p Box, spare Boxes) returns Box
+function pick(p Box) returns Box
+	var spare = Boxes.create(0)
 	return try spare.first() otherwise p
 end 'pick'
 
 function main() returns ExitCode
 	let frozen = freeze Box.create(7)
-	let r = pick(frozen, spare: Boxes.create(0))
+	let r = pick(frozen)
 	print("{r.n}\n")
 	return 0
 end 'main'
@@ -3970,7 +3971,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:24:7: 'bump' writes 'p'; 'frozen' is immutable
+error E3207: <fragment>:24:7: 'bump' writes 'p' (line 19: `c.n = 5`); 'frozen' is immutable
 ```
 
 <!-- test: a-parameter-joined-with-local-data-and-handed-to-a-writer-is-mutable-only -->
@@ -4224,7 +4225,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:25:13: 'bump' writes 'b'; 'frozen' is immutable
+error E3207: <fragment>:25:13: 'bump' writes 'b' (line 19: `c.n = 5`); 'frozen' is immutable
 ```
 
 <!-- test: a-loop-join-of-two-parameters-returned-is-read-only-for-frozen-arguments -->
@@ -4451,7 +4452,7 @@ end 'main'
 ```
 
 <!-- test: a-mixed-join-joined-with-immutable-data-is-not-written-through -->
-The result of `choose` may be `fixed`, so a mutable `p` does not make it writable.
+The result of `choose` may be `fixed`, so a mutable `p` does not make it writable: a result whose paths mix mutable and `immutable` data is read-only for the caller.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -4479,8 +4480,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3208: <fragment>:21:10: 'choose' returns 'p' or 'fixed'; they must both be mutable or both immutable here
-error E3197: <fragment>:22:2: cannot write 'n' through 'r', which is immutable
+error E3197: <fragment>:22:2: cannot write 'n' through 'r', which is read-only
 ```
 
 <!-- test: a-mixed-join-joined-with-immutable-data-is-read-only-for-frozen-arguments -->
@@ -4560,7 +4560,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:37:27: 'over' writes 'items' (line 18: `return Self{items: items}`); 'frozen' is immutable
+error E3207: <fragment>:38:2: 'bump' writes its receiver (line 23: `box.n = 5`); 'holder' is read-only
 ```
 
 <!-- test: a-holder-method-reaching-through-a-wrapper-is-refused-for-a-frozen-array -->
@@ -4612,7 +4612,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:41:27: 'over' writes 'items' (line 18: `return Self{items: items}`); 'frozen' is immutable
+error E3207: <fragment>:42:2: 'run' writes its receiver (it calls 'bump', which writes its receiver); 'holder' is read-only
 ```
 
 <!-- test: a-generic-call-that-may-yield-inside-modify-is-refused -->

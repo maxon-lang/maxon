@@ -3533,19 +3533,23 @@ type WasmFuncEmitter
 		return lines
 	end 'inlinePositionLines'
 
-	function renderInlinePosition(siteIndex ElementIndex) returns ByteArray
-		var lines = ByteArray.create(0)
-		var at = InlineSiteRef.site(siteIndex)
+	function renderInlinePosition(siteIndex ElementIndex) returns immutable ByteArray
+		var lines = ByteArray.create(0) as isolated ByteArray
 
-		while true 'chain'
-			match at 'level'
-				none then break 'chain'
-				site(index) then at = self.appendInlineSiteLine(lines, siteIndex: index)
-			end 'level'
-		end 'chain'
+		modify lines 'fill'
+			var at = InlineSiteRef.site(siteIndex)
 
-		self.frames.appendFrameLine(lines, name: self.func.name)
-		return lines
+			while true 'chain'
+				match at 'level'
+					none then break 'chain'
+					site(index) then at = self.appendInlineSiteLine(lines, siteIndex: index)
+				end 'level'
+			end 'chain'
+
+			self.frames.appendFrameLine(lines, name: self.func.name)
+		end 'fill'
+
+		return freeze lines
 	end 'renderInlinePosition'
 
 	function appendInlineSiteLine(lines ByteArray, siteIndex ElementIndex) returns InlineSiteRef

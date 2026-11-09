@@ -639,9 +639,10 @@ end 'main'
 42
 ```
 
-<!-- test: error.a-type-conformer-through-an-extension-writing-a-let-argument-is-refused -->
+<!-- test: a-type-conformer-through-an-extension-writing-a-let-argument-is-written -->
 The requirement's `mutable` reaches a `type` conformer that an extension declares, as it reaches one its own
-clause declares (`where-clauses.md`'s `witness-mutation-of-let-argument-refused`).
+clause declares (`where-clauses.md`'s `witness-mutation-of-let-argument-is-written`). A `let` forbids only
+reassigning `a`, so the push lands in the array it names and the read finds `9`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -674,6 +675,6 @@ function main() returns ExitCode
 	return try a.get(0) otherwise 55
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:29:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in main); pass a clone()
+```exitcode
+9
 ```

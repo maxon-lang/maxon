@@ -8,14 +8,16 @@ category: semantics
 
 ## Documentation
 
-Calling a receiver-writing method on a read-only (`let`) value is a compile-time error, `E3159`. A `let` is deeply read-only: nothing reachable through it may be written. The receiver-writing methods of the builtin containers are, exactly: `append` on a `String`, and `push`, `set`, `insert`, `append`, `reserve`, `resize`, `clear`, `pop` and `remove` on an `Array`. A method of a declared type — `Set` among them, since `stdlib/Set.maxon` declares it — is receiver-writing when its body writes `self`, and is refused on a `let` the same way: `let c = Counter.create(); c.bump()` is `E3159` for any user `type Counter` whose `bump` writes a field. Every method that only reads its receiver is legal on a `let`.
+Calling a receiver-writing method on a `let` value is legal: `let` forbids only reassigning the name, so the method writes the record the name denotes. The receiver-writing methods of the builtin containers are, exactly: `append` on a `String`, and `push`, `set`, `insert`, `append`, `reserve`, `resize`, `clear`, `pop` and `remove` on an `Array`. A method of a declared type — `Set` among them, since `stdlib/Set.maxon` declares it — is receiver-writing when its body writes `self`: `let c = Counter.create(); c.bump()` runs for any user `type Counter` whose `bump` writes a field. Every method that only reads its receiver is legal on any binding.
 
-A **parameter** is not a `let`: a parameter is a borrowed reference to the caller's record, so `dest.append(src)` inside a helper is ordinary Maxon, and the caller is refused at the call when it hands that parameter a `let` (`parameter-mutation.md`). A `let` that merely *aliases* a parameter is still a `let`, and is still refused.
+A module-level `let` is read-only data. A receiver-writing method on it, or on a field chain rooted at it, is refused: `E3207` for an `Array` method, `E3159` where the method writes a `String` field. A `let` bound to a compile-time constant is immutable image data for the same reason.
+
+A **parameter** is a borrowed reference to the caller's record, so `dest.append(src)` inside a helper is ordinary Maxon, and a caller may hand that parameter a `let` (`parameter-mutation.md`). A `let` that *aliases* a parameter names the same record.
 
 ## Tests
 
-<!-- test: push-on-let-array-error -->
-Calling `push` on a `let` array should produce a compile-time error.
+<!-- test: push-on-let-array-ok -->
+Calling `push` on a `let` array writes the array the name denotes; the `let` only forbids reassigning `arr`.
 
 ```maxon
 
@@ -25,11 +27,11 @@ typealias IntArray = Array with Integer
 function main() returns ExitCode
 	let arr = IntArray.create(0)
 	arr.push(42)
-	return 0
+	return arr.count()
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/immutable-method-call/push-on-let-array-error.maxon:8:6: cannot write through 'arr': 'arr' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+1
 ```
 
 <!-- test: append-on-let-string-error -->
@@ -44,7 +46,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/immutable-method-call/append-on-let-string-error.maxon:5:4: cannot pass 's', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E2013: <fragment>:5:4: 's' is a let and cannot be passed to the `mutable` parameter 'self'; bind it to a `var`
 ```
 
 <!-- test: append-on-string-parameter-ok -->
@@ -68,9 +70,8 @@ end 'main'
 4
 ```
 
-<!-- test: push-on-let-alias-of-parameter-error -->
-A `let` that merely ALIASES a parameter is still a `let`. The alias carries the parameter's own value,
-so a rule derived from that value rather than from the binding would wrongly accept this.
+<!-- test: push-on-let-alias-of-parameter-ok -->
+A `let` that ALIASES a parameter names the caller's record, so the push is seen through the caller's `v`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -87,13 +88,13 @@ function main() returns ExitCode
 	return grow(v) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/immutable-method-call/push-on-let-alias-of-parameter-error.maxon:7:4: cannot write through 'a': 'a' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+1
 ```
 
-<!-- test: insert-on-let-set-error -->
-A `Set` is a type the compiler COMPILES: `insert` is an ordinary declared method whose body writes `self`, so
-it writes the receiver, and a `let` receiver is refused exactly as it is for an `Array`.
+<!-- test: insert-on-let-set-ok -->
+A `Set` is a type the compiler COMPILES: `insert` is an ordinary declared method whose body writes `self`, and
+it writes the record a `let` receiver names.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -105,8 +106,8 @@ function main() returns ExitCode
 	return s.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/immutable-method-call/insert-on-let-set-error.maxon:7:4: cannot pass 's', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: insert-on-var-set-ok -->
@@ -126,8 +127,8 @@ end 'main'
 1
 ```
 
-<!-- test: remove-on-let-set-error -->
-The `remove` half of the same ruling: `remove` writes the set even when it answers false.
+<!-- test: remove-on-let-set-ok -->
+The `remove` half of the same ruling: `remove` is a write the `let` receiver takes even when it answers false.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -142,8 +143,8 @@ function main() returns ExitCode
 	return s.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/immutable-method-call/remove-on-let-set-error.maxon:7:15: cannot pass 's', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```exitcode
+0
 ```
 
 <!-- test: remove-on-var-set-ok -->
@@ -189,8 +190,8 @@ end 'main'
 0
 ```
 
-<!-- test: set-on-let-array-error -->
-Calling `set` on a `let` array should produce a compile-time error.
+<!-- test: set-on-let-array-ok -->
+Calling `set` on a `let` array writes the element.
 
 ```maxon
 
@@ -198,13 +199,13 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let arr = IntArray.create(0)
+	let arr = IntArray.create(1)
 	try arr.set(0, value: 99) otherwise panic("test invariant: set OOB")
-	return 0
+	return try arr.get(0) otherwise -1
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/immutable-method-call/set-on-let-array-error.maxon:8:10: cannot write through 'arr': 'arr' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+99
 ```
 
 <!-- test: read-on-let-array-ok -->
@@ -343,8 +344,8 @@ end 'main'
 4
 ```
 
-<!-- test: push-on-let-self-field-array-error -->
-A `let` FIELD refuses the write, blaming the field's own name.
+<!-- test: push-on-let-self-field-array-ok -->
+A `let` FIELD forbids only reassigning the field, so the array it holds may be pushed onto.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -372,28 +373,15 @@ function main() returns ExitCode
 	return b.size() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/immutable-method-call/push-on-let-self-field-array-error.maxon:13:9: cannot write through 'items': 'items' is read-only (a `let` field) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+1
 ```
 
-⭐⭐ **AND A CHAIN THROUGH A MODULE-LEVEL `let` REFUSES IT TOO, WHICH IS THE HALF NO DOOR COULD SEE.** The
-case above is a `let` FIELD reached from inside the type; this is a `let` GLOBAL reached through a field
-chain, where the receiver of the mutating call is the field's own record rather than the binding's.
-`SharedFacts.counts` is three tokens, so the bare-name test says nothing about it, and a chain test that asked
-only whether an enclosing `for` had locked the base would compile the write. When such a global's every field is
-image data the record is `.rdata`: the push reaches `__mm_cow_detach` and writes a page mapped read-only,
-which is a fault on x64 and, on wasm32-wasi, a silent rewrite of the constant.
-
-⛔ **THE RULE IS ASKED OF EVERY ROOT, A LOCAL `let` INCLUDED.** A `let` is deeply read-only, so after
-`let e = Facts.create()` both `e.counts.push(1)` and `e.counts.set(0, value: 9)` are writes through `e` and are
-refused (`error.push-through-a-field-chain-off-a-local-let`); the same chain off a `var` is legal
-(`push-through-a-field-chain-off-a-local-var-ok`).
-
-⚠ **A `self`-ROOTED CHAIN IS UNTOUCHED** — `self` is a parameter, a borrowed reference to the caller's
-record, so `self.items.push(v)` inside the type's own method stays legal; the CALL of that method on a `let`
-is what is refused, which `parameter-mutation:let-struct-with-array-field-to-mutating-method-error` pins.
-
 <!-- test: error.push-through-a-field-chain-off-a-module-let -->
+A chain through a module-level `let` reaches immutable image data: `SharedFacts.counts` is three tokens, so
+the receiver of the push is the field's own record rather than the binding. The push would write a page mapped
+read-only, which is a fault on x64 and, on wasm32-wasi, a silent rewrite of the constant.
+
 ```maxon
 typealias Count = int(0 to 1000)
 typealias CountArray = Array with Count
@@ -415,10 +403,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:16:21: cannot write through 'SharedFacts.counts': 'SharedFacts' is read-only (a module-level `let`) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3207: <fragment>:16:21: 'push' needs a writable receiver; 'counts' is immutable
 ```
 
-<!-- test: error.push-through-a-field-chain-off-a-local-let -->
+<!-- test: push-through-a-field-chain-off-a-local-let-ok -->
+The same chain off a local `let` writes the record the field holds, as off a `var`
+(`push-through-a-field-chain-off-a-local-var-ok`). A `self`-rooted chain is a parameter's, so `self.items.push(v)`
+inside the type's own method is legal on any receiver.
+
 ```maxon
 typealias Count = int(0 to 1000)
 typealias CountArray = Array with Count
@@ -438,8 +430,8 @@ function main() returns ExitCode
 	return facts.counts.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:15:15: cannot write through 'facts.counts': 'facts' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+1
 ```
 
 <!-- test: push-through-a-field-chain-off-a-local-var-ok -->
@@ -471,7 +463,9 @@ end 'main'
 <!-- test: let-record-written-through-a-returned-container -->
 ### Writing a `let` Array Through a Call That Returns It
 
-The receiver door asks of a call's result what it asks of the name the result may be.
+The result of `pass(a)` is the record `a` names, so the push lands in it.
+
+
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -486,12 +480,14 @@ function main() returns ExitCode
 	return a.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/immutable-method-call/let-record-written-through-a-returned-container.maxon:11:10: cannot write through 'pass(a)': 'a' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+1
 ```
 
-<!-- test: error.append-to-a-string-field-off-a-local-let -->
-A `String` field of a `let` holder is storage of the `let`'s record, so appending to it is refused.
+<!-- test: append-to-a-string-field-off-a-local-let -->
+A `String` field of a `let` holder is storage of the `let`'s record, so appending to it writes the record.
+
+
 ```maxon
 type Holder
 	export var name as String
@@ -508,8 +504,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:12:9: cannot pass 'h', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```stdout
+abXY
+```
+```exitcode
+0
 ```
 
 <!-- test: error.append-to-a-string-field-off-a-module-let -->

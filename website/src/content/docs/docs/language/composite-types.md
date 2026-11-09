@@ -32,7 +32,9 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- `var` fields can be written after construction; `let` fields cannot.
+- `var` fields can be reassigned after construction; `let` fields cannot (**E2013**, `'version' is a let field
+  and cannot be reassigned`). A `let` field's record can still be written through: `self.columns.push(x)` is
+  legal on a `let columns` array.
 - A field without a default names its type after `as` (`var x as Coord`); a field with a default takes its
   type from the default (see [Required Field Initialization](#required-field-initialization)). The type is an
   alias, `bool`, a type, or another named type — a bare `int` or `float` is refused.
@@ -189,8 +191,8 @@ belongs in a local `var` passed to a `mutable` parameter, in a field of a value 
   are **E2012**.
 - A `static let` whose value is decided entirely at compile time — a scalar or byte-string literal, an array
   literal of integers, an empty container, a payload-free union case, or a record whose every field is one of
-  these — is **image data**: its bytes are laid down in read-only memory and nothing creates it at run time.
-  Any other `static let` is built before `main`.
+  these — is **image data**: its bytes are laid down in read-only memory and nothing creates it at run time, and
+  it is `immutable` (see [Constant Data](/docs/language/regions/#constant-data)). Any other `static let` is built before `main`.
 - A static declared in `stdlib/` is kept only when reachable code reads it; one nothing reads is not emitted,
   and neither is its initializer.
 - A static field is a top-level binding whose name carries the type as a qualifier, so what its initializer

@@ -49,7 +49,7 @@ export union LibraryCacheDamage implements Error
 end 'LibraryCacheDamage'
 
 export type LibraryCacheWriter
-	var buffer as ByteArray
+	var buffer as isolated ByteArray
 	var refusal as bool
 
 	export static function create() returns LibraryCacheWriter
@@ -114,19 +114,21 @@ export type LibraryCacheWriter
 		self.buffer.append(value)
 	end 'raw'
 
-	export function payload() returns ByteArray
-		var taken = self.buffer
-		self.buffer = ByteArray.create(0)
-		return taken
+	export function payload() returns immutable ByteArray
+		return freeze swap self.buffer with ByteArray.create(0)
 	end 'payload'
 
-	export function sealed() returns ByteArray
-		var image = LibraryCacheMagic.toByteArray()
-		image.append(headerWordBytes(CacheSchemaFingerprint as CacheWord))
-		image.append(headerWordBytes(mixBytes(Hasher.empty(), bytes: self.buffer) as CacheWord))
-		image.append(self.buffer)
+	export function sealed() returns immutable ByteArray
+		var image = LibraryCacheMagic.toByteArray() as isolated ByteArray
+		var body = swap self.buffer with ByteArray.create(0)
 
-		return image
+		modify image 'fill'
+			image.append(headerWordBytes(CacheSchemaFingerprint as CacheWord))
+			image.append(headerWordBytes(mixBytes(Hasher.empty(), bytes: body) as CacheWord))
+			image.append(body)
+		end 'fill'
+
+		return freeze image
 	end 'sealed'
 end 'LibraryCacheWriter'
 
@@ -154,12 +156,12 @@ end 'headerWordAt'
 typealias ReaderPathMap = Map with (ByteArray, FilePath)
 
 export type LibraryCacheReader
-	let image as ByteArray
+	let image as immutable ByteArray
 	let limit as ElementIndex
 	var position as ElementIndex
 	var paths as ReaderPathMap
 
-	export static function open(image ByteArray) returns LibraryCacheReader throws LibraryCacheDamage
+	export static function open(image immutable ByteArray) returns LibraryCacheReader throws LibraryCacheDamage
 		let magicCount = LibraryCacheMagic.byteLength()
 		let headerCount = magicCount + HeaderWordCount * HeaderWordByteCount
 
@@ -187,7 +189,7 @@ export type LibraryCacheReader
 		return Self{image: image, limit: image.count(), position: headerCount, paths: ReaderPathMap.create()}
 	end 'open'
 
-	export static function over(image ByteArray, start ElementIndex, endIndex ElementIndex) returns LibraryCacheReader
+	export static function over(image immutable ByteArray, start ElementIndex, endIndex ElementIndex) returns LibraryCacheReader
 		return Self{image: image, limit: endIndex, position: start, paths: ReaderPathMap.create()}
 	end 'over'
 
@@ -206,8 +208,8 @@ export type LibraryCacheReader
 		return self.position
 	end 'offset'
 
-	function remainingBytes() returns ByteArray
-		return try self.image.slice(self.position, endIndex: self.limit) otherwise panic("LibraryCacheReader.remainingBytes: {self.position} to {self.limit} lies outside the {self.image.count()} bytes the reader was opened over")
+	function remainingBytes() returns immutable ByteArray
+		return freeze try self.image.slice(self.position, endIndex: self.limit) otherwise panic("LibraryCacheReader.remainingBytes: {self.position} to {self.limit} lies outside the {self.image.count()} bytes the reader was opened over")
 	end 'remainingBytes'
 
 	export function unsigned() returns CacheUnsigned throws LibraryCacheDamage
@@ -285,7 +287,7 @@ export type LibraryCacheReader
 		end 'flag'
 	end 'flag'
 
-	export function bytes() returns ByteArray throws LibraryCacheDamage
+	export function bytes() returns immutable ByteArray throws LibraryCacheDamage
 		let count = try self.unsigned()
 		let start = self.position
 
@@ -299,7 +301,7 @@ export type LibraryCacheReader
 
 		self.position = start + (count as ElementIndex)
 
-		return try self.image.slice(start, endIndex: self.position) otherwise throw LibraryCacheDamage.truncated
+		return freeze try self.image.slice(start, endIndex: self.position) otherwise throw LibraryCacheDamage.truncated
 	end 'bytes'
 
 	export function text() returns String throws LibraryCacheDamage
@@ -311,7 +313,7 @@ export type LibraryCacheReader
 	end 'real'
 
 	export function path() returns FilePath throws LibraryCacheDamage
-		let spelled = try self.bytes()
+		let spelled = freeze try self.bytes()
 
 		if let known = try self.paths.get(spelled) 'seenBefore'
 			return known
@@ -363,6 +365,7 @@ type PackRowKey implements Equatable
 end 'PackRowKey'
 
 typealias PackRowKeyArray = Array with PackRowKey
+typealias PackSectionArray = Array with immutable ByteArray
 
 function rowPositionIn(rows PackRowKeyArray, key PackRowKey) returns ElementIndex throws LibraryEntryMiss
 	for (iter, row) in rows.withIterator() 'eachRow'
@@ -378,10 +381,10 @@ end 'rowPositionIn'
 // the cost of a load on Windows.
 export type LibraryPackBuilder
 	var rows as PackRowKeyArray
-	var sections as ByteBlobArray
+	var sections as PackSectionArray
 
 	export static function create() returns LibraryPackBuilder
-		return Self{rows: PackRowKeyArray.create(0), sections: ByteBlobArray.create(0)}
+		return Self{rows: PackRowKeyArray.create(0), sections: PackSectionArray.create(0)}
 	end 'create'
 
 	export function add(first HashDigest, second HashDigest, third HashDigest, payload ByteArray)
@@ -414,7 +417,7 @@ export type LibraryPackBuilder
 		return found
 	end 'countInGroupOf'
 
-	export function sealed() returns ByteArray
+	export function sealed() returns immutable ByteArray
 		var writer = LibraryCacheWriter.create()
 		writer.unsigned(self.rows.count() as CacheUnsigned)
 
@@ -435,12 +438,12 @@ export type LibraryPackBuilder
 end 'LibraryPackBuilder'
 
 export type LibraryPack
-	let image as ByteArray
+	let image as immutable ByteArray
 	let rows as PackRowKeyArray
 	let starts as PackOffsetArray
 	let ends as PackOffsetArray
 
-	export static function open(image ByteArray) returns LibraryPack throws LibraryCacheDamage
+	export static function open(image immutable ByteArray) returns LibraryPack throws LibraryCacheDamage
 		var reader = try LibraryCacheReader.open(image)
 		let count = try reader.count()
 		var rows = PackRowKeyArray.create(count, zeroed: false)

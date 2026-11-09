@@ -1070,16 +1070,16 @@ end 'main'
 error E3005: <fragment>:25:17: Operator '<' requires type parameter 'T' to be constrained with 'where T is Comparable'
 ```
 
-<!-- test: witness-mutation-of-let-argument-refused -->
-⭐⭐ **E3159 REACHES THE GENERIC ROUTE THROUGH THE REQUIREMENT'S DECLARATION.**
+<!-- test: witness-mutation-of-let-argument-is-written -->
+⭐⭐ **THE WRITE REACHES THE GENERIC ROUTE THROUGH THE REQUIREMENT'S DECLARATION.**
 `Box.run(dest)` forwards `dest` into `self.item.grow(dest)`, which names no callee — the body is compiled ONCE
 against the opaque `T` and the jump goes through a witness table. What it DOES name is a REQUIREMENT, and
 `Grower.grow` declares its `dest` `mutable` (every conformer spells it the same), so `Box.run` writes its
-`dest`, therefore `b.run(a)` over a `let`-bound array is refused.
+`dest`. A `let` forbids only reassigning `a`, and an array is written in place and never rebound, so
+`b.run(a)` over a `let`-bound array pushes into the array `a` names and the read finds `9`.
 
-⚠ **THE TWO NON-GENERIC SPELLINGS OF THE SAME PUSH ARE REFUSED TOO** —
-a free `grow(a)` and an interface-method `p.grow(a)` both answer this diagnostic. This case is the third
-route to it, and the one that, unchecked, would compile clean and silently push into an immutable array.
+⚠ **THE TWO NON-GENERIC SPELLINGS OF THE SAME PUSH ARE ACCEPTED TOO** —
+a free `grow(a)` and an interface-method `p.grow(a)` write the same array. This case is the third route to it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -1117,13 +1117,13 @@ function main() returns ExitCode
 	return try a.get(0) otherwise 55
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:34:4: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in main); pass a clone()
+```exitcode
+9
 ```
 
 <!-- test: witness-mutation-of-var-argument-allowed -->
-⭐ **THE FIRST CONTROL FOR THE REFUSAL ABOVE, AND THE ONE THAT MATTERS: THE SAME PROGRAM WITH `var a`.**
-E3159 is about the BINDING, never about the route — a refusal that fired on the dispatch rather than on the
+⭐ **THE TWIN OF THE CASE ABOVE, AND THE ONE THAT MATTERS: THE SAME PROGRAM WITH `var a`.**
+The write reaches the array the BINDING names, whatever the route — a refusal that fired on the dispatch rather than on the
 subject would take this program with it, and nothing else in this file would notice. Answers 9: the push
 happened, through the witness table, into an array the program declared mutable.
 ```maxon
@@ -2468,7 +2468,7 @@ typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
 		var m = MyKeyMap.create()
-		try m.insert(MyKey.create(1), value: 42) otherwise ignore
+		try m.insert(freeze MyKey.create(1), value: 42) otherwise ignore
 		return m.count()
 end 'main'
 ```

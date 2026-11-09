@@ -560,7 +560,7 @@ type Holder
 
 	static let origin = Holder{step: (7, 9)}
 
-	static function get() returns Holder
+	static function get() returns immutable Holder
 		return Holder.origin
 	end 'get'
 end 'Holder'

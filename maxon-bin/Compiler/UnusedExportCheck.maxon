@@ -72,7 +72,7 @@ type TrackedDecl
 
 	// The key a reference is matched against — a function's compiled name, a type's name, or a binding's
 	// name. NOT the display spelling: `displayName` is what the message prints.
-	export let key as ByteArray
+	export let key as immutable ByteArray
 	export let displayName as String
 
 	// The word the message calls this declaration: "function", "type", "typealias", "constant", "variable".
@@ -90,8 +90,8 @@ type TrackedDecl
 		return Self{kind: kind, key: key, displayName: displayName, noun: noun, visibility: visibility, declFile: declFile, nameLine: nameLine, nameColumn: nameColumn, sawOutsideFile: false, sawOutsideModule: false, isAlias: isAlias}
 	end 'create'
 
-	function spelling() returns ByteArray
-		return unqualifiedMemberOf(self.displayName.toByteArray())
+	function spelling() returns immutable ByteArray
+		return unqualifiedMemberOf(freeze self.displayName.toByteArray())
 	end 'spelling'
 
 	function isVisibleFrom(reader AuditedFile) returns bool
@@ -442,7 +442,7 @@ function entryPointNamesOf(project Project, userFiles FilePathArray) returns Ent
 		let declared = try taskNamesIn(entry.content) otherwise continue
 
 		for task in declared 'eachTask'
-			names.insert(task.toByteArray())
+			names.insert(freeze task.toByteArray())
 		end 'eachTask'
 	end 'eachFile'
 
@@ -691,7 +691,7 @@ end 'noteBodyReferences'
 // and `throwsClauseName` already answers "is there one?" by throwing rather than by a second predicate.
 function noteThrowsType(func IrFunction, signatures ProgramSignatures, tracked TrackedDecls, reader AuditedFile)
 	let errorName = try throwsClauseName(func.throwsTypeName) otherwise return
-	noteTypeNameDenoting(signatures, tracked: tracked, name: errorName.toByteArray(), denotation: Denotation.readIn(reader), reader: reader)
+	noteTypeNameDenoting(signatures, tracked: tracked, name: freeze errorName.toByteArray(), denotation: Denotation.readIn(reader), reader: reader)
 end 'noteThrowsType'
 
 // ⭐⭐ **CALLING A FUNCTION USES ITS DECLARED ERROR TYPE, AND THE CALLER'S FILE IS WHERE THAT USE HAPPENS.**
@@ -708,7 +708,7 @@ end 'noteThrowsType'
 // receives a union value and never opens it.
 function noteCalleeSignature(signatures ProgramSignatures, tracked TrackedDecls, callee ByteArray, reader AuditedFile)
 	let errorName = try throwsClauseName(signatures.throwsOf(callee)) otherwise return
-	noteTypeNameDenoting(signatures, tracked: tracked, name: errorName.toByteArray(), denotation: Denotation.readIn(reader), reader: reader)
+	noteTypeNameDenoting(signatures, tracked: tracked, name: freeze errorName.toByteArray(), denotation: Denotation.readIn(reader), reader: reader)
 end 'noteCalleeSignature'
 
 function noteOpReferences(signatures ProgramSignatures, tracked TrackedDecls, op MaxonOp, reader AuditedFile)
@@ -1217,7 +1217,7 @@ function reachedSignatureDemands(project Project, tracked TrackedDecls) returns 
 	while next < widened.count() 'untilNoCreditWidensAnOwner'
 		let owner = (try widened.get(next) otherwise panic("reachedSignatureDemands: widened.get OOB at {next} inside its own count")).typeName
 		next = next + 1
-		var waiting = try awaiting.get(owner) otherwise continue
+		let waiting = try awaiting.get(owner) otherwise continue
 		var stillWaiting = SignatureTypeDemandArray.create(0)
 
 		for demand in waiting 'eachWaiting'
@@ -1228,7 +1228,7 @@ function reachedSignatureDemands(project Project, tracked TrackedDecls) returns 
 			end 'itsOwnerIsStillShort'
 		end 'eachWaiting'
 
-		awaiting.upsert(owner.clone(), value: stillWaiting)
+		awaiting.upsert(owner, value: stillWaiting)
 	end 'untilNoCreditWidensAnOwner'
 
 	return demanded
@@ -1249,7 +1249,7 @@ end 'creditDemand'
 
 union DemandingOwner
 	none
-	named(let name ByteArray)
+	named(let name immutable ByteArray)
 end 'DemandingOwner'
 
 function demandingOwnerOf(demand SignatureTypeDemand) returns DemandingOwner
@@ -1285,7 +1285,7 @@ function awaitCreditOf(owner ByteArray, demand SignatureTypeDemand, awaiting Dem
 
 	var waiting = try awaiting.get(owner) otherwise SignatureTypeDemandArray.create(0)
 	waiting.push(demand)
-	awaiting.upsert(owner.clone(), value: waiting)
+	awaiting.upsert(owner, value: waiting)
 end 'awaitCreditOf'
 
 function ownerIsCredited(tracked TrackedDecls, demand SignatureTypeDemand, owner ByteArray, demanded DemandedTierMap) returns bool
@@ -1322,7 +1322,7 @@ function demandIsReached(tracked TrackedDecls, demand SignatureTypeDemand) retur
 	end 'split'
 end 'demandIsReached'
 
-function ownerOfMemberDemand(demand SignatureTypeDemand) returns ByteArray
+function ownerOfMemberDemand(demand SignatureTypeDemand) returns immutable ByteArray
 	return match splitQualifiedName(demand.demandingName) 'split'
 		parts(owner, _) gives owner
 		default panic("ownerOfMemberDemand: the {demand.demandingKind.name} '{String.from(demand.demandingName)}' carries no owner — `memberSubject` names every field and union case 'Owner.member'")

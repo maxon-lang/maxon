@@ -24,17 +24,13 @@ end 'ChainStanding'
 module type ChainType
 	export let kind as TypeDeclKind
 	export let declFilePath as FilePath
-	export let name as ByteArray
-	export let written as ByteArray
+	export let name as immutable ByteArray
+	export let written as immutable ByteArray
 	export let standing as ChainStanding
 
 	static function create(kind TypeDeclKind, declFilePath FilePath, name ByteArray, written ByteArray, standing ChainStanding) returns ChainType
 		return Self{kind: kind, declFilePath: declFilePath, name: name, written: written, standing: standing}
 	end 'create'
-
-	export function nominalNameOr(spelling ByteArray) returns ByteArray
-		return spelling if isTypeAliasDecl(self.kind) else self.name
-	end 'nominalNameOr'
 
 	export function isNameable() returns bool
 		return match self.standing 'standing'
@@ -44,13 +40,17 @@ module type ChainType
 	end 'isNameable'
 end 'ChainType'
 
+export function nominalNameOr(kind TypeDeclKind, name immutable ByteArray, spelling immutable ByteArray) returns immutable ByteArray
+	return spelling if isTypeAliasDecl(kind) else name
+end 'nominalNameOr'
+
 module union ChainResolution
 	unqualified
 	value
 	declaredType(let declaration ChainType, consumed ElementIndex)
-	ambiguous(let written ByteArray, let candidates StringArray)
-	declaredFunction(let callee ByteArray, let written ByteArray)
-	nothing(let qualifier ByteArray)
+	ambiguous(let written immutable ByteArray, let candidates StringArray)
+	declaredFunction(let callee immutable ByteArray, let written immutable ByteArray)
+	nothing(let qualifier immutable ByteArray)
 end 'ChainResolution'
 
 // Shared because a union value is a heap object even when payload-free, and `resolveChain` answers at
@@ -100,12 +100,12 @@ module function chainSegmentsAt(tokens TokenArray, at ElementIndex) returns Elem
 	return segments
 end 'chainSegmentsAt'
 
-module function chainMemberAt(tokens TokenArray, at ElementIndex, segment ElementIndex) returns ByteArray
+module function chainMemberAt(tokens TokenArray, at ElementIndex, segment ElementIndex) returns immutable ByteArray
 	let member = try tokens.get(at + segment * TokensPerQualifierSegment) otherwise panic("chainMemberAt: tokens.get OOB for segment {segment}, which `chainContinuesAt` just found")
 	return member.value
 end 'chainMemberAt'
 
-module function chainSpellingAt(tokens TokenArray, at ElementIndex, segments ElementIndex) returns ByteArray
+module function chainSpellingAt(tokens TokenArray, at ElementIndex, segments ElementIndex) returns immutable ByteArray
 	let head = (try tokens.get(at) otherwise panic("chainSpellingAt: tokens.get OOB at {at}, the chain's head")).value
 
 	if segments == 0 'justTheHead'
@@ -167,7 +167,7 @@ module function resolveChain(tokens TokenArray, at ElementIndex, signatures Prog
 	// function below when the type declares no such member
 	// (`namespace-qualified-resolution/uncontested-free-function-in-a-type-named-directory`).
 	while consumed > 0 and consumed >= shortest and not headIsNominal 'eachLongerSpellingFirst'
-		let written = try qualifier.slice(0, endIndex: spellingEnd) otherwise panic("resolveChain: the spelling end {spellingEnd} left the {qualifier.count()}-byte qualifier it only ever shrinks from")
+		let written = freeze try qualifier.slice(0, endIndex: spellingEnd) otherwise panic("resolveChain: the spelling end {spellingEnd} left the {qualifier.count()}-byte qualifier it only ever shrinks from")
 		let looked = ownerOnlyWhenPartial(lookupQualifiedType(signatures, written: written, readerFilePath: readerFilePath), partial: use == ChainUse.typeOrMemberType and consumed < qualifierSegments)
 
 		match looked 'lookup'
@@ -261,7 +261,7 @@ module function lookupQualifiedType(signatures ProgramSignatures, written ByteAr
 	end 'claims'
 end 'lookupQualifiedType'
 
-module function spelledTypeName(signatures ProgramSignatures, written ByteArray, readerFilePath FilePath) returns ByteArray
+module function spelledTypeName(signatures ProgramSignatures, written ByteArray, readerFilePath FilePath) returns immutable ByteArray
 	return match lookupQualifiedType(signatures, written: written, readerFilePath: readerFilePath) 'lookup'
 		found(declaration) gives declaration.name
 		ambiguous or

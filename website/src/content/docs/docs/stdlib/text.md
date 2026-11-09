@@ -124,9 +124,9 @@ Output: `olléh`.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `trim(chars CharacterSet = CharacterSet.whitespacesAndNewlines())` | `String` | Remove characters in `chars` from both ends; by default Unicode whitespace and newlines. |
-| `trimStart(chars CharacterSet = CharacterSet.whitespacesAndNewlines())` | `String` | From the start only. |
-| `trimEnd(chars CharacterSet = CharacterSet.whitespacesAndNewlines())` | `String` | From the end only. |
+| `trim(chars CharacterSet = CharacterSet.whitespacesAndNewlines)` | `String` | Remove characters in `chars` from both ends; by default Unicode whitespace and newlines. |
+| `trimStart(chars CharacterSet = CharacterSet.whitespacesAndNewlines)` | `String` | From the start only. |
+| `trimEnd(chars CharacterSet = CharacterSet.whitespacesAndNewlines)` | `String` | From the end only. |
 
 Trimming walks grapheme clusters, so
 `"\r\n"` is one unit: a set holding `'\r'` but not `"\r\n"` trims neither.
@@ -267,22 +267,23 @@ Output: `true true false`.
 ## CharacterSet
 
 A `CharacterSet` is a set of characters defined by Unicode general categories, explicit members, or both.
-It is what the `String` trimming methods take.
+It is what the `String` trimming methods take. The presets below are `public static let` constants: constant
+data, read as `CharacterSet.letters` with no call. `from` builds a set of exactly the characters given.
 
-| Factory | Contents |
-|---------|----------|
-| `CharacterSet.whitespaces()` | Space separators (Zs) and tab — no newlines |
-| `CharacterSet.newlines()` | LF, CR, CRLF, VT, FF, NEL, line and paragraph separators |
-| `CharacterSet.whitespacesAndNewlines()` | Both of the above |
-| `CharacterSet.decimalDigits()` | Decimal digits (Nd) |
-| `CharacterSet.letters()` | Letters and marks (L\*, M\*) |
-| `CharacterSet.lowercaseLetters()` | Lowercase letters (Ll) |
-| `CharacterSet.uppercaseLetters()` | Uppercase and titlecase letters (Lu, Lt) |
-| `CharacterSet.alphanumerics()` | Letters, marks and numbers (L\*, M\*, N\*) |
-| `CharacterSet.punctuation()` | Punctuation (P\*) |
-| `CharacterSet.symbols()` | Symbols (S\*) |
-| `CharacterSet.controlCharacters()` | Control and format characters (Cc, Cf) |
-| `CharacterSet.from(chars CharSet)` | Exactly the characters given; `CharSet` is `Set with Character` |
+| Preset | Contents |
+|--------|----------|
+| `CharacterSet.whitespaces` | Space separators (Zs) and tab — no newlines |
+| `CharacterSet.newlines` | LF, CR, CRLF, VT, FF, NEL, line and paragraph separators |
+| `CharacterSet.whitespacesAndNewlines` | Both of the above |
+| `CharacterSet.decimalDigits` | Decimal digits (Nd) |
+| `CharacterSet.letters` | Letters and marks (L\*, M\*) |
+| `CharacterSet.lowercaseLetters` | Lowercase letters (Ll) |
+| `CharacterSet.uppercaseLetters` | Uppercase and titlecase letters (Lu, Lt) |
+| `CharacterSet.alphanumerics` | Letters, marks and numbers (L\*, M\*, N\*) |
+| `CharacterSet.punctuation` | Punctuation (P\*) |
+| `CharacterSet.symbols` | Symbols (S\*) |
+| `CharacterSet.controlCharacters` | Control and format characters (Cc, Cf) |
+| `CharacterSet.from(chars CharSet)` | A function, not a preset: exactly the characters given; `CharSet` is `Set with Character` |
 
 | Member | Returns | Description |
 |--------|---------|-------------|
@@ -297,8 +298,8 @@ function main() returns ExitCode
 	members.insert('y')
 	let xy = CharacterSet.from(members)
 
-	print("[{"xyhixy".trim(xy)}] [{"123abc456".trim(CharacterSet.decimalDigits())}]\n")
-	print("{CharacterSet.symbols().contains('$')} {CharacterSet.lowercaseLetters().contains('ß')}\n")
+	print("[{"xyhixy".trim(xy)}] [{"123abc456".trim(CharacterSet.decimalDigits)}]\n")
+	print("{CharacterSet.symbols.contains('$')} {CharacterSet.lowercaseLetters.contains('ß')}\n")
 	return 0
 end 'main'
 ```

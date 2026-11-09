@@ -1190,11 +1190,10 @@ end 'main'
 44 1
 ```
 
-<!-- test: let-receiver-refuses-mutating-methods -->
-### A `let` receiver refuses a method that writes its own fields
-A `let` is deeply read-only, so a type's own methods that write `self` are refused on it, as is a write
-through one of its fields (`self-keyword.md:self-with-params` pins the field-store door,
-`parameter-mutation:let-struct-with-array-field-to-mutating-method-error` the container-method one).
+<!-- test: let-receiver-takes-mutating-methods -->
+### A `let` receiver takes a method that writes its own fields
+A `let` is only a name that is never reassigned, so a type's own methods that write `self` run on it, and the record it names reads the writes.
+
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1224,9 +1223,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/borrow-liveness/let-receiver-refuses-mutating-methods.maxon:24:4: cannot pass 'b', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
-error E3159: specs/borrow-liveness/let-receiver-refuses-mutating-methods.maxon:25:4: cannot pass 'b', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```stdout
+42 0
+```
+```exitcode
+0
 ```
 
 <!-- test: var-receiver-takes-mutating-methods -->
@@ -4166,11 +4167,11 @@ type Holder
 	export var inner as immutable Inner
 
 	static function create(text String) returns Self
-		return Self{inner: freeze Inner.create(text)}
+		return Self{inner: Inner.create(text)}
 	end 'create'
 
 	function reset() returns String
-		self.inner = freeze Inner.create("replacement {7} padded out long enough for the heap")
+		self.inner = Inner.create("replacement {7} padded out long enough for the heap")
 		return "second {5} padded out long enough for the heap"
 	end 'reset'
 end 'Holder'
@@ -4317,8 +4318,9 @@ end 'main'
 t.1=99 shared.1=2
 ```
 
-<!-- test: a-let-field-array-through-a-merge-into-a-writing-callee-is-refused -->
-### A `let` field's array handed through a merge to a callee that writes it is refused, as the bare read is
+<!-- test: a-let-field-array-through-a-merge-into-a-writing-callee-is-written -->
+### A `let` field's array handed through a merge to a callee that writes it is written, as the bare read is
+
 ```maxon
 typealias Count = int(0 to 1000)
 typealias CountArray = Array with Count
@@ -4344,12 +4346,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:21:2: cannot pass 'h', which is read-only (a `let` binding), to a function that writes parameter 'a' (in main); pass a clone()
+```stdout
+2
+```
+```exitcode
+0
 ```
 
-<!-- test: a-let-fields-record-merged-into-a-var-is-not-writable -->
-### A `let` field's record merged into a `var` is not a writable name for it
+<!-- test: a-let-fields-record-merged-into-a-var-is-writable -->
+### A `let` field's record merged into a `var` is a writable name for it
+
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -4382,8 +4388,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:27:6: cannot assign a value, which may share storage with a `let` field, to mutable binding 't'; use 'let' instead of 'var', or use clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
 <!-- test: a-module-let-fields-record-returned-through-a-merge-is-not-writable -->
@@ -4426,11 +4435,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:32:6: cannot assign a value, which may share storage with a `let` field, to mutable binding 'r'; use 'let' instead of 'var', or use clone()
+error E3159: <fragment>:33:2: cannot write through 'r': the result of 'pick', which may share storage with a module-level `let`, is read-only and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
-<!-- test: a-let-fields-record-returned-through-a-merge-is-not-writable -->
-### A `let` field's record returned through a merge is not writable by the caller
+<!-- test: a-let-fields-record-returned-through-a-merge-is-writable-by-the-caller -->
+### A `let` field's record returned through a merge is writable by the caller
+
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -4466,12 +4476,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:30:6: cannot assign a value, which may share storage with a `let` field, to mutable binding 'r'; use 'let' instead of 'var', or use clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
-<!-- test: a-let-fields-record-held-as-a-struct-literal-field-into-a-var-field-is-refused -->
-### A `let` field's record held across a struct literal and stored into a `var` field is refused, as the bare store is
+<!-- test: a-let-fields-record-held-as-a-struct-literal-field-into-a-var-field-is-accepted -->
+### A `let` field's record held across a struct literal and stored into a `var` field is accepted, as the bare store is
+
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -4511,8 +4525,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:29:15: cannot store a value read out of a `let` field into mutable place 'Pair.first'; use clone()
+```stdout
+1 1
+```
+```exitcode
+0
 ```
 
 <!-- test: a-let-fields-string-merged-into-a-var-is-a-writable-copy -->
@@ -4947,8 +4964,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:30:20: cannot assign a value read out of a `let` field to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```stdout
+9 9
+```
+```exitcode
+0
 ```
 
 <!-- test: match-merge-of-a-module-let-and-a-fresh-record-field-survives-the-rebind -->
@@ -5277,7 +5297,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:18:3: cannot assign the read-only 'point' to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:21:2: cannot write 'n' through 'q', which is read-only, as it joins immutable and mutable data
 ```
 
 <!-- test: try-otherwise-merge-of-a-module-let-element-on-the-ok-edge-into-a-var-then-written-is-refused -->
@@ -5303,7 +5323,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:15:6: cannot assign the result of 'get', which may share storage with immutable variable 'Origins', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:16:2: cannot write 'n' through 'q', which is read-only, as it joins immutable and mutable data
 ```
 
 <!-- test: try-otherwise-diverging-read-of-a-module-let-element-into-a-var-then-written-is-refused -->
@@ -5329,7 +5349,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:15:6: cannot assign the result of 'get', which may share storage with immutable variable 'Origins', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:16:2: cannot write 'n' through 'q', which is immutable
 ```
 
 
@@ -5357,7 +5377,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:15:6: cannot assign the result of 'first', which may share storage with immutable variable 'Origins', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:16:2: cannot write 'n' through 'q', which is immutable
 ```
 
 <!-- test: try-otherwise-diverging-map-get-of-a-module-let-into-a-var-then-written-is-refused -->
@@ -5383,7 +5403,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:15:6: cannot assign the result of 'get', which may share storage with immutable variable 'Places', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:16:2: cannot write 'n' through 'q', which is immutable
 ```
 
 <!-- test: try-otherwise-diverging-last-of-a-module-let-into-a-var-then-written-is-refused -->
@@ -5409,7 +5429,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:15:6: cannot assign the result of 'last', which may share storage with immutable variable 'Origins', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:16:2: cannot write 'n' through 'q', which is immutable
 ```
 
 <!-- test: a-clone-of-a-module-let-element-into-a-var-is-written-and-runs -->
@@ -5520,7 +5540,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:30:6: cannot assign the result of 'get', which may share storage with immutable variable 'Racks', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:31:2: cannot write 'n' through 'q', which is immutable
 ```
 
 <!-- test: an-array-extension-element-of-a-module-let-into-a-var-then-written-is-refused -->
@@ -5553,7 +5573,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:21:6: cannot assign the result of 'head', which may share storage with immutable variable 'Origins', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:22:2: cannot write 'n' through 'q', which is immutable
 ```
 
 <!-- test: a-list-first-of-a-module-let-into-a-var-then-written-is-refused -->
@@ -5581,7 +5601,35 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:17:6: cannot assign the result of 'first', which may share storage with immutable variable 'Queue', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:18:2: cannot write 'n' through 'q', which is immutable
+```
+
+<!-- test: a-list-last-of-a-module-let-into-a-var-then-written-is-refused -->
+`List.last` hands back the element record the module `let` list holds.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+typealias Points = List with Point
+
+let Queue = Points.create()
+
+function main() returns ExitCode
+	var q = try Queue.last() otherwise Point.create(5)
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:18:2: cannot write 'n' through 'q', which is immutable
 ```
 
 <!-- test: an-array-extension-returning-its-argument-on-a-let-of-read-only-elements-into-a-var-runs -->
@@ -5760,7 +5808,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:34:6: cannot assign the result of 'pick', which may share storage with immutable variable 'Racks', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3208: <fragment>:34:16: 'pick' returns 'self' or 'fallback'; they must both be mutable or both immutable here
+error E3197: <fragment>:35:2: cannot write 'n' through 'q', which is immutable
 ```
 
 <!-- test: an-array-extension-forwarding-a-stored-element-of-read-only-elements-is-not-written-through -->
@@ -5840,7 +5889,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:30:6: cannot assign the result of 'getOr', which may share storage with immutable variable 'Racks', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3208: <fragment>:30:16: 'getOr' returns 'self' or 'fallback'; they must both be mutable or both immutable here
+error E3197: <fragment>:31:2: cannot write 'n' through 'q', which is immutable
 ```
 
 
@@ -5872,7 +5922,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:19:2: cannot pass the result of 'get', which may share storage with immutable variable 'Origins', to a function that writes parameter 'p' (in main); pass a clone()
+error E3207: <fragment>:19:7: 'bump' writes 'p' (line 15: `p.n = 9`); 'Origins.get(0)' is immutable
 ```
 
 <!-- test: error.a-module-let-element-written-through-a-receiver-method-is-refused -->
@@ -5901,7 +5951,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:20:4: cannot pass 'p', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E3207: <fragment>:20:2: 'reset' writes its receiver (line 12: `self.n = 0`); 'p' is immutable
 ```
 
 <!-- test: error.a-module-let-element-from-first-handed-to-a-writing-callee-is-refused -->
@@ -5930,7 +5980,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:19:2: cannot pass the result of 'first', which may share storage with immutable variable 'Origins', to a function that writes parameter 'p' (in main); pass a clone()
+error E3207: <fragment>:19:7: 'bump' writes 'p' (line 15: `p.n = 9`); 'Origins.first()' is immutable
 ```
 
 <!-- test: error.a-module-let-element-from-last-handed-to-a-writing-callee-is-refused -->
@@ -5959,7 +6009,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:19:2: cannot pass the result of 'last', which may share storage with immutable variable 'Origins', to a function that writes parameter 'p' (in main); pass a clone()
+error E3207: <fragment>:19:7: 'bump' writes 'p' (line 15: `p.n = 9`); 'Origins.last()' is immutable
 ```
 
 <!-- test: error.a-module-let-element-handed-to-a-writing-function-value-is-refused -->
@@ -5989,7 +6039,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:20:3: cannot pass the result of 'get', which may share storage with immutable variable 'Origins', to a function that writes parameter 'p' (in main); pass a clone()
+error E3207: <fragment>:20:3: 'bump' writes 'p' (line 15: `p.n = 9`); 'Origins.get(0)' is immutable
 ```
 
 <!-- test: error.a-module-let-element-handed-to-a-method-writing-its-argument-is-refused -->
@@ -6026,7 +6076,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:28:4: cannot pass the result of 'get', which may share storage with immutable variable 'Origins', to a function that writes parameter 'q' (in main); pass a clone()
+error E3207: <fragment>:28:9: 'take' writes 'q' (line 20: `q.n = 7`); 'Origins.get(0)' is immutable
 ```
 
 <!-- test: error.a-module-let-element-from-map-get-handed-to-a-writing-callee-is-refused -->
@@ -6057,7 +6107,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:21:2: cannot pass the result of 'get', which may share storage with immutable variable 'Places', to a function that writes parameter 'p' (in main); pass a clone()
+error E3207: <fragment>:21:7: 'bump' writes 'p' (line 17: `p.n = 9`); 'Places.get("a")' is immutable
 ```
 
 <!-- test: error.a-module-let-element-from-list-first-handed-to-a-writing-callee-is-refused -->
@@ -6088,7 +6138,37 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:21:2: cannot pass the result of 'first', which may share storage with immutable variable 'Queue', to a function that writes parameter 'p' (in main); pass a clone()
+error E3207: <fragment>:21:7: 'bump' writes 'p' (line 17: `p.n = 9`); 'Queue.first()' is immutable
+```
+
+<!-- test: error.a-module-let-element-from-list-last-handed-to-a-writing-callee-is-refused -->
+The element `List.last` hands back is the module `let` list's record, so passing it to a function that writes it is refused.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+typealias Points = List with Point
+
+let Queue = Points.create()
+
+function bump(p Point)
+	p.n = 9
+end 'bump'
+
+function main() returns ExitCode
+	bump(try Queue.last() otherwise panic("one point"))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:21:7: 'bump' writes 'p' (line 17: `p.n = 9`); 'Queue.last()' is immutable
 ```
 
 <!-- test: error.a-module-let-element-of-a-created-array-handed-to-a-writing-callee-is-refused -->
@@ -6119,7 +6199,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:21:2: cannot pass the result of 'get', which may share storage with immutable variable 'Arr', to a function that writes parameter 'p' (in main); pass a clone()
+error E3207: <fragment>:21:7: 'bump' writes 'p' (line 17: `p.n = 9`); 'Arr.get(0)' is immutable
 ```
 
 <!-- test: error.a-module-let-element-returned-by-a-function-handed-to-a-writing-callee-is-refused -->
@@ -6142,7 +6222,7 @@ function bump(p Point)
 	p.n = 9
 end 'bump'
 
-function head() returns Point
+function head() returns immutable Point
 	return try Origins.get(0) otherwise panic("one point")
 end 'head'
 
@@ -6153,6 +6233,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3159: <fragment>:23:2: cannot pass the result of 'head', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
+error E3207: <fragment>:23:7: 'bump' writes 'p' (line 15: `p.n = 9`); 'head()' is immutable
 ```
 
 <!-- test: error.a-module-let-element-bound-to-a-let-and-written-is-refused -->
@@ -6177,7 +6258,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:16:2: cannot write through 'p': 'p' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3197: <fragment>:16:2: cannot write 'n' through 'p', which is immutable
 ```
 
 <!-- test: error.a-module-let-element-stored-into-a-var-holders-field-is-refused -->
@@ -6212,7 +6293,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:24:4: cannot store the result of 'get', which may share storage with immutable variable 'Origins', into mutable place 'Holder.p'; use clone()
+error E3196: <fragment>:24:8: cannot store an immutable 'Point' into 'p', which holds a mutable 'Point'; declare the field `immutable Point`
 ```
 
 <!-- test: error.a-module-let-element-pushed-into-a-var-array-is-refused -->
@@ -6243,8 +6324,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:20:6: cannot store the result of 'get', which may share storage with immutable variable 'Origins', into mutable place 'an element of the container push writes'; use clone()
-error E3159: <fragment>:21:2: cannot pass the result of 'get', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
+error E3196: <fragment>:20:11: cannot store an immutable 'Point' into 'an element of the container push writes', which holds a mutable 'Point'; declare the element `immutable Point`
 ```
 
 <!-- test: error.a-module-let-element-returned-by-a-closure-handed-to-a-writing-callee-is-refused -->
@@ -6274,7 +6354,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:20:2: cannot pass the result of 'f', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
+error E3159: <fragment>:20:2: cannot pass a value, which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
 ```
 
 <!-- test: error.a-module-let-element-rebound-to-a-var-and-written-is-refused -->
@@ -6300,7 +6380,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:16:2: cannot assign the result of 'get', which may share storage with immutable variable 'Origins', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:17:2: cannot write 'n' through 'q', which is immutable
 ```
 
 <!-- test: error.a-module-let-element-assigned-to-a-var-is-refused -->
@@ -6327,7 +6407,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:16:2: cannot assign the result of 'get', which may share storage with immutable variable 'Origins', to mutable binding 'Cache'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:17:2: cannot write 'n' through 'Cache', which is immutable
 ```
 
 <!-- test: error.a-module-let-element-in-a-struct-literal-is-refused -->
@@ -6361,8 +6441,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:18:15: cannot store the result of 'get', which may share storage with immutable variable 'Origins', into mutable place 'Holder.p'; use clone()
-error E3159: <fragment>:24:2: cannot write through 'h.p': a value, which may share storage with a module-level `let`, is read-only and nothing reachable through it may be written; use 'var', or write a clone()
+error E3196: <fragment>:18:18: cannot store an immutable 'Point' into 'Holder.p', which holds a mutable 'Point'; declare the field `immutable Point`
 ```
 
 <!-- test: error.a-module-let-element-kept-by-a-factory-is-refused -->
@@ -6396,7 +6475,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:24:2: cannot write through 'h.p': a value, which may share storage with a module-level `let`, is read-only and nothing reachable through it may be written; use 'var', or write a clone()
+error E3197: <fragment>:24:2: cannot write 'n' through 'h.p', which is read-only
 ```
 
 <!-- test: error.a-module-let-element-in-an-array-literal-is-refused -->
@@ -6426,8 +6505,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:19:13: cannot store the result of 'get', which may share storage with immutable variable 'Origins', into mutable place 'an element of the array literal'; use clone()
-error E3159: <fragment>:20:2: cannot pass the result of 'get', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
+error E3196: <fragment>:19:13: cannot store an immutable 'Point' into 'an element of the array literal', which holds a mutable 'Point'; declare the element `immutable Point`
 ```
 
 <!-- test: error.a-module-let-element-upserted-into-a-var-map-is-refused -->
@@ -6460,7 +6538,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:23:2: cannot pass the result of 'get', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
+error E3196: <fragment>:22:28: cannot store an immutable 'Point' into 'Map.upsert.value', which holds a mutable 'Point'; declare the element `immutable Point`
 ```
 
 <!-- test: error.a-module-let-element-merged-by-a-ternary-is-refused -->
@@ -6487,7 +6565,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:16:6: cannot assign the result of 'get', which may share storage with immutable variable 'Origins', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:17:2: cannot write 'n' through 'q', which is read-only, as it joins immutable and mutable data
 ```
 
 <!-- test: an-argument-read-out-of-a-union-field-survives-the-callee-overwriting-the-field -->
@@ -6877,4 +6955,107 @@ end 'main'
 ```
 ```stdout
 d=68064
+```
+
+<!-- test: error.a-for-over-a-frozen-list-writes-its-element-is-refused -->
+A `for` over a frozen `List` hands out the element records the list holds, so writing one is a write through frozen data.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+	export var m as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n, m: n}
+	end 'create'
+end 'Point'
+
+typealias Points = List with Point
+
+function main() returns ExitCode
+	let frozen = freeze Points.create()
+
+	for p in frozen 'each'
+		p.n = 9
+	end 'each'
+
+	print("done\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:19:3: cannot write 'n' through 'p', which is immutable
+```
+
+<!-- test: error.a-for-over-a-module-let-list-writes-its-element-is-refused -->
+A `for` over a module `let` `List` hands out the element records the list holds, so writing one is a write through immutable data.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+	export var m as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n, m: n}
+	end 'create'
+end 'Point'
+
+typealias Points = List with Point
+
+let Queue = Points.create()
+
+function main() returns ExitCode
+	for q in Queue 'each'
+		q.m = 4
+	end 'each'
+
+	print("done\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3197: <fragment>:19:3: cannot write 'm' through 'q', which is immutable
+```
+
+<!-- test: a-for-over-a-frozen-list-reads-its-elements -->
+Reading the elements of a frozen or module `let` `List` in a `for` is accepted: only a write through the element is refused.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+	export var m as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n, m: n}
+	end 'create'
+end 'Point'
+
+typealias Points = List with Point
+
+let Queue = Points.create()
+
+function total(items Points) returns Num
+	var sum = 0 as Num
+
+	for p in items 'each'
+		sum = sum + p.n
+	end 'each'
+
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	let frozen = freeze Points.create()
+	print("{total(frozen)} {total(Queue)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 0
 ```

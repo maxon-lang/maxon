@@ -283,9 +283,9 @@ typealias Rows = Array with ByteArray
 
 function main() returns ExitCode
 	var rows = Rows.create(0)
-	rows.push(b"ccc")
-	rows.push(b"a")
-	rows.push(b"bb")
+	rows.push("ccc".toByteArray())
+	rows.push("a".toByteArray())
+	rows.push("bb".toByteArray())
 	rows.sortBy(function(left ByteArray, right ByteArray) gives left.count().compare(right.count()))
 
 	for row in rows 'each'
@@ -308,9 +308,9 @@ typealias Rows = Array with ByteArray
 
 function main() returns ExitCode
 	var rows = Rows.create(0)
-	rows.push(b"ccc")
-	rows.push(b"a")
-	rows.push(b"bb")
+	rows.push("ccc".toByteArray())
+	rows.push("a".toByteArray())
+	rows.push("bb".toByteArray())
 	rows.sortBy(function(left, right) gives right.count().compare(left.count()))
 
 	for row in rows 'each'

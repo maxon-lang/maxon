@@ -114,9 +114,64 @@ end 'main'
 1
 ```
 
-<!-- test: a-conformer-whose-result-holds-its-receiver-data-needs-mutable-self -->
-`Bag.open` returns a `Cursor` that holds the bag's `items`, so it writes through its receiver, and `Cursors.open`
-declares a read-only one.
+<!-- test: a-result-through-an-interface-over-frozen-data-cannot-be-written -->
+`Bag.open` returns a `Cursor` that holds the bag's `items`, and `first` answers through the `Cursors` interface, so its
+result is never fresh: it takes the capability of the interface value it was reached through. A bag frozen before it
+reaches `first` hands back a read-only cursor, and `grow` would write the frozen bag's items.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+type Cursor
+	var items as TallyArray
+
+	static function create(items TallyArray) returns Self
+		return Self{items: items}
+	end 'create'
+
+	function grow()
+		self.items.push(1)
+	end 'grow'
+
+	function size() returns Count
+		return self.items.count()
+	end 'size'
+end 'Cursor'
+
+interface Cursors
+	function open() returns Cursor
+end 'Cursors'
+
+type Bag implements Cursors
+	var items as TallyArray
+
+	static function create() returns Self
+		return Self{items: TallyArray.create(0)}
+	end 'create'
+
+	function open() returns Cursor
+		return Cursor.create(self.items)
+	end 'open'
+end 'Bag'
+
+function first(source Cursors) returns Cursor
+	return source.open()
+end 'first'
+
+function main() returns ExitCode
+	let bag = freeze Bag.create()
+	let c = first(bag)
+	c.grow()
+	return c.size() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:44:2: 'grow' writes its receiver (line 13: `self.items.push(1)`); 'c' is read-only
+```
+
+<!-- test: a-result-through-an-interface-over-frozen-data-can-be-read -->
+The accepted twin of the refusal above: the cursor is only read, so the frozen bag's items are never written.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -155,16 +210,322 @@ function first(source Cursors) returns Cursor
 end 'first'
 
 function main() returns ExitCode
-	let bag = Bag.create()
+	let bag = freeze Bag.create()
 	return first(bag).size() as ExitCode
 end 'main'
 ```
+```exitcode
+0
+```
+
+<!-- test: a-result-through-an-interface-written-in-its-function-pins-the-interface-parameter -->
+`poke` writes the cursor `source.open()` handed back, so `source` is mutable-only and the frozen bag cannot be passed.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+type Cursor
+	var items as TallyArray
+
+	static function create(items TallyArray) returns Self
+		return Self{items: items}
+	end 'create'
+
+	function grow()
+		self.items.push(1)
+	end 'grow'
+end 'Cursor'
+
+interface Cursors
+	function open() returns Cursor
+end 'Cursors'
+
+type Bag implements Cursors
+	var items as TallyArray
+
+	static function create() returns Self
+		return Self{items: TallyArray.create(0)}
+	end 'create'
+
+	function open() returns Cursor
+		return Cursor.create(self.items)
+	end 'open'
+end 'Bag'
+
+function poke(source Cursors)
+	let c = source.open()
+	c.grow()
+end 'poke'
+
+function main() returns ExitCode
+	let bag = freeze Bag.create()
+	poke(bag)
+	return 0
+end 'main'
+```
 ```maxoncstderr
-error E3210: <fragment>:28:11: 'Bag.open' writes its receiver, but 'Cursors.open' does not declare `mutable self`
+error E3207: <fragment>:40:7: 'poke' writes 'source' (it calls 'grow', which writes its receiver); 'bag' is immutable
+```
+
+<!-- test: a-result-through-an-interface-passed-to-a-writing-function-pins-the-interface-parameter -->
+`grower` writes the cursor it is handed, so `poke` passing it `source.open()` makes `source` mutable-only.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+type Cursor
+	var items as TallyArray
+
+	static function create(items TallyArray) returns Self
+		return Self{items: items}
+	end 'create'
+
+	function grow()
+		self.items.push(1)
+	end 'grow'
+end 'Cursor'
+
+interface Cursors
+	function open() returns Cursor
+end 'Cursors'
+
+type Bag implements Cursors
+	var items as TallyArray
+
+	static function create() returns Self
+		return Self{items: TallyArray.create(0)}
+	end 'create'
+
+	function open() returns Cursor
+		return Cursor.create(self.items)
+	end 'open'
+end 'Bag'
+
+function grower(cursor Cursor)
+	cursor.grow()
+end 'grower'
+
+function poke(source Cursors)
+	grower(source.open())
+end 'poke'
+
+function main() returns ExitCode
+	let bag = freeze Bag.create()
+	poke(bag)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:43:7: 'poke' writes 'source' (it calls 'grower', which calls 'grow', which writes its receiver); 'bag' is immutable
+```
+
+<!-- test: a-result-through-an-interface-written-in-its-function-accepts-a-writable-argument -->
+The accepted twin: the same `poke` is handed a bag nobody froze.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+type Cursor
+	var items as TallyArray
+
+	static function create(items TallyArray) returns Self
+		return Self{items: items}
+	end 'create'
+
+	function grow()
+		self.items.push(1)
+	end 'grow'
+end 'Cursor'
+
+interface Cursors
+	function open() returns Cursor
+end 'Cursors'
+
+type Bag implements Cursors
+	var items as TallyArray
+
+	static function create() returns Self
+		return Self{items: TallyArray.create(0)}
+	end 'create'
+
+	function open() returns Cursor
+		return Cursor.create(self.items)
+	end 'open'
+
+	function size() returns Count
+		return self.items.count()
+	end 'size'
+end 'Bag'
+
+function poke(source Cursors)
+	let c = source.open()
+	c.grow()
+end 'poke'
+
+function main() returns ExitCode
+	var bag = Bag.create()
+	poke(bag)
+	return bag.size() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: a-conformer-returning-its-receiver-field-hands-back-read-only-data-through-an-interface -->
+`Shelf.part` returns a bare field of its receiver. `through` answers through the `Parts` interface, so the part a frozen
+shelf hands back is read-only and `bump` would write the frozen shelf's field.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Part
+	export var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Part'
+
+interface Parts
+	function part() returns Part
+end 'Parts'
+
+type Shelf implements Parts
+	var inner as Part
+
+	static function create() returns Self
+		return Self{inner: Part.create()}
+	end 'create'
+
+	function part() returns Part
+		return self.inner
+	end 'part'
+end 'Shelf'
+
+function through(holder Parts) returns Part
+	return holder.part()
+end 'through'
+
+function main() returns ExitCode
+	let shelf = freeze Shelf.create()
+	let p = through(shelf)
+	p.bump()
+	return p.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:39:2: 'bump' writes its receiver (line 12: `self.n = self.n + 1`); 'p' is read-only
+```
+
+<!-- test: a-conformer-returning-its-receiver-field-hands-back-readable-data-through-an-interface -->
+The accepted twin: the part a frozen shelf hands back is only read.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Part
+	export var n as Tally
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Part'
+
+interface Parts
+	function part() returns Part
+end 'Parts'
+
+type Shelf implements Parts
+	var inner as Part
+
+	static function create() returns Self
+		return Self{inner: Part.create()}
+	end 'create'
+
+	function part() returns Part
+		return self.inner
+	end 'part'
+end 'Shelf'
+
+function through(holder Parts) returns Part
+	return holder.part()
+end 'through'
+
+function main() returns ExitCode
+	let shelf = freeze Shelf.create()
+	let p = through(shelf)
+	return p.n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-result-through-a-writable-interface-value-is-writable -->
+A requirement that does not declare `mutable self` still hands a writable result to a caller whose interface value is
+writable: the result takes the capability of the value it was reached through.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+type Cursor
+	var items as TallyArray
+
+	static function create(items TallyArray) returns Self
+		return Self{items: items}
+	end 'create'
+
+	function grow()
+		self.items.push(1)
+	end 'grow'
+
+	function size() returns Count
+		return self.items.count()
+	end 'size'
+end 'Cursor'
+
+interface Cursors
+	function open() returns Cursor
+end 'Cursors'
+
+type Bag implements Cursors
+	var items as TallyArray
+
+	static function create() returns Self
+		return Self{items: TallyArray.create(0)}
+	end 'create'
+
+	function open() returns Cursor
+		return Cursor.create(self.items)
+	end 'open'
+end 'Bag'
+
+function first(source Cursors) returns Cursor
+	return source.open()
+end 'first'
+
+function main() returns ExitCode
+	var bag = Bag.create()
+	let c = first(bag)
+	c.grow()
+	return c.size() as ExitCode
+end 'main'
+```
+```exitcode
+1
 ```
 
 <!-- test: a-conformer-whose-result-holds-its-receiver-data-conforms-to-a-mutable-self-requirement -->
-The accepted twin: the requirement declares `mutable self`.
+The requirement declares `mutable self`, so `first` takes a writable `source` and hands back a writable cursor.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -439,9 +800,9 @@ end 'main'
 error E3005: <fragment>:6:2: Cannot return '((int, Int), Int)' from function declared to return 'P'
 ```
 
-<!-- test: error.function-value-call-keeps-its-argument-in-a-let-field-through-a-mutable-parameter -->
+<!-- test: function-value-call-keeps-its-argument-in-a-let-field-through-a-mutable-parameter -->
 The conversion rule is met (`Maker` and `shelve` both declare the parameter `mutable`), so the call through
-`build` is judged by the older door: `shelve` keeps `v` in a `let` field and `v` is read again afterwards.
+`build` keeps `v` in a `let` field and `v` is read again afterwards: the `let` field and `v` name one array.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -473,12 +834,12 @@ function main() returns ExitCode
 	return shelf.items.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:26:14: cannot pass the `var` 'v', which is read again, to parameter 'd' of 'build', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+2
 ```
 
-<!-- test: error.a-write-through-a-let-bound-to-ordinary-data-is-refused-by-the-let-door -->
-A `let` is deep-immutable in the older analyses, and that door speaks for a write through it, in a program that spells
+<!-- test: a-write-through-a-let-bound-to-ordinary-data-is-legal -->
+A `let` forbids only reassigning the name, so a write through it lands in the record it names, in a program that spells
 no region word.
 
 ```maxon
@@ -495,8 +856,8 @@ function main() returns ExitCode
 	return a.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:11:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'd' (in main); pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: a-var-written-through-and-passed-to-a-reading-function-is-accepted -->

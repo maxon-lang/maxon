@@ -5937,7 +5937,7 @@ function main() returns ExitCode
 	var removed = false
 
 	modify s 'fill'
-		s.insert(cell.clone())
+		s.insert(freeze cell.clone())
 		removed = s.remove(cell)
 	end 'fill'
 
@@ -7356,7 +7356,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3196: <fragment>:30:22: cannot store an isolated 'CellArray' into 'cells', which holds a mutable 'CellArray'; `merge` it first
+error E3196: <fragment>:30:22: cannot store an isolated 'CellArray' into 'Svc.cells', which holds a mutable 'CellArray'; `merge` it first
 error E3200: <fragment>:40:27: 'pairedCellsAround' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
@@ -8922,7 +8922,7 @@ type Pair
 	end 'create'
 end 'Pair'
 
-typealias Boxes = Array with readonly Box
+typealias Boxes = Array with Box
 
 type Svc
 	var kept as Boxes
@@ -9515,7 +9515,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3206: <fragment>:16:18: parameter the receiver is used as mutable at line 19 and as immutable; a parameter cannot be both
+error E3206: <fragment>:16:18: parameter the receiver is used as mutable at line 19 and as immutable at line 20; a parameter cannot be both
 error E3137: <fragment>:20:3: `Store.take` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
 note: <fragment>:25:10: the `spawn` that makes `Store` a service
 error E3209: <fragment>:20:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
@@ -9559,7 +9559,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3206: <fragment>:20:18: parameter the receiver is used as mutable at line 22 and as immutable; a parameter cannot be both
+error E3206: <fragment>:20:18: parameter the receiver is used as mutable at line 22 and as immutable at line 23; a parameter cannot be both
 error E3137: <fragment>:23:3: `Store.take` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
 note: <fragment>:28:10: the `spawn` that makes `Store` a service
 error E3209: <fragment>:23:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
@@ -9618,8 +9618,8 @@ end 'Shelf'
 type Keeper
 	let shelf as Shelf
 
-	static function create(shelf isolated Shelf) returns Self
-		return Self{shelf: merge shelf}
+	static function create(shelf Shelf) returns Self
+		return Self{shelf: shelf}
 	end 'create'
 
 	export function describe() returns String
@@ -13542,7 +13542,7 @@ end 'main'
 ```maxoncstderr
 error E3137: <fragment>:29:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
 note: <fragment>:41:15: the `spawn` that makes `Worker` a service
-error E3078: <fragment>:35:17: cannot pass a value this function also hands out to parameter 'key' of 'Map.upsert', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+error E3078: <fragment>:35:17: cannot pass a value this function also hands out to parameter 'key' of 'Map.upsert', which stores it into a `Map` key, `Set` element or shared value: a `Map` key, `Set` element or shared value has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
 ```
 
 <!-- test: error.reply-a-sibling-returns-a-global-a-match-arm-local-shadows-refused -->
@@ -15498,8 +15498,8 @@ end 'main'
 42
 ```
 
-<!-- test: services.error.a-view-of-an-immutable-record-sent-to-a-service-is-refused -->
-`v` is a `view`, so it is refused as a message argument even though the record it names has only `let` fields; the refusal is decided by the argument's binding, so a second `view` elsewhere in the body changes nothing.
+<!-- test: services.a-view-of-an-immutable-record-sent-to-a-service-is-sent -->
+`v` is a `view` of a record with only `let` fields of a value type, so it is a value and crosses to the service; a second `view` elsewhere in the body changes nothing.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -15546,12 +15546,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3138: <fragment>:41:27: argument `v` of the message `Store.show` is a `view`: it names data something else may write, so it can be neither moved nor shared with the service. Send a `.clone()`
+```stdout
+2
+7
+```
+```exitcode
+0
 ```
 
 <!-- test: services.error.a-var-sent-after-it-has-been-viewed-is-refused -->
-Once `w` has viewed `b`, its reference is a second owner for the rest of the function, so `b` cannot be moved to the service, even though `w` is not read again.
+`view w = b` moves `b` into `w`, as `let w = b` does, so `b` cannot be sent afterwards, even though `w` is not read again.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -15593,11 +15597,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:35:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3102: <fragment>:35:27: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: services.error.a-var-sent-after-it-has-been-viewed-and-read-afterwards-is-refused -->
-`w` has viewed `b` and is read after the send, so it would read a record the service now owns and writes.
+`view w = b` moves `b` into `w`, which is read after the send, so the send of `b` is refused rather than leaving `w` reading a record the service now owns and writes.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -15639,7 +15643,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:35:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3102: <fragment>:35:27: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: services.a-text-field-read-through-a-view-is-sent-as-a-value -->
@@ -16010,7 +16014,7 @@ error E3102: <fragment>:49:27: use of moved value 'b': its ownership moved to an
 ```
 
 <!-- test: services.error.an-array-an-element-view-reaches-sent-is-refused -->
-`e` views an element of `boxes`, so its reference co-owns part of the array's graph, and the array cannot be moved to the service.
+`e` binds an element of the isolated `boxes` outside a `modify` block, which is an isolated read without a block, so it is refused before the array is sent to the service.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -16052,11 +16056,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:35:30: argument `boxes` of the message `Store.keepAll` has been viewed by 'e': a view's reference is a second owner for the rest of the function, so `boxes` can be neither moved nor shared with the service. Send a `.clone()`
+error E3198: <fragment>:34:11: 'try boxes.get(0) otherwise return 1' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
 ```
 
-<!-- test: services.error.an-array-an-if-view-reached-sent-later-is-refused -->
-The `if view` binder views an element of `boxes`, and a view counts for the rest of the function, so the send after the `if` is refused too.
+<!-- test: services.an-array-an-if-view-dead-before-the-send-is-sent -->
+The `if view` binder views an element of `boxes` only inside the `if`, and it is not read after the `if`, so the send after it is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -16100,12 +16104,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3138: <fragment>:38:30: argument `boxes` of the message `Store.keepAll` has been viewed by 'e': a view's reference is a second owner for the rest of the function, so `boxes` can be neither moved nor shared with the service. Send a `.clone()`
+```stdout
+1
+1
+```
+```exitcode
+0
 ```
 
 <!-- test: services.error.a-var-viewed-earlier-in-a-loop-body-sent-later-in-it-is-refused -->
-Inside one trip of the loop, `w` views `b` before the send, so the send is refused on every trip.
+Inside one trip of the loop, `view w = b` moves `b` before the send, so the send is refused on every trip.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -16151,11 +16159,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:37:28: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3102: <fragment>:37:28: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: services.error.a-var-viewed-then-handed-to-spawn-as-state-is-refused -->
-The state `spawn` starts the service with is moved into it, so a `var` a view has seen cannot be that state.
+The state `spawn` starts the service with is moved into it, so a `var` that `view w = b` has already moved cannot be that state.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -16196,7 +16204,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:33:30: argument `b` of `spawn Worker.create(…)` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+error E3102: <fragment>:33:30: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: services.a-viewed-var-of-an-immutable-record-is-shared-with-the-service -->
@@ -16228,8 +16236,8 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var b = freeze Box.create(1)
-	b = freeze Box.create(2)
+	var b = Box.create(1)
+	b = Box.create(2)
 	view w = b
 	let r = try await h.keep(b) otherwise 0
 	print("{w.n} {r}\n")
@@ -16330,8 +16338,8 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var b = freeze CountCell.create(1)
-	b = freeze CountCell.create(3)
+	var b = CountCell.create(1)
+	b = CountCell.create(3)
 	view w = b
 	let r = try await h.keep(b) otherwise 0
 	print("{w.v} {r}\n")
@@ -16375,8 +16383,8 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var n = freeze Note.text("a")
-	n = freeze Note.text("bb")
+	var n = Note.text("a")
+	n = Note.text("bb")
 	view w = n
 	let r = try await h.keep(n) otherwise 0
 

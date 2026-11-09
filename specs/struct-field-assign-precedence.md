@@ -25,40 +25,31 @@ The field READ path (`parseFieldAccess`) has always reported the not-a-struct er
 same three tokens, because it has no permission question to ask. So this rank is also what
 makes a READ and a WRITE agree about what `p.x` denotes.
 
-### Rank 2 — an immutable INSTANCE outranks an immutable FIELD
+### Rank 2 — a `let` FIELD is refused whatever the instance binding is
 
-Writing `c.version = 2` needs two things to be mutable, and they are two different facts:
+Writing `c.version = 2` asks two questions, and a `let` answers only one of them:
 
-1. the **instance** — `let c` cannot be written through at all;
+1. the **instance** — `let c` forbids reassigning `c`, not writing through it, so it never refuses a field write;
 2. the **field** — `export let version` cannot be written, whatever `c` is.
 
-They are one defect seen from two sides — a write to something declared not to accept one — and
-they are refused differently. A write through a read-only instance is **E3159**, the code for every
-write through a `let`; a write to a `let` field of a mutable instance is **E2013**. But when **both**
-are immutable, only one message can be printed, and *which one* is a real decision rather than a tie.
+A write to a `let` field is **E2013** (`'version' is a let field and cannot be reassigned`) through a `var` instance
+and through a `let` instance alike: the binding of the instance has no say, so only one message exists and it names
+the field, which is the change that fixes the program (`var version`).
 
-**The instance wins.** The reason is that the other message would be actively wrong: told
-`cannot assign to field 'Config.version' … (declare with 'var' to make it mutable)`, a reader
-who changes `let version` to `var version` still has a program that does not compile, because
-`let c` was the binding refusing the write. The instance message names the change that
-actually fixes it.
-
-Both ranks are deliberate, and both are
-stated by nothing stronger than the ORDER OF CHECKS in `Parser.parseFieldAssignment`. That is
+Rank 1 is stated by nothing stronger than the ORDER OF CHECKS in `Parser.parseFieldAssignment`. That is
 exactly the kind of rule the next edit reorders without noticing, which is why it is pinned
 here rather than left to a comment: the ordering is not derivable, so it gets a CHECK.
 
-`structs.md` covers each half of rank 2 alone — `error.let-struct-field-assign` (a `let` instance,
-a `var` field, E3159) and `error.let-field-assign` (a `var` instance, a `let` field, E2013) — and never makes them
-fail together, so neither can tell the two orderings apart. Rank 1 needs a write to a field on a
-non-struct through an immutable binding, which only this file writes.
+`structs.md` covers the write through a `let` instance (`let-struct-field-assign`, accepted) and the write to a `let`
+field of a `var` instance (`error.let-field-assign`, E2013); the case below makes them meet. Rank 1 needs a write to a
+field on a non-struct through an immutable binding, which only this file writes.
 
 ## Tests
 
-<!-- test: immutable-instance-outranks-immutable-field -->
-Both are immutable: `let c` AND `export let version`. Exactly one diagnostic is printed, and
-it must be the INSTANCE's. Anchored at the root variable `c`, which is column 2 — the same
-anchor both halves use, and never the field.
+<!-- test: a-let-field-is-refused-through-a-let-instance -->
+Both are `let`: `let c` AND `export let version`. Exactly one diagnostic is printed, and
+it is the FIELD's, anchored at the root variable `c`, which is column 2 — the same anchor a
+write through a `var` instance uses.
 
 ```maxon
 
@@ -79,7 +70,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:15:2: cannot write through 'c': 'c' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E2013: <fragment>:15:2: 'version' is a let field and cannot be reassigned
 ```
 
 <!-- test: error.not-a-struct-outranks-immutable-instance -->

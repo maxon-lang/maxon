@@ -442,7 +442,7 @@ export union TargetOp
 	// `x64ReturnScratchMask()` by `assertEncoderScratchMasks`.
 	ret(transfer ReturnTransfer) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x100, implicitDefs: 0x1}
 
-	tailJmp(let targetName ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	tailJmp(let targetName immutable ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// Unconditional near jump to a block (`jmp rel32`, 0xE9). `targetBlockId` names a
 	// function-local block; emitFunctionChunk resolves it to a chunk-local rel32 (a
@@ -586,7 +586,7 @@ export union TargetOp
 	// is subtracted from. That assert is why this literal and `callerSavedMask()` MUST move
 	// in one commit: it is the one-fact-one-place guard doing its job.
 	// A union-backing literal cannot reference a named `let`, so the mask is inline.
-	callDirect(let targetName ByteArray) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x003F0FC7}
+	callDirect(let targetName immutable ByteArray) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x003F0FC7}
 
 	// Indirect call through an Import Address Table slot (`call [rip+disp32]`).
 	// `slotIndex` names the IAT entry the PE writer patches to. `mrt_start` uses
@@ -782,7 +782,7 @@ export union TargetOp
 	// allocatable), which is exactly why `StdOp.globalAddr` can declare `isPure: true` — the
 	// op is rematerializable ANYWHERE, with no live input to keep alive to do it. `lea` sets
 	// no flags.
-	leaRegGlobal(dest TargetVReg, let label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	leaRegGlobal(dest TargetVReg, let label immutable ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// `mov dest, [base + disp]` at the op's width — load, zero-extending a narrow width to the full
 	// 64-bit register so a bool reads as a clean 0/1.
@@ -862,7 +862,7 @@ export union TargetOp
 	// ⇒ It is a real missed optimization, and it is the SAME one `leaRegGlobal` already prices:
 	// taking either means generalizing remat from "a constant value" to "an op with no register
 	// inputs". Not taken here. Recorded rather than silently ranged over.
-	movsdRegRip(dest TargetVReg, let label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	movsdRegRip(dest TargetVReg, let label immutable ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// ⚠⚠ THREE OF THE DIALECT'S FOUR CROSS-CLASS OPS — they read one file and write the other.
 	// `cvtsi2sd xmm, r64` (int → f64, `float-promotion`'s widening), its unsigned twin `cvtu64sd`, and
@@ -974,7 +974,7 @@ export union TargetOp
 	// `ripRelDisp32` is recorded; the PE writer patches it once `.rdata`'s RVA is known. `label` is a
 	// name, not a value, so it is a `ByteArray` — the same shape `leaRegGlobal`'s carries.
 	//
-	leaRegRdata(dest TargetVReg, let label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	leaRegRdata(dest TargetVReg, let label immutable ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// `minsd`/`maxsd xmm1, xmm2/m64` (F2 0F 5D /r and F2 0F 5F /r) — the `min` and `max` intrinsics
 	// (specs/min.md, specs/max.md), and the ONE target where the language's definition of each is a
@@ -1097,7 +1097,7 @@ export union TargetOp
 	// `mov x0, retval; ret`). The target-dispatched counterpart of the x64 `ret`'s R8 (0x100).
 	arm64Ret(transfer ReturnTransfer) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x1, implicitDefs: 0}
 
-	arm64TailBranch(let targetName ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	arm64TailBranch(let targetName immutable ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// Unconditional branch `b` to a function-local block.
 	arm64Branch(targetBlockId BlockId) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
@@ -1187,9 +1187,9 @@ export union TargetOp
 	// PIE address materialization via the ADRP+ADD page/page-off pair. Three label kinds, three
 	// relocation targets: a function's `.text` (`leaFuncAddr`), an `.rdata` constant record
 	// (`leaRdata`), a `.data` global (`leaGlobal`). Each is one plain def reading no register.
-	arm64LeaFuncAddr(dest TargetVReg, let funcName ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
-	arm64LeaRdata(dest TargetVReg, let label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
-	arm64LeaGlobal(dest TargetVReg, let label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	arm64LeaFuncAddr(dest TargetVReg, let funcName immutable ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	arm64LeaRdata(dest TargetVReg, let label immutable ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	arm64LeaGlobal(dest TargetVReg, let label immutable ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// Direct / indirect call (`bl` / `blr`). Full call-barrier semantics: implicitDefs =
 	// 0x7FFF807F80007FFF — every CALLER-saved register the allocator can colour into: GPRs x0..x14
@@ -1198,7 +1198,7 @@ export union TargetOp
 	// are absent because no value is ever coloured there (`RegisterAllocator.arm64AllocatablePool`).
 	// This equals `RegisterAllocator.arm64CallerSavedMask` and `assertCallClobberConsistent` holds them
 	// equal. A union-backing literal cannot reference a named `let`, so the mask is inline.
-	arm64BranchLink(let targetName ByteArray) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F80007FFF}
+	arm64BranchLink(let targetName immutable ByteArray) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F80007FFF}
 	arm64BranchLinkReg(reg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F80007FFF}
 
 	// Float ALU / compare / int↔float conversion. The four ALU ops are 3-address PLAIN defs (arm64
@@ -1251,7 +1251,7 @@ export union TargetOp
 	// splitter spills and reloads an f64 constant rather than re-emitting this op. A pass that ever DOES
 	// splice one is what would break the scheme, and no mask here would have caught it; the wide-frame
 	// fold's answer to that same problem is to use x17, which no pair spans.
-	arm64FpLoadRdata(dest TargetVReg, let label ByteArray) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	arm64FpLoadRdata(dest TargetVReg, let label immutable ByteArray) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// A GOT-indirect libSystem import call (`adrp x16, GOTPAGE; ldr x16, [x16, GOTOFF]; blr x16`) — the
 	// macOS twin of x64's `iatCall`, used by the arm64 isel to lower `osAllocPages`→`mmap` and
@@ -1338,7 +1338,7 @@ export union TargetOp
 	// recorded — resolved intra-`.text` by `resolveCallFixups` (NOT the PeWriter's rdata/data path, which
 	// is why it files a `CallFixup` where `leaRegRdata` files an `RdataRelocation`). `funcName` is a name,
 	// not a value, so a `ByteArray`.
-	leaRegFunc(dest TargetVReg, let funcName ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	leaRegFunc(dest TargetVReg, let funcName immutable ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// Register-indirect call `call reg` (`FF /2`, mod=11) — the twin of `callDirect`, calling THROUGH a
 	// register holding the callee address rather than a fixed target name. `reg` is a genuine value USE
@@ -1405,11 +1405,11 @@ export union TargetOp
 	//
 	// x64 scratch = r10 (0x400) | r11 (0x800) = 0xC00. A union-backing literal cannot reference a named
 	// `let`, so the mask is inline (guarded — see `assertEncoderScratchMasks`).
-	x64JumpTable(indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, let tableLabel ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0xC00}
+	x64JumpTable(indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, let tableLabel immutable ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0xC00}
 
 	// arm64 scratch = x16 (0x10000) | x17 (0x20000) = 0x30000 — the IP0/IP1 scratch pair, already outside
 	// the arm64 allocatable pool. Inline for the same union-literal reason (guarded by `assertEncoderScratchMasks`).
-	arm64JumpTable(indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, let tableLabel ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0x30000}
+	arm64JumpTable(indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, let tableLabel immutable ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0x30000}
 
 	// --- The fused witness call's memory-indirect call (x64) ---
 	//

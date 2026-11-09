@@ -54,12 +54,12 @@ export function isLiftedClosureName(name ByteArray) returns bool
 	return bytesContainRun(name, run: liftedClosureMark())
 end 'isLiftedClosureName'
 
-export function liftedClosureName(host ByteArray, ordinal ClosureSubIndex) returns ByteArray
-	return "{String.from(host)}{String.from(liftedClosureMark())}{ordinal}".toByteArray()
+export function liftedClosureName(host ByteArray, ordinal ClosureSubIndex) returns immutable ByteArray
+	return freeze "{String.from(host)}{String.from(liftedClosureMark())}{ordinal}".toByteArray()
 end 'liftedClosureName'
 
-function liftedClosureMark() returns ByteArray
-	return "{CompilerMintSeparator}{LiftedClosureWord}".toByteArray()
+function liftedClosureMark() returns immutable ByteArray
+	return freeze "{CompilerMintSeparator}{LiftedClosureWord}".toByteArray()
 end 'liftedClosureMark'
 
 let LiftedClosureWord = "closure_"
@@ -69,8 +69,8 @@ let FnRefThunkPrefix = "__fnref_"
 // The name of the thunk for plain function `funcName`. ONE builder, shared by the record's code
 // word (`registerFunctionRecord`) and the synthesis below, so the two spellings of the name cannot
 // drift.
-export function fnRefThunkName(funcName ByteArray) returns ByteArray
-	return "{FnRefThunkPrefix}{String.from(funcName)}".toByteArray()
+export function fnRefThunkName(funcName ByteArray) returns immutable ByteArray
+	return freeze "{FnRefThunkPrefix}{String.from(funcName)}".toByteArray()
 end 'fnRefThunkName'
 
 export function fnRefThunkTarget(thunkName ByteArray) returns ByteArray throws AbsentError
@@ -122,7 +122,7 @@ end 'isFunctionRecordLabel'
 // Registered under its own label, never the byte-deduped door: every function record's bytes are
 // the same zero seed and its code word is a relocation, so deduping by bytes would hand every
 // function value one record.
-export function registerFunctionRecord(globalData GlobalDataTable, funcName ByteArray, funcSignatures FuncSignatureMap, debugStream bool) returns String
+export function registerFunctionRecord(globalData GlobalDataTable, funcName immutable ByteArray, funcSignatures FuncSignatureMap, debugStream bool) returns String
 	let label = registerImmortalRecordLabeled(globalData, label: functionRecordLabel(funcName), record: functionRecordSeedBytes(), kind: RdataPayloadKind.functionRecord, debugStream: debugStream)
 	let code = fnRefThunkName(funcName) if functionValueNeedsFnRefThunk(funcName, funcSignatures: funcSignatures) else funcName
 	globalData.recordFuncAbs64InRdata(code, rdataLabel: label, offsetInLabel: FunctionRecordCodeOffset)
@@ -311,7 +311,7 @@ export type UncheckedCallPaths
 
 		for func in module.functions 'eachFunc'
 			if self.indirectArities.contains(functionValueUserArity(func)) 'anUncheckedCallFitsIt'
-				self.indirectlyReachable.insert(func.name.clone())
+				self.indirectlyReachable.insert(func.name)
 			end 'anUncheckedCallFitsIt'
 		end 'eachFunc'
 	end 'noteFunctionValuesOfAnUncheckedArity'
@@ -328,7 +328,7 @@ export type UncheckedCallPaths
 		let landing = witnessRequirementImplNames(project, signatures: signatures, slot: slot, conformers: conformers)
 
 		for impl in landing.names 'eachImpl'
-			self.calleeNames.insert(impl.clone())
+			self.calleeNames.insert(impl)
 		end 'eachImpl'
 
 		if landing.unselected or signatures.interfaceMap().namesALibraryProtocol(slot.sourceInterfaceName) 'anImplIsUnnamed'
@@ -344,7 +344,7 @@ export type UncheckedCallPaths
 
 		for func in module.functions 'eachFunc'
 			if signatures.namesAServiceMessage(func.name) 'aServiceHandler'
-				paths.serviceHandlers.insert(func.name.clone())
+				paths.serviceHandlers.insert(func.name)
 			end 'aServiceHandler'
 
 			if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
@@ -362,7 +362,7 @@ export type UncheckedCallPaths
 					match uncheckedCallPathOf(op, marks: marks) 'path'
 						none then break
 						indirect(userArity) then paths.noteIndirectArity(userArity)
-						named(callee) then paths.calleeNames.insert(callee.clone())
+						named(callee) then paths.calleeNames.insert(callee)
 						witness(interfaceDeclIndex, methodIndex) then paths.noteUncheckedWitnessDispatch(project, signatures: signatures, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex, conformers: conformers, witnessSlots: witnessSlots)
 						tableSend then tableSendUnchecked = true
 					end 'path'
@@ -374,7 +374,7 @@ export type UncheckedCallPaths
 
 		if tableSendUnchecked 'everyHandlerIsReachable'
 			for handler in paths.serviceHandlers 'eachHandler'
-				paths.calleeNames.insert(handler.clone())
+				paths.calleeNames.insert(handler)
 			end 'eachHandler'
 		end 'everyHandlerIsReachable'
 
@@ -397,7 +397,7 @@ end 'functionValueUserArity'
 union CallPath
 	none
 	indirect(userArity ParamCount)
-	named(let callee ByteArray)
+	named(let callee immutable ByteArray)
 	witness(interfaceDeclIndex ElementIndex, methodIndex WitnessMethodIndex)
 	tableSend
 end 'CallPath'

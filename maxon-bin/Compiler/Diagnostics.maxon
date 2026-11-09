@@ -83,15 +83,15 @@ end 'ShadowSpellingReader'
 // (`SignatureIndex.settleStdlibShadowSpellings`). No reader wrote `minted`, so text shown to a
 // reader carries `spellingFor` instead.
 export type StdlibShadowSpelling
-	export let minted as ByteArray
-	let qualified as ByteArray
-	export let bare as ByteArray
+	export let minted as immutable ByteArray
+	let qualified as immutable ByteArray
+	export let bare as immutable ByteArray
 
 	export static function create(minted ByteArray, qualified ByteArray, bare ByteArray) returns StdlibShadowSpelling
 		return Self{minted: minted, qualified: qualified, bare: bare}
 	end 'create'
 
-	export function spellingFor(reader ShadowSpellingReader) returns ByteArray
+	export function spellingFor(reader ShadowSpellingReader) returns immutable ByteArray
 		return match reader 'reader'
 			authorCode gives self.qualified
 			libraryCode gives self.bare
@@ -106,7 +106,7 @@ export type StdlibShadowSpelling
 		return self.minted.contains(AuthorMintSeparatorByte as Byte)
 	end 'isAuthorNominal'
 
-	function bareName() returns ByteArray
+	function bareName() returns immutable ByteArray
 		return self.bare
 	end 'bareName'
 
@@ -118,9 +118,9 @@ export type StdlibShadowSpelling
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns StdlibShadowSpelling throws LibraryCacheDamage
-		let f_minted = try reader.bytes()
-		let f_qualified = try reader.bytes()
-		let f_bare = try reader.bytes()
+		let f_minted = freeze try reader.bytes()
+		let f_qualified = freeze try reader.bytes()
+		let f_bare = freeze try reader.bytes()
 
 		return Self{minted: f_minted, qualified: f_qualified, bare: f_bare}
 	end 'cacheRead'
@@ -158,14 +158,14 @@ end 'cacheReadStdlibShadowSpellingArray'
 // @generated library-cache end
 
 type ShadowRespelling
-	let minted as ByteArray
-	let shown as ByteArray
+	let minted as immutable ByteArray
+	let shown as immutable ByteArray
 
 	static function create(minted ByteArray, shown ByteArray) returns ShadowRespelling
 		return Self{minted: minted, shown: shown}
 	end 'create'
 
-	function mintedName() returns ByteArray
+	function mintedName() returns immutable ByteArray
 		return self.minted
 	end 'mintedName'
 
@@ -192,8 +192,8 @@ type ShadowRespelling
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns ShadowRespelling throws LibraryCacheDamage
-		let f_minted = try reader.bytes()
-		let f_shown = try reader.bytes()
+		let f_minted = freeze try reader.bytes()
+		let f_shown = freeze try reader.bytes()
 
 		return Self{minted: f_minted, shown: f_shown}
 	end 'cacheRead'
@@ -510,14 +510,14 @@ export type ShadowSpellingRoster
 		return Self.of(StdlibShadowSpellingArray.create(0))
 	end 'none'
 
-	export function bareSpellingOf(name ByteArray) returns ByteArray
+	export function bareSpellingOf(name immutable ByteArray) returns immutable ByteArray
 		let position = try self.positionByMint.get(name) otherwise return name
 		view spelling = try self.spellings.get(position) otherwise panic("ShadowSpellingRoster.bareSpellingOf: spellings.get OOB at {position} of {self.spellings.count()} spellings, a position the roster indexed")
 
 		return spelling.bareName()
 	end 'bareSpellingOf'
 
-	export function authorBareSpellingOf(name ByteArray) returns ByteArray
+	export function authorBareSpellingOf(name immutable ByteArray) returns immutable ByteArray
 		if not name.contains(AuthorMintSeparatorByte as Byte) 'notMintedByTheAuthorsDirectory'
 			return name
 		end 'notMintedByTheAuthorsDirectory'

@@ -1,7 +1,7 @@
 ---
 feature: deep-let-read-only-call-results
 status: experimental
-keywords: [let, read-only, call result, let field, readonly, module let, keeper]
+keywords: [let, immutable, call result, let field, readonly, module let, keeper]
 category: memory
 ---
 
@@ -9,17 +9,17 @@ category: memory
 
 ## Documentation
 
-A function that returns a value read out of a `let` field, a module-level `let` or an element of a `readonly`
-container returns a value nothing can ever write. The caller sees that result as read-only, so a `let` field or a
-`readonly` container keeps it without a copy. A result that may also be a record some `var` can write is not
-read-only, and a `let` field refuses it. A result that is read-only on some paths and freshly built on the others
-is accepted by a `let` field, since neither alternative has another writer.
+A function that returns a value read out of a `let` field returns the record the field holds, and the caller sees
+that record: a `let` field of another record keeps it without a copy, whether or not its owner's `var` fields are
+written. A module-level `let` is `immutable`, so a function that returns it declares the result `immutable`, and
+the field that keeps the result is declared `immutable` too. A result that is the field on some paths and a fresh
+value on the others is accepted by a `let` field. A function that returns an element of a `readonly` container
+returns a value nothing can ever write, and another `readonly` container keeps it without a copy.
 
 ## Tests
 
 <!-- test: a-let-field-read-through-a-method-is-kept-by-a-let-field -->
-`fixedName` returns the `let` field `fixed`, so the label keeps it although `table` is a `var` its owner still
-writes.
+`fixedName` returns the `let` field `fixed`, so the label keeps the same record although `table` is a `var` its owner still writes.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -37,7 +37,7 @@ type Table
 	let fixed as ByteArray
 
 	static function create() returns Self
-		return Self{visits: 0, fixed: b"beta"}
+		return Self{visits: 0, fixed: "beta".toByteArray()}
 	end 'create'
 
 	function touch()
@@ -61,8 +61,9 @@ end 'main'
 4
 ```
 
-<!-- test: a-readonly-element-read-through-a-method-is-kept-by-a-let-field -->
-`nameOf` returns an element of a `readonly` array, which nothing can write.
+<!-- test: error.a-readonly-element-read-through-a-method-is-refused-by-a-let-field -->
+`nameOf` returns an element of a `readonly` array, which nothing can write. A `let` field names writable data, so
+it does not keep the read-only element: it keeps a clone.
 
 ```maxon
 typealias Names = Array with readonly ByteArray
@@ -97,6 +98,50 @@ function main() returns ExitCode
 	var table = Table.create()
 	table.register(b"gamma")
 	let label = Label.create(table.nameOf(1))
+
+	return label.text.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:33:20: cannot pass a value read out of a `readonly` element, which is read-only, to parameter 'text' of 'Label.create', which keeps it where something may write it; pass a clone()
+```
+
+<!-- test: a-readonly-element-read-through-a-method-is-kept-by-a-let-field-as-a-clone -->
+The same program keeping a clone of the element: the `let` field holds data of its own.
+
+```maxon
+typealias Names = Array with readonly ByteArray
+
+type Label
+	export let text as ByteArray
+
+	static function create(text ByteArray) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Label'
+
+type Table
+	var names as Names
+
+	static function create() returns Self
+		var names = Names.create(0)
+		names.push(b"alpha")
+		return Self{names: names}
+	end 'create'
+
+	function register(name ByteArray)
+		self.names.push(name)
+	end 'register'
+
+	function nameOf(index ElementIndex) returns ByteArray
+		return try self.names.get(index) otherwise panic("nameOf: no such name")
+	end 'nameOf'
+end 'Table'
+
+function main() returns ExitCode
+	var table = Table.create()
+	table.register(b"gamma")
+	let label = Label.create(table.nameOf(1).clone())
 
 	return label.text.count() as ExitCode
 end 'main'
@@ -156,7 +201,7 @@ type Table
 
 	static function create() returns Self
 		var names = Names.create(0)
-		names.push(b"alpha")
+		names.push("alpha".toByteArray())
 		return Self{names: names}
 	end 'create'
 
@@ -171,7 +216,7 @@ end 'Table'
 
 function main() returns ExitCode
 	var table = Table.create()
-	table.register(b"gamma")
+	table.register("gamma".toByteArray())
 	var roster = Roster.create(0)
 	roster.push(table.nameOf(1))
 
@@ -183,20 +228,20 @@ error E3078: <fragment>:27:9: cannot store a value other names may still write i
 ```
 
 <!-- test: a-module-let-returned-by-a-function-is-kept-by-a-let-field -->
-`banner` returns a module-level `let`, which is read-only everywhere.
+`banner` returns a module-level `let`, which is `immutable`, so its result and the label's `let` field are declared `immutable`.
 
 ```maxon
 let Banner = b"banner"
 
 type Label
-	export let text as ByteArray
+	export let text as immutable ByteArray
 
-	static function create(text ByteArray) returns Self
+	static function create(text immutable ByteArray) returns Self
 		return Self{text: text}
 	end 'create'
 end 'Label'
 
-function banner() returns ByteArray
+function banner() returns immutable ByteArray
 	return Banner
 end 'banner'
 
@@ -230,7 +275,7 @@ type Table
 	let fixed as ByteArray
 
 	static function create() returns Self
-		return Self{visits: 0, fixed: b"beta"}
+		return Self{visits: 0, fixed: "beta".toByteArray()}
 	end 'create'
 
 	function touch()
@@ -258,8 +303,8 @@ end 'main'
 4
 ```
 
-<!-- test: error.a-var-fields-element-returned-by-a-method-is-refused-by-a-let-field -->
-`nameOf` returns an element of a plain array its `var` field holds, which `table` may still write.
+<!-- test: a-var-fields-element-returned-by-a-method-is-kept-by-a-let-field -->
+`nameOf` returns an element of a plain array its `var` field holds, which `table` may still write, and the `let` field of the label keeps it.
 
 ```maxon
 typealias NameList = Array with ByteArray
@@ -277,7 +322,7 @@ type Table
 
 	static function create() returns Self
 		var names = NameList.create(0)
-		names.push(b"alpha")
+		names.push("alpha".toByteArray())
 		return Self{names: names}
 	end 'create'
 
@@ -292,19 +337,18 @@ end 'Table'
 
 function main() returns ExitCode
 	var table = Table.create()
-	table.register(b"gamma")
+	table.register("gamma".toByteArray())
 	let label = Label.create(table.nameOf(1))
 
 	return label.text.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/deep-let-read-only-call-results/error.a-var-fields-element-returned-by-a-method-is-refused-by-a-let-field.maxon:33:20: cannot pass a value other names may still write to parameter 'text' of 'Label.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+5
 ```
 
-<!-- test: error.a-merge-of-a-let-field-and-a-var-fields-element-is-refused-by-a-let-field -->
-`pick` returns the `let` field on one path and an element of the plain array a `var` field holds on the other. One
-alternative may still be written, so the `let` field of the label refuses the result.
+<!-- test: a-merge-of-a-let-field-and-a-var-fields-element-is-kept-by-a-let-field -->
+`pick` returns the `let` field on one path and an element of the plain array a `var` field holds on the other; the `let` field of the label keeps either.
 
 ```maxon
 typealias NameList = Array with ByteArray
@@ -323,8 +367,8 @@ type Table
 
 	static function create() returns Self
 		var names = NameList.create(0)
-		names.push(b"alpha")
-		return Self{names: names, fixed: b"beta"}
+		names.push("alpha".toByteArray())
+		return Self{names: names, fixed: "beta".toByteArray()}
 	end 'create'
 
 	function register(name ByteArray)
@@ -342,19 +386,20 @@ end 'Table'
 
 function main() returns ExitCode
 	var table = Table.create()
-	table.register(b"gamma")
+	table.register("gamma".toByteArray())
 	let label = Label.create(table.pick(true))
 
 	return label.text.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/deep-let-read-only-call-results/error.a-merge-of-a-let-field-and-a-var-fields-element-is-refused-by-a-let-field.maxon:38:20: cannot pass a value other names may still write to parameter 'text' of 'Label.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+4
 ```
 
-<!-- test: a-lookup-or-the-argument-is-read-only-when-the-argument-is -->
+<!-- test: error.a-lookup-or-the-argument-is-read-only-when-the-argument-is -->
 `spell` returns a read-only lookup on one path and its own parameter on the other. Its result is read-only when
-the argument is, here an element of a `readonly` array, so the `let` field of the label keeps it.
+the argument is, here an element of a `readonly` array, so the `let` field of the label, which names writable data,
+refuses it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -394,8 +439,8 @@ function main() returns ExitCode
 	return labelled.size() as ExitCode
 end 'main'
 ```
-```exitcode
-5
+```maxoncstderr
+error E3078: <fragment>:34:26: cannot pass a value read out of a `readonly` element, which is read-only, to parameter 'label' of 'Labelled.create', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: error.a-lookup-or-the-argument-is-refused-when-the-argument-may-be-written -->
@@ -440,5 +485,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/deep-let-read-only-call-results/error.a-lookup-or-the-argument-is-refused-when-the-argument-may-be-written.maxon:33:26: cannot pass a value other names may still write to parameter 'label' of 'Labelled.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+error E3078: <fragment>:33:26: cannot pass a value read out of a `readonly` element, which is read-only, to parameter 'label' of 'Labelled.create', which keeps it where something may write it; pass a clone()
 ```

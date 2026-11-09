@@ -197,7 +197,7 @@ export typealias FunctionNameSet = Set with ByteArray
 // A stdlib function name -> the host entry this compile's target lacks that its body reaches, directly
 // or through other stdlib functions. Membership IS "this function cannot be lowered for the target", so
 // the map is its own mark column and there is no second set to keep in step with it.
-export typealias StdlibSubstrateEntryMap = Map with (ByteArray, readonly ByteArray)
+export typealias StdlibSubstrateEntryMap = Map with (ByteArray, immutable ByteArray)
 
 // Stdlib function name -> its DENSE node index in the substrate fixpoint's call graph. A distinct alias
 // from `FuncIndexByName`, whose values are merged-MODULE function indices: these index the far
@@ -259,7 +259,7 @@ type ConstrainedOwnerLedger
 		end 'nothingToCredit'
 
 		self.seen.insert(typeName)
-		self.pending.push(typeName.clone())
+		self.pending.push(typeName)
 	end 'noteOwner'
 end 'ConstrainedOwnerLedger'
 
@@ -451,7 +451,7 @@ module function libraryReachOf(project Project, module MaxonModule, signatures P
 	// Under `check-scriptlib` every package function, and under `check-stdlib` every stdlib function, is a
 	// reach root: nothing calls one there, and a diagnostic in a swept library body is dropped.
 	for name in roster.auditedLibrary 'eachAuditedLibraryFunction'
-		initCallees.push(name.clone())
+		initCallees.push(name)
 	end 'eachAuditedLibraryFunction'
 
 	// Common-case short-circuit. If no op in user code reaches stdlib, no stdlib function is reachable
@@ -1866,7 +1866,7 @@ type SubstrateFixpoint
 
 	// The runtime entry `node` reaches. Defined only for a node `requiresSubstrate` accepts — an unmarked
 	// node's `seedOf` slot was never written, and the panics say so rather than returning slot 0's name.
-	function entryOf(node CsrIndex) returns ByteArray
+	function entryOf(node CsrIndex) returns immutable ByteArray
 		if not self.requiresSubstrate(node) 'unmarked'
 			panic("SubstrateFixpoint.entryOf: node {node} needs no substrate")
 		end 'unmarked'

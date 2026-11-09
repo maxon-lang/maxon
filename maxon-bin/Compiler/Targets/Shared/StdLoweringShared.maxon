@@ -194,24 +194,24 @@ export type CalleeAbiTable
 	// `FunctionNameIndex.create` refused a duplicate over, rather than whatever the module happened to hold
 	// when someone called it. Which is also why a name's id is its row: no name is interned twice, so
 	// `intern` appends in `functions` order and the columns are pushed in that same order.
-	export static function build(funcNames FunctionNameIndex) returns CalleeAbiTable
+	export static function build(funcNames FunctionNameIndex) returns immutable CalleeAbiTable
 		let rowCount = funcNames.functions.count()
-		var names = NameTable.create(rowCount as NameId, byteHint: (rowCount * CalleeNameByteEstimate) as NameByteCount)
-		var paramFloatMasks = ArgFloatMaskArray.create(rowCount, zeroed: false)
-		var resultClasses = CalleeResultClassArray.create(rowCount, zeroed: false)
+		var table = Self{names: NameTable.create(rowCount as NameId, byteHint: (rowCount * CalleeNameByteEstimate) as NameByteCount), paramFloatMasks: ArgFloatMaskArray.create(rowCount, zeroed: false), resultClasses: CalleeResultClassArray.create(rowCount, zeroed: false)} as isolated CalleeAbiTable
 
-		for func in funcNames.functions 'eachFunc'
-			let row = names.intern(func.name)
+		modify table 'fill'
+			for func in funcNames.functions 'eachFunc'
+				let row = table.names.intern(func.name)
 
-			if row != (paramFloatMasks.count() as NameId) 'nameAlreadyInterned'
-				panic("CalleeAbiTable.build: callee '{String.from(func.name)}' interned as id {row} where the columns hold {paramFloatMasks.count()} rows — `FunctionNameIndex.create` refused a duplicate name, so every intern here must append")
-			end 'nameAlreadyInterned'
+				if row != (table.paramFloatMasks.count() as NameId) 'nameAlreadyInterned'
+					panic("CalleeAbiTable.build: callee '{String.from(func.name)}' interned as id {row} where the columns hold {table.paramFloatMasks.count()} rows — `FunctionNameIndex.create` refused a duplicate name, so every intern here must append")
+				end 'nameAlreadyInterned'
 
-			paramFloatMasks.push(floatParamMaskOf(func.paramTypes))
-			resultClasses.push(returnTypeResultClass(func.returnType))
-		end 'eachFunc'
+				table.paramFloatMasks.push(floatParamMaskOf(func.paramTypes))
+				table.resultClasses.push(returnTypeResultClass(func.returnType))
+			end 'eachFunc'
+		end 'fill'
 
-		return Self{names: names, paramFloatMasks: paramFloatMasks, resultClasses: resultClasses}
+		return freeze table
 	end 'build'
 
 	function paramFloatMaskOf(callee ByteArray) returns ArgFloatMask throws CalleeAbiLookup

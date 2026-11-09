@@ -50,7 +50,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:16:14: cannot store an immutable 'Box' into 'List.append.value', which holds a mutable 'Box'; store a copy
+error E3196: <fragment>:16:14: cannot store an immutable 'Box' into 'List.append.value', which holds a mutable 'Box'; declare the element `immutable Box`
 ```
 
 <!-- test: a-frozen-argument-to-a-parameter-map-upsert-stores-refused -->
@@ -81,7 +81,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:20:12: 'keep' writes 'item'; 'pinned' is immutable
+error E3207: <fragment>:20:12: 'keep' writes 'item' (line 14: 'Map.upsert' keeps a value read from it in a writable slot (its parameter 'value')); 'pinned' is immutable
 ```
 
 <!-- test: a-declared-generic-method-that-stores-t-refuses-a-frozen-argument -->
@@ -127,7 +127,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:35:12: cannot store an immutable 'Job' into 'Stack.push.item', which holds a mutable 'Job'; store a copy
+error E3196: <fragment>:35:12: cannot store an immutable 'Job' into 'Stack.push.item', which holds a mutable 'Job'; declare the element `immutable Job`
 ```
 
 <!-- test: array-insert-of-a-frozen-value-into-a-mutable-array-refused -->
@@ -155,7 +155,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:17:23: cannot store an immutable 'Box' into 'Array.insert.value', which holds a mutable 'Box'; store a copy
+error E3196: <fragment>:17:23: cannot store an immutable 'Box' into 'Array.insert.value', which holds a mutable 'Box'; declare the element `immutable Box`
 ```
 
 <!-- test: list-with-immutable-takes-frozen-values-and-runs -->
@@ -284,7 +284,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:35:14: cannot store a mutable 'Job' into 'Stack.push.item', which holds an immutable 'Job'; freeze it, or store a copy
+error E3196: <fragment>:35:14: cannot store a mutable 'Job' into 'Stack.push.item', which holds an immutable 'Job'; freeze it
 ```
 
 <!-- test: a-mutable-local-pushed-into-an-immutable-array-refused -->
@@ -312,7 +312,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:16:13: cannot store a mutable 'Box' into 'an element of the container push writes', which holds an immutable 'Box'; freeze it, or store a copy
+error E3196: <fragment>:16:13: cannot store a mutable 'Box' into 'an element of the container push writes', which holds an immutable 'Box'; freeze it
 ```
 
 <!-- test: a-fresh-value-pushed-into-an-immutable-array-refused -->
@@ -338,7 +338,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:15:13: cannot store a mutable 'Box' into 'an element of the container push writes', which holds an immutable 'Box'; freeze it, or store a copy
+error E3196: <fragment>:15:13: cannot store a mutable 'Box' into 'an element of the container push writes', which holds an immutable 'Box'; freeze it
 ```
 
 <!-- test: a-moved-local-pushed-into-an-immutable-array-refused -->
@@ -365,7 +365,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:16:13: cannot store a mutable 'Box' into 'an element of the container push writes', which holds an immutable 'Box'; freeze it, or store a copy
+error E3196: <fragment>:16:13: cannot store a mutable 'Box' into 'an element of the container push writes', which holds an immutable 'Box'; freeze it
 ```
 
 <!-- test: a-mutable-value-reaching-an-immutable-element-through-a-parameter-refused -->
@@ -424,7 +424,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:16:25: cannot store a mutable 'Box' into 'Map.upsert.value', which holds an immutable 'Box'; freeze it, or store a copy
+error E3196: <fragment>:16:25: cannot store a mutable 'Box' into 'Map.upsert.value', which holds an immutable 'Box'; freeze it
 ```
 
 <!-- test: a-mutable-value-set-into-an-immutable-array-refused -->
@@ -453,7 +453,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:18:26: cannot store a mutable 'Box' into 'an element of the container set writes', which holds an immutable 'Box'; freeze it, or store a copy
+error E3196: <fragment>:18:26: cannot store a mutable 'Box' into 'an element of the container set writes', which holds an immutable 'Box'; freeze it
 ```
 
 <!-- test: an-array-literal-of-fresh-values-into-an-immutable-array-refused -->
@@ -478,7 +478,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:14:32: cannot store a mutable 'Box' into 'an element of the array literal', which holds an immutable 'Box'; freeze it, or store a copy
+error E3196: <fragment>:14:32: cannot store a mutable 'Box' into 'an element of the array literal', which holds an immutable 'Box'; freeze it
 ```
 
 <!-- test: readonly-and-immutable-element-arrays-are-different-types -->
@@ -549,7 +549,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:28:33: cannot store a mutable 'Job' into 'Holder.wrap.item', which holds an immutable 'Job'; freeze it, or store a copy
+error E3196: <fragment>:28:33: cannot store a mutable 'Job' into 'Holder.wrap.item', which holds an immutable 'Job'; freeze it
 ```
 
 <!-- test: a-static-factory-of-a-mutable-instance-refuses-a-frozen-argument -->
@@ -588,7 +588,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:28:32: cannot store an immutable 'Job' into 'Holder.wrap.item', which holds a mutable 'Job'; store a copy
+error E3196: <fragment>:28:32: cannot store an immutable 'Job' into 'Holder.wrap.item', which holds a mutable 'Job'; declare the element `immutable Job`
 ```
 
 <!-- test: a-fresh-value-passed-to-an-immutable-parameter-refused -->
@@ -782,7 +782,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:29:7: 'load' writes 'crate'; 'live' is immutable
+error E3207: <fragment>:29:7: 'load' writes 'crate' (line 23: 'List.append' keeps a value read from it in a writable slot (its parameter 'value')); 'live' is immutable
 ```
 
 <!-- test: a-frozen-field-of-a-parameter-held-by-a-let-into-an-immutable-list-runs -->
@@ -866,7 +866,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:30:7: 'load' needs 'crate' frozen; 'live' is mutable. Freeze it first
+error E3207: <fragment>:30:7: 'load' needs 'crate' frozen (line 23: 'List.append' keeps a value read from it in an `immutable` slot (its parameter 'value')); 'live' is mutable. Freeze it first
 ```
 
 <!-- test: a-receiverless-generic-call-refuses-a-frozen-argument-for-the-inferred-instance -->
@@ -903,7 +903,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:26:27: cannot store an immutable 'Job' into 'Holder.wrap.item', which holds a mutable 'Job'; store a copy
+error E3196: <fragment>:26:27: cannot store an immutable 'Job' into 'Holder.wrap.item', which holds a mutable 'Job'; declare the element `immutable Job`
 ```
 
 <!-- test: a-receiverless-generic-call-with-a-mutable-argument-runs -->
@@ -1082,7 +1082,7 @@ end 'Box'
 function main() returns ExitCode
 	var a = freeze Box.create(1)
 	var b = Box.create(2)
-	var (x, y) = (a, b)
+	let (x, y) = (a, b)
 	y.n = x.n + 8
 	print("{x.n} {y.n} {b.n}\n")
 	return 0
@@ -1155,7 +1155,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:18:16: cannot store an immutable 'Box' into 'an item of the tuple', which holds a mutable 'Box'; store a copy
+error E3196: <fragment>:18:16: cannot store an immutable 'Box' into 'an item of the tuple', which holds a mutable 'Box'; declare the item `immutable Box`
 ```
 
 <!-- test: a-tuple-bound-to-a-local-into-a-list-of-plain-tuples-refused -->
@@ -1392,7 +1392,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:37:14: cannot store an immutable 'Box' into 'an item of the tuple', which holds a mutable 'Box'; store a copy
+error E3196: <fragment>:37:14: cannot store an immutable 'Box' into 'an item of the tuple', which holds a mutable 'Box'; declare the item `immutable Box`
 ```
 
 <!-- test: a-tuple-of-frozen-items-handed-to-an-immutable-generic-method-runs -->
@@ -1501,7 +1501,7 @@ error E3196: <fragment>:14:16: cannot store an isolated 'Box' into 'a value of t
 ```
 
 <!-- test: a-read-only-element-in-a-tuple-literal-refused -->
-`held` is read out of a `readonly` element, and the tuple would keep it where something may write it.
+`held` is read out of a `readonly` element, and the tuple keeps it where the write through `pair.0` is refused.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -1527,7 +1527,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:18:6: cannot assign a value, which may share storage with a `readonly` element, to mutable binding 'pair'; use 'let' instead of 'var', or use clone()
+error E3159: <fragment>:19:2: cannot write through 'pair.0', which may be a record read out of a `readonly` element that a call or a merge handed back; nothing reachable through a `readonly` element may be written; use clone()
 ```
 
 <!-- test: a-read-only-element-in-a-map-literal-refused -->
@@ -1652,7 +1652,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:14:16: cannot store an immutable 'Box' into 'a value of the map literal', which holds a mutable 'Box'; store a copy
+error E3196: <fragment>:14:16: cannot store an immutable 'Box' into 'a value of the map literal', which holds a mutable 'Box'; declare the value `immutable Box`
 ```
 
 <!-- test: a-loop-variable-over-an-immutable-array-is-blamed-as-immutable -->
@@ -1683,7 +1683,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:19:3: cannot write through 'item': 'item' is read-only (an `immutable` element) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3159: <fragment>:19:3: cannot write through 'item': 'item' is read-only (a `for` element of a read-only source) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 <!-- test: a-value-read-out-of-an-immutable-list-bound-to-a-var-is-blamed-as-immutable -->
@@ -1711,11 +1711,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:17:6: cannot assign a value read out of an `immutable` element to mutable binding 'first'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:17:6: cannot assign a value, which may share storage with an `immutable` element, to mutable binding 'first'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: an-element-handed-back-by-a-call-over-an-immutable-array-is-blamed-as-immutable -->
-`pick` returns an element of a frozen array, so the binding `held` shares storage with an `immutable` element.
+`pick` returns an `immutable` element of a frozen array, so writing through the binding `held` is blamed on the `immutable` element.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -1729,7 +1729,7 @@ type Box
 	end 'create'
 end 'Box'
 
-function pick(items FrozenBoxes) returns Box
+function pick(items FrozenBoxes) returns immutable Box
 	return try items.get(0) otherwise panic("empty")
 end 'pick'
 
@@ -1744,7 +1744,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:21:6: cannot assign a value, which may share storage with an `immutable` element, to mutable binding 'held'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:22:2: cannot write 'n' through 'held', which is immutable
 ```
 
 <!-- test: an-element-handed-back-by-a-call-over-a-readonly-array-is-blamed-as-readonly -->
@@ -1880,7 +1880,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:37:12: cannot store an immutable 'Box' into 'Pairs.add.first', which holds a mutable 'Box'; store a copy
+error E3196: <fragment>:37:12: cannot store an immutable 'Box' into 'Pairs.add.first', which holds a mutable 'Box'; declare the element `immutable Box`
 ```
 
 <!-- test: an-item-handed-back-by-a-call-over-a-tuple-with-a-frozen-item-is-immutable -->
@@ -2007,7 +2007,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:13:10: cannot store an immutable 'Box' into 'an item of the tuple', which holds a mutable 'Box'; store a copy
+error E3196: <fragment>:13:10: cannot store an immutable 'Box' into 'an item of the tuple', which holds a mutable 'Box'; declare the item `immutable Box`
 ```
 
 <!-- test: a-nested-array-of-another-capability-is-another-type -->
@@ -2217,7 +2217,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:16:21: cannot store a mutable 'Box' into 'held', which holds an immutable 'Box'; freeze it, or store a copy
+error E3196: <fragment>:16:21: cannot store a mutable 'Box' into 'Shelf.held', which holds an immutable 'Box'; freeze it
 ```
 
 <!-- test: a-fresh-value-assigned-to-an-immutable-field-refused -->
@@ -2250,7 +2250,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:22:15: cannot store a mutable 'Box' into 'held', which holds an immutable 'Box'; freeze it, or store a copy
+error E3196: <fragment>:22:15: cannot store a mutable 'Box' into 'held', which holds an immutable 'Box'; freeze it
 ```
 
 <!-- test: a-fresh-value-sent-to-an-immutable-message-parameter-refused -->
@@ -2358,7 +2358,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:26:16: cannot store a mutable 'Job' into 'held', which holds an immutable 'Job'; freeze it, or store a copy
+error E3196: <fragment>:26:16: cannot store a mutable 'Job' into 'held', which holds an immutable 'Job'; freeze it
 ```
 
 <!-- test: a-field-assignment-into-an-immutable-instance-takes-a-frozen-value-and-runs -->
@@ -2434,7 +2434,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:5:41: 'create' writes 'certificate' (line 111: `return Self{storedCertificate: certificate, extensions: extensions}`); 'der' is immutable
+error E3208: <fragment>:5:34: 'create' returns 'certificate' or 'extensions'; they must both be mutable or both immutable here
 ```
 
 <!-- test: a-generic-function-declared-to-return-immutable-hands-back-frozen-data -->
@@ -2467,7 +2467,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:23:15: 'bump' writes 'box' (line 18: `box.n = box.n + 1`); 'frozenRow' is immutable
+error E3207: <fragment>:23:15: 'bump' writes 'box' (line 18: `box.n = box.n + 1`); 'frozenRow(1)' is immutable
 ```
 
 <!-- test: a-generic-function-declared-to-return-isolated-hands-back-an-isolated-value -->

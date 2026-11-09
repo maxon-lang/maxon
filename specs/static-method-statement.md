@@ -256,7 +256,7 @@ error E3004: <fragment>:14:11: call to undefined function 'Pair.nope'
 ```
 
 <!-- test: static-method-statement.error.a-method-writing-a-field-of-a-static-let-is-refused -->
-The same statement over a `static let`: the receiver chain `Registry.current.items` is read-only all the way down, so a method that writes the field is refused as writing through immutable storage, the way a bare statement on a `let` binding's field is.
+The same statement over a `static let`: the receiver chain `Registry.current.items` is immutable (a module-level or `static` `let` holds immutable data), so a method that writes the field is refused as writing through immutable storage (E3207).
 ```maxon
 typealias StringArray = Array with String
 
@@ -276,5 +276,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:15:25: cannot write through 'Registry.current.items': 'Registry.current' is read-only (a module-level `let`) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3207: <fragment>:15:25: 'push' needs a writable receiver; 'items' is immutable
 ```

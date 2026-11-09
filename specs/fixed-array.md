@@ -1029,17 +1029,14 @@ end 'main'
 5
 ```
 
-## A `let` Fixed Array Still Refuses The Write, By The Declaration's Own Rule
+## A `let` Fixed Array Is Written Through Unless A Literal Built It
 
-⚖ **A `let` FIXED ARRAY IS REFUSED THE WRITE BY THE ORDINARY PARAMETER-MUTATION RULE, NOT BY A ROSTER.**
-`stdlib/FixedArray.maxon`'s `set` writes through its receiver (`managed.set`), so the refusal (E3159) comes from the
-declaration, as it does for `Set`'s and `Map`'s own mutators.
+⚖ **A `let` NAMES A FIXED ARRAY IT NEVER REASSIGNS, AND THE RECORD BEHIND THE NAME IS WRITABLE.**
+`stdlib/FixedArray.maxon`'s `set` writes through its receiver (`managed.set`), and a `let` built by `create()` holds
+mutable data, so the write reaches the record. A `let` built by a literal is constant image data instead, and the
+same `set` is refused at the write.
 
-⚠ **THE SENTENCE NAMES THE PARAMETER**, and that is the whole of what this case pins: it names the
-PARAMETER the callee declares, not a surface. A case that asserted only "refused" would not see the
-difference.
-
-<!-- test: error.a-write-through-a-let-fixed-array-is-refused-off-the-declaration -->
+<!-- test: a-write-through-a-let-fixed-array-reaches-the-record -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
@@ -1050,8 +1047,23 @@ function main() returns ExitCode
 	return v.get(0)
 end 'main'
 ```
+```exitcode
+7
+```
+
+<!-- test: error.a-write-through-a-let-fixed-array-literal-is-refused-off-the-declaration -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = FixedArray with 3 Int
+
+function main() returns ExitCode
+	let v = Vec3 from [1, 2, 3]
+	v.set(0, value: 7)
+	return v.get(0)
+end 'main'
+```
 ```maxoncstderr
-error E3159: <fragment>:7:4: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E3207: <fragment>:7:2: 'set' writes its receiver (line 137: `try managed.set(index, value)`); 'v' is immutable
 ```
 
 ## A Fixed Array Global Takes The Declared Generic's Road
@@ -2555,8 +2567,8 @@ end 'launder'
 
 function main() returns ExitCode
 	var tags = Tags.create(launder(3), value: Tag.make(5))
-	var first = try tags.get(0) otherwise Tag.make(0)
-	var last = try tags.get(2) otherwise Tag.make(0)
+	let first = try tags.get(0) otherwise Tag.make(0)
+	let last = try tags.get(2) otherwise Tag.make(0)
 
 	print("{tags.count()} {first.text} {last.text} {last.weight}\n")
 
@@ -3922,7 +3934,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:4:4: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E3207: <fragment>:4:2: 'set' writes its receiver (line 137: `try managed.set(index, value)`); 'v' is immutable
 ```
 
 <!-- test: error.the-name-vector-is-not-a-builtin -->
@@ -3965,7 +3977,7 @@ function main() returns ExitCode
 	var nodes = Nodes.create(0)
 	nodes.push(Node.create(7))
 	var marks = Marks.create()
-	var held = try nodes.get(0) otherwise panic("get")
+	let held = try nodes.get(0) otherwise panic("get")
 	marks.set(0, value: 1)
 	try nodes.set(0, value: Node.create(9)) otherwise panic("set")
 	marks.set(1, value: 2)
@@ -4009,7 +4021,7 @@ end 'Ledger'
 function main() returns ExitCode
 	var ledger = Ledger.create()
 	ledger.nodes.push(Node.create(7))
-	var held = try ledger.nodes.get(0) otherwise panic("get")
+	let held = try ledger.nodes.get(0) otherwise panic("get")
 	ledger.marks.set(0, value: 1)
 	try ledger.nodes.set(0, value: Node.create(9)) otherwise panic("set")
 	ledger.marks.set(1, value: 2)
@@ -4040,7 +4052,7 @@ type Ring uses Element
 	end 'create'
 
 	function swapFirst(replacement Element) returns Element
-		var old = slots.get(0)
+		let old = slots.get(0)
 		slots.set(0, value: replacement)
 
 		return old

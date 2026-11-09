@@ -94,7 +94,7 @@ type Lex
 		counter = counter + 8
 		counter = counter + 9
 		counter = counter + 10
-		var t = cur.current()
+		let t = cur.current()
 		try cur.advance() otherwise throw IterErr.stop
 		return t
 	end 'consume'

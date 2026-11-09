@@ -153,8 +153,8 @@ distinguishes the two — `string-trim/trim-end-emoji` only needs an emoji NOT t
 search that always answered `Cn` would also give.
 ```maxon
 function main() returns ExitCode
-	let syms = CharacterSet.symbols()
-	let letters = CharacterSet.letters()
+	let syms = CharacterSet.symbols
+	let letters = CharacterSet.letters
 	print("{syms.contains('🎉')}\n")
 	print("{letters.contains('🎉')}\n")
 	print("{letters.contains('𝐀')}")
@@ -178,7 +178,7 @@ direction is caught twice rather than once.
 ```maxon
 function main() returns ExitCode
 	let s = "🎉🎉ok🎉"
-	let r = s.trim(CharacterSet.symbols())
+	let r = s.trim(CharacterSet.symbols)
 	print("[{r}]")
 	return 0
 end 'main'
@@ -201,7 +201,7 @@ falls out between two entries; and above EVERY range (U+10FFFF), which is the on
 the table's last index and is therefore what an off-by-one in the search's initial high bound would read past.
 ```maxon
 function main() returns ExitCode
-	let letters = CharacterSet.letters()
+	let letters = CharacterSet.letters
 	print("{letters.contains('󠄀')}\n")
 	print("{letters.contains('󠇰')}\n")
 	print("{letters.contains('􏿿')}")
@@ -287,8 +287,8 @@ compiler is right to refuse it. Binding without inspecting is what this case nee
 the drop obligation is the binding's, not the reader's.
 ```maxon
 function main() returns ExitCode
-	let punctuation = CharacterSet.punctuation()
-	let blanks = CharacterSet.whitespacesAndNewlines()
+	let punctuation = CharacterSet.punctuation
+	let blanks = CharacterSet.whitespacesAndNewlines
 	print("ok" if punctuation.contains('!') and blanks.contains('	') else "no")
 	return 0
 end 'main'
@@ -347,7 +347,7 @@ end 'main'
 The set is BORROWED by the scan, so trimming twice against one set neither frees it early nor twice.
 ```maxon
 function main() returns ExitCode
-	let d = CharacterSet.decimalDigits()
+	let d = CharacterSet.decimalDigits
 	let mixed = "12a34"
 	let head = mixed.trimStart(d)
 	let tail = mixed.trimEnd(d)
@@ -476,15 +476,15 @@ bit reopens it.**
 (The source-side statement of the same fact lives at `MmRuntime.noteDestructorUsage`'s header.)
 ```maxon
 type Trimmer
-	var chars as CharacterSet
+	var chars as immutable CharacterSet
 
-	static function init(cs CharacterSet) returns Self
+	static function init(cs immutable CharacterSet) returns Self
 		return Self{chars: cs}
 	end 'init'
 end 'Trimmer'
 
 function main() returns ExitCode
-	let trimmer = Trimmer.init(CharacterSet.whitespaces())
+	let trimmer = Trimmer.init(CharacterSet.whitespaces)
 	_ = trimmer
 	return 0
 end 'main'
@@ -503,11 +503,11 @@ all.
 ```maxon
 union Slot
 	empty
-	filled(chars CharacterSet)
+	filled(let chars immutable CharacterSet)
 end 'Slot'
 
 function main() returns ExitCode
-	let s = Slot.filled(CharacterSet.whitespaces())
+	let s = Slot.filled(CharacterSet.whitespaces)
 	print("{s}")
 	return 0
 end 'main'
@@ -540,11 +540,11 @@ type Box uses T
 	end 'init'
 end 'Box'
 
-typealias CharacterSetBox = Box with CharacterSet
+typealias CharacterSetBox = Box with immutable CharacterSet
 
 function main() returns ExitCode
 	var inits = 0 as Tally
-	_ = CharacterSetBox.init(CharacterSet.whitespaces(), inits: inits)
+	_ = CharacterSetBox.init(CharacterSet.whitespaces, inits: inits)
 	return inits - 1
 end 'main'
 ```

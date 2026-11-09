@@ -164,9 +164,10 @@ end 'main'
 ```
 
 <!-- test: empty-bstring-push -->
+An empty byte string is immutable image data, so the pushes go to its `.clone()`.
 ```maxon
 function main() returns ExitCode
-	var v = b""
+	var v = b"".clone()
 	v.push(7)
 	v.push(8)
 	return v.count() as ExitCode

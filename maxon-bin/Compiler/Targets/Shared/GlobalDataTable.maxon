@@ -247,7 +247,7 @@ export typealias PendingRdataAbsRelocArray = Array with PendingRdataAbsReloc
 // minted (offset via `rdataOffsetOf`). It is carried on the DATA TABLE, not the code-relocation list,
 // because it patches the rdata IMAGE, not the `.text` bytes — the exact reason `PendingRdataAbsReloc` above is.
 export type PendingRdataReloc
-	export let funcName as ByteArray
+	export let funcName as immutable ByteArray
 	export let rdataLabel as String
 	export let offsetInLabel as ByteOffset
 
@@ -689,7 +689,7 @@ export type GlobalDataTable
 		self.rdataSizeSoFar = self.rdataSizeSoFar + payload.count() as ByteOffset
 		self.nameIndex.upsert(label, value: self.names.count() as MachineWord)
 		self.names.push(label)
-		self.nameBytes.push(label.toByteArray())
+		self.nameBytes.push(freeze label.toByteArray())
 		self.values.push(payload)
 		self.payloadKinds.push(kind)
 	end 'appendRdataPayload'
@@ -987,7 +987,7 @@ export type GlobalDataTable
 	// One record, shared by every op that addresses this payload. That is sound because a Std op's label is
 	// read-only to every reader of it, and because the real Std module never crosses a thread — a `StdUnit`
 	// is a deep clone.
-	export function labelBytesOf(label String) returns ByteArray
+	export function labelBytesOf(label String) returns immutable ByteArray
 		let index = self.payloadIndexOf(label, what: "labelBytesOf")
 		return try self.nameBytes.get(index as ElementIndex) otherwise panic("GlobalDataTable.labelBytesOf: nameIndex maps '{label}' to {index}, which nameBytes does not hold — the spelling is pushed in the same `appendRdataPayload` call as the name and the payload, so the columns cannot disagree")
 	end 'labelBytesOf'

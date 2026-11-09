@@ -1,7 +1,6 @@
 typealias ReportedTypeNameSet = Set with ByteArray
 
 let ReadingFileSeenPrefix = "reading "
-let NoTypeParameters = NameRoster.create(0)
 
 union SignatureSpelling
 	callee
@@ -59,18 +58,18 @@ type SignatureSubject
 	export let nameLine as LineNumber
 	export let nameColumn as ColumnNumber
 	export let enclosing as EnclosingType
-	export let declaredName as ByteArray
-	export let typeParameters as NameRoster
+	export let declaredName as immutable ByteArray
+	export let typeParameters as immutable NameRoster
 
 	static function create(spelling SignatureSpelling, tier Visibility, readerFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, enclosing EnclosingType, declaredName ByteArray, kind SignatureSubjectKind) returns SignatureSubject
-		return Self{kind: kind, spelling: spelling, tier: tier, readerFilePath: readerFilePath, reportFilePath: readerFilePath, nameLine: nameLine, nameColumn: nameColumn, enclosing: enclosing, declaredName: declaredName, typeParameters: NoTypeParameters}
+		return Self{kind: kind, spelling: spelling, tier: tier, readerFilePath: readerFilePath, reportFilePath: readerFilePath, nameLine: nameLine, nameColumn: nameColumn, enclosing: enclosing, declaredName: declaredName, typeParameters: freeze NameRoster.create(0)}
 	end 'create'
 
 	function readingFrom(declFilePath FilePath) returns SignatureSubject
-		return Self{kind: self.kind, spelling: self.spelling, tier: self.tier, readerFilePath: declFilePath, reportFilePath: self.reportFilePath, nameLine: self.nameLine, nameColumn: self.nameColumn, enclosing: EnclosingType.none, declaredName: self.declaredName, typeParameters: NoTypeParameters}
+		return Self{kind: self.kind, spelling: self.spelling, tier: self.tier, readerFilePath: declFilePath, reportFilePath: self.reportFilePath, nameLine: self.nameLine, nameColumn: self.nameColumn, enclosing: EnclosingType.none, declaredName: self.declaredName, typeParameters: freeze NameRoster.create(0)}
 	end 'readingFrom'
 
-	function scopedToTypeParameters(names NameRoster) returns SignatureSubject
+	function scopedToTypeParameters(names immutable NameRoster) returns SignatureSubject
 		return Self{kind: self.kind, spelling: self.spelling, tier: self.tier, readerFilePath: self.readerFilePath, reportFilePath: self.reportFilePath, nameLine: self.nameLine, nameColumn: self.nameColumn, enclosing: self.enclosing, declaredName: self.declaredName, typeParameters: names}
 	end 'scopedToTypeParameters'
 
@@ -78,7 +77,7 @@ type SignatureSubject
 		return self.typeParameters.contains(name)
 	end 'namesATypeParameter'
 
-	function seenKey(name ByteArray) returns ByteArray
+	function seenKey(name immutable ByteArray) returns immutable ByteArray
 		if self.readerFilePath.equals(self.reportFilePath) 'theSubjectsOwnFile'
 			return name
 		end 'theSubjectsOwnFile'
@@ -89,7 +88,7 @@ end 'SignatureSubject'
 
 union EnclosingType
 	none
-	named(let typeName ByteArray)
+	named(let typeName immutable ByteArray)
 end 'EnclosingType'
 
 function subjectDisplay(signatures ProgramSignatures, subject SignatureSubject) returns String
@@ -102,11 +101,11 @@ end 'subjectDisplay'
 // Carried as a union and rendered only where a diagnostic is reported: the phrase is one String per
 // parameter of every audited signature, on a walk that reports nothing in nearly every compile.
 union SignaturePosition
-	parameter(let name ByteArray)
+	parameter(let name immutable ByteArray)
 	returnType
 	throwsClause
 	declaredType
-	payload(let name ByteArray)
+	payload(let name immutable ByteArray)
 	aliasTarget
 	backingRecord
 	implementsClause
@@ -235,7 +234,7 @@ function checkEveryField(project Project, signatures ProgramSignatures, decl Typ
 
 		let fieldName = try layout.fieldNames.get(position) otherwise panic("checkEveryField: fieldNames.get OOB at {position} inside its own `upto` bound")
 		let declared = try layout.fieldTypes.get(position) otherwise panic("checkEveryField: `type {String.from(layout.name)}` names {layout.fieldNames.count()} field(s) and carries {layout.fieldTypes.count()} field type(s) — `StructLayout.addField` writes the columns in lockstep")
-		let subject = memberSubject(decl, tier: tier, memberName: fieldName, site: layout.fieldTypeSites.siteAt(position), kind: SignatureSubjectKind.instanceField).scopedToTypeParameters(layout.typeParamNames.clone())
+		let subject = memberSubject(decl, tier: tier, memberName: fieldName, site: layout.fieldTypeSites.siteAt(position), kind: SignatureSubjectKind.instanceField).scopedToTypeParameters(layout.typeParamNames)
 		var seen = ReportedTypeNameSet.create()
 		walkSignatureType(project, signatures: signatures, subject: subject, where: SignaturePosition.declaredType, declared: declared, typeNames: fieldTypeNames, seen: seen)
 		walkSpelledBrand(project, signatures: signatures, subject: subject, where: SignaturePosition.declaredType, brand: layout.fieldDeclaredBrand(position), seen: seen)
@@ -349,10 +348,10 @@ function checkConformingType(project Project, signatures ProgramSignatures, conf
 	end 'eachInterface'
 end 'checkConformingType'
 
-function typeParametersOf(signatures ProgramSignatures, typeName ByteArray, readerFilePath FilePath) returns NameRoster
+function typeParametersOf(signatures ProgramSignatures, typeName ByteArray, readerFilePath FilePath) returns immutable NameRoster
 	return match signatures.structFor(typeName, readerFilePath: readerFilePath) 'aStruct'
 		declared(layout) gives layout.typeParamNames
-		undeclared gives NoTypeParameters
+		undeclared gives freeze NameRoster.create(0)
 	end 'aStruct'
 end 'typeParametersOf'
 
@@ -549,7 +548,7 @@ function checkThrowsType(project Project, signatures ProgramSignatures, subject 
 
 	match clause 'clause'
 		none then return
-		throwing(declared) then walkSignatureTypeName(project, signatures: signatures, subject: subject, where: SignaturePosition.throwsClause, name: declared.toByteArray(), seen: seen)
+		throwing(declared) then walkSignatureTypeName(project, signatures: signatures, subject: subject, where: SignaturePosition.throwsClause, name: freeze declared.toByteArray(), seen: seen)
 	end 'clause'
 end 'checkThrowsType'
 
@@ -644,7 +643,7 @@ function declarationOfIdentity(signatures ProgramSignatures, name ByteArray) ret
 	end 'declaringFile'
 end 'declarationOfIdentity'
 
-function judgeDeclaredType(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, name ByteArray, kind TypeDeclKind, visibility Visibility, declFilePath FilePath, seen ReportedTypeNameSet)
+function judgeDeclaredType(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, name immutable ByteArray, kind TypeDeclKind, visibility Visibility, declFilePath FilePath, seen ReportedTypeNameSet)
 	if declFilePath.equals(CompilerOwnedDeclFilePath) 'noAuthorWroteAModifierForIt'
 		return
 	end 'noAuthorWroteAModifierForIt'
@@ -678,7 +677,7 @@ function judgeDeclaredType(project Project, signatures ProgramSignatures, subjec
 	walkThroughAlias(project, signatures: signatures, subject: subject, where: where, name: name, kind: kind, declFilePath: declFilePath, seen: seen)
 end 'judgeDeclaredType'
 
-function demandedDeclarationName(signatures ProgramSignatures, written ByteArray, base ByteArray) returns ByteArray
+function demandedDeclarationName(signatures ProgramSignatures, written ByteArray, base immutable ByteArray) returns immutable ByteArray
 	if signatures.isServiceHandle(written) 'aHandleIsItsServicesTier'
 		return signatures.serviceOfHandle(written)
 	end 'aHandleIsItsServicesTier'

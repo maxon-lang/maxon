@@ -9,7 +9,7 @@ category: types
 
 ## Documentation
 
-CharacterSet predefined sets use Unicode General Categories for character classification rather than ASCII-only ranges. This means `CharacterSet.letters()` includes all Unicode letters (Cyrillic, CJK, Arabic, etc.), `CharacterSet.decimalDigits()` includes all Unicode decimal digits, and so on.
+CharacterSet predefined sets use Unicode General Categories for character classification rather than ASCII-only ranges. This means `CharacterSet.letters` includes all Unicode letters (Cyrillic, CJK, Arabic, etc.), `CharacterSet.decimalDigits` includes all Unicode decimal digits, and so on.
 
 The `unicodeGeneralCategory(cp)` function returns the Unicode General Category for any codepoint, using a page-based dispatch lookup table generated from the Unicode Character Database (DerivedGeneralCategory-16.0.0.txt).
 
@@ -34,7 +34,7 @@ The `unicodeGeneralCategory(cp)` function returns the Unicode General Category f
 <!-- test: cyrillic-letters -->
 ```maxon
 function main() returns ExitCode
-	let letters = CharacterSet.letters()
+	let letters = CharacterSet.letters
 	let a = '\u0410'
 	let b = '\u0430'
 	print("{letters.contains(a)}\n{letters.contains(b)}")
@@ -52,7 +52,7 @@ true
 <!-- test: cjk-letters -->
 ```maxon
 function main() returns ExitCode
-	let letters = CharacterSet.letters()
+	let letters = CharacterSet.letters
 	let c = '\u4E00'
 	print("{letters.contains(c)}")
 	return 0
@@ -68,7 +68,7 @@ true
 <!-- test: arabic-digits -->
 ```maxon
 function main() returns ExitCode
-	let digits = CharacterSet.decimalDigits()
+	let digits = CharacterSet.decimalDigits
 	let d = '\u0660'
 	print("{digits.contains(d)}")
 	return 0
@@ -84,7 +84,7 @@ true
 <!-- test: unicode-punctuation -->
 ```maxon
 function main() returns ExitCode
-	let punct = CharacterSet.punctuation()
+	let punct = CharacterSet.punctuation
 	let a = '\u00AB'
 	let b = '\u00BB'
 	print("{punct.contains(a)}\n{punct.contains(b)}")
@@ -102,7 +102,7 @@ true
 <!-- test: unicode-symbols -->
 ```maxon
 function main() returns ExitCode
-	let syms = CharacterSet.symbols()
+	let syms = CharacterSet.symbols
 	let c = '\u00A9'
 	print("{syms.contains(c)}")
 	return 0
@@ -135,7 +135,7 @@ false
 ```maxon
 function main() returns ExitCode
 	let s = "\u0410\u0411\u0412 123 \u0410\u0411\u0412"
-	let result = s.trim(CharacterSet.letters())
+	let result = s.trim(CharacterSet.letters)
 	print("[{result}]")
 	return 0
 end 'main'
@@ -150,7 +150,7 @@ end 'main'
 <!-- test: unicode-whitespace -->
 ```maxon
 function main() returns ExitCode
-	let ws = CharacterSet.whitespaces()
+	let ws = CharacterSet.whitespaces
 	let c = '\u2003'
 	print("{ws.contains(c)}")
 	return 0

@@ -2896,7 +2896,7 @@ error E3005: <fragment>:11:10: Value 400 is outside the range of 'Small' (int(0 
 ```
 
 <!-- test: error.a-let-tuple-field-write-is-refused -->
-A `let` tuple is immutable, so a field write through it is refused as a `let` record's direct field write is.
+A tuple of values is a value, so a field write through a `let` tuple reassigns part of the `let` and is refused as reassigning a `let` String is.
 ```maxon
 function main() returns ExitCode
 	let t = (1 as Count, 2 as Count)
@@ -2905,7 +2905,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:4:2: cannot write through 't': 't' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E2013: <fragment>:4:2: 't' is a let and cannot be reassigned
 ```
 
 <!-- test: a-tuple-literal-keeps-each-field-its-own-integer-type -->

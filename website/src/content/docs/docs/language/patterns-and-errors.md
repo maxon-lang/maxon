@@ -164,7 +164,7 @@ end 'compute'                 // E3013: missing return statement: 'compute'
 
 ```maxon
 let x = 5
-x = 10                        // E2013: cannot assign to immutable variable: 'x'
+x = 10                        // E2013: 'x' is a let and cannot be reassigned
 ```
 
 **A `var` started from a bare number**
@@ -206,11 +206,11 @@ _ = 42                        // E3067: expected a function call
 parseDigit("7")               // E3057: throwing function requires try: 'parseDigit'
 ```
 
-**Mutating through an immutable name**
+**Writing constant data**
 
 ```maxon
-let items = TallyArray.create(0)
-items.push(1)                 // E3159: cannot write through 'items': 'items' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+let name = b"abc"
+name.push(1)                  // E3207: 'push' needs a writable receiver; 'name' is immutable
 ```
 
 **Moving out of a `var`**
@@ -222,11 +222,11 @@ b.x = 2
 print("{a.x}\n")              // E3102: use of moved value 'a'
 ```
 
-**Binding a read-only value to a `var`**
+**Storing constant data where something may write it**
 
 ```maxon
-let a = Point.create(1)
-var c = a                     // E3078: cannot assign the read-only 'a' to mutable binding 'c'; use 'let' instead of 'var', or use clone()
+let name = b"abc"
+let tok = Tok{value: name}    // E3196 when Tok.value is a plain ByteArray: cannot store an immutable 'ByteArray' into 'Tok.value', which holds a mutable 'ByteArray'; declare the field `immutable ByteArray`
 ```
 
 **Reading a local in the statement that hands it to a `mutable` parameter the callee writes**

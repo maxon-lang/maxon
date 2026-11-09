@@ -701,7 +701,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Roster = Array with readonly ByteArray
 
 type Source
-	export let title as ByteArray
+	export let title as immutable ByteArray
 
 	static function create() returns Self
 		return Self{title: b"title"}
@@ -750,7 +750,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Roster = Array with ByteArray
 
 type Source
-	export let title as ByteArray
+	export let title as immutable ByteArray
 
 	static function create() returns Self
 		return Self{title: b"title"}
@@ -786,7 +786,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:36:10: cannot pass a `let` field of 'source', which is read-only, to parameter 'name' of 'Catalog.register', which keeps it where something may write it; pass a clone()
+error E3207: <fragment>:36:19: 'register' writes 'name' (it calls 'add', which writes 'name'); 'source' is immutable
 ```
 
 <!-- test: a-set-element-read-by-for-is-kept-without-a-copy -->
@@ -798,14 +798,14 @@ typealias NameSet = Set with ByteArray
 typealias CreditArray = Array with Credit
 
 type Credit
-	export let name as ByteArray
+	export let name as immutable ByteArray
 
-	static function create(name ByteArray) returns Self
+	static function create(name immutable ByteArray) returns Self
 		return Self{name: name}
 	end 'create'
 end 'Credit'
 
-function note(credits CreditArray, name ByteArray)
+function note(credits CreditArray, name immutable ByteArray)
 	credits.push(Credit.create(name))
 end 'note'
 
@@ -861,7 +861,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/readonly-element-types/error.a-map-key-read-by-for-is-not-stored-into-a-var-field.maxon:19:9: cannot store a value read out of a stored Map key into mutable place 'Tally.last'; use clone()
+error E3196: specs/readonly-element-types/error.a-map-key-read-by-for-is-not-stored-into-a-var-field.maxon:19:16: cannot store an immutable 'ByteArray' into 'last', which holds a mutable 'ByteArray'; declare the field `immutable ByteArray`
 ```
 
 <!-- test: error.a-set-element-read-by-for-is-not-stored-into-a-var-field -->
@@ -899,7 +899,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/readonly-element-types/error.a-set-element-read-by-for-is-not-stored-into-a-var-field.maxon:18:9: cannot store a value read out of a stored Set element into mutable place 'Tally.last'; use clone()
+error E3196: specs/readonly-element-types/error.a-set-element-read-by-for-is-not-stored-into-a-var-field.maxon:18:16: cannot store an immutable 'ByteArray' into 'last', which holds a mutable 'ByteArray'; declare the field `immutable ByteArray`
 ```
 
 <!-- test: a-type-named-like-the-readonly-marker-compiles-beside-a-readonly-instance -->

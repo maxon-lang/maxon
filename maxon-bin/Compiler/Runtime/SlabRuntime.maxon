@@ -519,10 +519,10 @@ function slabCountingOf(kind SlabBufferKind) returns SlabCounting
 end 'slabCountingOf'
 
 type SlabDoors
-	module let alloc as ByteArray
-	module let free as ByteArray
-	module let allocOversize as ByteArray
-	module let freeOversize as ByteArray
+	module let alloc as immutable ByteArray
+	module let free as immutable ByteArray
+	module let allocOversize as immutable ByteArray
+	module let freeOversize as immutable ByteArray
 
 	static function of(counting SlabCounting) returns SlabDoors
 		return match counting 'counting'
@@ -537,7 +537,7 @@ module union SlabFreeDoor
 	plain(counting SlabCounting)
 	poisoning
 
-	function name() returns ByteArray
+	function name() returns immutable ByteArray
 		return match self 'door'
 			plain(counting) gives SlabDoors.of(counting).free
 			poisoning gives SlabFreeBoxName
@@ -2269,7 +2269,7 @@ function emitSlabAbort(module StdModule, func IrFunction, block IrBlock, road Sl
 end 'emitSlabAbort'
 
 function emitCallThenDead(module StdModule, func IrFunction, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter)
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: callee.clone(), args: args))
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: callee, args: args))
 	emitDeadTerminator(module, func: func, block: block, ids: ids)
 end 'emitCallThenDead'
 
@@ -2353,7 +2353,7 @@ function emitSlabPop(module StdModule, func IrFunction, ready IrBlock, span Valu
 	let remaining = emitBin(module, block: consumed, a: live, b: one, opcode: StdBinOpcode.sub, ids: ids)
 	emitStoreField(module, block: consumed, record: span, offset: MspanFreeCountOffset, value: remaining)
 
-	var route = emitSlabEvictRoute(module, func: func, how: evict, abortRoad: abortRoad, unlink: unlink, span: span, ids: ids, label: label)
+	let route = emitSlabEvictRoute(module, func: func, how: evict, abortRoad: abortRoad, unlink: unlink, span: span, ids: ids, label: label)
 	emitBranchOnCompare(module, block: consumed, value: remaining, pred: StdCmpPred.eq, against: 0, whenTrue: route.entry, whenFalse: done, ids: ids)
 	pushBranchEdge(consumed, to: done, values: argsOf(slot))
 
@@ -2589,14 +2589,8 @@ end 'buildSlabAllocEntry'
 
 let SlabSlowDoorSuffix = b"_slow"
 
-function slabSlowDoorName(door ByteArray) returns ByteArray
-	var named = door.clone()
-
-	for suffixByte in SlabSlowDoorSuffix 'eachSuffixByte'
-		named.push(suffixByte)
-	end 'eachSuffixByte'
-
-	return named
+function slabSlowDoorName(door ByteArray) returns immutable ByteArray
+	return freeze "{String.from(door)}{String.from(SlabSlowDoorSuffix)}".toByteArray()
 end 'slabSlowDoorName'
 
 union SlabProbeOwner
@@ -3576,7 +3570,7 @@ export function emitSlabAllocInto(module StdModule, block IrBlock, result ValueI
 	module.appendOp(block, op: StdOp.call(result, callee: slabAllocDoorOf(kind), args: argsOf(bytes)))
 end 'emitSlabAllocInto'
 
-export function slabAllocDoorOf(kind SlabBufferKind) returns ByteArray
+export function slabAllocDoorOf(kind SlabBufferKind) returns immutable ByteArray
 	return SlabDoors.of(slabCountingOf(kind)).alloc
 end 'slabAllocDoorOf'
 

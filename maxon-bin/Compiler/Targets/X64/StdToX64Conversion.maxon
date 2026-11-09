@@ -1052,7 +1052,7 @@ export type StdToX64Lowering
 	// Every callee's declared ABI (`CalleeAbiTable`): which arguments a call routes to an XMM register, and
 	// whether its result comes back in XMM0 or R8 (`callResultRegister`). The one table the value-class
 	// column reads too, so a float result's CAPTURE register and its allocation CLASS are the one fact.
-	var abi as CalleeAbiTable
+	let abi as immutable CalleeAbiTable
 
 	// Fresh virtuals for the function being lowered (`mintVirtual`).
 	var fresh as ValueMinter
@@ -1062,7 +1062,7 @@ export type StdToX64Lowering
 	let usesGt as bool
 	var tailCalls as TailCalls
 
-	export static function create(target Target, abi CalleeAbiTable, usesGt bool) returns StdToX64Lowering
+	export static function create(target Target, abi immutable CalleeAbiTable, usesGt bool) returns StdToX64Lowering
 		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockRoster.create(), scaledIndexFolds: ScaledIndexFolds.create(), displacedAddressFolds: DisplacedAddressFolds.create(), memoryDestinationFolds: MemoryDestinationFolds.create(), valueDefs: StdValueDefs.create(), abi: abi, usesGt: usesGt, tailCalls: TailCalls.none(), fresh: ValueMinter.create(0)}
 	end 'create'
 
@@ -1091,7 +1091,7 @@ export type StdToX64Lowering
 		// AFTER the walk, not during it: the column is sized by `scanFunctionValueCount` over the TARGET
 		// ops, so every op has to exist before it can be measured.
 		let valueClass = buildFunctionValueClasses(self.stdModule, targetModule: self.targetModule, funcIndex: UnitFunctionIndex, abi: self.abi)
-		var lowered = LoweredUnit.create(self.targetModule, valueClass: valueClass, rdata: self.rdata.requests)
+		let lowered = LoweredUnit.create(self.targetModule, valueClass: valueClass, rdata: self.rdata.requests)
 		self.stdModule = StdModule.create()
 		self.targetModule = TargetModule.create()
 		self.rdata = RdataRequestLog.create()
@@ -1431,7 +1431,7 @@ export type StdToX64Lowering
 				self.targetModule.spans.current = self.stdModule.spans.at(termIdx)
 
 				if self.tailCalls.found 'jumpToTheCallee'
-					self.targetModule.setTerminator(dstBlock, op: TargetOp.tailJmp(self.tailCalls.callee.clone()))
+					self.targetModule.setTerminator(dstBlock, op: TargetOp.tailJmp(self.tailCalls.callee))
 				end 'jumpToTheCallee' else 'returnNormally'
 					self.lowerTerminatorOp(termOp, dstBlock: dstBlock, returnType: srcFunc.returnType, blockRef: blockRef)
 				end 'returnNormally'
@@ -5612,7 +5612,7 @@ export type StdToX64Lowering
 	// sharing one edge object would let a later rewrite of one silently move the other. `argIds`
 	// IS shared, and that is correct — nothing mutates it in place (see `prepareSkeleton`).
 	function cloneBranchEdgesOf(blockRef ElementIndex) returns BranchEdgeArray
-		var block = try self.targetModule.blocks.get(blockRef) otherwise panic("cloneBranchEdgesOf: blockRef {blockRef} not in targetModule.blocks")
+		let block = try self.targetModule.blocks.get(blockRef) otherwise panic("cloneBranchEdgesOf: blockRef {blockRef} not in targetModule.blocks")
 		var copied = BranchEdgeArray.create(block.branchEdges.count(), zeroed: false)
 
 		for edge in block.branchEdges 'each'
@@ -5859,7 +5859,7 @@ end 'StdToX64Lowering'
 
 union HostCallee
 	import(slot IatSlot)
-	chunk(let name ByteArray)
+	chunk(let name immutable ByteArray)
 end 'HostCallee'
 
 function hostCallOp(callee HostCallee) returns TargetOp

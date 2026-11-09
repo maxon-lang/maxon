@@ -6,21 +6,317 @@ module enum ParamClass
 	isolatedParam
 end 'ParamClass'
 
-module typealias SettledMemo = Map with (ValueId, ValueCapability)
+typealias SettledCapabilityMap = Map with (ValueId, ValueCapability)
+
+typealias ConstructionOpSet = Set with ElementIndex
+
+typealias PhiArmMap = Map with (ValueId, ValueIdArray)
+
+function phiArmsOfFunction(module MaxonModule, func IrFunction) returns PhiArmMap
+	var arms = PhiArmMap.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = module.getBlock(blockRef)
+
+		for edge in block.branchEdges 'eachEdge'
+			let target = try module.getBlockByIdIn(func, id: edge.targetBlockId) otherwise continue
+
+			for position in 0 upto edge.argIds.count() 'eachArgument'
+				let phi = (try target.blockArgs.get(position) otherwise continue).valueId
+				var known = try arms.get(phi) otherwise ValueIdArray.create(0)
+				known.push(try edge.argIds.get(position) otherwise continue)
+				arms.upsert(phi, value: known)
+			end 'eachArgument'
+		end 'eachEdge'
+	end 'eachBlock'
+
+	return arms
+end 'phiArmsOfFunction'
+
+function literalResultsOfFunction(module MaxonModule, func IrFunction) returns ValueMarkSet
+	var literals = ValueMarkSet.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		for opIdx in module.getBlock(blockRef).bodyOps() 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("literalResultsOfFunction: ops.get OOB at {opIdx}")
+			try requireLiteralOp(op) otherwise continue
+			literals.insert(try maxonOpDefinedValue(op) otherwise panic("literalResultsOfFunction: a literal defines its result"))
+		end 'eachOp'
+	end 'eachBlock'
+
+	return literals
+end 'literalResultsOfFunction'
+
+function exitChainPhisOfFunction(module MaxonModule, func IrFunction) returns ValueMarkSet
+	var phis = ValueMarkSet.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = module.getBlock(blockRef)
+
+		if block.role != BlockRole.exitChain 'ordinaryBlock'
+			continue
+		end 'ordinaryBlock'
+
+		for arg in block.blockArgs 'eachArg'
+			phis.insert(arg.valueId)
+		end 'eachArg'
+	end 'eachBlock'
+
+	return phis
+end 'exitChainPhisOfFunction'
+
+typealias PausedOperandsByOp = Map with (ElementIndex, ParamPositionMask)
+
+typealias SettlingDepthMap = Map with (ValueId, ElementIndex)
+
+let NoOpenRead = u64.max as ElementIndex
+
+function pausedOperandsOfFunction(func IrFunction) returns PausedOperandsByOp
+	var paused = PausedOperandsByOp.create()
+	let notes = func.capabilityNotes
+
+	for slot in 0 upto notes.windowCallOps.count() 'eachWindowCall'
+		let opIdx = try notes.windowCallOps.get(slot) otherwise panic("pausedOperandsOfFunction: windowCallOps.get OOB at {slot}")
+		let operands = try notes.windowCallPausedOperands.get(slot) otherwise panic("pausedOperandsOfFunction: windowCallPausedOperands.get OOB at {slot} — the window columns are parallel")
+		paused.upsert(opIdx, value: (try paused.get(opIdx) otherwise NoParamPositions) or operands)
+	end 'eachWindowCall'
+
+	return paused
+end 'pausedOperandsOfFunction'
+
+module type SettledMemo
+	var capabilities as SettledCapabilityMap
+	module let sources as ParamSources
+	let phiArms as PhiArmMap
+	let literals as ValueMarkSet
+	let exitChainPhis as ValueMarkSet
+	let settling as SettlingDepthMap
+	var oldestOpenRead as ElementIndex
+	let constructionOps as ConstructionOpSet
+	let pausedOperands as PausedOperandsByOp
+
+	module static function over(sources ParamSources) returns SettledMemo
+		var constructionOps = ConstructionOpSet.create()
+
+		for opIdx in sources.func.capabilityNotes.constructionOps 'eachConstructionOp'
+			constructionOps.insert(opIdx)
+		end 'eachConstructionOp'
+
+		return Self{capabilities: SettledCapabilityMap.create(), sources: sources, phiArms: phiArmsOfFunction(sources.ir, func: sources.func), literals: literalResultsOfFunction(sources.ir, func: sources.func), exitChainPhis: exitChainPhisOfFunction(sources.ir, func: sources.func), settling: SettlingDepthMap.create(), oldestOpenRead: NoOpenRead, constructionOps: constructionOps, pausedOperands: pausedOperandsOfFunction(sources.func)}
+	end 'over'
+
+	module function buildsALiteral(opIdx ElementIndex) returns bool
+		return self.constructionOps.contains(opIdx)
+	end 'buildsALiteral'
+
+	module function windowPausesOperand(opIdx ElementIndex, argIndex ParamCount) returns bool
+		let paused = try self.pausedOperands.get(opIdx) otherwise return false
+		return maskHasParam(paused, param: argIndex)
+	end 'windowPausesOperand'
+
+	module function beginSettling(value ValueId)
+		self.settling.upsert(value, value: self.settling.count())
+	end 'beginSettling'
+
+	module function endSettling(value ValueId) returns bool
+		let depth = try self.settling.get(value) otherwise panic("SettledMemo.endSettling: v{value} is not being settled")
+		_ = self.settling.remove(value)
+
+		if self.oldestOpenRead < depth 'dependsOnAnOpenValue'
+			return false
+		end 'dependsOnAnOpenValue'
+
+		self.oldestOpenRead = NoOpenRead
+		return true
+	end 'endSettling'
+
+	module function isSettling(value ValueId) returns bool
+		return self.settling.contains(value)
+	end 'isSettling'
+
+	module function noteRead(value ValueId)
+		let depth = try self.settling.get(value) otherwise return
+
+		if depth < self.oldestOpenRead 'anOlderOpenValue'
+			self.oldestOpenRead = depth
+		end 'anOlderOpenValue'
+	end 'noteRead'
+
+	module function forget(value ValueId)
+		_ = self.capabilities.remove(value)
+	end 'forget'
+
+	module function isAnExitChainPhi(value ValueId) returns bool
+		return self.exitChainPhis.contains(value)
+	end 'isAnExitChainPhi'
+
+	module function definesALiteral(value ValueId) returns bool
+		return self.literals.contains(value)
+	end 'definesALiteral'
+
+	module function mergesArms(value ValueId) returns bool
+		return self.phiArms.contains(value)
+	end 'mergesArms'
+
+	module function armsOfPhi(value ValueId) returns ValueIdArray throws AbsentError
+		return try self.phiArms.get(value) otherwise throw AbsentError.absent
+	end 'armsOfPhi'
+
+	module function settled(value ValueId) returns ValueCapability throws AbsentError
+		return try self.capabilities.get(value) otherwise throw AbsentError.absent
+	end 'settled'
+
+	module function record(value ValueId, capability ValueCapability)
+		self.capabilities.upsert(value, value: capability)
+	end 'record'
+
+	module function parameterBehind(value ValueId) returns ParamCount throws AbsentError
+		let position = try self.sources.parameterBehind(value)
+
+		if position >= self.sources.func.paramCount 'aCapturedSlot'
+			throw AbsentError.absent
+		end 'aCapturedSlot'
+
+		return position
+	end 'parameterBehind'
+
+	module function unmarkedParameterBehind(project Project, value ValueId) returns ParamCount throws AbsentError
+		let position = try self.parameterBehind(value)
+
+		if not isAnUnmarkedParameter(project, func: self.sources.func, argId: valueIdAtParamPosition(position)) 'aDeclaredMarker'
+			throw AbsentError.absent
+		end 'aDeclaredMarker'
+
+		return position
+	end 'unmarkedParameterBehind'
+
+	module function isAnUnmarkedParameterValue(project Project, value ValueId) returns bool
+		let _ = try self.unmarkedParameterBehind(project, value: value) otherwise return false
+		return true
+	end 'isAnUnmarkedParameterValue'
+end 'SettledMemo'
+
+typealias SeedOriginKey = int(0 to 9223372036854775807)
+
+enum SeedOriginKind
+	frozen = 0
+	mutable = 1
+end 'SeedOriginKind'
+
+function seedOriginKey(index ElementIndex, position ParamCount, mutable bool) returns SeedOriginKey
+	let kind = SeedOriginKind.mutable if mutable else SeedOriginKind.frozen
+	return (positionSlotKey(index, position: position as ElementIndex) as SeedOriginKey) * (SeedOriginKind.allCases.count() as SeedOriginKey) + (kind.rawValue as SeedOriginKey)
+end 'seedOriginKey'
+
+module type SeedOrigin
+	module let line as LineNumber
+	module let reason as String
+
+	static function create(line LineNumber, reason String) returns SeedOrigin
+		return Self{line: line, reason: reason}
+	end 'create'
+end 'SeedOrigin'
+
+typealias SeedOriginMap = Map with (SeedOriginKey, SeedOrigin)
+
+module type NeedHop
+	module let callee as ElementIndex
+	module let calleeParam as ParamCount
+
+	static function create(callee ElementIndex, calleeParam ParamCount) returns NeedHop
+		return Self{callee: callee, calleeParam: calleeParam}
+	end 'create'
+end 'NeedHop'
+
+typealias NeedHopMap = Map with (PositionSlotKey, NeedHop)
+
+module type NeedHops
+	let tracked as bool
+	var hops as NeedHopMap
+
+	module static function tracking() returns NeedHops
+		return Self{tracked: true, hops: NeedHopMap.create()}
+	end 'tracking'
+
+	module static function untracked() returns NeedHops
+		return Self{tracked: false, hops: NeedHopMap.create()}
+	end 'untracked'
+
+	module function record(index ElementIndex, position ParamCount, callee ElementIndex, calleeParam ParamCount)
+		if not self.tracked 'nothingToKeep'
+			return
+		end 'nothingToKeep'
+
+		self.hops.upsert(positionSlotKey(index, position: position as ElementIndex), value: NeedHop.create(callee, calleeParam: calleeParam))
+	end 'record'
+
+	module function viaOf(index ElementIndex, position ParamCount) returns NeedHop throws AbsentError
+		return try self.hops.get(positionSlotKey(index, position: position as ElementIndex)) otherwise throw AbsentError.absent
+	end 'viaOf'
+end 'NeedHops'
 
 module type CapabilityFacts
-	module let mutableOnly as ParamPositionMaskArray
-	module let immutableOnly as ParamPositionMaskArray
-	module let directMutable as ParamPositionMaskArray
-	module let directImmutable as ParamPositionMaskArray
-	module let mayWait as BoolArray
-	module let mayYield as BoolArray
+	module var writtenHops as NeedHops
+	module var frozenHops as NeedHops
+	module var frozenSomeHops as NeedHops
+	module var mutableOnly as ParamPositionMaskArray
+	module var immutableOnly as ParamPositionMaskArray
+	module var frozenInSomeInstance as ParamPositionMaskArray
+	module var buildsRecordFrom as ParamPositionMaskArray
+	module var directMutable as ParamPositionMaskArray
+	module var directImmutable as ParamPositionMaskArray
+	module var mayWait as BoolArray
+	module var mayYield as BoolArray
+	var seedOrigins as SeedOriginMap
 	module var funcNames as FunctionNameIndex
 	module var ir as MaxonModule
 
-	module static function create(mutableOnly ParamPositionMaskArray, immutableOnly ParamPositionMaskArray, directMutable ParamPositionMaskArray, directImmutable ParamPositionMaskArray, mayWait BoolArray, mayYield BoolArray, funcNames FunctionNameIndex, ir MaxonModule) returns CapabilityFacts
-		return Self{mutableOnly: mutableOnly, immutableOnly: immutableOnly, directMutable: directMutable, directImmutable: directImmutable, mayWait: mayWait, mayYield: mayYield, funcNames: funcNames, ir: ir}
+	module static function create(funcNames FunctionNameIndex, ir MaxonModule) returns CapabilityFacts
+		let funcCount = funcNames.functions.count()
+		return Self{writtenHops: NeedHops.tracking(), frozenHops: NeedHops.tracking(), frozenSomeHops: NeedHops.tracking(), mutableOnly: ParamPositionMaskArray.create(funcCount, zeroed: false), immutableOnly: ParamPositionMaskArray.create(funcCount, zeroed: false), frozenInSomeInstance: ParamPositionMaskArray.create(funcCount, zeroed: false), buildsRecordFrom: ParamPositionMaskArray.create(funcCount, zeroed: false), directMutable: ParamPositionMaskArray.create(0), directImmutable: ParamPositionMaskArray.create(0), mayWait: BoolArray.create(0), mayYield: BoolArray.create(0), seedOrigins: SeedOriginMap.create(), funcNames: funcNames, ir: ir}
 	end 'create'
+
+	function pinMutable(index ElementIndex, bits ParamPositionMask, line LineNumber, reason String)
+		let before = try self.mutableOnly.get(index) otherwise panic("CapabilityFacts.pinMutable: mutableOnly.get OOB at {index}")
+		self.noteSeedOrigins(index, fresh: bits and (bits xor before), mutable: true, line: line, reason: reason)
+		orIntoMask(self.mutableOnly, index: index, bits: bits)
+	end 'pinMutable'
+
+	function pinFrozen(index ElementIndex, bits ParamPositionMask, elementsOfUnknownType bool, line LineNumber, reason String)
+		let before = try self.frozenInSomeInstance.get(index) otherwise panic("CapabilityFacts.pinFrozen: frozenInSomeInstance.get OOB at {index}")
+		self.noteSeedOrigins(index, fresh: bits and (bits xor before), mutable: false, line: line, reason: reason)
+		orIntoMask(self.frozenInSomeInstance, index: index, bits: bits)
+
+		if not elementsOfUnknownType 'aNeedOfTheDataItself'
+			orIntoMask(self.immutableOnly, index: index, bits: bits)
+		end 'aNeedOfTheDataItself'
+	end 'pinFrozen'
+
+	function noteSeedOrigins(index ElementIndex, fresh ParamPositionMask, mutable bool, line LineNumber, reason String)
+		if fresh == NoParamPositions 'nothingNew'
+			return
+		end 'nothingNew'
+
+		for position in 0 upto MaxAbiArgs 'eachPosition'
+			if maskHasParam(fresh, param: position) 'aNewPin'
+				self.seedOrigins.upsert(seedOriginKey(index, position: position, mutable: mutable), value: SeedOrigin.create(line, reason: reason))
+			end 'aNewPin'
+		end 'eachPosition'
+	end 'noteSeedOrigins'
+
+	module function seedOriginAt(index ElementIndex, position ParamCount, mutable bool) returns SeedOrigin throws AbsentError
+		return try self.seedOrigins.get(seedOriginKey(index, position: position, mutable: mutable)) otherwise throw AbsentError.absent
+	end 'seedOriginAt'
+
+	module function frozenOnlyWhereRecordsAreHeld(index ElementIndex, position ParamCount) returns bool
+		let inSome = maskHasParam(try self.frozenInSomeInstance.get(index) otherwise panic("CapabilityFacts.frozenOnlyWhereRecordsAreHeld: frozenInSomeInstance.get OOB at {index}"), param: position)
+		let inEvery = maskHasParam(try self.immutableOnly.get(index) otherwise panic("CapabilityFacts.frozenOnlyWhereRecordsAreHeld: immutableOnly.get OOB at {index}"), param: position)
+		return inSome and not inEvery
+	end 'frozenOnlyWhereRecordsAreHeld'
+
+	module function buildsRecordAt(index ElementIndex, position ParamCount) returns bool
+		return maskHasParam(try self.buildsRecordFrom.get(index) otherwise panic("CapabilityFacts.buildsRecordAt: buildsRecordFrom.get OOB at {index}"), param: position)
+	end 'buildsRecordAt'
 
 	module function classAt(index ElementIndex, position ParamCount, declared ParamCapability) returns ParamClass
 		return match declared 'capability'
@@ -74,6 +370,16 @@ module union CapabilityKnowledge
 	known(facts CapabilityFacts)
 end 'CapabilityKnowledge'
 
+function heldParamMaskOf(func IrFunction) returns ParamPositionMask
+	var mask = NoParamPositions
+
+	for param in func.capabilityNotes.heldParams 'eachHeldParam'
+		mask = maskWithParam(mask, param: param)
+	end 'eachHeldParam'
+
+	return mask
+end 'heldParamMaskOf'
+
 module function declaredCapabilityAt(declared ParamCapabilityArray, position ParamCount) returns ParamCapability
 	if position >= declared.count() 'pastTheDeclaredParameters'
 		return ParamCapability.unmarked
@@ -106,7 +412,7 @@ function declaredPositionMask(declared ParamCapabilityArray, capability ParamCap
 	return mask
 end 'declaredPositionMask'
 
-module function isAnUnmarkedParameter(project Project, func IrFunction, argId ValueId) returns bool
+function isAnUnmarkedParameter(project Project, func IrFunction, argId ValueId) returns bool
 	if argId >= valueIdAtParamPosition(func.paramCount) 'notAParameter'
 		return false
 	end 'notAParameter'
@@ -134,29 +440,51 @@ module function argumentCapabilityOf(project Project, func IrFunction, argId Val
 	return try func.valueCapabilities.get(argId) otherwise panic("argumentCapabilityOf: valueCapabilities.get OOB at v{argId} of '{String.from(func.name)}' — the column is minted in lockstep with the type columns")
 end 'argumentCapabilityOf'
 
-module function paramTagCarriesACapability(func IrFunction, position ParamCount) returns bool
-	let paramType = try func.maxonParamTypes.get(position) otherwise panic("paramTagCarriesACapability: maxonParamTypes.get OOB at {position} — a compared position names a parameter the function declares")
+function nameIsABoxedUnion(project Project, nameId TypeNameId) returns bool
+	let name = try project.typeNames.nameOf(nameId) otherwise panic("nameIsABoxedUnion: nameOf failed at {nameId} — the id was minted against the project's interner")
 
-	return match maxonTypeTag(paramType) 'tag'
+	return programSignaturesIn(project, asker: "nameIsABoxedUnion").enumNameIsBoxed(name)
+end 'nameIsABoxedUnion'
+
+function tagAlwaysCarriesACapability(tag ValueTypeTag) returns bool
+	return match tag 'tag'
 		structRef or
 		genericInstance or
 		interfaceRef or
 		function gives true
-		boolean or
-		integer or
-		float or
+		typeParameter or
 		named or
+		integer or
+		boolean or
+		float or
 		exitCode or
 		unresolved or
 		void or
 		string or
-		typeParameter or
 		character or
 		cstring gives false
 	end 'tag'
+end 'tagAlwaysCarriesACapability'
+
+module function paramTagCarriesACapability(project Project, sig FuncSignature, func IrFunction, position ParamCount) returns bool
+	let tag = maxonTypeTag(try func.maxonParamTypes.get(position) otherwise panic("paramTagCarriesACapability: maxonParamTypes.get OOB at {position} — a compared position names a parameter the function declares"))
+
+	return tagAlwaysCarriesACapability(tag) or ((tag == ValueTypeTag.named or tag == ValueTypeTag.integer) and paramIsABoxedUnion(project, sig: sig, position: position))
 end 'paramTagCarriesACapability'
 
-module function storedSlotTargetOf(project Project, module MaxonModule, funcNames FunctionNameIndex, provenance ProvenanceTracer, stored StoredSlotArg) returns (ByteArray, String) throws AbsentError
+function paramIsABoxedUnion(project Project, sig FuncSignature, position ParamCount) returns bool
+	let aggregate = try sig.paramAggregateNames.get(position) otherwise return false
+
+	return not aggregate.isEmpty() and programSignaturesIn(project, asker: "paramIsABoxedUnion").enumNameIsBoxed(aggregate)
+end 'paramIsABoxedUnion'
+
+module function valueCarriesACapability(project Project, func IrFunction, value ValueId) returns bool
+	let tag = valueTagOf(func, value: value)
+
+	return tagAlwaysCarriesACapability(tag) or tag == ValueTypeTag.typeParameter or (tag == ValueTypeTag.named and nameIsABoxedUnion(project, nameId: try func.valueNameIds.get(value) otherwise panic("valueCarriesACapability: valueNameIds.get OOB at v{value} of '{String.from(func.name)}' — the type columns are minted in lockstep")))
+end 'valueCarriesACapability'
+
+module function storedSlotTargetOf(project Project, module MaxonModule, funcNames FunctionNameIndex, provenance ProvenanceTracer, stored StoredSlotArg) returns (immutable ByteArray, String) throws AbsentError
 	let op = try module.ops.get(stored.op) otherwise throw AbsentError.absent
 	let parts = try directCallPartsOf(op)
 	let callee = parts.0
@@ -200,10 +528,9 @@ module function functionValueIsMutable(project Project, func IrFunction, value V
 	return shape.mutableFunction
 end 'functionValueIsMutable'
 
-module function inferCapabilities(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, provenance ProvenanceTracer, provenanceWrites ProvenanceReceiverWrites, edges CallParamEdges, byCallee CsrGraph) returns CapabilityFacts
+module function inferCapabilities(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, provenance ProvenanceTracer, provenanceWrites ProvenanceReceiverWrites, edges CallParamEdges, byCallee CsrGraph, paramSources ParamSourceIndex) returns CapabilityFacts
 	let funcCount = funcNames.functions.count()
-	var mutableMasks = ParamPositionMaskArray.create(funcCount, zeroed: false)
-	var frozenMasks = ParamPositionMaskArray.create(funcCount, zeroed: false)
+	var facts = CapabilityFacts.create(funcNames, ir: module)
 	var waitSeeds = BoolArray.create(funcCount, zeroed: false)
 
 	for i in 0 upto funcCount 'seed'
@@ -219,31 +546,70 @@ module function inferCapabilities(project Project, module MaxonModule, signature
 			declaredImmutable = declaredPositionMask(declared, capability: ParamCapability.immutable)
 		end 'aDeclaredSignature'
 
-		mutableMasks.push(func.writtenParamMask or func.writesThroughParamMask or writtenThroughAnAlias or writtenWithinAnAlias or func.needsMutableParamMask or declaredMutable)
-		frozenMasks.push(func.needsFrozenParamMask or declaredImmutable)
+		facts.mutableOnly.push(func.writtenParamMask or func.writesThroughParamMask or writtenThroughAnAlias or writtenWithinAnAlias or func.needsMutableParamMask or declaredMutable)
+		facts.immutableOnly.push(func.needsFrozenParamMask or declaredImmutable)
+		facts.frozenInSomeInstance.push(func.needsFrozenParamMask or declaredImmutable)
+		facts.buildsRecordFrom.push(heldParamMaskOf(func))
 		waitSeeds.push(blockingSeedOf(func, waits: true, libraryFacts: project.libraryFacts))
 	end 'seed'
 
 	var blockingEdges = BlockingEdges.create()
-	collectCapabilitySeeds(project, module: module, signatures: signatures, funcNames: funcNames, provenance: provenance, mutableMasks: mutableMasks, frozenMasks: frozenMasks, blockingEdges: blockingEdges)
+	collectCapabilitySeeds(project, module: module, signatures: signatures, funcNames: funcNames, provenance: provenance, facts: facts, blockingEdges: blockingEdges, paramSources: paramSources)
 
-	let directMutable = mutableMasks.clone()
-	let directImmutable = frozenMasks.clone()
+	facts.directMutable = facts.mutableOnly.clone()
+	facts.directImmutable = facts.frozenInSomeInstance.clone()
 
-	propagateParamMasks(mutableMasks, edges: edges, byCallee: byCallee)
-	propagateParamMasks(frozenMasks, edges: edges, byCallee: byCallee)
+	propagateParamMasks(facts.mutableOnly, edges: edges, byCallee: byCallee, need: PropagatedNeed.written, hops: facts.writtenHops)
+	propagateParamMasks(facts.immutableOnly, edges: edges, byCallee: byCallee, need: PropagatedNeed.frozen, hops: facts.frozenHops)
+	propagateParamMasks(facts.frozenInSomeInstance, edges: edges, byCallee: byCallee, need: PropagatedNeed.frozenIfRecordsHeld, hops: facts.frozenSomeHops)
+	propagateParamMasks(facts.buildsRecordFrom, edges: edges, byCallee: byCallee, need: PropagatedNeed.written, hops: NeedHops.untracked())
 
-	let mayWait = blockingEdges.markCallers(waitSeeds, nodeCount: funcCount as CsrIndex, waits: true)
+	facts.mayWait = blockingEdges.markCallers(waitSeeds, nodeCount: funcCount as CsrIndex, waits: true)
 	var yieldSeeds = BoolArray.create(funcCount, zeroed: false)
 
 	for i in 0 upto funcCount 'yieldSeed'
 		let func = try funcNames.functions.get(i) otherwise panic("inferCapabilities: functions.get OOB at {i} below its own count")
-		yieldSeeds.push(blockingSeedOf(func, waits: false, libraryFacts: project.libraryFacts) or (try mayWait.get(i) otherwise panic("inferCapabilities: mayWait.get OOB at {i}")))
+		yieldSeeds.push(blockingSeedOf(func, waits: false, libraryFacts: project.libraryFacts) or (try facts.mayWait.get(i) otherwise panic("inferCapabilities: mayWait.get OOB at {i}")))
 	end 'yieldSeed'
 
-	let mayYield = blockingEdges.markCallers(yieldSeeds, nodeCount: funcCount as CsrIndex, waits: false)
-	return CapabilityFacts.create(mutableMasks, immutableOnly: frozenMasks, directMutable: directMutable, directImmutable: directImmutable, mayWait: mayWait, mayYield: mayYield, funcNames: funcNames, ir: module)
+	facts.mayYield = blockingEdges.markCallers(yieldSeeds, nodeCount: funcCount as CsrIndex, waits: false)
+	settleRetainDoors(module, funcNames: funcNames, facts: facts)
+	return facts
 end 'inferCapabilities'
+
+function settleRetainDoors(module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts)
+	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
+		let func = try funcNames.functions.get(funcIndex) otherwise panic("settleRetainDoors: functions.get OOB at {funcIndex} below its own count")
+
+		if bodyIsUnreadable(func) 'nothingToRewrite'
+			continue
+		end 'nothingToRewrite'
+
+		let notes = func.capabilityNotes
+		var position = 0 as ElementIndex
+
+		while position < notes.retainOps.count() 'eachDoor'
+			let opIdx = try notes.retainOps.get(position) otherwise panic("settleRetainDoors: retainOps.get OOB at {position}")
+			var frozen = true
+
+			while position < notes.retainOps.count() and (try notes.retainOps.get(position) otherwise panic("settleRetainDoors: retainOps.get OOB at {position}")) == opIdx 'eachSourceOfTheDoor'
+				let param = try notes.retainParams.get(position) otherwise panic("settleRetainDoors: retainParams.get OOB at {position} — the columns are pushed together")
+				frozen = frozen and facts.inferredClassAt(funcIndex, position: param) == ParamClass.immutableOnly
+				position = position + 1
+			end 'eachSourceOfTheDoor'
+
+			if not frozen 'stillMayBeWritten'
+				continue
+			end 'stillMayBeWritten'
+
+			let op = try module.ops.get(opIdx) otherwise panic("settleRetainDoors: ops.get OOB at {opIdx}")
+
+			if opIsDirectCallTo(op, callee: ManagedRetainName) 'aManagedRetain'
+				try module.ops.set(opIdx, value: callWithCallee(op, callee: MmRetainName)) otherwise panic("settleRetainDoors: ops.set OOB at {opIdx}")
+			end 'aManagedRetain'
+		end 'eachDoor'
+	end 'eachFunc'
+end 'settleRetainDoors'
 
 module enum CallEdgeKind
 	call
@@ -251,7 +617,7 @@ module enum CallEdgeKind
 	spawn
 end 'CallEdgeKind'
 
-module function callEdgeOf(op MaxonOp) returns (ByteArray, CallEdgeKind) throws AbsentError
+module function callEdgeOf(op MaxonOp) returns (immutable ByteArray, CallEdgeKind) throws AbsentError
 	match op 'op'
 		call(_, callee, _, _, _, _, _, _) then return (callee, CallEdgeKind.call)
 		tryCall(_, _, callee, _, _, _, _, _, _) then return (callee, CallEdgeKind.call)
@@ -261,7 +627,7 @@ module function callEdgeOf(op MaxonOp) returns (ByteArray, CallEdgeKind) throws 
 	end 'op'
 end 'callEdgeOf'
 
-module function directCallPartsOf(op MaxonOp) returns (ByteArray, ValueIdArray, NameRoster, SourceRangeArray, WriteBlameArray) throws AbsentError
+module function directCallPartsOf(op MaxonOp) returns (immutable ByteArray, ValueIdArray, NameRoster, SourceRangeArray, WriteBlameArray) throws AbsentError
 	match op 'op'
 		call(_, callee, args, argLabels, argRanges, argImmutableNames, _, _) then return (callee, args, argLabels, argRanges, argImmutableNames)
 		tryCall(_, _, callee, args, argLabels, argRanges, argImmutableNames, _, _) then return (callee, args, argLabels, argRanges, argImmutableNames)
@@ -270,7 +636,7 @@ module function directCallPartsOf(op MaxonOp) returns (ByteArray, ValueIdArray, 
 	end 'op'
 end 'directCallPartsOf'
 
-module function directCalleeOf(op MaxonOp) returns ByteArray throws AbsentError
+module function directCalleeOf(op MaxonOp) returns immutable ByteArray throws AbsentError
 	let edge = try callEdgeOf(op)
 
 	if edge.1 == CallEdgeKind.spawn 'aFactoryNotACall'
@@ -349,14 +715,14 @@ module function edgeTransmits(kind CallEdgeKind, waits bool) returns bool
 	end 'kind'
 end 'edgeTransmits'
 
-function closureCallEdgeOf(project Project, func IrFunction, op MaxonOp) returns (ByteArray, CallEdgeKind) throws AbsentError
+function closureCallEdgeOf(project Project, func IrFunction, op MaxonOp) returns (immutable ByteArray, CallEdgeKind) throws AbsentError
 	match op 'op'
 		indirectCall(_, callee, _, _) then return (functionValueGoverningName(project, func: func, value: callee), CallEdgeKind.call)
 		default throws AbsentError.absent
 	end 'op'
 end 'closureCallEdgeOf'
 
-module function callOrClosureEdgeOf(project Project, func IrFunction, op MaxonOp) returns (ByteArray, CallEdgeKind) throws AbsentError
+module function callOrClosureEdgeOf(project Project, func IrFunction, op MaxonOp) returns (immutable ByteArray, CallEdgeKind) throws AbsentError
 	if let edge = try callEdgeOf(op) 'aNamedCall'
 		return edge
 	end 'aNamedCall'
@@ -401,7 +767,7 @@ end 'BlockingEdges'
 module typealias FixedCallEdgeKindArray = FixedArray with CallEdgeKind
 module typealias CallEdgeKindArray = Array with CallEdgeKind
 
-function collectCapabilitySeeds(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, provenance ProvenanceTracer, mutableMasks ParamPositionMaskArray, frozenMasks ParamPositionMaskArray, blockingEdges BlockingEdges)
+function collectCapabilitySeeds(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, provenance ProvenanceTracer, facts CapabilityFacts, blockingEdges BlockingEdges, paramSources ParamSourceIndex)
 	var witnessSlots = WitnessSlotsByDeclIndex.create()
 
 	for callerIndex in 0 upto funcNames.functions.count() 'eachFunc'
@@ -411,7 +777,7 @@ function collectCapabilitySeeds(project Project, module MaxonModule, signatures 
 			continue
 		end 'nothingToRead'
 
-		let capturedLoads = capturedLoadsOf(module, func: func)
+		let sources = paramSources.of(callerIndex)
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("collectCapabilitySeeds: blockRef from func.blockRefs not in module.blocks")
@@ -419,16 +785,17 @@ function collectCapabilitySeeds(project Project, module MaxonModule, signatures 
 			for opIdx in block.bodyOps() 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("collectCapabilitySeeds: opIdx {opIdx} not in module.ops")
 				noteBlockingEdgeOf(project, op: op, funcNames: funcNames, func: func, callerIndex: callerIndex, blockingEdges: blockingEdges)
-				noteCapabilitySeedsOf(project, module: module, signatures: signatures, funcNames: funcNames, witnessSlots: witnessSlots, func: func, capturedLoads: capturedLoads, callerIndex: callerIndex, op: op, mutableMasks: mutableMasks, frozenMasks: frozenMasks)
+				noteCapabilitySeedsOf(project, signatures: signatures, funcNames: funcNames, witnessSlots: witnessSlots, sources: sources, callerIndex: callerIndex, opIdx: opIdx, op: op, facts: facts)
 			end 'eachOp'
 
 			if block.hasTerminatorOp() 'aTerminator'
-				noteReturnedResultSeed(project, module: module, funcNames: funcNames, func: func, capturedLoads: capturedLoads, callerIndex: callerIndex, op: try module.ops.get(block.terminatorIndex()) otherwise panic("collectCapabilitySeeds: terminatorIndex not in module.ops"), frozenMasks: frozenMasks)
+				noteReturnedResultSeed(project, sources: sources, callerIndex: callerIndex, opIdx: block.terminatorIndex(), facts: facts)
 			end 'aTerminator'
 		end 'eachBlock'
 
-		noteStoredSlotSeeds(project, module: module, funcNames: funcNames, provenance: provenance, func: func, capturedLoads: capturedLoads, callerIndex: callerIndex, mutableMasks: mutableMasks, frozenMasks: frozenMasks)
-		noteResultUseSeeds(project, module: module, funcNames: funcNames, func: func, capturedLoads: capturedLoads, callerIndex: callerIndex, mutableMasks: mutableMasks, frozenMasks: frozenMasks)
+		noteStoredSlotSeeds(project, funcNames: funcNames, provenance: provenance, sources: sources, callerIndex: callerIndex, facts: facts)
+		noteResultUseSeeds(project, sources: sources, callerIndex: callerIndex, facts: facts)
+		noteResultWriteSeeds(project, sources: sources, callerIndex: callerIndex, facts: facts)
 	end 'eachFunc'
 end 'collectCapabilitySeeds'
 
@@ -447,24 +814,12 @@ module function firstOpDefiningSince(module MaxonModule, value ValueId, floor El
 	throw AbsentError.absent
 end 'firstOpDefiningSince'
 
-module function resultOpDefining(module MaxonModule, func IrFunction, value ValueId) returns ElementIndex throws AbsentError
-	for position in 0 upto func.capabilityNotes.undecidedResultOps.count() 'eachUndecidedResult'
-		let opIdx = try func.capabilityNotes.undecidedResultOps.get(position) otherwise panic("resultOpDefining: undecidedResultOps.get OOB at {position}")
-
-		if opDefinesValue(module, opIdx: opIdx, value: value) 'theResult'
-			return opIdx
-		end 'theResult'
-	end 'eachUndecidedResult'
-
-	throw AbsentError.absent
-end 'resultOpDefining'
-
-module function callerParamMaskOf(project Project, module MaxonModule, funcNames FunctionNameIndex, func IrFunction, capturedLoads CapturedLoadMap, value ValueId) returns ParamPositionMask
+module function callerParamMaskOf(project Project, sources ParamSources, value ValueId) returns ParamPositionMask
 	var mask = NoParamPositions
-	let sources = callerParamMaskOfArgument(project, module: module, funcIndexByName: funcNames.byName, func: func, capturedLoads: capturedLoads, argId: value)
+	let reached = sources.maskOf(value)
 
 	for param in 0 upto MaxAbiArgs 'eachSource'
-		if maskHasParam(sources, param: param) and isAnUnmarkedParameter(project, func: func, argId: valueIdAtParamPosition(param)) 'anUnmarkedSource'
+		if maskHasParam(reached, param: param) and isAnUnmarkedParameter(project, func: sources.func, argId: valueIdAtParamPosition(param)) 'anUnmarkedSource'
 			mask = maskWithParam(mask, param: param)
 		end 'anUnmarkedSource'
 	end 'eachSource'
@@ -472,21 +827,64 @@ module function callerParamMaskOf(project Project, module MaxonModule, funcNames
 	return mask
 end 'callerParamMaskOf'
 
-function noteResultSlotSeed(slot ParamCapability, sources ParamPositionMask, callerIndex ElementIndex, mutableMasks ParamPositionMaskArray, frozenMasks ParamPositionMaskArray)
-	match slot 'slot'
-		immutable then orIntoMask(frozenMasks, index: callerIndex, bits: sources)
+function valueIsOfUnknownType(func IrFunction, value ValueId) returns bool
+	return valueTagOf(func, value: value) == ValueTypeTag.typeParameter
+end 'valueIsOfUnknownType'
+
+function slotNoun(slot ParamCapability) returns String
+	return match slot 'slot'
+		immutable gives "an `immutable` slot"
 		unmarked or
-		mutable then orIntoMask(mutableMasks, index: callerIndex, bits: sources)
+		mutable gives "a writable slot"
+		isolated gives "an `isolated` slot"
+	end 'slot'
+end 'slotNoun'
+
+function noteResultSlotSeed(facts CapabilityFacts, slot ParamCapability, sources ParamPositionMask, callerIndex ElementIndex, valueOfUnknownType bool, line LineNumber, reason String)
+	match slot 'slot'
+		immutable then facts.pinFrozen(callerIndex, bits: sources, elementsOfUnknownType: valueOfUnknownType, line: line, reason: reason)
+		unmarked or
+		mutable then facts.pinMutable(callerIndex, bits: sources, line: line, reason: reason)
 		isolated then break
 	end 'slot'
 end 'noteResultSlotSeed'
 
-function noteResultUseSeeds(project Project, module MaxonModule, funcNames FunctionNameIndex, func IrFunction, capturedLoads CapturedLoadMap, callerIndex ElementIndex, mutableMasks ParamPositionMaskArray, frozenMasks ParamPositionMaskArray)
-	for use in func.capabilityNotes.resultUses 'eachResultUse'
-		let defined = try maxonOpDefinedValue(try module.ops.get(use.op) otherwise panic("noteResultUseSeeds: ops.get OOB at {use.op}")) otherwise panic("noteResultUseSeeds: a result use names the call that defines the result")
-		noteResultSlotSeed(use.slot, sources: callerParamMaskOf(project, module: module, funcNames: funcNames, func: func, capturedLoads: capturedLoads, value: defined), callerIndex: callerIndex, mutableMasks: mutableMasks, frozenMasks: frozenMasks)
+function resultUseReason(use ResultUse) returns String
+	if use.sends 'aSend'
+		return "a result read from it is sent to an `immutable` parameter"
+	end 'aSend'
+
+	return "a result read from it is stored in {slotNoun(use.slot)} ({use.place})"
+end 'resultUseReason'
+
+function noteResultUseSeeds(project Project, sources ParamSources, callerIndex ElementIndex, facts CapabilityFacts)
+	for use in sources.func.capabilityNotes.resultUses 'eachResultUse'
+		let defined = try maxonOpDefinedValue(try sources.ir.ops.get(use.op) otherwise panic("noteResultUseSeeds: ops.get OOB at {use.op}")) otherwise panic("noteResultUseSeeds: a result use names the call that defines the result")
+		let reached = callerParamMaskOf(project, sources: sources, value: defined)
+
+		if reached == NoParamPositions 'nothingToPin'
+			continue
+		end 'nothingToPin'
+
+		noteResultSlotSeed(facts, slot: use.slot, sources: reached, callerIndex: callerIndex, valueOfUnknownType: valueIsOfUnknownType(sources.func, value: defined), line: use.line, reason: resultUseReason(use))
 	end 'eachResultUse'
 end 'noteResultUseSeeds'
+
+function noteResultWriteSeeds(project Project, sources ParamSources, callerIndex ElementIndex, facts CapabilityFacts)
+	let notes = sources.func.capabilityNotes
+
+	for position in 0 upto notes.resultWriteOps.count() 'eachResultWrite'
+		let opIdx = try notes.resultWriteOps.get(position) otherwise panic("noteResultWriteSeeds: resultWriteOps.get OOB at {position}")
+		let defined = try maxonOpDefinedValue(try sources.ir.ops.get(opIdx) otherwise panic("noteResultWriteSeeds: ops.get OOB at {opIdx}")) otherwise continue
+		let reached = callerParamMaskOf(project, sources: sources, value: defined)
+
+		if reached == NoParamPositions 'nothingToPin'
+			continue
+		end 'nothingToPin'
+
+		facts.pinMutable(callerIndex, bits: reached, line: try notes.resultWriteLines.get(position) otherwise panic("noteResultWriteSeeds: resultWriteLines.get OOB at {position}"), reason: "it is written through a result read from it")
+	end 'eachResultWrite'
+end 'noteResultWriteSeeds'
 
 module function returnedResultValueOf(op MaxonOp) returns ValueId throws AbsentError
 	match op 'op'
@@ -495,13 +893,9 @@ module function returnedResultValueOf(op MaxonOp) returns ValueId throws AbsentE
 	end 'op'
 end 'returnedResultValueOf'
 
-module function valueIsAResultOf(module MaxonModule, func IrFunction, value ValueId) returns bool
-	let _ = try resultOpDefining(module, func: func, value: value) otherwise return false
-	return true
-end 'valueIsAResultOf'
-
-function noteReturnedResultSeed(project Project, module MaxonModule, funcNames FunctionNameIndex, func IrFunction, capturedLoads CapturedLoadMap, callerIndex ElementIndex, op MaxonOp, frozenMasks ParamPositionMaskArray)
-	let retVal = try returnedResultValueOf(op) otherwise return
+function noteReturnedResultSeed(project Project, sources ParamSources, callerIndex ElementIndex, opIdx ElementIndex, facts CapabilityFacts)
+	let func = sources.func
+	let retVal = try returnedResultValueOf(try sources.ir.ops.get(opIdx) otherwise panic("noteReturnedResultSeed: ops.get OOB at {opIdx}")) otherwise return
 
 	view sig = try project.funcSignatures.get(func.name) otherwise return
 
@@ -509,26 +903,38 @@ function noteReturnedResultSeed(project Project, module MaxonModule, funcNames F
 		return
 	end 'nothingToPin'
 
-	if not valueIsAResultOf(module, func: func, value: retVal) 'notAResult'
+	if not sources.isAResult(retVal) 'notAResult'
 		return
 	end 'notAResult'
 
-	orIntoMask(frozenMasks, index: callerIndex, bits: callerParamMaskOf(project, module: module, funcNames: funcNames, func: func, capturedLoads: capturedLoads, value: retVal))
+	let reached = callerParamMaskOf(project, sources: sources, value: retVal)
+
+	if reached == NoParamPositions 'nothingToPin'
+		return
+	end 'nothingToPin'
+
+	facts.pinFrozen(callerIndex, bits: reached, elementsOfUnknownType: valueIsOfUnknownType(func, value: retVal), line: project.opRanges.get(opIdx).line, reason: "it returns a result read from it, and '{functionSourceName(project, func: func)}' declares `returns immutable`")
 end 'noteReturnedResultSeed'
 
-function noteStoredSlotSeeds(project Project, module MaxonModule, funcNames FunctionNameIndex, provenance ProvenanceTracer, func IrFunction, capturedLoads CapturedLoadMap, callerIndex ElementIndex, mutableMasks ParamPositionMaskArray, frozenMasks ParamPositionMaskArray)
-	for stored in func.capabilityNotes.storedSlotArgs 'eachStoredSlotArg'
-		let _ = try storedSlotTargetOf(project, module: module, funcNames: funcNames, provenance: provenance, stored: stored) otherwise continue
+function storedSlotReason(target(immutable ByteArray, String), slot ParamCapability) returns String
+	return "'{String.from(genericTemplateName(target.0))}' keeps a value read from it in {slotNoun(slot)} (its parameter '{target.1}')"
+end 'storedSlotReason'
 
-		if not stored.undecided 'judgedAtTheCall'
-			if valueIsAResultOf(module, func: func, value: stored.argValue) 'aResultStored'
-				noteResultSlotSeed(stored.slot, sources: callerParamMaskOf(project, module: module, funcNames: funcNames, func: func, capturedLoads: capturedLoads, value: stored.argValue), callerIndex: callerIndex, mutableMasks: mutableMasks, frozenMasks: frozenMasks)
-			end 'aResultStored'
+function noteStoredSlotSeeds(project Project, funcNames FunctionNameIndex, provenance ProvenanceTracer, sources ParamSources, callerIndex ElementIndex, facts CapabilityFacts)
+	for stored in sources.func.capabilityNotes.storedSlotArgs 'eachStoredSlotArg'
+		let target = try storedSlotTargetOf(project, module: sources.ir, funcNames: funcNames, provenance: provenance, stored: stored) otherwise continue
 
+		if not stored.undecided and not sources.isAResult(stored.argValue) 'judgedAtTheCall'
 			continue
 		end 'judgedAtTheCall'
 
-		noteResultSlotSeed(stored.slot, sources: stored.sources, callerIndex: callerIndex, mutableMasks: mutableMasks, frozenMasks: frozenMasks)
+		let reached = stored.sources if stored.undecided else callerParamMaskOf(project, sources: sources, value: stored.argValue)
+
+		if reached == NoParamPositions 'nothingToPin'
+			continue
+		end 'nothingToPin'
+
+		noteResultSlotSeed(facts, slot: stored.slot, sources: reached, callerIndex: callerIndex, valueOfUnknownType: valueIsOfUnknownType(sources.func, value: stored.argValue), line: stored.line, reason: storedSlotReason(target, slot: stored.slot))
 	end 'eachStoredSlotArg'
 end 'noteStoredSlotSeeds'
 
@@ -542,18 +948,19 @@ function noteBlockingEdgeOf(project Project, op MaxonOp, funcNames FunctionNameI
 	blockingEdges.record(calleeIndex, callerIndex: callerIndex, kind: edge.1)
 end 'noteBlockingEdgeOf'
 
-function noteCapabilitySeedsOf(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, witnessSlots WitnessSlotsByDeclIndex, func IrFunction, capturedLoads CapturedLoadMap, callerIndex ElementIndex, op MaxonOp, mutableMasks ParamPositionMaskArray, frozenMasks ParamPositionMaskArray)
+function noteCapabilitySeedsOf(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, witnessSlots WitnessSlotsByDeclIndex, sources ParamSources, callerIndex ElementIndex, opIdx ElementIndex, op MaxonOp, facts CapabilityFacts)
 	match capabilityDoorOf(op) 'door'
 		inert or
 		spawn or
 		returned then break
-		directCall then pinParamsJoinedWithWritableData(project, module: module, funcNames: funcNames, func: func, capturedLoads: capturedLoads, callerIndex: callerIndex, op: op, mutableMasks: mutableMasks)
-		functionValueCall then noteFunctionValueCallSeeds(project, module: module, funcNames: funcNames, func: func, capturedLoads: capturedLoads, callerIndex: callerIndex, op: op, mutableMasks: mutableMasks, frozenMasks: frozenMasks)
-		witnessCall then noteRequirementCallSeeds(project, module: module, signatures: signatures, funcNames: funcNames, witnessSlots: witnessSlots, func: func, capturedLoads: capturedLoads, callerIndex: callerIndex, op: op, mutableMasks: mutableMasks, frozenMasks: frozenMasks)
+		directCall then pinParamsJoinedWithWritableData(project, funcNames: funcNames, sources: sources, callerIndex: callerIndex, opIdx: opIdx, op: op, facts: facts)
+		functionValueCall then noteFunctionValueCallSeeds(project, sources: sources, callerIndex: callerIndex, opIdx: opIdx, op: op, facts: facts)
+		witnessCall then noteRequirementCallSeeds(project, signatures: signatures, witnessSlots: witnessSlots, sources: sources, callerIndex: callerIndex, opIdx: opIdx, op: op, facts: facts)
 	end 'door'
 end 'noteCapabilitySeedsOf'
 
-function pinParamsJoinedWithWritableData(project Project, module MaxonModule, funcNames FunctionNameIndex, func IrFunction, capturedLoads CapturedLoadMap, callerIndex ElementIndex, op MaxonOp, mutableMasks ParamPositionMaskArray)
+function pinParamsJoinedWithWritableData(project Project, funcNames FunctionNameIndex, sources ParamSources, callerIndex ElementIndex, opIdx ElementIndex, op MaxonOp, facts CapabilityFacts)
+	let func = sources.func
 	let parts = try directCallPartsOf(op) otherwise panic("pinParamsJoinedWithWritableData: handed an op that is not a direct call")
 	let callee = parts.0
 	let args = parts.1
@@ -578,10 +985,15 @@ function pinParamsJoinedWithWritableData(project Project, module MaxonModule, fu
 		end 'notJoined'
 
 		let argId = try args.get(i) otherwise panic("pinParamsJoinedWithWritableData: args.get OOB at {i} below its own count")
-		let sources = callerParamMaskOf(project, module: module, funcNames: funcNames, func: func, capturedLoads: capturedLoads, value: argId)
 
-		if sources != NoParamPositions 'anUnmarkedParameter'
-			parameters = parameters or sources
+		if not valueCarriesACapability(project, func: func, value: argId) 'aValueHasNoCapabilityToJoin'
+			continue
+		end 'aValueHasNoCapabilityToJoin'
+
+		let reached = callerParamMaskOf(project, sources: sources, value: argId)
+
+		if reached != NoParamPositions 'anUnmarkedParameter'
+			parameters = parameters or reached
 			continue
 		end 'anUnmarkedParameter'
 
@@ -591,11 +1003,13 @@ function pinParamsJoinedWithWritableData(project Project, module MaxonModule, fu
 	end 'eachArg'
 
 	if writable 'pinsThem'
-		orIntoMask(mutableMasks, index: callerIndex, bits: parameters)
+		facts.pinMutable(callerIndex, bits: parameters, line: project.opRanges.get(opIdx).line, reason: "it is joined with writable data in the call to '{String.from(genericTemplateName(callee))}', whose result takes the capability of its arguments")
 	end 'pinsThem'
 end 'pinParamsJoinedWithWritableData'
 
-function noteFunctionValueCallSeeds(project Project, module MaxonModule, funcNames FunctionNameIndex, func IrFunction, capturedLoads CapturedLoadMap, callerIndex ElementIndex, op MaxonOp, mutableMasks ParamPositionMaskArray, frozenMasks ParamPositionMaskArray)
+function noteFunctionValueCallSeeds(project Project, sources ParamSources, callerIndex ElementIndex, opIdx ElementIndex, op MaxonOp, facts CapabilityFacts)
+	let func = sources.func
+
 	let (calleeValue, args) = match op 'op'
 		indirectCall(_, callee, args, _) gives (callee, args)
 		default panic("noteFunctionValueCallSeeds: handed an op that is not an indirect call")
@@ -603,27 +1017,35 @@ function noteFunctionValueCallSeeds(project Project, module MaxonModule, funcNam
 
 	view shape = try functionTypeRegistryOf(project).aliasShapes.get(functionValueGoverningName(project, func: func, value: calleeValue)) otherwise return
 
+	let line = project.opRanges.get(opIdx).line
+	let boundary = aliasDisplayOf(project, name: functionValueGoverningName(project, func: func, value: calleeValue))
+
 	if shape.mutableFunction 'aMutableFunction'
-		orIntoMask(mutableMasks, index: callerIndex, bits: callerParamMaskOf(project, module: module, funcNames: funcNames, func: func, capturedLoads: capturedLoads, value: calleeValue))
+		facts.pinMutable(callerIndex, bits: callerParamMaskOf(project, sources: sources, value: calleeValue), line: line, reason: "it is a function value of '{boundary}', which declares `mutates captures`, called here")
 	end 'aMutableFunction'
 
 	for position in 0 upto userArityOfIndirectCall(args) 'eachArg'
-		let sources = callerParamMaskOf(project, module: module, funcNames: funcNames, func: func, capturedLoads: capturedLoads, value: try args.get(position) otherwise panic("noteFunctionValueCallSeeds: args.get OOB at {position} below the supplied count"))
-		pinDeclaredSources(declaredCapabilityAt(shape.paramCapabilities, position: position as ParamCount), index: callerIndex, sources: sources, mutableMasks: mutableMasks, frozenMasks: frozenMasks)
+		let argument = try args.get(position) otherwise panic("noteFunctionValueCallSeeds: args.get OOB at {position} below the supplied count")
+		let declared = declaredCapabilityAt(shape.paramCapabilities, position: position as ParamCount)
+		pinDeclaredSources(facts, declared: declared, index: callerIndex, sources: callerParamMaskOf(project, sources: sources, value: argument), valueOfUnknownType: valueIsOfUnknownType(func, value: argument), line: line, boundary: boundary)
 	end 'eachArg'
 end 'noteFunctionValueCallSeeds'
 
-function noteRequirementCallSeeds(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, witnessSlots WitnessSlotsByDeclIndex, func IrFunction, capturedLoads CapturedLoadMap, callerIndex ElementIndex, op MaxonOp, mutableMasks ParamPositionMaskArray, frozenMasks ParamPositionMaskArray)
+function noteRequirementCallSeeds(project Project, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, sources ParamSources, callerIndex ElementIndex, opIdx ElementIndex, op MaxonOp, facts CapabilityFacts)
 	let parts = try witnessCallPartsOf(op) otherwise panic("noteRequirementCallSeeds: handed an op that is not a witness dispatch")
 	let args = parts.0
 	let methodIndex = parts.2
 	let interfaceDeclIndex = parts.3
-	let method = witnessSlotAt(signatures, interfaces: signatures.interfaceMap(), witnessSlots: witnessSlots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex).method
+	let slot = witnessSlotAt(signatures, interfaces: signatures.interfaceMap(), witnessSlots: witnessSlots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
+	let method = slot.method
 	let first = requirementFirstPosition(method)
+	let line = project.opRanges.get(opIdx).line
+	let boundary = "{String.from(slot.sourceInterfaceName)}.{String.from(method.name)}"
 
 	for position in 0 upto args.count() 'eachArg'
-		let sources = callerParamMaskOf(project, module: module, funcNames: funcNames, func: func, capturedLoads: capturedLoads, value: try args.get(position) otherwise panic("noteRequirementCallSeeds: args.get OOB at {position} below its own count"))
-		pinDeclaredSources(requirementCapabilityAt(method, position: position as ParamCount, first: first), index: callerIndex, sources: sources, mutableMasks: mutableMasks, frozenMasks: frozenMasks)
+		let argument = try args.get(position) otherwise panic("noteRequirementCallSeeds: args.get OOB at {position} below its own count")
+		let declared = requirementCapabilityAt(method, position: position as ParamCount, first: first)
+		pinDeclaredSources(facts, declared: declared, index: callerIndex, sources: callerParamMaskOf(project, sources: sources, value: argument), valueOfUnknownType: valueIsOfUnknownType(sources.func, value: argument), line: line, boundary: boundary)
 	end 'eachArg'
 end 'noteRequirementCallSeeds'
 
@@ -635,11 +1057,11 @@ module function requirementCapabilityAt(method InterfaceMethodSig, position Para
 	return declaredCapabilityAt(method.paramCapabilities, position: position - first)
 end 'requirementCapabilityAt'
 
-function pinDeclaredSources(declared ParamCapability, index ElementIndex, sources ParamPositionMask, mutableMasks ParamPositionMaskArray, frozenMasks ParamPositionMaskArray)
+function pinDeclaredSources(facts CapabilityFacts, declared ParamCapability, index ElementIndex, sources ParamPositionMask, valueOfUnknownType bool, line LineNumber, boundary String)
 	match declared 'capability'
-		mutable then orIntoMask(mutableMasks, index: index, bits: sources)
-		immutable then orIntoMask(frozenMasks, index: index, bits: sources)
-		unmarked or
+		mutable then facts.pinMutable(index, bits: sources, line: line, reason: "it is passed to a `mutable` parameter of '{boundary}'")
+		immutable then facts.pinFrozen(index, bits: sources, elementsOfUnknownType: valueOfUnknownType, line: line, reason: "it is passed to an `immutable` parameter of '{boundary}'")
+		unmarked then orIntoMask(facts.buildsRecordFrom, index: index, bits: sources)
 		isolated then break
 	end 'capability'
 end 'pinDeclaredSources'

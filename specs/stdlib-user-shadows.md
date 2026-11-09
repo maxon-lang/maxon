@@ -1195,7 +1195,7 @@ type TextLogHandler
 	export var y as Count
 end 'TextLogHandler'
 
-default LogHandler = spawn stdlib.TextLogHandler.create(freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false))
+default LogHandler = spawn stdlib.TextLogHandler.create(LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false))
 
 function main() returns ExitCode
 	let record = freeze LogRecord.create(0, level: LogLevel.info.clone(), message: "up", attrs: LogFieldArray.create(0), file: "main.maxon", line: 1)

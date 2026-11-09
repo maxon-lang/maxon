@@ -487,16 +487,16 @@ end 'main'
 ```
 
 <!-- test: an-image-literal-passed-through-a-returning-function-is-written-through-a-copy -->
-`b"abc"` is an immortal record in read-only memory. `touch` returns its parameter, so the result is a
-private copy the caller may write; the writes, and the rebinds that follow, must not fault or reach the
-literal.
+`b"abc"` is an immortal record in read-only memory, and `touch` returns its parameter, so `touch(b"abc")` is the
+literal itself: reading it is free and writing it is refused. The caller writes a `.clone()`, a private copy
+passed through `touch`; the writes, and the rebinds that follow, must not fault or reach the literal.
 ```maxon
 function touch(bytes ByteArray) returns ByteArray
 	return bytes
 end 'touch'
 
 function main() returns ExitCode
-	var last = touch(b"abc")
+	var last = touch(b"abc".clone())
 	last.push(100)
 
 	for _ in 0 upto 3 'each'
@@ -776,9 +776,9 @@ end 'main'
 ```
 
 <!-- test: a-rebind-in-one-arm-of-a-branch-beside-an-image-literal-in-the-other-is-written-through-a-copy -->
-`route` rebinds `last` through `touch` in one arm and takes `touch(b"xyz")` in the other, so the join is
-reached from a predecessor that holds a counted record and one that holds the immortal literal's copy. Each
-call writes to its result; none may write to the literal, and the counts must not drift between calls.
+`route` rebinds `last` through `touch` in one arm and takes `touch(b"xyz".clone())` in the other, so the join is
+reached from a predecessor that holds a counted record and one that holds the literal's copy. Each call writes
+to its result; none may write to the literal, and the counts must not drift between calls.
 ```maxon
 function touch(bytes ByteArray) returns ByteArray
 	return bytes
@@ -791,7 +791,7 @@ function route(flag bool) returns ByteArray
 	if flag 'again'
 		last = touch(last)
 	end 'again' else 'first'
-		last = touch(b"xyz")
+		last = touch(b"xyz".clone())
 	end 'first'
 
 	last.push(9)

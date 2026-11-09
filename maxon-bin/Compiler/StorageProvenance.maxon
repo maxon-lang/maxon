@@ -71,6 +71,8 @@
 typealias MaskWordCount = int(0 to u64.max) implements ElementIndex
 typealias MaskWordCountArray = Array with MaskWordCount
 
+typealias ReadOnlyRootKindArray = Array with ReadOnlyRootKind
+
 enum RootLinkSlot
 	setHead
 	chunkLink
@@ -375,10 +377,6 @@ let ResultLiesWithinAModuleLet = 1 as ParamPositionMask
 let ResultHoldsAModuleLet = 2 as ParamPositionMask
 let ResultLiesWithinASharedView = 4 as ParamPositionMask
 let ResultHoldsASharedView = 8 as ParamPositionMask
-let ResultLiesWithinALetField = 16 as ParamPositionMask
-let ResultHoldsALetField = 32 as ParamPositionMask
-let ResultLiesWithinALetPayload = 64 as ParamPositionMask
-let ResultHoldsALetPayload = 128 as ParamPositionMask
 let ResultLiesWithinAReadOnlyElement = 256 as ParamPositionMask
 let ResultHoldsAReadOnlyElement = 512 as ParamPositionMask
 let ResultLiesWithinAFrozenElement = 1024 as ParamPositionMask
@@ -412,12 +410,6 @@ enum LetReach
 	boundValue
 	storedContents
 end 'LetReach'
-
-enum LetSlotKind
-	none
-	field
-	payload
-end 'LetSlotKind'
 
 enum SlotExclusivity
 	pending
@@ -455,9 +447,8 @@ end 'OpShape'
 
 typealias SwappedOutReturnMemo = Map with (ElementIndex, bool)
 typealias SlotExclusivityMemo = Map with (StoreSlotKey, SlotExclusivity)
+typealias ImmutableSlotMemo = Map with (StoreSlotKey, bool)
 typealias SlotAccessHeadMap = Map with (StoreSlotKey, StoreSlotKey)
-typealias LetFieldSlotMemo = Map with (StoreSlotKey, LetSlotKind)
-typealias LetPayloadKindsMemo = Map with (StoreSlotKey, HeldRecordKinds)
 typealias ViewSinkMap = Map with (ElementIndex, ValueId)
 
 enum PermanenceSettling
@@ -490,8 +481,7 @@ enum PermanentView
 end 'PermanentView'
 
 module enum ArgumentKeep
-	letField
-	letPayload
+	readOnlyStore
 	readOnlyElement
 	mutablePlace
 	consumed
@@ -538,8 +528,7 @@ export type TracedSummaryRow
 	export var placedWithin = NoParamPositions as ParamPositionMask
 	export var escapes = NoParamPositions as ParamPositionMask
 	export var binds = NoParamPositions as ParamPositionMask
-	export var letKeeps = NoParamPositions as ParamPositionMask
-	export var payloadKeeps = NoParamPositions as ParamPositionMask
+	export var readOnlyStoreKeeps = NoParamPositions as ParamPositionMask
 	export var elementKeeps = NoParamPositions as ParamPositionMask
 	export var keeps = NoParamPositions as ParamPositionMask
 	export var otherKeeps = NoParamPositions as ParamPositionMask
@@ -793,8 +782,7 @@ export type ProvenanceSummary
 	var placedWithin as ParamPositionMaskArray
 	var escapes as ParamPositionMaskArray
 	var binds as ParamPositionMaskArray
-	var letKeeps as ParamPositionMaskArray
-	var payloadKeeps as ParamPositionMaskArray
+	var readOnlyStoreKeeps as ParamPositionMaskArray
 	var elementKeeps as ParamPositionMaskArray
 	var keeps as ParamPositionMaskArray
 	var otherKeeps as ParamPositionMaskArray
@@ -807,7 +795,7 @@ export type ProvenanceSummary
 	export static function create(funcCount ElementIndex) returns ProvenanceSummary
 		var noStoredParameters = ParamPositionMaskArray.create(0)
 
-		return Self{shares: emptySummaryColumn(funcCount), identity: emptySummaryColumn(funcCount), holds: emptySummaryColumn(funcCount), inside: emptySummaryColumn(funcCount), holdsWithin: emptySummaryColumn(funcCount), placedWithin: emptySummaryColumn(funcCount), escapes: emptySummaryColumn(funcCount), binds: emptySummaryColumn(funcCount), letKeeps: emptySummaryColumn(funcCount), payloadKeeps: emptySummaryColumn(funcCount), elementKeeps: emptySummaryColumn(funcCount), keeps: emptySummaryColumn(funcCount), otherKeeps: emptySummaryColumn(funcCount), recordKeeps: emptySummaryColumn(funcCount), moduleLets: emptySummaryColumn(funcCount), storesInto: emptyStoreRows(funcCount, sharedEmptyRow: noStoredParameters), storesDeep: emptyStoreRows(funcCount, sharedEmptyRow: noStoredParameters), noStoredParameters: noStoredParameters}
+		return Self{shares: emptySummaryColumn(funcCount), identity: emptySummaryColumn(funcCount), holds: emptySummaryColumn(funcCount), inside: emptySummaryColumn(funcCount), holdsWithin: emptySummaryColumn(funcCount), placedWithin: emptySummaryColumn(funcCount), escapes: emptySummaryColumn(funcCount), binds: emptySummaryColumn(funcCount), readOnlyStoreKeeps: emptySummaryColumn(funcCount), elementKeeps: emptySummaryColumn(funcCount), keeps: emptySummaryColumn(funcCount), otherKeeps: emptySummaryColumn(funcCount), recordKeeps: emptySummaryColumn(funcCount), moduleLets: emptySummaryColumn(funcCount), storesInto: emptyStoreRows(funcCount, sharedEmptyRow: noStoredParameters), storesDeep: emptyStoreRows(funcCount, sharedEmptyRow: noStoredParameters), noStoredParameters: noStoredParameters}
 	end 'create'
 
 	export function resultMayReachAModuleLet(index ElementIndex) returns bool
@@ -846,20 +834,16 @@ export type ProvenanceSummary
 		return summaryMaskAt(self.escapes, index: index)
 	end 'escapesAt'
 
-	export function letKeepsAt(index ElementIndex) returns ParamPositionMask
-		return summaryMaskAt(self.letKeeps, index: index)
-	end 'letKeepsAt'
-
-	export function payloadKeepsAt(index ElementIndex) returns ParamPositionMask
-		return summaryMaskAt(self.payloadKeeps, index: index)
-	end 'payloadKeepsAt'
+	export function readOnlyStoreKeepsAt(index ElementIndex) returns ParamPositionMask
+		return summaryMaskAt(self.readOnlyStoreKeeps, index: index)
+	end 'readOnlyStoreKeepsAt'
 
 	export function elementKeepsAt(index ElementIndex) returns ParamPositionMask
 		return summaryMaskAt(self.elementKeeps, index: index)
 	end 'elementKeepsAt'
 
 	export function anyKeepsAt(index ElementIndex) returns ParamPositionMask
-		return self.letKeepsAt(index) or self.payloadKeepsAt(index) or self.elementKeepsAt(index)
+		return self.readOnlyStoreKeepsAt(index) or self.elementKeepsAt(index)
 	end 'anyKeepsAt'
 
 	export function keepsAt(index ElementIndex) returns ParamPositionMask
@@ -899,8 +883,7 @@ export type ProvenanceSummary
 		grew = widenSummaryColumn(self.placedWithin, index: index, by: row.placedWithin) or grew
 		grew = widenSummaryColumn(self.escapes, index: index, by: row.escapes) or grew
 		grew = widenSummaryColumn(self.binds, index: index, by: row.binds) or grew
-		grew = widenSummaryColumn(self.letKeeps, index: index, by: row.letKeeps) or grew
-		grew = widenSummaryColumn(self.payloadKeeps, index: index, by: row.payloadKeeps) or grew
+		grew = widenSummaryColumn(self.readOnlyStoreKeeps, index: index, by: row.readOnlyStoreKeeps) or grew
 		grew = widenSummaryColumn(self.elementKeeps, index: index, by: row.elementKeeps) or grew
 		grew = widenSummaryColumn(self.keeps, index: index, by: row.keeps) or grew
 		grew = widenSummaryColumn(self.otherKeeps, index: index, by: row.otherKeeps) or grew
@@ -993,9 +976,9 @@ end 'widenSummaryColumn'
 // began. Its dependency rows repeat per call site and per pass of its walk, and a trace whose every input is
 // as it last read them answers the masks it already widened by, so skipping it leaves every summary exactly
 // as tracing it would.
-module function buildStorageProvenance(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, summaryIndex CallSummaryIndex) returns ProvenanceTracer throws CompileError
+module function buildStorageProvenance(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, summaryIndex CallSummaryIndex, paramSources ParamSourceIndex) returns ProvenanceTracer throws CompileError
 	let funcCount = funcNames.functions.count()
-	var tracer = ProvenanceTracer.create(project, module: module, signatures: signatures, calls: CallSiteCursor.create(summaryIndex), funcCount: funcCount)
+	var tracer = ProvenanceTracer.create(project, module: module, signatures: signatures, calls: CallSiteCursor.create(summaryIndex), funcCount: funcCount, paramSources: paramSources)
 	try settleSummaries(project, order: calleesFirstOrder(module, funcNames: funcNames), bodies: tracer, dependencies: tracer.calls.dependencies)
 	tracer.markBodiesHandedAModuleLetsRecord(funcNames)
 	tracer.settleFreshReturns(funcNames)
@@ -1208,7 +1191,7 @@ end 'StagedParamEdges'
 
 union IndexedFunctionBody
 	none
-	body(let name ByteArray)
+	body(let name immutable ByteArray)
 
 	function isOf(name ByteArray) returns bool
 		return match self 'indexed'
@@ -1259,6 +1242,7 @@ end 'WriteDoor'
 // which a loop's back edge needs and a straight-line body settles in one extra pass.
 module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	var project as Project
+	var paramSources as ParamSourceIndex
 	var module as MaxonModule
 	var signatures as ProgramSignatures
 	export var calls as CallSiteCursor
@@ -1311,9 +1295,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	// The last use of each root through a second name for its record (`let u = t`), which keeps it live as its own does.
 	var rootAliasLastUse as TokenIndexArray
 	var rootAliased as BoolArray
-	var rootInfos as VarInfoArray
+	var rootInfoSlots as EntryIndexArray
 	var rootDeclTokens as TokenIndexArray
 	var rootLiveUntil as TokenIndexArray
+	var rootKinds as ReadOnlyRootKindArray
+	var rootViews as BoolArray
 	var rootSoleBase as BoolArray
 	var rootMovedAt as TokenIndexArray
 
@@ -1366,8 +1352,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	var returnedPlacedWithin as ParamPositionMask
 	var returnedEscapes as ParamPositionMask
 	var returnedBinds as ParamPositionMask
-	var returnedLetKeeps as ParamPositionMask
-	var returnedPayloadKeeps as ParamPositionMask
+	var returnedReadOnlyStoreKeeps as ParamPositionMask
 	var returnedElementKeeps as ParamPositionMask
 	var returnedKeeps as ParamPositionMask
 	var returnedOtherKeeps as ParamPositionMask
@@ -1448,10 +1433,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	// Each binding root's reads, by rank: `rootReads` from `rootReadStarts[rank]` up to `rootReadStarts[rank + 1]`.
 	var rootReadStarts as EntryIndexArray
 	var rootReads as TokenIndexArray
-	var tracedSites as ProvenanceSites
 
 	// What a function that filed no provenance answers (`IrFunction.provenanceSites`).
-	var noSites as ProvenanceSites
+	let noSites as immutable ProvenanceSites
 	var refusedDoorValues as BoolArray
 
 	// Per value of the function `indexedDefinitionsOf` names: the op that defines it, the hop that op takes toward the
@@ -1503,8 +1487,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	// (`indexDefinitions`).
 	var blockIndex as BlockIndexById
 
-	// The calls `callTokenAtPosition` last indexed, and their token and start indexes.
-	var indexedCalls as CallTokenColumns
+	var indexedCallsOf as immutable ByteArray
 	var callTokenIndex as TokenByPosition
 	var callStartIndex as StartByPosition
 
@@ -1514,8 +1497,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	var freshChecked as BoolArray
 	var freshChanged as bool
 	var freshNeeds as FuncIndexArray
-	var letFieldSlots as LetFieldSlotMemo
-	var letPayloadKinds as LetPayloadKindsMemo
 	var keptArgKinds as ArgumentKeepArray
 	var viewSinks as ViewSinkMap
 	var permanentReturns as BoolArray
@@ -1529,6 +1510,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	var permanentParamsNeeded as ParamPositionMask
 	var permanentUsedGiven as bool
 	var slotExclusivity as SlotExclusivityMemo
+	var immutableSlots as ImmutableSlotMemo
+	var hasBoxTag as BoolArray
+	var boxTags as FullRangeIntArray
 	var slotAccessHeads as SlotAccessHeadMap
 	var slotAccessPacked as StoreSlotKeyArray
 	var slotAccessNext as StoreSlotKeyArray
@@ -1544,9 +1528,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	var readOnlyKeptAt as PositionKeyArray
 	var doorAcceptsParameters as bool
 
-	static function create(project Project, module MaxonModule, signatures ProgramSignatures, calls CallSiteCursor, funcCount ElementIndex) returns ProvenanceTracer
-		var noSites = ProvenanceSites.create(ProvenanceColumns.create())
-		return Self{project: project, module: module, signatures: signatures, calls: calls, stagedEdges: StagedParamEdges.create(funcCount), summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count(), setsPerColumn: 0, storeSlots: StoreSlotTable.create(), deepSlots: StoreSlotTable.create(), loadOrigins: StoreSlotKeyArray.create(0), hasLoadOrigin: BoolArray.create(0), tracked: BoolArray.create(0), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), unboxedWords: UnboxedWordMemo.create(), kindWritability: RecordKindWritability.of(signatures), rootValues: ValueIdArray.create(0), rootNames: NameRoster.create(0), rootRecordKinds: HeldRecordKindsArray.create(0), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: OptionalElementIndexColumn.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(0), isImmutableBindingValue: BoolArray.create(0), rootIsModuleLet: BoolArray.create(0), rootAliasLastUse: TokenIndexArray.create(0), rootAliased: BoolArray.create(0), rootInfos: VarInfoArray.create(0), rootDeclTokens: TokenIndexArray.create(0), rootLiveUntil: TokenIndexArray.create(0), rootSoleBase: BoolArray.create(0), rootMovedAt: TokenIndexArray.create(0), rootCaptured: BoolArray.create(0), writableRankOfValue: OptionalElementIndexColumn.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(0), callWrittenPlaceWords: ParamPositionMaskArray.create(0), parameterRankWords: ParamPositionMaskArray.create(0), doorToken: NoDoorToken, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: moduleLetKindsOf(project, signatures: signatures), escapedSet: 0, operands: ValueIdArray.create(0), refusals: PendingRefusalArray.create(0), argIdentityReach: ParamPositionMaskArray.create(0), argWithinReach: ParamPositionMaskArray.create(0), changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedLetKeeps: NoParamPositions, returnedPayloadKeeps: NoParamPositions, returnedElementKeeps: NoParamPositions, returnedKeeps: NoParamPositions, returnedOtherKeeps: NoParamPositions, returnedRecordKeeps: NoParamPositions, writtenMasks: ParamPositionMaskArray.create(0), recordWrittenMasks: ParamPositionMaskArray.create(0), letRefused: BoolArray.create(0), keptRefusedValues: ValueIdArray.create(0), keptRefusedAt: PositionKeyArray.create(0), keptSiteHeads: KeptSiteHeadsByCall.create(), keptSiteNext: OptionalElementIndexColumn.create(), keptSitesValid: false, keptSitesIndex: 0, landingKeeps: LandingKeeps.fromBodies, callStartIndex: StartByPosition.create(), letCheckedValid: false, letCheckedIndex: 0, opaqueBoundBodies: BoolArray.create(0), returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(0), storedRow: ParamPositionMaskArray.create(0), storedDeepRow: ParamPositionMaskArray.create(0), capturedPositions: CapturedLoadMap.create(), rankCount: 0, enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(0), writtenArgValues: ValueIdArray.create(0), writtenArgCalls: SourceRangeArray.create(0), writtenArgParams: ArgumentParameterArray.create(0), writtenArgJudged: BoolArray.create(0), writtenArgsHere: EntryIndexArray.create(0), landingNotedPositions: ParamCountArray.create(0), landingNotedRows: EntryIndexArray.create(0), keptArgFuncs: FuncIndexArray.create(0), keptArgValues: ValueIdArray.create(0), keptArgCalls: SourceRangeArray.create(0), keptArgParams: ArgumentParameterArray.create(0), keptArgCallees: NameRoster.create(0), keptArgCursor: 0, refusedDoorRanks: 0, refusedBodies: BoolArray.create(0), pendingKeeps: PendingKeepArray.create(0), returnedValues: ValueIdArray.create(0), keptEscapes: BoolArray.create(0), keptReturned: BoolArray.create(0), functionHoldings: FunctionHoldingAnswers.plain(), keptEverythingEscapes: false, varMovedAt: TokenIndexArray.create(0), varDeadFrom: TokenIndexArray.create(0), keptRefusedRanks: 0, rootReadStarts: EntryIndexArray.create(0), rootReads: TokenIndexArray.create(0), tracedSites: noSites, noSites: noSites, refusedDoorValues: BoolArray.create(0), indexedDefinitionsOf: IndexedFunctionBody.none, definingOps: OptionalElementIndexColumn.create(), mergingBlocks: MergingBlockColumn.create(), hopKinds: AccessHopKindArray.create(0), hopBases: ValueIdArray.create(0), hopSteps: AccessStepColumn.create(), soleIncomings: ValueIdArray.create(0), soleIncomingSeen: BoolArray.create(0), incomingStart: EntryIndexArray.create(0), incomingLength: EntryIndexArray.create(0), incomingComplete: BoolArray.create(0), incomingValues: ValueIdArray.create(0), pairMerge: ValueIdArray.create(0), pairIncoming: ValueIdArray.create(0), pairHanded: BoolArray.create(0), blockPairStart: EntryIndexArray.create(0), useCounts: EntryIndexArray.create(0), pathSteps: PathStepArray.create(0), rootReadFill: EntryIndexArray.create(0), reachWorklist: BlockIdArray.create(0), reachVisited: BoolArray.create(0), writtenArgCursor: 0, writtenRanks: 0, writtenWithinRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: OptionalElementIndexColumn.create(), hygieneWithdrawn: BoolArray.create(0), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), freshReturns: BoolArray.create(0), freshMember: BoolArray.create(0), freshRequired: BoolArray.create(0), freshChecked: BoolArray.create(0), freshChanged: false, freshNeeds: FuncIndexArray.create(0), letFieldSlots: LetFieldSlotMemo.create(), letPayloadKinds: LetPayloadKindsMemo.create(), keptArgKinds: ArgumentKeepArray.create(0), viewSinks: ViewSinkMap.create(), permanentReturns: BoolArray.create(0), permanentOrFreshReturns: BoolArray.create(0), permanentNeeds: FuncIndexArray.create(0), permanentSettling: PermanenceSettling.none, permanentGivenReturns: BoolArray.create(0), permanentOrFreshGivenReturns: BoolArray.create(0), permanentGivenParams: ParamPositionMaskArray.create(0), permanentOrFreshGivenParams: ParamPositionMaskArray.create(0), permanentParamsNeeded: NoParamPositions, permanentUsedGiven: false, slotExclusivity: SlotExclusivityMemo.create(), slotAccessHeads: SlotAccessHeadMap.create(), slotAccessPacked: StoreSlotKeyArray.create(0), slotAccessNext: StoreSlotKeyArray.create(0), slotAccessesIndexed: false, slotAccessedThroughAnUnkeyedAddress: false, moduleVarKinds: signatures.recordKindsOfTypes(MaxonTypeArray.create(0)), swapOperands: ValueIdArray.create(0), aliasesGrew: false, swappedOutReturns: SwappedOutReturnMemo.create(), valueHandedOut: BoolArray.create(0), handedOutComputed: false, readOnlyKeptBases: ValueIdArray.create(0), readOnlyKeptAt: PositionKeyArray.create(0), doorAcceptsParameters: false, capabilities: CapabilityKnowledge.notYet}
+	static function create(project Project, module MaxonModule, signatures ProgramSignatures, calls CallSiteCursor, funcCount ElementIndex, paramSources ParamSourceIndex) returns ProvenanceTracer
+		let noSites = freeze ProvenanceSites.create(ProvenanceColumns.create())
+		return Self{project: project, module: module, paramSources: paramSources, signatures: signatures, calls: calls, stagedEdges: StagedParamEdges.create(funcCount), summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count(), setsPerColumn: 0, storeSlots: StoreSlotTable.create(), deepSlots: StoreSlotTable.create(), loadOrigins: StoreSlotKeyArray.create(0), hasLoadOrigin: BoolArray.create(0), tracked: BoolArray.create(0), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), unboxedWords: UnboxedWordMemo.create(), kindWritability: RecordKindWritability.of(signatures), rootValues: ValueIdArray.create(0), rootNames: NameRoster.create(0), rootRecordKinds: HeldRecordKindsArray.create(0), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: OptionalElementIndexColumn.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(0), isImmutableBindingValue: BoolArray.create(0), rootIsModuleLet: BoolArray.create(0), rootAliasLastUse: TokenIndexArray.create(0), rootAliased: BoolArray.create(0), rootInfoSlots: EntryIndexArray.create(0), rootKinds: ReadOnlyRootKindArray.create(0), rootViews: BoolArray.create(0), rootDeclTokens: TokenIndexArray.create(0), rootLiveUntil: TokenIndexArray.create(0), rootSoleBase: BoolArray.create(0), rootMovedAt: TokenIndexArray.create(0), rootCaptured: BoolArray.create(0), writableRankOfValue: OptionalElementIndexColumn.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(0), callWrittenPlaceWords: ParamPositionMaskArray.create(0), parameterRankWords: ParamPositionMaskArray.create(0), doorToken: NoDoorToken, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: moduleLetKindsOf(project, signatures: signatures), escapedSet: 0, operands: ValueIdArray.create(0), refusals: PendingRefusalArray.create(0), argIdentityReach: ParamPositionMaskArray.create(0), argWithinReach: ParamPositionMaskArray.create(0), changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedReadOnlyStoreKeeps: NoParamPositions, returnedElementKeeps: NoParamPositions, returnedKeeps: NoParamPositions, returnedOtherKeeps: NoParamPositions, returnedRecordKeeps: NoParamPositions, writtenMasks: ParamPositionMaskArray.create(0), recordWrittenMasks: ParamPositionMaskArray.create(0), letRefused: BoolArray.create(0), keptRefusedValues: ValueIdArray.create(0), keptRefusedAt: PositionKeyArray.create(0), keptSiteHeads: KeptSiteHeadsByCall.create(), keptSiteNext: OptionalElementIndexColumn.create(), keptSitesValid: false, keptSitesIndex: 0, landingKeeps: LandingKeeps.fromBodies, callStartIndex: StartByPosition.create(), letCheckedValid: false, letCheckedIndex: 0, opaqueBoundBodies: BoolArray.create(0), returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(0), storedRow: ParamPositionMaskArray.create(0), storedDeepRow: ParamPositionMaskArray.create(0), capturedPositions: CapturedLoadMap.create(), rankCount: 0, enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(0), writtenArgValues: ValueIdArray.create(0), writtenArgCalls: SourceRangeArray.create(0), writtenArgParams: ArgumentParameterArray.create(0), writtenArgJudged: BoolArray.create(0), writtenArgsHere: EntryIndexArray.create(0), landingNotedPositions: ParamCountArray.create(0), landingNotedRows: EntryIndexArray.create(0), keptArgFuncs: FuncIndexArray.create(0), keptArgValues: ValueIdArray.create(0), keptArgCalls: SourceRangeArray.create(0), keptArgParams: ArgumentParameterArray.create(0), keptArgCallees: NameRoster.create(0), keptArgCursor: 0, refusedDoorRanks: 0, refusedBodies: BoolArray.create(0), pendingKeeps: PendingKeepArray.create(0), returnedValues: ValueIdArray.create(0), keptEscapes: BoolArray.create(0), keptReturned: BoolArray.create(0), functionHoldings: FunctionHoldingAnswers.plain(), keptEverythingEscapes: false, varMovedAt: TokenIndexArray.create(0), varDeadFrom: TokenIndexArray.create(0), keptRefusedRanks: 0, rootReadStarts: EntryIndexArray.create(0), rootReads: TokenIndexArray.create(0), noSites: noSites, refusedDoorValues: BoolArray.create(0), indexedDefinitionsOf: IndexedFunctionBody.none, definingOps: OptionalElementIndexColumn.create(), mergingBlocks: MergingBlockColumn.create(), hopKinds: AccessHopKindArray.create(0), hopBases: ValueIdArray.create(0), hopSteps: AccessStepColumn.create(), soleIncomings: ValueIdArray.create(0), soleIncomingSeen: BoolArray.create(0), incomingStart: EntryIndexArray.create(0), incomingLength: EntryIndexArray.create(0), incomingComplete: BoolArray.create(0), incomingValues: ValueIdArray.create(0), pairMerge: ValueIdArray.create(0), pairIncoming: ValueIdArray.create(0), pairHanded: BoolArray.create(0), blockPairStart: EntryIndexArray.create(0), useCounts: EntryIndexArray.create(0), pathSteps: PathStepArray.create(0), rootReadFill: EntryIndexArray.create(0), reachWorklist: BlockIdArray.create(0), reachVisited: BoolArray.create(0), writtenArgCursor: 0, writtenRanks: 0, writtenWithinRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: OptionalElementIndexColumn.create(), hygieneWithdrawn: BoolArray.create(0), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCallsOf: EmptySourceText, callTokenIndex: TokenByPosition.create(), freshReturns: BoolArray.create(0), freshMember: BoolArray.create(0), freshRequired: BoolArray.create(0), freshChecked: BoolArray.create(0), freshChanged: false, freshNeeds: FuncIndexArray.create(0), keptArgKinds: ArgumentKeepArray.create(0), viewSinks: ViewSinkMap.create(), permanentReturns: BoolArray.create(0), permanentOrFreshReturns: BoolArray.create(0), permanentNeeds: FuncIndexArray.create(0), permanentSettling: PermanenceSettling.none, permanentGivenReturns: BoolArray.create(0), permanentOrFreshGivenReturns: BoolArray.create(0), permanentGivenParams: ParamPositionMaskArray.create(0), permanentOrFreshGivenParams: ParamPositionMaskArray.create(0), permanentParamsNeeded: NoParamPositions, permanentUsedGiven: false, slotExclusivity: SlotExclusivityMemo.create(), immutableSlots: ImmutableSlotMemo.create(), hasBoxTag: BoolArray.create(0), boxTags: FullRangeIntArray.create(0), slotAccessHeads: SlotAccessHeadMap.create(), slotAccessPacked: StoreSlotKeyArray.create(0), slotAccessNext: StoreSlotKeyArray.create(0), slotAccessesIndexed: false, slotAccessedThroughAnUnkeyedAddress: false, moduleVarKinds: signatures.recordKindsOfTypes(MaxonTypeArray.create(0)), swapOperands: ValueIdArray.create(0), aliasesGrew: false, swappedOutReturns: SwappedOutReturnMemo.create(), valueHandedOut: BoolArray.create(0), handedOutComputed: false, readOnlyKeptBases: ValueIdArray.create(0), readOnlyKeptAt: PositionKeyArray.create(0), doorAcceptsParameters: false, capabilities: CapabilityKnowledge.notYet}
 	end 'create'
 
 	function tracesFirst(index ElementIndex) returns bool
@@ -1735,8 +1719,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		row.placedWithin = self.returnedPlacedWithin
 		row.escapes = self.returnedEscapes
 		row.binds = self.returnedBinds
-		row.letKeeps = self.returnedLetKeeps or self.sharedSendParameters(self.functionAt(index))
-		row.payloadKeeps = self.returnedPayloadKeeps
+		row.readOnlyStoreKeeps = self.returnedReadOnlyStoreKeeps or self.sharedSendParameters(self.functionAt(index))
 		row.elementKeeps = self.returnedElementKeeps
 		let sent = self.sharedSendParameters(self.functionAt(index))
 		row.keeps = maskWithout(self.returnedKeeps, removed: sent)
@@ -1745,7 +1728,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		row.moduleLets = self.returnedModuleLets
 		row.stores = self.storedRow
 		row.deepStores = self.storedDeepRow
-		self.keepStoredKeyLikeALetField(self.functionAt(index), row: row)
+		self.keepStoredKeyReadOnly(self.functionAt(index), row: row)
 		return self.summary.widen(index, row: row)
 	end 'widenSummary'
 
@@ -1761,21 +1744,21 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return shared
 	end 'sharedSendParameters'
 
-	function keepStoredKeyLikeALetField(func IrFunction, row TracedSummaryRow)
+	function keepStoredKeyReadOnly(func IrFunction, row TracedSummaryRow)
 		let position = try self.storedKeyParameterOf(func) otherwise return
-		row.letKeeps = maskWithParam(row.letKeeps, param: position)
+		row.readOnlyStoreKeeps = maskWithParam(row.readOnlyStoreKeeps, param: position)
 		row.keeps = maskWithoutParam(row.keeps, param: position)
 		row.escapes = maskWithoutParam(row.escapes, param: position)
 		row.binds = maskWithoutParam(row.binds, param: position)
 
 		for target in 0 upto row.stores.count() 'eachStoreTarget'
-			try row.stores.set(target, value: maskWithoutParam(try row.stores.get(target) otherwise panic("ProvenanceTracer.keepStoredKeyLikeALetField: stores.get OOB at {target}"), param: position)) otherwise panic("ProvenanceTracer.keepStoredKeyLikeALetField: stores.set OOB at {target}")
+			try row.stores.set(target, value: maskWithoutParam(try row.stores.get(target) otherwise panic("ProvenanceTracer.keepStoredKeyReadOnly: stores.get OOB at {target}"), param: position)) otherwise panic("ProvenanceTracer.keepStoredKeyReadOnly: stores.set OOB at {target}")
 		end 'eachStoreTarget'
 
 		for target in 0 upto row.deepStores.count() 'eachDeepStoreTarget'
-			try row.deepStores.set(target, value: maskWithoutParam(try row.deepStores.get(target) otherwise panic("ProvenanceTracer.keepStoredKeyLikeALetField: deepStores.get OOB at {target}"), param: position)) otherwise panic("ProvenanceTracer.keepStoredKeyLikeALetField: deepStores.set OOB at {target}")
+			try row.deepStores.set(target, value: maskWithoutParam(try row.deepStores.get(target) otherwise panic("ProvenanceTracer.keepStoredKeyReadOnly: deepStores.get OOB at {target}"), param: position)) otherwise panic("ProvenanceTracer.keepStoredKeyReadOnly: deepStores.set OOB at {target}")
 		end 'eachDeepStoreTarget'
-	end 'keepStoredKeyLikeALetField'
+	end 'keepStoredKeyReadOnly'
 
 	function storedKeyParameterOf(func IrFunction) returns ParamCount throws AbsentError
 		let wanted = match storedKeyColumnOwnerOf(func.name) 'owner'
@@ -2027,7 +2010,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return
 		end 'notALiftedClosure'
 
-		self.capturedPositions = collectedCapturedLoadsOf(self.module, func: func)
+		self.capturedPositions = self.paramSources.ofFunction(func).captured
 		let env = valueIdAtParamPosition(func.paramCount - 1)
 
 		for (_, position) in self.capturedPositions 'eachCapture'
@@ -2094,7 +2077,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.rootIsModuleLet.clear()
 		self.rootAliasLastUse.clear()
 		self.rootAliased.clear()
-		self.rootInfos.clear()
+		self.rootInfoSlots.clear()
+		self.rootKinds.clear()
+		self.rootViews.clear()
 		self.rootDeclTokens.clear()
 
 		self.rootRankOfValue.makeAbsent(func.valueTags.count())
@@ -2127,7 +2112,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			self.rootIsModuleLet.push(try bindings.moduleLets.get(i) otherwise panic("ProvenanceTracer.traceImmutableBindings: moduleLets.get OOB at {i}"))
 			self.rootAliasLastUse.push(0)
 			self.rootAliased.push(false)
-			self.rootInfos.push(try bindings.infos.get(i) otherwise panic("ProvenanceTracer.traceImmutableBindings: infos.get OOB at {i}"))
+			self.rootInfoSlots.push(i)
+			view rootInfo = try bindings.infos.get(i) otherwise panic("ProvenanceTracer.traceImmutableBindings: infos.get OOB at {i}")
+			self.rootKinds.push(rootInfo.rootKind)
+			self.rootViews.push(rootInfo.isView())
 			self.rootDeclTokens.push(try bindings.declTokens.get(i) otherwise panic("ProvenanceTracer.traceImmutableBindings: declTokens.get OOB at {i}"))
 		end 'eachBinding'
 
@@ -2231,14 +2219,13 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			end 'liveEverywhere'
 
 			let declared = try self.rootDeclTokens.get(rank) otherwise panic("ProvenanceTracer.settleBindingRoots: rootDeclTokens.get OOB at {rank}")
-			view info = try self.rootInfos.get(rank) otherwise panic("ProvenanceTracer.settleBindingRoots: rootInfos.get OOB at {rank}")
+			view info = self.rootInfoOf(func, rank: rank)
 			let aliasLastUse = try self.rootAliasLastUse.get(rank) otherwise panic("ProvenanceTracer.settleBindingRoots: rootAliasLastUse.get OOB at {rank}")
 			let named = info.lastReadToken if info.lastReadToken > aliasLastUse else aliasLastUse
 			let lastUse = named if named > declared else declared
 			try self.rootLiveUntil.set(rank, value: liveUntilAcrossLoops(declared, lastUse: lastUse, loops: loops)) otherwise panic("ProvenanceTracer.settleBindingRoots: rootLiveUntil.set OOB at {rank}")
 		end 'eachBinding'
 
-		self.tracedSites = func.provenanceSites(self.noSites)
 		self.gatherRootReads(func, bindingCount: bindingCount)
 	end 'settleBindingRoots'
 
@@ -2297,7 +2284,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'noReadFiled'
 
 		let declared = try self.rootDeclTokens.get(rank) otherwise panic("ProvenanceTracer.rootReadAfter: rootDeclTokens.get OOB at {rank}")
-		let sites = self.tracedSites
+		let sites = self.functionAt(self.bindingsTraceIndex).provenanceSites(self.noSites)
 
 		for k in first upto bound 'eachRead'
 			let read = try self.rootReads.get(k) otherwise panic("ProvenanceTracer.rootReadAfter: rootReads.get OOB at {k}")
@@ -2402,7 +2389,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return kept and self.readOnlyElementParameters(func, callee: callee, sig: sig, args: args, frozen: false)
 	end 'elementKeptParameters'
 
-	module function keepsAt(func IrFunction, calleeIndex ElementIndex, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels NameRoster, result ValueId) returns (ParamPositionMask, ParamPositionMask, ParamPositionMask, ParamPositionMask)
+	module function keepsAt(func IrFunction, calleeIndex ElementIndex, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels NameRoster, result ValueId) returns (ParamPositionMask, ParamPositionMask, ParamPositionMask)
 		let inElements = self.elementKeptParameters(func, calleeIndex: calleeIndex, callee: callee, sig: sig, args: args)
 		let kept = self.keptParameters(calleeIndex, paramCount: sig.paramCount())
 		var mutablyKept = maskWithout(kept xor inElements, removed: kept and self.readOnlyElementParameters(func, callee: callee, sig: sig, args: args, frozen: true))
@@ -2414,7 +2401,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			mutablyKept = mutablyKept xor heldByTheResult
 		end 'theResultIsReadOnly'
 
-		return (self.summary.letKeepsAt(calleeIndex), self.summary.payloadKeepsAt(calleeIndex), self.summary.elementKeepsAt(calleeIndex) or inElements, mutablyKept)
+		return (self.summary.readOnlyStoreKeepsAt(calleeIndex), self.summary.elementKeepsAt(calleeIndex) or inElements, mutablyKept)
 	end 'keepsAt'
 
 	function valueTypedContentParameters(func IrFunction, calleeIndex ElementIndex, sig FuncSignature, args ValueIdArray, argLabels NameRoster) returns ParamPositionMask
@@ -2523,7 +2510,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.writtenArgJudged.push(false)
 	end 'noteArgumentWritten'
 
-	module function noteKeptArgument(value ValueId, call SourceRange, parameter ArgumentParameter, callee ByteArray, keep ArgumentKeep)
+	module function noteKeptArgument(value ValueId, call SourceRange, parameter ArgumentParameter, callee immutable ByteArray, keep ArgumentKeep)
 		self.keptArgKinds.push(keep)
 		self.keptArgFuncs.push(self.enteredIndex)
 		self.keptArgValues.push(value)
@@ -2591,14 +2578,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'noteLandingArgumentJudged'
 
 	function noteLandingArgumentsKept(func IrFunction, args ValueIdArray, argCount ParamCount, bodies CallLandingBodies, call SourceRange, mutationSummary ParamMutationSummary, keeps LandingKeeps, calleeText String)
-		var letKeeps = NoParamPositions
-		var payloadKeeps = NoParamPositions
+		var readOnlyStoreKeeps = NoParamPositions
 		var elementKeeps = NoParamPositions
 		var mutablyKept = NoParamPositions
 
 		for impl in bodies.impls 'eachBody'
-			letKeeps = letKeeps or self.summary.letKeepsAt(impl)
-			payloadKeeps = payloadKeeps or self.summary.payloadKeepsAt(impl)
+			readOnlyStoreKeeps = readOnlyStoreKeeps or self.summary.readOnlyStoreKeepsAt(impl)
 			elementKeeps = elementKeeps or self.summary.elementKeepsAt(impl)
 			mutablyKept = mutablyKept or self.keptParameters(impl, paramCount: self.functionAt(impl).paramCount)
 		end 'eachBody'
@@ -2609,8 +2594,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return
 		end 'noBodyToJudge'
 
-		let masks = KeptMasks.create(letKeeps, letPayload: payloadKeeps, readOnlyElement: elementKeeps, mutable: keeps.keptOr(mutablyKept), anyPosition: bodies.unresolvedMayStore and not declaredByBoundary)
-		view noteCallee = calleeText.toByteArray() if declaredByBoundary else self.functionAt(try bodies.impls.get(0) otherwise panic("ProvenanceTracer.noteLandingArgumentsKept: impls.get(0) on a non-empty list")).name
+		let masks = KeptMasks.create(readOnlyStoreKeeps, readOnlyElement: elementKeeps, mutable: keeps.keptOr(mutablyKept), anyPosition: bodies.unresolvedMayStore and not declaredByBoundary)
+		view noteCallee = (freeze calleeText.toByteArray()) if declaredByBoundary else self.functionAt(try bodies.impls.get(0) otherwise panic("ProvenanceTracer.noteLandingArgumentsKept: impls.get(0) on a non-empty list")).name
 
 		for i in 0 upto argCount 'eachArg'
 			let value = try args.get(i) otherwise panic("ProvenanceTracer.noteLandingArgumentsKept: args.get OOB at {i}")
@@ -2633,7 +2618,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'eachArg'
 	end 'noteLandingArgumentsKept'
 
-	module function noteArgumentKept(func IrFunction, value ValueId, call SourceRange, parameter ArgumentParameter, callee ByteArray, position ParamCount, masks KeptMasks, refusal KeptRefusal) returns bool
+	module function noteArgumentKept(func IrFunction, value ValueId, call SourceRange, parameter ArgumentParameter, callee immutable ByteArray, position ParamCount, masks KeptMasks, refusal KeptRefusal) returns bool
 		let keptWhereSomethingMayWriteIt = (masks.anyPosition or maskHasParam(masks.mutable, param: position)) and value >= valueIdAtParamPosition(func.paramCount)
 
 		let refused = match refusal 'refusal'
@@ -2645,11 +2630,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return true
 		end 'refusedAsALet'
 
-		if maskHasParam(masks.letField, param: position) 'keptInALetField'
-			self.noteKeptArgument(value, call: call, parameter: parameter, callee: callee, keep: ArgumentKeep.letField)
-		end 'keptInALetField' else if maskHasParam(masks.letPayload, param: position) 'keptInALetPayload'
-			self.noteKeptArgument(value, call: call, parameter: parameter, callee: callee, keep: ArgumentKeep.letPayload)
-		end 'keptInALetPayload' else if maskHasParam(masks.readOnlyElement, param: position) 'keptInAReadOnlyElement'
+		if maskHasParam(masks.readOnlyStore, param: position) 'keptInAReadOnlyStore'
+			self.noteKeptArgument(value, call: call, parameter: parameter, callee: callee, keep: ArgumentKeep.readOnlyStore)
+		end 'keptInAReadOnlyStore' else if maskHasParam(masks.readOnlyElement, param: position) 'keptInAReadOnlyElement'
 			self.noteKeptArgument(value, call: call, parameter: parameter, callee: callee, keep: ArgumentKeep.readOnlyElement)
 		end 'keptInAReadOnlyElement'
 
@@ -2684,7 +2667,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return String.from(functionValueOwnTypeName(self.project, func: func, value: callee))
 	end 'calleeValueName'
 
-	function fieldNameLoadedBy(func IrFunction, value ValueId) returns ByteArray throws AbsentError
+	function fieldNameLoadedBy(func IrFunction, value ValueId) returns immutable ByteArray throws AbsentError
 		self.indexDefinitions(func, ir: self.module)
 		let defining = try self.definingOpIndexOf(value)
 		view op = self.memoryOpAt(func, opIdx: defining)
@@ -2697,7 +2680,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'read'
 	end 'fieldNameLoadedBy'
 
-	function fieldNameAt(func IrFunction, record ValueId, offset ByteOffset) returns ByteArray throws AbsentError
+	function fieldNameAt(func IrFunction, record ValueId, offset ByteOffset) returns immutable ByteArray throws AbsentError
 		if not tagNamesADeclaredType(valueTagOf(func, value: record)) 'notADeclaredRecord'
 			throw AbsentError.absent
 		end 'notADeclaredRecord'
@@ -2893,6 +2876,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.deepSlots.reset()
 		self.hasLoadOrigin.refill(valueCount, value: false)
 		self.loadOrigins.refill(valueCount, value: 0)
+		self.hasBoxTag.refill(valueCount, value: false)
+		self.boxTags.refill(valueCount, value: 0)
 
 		self.returnedShares = NoParamPositions
 		self.returnedIdentity = NoParamPositions
@@ -2902,8 +2887,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.returnedPlacedWithin = NoParamPositions
 		self.returnedEscapes = NoParamPositions
 		self.returnedBinds = NoParamPositions
-		self.returnedLetKeeps = NoParamPositions
-		self.returnedPayloadKeeps = NoParamPositions
+		self.returnedReadOnlyStoreKeeps = NoParamPositions
 		self.returnedElementKeeps = NoParamPositions
 		self.returnedKeeps = NoParamPositions
 		self.returnedOtherKeeps = NoParamPositions
@@ -2974,6 +2958,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function traceOp(func IrFunction, plainOp MaxonOp, opIdx ElementIndex)
 		let op = self.wordOpAsMemoryOp(func, op: plainOp)
+		self.noteWordConstructionKey(func, authoredOp: try self.module.ops.get(opIdx) otherwise panic("ProvenanceTracer.traceOp: op {opIdx} not in module.ops"))
 
 		match op 'op'
 			loadIndirect(result, addr, offset, _) then self.traceLoad(func, result: result, addr: addr, offset: offset)
@@ -3081,22 +3066,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			self.seedBit(ProvenanceColumn.holds, value: result, rank: self.sharedViewRank())
 		end 'holdsAView'
 
-		if (reach and ResultLiesWithinALetField) != NoParamPositions 'liesWithinALetField'
-			self.seedBit(ProvenanceColumn.identity, value: result, rank: self.letFieldRank())
-		end 'liesWithinALetField'
-
-		if (reach and ResultHoldsALetField) != NoParamPositions 'holdsALetField'
-			self.seedBit(ProvenanceColumn.holds, value: result, rank: self.letFieldRank())
-		end 'holdsALetField'
-
-		if (reach and ResultLiesWithinALetPayload) != NoParamPositions 'liesWithinALetPayload'
-			self.seedBit(ProvenanceColumn.identity, value: result, rank: self.letPayloadRank())
-		end 'liesWithinALetPayload'
-
-		if (reach and ResultHoldsALetPayload) != NoParamPositions 'holdsALetPayload'
-			self.seedBit(ProvenanceColumn.holds, value: result, rank: self.letPayloadRank())
-		end 'holdsALetPayload'
-
 		if (reach and ResultLiesWithinAReadOnlyElement) != NoParamPositions 'liesWithinAReadOnlyElement'
 			self.seedBit(ProvenanceColumn.identity, value: result, rank: self.readOnlyElementRank())
 		end 'liesWithinAReadOnlyElement'
@@ -3162,10 +3131,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return self.writableRank + 3
 	end 'letFieldRank'
 
-	function letPayloadRank() returns ElementIndex
-		return self.letFieldRank() + 1
-	end 'letPayloadRank'
-
 	function readOnlyElementRank() returns ElementIndex
 		return self.letFieldRank() + 2
 	end 'readOnlyElementRank'
@@ -3191,11 +3156,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		let slot = (offset / FieldSlotBytes) as ElementIndex
 		return slot if slot < TupleColumnMarkCount else TupleColumnMarkCount - 1
 	end 'tupleColumnOfOffset'
-
-	function seedLetSlotRead(result ValueId, rank ElementIndex)
-		self.seedBit(ProvenanceColumn.identity, value: result, rank: rank)
-		self.moduleLetStorageReached = true
-	end 'seedLetSlotRead'
 
 	function isPermanentViewRank(rank ElementIndex) returns bool
 		return rank == self.moduleLetRank() or rank == self.sharedViewRank() or (rank >= self.letFieldRank() and rank < self.letFieldRank() + HiddenViewRankCount)
@@ -3237,27 +3197,69 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return PermanentView.none
 	end 'readOnlySlotViewOf'
 
-	function slotIsALetSlot(func IrFunction, addr ValueId, offset ByteOffset, held ValueId) returns bool
-		return self.letSlotKindMemoized(func, addr: addr, offset: offset, held: held) != LetSlotKind.none
-	end 'slotIsALetSlot'
-
-	function letSlotKindMemoized(func IrFunction, addr ValueId, offset ByteOffset, held ValueId) returns LetSlotKind
-		let tag = valueTagOf(func, value: addr)
-
-		if tag == ValueTypeTag.named 'aUnionBox'
-			return LetSlotKind.payload if self.slotIsALetPayload(func, box: addr, offset: offset, held: held) else LetSlotKind.none
+	function storeSlotIsImmutable(func IrFunction, addr ValueId, offset ByteOffset) returns bool
+		if valueTagOf(func, value: addr) == ValueTypeTag.named 'aUnionBox'
+			return self.payloadSlotIsImmutable(func, box: addr, offset: offset)
 		end 'aUnionBox'
 
-		let key = try self.declaredSlotKeyOf(func, addr: addr, offset: offset) otherwise return LetSlotKind.none
+		let key = try self.declaredSlotKeyOf(func, addr: addr, offset: offset) otherwise return false
 
-		if let known = try self.letFieldSlots.get(key) 'asked'
+		if let known = try self.immutableSlots.get(key) 'asked'
 			return known
 		end 'asked'
 
-		let kind = LetSlotKind.field if self.slotIsALetField(func, addr: addr, offset: offset) else LetSlotKind.none
-		self.letFieldSlots.upsert(key, value: kind)
-		return kind
-	end 'letSlotKindMemoized'
+		let verdict = self.fieldSlotIsDeclaredImmutable(func, addr: addr, offset: offset)
+		self.immutableSlots.upsert(key, value: verdict)
+		return verdict
+	end 'storeSlotIsImmutable'
+
+	function payloadSlotIsImmutable(func IrFunction, box ValueId, offset ByteOffset) returns bool
+		if not (try self.hasBoxTag.get(box) otherwise panic("ProvenanceTracer.payloadSlotIsImmutable: hasBoxTag.get OOB at v{box}")) 'tagUnknown'
+			return false
+		end 'tagUnknown'
+
+		let tag = try self.boxTags.get(box) otherwise panic("ProvenanceTracer.payloadSlotIsImmutable: boxTags.get OOB at v{box}")
+		let unionName = try self.project.typeNames.nameOf(self.nameIdOf(func, value: box)) otherwise return false
+		return self.signatures.unionPayloadSlotIsImmutable(unionName, caseKey: tag, offset: offset)
+	end 'payloadSlotIsImmutable'
+
+	function noteUnionBoxTag(func IrFunction, box ValueId, offset ByteOffset, value ValueId)
+		if offset == UnionTagOffset 'aTagStore'
+			self.noteBoxCaseKey(func, box: box, key: value)
+		end 'aTagStore'
+	end 'noteUnionBoxTag'
+
+	function noteWordConstructionKey(func IrFunction, authoredOp MaxonOp)
+		let kind = try binOpKindOf(authoredOp) otherwise return
+
+		if kind != MaxonBinOp.bitOr 'notAConstruction'
+			return
+		end 'notAConstruction'
+
+		match authoredOp 'op'
+			binOp(result, _, rhs, _) then self.noteBoxCaseKey(func, box: result, key: rhs)
+			default panic("ProvenanceTracer.noteWordConstructionKey: `binOpKindOf` answered for an op that is not a `binOp`")
+		end 'op'
+	end 'noteWordConstructionKey'
+
+	function noteBoxCaseKey(func IrFunction, box ValueId, key ValueId)
+		if valueTagOf(func, value: box) != ValueTypeTag.named 'notAUnion'
+			return
+		end 'notAUnion'
+
+		let defining = try self.definingOpIndexOf(key) otherwise return
+		let caseKey = try literalValueOf(self.memoryOpAt(func, opIdx: defining)) otherwise return
+		try self.hasBoxTag.set(box, value: true) otherwise panic("ProvenanceTracer.noteBoxCaseKey: hasBoxTag.set OOB at v{box}")
+		try self.boxTags.set(box, value: caseKey) otherwise panic("ProvenanceTracer.noteBoxCaseKey: boxTags.set OOB at v{box}")
+	end 'noteBoxCaseKey'
+
+	function fieldSlotIsDeclaredImmutable(func IrFunction, addr ValueId, offset ByteOffset) returns bool
+		if valueTagOf(func, value: addr) == ValueTypeTag.genericInstance 'anInstance'
+			return self.signatures.instanceFieldSlotIsImmutable(self.instanceIdOf(func, value: addr), offset: offset)
+		end 'anInstance'
+
+		return self.signatures.declaredFieldSlotIsImmutable(try self.project.typeNames.nameOf(self.nameIdOf(func, value: addr)) otherwise return false, offset: offset)
+	end 'fieldSlotIsDeclaredImmutable'
 
 	function declaredSlotKeyOf(func IrFunction, addr ValueId, offset ByteOffset) returns StoreSlotKey throws AbsentError
 		let tag = valueTagOf(func, value: addr)
@@ -3423,12 +3425,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.unionInsideOfIdentity(result, source: addr, reach: TupleColumnReach.columnAt(offset))
 		self.unionMask(ProvenanceColumn.inside, to: result, from: ProvenanceColumn.inside, source: addr)
 
-		match self.letSlotKindMemoized(func, addr: addr, offset: offset, held: result) 'slotKind'
-			field then self.seedLetSlotRead(result, rank: self.letFieldRank())
-			payload then self.seedLetSlotRead(result, rank: self.letPayloadRank())
-			none then break
-		end 'slotKind'
-
 		let key = storeSlotKey(addr, offset: offset)
 
 		if not self.readsParameterStorage(addr) 'whatTheRecordHolds'
@@ -3530,6 +3526,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	// `value` now lies within `addr`, in the field `offset` names.
 	function traceStore(func IrFunction, addr ValueId, offset ByteOffset, value ValueId)
+		self.noteUnionBoxTag(func, box: addr, offset: offset, value: value)
+
 		if not self.isTracked(value) 'storesNoRecord'
 			return
 		end 'storesNoRecord'
@@ -3542,75 +3540,21 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			self.markTupleColumn(addr, offset: offset, from: value)
 		end 'aTupleIsAsReadOnlyAsWhatItHolds'
 
-		let slotKind = LetSlotKind.none if self.tracingImmutableBindings else self.letSlotKindMemoized(func, addr: addr, offset: offset, held: value)
-		let keptReadOnly = slotKind != LetSlotKind.none
-
-		if keptReadOnly and not self.valueGivesAStoreNoWriter(func, value: value) 'keptInALetSlot'
-			let keptValue = self.parametersAValueMayBe(func, value: value)
-
-			match slotKind 'slotKind'
-				field then self.returnedLetKeeps = self.returnedLetKeeps or keptValue
-				payload then self.returnedPayloadKeeps = self.returnedPayloadKeeps or keptValue
-				none then panic("ProvenanceTracer.traceStore: a slot kept read-only has a kind")
-			end 'slotKind'
-		end 'keptInALetSlot'
-
 		let key = storeSlotKey(addr, offset: offset)
 		self.unionInto(self.slotIn(self.storeSlots, key: key), from: self.setOf(ProvenanceColumn.identity, value: value))
 		self.unionContents(self.slotIn(self.deepSlots, key: key), source: value)
 
-		if not keptReadOnly 'aWritableSlot'
+		let intoAWritableSlot = not self.storeSlotIsImmutable(func, addr: addr, offset: offset)
+
+		if intoAWritableSlot 'aWritableSlot'
 			self.noteKeptUnlessViewed(func, value: value, addr: addr, content: KeptContent.ofItsOwnType)
 			self.unionMask(ProvenanceColumn.storedHolds, to: addr, from: ProvenanceColumn.identity, source: value)
 			self.unionContents(self.setOf(ProvenanceColumn.deepHolds, value: addr), source: value)
 		end 'aWritableSlot'
 
-		self.unionOverlap(addr, value: value, intoAWritableSlot: not keptReadOnly)
-		self.recordWhereValueLies(func, addr: addr, value: value, intoAWritableSlot: not keptReadOnly)
+		self.unionOverlap(addr, value: value, intoAWritableSlot: intoAWritableSlot)
+		self.recordWhereValueLies(func, addr: addr, value: value, intoAWritableSlot: intoAWritableSlot)
 	end 'traceStore'
-
-	function slotIsALetPayload(func IrFunction, box ValueId, offset ByteOffset, held ValueId) returns bool
-		view kinds = self.letPayloadKindsAt(func, box: box, offset: offset)
-
-		if kinds.holdsNothing() 'noLetPayloadHere'
-			return false
-		end 'noLetPayloadHere'
-
-		if kinds.anything 'anOpaqueLetPayload'
-			return true
-		end 'anOpaqueLetPayload'
-
-		return kinds.mayHold(try self.heldKindOfValue(func, value: held) otherwise return true)
-	end 'slotIsALetPayload'
-
-	function letPayloadKindsAt(func IrFunction, box ValueId, offset ByteOffset) returns HeldRecordKinds
-		let key = ((self.nameIdOf(func, value: box) as StoreSlotKey) shl LetFieldSlotNameShift) or (offset as StoreSlotKey)
-
-		if let known = try self.letPayloadKinds.get(key) 'asked'
-			return known
-		end 'asked'
-
-		let unionName = try self.project.typeNames.nameOf(self.nameIdOf(func, value: box)) otherwise return self.noRecordKinds
-		var kinds = self.signatures.letPayloadKindsAt(unionName, offset: offset)
-		self.letPayloadKinds.upsert(key, value: kinds)
-		return kinds
-	end 'letPayloadKindsAt'
-
-	function slotIsALetField(func IrFunction, addr ValueId, offset ByteOffset) returns bool
-		let tag = valueTagOf(func, value: addr)
-
-		if tag == ValueTypeTag.genericInstance 'anInstance'
-			let id = self.instanceIdOf(func, value: addr)
-			return self.signatures.genericInstanceHasBaseLayout(id) and self.signatures.instanceFieldAtOffsetIsALet(id, offset: offset)
-		end 'anInstance'
-
-		if not tagNamesADeclaredType(tag) 'notADeclaredRecord'
-			return false
-		end 'notADeclaredRecord'
-
-		let name = try self.project.typeNames.nameOf(self.nameIdOf(func, value: addr)) otherwise return false
-		return self.signatures.fieldAtOffsetIsALet(name, offset: offset)
-	end 'slotIsALetField'
 
 	// `value` now lies within `addr` — in a field no load can name, a store a call made, or deeper still.
 	function traceWholeStore(func IrFunction, addr ValueId, value ValueId, deep bool, content KeptContent)
@@ -3847,24 +3791,14 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'keptByBodies'
 
 	function varHoldsAViewOfItsSource(func IrFunction, rank ElementIndex) returns bool
-		return rank < self.writableRank and self.recordIsAViewOfItsSource(func, record: self.rootValueAt(rank))
+		return rank < self.writableRank and valueIsAnIteratorRecord(self.project, signatures: self.signatures, func: func, value: self.rootValueAt(rank))
 	end 'varHoldsAViewOfItsSource'
 
 	function noteKeptUnlessViewed(func IrFunction, value ValueId, addr ValueId, content KeptContent)
-		if not self.recordIsAViewOfItsSource(func, record: addr) 'anIteratorHoldsNoKeep'
+		if not valueIsAnIteratorRecord(self.project, signatures: self.signatures, func: func, value: addr) 'anIteratorHoldsNoKeep'
 			self.noteKept(func, value: value, holders: self.parametersAValueIsOrLiesWithin(func, value: addr), destination: KeepDestination.within(addr), content: content)
 		end 'anIteratorHoldsNoKeep'
 	end 'noteKeptUnlessViewed'
-
-	function recordIsAViewOfItsSource(func IrFunction, record ValueId) returns bool
-		let tag = valueTagOf(func, value: record)
-
-		if tag != ValueTypeTag.genericInstance and not self.signatures.tagMayNameAggregate(tag) 'notADeclaredType'
-			return false
-		end 'notADeclaredType'
-
-		return self.signatures.typeImplementsInterface(self.baseNameOfInstanceOrDeclaration(func, value: record), interfaceName: IteratorInterfaceName)
-	end 'recordIsAViewOfItsSource'
 
 	function noteKept(func IrFunction, value ValueId, holders ParamPositionMask, destination KeepDestination, content KeptContent)
 		if self.tracingImmutableBindings 'aBindingsTrace'
@@ -4085,30 +4019,25 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'parametersAValueMayBe'
 
 	function keepThroughSummary(func IrFunction, calleeIndex ElementIndex, args ValueIdArray, inElements ParamPositionMask)
-		let inFields = self.summary.letKeepsAt(calleeIndex)
-		let inPayloads = self.summary.payloadKeepsAt(calleeIndex)
+		let inStores = self.summary.readOnlyStoreKeepsAt(calleeIndex)
 		let elements = self.summary.elementKeepsAt(calleeIndex) or inElements
 
-		if self.tracingImmutableBindings or (inFields or inPayloads or elements) == NoParamPositions 'keepsNothingReadOnly'
+		if self.tracingImmutableBindings or (inStores or elements) == NoParamPositions 'keepsNothingReadOnly'
 			return
 		end 'keepsNothingReadOnly'
 
 		for i in 0 upto args.count() 'eachArg'
 			let pos = try self.calls.argPositionAt(i as ParamCount) otherwise continue
 
-			if not (maskHasParam(inFields, param: pos) or maskHasParam(inPayloads, param: pos) or maskHasParam(elements, param: pos)) 'keptNowhereReadOnly'
+			if not (maskHasParam(inStores, param: pos) or maskHasParam(elements, param: pos)) 'keptNowhereReadOnly'
 				continue
 			end 'keptNowhereReadOnly'
 
 			let passed = self.parametersAValueMayBe(func, value: try args.get(i) otherwise panic("ProvenanceTracer.keepThroughSummary: args.get OOB at {i}"))
 
-			if maskHasParam(inFields, param: pos) 'keptInALetField'
-				self.returnedLetKeeps = self.returnedLetKeeps or passed
-			end 'keptInALetField'
-
-			if maskHasParam(inPayloads, param: pos) 'keptInALetPayload'
-				self.returnedPayloadKeeps = self.returnedPayloadKeeps or passed
-			end 'keptInALetPayload'
+			if maskHasParam(inStores, param: pos) 'keptInAReadOnlyStore'
+				self.returnedReadOnlyStoreKeeps = self.returnedReadOnlyStoreKeeps or passed
+			end 'keptInAReadOnlyStore'
 
 			if maskHasParam(elements, param: pos) 'keptInAReadOnlyElement'
 				self.returnedElementKeeps = self.returnedElementKeeps or passed
@@ -4440,22 +4369,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			self.returnedModuleLets = self.returnedModuleLets or ResultHoldsASharedView
 		end 'holdsAView'
 
-		if self.valueIsOrLiesWithin(value, rank: self.letFieldRank()) 'withinALetField'
-			self.returnedModuleLets = self.returnedModuleLets or ResultLiesWithinALetField
-		end 'withinALetField'
-
-		if self.valueHoldsRank(value, rank: self.letFieldRank()) 'holdsALetField'
-			self.returnedModuleLets = self.returnedModuleLets or ResultHoldsALetField
-		end 'holdsALetField'
-
-		if self.valueIsOrLiesWithin(value, rank: self.letPayloadRank()) 'withinALetPayload'
-			self.returnedModuleLets = self.returnedModuleLets or ResultLiesWithinALetPayload
-		end 'withinALetPayload'
-
-		if self.valueHoldsRank(value, rank: self.letPayloadRank()) 'holdsALetPayload'
-			self.returnedModuleLets = self.returnedModuleLets or ResultHoldsALetPayload
-		end 'holdsALetPayload'
-
 		if self.valueIsOrLiesWithin(value, rank: self.readOnlyElementRank()) 'withinAReadOnlyElement'
 			self.returnedModuleLets = self.returnedModuleLets or ResultLiesWithinAReadOnlyElement
 		end 'withinAReadOnlyElement'
@@ -4712,7 +4625,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		for i in 0 upto args.count() 'eachArg'
 			let pos = try self.calls.argPositionAt(i as ParamCount) otherwise continue
-			self.addArgumentRecordEdges(i as ParamCount, calleeIndex: calleeIndex, callerIndex: callerIndex, calleeParam: pos)
+			self.addArgumentRecordEdges(func, args: args, argIndex: i as ParamCount, calleeIndex: calleeIndex, callerIndex: callerIndex, calleeParam: pos)
 		end 'eachArg'
 	end 'addNamedCallRecordEdges'
 
@@ -4734,22 +4647,44 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		for impl in bodies.impls 'eachImpl'
 			for i in 0 upto argCount 'eachArg'
-				self.addArgumentRecordEdges(i, calleeIndex: impl, callerIndex: callerIndex, calleeParam: i)
+				self.addArgumentRecordEdges(func, args: args, argIndex: i, calleeIndex: impl, callerIndex: callerIndex, calleeParam: i)
 			end 'eachArg'
 		end 'eachImpl'
 	end 'addLandingRecordEdges'
 
 	// Argument `argIndex`'s edges, off the reach `argumentsReachAParameter` recorded for it.
-	function addArgumentRecordEdges(argIndex ParamCount, calleeIndex ElementIndex, callerIndex ElementIndex, calleeParam ParamCount)
+	function addArgumentRecordEdges(func IrFunction, args ValueIdArray, argIndex ParamCount, calleeIndex ElementIndex, callerIndex ElementIndex, calleeParam ParamCount)
 		let within = try self.argWithinReach.get(argIndex) otherwise panic("ProvenanceTracer.addArgumentRecordEdges: within reach OOB at argument {argIndex}")
 		recordAliasEdges(try self.argIdentityReach.get(argIndex) otherwise panic("ProvenanceTracer.addArgumentRecordEdges: identity reach OOB at argument {argIndex}"), calleeIndex: calleeIndex, callerIndex: callerIndex, calleeParam: calleeParam, edges: self.stagedEdges.alias.rows)
 
+		if within == NoParamPositions 'liesWithinNoParameter'
+			return
+		end 'liesWithinNoParameter'
+
+		let carry = self.frozenCarryOfArgument(func, argument: try args.get(argIndex) otherwise panic("ProvenanceTracer.addArgumentRecordEdges: args.get OOB at argument {argIndex}"))
+
 		for p in 0 upto self.rankCount 'eachParam'
 			if maskHasParam(within, param: p) 'withinThisOne'
-				self.stagedEdges.within.rows.record(calleeIndex, callerIndex: callerIndex, callerParam: p, calleeParam: calleeParam)
+				self.stagedEdges.within.rows.record(calleeIndex, callerIndex: callerIndex, callerParam: p, calleeParam: calleeParam, carry: carry)
 			end 'withinThisOne'
 		end 'eachParam'
 	end 'addArgumentRecordEdges'
+
+	function frozenCarryOfArgument(func IrFunction, argument ValueId) returns FrozenCarry
+		if argumentCapabilityOf(self.project, func: func, argId: argument) == ValueCapability.immutable or frozenCarryOfValue(func, value: argument) == FrozenCarry.alreadyFrozen 'frozenByItsOwnSlot'
+			return FrozenCarry.alreadyFrozen
+		end 'frozenByItsOwnSlot'
+
+		if valueTagOf(func, value: argument) == ValueTypeTag.typeParameter 'anElementOfUnknownType'
+			return FrozenCarry.opaqueElement
+		end 'anElementOfUnknownType'
+
+		if valueTagOf(func, value: argument) == ValueTypeTag.genericInstance and not self.valueHoldsRecordsWithin(func, value: argument) 'aContainerOfValues'
+			return FrozenCarry.valuesOnly
+		end 'aContainerOfValues'
+
+		return FrozenCarry.carries
+	end 'frozenCarryOfArgument'
 
 	// ⭐⭐ **THE OWNERSHIP MODEL'S DOORS, WHERE THE PARSER COULD NOT DECIDE BY NAME.** A record is
 	// reachable through immutable names or through mutable paths, never both at once: mutable holders
@@ -4876,16 +4811,16 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	function decideLetFieldMoves(func IrFunction, index ElementIndex, sites ProvenanceSites, mutationSummary ParamMutationSummary)
 		for site in sites.moveSites 'eachSite'
 			match site.destinationKind 'kind'
-				letField then self.decideLetFieldMove(func, index: index, site: site, into: ReadOnlyRootKind.letField)
-				letFieldValue then self.decideLetFieldValue(func, index: index, site: site, into: ReadOnlyRootKind.letField)
-				letPayload then self.decideLetFieldMove(func, index: index, site: site, into: ReadOnlyRootKind.letPayload)
-				letPayloadValue then self.decideLetFieldValue(func, index: index, site: site, into: ReadOnlyRootKind.letPayload)
 				readOnlyElement then self.decideLetFieldMove(func, index: index, site: site, into: ReadOnlyRootKind.readOnlyElement)
 				readOnlyElementValue then self.decideLetFieldValue(func, index: index, site: site, into: ReadOnlyRootKind.readOnlyElement)
 				serviceReply then self.decideServiceReply(func, site: site)
 				sharedSend then self.decideSharedSend(func, site: site, mutationSummary: mutationSummary)
 				sentMessage or
 				publishedValue then self.decideHandedOff(func, index: index, site: site)
+				letField or
+				letFieldValue or
+				letPayload or
+				letPayloadValue or
 				mutablePlace then self.decideMutablePlaceStore(func, index: index, site: site)
 				returnedValue then self.decideReturnedValue(func, index: index, site: site)
 				mutableName or
@@ -5051,7 +4986,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		throw AbsentError.absent
 	end 'firstVarOrParameterRankShared'
 
-	function viewRootReachedBy(value ValueId) returns ByteArray throws AbsentError
+	function viewRootReachedBy(value ValueId) returns immutable ByteArray throws AbsentError
 		for rank in 0 upto self.rootNames.count() 'eachBindingRoot'
 			if self.viewReaches(rank, value: value) 'aViewItReaches'
 				return self.rootNameAt(rank)
@@ -5061,7 +4996,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		throw AbsentError.absent
 	end 'viewRootReachedBy'
 
-	function viewOfAPlaceReachedBy(func IrFunction, value ValueId) returns ByteArray throws AbsentError
+	function viewOfAPlaceReachedBy(func IrFunction, value ValueId) returns immutable ByteArray throws AbsentError
 		for rank in 0 upto self.rootNames.count() 'eachBindingRoot'
 			if self.viewReaches(rank, value: value) and self.valueNamesAPlace(func, value: self.rootValueAt(rank)) 'aViewOfAPlaceItReaches'
 				return self.rootNameAt(rank)
@@ -5314,10 +5249,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			for opIdx in block.bodyOps() 'eachOp'
 				view op = self.memoryOpAt(func, opIdx: opIdx)
 
-				if self.opLoadsALetFieldRecord(func, plainOp: op) 'readsALetField'
-					return true
-				end 'readsALetField'
-
 				if self.opReadsAReadOnlyElement(func, op: op) 'readsAReadOnlyElement'
 					return true
 				end 'readsAReadOnlyElement'
@@ -5538,7 +5469,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'rootIsModuleLetAt'
 
 	function rootIsViewAt(rank ElementIndex) returns bool
-		return (try self.rootInfos.get(rank) otherwise panic("ProvenanceTracer.rootIsViewAt: rootInfos.get OOB at {rank}")).isView()
+		return try self.rootViews.get(rank) otherwise panic("ProvenanceTracer.rootIsViewAt: rootViews.get OOB at {rank} — it is pushed with the roots")
 	end 'rootIsViewAt'
 
 	function rootIsLiveEverywhere(rank ElementIndex) returns bool
@@ -5666,11 +5597,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return self.sets.hasRank(self.setOf(ProvenanceColumn.identity, value: value), rank: rank) and self.slotMayHoldRoot(func, ir: self.module, rank: rank, value: value)
 	end 'rootValueMayBeRank'
 
-	// May `value` be, lie within, or hold root `rank`'s record?
-	function valueReachesRank(value ValueId, rank ElementIndex) returns bool
-		return self.sets.hasRank(self.setOf(ProvenanceColumn.identity, value: value), rank: rank) or self.sets.hasRank(self.setOf(ProvenanceColumn.inside, value: value), rank: rank) or self.valueHoldsRank(value, rank: rank)
-	end 'valueReachesRank'
-
 	function valueHoldsRank(value ValueId, rank ElementIndex) returns bool
 		return self.sets.hasRank(self.setOf(ProvenanceColumn.holds, value: value), rank: rank) or self.sets.hasRank(self.setOf(ProvenanceColumn.storedHolds, value: value), rank: rank) or self.sets.hasRank(self.setOf(ProvenanceColumn.deepHolds, value: value), rank: rank) or self.sets.hasRank(self.setOf(ProvenanceColumn.holdsWithin, value: value), rank: rank)
 	end 'valueHoldsRank'
@@ -5750,7 +5676,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 				continue
 			end 'queuedByAnEarlierTrace'
 
-			view info = try self.rootInfos.get(rank) otherwise panic("ProvenanceTracer.checkLetBindings: rootInfos.get OOB at {rank}")
+			view info = self.rootInfoOf(func, rank: rank)
 			self.refuse(info.declaredLine, column: info.declaredColumn, code: ErrorCode.semanticLetBindsWritableState, message: letBindsWritableStateMessage(String.from(self.rootNameAt(rank)), through: self.writableRootName(func, rank: reached)))
 		end 'eachBinding'
 
@@ -5789,12 +5715,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		return found
 	end 'firstWritableStateReached'
-
-	function valueReachesWritableState(func IrFunction, value ValueId, rank ElementIndex) returns bool
-		self.indexDefinitions(func, ir: self.module)
-		_ = try self.firstWritableStateReached(func, value: value, kinds: try self.rootRecordKinds.get(rank) otherwise panic("ProvenanceTracer.valueReachesWritableState: rootRecordKinds.get OOB at {rank}"), reach: LetReach.boundValue) otherwise return false
-		return true
-	end 'valueReachesWritableState'
 
 	function lowestWritableRankPlacedByTheCall(func IrFunction, value ValueId, kinds HeldRecordKinds, skipped ElementIndex, reach LetReach, bound ElementIndex) returns ElementIndex
 		let defining = try self.definingOpIndexOf(value) otherwise return bound
@@ -5962,12 +5882,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	// The token the call at `line`:`column` ends at (`Parser.noteCallToken`), out of the calls of
 	// `func` indexed by position at its first question.
 	function callTokenAtPosition(func IrFunction, line LineNumber, column ColumnNumber) returns ElementIndex
-		var siteCalls = func.provenanceSites(self.noSites).calls
-
-		if siteCalls is not self.indexedCalls 'anotherFunctionsCalls'
+		if not func.name.equals(self.indexedCallsOf) 'anotherFunctionsCalls'
+			view siteCalls = func.provenanceSites(self.noSites).calls
 			self.callTokenIndex = siteCalls.byPosition()
 			self.callStartIndex = siteCalls.startsByPosition()
-			self.indexedCalls = siteCalls
+			self.indexedCallsOf = func.name
 		end 'anotherFunctionsCalls'
 
 		return try self.callTokenIndex.get(positionKey(line, column: column)) otherwise panic("ProvenanceTracer.callTokenAtPosition: '{String.from(func.name)}' files no call at {line}:{column}")
@@ -6217,7 +6136,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.indexEdgePairs(func, ir: ir)
 		self.indexSoleIncomings(valueCount)
 		self.useCountsIndexed = false
-		self.indexedDefinitionsOf = IndexedFunctionBody.body(func.name.clone())
+		self.indexedDefinitionsOf = IndexedFunctionBody.body(func.name)
 	end 'indexDefinitions'
 
 	function indexUseCounts(func IrFunction, ir MaxonModule, valueCount ElementIndex)
@@ -7072,22 +6991,17 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'producerOfOp'
 
 	// ⭐ **E3077 IS WITHHELD WHERE `let` WOULD NOT COMPILE.** A `var` the author never reassigned is
-	// still legitimately mutable when a `let` there would be refused: bound to a value that reaches
-	// writable state (E3188), handed whole to a door and read afterwards, written through, or — while
-	// it is live after the door — stored into writable storage or reached by a value another `var`
-	// door takes. The parser reported its first candidate; the first one that does NEED `let` is
-	// reported instead, or none.
+	// still legitimately mutable when a `let` there would be refused: handed whole to a door that moves
+	// it and read afterwards, or written through. The parser reported its first candidate; the first
+	// one that does NEED `let` is reported instead, or none.
 	function withholdVarShouldBeLet(func IrFunction, candidates VarShouldBeLetCandidates)
 		var firstUnexcused = candidates.values.count()
 
 		for c in 0 upto candidates.values.count() 'eachCandidate'
 			let value = try candidates.values.get(c) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: values.get OOB at {c}")
 			let name = try candidates.names.get(c) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: names.get OOB at {c}")
-			let declared = try candidates.declTokens.get(c) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: declTokens.get OOB at {c}")
-			let lastUse = (try candidates.infos.get(c) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: infos.get OOB at {c}")).lastReadToken
-			let liveUntil = liveUntilAcrossLoops(declared, lastUse: lastUse if lastUse > declared else declared, loops: func.provenanceSites(self.noSites).loops)
 
-			if not self.varIsNeededMutable(func, value: value, name: name, liveUntil: liveUntil) 'couldBeALet'
+			if not self.varIsNeededMutable(func, value: value, name: name) 'couldBeALet'
 				firstUnexcused = c
 				break
 			end 'couldBeALet'
@@ -7166,14 +7080,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.project.bindingHygieneDiagnostics = kept
 	end 'dropWithdrawnHygiene'
 
-	// Would a `let` in place of the `var` named `name` holding `value`, live until `liveUntil`, be
-	// refused where it is bound, or meet a mutable door that moves or refuses it?
-	function varIsNeededMutable(func IrFunction, value ValueId, name ByteArray, liveUntil ElementIndex) returns bool
-		let rank = try self.writableRankOf(value) otherwise return false
-
-		if self.valueReachesWritableState(func, value: value, rank: rank) 'aLetWouldBeRefused'
-			return true
-		end 'aLetWouldBeRefused'
+	// Would a `let` in place of the `var` named `name` holding `value` meet a mutable door that moves it
+	// before a later read, or have the record it binds written through?
+	function varIsNeededMutable(func IrFunction, value ValueId, name ByteArray) returns bool
+		if not self.hasWritableRank(value) 'aValueNoWriteReaches'
+			return false
+		end 'aValueNoWriteReaches'
 
 		view sites = func.provenanceSites(self.noSites)
 
@@ -7192,20 +7104,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		if self.boundRecordOrAnyPartOfItIsWrittenThrough(value) 'aLetWouldBeWrittenThrough'
 			return true
 		end 'aLetWouldBeWrittenThrough'
-
-		for k in 0 upto sites.moveSites.count() 'eachStore'
-			view site = try sites.moveSites.get(k) otherwise panic("ProvenanceTracer.varIsNeededMutable: moveSites.get OOB at {k}")
-
-			if site.destinationKind == MoveDestinationKind.mutablePlace and liveUntil > site.token and self.valueReachesRank(site.value, rank: rank) 'aLetWouldBeStoredAndReadAgain'
-				return true
-			end 'aLetWouldBeStoredAndReadAgain'
-		end 'eachStore'
-
-		for site in sites.mutableBindingSites 'eachBinding'
-			if liveUntil > site.token and site.value != value and self.valueReachesRank(site.value, rank: rank) 'derivedIntoAMutableName'
-				return true
-			end 'derivedIntoAMutableName'
-		end 'eachBinding'
 
 		return false
 	end 'varIsNeededMutable'
@@ -7696,7 +7594,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	// The kind `value`'s record is, as `HeldRecordKinds` names kinds. A name that denotes no record a value can
 	// have throws.
-	function heldKindOfValue(func IrFunction, value ValueId) returns ByteArray throws MapError
+	function heldKindOfValue(func IrFunction, value ValueId) returns immutable ByteArray throws MapError
 		return try self.signatures.heldRecordKindOfTag(valueTagOf(func, value: value), nameId: self.nameIdOf(func, value: value), from: self.project.typeNames)
 	end 'heldKindOfValue'
 
@@ -7719,6 +7617,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		return self.recordKindsWithinAggregateNamed(try self.project.typeNames.nameOf(self.nameIdOf(func, value: value)) otherwise return self.anyRecordKinds)
 	end 'recordKindsWithinValue'
+
+	module function valueHoldsRecordsWithin(func IrFunction, value ValueId) returns bool
+		return not self.recordKindsWithinValue(func, value: value).holdsNoWritableRecord(self.kindWritability)
+	end 'valueHoldsRecordsWithin'
 
 	function recordKindsWithinInstanceOf(id GenericInstanceId) returns HeldRecordKinds
 		if let memoized = try self.recordKindsByInstance.get(id) 'asked'
@@ -7756,15 +7658,20 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return rank < self.rootNames.count()
 	end 'isImmutableBindingRank'
 
+	function rootInfoOf(func IrFunction, rank ElementIndex) returns VarInfo
+		let slot = try self.rootInfoSlots.get(rank) otherwise panic("ProvenanceTracer.rootInfoOf: rootInfoSlots.get OOB at {rank} — it is pushed with the roots")
+		return try func.provenanceSites(self.noSites).immutableBindings.infos.get(slot) otherwise panic("ProvenanceTracer.rootInfoOf: infos.get OOB at {slot} — the slot names a binding of this function's sites")
+	end 'rootInfoOf'
+
 	function rootKindAt(rank ElementIndex) returns ReadOnlyRootKind
 		if self.rootIsModuleLetAt(rank) 'aModuleLet'
 			return ReadOnlyRootKind.moduleLet
 		end 'aModuleLet'
 
-		return (try self.rootInfos.get(rank) otherwise panic("ProvenanceTracer.rootKindAt: rootInfos.get OOB at {rank} — it is pushed with the roots")).rootKind
+		return try self.rootKinds.get(rank) otherwise panic("ProvenanceTracer.rootKindAt: rootKinds.get OOB at {rank} — it is pushed with the roots")
 	end 'rootKindAt'
 
-	function rootNameAt(rank ElementIndex) returns ByteArray
+	function rootNameAt(rank ElementIndex) returns immutable ByteArray
 		return try self.rootNames.get(rank) otherwise panic("ProvenanceTracer.rootNameAt: rank {rank} is past the {self.rootNames.count()} named roots — only an immutable-binding trace names its roots")
 	end 'rootNameAt'
 
@@ -7784,7 +7691,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return self.kindWritability.isWritableState(try self.heldKindOfValue(func, value: value) otherwise return true)
 	end 'valueKindIsWritableState'
 
-	function valueIsAnImmutableAggregate(func IrFunction, value ValueId) returns bool
+	module function valueIsAnImmutableAggregate(func IrFunction, value ValueId) returns bool
 		return self.kindWritability.namesAnImmutableAggregate(valueTagOf(func, value: value), nameId: self.nameIdOf(func, value: value), from: self.project.typeNames)
 	end 'valueIsAnImmutableAggregate'
 
@@ -7962,52 +7869,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		return self.callReadsAReadOnlyInstanceElement(func, callee: maxonOpCalleeName(op), receiver: try self.operands.get(0) otherwise panic("ProvenanceTracer.opReadsAReadOnlyElement: operands.get(0) on a non-empty list"))
 	end 'opReadsAReadOnlyElement'
-
-	function opLoadsALetFieldRecord(func IrFunction, plainOp MaxonOp) returns bool
-		let op = self.wordOpAsMemoryOp(func, op: plainOp)
-		return match op 'op'
-			loadIndirect(result, addr, offset, _) gives self.valueTagCarriesProvenance(func, value: result) and self.slotIsALetSlot(func, addr: addr, offset: offset, held: result)
-
-			call or
-			literal or
-			ret or
-			retVoid or
-			binOp or
-			unaryOp or
-			compare or
-			condBranch or
-			branch or
-			globalAddr or
-			storeIndirect or
-			stringLiteral or
-			tryCall or
-			throwError or
-			propagateError or
-			panicAbort or
-			functionRef or
-			indirectCall or
-			asyncCall or
-			await or
-			tryAwait or
-			sizeofType or
-			constArrayLiteral or
-			switch or
-			witnessDispatch or
-			witnessTryDispatch or
-			panicAbortValue or
-			errorFlagEncode or
-			serviceSpawn or
-			serviceSend or
-			serviceReplyCell or
-			immortalStructRecord or
-			immortalStringTable or
-			covPoint or
-			rawIntrinsic or
-			existentialWitness or
-			holdValue or
-			holdEnd gives false
-		end 'op'
-	end 'opLoadsALetFieldRecord'
 
 	module function settleFreshReturns(funcNames FunctionNameIndex)
 		let funcCount = funcNames.functions.count()
@@ -9553,7 +9414,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'neverWritten'
 
 		match slotReadOfOp(op, opIndex: defining) 'read'
-			load(_, addr, offset) then return self.slotHoldsAPermanentRecord(func, addr: addr, offset: offset, held: base, depth: depth)
+			load(_, addr, _) then return self.recordIsPermanentlyReadOnly(func, base: self.sameRecordBase(func, ir: self.module, value: addr), depth: depth + 1, allowFresh: false)
 			none then break
 			store or
 			retainOf then return false
@@ -9575,14 +9436,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	function settlingGivenArguments() returns bool
 		return self.permanentSettling == PermanenceSettling.strictGivenArguments or self.permanentSettling == PermanenceSettling.orFreshGivenArguments
 	end 'settlingGivenArguments'
-
-	function slotHoldsAPermanentRecord(func IrFunction, addr ValueId, offset ByteOffset, held ValueId, depth ElementIndex) returns bool
-		if self.slotIsALetSlot(func, addr: addr, offset: offset, held: held) 'aLetSlot'
-			return true
-		end 'aLetSlot'
-
-		return self.recordIsPermanentlyReadOnly(func, base: self.sameRecordBase(func, ir: self.module, value: addr), depth: depth + 1, allowFresh: false)
-	end 'slotHoldsAPermanentRecord'
 
 	function callResultIsPermanentlyReadOnly(func IrFunction, op MaxonOp, callee ByteArray, depth ElementIndex, allowFresh bool) returns bool
 		if self.opReadsASharedView(op) 'aSharedRead'
@@ -9971,7 +9824,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return found
 	end 'uniqueSiteIndicesOf'
 
-	module function moveUniqueArgument(func IrFunction, value ValueId, call SourceRange, parameter ArgumentParameter, callee ByteArray)
+	module function moveUniqueArgument(func IrFunction, value ValueId, call SourceRange, parameter ArgumentParameter, callee immutable ByteArray)
 		for siteIndex in self.uniqueSiteIndicesOf(func, value: value, call: call) 'eachDoor'
 			view site = try func.provenanceSites(self.noSites).moveSites.get(siteIndex) otherwise panic("ProvenanceTracer.moveUniqueArgument: moveSites.get OOB at {siteIndex}")
 
@@ -10023,9 +9876,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'theCallersOwnOrNoWriter'
 
 		match try self.keptArgKinds.get(note) otherwise panic("ProvenanceTracer.judgeKeptArgument: keptArgKinds.get OOB at {note}") 'keep'
-			letField then self.judgeLetFieldKeptArgument(func, note: note, value: value, into: ReadOnlyRootKind.letField)
-			letPayload then self.judgeLetFieldKeptArgument(func, note: note, value: value, into: ReadOnlyRootKind.letPayload)
-			readOnlyElement then self.judgeLetFieldKeptArgument(func, note: note, value: value, into: ReadOnlyRootKind.readOnlyElement)
+			readOnlyStore then self.judgeReadOnlyKeptArgument(func, note: note, value: value, into: ReadOnlyRootKind.storedMapKey)
+			readOnlyElement then self.judgeReadOnlyKeptArgument(func, note: note, value: value, into: ReadOnlyRootKind.readOnlyElement)
 			mutablePlace then self.judgeMutablyKeptArgument(func, note: note, value: value)
 			consumed then panic("ProvenanceTracer.judgeKeptArgument: a consumed argument is judged before the match")
 		end 'keep'
@@ -10075,8 +9927,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.refuse(at.line, column: at.column, code: ErrorCode.semanticVarFromImmutable, message: deepLetPassedMessage(subject, paramName: self.keptArgumentParameterName(note), functionName: calleeText, fate: ArgumentFate.consumed))
 	end 'refuseConsumedArgument'
 
-	function judgeLetFieldKeptArgument(func IrFunction, note ElementIndex, value ValueId, into ReadOnlyRootKind)
-		let call = try self.keptArgCalls.get(note) otherwise panic("ProvenanceTracer.judgeLetFieldKeptArgument: keptArgCalls.get OOB at {note}")
+	function judgeReadOnlyKeptArgument(func IrFunction, note ElementIndex, value ValueId, into ReadOnlyRootKind)
+		let call = try self.keptArgCalls.get(note) otherwise panic("ProvenanceTracer.judgeReadOnlyKeptArgument: keptArgCalls.get OOB at {note}")
 		self.noteKeptReadOnly(func, value: value, at: positionKey(call.line, column: call.column))
 
 		if self.keptValueIsReadOnly(func, value: value) 'alreadyReadOnly'
@@ -10084,7 +9936,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'alreadyReadOnly'
 
 		if self.valueIsHandedOut(func, value: value) 'alsoHandedOut'
-			self.refuseLetFieldKeptArgument(func, note: note, value: value, into: into, subject: "a value this function also hands out")
+			self.refuseReadOnlyKeptArgument(func, note: note, value: value, into: into, subject: "a value this function also hands out")
 			return
 		end 'alsoHandedOut'
 
@@ -10092,21 +9944,21 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			view site = try func.provenanceSites(self.noSites).moveSites.get(siteIndex) otherwise panic("ProvenanceTracer.keptArgumentSiteOf: moveSites.get OOB at {siteIndex}")
 
 			if site.readAfter or site.readInALaterIteration 'readAgain'
-				self.refuseLetFieldKeptArgument(func, note: note, value: value, into: into, subject: "the `var` '{String.from(site.source)}', which is read again,")
+				self.refuseReadOnlyKeptArgument(func, note: note, value: value, into: into, subject: "the `var` '{String.from(site.source)}', which is read again,")
 				return
 			end 'readAgain'
 		end 'aNamedVar'
 
 		if self.valueTakesNoOtherWriter(func, value: value, placedByTheStore: false) 'soleOrAParameter'
 			if let through = try self.writableStateReachedBy(func, value: value, token: self.callTokenAtPosition(func, line: call.line, column: call.column)) 'contentsStayWritable'
-				self.refuseLetFieldKeptArgument(func, note: note, value: value, into: into, subject: deepLetWritableContentsSubject(through))
+				self.refuseReadOnlyKeptArgument(func, note: note, value: value, into: into, subject: deepLetWritableContentsSubject(through))
 			end 'contentsStayWritable'
 
 			return
 		end 'soleOrAParameter'
 
-		self.refuseLetFieldKeptArgument(func, note: note, value: value, into: into, subject: "a value other names may still write")
-	end 'judgeLetFieldKeptArgument'
+		self.refuseReadOnlyKeptArgument(func, note: note, value: value, into: into, subject: "a value other names may still write")
+	end 'judgeReadOnlyKeptArgument'
 
 	function valueTakesNoOtherWriter(func IrFunction, value ValueId, placedByTheStore bool) returns bool
 		if not (self.acceptsAsSole(func, value: value) or self.valueIsPermanentOrFresh(func, value: value)) 'neitherSoleNorFresh'
@@ -10124,6 +9976,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'valueIsPermanentOrFresh'
 
 	function keptValueIsReadOnly(func IrFunction, value ValueId) returns bool
+		let record = self.sameRecordBase(func, ir: self.module, value: value)
+
+		if record >= valueIdAtParamPosition(func.paramCount) and not self.paramSources.ofFunction(func).isAResult(record) and argumentCapabilityOf(self.project, func: func, argId: record) == ValueCapability.immutable 'frozenByItsSlot'
+			return true
+		end 'frozenByItsSlot'
+
 		self.doorAcceptsParameters = true
 		let provenPermanent = self.recordIsPermanentlyReadOnly(func, base: self.sameRecordBase(func, ir: self.module, value: value), depth: 0, allowFresh: false)
 		self.doorAcceptsParameters = false
@@ -10191,7 +10049,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 			for opIdx in block.bodyOps() 'eachOp'
 				match slotReadOfOp(self.memoryOpAt(func, opIdx: opIdx), opIndex: opIdx) 'access'
-					store(addr, offset, value) then self.noteStoreHandsOut(func, addr: addr, offset: offset, value: value)
+					store(_, _, value) then self.noteValueHandedOut(func, value: value)
 
 					none or
 					load or
@@ -10212,14 +10070,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			grew = self.handOutThroughMerges(func)
 		end 'untilNoMergeHandsMore'
 	end 'scanHandedOutValues'
-
-	function noteStoreHandsOut(func IrFunction, addr ValueId, offset ByteOffset, value ValueId)
-		if self.slotIsALetField(func, addr: addr, offset: offset) or self.slotIsALetPayload(func, box: addr, offset: offset, held: value) 'intoAPlaceNothingWrites'
-			return
-		end 'intoAPlaceNothingWrites'
-
-		self.noteValueHandedOut(func, value: value)
-	end 'noteStoreHandsOut'
 
 	function noteValueHandedOut(func IrFunction, value ValueId)
 		let base = self.sameRecordBase(func, ir: self.module, value: value)
@@ -10249,16 +10099,16 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		return grew
 	end 'handOutThroughMerges'
 
-	function refuseLetFieldKeptArgument(func IrFunction, note ElementIndex, value ValueId, into ReadOnlyRootKind, subject String)
-		if self.deferToInstantiation(func, value: value, owner: try self.keptArgFuncs.get(note) otherwise panic("ProvenanceTracer.refuseLetFieldKeptArgument: keptArgFuncs.get OOB at {note}")) 'decidedWhereItIsInstantiated'
+	function refuseReadOnlyKeptArgument(func IrFunction, note ElementIndex, value ValueId, into ReadOnlyRootKind, subject String)
+		if self.deferToInstantiation(func, value: value, owner: try self.keptArgFuncs.get(note) otherwise panic("ProvenanceTracer.refuseReadOnlyKeptArgument: keptArgFuncs.get OOB at {note}")) 'decidedWhereItIsInstantiated'
 			return
 		end 'decidedWhereItIsInstantiated'
 
-		let call = try self.keptArgCalls.get(note) otherwise panic("ProvenanceTracer.refuseLetFieldKeptArgument: keptArgCalls.get OOB at {note}")
-		let calleeText = String.from(try self.keptArgCallees.get(note) otherwise panic("ProvenanceTracer.refuseLetFieldKeptArgument: keptArgCallees.get OOB at {note}"))
+		let call = try self.keptArgCalls.get(note) otherwise panic("ProvenanceTracer.refuseReadOnlyKeptArgument: keptArgCalls.get OOB at {note}")
+		let calleeText = String.from(try self.keptArgCallees.get(note) otherwise panic("ProvenanceTracer.refuseReadOnlyKeptArgument: keptArgCallees.get OOB at {note}"))
 		let paramName = self.keptArgumentParameterName(note)
 		self.refuse(call.line, column: call.column, code: ErrorCode.semanticVarFromImmutable, message: deepLetKeptArgumentMessage(into, subject: subject, paramName: paramName, functionName: calleeText))
-	end 'refuseLetFieldKeptArgument'
+	end 'refuseReadOnlyKeptArgument'
 
 	function judgeMutablyKeptArgument(func IrFunction, note ElementIndex, value ValueId)
 		let view = self.maybePermanentViewOf(value)
@@ -10472,7 +10322,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return false
 		end 'notAnInstance'
 
-		let base = self.baseNameOfInstanceOrDeclaration(caller, value: conformer)
+		let base = baseNameOfInstanceOrDeclaration(self.project, signatures: self.signatures, func: caller, value: conformer)
 
 		if self.signatures.structTypeParamsOf(base).count() == 0 'notGeneric'
 			return false
@@ -10657,18 +10507,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'notAnInstance'
 
 		return match splitQualifiedName(calleeFunc.name) 'qualified'
-			parts(owner, _) gives owner.equals(self.baseNameOfInstanceOrDeclaration(func, value: value))
+			parts(owner, _) gives owner.equals(baseNameOfInstanceOrDeclaration(self.project, signatures: self.signatures, func: func, value: value))
 			notQualified gives false
 		end 'qualified'
 	end 'valueIsAnInstanceOfTheOwner'
-
-	function baseNameOfInstanceOrDeclaration(func IrFunction, value ValueId) returns ByteArray
-		if valueTagOf(func, value: value) == ValueTypeTag.genericInstance 'anInstance'
-			return self.signatures.genericInstanceBaseName(self.instanceIdOf(func, value: value))
-		end 'anInstance'
-
-		return try self.project.typeNames.nameOf(self.nameIdOf(func, value: value)) otherwise panic("ProvenanceTracer.baseNameOfInstanceOrDeclaration: type name {self.nameIdOf(func, value: value)} is not in the project interner")
-	end 'baseNameOfInstanceOrDeclaration'
 
 	function inheritOpaqueBound(callerIndex ElementIndex) returns bool
 		if self.opaqueBoundBodyAt(callerIndex) 'alreadyBound'
@@ -10720,7 +10562,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return OpaqueBoundClass.satisfied if self.valueGivesAStoreNoWriter(func, value: value) else OpaqueBoundClass.writable
 		end 'theElementItself'
 
-		if tag != ValueTypeTag.genericInstance and tagNamesADeclaredType(tag) and self.signatures.structTypeParamsOf(self.baseNameOfInstanceOrDeclaration(func, value: value)).count() > 0 'theOwnersOwnRecord'
+		if tag != ValueTypeTag.genericInstance and tagNamesADeclaredType(tag) and self.signatures.structTypeParamsOf(baseNameOfInstanceOrDeclaration(self.project, signatures: self.signatures, func: func, value: value)).count() > 0 'theOwnersOwnRecord'
 			return OpaqueBoundClass.opaque
 		end 'theOwnersOwnRecord'
 
@@ -10767,7 +10609,7 @@ end 'ProvenanceTracer'
 
 union InstantiationDoor
 	aCall
-	aConversion(let interfaceName ByteArray)
+	aConversion(let interfaceName immutable ByteArray)
 end 'InstantiationDoor'
 
 // Ordered best to worst: `worseOpaqueBoundClass` keeps the higher ordinal.
@@ -10786,6 +10628,29 @@ end 'OpaqueShape'
 function worseOpaqueBoundClass(held OpaqueBoundClass, next OpaqueBoundClass) returns OpaqueBoundClass
 	return next if next.ordinal > held.ordinal else held
 end 'worseOpaqueBoundClass'
+
+module function valueMayHoldAnIterator(signatures ProgramSignatures, func IrFunction, value ValueId) returns bool
+	let tag = valueTagOf(func, value: value)
+	return tag == ValueTypeTag.genericInstance or signatures.tagMayNameAggregate(tag)
+end 'valueMayHoldAnIterator'
+
+module function valueIsAnIteratorRecord(project Project, signatures ProgramSignatures, func IrFunction, value ValueId) returns bool
+	if not valueMayHoldAnIterator(signatures, func: func, value: value) 'notADeclaredType'
+		return false
+	end 'notADeclaredType'
+
+	return signatures.typeImplementsInterface(baseNameOfInstanceOrDeclaration(project, signatures: signatures, func: func, value: value), interfaceName: IteratorInterfaceName)
+end 'valueIsAnIteratorRecord'
+
+function baseNameOfInstanceOrDeclaration(project Project, signatures ProgramSignatures, func IrFunction, value ValueId) returns immutable ByteArray
+	let nameId = try func.valueNameIds.get(value) otherwise panic("baseNameOfInstanceOrDeclaration: v{value} of '{String.from(func.name)}' has no type name — the type columns are minted in lockstep")
+
+	if valueTagOf(func, value: value) == ValueTypeTag.genericInstance 'anInstance'
+		return signatures.genericInstanceBaseName(nameId as GenericInstanceId)
+	end 'anInstance'
+
+	return try project.typeNames.nameOf(nameId) otherwise panic("baseNameOfInstanceOrDeclaration: type name {nameId} is not in the project interner")
+end 'baseNameOfInstanceOrDeclaration'
 
 function incomingIsTheMerge(merge ValueId, incoming ValueId, incomingBase ValueId) returns bool
 	return incoming == merge or incomingBase == merge
@@ -10850,7 +10715,7 @@ function columnNamesWhatItHolds(column ProvenanceColumn) returns bool
 	end 'column'
 end 'columnNamesWhatItHolds'
 
-function freshCalleeOf(op MaxonOp) returns ByteArray throws AbsentError
+function freshCalleeOf(op MaxonOp) returns immutable ByteArray throws AbsentError
 	match op 'op'
 		call(_, callee, _, _, _, _, _, _) then return callee
 		tryCall(_, _, callee, _, _, _, _, _, _) then return callee
@@ -10947,7 +10812,7 @@ end 'anyHeldRecordKinds'
 
 export union ArgumentParameter
 	unnamed
-	named(let name ByteArray)
+	named(let name immutable ByteArray)
 
 	function displayName() returns String
 		return match self 'parameter'
@@ -10969,18 +10834,17 @@ module union KeptRefusal
 end 'KeptRefusal'
 
 export type KeptMasks
-	export let letField as ParamPositionMask
-	export let letPayload as ParamPositionMask
+	export let readOnlyStore as ParamPositionMask
 	export let readOnlyElement as ParamPositionMask
 	export let mutable as ParamPositionMask
 	export let anyPosition as bool
 
-	export static function create(letField ParamPositionMask, letPayload ParamPositionMask, readOnlyElement ParamPositionMask, mutable ParamPositionMask, anyPosition bool) returns KeptMasks
-		return Self{letField: letField, letPayload: letPayload, readOnlyElement: readOnlyElement, mutable: mutable, anyPosition: anyPosition}
+	export static function create(readOnlyStore ParamPositionMask, readOnlyElement ParamPositionMask, mutable ParamPositionMask, anyPosition bool) returns KeptMasks
+		return Self{readOnlyStore: readOnlyStore, readOnlyElement: readOnlyElement, mutable: mutable, anyPosition: anyPosition}
 	end 'create'
 
 	export function keepsAt(position ParamCount) returns bool
-		return maskHasParam(self.letField or self.letPayload or self.readOnlyElement or self.mutable, param: position)
+		return maskHasParam(self.readOnlyStore or self.readOnlyElement or self.mutable, param: position)
 	end 'keepsAt'
 end 'KeptMasks'
 
@@ -11485,6 +11349,13 @@ function literalResultOf(op MaxonOp) returns ValueId throws AbsentError
 	end 'op'
 end 'literalResultOf'
 
+function literalValueOf(op MaxonOp) returns FullRangeInt throws AbsentError
+	match op 'op'
+		literal(_, value, _) then return value
+		default throws AbsentError.absent
+	end 'op'
+end 'literalValueOf'
+
 function opIsTheLiteralOf(op MaxonOp, value ValueId) returns bool
 	let result = try literalResultOf(op) otherwise return false
 
@@ -11552,7 +11423,7 @@ function recordAliasEdges(aliased ParamPositionMask, calleeIndex ElementIndex, c
 
 	for p in 0 upto RootBitIndexMask + 1 'eachCallerParam'
 		if maskHasParam(aliased, param: p as ParamCount) 'mayBeThisParameter'
-			edges.record(calleeIndex, callerIndex: callerIndex, callerParam: p as ParamCount, calleeParam: calleeParam)
+			edges.record(calleeIndex, callerIndex: callerIndex, callerParam: p as ParamCount, calleeParam: calleeParam, carry: FrozenCarry.carries)
 		end 'mayBeThisParameter'
 	end 'eachCallerParam'
 end 'recordAliasEdges'

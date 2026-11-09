@@ -896,7 +896,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:22:6: cannot bind 'alias' to a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read it through a `view`, or move it out with `pop` or `remove`
+error E3214: <fragment>:22:6: cannot bind 'alias' to a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
 ```
 
 <!-- test: a-let-bound-to-a-unique-element-read-is-refused -->
@@ -925,7 +925,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:17:6: cannot bind 'alias' to a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read it through a `view`, or move it out with `pop` or `remove`
+error E3214: <fragment>:17:6: cannot bind 'alias' to a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
 ```
 
 <!-- test: a-conditional-with-a-unique-field-read-arm-is-refused -->
@@ -966,7 +966,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:21:28: cannot give a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read it through a `view`, or move it out with `pop` or `remove`
+error E3214: <fragment>:21:28: cannot give a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
 ```
 
 <!-- test: a-let-bound-to-a-unique-tuple-element-read-is-refused -->
@@ -992,11 +992,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:14:6: cannot bind 'alias' to a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read it through a `view`, or move it out with `pop` or `remove`
+error E3214: <fragment>:14:6: cannot bind 'alias' to a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
 ```
 
 <!-- test: a-unique-field-is-read-through-without-an-alias -->
-`holder.token.n` reads a scalar through the field, and a `view` lends the field, so neither names the unique.
+`holder.token.n` reads a scalar through the field, which names no unique.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -1021,17 +1021,50 @@ function main() returns ExitCode
 	var holder = Holder.create(4)
 	holder.token.n = 6
 	let seen = holder.token.n
-	view lent = holder.token
-	print("{seen} {lent.n} {holder.token.n}\n")
+	print("{seen} {holder.token.n}\n")
 
 	return 0
 end 'main'
 ```
 ```stdout
-6 6 6
+6 6
 ```
 ```exitcode
 0
+```
+
+<!-- test: error.a-unique-field-bound-to-a-view-is-refused -->
+`view` is another spelling of `let`, and a `let` names the unique it is bound to, so the field is no longer the only name for it.
+
+```maxon
+typealias Tally = int(0 to 1024)
+
+type Token is unique
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Token'
+
+type Holder
+	export var token as Token
+
+	static function create(n Tally) returns Self
+		return Self{token: Token.create(n)}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var holder = Holder.create(4)
+	view lent = holder.token
+	print("{lent.n}\n")
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3214: <fragment>:22:7: cannot bind 'lent' to a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
 ```
 
 <!-- test: a-for-binding-over-uniques-handed-to-a-keeping-parameter-is-refused -->
@@ -1262,7 +1295,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:28:18: cannot store into 'token' a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read it through a `view`, or move it out with `pop` or `remove`
+error E3214: <fragment>:28:18: cannot store into 'token' a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
 ```
 
 <!-- test: a-for-binding-over-uniques-returned-from-the-function-is-refused -->
@@ -1298,7 +1331,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:16:10: cannot return a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read it through a `view`, or move it out with `pop` or `remove`
+error E3214: <fragment>:16:10: cannot return a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
 ```
 
 <!-- test: a-for-binding-over-uniques-pushed-into-another-array-is-refused -->
@@ -1331,7 +1364,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:20:13: cannot store into 'an element of the container push writes' a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read it through a `view`, or move it out with `pop` or `remove`
+error E3214: <fragment>:20:13: cannot store into 'an element of the container push writes' a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
 ```
 
 <!-- test: a-for-binding-over-uniques-bound-to-a-var-is-refused -->
@@ -1363,7 +1396,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:19:7: cannot bind 'second' to a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read it through a `view`, or move it out with `pop` or `remove`
+error E3214: <fragment>:19:7: cannot bind 'second' to a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
 ```
 
 <!-- test: a-for-over-an-array-of-unique-payload-unions-may-not-write-the-array -->

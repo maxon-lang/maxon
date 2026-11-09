@@ -1,23 +1,22 @@
 ---
 feature: deep-let-built-values
 status: experimental
-keywords: [let, read-only, field, record, String, var, fresh value]
+keywords: [let, field, record, String, var, fresh value]
 category: type-system
 ---
 
-# A value built from what a `let` field holds is a new value
+# A `var` may take what a `let` field holds
 
 ## Documentation
 
-A `let` field is read-only, and so is everything reachable through it. A record or a `String` that a function
-builds from the text it reads out of a `let` field is a value of its own: the builder's result is not a view
-of the field, so a `var` may take it and write it. What stays refused is the `let` field's own record: binding
-it to a `var` would let the `var` write what the field holds.
+A `let` field is a name that is never reassigned, and the record it holds is written like any other: a `var` bound
+to a `let` field's record writes what the field holds. A record or a `String` that a function builds from the text
+it reads out of a `let` field is a value of its own.
 
-A `var` field's record can be moved out instead: `let old = self.log` followed by `self.log = Log.create()` leaves
-`old` as the record's only holder, so a `let` field may take it. Statements between the two that neither read nor
-write the field or the record are fine; a read of the field, a call that reaches it, or a record some other holder
-also names is refused.
+A `var` field's record can be moved out: `let old = self.log` followed by `self.log = Log.create()` leaves `old` as
+the record's only holder, and a `let` field may take it. A `let` field takes any record, so statements between the
+load and the store, a read of the field and a record some other holder also names change nothing: every holder
+reads the same record.
 
 ## Tests
 
@@ -107,8 +106,8 @@ end 'main'
 2
 ```
 
-<!-- test: error.a-let-fields-own-record-is-not-writable-through-a-var -->
-The twin: the record a `let` field holds is the field's own, so a `var` bound to it is refused.
+<!-- test: a-let-fields-own-record-is-written-through-a-var -->
+The twin: the record a `let` field holds is the field's own, and a `var` bound to it writes it.
 
 ```maxon
 typealias Tally = int(0 to 1000000)
@@ -137,13 +136,12 @@ function main() returns ExitCode
 	return copy.level as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/deep-let-built-values/error.a-let-fields-own-record-is-not-writable-through-a-var.maxon:22:6: cannot assign a value read out of a `let` field to mutable binding 'copy'; use 'let' instead of 'var', or use clone()
+```exitcode
+2
 ```
 
-<!-- test: error.a-local-bound-to-a-let-fields-record-is-not-assigned-to-a-var -->
-The `let` local `held` names the `let` field's own record. Assigning it to an existing `var` binds the record to a
-writer exactly as declaring the `var` from it would.
+<!-- test: a-local-bound-to-a-let-fields-record-is-assigned-to-a-var -->
+The `let` local `held` names the `let` field's own record. Assigning it to an existing `var` binds the record to a writer exactly as declaring the `var` from it would.
 
 ```maxon
 typealias Tally = int(0 to 1000000)
@@ -174,8 +172,8 @@ function main() returns ExitCode
 	return copy.level as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/deep-let-built-values/error.a-local-bound-to-a-let-fields-record-is-not-assigned-to-a-var.maxon:24:2: cannot assign a value read out of a `let` field to mutable binding 'copy'; use 'let' instead of 'var', or use clone()
+```exitcode
+2
 ```
 
 <!-- test: a-fresh-record-is-assigned-to-a-var -->
@@ -209,7 +207,7 @@ end 'main'
 fresh value, nothing else holds the old record, so `old` is its only holder and a `let` field may take it.
 
 ```maxon
-typealias NameList = Array with ByteArray
+typealias NameList = Array with immutable ByteArray
 
 type Told
 	export var names as NameList
@@ -218,7 +216,7 @@ type Told
 		return Self{names: NameList.create(0)}
 	end 'create'
 
-	function note(name ByteArray)
+	function note(name immutable ByteArray)
 		self.names.push(name)
 	end 'note'
 end 'Told'
@@ -246,12 +244,12 @@ type Holder
 		return Self{log: Log.create()}
 	end 'create'
 
-	function note(name ByteArray)
+	function note(name immutable ByteArray)
 		self.log.told.note(name)
 	end 'note'
 
 	function closeWhole() returns KeepLog
-		var old = self.log
+		let old = self.log
 		self.log = Log.create()
 		return KeepLog.create(old)
 	end 'closeWhole'
@@ -276,7 +274,7 @@ load and the store: the old record is still the only holder when the replacement
 ```maxon
 typealias Count = int(0 to 1000)
 
-typealias NameList = Array with ByteArray
+typealias NameList = Array with immutable ByteArray
 
 type Told
 	export var names as NameList
@@ -285,7 +283,7 @@ type Told
 		return Self{names: NameList.create(0)}
 	end 'create'
 
-	function note(name ByteArray)
+	function note(name immutable ByteArray)
 		self.names.push(name)
 	end 'note'
 end 'Told'
@@ -314,12 +312,12 @@ type Holder
 		return Self{log: Log.create(), generation: 0}
 	end 'create'
 
-	function note(name ByteArray)
+	function note(name immutable ByteArray)
 		self.log.told.note(name)
 	end 'note'
 
 	function closeWhole() returns KeepLog
-		var old = self.log
+		let old = self.log
 		let next = self.generation + 1
 		self.generation = next
 		self.log = Log.create()
@@ -339,14 +337,11 @@ end 'main'
 1
 ```
 
-<!-- test: error.a-read-of-the-field-between-the-swap-load-and-store-is-refused -->
-A read of `self.log` between the load and the store may hand the record to a second holder, so the swap no longer
-proves `old` is the only one and the `let` field refuses it.
+<!-- test: a-record-another-holder-also-names-is-swapped-out-and-kept -->
+The `Holder` was built around a `Log` that `main` still names. Swapping the field leaves that second holder with the old record, and the `let` field keeps it: a write through `shared` is read through `kept`.
 
 ```maxon
-typealias Count = int(0 to 1000)
-
-typealias NameList = Array with ByteArray
+typealias NameList = Array with immutable ByteArray
 
 type Told
 	export var names as NameList
@@ -355,141 +350,7 @@ type Told
 		return Self{names: NameList.create(0)}
 	end 'create'
 
-	function note(name ByteArray)
-		self.names.push(name)
-	end 'note'
-end 'Told'
-
-type Log
-	export var told as Told
-
-	static function create() returns Self
-		return Self{told: Told.create()}
-	end 'create'
-end 'Log'
-
-type KeepLog
-	export let log as Log
-
-	static function create(log Log) returns Self
-		return Self{log: log}
-	end 'create'
-end 'KeepLog'
-
-type Holder
-	var log as Log
-	var total as Count
-
-	static function create() returns Self
-		return Self{log: Log.create(), total: 0}
-	end 'create'
-
-	function note(name ByteArray)
-		self.log.told.note(name)
-	end 'note'
-
-	function closeWhole() returns KeepLog
-		var old = self.log
-		let seen = self.log.told.names.count()
-		self.total = seen as Count
-		self.log = Log.create()
-		return KeepLog.create(old)
-	end 'closeWhole'
-end 'Holder'
-
-function main() returns ExitCode
-	var holder = Holder.create()
-	holder.note(b"a")
-	let kept = holder.closeWhole()
-
-	return kept.log.told.names.count() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3078: specs/deep-let-built-values/error.a-read-of-the-field-between-the-swap-load-and-store-is-refused.maxon:51:18: cannot pass a value other names may still write to parameter 'log' of 'KeepLog.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
-```
-
-<!-- test: error.a-call-that-reaches-the-field-between-the-swap-load-and-store-is-refused -->
-A call that may read or write `self.log` between the load and the store is judged by what it does to the field, and
-`self.note(...)` reaches it, so the swap is not proven and the `let` field refuses the record.
-
-```maxon
-typealias NameList = Array with ByteArray
-
-type Told
-	export var names as NameList
-
-	static function create() returns Self
-		return Self{names: NameList.create(0)}
-	end 'create'
-
-	function note(name ByteArray)
-		self.names.push(name)
-	end 'note'
-end 'Told'
-
-type Log
-	export var told as Told
-
-	static function create() returns Self
-		return Self{told: Told.create()}
-	end 'create'
-end 'Log'
-
-type KeepLog
-	export let log as Log
-
-	static function create(log Log) returns Self
-		return Self{log: log}
-	end 'create'
-end 'KeepLog'
-
-type Holder
-	var log as Log
-
-	static function create() returns Self
-		return Self{log: Log.create()}
-	end 'create'
-
-	function note(name ByteArray)
-		self.log.told.note(name)
-	end 'note'
-
-	function closeWhole() returns KeepLog
-		var old = self.log
-		self.note(b"peek")
-		self.log = Log.create()
-		return KeepLog.create(old)
-	end 'closeWhole'
-end 'Holder'
-
-function main() returns ExitCode
-	var holder = Holder.create()
-	holder.note(b"a")
-	let kept = holder.closeWhole()
-
-	return kept.log.told.names.count() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3078: specs/deep-let-built-values/error.a-call-that-reaches-the-field-between-the-swap-load-and-store-is-refused.maxon:47:18: cannot pass a value other names may still write to parameter 'log' of 'KeepLog.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
-```
-
-<!-- test: error.a-record-another-holder-also-names-is-not-swapped-out -->
-The `Holder` was built around a `Log` that `main` still names. Swapping the field leaves that second holder with the
-old record, so the `let` field refuses it.
-
-```maxon
-typealias NameList = Array with ByteArray
-
-type Told
-	export var names as NameList
-
-	static function create() returns Self
-		return Self{names: NameList.create(0)}
-	end 'create'
-
-	function note(name ByteArray)
+	function note(name immutable ByteArray)
 		self.names.push(name)
 	end 'note'
 end 'Told'
@@ -517,12 +378,12 @@ type Holder
 		return Self{log: log}
 	end 'create'
 
-	function note(name ByteArray)
+	function note(name immutable ByteArray)
 		self.log.told.note(name)
 	end 'note'
 
 	function closeWhole() returns KeepLog
-		var old = self.log
+		let old = self.log
 		self.log = Log.create()
 		return KeepLog.create(old)
 	end 'closeWhole'
@@ -538,6 +399,6 @@ function main() returns ExitCode
 	return kept.log.told.names.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/deep-let-built-values/error.a-record-another-holder-also-names-is-not-swapped-out.maxon:46:18: cannot pass a value other names may still write to parameter 'log' of 'KeepLog.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+2
 ```

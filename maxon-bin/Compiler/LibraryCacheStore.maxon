@@ -1,5 +1,5 @@
 export let LibraryCacheDirName = "library"
-let LibraryCacheFormat = 22
+let LibraryCacheFormat = 23
 let LibraryEntryExtension = ".mxlc"
 let LibraryEntryNameSeparator = "-"
 
@@ -133,7 +133,7 @@ export type LibraryCache
 	end 'retainsWhatItLoads'
 
 	export function takeTotals() returns LibraryCacheTally
-		var taken = self.totals
+		let taken = self.totals
 		self.totals = LibraryCacheTally.create()
 
 		return taken
@@ -215,14 +215,14 @@ export type LibraryCache
 		return File.exists(entries.join(name))
 	end 'holds'
 
-	function imageOf(target Target, name String) returns ByteArray throws LibraryEntryMiss
+	function imageOf(target Target, name String) returns immutable ByteArray throws LibraryEntryMiss
 		let path = (try self.entriesFor(target)).join(name)
 
 		if not File.exists(path) 'nothingThere'
 			throw LibraryEntryMiss.absent
 		end 'nothingThere'
 
-		return try File.readBinary(path) otherwise 'unreadable'
+		return freeze try File.readBinary(path) otherwise 'unreadable'
 			noteLibraryCacheTrouble("{path.toString()} could not be read")
 			throw LibraryEntryMiss.absent
 		end 'unreadable'

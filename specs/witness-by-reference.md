@@ -558,7 +558,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:29:13: 'Doubler.bump' writes its parameter 'n', but 'bump' passes it the immutable 'x'
+error E2013: <fragment>:29:13: 'x' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
 ```
 
 <!-- test: witness-by-reference.error.a-let-handed-to-an-existential-at-a-written-position-is-refused -->
@@ -593,7 +593,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:22:4: 'Doubler.bump' writes its parameter 'n', but 'bump' passes it the immutable 'x'
+error E2013: <fragment>:22:4: 'x' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
 ```
 
 <!-- test: witness-by-reference.a-let-is-accepted-where-no-conformer-writes-the-position -->
@@ -815,8 +815,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:41:13: 'Doubler.bump' writes its parameter 'n', but 'bump' passes it the immutable 'x'
-error E3159: <fragment>:41:13: 'Tripler.bump' writes its parameter 'amount', but 'bump' passes it the immutable 'x'
+error E2013: <fragment>:41:13: 'x' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
+error E2013: <fragment>:41:13: 'x' is a let and cannot be passed to the `mutable` parameter 'amount'; bind it to a `var`
 ```
 
 <!-- test: witness-by-reference.error.a-narrow-var-at-an-associated-type-formal-is-refused-at-the-call -->

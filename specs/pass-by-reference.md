@@ -36,7 +36,7 @@ let result = double(n)  // result is 42
 
 ### What a `mutable` Parameter Takes
 
-The caller passes a `var`, or a field or element that is writable. A `let`, a literal or an expression result is refused, because no variable exists for the write to reach: a `let` that is handed to a `mutable` parameter is **E3159**, which also covers a captured name, a loop variable and a read-only field. A record-type parameter is never rebound: reassigning one is E2013 even where it is marked, and writing a field of it or growing an array it holds (`p.x = 99`, `p.items.push(x)`) is an ordinary write through the parameter.
+The caller passes a `var`, or a field or element that is writable. A `let`, a literal or an expression result is refused, because no variable exists for the write to reach: a `let` that is handed to a `mutable` parameter is **E2013**, which also covers a loop variable; a captured name is E3159. A record-type parameter is never rebound: reassigning one is E2013 even where it is marked, and writing a field of it or growing an array it holds (`p.x = 99`, `p.items.push(x)`) is an ordinary write through the parameter.
 
 ### Closure Capture
 
@@ -48,7 +48,7 @@ The reassignment is visible to the caller: the function reassigns a `String`, a 
 
 ### A call through a function value
 
-A function type spells the marker too: `typealias Step = function(mutable Count)`. A function, closure or interface conformer fits a function type or requirement only when every parameter's marker is the same as the type's, so a function that reassigns its parameter does not convert to `function(Count)`, and one that declares `mutable` but only reads does not either. A call through a function value passes the argument's storage at each `mutable` position, and a `let` handed to such a position is refused as it is at a direct call (**E3159**).
+A function type spells the marker too: `typealias Step = function(mutable Count)`. A function, closure or interface conformer fits a function type or requirement only when every parameter's marker is the same as the type's, so a function that reassigns its parameter does not convert to `function(Count)`, and one that declares `mutable` but only reads does not either. A call through a function value passes the argument's storage at each `mutable` position, and a `let` handed to such a position is refused as it is at a direct call (**E2013**).
 
 ## Tests
 
@@ -396,7 +396,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/pass-by-reference/pass-by-reference.let-to-mutating-param-error.maxon:11:2: cannot pass 'n', which is read-only (a `let` binding), to a function that writes parameter 'x' (in main); pass a clone()
+error E2013: specs/pass-by-reference/pass-by-reference.let-to-mutating-param-error.maxon:11:2: 'n' is a let and cannot be passed to the `mutable` parameter 'x'; bind it to a `var`
 ```
 
 <!-- test: pass-by-reference.captured-let-to-mutating-param-error -->
@@ -1002,7 +1002,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:11:3: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'n' (in main); pass a clone()
+error E2013: <fragment>:11:3: 'v' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
 ```
 
 <!-- test: pass-by-reference.error.a-literal-handed-to-a-by-reference-function-value-is-refused -->
@@ -1182,7 +1182,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:11:3: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'n' (in run); pass a clone()
+error E2013: <fragment>:11:3: 'v' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
 ```
 
 <!-- test: pass-by-reference.a-ranged-var-handed-to-a-function-value-keeps-its-range-guard -->
@@ -1250,7 +1250,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:15:3: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'n' (in run); pass a clone()
+error E2013: <fragment>:15:3: 'v' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
 ```
 
 <!-- test: pass-by-reference.error.a-loop-variable-handed-to-a-parameter-that-reassigns-it-is-refused -->
@@ -1281,7 +1281,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:17:6: cannot pass 'item', which is read-only (a `for` loop variable), to a function that writes parameter 'n' (in main); pass a clone()
+error E2013: <fragment>:17:6: 'item' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
 ```
 
 <!-- test: pass-by-reference.a-field-typed-with-a-directory-qualified-function-alias-passes-by-reference -->
@@ -1893,8 +1893,8 @@ end 'main'
 11
 ```
 
-<!-- test: pass-by-reference.error.a-let-record-handed-to-a-mutable-record-function-value-is-refused-as-a-write -->
-A `mutable` position of a function type declares a write, so a `let` handed to it is refused as a write, not as a keep.
+<!-- test: pass-by-reference.a-let-record-handed-to-a-mutable-record-function-value-is-written -->
+A `mutable` position of a function type declares a write. A record is written in place through its parameter and is never rebound, so a `let` record handed to it is accepted: `let` forbids reassigning `row`, not writing the record it names.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -1919,9 +1919,9 @@ end 'apply'
 function main() returns ExitCode
 	let row = Row.create(1)
 	apply(raise, row: row)
-	return 0
+	return row.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:24:2: cannot pass 'row', which is read-only (a `let` binding), to a function that writes parameter 'row' (in main); pass a clone()
+```exitcode
+6
 ```

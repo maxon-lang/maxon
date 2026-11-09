@@ -200,7 +200,7 @@ end 'launder'
 
 function main() returns ExitCode
 	let s = "  héllo wörld  "
-	var n = s.trim(CharacterSet.letters()).count() as Signed
+	var n = s.trim(CharacterSet.letters).count() as Signed
 	n = n + (s.bytes().count() as Signed)
 	for cp in "héllo".codepoints() 'c'
 		n = n + (cp as Signed)
@@ -243,7 +243,7 @@ end 'launder'
 
 function main() returns ExitCode
 	let s = "  héllo wörld  "
-	var n = s.trim(CharacterSet.letters()).count() as Signed
+	var n = s.trim(CharacterSet.letters).count() as Signed
 	n = n + (s.bytes().count() as Signed)
 	for cp in "héllo".codepoints() 'c'
 		n = n + (cp as Signed)

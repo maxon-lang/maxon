@@ -67,8 +67,8 @@ end 'RuntimeLockSite'
 export typealias RuntimeLockSiteArray = Array with RuntimeLockSite
 
 export type RuntimeLockRequirement
-	export let funcName as ByteArray
-	export let lockLabel as ByteArray
+	export let funcName as immutable ByteArray
+	export let lockLabel as immutable ByteArray
 
 	static function create(funcName ByteArray, lockLabel ByteArray) returns RuntimeLockRequirement
 		return Self{funcName: funcName, lockLabel: lockLabel}
@@ -81,7 +81,7 @@ export typealias RuntimeLockRequirementArray = Array with RuntimeLockRequirement
 // every call to it where the lock may be free and every return from it where the lock may be free,
 // and its body is checked as entered holding the lock (`RuntimeLockUse`).
 export function requireRuntimeLockHeld(module StdModule, func IrFunction, lockLabel ByteArray)
-	module.runtimeLockRequirements.push(RuntimeLockRequirement.create(func.name.clone(), lockLabel: lockLabel.clone()))
+	module.runtimeLockRequirements.push(RuntimeLockRequirement.create(func.name, lockLabel: lockLabel))
 end 'requireRuntimeLockHeld'
 
 export function runtimeLockMarkOf(kind RuntimeLockKind, entering bool) returns RuntimeLockMark
@@ -92,7 +92,7 @@ export function runtimeLockMarkOf(kind RuntimeLockKind, entering bool) returns R
 	end 'kind'
 end 'runtimeLockMarkOf'
 
-function runtimeLockMarkerName(mark RuntimeLockMark) returns ByteArray
+function runtimeLockMarkerName(mark RuntimeLockMark) returns immutable ByteArray
 	return match mark 'mark'
 		enterRecursive gives b"__rtlock_enter"
 		leaveRecursive gives b"__rtlock_leave"
@@ -110,10 +110,8 @@ export function emitRuntimeLockMark(module StdModule, block IrBlock, lock ValueI
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: runtimeLockMarkerName(mark), args: argsOf(lock)))
 end 'emitRuntimeLockMark'
 
-function runtimeLockWordLabel(label ByteArray, suffix ByteArray) returns ByteArray
-	var named = label.clone()
-	named.append(suffix)
-	return named
+function runtimeLockWordLabel(label ByteArray, suffix ByteArray) returns immutable ByteArray
+	return freeze "{String.from(label)}{String.from(suffix)}".toByteArray()
 end 'runtimeLockWordLabel'
 
 export function pushRecursiveRuntimeLock(out DataSectionEntryArray, label ByteArray)
@@ -165,7 +163,7 @@ function rtLockSlowPathIsGuarded(kind RuntimeLockKind) returns bool
 	end 'kind'
 end 'rtLockSlowPathIsGuarded'
 
-function rtLockAcquireName(kind RuntimeLockKind) returns ByteArray
+function rtLockAcquireName(kind RuntimeLockKind) returns immutable ByteArray
 	return match kind 'kind'
 		recursive gives RtLockEnterSlowName
 		exclusive gives RtLockAcquireName
@@ -173,7 +171,7 @@ function rtLockAcquireName(kind RuntimeLockKind) returns ByteArray
 	end 'kind'
 end 'rtLockAcquireName'
 
-function rtLockReleaseName(kind RuntimeLockKind) returns ByteArray
+function rtLockReleaseName(kind RuntimeLockKind) returns immutable ByteArray
 	return match kind 'kind'
 		recursive or
 		exclusive gives RtLockReleaseName

@@ -444,8 +444,8 @@ The two handlers write each record with one write, so lines from different threa
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `TextLogHandler.create(options immutable LogHandlerOptions)` | `TextLogHandler` | `key=value` pairs in the order `time`, `level`, `source` (`file:line`), `msg`, then the attributes; the time is RFC 3339 with milliseconds. A text value is quoted with `Json.quote`'s escapes when it is empty or holds a space, a control byte, `"` or `=`. A group's attributes print with dotted keys. |
-| `JsonLogHandler.create(options immutable LogHandlerOptions)` | `JsonLogHandler` | One JSON object per line: `time` (RFC 3339 with nanoseconds), `level`, `source` as `{"file":…,"line":…}`, `msg`, then the attributes, a group as a nested object. A non-finite float is a string. |
+| `TextLogHandler.create(options LogHandlerOptions)` | `TextLogHandler` | `key=value` pairs in the order `time`, `level`, `source` (`file:line`), `msg`, then the attributes; the time is RFC 3339 with milliseconds. A text value is quoted with `Json.quote`'s escapes when it is empty or holds a space, a control byte, `"` or `=`. A group's attributes print with dotted keys. |
+| `JsonLogHandler.create(options LogHandlerOptions)` | `JsonLogHandler` | One JSON object per line: `time` (RFC 3339 with nanoseconds), `level`, `source` as `{"file":…,"line":…}`, `msg`, then the attributes, a group as a nested object. A non-finite float is a string. |
 | `LogHandlerOptions.create(stream LogStream, addTime bool, addSource bool)` | `LogHandlerOptions` | Where to write, and whether to include the time and the caller's location. |
 | `LogHandlerOptions.standard()` | `LogHandlerOptions` | Stderr, time on, source off. |
 | `stream`, `addTime`, `addSource` | | The options' fields. |
@@ -464,7 +464,7 @@ A handler of your own implements `LogHandler`, declares its parameter `record im
 
 ```maxon
 function main() returns ExitCode
-	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.debug))
 	Log.setDefault(LogSink.create(spawn JsonLogHandler.create(options), levels: levels))
 

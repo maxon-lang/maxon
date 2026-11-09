@@ -39,17 +39,17 @@ The no-argument versions are convenience methods that trim Unicode whitespace.
 `CharacterSet` provides predefined character sets and supports custom sets:
 
 ```text
-CharacterSet.whitespacesAndNewlines()  // All Unicode whitespace including newlines
-CharacterSet.whitespaces()             // Spaces and tabs (no newlines)
-CharacterSet.newlines()                // Newline characters only
-CharacterSet.decimalDigits()           // 0-9
-CharacterSet.letters()                 // a-z, A-Z
-CharacterSet.lowercaseLetters()        // a-z
-CharacterSet.uppercaseLetters()        // A-Z
-CharacterSet.alphanumerics()           // a-z, A-Z, 0-9
-CharacterSet.punctuation()             // Punctuation characters
-CharacterSet.symbols()                 // Symbol characters
-CharacterSet.controlCharacters()       // Control characters
+CharacterSet.whitespacesAndNewlines  // All Unicode whitespace including newlines
+CharacterSet.whitespaces             // Spaces and tabs (no newlines)
+CharacterSet.newlines                // Newline characters only
+CharacterSet.decimalDigits           // 0-9
+CharacterSet.letters                 // a-z, A-Z
+CharacterSet.lowercaseLetters        // a-z
+CharacterSet.uppercaseLetters        // A-Z
+CharacterSet.alphanumerics           // a-z, A-Z, 0-9
+CharacterSet.punctuation             // Punctuation characters
+CharacterSet.symbols                 // Symbol characters
+CharacterSet.controlCharacters       // Control characters
 ```
 
 ## Tests
@@ -58,7 +58,7 @@ CharacterSet.controlCharacters()       // Control characters
 ```maxon
 function main() returns ExitCode
 	let s = "  hello  "
-	let ws = CharacterSet.whitespacesAndNewlines()
+	let ws = CharacterSet.whitespacesAndNewlines
 	let result = s.trim(ws)
 	print("[{result}]")
 	return 0
@@ -203,7 +203,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "  hello  "
-	let result = s.trim(CharacterSet.whitespacesAndNewlines())
+	let result = s.trim(CharacterSet.whitespacesAndNewlines)
 	print("[{result}]")
 	return 0
 end 'main'
@@ -219,7 +219,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "123hello456"
-	let result = s.trim(CharacterSet.decimalDigits())
+	let result = s.trim(CharacterSet.decimalDigits)
 	print("[{result}]")
 	return 0
 end 'main'
@@ -235,7 +235,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "abc123abc"
-	let result = s.trim(CharacterSet.letters())
+	let result = s.trim(CharacterSet.letters)
 	print("[{result}]")
 	return 0
 end 'main'
@@ -251,7 +251,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "123hello"
-	let result = s.trimStart(CharacterSet.decimalDigits())
+	let result = s.trimStart(CharacterSet.decimalDigits)
 	print("[{result}]")
 	return 0
 end 'main'
@@ -267,7 +267,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "hello123"
-	let result = s.trimEnd(CharacterSet.decimalDigits())
+	let result = s.trimEnd(CharacterSet.decimalDigits)
 	print("[{result}]")
 	return 0
 end 'main'
@@ -283,7 +283,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
-	let result = s.trim(CharacterSet.decimalDigits())
+	let result = s.trim(CharacterSet.decimalDigits)
 	print("[{result}]")
 	return 0
 end 'main'
@@ -299,7 +299,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "12345"
-	let result = s.trim(CharacterSet.decimalDigits())
+	let result = s.trim(CharacterSet.decimalDigits)
 	print("[{result}]")
 	return 0
 end 'main'
@@ -315,7 +315,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = ""
-	let result = s.trim(CharacterSet.whitespacesAndNewlines())
+	let result = s.trim(CharacterSet.whitespacesAndNewlines)
 	print("[{result}]")
 	return 0
 end 'main'
@@ -331,7 +331,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "...hello!!!"
-	let result = s.trim(CharacterSet.punctuation())
+	let result = s.trim(CharacterSet.punctuation)
 	print("[{result}]")
 	return 0
 end 'main'

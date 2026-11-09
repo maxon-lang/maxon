@@ -297,7 +297,7 @@ type UntalliedEdges implements PhaseEdges
 end 'UntalliedEdges'
 
 type FrontEndTools
-	var keywords as KeywordTable
+	let keywords as immutable KeywordTable
 	var facts as ConditionFacts
 
 	static function create(cpu CpuArch, os Os, debugStream bool) returns FrontEndTools
@@ -562,7 +562,7 @@ module type FrontEndPool
 		self.noteDrain(FrontEndDrainKind.parsing)
 		try self.drainEveryJob(project, input: FrontEndDrainInput.parsing(queries), files: files, sizes: sizes, outcomes: outcomes, slots: slots)
 
-		var artifacts = landParses(project, queries: queries, outcomes: outcomes, slots: slots)
+		let artifacts = landParses(project, queries: queries, outcomes: outcomes, slots: slots)
 		recordPhase(project, phase: CompilePhase.frontEndPool, probe: probe)
 		self.sampleLevelsAfter(project, kind: FrontEndDrainKind.parsing)
 		return artifacts
@@ -856,7 +856,7 @@ function parseInProcess(project Project, worker FrontEndWorkerState, query Parse
 
 	project.memory.allocTally.settleTo(CompilePhase.frontEndPool)
 
-	var outcome = worker.ran(job)
+	let outcome = worker.ran(job)
 	project.memory.allocTally.settleTo(CompilePhase.parse)
 
 	return outcome

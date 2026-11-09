@@ -4025,8 +4025,8 @@ hello padded out long enough to heap allocate 1!
 47
 ```
 
-<!-- test: async-await.error.a-let-handed-to-async-cannot-be-written-by-the-coroutine -->
-A `let` handed to `async` is shared read-only, so a target that writes its parameter may not be handed it.
+<!-- test: async-await.a-let-handed-to-async-may-be-written-by-the-coroutine -->
+A `let` only forbids reassignment, and `async` moves the record into the coroutine, so a target that writes its parameter may be handed a `let`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -4050,8 +4050,8 @@ function main() returns ExitCode
 	return await pending as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:20:22: cannot pass 'b', which is read-only (a `let` binding), to a function that writes parameter 'p' (in main); pass a clone()
+```exitcode
+42
 ```
 
 <!-- test: async-await.a-var-handed-to-async-may-be-written-by-the-coroutine -->
@@ -4411,9 +4411,8 @@ end 'main'
 14
 ```
 
-<!-- test: async-await.error.a-match-payload-of-a-let-union-cannot-be-written-by-a-coroutine -->
-`b` is bound out of `w`, which is a `let`, so `b` is read-only and a coroutine that writes its parameter may not
-be handed it.
+<!-- test: async-await.a-match-payload-of-a-let-union-may-be-written-by-a-coroutine -->
+`b` is bound out of `w`, which is a `let`; a `let` only forbids reassignment, so a coroutine that writes its parameter may be handed `b`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -4447,13 +4446,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:27:36: cannot pass 'b', which is read-only (a `match` binding), to a function that writes parameter 'p' (in main); pass a clone()
+```stdout
+99
+```
+```exitcode
+0
 ```
 
-<!-- test: async-await.error.an-element-the-array-still-holds-cannot-be-written-by-a-coroutine -->
-`a` is a `let` holding an element `items` still holds, so `a` is read-only and a coroutine that writes its
-parameter may not be handed it.
+<!-- test: async-await.an-element-the-array-still-holds-may-be-written-by-a-coroutine -->
+`a` is a `let` holding an element `items` still holds; a `let` only forbids reassignment, so a coroutine that writes its
+parameter may be handed it, and `items` sees the write.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Boxes = Array with Box
@@ -4481,8 +4483,12 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:23:22: cannot pass 'a', which is read-only (a `view`), to a function that writes parameter 'p' (in main); pass a clone()
+```stdout
+99
+1
+```
+```exitcode
+0
 ```
 
 <!-- test: async-await.a-counted-co-owner-bound-to-a-let-is-shared-with-async -->
@@ -4629,7 +4635,7 @@ type Box
 		return Self{n: 7}
 	end 'create'
 
-	static function get() returns Box
+	static function get() returns immutable Box
 		return G
 	end 'get'
 end 'Box'
@@ -4650,6 +4656,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3159: <fragment>:25:22: cannot pass the result of 'get', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
+error E3207: <fragment>:25:27: 'poke' writes 'p' (line 20: `p.n = 99`); 'Box.get()' is immutable
 ```
 
 <!-- test: async-await.error.an-immutable-global-in-a-let-cannot-be-written-by-a-coroutine -->
@@ -4683,6 +4690,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3159: <fragment>:22:22: cannot pass 'b', which is read-only (a module-level `let`), to a function that writes parameter 'p' (in main); pass a clone()
+error E3207: <fragment>:22:27: 'poke' writes 'p' (line 16: `p.n = 99`); 'b' is immutable
 ```
 
 <!-- test: async-await.error.an-immutable-global-is-not-bound-to-a-var-before-a-coroutine -->
@@ -5030,13 +5038,13 @@ function main() returns ExitCode
 		arr.push(async work(-1))
 
 		let first = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
-		var box = try await first otherwise (e) 'firstFailed'
+		let box = try await first otherwise (e) 'firstFailed'
 				return 1
 		end 'firstFailed'
 		print("got {box.n}\n")
 
 		let second = try arr.get(1) otherwise panic("index 1 is in bounds by construction")
-		var none = try await second otherwise (e) 'failed'
+		let none = try await second otherwise (e) 'failed'
 				match e 'which'
 						failed(reason) then print("caught: {reason}\n")
 						refused(code) then print("refused {code}\n")
@@ -5095,13 +5103,13 @@ function main() returns ExitCode
 		arr.push(async work(-1))
 
 		let first = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
-		var batch = try await first otherwise (e) 'firstFailed'
+		let batch = try await first otherwise (e) 'firstFailed'
 				return 1
 		end 'firstFailed'
 		print("got {batch.lines.count()} {batch.tally}\n")
 
 		let second = try arr.get(1) otherwise panic("index 1 is in bounds by construction")
-		var other = try await second otherwise (e) 'failed'
+		let other = try await second otherwise (e) 'failed'
 				match e 'which'
 						failed(reason) then print("caught: {reason}\n")
 						refused(code) then print("refused {code}\n")

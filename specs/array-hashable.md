@@ -9,7 +9,7 @@ category: type-system
 
 ## Documentation
 
-Arrays conditionally implement `Hashable` and `Equatable` when their element type implements both interfaces. This enables arrays to be used as keys in `Map` and elements in `Set`.
+Arrays conditionally implement `Hashable` and `Equatable` when their element type implements both interfaces. This enables arrays to be used as keys in `Map` and elements in `Set`. A `Map` key and a `Set` element are `immutable` slots, so an array built at run time enters one frozen: `m.insert(freeze buildKey(), value: 1)`. A lookup (`get`, `contains`) takes any array.
 
 ### hash()
 
@@ -100,13 +100,17 @@ typealias Val = int(i64.min to i64.max)
 typealias IntArr = Array with Val
 typealias IntArrMap = Map with (IntArr, Val)
 
-function main() returns ExitCode
-	var m = IntArrMap.create()
+function threeKey() returns IntArr
 	var key = IntArr.create(0)
 	key.push(1)
 	key.push(2)
 	key.push(3)
-	try m.insert(key, value: 42) otherwise ignore
+	return key
+end 'threeKey'
+
+function main() returns ExitCode
+	var m = IntArrMap.create()
+	try m.insert(freeze threeKey(), value: 42) otherwise ignore
 	var lookup = IntArr.create(0)
 	lookup.push(1)
 	lookup.push(2)
@@ -335,7 +339,7 @@ end 'numbered'
 
 function main() returns ExitCode
 	var m = StrArrMap.create()
-	try m.insert(["p1", "p2", "p3"], value: 42) otherwise ignore
+	try m.insert(freeze numbered(1, count: 3), value: 42) otherwise ignore
 	let found = try m.get(numbered(1, count: 3)) otherwise 'notFound'
 		print("not found\n")
 		return 1
@@ -399,11 +403,17 @@ function numbered(first Val, count Val) returns StrArr
 	return arr
 end 'numbered'
 
+function seven() returns IntArr
+	var xs = IntArr.create(0)
+	xs.push(7)
+	return xs
+end 'seven'
+
 function main() returns ExitCode
 	var ints = IntArrMap.create()
-	try ints.insert([7], value: 1) otherwise ignore
+	try ints.insert(freeze seven(), value: 1) otherwise ignore
 	var strings = StrArrMap.create()
-	try strings.insert(["p1", "p2", "p3"], value: 2) otherwise ignore
+	try strings.insert(freeze numbered(1, count: 3), value: 2) otherwise ignore
 	var intProbe = IntArr.create(0)
 	intProbe.push(7)
 	let a = try ints.get(intProbe) otherwise 0
@@ -576,16 +586,17 @@ end 'Holder'
 typealias H = Holder with Val
 typealias ValArray = Array with Val
 
+function numbers() returns ValArray
+	var xs = ValArray.create(0)
+	xs.push(41)
+	xs.push(42)
+	return xs
+end 'numbers'
+
 function main() returns ExitCode
 	var holder = H.create()
-	var first = ValArray.create(0)
-	first.push(41)
-	first.push(42)
-	var second = ValArray.create(0)
-	second.push(41)
-	second.push(42)
-	holder.note(first)
-	holder.note(second)
+	holder.note(freeze numbers())
+	holder.note(freeze numbers())
 	print("{holder.seenCount()}\n")
 	return 0
 end 'main'
@@ -808,6 +819,14 @@ typealias Signed = int(-100 to 100)
 typealias SignedArray = Array with Signed
 typealias SignedArraySet = Set with SignedArray
 
+function signedKey() returns SignedArray
+	var key = SignedArray.create(0)
+	key.push(-100)
+	key.push(5)
+	key.push(100)
+	return key
+end 'signedKey'
+
 function main() returns ExitCode
 	var key = SignedArray.create(0)
 	key.push(-100)
@@ -823,7 +842,7 @@ function main() returns ExitCode
 	other.push(100)
 	let sameHash = key.hash() == probe.hash()
 	var seen = SignedArraySet.create()
-	seen.insert(key)
+	seen.insert(freeze signedKey())
 	print("{seen.contains(probe)}\n")
 	print("{seen.contains(other)}\n")
 	print("{sameHash}\n")

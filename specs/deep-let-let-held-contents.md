@@ -1,7 +1,7 @@
 ---
 feature: deep-let-let-held-contents
 status: experimental
-keywords: [let, read-only, let field, keep, mutable container, payload-free union, module let, value type]
+keywords: [let, immutable, let field, keep, mutable container, payload-free union, module let, value type]
 category: memory
 ---
 
@@ -9,36 +9,35 @@ category: memory
 
 ## Documentation
 
-A `let` field has no other writer, so a value a record keeps only in its `let` fields cannot be written through
-that record, whatever the record is later pushed into. A parameter that a function stores only into `let` fields
-of a record is therefore kept read-only: a read-only argument is accepted for it even when the record goes into a
-mutable container. A record whose fields are all `let` is a value type and goes anywhere, and so is a union whose every payload is `let`. A parameter stored
-into a `var` field is kept where something may write it, and a read-only argument is refused for it.
+A `let` field is a name that is never reassigned, and the record it holds is written like any other: a parameter a
+function stores into a `let` field of a record is kept where something may write it, and a `var` bound to the same
+record writes what the field holds. A parameter declared `immutable` takes immutable data, and a `var` field
+refuses it. A record whose fields are all `let` values is a value type and goes anywhere, and so is a union whose
+every payload is a `let` value.
 
-A payload-free case of a union held in a module-level `let` has no storage to write, so it passes every door
-that a read-only value is refused at, directly, through a call result, or through a merge.
+A payload-free case of a union held in a module-level `let` has no storage to write, so it passes every door that
+immutable data is refused at, directly, through a call result, or through a merge.
 
 ## Tests
 
-<!-- test: a-parameter-kept-only-in-a-let-field-of-a-pushed-record-takes-a-read-only-argument -->
-`Entry` keeps `name` in a `let` field and `weight` in a `var` field. The entry goes into a mutable array, yet
-`source.title`, itself read-only, is accepted as the argument for `name`.
+<!-- test: a-parameter-kept-only-in-a-let-field-of-a-pushed-record-takes-an-immutable-argument -->
+`Entry` keeps `name` in a `let` field and `weight` in a `var` field. The entry goes into a mutable array, and `source.title`, itself `immutable`, is accepted as the argument for `name`, a parameter declared `immutable`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias EntryArray = Array with Entry
 
 type Entry
-	export let name as ByteArray
+	export let name as immutable ByteArray
 	export var weight as Integer
 
-	static function create(name ByteArray) returns Self
+	static function create(name immutable ByteArray) returns Self
 		return Self{name: name, weight: 0}
 	end 'create'
 end 'Entry'
 
 type Source
-	export let title as ByteArray
+	export let title as immutable ByteArray
 
 	static function create() returns Self
 		return Self{title: b"title"}
@@ -52,7 +51,7 @@ type Registry
 		return Self{entries: EntryArray.create(0)}
 	end 'create'
 
-	function add(name ByteArray)
+	function add(name immutable ByteArray)
 		self.entries.push(Entry.create(name))
 	end 'add'
 
@@ -73,9 +72,8 @@ end 'main'
 1
 ```
 
-<!-- test: error.a-parameter-kept-in-a-var-field-of-a-pushed-record-refuses-a-read-only-argument -->
-`name` is a `var` field here, so the pushed entry is a place something may write, and the read-only `source.title`
-is refused for it.
+<!-- test: error.a-parameter-kept-in-a-var-field-of-a-pushed-record-refuses-an-immutable-argument -->
+`name` is a `var` field here, so the pushed entry holds a mutable `ByteArray`, and the `immutable` `source.title` is refused for it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -91,7 +89,7 @@ type Entry
 end 'Entry'
 
 type Source
-	export let title as ByteArray
+	export let title as immutable ByteArray
 
 	static function create() returns Self
 		return Self{title: b"title"}
@@ -123,30 +121,30 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:41:11: cannot pass a `let` field of 'source', which is read-only, to parameter 'name' of 'Registry.add', which keeps it where something may write it; pass a clone()
+error E3207: <fragment>:41:15: 'add' writes 'name' (line 30: a result read from it is stored in a writable slot (an element of the container push writes)); 'source' is immutable
 ```
 
 <!-- test: a-record-whose-fields-are-all-let-is-a-value-type-pushed-anywhere -->
-`Entry` has only `let` fields, so it is a value type: the entry is pushed into a mutable array and the read-only
-`source.title` is accepted for `name`.
+`Entry` has only `let` fields of value types, so it is a value type: the entry is pushed into a mutable array and `source.size` is accepted for `id`.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
 typealias EntryArray = Array with Entry
 
 type Entry
-	export let name as ByteArray
-	export let weight as ByteArray
+	export let id as Integer
+	export let weight as Integer
 
-	static function create(name ByteArray) returns Self
-		return Self{name: name, weight: b"0"}
+	static function create(id Integer) returns Self
+		return Self{id: id, weight: 0}
 	end 'create'
 end 'Entry'
 
 type Source
-	export let title as ByteArray
+	export let size as Integer
 
 	static function create() returns Self
-		return Self{title: b"title"}
+		return Self{size: 3}
 	end 'create'
 end 'Source'
 
@@ -157,8 +155,8 @@ type Registry
 		return Self{entries: EntryArray.create(0)}
 	end 'create'
 
-	function add(name ByteArray)
-		self.entries.push(Entry.create(name))
+	function add(id Integer)
+		self.entries.push(Entry.create(id))
 	end 'add'
 
 	function total() returns ElementIndex
@@ -169,7 +167,7 @@ end 'Registry'
 function main() returns ExitCode
 	var registry = Registry.create()
 	let source = Source.create()
-	registry.add(source.title)
+	registry.add(source.size)
 
 	return registry.total() as ExitCode
 end 'main'
@@ -228,17 +226,15 @@ end 'main'
 ```
 
 <!-- test: error.a-union-case-with-a-payload-in-a-module-let-is-refused-at-every-door -->
-The same three doors as the case above with a module-level `let` that holds a case with a payload. `Target` has a
-payload that is not `let`, so the value is not inert: it is read-only, and a `var` field that keeps it is a second
-holder that could write it. The direct pass, the call result and the merge are each refused.
+The same three doors as the case above with a module-level `let` that holds a case with a payload. `Target` has a `ByteArray` payload, so the value is `immutable` image data, and a `var` field that keeps it is a second holder that could write it. The direct pass, the call result and the merge are each refused.
 
 ```maxon
 union Target
 	none
-	named(label String)
+	named(label ByteArray)
 end 'Target'
 
-let Named = Target.named("x")
+let Named = Target.named("x".toByteArray())
 
 type Walker
 	var target as Target
@@ -259,7 +255,7 @@ type Walker
 	end 'aimed'
 end 'Walker'
 
-function fallback() returns Target
+function fallback() returns immutable Target
 	return Named
 end 'fallback'
 
@@ -274,14 +270,42 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:34:9: cannot pass 'Named', which is read-only (a module-level `let`), to parameter 'next' of 'Walker.aim', which keeps it where something may write it; pass a clone()
-error E3078: <fragment>:35:9: cannot pass the result of 'fallback', which may share storage with a module-level `let`, to parameter 'next' of 'Walker.aim', which keeps it where something may write it; pass a clone()
-error E3078: <fragment>:37:9: cannot pass 'chosen', which is read-only (a module-level `let`), to parameter 'next' of 'Walker.aim', which keeps it where something may write it; pass a clone()
+error E3207: <fragment>:34:13: 'aim' writes 'next' (line 17: `self.target = next`); 'Named' is immutable
+error E3207: <fragment>:35:13: 'aim' writes 'next' (line 17: `self.target = next`); 'fallback()' is immutable
+error E3207: <fragment>:37:13: 'aim' writes 'next' (line 17: `self.target = next`); 'chosen' is immutable
+```
+
+<!-- test: error.a-payload-written-through-a-match-in-a-callee-refuses-a-module-let-union -->
+A `match` binding is a payload of its scrutinee's box, so the callee that pushes onto `label` writes the box it was handed, and the module-level `let` that box is cannot be handed to it.
+
+```maxon
+union Target
+	none
+	named(label ByteArray)
+end 'Target'
+
+let Named = Target.named("x".toByteArray())
+
+function poke(t Target)
+	match t 'm'
+		none then break
+		named(label) then label.push(65)
+	end 'm'
+end 'poke'
+
+function main() returns ExitCode
+	poke(Named)
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:17:7: 'poke' writes 't' (line 12: `label.push(65)`); 'Named' is immutable
 ```
 
 <!-- test: an-all-let-union-is-a-value-type-pushed-anywhere -->
-Every payload of `Step` is `let`, so a `Step` is a value type exactly as an all-`let` record is: the read-only
-`route.first` is pushed into a mutable array and nothing else can write it.
+Every payload of `Step` is `let`, so a `Step` is a value type exactly as an all-`let` record is: `route.first`
+is pushed into a mutable array and nothing can write it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -312,9 +336,8 @@ end 'main'
 1
 ```
 
-<!-- test: error.a-union-with-a-var-payload-is-not-a-value-type -->
-The same union with one payload that is not `let` can have a second writer, so the read-only `route.first` is
-refused when it is pushed into the mutable array.
+<!-- test: a-union-with-a-var-payload-is-pushed-anywhere -->
+The same union with one payload that is not `let` is not a value type, and the `route.first` is pushed into the mutable array all the same: the `let` field only fixes the name, and the array shares the union.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -341,6 +364,6 @@ function main() returns ExitCode
 	return steps.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/deep-let-let-held-contents/error.a-union-with-a-var-payload-is-not-a-value-type.maxon:21:8: cannot store a value read out of a `let` field into mutable place 'an element of the container push writes'; use clone()
+```exitcode
+1
 ```

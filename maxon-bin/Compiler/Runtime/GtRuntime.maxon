@@ -1611,7 +1611,7 @@ end 'GtIoOperation'
 
 // The suffix text each operation prints. The ONE place an operation is spelled — `registerIoOperationTags`
 // reads it for every case, so a new case cannot be added without one.
-function ioOperationSuffixText(operation GtIoOperation) returns ByteArray
+function ioOperationSuffixText(operation GtIoOperation) returns immutable ByteArray
 	return match operation 'operation'
 		fileExists gives GtTraceFileExistsSuffixText
 		netConnect gives GtTraceNetConnectSuffixText
@@ -1637,7 +1637,7 @@ let GtTraceTagPrefix = "__at_tag_"
 // digits and its newlines and NOTHING ELSE, because every tag write handed `osWriteStderr` a small integer as
 // a pointer. A raw blob has no such indirection: `rdataAddr` IS the address of the bytes.
 export type GtTraceTag
-	export let label as ByteArray
+	export let label as immutable ByteArray
 	export let length as FullRangeInt
 
 	export static function create(label ByteArray, length FullRangeInt) returns GtTraceTag
@@ -1719,7 +1719,9 @@ end 'GtTracing'
 
 // One tag's bytes, interned in `.rdata` and deduped by content like every other rdata constant.
 function registerGtTraceTag(globalData GlobalDataTable, text ByteArray) returns GtTraceTag
-	return GtTraceTag.create(globalData.registerRdataConstant(GtTraceTagPrefix, bytes: text, kind: RdataPayloadKind.traceTag).toByteArray(), length: text.count() as FullRangeInt)
+	let tagLabel = globalData.registerRdataConstant(GtTraceTagPrefix, bytes: text, kind: RdataPayloadKind.traceTag)
+
+	return GtTraceTag.create(freeze tagLabel.toByteArray(), length: text.count() as FullRangeInt)
 end 'registerGtTraceTag'
 
 // ⭐ The operation suffixes in `GtIoOperation` ORDINAL ORDER, because the walk IS `allCases` — the enum's
@@ -2212,7 +2214,7 @@ end 'runtimeThrowsClause'
 // tomorrow has no map at all. A union rather than an empty `ByteArray`, so the absent state is structurally
 // distinct instead of a sentinel.
 export union RuntimeCalleeSourceMethod
-	found(let method ByteArray)
+	found(let method immutable ByteArray)
 
 	// ⚠⚠ **TWO SOURCE SPELLINGS, ONE CALLEE.** Where one runtime entry serves two source methods the
 	// callee is a LOSSY KEY and no map over it can be injective. Quoting ONE of the two is a false
@@ -2220,7 +2222,7 @@ export union RuntimeCalleeSourceMethod
 	// construct the program does not contain". So the answer names BOTH, which is true whichever was
 	// written, and the message says why the compiler cannot narrow it. No family produces it (see
 	// `ManagedFileRuntime`'s source-method map).
-	sharedByTwoSpellings(let spelling ByteArray, let alsoSpelled ByteArray)
+	sharedByTwoSpellings(let spelling immutable ByteArray, let alsoSpelled immutable ByteArray)
 	notFound
 end 'RuntimeCalleeSourceMethod'
 
@@ -2855,7 +2857,7 @@ end 'GtSpawnKind'
 
 // Which entry point a kind is built under. Beside the kind rather than at the builder's `createFromStd` call,
 // because the pairing of a kind with its symbol is a fact about the kind.
-function gtSpawnNameOf(kind GtSpawnKind) returns ByteArray
+function gtSpawnNameOf(kind GtSpawnKind) returns immutable ByteArray
 	return match kind 'kind'
 		coroutine gives GtSpawnName
 		greenThread gives GtSpawnGreenName
@@ -3153,7 +3155,7 @@ export enum GtReadyGate
 	alreadyRunnable
 end 'GtReadyGate'
 
-function gtReadyNameOf(gate GtReadyGate, hold SchedLockHold) returns ByteArray
+function gtReadyNameOf(gate GtReadyGate, hold SchedLockHold) returns immutable ByteArray
 	return match gate 'gate'
 		fromWaiting gives lockHoldNameOf(hold, whenFree: GtReadyLockedName, whenHeld: GtReadyLockedHeldName)
 		alreadyRunnable gives lockHoldNameOf(hold, whenFree: GtReadyRunnableName, whenHeld: GtReadyRunnableHeldName)
@@ -6395,10 +6397,8 @@ function emitGtRenouncePark(module StdModule, func IrFunction, ids ValueMinter, 
 end 'emitGtRenouncePark'
 
 // A block label with a per-arm suffix, so the renounce arms' blocks are distinguishable in a dump.
-function bytesWithSuffix(base ByteArray, suffix ByteArray) returns ByteArray
-	var out = base.clone()
-	out.append(suffix)
-	return out
+function bytesWithSuffix(base ByteArray, suffix ByteArray) returns immutable ByteArray
+	return freeze "{String.from(base)}{String.from(suffix)}".toByteArray()
 end 'bytesWithSuffix'
 
 // ⭐⭐ **`__gt_runner_done(gt, heldStrand)` — THE RUNNER's HALF OF THE TEARDOWN RENDEZVOUS: this party is
@@ -10217,7 +10217,7 @@ end 'emitSubpFreeSetupScratch'
 // `"NUL"` in a fresh slab buffer, as a NUL-terminated UTF-8 path. Three stores and a
 // slab-zeroed terminator — a four-byte `.rdata` blob would need a relocation and a symbol for what is three
 // immediates.
-function subpNullDeviceName(commandShape SubprocessCommandShape) returns ByteArray
+function subpNullDeviceName(commandShape SubprocessCommandShape) returns immutable ByteArray
 	return match commandShape 'shape'
 		commandLine gives SubpWindowsNullDeviceName
 		argumentVector gives SubpPosixNullDeviceName
@@ -10516,7 +10516,7 @@ enum SubpWideRequestStep
 	release
 end 'SubpWideRequestStep'
 
-function subpWideRequestStepName(step SubpWideRequestStep) returns ByteArray
+function subpWideRequestStepName(step SubpWideRequestStep) returns immutable ByteArray
 	return match step 'name'
 		widen gives SubpWidenRequestName
 		release gives SubpFreeWideRequestName
@@ -10628,7 +10628,7 @@ function emitSubpCloseStdinWriteOwned(module StdModule, func IrFunction, ids Val
 	var contended = module.addBlock(func, label: b"rlsstdinwait", heat: BlockHeat.normal)
 
 	module.setTerminator(cur, op: StdOp.branch(attempt.id))
-	var closed = emitSubpCloseStdinIfIdle(module, func: func, ids: ids, cur: attempt, slot: slot, whenLost: contended)
+	let closed = emitSubpCloseStdinIfIdle(module, func: func, ids: ids, cur: attempt, slot: slot, whenLost: contended)
 	module.appendOp(contended, op: StdOp.call(ids.mint(), callee: GtReschedName, args: ValueIdArray.create(0)))
 	module.setTerminator(contended, op: StdOp.branch(attempt.id))
 

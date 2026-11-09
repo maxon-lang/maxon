@@ -335,7 +335,7 @@ type HeldWorkspace
 		let rootPath = heldRootOf(root).spelled.toString()
 
 		writeProjectLoadingNotification(workspace.writer, rootPath: rootPath, loading: true)
-		var swept = self.builtSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
+		let swept = self.builtSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
 		writeProjectLoadingNotification(workspace.writer, rootPath: rootPath, loading: false)
 
 		return swept
@@ -743,7 +743,7 @@ end 'writeProjectLoadingNotification'
 module function lspProjectCheckerFor(workspace LspWorkspaceState, name RootName, tiers LibraryTiers) returns LspProjectChecker.handle
 	var root = workspace.held.rootAt(name)
 
-	return root.checker.obtained(function() gives spawn LspProjectChecker.create(freeze name.spelled.clone(), stdlibDir: freeze tiers.stdlibDir.clone(), runtimeDir: freeze tiers.runtimeDir.clone(), writer: workspace.writer.clone()))
+	return root.checker.obtained(function() gives spawn LspProjectChecker.create(name.spelled, stdlibDir: tiers.stdlibDir, runtimeDir: tiers.runtimeDir, writer: workspace.writer.clone()))
 end 'lspProjectCheckerFor'
 
 union HeldWorkspaceSlot
@@ -873,7 +873,7 @@ module type RecentHeldRoots
 	end 'rootSpelledAs'
 
 	function recentAt(key String) returns HeldRoot throws MapError
-		var held = try self.roots.get(key)
+		let held = try self.roots.get(key)
 		self.use(key)
 
 		return held

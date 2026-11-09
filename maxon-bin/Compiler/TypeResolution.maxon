@@ -180,10 +180,10 @@ end 'builtinTypeNameTag'
 export union AliasSlotIdentity
 	// The DIGEST of `(declaring type, parameter name)` — not an interner id at all, which is why it needs
 	// a column of its own rather than the name slot.
-	typeParamToken(token TypeParamId)
+	typeParamToken(let token TypeParamId)
 
 	// The whole-program `GenericInstanceId` keying `GenericInstanceRegistry`.
-	genericInstance(id GenericInstanceId)
+	genericInstance(let id GenericInstanceId)
 
 	// The tag and the name are the whole of the slot — every primitive, every `named`/`structRef`/`function`/
 	// `interfaceRef`, and `void`.
@@ -519,7 +519,7 @@ function functionAliasShapesIn(project Project, signatures ProgramSignatures, fo
 			preErasedNames.push(param.aggregateName)
 
 			match signatures.declaredAliasOfSpelling(param.typeName, readerFilePath: alias.declFilePath) 'rangedSpelling'
-				declared then spellings.push(param.typeName.clone())
+				declared then spellings.push(param.typeName)
 				undeclared then spellings.push(EmptySourceText)
 			end 'rangedSpelling'
 		end 'eachParam'
@@ -609,7 +609,7 @@ module union DeclaredFunctionShape
 	undeclared
 end 'DeclaredFunctionShape'
 
-function signatureReturnIdentity(registry FunctionTypeRegistry, sig FuncSignature) returns ByteArray
+function signatureReturnIdentity(registry FunctionTypeRegistry, sig FuncSignature) returns immutable ByteArray
 	if sig.offeredResultAlias.isEmpty() 'itsOwnResult'
 		return sig.returnAggregateName
 	end 'itsOwnResult'
@@ -620,7 +620,7 @@ function signatureReturnIdentity(registry FunctionTypeRegistry, sig FuncSignatur
 		return sig.returnAggregateName
 	end 'theAliasRecordsNoIdentity'
 
-	return offered.returnAggregateName.clone()
+	return offered.returnAggregateName
 end 'signatureReturnIdentity'
 
 // The registries this reads travel as one `FunctionTypeRegistry` — see there for why all four move together.
@@ -656,7 +656,7 @@ end 'functionTypeRegistryOf'
 // close. A value merge asks it too, of parse-time shapes; FunctionShape states why a door and a
 // merge get different rules.
 export function functionShapesAgree(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, readerFilePath FilePath) returns bool
-	return shapesAgreeUnder(registry, signatures: signatures, declared: declared, got: got, pending: sharedEmptyFunctionTypePairs, readerFilePath: readerFilePath)
+	return shapesAgreeUnder(registry, signatures: signatures, declared: declared, got: got, pending: FunctionTypePairArray.create(0), readerFilePath: readerFilePath)
 end 'functionShapesAgree'
 
 let MaxNestedFunctionTypeDepth = 8
@@ -758,7 +758,7 @@ function positionAgreesUnderSomeInstantiation(registry FunctionTypeRegistry, sig
 		return maxonTypeTag(slotType) == ValueTypeTag.typeParameter or maxonTypeTag(sourceType) == ValueTypeTag.typeParameter or maxonTypeTag(slotType) == maxonTypeTag(sourceType)
 	end 'aWildcardPosition'
 
-	return resolvedTypesMatch(registry, signatures: signatures, declared: slotType, got: sourceType, pending: sharedEmptyFunctionTypePairs, readerFilePath: readerFilePath) and signatures.identityFitsSlot(sourceIdentity, slot: slotIdentity, readerFilePath: readerFilePath)
+	return resolvedTypesMatch(registry, signatures: signatures, declared: slotType, got: sourceType, pending: FunctionTypePairArray.create(0), readerFilePath: readerFilePath) and signatures.identityFitsSlot(sourceIdentity, slot: slotIdentity, readerFilePath: readerFilePath)
 end 'positionAgreesUnderSomeInstantiation'
 
 function writtenParameterFlowsBack(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, index ParamCount, pending FunctionTypePairArray, readerFilePath FilePath) returns bool
@@ -880,17 +880,13 @@ end 'unerasedType'
 
 // One position's entry in a shape's pre-erasure identity column. The two columns are built in lockstep with
 // `paramTypes` at both fill sites, so an out-of-range read is a compiler bug rather than a program's.
-export function shapeParamIdentity(shape FunctionShape, index ParamCount) returns ByteArray
+export function shapeParamIdentity(shape FunctionShape, index ParamCount) returns immutable ByteArray
 	return try shape.paramAggregateNames.get(index) otherwise panic("shapeParamIdentity: paramAggregateNames.get OOB at {index} below count {shape.paramAggregateNames.count()} — a shape's parameter columns are built in lockstep with its {shape.paramTypes.count()} parameter type(s)")
 end 'shapeParamIdentity'
 
-export function shapeParamSpelling(shape FunctionShape, index ParamCount) returns ByteArray
+export function shapeParamSpelling(shape FunctionShape, index ParamCount) returns immutable ByteArray
 	return try shape.paramDeclaredNames.get(index) otherwise panic("shapeParamSpelling: paramDeclaredNames.get OOB at {index} below count {shape.paramDeclaredNames.count()} — a shape's parameter columns are filled in lockstep with paramTypes")
 end 'shapeParamSpelling'
-
-// The pending list a top-level comparison starts from. ONE object for the whole compile and NEVER mutated
-// (`pendingWithPair` builds a fresh array): a nested function type is rare, so the overwhelming majority of comparisons must allocate nothing at all.
-let sharedEmptyFunctionTypePairs = FunctionTypePairArray.create(0)
 
 // Two resolved RETURN slots are the same slot: both return nothing, or both return the same type. A `void`
 // meeting a value (or the reverse) is a real disagreement — a call site that expects a result register from
@@ -1008,7 +1004,7 @@ end 'nestedFunctionTypesAgree'
 // the NAME, because that is what the registries are keyed by. All of them read it here: the ids are remapped
 // project-global at merge, so one table answers for all three passes and none of them can resolve it its own
 // way. SemanticCheck and LowerMaxonToStd each had a private copy of exactly this before.
-export function functionTypeNameOf(registry FunctionTypeRegistry, nameId TypeNameId) returns ByteArray
+export function functionTypeNameOf(registry FunctionTypeRegistry, nameId TypeNameId) returns immutable ByteArray
 	return try registry.typeNames.nameOf(nameId) otherwise panic("functionTypeNameOf: type-name id {nameId} is not in the project interner — a function type's name id is remapped project-global at merge (mergeArtifact)")
 end 'functionTypeNameOf'
 
@@ -1055,7 +1051,7 @@ function pairIsUnderComparison(pending FunctionTypePairArray, declaredName ByteA
 	return false
 end 'pairIsUnderComparison'
 
-// `pending` plus this pair, as a FRESH array — `sharedEmptyFunctionTypePairs` and every list above this one
+// `pending` plus this pair, as a FRESH array — every list above this one
 // in the descent must stay untouched, because a sibling parameter compared after this one is not under it.
 function pendingWithPair(pending FunctionTypePairArray, declaredName ByteArray, gotName ByteArray) returns FunctionTypePairArray
 	var extended = FunctionTypePairArray.create(pending.count() + 1, zeroed: false)
@@ -1125,7 +1121,7 @@ function checkLayoutFieldTypes(project Project, signatures ProgramSignatures, la
 end 'checkLayoutFieldTypes'
 
 function checkEnumPayloadTypes(project Project, signatures ProgramSignatures)
-	var layouts = EnumLayoutArray.create(project.enumTypes.count(), zeroed: false)
+	var layouts = FrozenEnumLayoutArray.create(project.enumTypes.count(), zeroed: false)
 
 	for (_, layout) in project.enumTypes 'eachDeclaredEnum'
 		layouts.push(layout)
@@ -1164,7 +1160,7 @@ function syncResolvedSignature(project Project, func IrFunction)
 		return
 	end 'aRefusedDuplicate'
 
-	var sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
+	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
 	var resolved = FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, returnBrand: sig.returnBrand, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames, selfSpelledParams: sig.selfSpelledParams, offeredResultAlias: sig.offeredResultAlias, byRefParams: sig.byRefParams, returnCapability: sig.returnCapability, paramCapabilities: sig.paramCapabilities, selfCapability: sig.selfCapability, writtenParams: sig.writtenParams)
 	project.funcSignatures.upsert(func.name, value: resolved)
 end 'syncResolvedSignature'
@@ -1219,7 +1215,7 @@ end 'resolveReturnType'
 // be erased exactly as this pass erased every other slot of the shapes being compared. A second erasure
 // written there would be a second answer to "what does this name denote", which is the disagreement this
 // file's header is about.
-export function resolveType(project Project, signatures ProgramSignatures, t MaxonType, readerFilePath FilePath, site PositionKey = PositionlessSite, declaration ByteArray = EmptySourceText) returns MaxonType
+export function resolveType(project Project, signatures ProgramSignatures, t MaxonType, readerFilePath FilePath, site PositionKey = PositionlessSite, declaration immutable ByteArray = EmptySourceText) returns MaxonType
 	match t 'r'
 		boolean then return t
 		integer then return t
@@ -1700,7 +1696,7 @@ function reportUnknownDeclaredType(project Project, typeName String, readerFileP
 			panic("resolveType: {message} in a slot of '{readerFilePath.toString()}' that has no source position and belongs to no declaration being resolved — a late reader hands this door only a type already settled, so the type is a compiler bug")
 		end 'noDeclarationToDeferTo'
 
-		project.unknownTypeReports.unplaced.push(UnplacedUnknownType.create(message, declaration: declaration.clone(), readerFilePath: readerFilePath))
+		project.unknownTypeReports.unplaced.push(UnplacedUnknownType.create(message, declaration: declaration, readerFilePath: readerFilePath))
 		return
 	end 'copiedByTheCompiler'
 
@@ -1728,6 +1724,6 @@ export function denotedAliasForm(signatures ProgramSignatures, name ByteArray, r
 	match form 'form'
 		functionAlias then return MaxonType.function(into.intern(signatures.declaredIdentityOfSpelling(name, declFilePath: readerFilePath)))
 		genericAlias then return signatures.instanceDenotedType(signatures.genericAliasInstanceFrom(name, readerFilePath: readerFilePath), into: into)
-		tupleAlias then return MaxonType.structRef(into.intern(signatures.tupleAliasTargetFrom(name, readerFilePath: readerFilePath)))
+		tupleAlias then return signatures.tupleAliasDenotedType(name, readerFilePath: readerFilePath, into: into)
 	end 'form'
 end 'denotedAliasForm'

@@ -210,7 +210,7 @@ enum HoverDeclarationScope
 end 'HoverDeclarationScope'
 
 union HoverMemberOwner
-	declaredIn(let name ByteArray)
+	declaredIn(let name immutable ByteArray)
 	notAMemberLine
 end 'HoverMemberOwner'
 
@@ -266,7 +266,7 @@ let NoDeclarationHopsLeft = 0
 // compiler's diagnostic renderer cannot supply it: a generic instance renders there as the bare word
 // `struct` (`IrInterface.maxon` says so), which would tell an editor user nothing.
 union HoverType
-	named(let base ByteArray, let rendered String, let written ByteArray)
+	named(let base immutable ByteArray, let rendered String, let written immutable ByteArray)
 	unknown
 end 'HoverType'
 
@@ -286,7 +286,7 @@ union HoverTypeParamSite
 end 'HoverTypeParamSite'
 
 union HoverDeclaringType
-	at(let owner ByteArray)
+	at(let owner immutable ByteArray)
 	none
 end 'HoverDeclaringType'
 
@@ -340,7 +340,7 @@ module type HoverDocument
 	let bytes as ByteArray
 	module let tokens as TokenArray
 	let lines as LspLineIndex
-	let keywords as KeywordTable
+	let keywords as immutable KeywordTable
 	var corpus as LspCorpus
 
 	// A stdlib document read to answer a hover elsewhere. Its bare names are the library's own, and a
@@ -372,14 +372,14 @@ module type HoverDocument
 		return Self.assembled(self.text, bytes: self.bytes, tokens: self.tokens, lines: self.lines, keywords: self.keywords, corpus: self.corpus, consultedLibrary: true)
 	end 'consultedAsLibrary'
 
-	function compilerNameOf(name ByteArray) returns ByteArray
+	function compilerNameOf(name ByteArray) returns immutable ByteArray
 		return match corpus 'held'
 			loaded(_, signatures, _) gives signatures.interfaceMap().libraryNameOf(name)
 			unavailable gives name
 		end 'held'
 	end 'compilerNameOf'
 
-	function spelledInThisDocument(name ByteArray) returns ByteArray
+	function spelledInThisDocument(name ByteArray) returns immutable ByteArray
 		return self.naming.roster.bareSpellingOf(name) if self.consultedLibrary else name
 	end 'spelledInThisDocument'
 
@@ -871,7 +871,7 @@ module type HoverDocument
 			unknown then break
 		end 'qualified'
 
-		let base = sourceBetween(opening.startByte, endByte: tokenAt(nameEnd).endByte).toByteArray()
+		let base = freeze sourceBetween(opening.startByte, endByte: tokenAt(nameEnd).endByte).toByteArray()
 
 		return self.writtenType(base, rendered: sourceBetween(opening.startByte, endByte: typeEndByte(index)))
 	end 'declaredTypeAt'
@@ -885,7 +885,7 @@ module type HoverDocument
 
 	function chainTypeEndingAt(signatures ProgramSignatures, readerPath FilePath, last ElementIndex) returns HoverType
 		let declaration = try nameableQualifiedTypeEndingAt(tokens, index: last, signatures: signatures, readerFilePath: readerPath) otherwise return HoverType.unknown
-		let declared = declaration.nominalNameOr(declaration.written)
+		let declared = nominalNameOr(declaration.kind, name: declaration.name, spelling: declaration.written)
 
 		return HoverType.named(declared, rendered: String.from(declared), written: declared)
 	end 'chainTypeEndingAt'
@@ -1504,7 +1504,7 @@ module type HoverDocument
 		end 'ofType'
 	end 'resolvedTypeName'
 
-	function resolvedBaseName(base ByteArray) returns ByteArray
+	function resolvedBaseName(base ByteArray) returns immutable ByteArray
 		match aliasTargetHere(base) 'inThisDocument'
 			at(target) then return tokenAt(target).value
 			none then return corpusBaseName(base)
@@ -1543,7 +1543,7 @@ module type HoverDocument
 		return HoverDeclarationSite.at(target)
 	end 'aliasTargetAt'
 
-	function corpusBaseName(base ByteArray) returns ByteArray
+	function corpusBaseName(base ByteArray) returns immutable ByteArray
 		var heldCorpus = self.corpus
 
 		match heldCorpus 'held'

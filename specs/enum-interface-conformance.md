@@ -344,12 +344,13 @@ end 'main'
 40
 ```
 
-<!-- test: error.an-enum-conformer-writing-a-let-argument-is-refused -->
+<!-- test: an-enum-conformer-writing-a-let-argument-is-written -->
 ⭐⭐ **THE REQUIREMENT'S DECLARATION REACHES THE ENUM CONFORMER TOO.** `through(g Grower, dest IntArray)`
 names no callee — the jump goes through the witness table — so what says it writes `dest` is the requirement,
-which declares its `dest` `mutable`. `Step.grow` spells it the same and pushes into it,
-therefore `through` writes its `dest`, therefore passing a `let`-bound array is **E3159**. The same
-program with a `type` conformer is `where-clauses.md`'s `witness-mutation-of-let-argument-refused`.
+which declares its `dest` `mutable`. `Step.grow` spells it the same and pushes into it, therefore `through`
+writes its `dest`. A `let`-bound array is written in place and never rebound, so passing one is accepted and the
+push lands in it. The same program with a `type` conformer is `where-clauses.md`'s
+`witness-mutation-of-let-argument-is-written`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -377,13 +378,13 @@ function main() returns ExitCode
 	return try a.get(0) otherwise 55
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:24:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in main); pass a clone()
+```exitcode
+9
 ```
 
 <!-- test: an-enum-conformer-writing-a-var-argument-is-allowed -->
-⭐ **THE CONTROL FOR THE REFUSAL ABOVE: THE SAME PROGRAM WITH `var a`.** E3159 is about the BINDING and
-never about the route, so a refusal that fired on the enum dispatch rather than on the subject would
+⭐ **THE TWIN OF THE CASE ABOVE: THE SAME PROGRAM WITH `var a`.** The write reaches the array the BINDING names and
+never depends on the route, so a refusal that fired on the enum dispatch rather than on the subject would
 take this program with it and nothing else here would notice. Answers 9 — the push happened, through
 the enum's witness table, into an array the program declared mutable.
 ```maxon

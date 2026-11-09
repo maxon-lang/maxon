@@ -37,6 +37,34 @@ release's version as its heading when the release is cut.
   throw these. A `match` over `SubprocessError` that lists every case is no longer exhaustive (E2026).
   Fix: add arms for `treeNotEnded` and `detachRefused`; code that told these failures apart by the reason text
   of `ioFailed` or `spawnFailed` matches the cases.
+- `let` means the name is never reassigned, so a `var` that is never reassigned or mutated is E3077 whatever
+  it is bound from. A `var` bound from state something else writes (`var node = holder.box`), or from a
+  read-only value, compiled before only because a `let` there was refused.
+  Fix: write `let` (the compiler lists each site).
+- Reassigning a `let` is E2013 with the message `'x' is a let and cannot be reassigned` (`'f' is a let field and
+  cannot be reassigned` for a field), and passing a `let` to a `mutable` parameter is E2013 (``'n' is a let and
+  cannot be passed to the `mutable` parameter 'x'; bind it to a `var` ``), where it was E3159.
+  Fix: expect E2013 wherever a script or test matches the code or the message; bind the value to a `var` to
+  pass it to a `mutable` parameter.
+- Constant data is `immutable`: a `let` bound to a literal, a `b"…"` byte string, a constant record or array
+  literal or another constant `let` (module, `static`, field or local), and every inline `b"…"` literal. Storing
+  one into a plain `ByteArray` field, array element or union payload is E3196, returning one from an unmarked
+  result is E3209, and writing through it, passing it to a parameter the callee writes, or writing a `var` bound
+  to a literal is E3207; each compiled before.
+  Fix: declare the holder `immutable ByteArray` (a field, an `Array with immutable ByteArray` element, a union
+  payload `named(let name immutable ByteArray)`) and the result `returns immutable ByteArray`; to get a mutable
+  array build it with `ByteArray.create` and `push`, or `"text".toByteArray()`, or take `.clone()`.
+- A `Map` key and a `Set` element are `immutable` slots: `Map.insert`, `Map.upsert` and `Set.insert` take an
+  `immutable` key or element, so a record or array key built at run time is E3207 until it is frozen. Numbers,
+  `String` and other value types need nothing.
+  Fix: write `freeze` before the fresh key or element (`counts.upsert(freeze ByteArray.create(3), value: 7)`).
+- A record whose fields are all `let` is immutable only when every field's type is a value type or an immutable
+  aggregate, so a record with a `let` array field is no longer immutable data: handing it to an `immutable`
+  parameter, or sending it as `immutable`, is E3207.
+  Fix: write `freeze` before the value.
+- The `CharacterSet` presets are `public static let` constants, so `CharacterSet.whitespaces()` is refused.
+  Fix: drop the parentheses (`CharacterSet.whitespaces`, `CharacterSet.decimalDigits`, `CharacterSet.letters`, …);
+  `CharacterSet.from(chars)` is unchanged.
 - An `Array` or `ByteArray` is created with a capacity: `Items.create()` with no argument is E3195.
   Fix: write `create(0)` for an empty array, `create(n)` for `n` zero elements in one allocation, or
   `create(n, zeroed: false)` for an empty array with room for `n`; a collection whose length is fixed after the
@@ -109,14 +137,15 @@ release's version as its heading when the release is cut.
 - A `match` payload binding wears the typealias its payload was declared with, as the union's declaring
   file resolves it, so passing it where another typealias of the same instance is expected is E3005.
   Fix: convert the binding with `as`, or declare the parameter with the payload's typealias.
-- A tuple holding a value read out of a `let` field, a `let` payload or a read-only element is read-only
-  wherever it goes, a tuple a call returns included. Binding it, or one of its read-only elements, to a `var`, assigning
+- A tuple holding a value read out of read-only data, such as a `readonly` element or a module-level `let`
+  built by a call, is read-only wherever it goes, a tuple a call returns included. Binding it, or one of its read-only elements, to a `var`, assigning
   it to existing `var` names, storing it into a `var` field or an array, or passing it to a function that
   writes it is E3078 (E3159 for the call); each of these compiled before.
   Fix: bind it with `let`, or take a `.clone()` of the elements.
 
-- Passing a `let` to a function whose result holds a closure capturing that parameter — in a container,
-  a record or bare — is E3078, also when the result is bound by a `let` and the closure only reads.
+- Passing read-only data, such as a `readonly` element or a module-level `let` built by a call, to a function
+  whose result holds a closure capturing that parameter — in a container, a record or bare — is E3078, also
+  when the result is bound by a `let` and the closure only reads.
   Fix: pass a `clone()`.
 - An element of another enum stored into an array by `push`, `set`, `insert` or `fill`, or written in an
   array literal, is refused (E3005).
@@ -161,9 +190,8 @@ release's version as its heading when the release is cut.
   string literal or a comment is E1010 (`Unexpected character`); the lexer skipped it before.
   Fix: delete the character, or move it into a string literal or a comment.
 - A fresh tuple or record that holds a record a `var` of the function may still write
-  is E3078 when it is stored into a `let` field, a `let` payload or a `readonly` element, or passed to a
-  parameter that stores it there (`Frozen.create((Box.create(1), id(p)))` with `p` a `var` written later);
-  it compiled before, with the `let` field's contents writable through `p`.
+  is E3078 when it is stored into a `readonly` element, or passed to a parameter that stores it there, with
+  `p` a `var` written later; it compiled before, with the element's contents writable through `p`.
   Fix: hold a `.clone()` of the record, or a record of its own.
 - A function value fits a function type only by variance: a read-only parameter may be wider than the
   type's, a `mutable` parameter must be the same type, and a result may be narrower.
@@ -314,8 +342,8 @@ release's version as its heading when the release is cut.
   Fix: write `mutable` on a value-type parameter (a number, `bool`, an enum or `String`) the function must
   reassign, as in `function bump(n mutable Count)`, or copy the parameter into a local `var` and reassign the
   local. A record-type parameter is never rebound; copy it into a local `var`.
-- A `mutable` parameter takes a `var`, a field or an element that is writable: a literal, an expression or a
-  `let` handed to it is E3159, where a literal or an expression was given a temporary. A function with a
+- A `mutable` parameter takes a `var`, a field or an element that is writable: a literal or an expression
+  handed to it is E3159, where it was given a temporary, and a `let` handed to it is E2013. A function with a
   `mutable` parameter fits only a function type that spells `mutable` at that position (E3005), and a
   message or factory parameter cannot be `mutable` (E2010).
   Fix: pass a `var`; write the marker in the function type, as in `typealias Step = function(mutable Count)`;
@@ -430,15 +458,18 @@ release's version as its heading when the release is cut.
 - A function type and an interface requirement are read-only and neither wait nor yield. A function value,
   closure or conformer that writes a parameter, its receiver or a capture the boundary does not declare, or
   that may wait or yield, is E3210, and a `mutates captures` value called through frozen or read-only data is
-  E3211. The library's own boundaries are declared the same way: `Iterator.advance`,
-  `BidirectionalIterator.retreat` and `LogHandler.handle` are `mutable self`, `HttpHandler.handle` takes
+  E3211, inside a `modify` block as well when the value came from the data the block holds. A closure that
+  builds a record from its captures counts as writing them. The library's own boundaries are declared the same
+  way: `Iterator.advance`, `BidirectionalIterator.retreat` and `LogHandler.handle` are `mutable self`,
+  `HttpHandler.handle` takes
   `exchange mutable HttpExchange`, and `Array.SortComparator` and the other library function types do not
   declare `mutates captures`.
   Fix: declare what the callee does on the boundary: `mutable` on the parameter (`function(mutable Row)`),
   `mutable self` on the requirement (`function grow(mutable self, by Tally)`), `mutates captures` after the
-  result of a function type whose closures write what they capture. Spell `mutable` on an `HttpHandler`
-  conformer's `exchange` parameter. A callee that waits on a reply or awaits a coroutine cannot stand behind a
-  function type or requirement: start the wait in the caller.
+  result of a function type whose closures write what they capture or build a record from it; declare
+  `mutable self` on the interface requirement whose conformer's result holds data from its receiver (E3210).
+  Spell `mutable` on an `HttpHandler` conformer's `exchange` parameter. A callee that waits on a reply or
+  awaits a coroutine cannot stand behind a function type or requirement: start the wait in the caller.
 - `keep`, `sole`, `returns sole` and `returns readonly` are removed, along with E2076 and E3189, and fail as
   any stray word does. A message or factory parameter marked `mutable` is E2010, where it was E2076.
   Fix: delete the qualifier. A function type whose callee writes a parameter says `mutable T`; whether a
@@ -497,12 +528,10 @@ release's version as its heading when the release is cut.
   OS handle need no word.
   Fix: write `isolated T` and send a fresh value or an `isolated` local, which the sender cannot read
   afterwards, or write `immutable T` and send `freeze x.clone()`.
-- `LogHandler.handle` takes `record immutable LogRecord`, and `TextLogHandler.create` and
-  `JsonLogHandler.create` take `options immutable LogHandlerOptions`, so a handler conforming to
-  `LogHandler` declares `handle(record immutable LogRecord)` and a handler's options are frozen.
+- `LogHandler.handle` takes `record immutable LogRecord`, so a handler conforming to
+  `LogHandler` declares `handle(record immutable LogRecord)`.
   `LogRecord.create` takes `attrs isolated LogFieldArray`.
-  Fix: spell `immutable` on a `LogHandler` conformer's `record` parameter; write
-  `spawn TextLogHandler.create(freeze LogHandlerOptions.standard())`; pass `attrs` as a fresh
+  Fix: spell `immutable` on a `LogHandler` conformer's `record` parameter; pass `attrs` as a fresh
   `LogFieldArray.create(0)` call or an `isolated` local, and `freeze` a `LogRecord` before sending it to a
   handler.
 - `HttpServer.serve` takes `handler immutable HttpHandler`.
@@ -530,6 +559,42 @@ release's version as its heading when the release is cut.
   a surrogate or a malformed byte sequence typed into the source. UTF-8 has no spelling for a surrogate
   (U+D800 to U+DFFF), and such a literal used to build a `Character` or `String` holding one.
   Fix: write `\uFFFD` where a placeholder is meant; bytes that are not text are a `b"…"` literal.
+- A function that returns frozen data on one path and writable data on another, including one `return` whose
+  `if … else` or `match` gives both, hands back a read-only result to every caller: writing through it, or
+  passing it to a `mutable` parameter, is E3197 or E3207 whatever the receiver is, where only a caller whose
+  receiver was an unmarked parameter was held to it.
+  Fix: declare the function `returns immutable` when every path is frozen, or return a `.clone()` of the frozen
+  path.
+- A function declared `returns immutable` that returns one of its parameters on some path, including a
+  `return` whose `if … else` or `match` also gives frozen data, takes frozen data for that parameter, as it does
+  when it returns the parameter alone: passing a mutable value is E3207.
+  Fix: `freeze` the argument, or pass a `.clone()` of it.
+- The keys of a `Map` literal are held to `Map.upsert`'s `immutable` key like the argument of a written
+  `upsert`, so a key that something may still write, such as the fresh result of a call that returns its
+  argument, is E3207.
+  Fix: `freeze` the key where the literal writes it.
+- A `let` bound to a collection literal (a `Map`, a `FixedArray` or an array literal) is constant data, so a
+  call that writes it (`upsert`, `set`, `push`) is E3207, and a `let` bound to a `String` is a name that is
+  never reassigned, so `let s = "…"` followed by `s.append(…)` is E2013.
+  Fix: declare the name `var`, or write to a `.clone()`.
+- `freeze` of a record that is an immutable aggregate (every field a `let` of a value type or of such a
+  record) is E3200, because the record already counts as a value: `freeze LogHandlerOptions.create()`.
+  Fix: delete the `freeze`.
+- A `for` over a read-only `List` (frozen, or a module-level `let`) hands out read-only elements: writing one
+  is E3197.
+  Fix: iterate a `.clone()`, or write through a mutable list.
+- A closure that writes through a captured iterator writes the collection the iterator runs over, so a function
+  whose parameter the closure iterates takes a mutable argument: a frozen one is E3207. A union parameter is
+  judged like a record parameter, and a parameter a function passes only through a retained alias (an
+  interface-typed argument, for one) to a callee that stores or writes it is mutable only, so a read-only
+  argument is E3207.
+  Fix: pass writable data or a `.clone()`.
+- `try … otherwise <param>` joining two parameter sources is E3208 for mixed arguments (one frozen, one
+  fresh), and binding an element of an `isolated` container to a `let` or `var` outside a block is E3198.
+  Fix: `freeze` or `.clone()` one argument so both share a capability; open the container with `modify`.
+- A bare `get(…)` inside an `extension Array` or `Array` body takes the capability of the receiver, so
+  writing through its result when the receiver is frozen or read-only is E3197.
+  Fix: take a `.clone()` of the element.
 
 ## 0.5.0 — 2026-10-08
 

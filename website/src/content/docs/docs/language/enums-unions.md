@@ -453,20 +453,26 @@ enum case: `Outcome.pending`.
 Payloads may be integers, floats, booleans, strings, records, other unions and collections. An integer
 literal passed for a `float` payload widens to the float: `Reading.celsius(21)` carries `21.0`.
 
-### Read-Only Payloads
+### Payload Declarations
 
-A payload declared `let` is read-only for the whole life of the value, like a `let` field (see
-[Read-Only Values](/docs/language/memory-model/#read-only-values)). A value stored into it must be read-only, a value type, or moved in
-(**E3078** otherwise); a match binding of it is read-only, and a write through it is **E3159**. Every payload
-of a read-only union value — one held by a `let` binding, a `let` field or a module-level `let` — is read-only
-too, whatever the payload's own declaration, so binding a record out of it to a `var` is **E3078**. A
-union whose payloads are all `let` and all value types is itself a value type.
+A payload declared `let` is never reassigned for the whole life of the value, like a `let` field: assigning to
+a match binding of it is **E2013** (`'callee' is a let and cannot be reassigned`). Writes reach through it, so
+a field store or a `push` on the record or array it holds is legal. A union whose payloads are all `let` and
+all value types is itself a value type.
+
+A payload takes the capability words a field does, written before its type: `named(let text immutable
+ByteArray)`. An `immutable` payload holds frozen data. What is stored into it must be `immutable` (a `b"…"`
+literal, a constant `let`, a `freeze`d value, or data read from another `immutable` slot); a plain
+`ByteArray` is **E3196**. A payload that is not declared `immutable` cannot hold immutable data: storing a
+constant name into `named(let text ByteArray)` is **E3196** (``cannot store an immutable 'ByteArray' into
+'Label.named.text', which holds a mutable 'ByteArray'; declare the payload `immutable ByteArray` ``). A
+`match` binding of an `immutable` payload is `immutable`, so a write through it is **E3207**.
 
 ```maxon
 typealias Weight = int(0 to 100)
 
 union Op
-	call(let callee ByteArray, weight Weight)
+	call(let callee immutable ByteArray, weight Weight)
 	nop
 end 'Op'
 
@@ -530,16 +536,15 @@ end 'main'
 
 Every other scrutinee is **E2013**, and the message names the fix:
 
-- A `let` scrutinee has immutable bindings.
+- A `let` scrutinee: the union is never reassigned, so its bindings are too (`'value' is a let and cannot be
+  reassigned`).
 - An unmarked union parameter: `'value' is a payload of the by-value parameter 'b', so assigning it cannot
   reach the caller's union; mark 'b' mutable or copy it into a local var`.
 - The receiver `self`: copy the union into a local `var` and match on that.
 - A temporary, or any union nothing holds: copy it into a local `var` first.
 
-The bindings of a `let` scrutinee are also [read-only](/docs/language/memory-model/#read-only-values) all the way down, whatever each
-payload's own declaration, so a write through one is **E3159** and binding a record out of one to a `var` is
-**E3078**. Writing a field of a parameter's payload record in place (`value.count = value.count + 1`) is not
-an assignment of the binding, and it stays legal.
+Writing a field of a payload record in place (`value.count = value.count + 1`) is not an assignment of the
+binding, and it is legal whatever the scrutinee is.
 
 ### Comparing Union Values
 

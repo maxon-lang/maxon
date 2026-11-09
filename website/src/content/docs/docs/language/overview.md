@@ -211,7 +211,7 @@ else:
 | `test` | at the top level, followed by a quoted name (see [Testing](/docs/language/testing/)) |
 | `spawn` | followed by a type's static factory call, optionally after `(capacity: n)` (see [Services](/docs/language/async/#services--spawn)) |
 | `bits` | followed by `(` on the right-hand side of a typealias |
-| `view` | at the start of a statement, or after `if` or `then`, followed by a name, or by a `( … )` list and `=` (see [Views](/docs/language/variables/#views-view)) |
+| `view` | at the start of a statement, or after `if` or `then`, followed by a name, or by a `( … )` list and `=`; another spelling of `let` (see [Views](/docs/language/variables/#views-view)) |
 | `readonly` | before an element or value type argument of a container (see [Read-Only Values](/docs/language/memory-model/#read-only-values)) |
 | `mutable` | before a parameter's type, or a function-type parameter's, and as `mutable self` (see [Parameter Passing](/docs/language/functions/#parameter-passing)) |
 | `isolated`, `immutable` | before a type, and before `self` as a receiver capability; `isolated` also after `is` in a `where` constraint (see [Regions and Capabilities](/docs/language/regions/)) |
@@ -371,6 +371,11 @@ Every character becomes exactly one byte: `\xNN` is the byte `NN`, and a charact
 `U+0000` to `U+00FF` is its Latin-1 byte. A character above `U+00FF` has no single-byte encoding and is
 **E1004**. `\{` and `\}` are not valid in a byte string.
 
+Every `b"..."` literal is `immutable` image data (see [Constant Data](/docs/language/regions/#constant-data)): it allocates nothing at
+run time and nothing may write it. A mutable copy comes from `.clone()`, or from building the array with
+`ByteArray.create` and `push`; `"text".toByteArray()` makes a mutable array from text. Binding a literal with
+`var` and then writing it is refused (**E3207**).
+
 ### Array and Dictionary Literals
 
 ```maxon
@@ -385,7 +390,7 @@ var seen = AgeArray from [36, 41]      // an AgeArray that can grow
 
 The element type comes from the first element (or pair), and every later element is converted to it the
 way an argument is to its parameter: `[1.5, 1]` holds `1.0`, and `["a", 1]` is **E3005**. A `let` bound to a literal of bare numbers is a
-constant: its elements fit any element alias that admits them at each use, and it is immutable — a method
-that writes it is **E3159**. A `var` of such a literal is **E2004**: cast the numbers, or name the alias of an
+constant: its elements fit any element alias that admits them at each use, and it is `immutable` image data
+(see [Constant Data](/docs/language/regions/#constant-data)) — a method that writes it is refused (**E3207**). A `var` of such a literal is **E2004**: cast the numbers, or name the alias of an
 `Array`, `Set`, `List` or `FixedArray` (`AgeArray from [...]`). See
 [Initializing From Literals](/docs/language/composite-types/#initializing-from-literals) for literals of other collection types.

@@ -1093,10 +1093,10 @@ error E3005: <fragment>:11:4: argument type mismatch for 'source': expected 'Byt
 
 <!-- test: error.appendMemory-on-a-let-array -->
 <!-- tier: stdlib -->
-### It WRITES the receiver, so a `let` array refuses it
+### It WRITES the receiver, so an immutable array refuses it
 `appendMemory` is a receiver-writing method (`arrayMethodMutatesReceiver`), which is the same answer
-E3159 and the storage-written mask both read. Served as a member but omitted from that
-answer, this program would have compiled and silently written through an immutable binding.
+E3207 and the storage-written mask both read. Served as a member but omitted from that
+answer, this program would have compiled and silently written through an immutable array.
 ```maxon
 function main() returns ExitCode
 	let a = [1, 2]
@@ -1106,7 +1106,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:5:4: cannot write through 'a': 'a' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3207: <fragment>:5:4: 'appendMemory' needs a writable receiver; 'a' is immutable
 ```
 
 <!-- test: appendMemory-keeps-an-element-read-before-it -->
@@ -1160,7 +1160,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:4:6: cannot pass 'arr', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E3207: <fragment>:4:2: 'insert' writes its receiver (line 275: `self.resize(len + 1)`); 'arr' is immutable
 ```
 
 <!-- test: insert-keeps-an-element-read-before-it -->
@@ -1198,7 +1198,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:4:10: cannot write through 'arr': 'arr' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3207: <fragment>:4:10: 'set' needs a writable receiver; 'arr' is immutable
 ```
 
 <!-- test: set-keeps-the-element-it-displaces-readable -->
@@ -1224,7 +1224,7 @@ end 'main'
 <!-- test: error.reserve-on-a-let-array -->
 ### … and `reserve` is the FOURTH
 ⚠ `reserve` is served by the corpus declaration, whose own write mask carries the rule. `reserve` allocates
-capacity and rewrites `buffer@0`/`capacity@16`, so an immutable binding must refuse it exactly as `push`
+capacity and rewrites `buffer@0`/`capacity@16`, so an immutable array must refuse it exactly as `push`
 and `set` do.
 ```maxon
 function main() returns ExitCode
@@ -1234,7 +1234,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:4:6: cannot pass 'arr', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E3207: <fragment>:4:2: 'reserve' writes its receiver (line 328: `try managed.grow(minCapacity)`); 'arr' is immutable
 ```
 
 <!-- test: reserve-keeps-an-element-read-before-it -->
@@ -1258,7 +1258,7 @@ end 'main'
 
 <!-- test: error.clear-on-a-let-array -->
 ### … and `clear` is the FIFTH
-⚠ `clear` shortens the array and RELEASES every element on the way out, so an immutable binding must refuse
+⚠ `clear` shortens the array and RELEASES every element on the way out, so an immutable array must refuse
 it exactly as `push` and `set` do.
 
 ⛔ **A WRITE REACHING A CALLER THROUGH A METHOD'S OWN FIELD IS A USE-AFTER-FREE WHEN IT IS MISSED**, and
@@ -1273,7 +1273,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:4:6: cannot pass 'arr', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E3207: <fragment>:4:2: 'clear' writes its receiver (line 316: `managed.clear()`); 'arr' is immutable
 ```
 
 <!-- test: clear-keeps-an-element-read-before-it -->
@@ -3446,7 +3446,7 @@ error E3005: <fragment>:12:10: Value 2000 is outside the range of 'Small' (int(0
 ```
 
 <!-- test: error.an-unnamed-argument-aliasing-a-let-array-is-refused -->
-A `let` array is an immutable root: an argument that names no binding but returns the same record (`pass(a)`)
+A `let` array literal is an immutable root: an argument that names no binding but returns the same record (`pass(a)`)
 reaches the refusal `grow(a)` does.
 ```maxon
 typealias CountArray = Array with Count
@@ -3466,7 +3466,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:14:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'a' (in main); pass a clone()
+error E3207: <fragment>:14:7: 'grow' writes 'a' (line 9: `a.push(2)`); 'pass(a)' is immutable
 ```
 
 <!-- test: error.an-unnamed-receiver-aliasing-a-let-array-is-refused -->
@@ -3485,7 +3485,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:10:10: cannot write through 'pass(a)': 'a' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3197: <fragment>:10:10: cannot write 'a container' through 'a call result', which is immutable
 ```
 
 <!-- test: error.a-closure-capturing-a-let-array-cannot-write-it -->
@@ -3501,7 +3501,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:4:34: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main$closure_0); pass a clone()
+error E3197: <fragment>:4:32: cannot write 'a' through the closure that captures it: 'a' is immutable
 ```
 
 <!-- test: error.a-let-array-stored-in-a-var-struct-field-cannot-be-written-through-it -->
@@ -3525,7 +3525,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:14:17: cannot pass 'a', which is read-only (a `let` binding), to parameter 'a' of 'Holder.create', which keeps it where something may write it; pass a clone()
+error E3197: <fragment>:15:6: cannot write 'a container' through 'a call result', which is read-only
 ```
 
 <!-- test: error.a-let-array-element-in-a-dead-branch-outside-a-narrower-alias -->
@@ -3697,7 +3697,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:11:3: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'a' (in main); pass a clone()
+error E3207: <fragment>:11:3: 'grow' writes 'a' (line 5: `a.push(2)`); 'a' is immutable
 ```
 
 <!-- test: error.a-let-fixed-array-handed-to-a-function-value-that-writes-it-is-refused -->
@@ -3717,7 +3717,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:11:3: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'v' (in main); pass a clone()
+error E3207: <fragment>:11:3: 'poke' writes 'v' (it calls 'set', which writes its receiver); 'v' is immutable
 ```
 
 <!-- test: a-let-array-holding-u64-max-reads-back-u64-max -->
@@ -3923,7 +3923,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:12:28: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'a' (in main$closure_0); pass a clone()
+error E3197: <fragment>:12:29: cannot write 'a' through the closure that captures it: 'a' is immutable
 ```
 
 <!-- test: error.a-closure-handing-a-captured-let-fixed-array-to-a-function-value-is-refused -->
@@ -3944,7 +3944,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:12:28: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'v' (in main$closure_0); pass a clone()
+error E3197: <fragment>:12:29: cannot write 'v' through the closure that captures it: 'v' is immutable
 ```
 
 <!-- test: a-closure-capturing-a-var-array-may-hand-it-to-a-function-value -->

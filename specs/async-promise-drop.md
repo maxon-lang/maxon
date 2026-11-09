@@ -1167,7 +1167,7 @@ end 'main'
 ```
 
 <!-- test: async-promise-drop.error.awaiting-a-promise-held-in-a-let-field-is-refused -->
-`await` consumes the promise: it empties the slot it was read from. A `let` field is read-only, so nothing reachable through it may be written, and the await is refused. A `var` field (`a-struct-field-drops-the-promise-it-holds`) is accepted.
+`await` consumes the promise: it empties the slot it was read from. A `let` field is never reassigned, so the await is refused. A `var` field (`a-struct-field-drops-the-promise-it-holds`) is accepted.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -1190,7 +1190,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:19:10: cannot consume with 'await' a promise held in a `let` field: consuming a promise empties the slot it was read from, and nothing reachable through a read-only value may be written; hold it in a `var` field
+error E3159: <fragment>:19:10: cannot consume with 'await' a promise held in a `let` field: consuming a promise empties the slot it was read from, and a `let` field is never reassigned; hold it in a `var` field
 ```
 
 <!-- test: async-promise-drop.error.cancelling-a-promise-held-in-a-let-field-is-refused -->
@@ -1218,7 +1218,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:19:6: cannot consume with 'cancel' a promise held in a `let` field: consuming a promise empties the slot it was read from, and nothing reachable through a read-only value may be written; hold it in a `var` field
+error E3159: <fragment>:19:6: cannot consume with 'cancel' a promise held in a `let` field: consuming a promise empties the slot it was read from, and a `let` field is never reassigned; hold it in a `var` field
 ```
 
 <!-- test: async-promise-drop.error.a-promise-element-read-through-a-borrow-door -->

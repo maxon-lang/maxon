@@ -94,16 +94,16 @@ end 'PoisonedDeclaration'
 
 union DeclaredWithin
 	anywhere
-	namespace(qualifier ByteArray)
+	namespace(qualifier immutable ByteArray)
 end 'DeclaredWithin'
 
 union EnclosingRegion
 	declaration(head DeclarationHead)
-	lostHead(name ByteArray)
+	lostHead(name immutable ByteArray)
 end 'EnclosingRegion'
 
 type DeclarationHead
-	export let name as ByteArray
+	export let name as immutable ByteArray
 	export let reach as Visibility
 	export let nominal as bool
 	export let extendsAType as bool
@@ -306,7 +306,7 @@ export type DeclarationPoison
 
 		match region 'region'
 			declaration(enclosing) then self.noteHead(enclosing, file: path, backing: backing)
-			lostHead(name) then self.lostHeads.insert(name.clone())
+			lostHead(name) then self.lostHeads.insert(name)
 		end 'region'
 	end 'noteRefusedDeclarationAt'
 
@@ -346,7 +346,7 @@ export type DeclarationPoison
 	end 'noteBacked'
 
 	module function takeBackedNames() returns BackedNameArray
-		var taken = self.backedNames
+		let taken = self.backedNames
 		self.backedNames = BackedNameArray.create(0)
 
 		return taken
@@ -419,7 +419,7 @@ export type DeclarationPoison
 		return false
 	end 'refusesAnyPartOfFrom'
 
-	export function refusesAPartOfFrom(callee ByteArray, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted) returns bool
+	export function refusesAPartOfFrom(callee immutable ByteArray, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted) returns bool
 		for key in refusalKeysOf(callee) 'eachKey'
 			if self.refusesANamedFrom(key.spelling(), reader: reader, signatures: signatures, counting: counting, within: key.scope()) 'aKeyIsRefused'
 				return true
@@ -451,14 +451,14 @@ export type DeclarationPoison
 end 'DeclarationPoison'
 
 module type BackedName
-	let name as ByteArray
+	let name as immutable ByteArray
 	let extendsAType as bool
 
-	static function create(name ByteArray, extendsAType bool) returns BackedName
+	static function create(name immutable ByteArray, extendsAType bool) returns BackedName
 		return Self{name: name, extendsAType: extendsAType}
 	end 'create'
 
-	function spelling() returns ByteArray
+	function spelling() returns immutable ByteArray
 		return self.name
 	end 'spelling'
 
@@ -560,14 +560,14 @@ function filePositionUnder(table ConsequencePositionsByName, name ByteArray, pos
 end 'filePositionUnder'
 
 type RefusalKey
-	let name as ByteArray
+	let name as immutable ByteArray
 	let within as DeclaredWithin
 
-	static function create(name ByteArray, within DeclaredWithin) returns RefusalKey
+	static function create(name immutable ByteArray, within DeclaredWithin) returns RefusalKey
 		return Self{name: name, within: within}
 	end 'create'
 
-	function spelling() returns ByteArray
+	function spelling() returns immutable ByteArray
 		return self.name
 	end 'spelling'
 
@@ -578,7 +578,7 @@ end 'RefusalKey'
 
 typealias RefusalKeyArray = Array with RefusalKey
 
-function refusalKeysOf(callee ByteArray) returns RefusalKeyArray
+function refusalKeysOf(callee immutable ByteArray) returns RefusalKeyArray
 	var keys = RefusalKeyArray.create(3, zeroed: false)
 	keys.push(RefusalKey.create(callee, within: DeclaredWithin.anywhere))
 	keys.push(RefusalKey.create(qualifyingTypeName(callee), within: DeclaredWithin.anywhere))
@@ -591,7 +591,7 @@ function refusalKeysOf(callee ByteArray) returns RefusalKeyArray
 	return keys
 end 'refusalKeysOf'
 
-function extensionQualifierOf(name ByteArray) returns ByteArray throws AbsentError
+function extensionQualifierOf(name ByteArray) returns immutable ByteArray throws AbsentError
 	let qualifier = qualifyingTypeName(name)
 
 	if qualifier.count() == name.count() 'notQualified'
@@ -605,7 +605,7 @@ function extensionReaches(target ByteArray, qualifier ByteArray, signatures Prog
 	return target.equals(qualifier) or signatures.typeImplementsInterface(qualifier, interfaceName: target)
 end 'extensionReaches'
 
-function addRefusalKeys(callee ByteArray, into NameRoster)
+function addRefusalKeys(callee immutable ByteArray, into NameRoster)
 	for key in refusalKeysOf(callee) 'eachKey'
 		into.push(key.spelling())
 	end 'eachKey'
@@ -749,7 +749,7 @@ export type DeclarationHeadIndex
 
 			if token.kind == TokenKind.function and lineStartColumn > DeclarationHeadColumn and functionDeclarationShapeIn(tokens, index: position) 'aNestedFunction'
 				view name = try tokens.get(position + 1) otherwise panic("DeclarationHeadIndex.build: the name of the function at {position} is missing, though its shape was just read")
-				memberNames.push(name.value.clone())
+				memberNames.push(name.value)
 				memberOrder.add(token.line)
 			end 'aNestedFunction'
 		end 'eachToken'
@@ -777,7 +777,7 @@ export type DeclarationHeadIndex
 		end 'reading'
 	end 'regionAt'
 
-	function memberAt(line LineNumber) returns ByteArray throws AbsentError
+	function memberAt(line LineNumber) returns immutable ByteArray throws AbsentError
 		let head = try self.headOrder.lastAtOrBefore(line)
 		let member = try self.memberOrder.lastAtOrBefore(line)
 
@@ -785,7 +785,7 @@ export type DeclarationHeadIndex
 			throw AbsentError.absent
 		end 'outsideTheEnclosingDeclaration'
 
-		return (try self.memberNames.get(member.position()) otherwise panic("DeclarationHeadIndex.memberAt: memberNames.get OOB at {member.position()} below count {self.memberNames.count()}")).clone()
+		return try self.memberNames.get(member.position()) otherwise panic("DeclarationHeadIndex.memberAt: memberNames.get OOB at {member.position()} below count {self.memberNames.count()}")
 	end 'memberAt'
 end 'DeclarationHeadIndex'
 
@@ -813,7 +813,7 @@ function copiedFailedFiles(paths FailedFileSet) returns FailedFileSet
 	var copied = FailedFileSet.create()
 
 	for path in paths 'eachPath'
-		copied.insert(path.clone())
+		copied.insert(path)
 	end 'eachPath'
 
 	return copied
@@ -823,7 +823,7 @@ function copiedDuplicatedFunctions(names DuplicatedFunctionSet) returns Duplicat
 	var copied = DuplicatedFunctionSet.create()
 
 	for name in names 'eachName'
-		copied.insert(name.clone())
+		copied.insert(name)
 	end 'eachName'
 
 	return copied
@@ -833,7 +833,7 @@ function copiedLostHeads(names LostHeadNameSet) returns LostHeadNameSet
 	var copied = LostHeadNameSet.create()
 
 	for name in names 'eachName'
-		copied.insert(name.clone())
+		copied.insert(name)
 	end 'eachName'
 
 	return copied
@@ -843,7 +843,7 @@ function copiedPoisonedDeclarations(table PoisonedDeclarationsByName) returns Po
 	var copied = PoisonedDeclarationsByName.create()
 
 	for (name, declarations) in table 'eachName'
-		copied.upsert(name.clone(), value: declarations.clone())
+		copied.upsert(name, value: declarations.clone())
 	end 'eachName'
 
 	return copied
@@ -883,7 +883,7 @@ function regionHeadAt(tokens TokenArray, position ElementIndex) returns Enclosin
 	return EnclosingRegion.lostHead(try lostFunctionHeadAt(tokens, position: position))
 end 'regionHeadAt'
 
-function lostFunctionHeadAt(tokens TokenArray, position ElementIndex) returns ByteArray throws AbsentError
+function lostFunctionHeadAt(tokens TokenArray, position ElementIndex) returns immutable ByteArray throws AbsentError
 	let nameAt = pastVisibilityModifiers(tokens, index: position)
 	view name = try tokens.get(nameAt) otherwise throw AbsentError.absent
 	view opener = try tokens.get(nameAt + 1) otherwise throw AbsentError.absent
@@ -892,7 +892,7 @@ function lostFunctionHeadAt(tokens TokenArray, position ElementIndex) returns By
 		throw AbsentError.absent
 	end 'notAFunctionHead'
 
-	return name.value.clone()
+	return name.value
 end 'lostFunctionHeadAt'
 
 function declarationHeadAt(tokens TokenArray, position ElementIndex) returns DeclarationHead throws AbsentError
@@ -909,7 +909,7 @@ function declarationHeadAt(tokens TokenArray, position ElementIndex) returns Dec
 	end 'notNamed'
 
 	if keyword.kind == TokenKind.extension 'anExtensionReachesEveryReader'
-		return DeclarationHead.create(name.value.clone(), reach: Visibility.public, nominal: false, extendsAType: true)
+		return DeclarationHead.create(name.value, reach: Visibility.public, nominal: false, extendsAType: true)
 	end 'anExtensionReachesEveryReader'
 
 	var reach = Visibility.file
@@ -918,7 +918,7 @@ function declarationHeadAt(tokens TokenArray, position ElementIndex) returns Dec
 		reach = reachOfModifier(tokens, position: keywordAt - 1)
 	end 'aModifierPrecedes'
 
-	return DeclarationHead.create(name.value.clone(), reach: reach, nominal: tokenKindDeclaresANominalType(keyword.kind), extendsAType: false)
+	return DeclarationHead.create(name.value, reach: reach, nominal: tokenKindDeclaresANominalType(keyword.kind), extendsAType: false)
 end 'declarationHeadAt'
 
 function reachOfModifier(tokens TokenArray, position ElementIndex) returns Visibility

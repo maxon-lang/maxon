@@ -55,9 +55,9 @@ let MxdbgVoidAlign = 1 as MxdbgIndex
 // One field of a described type. Its type is held by NAME rather than by id, because the entry it names
 // may not be in the table yet when the field is recorded.
 type MxdbgFieldDesc
-	export let name as ByteArray
+	export let name as immutable ByteArray
 	export var offset as MxdbgIndex
-	export let typeName as ByteArray
+	export let typeName as immutable ByteArray
 
 	static function create(name ByteArray, offset MxdbgIndex, typeName ByteArray) returns MxdbgFieldDesc
 		return Self{name: name, offset: offset, typeName: typeName}
@@ -68,9 +68,9 @@ typealias MxdbgFieldDescArray = Array with MxdbgFieldDesc
 
 union MxdbgElementType
 	none
-	of(let typeName ByteArray)
+	of(let typeName immutable ByteArray)
 
-	function typeName() returns ByteArray throws AbsentError
+	function typeName() returns immutable ByteArray throws AbsentError
 		match self 'element'
 			none then throw AbsentError.absent
 			of(typeName) then return typeName
@@ -102,7 +102,7 @@ end 'MxdbgTypeDesc'
 // every local carries is the entry's POSITION, and two columns that could fall out of step would make
 // that position mean two different things.
 type MxdbgTypeEntry
-	export let name as ByteArray
+	export let name as immutable ByteArray
 	export var desc as MxdbgTypeDesc
 
 	static function create(name ByteArray, desc MxdbgTypeDesc) returns MxdbgTypeEntry
@@ -116,7 +116,7 @@ typealias MxdbgTypeEntryArray = Array with MxdbgTypeEntry
 // id `idOf` answers the id the table was written under.
 typealias MxdbgTypePositionMap = Map with (ByteArray, ElementIndex)
 
-typealias MxdbgArrayElementMap = Map with (ByteArray, readonly ByteArray)
+typealias MxdbgArrayElementMap = Map with (ByteArray, immutable ByteArray)
 
 typealias MxdbgClosureEnvMap = Map with (ByteArray, MxdbgFieldDescArray)
 
@@ -319,7 +319,7 @@ end 'MxdbgTypeTable'
 // ⭐ **THE NAME A `MaxonType` IS DESCRIBED UNDER, AND THE ONE PLACE IT IS CHOSEN.** A field's type and a
 // local's type both come through here, so an entry a record points at and the entry the table built are
 // the same by construction rather than by agreement.
-export function mxdbgTypeNameOf(names TypeNameInterner, signatures ProgramSignatures, ref MaxonType) returns ByteArray
+export function mxdbgTypeNameOf(names TypeNameInterner, signatures ProgramSignatures, ref MaxonType) returns immutable ByteArray
 	return match ref 'arm'
 		boolean gives MxdbgBoolName
 		integer gives MxdbgIntName
@@ -344,7 +344,7 @@ end 'mxdbgTypeNameOf'
 // A name the interner does not know is a compiler invariant break rather than a user error, but the
 // sidecar is a diagnostic side output and must never fail a build that produced a correct executable —
 // so it is described under an honest placeholder instead.
-function mxdbgInternedName(names TypeNameInterner, id TypeNameId) returns ByteArray
+function mxdbgInternedName(names TypeNameInterner, id TypeNameId) returns immutable ByteArray
 	return try names.nameOf(id) otherwise MxdbgUnnamedName
 end 'mxdbgInternedName'
 
@@ -447,7 +447,7 @@ function mxdbgTagWord(tag FullRangeInt) returns MxdbgIndex
 	return tag as MxdbgIndex
 end 'mxdbgTagWord'
 
-function mxdbgCasePayloadName(project Project, signatures ProgramSignatures, payload PayloadFieldArray) returns ByteArray
+function mxdbgCasePayloadName(project Project, signatures ProgramSignatures, payload PayloadFieldArray) returns immutable ByteArray
 	if payload.count() == 0 'payloadFree'
 		return MxdbgVoidName
 	end 'payloadFree'

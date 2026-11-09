@@ -2703,7 +2703,7 @@ let Nop7 = b"\x0F\x1F\x80\x00\x00\x00\x00"  // nop dword [rax+0] (disp32)
 let Nop8 = b"\x0F\x1F\x84\x00\x00\x00\x00\x00"  // nop dword [rax+rax*1+0] (disp32)
 let Nop9 = b"\x66\x0F\x1F\x84\x00\x00\x00\x00\x00"  // 66 nop word [rax+rax*1+0] (disp32)
 
-function nopOfLength(length NopBytes) returns ByteArray
+function nopOfLength(length NopBytes) returns immutable ByteArray
 	return match length 'form'
 		1 gives Nop1
 		2 gives Nop2
@@ -3179,7 +3179,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 
 	resolveChunkRel32Fixups(code, labelOffsets: chunkLabelOffsets, rel32Fixups: rel32Fixups)
 
-	var chunk = FunctionCodeChunk.createWith(func.name.clone(), code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
+	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: chunkLabelOffsets)
 
 	// Not `emitGuard`: see `asyncPreemptionCanStop`. The safe-point predicate tests the stack

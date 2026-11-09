@@ -3264,7 +3264,7 @@ function peerLeft(fault HttpHandlerFault) returns bool
 end 'peerLeft'
 
 function serveInterop(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze InteropHandler.create())
+	return server.serve(InteropHandler.create())
 end 'serveInterop'
 
 function lineContaining(lines StringArray, text String) returns String

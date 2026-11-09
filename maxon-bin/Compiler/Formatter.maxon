@@ -664,7 +664,7 @@ function modIsCasePattern(prev TokenKind, prevBeganLine bool) returns bool
 end 'modIsCasePattern'
 
 // Does a space go between `prev` and `cur`?
-function needsSpaceBefore(cur TokenKind, prev TokenKind, prevWasDot bool, inDataBlock bool, prevWasUnary bool, prevBeganLine bool, prevIsReadonlyModifier bool, prevNamesAFunction bool) returns bool
+function needsSpaceBefore(cur TokenKind, prev TokenKind, prevWasDot bool, inDataBlock bool, prevWasUnary bool, prevBeganLine bool, prevIsReadonlyModifier bool, prevNamesAFunction bool, prevIsRegionOperator bool) returns bool
 	if noSpaceBefore(cur) 'tightBefore'
 		return false
 	end 'tightBefore'
@@ -696,6 +696,10 @@ function needsSpaceBefore(cur TokenKind, prev TokenKind, prevWasDot bool, inData
 	if cur == TokenKind.leftParen and prevNamesAFunction 'declaredName'
 		return false
 	end 'declaredName'
+
+	if cur == TokenKind.leftParen and prevIsRegionOperator 'regionOperand'
+		return true
+	end 'regionOperand'
 
 	if cur == TokenKind.leftParen and prevIsReadonlyModifier 'readonlyElementType'
 		return true
@@ -735,7 +739,7 @@ type FormatState
 	let lines as SourceLines
 	let comments as SourceCommentMap
 	let inPlace as InPlaceCommentMap
-	let keywords as KeywordTable
+	let keywords as immutable KeywordTable
 	var consumedLeading as ConsumedLineSet
 	var consumedTrailing as ConsumedLineSet
 	var blocks as FormatBlockKindArray
@@ -1032,7 +1036,7 @@ type FormatState
 		end 'indent' else 'separate'
 			if tok.line > self.lastEmittedSourceLine and self.pendingCommentOn(self.lastEmittedSourceLine, slot: CommentSlot.afterCode) 'commentSwallowedTheBreak'
 				self.emitCommentAcrossLineBreak(tok.line)
-			end 'commentSwallowedTheBreak' else if self.inPlaceCommentNeedsSpace(index) or needsSpaceBefore(tok.kind, prev: self.prevKind, prevWasDot: self.prevWasDot, inDataBlock: self.inDataBlock(), prevWasUnary: self.prevWasUnary, prevBeganLine: self.prevBeganLine, prevIsReadonlyModifier: self.brackets.lastWasReadonlyModifier(), prevNamesAFunction: self.prevNamesAFunction) 'needsSpace'
+			end 'commentSwallowedTheBreak' else if self.inPlaceCommentNeedsSpace(index) or needsSpaceBefore(tok.kind, prev: self.prevKind, prevWasDot: self.prevWasDot, inDataBlock: self.inDataBlock(), prevWasUnary: self.prevWasUnary, prevBeganLine: self.prevBeganLine, prevIsReadonlyModifier: self.brackets.lastWasReadonlyModifier(), prevNamesAFunction: self.prevNamesAFunction, prevIsRegionOperator: tok.kind == TokenKind.leftParen and index > 0 and regionOperatorAt(self.tokens, index: index - 1)) 'needsSpace'
 				self.out.append(" ")
 			end 'needsSpace'
 		end 'separate'

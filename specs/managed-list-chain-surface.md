@@ -22,9 +22,9 @@ ownership defects these members can have.
 
 `count`, `isEmpty`, `head` and `tail` read the record. Everything else — both end insertions, both
 interior insertions, both reinsertions, `remove`, `detach` and `clear` — writes at least one of
-`head@0`, `tail@8` and `count@16`, so all nine are refused through an immutable receiver (E3159).
-`setValue` is the one WRITE on the node surface, so a `let`-bound handle is refused there for the same
-reason; `value`, `next` and `prev` are reads.
+`head@0`, `tail@8` and `count@16`, so all nine are refused through a frozen receiver (E3207).
+`setValue` is the one WRITE on the node surface; `value`, `next` and `prev` are reads. A `let`-bound handle or
+chain is written through all the same: a `let` forbids reassigning the name only.
 
 ### A target in another chain is an ABORT, and a node in another chain is a MOVE
 
@@ -330,13 +330,12 @@ end 'main'
 the element that replaced it after the detach, on the heap 0
 ```
 
-<!-- test: setting-a-value-through-a-let-handle-is-refused -->
-`setValue` is the one member that WRITES a node, so a `let`-bound handle is refused exactly as a
-`let`-bound chain's `insertLast` is. `specs/managed-list.md` writes `var node` for both of its
-`setValue` cases and `let` for every read-only one, so that spec already spells the split.
+<!-- test: setting-a-value-through-a-let-handle-writes-the-node -->
+`setValue` is the one member that WRITES a node, and a `view`-bound handle (a `let`) is accepted exactly as a
+`let`-bound chain's `insertLast` is: a `let` forbids reassigning the name, not writing the node it names.
 
 ⚠ What would be wrong is to have every
-other write on these two types refused through a `let` and this one admitted.
+other write on these two types admitted through a `let` and this one refused.
 ```maxon
 typealias StrChain = __ManagedList with String
 
@@ -348,13 +347,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:7:4: cannot write through 'n': 'n' is read-only (a `view`) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+0
+```
+```stdout
+a replacement element, long enough to be a real allocation
 ```
 
-<!-- test: detaching-through-a-let-chain-is-refused -->
+<!-- test: detaching-through-a-let-chain-writes-the-chain -->
 `detach` writes `head@0`, `tail@8` and `count@16`, so it is on the receiver-write roster: `ml.detach(n)`
-through a `let` is refused exactly as the identical `ml.remove(n)` is, or one operation would give two
+through a `let` is accepted exactly as the identical `ml.remove(n)` is, or one operation would give two
 answers about the same binding. The chain is built in a helper
 so the `let` can hold a populated one.
 ```maxon
@@ -377,8 +379,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:16:8: cannot write through 'chain': 'chain' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+0
+```
+```stdout
+1 one, long enough to be a real heap allocation
 ```
 
 <!-- test: a-discarded-insertion-mints-no-handle -->

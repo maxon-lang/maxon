@@ -481,11 +481,11 @@ export let BitsPerByte = 8 as FullRangeInt
 export type ConstArrayBlob
 	export let stride as ElementStride
 	export let elementCount as FullRangeInt
-	export let bytes as ByteArray
+	export let bytes as immutable ByteArray
 
 	// Private to `constArrayBlobOf` below, which is the point: the three fields are only correct together,
 	// so there is one way to make the triple and it derives two of them from the third.
-	static function create(stride ElementStride, elementCount FullRangeInt, bytes ByteArray) returns ConstArrayBlob
+	static function create(stride ElementStride, elementCount FullRangeInt, bytes immutable ByteArray) returns ConstArrayBlob
 		return Self{stride: stride, elementCount: elementCount, bytes: bytes}
 	end 'create'
 end 'ConstArrayBlob'
@@ -494,18 +494,20 @@ export function constArrayBlobOf(values FullRangeIntArray, stride ElementStride)
 	return ConstArrayBlob.create(stride, elementCount: values.count() as FullRangeInt, bytes: constantElementsImage(values, stride: stride))
 end 'constArrayBlobOf'
 
-function constantElementsImage(values FullRangeIntArray, stride ElementStride) returns ByteArray
+function constantElementsImage(values FullRangeIntArray, stride ElementStride) returns immutable ByteArray
 	if stride < 0 'subBytePacked'
 		return packConstantElements(values, packedBits: -stride as PackedBitWidth)
 	end 'subBytePacked'
 
-	var out = ByteArray.create(values.count() * (stride as Count), zeroed: false)
+	var out = ByteArray.create(values.count() * (stride as Count), zeroed: false) as isolated ByteArray
 
-	for value in values 'eachElement'
-		appendLittleEndianScalar(out, value: value, byteCount: stride as BytePos)
-	end 'eachElement'
+	modify out 'fill'
+		for value in values 'eachElement'
+			appendLittleEndianScalar(out, value: value, byteCount: stride as BytePos)
+		end 'eachElement'
+	end 'fill'
 
-	return out
+	return freeze out
 end 'constantElementsImage'
 
 // ⭐ **APPEND `value` AS `byteCount` LITTLE-ENDIAN BYTES — the compiler's ONE integer serializer.** Every
@@ -552,25 +554,27 @@ let ByteMask = 0xFF as MachineWord
 //
 // It is PRIVATE: `constantElementsImage` above is the only caller, because the choice between this and the
 // byte-strided run is the stride's to make and not a caller's.
-function packConstantElements(values FullRangeIntArray, packedBits PackedBitWidth) returns ByteArray
-	var out = ByteArray.create(elementsByteLen(values.count() as FullRangeInt, stride: (-packedBits) as ElementStride) as ElementIndex)
+function packConstantElements(values FullRangeIntArray, packedBits PackedBitWidth) returns immutable ByteArray
+	var out = ByteArray.create(elementsByteLen(values.count() as FullRangeInt, stride: (-packedBits) as ElementStride) as ElementIndex) as isolated ByteArray
 
 	let fieldMask = ((1 shl packedBits) - 1) as FullRangeInt
 
-	for i in 0 upto values.count() 'eachElement'
-		let value = try values.get(i) otherwise panic("packConstantElements: values.get({i}) failed inside its own upto bound")
-		let bitPos = (i as FullRangeInt) * (packedBits as FullRangeInt)
-		let byteIndex = (bitPos / BitsPerByte) as ElementIndex
-		let shift = bitPos mod BitsPerByte
-		let occupied = (try out.get(byteIndex) otherwise panic("packConstantElements: byte {byteIndex} is past a buffer sized to hold every element — `elementsByteLen` and this walk disagree about the layout")) as FullRangeInt
+	modify out 'fill'
+		for i in 0 upto values.count() 'eachElement'
+			let value = try values.get(i) otherwise panic("packConstantElements: values.get({i}) failed inside its own upto bound")
+			let bitPos = (i as FullRangeInt) * (packedBits as FullRangeInt)
+			let byteIndex = (bitPos / BitsPerByte) as ElementIndex
+			let shift = bitPos mod BitsPerByte
+			let occupied = (try out.get(byteIndex) otherwise panic("packConstantElements: byte {byteIndex} is past a buffer sized to hold every element — `elementsByteLen` and this walk disagree about the layout")) as FullRangeInt
 
-		// A packed width DIVIDES a byte, so `shift + packedBits <= 8` and the shifted field never leaves the
-		// byte it starts in. The `and 0xFF` states that rather than relying on it: it is the one line where a
-		// straddle would silently corrupt the next element instead of failing.
-		try out.set(byteIndex, value: ((occupied or ((value and fieldMask) shl shift)) and 0xFF) as Byte) otherwise panic("packConstantElements: byte {byteIndex} was readable a line ago and is not writable now")
-	end 'eachElement'
+			// A packed width DIVIDES a byte, so `shift + packedBits <= 8` and the shifted field never leaves the
+			// byte it starts in. The `and 0xFF` states that rather than relying on it: it is the one line where a
+			// straddle would silently corrupt the next element instead of failing.
+			try out.set(byteIndex, value: ((occupied or ((value and fieldMask) shl shift)) and 0xFF) as Byte) otherwise panic("packConstantElements: byte {byteIndex} was readable a line ago and is not writable now")
+		end 'eachElement'
+	end 'fill'
 
-	return out
+	return freeze out
 end 'packConstantElements'
 
 // The smallest value ANY unsigned slot holds, whatever its width: zero, because the load of an unsigned

@@ -467,7 +467,7 @@ typealias ImmortalStructBoxLabelSet = Set with String
 
 typealias FunctionRecordLabelSet = Set with String
 
-typealias FunctionValueTargetMap = Map with (ValueId, readonly ByteArray)
+typealias FunctionValueTargetMap = Map with (ValueId, immutable ByteArray)
 
 union FunctionValueTargets
 	none
@@ -552,14 +552,14 @@ type WitnessAdapterRequest
 	// The conforming type, as the table label spells it — carried for the diagnostic
 	// `requireWitnessSlotImplIgnoresDictionary` may raise, which has to name the conformance whose shared
 	// table cannot supply a dictionary.
-	export let conformerType as ByteArray
+	export let conformerType as immutable ByteArray
 
 	// The impl the adapter forwards to — `witnessSlotImpl`'s answer, so the adapter calls exactly the member
 	// the conformance accepted.
-	export let implName as ByteArray
+	export let implName as immutable ByteArray
 
 	// The adapter's own symbol, already stamped into the slot's relocation by the time this is drained.
-	export let adapterName as ByteArray
+	export let adapterName as immutable ByteArray
 
 	// How many arguments a `witnessCall` through this slot passes — the adapter's whole parameter list.
 	export let slotArity as ParamCount
@@ -582,7 +582,7 @@ typealias WitnessAdapterRequestArray = Array with WitnessAdapterRequest
 
 union FormalSite
 	dispatchedFrom(receiver ValueId)
-	tableSlot(let conformer ByteArray)
+	tableSlot(let conformer immutable ByteArray)
 end 'FormalSite'
 
 // ⭐⭐ **ONE CALL THAT PASSED A ZERO WHERE A `where` CONSTRAINT'S WITNESS TABLE BELONGS, RECORDED WHILE THE
@@ -613,10 +613,10 @@ end 'FormalSite'
 type NullWitnessArgRequest
 	// The function whose body passes the zero — the position a refusal is blamed at, because it is the call
 	// site the author must change, and the only one of the two names that is always the user's.
-	export let caller as ByteArray
+	export let caller as immutable ByteArray
 
 	// The callee whose witness parameter receives it.
-	export let callee as ByteArray
+	export let callee as immutable ByteArray
 
 	// WHICH of the callee's witness parameters — its position in `witnessConstraintsOfMethod(callee)`, the
 	// same list `appendWitnessArgs` walks, so the parameter this names is the parameter the zero landed in.
@@ -624,8 +624,8 @@ type NullWitnessArgRequest
 
 	// The conformer and interface the missing table would have been keyed by — carried for the diagnostic,
 	// which has to name the conformance whose impls make the instance untabulatable.
-	export let conformerType as ByteArray
-	export let interfaceName as ByteArray
+	export let conformerType as immutable ByteArray
+	export let interfaceName as immutable ByteArray
 
 	static function create(caller ByteArray, callee ByteArray, constraintIndex WitnessSlotIndex, conformerType ByteArray, interfaceName ByteArray) returns NullWitnessArgRequest
 		return Self{caller: caller, callee: callee, constraintIndex: constraintIndex, conformerType: conformerType, interfaceName: interfaceName}
@@ -978,7 +978,7 @@ union ByReferenceParamSource
 
 	// A runtime primitive's arguments, which are always values whatever the source call's ABI.
 	valueArguments
-	directCallee(let name ByteArray)
+	directCallee(let name immutable ByteArray)
 end 'ByReferenceParamSource'
 
 typealias IndexTest = function(ElementIndex) returns bool
@@ -995,8 +995,8 @@ end 'firstIndexWhere'
 
 type WitnessTableEntry
 	export let instance as GenericInstanceId
-	export let interfaceName as ByteArray
-	export let conformer as ByteArray
+	export let interfaceName as immutable ByteArray
+	export let conformer as immutable ByteArray
 
 	static function create(instance GenericInstanceId, interfaceName ByteArray, conformer ByteArray) returns WitnessTableEntry
 		return Self{instance: instance, interfaceName: interfaceName, conformer: conformer}
@@ -1010,7 +1010,7 @@ end 'WitnessTableEntry'
 typealias WitnessTableEntryArray = Array with WitnessTableEntry
 
 type WitnessPartition
-	export let owner as ByteArray
+	export let owner as immutable ByteArray
 	export var kept as WitnessTableEntryArray
 	export var shed as WitnessTableEntryArray
 
@@ -1031,7 +1031,7 @@ function entriesHold(entries WitnessTableEntryArray, instance GenericInstanceId,
 	return false
 end 'entriesHold'
 
-function entryIndexIn(entries WitnessTableEntryArray, instance GenericInstanceId, interfaceName ByteArray) returns ElementIndex throws AbsentError
+function entryIndexIn(entries WitnessTableEntryArray, instance GenericInstanceId, interfaceName immutable ByteArray) returns ElementIndex throws AbsentError
 	return try firstIndexWhere(entries.count(), test: function(i) gives (try entries.get(i) otherwise panic("entryIndexIn: entries.get({i}) below count")).names(instance, otherInterface: interfaceName))
 end 'entryIndexIn'
 
@@ -1061,8 +1061,6 @@ end 'DescriptorTable'
 
 typealias DescriptorTableMap = Map with (ByteArray, DescriptorTable)
 
-let noDescriptorTable = DescriptorTable.create()
-
 enum DictionaryOutlook
 	realized
 	assumeCarried
@@ -1080,12 +1078,12 @@ end 'SlotImpls'
 union WitnessArgSource
 	forwardedSlot
 	forwardedBareParameter(token TypeParamId)
-	staticTable(let conformer ByteArray, instance WitnessTableInstance)
-	parametricInstance(let conformer ByteArray, instance GenericInstanceId)
+	staticTable(let conformer immutable ByteArray, instance WitnessTableInstance)
+	parametricInstance(let conformer immutable ByteArray, instance GenericInstanceId)
 end 'WitnessArgSource'
 
 type HiddenSlotTarget
-	export let callee as ByteArray
+	export let callee as immutable ByteArray
 	export let slot as HiddenParameterSlot
 
 	static function create(callee ByteArray, slot HiddenParameterSlot) returns HiddenSlotTarget
@@ -1134,7 +1132,7 @@ typealias DescriptorTableOwnerSet = Set with ByteArray
 
 type DescriptorSubjectSite
 	export let instance as GenericInstanceId
-	export let callee as ByteArray
+	export let callee as immutable ByteArray
 	export let funcIndex as ElementIndex
 
 	static function create(instance GenericInstanceId, callee ByteArray, funcIndex ElementIndex) returns DescriptorSubjectSite
@@ -1192,7 +1190,7 @@ end 'CarrierCallKind'
 
 union UnboundBase
 	none
-	named(typeName ByteArray)
+	named(typeName immutable ByteArray)
 end 'UnboundBase'
 
 type CarrierCall
@@ -1392,7 +1390,7 @@ end 'divisionExpansionKind'
 
 union LoweredFunction
 	none
-	named(let name ByteArray)
+	named(let name immutable ByteArray)
 end 'LoweredFunction'
 
 type MaxonToStdLowering
@@ -2165,7 +2163,7 @@ type MaxonToStdLowering
 		end 'lower'
 	end 'lowerOp'
 
-	function currentFuncName() returns ByteArray
+	function currentFuncName() returns immutable ByteArray
 		match self.currentFunction 'lowered'
 			none then panic("MaxonToStdLowering.currentFuncName: asked outside the lowering of any function")
 			named(name) then return name
@@ -2849,8 +2847,8 @@ type MaxonToStdLowering
 	// The CANONICAL conformer name a concrete argument's witness table is keyed by — the SAME reduction the
 	// conformance answer and the impl symbols use (`ProgramSignatures.conformerNameOfType`), so the widening
 	// that accepted this argument and the table this looks up cannot be filed under different names.
-	function conformerNameOf(value ValueId) returns ByteArray
-		return self.signatures.conformerNameOfType(maxonTypeOfTag(self.valueTagOf(value), nameId: try self.valueNameIds.get(value) otherwise panic("conformerNameOf: value v{value} has no recorded type name — the two type columns are minted in lockstep")), idsFrom: self.typeNames, readerFilePath: self.currentSourceFilePath).toByteArray()
+	function conformerNameOf(value ValueId) returns immutable ByteArray
+		return freeze self.signatures.conformerNameOfType(maxonTypeOfTag(self.valueTagOf(value), nameId: try self.valueNameIds.get(value) otherwise panic("conformerNameOf: value v{value} has no recorded type name — the two type columns are minted in lockstep")), idsFrom: self.typeNames, readerFilePath: self.currentSourceFilePath).toByteArray()
 	end 'conformerNameOf'
 
 	// Append the hidden WITNESS arguments a dictionary-passing call to `callee` carries — one
@@ -2927,7 +2925,8 @@ type MaxonToStdLowering
 			return WitnessArgSource.forwardedBareParameter(typeParamIdOf(typeArg))
 		end 'aBareParameter'
 
-		let concreteType = self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
+		let concreteName = self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex)
+		let concreteType = freeze concreteName.toByteArray()
 		let argInstance = self.constraintArgumentInstance(gid, position: constraint.typeParamIndex)
 
 		if not self.constraintArgumentHasNoTable(concreteType, instance: argInstance, interfaceName: constraint.interfaceName, outlook: outlook) 'aTableExistsToNameStatically'
@@ -2982,7 +2981,7 @@ type MaxonToStdLowering
 		return tableId
 	end 'witnessTableFromTheCallersDescriptor'
 
-	function methodTypeOfFunction(funcName ByteArray) returns ByteArray throws AbsentError
+	function methodTypeOfFunction(funcName ByteArray) returns immutable ByteArray throws AbsentError
 		match self.signatures.functionDeclaringType(funcName) 'declaring'
 			method(typeName) then return typeName
 			freeFunction then throw AbsentError.absent
@@ -3205,7 +3204,7 @@ type MaxonToStdLowering
 	// shared body answers them for every instantiation — so those questions keep asking `typeName` whichever
 	// table is being built. What moves with the label is what is a fact about the INSTANCE: the adapter's
 	// dictionary (`appendInstanceAdapterDictionary`) and the two ownership words (`witnessDestroyCallee`).
-	function witnessTableLabelComponent(typeName ByteArray, instance WitnessTableInstance) returns ByteArray
+	function witnessTableLabelComponent(typeName immutable ByteArray, instance WitnessTableInstance) returns immutable ByteArray
 		return match instance 'table'
 			shared gives typeName
 			perInstance(gid) gives self.signatures.mangleGenericInstance(gid)
@@ -3248,7 +3247,7 @@ type MaxonToStdLowering
 				return SlotImpls.create(NameRoster.create(0), surelyCarriesADictionary: true)
 			end 'thisSlotCarriesOne'
 
-			names.push(implName.clone())
+			names.push(implName)
 		end 'eachSlot'
 
 		return SlotImpls.create(names, surelyCarriesADictionary: false)
@@ -3373,8 +3372,8 @@ type MaxonToStdLowering
 	// A COMPILER-SYNTHESIZED impl (`int.hash`, an `__` runtime entry) is in no signature registry and is built
 	// to the requirement's shape by construction — it has no `where` clause and no type parameter to describe
 	// — so it is returned unchanged rather than measured against a signature that does not exist.
-	function witnessSlotCallee(typeName ByteArray, instance WitnessTableInstance, slot CollectedInterfaceMethod, tableInterface IrInterface) returns ByteArray
-		let implName = self.witnessSlotImpl(typeName, interfaceName: slot.sourceInterfaceName, method: slot.method).clone()
+	function witnessSlotCallee(typeName ByteArray, instance WitnessTableInstance, slot CollectedInterfaceMethod, tableInterface IrInterface) returns immutable ByteArray
+		let implName = self.witnessSlotImpl(typeName, interfaceName: slot.sourceInterfaceName, method: slot.method)
 		let cellMask = self.signatures.witnessRequirementByRefMask(slot.sourceInterfaceName, methodName: slot.method.name)
 
 		if let runtime = try self.bitwiseWitnessImpl(instance, implName: implName) 'bytesAreTheContent'
@@ -3395,7 +3394,7 @@ type MaxonToStdLowering
 		return self.witnessSlotAdapter(typeName, instance: instance, slot: slot, reinterpretedParams: reinterpretedParams, cellMask: cellMask)
 	end 'witnessSlotCallee'
 
-	function witnessSlotAdapter(typeName ByteArray, instance WitnessTableInstance, slot CollectedInterfaceMethod, reinterpretedParams ArgFloatMask, cellMask ParamPositionMask) returns ByteArray
+	function witnessSlotAdapter(typeName ByteArray, instance WitnessTableInstance, slot CollectedInterfaceMethod, reinterpretedParams ArgFloatMask, cellMask ParamPositionMask) returns immutable ByteArray
 		// ⭐ **THE ADAPTER IS NAMED OFF THE TABLE'S OWN LABEL COMPONENT, NEVER OFF THE CONFORMER** —
 		// two instances of one generic conformer share the impl and must NOT share the adapter, because the
 		// adapter is exactly where the two dictionaries differ. A shared table's component IS the conformer,
@@ -3411,7 +3410,7 @@ type MaxonToStdLowering
 		return adapterName
 	end 'witnessSlotAdapter'
 
-	function witnessSlotAdapterName(typeName ByteArray, instance WitnessTableInstance, slot CollectedInterfaceMethod) returns ByteArray
+	function witnessSlotAdapterName(typeName ByteArray, instance WitnessTableInstance, slot CollectedInterfaceMethod) returns immutable ByteArray
 		return witnessSlotAdapterSymbol(self.witnessTableLabelComponent(typeName, instance: instance), interfaceName: slot.sourceInterfaceName, methodName: slot.method.name)
 	end 'witnessSlotAdapterName'
 
@@ -3458,7 +3457,7 @@ type MaxonToStdLowering
 		return try self.funcNames.funcNamed(implName) otherwise panic("signedWitnessImpl: '{String.from(implName)}' has a declared signature but is in no function of this module — `witnessSlotImpl` names the member a conformance ACCEPTED, and a check accepts only a declaration the merge carried")
 	end 'signedWitnessImpl'
 
-	function bitwiseWitnessImpl(instance WitnessTableInstance, implName ByteArray) returns ByteArray throws AbsentError
+	function bitwiseWitnessImpl(instance WitnessTableInstance, implName ByteArray) returns immutable ByteArray throws AbsentError
 		match instance 'table'
 			shared then throw AbsentError.absent
 			perInstance(gid) then return try self.bitwiseArrayRuntime(gid, callee: implName)
@@ -3715,7 +3714,9 @@ type MaxonToStdLowering
 			panic("instanceConstraintWitnessLabel: the per-instance table for '{String.from(self.signatures.mangleGenericInstance(gid))}' owes '{String.from(implName)}' a witness for `{String.from(constraint.interfaceName)}` at type-parameter position {constraint.typeParamIndex}, and that argument is still opaque — `instanceIsFullyConcrete` gates exactly this")
 		end 'stillOpaque'
 
-		return self.ensureWitnessTable(self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray(), instance: self.constraintArgumentInstance(gid, position: constraint.typeParamIndex), interfaceName: constraint.interfaceName)
+		let concreteName = self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex)
+
+		return self.ensureWitnessTable(freeze concreteName.toByteArray(), instance: self.constraintArgumentInstance(gid, position: constraint.typeParamIndex), interfaceName: constraint.interfaceName)
 	end 'instanceConstraintWitnessLabel'
 
 	// ⭐⭐ **PROVE THE IMPL NEVER READS THE NULL DICTIONARY — the premise the base-keyed conformer name rests
@@ -4055,7 +4056,7 @@ type MaxonToStdLowering
 	// ⚠ This arm answers for an enum that declared no clause at all. One that names the protocol explicitly
 	// is accepted by `checkConformance`, so the lookup above answers first — with the symbol this arm would
 	// have given, since the acceptance reads that same one home. The two roads cannot stamp two addresses.
-	function witnessSlotImpl(typeName ByteArray, interfaceName ByteArray, method InterfaceMethodSig) returns ByteArray
+	function witnessSlotImpl(typeName ByteArray, interfaceName ByteArray, method InterfaceMethodSig) returns immutable ByteArray
 		if let selected = try self.witnessSlotImpls.get(witnessSlotImplKey(typeName, interfaceName: interfaceName, methodName: method.name)) 'chosenByConformance'
 			return selected
 		end 'chosenByConformance'
@@ -4207,7 +4208,7 @@ type MaxonToStdLowering
 		return try firstIndexWhere(table.instances.count(), test: function(i) gives (try table.instances.get(i) otherwise panic("descriptorTableEntryOf: instances.get({i}) below count")) == gid) otherwise panic("descriptorTableEntryOf: '{String.from(owner)}''s descriptor table holds no entry for instance {gid}")
 	end 'descriptorTableEntryOf'
 
-	function descriptorTableOwnerOf(gid GenericInstanceId) returns ByteArray
+	function descriptorTableOwnerOf(gid GenericInstanceId) returns immutable ByteArray
 		return try self.signatures.instanceParameterOwnerName(gid) otherwise panic("descriptorTableOwnerOf: instance {gid} is built on no type parameter, so no declaration's table can hold it")
 	end 'descriptorTableOwnerOf'
 
@@ -5126,7 +5127,7 @@ type MaxonToStdLowering
 	end 'ensureLayoutDescriptor'
 
 	function tableOfBase(gid GenericInstanceId) returns DescriptorTable
-		return try self.descriptorTables.get(self.signatures.genericInstanceBaseName(gid)) otherwise noDescriptorTable
+		return try self.descriptorTables.get(self.signatures.genericInstanceBaseName(gid)) otherwise DescriptorTable.create()
 	end 'tableOfBase'
 
 	function stampWitnessTableEntry(entry WitnessTableEntry, root GenericInstanceId, label String, offsetInLabel ByteOffset)
@@ -5205,7 +5206,7 @@ type MaxonToStdLowering
 		self.appendDirectCall(result, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, result: result, dstBlock: dstBlock), dstBlock: dstBlock)
 	end 'lowerSlottedCall'
 
-	function bitwiseArrayRuntimeFor(callee ByteArray, argIds ValueIdArray) returns ByteArray throws AbsentError
+	function bitwiseArrayRuntimeFor(callee ByteArray, argIds ValueIdArray) returns immutable ByteArray throws AbsentError
 		let receiver = try argIds.get(0) otherwise throw AbsentError.absent
 
 		if self.valueTagOf(receiver) != ValueTypeTag.genericInstance 'notAnInstance'
@@ -5215,7 +5216,7 @@ type MaxonToStdLowering
 		return try self.bitwiseArrayRuntime(self.instanceIdOfValue(receiver), callee: callee)
 	end 'bitwiseArrayRuntimeFor'
 
-	function bitwiseArrayRuntime(instance GenericInstanceId, callee ByteArray) returns ByteArray throws AbsentError
+	function bitwiseArrayRuntime(instance GenericInstanceId, callee ByteArray) returns immutable ByteArray throws AbsentError
 		let kind = self.bitwiseKindOf(instance)
 
 		if self.signatures.calleeIsArrayRecordMember(callee, member: EqualsMethodName) 'anEquals'
@@ -5926,7 +5927,7 @@ type MaxonToStdLowering
 	// The NAME governing a function value's type, from the per-value name column of the function being
 	// lowered — the twin of `SemanticCheck.functionValueGoverningName`, reading the same column and turning
 	// the id into a name through the one shared `TypeResolution.functionTypeNameOf`.
-	function functionValueName(value ValueId) returns ByteArray
+	function functionValueName(value ValueId) returns immutable ByteArray
 		let nameId = try self.valueNameIds.get(value) otherwise panic("functionValueName: value v{value} in '{String.from(self.currentFuncName())}' has no recorded type name — the two type columns are minted in lockstep and `lower` re-points both per function")
 		return functionTypeNameOf(self.functionTypes, nameId: nameId)
 	end 'functionValueName'
@@ -6402,7 +6403,7 @@ type MaxonToStdLowering
 		let thunkName = serviceStartSymbol(serviceOwnerSymbolFor(self.signatures, typeName: typeName, instance: instance), factory: callee)
 
 		if not self.stdModule.serviceStartThunks.contains(thunkName) 'notBuiltYet'
-			self.stdModule.serviceStartThunks.insert(thunkName.clone())
+			self.stdModule.serviceStartThunks.insert(thunkName)
 			self.buildServiceStartThunk(thunkName, callee: callee, wordCount: words.count(), slots: slots, target: target, replies: replies)
 		end 'notBuiltYet'
 
@@ -6616,7 +6617,7 @@ type MaxonToStdLowering
 		return userArgs
 	end 'argsTheTargetTakes'
 
-	function functionValueTargetOf(callee ValueId) returns ByteArray throws AbsentError
+	function functionValueTargetOf(callee ValueId) returns immutable ByteArray throws AbsentError
 		match self.functionValueTargets 'targets'
 			none then throw AbsentError.absent
 			entries(byValue) then return try byValue.get(callee) otherwise throw AbsentError.absent

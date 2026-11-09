@@ -113,10 +113,10 @@ records are passed by reference, so the caller's `Counts` is the one that change
 marks the **message API**: what another thread may ask this type to do. `count` reads one file and
 answers its counts, or throws `FileReadError` when the file cannot be read.
 
-**A message says how its data crosses to the other thread.** `path immutable FilePath` is frozen data the
-sender shares with the service, which only reads it. `returns isolated Counts` is a value the service
+**A message says how its data crosses to the other thread.** `path FilePath` is a value, so the sender
+passes a copy and needs no word. `returns isolated Counts` is a value the service
 gives away: the caller owns the counts outright once the reply arrives. A record parameter or reply with
-neither word is refused where the service is spawned. Numbers, strings and service handles need no word.
+neither word is refused where the service is spawned. Numbers, strings, paths and service handles need no word.
 See [Concurrency](/docs/language/async/).
 </TourStep>
 
@@ -141,10 +141,9 @@ machine's processors. `spawn Counter.create()` runs the factory over there and h
 the `as WorkerCount` at the end is checked at run time, and `Options.parse` has already guaranteed at
 least one file.
 
-`try counter.count(freeze path.clone(), sendTimeout: ForeverMs)` **returns once the message is queued**. It
-hands back a promise, so every file is in flight before the first answer is read. `freeze path.clone()`
-gives the service a frozen path of its own, because `paths` still holds the original. See
-the [memory model](/docs/language/memory-model/).
+`try counter.count(path, sendTimeout: ForeverMs)` **returns once the message is queued**. It
+hands back a promise, so every file is in flight before the first answer is read. `path` is a value, so
+the service gets a copy of its own. See the [memory model](/docs/language/memory-model/).
 
 A send is a `try` because it can fail on the spot: a service's mailbox holds at most 1024 messages, and
 a stopped service takes none. `sendTimeout: ForeverMs` makes a send to a full mailbox wait its turn

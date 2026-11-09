@@ -9,7 +9,7 @@ category: collections
 
 ## Documentation
 
-`Array.contains(element)` checks whether an array contains a specific element using content equality (the `Equatable` interface). This must work correctly for nested array types like `ByteArrayArray` (`Array with ByteArray`), where element comparison requires calling `.equals()` rather than comparing pointers.
+`Array.contains(element)` checks whether an array contains a specific element using content equality (the `Equatable` interface). This must work correctly for nested array types like `ByteArrayArray` (`Array with immutable ByteArray`), where element comparison requires calling `.equals()` rather than comparing pointers.
 
 ## Tests
 
@@ -18,7 +18,7 @@ Check that ByteArrayArray.contains() uses content equality, not pointer identity
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
-typealias ByteArrayArray = Array with ByteArray
+typealias ByteArrayArray = Array with immutable ByteArray
 
 function main() returns ExitCode
 	var names = ByteArrayArray.create(0)

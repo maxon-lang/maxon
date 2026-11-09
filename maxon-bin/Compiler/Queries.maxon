@@ -1342,8 +1342,8 @@ typealias TokenFactEventArray = Array with TokenFactEvent
 
 union TokenFactEvent
 	defaultDeclaration(let declaration DefaultDeclaration)
-	serviceSpawn(let typeName ByteArray, let member ByteArray, let gate SpawnGate, let line LineNumber, let column ColumnNumber)
-	arrayLiteralConformer(let name ByteArray)
+	serviceSpawn(let typeName immutable ByteArray, let member immutable ByteArray, let gate SpawnGate, let line LineNumber, let column ColumnNumber)
+	arrayLiteralConformer(let name immutable ByteArray)
 
 	function noteInto(signatures ProgramSignatures, path FilePath, isStdlibSource bool)
 		match self 'event'
@@ -1643,7 +1643,7 @@ function contestStdlibDeclarationsAgainstUserNames(project Project, signatures P
 
 	// Re-seeded because `SettledDeclarations` seeds its registry before the contest exists, spelling a
 	// bare `Error` that a contest makes the author's interface.
-	seedCompilerOwnedErrorEnums(signatures.mainThreadSettled().enumTypes, interfaces: signatures.interfaceMap())
+	seedCompilerOwnedErrorEnums(signatures.mainThreadSettled().enumTypes, errorSpelling: signatures.interfaceMap().spellingOf(BuiltinInterfaceKind.error))
 	try refuseContestedNamesUsedAsMembers(project, signatures: signatures, stdlibPaths: stdlibPaths)
 end 'contestStdlibDeclarationsAgainstUserNames'
 
@@ -1818,7 +1818,7 @@ end 'contestedMemberSentence'
 
 union ContestedMember
 	clean
-	spelled(name ByteArray)
+	spelled(name immutable ByteArray)
 end 'ContestedMember'
 
 function contestedMemberIn(project Project, signatures ProgramSignatures, path FilePath) returns ContestedMember throws CompileError
@@ -2363,7 +2363,7 @@ export function queryAllModule(project Project, directories NamespaceDirectoryCh
 	// finish, and a front end that threw with its workers still held would leave services no exit can end.
 	var pool = FrontEndPool.create()
 
-	var merged = try queryAllModuleOn(project, pool: pool, directories: directories) otherwise (err) 'frontEndFailed'
+	let merged = try queryAllModuleOn(project, pool: pool, directories: directories) otherwise (err) 'frontEndFailed'
 		pool.close(project)
 		finishLibraryCache(project)
 		throw err
@@ -2666,7 +2666,7 @@ function emissionComponentsOf(project Project, path FilePath, tier SourceTier, c
 	var components = NameRoster.create(pieces.count(), zeroed: false)
 
 	for component in pieces 'eachComponent'
-		components.push(component.toByteArray())
+		components.push(freeze component.toByteArray())
 	end 'eachComponent'
 
 	return components
@@ -3913,7 +3913,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		returnValueFromVoid(name, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "type mismatch: '{name}' declares no return type, so it cannot return a value", line: line, column: column, filePath: path)
 		returnInInitializer(binding, line, column) gives Diagnostic.create(ErrorCode.returnInInitializer, message: "`return` has no function to leave in the initializer of '{binding}' — end a handler there with `panic(…)`, or give the `try` a fallback value with `otherwise <expr>`", line: line, column: column, filePath: path)
 		returnWithoutValue(name, line, column) gives Diagnostic.create(ErrorCode.missingReturn, message: "missing return value: '{name}' declares a return type, so every 'return' must carry a value", line: line, column: column, filePath: path)
-		assignToImmutable(name, line, column) gives Diagnostic.create(ErrorCode.assignToImmutable, message: "cannot assign to immutable variable: '{name}'", line: line, column: column, filePath: path)
+		assignToImmutable(name, line, column) gives Diagnostic.create(ErrorCode.assignToImmutable, message: letReassignedMessage(name, holder: WriteBlameHolder.binding), line: line, column: column, filePath: path)
 		useAfterMove(name, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: useOfMovedValueMessage(name), line: line, column: column, filePath: path)
 		useAfterMoveInto(name, into, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: useOfValueMovedIntoMessage(name, into: into), line: line, column: column, filePath: path)
 		useAfterMoveInAnEarlierIteration(name, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: movedInAnEarlierIterationMessage(name), line: line, column: column, filePath: path)
@@ -4049,7 +4049,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 
 		// The SAME code as `assignToImmutable` — one rule, two sides. Pinned byte-for-byte by
 		// `structs.md` and `challenge-struct-field-assign.md`, in both suites.
-		assignToImmutableField(typeName, fieldName, line, column) gives Diagnostic.create(ErrorCode.assignToImmutable, message: "cannot assign to field '{typeName}.{fieldName}' because it is immutable (declare with 'var' to make it mutable)", line: line, column: column, filePath: path)
+		assignToImmutableField(fieldName, line, column) gives Diagnostic.create(ErrorCode.assignToImmutable, message: letReassignedMessage(fieldName, holder: WriteBlameHolder.letField), line: line, column: column, filePath: path)
 
 		// The instance-method arms. Pinned byte-for-byte by `export-var-fields.md` for both, and the two
 		// suites run the same spec file.

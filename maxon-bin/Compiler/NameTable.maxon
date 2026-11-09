@@ -24,7 +24,7 @@ end 'NameTableError'
 
 union NameView
 	unmaterialized
-	materialized(let text ByteArray)
+	materialized(let text immutable ByteArray)
 end 'NameView'
 
 // An all-`let` record of two narrow fields: one inline machine word where the compiler packs such a
@@ -121,7 +121,7 @@ export type NameTable
 	// The cache holds owned copies, never views. A view would share the arena's buffer, and the next
 	// `intern`'s reserve detaches a shared buffer by copying the whole arena — so interleaved interning and
 	// reading would be quadratic in the arena. A name nothing ever asks for is never copied.
-	export function nameOf(id NameId) returns ByteArray throws NameTableError
+	export function nameOf(id NameId) returns immutable ByteArray throws NameTableError
 		if id >= self.spans.count() as NameId 'noSuchName'
 			throw NameTableError.unknownId
 		end 'noSuchName'
@@ -138,11 +138,15 @@ export type NameTable
 	end 'nameOf'
 
 	// A copy nothing else holds — what a caller handing the name to another thread needs.
-	export function ownedCopyOf(id NameId) returns ByteArray
+	export function ownedCopyOf(id NameId) returns immutable ByteArray
 		let span = self.spanAt(id)
-		var copy = ByteArray.create(span.size as ElementIndex, zeroed: false)
-		appendArenaWindow(copy, source: self.bytes, start: span.offset, size: span.size)
-		return copy
+		var copy = ByteArray.create(span.size as ElementIndex, zeroed: false) as isolated ByteArray
+
+		modify copy 'fill'
+			appendArenaWindow(copy, source: self.bytes, start: span.offset, size: span.size)
+		end 'fill'
+
+		return freeze copy
 	end 'ownedCopyOf'
 
 	export function equalsAt(id NameId, other ByteArray) returns bool

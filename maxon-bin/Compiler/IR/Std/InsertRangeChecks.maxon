@@ -414,7 +414,7 @@ type RangeCheckEmitter
 
 	function stdPositionsOf() returns RangeSitePositionArray
 		if self.functionChecks.sites.isEmpty() 'noSiteToPlace'
-			return noStdPositions
+			return RangeSitePositionArray.create(0)
 		end 'noSiteToPlace'
 
 		return try self.project.rangeSiteFacts.stdPositions.get(self.func.name) otherwise panic("stdPositionsOf: '{String.from(self.func.name)}' has {self.functionChecks.sites.count()} range-check site(s) whose Std positions `lowerMaxonToStd` never filled — this pass runs over the module that lowering just produced, so every function it walks was walked there first")
@@ -1059,7 +1059,7 @@ type RangeCheckEmitter
 		end 'noBoundNeeded'
 
 		self.module.spans.current = sourceSpanOf(self.project, filePath: filePath, line: line, column: column)
-		var ok = self.emitCheckedGuard(site, operand: operand, checks: checks, message: self.rangeCheckMessage(filePath, line: line, alias: alias), chain: chain, isFloat: isFloat, wrap: wrapDemandOf(alias, source: source))
+		let ok = self.emitCheckedGuard(site, operand: operand, checks: checks, message: self.rangeCheckMessage(filePath, line: line, alias: alias), chain: chain, isFloat: isFloat, wrap: wrapDemandOf(alias, source: source))
 		self.module.spans.current = NoSpanId
 
 		return ok
@@ -1103,7 +1103,7 @@ type RangeCheckEmitter
 		end 'noWrapToCheck'
 
 		view recorded = match self.functionChecks.wrapOperands 'column'
-			unwritten gives sharedNoWrapOperands
+			unwritten gives WrapOperandsMap.create()
 			entries(byResult) gives byResult
 		end 'column'
 
@@ -1578,7 +1578,7 @@ type RangeCheckEmitter
 	// compile-time twin (`literalOutOfRangeMessage`'s caller) applies, so a range-contested program
 	// cannot panic naming a typealias no file declares, and one alias reads the same whether it guards
 	// an array ELEMENT or a plain PARAMETER.
-	function rangeCheckMessage(filePath FilePath, line LineNumber, alias RangedTypeAlias) returns ByteArray
+	function rangeCheckMessage(filePath FilePath, line LineNumber, alias RangedTypeAlias) returns immutable ByteArray
 		return panicMessageLine(filePath, line: line, text: textAsItsReaderSpellsIt(self.project, path: filePath, text: "Range check failed: value outside typealias '{aliasSpelledForReader(self.project, alias: alias, readerFilePath: filePath, memo: self.spellings)}'"))
 	end 'rangeCheckMessage'
 
@@ -1774,7 +1774,7 @@ end 'appendDeadReturn'
 module function appendPanicBlock(module StdModule, func IrFunction, globalData GlobalDataTable, label ByteArray, message ByteArray, ids ValueMinter) returns IrBlock
 	var panicBlock = module.addBlock(func, label: label, heat: BlockHeat.cold)
 	let blobLabel = registerStringBlob(globalData, bytes: message)
-	module.appendOp(panicBlock, op: StdOp.osPanic(blobLabel.toByteArray()))
+	module.appendOp(panicBlock, op: StdOp.osPanic(freeze blobLabel.toByteArray()))
 	appendDeadReturn(module, func: func, block: panicBlock, ids: ids)
 
 	return panicBlock
@@ -2138,7 +2138,7 @@ end 'WaivableParam'
 
 typealias WaivableParamArray = Array with WaivableParam
 typealias WaivableParamsByCallee = Map with (ByteArray, WaivableParamArray)
-typealias CallTargetMap = Map with (ValueId, readonly ByteArray)
+typealias CallTargetMap = Map with (ValueId, immutable ByteArray)
 typealias CallTargetsByFunction = Map with (ElementIndex, CallTargetMap)
 typealias RecordedCallArguments = Map with (ValueId, RangeCheckSiteArray)
 
@@ -2273,7 +2273,7 @@ type EntryGuardWaivers
 					continue
 				end 'anIndirectCallTheParserChecked'
 
-				self.denyParamsTheCallDidNotRecord(project, callee: callee, sites: try recorded.get(call.resultId) otherwise sharedNoCallArgumentSites)
+				self.denyParamsTheCallDidNotRecord(project, callee: callee, sites: try recorded.get(call.resultId) otherwise RangeCheckSiteArray.create(0))
 			end 'eachOp'
 		end 'eachCaller'
 	end 'denyCallsThatDidNotRecord'
@@ -2326,10 +2326,6 @@ type EntryGuardWaivers
 		return WaivableParamLookup.none
 	end 'waivableParamAt'
 end 'EntryGuardWaivers'
-
-let sharedNoCallArgumentSites = RangeCheckSiteArray.create(0)
-
-let noStdPositions = RangeSitePositionArray.create(0)
 
 function indexCallArgumentSite(recorded RecordedCallArguments, site RangeCheckSite)
 	match site.target 'target'
@@ -2392,5 +2388,3 @@ function denyParamAt(params WaivableParamArray, at ElementIndex)
 	var denied = try params.get(at) otherwise panic("denyParamAt: params.get OOB at {at}")
 	denied.waived = false
 end 'denyParamAt'
-
-let sharedNoWrapOperands = WrapOperandsMap.create()

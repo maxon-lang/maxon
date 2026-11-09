@@ -310,7 +310,7 @@ function buildServiceFinish(module MaxonModule, project Project, signatures Prog
 end 'buildServiceFinish'
 
 function buildUnknownTagBlock(fn SynthesizedFunction, site SynthesizedSite) returns IrBlock
-	var unknownTag = fn.openBlock(b"unknowntag")
+	let unknownTag = fn.openBlock(b"unknowntag")
 
 	fn.emitPositionalCallDiscarding(CownUnknownTagName, args: ValueIdArray.create(0), site: site)
 	fn.terminate(MaxonOp.retVoid, site: site)
@@ -403,7 +403,7 @@ end 'ReassignedPayloadCell'
 
 typealias ReassignedPayloadCellArray = Array with ReassignedPayloadCell
 
-typealias LoadedPayloadClassArray = Array with readonly PayloadClass
+typealias LoadedPayloadClassArray = Array with PayloadClass
 
 // A payload whose handler parameter is passed by reference is handed in a parameter cell, and
 // `reclaimReassignedPayloads` reads the cell's final value back into `args` before
@@ -560,7 +560,7 @@ function emitServiceHandlerCall(fn SynthesizedFunction, callee ByteArray, return
 
 	let result = fn.mint(resultTag, nameId: resultNameId)
 	let errorFlag = fn.mintOfType(MaxonType.integer)
-	fn.emit(MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: site.range()), argImmutableNames: NoImmutableArgNames, defaultedArgs: NoDefaultedArgs, mint: CalleeMint.notMinted), site: site)
+	fn.emit(MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: site.range()), argImmutableNames: WriteBlameArray.create(0), defaultedArgs: NoDefaultedArgs, mint: CalleeMint.notMinted), site: site)
 	return ServiceHandlerOutcome.routed(result, errorFlag: errorFlag)
 end 'emitServiceHandlerCall'
 

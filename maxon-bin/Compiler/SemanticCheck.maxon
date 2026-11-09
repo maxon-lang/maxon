@@ -50,7 +50,9 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// interprocedural summaries below propagate, differing only in their SEED. Built here rather than inside
 	// either builder because a second walk over every call in the program, to derive the same relation, is the
 	// duplication `buildParamMutationSummary`'s header refuses.
-	var (callEdges, unknownFunctionValueWrites) = collectCallParamEdges(project, signatures: signatures, module: module, funcIndexByName: funcNames.byName, calls: summaryIndex)
+	let paramSources = ParamSourceIndex.over(project, ir: module, funcNames: funcNames)
+	closeResultSourceMasks(funcNames, paramSources: paramSources)
+	var (callEdges, unknownFunctionValueWrites) = collectCallParamEdges(project, signatures: signatures, module: module, funcIndexByName: funcNames.byName, calls: summaryIndex, paramSources: paramSources)
 	let edgesByCallee = callEdges.byCallee(funcNames.functions.count() as CsrIndex)
 
 	// The interprocedural PARAMETER-MUTATION summary — built once, read at every call site to refuse
@@ -62,7 +64,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// through a call's result, a retain or a merge (`ProvenanceTracer.collectProvenanceParamEdges`), which the
 	// storage-provenance summary is what can say. The record-write column's relation also holds an argument that
 	// may lie WITHIN one.
-	var provenance = try buildStorageProvenance(project, module: module, signatures: signatures, funcNames: funcNames, summaryIndex: summaryIndex)
+	var provenance = try buildStorageProvenance(project, module: module, signatures: signatures, funcNames: funcNames, summaryIndex: summaryIndex, paramSources: paramSources)
 	try requireStillWanted(project)
 
 	var (mutationEdges, recordEdges) = provenance.collectProvenanceParamEdges(callEdges, funcNames: funcNames)
@@ -79,10 +81,10 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 
 	checkComparisonMethodsDoNotWrite(project, module: module, mutationSummary: mutationSummary, provenance: provenance)
 
-	var capabilityFacts = inferCapabilities(project, module: module, signatures: signatures, funcNames: funcNames, provenance: provenance, provenanceWrites: provenance.receiverWrites, edges: recordEdges, byCallee: recordEdgesByCallee)
+	var capabilityFacts = inferCapabilities(project, module: module, signatures: signatures, funcNames: funcNames, provenance: provenance, provenanceWrites: provenance.receiverWrites, edges: recordEdges, byCallee: recordEdgesByCallee, paramSources: paramSources)
 	provenance.adoptCapabilityFacts(capabilityFacts)
 	try checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, mutationSummary: mutationSummary, provenance: provenance, calls: summaryIndex)
-	try checkCapabilityCalls(project, module: module, signatures: signatures, funcNames: funcNames, provenance: provenance, facts: capabilityFacts, edges: recordEdges)
+	try checkCapabilityCalls(project, module: module, signatures: signatures, funcNames: funcNames, provenance: provenance, facts: capabilityFacts, calls: summaryIndex, paramSources: paramSources)
 	try requireStillWanted(project)
 
 	provenance.endStorageDoors()
@@ -401,7 +403,7 @@ type UnthrownClauses
 		self.clauses.push(UnthrownClause.create(func, declared: declared))
 		self.siteOf.push(site)
 		self.settled.push(false)
-		self.byName.upsert(func.name.clone(), value: index)
+		self.byName.upsert(func.name, value: index)
 
 		if var atPosition = try self.byPosition.get(position) 'positionKnown'
 			atPosition.push(index)
@@ -614,14 +616,24 @@ end 'ParamMutationSummary'
 // Dense columns rather than an `Array with <a record>`: a `type` has reference semantics, so an array of
 // them is an array of POINTERS to heap-boxed records — one live allocation per edge, on a pass that runs
 // over every call in the program. The same discipline `SourceRangeTable` and `ValueOriginTable` state.
+export enum FrozenCarry
+	carries
+	opaqueElement
+	valuesOnly
+	alreadyFrozen
+end 'FrozenCarry'
+
+typealias FrozenCarryArray = Array with FrozenCarry
+
 export type CallParamEdges
 	export var calleeIndices as CsrColumn
 	export var callerIndices as FuncIndexArray
 	export var callerParams as ParamCountArray
 	export var calleeParams as ParamCountArray
+	var frozenCarries as FrozenCarryArray
 
 	export static function create() returns CallParamEdges
-		return Self{calleeIndices: CsrColumn.create(0), callerIndices: FuncIndexArray.create(0), callerParams: ParamCountArray.create(0), calleeParams: ParamCountArray.create(0)}
+		return Self{calleeIndices: CsrColumn.create(0), callerIndices: FuncIndexArray.create(0), callerParams: ParamCountArray.create(0), calleeParams: ParamCountArray.create(0), frozenCarries: FrozenCarryArray.create(0)}
 	end 'create'
 
 	export function count() returns CsrIndex
@@ -630,12 +642,17 @@ export type CallParamEdges
 
 	// The four columns are only ever pushed together here, so they stay the same length by construction —
 	// `pushCallArg`'s reason, reaching the third family of parallel columns in the compiler.
-	export function record(calleeIndex ElementIndex, callerIndex ElementIndex, callerParam ParamCount, calleeParam ParamCount)
+	export function record(calleeIndex ElementIndex, callerIndex ElementIndex, callerParam ParamCount, calleeParam ParamCount, carry FrozenCarry)
 		self.calleeIndices.push(calleeIndex as CsrIndex)
 		self.callerIndices.push(callerIndex)
 		self.callerParams.push(callerParam)
 		self.calleeParams.push(calleeParam)
+		self.frozenCarries.push(carry)
 	end 'record'
+
+	export function frozenCarryOf(row ElementIndex) returns FrozenCarry
+		return try self.frozenCarries.get(row) otherwise panic("CallParamEdges.frozenCarryOf: frozenCarries.get OOB at {row} — the columns are parallel by construction")
+	end 'frozenCarryOf'
 
 	// This relation with `rows` added, as a second list the base does not see — or this very list when `rows` is
 	// empty, so a caller's `is` can tell that the two relations are one and share an adjacency (`adjacencyOf`).
@@ -656,7 +673,7 @@ export type CallParamEdges
 			let caller = try other.callerIndices.get(k as ElementIndex) otherwise panic("CallParamEdges.appendRowsIn: callerIndices.get OOB at {k} — the four columns are parallel by construction")
 			let callerParam = try other.callerParams.get(k as ElementIndex) otherwise panic("CallParamEdges.appendRowsIn: callerParams.get OOB at {k} — the four columns are parallel by construction")
 			let calleeParam = try other.calleeParams.get(k as ElementIndex) otherwise panic("CallParamEdges.appendRowsIn: calleeParams.get OOB at {k} — the four columns are parallel by construction")
-			self.record(callee, callerIndex: caller, callerParam: callerParam, calleeParam: calleeParam)
+			self.record(callee, callerIndex: caller, callerParam: callerParam, calleeParam: calleeParam, carry: other.frozenCarryOf(k as ElementIndex))
 		end 'eachRow'
 	end 'appendRowsIn'
 
@@ -713,13 +730,13 @@ function buildParamMutationSummary(project Project, signatures ProgramSignatures
 		byRefWriteMasks.push(cellWrittenParamMask(project, func: func, writtenThrough: writtenThrough, writtenThroughAnUnknownBody: cellWrittenThroughAnUnknownBody))
 	end 'seed'
 
-	propagateParamMasks(masks, edges: edges, byCallee: byCallee)
-	propagateParamMasks(byRefWriteMasks, edges: edges, byCallee: byCallee)
+	propagateParamMasks(masks, edges: edges, byCallee: byCallee, need: PropagatedNeed.written, hops: NeedHops.untracked())
+	propagateParamMasks(byRefWriteMasks, edges: edges, byCallee: byCallee, need: PropagatedNeed.written, hops: NeedHops.untracked())
 
 	// ⭐ **THE RECORD COLUMN IS CLOSED OVER THE RECORD RELATION** — the argument edges plus every argument that may
 	// lie within a parameter's record, because its question is whether the GRAPH a call site handed over gets
 	// written: `nudge(t)` whose body is `t.inner.bump()` writes it (`ProvenanceTracer.collectProvenanceParamEdges`).
-	propagateParamMasks(recordWriteMasks, edges: recordEdges, byCallee: recordByCallee)
+	propagateParamMasks(recordWriteMasks, edges: recordEdges, byCallee: recordByCallee, need: PropagatedNeed.written, hops: NeedHops.untracked())
 
 	return ParamMutationSummary.create(masks, recordWriteMasks: recordWriteMasks, byRefWriteMasks: byRefWriteMasks, funcIndexByName: funcIndexByName, instancesOfTemplate: instancesOfTemplates(signatures, funcNames: funcNames))
 end 'buildParamMutationSummary'
@@ -863,124 +880,243 @@ module typealias ConformersByInterface = Map with (ByteArray, NameRoster)
 
 module typealias TemplateInstanceMap = Map with (ByteArray, FuncIndexArray)
 
-module typealias CapturedLoadMap = Map with (ValueId, ParamCount)
+function addClosureEnvEdges(project Project, addr ValueId, offset ByteOffset, value ValueId, callerIndex ElementIndex, edges CallParamEdges, viewed ViewedSources)
+	let func = viewed.sources.func
 
-module function capturedLoadsOf(module MaxonModule, func IrFunction) returns CapturedLoadMap
-	if func.closureEnvFields.count() == 0 and not buildsAClosureRecord(module, func: func) 'nothingCaptured'
-		return CapturedLoadMap.create()
-	end 'nothingCaptured'
-
-	return collectedCapturedLoadsOf(module, func: func)
-end 'capturedLoadsOf'
-
-module function collectedCapturedLoadsOf(module MaxonModule, func IrFunction) returns CapturedLoadMap
-	let environment = capturedEnvironmentOf(func)
-	var aliases = CapturedLoadMap.create()
-
-	for opIdx in module.liveOpIndices(func) 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("capturedLoadsOf: opIdx {opIdx} from liveOpIndices is not in module.ops")
-
-		match slotReadOfOp(op, opIndex: opIdx) 'read'
-			load(_, addr, offset) then noteCapturedLoad(aliases, op: op, addr: addr, environment: environment, offset: offset)
-			retainOf(operand) then noteRetainedParam(aliases, func: func, op: op, operand: operand)
-			none or
-			store then break
-		end 'read'
-	end 'eachOp'
-
-	return aliases
-end 'collectedCapturedLoadsOf'
-
-function buildsAClosureRecord(module MaxonModule, func IrFunction) returns bool
-	if not func.valueTags.contains(ValueTypeTag.function) 'noFunctionValueExists'
-		return false
-	end 'noFunctionValueExists'
-
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("buildsAClosureRecord: blockRef from func.blockRefs not in module.blocks")
-
-		for opIdx in block.bodyOps() 'eachOp'
-			if storesIntoAClosureRecord(func, read: slotReadOfOp(try module.ops.get(opIdx) otherwise panic("buildsAClosureRecord: opIdx {opIdx} not in module.ops"), opIndex: opIdx)) 'aClosureEnvironment'
-				return true
-			end 'aClosureEnvironment'
-		end 'eachOp'
-	end 'eachBlock'
-
-	return false
-end 'buildsAClosureRecord'
-
-function storesIntoAClosureRecord(func IrFunction, read SlotRead) returns bool
-	return match read 'read'
-		store(addr, _, _) gives (try func.valueTags.get(addr) otherwise panic("storesIntoAClosureRecord: v{addr} of '{String.from(func.name)}' has no recorded type")) == ValueTypeTag.function
-		none or
-		load or
-		retainOf gives false
-	end 'read'
-end 'storesIntoAClosureRecord'
-
-union CapturedEnvironment
-	none
-	parameter(position ParamCount, value ValueId)
-end 'CapturedEnvironment'
-
-function capturedEnvironmentOf(func IrFunction) returns CapturedEnvironment
-	if func.closureEnvFields.count() == 0 'notAClosure'
-		return CapturedEnvironment.none
-	end 'notAClosure'
-
-	let position = func.paramCount - 1
-	return CapturedEnvironment.parameter(position, value: valueIdAtParamPosition(position))
-end 'capturedEnvironmentOf'
-
-function noteCapturedLoad(aliases CapturedLoadMap, op MaxonOp, addr ValueId, environment CapturedEnvironment, offset ByteOffset)
-	match environment 'environment'
-		none then return
-		parameter(envPosition, env) then noteEnvironmentLoad(aliases, op: op, addr: addr, env: env, envPosition: envPosition, offset: offset)
-	end 'environment'
-end 'noteCapturedLoad'
-
-function noteEnvironmentLoad(aliases CapturedLoadMap, op MaxonOp, addr ValueId, env ValueId, envPosition ParamCount, offset ByteOffset)
-	if addr != env 'notTheEnvironment'
-		return
-	end 'notTheEnvironment'
-
-	let slot = try envSlotAtOffset(offset) otherwise return
-
-	let id = try maxonOpDefinedValue(op) otherwise panic("noteEnvironmentLoad: a load defines its result")
-	aliases.upsert(id, value: capturedParamPosition(envPosition, slot: slot))
-end 'noteEnvironmentLoad'
-
-function noteRetainedParam(aliases CapturedLoadMap, func IrFunction, op MaxonOp, operand ValueId)
-	let position = try callerParamOf(func, capturedLoads: aliases, argId: operand) otherwise return
-
-	let id = try maxonOpDefinedValue(op) otherwise return
-	aliases.upsert(id, value: position)
-end 'noteRetainedParam'
-
-function callerParamOf(func IrFunction, capturedLoads CapturedLoadMap, argId ValueId) returns ParamCount throws AbsentError
-	if argId < valueIdAtParamPosition(func.paramCount) 'oneOfOurParameters'
-		return paramPositionOfValueId(argId)
-	end 'oneOfOurParameters'
-
-	return try capturedLoads.get(argId) otherwise throw AbsentError.absent
-end 'callerParamOf'
-
-function addClosureEnvEdges(project Project, module MaxonModule, func IrFunction, addr ValueId, offset ByteOffset, value ValueId, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, capturedLoads CapturedLoadMap)
 	if (try func.valueTags.get(addr) otherwise panic("addClosureEnvEdges: v{addr} of '{String.from(func.name)}' has no recorded type")) != ValueTypeTag.function 'notAClosureRecord'
 		return
 	end 'notAClosureRecord'
 
 	let slot = try envSlotAtOffset(offset) otherwise return
-	let callerParam = try callerParamOf(func, capturedLoads: capturedLoads, argId: value) otherwise return
-	let calleeIndex = try funcIndexByName.get(functionValueOwnTypeName(project, func: func, value: addr)) otherwise return
-	let closure = try module.functions.get(calleeIndex) otherwise panic("addClosureEnvEdges: functions.get OOB at {calleeIndex}")
+	let sources = viewed.sourcesOfCapture(value)
+
+	if sources == NoParamPositions 'noParameterReachesIt'
+		return
+	end 'noParameterReachesIt'
+
+	let calleeIndex = try viewed.sources.funcIndexByName.get(functionValueOwnTypeName(project, func: func, value: addr)) otherwise return
+	let closure = try viewed.sources.ir.functions.get(calleeIndex) otherwise panic("addClosureEnvEdges: functions.get OOB at {calleeIndex}")
 
 	if closure.closureEnvFields.count() == 0 'notALiftedClosure'
 		return
 	end 'notALiftedClosure'
 
-	edges.record(calleeIndex, callerIndex: callerIndex, callerParam: callerParam, calleeParam: capturedParamPosition(closure.paramCount - 1, slot: slot))
+	let calleeParam = capturedParamPosition(closure.paramCount - 1, slot: slot)
+
+	for callerParam in 0 upto MaxAbiArgs 'eachSource'
+		if maskHasParam(sources, param: callerParam) 'aSource'
+			edges.record(calleeIndex, callerIndex: callerIndex, callerParam: callerParam, calleeParam: calleeParam, carry: FrozenCarry.carries)
+		end 'aSource'
+	end 'eachSource'
 end 'addClosureEnvEdges'
+
+union SlotSelector
+	everySlot
+	slotAt(offset ByteOffset)
+end 'SlotSelector'
+
+function slotSelected(selector SlotSelector, offset ByteOffset) returns bool
+	return match selector 'selector'
+		everySlot gives true
+		slotAt(wanted) gives wanted == offset
+	end 'selector'
+end 'slotSelected'
+
+type SlotAccess
+	module let addr as ValueId
+	module let offset as ByteOffset
+	module let value as ValueId
+
+	static function create(addr ValueId, offset ByteOffset, value ValueId) returns Self
+		return Self{addr: addr, offset: offset, value: value}
+	end 'create'
+end 'SlotAccess'
+
+typealias SlotAccessArray = Array with SlotAccess
+
+typealias SlotAccessByResult = Map with (ValueId, SlotAccess)
+
+typealias CallOpByResult = Map with (ValueId, ElementIndex)
+
+typealias SlotAccessByRoot = Map with (ValueId, SlotAccessArray)
+
+type AggregateOrigins
+	let signatures as ProgramSignatures
+	module let sources as ParamSources
+	let storesByRoot as SlotAccessByRoot
+	let loads as SlotAccessByResult
+	let calls as CallOpByResult
+	var built as bool
+
+	static function of(signatures ProgramSignatures, sources ParamSources) returns Self
+		return Self{signatures: signatures, sources: sources, storesByRoot: SlotAccessByRoot.create(), loads: SlotAccessByResult.create(), calls: CallOpByResult.create(), built: false}
+	end 'of'
+
+	function ensureBuilt()
+		if self.built 'alreadyBuilt'
+			return
+		end 'alreadyBuilt'
+
+		self.built = true
+
+		for opIdx in self.sources.ir.liveOpIndices(self.sources.func) 'eachOp'
+			let op = try self.sources.ir.ops.get(opIdx) otherwise panic("AggregateOrigins.ensureBuilt: opIdx {opIdx} from liveOpIndices is not in module.ops")
+
+			match slotReadOfOp(op, opIndex: opIdx) 'read'
+				retainOf then break
+				store(addr, offset, value) then self.noteStore(addr, offset: offset, value: value)
+				load(_, addr, offset) then self.noteLoad(op, addr: addr, offset: offset)
+				none then self.noteCall(op, opIdx: opIdx)
+			end 'read'
+		end 'eachOp'
+	end 'ensureBuilt'
+
+	function noteStore(addr ValueId, offset ByteOffset, value ValueId)
+		if not valueMayHoldAnIterator(self.signatures, func: self.sources.func, value: value) 'aRecordHoldsNone'
+			return
+		end 'aRecordHoldsNone'
+
+		let root = self.sources.rootOf(addr)
+		var known = try self.storesByRoot.get(root) otherwise SlotAccessArray.create(0)
+		known.push(SlotAccess.create(addr, offset: offset, value: value))
+		self.storesByRoot.upsert(root, value: known)
+	end 'noteStore'
+
+	function noteLoad(op MaxonOp, addr ValueId, offset ByteOffset)
+		let result = try maxonOpDefinedValue(op) otherwise panic("AggregateOrigins.noteLoad: a load defines its result")
+
+		if valueMayHoldAnIterator(self.signatures, func: self.sources.func, value: result) 'aRecordMayHoldOne'
+			self.loads.upsert(result, value: SlotAccess.create(addr, offset: offset, value: result))
+		end 'aRecordMayHoldOne'
+	end 'noteLoad'
+
+	function noteCall(op MaxonOp, opIdx ElementIndex)
+		let _ = try directCallPartsOf(op) otherwise return
+		let result = try maxonOpDefinedValue(op) otherwise panic("AggregateOrigins.noteCall: a call defines its result")
+
+		if valueMayHoldAnIterator(self.signatures, func: self.sources.func, value: result) 'aRecordMayHoldOne'
+			self.calls.upsert(result, value: opIdx)
+		end 'aRecordMayHoldOne'
+	end 'noteCall'
+
+	function storedInto(root ValueId, selector SlotSelector) returns ValueIdArray
+		self.ensureBuilt()
+		var found = ValueIdArray.create(0)
+		let stores = try self.storesByRoot.get(root) otherwise return found
+
+		for store in stores 'eachStore'
+			if slotSelected(selector, offset: store.offset) 'aSlotOfTheRoot'
+				found.push(store.value)
+			end 'aSlotOfTheRoot'
+		end 'eachStore'
+
+		return found
+	end 'storedInto'
+
+	function loadedAs(value ValueId) returns SlotAccess throws AbsentError
+		self.ensureBuilt()
+		return try self.loads.get(value) otherwise throw AbsentError.absent
+	end 'loadedAs'
+
+	function callProducing(value ValueId) returns ElementIndex throws AbsentError
+		self.ensureBuilt()
+		return try self.calls.get(value) otherwise throw AbsentError.absent
+	end 'callProducing'
+end 'AggregateOrigins'
+
+type ViewedSources
+	let signatures as ProgramSignatures
+	module let sources as ParamSources
+	let origins as AggregateOrigins
+	var seen as ValueMarkSet
+
+	static function over(signatures ProgramSignatures, sources ParamSources) returns Self
+		return Self{signatures: signatures, sources: sources, origins: AggregateOrigins.of(signatures, sources: sources), seen: ValueMarkSet.create()}
+	end 'over'
+
+	function sourcesOfCapture(value ValueId) returns ParamPositionMask
+		if let direct = try self.sources.parameterBehind(value) 'aParameterItself'
+			return maskWithParam(NoParamPositions, param: direct)
+		end 'aParameterItself'
+
+		self.seen = ValueMarkSet.create()
+		return self.sources.maskOf(value) or self.viewedSources(value)
+	end 'sourcesOfCapture'
+
+	function viewedSources(value ValueId) returns ParamPositionMask
+		if not valueMayHoldAnIterator(self.signatures, func: self.sources.func, value: value) 'holdsNothingToView'
+			return NoParamPositions
+		end 'holdsNothingToView'
+
+		let root = self.sources.rootOf(value)
+
+		if self.seen.contains(root) 'alreadyWalked'
+			return NoParamPositions
+		end 'alreadyWalked'
+
+		self.seen.insert(root)
+		var mask = self.sourcesOfStoredValues(root, selector: SlotSelector.everySlot) or self.viewedThroughProducer(root)
+
+		if let access = try self.origins.loadedAs(root) 'readFromARecord'
+			mask = mask or self.readFrom(access)
+		end 'readFromARecord'
+
+		if valueIsAnIteratorRecord(self.sources.project, signatures: self.signatures, func: self.sources.func, value: root) 'anIterator'
+			mask = mask or self.sources.maskOf(root) or self.createdBySettledCall(root)
+		end 'anIterator'
+
+		return mask
+	end 'viewedSources'
+
+	function sourcesOfStoredValues(root ValueId, selector SlotSelector) returns ParamPositionMask
+		var mask = NoParamPositions
+
+		for held in self.origins.storedInto(root, selector: selector) 'eachStoredValue'
+			mask = mask or self.viewedSources(held)
+		end 'eachStoredValue'
+
+		return mask
+	end 'sourcesOfStoredValues'
+
+	function readFrom(access SlotAccess) returns ParamPositionMask
+		let root = self.sources.rootOf(access.addr)
+		var mask = self.sources.maskOf(root) or self.sourcesOfStoredValues(root, selector: SlotSelector.slotAt(access.offset)) or self.viewedThroughProducer(root)
+
+		if let outer = try self.origins.loadedAs(root) 'aNestedRecord'
+			mask = mask or self.readFrom(outer)
+		end 'aNestedRecord'
+
+		return mask
+	end 'readFrom'
+
+	function viewedThroughProducer(root ValueId) returns ParamPositionMask
+		let opIdx = try self.origins.callProducing(root) otherwise return NoParamPositions
+		return self.viewedThroughArguments(opIdx)
+	end 'viewedThroughProducer'
+
+	function createdBySettledCall(iterator ValueId) returns ParamPositionMask
+		let opIdx = try self.sources.settlingOpOf(iterator) otherwise return NoParamPositions
+		let parts = try directCallPartsOf(try self.sources.ir.ops.get(opIdx) otherwise panic("ViewedSources.createdBySettledCall: ops.get OOB at {opIdx}")) otherwise return NoParamPositions
+		var mask = self.viewedThroughArguments(opIdx)
+
+		for position in 0 upto parts.1.count() 'eachArgument'
+			mask = mask or self.sources.maskOfCallArgument(opIdx, args: parts.1, position: position)
+		end 'eachArgument'
+
+		return mask
+	end 'createdBySettledCall'
+
+	function viewedThroughArguments(opIdx ElementIndex) returns ParamPositionMask
+		let parts = try directCallPartsOf(try self.sources.ir.ops.get(opIdx) otherwise panic("ViewedSources.viewedThroughArguments: ops.get OOB at {opIdx}")) otherwise return NoParamPositions
+		var mask = NoParamPositions
+
+		for argument in parts.1 'eachArgument'
+			mask = mask or self.viewedSources(argument)
+		end 'eachArgument'
+
+		return mask
+	end 'viewedThroughArguments'
+end 'ViewedSources'
 
 type UnknownBodyWrites
 	// A position handed to a call whose bodies are not all known feeds the capability and record columns
@@ -1009,11 +1145,12 @@ type UnknownBodyWrites
 	end 'byReferencePositionAt'
 end 'UnknownBodyWrites'
 
-function collectCallParamEdges(project Project, signatures ProgramSignatures, module MaxonModule, funcIndexByName FuncIndexByName, calls CallSummaryIndex) returns (CallParamEdges, UnknownBodyWrites)
+function collectCallParamEdges(project Project, signatures ProgramSignatures, module MaxonModule, funcIndexByName FuncIndexByName, calls CallSummaryIndex, paramSources ParamSourceIndex) returns (CallParamEdges, UnknownBodyWrites)
 	var edges = CallParamEdges.create()
 	var conformers = ConformersByInterface.create()
 	var witnessSlots = WitnessSlotsByDeclIndex.create()
 	var unknownWrites = UnknownBodyWrites.create(module.functions.count())
+	var carryClassifier = ArgumentCarryClassifier.of(signatures)
 
 	for i in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(i) otherwise panic("collectCallParamEdges: functions.get OOB at {i}")
@@ -1022,13 +1159,14 @@ function collectCallParamEdges(project Project, signatures ProgramSignatures, mo
 			continue
 		end 'passesNothingOfItsOwn'
 
-		let capturedLoads = capturedLoadsOf(module, func: func)
+		let sources = paramSources.of(i)
+		let viewed = ViewedSources.over(signatures, sources: sources)
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("collectCallParamEdges: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.bodyOps() 'eachOp'
-				collectCallParamEdgesAt(project, signatures: signatures, op: try module.ops.get(opIdx) otherwise panic("collectCallParamEdges: opIdx {opIdx} not in module.ops"), func: func, callerIndex: i, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots, module: module, calls: calls, unknownWrites: unknownWrites, capturedLoads: capturedLoads)
+				collectCallParamEdgesAt(project, signatures: signatures, op: try module.ops.get(opIdx) otherwise panic("collectCallParamEdges: opIdx {opIdx} not in module.ops"), sources: sources, callerIndex: i, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots, calls: calls, unknownWrites: unknownWrites, carryClassifier: carryClassifier, viewed: viewed)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -1041,17 +1179,17 @@ end 'collectCallParamEdges'
 // whose shape agrees with its type, a dispatch on its interface's conformers — and carries an edge to each.
 // Every variant is named, so a newly appended op fails to compile here rather than silently dropping out of
 // the call graph.
-function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, op MaxonOp, func IrFunction, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex, module MaxonModule, calls CallSummaryIndex, unknownWrites UnknownBodyWrites, capturedLoads CapturedLoadMap)
+function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, op MaxonOp, sources ParamSources, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex, calls CallSummaryIndex, unknownWrites UnknownBodyWrites, carryClassifier ArgumentCarryClassifier, viewed ViewedSources)
 	match op 'op'
-		indirectCall then addFunctionValueParamEdges(project, op: op, calls: calls, func: func, callerIndex: callerIndex, edges: edges, unknownWrites: unknownWrites, capturedLoads: capturedLoads)
-		call(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, module: module, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
+		indirectCall then addFunctionValueParamEdges(project, op: op, calls: calls, sources: sources, callerIndex: callerIndex, edges: edges, unknownWrites: unknownWrites)
+		call(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, sources: sources, callerIndex: callerIndex, edges: edges, carryClassifier: carryClassifier)
 
 		// ⚠ An `async` spawn carries the same edge a direct call does. A managed argument is legal and
 		// the spawn hands the coroutine a reference to it, so `async g(p)` where `g`
 		// writes its parameter writes the caller's own, before the await or after it. Without the edge,
 		// `relay(q)` spawning a writing `replace(q)` would read as writing nothing, and E3159 would admit
 		// a `let` handed to `relay`.
-		asyncCall(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, module: module, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
+		asyncCall(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, sources: sources, callerIndex: callerIndex, edges: edges, carryClassifier: carryClassifier)
 		literal or
 		ret or
 		retVoid or
@@ -1089,12 +1227,188 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 		existentialWitness or
 		holdValue or
 		holdEnd then break
-		tryCall(_, _, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, module: module, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
-		storeIndirect(addr, offset, value, _) then addClosureEnvEdges(project, module: module, func: func, addr: addr, offset: offset, value: value, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
-		witnessDispatch(_, args, _, _, methodIndex, interfaceDeclIndex, _, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots, capturedLoads: capturedLoads)
-		witnessTryDispatch(_, _, args, _, _, methodIndex, interfaceDeclIndex, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots, capturedLoads: capturedLoads)
+		tryCall(_, _, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, sources: sources, callerIndex: callerIndex, edges: edges, carryClassifier: carryClassifier)
+		storeIndirect(addr, offset, value, _) then addClosureEnvEdges(project, addr: addr, offset: offset, value: value, callerIndex: callerIndex, edges: edges, viewed: viewed)
+		witnessDispatch(_, args, _, _, methodIndex, interfaceDeclIndex, _, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, sources: sources, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots)
+		witnessTryDispatch(_, _, args, _, _, methodIndex, interfaceDeclIndex, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, sources: sources, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots)
 	end 'op'
 end 'collectCallParamEdgesAt'
+
+type ReturnedCallResults
+	module let functionIndex as ElementIndex
+	let values as ValueIdArray
+	let heldOps as FuncIndexArray
+	module let sources as ParamSources
+
+	static function create(functionIndex ElementIndex, values ValueIdArray, heldOps FuncIndexArray, sources ParamSources) returns ReturnedCallResults
+		return Self{functionIndex: functionIndex, values: values, heldOps: heldOps, sources: sources}
+	end 'create'
+
+	function widenResultMask() returns bool
+		let func = self.sources.func
+		var closed = func.resultFromParamMask
+		self.sources.forgetMasks()
+
+		for value in self.values 'eachReturnedResult'
+			let opIdx = try self.sources.settlingOpOf(value) otherwise panic("widenResultMask: a returned call result has its settling op")
+			closed = closed or self.sources.maskOfResult(opIdx)
+		end 'eachReturnedResult'
+
+		for opIdx in self.heldOps 'eachHeldResult'
+			closed = closed or self.sources.maskOfResult(opIdx)
+		end 'eachHeldResult'
+
+		if closed == func.resultFromParamMask 'unchanged'
+			return false
+		end 'unchanged'
+
+		func.resultFromParamMask = closed
+		return true
+	end 'widenResultMask'
+end 'ReturnedCallResults'
+
+typealias ReturnedCallResultsArray = Array with ReturnedCallResults
+
+typealias EntriesByCallee = Map with (ElementIndex, FuncIndexArray)
+
+function returnedCallResultsOf(sources ParamSources) returns ValueIdArray
+	var values = ValueIdArray.create(0)
+
+	for blockRef in sources.func.blockRefs 'eachBlock'
+		let block = sources.ir.getBlock(blockRef)
+
+		if not block.hasTerminatorOp() 'noTerminator'
+			continue
+		end 'noTerminator'
+
+		let returned = try returnedResultValueOf(try sources.ir.ops.get(block.terminatorIndex()) otherwise panic("returnedCallResultsOf: ops.get OOB at {block.terminatorIndex()}")) otherwise continue
+
+		if sources.hasASettlingOp(returned) 'aCallResult'
+			values.push(returned)
+		end 'aCallResult'
+	end 'eachBlock'
+
+	return values
+end 'returnedCallResultsOf'
+
+function noteEntryDependsOnCallee(dependents EntriesByCallee, calleeIndex ElementIndex, entry ElementIndex)
+	var known = try dependents.get(calleeIndex) otherwise FuncIndexArray.create(0)
+
+	if not known.contains(entry) 'firstOfItsKind'
+		known.push(entry)
+		dependents.upsert(calleeIndex, value: known)
+	end 'firstOfItsKind'
+end 'noteEntryDependsOnCallee'
+
+function noteEntryCallees(sources ParamSources, ops FuncIndexArray, entry ElementIndex, dependents EntriesByCallee)
+	for opIdx in ops 'eachSettlingOp'
+		let parts = try directCallPartsOf(try sources.ir.ops.get(opIdx) otherwise panic("noteEntryCallees: ops.get OOB at {opIdx}")) otherwise continue
+		let calleeIndex = try sources.funcIndexByName.get(parts.0) otherwise continue
+		noteEntryDependsOnCallee(dependents, calleeIndex: calleeIndex, entry: entry)
+	end 'eachSettlingOp'
+end 'noteEntryCallees'
+
+function closeResultSourceMasks(funcNames FunctionNameIndex, paramSources ParamSourceIndex)
+	var returning = ReturnedCallResultsArray.create(0)
+	var dependents = EntriesByCallee.create()
+
+	for index in 0 upto funcNames.functions.count() 'eachFunc'
+		let func = try funcNames.functions.get(index) otherwise panic("closeResultSourceMasks: functions.get OOB at {index} below its own count")
+
+		if func.capabilityNotes.undecidedResultOps.isEmpty() or bodyIsUnreadable(func) 'nothingReturnedFromACall'
+			continue
+		end 'nothingReturnedFromACall'
+
+		let sources = paramSources.of(index)
+		let values = returnedCallResultsOf(sources)
+
+		if values.isEmpty() and func.capabilityNotes.heldResultOps.isEmpty() 'returnsNoCallResult'
+			continue
+		end 'returnsNoCallResult'
+
+		let entry = returning.count()
+		returning.push(ReturnedCallResults.create(index, values: values, heldOps: func.capabilityNotes.heldResultOps, sources: sources))
+		noteEntryCallees(sources, ops: func.capabilityNotes.undecidedResultOps, entry: entry, dependents: dependents)
+		noteEntryCallees(sources, ops: func.capabilityNotes.derivedResultOps, entry: entry, dependents: dependents)
+		noteEntryCallees(sources, ops: func.capabilityNotes.heldResultOps, entry: entry, dependents: dependents)
+	end 'eachFunc'
+
+	var worklist = FuncIndexArray.create(0)
+	var queued = BoolArray.create(returning.count(), zeroed: false)
+
+	for entry in 0 upto returning.count() 'seedWorklist'
+		worklist.push(entry)
+		queued.push(true)
+	end 'seedWorklist'
+
+	var head = 0 as ElementIndex
+
+	while head < worklist.count() 'drain'
+		let entryIndex = try worklist.get(head) otherwise panic("closeResultSourceMasks: worklist.get OOB at {head}")
+		head = head + 1
+		try queued.set(entryIndex, value: false) otherwise panic("closeResultSourceMasks: queued.set OOB at {entryIndex}")
+		let entry = try returning.get(entryIndex) otherwise panic("closeResultSourceMasks: returning.get OOB at {entryIndex}")
+
+		if not entry.widenResultMask() 'nothingGrew'
+			continue
+		end 'nothingGrew'
+
+		let waiting = try dependents.get(entry.functionIndex) otherwise continue
+
+		for dependent in waiting 'eachDependent'
+			let wasQueued = try queued.get(dependent) otherwise panic("closeResultSourceMasks: queued.get OOB at {dependent}")
+
+			if wasQueued 'alreadyQueued'
+				continue
+			end 'alreadyQueued'
+
+			try queued.set(dependent, value: true) otherwise panic("closeResultSourceMasks: queued.set OOB at {dependent}")
+			worklist.push(dependent)
+		end 'eachDependent'
+	end 'drain'
+end 'closeResultSourceMasks'
+
+module function frozenCarryOfValue(func IrFunction, value ValueId) returns FrozenCarry
+	return FrozenCarry.alreadyFrozen if tagIsByteRecord(valueTagOf(func, value: value)) else FrozenCarry.carries
+end 'frozenCarryOfValue'
+
+typealias ValueOnlyInstanceMap = Map with (GenericInstanceId, bool)
+
+type ArgumentCarryClassifier
+	var signatures as ProgramSignatures
+	var writability as RecordKindWritability
+	var valueOnly as ValueOnlyInstanceMap
+
+	static function of(signatures ProgramSignatures) returns ArgumentCarryClassifier
+		return Self{signatures: signatures, writability: RecordKindWritability.of(signatures), valueOnly: ValueOnlyInstanceMap.create()}
+	end 'of'
+
+	function carryOf(func IrFunction, value ValueId) returns FrozenCarry
+		let carry = frozenCarryOfValue(func, value: value)
+
+		if carry != FrozenCarry.carries or valueTagOf(func, value: value) != ValueTypeTag.genericInstance 'notAContainer'
+			return carry
+		end 'notAContainer'
+
+		let id = (try func.valueNameIds.get(value) otherwise panic("ArgumentCarryClassifier.carryOf: v{value} of '{String.from(func.name)}' has no type name — the type columns are minted in lockstep")) as GenericInstanceId
+
+		if self.instanceHoldsOnlyValues(id) 'aContainerOfValues'
+			return FrozenCarry.valuesOnly
+		end 'aContainerOfValues'
+
+		return carry
+	end 'carryOf'
+
+	function instanceHoldsOnlyValues(id GenericInstanceId) returns bool
+		if let known = try self.valueOnly.get(id) 'asked'
+			return known
+		end 'asked'
+
+		let holdsNone = self.signatures.recordKindsWithinInstance(id).holdsNoWritableRecord(self.writability)
+		self.valueOnly.upsert(id, value: holdsNone)
+		return holdsNone
+	end 'instanceHoldsOnlyValues'
+end 'ArgumentCarryClassifier'
 
 // Record the edges of ONE call: for each argument that is one of the caller's own parameters, the callee
 // parameter position it fills. Slotted through the shared `argSlotPosition`, the same mapping
@@ -1105,76 +1419,23 @@ end 'collectCallParamEdgesAt'
 // receiver writes the parser already recorded directly) or undeclared (E3004, reported by `checkCalls`).
 // A label naming no parameter fills no position and is skipped for the same reason — `slotCallArgs`
 // reports it.
-function callerParamMaskWithin(project Project, module MaxonModule, funcIndexByName FuncIndexByName, func IrFunction, capturedLoads CapturedLoadMap, argId ValueId, visited ValueIdArray) returns ParamPositionMask
-	if let direct = try callerParamOf(func, capturedLoads: capturedLoads, argId: argId) 'aParameter'
-		return maskWithParam(NoParamPositions, param: direct)
-	end 'aParameter'
-
-	if valueIdArrayContains(visited, value: argId) 'alreadyWalked'
-		return NoParamPositions
-	end 'alreadyWalked'
-
-	visited.push(argId)
-
-	for joined in func.capabilityNotes.joinedSources 'eachMixedJoin'
-		if joined.value == argId 'theJoin'
-			return joined.sources
-		end 'theJoin'
-	end 'eachMixedJoin'
-
-	if let opIdx = try resultOpDefining(module, func: func, value: argId) 'anUndecidedResult'
-		let op = try module.ops.get(opIdx) otherwise panic("callerParamMaskWithin: ops.get OOB at {opIdx}")
-
-		return callerParamMaskOfResult(project, module: module, funcIndexByName: funcIndexByName, func: func, capturedLoads: capturedLoads, op: op, visited: visited)
-	end 'anUndecidedResult'
-
-	return NoParamPositions
-end 'callerParamMaskWithin'
-
-function callerParamMaskOfResult(project Project, module MaxonModule, funcIndexByName FuncIndexByName, func IrFunction, capturedLoads CapturedLoadMap, op MaxonOp, visited ValueIdArray) returns ParamPositionMask
-	let parts = try directCallPartsOf(op) otherwise return NoParamPositions
-	let calleeIndex = try funcIndexByName.get(parts.0) otherwise return NoParamPositions
-	let callee = try module.functions.get(calleeIndex) otherwise panic("callerParamMaskOfResult: functions.get OOB at {calleeIndex}")
-	view sig = try project.funcSignatures.get(parts.0) otherwise return NoParamPositions
-	var mask = NoParamPositions
-
-	for i in 0 upto parts.1.count() 'eachSourceArg'
-		let label = try parts.2.get(i) otherwise continue
-		let slot = try argSlotPosition(sig.paramNames, argIndex: i as ParamCount, label: label) otherwise continue
-
-		if maskHasParam(callee.resultFromParamMask, param: slot) 'aSource'
-			mask = mask or callerParamMaskWithin(project, module: module, funcIndexByName: funcIndexByName, func: func, capturedLoads: capturedLoads, argId: try parts.1.get(i) otherwise panic("callerParamMaskOfResult: args.get OOB at {i}"), visited: visited)
-		end 'aSource'
-	end 'eachSourceArg'
-
-	return mask
-end 'callerParamMaskOfResult'
-
-module function callerParamMaskOfArgument(project Project, module MaxonModule, funcIndexByName FuncIndexByName, func IrFunction, capturedLoads CapturedLoadMap, argId ValueId) returns ParamPositionMask
-	if let direct = try callerParamOf(func, capturedLoads: capturedLoads, argId: argId) 'aParameterItself'
-		return maskWithParam(NoParamPositions, param: direct)
-	end 'aParameterItself'
-
-	var visited = ValueIdArray.create(0)
-	return callerParamMaskWithin(project, module: module, funcIndexByName: funcIndexByName, func: func, capturedLoads: capturedLoads, argId: argId, visited: visited)
-end 'callerParamMaskOfArgument'
-
-function addCallParamEdges(project Project, module MaxonModule, callee ByteArray, args ValueIdArray, argLabels NameRoster, func IrFunction, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, capturedLoads CapturedLoadMap)
+function addCallParamEdges(project Project, callee ByteArray, args ValueIdArray, argLabels NameRoster, sources ParamSources, callerIndex ElementIndex, edges CallParamEdges, carryClassifier ArgumentCarryClassifier)
 	let sig = try project.funcSignatures.get(callee) otherwise return
-	let calleeIndex = try funcIndexByName.get(callee) otherwise return
+	let calleeIndex = try sources.funcIndexByName.get(callee) otherwise return
 
 	for i in 0 upto args.count() 'eachArg'
 		let label = try argLabels.get(i) otherwise panic("addCallParamEdges: argLabels.get OOB at {i} — a call's argument columns are parallel by construction")
 		let pos = try argSlotPosition(sig.paramNames, argIndex: i as ParamCount, label: label) otherwise continue
-		let sources = callerParamMaskOfArgument(project, module: module, funcIndexByName: funcIndexByName, func: func, capturedLoads: capturedLoads, argId: try args.get(i) otherwise panic("addCallParamEdges: args.get OOB at {i}"))
+		let argument = try args.get(i) otherwise panic("addCallParamEdges: args.get OOB at {i}")
+		let reached = sources.maskOf(argument)
 
-		if sources == NoParamPositions 'noParameterReachesIt'
+		if reached == NoParamPositions 'noParameterReachesIt'
 			continue
 		end 'noParameterReachesIt'
 
 		for callerParam in 0 upto MaxAbiArgs 'eachSource'
-			if maskHasParam(sources, param: callerParam) 'aSource'
-				edges.record(calleeIndex, callerIndex: callerIndex, callerParam: callerParam, calleeParam: pos)
+			if maskHasParam(reached, param: callerParam) 'aSource'
+				edges.record(calleeIndex, callerIndex: callerIndex, callerParam: callerParam, calleeParam: pos, carry: carryClassifier.carryOf(sources.func, value: argument))
 			end 'aSource'
 		end 'eachSource'
 	end 'eachArg'
@@ -1278,13 +1539,13 @@ end 'indirectCallArgsOf'
 // declared roster `DeclaredConformerIndex.conformersOf` holds. Those impls are compiler-synthesized
 // to the requirement's shape and write no parameter, so no edge is lost — and if one ever could,
 // `witnessSlotImpl`'s own gate is where that set is decided, not here.
-function addWitnessParamEdges(project Project, signatures ProgramSignatures, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, func IrFunction, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex, capturedLoads CapturedLoadMap)
-	if func.paramCount == 0 'passesNothingOfItsOwn'
+function addWitnessParamEdges(project Project, signatures ProgramSignatures, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, sources ParamSources, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex)
+	if sources.func.paramCount == 0 'passesNothingOfItsOwn'
 		return
 	end 'passesNothingOfItsOwn'
 
 	for calleeIndex in witnessDispatchImpls(project, signatures: signatures, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: funcIndexByName, conformers: conformers, witnessSlots: witnessSlots).impls 'eachImpl'
-		addLandingBodyEdges(args, argCount: args.count() as ParamCount, calleeIndex: calleeIndex, func: func, callerIndex: callerIndex, edges: edges, capturedLoads: capturedLoads)
+		addLandingBodyEdges(args, argCount: args.count() as ParamCount, calleeIndex: calleeIndex, sources: sources, callerIndex: callerIndex, edges: edges)
 	end 'eachImpl'
 end 'addWitnessParamEdges'
 
@@ -1362,17 +1623,17 @@ end 'conformersOfMemoized'
 // One conformer's edges. The argument list is POSITIONAL and its position 0 is the receiver
 // (`witnessDispatchReceiver`), which is the implementation's own `self` — so argument `i` fills parameter `i`
 // with no slotting to do, where a named call needs `argSlotPosition` to undo a label permutation.
-function addLandingBodyEdges(args ValueIdArray, argCount ParamCount, calleeIndex ElementIndex, func IrFunction, callerIndex ElementIndex, edges CallParamEdges, capturedLoads CapturedLoadMap)
+function addLandingBodyEdges(args ValueIdArray, argCount ParamCount, calleeIndex ElementIndex, sources ParamSources, callerIndex ElementIndex, edges CallParamEdges)
 	for i in 0 upto argCount 'eachArg'
-		let callerParam = try callerParamOf(func, capturedLoads: capturedLoads, argId: try args.get(i) otherwise panic("addLandingBodyEdges: args.get OOB at {i} below its own count")) otherwise continue
+		let callerParam = try sources.parameterBehind(try args.get(i) otherwise panic("addLandingBodyEdges: args.get OOB at {i} below its own count")) otherwise continue
 
-		edges.record(calleeIndex, callerIndex: callerIndex, callerParam: callerParam, calleeParam: i)
+		edges.record(calleeIndex, callerIndex: callerIndex, callerParam: callerParam, calleeParam: i, carry: FrozenCarry.carries)
 	end 'eachArg'
 end 'addLandingBodyEdges'
 
-function addFunctionValueParamEdges(project Project, op MaxonOp, calls CallSummaryIndex, func IrFunction, callerIndex ElementIndex, edges CallParamEdges, unknownWrites UnknownBodyWrites, capturedLoads CapturedLoadMap)
+function addFunctionValueParamEdges(project Project, op MaxonOp, calls CallSummaryIndex, sources ParamSources, callerIndex ElementIndex, edges CallParamEdges, unknownWrites UnknownBodyWrites)
 	match op 'indirect'
-		indirectCall(_, callee, args, _) then addFunctionValueBodiesEdges(args, bodies: calls.functionValueBodiesCalledThrough(func, callee: callee), byReferencePositions: functionValueByReferencePositions(project, func: func, callee: callee, whenUndeclared: EveryParamPosition), func: func, callerIndex: callerIndex, edges: edges, unknownWrites: unknownWrites, capturedLoads: capturedLoads)
+		indirectCall(_, callee, args, _) then addFunctionValueBodiesEdges(args, bodies: calls.functionValueBodiesCalledThrough(sources.func, callee: callee), byReferencePositions: functionValueByReferencePositions(project, func: sources.func, callee: callee, whenUndeclared: EveryParamPosition), sources: sources, callerIndex: callerIndex, edges: edges, unknownWrites: unknownWrites)
 		default panic("addFunctionValueParamEdges: handed an op that is not an indirect call")
 	end 'indirect'
 end 'addFunctionValueParamEdges'
@@ -1384,11 +1645,11 @@ function functionValueByReferencePositions(project Project, func IrFunction, cal
 	end 'shape'
 end 'functionValueByReferencePositions'
 
-function addFunctionValueBodiesEdges(args ValueIdArray, bodies CallLandingBodies, byReferencePositions ParamPositionMask, func IrFunction, callerIndex ElementIndex, edges CallParamEdges, unknownWrites UnknownBodyWrites, capturedLoads CapturedLoadMap)
+function addFunctionValueBodiesEdges(args ValueIdArray, bodies CallLandingBodies, byReferencePositions ParamPositionMask, sources ParamSources, callerIndex ElementIndex, edges CallParamEdges, unknownWrites UnknownBodyWrites)
 	let suppliedCount = userArityOfIndirectCall(args)
 
 	for impl in bodies.impls 'eachBody'
-		addLandingBodyEdges(args, argCount: suppliedCount, calleeIndex: impl, func: func, callerIndex: callerIndex, edges: edges, capturedLoads: capturedLoads)
+		addLandingBodyEdges(args, argCount: suppliedCount, calleeIndex: impl, sources: sources, callerIndex: callerIndex, edges: edges)
 	end 'eachBody'
 
 	if not bodies.unresolvedMayStore 'everyBodyIsKnown'
@@ -1396,7 +1657,7 @@ function addFunctionValueBodiesEdges(args ValueIdArray, bodies CallLandingBodies
 	end 'everyBodyIsKnown'
 
 	for i in 0 upto suppliedCount 'eachArg'
-		let callerParam = try callerParamOf(func, capturedLoads: capturedLoads, argId: try args.get(i) otherwise panic("addFunctionValueBodiesEdges: args.get OOB at {i} below its own count")) otherwise continue
+		let callerParam = try sources.parameterBehind(try args.get(i) otherwise panic("addFunctionValueBodiesEdges: args.get OOB at {i} below its own count")) otherwise continue
 		unknownWrites.note(callerIndex, callerParam: callerParam, byReference: maskHasParam(byReferencePositions, param: i))
 	end 'eachArg'
 end 'addFunctionValueBodiesEdges'
@@ -1405,7 +1666,21 @@ end 'addFunctionValueBodiesEdges'
 // the worklist, propagates its mask across its incoming edges, and re-enqueues a caller only when a bit
 // actually changed — which is what bounds the total work and makes a recursive or mutually recursive graph
 // terminate rather than spin. No hashing: the CSR is keyed by function index throughout.
-module function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges, byCallee CsrGraph)
+module enum PropagatedNeed
+	written
+	frozen
+	frozenIfRecordsHeld
+end 'PropagatedNeed'
+
+function edgeCarriesNeed(edges CallParamEdges, row ElementIndex, need PropagatedNeed) returns bool
+	return match need 'need'
+		written gives true
+		frozen gives edges.frozenCarryOf(row) == FrozenCarry.carries or edges.frozenCarryOf(row) == FrozenCarry.valuesOnly
+		frozenIfRecordsHeld gives edges.frozenCarryOf(row) == FrozenCarry.carries or edges.frozenCarryOf(row) == FrozenCarry.opaqueElement
+	end 'need'
+end 'edgeCarriesNeed'
+
+module function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges, byCallee CsrGraph, need PropagatedNeed, hops NeedHops)
 	var worklist = FuncIndexArray.create(0)
 	var queued = BoolArray.create(masks.count(), zeroed: false)
 
@@ -1424,21 +1699,21 @@ module function propagateParamMasks(masks ParamPositionMaskArray, edges CallPara
 		let calleeIndex = try worklist.get(head) otherwise panic("propagateParamMasks: worklist.get OOB at {head}")
 		head = head + 1
 		try queued.set(calleeIndex, value: false) otherwise panic("propagateParamMasks: queued.set OOB at {calleeIndex}")
-		propagateAcrossEdges(byCallee, masks: masks, edges: edges, calleeIndex: calleeIndex, worklist: worklist, queued: queued)
+		propagateAcrossEdges(byCallee, masks: masks, edges: edges, calleeIndex: calleeIndex, worklist: worklist, queued: queued, need: need, hops: hops)
 	end 'drain'
 end 'propagateParamMasks'
 
 // Propagate one callee's mask across every edge that reaches it, enqueueing each caller whose own mask grew.
-function propagateAcrossEdges(byCallee CsrGraph, masks ParamPositionMaskArray, edges CallParamEdges, calleeIndex ElementIndex, worklist FuncIndexArray, queued BoolArray)
+function propagateAcrossEdges(byCallee CsrGraph, masks ParamPositionMaskArray, edges CallParamEdges, calleeIndex ElementIndex, worklist FuncIndexArray, queued BoolArray, need PropagatedNeed, hops NeedHops)
 	let calleeMask = try masks.get(calleeIndex) otherwise panic("propagateAcrossEdges: masks.get OOB at {calleeIndex}")
 
 	for k in 0 upto byCallee.degree(calleeIndex as CsrIndex) 'eachEdge'
 		let row = byCallee.neighbour(calleeIndex as CsrIndex, k: k)
 		let calleeParam = try edges.calleeParams.get(row) otherwise panic("propagateAcrossEdges: calleeParams.get OOB at {row}")
 
-		if not maskHasParam(calleeMask, param: calleeParam) 'calleeDoesNotWriteThisOne'
+		if not maskHasParam(calleeMask, param: calleeParam) or not edgeCarriesNeed(edges, row: row, need: need) 'nothingToCarry'
 			continue
-		end 'calleeDoesNotWriteThisOne'
+		end 'nothingToCarry'
 
 		let callerIndex = try edges.callerIndices.get(row) otherwise panic("propagateAcrossEdges: callerIndices.get OOB at {row}")
 		let callerParam = try edges.callerParams.get(row) otherwise panic("propagateAcrossEdges: callerParams.get OOB at {row}")
@@ -1450,6 +1725,7 @@ function propagateAcrossEdges(byCallee CsrGraph, masks ParamPositionMaskArray, e
 		end 'nothingNew'
 
 		try masks.set(callerIndex, value: after) otherwise panic("propagateAcrossEdges: masks.set OOB at {callerIndex}")
+		hops.record(callerIndex, position: callerParam, callee: calleeIndex, calleeParam: calleeParam)
 		let wasQueued = try queued.get(callerIndex) otherwise panic("propagateAcrossEdges: queued.get OOB at {callerIndex}")
 
 		if wasQueued 'alreadyQueued'
@@ -2308,7 +2584,7 @@ end 'requireTriedWitnessDispatch'
 // `checkOneArgType`'s sake: a boxed union/enum formal resolves to bare `integer` and only the carrier still
 // holds its name.
 union WitnessFormalType
-	declared(paramType MaxonType, let preErasedAggregate ByteArray)
+	declared(paramType MaxonType, let preErasedAggregate immutable ByteArray)
 	opaque
 end 'WitnessFormalType'
 
@@ -2378,8 +2654,8 @@ function checkWitnessArgTypes(project Project, func IrFunction, signatures Progr
 	end 'eachFormal'
 end 'checkWitnessArgTypes'
 
-function checkWitnessArgument(project Project, func IrFunction, signatures ProgramSignatures, interfaceName ByteArray, formal RequirementType, formalName ByteArray, paramType MaxonType, preErasedAggregate ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer)
-	if argumentIsRefused(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formal.argumentCheckSpelling(formalName), param: param, position: position, argId: argId, callInstanceSubject: callInstanceSubject, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, handedAt: callRange, filePath: filePath, provenance: provenance) 'thisArgumentWasRefused'
+function checkWitnessArgument(project Project, func IrFunction, signatures ProgramSignatures, interfaceName ByteArray, formal RequirementType, formalName ByteArray, paramType MaxonType, preErasedAggregate immutable ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer)
+	if argumentIsRefused(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formal.argumentCheckSpelling(formalName), param: param, position: position, argId: argId, callInstanceSubject: callInstanceSubject, paramExistentialSites: ParamExistentialSiteArray.create(0), callRange: callRange, handedAt: callRange, filePath: filePath, provenance: provenance) 'thisArgumentWasRefused'
 		return
 	end 'thisArgumentWasRefused'
 
@@ -2395,7 +2671,7 @@ end 'checkWitnessArgument'
 // functions, so a returned flag is six places to remember and one place to silently forget — where
 // the record that a diagnostic exists cannot be forgotten by a new report site. It is
 // `Queries.foldOneFileInto`'s own before/after idiom.
-function argumentIsRefused(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, handedAt SourceRange, filePath FilePath, provenance ProvenanceTracer) returns bool
+function argumentIsRefused(project Project, func IrFunction, paramType MaxonType, preErasedAggregate immutable ByteArray, declaredParamName ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, handedAt SourceRange, filePath FilePath, provenance ProvenanceTracer) returns bool
 	let reportedBefore = project.diagnostics.count()
 	checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, param: param, position: position, argId: argId, callInstanceSubject: callInstanceSubject, paramExistentialSites: paramExistentialSites, callRange: callRange, handedAt: handedAt, filePath: filePath, provenance: provenance)
 	return project.diagnostics.count() > reportedBefore
@@ -2404,7 +2680,7 @@ end 'argumentIsRefused'
 // The formal's own NAME, for the diagnostic — the INTERFACE's, which is the vocabulary the call binds
 // against (`WitnessDispatchTarget.paramNames` carries the same list for the same reason). Parallel to
 // `paramTypeNames` by construction.
-function witnessFormalName(requirement InterfaceMethodSig, position ParamCount) returns ByteArray
+function witnessFormalName(requirement InterfaceMethodSig, position ParamCount) returns immutable ByteArray
 	return try requirement.paramNames.get(position) otherwise panic("witnessFormalName: paramNames.get OOB at {position} — an InterfaceMethodSig's paramNames and paramTypeNames are parallel by construction ({requirement.paramNames.count()} names, {requirement.paramTypeNames.count()} types)")
 end 'witnessFormalName'
 
@@ -2482,7 +2758,7 @@ end 'nominalWitnessFormal'
 // second author remembering them.
 // ⚠ `readerFilePath` is the one `witnessFormalDeclaredType` resolved the formal with, the declaring
 // interface's file: the denoted type and its pre-erasure identity must come from one declaration.
-function erasedFormalIdentity(project Project, denoted MaxonType, id TypeNameId, readerFilePath FilePath) returns ByteArray
+function erasedFormalIdentity(project Project, denoted MaxonType, id TypeNameId, readerFilePath FilePath) returns immutable ByteArray
 	if not aggregateNameIn(programSignaturesIn(project, asker: "erasedFormalIdentity"), interner: project.typeNames, tag: maxonTypeTag(denoted), nameId: typeNameIdOf(denoted), readerFilePath: readerFilePath).isEmpty() 'survivedResolution'
 		return EmptySourceText
 	end 'survivedResolution'
@@ -2510,7 +2786,7 @@ end 'erasedFormalIdentity'
 // `error.contested-bare-call-with-exactly-one-visible-candidate` would report `'alpha.helper'`
 // about a call written as `helper()`. See `diagnosticCalleeSpelling`'s header for what is still
 // owed.
-module function callDiagnosticNoun(callee ByteArray, mint CalleeMint) returns ByteArray
+module function callDiagnosticNoun(callee immutable ByteArray, mint CalleeMint) returns immutable ByteArray
 	match mint 'm'
 		notMinted or
 
@@ -2725,7 +3001,7 @@ function sizedAccessorOfCall(func IrFunction, signatures ProgramSignatures, call
 	return try sizedAccessorOf(signatures, receiverTag: tag, receiverNameId: nameId, callee: callee)
 end 'sizedAccessorOfCall'
 
-function boundCalleeSpelling(signatures ProgramSignatures, callee ByteArray, mint CalleeMint) returns ByteArray
+function boundCalleeSpelling(signatures ProgramSignatures, callee ByteArray, mint CalleeMint) returns immutable ByteArray
 	return signatures.diagnosticCalleeSpelling(callDiagnosticNoun(callee, mint: mint))
 end 'boundCalleeSpelling'
 
@@ -3222,7 +3498,7 @@ function checkIndirectCallArgs(project Project, module MaxonModule, calls CallSu
 		// ⚠ The CALLEE is this call's own subject, and it is a function VALUE — never `genericInstance`-tagged —
 		// so the shape substitution declines. That is the right answer as well as an honest one: an indirect
 		// call's declared shape is the function TYPE's own, written in no generic body's declaration view.
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i as ParamCount), declaredParamName: shapeParamSpelling(shape, index: i as ParamCount), param: ArgumentParameter.unnamed, position: i as ParamCount, argId: argId, callInstanceSubject: CallSubject.heldBy(callee), paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, handedAt: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), provenance: provenance)
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i as ParamCount), declaredParamName: shapeParamSpelling(shape, index: i as ParamCount), param: ArgumentParameter.unnamed, position: i as ParamCount, argId: argId, callInstanceSubject: CallSubject.heldBy(callee), paramExistentialSites: ParamExistentialSiteArray.create(0), callRange: callRange, handedAt: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), provenance: provenance)
 	end 'eachArg'
 
 	view bodies = calls.functionValueBodiesCalledThrough(func, callee: callee)
@@ -3287,11 +3563,12 @@ function checkLandingArguments(project Project, module MaxonModule, calls CallSu
 end 'checkLandingArguments'
 
 function refuseAtAFunctionValueLanding(project Project, module MaxonModule, func IrFunction, bodies CallLandingBodies, argId ValueId, named WriteBlame, position ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath) returns bool
-	let blame = blameOfAWrittenArgument(named, rebindsIt: named.isRebindOnly() and functionValueLandingRebinds(module, bodies: bodies, position: position))
+	let rebinds = named.isRebindOnly() and functionValueLandingRebinds(module, bodies: bodies, position: position)
+	let blame = blameOfAWrittenArgument(named, rebindsIt: rebinds)
 	var reported = false
 
 	for parameter in provenance.landingParamNames(bodies, position: position, mutationSummary: mutationSummary) 'eachWritersName'
-		reported = refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blame, parameter: parameter, asksWrittenArguments: false, provenance: provenance, callRange: callRange, filePath: filePath, report: ReportSite.atTheCall) or reported
+		reported = refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blame, rebinds: rebinds, parameter: parameter, asksWrittenArguments: false, provenance: provenance, callRange: callRange, filePath: filePath, report: ReportSite.atTheCall) or reported
 	end 'eachWritersName'
 
 	return reported
@@ -3310,8 +3587,9 @@ function refuseAtEachWritingConformer(project Project, module MaxonModule, func 
 			continue
 		end 'writesItNot'
 
-		let blame = blameOfAWrittenArgument(named, rebindsIt: named.isRebindOnly() and programSignaturesIn(project, asker: "refuseAtEachWritingConformer").paramIsByRef(writer.name, index: position))
-		reported = refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blame, parameter: provenance.bodyParamName(index, position: position), asksWrittenArguments: false, provenance: provenance, callRange: callRange, filePath: filePath, report: ReportSite.dispatchedTo(functionSourceName(project, func: writer), via: requirement)) or reported
+		let rebinds = named.isRebindOnly() and programSignaturesIn(project, asker: "refuseAtEachWritingConformer").paramIsByRef(writer.name, index: position)
+		let blame = blameOfAWrittenArgument(named, rebindsIt: rebinds)
+		reported = refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blame, rebinds: rebinds, parameter: provenance.bodyParamName(index, position: position), asksWrittenArguments: false, provenance: provenance, callRange: callRange, filePath: filePath, report: ReportSite.dispatchedTo(functionSourceName(project, func: writer), via: requirement)) or reported
 	end 'eachWriterInDeclarationOrder'
 
 	return reported
@@ -3376,8 +3654,9 @@ function checkImmutableArgsToCallbackSites(project Project, module MaxonModule, 
 			let argId = try args.get(i) otherwise panic("checkImmutableArgsToCallbackSites: args.get OOB at {i} below the supplied count")
 
 			let named = immutableArgNameAt(argImmutableNames, index: i)
+			let rebinds = named.isRebindOnly() and functionValueBodyRebinds(writer, position: i)
 
-			if refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blameOfAWrittenArgument(named, rebindsIt: named.isRebindOnly() and functionValueBodyRebinds(writer, position: i)), parameter: provenance.bodyParamName(writerIndex, position: i), asksWrittenArguments: false, provenance: provenance, callRange: callRange, filePath: siteFile, report: report) 'reported'
+			if refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blameOfAWrittenArgument(named, rebindsIt: rebinds), rebinds: rebinds, parameter: provenance.bodyParamName(writerIndex, position: i), asksWrittenArguments: false, provenance: provenance, callRange: callRange, filePath: siteFile, report: report) 'reported'
 				owned = maskWithParam(owned, param: i)
 			end 'reported'
 		end 'eachArg'
@@ -3391,7 +3670,7 @@ end 'checkImmutableArgsToCallbackSites'
 // `named` column entry, because `MaxonType.function(id)` carries exactly that (see MaxonType's `function`
 // arm); the parser reads the same fact through its file-local interner in `functionValueReturnType`. The id
 // becomes the name through `TypeResolution.functionTypeNameOf`, the one reader every pass shares.
-module function functionValueGoverningName(project Project, func IrFunction, value ValueId) returns ByteArray
+module function functionValueGoverningName(project Project, func IrFunction, value ValueId) returns immutable ByteArray
 	// A function value cast to an alias (`h as Callback`) wears that alias as its BRAND and keeps its own
 	// type — `Parser.rebrandValue` — so the brand is the name every door compares by.
 	let brand = valueBrandOf(project, func: func, value: value)
@@ -3405,7 +3684,7 @@ end 'functionValueGoverningName'
 
 // The function type a value was MINTED with — a declared function's own signature, a closure literal's, or
 // the alias a parameter or field was declared at — read off the type column and never off the brand.
-module function functionValueOwnTypeName(project Project, func IrFunction, value ValueId) returns ByteArray
+module function functionValueOwnTypeName(project Project, func IrFunction, value ValueId) returns immutable ByteArray
 	let nameId = try func.valueNameIds.get(value) otherwise panic("functionValueOwnTypeName: value v{value} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	return functionTypeNameOf(functionTypeRegistryOf(project), nameId: nameId)
 end 'functionValueOwnTypeName'
@@ -3647,7 +3926,7 @@ union DiscardResolution
 
 	// The callee's slot in the effect-free column is the rest of this site's answer, and its resolved name
 	// is what the verdict reports.
-	purityOf(calleeIndex ElementIndex, let callee ByteArray)
+	purityOf(calleeIndex ElementIndex, let callee immutable ByteArray)
 end 'DiscardResolution'
 
 // ⭐⭐ **E3064 — A CALL WHOSE RESULT NOBODY TOOK, WHEN THE CALLEE HAD NO OTHER REASON TO RUN.** Drains the
@@ -3905,7 +4184,7 @@ export type WitnessDispatchTargets
 		var lastWithName = FunctionByBareName.create()
 
 		for i in 0 upto self.functions.count() 'eachFunc'
-			let name = bareMethodName(genericTemplateName((try self.functions.get(i) otherwise panic("splitBareNames: functions.get OOB at {i} inside its own count()")).name)).toByteArray()
+			let name = freeze bareMethodName(genericTemplateName((try self.functions.get(i) otherwise panic("splitBareNames: functions.get OOB at {i} inside its own count()")).name)).toByteArray()
 			self.nextWithName.push(i)
 			self.hasNextWithName.push(false)
 
@@ -3922,7 +4201,7 @@ export type WitnessDispatchTargets
 
 	// The requirement's declared name, off the SAME slot list `checkWitnessArgTypes` reads — so the candidate
 	// set and the argument check cannot come to name different requirements for one op.
-	module function requirementNameAt(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns ByteArray
+	module function requirementNameAt(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns immutable ByteArray
 		return witnessSlotAt(self.signatures, interfaces: self.signatures.interfaceMap(), witnessSlots: self.slots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex).method.name
 	end 'requirementNameAt'
 
@@ -4860,7 +5139,7 @@ function checkSlottedCall(project Project, module MaxonModule, func IrFunction, 
 	checkPerInstanceArgs(project, func: func, callee: callee, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 	let keptReadOnly = checkReadOnlyArgToKeepingParam(func, result: result, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange)
 	let keptWritable = noteSharedArgsToKeepingParams(func, result: result, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, defaultedArgs: defaultedArgs, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange)
-	checkImmutableArgToMutatingParam(project, func: func, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, refusedAsKept: keptReadOnly or keptWritable, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, argRanges: argRanges, filePath: filePath)
+	checkImmutableArgToMutatingParam(project, module: module, func: func, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, refusedAsKept: keptReadOnly or keptWritable, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, argRanges: argRanges, filePath: filePath)
 end 'checkSlottedCall'
 
 // ⭐⭐ **E3159, THE CALL-SITE HALF: AN IMMUTABLE BINDING MAY NOT FILL A PARAMETER THE CALLEE WRITES.**
@@ -4886,7 +5165,7 @@ end 'checkSlottedCall'
 // ⭐⭐ **THE MASK IS THE UNION OF TWO WRITE COLUMNS, BECAUSE A FIELD WRITE THROUGH A PARAMETER WRITES THE
 // CALLER'S RECORD.** `let a = Box.create()` handed to a `bump(b Box)` whose body is `b.n = 99` is refused: a
 // `let` is immutable, and how deep the callee reaches to write it does not change whose record was written.
-function checkImmutableArgToMutatingParam(project Project, func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels NameRoster, argImmutableNames WriteBlameArray, refusedAsKept ParamPositionMask, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, argRanges SourceRangeArray, filePath FilePath)
+function checkImmutableArgToMutatingParam(project Project, module MaxonModule, func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels NameRoster, argImmutableNames WriteBlameArray, refusedAsKept ParamPositionMask, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, argRanges SourceRangeArray, filePath FilePath)
 	let (mask, recordWriteMask) = mutationSummary.writesOf(callee)
 	let written = mask or recordWriteMask
 	let asksWrittenArguments = provenance.enteredFunctionAsksWrittenArguments(func)
@@ -4920,7 +5199,7 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 
 		if maskHasParam(refusedAsKept, param: pos) 'refusedWhereItIsKept'
 			if asksWrittenArguments 'someDoorReadsIt'
-				provenance.noteArgumentWritten(argId, call: callRange, parameter: ArgumentParameter.named(paramName.clone()))
+				provenance.noteArgumentWritten(argId, call: callRange, parameter: ArgumentParameter.named(paramName))
 			end 'someDoorReadsIt'
 
 			continue
@@ -4928,12 +5207,31 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 
 		let named = immutableArgNameAt(argImmutableNames, index: i as ParamCount)
 		let byRef = programSignaturesIn(project, asker: "checkImmutableArgToMutatingParam").paramIsByRef(callee, index: pos)
-		let blame = blameOfAWrittenArgument(named, rebindsIt: named.isRebindOnly() and byRef)
-		_ = refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blame.whenOnlyRebound() if byRef and not maskHasParam(recordWriteMask, param: pos) else blame, parameter: ArgumentParameter.named(paramName.clone()), asksWrittenArguments: asksWrittenArguments, provenance: provenance, callRange: callRange, filePath: filePath, report: ReportSite.atTheCall)
+		let rebinds = named.isRebindOnly() and (byRef or valueIsABindingsText(module, func: func, argId: argId))
+		let blame = blameOfAWrittenArgument(named, rebindsIt: rebinds)
+		_ = refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blame.whenOnlyRebound() if byRef and not maskHasParam(recordWriteMask, param: pos) else blame, rebinds: rebinds, parameter: ArgumentParameter.named(paramName), asksWrittenArguments: asksWrittenArguments, provenance: provenance, callRange: callRange, filePath: filePath, report: ReportSite.atTheCall)
 	end 'eachArg'
 end 'checkImmutableArgToMutatingParam'
 
-function unmarkedTextParameterOf(project Project, func IrFunction, argId ValueId) returns ByteArray throws AbsentError
+function valueIsABindingsText(module MaxonModule, func IrFunction, argId ValueId) returns bool
+	if not tagIsByteRecord(valueTagOf(func, value: argId)) 'notText'
+		return false
+	end 'notText'
+
+	let producer = try opDefiningValue(module, func: func, value: argId) otherwise return true
+	try requireFieldLoadOp(producer) otherwise return true
+
+	return false
+end 'valueIsABindingsText'
+
+function requireFieldLoadOp(op MaxonOp) throws AbsentError
+	match op 'op'
+		loadIndirect then return
+		default throws AbsentError.absent
+	end 'op'
+end 'requireFieldLoadOp'
+
+function unmarkedTextParameterOf(project Project, func IrFunction, argId ValueId) returns immutable ByteArray throws AbsentError
 	let position = argId as ElementIndex
 
 	if position >= func.maxonParamTypes.count() 'notAParameter'
@@ -4947,7 +5245,7 @@ function unmarkedTextParameterOf(project Project, func IrFunction, argId ValueId
 	end 'notAnUnmarkedText'
 
 	view callerSig = try project.funcSignatures.get(func.name) otherwise throw AbsentError.absent
-	let name = (try callerSig.paramNames.get(position) otherwise throw AbsentError.absent).clone()
+	let name = try callerSig.paramNames.get(position) otherwise throw AbsentError.absent
 
 	if name.equals(SelfParamName) 'theReceiver'
 		throw AbsentError.absent
@@ -4967,20 +5265,23 @@ union ReportSite
 	dispatchedTo(writer String, via String)
 end 'ReportSite'
 
-function refuseImmutableArgAtWrittenParam(project Project, func IrFunction, argId ValueId, namedBlame WriteBlame, parameter ArgumentParameter, asksWrittenArguments bool, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath, report ReportSite) returns bool
+function refuseImmutableArgAtWrittenParam(project Project, func IrFunction, argId ValueId, namedBlame WriteBlame, rebinds bool, parameter ArgumentParameter, asksWrittenArguments bool, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath, report ReportSite) returns bool
 	if asksWrittenArguments 'someDoorReadsIt'
 		provenance.noteArgumentWritten(argId, call: callRange, parameter: parameter)
 	end 'someDoorReadsIt'
 
 	var blamed = namedBlame
+	var rebound = rebinds
 
 	if not blamed.isBlamed() 'noNamedBinding'
 		blamed = provenance.immutableRootWrittenThrough(func, value: argId, call: callRange)
+		rebound = false
 	end 'noNamedBinding' else if blameIsOnlyAHeldPromise(blamed) 'onlyTheContainer'
 		var rooted = provenance.immutableRootWrittenThrough(func, value: argId, call: callRange)
 
 		if rooted.isBlamed() 'aSharperRoot'
 			blamed = rooted
+			rebound = false
 		end 'aSharperRoot'
 	end 'onlyTheContainer'
 
@@ -4993,15 +5294,26 @@ function refuseImmutableArgAtWrittenParam(project Project, func IrFunction, argI
 	end 'judgedHere'
 
 	let root = blamed.rootName()
+	let code = ErrorCode.assignToImmutable if rebound else ErrorCode.semanticWriteThroughImmutableRecord
+	let letMessage = letPassedToMutableParameterMessage(root, holder: try blamed.blamedHolder() otherwise panic("refuseImmutableArgAtWrittenParam: a blamed argument names its holder"), parameter: parameter)
 
 	match report 'where'
-		atTheCall then reportPositioned(project, code: ErrorCode.semanticWriteThroughImmutableRecord, message: immutableArgAtTheCallMessage(root, provenance: provenance, func: func, argId: argId, call: callRange, blamed: blamed, parameter: parameter, functionName: functionSourceName(project, func: func)), line: callRange.line, column: callRange.column, filePath: filePath)
-		handedIn(range, writer, callee) then reportPositioned(project, code: ErrorCode.semanticWriteThroughImmutableRecord, message: callbackWritesHandedValueMessage(writer, parameter: parameter, callee: callee, blamed: root), line: range.line, column: range.column, filePath: filePath)
-		dispatchedTo(writer, via) then reportPositioned(project, code: ErrorCode.semanticWriteThroughImmutableRecord, message: callbackWritesHandedValueMessage(writer, parameter: parameter, callee: via, blamed: root), line: callRange.line, column: callRange.column, filePath: filePath)
+		atTheCall then reportPositioned(project, code: code, message: letMessage if rebound else immutableArgAtTheCallMessage(root, provenance: provenance, func: func, argId: argId, call: callRange, blamed: blamed, parameter: parameter, functionName: functionSourceName(project, func: func)), line: callRange.line, column: callRange.column, filePath: filePath)
+		handedIn(range, writer, callee) then reportPositioned(project, code: code, message: letMessage if rebound else callbackWritesHandedValueMessage(writer, parameter: parameter, callee: callee, blamed: root), line: range.line, column: range.column, filePath: filePath)
+		dispatchedTo(writer, via) then reportPositioned(project, code: code, message: letMessage if rebound else callbackWritesHandedValueMessage(writer, parameter: parameter, callee: via, blamed: root), line: callRange.line, column: callRange.column, filePath: filePath)
 	end 'where'
 
 	return true
 end 'refuseImmutableArgAtWrittenParam'
+
+function letPassedToMutableParameterMessage(root String, holder WriteBlameHolder, parameter ArgumentParameter) returns String
+	let binding = "a let field" if holder == WriteBlameHolder.letField else "a let"
+
+	return match parameter 'parameter'
+		named(name) gives "'{root}' is {binding} and cannot be passed to the `mutable` parameter '{displayParamName(name)}'; bind it to a `var`"
+		unnamed gives "'{root}' is {binding} and cannot be passed to a `mutable` parameter; bind it to a `var`"
+	end 'parameter'
+end 'letPassedToMutableParameterMessage'
 
 function immutableArgAtTheCallMessage(root String, provenance ProvenanceTracer, func IrFunction, argId ValueId, call SourceRange, blamed WriteBlame, parameter ArgumentParameter, functionName String) returns String
 	if blamed.isHeldByAClosure() 'aClosuresOwnCopy'
@@ -5076,7 +5388,7 @@ function checkReadOnlyArgToKeepingParam(func IrFunction, result ValueId, callee 
 
 		if not keptKnown 'firstPermanentArgument'
 			let calleeIndex = try mutationSummary.funcIndexByName.get(callee) otherwise return NoParamPositions
-			let (_, _, _, mutablyKept) = provenance.keepsAt(func, calleeIndex: calleeIndex, callee: callee, sig: sig, args: args, argLabels: argLabels, result: result)
+			let (_, _, mutablyKept) = provenance.keepsAt(func, calleeIndex: calleeIndex, callee: callee, sig: sig, args: args, argLabels: argLabels, result: result)
 			kept = NoParamPositions if provenance.bodyWasRefused(callee) else mutablyKept
 			keptKnown = true
 		end 'firstPermanentArgument'
@@ -5100,9 +5412,9 @@ end 'checkReadOnlyArgToKeepingParam'
 
 function noteSharedArgsToKeepingParams(func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels NameRoster, argImmutableNames WriteBlameArray, defaultedArgs ParamCount, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange) returns ParamPositionMask
 	let calleeIndex = try mutationSummary.funcIndexByName.get(callee) otherwise return NoParamPositions
-	let (fieldKeeps, payloadKeeps, elementKeeps, mutablyKept) = provenance.keepsAt(func, calleeIndex: calleeIndex, callee: callee, sig: sig, args: args, argLabels: argLabels, result: result)
+	let (storeKeeps, elementKeeps, mutablyKept) = provenance.keepsAt(func, calleeIndex: calleeIndex, callee: callee, sig: sig, args: args, argLabels: argLabels, result: result)
 
-	let keptAnywhere = fieldKeeps or payloadKeeps or elementKeeps or mutablyKept
+	let keptAnywhere = storeKeeps or elementKeeps or mutablyKept
 
 	if keptAnywhere == NoParamPositions 'keepsNothing'
 		return NoParamPositions
@@ -5110,7 +5422,7 @@ function noteSharedArgsToKeepingParams(func IrFunction, result ValueId, callee B
 
 	var refused = NoParamPositions
 	let synthesized = synthesizedArgSlots(sig.paramNames, argLabels: argLabels, defaultedArgs: defaultedArgs)
-	let masks = KeptMasks.create(fieldKeeps, letPayload: payloadKeeps, readOnlyElement: elementKeeps, mutable: NoParamPositions if provenance.bodyWasRefused(callee) else mutablyKept, anyPosition: false)
+	let masks = KeptMasks.create(storeKeeps, readOnlyElement: elementKeeps, mutable: NoParamPositions if provenance.bodyWasRefused(callee) else mutablyKept, anyPosition: false)
 
 	for i in 0 upto args.count() 'eachArg'
 		let argId = try args.get(i) otherwise panic("noteSharedArgsToKeepingParams: args.get OOB at {i} below its own count")
@@ -5574,7 +5886,7 @@ end 'checkPerInstanceArgsWith'
 
 // The brand the RECEIVER argument (`argIds[0]`) wears. Empty when the receiver has none — a `self` receiver,
 // a value merged across unbranded arms — which makes the inner-alias arguments decay.
-function receiverBrand(project Project, func IrFunction, argIds ValueIdArray) returns ByteArray
+function receiverBrand(project Project, func IrFunction, argIds ValueIdArray) returns immutable ByteArray
 	if argIds.count() == 0 'noArgs'
 		return EmptySourceText
 	end 'noArgs'
@@ -5586,7 +5898,7 @@ end 'receiverBrand'
 // The brand `value` wears — the generic-instance alias it was declared, built or read under — or empty. The
 // whole-program read of the column the parser stamps (`Parser.brandValue`), through the project interner
 // the merge remapped it into; `UnnamedTypeId` is the empty name.
-function valueBrandOf(project Project, func IrFunction, value ValueId) returns ByteArray
+function valueBrandOf(project Project, func IrFunction, value ValueId) returns immutable ByteArray
 	let brandId = try func.valueBrandIds.get(value) otherwise panic("valueBrandOf: value v{value} of function '{String.from(func.name)}' has no brand slot — the brand column is pushed in lockstep with the type columns")
 	return try project.typeNames.nameOf(brandId) otherwise panic("valueBrandOf: brand id {brandId} is not in the project interner — a value's brand id is remapped project-global at merge (remapArtifact)")
 end 'valueBrandOf'
@@ -5594,7 +5906,7 @@ end 'valueBrandOf'
 // The brand a signature's parameter DECLARED — `paramDeclaredNames` carries the spelled alias for a
 // generic-instance parameter (`Parser.paramDeclaredNamesOf`), and for a ranged one the alias name, which
 // is an identity rather than a brand and is not one here.
-function paramBrandOf(sig FuncSignature, position ParamCount, paramTag ValueTypeTag) returns ByteArray
+function paramBrandOf(sig FuncSignature, position ParamCount, paramTag ValueTypeTag) returns immutable ByteArray
 	return declaredBrandOf(try sig.paramDeclaredNames.get(position) otherwise panic("paramBrandOf: paramDeclaredNames.get OOB at {position} — a signature's param columns are built in lockstep"), paramTag: paramTag)
 end 'paramBrandOf'
 
@@ -5709,7 +6021,7 @@ function checkArgTypes(project Project, module MaxonModule, func IrFunction, res
 	end 'eachArg'
 end 'checkArgTypes'
 
-function receiverBrandForSelfParam(project Project, func IrFunction, sig FuncSignature, argIds ValueIdArray, position ParamCount, declared ByteArray) returns ByteArray
+function receiverBrandForSelfParam(project Project, func IrFunction, sig FuncSignature, argIds ValueIdArray, position ParamCount, declared immutable ByteArray) returns immutable ByteArray
 	if position == ReceiverParamPosition or not sig.takesReceiver() or not maskHasParam(sig.selfSpelledParams, param: position) 'notASelfParameterBesideAReceiver'
 		return declared
 	end 'notASelfParameterBesideAReceiver'
@@ -5831,7 +6143,7 @@ end 'functionShapeThroughCallInstance'
 // ONE function, not a second spelling of it: the caller holds the RESOLVED form, and the name this needs
 // exists only in the unresolved one. The crossing is `slotThroughInstance` either way, so the two cannot
 // come to disagree; and it runs on the bare-`T` arm alone, which is a handful of slots in a whole program.
-function substitutedSlotIdentity(project Project, signatures ProgramSignatures, slotType MaxonType, gid GenericInstanceId, carried ByteArray) returns ByteArray
+function substitutedSlotIdentity(project Project, signatures ProgramSignatures, slotType MaxonType, gid GenericInstanceId, carried immutable ByteArray) returns immutable ByteArray
 	if not slotIsBareTypeParameter(slotType) 'concreteAtTheParse'
 		return carried
 	end 'concreteAtTheParse'
@@ -5848,7 +6160,7 @@ end 'substitutedSlotIdentity'
 
 // The RETURN slot's half of the identity above — one name rather than a column, because a function type
 // returns exactly one thing. `void` carries no type and therefore no identity.
-function returnSlotIdentityThroughCallInstance(project Project, signatures ProgramSignatures, shape FunctionShape, gid GenericInstanceId) returns ByteArray
+function returnSlotIdentityThroughCallInstance(project Project, signatures ProgramSignatures, shape FunctionShape, gid GenericInstanceId) returns immutable ByteArray
 	match shape.returnType 'declaredSlot'
 		void then return EmptySourceText
 		value(inner) then return substitutedSlotIdentity(project, signatures: signatures, slotType: inner, gid: gid, carried: shape.returnAggregateName)
@@ -6043,7 +6355,7 @@ end 'existentialWideningVerdict'
 // 'Cursor'), and the wrong binder ('UpBag' where it is the cursor `UpBag` bound).
 union ExistentialSiteClaimRoute
 	direct
-	throughHeld(let route ByteArray, let at ByteArray, let binding ByteArray)
+	throughHeld(let route immutable ByteArray, let at immutable ByteArray, let binding immutable ByteArray)
 end 'ExistentialSiteClaimRoute'
 
 // The three answers `existentialSiteClaimVerdict` gives. `unresolvable` is NOT a shade of `disagrees`: the two
@@ -6058,12 +6370,12 @@ end 'ExistentialSiteClaimRoute'
 // actually claimed something, which is a vanishing fraction of any program's arguments.
 union ExistentialSiteClaim
 	agrees
-	disagrees(let associatedName ByteArray, let siteBinding ByteArray, conformerBinding ByteArray, route ExistentialSiteClaimRoute)
+	disagrees(let associatedName immutable ByteArray, let siteBinding immutable ByteArray, conformerBinding immutable ByteArray, route ExistentialSiteClaimRoute)
 
 	// An unresolvable claim names no conformer binding, and that is not a missing field: the fault is that
 	// nothing has fixed the SITE's side, so the conformer's was never reached and there is nothing to report
 	// about it. The two sentences that word this refusal say so.
-	unresolvable(let associatedName ByteArray, let siteBinding ByteArray, route ExistentialSiteClaimRoute)
+	unresolvable(let associatedName immutable ByteArray, let siteBinding immutable ByteArray, route ExistentialSiteClaimRoute)
 
 	function isAgreed() returns bool
 		return match self 'claim'
@@ -6079,8 +6391,8 @@ union ExistentialSiteClaim
 	function throughHeldPosition(route ByteArray, at ByteArray, binding ByteArray) returns ExistentialSiteClaim
 		return match self 'claim'
 			agrees gives ExistentialSiteClaim.agrees
-			disagrees(associatedName, siteBinding, conformerBinding, _) gives ExistentialSiteClaim.disagrees(associatedName.clone(), siteBinding: siteBinding.clone(), conformerBinding: conformerBinding.clone(), route: ExistentialSiteClaimRoute.throughHeld(route, at: at, binding: binding))
-			unresolvable(associatedName, siteBinding, _) gives ExistentialSiteClaim.unresolvable(associatedName.clone(), siteBinding: siteBinding.clone(), route: ExistentialSiteClaimRoute.throughHeld(route, at: at, binding: binding))
+			disagrees(associatedName, siteBinding, conformerBinding, _) gives ExistentialSiteClaim.disagrees(associatedName, siteBinding: siteBinding, conformerBinding: conformerBinding, route: ExistentialSiteClaimRoute.throughHeld(route, at: at, binding: binding))
+			unresolvable(associatedName, siteBinding, _) gives ExistentialSiteClaim.unresolvable(associatedName, siteBinding: siteBinding, route: ExistentialSiteClaimRoute.throughHeld(route, at: at, binding: binding))
 		end 'claim'
 	end 'throughHeldPosition'
 end 'ExistentialSiteClaim'
@@ -6164,7 +6476,7 @@ function existentialSiteClaimAgainst(project Project, signatures ProgramSignatur
 
 		if let conformerBinding = try conformerBindingThroughInstance(project, signatures: signatures, conformerTag: conformerTag, conformerNameId: conformerNameId, interfaceName: iface.name, position: position) 'thisConformerBindsIt'
 			if not signatures.instanceArgRequirement(siteInstance, position: position).denotesSameTypeAs(conformerBinding) 'contradictsTheClaim'
-				return ExistentialSiteClaim.disagrees(associatedName, siteBinding: siteBinding, conformerBinding: signatures.requirementDisplay(conformerBinding).toByteArray(), route: ExistentialSiteClaimRoute.direct)
+				return ExistentialSiteClaim.disagrees(associatedName, siteBinding: siteBinding, conformerBinding: freeze signatures.requirementDisplay(conformerBinding).toByteArray(), route: ExistentialSiteClaimRoute.direct)
 			end 'contradictsTheClaim'
 		end 'thisConformerBindsIt'
 	end 'eachAssociatedType'
@@ -6200,7 +6512,7 @@ function heldPositionNestedClaim(project Project, signatures ProgramSignatures, 
 
 	let heldAt = try signatures.associatedTypeHeldAt(iface.name, position: position) otherwise panic("heldPositionNestedClaim: '{String.from(iface.name)}' position {position} answered `associatedTypeIsHeldAt` and then held nothing — both doors read the one `associatedTypeHoldings` row")
 	let associatedName = try iface.associatedTypeNames.get(position) otherwise panic("heldPositionNestedClaim: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()} — the caller's loop is bounded by that same list")
-	return nestedClaimAgainstBinding(project, signatures: signatures, nestedInstance: nestedInstance, binding: binding, heldAt: heldAt).throughHeldPosition(associatedName, at: heldAt, binding: signatures.requirementDisplay(binding).toByteArray())
+	return nestedClaimAgainstBinding(project, signatures: signatures, nestedInstance: nestedInstance, binding: binding, heldAt: heldAt).throughHeldPosition(associatedName, at: heldAt, binding: freeze signatures.requirementDisplay(binding).toByteArray())
 end 'heldPositionNestedClaim'
 
 // The verdict door names a conformer by `(tag, nameId)`, so this adapts a binding's identity to it — and it
@@ -6484,7 +6796,7 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, func 
 	// `return`: they are a property of the DECLARATION, and this walk visits every `ret` in the body.
 	// A function with no registered signature — none, since the parser records one per function it
 	// builds — claims nothing.
-	view returnExistentialSites = try returnExistentialSitesOfFunc(project, name: func.name) otherwise sharedEmptyReturnExistentialSites
+	view returnExistentialSites = try returnExistentialSitesOfFunc(project, name: func.name) otherwise GenericInstanceIdArray.create(0)
 	var retOpIndices = OpIndexArray.create(0)
 	var retValues = ValueIdArray.create(0)
 	var literalRanges = LiteralRangeByValue.create()
@@ -6713,7 +7025,7 @@ end 'existentialStoreWideningPlace'
 // which is their honest answer rather than a stand-in — an interface REQUIREMENT's formals are the
 // interface's own spelling, and a function TYPE names its parameters' declarations nowhere at all
 // (the same gap `declaredParamName` has at those two sites).
-function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, handedAt SourceRange, filePath FilePath, provenance ProvenanceTracer)
+function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate immutable ByteArray, declaredParamName ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, handedAt SourceRange, filePath FilePath, provenance ProvenanceTracer)
 	let argTag = try func.valueTags.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 	let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let paramTag = maxonTypeTag(paramType)

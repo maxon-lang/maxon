@@ -1,7 +1,7 @@
 ---
 feature: let-union-payloads
 status: experimental
-keywords: [union, enum, payload, let, read-only, match, write-back, let field]
+keywords: [union, enum, payload, let, immutable, match, write-back, let field]
 category: memory
 ---
 
@@ -18,33 +18,35 @@ union Op
 end 'Op'
 ```
 
-The payload is read-only for the whole life of the value, and it has no other writer:
+The payload is never reassigned for the whole life of the value:
 
-- Nothing reachable through it may be written. A `match` binding of a `let` payload is read-only whatever the
-  scrutinee is, so a field store, a receiver-writing method or a call that writes its parameter is refused
-  (`E3159`), and so is assigning to the binding, which would write back into the union.
-- The value stored into it at construction must be read-only, a value type, or moved: a still-shared `var` is
-  refused (`E3078`). A `var` at its last use moves in.
-- A read of the payload is read-only, so binding it to a `var` is refused (`E3078`).
+- A `match` binding of a `let` payload is a `let`: assigning to the binding, which would write back into the union, is
+  `E2013`. A field store, a receiver-writing method or a call that writes its parameter writes the record the
+  union holds.
+- The value stored into it at construction may be a `var` that is read again: the payload and the `var` name one
+  record. A `var` at its last use moves in.
+- A read of the payload may be bound to a `var`.
 
-A payload declared without `let` follows its scrutinee as before: writable under a `var`, read-only under a
-`let`.
+A payload takes a capability word as a record field does (`let callee immutable ByteArray`), and an immutable value
+such as a constant byte string is stored only into a payload declared `immutable` (`E3196`).
+
+A payload declared without `let` is writable through its binding under a `var` scrutinee.
 
 ## Tests
 
 <!-- test: a-read-only-value-stored-into-a-let-payload -->
-The read-only `source.title` is stored into the `let` payload `callee`.
+The immutable `source.title` is stored into the `let` payload `callee`, which is declared `immutable` to take it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
 union Op
-	call(let callee ByteArray, weight Integer)
+	call(let callee immutable ByteArray, weight Integer)
 	nop
 end 'Op'
 
 type Source
-	export let title as ByteArray
+	export let title as immutable ByteArray
 
 	static function create() returns Self
 		return Self{title: b"title"}
@@ -98,8 +100,8 @@ end 'main'
 2
 ```
 
-<!-- test: error.a-still-shared-var-stored-into-a-let-payload -->
-`name` is read again after the construction, so it is still shared and cannot be stored into the `let` payload.
+<!-- test: a-still-shared-var-stored-into-a-let-payload -->
+`name` is read again after the construction, and the `let` payload names the same record.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -121,12 +123,12 @@ function main() returns ExitCode
 	end 'shape'
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/let-union-payloads/error.a-still-shared-var-stored-into-a-let-payload.maxon:12:19: cannot store the `var` 'name', which is read again, into a `let` payload 'Op.call.callee': a `let` payload has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+1
 ```
 
-<!-- test: error.a-field-write-through-the-binding-of-a-let-payload -->
-`cell` is bound out of a `let` payload, so it is read-only even though the scrutinee `holder` is a `var`.
+<!-- test: a-field-write-through-the-binding-of-a-let-payload -->
+`cell` is bound out of a `let` payload; the payload forbids only reassigning, so a field write through `cell` writes the record the union holds.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -155,11 +157,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/let-union-payloads/error.a-field-write-through-the-binding-of-a-let-payload.maxon:21:19: cannot write through 'cell': 'cell' is read-only (a `let` payload) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+0
 ```
 
-<!-- test: error.a-writing-method-on-the-binding-of-a-let-payload -->
+<!-- test: a-writing-method-on-the-binding-of-a-let-payload -->
 `items.push` writes the record bound out of the `let` payload.
 
 ```maxon
@@ -179,12 +181,12 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/let-union-payloads/error.a-writing-method-on-the-binding-of-a-let-payload.maxon:11:26: cannot write through 'items': 'items' is read-only (a `let` payload) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+0
 ```
 
 <!-- test: error.assigning-to-the-binding-of-a-let-payload -->
-Assigning to the binding of a payload writes back into the union, which a `let` payload refuses.
+Assigning to the binding of a payload reassigns a `let`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -214,11 +216,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/let-union-payloads/error.assigning-to-the-binding-of-a-let-payload.maxon:21:19: cannot write through 'cell': 'cell' is read-only (a `let` payload) and nothing reachable through it may be written; use 'var', or write a clone()
+error E2013: specs/let-union-payloads/error.assigning-to-the-binding-of-a-let-payload.maxon:21:19: 'cell' is a let and cannot be reassigned
 ```
 
-<!-- test: error.a-let-payload-read-into-a-var -->
-A `var` is a writer, and a `let` payload has none besides its construction.
+<!-- test: a-let-payload-read-into-a-var -->
+A `var` may name the record a `let` payload holds.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -248,8 +250,8 @@ function main() returns ExitCode
 	return copy.level as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/let-union-payloads/error.a-let-payload-read-into-a-var.maxon:22:19: cannot assign a value read out of a `let` payload to mutable binding 'copy'; use 'let' instead of 'var', or use clone()
+```exitcode
+0
 ```
 
 <!-- test: a-non-let-payload-read-into-a-var -->
@@ -290,8 +292,8 @@ end 'main'
 4
 ```
 
-<!-- test: error.the-binding-of-a-let-payload-passed-to-a-callee-that-writes-it -->
-`bump` writes its parameter, so the read-only record bound out of the `let` payload cannot be passed to it.
+<!-- test: the-binding-of-a-let-payload-passed-to-a-callee-that-writes-it -->
+`bump` writes its parameter, and the record bound out of the `let` payload may be passed to it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -324,13 +326,12 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/let-union-payloads/error.the-binding-of-a-let-payload-passed-to-a-callee-that-writes-it.maxon:25:19: cannot pass 'cell', which is read-only (a `let` payload), to a function that writes parameter 'cell' (in main); pass a clone()
+```exitcode
+0
 ```
 
-<!-- test: error.the-binding-of-a-let-payload-passed-to-a-parameter-kept-in-a-var-field -->
-`keep` stores its parameter into a `var` field, which is a place something may write, so the read-only record bound
-out of the `let` payload is refused for it.
+<!-- test: the-binding-of-a-let-payload-passed-to-a-parameter-kept-in-a-var-field -->
+`keep` stores its parameter into a `var` field, and the record bound out of the `let` payload may be passed to it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -372,12 +373,12 @@ function main() returns ExitCode
 	return pocket.kept.level as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/let-union-payloads/error.the-binding-of-a-let-payload-passed-to-a-parameter-kept-in-a-var-field.maxon:34:26: cannot pass 'cell', which is read-only (a `let` payload), to parameter 'cell' of 'Pocket.keep', which keeps it where something may write it; pass a clone()
+```exitcode
+0
 ```
 
-<!-- test: error.a-let-payload-returned-by-a-call-is-read-into-a-var -->
-A function that hands the payload back hands back a read-only record, so binding the result to a `var` is refused.
+<!-- test: a-let-payload-returned-by-a-call-is-read-into-a-var -->
+A function that hands the payload back hands back the record, and the result may be bound to a `var`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -410,8 +411,8 @@ function main() returns ExitCode
 	return copy.level as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/let-union-payloads/error.a-let-payload-returned-by-a-call-is-read-into-a-var.maxon:26:6: cannot assign a value, which may share storage with a `let` payload, to mutable binding 'copy'; use 'let' instead of 'var', or use clone()
+```exitcode
+4
 ```
 
 <!-- test: a-non-let-payload-returned-by-a-call-is-read-into-a-var -->
@@ -454,8 +455,7 @@ end 'main'
 ```
 
 <!-- test: a-let-payload-binding-goes-to-a-parameter-kept-in-a-let-payload -->
-A read-only record bound out of one `let` payload is stored into another: a `let` payload has no other writer, so
-the new holder cannot write it either.
+A record bound out of one `let` payload is stored into another, and the new holder names the same record.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -506,8 +506,8 @@ end 'main'
 1
 ```
 
-<!-- test: error.a-var-read-again-after-it-is-passed-to-a-parameter-kept-in-a-let-payload -->
-`shelve` keeps its parameter in a `let` payload, so a `var` handed to it and read again is still shared.
+<!-- test: a-var-read-again-after-it-is-passed-to-a-parameter-kept-in-a-let-payload -->
+`shelve` keeps its parameter in a `let` payload, and a `var` handed to it and read again names the same record.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -551,8 +551,8 @@ function main() returns ExitCode
 	return shelf.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/let-union-payloads/error.a-var-read-again-after-it-is-passed-to-a-parameter-kept-in-a-let-payload.maxon:37:8: cannot pass the `var` 'cell', which is read again, to parameter 'cell' of 'Shelf.shelve', which stores it into a `let` payload: a `let` payload has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: a-payload-without-let-still-follows-the-scrutinee -->
@@ -650,9 +650,8 @@ end 'main'
 20
 ```
 
-<!-- test: error.a-var-read-again-after-a-wrapper-that-stores-into-a-let-payload -->
-`wrapOp` hands its parameter on to a function that stores it in a `let` payload, so the wrapper keeps it there
-too and a `var` that is read again is refused, naming the payload.
+<!-- test: a-var-read-again-after-a-wrapper-that-stores-into-a-let-payload -->
+`wrapOp` hands its parameter on to a function that stores it in a `let` payload, and a `var` that is read again names the same record.
 
 ```maxon
 union Op
@@ -680,12 +679,12 @@ function main() returns ExitCode
 	end 'shape'
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/let-union-payloads/error.a-var-read-again-after-a-wrapper-that-stores-into-a-let-payload.maxon:18:11: cannot pass the `var` 'scratch', which is read again, to parameter 'callee' of 'wrapOp', which stores it into a `let` payload: a `let` payload has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+2
 ```
 
 <!-- test: a-let-payload-of-an-aliased-array-stored-into-a-tuple -->
-`Bytes` names the payload type, so the tuple column the two payloads are stored into is declared `Bytes`. The read-only mark travels with the tuple, and `let (a, b)` keeps both payloads read-only, so the store is accepted.
+`Bytes` names the payload type, so the tuple column the two payloads are stored into is declared `Bytes`. `let (a, b)` binds both payloads' records, so the store is accepted.
 ```maxon
 typealias Bytes = Array with Byte
 
@@ -750,8 +749,8 @@ end 'names'
 0
 ```
 
-<!-- test: error.a-var-read-again-after-a-wrapper-that-stores-it-into-a-let-payload-of-an-alias-over-an-alias -->
-The payload's type `Grid` is an array of `Row`, which is itself an alias of an instance, so the payload's kind is spelled through both aliases; a `var` stored into it by a wrapper and read again is refused the same way.
+<!-- test: a-var-read-again-after-a-wrapper-that-stores-it-into-a-let-payload-of-an-alias-over-an-alias -->
+The payload's type `Grid` is an array of `Row`, which is itself an alias of an instance, so the payload's kind is spelled through both aliases; a `var` stored into it by a wrapper and read again names the same record.
 
 ```maxon
 typealias Row = Array with Byte
@@ -782,12 +781,12 @@ function main() returns ExitCode
 	end 'shape'
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:21:11: cannot pass the `var` 'scratch', which is read again, to parameter 'grid' of 'wrapOp', which stores it into a `let` payload: a `let` payload has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+2
 ```
 
-<!-- test: error.a-let-payload-passed-to-a-constructor-that-stores-it-is-refused -->
-`Shape.create` stores its parameter into a `var` field, which something may write, so the read-only record bound out of the `let` payload is refused for it.
+<!-- test: a-let-payload-passed-to-a-constructor-that-stores-it -->
+`Shape.create` stores its parameter into a `var` field, and the record bound out of the `let` payload may be passed to it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -827,12 +826,12 @@ function main() returns ExitCode
 	return shape.cell.level as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:27:32: cannot pass 'cell', which is read-only (a `let` payload), to parameter 'cell' of 'Shape.create', which keeps it where something may write it; pass a clone()
+```exitcode
+0
 ```
 
 <!-- test: a-let-payload-projected-into-a-tuple-is-read-by-the-caller -->
-A tuple lends its items: the projection returns the payload's read-only record and the caller reads it, where a record built over the payload is refused.
+A tuple lends its items: the projection returns the payload's record and the caller reads it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)

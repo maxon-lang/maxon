@@ -124,7 +124,7 @@ export function installCoverageRuntime(module StdModule, globalData GlobalDataTa
 	end 'notInstrumented'
 
 	let pathLabel = globalData.registerRdataConstant(CoveragePathRdataPrefix, bytes: hostCStringBytes(module, text: dataPath), kind: RdataPayloadKind.coveragePath)
-	buildCoverageDump(module, pathLabel: pathLabel.toByteArray(), pointCount: pointCount)
+	buildCoverageDump(module, pathLabel: freeze pathLabel.toByteArray(), pointCount: pointCount)
 	buildCoverageWriteFile(module)
 end 'installCoverageRuntime'
 
@@ -142,7 +142,7 @@ function buildCoverageDump(module StdModule, pathLabel ByteArray, pointCount Mxc
 	let status = 0 as ValueId
 
 	let image = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(image, label: CoverageImageGlobal.toByteArray()))
+	module.appendOp(entry, op: StdOp.globalAddr(image, label: freeze CoverageImageGlobal.toByteArray()))
 	module.appendOp(entry, op: StdOp.storeIndirect(image, offset: MxcovOffStatus as ByteOffset, valueId: status, valueType: StdType.i64))
 
 	let path = ids.mint()

@@ -188,9 +188,10 @@ end 'loop'
 ```
 
 **Notes:**
-- The loop variable cannot be reassigned. It follows its source: read-only all the way down over a
-  [read-only](/docs/language/memory-model/#read-only-values) source, writable through over a `var` one. Handing it to a parameter the
-  callee reassigns is **E3159**, which names it a `for` loop variable.
+- The loop variable is a `let`: reassigning it is **E2013** (`'item' is a let and cannot be reassigned`), and so
+  is handing it to a `mutable` parameter the callee reassigns. It follows its source for writes through it:
+  writable over a writable source, read-only over [read-only](/docs/language/memory-model/#read-only-values) data such as a stored `Map`
+  key or an `immutable` array.
 - The loop holds a counted reference to its source, so the body may write the collection. A loop over an
   `Array` or a `String` re-reads the live count each step: a `push` in the body extends the loop, and a
   `clear` ends it.

@@ -181,8 +181,8 @@ order, which is unspecified. The table resizes when it is three-quarters full.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `Map.create()` | `Map` | An empty map. |
-| `insert(key Key, value Value)` | — | Add a new entry. Throws `MapError.keyAlreadyExists` when the key is present. |
-| `upsert(key Key, value Value)` | — | Add the entry, or replace the value of an existing key. |
+| `insert(key immutable Key, value Value)` | — | Add a new entry. Throws `MapError.keyAlreadyExists` when the key is present. |
+| `upsert(key immutable Key, value Value)` | — | Add the entry, or replace the value of an existing key. |
 | `get(key Key)` | `Value` | Throws `MapError.keyNotFound`. |
 | `contains(key Key)` | `bool` | Key test. |
 | `remove(key Key)` | `bool` | Remove the entry; true when the key was present. |
@@ -193,9 +193,13 @@ order, which is unspecified. The table resizes when it is three-quarters full.
 
 `MapIterator` implements `Iterator with (Key, Value)`: `current()` and `advance()`.
 
-A stored key is read-only: a key read back from the map, by iteration or otherwise, takes no writes
-([E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord)), so a key's hash stays the one it was filed under.
-`clone()` gives a key to change.
+A key is stored in an `immutable` slot. A number, `String` or other value type needs nothing, a constant such
+as a `b"..."` literal is inserted as it is, and a record or array built at run time is `freeze`d where it
+is inserted (`counts.upsert(freeze ByteArray.create(3), value: 7)`); an unfrozen one is
+[E3207](/docs/cli/error-codes/#e3207--semanticargumentcapabilityrefused). A stored key is read-only: a key read back from
+the map, by iteration or otherwise, is `immutable` and takes no writes
+([E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord)), so a key's hash stays the one it was filed under,
+and it goes straight into an `immutable` holder with no copy. `clone()` gives a key to change.
 
 ```maxon
 enum MapError implements Error
@@ -239,7 +243,7 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `Set.create()` | `Set` | An empty set. |
-| `insert(element Element)` | — | Add an element; inserting a present element does nothing. |
+| `insert(element immutable Element)` | — | Add an element; inserting a present element does nothing. |
 | `contains(element Element)` | `bool` | Membership test. |
 | `remove(element Element)` | `bool` | Remove; true when the element was present. |
 | `count()` | `MemberCount` | Number of elements. |
@@ -249,8 +253,11 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 
 `SetIterator` implements `Iterator with Element`: `current()` and `advance()`.
 
-A stored element is read-only, as a `Map` key is: an element read back from the set takes no writes
-([E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord)); `clone()` gives one to change.
+An element is stored in an `immutable` slot, as a `Map` key is: a value type needs nothing, and a record or
+array built at run time is `freeze`d where it is inserted. An element read back from the set is `immutable` and
+takes no writes ([E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord)); `clone()` gives one to change.
+`Set from values` over an `Array` of value types takes any array; over elements that are not value types, the
+array holds `immutable` elements (`Array with immutable Name`).
 
 ```maxon
 typealias Tags = Set with String

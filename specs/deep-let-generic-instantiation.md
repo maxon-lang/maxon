@@ -1,25 +1,26 @@
 ---
 feature: deep-let-generic-instantiation
 status: experimental
-keywords: [generic, instantiation, let, read-only, Set, type parameter]
+keywords: [generic, instantiation, let, immutable, Set, type parameter]
 category: type-system
 ---
 
-# Read-only places and a generic body's type parameter
+# Immutable places and a generic body's type parameter
 
 ## Documentation
 
-A generic body is compiled once against its opaque type parameter, so the read-only rules cannot see whether
-a value of that type may be written. They are decided where the program instantiates the body: a type whose
-values nothing writes (a number, a `String`, a record whose fields are all `let`) satisfies a body that keeps
-a value of its type parameter in a `let` field, and a record that can be written is refused at the call that
-instantiates the body, naming it. A call through an interface has no type argument to judge, so the instance is
-judged where it becomes an interface value: as an argument, a return, a field store or a message payload.
+A generic body is compiled once against its opaque type parameter, so the rules cannot see whether a value of
+that type may be written. They are decided where the program instantiates the body. A `let` field keeps any value
+of its type parameter, and a `Set`'s elements are `immutable` slots, so a body that inserts a value of its type
+parameter into a `Set` is refused at the call that instantiates it unless the argument is data nothing writes: a
+number, a `String`, a record whose fields are all `let` values, or frozen data. A call through an interface has no
+type argument to judge, so the instance is judged where it becomes an interface value: as an argument, a return,
+a field store or a message payload.
 
 ## Tests
 
 <!-- test: a-set-of-strings-is-built-from-a-literal -->
-A `Set` instantiates bodies that keep a value of its element type in a read-only place; a `String` element
+A `Set` instantiates bodies that keep a value of its element type in an `immutable` slot; a `String` element
 satisfies them all.
 
 ```maxon
@@ -82,8 +83,7 @@ end 'main'
 ```
 
 <!-- test: error.a-generic-body-keeping-its-type-parameter-refuses-a-writable-record -->
-The same type instantiated with a record that has a `var` field is refused at the call that instantiates the
-body, naming `Registry.remember`, because the registry would keep a record other names may still write.
+The same type instantiated with a record that has a `var` field is refused at the call that instantiates the body, naming `Registry.remember`: a `Set` keeps `immutable` elements, and `counters` is mutable.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -137,11 +137,11 @@ end 'main'
 ```
 ```maxoncstderr
 error E3078: <fragment>:47:11: cannot call 'Registry.remember' with a type whose values something may write: its body keeps a value of its type parameter, and a kept value must have no other writer, which only a type nothing writes guarantees (a number, a String, or a record whose fields are all `let`); use such a type
+error E3207: <fragment>:47:20: 'remember' needs 'keys' frozen (it calls 'insert', which takes `immutable` 'element'); 'counters' is mutable. Freeze it first
 ```
 
 <!-- test: error.a-set-of-writable-records-is-refused-for-an-element-another-array-still-holds -->
-A record read out of an array the program still holds is not handed to a `Set` that keeps it read-only; the
-refusal is at the `insert` in the program's own loop.
+A record read out of an array the program still holds is mutable, so it is not handed to a `Set`, whose elements are `immutable`; the refusal is at the `insert` in the program's own loop.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -177,11 +177,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/deep-let-generic-instantiation/error.a-set-of-writable-records-is-refused-for-an-element-another-array-still-holds.maxon:28:11: cannot pass a value other names may still write to parameter 'element' of 'Set.insert', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+error E3207: <fragment>:28:18: 'insert' takes `immutable` 'element'; 'counter' is mutable. Freeze it first
 ```
 
-<!-- test: a-set-of-writable-records-takes-freshly-built-members -->
-The twin: members built in the argument itself are the only reference to their records.
+<!-- test: a-set-of-writable-records-takes-frozen-members -->
+The twin: members frozen where they are inserted are the only reference to their records.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -205,8 +205,8 @@ end 'Counter'
 
 function main() returns ExitCode
 	var members = CounterSet.create()
-	members.insert(Counter.create(1))
-	members.insert(Counter.create(2))
+	members.insert(freeze Counter.create(1))
+	members.insert(freeze Counter.create(2))
 
 	return members.count() as ExitCode
 end 'main'
@@ -244,9 +244,8 @@ end 'main'
 1
 ```
 
-<!-- test: error.a-generic-create-refuses-an-argument-another-name-still-holds -->
-The same `create` instantiated with a record that has a `var` field is refused at the user's call when the
-argument is an element the array still holds.
+<!-- test: a-generic-create-keeps-an-argument-another-name-still-holds -->
+The same `create` instantiated with a record that has a `var` field takes the argument at the user's call, though the array still holds the element: the box keeps it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -282,8 +281,8 @@ function main() returns ExitCode
 	return box.peek().n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/deep-let-generic-instantiation/error.a-generic-create-refuses-an-argument-another-name-still-holds.maxon:30:23: cannot pass a value other names may still write to parameter 'item' of 'Box.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+1
 ```
 
 <!-- test: a-generic-store-of-a-value-read-out-of-an-array-is-judged-at-the-call -->
@@ -320,8 +319,8 @@ end 'main'
 3
 ```
 
-<!-- test: error.a-generic-store-of-a-value-read-out-of-an-array-refuses-a-writable-record -->
-The same `first` instantiated with a record that has a `var` field is refused at the call that instantiates it.
+<!-- test: a-generic-store-of-a-value-read-out-of-an-array-takes-a-writable-record -->
+The same `first` instantiated with a record that has a `var` field is accepted at the call that instantiates it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -359,8 +358,8 @@ function main() returns ExitCode
 	return box.peek().n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:32:23: cannot call 'Box.first' with a type whose values something may write: its body keeps a value of its type parameter, and a kept value must have no other writer, which only a type nothing writes guarantees (a number, a String, or a record whose fields are all `let`); use such a type
+```exitcode
+1
 ```
 
 <!-- test: a-type-parameter-value-read-out-of-a-let-field-may-be-stored-in-a-var-field-of-a-value-type -->
@@ -396,8 +395,8 @@ end 'main'
 1
 ```
 
-<!-- test: error.a-type-parameter-value-read-out-of-a-let-field-is-not-stored-in-a-var-field-of-a-writable-record -->
-The same method instantiated with a record that has a `var` field is refused at the call.
+<!-- test: a-type-parameter-value-read-out-of-a-let-field-is-stored-in-a-var-field-of-a-writable-record -->
+The same method instantiated with a record that has a `var` field is accepted at the call: both fields then name one record.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -434,8 +433,8 @@ function main() returns ExitCode
 	return extra.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:31:19: cannot call 'Pair.mirror' with a type whose values something may write: its body keeps a value of its type parameter, and a kept value must have no other writer, which only a type nothing writes guarantees (a number, a String, or a record whose fields are all `let`); use such a type
+```exitcode
+3
 ```
 
 <!-- test: a-method-with-only-its-receiver-is-judged-by-the-receivers-type-argument -->
@@ -468,8 +467,8 @@ end 'main'
 0
 ```
 
-<!-- test: error.a-method-with-only-its-receiver-refuses-a-receiver-of-writable-records -->
-The same method called on a pair of records that have a `var` field is refused at the call.
+<!-- test: a-method-with-only-its-receiver-takes-a-receiver-of-writable-records -->
+The same method called on a pair of records that have a `var` field is accepted at the call.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -504,8 +503,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:29:7: cannot call 'Pair.mirror' with a type whose values something may write: its body keeps a value of its type parameter, and a kept value must have no other writer, which only a type nothing writes guarantees (a number, a String, or a record whose fields are all `let`); use such a type
+```exitcode
+0
 ```
 
 <!-- test: a-generic-body-reached-through-an-interface-takes-a-value-type -->
@@ -572,10 +571,8 @@ true
 0
 ```
 
-<!-- test: error.a-generic-body-reached-through-an-interface-refuses-a-writable-record-at-the-conversion -->
-The refused twin: the same body instantiated with a record that has a `var` field is refused where the instance
-becomes a `Mirrored`, because the pair would keep a record other names may still write and every call through the
-interface would reach it.
+<!-- test: a-generic-body-reached-through-an-interface-takes-a-writable-record-at-the-conversion -->
+The same body instantiated with a record that has a `var` field is accepted where the instance becomes a `Mirrored`, and every call through the interface reaches it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -626,13 +623,12 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:44:22: cannot convert to 'Mirrored' a type whose values something may write: its method 'Pair.mirror' keeps a value of its type parameter, and a kept value must have no other writer, which only a type nothing writes guarantees (a number, a String, or a record whose fields are all `let`); use such a type
+```exitcode
+0
 ```
 
-<!-- test: error.a-generic-body-returned-at-an-interface-type-is-refused-at-the-conversion -->
-A return at an interface type is a conversion too: the returned pair of records that have a `var` field becomes a
-`Mirrored` at the `return`, so every call through the result would reach a body that keeps a writable record.
+<!-- test: a-generic-body-returned-at-an-interface-type-is-accepted-at-the-conversion -->
+A return at an interface type is a conversion too: the returned pair of records that have a `var` field becomes a `Mirrored` at the `return`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -675,13 +671,12 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:32:2: cannot convert to 'Mirrored' a type whose values something may write: its method 'Pair.mirror' keeps a value of its type parameter, and a kept value must have no other writer, which only a type nothing writes guarantees (a number, a String, or a record whose fields are all `let`); use such a type
+```exitcode
+0
 ```
 
-<!-- test: error.a-generic-body-stored-in-an-interface-field-is-refused-at-the-conversion -->
-A store into a field declared at an interface type is a conversion as well: the pair becomes a `Mirrored` where
-`Holder` is built.
+<!-- test: a-generic-body-stored-in-an-interface-field-is-accepted-at-the-conversion -->
+A store into a field declared at an interface type is a conversion as well: the pair becomes a `Mirrored` where `Holder` is built.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -728,8 +723,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:35:10: cannot convert to 'Mirrored' a type whose values something may write: its method 'Pair.mirror' keeps a value of its type parameter, and a kept value must have no other writer, which only a type nothing writes guarantees (a number, a String, or a record whose fields are all `let`); use such a type
+```exitcode
+0
 ```
 
 <!-- test: a-var-at-its-last-use-moves-into-a-static-factorys-let-field -->
@@ -812,9 +807,8 @@ end 'main'
 4
 ```
 
-<!-- test: error.a-var-read-after-a-static-factory-keeps-it-is-refused -->
-The `var` is read again after the call, so the factory's `let` field would share the record with a name that can
-still write it.
+<!-- test: a-var-read-after-a-static-factory-keeps-it-is-accepted -->
+The `var` is read again after the call, so the factory's `let` field shares the record with a name that still reads it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -848,12 +842,12 @@ function main() returns ExitCode
 	return (box.peek() + seen) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/deep-let-generic-instantiation/error.a-var-read-after-a-static-factory-keeps-it-is-refused.maxon:27:16: cannot pass the `var` 'counter', which is read again, to parameter 'item' of 'Box.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+2
 ```
 
-<!-- test: error.a-var-written-after-a-static-factory-keeps-it-is-refused -->
-A write through the `var` after the call is a use of it too, so the factory's `let` field is refused the record.
+<!-- test: a-var-written-after-a-static-factory-keeps-it-is-accepted -->
+A write through the `var` after the call reaches the record the factory's `let` field holds, and `peek` reads the write.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -887,12 +881,12 @@ function main() returns ExitCode
 	return box.peek() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/deep-let-generic-instantiation/error.a-var-written-after-a-static-factory-keeps-it-is-refused.maxon:27:16: cannot pass the `var` 'counter', which is read again, to parameter 'item' of 'Box.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+2
 ```
 
-<!-- test: error.a-var-written-after-a-generic-factory-keeps-it-is-refused -->
-The generic spelling refuses the same write, naming the instance's `create`.
+<!-- test: a-var-written-after-a-generic-factory-keeps-it-is-accepted -->
+The generic spelling accepts the same write, and `peek` reads it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -927,13 +921,12 @@ function main() returns ExitCode
 	return box.peek().n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/deep-let-generic-instantiation/error.a-var-written-after-a-generic-factory-keeps-it-is-refused.maxon:28:23: cannot pass the `var` 'counter', which is read again, to parameter 'item' of 'Box.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+2
 ```
 
-<!-- test: error.a-let-view-of-a-vars-field-is-refused-by-a-let-field-keeper -->
-A `view` of the record a `var`'s field holds is read-only while it is live, so a `let` field that
-keeps it would still share the record with a name that writes it once the view is dead.
+<!-- test: a-let-view-of-a-vars-field-is-kept-by-a-let-field-keeper -->
+A `view` of the record a `var`'s field holds is kept by a `let` field, and the write to the `var`'s field is read through it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -977,8 +970,8 @@ function main() returns ExitCode
 	return (box.peek() + seen) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/deep-let-generic-instantiation/error.a-let-view-of-a-vars-field-is-refused-by-a-let-field-keeper.maxon:36:16: cannot pass a value other names may still write to parameter 'item' of 'Box.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+3
 ```
 
 <!-- test: a-let-moved-from-a-var-is-sole-so-a-let-field-keeps-it -->
@@ -1022,9 +1015,8 @@ end 'main'
 4
 ```
 
-<!-- test: error.a-let-view-of-a-vars-field-is-refused-by-a-factorys-struct-literal -->
-`x` only views the record `holder.field` holds. The struct literal's `let` field would keep it, so the store is
-refused although `x` is read-only.
+<!-- test: a-let-view-of-a-vars-field-is-kept-by-a-factorys-struct-literal -->
+`x` views the record `holder.field` holds. The struct literal's `let` field keeps it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1067,8 +1059,8 @@ function main() returns ExitCode
 	return box.peek() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: specs/deep-let-generic-instantiation/error.a-let-view-of-a-vars-field-is-refused-by-a-factorys-struct-literal.maxon:28:15: cannot store view 'x' into a `let` field 'Box.kept': a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+2
 ```
 
 <!-- test: a-let-bound-to-a-fresh-record-is-kept-by-a-factorys-struct-literal -->

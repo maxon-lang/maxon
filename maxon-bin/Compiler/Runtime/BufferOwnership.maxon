@@ -281,14 +281,18 @@ end 'immortalRecordShapeOf'
 // Alignment holds by construction: `MmRuntime.immortalBoxHeaderSize` is a multiple of
 // `GlobalDataTable.RdataPayloadAlignment` in a traced and an untraced build, so the record inside the
 // payload lands aligned too.
-function immortalRecordPayload(record ByteArray, kind RdataPayloadKind, debugStream bool) returns ByteArray
+function immortalRecordPayload(record ByteArray, kind RdataPayloadKind, debugStream bool) returns immutable ByteArray
 	if immortalRecordShapeOf(kind) == ImmortalRecordShape.managedRecord and not recordCarriesImmortalCapacity(record) 'markSplit'
 		panic("immortalRecordPayload: a {record.count()}-byte managed record is being given the immortal HEADER without ImmortalRecordCapacity at capacity@16 — the two marks are read by different runtime entries, so a record carrying one of them is skipped by half the readers and counted by the other half")
 	end 'markSplit'
 
-	var payload = immortalBoxHeaderBytes(debugStream, recordBytes: record.count() as FullRangeInt)
-	payload.append(record)
-	return payload
+	var payload = immortalBoxHeaderBytes(debugStream, recordBytes: record.count() as FullRangeInt) as isolated ByteArray
+
+	modify payload 'fill'
+		payload.append(record)
+	end 'fill'
+
+	return freeze payload
 end 'immortalRecordPayload'
 
 // Does `record` carry `ImmortalRecordCapacity` at `capacity@16`? Compared as the BYTES `immortalRecordBytes`

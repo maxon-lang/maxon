@@ -980,23 +980,26 @@ end 'writeI32ConstOffsetExpr'
 // for results. Exported so `StdToWasm.buildIndirectCallTypeIdxMap`/`emitCallIndirect` can key an indirect
 // call's pre-interned functype by the SAME encoded bytes `internFuncType` dedups on — one
 // encoder, so the intern-time key and the emit-time lookup key cannot disagree.
-export function encodeFuncType(params WasmValTypeArray, results WasmValTypeArray) returns ByteArray
-	var enc = ByteArray.create(0)
-	enc.push(wasmFunctypeForm)
+export function encodeFuncType(params WasmValTypeArray, results WasmValTypeArray) returns immutable ByteArray
+	var enc = ByteArray.create(0) as isolated ByteArray
 
-	writeUleb128(enc, value: params.count() as Wasm32Index)
+	modify enc 'fill'
+		enc.push(wasmFunctypeForm)
 
-	for p in params 'eachParam'
-		enc.push(valTypeByte(p) as Byte)
-	end 'eachParam'
+		writeUleb128(enc, value: params.count() as Wasm32Index)
 
-	writeUleb128(enc, value: results.count() as Wasm32Index)
+		for p in params 'eachParam'
+			enc.push(valTypeByte(p) as Byte)
+		end 'eachParam'
 
-	for r in results 'eachResult'
-		enc.push(valTypeByte(r) as Byte)
-	end 'eachResult'
+		writeUleb128(enc, value: results.count() as Wasm32Index)
 
-	return enc
+		for r in results 'eachResult'
+			enc.push(valTypeByte(r) as Byte)
+		end 'eachResult'
+	end 'fill'
+
+	return freeze enc
 end 'encodeFuncType'
 
 // Encode a function body's local declarations as run-length `(count, valtype)` groups: adjacent
@@ -1040,7 +1043,7 @@ end 'writeLocalDecls'
 // One export entry, held until finish() so exports emit in the order StdToWasm declared them (which
 // determinism requires and the component tooling expects: memory before the run function).
 type WasmExport
-	export let name as ByteArray
+	export let name as immutable ByteArray
 	export var kind as MachineWord
 	export var index as Wasm32Index
 

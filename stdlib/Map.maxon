@@ -19,11 +19,11 @@ public typealias EntryCount = int(0 to 9223372036854775808) implements Count
 // error at one file's `match`es and silence at the other's — so there is one.
 
 public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable with (Entry, MapIterator) where Key is Hashable and Equatable
-	typealias KeyArray = Array with Key
+	typealias KeyArray = Array with immutable Key
 	typealias ValueArray = Array with Value
 	typealias StateArray = Array with SlotState
 	typealias HashSlotArray = Array with HashValue
-	public typealias Entry = (Key, Value)
+	public typealias Entry = (immutable Key, Value)
 	typealias KeyMemory = __ManagedMemory with Key
 	typealias ValueMemory = __ManagedMemory with Value
 
@@ -143,7 +143,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	/// Insert a key-value pair into the map
 	/// Throws if the key already exists
 	/// Automatically resizes the map when load factor exceeds 75%
-	public function insert(key Key, value Value) throws MapError
+	public function insert(key immutable Key, value Value) throws MapError
 		ensureCapacity()
 
 		let hash = key.hash()
@@ -163,7 +163,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	/// Insert or update a key-value pair in the map
 	/// If the key already exists, updates the value
 	/// Automatically resizes the map when load factor exceeds 75%
-	public function upsert(key Key, value Value)
+	public function upsert(key immutable Key, value Value)
 		ensureCapacity()
 
 		let hash = key.hash()
@@ -430,13 +430,13 @@ end 'Map'
 /// capacity after the final advance throws). current() reads that slot without
 /// a state check.
 public type MapIterator uses Key, Value implements Iterator with Entry where Key is Hashable and Equatable
-	public typealias Entry = (Key, Value)
-	public typealias IterKeyArray = Array with Key
+	public typealias Entry = (immutable Key, Value)
+	public typealias IterKeyArray = Array with immutable Key
 	public typealias IterValueArray = Array with Value
 	public typealias IterStateArray = Array with SlotState
-	typealias KeySlots = SlotCursor with Key
+	typealias KeySlots = SlotCursor with immutable Key
 	typealias ValueSlots = SlotCursor with Value
-	typealias KeyCursor = __ManagedMemoryCursor with Key
+	typealias KeyCursor = __ManagedMemoryCursor with immutable Key
 	typealias ValueCursor = __ManagedMemoryCursor with Value
 
 	var keys as KeyCursor

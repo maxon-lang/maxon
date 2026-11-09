@@ -57,7 +57,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/block-scoping/for-iterator-immutable.maxon:5:3: cannot assign to immutable variable: 'item'
+error E2013: specs/block-scoping/for-iterator-immutable.maxon:5:3: 'item' is a let and cannot be reassigned
 ```
 
 <!-- test: for-iterator-not-accessible-after -->
@@ -99,7 +99,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/block-scoping/for-destructured-immutable.maxon:5:3: cannot assign to immutable variable: 'value'
+error E2013: specs/block-scoping/for-destructured-immutable.maxon:5:3: 'value' is a let and cannot be reassigned
 ```
 
 <!-- test: for-destructured-not-accessible-after -->

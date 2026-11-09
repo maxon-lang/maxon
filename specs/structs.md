@@ -43,7 +43,7 @@ let config = Config.create(1, count: 0)
 
 ### Instance Mutability
 
-The mutability of a type instance is determined by `let` vs `var`:
+A `var` name can be reassigned, and a `let` name cannot:
 
 **var type** - Can modify `var` fields:
 ```maxon
@@ -54,10 +54,11 @@ function main() returns ExitCode
 end 'main'
 ```
 
-**let type** - Cannot modify any fields:
+**let type** - Cannot be reassigned, but its `var` fields can be written through it:
 ```maxon
 let p = Point.create(10, y: 20)
-// p.x = 30   // ERROR: type instance is immutable
+p.x = 30       // OK: `let` forbids reassigning `p`, not writing the record it names
+// p = Point.create(1, y: 2)   // ERROR: 'p' is a let and cannot be reassigned
 ```
 
 ### Field Mutability
@@ -122,7 +123,7 @@ end 'main'
 5
 ```
 
-<!-- test: error.let-struct-field-assign -->
+<!-- test: let-struct-field-assign -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -142,8 +143,8 @@ function main() returns ExitCode
 	return p.x
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/structs/error.let-struct-field-assign.maxon:16:2: cannot write through 'p': 'p' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+30
 ```
 
 <!-- test: error.let-field-assign -->
@@ -167,7 +168,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/structs/error.let-field-assign.maxon:16:2: cannot assign to field 'Config.version' because it is immutable (declare with 'var' to make it mutable)
+error E2013: specs/structs/error.let-field-assign.maxon:16:2: 'version' is a let field and cannot be reassigned
 ```
 
 <!-- test: simple-type -->
@@ -715,16 +716,17 @@ end 'main'
 
 <!-- test: error.return-a-let-declared-global -->
 The negative control, and the one thing the widened door must still refuse — **at the BINDING**.
-RETURNING a `let`-declared global's record is legal: `expose()` compiles, and a caller
-that only reads what it hands back is a working program (the next case). What is refused is `var b = expose()`,
-because the `var` would be a writable name for a global the program declared immutable. The caller can know
-this only because the return is summarised whole-program — `expose`'s body may be in another file.
+RETURNING a `let`-declared global's record is legal when the result is declared `returns immutable` (from an
+unmarked result it is E3209): `expose()` compiles, and a caller that only reads what it hands back is a working
+program (the next case). What is refused is `var b = expose()`, because the `var` would be a writable name for a
+global the program declared immutable. The caller can know this only because the return is summarised
+whole-program — `expose`'s body may be in another file.
 ```maxon
 typealias Names = Array with String
 
 let A = ["ab", "cde"]
 
-function expose() returns Names
+function expose() returns immutable Names
 	return A
 end 'expose'
 
@@ -745,7 +747,7 @@ typealias Names = Array with String
 
 let A = ["ab", "cde"]
 
-function expose() returns Names
+function expose() returns immutable Names
 	return A
 end 'expose'
 

@@ -439,9 +439,9 @@ Output: `olléh`.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `trim(chars CharacterSet = CharacterSet.whitespacesAndNewlines())` | `String` | Remove characters in `chars` from both ends; by default Unicode whitespace and newlines. |
-| `trimStart(chars CharacterSet = CharacterSet.whitespacesAndNewlines())` | `String` | From the start only. |
-| `trimEnd(chars CharacterSet = CharacterSet.whitespacesAndNewlines())` | `String` | From the end only. |
+| `trim(chars CharacterSet = CharacterSet.whitespacesAndNewlines)` | `String` | Remove characters in `chars` from both ends; by default Unicode whitespace and newlines. |
+| `trimStart(chars CharacterSet = CharacterSet.whitespacesAndNewlines)` | `String` | From the start only. |
+| `trimEnd(chars CharacterSet = CharacterSet.whitespacesAndNewlines)` | `String` | From the end only. |
 
 Trimming walks grapheme clusters, so
 `"\r\n"` is one unit: a set holding `'\r'` but not `"\r\n"` trims neither.
@@ -582,22 +582,23 @@ Output: `true true false`.
 ## CharacterSet
 
 A `CharacterSet` is a set of characters defined by Unicode general categories, explicit members, or both.
-It is what the `String` trimming methods take.
+It is what the `String` trimming methods take. The presets below are `public static let` constants: constant
+data, read as `CharacterSet.letters` with no call. `from` builds a set of exactly the characters given.
 
-| Factory | Contents |
-|---------|----------|
-| `CharacterSet.whitespaces()` | Space separators (Zs) and tab — no newlines |
-| `CharacterSet.newlines()` | LF, CR, CRLF, VT, FF, NEL, line and paragraph separators |
-| `CharacterSet.whitespacesAndNewlines()` | Both of the above |
-| `CharacterSet.decimalDigits()` | Decimal digits (Nd) |
-| `CharacterSet.letters()` | Letters and marks (L\*, M\*) |
-| `CharacterSet.lowercaseLetters()` | Lowercase letters (Ll) |
-| `CharacterSet.uppercaseLetters()` | Uppercase and titlecase letters (Lu, Lt) |
-| `CharacterSet.alphanumerics()` | Letters, marks and numbers (L\*, M\*, N\*) |
-| `CharacterSet.punctuation()` | Punctuation (P\*) |
-| `CharacterSet.symbols()` | Symbols (S\*) |
-| `CharacterSet.controlCharacters()` | Control and format characters (Cc, Cf) |
-| `CharacterSet.from(chars CharSet)` | Exactly the characters given; `CharSet` is `Set with Character` |
+| Preset | Contents |
+|--------|----------|
+| `CharacterSet.whitespaces` | Space separators (Zs) and tab — no newlines |
+| `CharacterSet.newlines` | LF, CR, CRLF, VT, FF, NEL, line and paragraph separators |
+| `CharacterSet.whitespacesAndNewlines` | Both of the above |
+| `CharacterSet.decimalDigits` | Decimal digits (Nd) |
+| `CharacterSet.letters` | Letters and marks (L\*, M\*) |
+| `CharacterSet.lowercaseLetters` | Lowercase letters (Ll) |
+| `CharacterSet.uppercaseLetters` | Uppercase and titlecase letters (Lu, Lt) |
+| `CharacterSet.alphanumerics` | Letters, marks and numbers (L\*, M\*, N\*) |
+| `CharacterSet.punctuation` | Punctuation (P\*) |
+| `CharacterSet.symbols` | Symbols (S\*) |
+| `CharacterSet.controlCharacters` | Control and format characters (Cc, Cf) |
+| `CharacterSet.from(chars CharSet)` | A function, not a preset: exactly the characters given; `CharSet` is `Set with Character` |
 
 | Member | Returns | Description |
 |--------|---------|-------------|
@@ -612,8 +613,8 @@ function main() returns ExitCode
 	members.insert('y')
 	let xy = CharacterSet.from(members)
 
-	print("[{"xyhixy".trim(xy)}] [{"123abc456".trim(CharacterSet.decimalDigits())}]\n")
-	print("{CharacterSet.symbols().contains('$')} {CharacterSet.lowercaseLetters().contains('ß')}\n")
+	print("[{"xyhixy".trim(xy)}] [{"123abc456".trim(CharacterSet.decimalDigits)}]\n")
+	print("{CharacterSet.symbols.contains('$')} {CharacterSet.lowercaseLetters.contains('ß')}\n")
 	return 0
 end 'main'
 ```
@@ -796,8 +797,8 @@ order, which is unspecified. The table resizes when it is three-quarters full.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `Map.create()` | `Map` | An empty map. |
-| `insert(key Key, value Value)` | — | Add a new entry. Throws `MapError.keyAlreadyExists` when the key is present. |
-| `upsert(key Key, value Value)` | — | Add the entry, or replace the value of an existing key. |
+| `insert(key immutable Key, value Value)` | — | Add a new entry. Throws `MapError.keyAlreadyExists` when the key is present. |
+| `upsert(key immutable Key, value Value)` | — | Add the entry, or replace the value of an existing key. |
 | `get(key Key)` | `Value` | Throws `MapError.keyNotFound`. |
 | `contains(key Key)` | `bool` | Key test. |
 | `remove(key Key)` | `bool` | Remove the entry; true when the key was present. |
@@ -808,9 +809,13 @@ order, which is unspecified. The table resizes when it is three-quarters full.
 
 `MapIterator` implements `Iterator with (Key, Value)`: `current()` and `advance()`.
 
-A stored key is read-only: a key read back from the map, by iteration or otherwise, takes no writes
-([E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159)), so a key's hash stays the one it was filed under.
-`clone()` gives a key to change.
+A key is stored in an `immutable` slot. A number, `String` or other value type needs nothing, a constant such
+as a `b"..."` literal is inserted as it is, and a record or array built at run time is `freeze`d where it
+is inserted (`counts.upsert(freeze ByteArray.create(3), value: 7)`); an unfrozen one is
+[E3207](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3207). A stored key is read-only: a key read back from
+the map, by iteration or otherwise, is `immutable` and takes no writes
+([E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159)), so a key's hash stays the one it was filed under,
+and it goes straight into an `immutable` holder with no copy. `clone()` gives a key to change.
 
 ```maxon
 enum MapError implements Error
@@ -854,7 +859,7 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `Set.create()` | `Set` | An empty set. |
-| `insert(element Element)` | — | Add an element; inserting a present element does nothing. |
+| `insert(element immutable Element)` | — | Add an element; inserting a present element does nothing. |
 | `contains(element Element)` | `bool` | Membership test. |
 | `remove(element Element)` | `bool` | Remove; true when the element was present. |
 | `count()` | `MemberCount` | Number of elements. |
@@ -864,8 +869,11 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 
 `SetIterator` implements `Iterator with Element`: `current()` and `advance()`.
 
-A stored element is read-only, as a `Map` key is: an element read back from the set takes no writes
-([E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159)); `clone()` gives one to change.
+An element is stored in an `immutable` slot, as a `Map` key is: a value type needs nothing, and a record or
+array built at run time is `freeze`d where it is inserted. An element read back from the set is `immutable` and
+takes no writes ([E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159)); `clone()` gives one to change.
+`Set from values` over an `Array` of value types takes any array; over elements that are not value types, the
+array holds `immutable` elements (`Array with immutable Name`).
 
 ```maxon
 typealias Tags = Set with String
@@ -1612,8 +1620,8 @@ The two handlers write each record with one write, so lines from different threa
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `TextLogHandler.create(options immutable LogHandlerOptions)` | `TextLogHandler` | `key=value` pairs in the order `time`, `level`, `source` (`file:line`), `msg`, then the attributes; the time is RFC 3339 with milliseconds. A text value is quoted with `Json.quote`'s escapes when it is empty or holds a space, a control byte, `"` or `=`. A group's attributes print with dotted keys. |
-| `JsonLogHandler.create(options immutable LogHandlerOptions)` | `JsonLogHandler` | One JSON object per line: `time` (RFC 3339 with nanoseconds), `level`, `source` as `{"file":…,"line":…}`, `msg`, then the attributes, a group as a nested object. A non-finite float is a string. |
+| `TextLogHandler.create(options LogHandlerOptions)` | `TextLogHandler` | `key=value` pairs in the order `time`, `level`, `source` (`file:line`), `msg`, then the attributes; the time is RFC 3339 with milliseconds. A text value is quoted with `Json.quote`'s escapes when it is empty or holds a space, a control byte, `"` or `=`. A group's attributes print with dotted keys. |
+| `JsonLogHandler.create(options LogHandlerOptions)` | `JsonLogHandler` | One JSON object per line: `time` (RFC 3339 with nanoseconds), `level`, `source` as `{"file":…,"line":…}`, `msg`, then the attributes, a group as a nested object. A non-finite float is a string. |
 | `LogHandlerOptions.create(stream LogStream, addTime bool, addSource bool)` | `LogHandlerOptions` | Where to write, and whether to include the time and the caller's location. |
 | `LogHandlerOptions.standard()` | `LogHandlerOptions` | Stderr, time on, source off. |
 | `stream`, `addTime`, `addSource` | | The options' fields. |
@@ -1632,7 +1640,7 @@ A handler of your own implements `LogHandler`, declares its parameter `record im
 
 ```maxon
 function main() returns ExitCode
-	let options = freeze LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
 	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.debug))
 	Log.setDefault(LogSink.create(spawn JsonLogHandler.create(options), levels: levels))
 

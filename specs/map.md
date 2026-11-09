@@ -629,6 +629,9 @@ body**, so a map that did not own its keys would hold a key freed at the end of 
 key dangling. A capability that evaporates the moment its subject is written in a loop is not a
 capability, and a case that cannot tell the difference does not test one.
 
+A `Map` key is an `immutable` slot, so a key built at run time enters it frozen: the upserts write
+`freeze Point.create(…)`.
+
 ⚠ the compiler's signature match erases a ranged alias to its underlying primitive, so `hash()` written
 `returns Val` — an `int` alias of `HashValue`'s span — is ACCEPTED rather than refused with
 `E3016: Partial interface implementation … expected hash() returns HashValue`. It is recorded here
@@ -658,7 +661,7 @@ typealias PointMap = Map with (Point, Val)
 function main() returns ExitCode
 	var m = PointMap.create()
 	for i in 1 upto 4 'fill'
-		m.upsert(Point.create(i, y: i * 2), value: i * 7)
+		m.upsert(freeze Point.create(i, y: i * 2), value: i * 7)
 	end 'fill'
 	return (try m.get(Point.create(1, y: 2)) otherwise 0) + (try m.get(Point.create(2, y: 4)) otherwise 0) + (try m.get(Point.create(3, y: 6)) otherwise 0)
 end 'main'
@@ -710,7 +713,7 @@ typealias PointMap = Map with (Point, Val)
 function build(n Val) returns Val
 	var m = PointMap.create()
 	for i in 0 upto n 'fill'
-		m.upsert(Point.create(i, y: i * 3), value: i)
+		m.upsert(freeze Point.create(i, y: i * 3), value: i)
 	end 'fill'
 	var seen = 0 as Val
 	for i in 0 upto n 'read'
@@ -769,7 +772,7 @@ typealias PointStrMap = Map with (Point, String)
 function main() returns ExitCode
 	var m = PointStrMap.create()
 	for i in 0 upto 40 'fill'
-		m.upsert(Point.create(i, y: i * 3), value: "value number {i}, long enough to escape any small-string envelope")
+		m.upsert(freeze Point.create(i, y: i * 3), value: "value number {i}, long enough to escape any small-string envelope")
 	end 'fill'
 	var seen = 0 as Count
 	for i in 0 upto 40 'read'
@@ -1586,7 +1589,7 @@ error E3005: <fragment>:11:11: Value 700 is outside the range of 'Small' (int(0 
 ```
 
 <!-- test: error.a-let-map-mutation-is-refused -->
-A `let` map literal is immutable, so a write through it reaches the immutable-binding refusal.
+A `let` map literal is constant data, so a write through it is refused.
 ```maxon
 function main() returns ExitCode
 	let m = [1: 10]
@@ -1595,7 +1598,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:4:4: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E3207: <fragment>:4:2: 'upsert' writes its receiver (line 174: `try values.set(slotIndex as ElementIndex, value: value)`); 'm' is immutable
 ```
 
 <!-- test: a-top-level-let-map-read-is-range-known -->
@@ -1654,6 +1657,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3207: <fragment>:5:2: 'upsert' writes its receiver (line 174: `try values.set(slotIndex as ElementIndex, value: value)`); 'TABLE' is immutable
 error E3159: <fragment>:5:8: cannot pass 'TABLE', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
@@ -1673,7 +1677,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:10:2: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'm' (in main); pass a clone()
+error E3207: <fragment>:10:9: 'pokeIn' writes 'm' (it calls 'upsert', which writes its receiver); 'm' is immutable
 ```
 
 <!-- test: a-let-map-read-after-a-reading-call-keeps-its-range -->
@@ -1743,7 +1747,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:14:2: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'm' (in main); pass a clone()
+error E3207: <fragment>:14:7: 'grow' writes 'm' (it calls 'upsert', which writes its receiver); 'pass(m)' is immutable
 ```
 
 <!-- test: error.an-unnamed-receiver-aliasing-a-let-map-is-refused -->
@@ -1763,7 +1767,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:10:10: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E3207: <fragment>:10:9: 'upsert' writes its receiver (line 174: `try values.set(slotIndex as ElementIndex, value: value)`); the receiver is immutable
 ```
 
 <!-- test: error.a-closure-capturing-a-let-map-cannot-write-it -->
@@ -1780,12 +1784,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:4:29: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main$closure_0); pass a clone()
+error E3197: <fragment>:4:27: cannot write 'm' through the closure that captures it: 'm' is immutable
 ```
 
 <!-- test: error.a-let-map-stored-in-a-var-struct-field-cannot-be-written-through-it -->
-A `let` map literal cannot be stored into a field of a `var` record, so no write through that field can reach
-it and the range column read from the `let` stays true.
+A `let` map literal stored into a field of a `var` record stays constant, so a write through that field is refused
+and the range column read from the `let` stays true.
 ```maxon
 typealias CountMap = Map with (Count, Count)
 
@@ -1805,7 +1809,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:14:17: cannot pass 'm', which is read-only (a `let` binding), to parameter 'm' of 'Holder.create', which keeps it where something may write it; pass a clone()
+error E3207: <fragment>:15:5: 'upsert' writes its receiver (line 174: `try values.set(slotIndex as ElementIndex, value: value)`); the receiver is read-only
 ```
 
 <!-- test: error.a-let-map-handed-to-a-function-value-that-writes-it-is-refused -->
@@ -1825,7 +1829,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:11:3: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'm' (in main); pass a clone()
+error E3207: <fragment>:11:3: 'grow' writes 'm' (it calls 'upsert', which writes its receiver); 'm' is immutable
 ```
 
 <!-- test: error.a-let-map-of-bare-numbers-handed-to-a-function-value-is-refused -->
@@ -1851,7 +1855,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:16:3: argument type mismatch for 1: expected 'SmallMap', got 'Map with (int, int)'
-error E3159: <fragment>:16:3: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'm' (in main); pass a clone()
+error E3207: <fragment>:16:3: 'grow' writes 'm' (it calls 'upsert', which writes its receiver); 'm' is immutable
 ```
 
 <!-- test: error.a-closure-handing-a-captured-let-map-to-a-function-value-is-refused -->
@@ -1872,7 +1876,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:12:28: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'm' (in main$closure_0); pass a clone()
+error E3197: <fragment>:12:29: cannot write 'm' through the closure that captures it: 'm' is immutable
 ```
 
 <!-- test: a-closure-capturing-a-var-map-may-hand-it-to-a-function-value -->

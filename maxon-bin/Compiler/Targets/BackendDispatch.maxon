@@ -218,7 +218,7 @@ end 'programStartedGlobals'
 // is the first to see; concat resolves those labels against the same table.
 module function encodeOnTheBackendPool(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex, chunks FunctionCodeChunkArray) returns TargetModule throws CompileError
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
-	var targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt, chunks: chunks)
+	let targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt, chunks: chunks)
 	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
 
 	let releaseProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.releaseIr)
@@ -346,7 +346,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	releaseEncodedTargetModule(project, targetModule: targetModule)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
-	var codeResult = try concatX64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData, project: project, funcNames: funcNames)
+	let codeResult = try concatX64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData, project: project, funcNames: funcNames)
 	recordPhase(project, phase: CompilePhase.link, probe: linkProbe)
 
 	return codeResult

@@ -840,7 +840,7 @@ function assertX64CallClobbers(pool RegMask)
 	// the thing that actually moved.
 	assertCalleeSavedListsMatchMasks()
 
-	assertOneCallClobber(TargetOp.callDirect(ByteArray.create(0)), name: "callDirect", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
+	assertOneCallClobber(TargetOp.callDirect(b""), name: "callDirect", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 	assertOneCallClobber(TargetOp.iatCall(0), name: "iatCall", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 
 	// The register-indirect call carries the SAME caller-saved clobber mask as `callDirect`
@@ -1232,8 +1232,8 @@ end 'assertRegisterFacts'
 // function is re-extracted from the untouched Std module and taken through the same isel, the same edge
 // split and the same core, so it refuses at the same peak. A compile that reaches here is failing, so the
 // second run (and the fresh variant memo it builds) costs nothing anybody will see.
-module function refuseForRegisterPressure(project Project, stdModule StdModule, funcIndex ElementIndex, target Target, abi CalleeAbiTable, usesGt bool, pool RegMask, callerSaved RegMask, file RegisterFile) throws CompileError
-	var body = BackendUnitBody.extract(stdModule, func: stdModule.getFunc(funcIndex), runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable)
+module function refuseForRegisterPressure(project Project, stdModule StdModule, funcIndex ElementIndex, target Target, abi immutable CalleeAbiTable, usesGt bool, pool RegMask, callerSaved RegMask, file RegisterFile) throws CompileError
+	let body = BackendUnitBody.extract(stdModule, func: stdModule.getFunc(funcIndex), runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable)
 	var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
 	var iselCost = PhaseDelta.zero()
 	var lowered = lowerAndSplitUnit(unitLoweringFor(target, abi: abi, usesGt: usesGt), unitModule: body.unitModule, permitsTailCalls: body.encoding.permitsTailCalls, target: target, costs: costs, iselCost: iselCost)

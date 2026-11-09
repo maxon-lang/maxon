@@ -401,7 +401,7 @@ function countIn(s String, chars CharacterSet) returns HitCount
 end 'countIn'
 
 function main() returns ExitCode
-	return countIn("a b c", chars: CharacterSet.whitespaces()) as ExitCode
+	return countIn("a b c", chars: CharacterSet.whitespaces) as ExitCode
 end 'main'
 ```
 ```exitcode

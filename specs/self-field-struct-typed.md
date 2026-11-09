@@ -294,10 +294,10 @@ end 'main'
 7
 ```
 
-<!-- test: error.let-field-base-is-immutable -->
-The other half of the column: the SAME write, through a base field declared `let`. It is refused,
-and the E3159 names the BASE.
-Without this case a permission that always answered "writable" would look correct.
+<!-- test: a-let-field-base-is-written-through -->
+The other half of the column: the SAME write, through a base field declared `let`. It is accepted: a `let`
+field forbids reassigning `inner`, not writing the record it names, and the write lands in that record.
+Without this case a permission that always answered "read-only" would look correct.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -325,11 +325,11 @@ end 'Outer'
 function main() returns ExitCode
 	let o = Outer.create(Inner.create(3))
 	o.writeIt(7)
-	return 0
+	return o.inner.value as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:17:3: cannot write through 'inner': 'inner' is read-only (a `let` field) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+7
 ```
 
 <!-- test: managed-field-write-through-the-base -->

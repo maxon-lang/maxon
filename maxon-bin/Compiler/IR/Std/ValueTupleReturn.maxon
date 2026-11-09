@@ -146,7 +146,7 @@ type TupleValueRow
 	export var trivialDrops as UseTally
 
 	export var cascadeDrops as UseTally
-	export var cascadeCallee as ByteArray
+	export var cascadeCallee as immutable ByteArray
 
 	// Every read this pass has no rewrite for: an argument to some other call, a store of the value
 	// ITSELF into somewhere, a branch-edge argument, a comparison. One is enough to refuse.
@@ -155,7 +155,7 @@ type TupleValueRow
 	export var storedHigh as ValueId
 
 	static function create(value ValueId) returns TupleValueRow
-		return Self{value: value, origin: TupleValueOrigin.elsewhere, loadLow: 0, loadHigh: 0, storeLow: 0, storeHigh: 0, returnUses: 0, trivialDrops: 0, cascadeDrops: 0, cascadeCallee: ByteArray.create(0), other: 0, storedLow: 0, storedHigh: 0}
+		return Self{value: value, origin: TupleValueOrigin.elsewhere, loadLow: 0, loadHigh: 0, storeLow: 0, storeHigh: 0, returnUses: 0, trivialDrops: 0, cascadeDrops: 0, cascadeCallee: EmptySourceText, other: 0, storedLow: 0, storedHigh: 0}
 	end 'create'
 
 	function dropCount() returns UseTally
@@ -409,7 +409,7 @@ end 'cascadeSymbolsOf'
 
 function insertCascadeSymbols(flow FunctionTupleFlow, into DestructorSet)
 	for symbol in flow.cascadeSymbols 'eachSymbol'
-		into.insert(symbol.clone())
+		into.insert(symbol)
 	end 'eachSymbol'
 end 'insertCascadeSymbols'
 
@@ -1493,8 +1493,8 @@ function noteCascadeDrop(flow FunctionTupleFlow, box ValueId, callee ByteArray)
 	end 'aDifferentDestructor'
 
 	row.cascadeDrops = row.cascadeDrops + 1
-	row.cascadeCallee = callee.clone()
-	flow.cascadeSymbols.insert(callee.clone())
+	row.cascadeCallee = callee
+	flow.cascadeSymbols.insert(callee)
 end 'noteCascadeDrop'
 
 function noteHalfLoad(flow FunctionTupleFlow, addrId ValueId, offset ByteOffset, valueType StdType)
@@ -1894,7 +1894,7 @@ enum NoSlotDrops
 end 'NoSlotDrops'
 
 type SlotDrop
-	export let callee as ByteArray
+	export let callee as immutable ByteArray
 	export let value as ValueId
 
 	static function create(callee ByteArray, value ValueId) returns SlotDrop
@@ -1908,7 +1908,7 @@ typealias FollowingOpsByOp = Map with (ElementIndex, OpIndexArray)
 
 type SlotDropTarget
 	export let offset as ByteOffset
-	export let callee as ByteArray
+	export let callee as immutable ByteArray
 
 	static function create(offset ByteOffset, callee ByteArray) returns SlotDropTarget
 		return Self{offset: offset, callee: callee}
@@ -1952,7 +1952,7 @@ function directSlotDropTargets(entry StructRosterEntry, signatures ProgramSignat
 
 	for field in structDestructorDrops(entry.layout, typeNames: entry.typeNames, signatures: signatures) 'eachManagedSlot'
 		match field.kind 'kind'
-			direct(callee) then targets.push(SlotDropTarget.create(field.offset, callee: callee.clone()))
+			direct(callee) then targets.push(SlotDropTarget.create(field.offset, callee: callee))
 			existential or
 			throughDescriptor then throw NoSlotDrops.notElidable
 		end 'kind'
@@ -1993,7 +1993,7 @@ function planSlotReleases(plan ValueTuplePlan, box ValueId, row TupleValueRow, l
 	var drops = SlotDropArray.create(targets.count(), zeroed: false)
 
 	for target in targets 'eachTarget'
-		drops.push(SlotDrop.create(target.callee.clone(), value: valueAtSlot(target.offset, low: low, high: high)))
+		drops.push(SlotDrop.create(target.callee, value: valueAtSlot(target.offset, low: low, high: high)))
 	end 'eachTarget'
 
 	plan.slotDrops.upsert(box, value: drops)

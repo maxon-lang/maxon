@@ -41,7 +41,7 @@ end 'HelloHandler'
 
 function main() returns ExitCode
 	var server = try HttpServer.bind("127.0.0.1", port: 8080) otherwise return 1
-	_ = server.serve(freeze HelloHandler.create("hello\n"))
+	_ = server.serve(HelloHandler.create("hello\n"))
 
 	return 0
 end 'main'
@@ -345,7 +345,7 @@ function serveUntilClosed(server HttpServer, handler immutable PickyHandler) ret
 end 'serveUntilClosed'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let handler = freeze PickyHandler.create("second")
+	let handler = PickyHandler.create("second")
 	let peer = async serveUntilClosed(server, handler: handler)
 	let port = server.port()
 
@@ -409,7 +409,7 @@ function serveUntilClosed(server HttpServer, handler immutable LateThrowingHandl
 end 'serveUntilClosed'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let handler = freeze LateThrowingHandler.create("answered")
+	let handler = LateThrowingHandler.create("answered")
 	let peer = async serveUntilClosed(server, handler: handler)
 	let port = server.port()
 
@@ -508,7 +508,7 @@ function serveUntilClosed(server HttpServer, handler immutable EchoPathHandler) 
 end 'serveUntilClosed'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let handler = freeze EchoPathHandler.create("echo")
+	let handler = EchoPathHandler.create("echo")
 	try server.setAcceptDeadline(300) otherwise return 2
 
 	let idle = server.serve(handler)
@@ -1191,7 +1191,7 @@ function serveUntilClosed(server HttpServer, handler immutable PlainHandler) ret
 end 'serveUntilClosed'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let handler = freeze PlainHandler.create("serving")
+	let handler = PlainHandler.create("serving")
 	let peer = async serveUntilClosed(server, handler: handler)
 
 	let response = try HttpClient.get("http://127.0.0.1:{server.port()}/first") otherwise 'cancelled28'
@@ -1662,7 +1662,7 @@ function serveUntilClosed(server HttpServer, handler immutable ForgetfulHandler)
 end 'serveUntilClosed'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let handler = freeze ForgetfulHandler.create("remembered")
+	let handler = ForgetfulHandler.create("remembered")
 	let peer = async serveUntilClosed(server, handler: handler)
 	let port = server.port()
 
@@ -1771,7 +1771,7 @@ function serveUntilClosed(server HttpServer, handler immutable ResetHandler) ret
 end 'serveUntilClosed'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let peer = async serveUntilClosed(server, handler: freeze ResetHandler.create())
+	let peer = async serveUntilClosed(server, handler: ResetHandler.create())
 	let reset = sendThenReset(server.port())
 	raiseFlag(PeerResetFlag)
 	awaitFlag(FaultReportedFlag)
@@ -1838,7 +1838,7 @@ function statusCodeOf(answer String) returns String
 end 'statusCodeOf'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let peer = async serveUntilClosed(server, handler: freeze PlainHandler.create("after"))
+	let peer = async serveUntilClosed(server, handler: PlainHandler.create("after"))
 
 	let client = try TcpClient.connect("127.0.0.1", port: server.port()) otherwise 'cancelled31'
 		peer.cancel()
@@ -2153,7 +2153,7 @@ function serveOne(server HttpServer, handler immutable BigAnswerHandler) returns
 end 'serveOne'
 
 function exchangeOver(listening HttpServer) returns ExitCode
-	let handler = freeze BigAnswerHandler.create(bigAnswer())
+	let handler = BigAnswerHandler.create(bigAnswer())
 	let peer = async serveOne(listening, handler: handler)
 
 	let client = try TcpClient.connect("127.0.0.1", port: listening.port()) otherwise 'cancelled39'
@@ -2571,7 +2571,7 @@ type AnswerHandler implements HttpHandler
 end 'AnswerHandler'
 
 function serveAnswers(server HttpServer) returns HttpServeEnd
-	return server.serve(freeze AnswerHandler.create())
+	return server.serve(AnswerHandler.create())
 end 'serveAnswers'
 
 function main() returns ExitCode
@@ -2703,7 +2703,7 @@ type Prober
 end 'Prober'
 
 function serving(server HttpServer, gate Gate.handle, released ReleaseCell) returns HttpServeEnd
-	return server.serve(freeze SpinHandler.create(gate.clone(), released: released.clone()))
+	return server.serve(SpinHandler.create(gate.clone(), released: released.clone()))
 end 'serving'
 
 function main() returns ExitCode
@@ -2788,7 +2788,7 @@ type CountingHandler implements HttpHandler
 end 'CountingHandler'
 
 function serving(server HttpServer, tally Tally.handle) returns HttpServeEnd
-	return server.serve(freeze CountingHandler.create(tally.clone()))
+	return server.serve(CountingHandler.create(tally.clone()))
 end 'serving'
 
 function main() returns ExitCode

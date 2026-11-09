@@ -229,10 +229,11 @@ end 'witnessTableLabel'
 // spellings do), so it is only the last two components that must be free of it — and each of those is a
 // single token the lexer keeps the separator out of. Both halves free ⇒ the join is a function of the
 // triple, which is the whole of what a map key needs.
-export function witnessSlotImplKey(typeName ByteArray, interfaceName ByteArray, methodName ByteArray) returns ByteArray
+export function witnessSlotImplKey(typeName ByteArray, interfaceName ByteArray, methodName ByteArray) returns immutable ByteArray
 	requireSeparatorFreeLabelComponent(methodName, component: WitnessLabelComponent.methodName)
 
-	return "{witnessTableLabel(typeName, interfaceName: interfaceName)}{WitnessLabelSeparator}{String.from(methodName)}".toByteArray()
+	let key = "{witnessTableLabel(typeName, interfaceName: interfaceName)}{WitnessLabelSeparator}{String.from(methodName)}"
+	return freeze key.toByteArray()
 end 'witnessSlotImplKey'
 
 // ⭐⭐ **THE `.text` NAME OF THE ABI ADAPTER A WITNESS SLOT MAY NEED** — a real function, one per
@@ -245,8 +246,9 @@ end 'witnessSlotImplKey'
 // would put two distinct slots' adapters under one symbol — a silently mis-dispatched method, which is the
 // exact failure the separator exists to prevent. The prefix keeps the adapter's symbol out of the `.rdata`
 // label space the key it is built on belongs to, so a function and a blob can never contest a name.
-export function witnessSlotAdapterSymbol(typeName ByteArray, interfaceName ByteArray, methodName ByteArray) returns ByteArray
-	return "{String.from(WitnessSlotAdapterPrefix)}{String.from(witnessSlotImplKey(typeName, interfaceName: interfaceName, methodName: methodName))}".toByteArray()
+export function witnessSlotAdapterSymbol(typeName ByteArray, interfaceName ByteArray, methodName ByteArray) returns immutable ByteArray
+	let symbol = "{String.from(WitnessSlotAdapterPrefix)}{String.from(witnessSlotImplKey(typeName, interfaceName: interfaceName, methodName: methodName))}"
+	return freeze symbol.toByteArray()
 end 'witnessSlotAdapterSymbol'
 
 export let WitnessSlotAdapterPrefix = b"__adapt_"
@@ -623,6 +625,21 @@ end 'cacheReadParamCapabilityArray'
 
 // @generated library-cache end
 
+// @generated library-cache begin
+function cacheReadFrozenParamCapabilityArray(reader LibraryCacheReader) returns immutable ParamCapabilityArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ParamCapabilityArray.create(count, zeroed: false) as isolated ParamCapabilityArray
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadParamCapability(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return freeze result
+end 'cacheReadFrozenParamCapabilityArray'
+
+// @generated library-cache end
+
 export function unmarkedParams(count ParamCount) returns ParamCapabilityArray
 	var out = ParamCapabilityArray.create(count as ElementIndex, zeroed: false)
 	out.refill(count as ElementIndex, value: ParamCapability.unmarked)
@@ -635,7 +652,7 @@ export union RequirementTypeIdentity
 	typeParameter(let token TypeParamId)
 	genericInstance(let id GenericInstanceId)
 	builtin(let tag ValueTypeTag)
-	nominal(let name ByteArray)
+	nominal(let name immutable ByteArray)
 end 'RequirementTypeIdentity'
 
 // @generated library-cache begin
@@ -664,7 +681,7 @@ function cacheWriteRequirementTypeIdentityBuiltin(writer LibraryCacheWriter, a0 
 	writer.unsigned(a0.ordinal as CacheUnsigned)
 end 'cacheWriteRequirementTypeIdentityBuiltin'
 
-function cacheWriteRequirementTypeIdentityNominal(writer LibraryCacheWriter, a0 ByteArray)
+function cacheWriteRequirementTypeIdentityNominal(writer LibraryCacheWriter, a0 immutable ByteArray)
 	writer.bytes(a0)
 end 'cacheWriteRequirementTypeIdentityNominal'
 
@@ -701,7 +718,7 @@ function cacheReadRequirementTypeIdentityBuiltin(reader LibraryCacheReader) retu
 end 'cacheReadRequirementTypeIdentityBuiltin'
 
 function cacheReadRequirementTypeIdentityNominal(reader LibraryCacheReader) returns RequirementTypeIdentity throws LibraryCacheDamage
-	let a0 = try reader.bytes()
+	let a0 = freeze try reader.bytes()
 
 	return RequirementTypeIdentity.nominal(a0)
 end 'cacheReadRequirementTypeIdentityNominal'
@@ -710,7 +727,7 @@ end 'cacheReadRequirementTypeIdentityNominal'
 
 export type RequirementType
 	export let identity as RequirementTypeIdentity
-	export let brand as ByteArray
+	export let brand as immutable ByteArray
 
 	export static function create(identity RequirementTypeIdentity, brand ByteArray) returns RequirementType
 		return Self{identity: identity, brand: brand}
@@ -783,9 +800,9 @@ export type RequirementType
 		end 'identity'
 	end 'isFloat'
 
-	export function nominalName() returns ByteArray throws AbsentError
+	export function nominalName() returns immutable ByteArray throws AbsentError
 		match self.identity 'identity'
-			nominal(name) then return name.clone()
+			nominal(name) then return name
 			void or
 			selfType or
 			typeParameter or
@@ -802,7 +819,7 @@ export type RequirementType
 		return self.denotesSameTypeAs(other) and self.brand.equals(other.brand)
 	end 'agreesWith'
 
-	export function argumentCheckSpelling(display ByteArray) returns ByteArray
+	export function argumentCheckSpelling(display immutable ByteArray) returns immutable ByteArray
 		return match self.identity 'identity'
 			genericInstance gives self.brand
 			void or
@@ -832,7 +849,7 @@ export type RequirementType
 
 	static function cacheRead(reader LibraryCacheReader) returns RequirementType throws LibraryCacheDamage
 		let f_identity = try cacheReadRequirementTypeIdentity(reader)
-		let f_brand = try reader.bytes()
+		let f_brand = freeze try reader.bytes()
 
 		return Self{identity: f_identity, brand: f_brand}
 	end 'cacheRead'
@@ -866,6 +883,21 @@ export function cacheReadRequirementTypeArray(reader LibraryCacheReader) returns
 
 	return result
 end 'cacheReadRequirementTypeArray'
+
+// @generated library-cache end
+
+// @generated library-cache begin
+function cacheReadFrozenRequirementTypeArray(reader LibraryCacheReader) returns immutable RequirementTypeArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RequirementTypeArray.create(count, zeroed: false) as isolated RequirementTypeArray
+
+	for _ in 0 upto count 'eachItem'
+		let item = try RequirementType.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return freeze result
+end 'cacheReadFrozenRequirementTypeArray'
 
 // @generated library-cache end
 
@@ -912,8 +944,8 @@ export function requirementTypeOfDeclared(declared MaxonType, names TypeNameInte
 	return RequirementType.create(identity, brand: brand)
 end 'requirementTypeOfDeclared'
 
-function declaredTypeNameOf(names TypeNameInterner, id TypeNameId) returns ByteArray
-	return (try names.nameOf(id) otherwise panic("declaredTypeNameOf: type-name id {id} is not in this interner — every `named`/`structRef` id is minted from the interner its reader holds")).clone()
+function declaredTypeNameOf(names TypeNameInterner, id TypeNameId) returns immutable ByteArray
+	return try names.nameOf(id) otherwise panic("declaredTypeNameOf: type-name id {id} is not in this interner — every `named`/`structRef` id is minted from the interner its reader holds")
 end 'declaredTypeNameOf'
 
 function requirementIdentitiesAgree(first RequirementTypeIdentity, second RequirementTypeIdentity) returns bool
@@ -1007,7 +1039,7 @@ function builtinAbiType(tag ValueTypeTag) returns MaxonType
 	end 'tag'
 end 'builtinAbiType'
 
-export function associatedNameOf(requirement RequirementType, signatures ProgramSignatures) returns ByteArray throws MapError
+export function associatedNameOf(requirement RequirementType, signatures ProgramSignatures) returns immutable ByteArray throws MapError
 	match requirement.identity 'identity'
 		typeParameter(token) then return try declaredParameterName(token, signatures: signatures)
 		void or
@@ -1018,7 +1050,7 @@ export function associatedNameOf(requirement RequirementType, signatures Program
 	end 'identity'
 end 'associatedNameOf'
 
-function declaredParameterName(token TypeParamId, signatures ProgramSignatures) returns ByteArray throws MapError
+function declaredParameterName(token TypeParamId, signatures ProgramSignatures) returns immutable ByteArray throws MapError
 	let owner = try signatures.typeParamOwnerOf(token)
 	return owner.paramName
 end 'declaredParameterName'
@@ -1030,11 +1062,11 @@ end 'associatedPositionIn'
 // One method SIGNATURE declared in an interface body (no body). `paramTypeNames`/`returnTypeName` are
 // the display of `paramTypes`/`returnType` (see the header). The parameter columns are parallel.
 export type InterfaceMethodSig
-	export let name as ByteArray
-	export let paramNames as NameRoster
-	export let paramTypeNames as NameRoster
-	export let paramTypes as RequirementTypeArray
-	export let returnTypeName as ByteArray
+	export let name as immutable ByteArray
+	export let paramNames as immutable NameRoster
+	export let paramTypeNames as immutable NameRoster
+	export let paramTypes as immutable RequirementTypeArray
+	export let returnTypeName as immutable ByteArray
 	export let returnType as RequirementType
 
 	// A `static function` in an interface body carries no receiver, so a conforming type
@@ -1069,11 +1101,11 @@ export type InterfaceMethodSig
 	// requirement would silently accept a real `ByteArray` mismatch — a wrong ACCEPTANCE, which no
 	// diagnostic reports. This column is what keeps the widening scoped to the spelling that actually meant
 	// "any element".
-	export let paramIsBuffer as BoolArray
+	export let paramIsBuffer as immutable BoolArray
 
 	// Parallel to `paramNames`, which names no receiver: an instance requirement's entry `k` is
 	// parameter `k + 1` of a conformer's body (`SummaryCallDispatch.requirementFirstPosition`).
-	export let paramCapabilities as ParamCapabilityArray
+	export let paramCapabilities as immutable ParamCapabilityArray
 	export let returnCapability as ResultCapability
 	export let selfCapability as ParamCapability
 	export let byRefParams as ParamPositionMask
@@ -1085,16 +1117,18 @@ export type InterfaceMethodSig
 	// A signature whose parameters carry no buffer spelling — every position plainly declared. The
 	// synthesized interfaces build one of these rather than passing an empty array, because a column that
 	// is SHORTER than `paramNames` would make "absent" and "false" two different things at every reader.
-	export static function noBufferParams(count ParamCount) returns BoolArray
-		var out = BoolArray.create(0)
+	export static function noBufferParams(count ParamCount) returns immutable BoolArray
+		var out = BoolArray.create(0) as isolated BoolArray
 		var filled = 0 as ParamCount
 
-		while filled < count 'each'
-			out.push(false)
-			filled = filled + 1
-		end 'each'
+		modify out 'fill'
+			while filled < count 'each'
+				out.push(false)
+				filled = filled + 1
+			end 'each'
+		end 'fill'
 
-		return out
+		return freeze out
 	end 'noBufferParams'
 
 	export let nameLine as LineNumber
@@ -1107,7 +1141,14 @@ export type InterfaceMethodSig
 	end 'create'
 
 	export function withInstancesRenumbered(remap TypeIdRemap) returns InterfaceMethodSig
-		return Self{name: self.name, paramNames: self.paramNames, paramTypeNames: self.paramTypeNames, paramTypes: renumberedRequirements(self.paramTypes, remap: remap), returnTypeName: self.returnTypeName, returnType: self.returnType.withInstancesRenumbered(remap), isStatic: self.isStatic, throwsClause: self.throwsClause, paramIsBuffer: self.paramIsBuffer, paramCapabilities: self.paramCapabilities, returnCapability: self.returnCapability, selfCapability: self.selfCapability, byRefParams: self.byRefParams, nameLine: self.nameLine, nameColumn: self.nameColumn, written: self.written}
+		var renumberedTypes = RequirementTypeArray.create(self.paramTypes.count(), zeroed: false) as isolated RequirementTypeArray
+
+		for requirement in self.paramTypes 'eachRequirement'
+			let renumbered = requirement.withInstancesRenumbered(remap)
+			renumberedTypes.push(renumbered)
+		end 'eachRequirement'
+
+		return Self{name: self.name, paramNames: self.paramNames, paramTypeNames: self.paramTypeNames, paramTypes: freeze renumberedTypes, returnTypeName: self.returnTypeName, returnType: self.returnType.withInstancesRenumbered(remap), isStatic: self.isStatic, throwsClause: self.throwsClause, paramIsBuffer: self.paramIsBuffer, paramCapabilities: self.paramCapabilities, returnCapability: self.returnCapability, selfCapability: self.selfCapability, byRefParams: self.byRefParams, nameLine: self.nameLine, nameColumn: self.nameColumn, written: self.written}
 	end 'withInstancesRenumbered'
 
 	// @generated library-cache begin
@@ -1131,16 +1172,16 @@ export type InterfaceMethodSig
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns InterfaceMethodSig throws LibraryCacheDamage
-		let f_name = try reader.bytes()
-		let f_paramNames = try cacheReadNameRoster(reader)
-		let f_paramTypeNames = try cacheReadNameRoster(reader)
-		let f_paramTypes = try cacheReadRequirementTypeArray(reader)
-		let f_returnTypeName = try reader.bytes()
+		let f_name = freeze try reader.bytes()
+		let f_paramNames = try cacheReadFrozenNameRoster(reader)
+		let f_paramTypeNames = try cacheReadFrozenNameRoster(reader)
+		let f_paramTypes = try cacheReadFrozenRequirementTypeArray(reader)
+		let f_returnTypeName = freeze try reader.bytes()
 		let f_returnType = try RequirementType.cacheRead(reader)
 		let f_isStatic = try reader.flag()
 		let f_throwsClause = try cacheReadThrowsClause(reader)
-		let f_paramIsBuffer = try cacheReadBoolArray(reader)
-		let f_paramCapabilities = try cacheReadParamCapabilityArray(reader)
+		let f_paramIsBuffer = try cacheReadFrozenBoolArray(reader)
+		let f_paramCapabilities = try cacheReadFrozenParamCapabilityArray(reader)
 		let f_returnCapability = try cacheReadResultCapability(reader)
 		let f_selfCapability = try cacheReadParamCapability(reader)
 		let f_byRefParams = (try reader.unsigned()) as ParamPositionMask
@@ -1180,6 +1221,21 @@ function cacheReadInterfaceMethodSigArray(reader LibraryCacheReader) returns Int
 
 	return result
 end 'cacheReadInterfaceMethodSigArray'
+
+// @generated library-cache end
+
+// @generated library-cache begin
+function cacheReadFrozenInterfaceMethodSigArray(reader LibraryCacheReader) returns immutable InterfaceMethodSigArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = InterfaceMethodSigArray.create(count, zeroed: false) as isolated InterfaceMethodSigArray
+
+	for _ in 0 upto count 'eachItem'
+		let item = try InterfaceMethodSig.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return freeze result
+end 'cacheReadFrozenInterfaceMethodSigArray'
 
 // @generated library-cache end
 
@@ -1236,7 +1292,7 @@ end 'assembleMethodSignature'
 // declaration it is inside (`enclosingTypeParams`) and its file-local interner, the conformance check
 // against the conforming type's recorded `uses` names and the project interner. They are four PARAMETERS
 // and deliberately not one record: a record is a heap box, and this is called once per rendered type.
-export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, typeParamNames NameRoster, typeNames TypeNameInterner, signatures ProgramSignatures) returns ByteArray
+export function renderDeclaredTypeName(t MaxonType, declarationName immutable ByteArray, typeParamNames NameRoster, typeNames TypeNameInterner, signatures ProgramSignatures) returns immutable ByteArray
 	let tag = maxonTypeTag(t)
 
 	// ⚠ **THE TOKEN IS RE-SPELLED AGAINST THIS DECLARATION'S OWN NAMES, NOT LOOKED UP.** Both callers
@@ -1269,7 +1325,7 @@ export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, t
 	return renderTypeNameOutsideAnyDeclaration(t, typeNames: typeNames, signatures: signatures)
 end 'renderDeclaredTypeName'
 
-export function renderTypeNameOutsideAnyDeclaration(t MaxonType, typeNames TypeNameInterner, signatures ProgramSignatures) returns ByteArray
+export function renderTypeNameOutsideAnyDeclaration(t MaxonType, typeNames TypeNameInterner, signatures ProgramSignatures) returns immutable ByteArray
 	let tag = maxonTypeTag(t)
 
 	if tag == ValueTypeTag.typeParameter 'typeParameterType'
@@ -1280,7 +1336,8 @@ export function renderTypeNameOutsideAnyDeclaration(t MaxonType, typeNames TypeN
 		return signatures.canonicalInstanceName(genericInstanceIdOf(t))
 	end 'genericInstanceType'
 
-	return maxonTypeName(t, typeNames: typeNames).toByteArray()
+	let spelled = maxonTypeName(t, typeNames: typeNames)
+	return freeze spelled.toByteArray()
 end 'renderTypeNameOutsideAnyDeclaration'
 
 // A parsed (or synthesized) `interface`. `extendsInterfaces` are parent interface names
@@ -1290,24 +1347,25 @@ end 'renderTypeNameOutsideAnyDeclaration'
 // `InterfaceConformance.withArgs` lines up against, and the list an unbound name is
 // reported from.
 export type IrInterface
-	export let name as ByteArray
-	export var methods as InterfaceMethodSigArray
-	export let extendsInterfaces as NameRoster
-	export var associatedTypeNames as NameRoster
+	export let name as immutable ByteArray
+	export let methods as immutable InterfaceMethodSigArray
+	export let extendsInterfaces as immutable NameRoster
+	export let associatedTypeNames as immutable NameRoster
 	export let declFilePath as FilePath
 
-	export static function create(name ByteArray, methods InterfaceMethodSigArray, extendsInterfaces NameRoster, associatedTypeNames NameRoster, declFilePath FilePath) returns IrInterface
+	export static function create(name ByteArray, methods immutable InterfaceMethodSigArray, extendsInterfaces immutable NameRoster, associatedTypeNames immutable NameRoster, declFilePath FilePath) returns IrInterface
 		return Self{name: name, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames, declFilePath: declFilePath}
 	end 'create'
 
 	export function withInstancesRenumbered(remap TypeIdRemap) returns IrInterface
-		var renumbered = InterfaceMethodSigArray.create(self.methods.count(), zeroed: false)
+		var renumbered = InterfaceMethodSigArray.create(self.methods.count(), zeroed: false) as isolated InterfaceMethodSigArray
 
 		for method in self.methods 'eachMethod'
-			renumbered.push(method.withInstancesRenumbered(remap))
+			let renumberedMethod = method.withInstancesRenumbered(remap)
+			renumbered.push(renumberedMethod)
 		end 'eachMethod'
 
-		return Self{name: self.name, methods: renumbered, extendsInterfaces: self.extendsInterfaces, associatedTypeNames: self.associatedTypeNames.clone(), declFilePath: self.declFilePath}
+		return Self{name: self.name, methods: freeze renumbered, extendsInterfaces: self.extendsInterfaces, associatedTypeNames: self.associatedTypeNames, declFilePath: self.declFilePath}
 	end 'withInstancesRenumbered'
 
 	// @generated library-cache begin
@@ -1320,10 +1378,10 @@ export type IrInterface
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns IrInterface throws LibraryCacheDamage
-		let f_name = try reader.bytes()
-		let f_methods = try cacheReadInterfaceMethodSigArray(reader)
-		let f_extendsInterfaces = try cacheReadNameRoster(reader)
-		let f_associatedTypeNames = try cacheReadNameRoster(reader)
+		let f_name = freeze try reader.bytes()
+		let f_methods = try cacheReadFrozenInterfaceMethodSigArray(reader)
+		let f_extendsInterfaces = try cacheReadFrozenNameRoster(reader)
+		let f_associatedTypeNames = try cacheReadFrozenNameRoster(reader)
 		let f_declFilePath = try reader.path()
 
 		return Self{name: f_name, methods: f_methods, extendsInterfaces: f_extendsInterfaces, associatedTypeNames: f_associatedTypeNames, declFilePath: f_declFilePath}
@@ -1355,12 +1413,12 @@ export union AssociatedAbiBinding
 	// `declaredType` its ABI type (`requirementAbiType`, ready for the same `paramFloatMask` collapse a
 	// function value's declared parameters go through), and `conformer` the declaration that settled it —
 	// carried so a reporter has a POSITION without re-walking the store this fold just walked.
-	agreed(conformer ConformanceDecl, let binding ByteArray, let bindingType RequirementType, declaredType MaxonType)
+	agreed(conformer ConformanceDecl, let binding immutable ByteArray, let bindingType RequirementType, declaredType MaxonType)
 
 	// Two conformers bind DIFFERENT types. Both claimants ride WITH their declarations, so the diagnostic can
 	// name them and anchor on one; the FIRST is the one that settled the binding in source order, exactly as
 	// `checkTypeSymbolNamespace` reports a contested name.
-	disagreed(first ConformanceDecl, let firstBinding ByteArray, second ConformanceDecl, let secondBinding ByteArray)
+	disagreed(first ConformanceDecl, let firstBinding immutable ByteArray, second ConformanceDecl, let secondBinding immutable ByteArray)
 
 	// No type in the program conforms at all, so no dispatch through this requirement can ever be made and
 	// nothing constrains the type. A body that mentions it still has to lower, so the caller supplies the
@@ -1483,7 +1541,7 @@ end 'declAssociatedBindingType'
 // the identical reason: `__` is a prefix no declaration may take, so the moved name cannot contest anything
 // and no user program can reach it. Re-probed rather than prefixed once, and ON CONTEST ONLY — a program
 // that shadows nothing renames nothing and compiles to the bytes it would with no rename at all.
-export typealias StdlibShadowRenameMap = Map with (ByteArray, readonly ByteArray)
+export typealias StdlibShadowRenameMap = Map with (ByteArray, immutable ByteArray)
 
 // @generated library-cache begin
 function cacheWriteStdlibShadowRenameMap(writer LibraryCacheWriter, value StdlibShadowRenameMap)
@@ -1501,7 +1559,7 @@ function cacheReadStdlibShadowRenameMap(reader LibraryCacheReader) returns Stdli
 
 	for _ in 0 upto count 'eachEntry'
 		let key = try reader.bytes()
-		let entry = try reader.bytes()
+		let entry = freeze try reader.bytes()
 		result.upsert(key, value: entry)
 	end 'eachEntry'
 
@@ -1510,7 +1568,7 @@ end 'cacheReadStdlibShadowRenameMap'
 
 // @generated library-cache end
 
-export typealias IrInterfaceEntryMap = Map with (ByteArray, readonly IrInterface)
+export typealias IrInterfaceEntryMap = Map with (ByteArray, IrInterface)
 
 // @generated library-cache begin
 function cacheWriteIrInterfaceEntryMap(writer LibraryCacheWriter, value IrInterfaceEntryMap)
@@ -1537,7 +1595,7 @@ end 'cacheReadIrInterfaceEntryMap'
 
 // @generated library-cache end
 
-export typealias SynthesizedNominalMap = Map with (ByteArray, readonly ByteArray)
+export typealias SynthesizedNominalMap = Map with (ByteArray, immutable ByteArray)
 
 // @generated library-cache begin
 function cacheWriteSynthesizedNominalMap(writer LibraryCacheWriter, value SynthesizedNominalMap)
@@ -1555,7 +1613,7 @@ function cacheReadSynthesizedNominalMap(reader LibraryCacheReader) returns Synth
 
 	for _ in 0 upto count 'eachEntry'
 		let key = try reader.bytes()
-		let entry = try reader.bytes()
+		let entry = freeze try reader.bytes()
 		result.upsert(key, value: entry)
 	end 'eachEntry'
 
@@ -1585,7 +1643,7 @@ export type IrInterfaceMap
 		self.synthesizedNominals.upsert(name, value: identity)
 	end 'recordSynthesizedNominal'
 
-	export function synthesizedNominalOf(name ByteArray) returns ByteArray
+	export function synthesizedNominalOf(name immutable ByteArray) returns immutable ByteArray
 		return try self.synthesizedNominals.get(name) otherwise name
 	end 'synthesizedNominalOf'
 
@@ -1609,11 +1667,11 @@ export type IrInterfaceMap
 
 	// The name a STDLIB file must spell this identifier under — the renamed one if the name is contested,
 	// and the name itself otherwise.
-	export function libraryNameOf(name ByteArray) returns ByteArray
+	export function libraryNameOf(name immutable ByteArray) returns immutable ByteArray
 		return try self.libraryRenames.get(name) otherwise name
 	end 'libraryNameOf'
 
-	export function libraryNameMintedAs(minted ByteArray) returns ByteArray throws MapError
+	export function libraryNameMintedAs(minted ByteArray) returns immutable ByteArray throws MapError
 		for (libraryName, mint) in self.libraryRenames 'eachMint'
 			if mint.equals(minted) 'thisMint'
 				return libraryName
@@ -1633,7 +1691,7 @@ export type IrInterfaceMap
 		return true
 	end 'isMintedLibraryName'
 
-	export function spellingOf(protocol BuiltinInterfaceKind) returns ByteArray
+	export function spellingOf(protocol BuiltinInterfaceKind) returns immutable ByteArray
 		let canonical = canonicalProtocolName(protocol)
 		return try self.libraryRenames.get(canonical) otherwise canonical
 	end 'spellingOf'
@@ -1686,7 +1744,7 @@ end 'IrInterfaceMap'
 
 // The per-file artifact contribution form — declaration order, folded into the
 // whole-program `IrInterfaceMap` by `mergeArtifact`.
-export typealias IrInterfaceArray = Array with readonly IrInterface
+export typealias IrInterfaceArray = Array with IrInterface
 
 // @generated library-cache begin
 export function cacheWriteIrInterfaceArray(writer LibraryCacheWriter, value IrInterfaceArray)
@@ -1711,17 +1769,6 @@ end 'cacheReadIrInterfaceArray'
 
 // @generated library-cache end
 
-// The SHARED EMPTY `with` argument list every conformance that writes no `with` clause holds —
-// which is every conformance in the corpus but the associated-type specs. `InterfaceConformance`
-// binds it with `let` and the substitution only READS it, so one allocation serves them all, the
-// discipline `Parser.sharedEmptyWhereConstraints` states in full. It is the reason
-// `withoutBindings` exists as a second constructor rather than each caller spelling
-// `NameRoster.create(0)`: a caller that allocated its own empty list would pay one heap object per
-// declared conformance and nothing would notice.
-let sharedEmptyWithArgs = NameRoster.create(0)
-
-export let sharedEmptyRequirementTypes = RequirementTypeArray.create(0)
-
 export function renumberedRequirements(requirements RequirementTypeArray, remap TypeIdRemap) returns RequirementTypeArray
 	if requirements.isEmpty() 'nothingToRenumber'
 		return requirements
@@ -1745,7 +1792,7 @@ end 'renumberedRequirements'
 // `withArgSpellings` (as written) are display, substituted into a requirement's display so the E3016
 // message prints the result — `implements Typed with Float` prints `expected make() returns Float`.
 export type InterfaceConformance
-	export let interfaceName as ByteArray
+	export let interfaceName as immutable ByteArray
 	export let withArgs as NameRoster
 	export let withArgSpellings as NameRoster
 	export let withArgTypes as RequirementTypeArray
@@ -1754,9 +1801,9 @@ export type InterfaceConformance
 		return Self{interfaceName: interfaceName, withArgs: withArgs, withArgSpellings: withArgSpellings, withArgTypes: withArgTypes}
 	end 'create'
 
-	// A conformance that wrote no `with` clause at all — it binds nothing, and shares the one empty list.
+	// A conformance that wrote no `with` clause at all — it binds nothing.
 	export static function withoutBindings(interfaceName ByteArray) returns InterfaceConformance
-		return Self{interfaceName: interfaceName, withArgs: sharedEmptyWithArgs, withArgSpellings: sharedEmptyWithArgs, withArgTypes: sharedEmptyRequirementTypes}
+		return Self{interfaceName: interfaceName, withArgs: NameRoster.create(0), withArgSpellings: NameRoster.create(0), withArgTypes: RequirementTypeArray.create(0)}
 	end 'withoutBindings'
 
 	export function withInstancesRenumbered(remap TypeIdRemap) returns InterfaceConformance
@@ -1772,7 +1819,7 @@ export type InterfaceConformance
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns InterfaceConformance throws LibraryCacheDamage
-		let f_interfaceName = try reader.bytes()
+		let f_interfaceName = freeze try reader.bytes()
 		let f_withArgs = try cacheReadNameRoster(reader)
 		let f_withArgSpellings = try cacheReadNameRoster(reader)
 		let f_withArgTypes = try cacheReadRequirementTypeArray(reader)
@@ -1815,7 +1862,7 @@ end 'cacheReadInterfaceConformanceArray'
 // A `type X implements I1, I2` conformance declaration. Carries the type NAME token
 // position (line/column/file) so the E3015/E3016 diagnostic lands ON the type name.
 export type ConformanceDecl
-	export let typeName as ByteArray
+	export let typeName as immutable ByteArray
 	export let interfaces as InterfaceConformanceArray
 	export let nameLine as LineNumber
 	export let nameColumn as ColumnNumber
@@ -1845,7 +1892,7 @@ export type ConformanceDecl
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns ConformanceDecl throws LibraryCacheDamage
-		let f_typeName = try reader.bytes()
+		let f_typeName = freeze try reader.bytes()
 		let f_interfaces = try cacheReadInterfaceConformanceArray(reader)
 		let f_nameLine = (try reader.unsigned()) as LineNumber
 		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
@@ -1901,12 +1948,12 @@ end 'cacheReadConformanceDeclArray'
 //
 // The position is the TYPE NAME token — the `Wrapper` of `let w = Wrapper from "hello"`.
 export type LiteralInitSite
-	export let typeName as ByteArray
+	export let typeName as immutable ByteArray
 
 	// ⭐ **WHICH CONFORMANCE THIS SITE REQUIRES**, carried rather than assumed: `<Type> from "…"` needs
 	// `InitableFromStringLiteral` and `<Type> from 'A'` needs `InitableFromCharLiteral`, and the check runs
 	// over one array holding both. A checker that named one of them would silently hold every site to it.
-	export let interfaceName as ByteArray
+	export let interfaceName as immutable ByteArray
 	export let nameLine as LineNumber
 	export let nameColumn as ColumnNumber
 	export let filePath as FilePath
@@ -1925,8 +1972,8 @@ export type LiteralInitSite
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns LiteralInitSite throws LibraryCacheDamage
-		let f_typeName = try reader.bytes()
-		let f_interfaceName = try reader.bytes()
+		let f_typeName = freeze try reader.bytes()
+		let f_interfaceName = freeze try reader.bytes()
 		let f_nameLine = (try reader.unsigned()) as LineNumber
 		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
 		let f_filePath = try reader.path()
@@ -2011,10 +2058,10 @@ export type WitnessDispatchTarget
 	// it is what lets `LowerMaxonToStd` recover the requirement's declared FORMALS and derive the call's
 	// per-argument ABI widths from the CALLEE's signature rather than from the actuals.
 	export let interfaceDeclIndex as ElementIndex
-	export let returnTypeName as ByteArray
+	export let returnTypeName as immutable ByteArray
 	export let returnType as RequirementType
-	export let paramTypeNames as NameRoster
-	export let paramTypes as RequirementTypeArray
+	export let paramTypeNames as immutable NameRoster
+	export let paramTypes as immutable RequirementTypeArray
 
 	// ⭐ **THE AUTHORITATIVE `name:` LABEL VOCABULARY OF THIS DISPATCH** — parallel to
 	// `paramTypeNames`, and the list `Project.slotCallArgs` slots the call's arguments against. It is the
@@ -2022,7 +2069,7 @@ export type WitnessDispatchTarget
 	// body has no concrete callee to ask, and `ConformanceCheck.signatureMatches` compares arity and TYPES
 	// only (it reads `paramNames` to format E3016 and never compares it), so several conformers may spell
 	// their parameters differently and only the interface's names are common to all of them.
-	export let paramNames as NameRoster
+	export let paramNames as immutable NameRoster
 
 	// The interface method's declared `throws` — carried through the resolution so the
 	// dispatch site picks the throwing or non-throwing witness ABI, and so the `try` desugar can type the
@@ -2032,7 +2079,7 @@ export type WitnessDispatchTarget
 
 	// The method NAME, for the E3055/E3057/E3059 diagnostics a witness `try` target reports. A direct call
 	// blames its callee name; a witness dispatch blames the interface method the user actually wrote.
-	export let methodName as ByteArray
+	export let methodName as immutable ByteArray
 
 	// ⭐ **THE INTERFACE THAT DECLARED THE REQUIREMENT, WHICH IS NOT ALWAYS THE CONSTRAINT'S.** Under
 	// `where T is Derived` with `interface Derived extends Base`, a dispatch of `Base`'s `label()` reads a slot
@@ -2040,7 +2087,7 @@ export type WitnessDispatchTarget
 	// dispatch names THIS interface — telling an author that `Derived.label` expects one argument is false of
 	// an interface that inherits a zero-argument `label()`, and that falsehood is what a missing projection
 	// produces.
-	export let declaringInterfaceName as ByteArray
+	export let declaringInterfaceName as immutable ByteArray
 
 	// The requirement's `static`ness, carried for ONE reason: `assembleMethodSignature` — the one spelling of
 	// a requirement, shared with the conformance diagnostics — prints it, and a target that answered `false`
@@ -2148,16 +2195,18 @@ export function witnessCandidatesNeedReceiverFilter(candidates WitnessDispatchTa
 end 'witnessCandidatesNeedReceiverFilter'
 
 export type AliasExpansionScope
-	export let declaringInterfaceName as ByteArray
-	export let associatedNames as NameRoster
+	export let declaringInterfaceName as immutable ByteArray
+	export let associatedNames as immutable NameRoster
 	export let bound as RequirementTypeArray
 
 	export static function create(declaringInterfaceName ByteArray, associatedNames NameRoster, bound RequirementTypeArray) returns AliasExpansionScope
 		return Self{declaringInterfaceName: declaringInterfaceName, associatedNames: associatedNames, bound: bound}
 	end 'create'
-end 'AliasExpansionScope'
 
-export let sharedNoAliasExpansion = AliasExpansionScope.create(b"", associatedNames: NameRoster.create(0), bound: RequirementTypeArray.create(0))
+	export static function none() returns AliasExpansionScope
+		return Self{declaringInterfaceName: b"", associatedNames: freeze NameRoster.create(0), bound: RequirementTypeArray.create(0)}
+	end 'none'
+end 'AliasExpansionScope'
 
 // One requirement of an interface paired with the interface that DECLARED it — the source interface, so a
 // method inherited via `extends` can be tagged `(from BaseInterface)` in a missing-method report and so a
@@ -2167,7 +2216,7 @@ export let sharedNoAliasExpansion = AliasExpansionScope.create(b"", associatedNa
 export type CollectedInterfaceMethod
 	export let method as InterfaceMethodSig
 	export let displayMethod as InterfaceMethodSig
-	export let sourceInterfaceName as ByteArray
+	export let sourceInterfaceName as immutable ByteArray
 	export let sourceDeclFilePath as FilePath
 	export let expansion as AliasExpansionScope
 
@@ -2212,7 +2261,7 @@ end 'cacheReadInterfaceNameSet'
 // signature index's for a swept one, the FILE's for a type the parser has just minted. The caller knows which
 // it holds, exactly as `maxonTypeName`'s does; passing the wrong one is the panic below rather than a
 // plausible other name.
-export function interfaceNameOfType(t MaxonType, typeNames TypeNameInterner) returns ByteArray
+export function interfaceNameOfType(t MaxonType, typeNames TypeNameInterner) returns immutable ByteArray
 	return try typeNames.nameOf(typeNameIdOf(t)) otherwise panic("interfaceNameOfType: the interface name id {typeNameIdOf(t)} is not in the interner it was resolved against — pass the interner this type's ids live in")
 end 'interfaceNameOfType'
 
@@ -2273,7 +2322,7 @@ function appendInterfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterfac
 
 	for i in 0 upto iface.methods.count() 'eachOwn'
 		let method = try iface.methods.get(i) otherwise panic("appendInterfaceWitnessSlots: methods.get OOB at {i} below count {iface.methods.count()}")
-		slots.push(CollectedInterfaceMethod.create(method, displayMethod: method, sourceInterfaceName: iface.name, sourceDeclFilePath: iface.declFilePath, expansion: sharedNoAliasExpansion))
+		slots.push(CollectedInterfaceMethod.create(method, displayMethod: method, sourceInterfaceName: iface.name, sourceDeclFilePath: iface.declFilePath, expansion: AliasExpansionScope.none()))
 	end 'eachOwn'
 
 	for j in 0 upto iface.extendsInterfaces.count() 'eachParent'
@@ -2451,34 +2500,49 @@ end 'witnessTargetIsProtocol'
 // non-throwing — the builtin conformances (`int.hash()`, `String.equals(other)`) are compiler-emitted
 // runtime chunks with no error channel — so the throws clause is `none` at both helpers.
 function nullaryInterfaceMethod(name ByteArray, returnTypeName ByteArray, returnType RequirementType) returns InterfaceMethodSig
-	return InterfaceMethodSig.create(name, paramNames: NameRoster.create(0), paramTypeNames: NameRoster.create(0), paramTypes: RequirementTypeArray.create(0), returnTypeName: returnTypeName, returnType: returnType, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0), paramCapabilities: unmarkedParams(0), returnCapability: ResultCapability.unmarked, byRefParams: NoParamPositions, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
+	return InterfaceMethodSig.create(name, paramNames: freeze NameRoster.create(0), paramTypeNames: freeze NameRoster.create(0), paramTypes: freeze RequirementTypeArray.create(0), returnTypeName: returnTypeName, returnType: returnType, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0), paramCapabilities: freeze unmarkedParams(0), returnCapability: ResultCapability.unmarked, byRefParams: NoParamPositions, nameLine: 0, nameColumn: 0, written: WrittenTypeNames.none())
 end 'nullaryInterfaceMethod'
 
 // A one-parameter interface method (`equals(other Self)`, `toString(format String)`).
-function unaryInterfaceMethod(name ByteArray, paramName ByteArray, paramTypeName ByteArray, paramType RequirementType, returnTypeName ByteArray, returnType RequirementType) returns InterfaceMethodSig
-	var paramNames = NameRoster.create(0)
-	paramNames.push(paramName)
-	var paramTypeNames = NameRoster.create(0)
-	paramTypeNames.push(paramTypeName)
-	var paramTypes = RequirementTypeArray.create(0)
-	paramTypes.push(paramType)
+function unaryInterfaceMethod(name ByteArray, paramName immutable ByteArray, paramTypeName immutable ByteArray, paramType RequirementType, returnTypeName ByteArray, returnType RequirementType) returns InterfaceMethodSig
+	let paramNames = singleName(paramName)
 	let paramIsBuffer = InterfaceMethodSig.noBufferParams(paramNames.count() as ParamCount)
-	let paramCapabilities = unmarkedParams(paramNames.count() as ParamCount)
-	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, paramTypes: paramTypes, returnTypeName: returnTypeName, returnType: returnType, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: paramIsBuffer, paramCapabilities: paramCapabilities, returnCapability: ResultCapability.unmarked, byRefParams: NoParamPositions, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
+	let paramCapabilities = freeze unmarkedParams(paramNames.count() as ParamCount)
+	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: singleName(paramTypeName), paramTypes: singleRequirement(paramType), returnTypeName: returnTypeName, returnType: returnType, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: paramIsBuffer, paramCapabilities: paramCapabilities, returnCapability: ResultCapability.unmarked, byRefParams: NoParamPositions, nameLine: 0, nameColumn: 0, written: WrittenTypeNames.none())
 end 'unaryInterfaceMethod'
+
+function singleName(name immutable ByteArray) returns immutable NameRoster
+	var names = NameRoster.create(0) as isolated NameRoster
+
+	modify names 'fill'
+		names.push(name)
+	end 'fill'
+
+	return freeze names
+end 'singleName'
+
+function singleRequirement(requirement RequirementType) returns immutable RequirementTypeArray
+	var requirements = RequirementTypeArray.create(0) as isolated RequirementTypeArray
+
+	modify requirements 'fill'
+		requirements.push(requirement)
+	end 'fill'
+
+	return freeze requirements
+end 'singleRequirement'
 
 // An interface with exactly one method and no `extends`/`uses` — every synthesized
 // protocol interface but `Error`.
 function singleMethodInterface(name ByteArray, method InterfaceMethodSig) returns IrInterface
-	var methods = InterfaceMethodSigArray.create(0)
+	var methods = InterfaceMethodSigArray.create(0) as isolated InterfaceMethodSigArray
 	methods.push(method)
-	return IrInterface.create(name, methods: methods, extendsInterfaces: NameRoster.create(0), associatedTypeNames: NameRoster.create(0), declFilePath: CompilerOwnedDeclFilePath)
+	return IrInterface.create(name, methods: freeze methods, extendsInterfaces: freeze NameRoster.create(0), associatedTypeNames: freeze NameRoster.create(0), declFilePath: CompilerOwnedDeclFilePath)
 end 'singleMethodInterface'
 
 // A marker interface with NO methods (`Error`). A type conforms to it by declaring
 // `implements Error` alone; there is nothing to check.
 function markerInterface(name ByteArray) returns IrInterface
-	return IrInterface.create(name, methods: InterfaceMethodSigArray.create(0), extendsInterfaces: NameRoster.create(0), associatedTypeNames: NameRoster.create(0), declFilePath: CompilerOwnedDeclFilePath)
+	return IrInterface.create(name, methods: freeze InterfaceMethodSigArray.create(0), extendsInterfaces: freeze NameRoster.create(0), associatedTypeNames: freeze NameRoster.create(0), declFilePath: CompilerOwnedDeclFilePath)
 end 'markerInterface'
 
 // ⭐⭐ **THE Std RESULT TYPE OF A SYNTHESIZED PROTOCOL METHOD — ONE FACT, READ BY EVERY BUILDER THAT MUST
@@ -2534,7 +2598,7 @@ function synthesizedProtocol(protocol BuiltinInterfaceKind, spelledAs ByteArray,
 	return singleMethodInterface(spelledAs, method: method)
 end 'synthesizedProtocol'
 
-function synthesizedProtocolMethodName(protocol BuiltinInterfaceKind) returns ByteArray throws AbsentError
+function synthesizedProtocolMethodName(protocol BuiltinInterfaceKind) returns immutable ByteArray throws AbsentError
 	match protocol 'which'
 		notABuiltin then panic("synthesizedProtocolMethodName: asked for the method of a name that is not one of the synthesized protocols — every caller classifies the name first")
 		stringable or
@@ -2562,7 +2626,7 @@ function synthesizedProtocolMethod(protocol BuiltinInterfaceKind, interfaces IrI
 	end 'which'
 end 'synthesizedProtocolMethod'
 
-function canonicalProtocolName(protocol BuiltinInterfaceKind) returns ByteArray
+function canonicalProtocolName(protocol BuiltinInterfaceKind) returns immutable ByteArray
 	match protocol 'which'
 		notABuiltin then panic("canonicalProtocolName: asked for the name of a kind that is not one of the synthesized protocols — every caller classifies the name first")
 		stringable then return StringableInterfaceName
@@ -3167,7 +3231,7 @@ end 'isBuiltinConformer'
 //
 // It PANICS on `notAConformer`: only a caller the gate above has
 // already admitted may ask for a name, so a miss is a driver invariant violation rather than user input.
-export function builtinConformerName(conformer BuiltinConformer) returns ByteArray
+export function builtinConformerName(conformer BuiltinConformer) returns immutable ByteArray
 	match conformer 'c'
 		intConformer then return IntConformerName
 		floatConformer then return FloatConformerName
@@ -3195,12 +3259,12 @@ export union DirectConformanceTarget
 	// (`ProgramSignatures.enumConformanceImplName`). A `Self` formal takes a value of THAT enum and nothing
 	// else — an `int` actual would compare a tag against an unrelated number, and another enum's would
 	// compare two case indices that mean different things.
-	enumTagValue(let enumName ByteArray)
+	enumTagValue(let enumName immutable ByteArray)
 end 'DirectConformanceTarget'
 
 // The type a `Self` formal of a direct conformance dispatch is quoted as requiring: the conformer's own
 // name, or the ENUM's — which is the name the author wrote and the only one that would help them.
-export function conformanceSelfTypeNameOf(target DirectConformanceTarget) returns ByteArray
+export function conformanceSelfTypeNameOf(target DirectConformanceTarget) returns immutable ByteArray
 	match target 'target'
 		builtinValue(conformer) then return builtinConformerName(conformer)
 		enumTagValue(enumName) then return enumName

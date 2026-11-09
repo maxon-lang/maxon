@@ -1788,7 +1788,7 @@ export enum SchedLockHold
 	held
 end 'SchedLockHold'
 
-export function lockHoldNameOf(hold SchedLockHold, whenFree ByteArray, whenHeld ByteArray) returns ByteArray
+export function lockHoldNameOf(hold SchedLockHold, whenFree immutable ByteArray, whenHeld immutable ByteArray) returns immutable ByteArray
 	return match hold 'hold'
 		free gives whenFree
 		held gives whenHeld
@@ -2773,7 +2773,7 @@ end 'emitLockDepthAddrOrSink'
 // Where a LIFO's head word lives, which is also what serializes it.
 union SchedListHead
 	// A `.data` word, read and written only under `__sched_lock`.
-	lockedWord(let label ByteArray)
+	lockedWord(let label immutable ByteArray)
 
 	// A field of processor `p`, read and written only by the machine holding `p`, and so with no lock.
 	heldProcessorField(p ValueId, offset ByteOffset)
@@ -4184,12 +4184,6 @@ end 'runqWordNameOf'
 
 let RunQueueCheckName = "assertRunQueueObservationIsOrdered"
 
-function pushNameCopy(column NameRoster, name ByteArray)
-	var copied = ByteArray.create(0)
-	copied.append(name)
-	column.push(copied)
-end 'pushNameCopy'
-
 function isMachineLinkOffset(offset ByteOffset) returns bool
 	return offset == MOffAllNext or offset == MOffIdleNext or offset == MOffIdlePrev or offset == MOffRegainNext
 end 'isMachineLinkOffset'
@@ -4261,7 +4255,7 @@ type RunqTaintChannel
 			return false
 		end 'alreadyKnown'
 
-		pushNameCopy(self.argCallees, name: callee)
+		self.argCallees.push(callee)
 		self.argIndices.push(index)
 		self.crossedAFunction = true
 		return true
@@ -4272,7 +4266,7 @@ type RunqTaintChannel
 			return false
 		end 'alreadyKnown'
 
-		pushNameCopy(self.returningCallees, name: callee)
+		self.returningCallees.push(callee)
 		self.crossedAFunction = true
 		return true
 	end 'noteReturn'
@@ -4763,13 +4757,7 @@ function publishedFromTheLockLabels(entries DataSectionEntryArray) returns NameR
 
 	for entry in entries 'eachSlot'
 		if entryIsPublishedFromTheLock(entry) 'itClaimsTheClass'
-			var label = ByteArray.create(entry.label.byteLength() as ElementIndex, zeroed: false)
-
-			for labelByte in entry.label.bytes() 'eachByte'
-				label.push(labelByte)
-			end 'eachByte'
-
-			out.push(label)
+			out.push(freeze entry.label.toByteArray())
 		end 'itClaimsTheClass'
 	end 'eachSlot'
 
@@ -4801,7 +4789,7 @@ function requireOrderedPublishedAccessIn(module StdModule, func IrFunction, labe
 
 		if access.shape == StdAccessShape.globalAddress and noteWordSeenIfPublished(present, labels: labels, label: access.label) 'aPublishedWordsAddress'
 			addrValues.push(access.resultId)
-			pushNameCopy(addrWords, name: access.label)
+			addrWords.push(access.label)
 		end 'aPublishedWordsAddress'
 	end 'eachAddress'
 
@@ -6210,8 +6198,8 @@ end 'emitSchedStartM'
 // does not take itself off on waking: one still on the list at that point was woken by nobody, and waits
 // again. `__sched_lock` held. It terminates `cur` and answers the block to continue in.
 function emitSchedSignalMachineLocked(module StdModule, func IrFunction, cur IrBlock, m ValueId, labelPrefix String, ids ValueMinter) returns IrBlock
-	var unlist = module.addBlock(func, label: "{labelPrefix}unlist".toByteArray(), heat: BlockHeat.normal)
-	var signal = module.addBlock(func, label: "{labelPrefix}wake".toByteArray(), heat: BlockHeat.normal)
+	var unlist = module.addBlock(func, label: freeze "{labelPrefix}unlist".toByteArray(), heat: BlockHeat.normal)
+	var signal = module.addBlock(func, label: freeze "{labelPrefix}wake".toByteArray(), heat: BlockHeat.normal)
 
 	let onList = emitSchedMidleHolds(module, block: cur, m: m, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: onList, pred: StdCmpPred.eq, against: 0, whenTrue: signal, whenFalse: unlist, ids: ids)
@@ -8080,15 +8068,12 @@ end 'emitGtPreemptSafeLlscLookback'
 
 // `psnollsc1` … `psnollsc4` — the block that refuses on the `wordsBack`-th word before the interrupted one.
 // One ASCII digit, which the refusal below is what makes safe rather than the reader's arithmetic.
-function arm64LookbackBlockLabel(wordsBack FullRangeInt) returns ByteArray
+function arm64LookbackBlockLabel(wordsBack FullRangeInt) returns immutable ByteArray
 	if Arm64ExclusiveLookbackWords > SingleDigitLimit 'twoDigits'
 		panic("arm64LookbackBlockLabel: the lookback walks {Arm64ExclusiveLookbackWords} words and this label carries one ASCII digit — widen it, or blocks {SingleDigitLimit + 1} and up would collide with earlier ones under one name")
 	end 'twoDigits'
 
-	var label = ByteArray.create(0)
-	label.append(b"psnollsc")
-	label.push((AsciiZeroDigit + wordsBack) as Byte)
-	return label
+	return freeze "psnollsc{wordsBack}".toByteArray()
 end 'arm64LookbackBlockLabel'
 
 // The largest number one ASCII digit spells.

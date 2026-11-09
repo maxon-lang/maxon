@@ -159,7 +159,7 @@ function mainShapeOf(source String) returns MainShapeLookup
 	var ends = 0 as TestTally
 
 	for rawLine in source.split(SourceLineBreak) 'eachLine'
-		let line = rawLine.trimEnd(CharacterSet.newlines())
+		let line = rawLine.trimEnd(CharacterSet.newlines)
 
 		if line.startsWith(MainSignatureOpening) 'opensMain'
 			mains = mains + 1
@@ -581,7 +581,7 @@ function batchCaseSource(test SpecTest, caseIndex ElementIndex) returns String
 	var lines = StringArray.create(rawLines.count(), zeroed: false)
 
 	for rawLine in rawLines 'eachLine'
-		let line = rawLine.trimEnd(CharacterSet.newlines())
+		let line = rawLine.trimEnd(CharacterSet.newlines)
 		let lineEnding = SourceCarriageReturn if rawLine.endsWith(SourceCarriageReturn) else ""
 
 		if line == MainSignatureReturningExitCode 'exitCodeSignature'
@@ -657,13 +657,19 @@ function batchEntrySource(members BatchMemberArray, facilities EntryFacilities) 
 	return source
 end 'batchEntrySource'
 
-function mintedNamesForBatchEntry() returns NameRoster
-	var names = NameRoster.create(4, zeroed: false)
-	names.push(BatchIndexAlias.toByteArray())
-	names.push(BatchLeftAlias.toByteArray())
-	names.push(BatchRunType.toByteArray())
-	names.push(BatchEntrySymbol.toByteArray())
-	return names
+function mintedNamesForBatchCase(caseIndex ElementIndex) returns immutable NameRoster
+	var names = NameRoster.create(1, zeroed: false) as isolated NameRoster
+	names.push(freeze batchCaseName(caseIndex).toByteArray())
+	return freeze names
+end 'mintedNamesForBatchCase'
+
+function mintedNamesForBatchEntry() returns immutable NameRoster
+	var names = NameRoster.create(4, zeroed: false) as isolated NameRoster
+	names.push(freeze BatchIndexAlias.toByteArray())
+	names.push(freeze BatchLeftAlias.toByteArray())
+	names.push(freeze BatchRunType.toByteArray())
+	names.push(freeze BatchEntrySymbol.toByteArray())
+	return freeze names
 end 'mintedNamesForBatchEntry'
 
 module type BatchProgram
@@ -713,9 +719,7 @@ function stageBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 		let test = try tests.get(member.testIndex) otherwise panic("SpecBatch: batch member {iter.index()} names test {member.testIndex}, past the {tests.count()} the spec selected")
 		let caseIndex = iter.index()
 		let path = build.root.join("{BatchCaseDirPrefix}{caseIndex}").join(BatchCaseFileName)
-		var names = NameRoster.create(1, zeroed: false)
-		names.push(batchCaseName(caseIndex).toByteArray())
-		try build.addSource(path, content: batchCaseSource(test, caseIndex: caseIndex), mintedNames: names)
+		try build.addSource(path, content: batchCaseSource(test, caseIndex: caseIndex), mintedNames: mintedNamesForBatchCase(caseIndex))
 	end 'eachMember'
 
 	try build.addSource(build.root.join(BatchEntryFileName), content: batchEntrySource(members, facilities: facilities), mintedNames: mintedNamesForBatchEntry())
@@ -751,7 +755,7 @@ function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 	let exePath = batchExePath(tempDir, ordinal: ordinal, exeExtension: exeExtension)
 
 	var session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
-	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exePath.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(0), poisonFreed: batchBuildsWithFreedBoxPoison(tests, members: members), stdlibDirOverride: StatedText.stated(stdlibDir.toString()), runtimeDirOverride: StatedText.stated(runtimeDir.toString()), scriptlib: ScriptlibLoad.omitted, entryFunction: BatchEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, session: session) otherwise (e) 'didNotCompile'
+	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exePath.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(0), poisonFreed: batchBuildsWithFreedBoxPoison(tests, members: members), stdlibDirOverride: StatedText.stated(stdlibDir.toString()), runtimeDirOverride: StatedText.stated(runtimeDir.toString()), scriptlib: ScriptlibLoad.omitted, entryFunction: freeze BatchEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, session: session) otherwise (e) 'didNotCompile'
 		reportCompileError(e, sink: session.diagnostics)
 		return batchBuildAfterError(CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text()), ordinal: ordinal, count: members.count())
 	end 'didNotCompile'

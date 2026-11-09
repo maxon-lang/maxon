@@ -6,7 +6,7 @@ module typealias WitnessSlotKey = int(0 to u64.max)
 typealias WitnessImplsMemo = Map with (WitnessSlotKey, CallLandingBodies)
 typealias FunctionValueBodiesMemo = Map with (ByteArray, CallLandingBodies)
 typealias InstanceRecordMemo = Map with (GenericInstanceId, bool)
-typealias FunctionRefNameMap = Map with (ValueId, readonly ByteArray)
+typealias FunctionRefNameMap = Map with (ValueId, immutable ByteArray)
 typealias FunctionRefNamesByFunc = Map with (ElementIndex, FunctionRefNameMap)
 
 let WitnessSlotKeyShift = 16 as WitnessSlotKey
@@ -79,8 +79,8 @@ let FunctionValueReaderSeparator = "@@"
 
 // The reader's file is part of the key: `functionShapesAgree` resolves the shapes' names from that
 // file.
-function functionValueBodiesKey(calleeType ByteArray, readerFilePath FilePath) returns ByteArray
-	return "{String.from(calleeType)}{FunctionValueReaderSeparator}{readerFilePath}".toByteArray()
+function functionValueBodiesKey(calleeType ByteArray, readerFilePath FilePath) returns immutable ByteArray
+	return freeze "{String.from(calleeType)}{FunctionValueReaderSeparator}{readerFilePath}".toByteArray()
 end 'functionValueBodiesKey'
 
 typealias ReachedBlockFlags = FixedArray with bool
@@ -355,7 +355,7 @@ end 'CallDependencies'
 
 module union LandingKeeps
 	fromBodies
-	declared(written ParamPositionMask, consumed ParamPositionMask, let paramNames NameRoster, firstPosition ParamCount, result ResultCapability)
+	declared(written ParamPositionMask, consumed ParamPositionMask, let paramNames immutable NameRoster, firstPosition ParamCount, result ResultCapability)
 
 	module function isDeclared() returns bool
 		return match self 'keeps'
@@ -509,13 +509,13 @@ module type CallSummaryIndex
 
 		if let aliasShape = try registry.aliasShapes.get(typeName) 'aDeclaredBoundary'
 			let alias = try self.project.functionTypeAliases.get(typeName) otherwise panic("CallSummaryIndex.functionValueKeeps: '{String.from(typeName)}' has a shape but no alias")
-			var names = NameRoster.create(alias.paramTypes.count(), zeroed: false)
+			var names = NameRoster.create(alias.paramTypes.count(), zeroed: false) as isolated NameRoster
 
 			for param in alias.paramTypes 'eachParameter'
 				names.push(param.name)
 			end 'eachParameter'
 
-			return LandingKeeps.declared(declaredWrittenPositionsOf(aliasShape.paramCapabilities, marked: alias.markedParamMask(), firstPosition: 0), consumed: declaredPositionsOf(aliasShape.paramCapabilities, marked: alias.markedParamMask(), firstPosition: 0, atLeast: ParamCapability.isolated), paramNames: names, firstPosition: 0, result: aliasShape.returnCapability)
+			return LandingKeeps.declared(declaredWrittenPositionsOf(aliasShape.paramCapabilities, marked: alias.markedParamMask(), firstPosition: 0), consumed: declaredPositionsOf(aliasShape.paramCapabilities, marked: alias.markedParamMask(), firstPosition: 0, atLeast: ParamCapability.isolated), paramNames: freeze names, firstPosition: 0, result: aliasShape.returnCapability)
 		end 'aDeclaredBoundary'
 
 		return LandingKeeps.fromBodies
@@ -619,7 +619,7 @@ module type CallSummaryIndex
 		return found
 	end 'closureBodiesOf'
 
-	module function functionRefTargetOf(func IrFunction, value ValueId) returns ByteArray throws AbsentError
+	module function functionRefTargetOf(func IrFunction, value ValueId) returns immutable ByteArray throws AbsentError
 		let funcIndex = self.functionIndexOf(func.name)
 
 		if let names = try self.functionRefNames.get(funcIndex) 'gathered'
@@ -632,7 +632,7 @@ module type CallSummaryIndex
 			view op = try self.module.ops.get(opIdx) otherwise panic("CallSummaryIndex.functionRefTargetOf: opIdx {opIdx} from liveOpIndices is not in module.ops")
 
 			if maxonOpCalleeKind(op) == MaxonCalleeKind.functionValue 'aFunctionRef'
-				names.upsert(try maxonOpDefinedValue(op) otherwise panic("CallSummaryIndex.functionRefTargetOf: a `functionRef` defines its result"), value: maxonOpCalleeName(op).clone())
+				names.upsert(try maxonOpDefinedValue(op) otherwise panic("CallSummaryIndex.functionRefTargetOf: a `functionRef` defines its result"), value: maxonOpCalleeName(op))
 			end 'aFunctionRef'
 		end 'eachOp'
 

@@ -3512,7 +3512,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:44:17: cannot pass 'e', which is read-only (a `for` loop variable), to a function that writes parameter 'text' (in main); pass a clone()
+error E2013: <fragment>:44:17: 'e' is a let and cannot be passed to the `mutable` parameter 'text'; bind it to a `var`
 ```
 
 <!-- test: loop-body-alias-after-the-write -->
@@ -3550,9 +3550,9 @@ ok
 0
 ```
 
-<!-- test: view-alias-sibling-field-before -->
-A `view` of the record a field cell lends is another name for that record, and the hold on `h2.f` keeps the old string alive across the write of `h.f`: `p.first` is the string `h.f` held before the call.
-<!-- MmTrace -->
+<!-- test: let-alias-sibling-field-before -->
+A `let` alias of a parameter is another name for the record a field cell lends, and the hold on `h2.f` keeps the old string alive across the write of `h.f`: `p.first` is the string `h.f` held before the call.
+
 ```maxon
 typealias Tally = int(0 to u64.max)
 
@@ -3580,12 +3580,15 @@ function put(text mutable String) returns Tally
 	return 1
 end 'put'
 
-function main() returns ExitCode
-	var h = Holder.create()
-	view h2 = h
+function run(h Holder) returns ExitCode
+	let h2 = h
 	let p = PA.build(h2.f, second: put(h.f))
 	print("{p.first} {h.f}\n")
 	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(Holder.create())
 end 'main'
 ```
 ```stdout
@@ -3598,7 +3601,6 @@ original replaced
 mm_alloc Holder #1 size=16
 mm_alloc StringRecord #2 size=65
 mm_alloc StringRecord #3 size=62
-mm_incref Holder #1 rc=2
 mm_incref StringRecord #2 rc=2
 mm_alloc StringRecord #4 size=65
 mm_decref StringRecord #2 rc=1
@@ -3615,7 +3617,6 @@ mm_decref StringRecord #7 rc=0
 mm_free StringRecord #7
 mm_decref StringRecord #6 rc=0
 mm_free StringRecord #6
-mm_decref Holder #1 rc=1
 mm_decref Holder #1 rc=0
 mm_decref StringRecord #4 rc=0
 mm_free StringRecord #4
@@ -3624,8 +3625,8 @@ mm_free StringRecord #3
 mm_free Holder #1
 ```
 
-<!-- test: view-alias-sibling-field-after -->
-A `view` of the record is read after the write.
+<!-- test: let-alias-sibling-field-after -->
+A `let` alias of a parameter is read after the write.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -3654,12 +3655,15 @@ function put(text mutable String) returns Tally
 	return 1
 end 'put'
 
-function main() returns ExitCode
-	var h = Holder.create()
-	view h2 = h
+function run(h Holder) returns ExitCode
+	let h2 = h
 	let p = PB.build(put(h.f), second: h2.g)
 	print("{p.second} {h.f}\n")
 	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(Holder.create())
 end 'main'
 ```
 ```stdout
@@ -3669,8 +3673,8 @@ other replaced
 0
 ```
 
-<!-- test: view-alias-source-reassigned-in-a-loop -->
-The source of a `view` is reassigned later in the loop. `h2` reads the record `h` named at the view: the first lap reads it before the write of `h.f`, the second lap reads what that write left.
+<!-- test: let-alias-source-reassigned-in-a-loop -->
+The source of a `let` alias of a parameter is reassigned later in the loop. `h2` reads the record `start` named: the first lap reads it before the write of `h.f`, the second lap reads what that write left.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -3699,9 +3703,9 @@ function put(text mutable String) returns Tally
 	return 1
 end 'put'
 
-function main() returns ExitCode
-	var h = Holder.create()
-	view h2 = h
+function run(start Holder) returns ExitCode
+	var h = start
+	let h2 = start
 	var i = 0 as Tally
 
 	while i < 2 'loop'
@@ -3712,6 +3716,10 @@ function main() returns ExitCode
 	end 'loop'
 
 	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(Holder.create())
 end 'main'
 ```
 ```stdout
@@ -3819,8 +3827,8 @@ a replaced
 0
 ```
 
-<!-- test: view-alias-source-rebound-to-the-view -->
-The source of a `view` is rebound to the view itself, so `h` holds a record read through a `view` and the by-reference write of `h.f` is refused as a write through a view, not as an overlap.
+<!-- test: let-alias-source-rebound-to-the-alias -->
+The source of a `let` alias is rebound to the alias itself, so `h` and `h2` name one record and the by-reference write of `h.f` is read through `h2` after the write.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -3849,197 +3857,17 @@ function put(text mutable String) returns Tally
 	return 1
 end 'put'
 
-function main() returns ExitCode
-	var h = Holder.create()
-	view h2 = h
+function run(start Holder) returns ExitCode
+	var h = start
+	let h2 = start
 	h = h2
 	let p = PA.build(h2.f, second: put(h.f))
 	print("{p.first} {h.f}\n")
 	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:31:2: cannot assign the read-only 'h2' to mutable binding 'h'; use 'let' instead of 'var', or use clone()
-error E3159: <fragment>:32:33: cannot pass 'h2', which is read-only (a `view`), to a function that writes parameter 'text' (in main); pass a clone()
-```
-
-<!-- test: view-alias-source-rebound-to-another-view -->
-The source of a `view` is rebound to a second view of the same record, so the by-reference write of `h.f` is refused as a write through a view, not as an overlap.
-
-```maxon
-typealias Tally = int(0 to u64.max)
-
-type Holder
-	export var f as String
-	export var g as String
-
-	static function create() returns Self
-		return Self{f: "a", g: "b"}
-	end 'create'
-end 'Holder'
-
-type PA
-	export var first as String
-	export var second as Tally
-
-	static function build(first String, second Tally) returns Self
-		return Self{first: first, second: second}
-	end 'build'
-end 'PA'
-
-function put(text mutable String) returns Tally
-	text = "replaced"
-
-	return 1
-end 'put'
+end 'run'
 
 function main() returns ExitCode
-	var h = Holder.create()
-	view h2 = h
-	view h3 = h
-	h = h3
-	let p = PA.build(h2.f, second: put(h.f))
-	print("{p.first} {h.f}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:32:2: cannot assign the read-only 'h3' to mutable binding 'h'; use 'let' instead of 'var', or use clone()
-error E3159: <fragment>:33:33: cannot pass 'h3', which is read-only (a `view`), to a function that writes parameter 'text' (in main); pass a clone()
-```
-
-<!-- test: view-alias-source-rebound-to-a-conditional-of-the-view -->
-The source of a `view` is rebound to a conditional whose taken arm is the view, so the by-reference write of `h.f` is refused as a write through a view, not as an overlap.
-
-```maxon
-typealias Tally = int(0 to u64.max)
-
-type Holder
-	export var f as String
-	export var g as String
-
-	static function create() returns Self
-		return Self{f: "a", g: "b"}
-	end 'create'
-end 'Holder'
-
-type PA
-	export var first as String
-	export var second as Tally
-
-	static function build(first String, second Tally) returns Self
-		return Self{first: first, second: second}
-	end 'build'
-end 'PA'
-
-function put(text mutable String) returns Tally
-	text = "replaced"
-
-	return 1
-end 'put'
-
-function main() returns ExitCode
-	var h = Holder.create()
-	view h2 = h
-	let n = "x".count()
-	h = h2 if n < 5 else Holder.create()
-	let p = PA.build(h2.f, second: put(h.f))
-	print("{p.first} {h.f}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:33:33: cannot pass 'h2', which is read-only (a `view`), to a function that writes parameter 'text' (in main); pass a clone()
-```
-
-<!-- test: view-alias-source-rebound-to-a-call-that-returns-the-view -->
-The source of a `view` is rebound to a call result that returns the view, so the by-reference write of `h.f` is refused as a write through a view, not as an overlap.
-
-```maxon
-typealias Tally = int(0 to u64.max)
-
-type Holder
-	export var f as String
-	export var g as String
-
-	static function create() returns Self
-		return Self{f: "a", g: "b"}
-	end 'create'
-end 'Holder'
-
-type PA
-	export var first as String
-	export var second as Tally
-
-	static function build(first String, second Tally) returns Self
-		return Self{first: first, second: second}
-	end 'build'
-end 'PA'
-
-function put(text mutable String) returns Tally
-	text = "replaced"
-
-	return 1
-end 'put'
-
-function same(holder Holder) returns Holder
-	return holder
-end 'same'
-
-function main() returns ExitCode
-	var h = Holder.create()
-	view h2 = h
-	h = same(h2)
-	let p = PA.build(h2.f, second: put(h.f))
-	print("{p.first} {h.f}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:36:33: cannot pass 'h2', which is read-only (a `view`), to a function that writes parameter 'text' (in main); pass a clone()
-```
-
-<!-- test: view-alias-source-rebound-through-a-call-on-the-source -->
-The source of a `view` is rebound to a call result that returns the very record `h` held, so `h` still names the record `h2` names.
-
-```maxon
-typealias Tally = int(0 to u64.max)
-
-type Holder
-	export var f as String
-	export var g as String
-
-	static function create() returns Self
-		return Self{f: "a", g: "b"}
-	end 'create'
-end 'Holder'
-
-type PA
-	export var first as String
-	export var second as Tally
-
-	static function build(first String, second Tally) returns Self
-		return Self{first: first, second: second}
-	end 'build'
-end 'PA'
-
-function put(text mutable String) returns Tally
-	text = "replaced"
-
-	return 1
-end 'put'
-
-function same(holder Holder) returns Holder
-	return holder
-end 'same'
-
-function main() returns ExitCode
-	var h = Holder.create()
-	view h2 = h
-	h = same(h)
-	let p = PA.build(h2.f, second: put(h.f))
-	print("{p.first} {h.f}\n")
-	return 0
+	return run(Holder.create())
 end 'main'
 ```
 ```stdout
@@ -4049,8 +3877,8 @@ a replaced
 0
 ```
 
-<!-- test: view-alias-source-rebound-to-a-conditional-of-the-source -->
-The source of a `view` is rebound to a conditional whose taken arm is the record `h` held, so `h` still names the record `h2` names.
+<!-- test: let-alias-source-rebound-to-another-alias -->
+The source of a `let` alias is rebound to a second alias of the same record.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -4079,14 +3907,228 @@ function put(text mutable String) returns Tally
 	return 1
 end 'put'
 
+function run(start Holder) returns ExitCode
+	var h = start
+	let h2 = start
+	let h3 = start
+	h = h3
+	let p = PA.build(h2.f, second: put(h.f))
+	print("{p.first} {h.f}\n")
+	return 0
+end 'run'
+
 function main() returns ExitCode
-	var h = Holder.create()
-	view h2 = h
+	return run(Holder.create())
+end 'main'
+```
+```stdout
+a replaced
+```
+```exitcode
+0
+```
+
+<!-- test: let-alias-source-rebound-to-a-conditional-of-the-alias -->
+The source of a `let` alias is rebound to a conditional whose taken arm is the alias.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Holder
+	export var f as String
+	export var g as String
+
+	static function create() returns Self
+		return Self{f: "a", g: "b"}
+	end 'create'
+end 'Holder'
+
+type PA
+	export var first as String
+	export var second as Tally
+
+	static function build(first String, second Tally) returns Self
+		return Self{first: first, second: second}
+	end 'build'
+end 'PA'
+
+function put(text mutable String) returns Tally
+	text = "replaced"
+
+	return 1
+end 'put'
+
+function run(start Holder) returns ExitCode
+	var h = start
+	let h2 = start
+	let n = "x".count()
+	h = h2 if n < 5 else Holder.create()
+	let p = PA.build(h2.f, second: put(h.f))
+	print("{p.first} {h.f}\n")
+	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(Holder.create())
+end 'main'
+```
+```stdout
+a replaced
+```
+```exitcode
+0
+```
+
+<!-- test: let-alias-source-rebound-to-a-call-that-returns-the-alias -->
+The source of a `let` alias is rebound to a call result that returns the alias.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Holder
+	export var f as String
+	export var g as String
+
+	static function create() returns Self
+		return Self{f: "a", g: "b"}
+	end 'create'
+end 'Holder'
+
+type PA
+	export var first as String
+	export var second as Tally
+
+	static function build(first String, second Tally) returns Self
+		return Self{first: first, second: second}
+	end 'build'
+end 'PA'
+
+function put(text mutable String) returns Tally
+	text = "replaced"
+
+	return 1
+end 'put'
+
+function same(holder Holder) returns Holder
+	return holder
+end 'same'
+
+function run(start Holder) returns ExitCode
+	var h = start
+	let h2 = start
+	h = same(h2)
+	let p = PA.build(h2.f, second: put(h.f))
+	print("{p.first} {h.f}\n")
+	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(Holder.create())
+end 'main'
+```
+```stdout
+a replaced
+```
+```exitcode
+0
+```
+
+<!-- test: let-alias-source-rebound-through-a-call-on-the-source -->
+The source of a `let` alias of a parameter is rebound to a call result that returns the very record `h` held, so `h` still names the record `h2` names.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Holder
+	export var f as String
+	export var g as String
+
+	static function create() returns Self
+		return Self{f: "a", g: "b"}
+	end 'create'
+end 'Holder'
+
+type PA
+	export var first as String
+	export var second as Tally
+
+	static function build(first String, second Tally) returns Self
+		return Self{first: first, second: second}
+	end 'build'
+end 'PA'
+
+function put(text mutable String) returns Tally
+	text = "replaced"
+
+	return 1
+end 'put'
+
+function same(holder Holder) returns Holder
+	return holder
+end 'same'
+
+function run(start Holder) returns ExitCode
+	var h = start
+	let h2 = start
+	h = same(h)
+	let p = PA.build(h2.f, second: put(h.f))
+	print("{p.first} {h.f}\n")
+	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(Holder.create())
+end 'main'
+```
+```stdout
+a replaced
+```
+```exitcode
+0
+```
+
+<!-- test: let-alias-source-rebound-to-a-conditional-of-the-source -->
+The source of a `let` alias of a parameter is rebound to a conditional whose taken arm is the record `h` held, so `h` still names the record `h2` names.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Holder
+	export var f as String
+	export var g as String
+
+	static function create() returns Self
+		return Self{f: "a", g: "b"}
+	end 'create'
+end 'Holder'
+
+type PA
+	export var first as String
+	export var second as Tally
+
+	static function build(first String, second Tally) returns Self
+		return Self{first: first, second: second}
+	end 'build'
+end 'PA'
+
+function put(text mutable String) returns Tally
+	text = "replaced"
+
+	return 1
+end 'put'
+
+function run(start Holder) returns ExitCode
+	var h = start
+	let h2 = start
 	let n = "x".count()
 	h = h if n < 5 else Holder.create()
 	let p = PA.build(h2.f, second: put(h.f))
 	print("{p.first} {h.f}\n")
 	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(Holder.create())
 end 'main'
 ```
 ```stdout
@@ -4148,9 +4190,9 @@ b replaced
 0
 ```
 
-<!-- test: view-alias-source-moved-into-a-var-then-rebound -->
-A `var` that took the record by move names the record `h2` views, and `h` was rebound to another record. The cell is `o.f`; the hold on `h2.f` keeps the old string alive across its write.
-<!-- MmTrace -->
+<!-- test: let-alias-source-moved-into-a-var-then-rebound -->
+A `var` that took the record by move names the record `h2` aliases, and `h` was rebound to another record. The cell is `o.f`; the hold on `h2.f` keeps the old string alive across its write.
+
 ```maxon
 typealias Tally = int(0 to u64.max)
 
@@ -4178,14 +4220,18 @@ function put(text mutable String) returns Tally
 	return 1
 end 'put'
 
-function main() returns ExitCode
-	var h = Holder.create()
-	view h2 = h
+function run(start Holder) returns ExitCode
+	var h = start
+	let h2 = start
 	var o = h
 	h = Holder.create()
 	let p = PA.build(h2.f, second: put(o.f))
 	print("{p.first} {o.f} {h.f}\n")
 	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(Holder.create())
 end 'main'
 ```
 ```stdout
@@ -4219,22 +4265,22 @@ mm_free StringRecord #10
 mm_decref StringRecord #9 rc=0
 mm_free StringRecord #9
 mm_decref Holder #1 rc=1
-mm_decref Holder #1 rc=0
-mm_decref StringRecord #7 rc=0
-mm_free StringRecord #7
-mm_decref StringRecord #3 rc=0
-mm_free StringRecord #3
-mm_free Holder #1
 mm_decref Holder #4 rc=0
 mm_decref StringRecord #5 rc=0
 mm_free StringRecord #5
 mm_decref StringRecord #6 rc=0
 mm_free StringRecord #6
 mm_free Holder #4
+mm_decref Holder #1 rc=0
+mm_decref StringRecord #7 rc=0
+mm_free StringRecord #7
+mm_decref StringRecord #3 rc=0
+mm_free StringRecord #3
+mm_free Holder #1
 ```
 
-<!-- test: view-alias-moved-var-viewed-again -->
-A second `view` of the `var` that took the record by move reads the record before the write of `o.f`.
+<!-- test: let-alias-moved-var-aliased-again -->
+A second `let` alias of the parameter reads the record before the write of `o.f`, which took the record by move.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -4263,14 +4309,18 @@ function put(text mutable String) returns Tally
 	return 1
 end 'put'
 
-function main() returns ExitCode
-	var h = Holder.create()
+function run(start Holder) returns ExitCode
+	var h = start
 	var o = h
-	view h3 = o
+	let h3 = start
 	h = Holder.create()
 	let p = PA.build(h3.f, second: put(o.f))
 	print("{p.first} {o.f} {h.f}\n")
 	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(Holder.create())
 end 'main'
 ```
 ```stdout
@@ -4280,7 +4330,7 @@ a replaced a
 0
 ```
 
-<!-- test: view-alias-source-moved-to-a-var-and-rebound-nested-path -->
+<!-- test: let-alias-source-moved-to-a-var-and-rebound-nested-path -->
 The cell is a nested field path of the `var` that took the record by move, and `w2.inner.f` is read before the write of `o.inner.f`.
 
 ```maxon
@@ -4318,14 +4368,18 @@ function put(text mutable String) returns Tally
 	return 1
 end 'put'
 
-function main() returns ExitCode
-	var w = Wrapper.create()
-	view w2 = w
+function run(start Wrapper) returns ExitCode
+	var w = start
+	let w2 = start
 	var o = w
 	w = Wrapper.create()
 	let p = PA.build(w2.inner.f, second: put(o.inner.f))
 	print("{p.first} {o.inner.f} {w.inner.f}\n")
 	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(Wrapper.create())
 end 'main'
 ```
 ```stdout

@@ -102,7 +102,7 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 	try seedRoots(globalData, project: project, index: index, reached: reached, worklist: worklist)
 
 	for label in globalData.functionRecordLabelsNamedInRdata() 'eachRecordAnImageNames'
-		markFunctionRecordCode(label.toByteArray(), recordCodes: recordCodes, referencedRecords: referencedRecords, byName: byName, reached: reached, worklist: worklist)
+		markFunctionRecordCode(freeze label.toByteArray(), recordCodes: recordCodes, referencedRecords: referencedRecords, byName: byName, reached: reached, worklist: worklist)
 	end 'eachRecordAnImageNames'
 
 	while worklist.count() > 0 'walk'
@@ -333,14 +333,14 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	end 'eachRdataSlot'
 end 'seedRoots'
 
-typealias FunctionRecordCodeMap = Map with (ByteArray, readonly ByteArray)
+typealias FunctionRecordCodeMap = Map with (ByteArray, immutable ByteArray)
 
 function functionRecordCodesOf(globalData GlobalDataTable) returns FunctionRecordCodeMap
 	var codes = FunctionRecordCodeMap.create()
 
 	for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
 		if isFunctionRecordLabel(reloc.rdataLabel) 'aFunctionRecord'
-			codes.upsert(reloc.rdataLabel.toByteArray(), value: reloc.funcName)
+			codes.upsert(freeze reloc.rdataLabel.toByteArray(), value: reloc.funcName)
 		end 'aFunctionRecord'
 	end 'eachRdataSlot'
 
@@ -404,10 +404,10 @@ end 'compilerOwnedRoots'
 
 // One name the compiler owns, and whether this build's stub or chunks call it (`compilerOwnedRoots`).
 export type CompilerOwnedRoot
-	export let name as ByteArray
+	export let name as immutable ByteArray
 	export let isCalledHere as bool
 
-	static function create(name ByteArray, isCalledHere bool) returns CompilerOwnedRoot
+	static function create(name immutable ByteArray, isCalledHere bool) returns CompilerOwnedRoot
 		return Self{name: name, isCalledHere: isCalledHere}
 	end 'create'
 end 'CompilerOwnedRoot'
@@ -894,7 +894,7 @@ function compareWithinEmissionRun(module StdModule, left ElementIndex, right Ele
 	return compareParsedFunctions(leftFunc, right: rightFunc)
 end 'compareWithinEmissionRun'
 
-function synthesizedOwnerName(name ByteArray) returns ByteArray
+function synthesizedOwnerName(name immutable ByteArray) returns immutable ByteArray
 	if bytesStartWith(name, prefix: DestructorPrefix) 'aDestructor'
 		return nameAfterPrefix(name, prefix: DestructorPrefix)
 	end 'aDestructor'
@@ -903,11 +903,11 @@ function synthesizedOwnerName(name ByteArray) returns ByteArray
 		return nameAfterPrefix(name, prefix: UnionRetainPrefix)
 	end 'aUnionRetain'
 
-	return name.clone()
+	return name
 end 'synthesizedOwnerName'
 
-function nameAfterPrefix(name ByteArray, prefix ByteArray) returns ByteArray
-	return try name.slice(prefix.count(), endIndex: name.count()) otherwise panic("nameAfterPrefix: slice OOB past the prefix {String.from(prefix)} of {String.from(name)}")
+function nameAfterPrefix(name immutable ByteArray, prefix ByteArray) returns immutable ByteArray
+	return freeze try name.slice(prefix.count(), endIndex: name.count()) otherwise panic("nameAfterPrefix: slice OOB past the prefix {String.from(prefix)} of {String.from(name)}")
 end 'nameAfterPrefix'
 
 enum SynthesisFamily

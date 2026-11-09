@@ -2093,7 +2093,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Index = Map with (StringArray, Integer)
 function main() returns ExitCode
 	var m = Index.create()
-	try m.insert("a,b".split(","), value: 7) otherwise ignore
+	try m.insert(freeze ("a,b".split(",")), value: 7) otherwise ignore
 	let found = try m.get("a,b".split(",")) otherwise 0
 	print("{found}\n")
 	return 0
@@ -2131,7 +2131,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Index = Map with (StringArray, Integer)
 function main() returns ExitCode
 	var m = Index.create()
-	try m.insert("a,b".split(","), value: 7) otherwise ignore
+	try m.insert(freeze ("a,b".split(",")), value: 7) otherwise ignore
 	let found = try m.get("c,d".split(",")) otherwise 0
 	print("{found}\n")
 	return 0

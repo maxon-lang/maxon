@@ -114,7 +114,7 @@ enum TrustStoreKey
 	appleSsl
 end 'TrustStoreKey'
 
-function trustStoreKeyName(key TrustStoreKey) returns ByteArray
+function trustStoreKeyName(key TrustStoreKey) returns immutable ByteArray
 	return match key 'name'
 		policy gives TrustStoreKeyPolicyName
 		policyString gives TrustStoreKeyPolicyStringName
@@ -379,9 +379,9 @@ end 'emitTrustStoreTotal'
 
 function emitTrustStoreCopyDomain(module StdModule, func IrFunction, cur IrBlock, header ValueId, scratch ValueId, domain TrustStoreDomain, ids ValueMinter) returns IrBlock
 	let position = trustStoreDomainWord(domain)
-	var copied = module.addBlock(func, label: "tscopied{position}".toByteArray(), heat: BlockHeat.normal)
-	var counted = module.addBlock(func, label: "tscounted{position}".toByteArray(), heat: BlockHeat.normal)
-	var next = module.addBlock(func, label: "tsdomain{position}".toByteArray(), heat: BlockHeat.normal)
+	var copied = module.addBlock(func, label: freeze "tscopied{position}".toByteArray(), heat: BlockHeat.normal)
+	var counted = module.addBlock(func, label: freeze "tscounted{position}".toByteArray(), heat: BlockHeat.normal)
+	var next = module.addBlock(func, label: freeze "tsdomain{position}".toByteArray(), heat: BlockHeat.normal)
 
 	emitStoreField(module, block: cur, record: scratch, offset: TrustStoreOutOffset, value: emitConst(module, block: cur, value: TrustStoreNoContext, ids: ids))
 	let domainConstant = emitConst(module, block: cur, value: trustStoreDomainConstant(domain), ids: ids)

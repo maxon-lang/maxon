@@ -1,7 +1,7 @@
 module union SystemRootsOutcome
 	unloaded
 	loading(loader SystemRootsLoader.handle)
-	loaded(anchors X509RootPool)
+	loaded(anchors immutable X509RootPool)
 	failed(error TrustStoreError)
 end 'SystemRootsOutcome'
 
@@ -18,7 +18,7 @@ public type SystemRoots
 		return Self{outcome: SystemRootsOutcome.loading(loader.clone())}
 	end 'loading'
 
-	module static function loaded(anchors X509RootPool) returns SystemRoots
+	module static function loaded(anchors immutable X509RootPool) returns SystemRoots
 		return Self{outcome: SystemRootsOutcome.loaded(anchors)}
 	end 'loaded'
 
@@ -38,7 +38,7 @@ public type SystemRoots
 		let seen = SystemRoots.current()
 
 		if seen.isUnloaded() 'unclaimed'
-			let loader = spawn SystemRootsLoader.create(freeze OperatingSystemTrust.create())
+			let loader = spawn SystemRootsLoader.create(OperatingSystemTrust.create())
 
 			_ = SystemRoots.register(SystemRoots.loading(loader), replacing: seen)
 		end 'unclaimed'

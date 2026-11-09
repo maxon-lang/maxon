@@ -1,0 +1,312 @@
+module typealias CapturedLoadMap = Map with (ValueId, ParamCount)
+
+module typealias RetainedValueMap = Map with (ValueId, ValueId)
+
+module typealias ParamMaskByValue = Map with (ValueId, ParamPositionMask)
+
+module typealias SettlingOpByValue = Map with (ValueId, ElementIndex)
+
+module typealias PositionSlotKey = int(0 to 9223372036854775807)
+
+module typealias ParamMaskByCallArgument = Map with (PositionSlotKey, ParamPositionMask)
+
+module typealias ParamSourcesByFunction = Map with (ElementIndex, ParamSources)
+
+module function positionSlotKey(index ElementIndex, position ElementIndex) returns PositionSlotKey
+	return (index as PositionSlotKey) * (MaxAbiArgs as PositionSlotKey) + (position as PositionSlotKey)
+end 'positionSlotKey'
+
+union CapturedEnvironment
+	none
+	parameter(position ParamCount, value ValueId)
+end 'CapturedEnvironment'
+
+function capturedEnvironmentOf(func IrFunction) returns CapturedEnvironment
+	if func.closureEnvFields.count() == 0 'notAClosure'
+		return CapturedEnvironment.none
+	end 'notAClosure'
+
+	let position = func.paramCount - 1
+	return CapturedEnvironment.parameter(position, value: valueIdAtParamPosition(position))
+end 'capturedEnvironmentOf'
+
+function noteCapturedLoad(captured CapturedLoadMap, op MaxonOp, addr ValueId, environment CapturedEnvironment, offset ByteOffset)
+	match environment 'environment'
+		none then return
+		parameter(envPosition, env) then noteEnvironmentLoad(captured, op: op, addr: addr, env: env, envPosition: envPosition, offset: offset)
+	end 'environment'
+end 'noteCapturedLoad'
+
+function noteEnvironmentLoad(captured CapturedLoadMap, op MaxonOp, addr ValueId, env ValueId, envPosition ParamCount, offset ByteOffset)
+	if addr != env 'notTheEnvironment'
+		return
+	end 'notTheEnvironment'
+
+	let slot = try envSlotAtOffset(offset) otherwise return
+
+	let id = try maxonOpDefinedValue(op) otherwise panic("noteEnvironmentLoad: a load defines its result")
+	captured.upsert(id, value: capturedParamPosition(envPosition, slot: slot))
+end 'noteEnvironmentLoad'
+
+function opCopiesItsOperand(op MaxonOp) returns bool
+	let callee = try directCalleeOf(op) otherwise return false
+	return bytesStartWith(callee, prefix: ClonerPrefix)
+end 'opCopiesItsOperand'
+
+function noteRetain(captured CapturedLoadMap, retainedFrom RetainedValueMap, func IrFunction, op MaxonOp, operand ValueId)
+	if opCopiesItsOperand(op) 'aCopyOwnsItsOwnStorage'
+		return
+	end 'aCopyOwnsItsOwnStorage'
+
+	let result = try maxonOpDefinedValue(op) otherwise return
+	retainedFrom.upsert(result, value: operand)
+
+	let position = try parameterBehindIn(func, captured: captured, value: operand) otherwise return
+	captured.upsert(result, value: position)
+end 'noteRetain'
+
+function parameterBehindIn(func IrFunction, captured CapturedLoadMap, value ValueId) returns ParamCount throws AbsentError
+	if value < valueIdAtParamPosition(func.paramCount) 'oneOfOurParameters'
+		return paramPositionOfValueId(value)
+	end 'oneOfOurParameters'
+
+	return try captured.get(value) otherwise throw AbsentError.absent
+end 'parameterBehindIn'
+
+function valueIsAnOpaqueElement(func IrFunction, value ValueId) returns bool
+	if valueIsAParameter(value, paramCount: func.paramCount) 'aParameterItself'
+		return false
+	end 'aParameterItself'
+
+	return (try func.valueTags.get(value) otherwise panic("valueIsAnOpaqueElement: v{value} of '{String.from(func.name)}' has no recorded type")) == ValueTypeTag.typeParameter
+end 'valueIsAnOpaqueElement'
+
+function scanParamAliases(ir MaxonModule, func IrFunction, captured CapturedLoadMap, retainedFrom RetainedValueMap)
+	let environment = capturedEnvironmentOf(func)
+
+	for opIdx in ir.liveOpIndices(func) 'eachOp'
+		let op = try ir.ops.get(opIdx) otherwise panic("scanParamAliases: opIdx {opIdx} from liveOpIndices is not in module.ops")
+
+		match slotReadOfOp(op, opIndex: opIdx) 'read'
+			load(_, addr, offset) then noteCapturedLoad(captured, op: op, addr: addr, environment: environment, offset: offset)
+			retainOf(operand) then noteRetain(captured, retainedFrom: retainedFrom, func: func, op: op, operand: operand)
+			none or
+			store then break
+		end 'read'
+	end 'eachOp'
+end 'scanParamAliases'
+
+function indexParamNotes(ir MaxonModule, func IrFunction, joined ParamMaskByValue, callArguments ParamMaskByCallArgument, results SettlingOpByValue, derived SettlingOpByValue)
+	let notes = func.capabilityNotes
+
+	for source in notes.joinedSources 'eachJoin'
+		if not joined.contains(source.value) 'firstWins'
+			joined.upsert(source.value, value: source.sources)
+		end 'firstWins'
+	end 'eachJoin'
+
+	for source in notes.callArgSources 'eachCallArgument'
+		let key = positionSlotKey(source.op, position: source.position)
+
+		if not callArguments.contains(key) 'firstWins'
+			callArguments.upsert(key, value: source.sources)
+		end 'firstWins'
+	end 'eachCallArgument'
+
+	for opIdx in notes.undecidedResultOps 'eachUndecidedResult'
+		let defined = try maxonOpDefinedValue(try ir.ops.get(opIdx) otherwise panic("indexParamNotes: ops.get OOB at {opIdx}")) otherwise continue
+
+		if not results.contains(defined) 'firstWins'
+			results.upsert(defined, value: opIdx)
+		end 'firstWins'
+	end 'eachUndecidedResult'
+
+	for position in 0 upto notes.derivedResultValues.count() 'eachDerivedResult'
+		let value = try notes.derivedResultValues.get(position) otherwise panic("indexParamNotes: derivedResultValues.get OOB at {position}")
+
+		if not derived.contains(value) 'firstWins'
+			derived.upsert(value, value: try notes.derivedResultOps.get(position) otherwise panic("indexParamNotes: derivedResultOps.get OOB at {position} — the columns are pushed together"))
+		end 'firstWins'
+	end 'eachDerivedResult'
+end 'indexParamNotes'
+
+module type ParamNoteIndex
+	module let joined as ParamMaskByValue
+	module let callArguments as ParamMaskByCallArgument
+	module let results as SettlingOpByValue
+	module let derived as SettlingOpByValue
+
+	module static function empty() returns ParamNoteIndex
+		return Self{joined: ParamMaskByValue.create(), callArguments: ParamMaskByCallArgument.create(), results: SettlingOpByValue.create(), derived: SettlingOpByValue.create()}
+	end 'empty'
+
+	module static function of(ir MaxonModule, func IrFunction, shared ParamNoteIndex) returns ParamNoteIndex
+		if not paramNotesAreRecorded(func) 'nothingRecorded'
+			return shared
+		end 'nothingRecorded'
+
+		var joined = ParamMaskByValue.create()
+		var callArguments = ParamMaskByCallArgument.create()
+		var results = SettlingOpByValue.create()
+		var derived = SettlingOpByValue.create()
+		indexParamNotes(ir, func: func, joined: joined, callArguments: callArguments, results: results, derived: derived)
+		return Self{joined: joined, callArguments: callArguments, results: results, derived: derived}
+	end 'of'
+end 'ParamNoteIndex'
+
+function paramNotesAreRecorded(func IrFunction) returns bool
+	let notes = func.capabilityNotes
+
+	if bodyIsUnreadable(func) 'anUnreadableBody'
+		return false
+	end 'anUnreadableBody'
+
+	return not (notes.joinedSources.isEmpty() and notes.callArgSources.isEmpty() and notes.undecidedResultOps.isEmpty() and notes.derivedResultValues.isEmpty())
+end 'paramNotesAreRecorded'
+
+module type ParamSources
+	module let project as Project
+	module let ir as MaxonModule
+	module let funcIndexByName as FuncIndexByName
+	module let func as IrFunction
+	module let captured as CapturedLoadMap
+	module let retainedFrom as RetainedValueMap
+	let notes as ParamNoteIndex
+	var masks as ParamMaskByValue
+	var walking as ValueMarkSet
+
+	module static function of(project Project, ir MaxonModule, funcIndexByName FuncIndexByName, func IrFunction, noNotes ParamNoteIndex) returns ParamSources
+		var captured = CapturedLoadMap.create()
+		var retainedFrom = RetainedValueMap.create()
+		scanParamAliases(ir, func: func, captured: captured, retainedFrom: retainedFrom)
+		return Self{project: project, ir: ir, funcIndexByName: funcIndexByName, func: func, captured: captured, retainedFrom: retainedFrom, notes: ParamNoteIndex.of(ir, func: func, shared: noNotes), masks: ParamMaskByValue.create(), walking: ValueMarkSet.create()}
+	end 'of'
+
+	module function forgetMasks()
+		self.masks = ParamMaskByValue.create()
+	end 'forgetMasks'
+
+	module function parameterBehind(value ValueId) returns ParamCount throws AbsentError
+		return try parameterBehindIn(self.func, captured: self.captured, value: value)
+	end 'parameterBehind'
+
+	module function rootOf(value ValueId) returns ValueId
+		var current = value
+
+		while true 'towardTheRoot'
+			current = try self.retainedFrom.get(current) otherwise return current
+		end 'towardTheRoot'
+
+		panic("ParamSources.rootOf: the walk toward a root only exits by returning at a value no retain produced")
+	end 'rootOf'
+
+	module function isAResult(value ValueId) returns bool
+		return self.notes.results.contains(value)
+	end 'isAResult'
+
+	module function settlingOpOf(value ValueId) returns ElementIndex throws AbsentError
+		if let opIdx = try self.notes.results.get(value) 'aResult'
+			return opIdx
+		end 'aResult'
+
+		return try self.notes.derived.get(value) otherwise throw AbsentError.absent
+	end 'settlingOpOf'
+
+	module function hasASettlingOp(value ValueId) returns bool
+		return self.notes.results.contains(value) or self.notes.derived.contains(value)
+	end 'hasASettlingOp'
+
+	module function maskOf(value ValueId) returns ParamPositionMask
+		if let known = try self.masks.get(value) 'alreadyAnswered'
+			return known
+		end 'alreadyAnswered'
+
+		if valueIsAnOpaqueElement(self.func, value: value) 'anElementOfAnOpaqueType'
+			return NoParamPositions
+		end 'anElementOfAnOpaqueType'
+
+		if let direct = try self.parameterBehind(value) 'aParameter'
+			return maskWithParam(NoParamPositions, param: direct)
+		end 'aParameter'
+
+		if self.walking.contains(value) 'beingWalked'
+			return NoParamPositions
+		end 'beingWalked'
+
+		self.walking.insert(value)
+		var mask = NoParamPositions
+
+		if let joinedSources = try self.notes.joined.get(value) 'aMixedJoin'
+			mask = joinedSources
+		end 'aMixedJoin' else 'notJoined'
+			mask = self.maskOfSettlingResult(value)
+		end 'notJoined'
+
+		_ = self.walking.remove(value)
+		self.masks.upsert(value, value: mask)
+		return mask
+	end 'maskOf'
+
+	function maskOfSettlingResult(value ValueId) returns ParamPositionMask
+		let opIdx = try self.settlingOpOf(value) otherwise return NoParamPositions
+		return self.maskOfResult(opIdx)
+	end 'maskOfSettlingResult'
+
+	module function maskOfResult(opIdx ElementIndex) returns ParamPositionMask
+		let op = try self.ir.ops.get(opIdx) otherwise panic("ParamSources.maskOfResult: ops.get OOB at {opIdx}")
+		let parts = try directCallPartsOf(op) otherwise return NoParamPositions
+
+		if borrowedElementReadCallee(parts.0) 'anElementRead'
+			return self.maskOfCallArgument(opIdx, args: parts.1, position: 0)
+		end 'anElementRead'
+
+		let calleeIndex = try self.funcIndexByName.get(parts.0) otherwise return NoParamPositions
+		let callee = try self.ir.functions.get(calleeIndex) otherwise panic("ParamSources.maskOfResult: functions.get OOB at {calleeIndex}")
+		view sig = try self.project.funcSignatures.get(parts.0) otherwise return NoParamPositions
+		var mask = NoParamPositions
+
+		for i in 0 upto parts.1.count() 'eachSourceArg'
+			let label = try parts.2.get(i) otherwise continue
+			let slot = try argSlotPosition(sig.paramNames, argIndex: i as ParamCount, label: label) otherwise continue
+
+			if maskHasParam(callee.resultFromParamMask, param: slot) 'aSource'
+				mask = mask or self.maskOfCallArgument(opIdx, args: parts.1, position: i)
+			end 'aSource'
+		end 'eachSourceArg'
+
+		return mask
+	end 'maskOfResult'
+
+	module function maskOfCallArgument(opIdx ElementIndex, args ValueIdArray, position ElementIndex) returns ParamPositionMask
+		let argId = try args.get(position) otherwise panic("ParamSources.maskOfCallArgument: args.get OOB at {position}")
+		let recorded = try self.notes.callArguments.get(positionSlotKey(opIdx, position: position)) otherwise NoParamPositions
+		return recorded or self.maskOf(argId)
+	end 'maskOfCallArgument'
+end 'ParamSources'
+
+module type ParamSourceIndex
+	let project as Project
+	let ir as MaxonModule
+	let funcNames as FunctionNameIndex
+	let noNotes as ParamNoteIndex
+	var built as ParamSourcesByFunction
+
+	module static function over(project Project, ir MaxonModule, funcNames FunctionNameIndex) returns ParamSourceIndex
+		return Self{project: project, ir: ir, funcNames: funcNames, noNotes: ParamNoteIndex.empty(), built: ParamSourcesByFunction.create()}
+	end 'over'
+
+	module function of(funcIndex ElementIndex) returns ParamSources
+		if let known = try self.built.get(funcIndex) 'alreadyBuilt'
+			return known
+		end 'alreadyBuilt'
+
+		let func = try self.funcNames.functions.get(funcIndex) otherwise panic("ParamSourceIndex.of: functions.get OOB at {funcIndex}")
+		let sources = ParamSources.of(self.project, ir: self.ir, funcIndexByName: self.funcNames.byName, func: func, noNotes: self.noNotes)
+		self.built.upsert(funcIndex, value: sources)
+		return sources
+	end 'of'
+
+	module function ofFunction(func IrFunction) returns ParamSources
+		return self.of(try self.funcNames.byName.get(func.name) otherwise panic("ParamSourceIndex.ofFunction: '{String.from(func.name)}' is not in the function-name index"))
+	end 'ofFunction'
+end 'ParamSourceIndex'

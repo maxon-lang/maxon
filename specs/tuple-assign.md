@@ -143,7 +143,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/tuple-assign/tuple-assign-error-immutable.maxon:11:3: cannot assign to immutable variable: 'x'
+error E2013: specs/tuple-assign/tuple-assign-error-immutable.maxon:11:3: 'x' is a let and cannot be reassigned
 ```
 
 <!-- test: tuple-assign-mixed-var-decl -->
@@ -215,7 +215,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/tuple-assign/tuple-assign-error-assign-to-let-decl.maxon:11:6: cannot assign to immutable variable: 'y'
+error E2013: specs/tuple-assign/tuple-assign-error-assign-to-let-decl.maxon:11:6: 'y' is a let and cannot be reassigned
 ```
 
 <!-- test: tuple-assign-error-count-mismatch -->

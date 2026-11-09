@@ -35,10 +35,12 @@ laid down as read-only data; any other is built by `__module_init` before `main`
 literal is refused at file scope (E3076); inside a `type` body a static member may be initialized by a struct
 literal of that type (`specs/lazy-static.md`). What an initializer's calls may reach is restricted further: E3164, below and in `specs/green-thread-globals.md`.
 
-A top-level `let`'s record is read-only through every name that reaches it — a `let` bound to it, a field
-read off it, a parameter it was passed to. Calling a method that writes its receiver on it, or passing it
-to a parameter the callee writes, is E3159 naming the root binding; storing it into a `var` field is
-E3078, at the store, since the function that later writes the field cannot see where its value came from. `.clone()` makes a record of one's own.
+A top-level `let`'s record is immutable data through every name that reaches it — a `let` bound to it, a field
+read off it, a parameter it was passed to. Calling a method that writes its receiver on it is E3207; passing it
+to a parameter the callee writes is E3159 and E3207; storing it into a field that is not declared `immutable` is
+E3196, at the store, since the function that later writes the field cannot see where its value came from. A
+function that hands the record back declares `returns immutable` (E3209), and a `var` bound to what it handed back
+is E3078. `.clone()` makes a record of one's own.
 
 ### Static Fields in Types
 
@@ -158,7 +160,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:7:2: cannot assign to immutable variable: 'Config.MAX_SIZE'
+error E2013: <fragment>:7:2: 'Config.MAX_SIZE' is a let and cannot be reassigned
 ```
 
 <!-- test: error.static-member-undeclared -->
@@ -381,7 +383,7 @@ type Pair
 
 	static let origin = Pair{a: 500}
 
-	static function get() returns Pair
+	static function get() returns immutable Pair
 		return Pair.origin
 	end 'get'
 end 'Pair'
@@ -468,7 +470,7 @@ type Holder
 
 	static let one = Holder{s: Square.create(4), tag: 77}
 
-	static function get() returns Holder
+	static function get() returns immutable Holder
 		return Holder.one
 	end 'get'
 end 'Holder'
@@ -493,7 +495,7 @@ type Holder
 
 	static let one = Holder{key: "ab1cd"}
 
-	static function get() returns Holder
+	static function get() returns immutable Holder
 		return Holder.one
 	end 'get'
 end 'Holder'
@@ -523,7 +525,7 @@ type Holder
 
 	static let one = Holder{s: 5, tag: 77}
 
-	static function get() returns Holder
+	static function get() returns immutable Holder
 		return Holder.one
 	end 'get'
 end 'Holder'
@@ -585,7 +587,7 @@ hi3
 
 <!-- test: error.static-let-array-mutate -->
 ⭐⭐ **THE WRITE-THROUGH-AN-IMMUTABLE-STATIC GUARD.** A receiver-writing method
-on a `static let` array is E3159 — the SAME rule
+on a `static let` array is E3207 (and E3159 at the call) — the SAME rule
 `error.top-level-let-array-mutate` pins for a file-scope `let`, naming the qualified binding.
 
 The static read is routed through the receiver door so that the blame name reaches the check. Falling out
@@ -603,6 +605,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3207: <fragment>:7:14: 'pop' writes its receiver (line 256: `return try managed.remove(len - 1)`); 'Cache.xs' is immutable
 error E3159: <fragment>:7:23: cannot pass 'Cache.xs', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
@@ -636,7 +639,7 @@ end 'main'
 
 A top-level array is a HEAP record with a `.data` pointer slot, built by `__module_init` before `main`
 and released by `__maxon_global_cleanup` after it. A `let` refuses the write, both at an assignment (E2013)
-and at a receiver-writing method (E3159).
+and at a receiver-writing method (E3207).
 
 A never-mutated `let` array is NOT promoted to an immortal shared static record: an `Array`'s own methods
 rewrite its record (a `push` detaches the buffer by writing `buffer@0`/`capacity@16`/`length@8`), and a
@@ -697,8 +700,8 @@ abcde
 ```
 
 <!-- test: error.top-level-let-array-mutate -->
-A receiver-writing method on a `let`-bound array is E3159 — the SAME rule a `let`-bound String or Set
-receiver gets, under the one deep-`let` rule. Without it a `let` array would be writable, since
+A receiver-writing method on a `let`-bound array is E3207 — the SAME rule a `let`-bound String or Set
+receiver gets, because the array is immutable data. Without it a `let` array would be writable, since
 it has a real slot.
 ```maxon
 let fixed = [4, 5, 6]
@@ -709,7 +712,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:5:8: cannot write through 'fixed': 'fixed' is read-only (a module-level `let`) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3207: <fragment>:5:8: 'push' needs a writable receiver; 'fixed' is immutable
 ```
 
 <!-- test: error.top-level-let-array-reassign -->
@@ -724,7 +727,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:5:2: cannot assign to immutable variable: 'xs'
+error E2013: <fragment>:5:2: 'xs' is a let and cannot be reassigned
 ```
 
 <!-- test: a-top-level-array-let-names-another-global -->
@@ -837,7 +840,7 @@ error E3078: <fragment>:19:6: cannot assign a value, which may share storage wit
 ```
 
 <!-- test: top-level-let-field-accessor-read-only -->
-An accessor may hand that field back, and a caller that only reads it compiles and runs.
+An accessor may hand that field back, declaring the result `immutable`, and a caller that only reads it compiles and runs.
 ```maxon
 typealias Key = int(0 to 1000)
 typealias Items = Array with Key
@@ -855,7 +858,7 @@ end 'Holder'
 
 let H = Holder.create()
 
-function index() returns ItemIndex
+function index() returns immutable ItemIndex
 	return H.index
 end 'index'
 
@@ -887,7 +890,7 @@ end 'Holder'
 
 let H = Holder.create()
 
-function index() returns ItemIndex
+function index() returns immutable ItemIndex
 	return H.index
 end 'index'
 
@@ -898,7 +901,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:23:6: cannot assign a value, which may share storage with a `let` field, to mutable binding 'm'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:23:6: cannot assign the result of 'index', which may share storage with a module-level `let`, to mutable binding 'm'; use 'let' instead of 'var', or use clone()
+error E3207: <fragment>:24:2: 'upsert' writes its receiver (line 174: `try values.set(slotIndex as ElementIndex, value: value)`); 'm' is immutable
 ```
 
 <!-- test: error.top-level-let-array-ternary-alias -->
@@ -948,7 +952,7 @@ error E3078: <fragment>:12:6: cannot assign a value, which may share storage wit
 
 <!-- test: error.top-level-let-array-handed-back-as-a-map-miss-fallback -->
 And through a call whose `otherwise` fallback is the `let` array: `pick` hands back `Empty`'s own record
-whenever the lookup misses, so binding it to `var mine` is refused as the direct alias is.
+whenever the lookup misses, so its result mixes frozen and mutable data and is read-only for the caller: the write through `var mine` is E3197.
 ```maxon
 typealias Count = int(0 to 1000)
 typealias Items = Array with Count
@@ -971,7 +975,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:17:6: cannot assign the result of 'pick', which may share storage with a module-level `let`, to mutable binding 'mine'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:18:7: cannot write 'a container' through 'a call result', which is read-only
 ```
 
 <!-- test: top-level-let-array-let-alias -->
@@ -1007,7 +1011,7 @@ type Box
 		return Box{n: 1}
 	end 'make'
 
-	static function get() returns Box
+	static function get() returns immutable Box
 		return Box.shared
 	end 'get'
 end 'Box'
@@ -1039,7 +1043,7 @@ type Box
 		return Box{n: 1}
 	end 'make'
 
-	static function get() returns Box
+	static function get() returns immutable Box
 		return Box.shared
 	end 'get'
 end 'Box'
@@ -1072,11 +1076,11 @@ type Box
 		return Box{n: 1}
 	end 'make'
 
-	static function inner() returns Box
+	static function inner() returns immutable Box
 		return Box.shared
 	end 'inner'
 
-	static function get() returns Box
+	static function get() returns immutable Box
 		return Box.inner()
 	end 'get'
 end 'Box'
@@ -1119,7 +1123,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:19:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'b' (in main); pass a clone()
+error E3207: <fragment>:19:7: 'bump' writes 'b' (line 15: `b.n = 99`); 'G' is immutable
 ```
 
 <!-- test: error.let-global-to-a-callee-that-calls-a-self-writing-method -->
@@ -1154,7 +1158,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:23:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'b' (in main); pass a clone()
+error E3207: <fragment>:23:7: 'tick' writes 'b' (it calls 'bump', which writes its receiver); 'G' is immutable
 ```
 
 <!-- test: error.let-global-to-a-callee-that-calls-a-self-writing-method-on-a-field -->
@@ -1195,7 +1199,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:31:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 't' (in main); pass a clone()
+error E3207: <fragment>:31:8: 'nudge' writes 't' (it calls 'bump', which writes its receiver); 'G' is immutable
 ```
 
 <!-- test: error.let-global-to-a-callee-that-pushes-into-a-container-a-call-hands-back-from-inside-it -->
@@ -1229,7 +1233,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:24:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'h' (in main); pass a clone()
+error E3207: <fragment>:24:7: 'poke' writes 'h'; 'G' is immutable
 ```
 
 <!-- test: error.let-global-to-a-callee-that-pushes-into-a-var-merged-from-inside-it -->
@@ -1273,7 +1277,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:34:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 't' (in main); pass a clone()
+error E3207: <fragment>:34:7: 'poke' writes 't' (line 30: `list.push(1)`); 'G' is immutable
 ```
 
 <!-- test: a-let-global-held-by-a-record-a-callee-builds-is-not-written-by-writing-that-record -->
@@ -1295,14 +1299,14 @@ let Shared = Guards.make()
 
 type Blocks
 	export var subst as CountArray
-	export var guards as Guards
+	export var guards as immutable Guards
 
-	static function create(guards Guards) returns Blocks
+	static function create(guards immutable Guards) returns Blocks
 		return Blocks{subst: CountArray.create(0), guards: guards}
 	end 'create'
 end 'Blocks'
 
-function mint(guards Guards) returns Blocks
+function mint(guards immutable Guards) returns Blocks
 	var blocks = Blocks.create(guards)
 	blocks.subst.push(1)
 	return blocks
@@ -1333,7 +1337,7 @@ type Box
 		return Box{n: 1}
 	end 'make'
 
-	static function get() returns Box
+	static function get() returns immutable Box
 		return Box.shared
 	end 'get'
 end 'Box'
@@ -1383,7 +1387,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:23:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'b' (in main); pass a clone()
+error E3207: <fragment>:23:7: 'bump' writes 'b' (it calls 'poke', which writes 'c'); 'G' is immutable
 ```
 
 <!-- test: error.let-global-given-out-of-a-closure -->
@@ -1424,7 +1428,7 @@ typealias IntThunk = function() returns Integer
 
 let A = ["a", "b"]
 
-function expose() returns Names
+function expose() returns immutable Names
 	return A
 end 'expose'
 
@@ -1445,6 +1449,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3159: <fragment>:21:37: cannot pass the result of 'expose', which may share storage with a module-level `let`, to a function that writes parameter 'xs' (in main$closure_0); pass a clone()
+error E3207: <fragment>:21:42: 'grow' writes 'xs' (line 12: `xs.push("zz")`); 'expose()' is immutable
 ```
 
 <!-- test: error.let-global-alias-across-an-if-merge -->
@@ -1459,7 +1464,7 @@ typealias Names = Array with String
 
 let A = ["a", "b"]
 
-function expose() returns Names
+function expose() returns immutable Names
 	return A
 end 'expose'
 
@@ -1496,7 +1501,7 @@ typealias Names = Array with String
 
 let A = ["a", "b"]
 
-function expose() returns Names
+function expose() returns immutable Names
 	return A
 end 'expose'
 
@@ -1600,7 +1605,7 @@ type Box
 		return Self{n: 7}
 	end 'create'
 
-	static function current() returns Self
+	static function current() returns immutable Self
 		return a
 	end 'current'
 end 'Box'
@@ -1623,8 +1628,9 @@ a=7 b=7
 
 ### A write through a record a call hands back out of a `let`
 
-A write, inside a function, through a record a call handed back out of a module-level `let` is E3159; a local
-`var` bound to that record is refused at the binding. The storage-provenance summary of the call answers it,
+A write, inside a function, through a record a call handed back out of a module-level `let` is E3159, and the
+function that hands it back declares `returns immutable` (E3209); a local `var` bound to that record is refused at
+the binding. The storage-provenance summary of the call answers it,
 carried through calls, witness dispatches and calls through function values.
 
 <!-- test: error.a-local-var-may-not-write-through-a-lets-record-a-call-hands-back -->
@@ -1637,7 +1643,7 @@ type Box
 		return Self{n: 7}
 	end 'create'
 
-	static function current() returns Self
+	static function current() returns immutable Self
 		return a
 	end 'current'
 end 'Box'
@@ -1666,7 +1672,7 @@ type Box
 		return Self{n: 7}
 	end 'create'
 
-	static function current() returns Self
+	static function current() returns immutable Self
 		return a
 	end 'current'
 end 'Box'
@@ -1690,6 +1696,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3159: <fragment>:25:2: cannot pass the result of 'current', which may share storage with a module-level `let`, to a function that writes parameter 'b' (in main); pass a clone()
+error E3207: <fragment>:25:7: 'bump' writes 'b' (line 17: `b.n = 9`); 'Box.current()' is immutable
 ```
 
 <!-- test: error.a-local-var-may-not-write-through-a-lets-record-an-await-hands-back -->
@@ -1702,14 +1709,14 @@ type Box
 		return Self{n: 7}
 	end 'create'
 
-	static function current() returns Self
+	static function current() returns immutable Self
 		return a
 	end 'current'
 end 'Box'
 
 let a = Box.create()
 
-function fetch() returns Box
+function fetch() returns immutable Box
 	return Box.current()
 end 'fetch'
 
@@ -1731,7 +1738,7 @@ error E3078: <fragment>:26:6: cannot assign a value, which may share storage wit
 ```
 
 <!-- test: error.a-local-var-may-not-write-through-a-lets-record-a-map-miss-hands-back -->
-`pick` hands back `a`'s own record whenever the lookup misses, through its `otherwise` fallback.
+`pick` hands back `a`'s own record whenever the lookup misses, through its `otherwise` fallback, so its result mixes frozen and mutable data and is read-only for the caller: the write through `var b` is E3197.
 ```maxon
 type Box
 	export var n as Integer
@@ -1764,7 +1771,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:25:6: cannot assign the result of 'pick', which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:26:2: cannot write 'n' through 'b', which is read-only
 ```
 
 ### A top-level `let` and a type of one name are one name declared twice
@@ -1853,7 +1860,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:5:2: cannot assign to immutable variable: 'origin'
+error E2013: <fragment>:5:2: 'origin' is a let and cannot be reassigned
 ```
 
 <!-- test: top-level-let-struct-reassign-error -->
@@ -1878,7 +1885,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:16:3: cannot assign to immutable variable: 'origin'
+error E2013: <fragment>:16:3: 'origin' is a let and cannot be reassigned
 ```
 
 <!-- test: top-level-let-function-call-error -->
@@ -2148,7 +2155,7 @@ typealias Names = Array with Integer
 
 let sharedEmptyNames = Names.create(0)
 
-function shared() returns Names
+function shared() returns immutable Names
 	return sharedEmptyNames
 end 'shared'
 
@@ -2171,9 +2178,9 @@ omitted=0
 <!-- test: a-defaulted-global-may-not-reach-a-mutating-parameter -->
 ⭐ **THE CONTROL FOR THE NAME, AND IT IS THE HALF THAT MUST NOT BREAK.** Admitting the return is only
 half of the rule; the other half is that the refusal is at the write rather than dropped. The
-callee pushes, so the omitted argument is refused at the CALL — the same E3159, from the same one
-reporter, that the written-out `grow(sharedEmptyNames)` earns. **The blame is the shared noun and not a
-binding name**, because a filled default names nothing the author wrote.
+callee pushes, so the omitted argument is refused at the CALL by the capability checker, as the written-out
+`grow(sharedEmptyNames)` is. **The subject is "the argument" and not a binding name**, because a filled default
+names nothing the author wrote.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Names = Array with Integer
@@ -2191,7 +2198,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:13:12: cannot pass a value, which may share storage with a module-level `let`, to a function that writes parameter 'names' (in main); pass a clone()
+error E3207: <fragment>:13:12: 'grow' writes 'names' (line 8: `names.push(1)`); the argument is read-only
 ```
 
 <!-- test: a-defaulted-accessor-call-may-not-reach-a-mutating-parameter -->
@@ -2208,7 +2215,7 @@ typealias Names = Array with Integer
 
 let sharedEmptyNames = Names.create(0)
 
-function shared() returns Names
+function shared() returns immutable Names
 	return sharedEmptyNames
 end 'shared'
 
@@ -2223,7 +2230,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:17:12: cannot pass a value, which may share storage with a module-level `let`, to a function that writes parameter 'names' (in main); pass a clone()
+error E3207: <fragment>:17:12: 'grow' writes 'names' (line 12: `names.push(1)`); the argument is read-only
 ```
 
 <!-- test: a-field-default-naming-a-let-global-is-still-refused -->
@@ -3103,7 +3110,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:17:10: cannot write through 'v.items': 'v' is read-only (a module-level `let`) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3207: <fragment>:17:10: 'push' needs a writable receiver; 'items' is immutable
 ```
 
 <!-- test: error.let-global-field-passed-to-a-writing-callee -->
@@ -3141,6 +3148,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3159: <fragment>:27:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'b' (in main); pass a clone()
+error E3207: <fragment>:27:7: 'bump' writes 'b' (line 23: `b.n = 99`); 'G' is immutable
 ```
 
 <!-- test: error.let-global-alias-field-passed-to-a-writing-callee -->
@@ -3178,6 +3186,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3159: <fragment>:28:2: cannot pass 'v', which is read-only (a module-level `let`), to a function that writes parameter 'b' (in main); pass a clone()
+error E3207: <fragment>:28:7: 'bump' writes 'b' (line 23: `b.n = 99`); 'v' is immutable
 ```
 
 <!-- test: error.let-global-field-receives-a-self-writing-method -->
@@ -3213,6 +3222,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3207: <fragment>:27:9: 'bump' writes its receiver (line 12: `self.n = self.n + 1`); 'G' is immutable
 error E3159: <fragment>:27:10: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
@@ -3250,6 +3260,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3207: <fragment>:28:9: 'bump' writes its receiver (line 12: `self.n = self.n + 1`); 'v' is immutable
 error E3159: <fragment>:28:10: cannot pass 'v', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
@@ -3280,6 +3291,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3159: <fragment>:20:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'xs' (in main); pass a clone()
+error E3207: <fragment>:20:7: 'fill' writes 'xs' (line 16: `xs.push(1)`); 'G' is immutable
 ```
 
 <!-- test: error.let-global-alias-container-field-passed-to-a-pushing-callee -->
@@ -3310,6 +3322,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3159: <fragment>:21:2: cannot pass 'v', which is read-only (a module-level `let`), to a function that writes parameter 'xs' (in main); pass a clone()
+error E3207: <fragment>:21:7: 'fill' writes 'xs' (line 16: `xs.push(1)`); 'v' is immutable
 ```
 
 <!-- test: error.let-binding-of-a-let-global-field-receives-a-self-writing-method -->
@@ -3347,6 +3360,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3207: <fragment>:28:2: 'bump' writes its receiver (line 12: `self.n = self.n + 1`); 'i' is immutable
 error E3159: <fragment>:28:4: cannot pass 'i', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
@@ -3391,7 +3405,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:23:4: cannot store 'G', which is read-only (a module-level `let`), into mutable place 'Bag.cfg'; use clone()
+error E3196: <fragment>:23:10: cannot store an immutable 'Config' into 'cfg', which holds a mutable 'Config'; declare the field `immutable Config`
 ```
 
 <!-- test: a-clone-of-a-let-global-stored-into-a-var-field-may-be-written -->

@@ -145,13 +145,13 @@ end 'main'
 
 <!-- test: bytearray-insert-preserves-tail -->
 ### `insert` into a byte-string literal keeps the elements it shifted
-`b"hey"` is backed by read-only rdata, so the insert COWs it to the heap first;
-the shift and the erase then run against a 1-byte stride. The erase must clear
+`b"hey"` is immutable image data, so the insert runs on its `.clone()`, a writable array holding the literal's bytes;
+the shift and the erase run against a 1-byte stride. The erase must clear
 one byte. An 8-byte erase wipes the just-shifted `e` and `y` and the array reads
 back `h X \0 \0` with `count() == 4` — corrupt data behind a successful exit.
 ```maxon
 function main() returns ExitCode
-	var bytes = b"hey"
+	var bytes = b"hey".clone()
 	bytes.insert(1, value: 88)
 	if bytes.count() != 4 'cnt'
 		return 1
@@ -192,7 +192,7 @@ the maximum number of live neighbours — five here, so an over-wide erase loses
 all five rather than the two `insert(1, ...)` loses.
 ```maxon
 function main() returns ExitCode
-	var bytes = b"axbxc"
+	var bytes = b"axbxc".clone()
 	bytes.insert(0, value: 90)
 	if bytes.count() != 6 'cnt'
 		return 1
@@ -231,7 +231,7 @@ each has its own way of going wrong:
 * the remainder must exist at all — without it the array keeps its old last five bytes.
 ```maxon
 function main() returns ExitCode
-	var bytes = b"abcdefghijklmnopqrstu"
+	var bytes = b"abcdefghijklmnopqrstu".clone()
 	bytes.insert(0, value: 90)
 	if bytes.count() != 22 'cnt'
 		return 1
@@ -252,7 +252,7 @@ the high word has not read yet; and the words must ASCEND, because the high word
 on `buffer[8]`, which the low word still has to read.
 ```maxon
 function main() returns ExitCode
-	var bytes = b"abcdefghijklmnopqrstu"
+	var bytes = b"abcdefghijklmnopqrstu".clone()
 	let gone = try bytes.remove(0) otherwise panic("test invariant: index 0 is in bounds")
 	if gone != 97 'first'
 		return 1
@@ -2188,10 +2188,11 @@ end 'main'
 <!-- tier: stdlib -->
 ### A program that declares no `Byte` at all keeps its raw writer
 The literal mints its own `Array with Byte` (`undeclaredNamedElementSlot`'s byte arm), which strides
-one byte and has no declared range for a raw byte to fall outside of — exactly the case E3117 returns on.
+one byte and has no declared range for a raw byte to fall outside of — exactly the case E3117 returns on. The
+literal is immutable, so the raw write goes into its `.clone()`.
 ```maxon
 function main() returns ExitCode
-	var v = b"abc"
+	var v = b"abc".clone()
 	try v.managed.setByte(0, 223) otherwise return 3
 	return 0 if (try v.managed.byteAt(0) otherwise 0) == 223 else 4
 end 'main'

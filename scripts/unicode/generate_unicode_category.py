@@ -146,7 +146,7 @@ def generate_maxon(supp_count, output_path):
     lines.append("// Category bitmask helpers for CharacterSet")
     for mask_name, cats in MASK_DEFS.items():
         val = compute_mask(cats)
-        lines.append(f"let {mask_name} = {val}")
+        lines.append(f"export let {mask_name} = {val}")
     lines.append("")
 
     lines.append(f"let UCD_SUPP_COUNT = {supp_count}")

@@ -41,13 +41,13 @@ end 'cacheTableAgreesGenericArgumentKind'
 
 export type GenericFunctionArgument
 	export let kind as GenericArgumentKind
-	export let name as ByteArray
+	export let name as immutable ByteArray
 
 	export static function create(kind GenericArgumentKind, name ByteArray) returns Self
 		return Self{kind: kind, name: name}
 	end 'create'
 
-	export function spelling() returns ByteArray
+	export function spelling() returns immutable ByteArray
 		return match self.kind 'kind'
 			integer gives b"int"
 			float gives b"float"
@@ -85,7 +85,7 @@ export type GenericFunctionArgument
 
 	static function cacheRead(reader LibraryCacheReader) returns GenericFunctionArgument throws LibraryCacheDamage
 		let f_kind = try cacheReadGenericArgumentKind(reader)
-		let f_name = try reader.bytes()
+		let f_name = freeze try reader.bytes()
 
 		return Self{kind: f_kind, name: f_name}
 	end 'cacheRead'
@@ -232,24 +232,24 @@ export union BoundGenericType
 end 'BoundGenericType'
 
 export type GenericFunctionTemplate
-	export let key as ByteArray
+	export let key as immutable ByteArray
 	export let declFilePath as FilePath
 	export let line as LineNumber
 	export let column as ColumnNumber
-	export let typeParamNames as NameRoster
+	export let typeParamNames as immutable NameRoster
 	export let paramNames as NameRoster
 	export let paramSlots as GenericParamSlotArray
 	export let paramTypeParams as TypeParamIndexArray
 	export let constraints as WhereConstraintArray
 	export let takesReceiver as bool
 	export let visibility as Visibility
-	export let enclosingTypeName as ByteArray
+	export let enclosingTypeName as immutable ByteArray
 
-	export static function create(key ByteArray, declFilePath FilePath, line LineNumber, column ColumnNumber, typeParamNames NameRoster, paramNames NameRoster, paramSlots GenericParamSlotArray, paramTypeParams TypeParamIndexArray, constraints WhereConstraintArray, takesReceiver bool, visibility Visibility, enclosingTypeName ByteArray) returns Self
+	export static function create(key ByteArray, declFilePath FilePath, line LineNumber, column ColumnNumber, typeParamNames immutable NameRoster, paramNames NameRoster, paramSlots GenericParamSlotArray, paramTypeParams TypeParamIndexArray, constraints WhereConstraintArray, takesReceiver bool, visibility Visibility, enclosingTypeName ByteArray) returns Self
 		return Self{key: key, declFilePath: declFilePath, line: line, column: column, typeParamNames: typeParamNames, paramNames: paramNames, paramSlots: paramSlots, paramTypeParams: paramTypeParams, constraints: constraints, takesReceiver: takesReceiver, visibility: visibility, enclosingTypeName: enclosingTypeName}
 	end 'create'
 
-	export function siteKey() returns ByteArray
+	export function siteKey() returns immutable ByteArray
 		return declarationSiteKey(self.declFilePath, line: self.line, column: self.column)
 	end 'siteKey'
 
@@ -262,7 +262,7 @@ export type GenericFunctionTemplate
 	// the project-relative path (`ProgramSignatures.projectRelativeFileDisplay`), because two directories
 	// can hold files of one name, and relative because the instance name reaches emitted symbols and
 	// `TargetIr` pins, which must not depend on the host or the checkout's location.
-	export function instanceName(arguments GenericFunctionArgumentArray, declaringFile String) returns ByteArray
+	export function instanceName(arguments GenericFunctionArgumentArray, declaringFile String) returns immutable ByteArray
 		var suffix = "{GenericInstanceSuffixHead}{self.line}_{self.column}"
 
 		if not isProgramWideTier(self.visibility) 'scopedBelowTheProgram'
@@ -293,18 +293,18 @@ export type GenericFunctionTemplate
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns GenericFunctionTemplate throws LibraryCacheDamage
-		let f_key = try reader.bytes()
+		let f_key = freeze try reader.bytes()
 		let f_declFilePath = try reader.path()
 		let f_line = (try reader.unsigned()) as LineNumber
 		let f_column = (try reader.unsigned()) as ColumnNumber
-		let f_typeParamNames = try cacheReadNameRoster(reader)
+		let f_typeParamNames = try cacheReadFrozenNameRoster(reader)
 		let f_paramNames = try cacheReadNameRoster(reader)
 		let f_paramSlots = try cacheReadGenericParamSlotArray(reader)
 		let f_paramTypeParams = try cacheReadTypeParamIndexArray(reader)
 		let f_constraints = try cacheReadWhereConstraintArray(reader)
 		let f_takesReceiver = try reader.flag()
 		let f_visibility = try cacheReadVisibility(reader)
-		let f_enclosingTypeName = try reader.bytes()
+		let f_enclosingTypeName = freeze try reader.bytes()
 
 		return Self{key: f_key, declFilePath: f_declFilePath, line: f_line, column: f_column, typeParamNames: f_typeParamNames, paramNames: f_paramNames, paramSlots: f_paramSlots, paramTypeParams: f_paramTypeParams, constraints: f_constraints, takesReceiver: f_takesReceiver, visibility: f_visibility, enclosingTypeName: f_enclosingTypeName}
 	end 'cacheRead'
@@ -370,24 +370,26 @@ end 'cacheReadGenericFunctionTemplateMap'
 
 let GenericInstanceSuffixHead = "__with"
 
-export function declarationSiteKey(declFilePath FilePath, line LineNumber, column ColumnNumber) returns ByteArray
-	return "{declFilePath.toString()}:{line}:{column}".toByteArray()
+export function declarationSiteKey(declFilePath FilePath, line LineNumber, column ColumnNumber) returns immutable ByteArray
+	let text = "{declFilePath.toString()}:{line}:{column}"
+
+	return freeze text.toByteArray()
 end 'declarationSiteKey'
 
-export function genericInstanceNameMarker() returns ByteArray
+export function genericInstanceNameMarker() returns immutable ByteArray
 	return mintedName(b"", suffix: GenericInstanceSuffixHead.toByteArray())
 end 'genericInstanceNameMarker'
 
 export union GenericInstanceOrigin
-	instanceOf(let templateKey ByteArray)
+	instanceOf(let templateKey immutable ByteArray)
 	notAnInstance
 end 'GenericInstanceOrigin'
 
 export type GenericFunctionInstance
-	export let templateKey as ByteArray
-	export let siteKey as ByteArray
+	export let templateKey as immutable ByteArray
+	export let siteKey as immutable ByteArray
 	export let arguments as GenericFunctionArgumentArray
-	export let instanceName as ByteArray
+	export let instanceName as immutable ByteArray
 
 	export static function create(templateKey ByteArray, siteKey ByteArray, arguments GenericFunctionArgumentArray, instanceName ByteArray) returns Self
 		return Self{templateKey: templateKey, siteKey: siteKey, arguments: arguments, instanceName: instanceName}
@@ -402,10 +404,10 @@ export type GenericFunctionInstance
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns GenericFunctionInstance throws LibraryCacheDamage
-		let f_templateKey = try reader.bytes()
-		let f_siteKey = try reader.bytes()
+		let f_templateKey = freeze try reader.bytes()
+		let f_siteKey = freeze try reader.bytes()
 		let f_arguments = try cacheReadGenericFunctionArgumentArray(reader)
-		let f_instanceName = try reader.bytes()
+		let f_instanceName = freeze try reader.bytes()
 
 		return Self{templateKey: f_templateKey, siteKey: f_siteKey, arguments: f_arguments, instanceName: f_instanceName}
 	end 'cacheRead'
@@ -522,7 +524,7 @@ export type RequestedGenericInstances
 	export function file(instance GenericFunctionInstance, tupleTypes RequestedTupleTypes)
 		self.filed.file(instance.instanceName)
 		self.byName.upsert(instance.instanceName, value: instance)
-		self.tuples.upsert(instance.instanceName.clone(), value: tupleTypes)
+		self.tuples.upsert(instance.instanceName, value: tupleTypes)
 	end 'file'
 
 	export function drop(name ByteArray)

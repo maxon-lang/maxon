@@ -9,24 +9,24 @@ category: type-system
 
 ## Documentation
 
-A `let` is deeply read-only, and so is everything read out of it. An element an iterator or a cursor yields is read
-out of the collection it was made from, so it carries the collection's mutability:
+A `let` is a name that is never reassigned, so the records a `let` collection holds stay writable. An element an
+iterator or a cursor yields is read out of the collection it was made from, and it is the collection's own record:
 
 - a `for` over `withIterator()`, or over any cursor made from a `let`, a `let` parameter or a `let` field, yields
-  read-only elements, exactly as `for element in collection` does;
-- `current()` and `peek()` of a cursor made by `createIterator()` or `cursor()` on a read-only collection yield
-  read-only elements: writing through one is E3159, passing one to a function that writes it is E3159, and binding
-  one to a `var` is E3078;
-- the cursor itself is not read-only: `advance()`, `retreat()` and `seek()` move it, and a `var` cursor over a
-  `let` collection is legal;
-- over a `var` collection every element stays writable, through a `for` and through a cursor alike.
+  the collection's records, exactly as `for element in collection` does, and a write through one is legal;
+- `current()` and `peek()` of a cursor made by `createIterator()` or `cursor()` yield the collection's records too:
+  writing through one, passing one to a function that writes it, and binding one to a `var` that is then written
+  are legal;
+- the cursor itself moves: `advance()`, `retreat()` and `seek()` change it, so a cursor is a `var`;
+- the same holds over a `var` collection, through a `for` and through a cursor alike.
 
-A `let` that was made from a `var` (`let frozen = items`, which moves `items`) is read-only like any other `let`.
+A `let` that was made from a `var` (`let frozen = items`, which moves `items`) is a `let` like any other: it is
+never reassigned, and what it holds can be written.
 
 ## Tests
 
-<!-- test: error.a-for-with-iterator-over-a-let-array-refuses-a-write -->
-`frozen` is the `let` that took `items` over. The element `c` is read out of `frozen`, so the write is refused.
+<!-- test: a-for-with-iterator-over-a-let-array-writes-its-elements -->
+`frozen` is the `let` that took `items` over. The element `c` is a record `frozen` holds, and the write reaches it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -54,11 +54,11 @@ function main() returns ExitCode
 	return first.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:20:3: cannot write through 'c': 'frozen' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+99
 ```
 
-<!-- test: error.a-for-with-iterator-over-a-let-built-by-a-call-refuses-a-write -->
+<!-- test: a-for-with-iterator-over-a-let-built-by-a-call-writes-its-elements -->
 The same with a `let` bound to a call result instead of one moved out of a `var`.
 
 ```maxon
@@ -91,12 +91,12 @@ function main() returns ExitCode
 	return first.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:24:3: cannot write through 'c': 'frozen' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+99
 ```
 
-<!-- test: error.a-for-with-iterator-over-a-let-parameters-field-refuses-the-call -->
-`bumpAll` writes the elements of the array its parameter holds. Handing it a `let` is refused at the call.
+<!-- test: a-for-with-iterator-over-a-let-parameters-field-writes-through-the-call -->
+`bumpAll` writes the elements of the array its parameter holds. Handing it a `let` is accepted: the `let` is never reassigned.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -134,12 +134,12 @@ function main() returns ExitCode
 	return first.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:32:2: cannot pass 'bag', which is read-only (a `let` binding), to a function that writes parameter 'bag' (in main); pass a clone()
+```exitcode
+99
 ```
 
-<!-- test: error.the-current-element-of-a-cursor-over-a-let-array-cannot-be-bound-to-a-var -->
-A cursor made from the `let` `frozen` hands out `frozen`'s elements, so `var c` would write one.
+<!-- test: the-current-element-of-a-cursor-over-a-let-array-can-be-bound-to-a-var -->
+A cursor made from the `let` `frozen` hands out `frozen`'s elements, so `var c` writes one.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -167,11 +167,11 @@ function main() returns ExitCode
 	return first.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:20:6: cannot assign the result of 'current', which may share storage with a field of an immutable variable, to mutable binding 'c'; use 'let' instead of 'var', or use clone()
+```exitcode
+99
 ```
 
-<!-- test: error.the-current-element-of-a-cursor-over-a-let-array-refuses-a-writing-callee -->
+<!-- test: the-current-element-of-a-cursor-over-a-let-array-is-written-by-a-callee -->
 The element is passed straight to `bump`, which writes it.
 
 ```maxon
@@ -203,11 +203,11 @@ function main() returns ExitCode
 	return first.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:24:2: cannot pass 'frozen', which is read-only (a `let` binding), to a function that writes parameter 'c' (in main); pass a clone()
+```exitcode
+99
 ```
 
-<!-- test: error.an-element-read-out-of-a-let-moved-from-a-var-cannot-be-bound-to-a-var -->
+<!-- test: an-element-read-out-of-a-let-moved-from-a-var-can-be-bound-to-a-var -->
 `get` on the `let` that took `items` over hands out an element of `frozen`. No cursor is involved.
 
 ```maxon
@@ -235,8 +235,8 @@ function main() returns ExitCode
 	return first.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:19:6: cannot assign the result of 'get', which may share storage with immutable variable 'frozen', to mutable binding 'c'; use 'let' instead of 'var', or use clone()
+```exitcode
+99
 ```
 
 <!-- test: a-var-array-hands-out-writable-elements-through-a-for-and-a-cursor -->

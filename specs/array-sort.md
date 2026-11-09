@@ -1354,7 +1354,7 @@ sorted within the bound
 ## Duplicate-heavy inputs
 
 <!-- test: error.a-let-adversary-a-comparator-closure-writes-is-refused -->
-The adversary is a `let` handed to `sortAgainst`, whose comparator closure writes the adversary it captured: `SortComparator` does not declare `mutates captures`, so the closure is refused, and so is passing the read-only `adversary` to a function that writes it.
+The adversary is a `let` handed to `sortAgainst`, whose comparator closure writes the adversary it captured: `SortComparator` does not declare `mutates captures`, so the closure is refused.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -1456,7 +1456,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3210: <fragment>:67:15: function value for 'Array.SortComparator' writes data it captured, but 'Array.SortComparator' does not declare `mutates captures`
-error E3159: <fragment>:78:2: cannot pass 'adversary', which is read-only (a `let` binding), to a function that writes parameter 'adversary' (in main); pass a clone()
 ```
 
 <!-- test: sort-duplicate-heavy-arrays-come-out-sorted -->

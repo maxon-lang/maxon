@@ -367,10 +367,10 @@ type Bag
 end 'Bag'
 
 type Pair
-	export let left as Bag
-	export let right as Bag
+	export let left as immutable Bag
+	export let right as immutable Bag
 
-	static function around(bag Bag) returns Self
+	static function around(bag immutable Bag) returns Self
 		return Self{left: bag, right: bag}
 	end 'around'
 end 'Pair'

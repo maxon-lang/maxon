@@ -1,33 +1,26 @@
 ---
 feature: deep-let-door-agreement
 status: experimental
-keywords: [let, read-only, field, call argument, store, owner, orphaned array, key column, sole]
+keywords: [let, field, call argument, store, owner, shared record, key column]
 category: type-system
 ---
 
-# Every door a `let` field is filled through asks the same question
+# Every door a `let` field is filled through takes the record itself
 
 ## Documentation
 
-A `let` field has no other writer, so what it takes must be fresh, moved or already read-only. Two doors
-fill one: a call to a function that stores its parameter into the field, and a store written in the
-function that owns the field's type. They ask one question, and a value is accepted only when nothing else
-can still write it:
-
-- a value this function made and names only here, or hands over at its last use, is accepted;
-- a value that was also placed inside another container, and is read again after, is not;
-- a value read out of a record this function made is accepted only when that record is dead afterwards: reading
-  the same field again, passing the record on, returning it or branching on it keeps the record alive, and the
-  value read out of it is still named through it;
-- an element read out of an array whose slot was rewritten is not fresh, because another holder may still name
-  the array or the element. The one array whose elements are always read-only is the key column of a `Map` or a
-  `Set`, which only holds keys stored read-only.
+A `let` field is a name that is never reassigned; the record it holds is written like any other. Two doors fill
+one: a call to a function that stores its parameter into the field, and a store written in the function that owns
+the field's type. Both hand the field the record itself, so a record that is also named elsewhere stays shared
+with those names: one placed inside another container, one read again afterwards, one handed out in the result,
+one read out of a record this function made, or an element read out of an array whose slot was rewritten. A
+write through any of those names is read through the field, and `clone()` gives the field a record of its own.
+The key column of a `Map` or a `Set` holds `immutable` keys only.
 
 ## Tests
 
-<!-- test: error.an-element-of-an-array-another-field-also-names-is-not-fresh -->
-`orphan` swaps `a` out and reads an element of the old array. `seed` made `b` another name for the same array,
-so the element is still reachable through `b` and the `let` field refuses it.
+<!-- test: an-element-of-an-array-another-field-also-names-is-kept-by-a-let-field -->
+`orphan` swaps `a` out and reads an element of the old array. `seed` made `b` another name for the same array, so the element stays reachable through `b`, and the `let` field keeps it all the same.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -77,8 +70,8 @@ function main() returns ExitCode
 	return kept.inner.v as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:38:17: cannot pass a value other names may still write to parameter 'inner' of 'Keeper.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+4
 ```
 
 <!-- test: a-value-made-here-and-stored-once-is-stored-into-a-let-field -->
@@ -113,9 +106,8 @@ end 'main'
 1
 ```
 
-<!-- test: error.a-record-read-out-of-an-owner-that-is-handed-out-afterwards-is-not-fresh -->
-`owner` is made in `build`, its `inner` goes into the `let` field, and `owner` itself is handed out in the
-result. The caller can bind it to a `var` and write `owner.inner`, which is the record the `let` field holds.
+<!-- test: a-record-read-out-of-an-owner-that-is-handed-out-afterwards-is-kept-by-a-let-field -->
+`owner` is made in `build`, its `inner` goes into the `let` field, and `owner` itself is handed out in the result. The caller can write `owner.inner`, the record the `let` field holds.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -155,8 +147,8 @@ function main() returns ExitCode
 	return built.0.inner.v as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:30:22: cannot pass a value other names may still write to parameter 'inner' of 'Keeper.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+0
 ```
 
 <!-- test: a-record-read-out-of-an-owner-nothing-names-afterwards-is-stored-into-a-let-field -->
@@ -204,8 +196,7 @@ end 'main'
 ```
 
 <!-- test: a-map-that-grows-keeps-every-key -->
-A `Map` rehashes into larger arrays when it fills, moving each key out of the old key column into the new one. The
-key column holds only read-only keys, so the move is accepted and no key is lost.
+A `Map` rehashes into larger arrays when it fills, moving each key out of the old key column into the new one. The key column holds only `immutable` keys, so the move is accepted and no key is lost.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -235,9 +226,8 @@ end 'main'
 200 19900
 ```
 
-<!-- test: error.a-let-kept-by-a-let-field-cannot-be-moved-into-a-var -->
-`wrap` keeps the record `cell` names in a `let` field and is read again, so moving `cell` into a `var` would give a
-writer to a record the field reads.
+<!-- test: a-let-kept-by-a-let-field-is-moved-into-a-var -->
+`wrap` keeps the record `cell` names in a `let` field, and `cell` is moved into a `var` that writes it: `wrap` reads the write.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -266,13 +256,12 @@ function main() returns ExitCode
 	return wrap.cell.n as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:23:6: cannot assign the read-only 'cell' to mutable binding 'mine'; use 'let' instead of 'var', or use clone()
+```exitcode
+7
 ```
 
-<!-- test: error.a-let-kept-by-a-let-field-and-also-returned-is-refused -->
-The function hands the record to the caller beside the `Wrap` that keeps it, so the `Wrap`'s `let` field would not be the
-only name the record is reachable through.
+<!-- test: a-let-kept-by-a-let-field-and-also-returned-is-accepted -->
+The function hands the record to the caller beside the `Wrap` that keeps it: both names reach one record.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -304,12 +293,12 @@ function main() returns ExitCode
 	return (wrap.cell.n + cell.n) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:22:18: cannot pass a value this function also hands out to parameter 'cell' of 'Wrap.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+0
 ```
 
-<!-- test: error.a-byte-array-kept-by-a-let-field-and-also-returned-is-refused -->
-A `ByteArray` is an array like any other: the name a `Layout` keeps in its `let` field may not also be returned.
+<!-- test: a-byte-array-kept-by-a-let-field-and-also-returned-is-accepted -->
+A `ByteArray` is an array like any other: the name a `Layout` keeps in its `let` field may also be returned.
 
 ```maxon
 type Layout
@@ -331,8 +320,8 @@ function main() returns ExitCode
 	return (layout.name.count() + name.count()) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:12:22: cannot pass a value this function also hands out to parameter 'name' of 'Layout.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```exitcode
+0
 ```
 
 <!-- test: a-let-kept-by-a-let-field-is-read-through-the-field -->

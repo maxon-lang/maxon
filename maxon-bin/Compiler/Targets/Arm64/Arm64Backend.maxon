@@ -2976,7 +2976,7 @@ function encodeArm64FunctionChunk(module TargetModule, func IrFunction, frameByt
 
 	// `funcAdrpRelocs` is assigned after the fact so `createWith`'s signature — shared with the x64
 	// runtimes — stays unchanged (only arm64 chunks carry any).
-	var chunk = FunctionCodeChunk.createWith(func.name.clone(), code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
+	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
 	chunk.funcAdrpRelocs = funcAdrpRelocs
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: blockOffsets)
 
@@ -3358,7 +3358,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	releaseEncodedTargetModule(project, targetModule: targetModule)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
-	var codeResult = try concatArm64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData, project: project, funcNames: funcNames)
+	let codeResult = try concatArm64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData, project: project, funcNames: funcNames)
 	recordPhase(project, phase: CompilePhase.link, probe: linkProbe)
 
 	return codeResult

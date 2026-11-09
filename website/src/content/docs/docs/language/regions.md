@@ -48,7 +48,7 @@ keeps its meaning, and `swap(1, right: 2)`, with the parenthesis against the nam
 
 A capability word written directly on a number, `bool`, an enum, a payload-free union or a `String` is not a
 type there: those values belong to no region. A union with a payload does, and takes `isolated` and
-`immutable` like a record. `mutable` on a parameter or function-type parameter of a value type is the one
+`immutable` like a record, on the union and on each payload (see [Payload Declarations](/docs/language/enums-unions/#payload-declarations)). `mutable` on a parameter or function-type parameter of a value type is the one
 place it is accepted, and it makes the parameter by reference. The same words in other positions fail as any
 stray word does: the cases are in `specs/regions-syntax.md`.
 
@@ -79,7 +79,11 @@ typealias SettledIndex = immutable IndexBuilder
 
 A write through frozen data is **E3197** (`cannot write 'numeric' through 'pinned', which is immutable`), and
 storing a mutable value where frozen data is held, or the reverse, is **E3196** (`cannot store a mutable
-'Row' into 'pinned', which holds an immutable 'Row'; freeze it, or store a copy`). A value that joins frozen
+'Row' into 'pinned', which holds an immutable 'Row'; freeze it, or store a copy`). Storing immutable data
+into a plain holder is **E3196** too, and the message names the declaration to change (``cannot store an
+immutable 'ByteArray' into 'Tok.value', which holds a mutable 'ByteArray'; declare the field `immutable
+ByteArray` ``). A method that writes its receiver, called on immutable data, is **E3207** (`'push' needs a
+writable receiver; 'frozen' is immutable`). A value that joins frozen
 and mutable data, through a ternary, a `match` arm, a `try … otherwise` or a `var` assigned both, is
 read-only (**E3197**: `which is read-only, as it joins immutable and mutable data`). The cases are in
 `specs/regions-modify.md` and `specs/regions-inferred.md`.
@@ -90,6 +94,64 @@ against it as a store into a slot, so a frozen value into the mutable position a
 `immutable` position are both refused (**E3196** at a store, **E3207** at a call argument that the callee
 stores). `Array with immutable Box` and `Array with readonly Box` are
 different types (`specs/regions-generic-flows.md`).
+
+## Constant Data
+
+A `let` whose initializer is a compile-time constant names **image data**: a literal, a `b"…"` byte string, a
+constant record, array or tuple literal, or another constant `let`. The `let` may be a module-level binding, a
+`static let`, a `let` field or a local, and the data is `immutable`. So is every inline `b"…"` literal, bound
+or not. Image data allocates nothing at run time and is read with plain counts from any thread.
+
+Immutable data goes where it is only read, or where it is held as `immutable`:
+
+- A parameter that only reads it, an `immutable` parameter, and a parameter the callee stores into an
+  `immutable` place all take it.
+- A field, array element or union payload declared `immutable T` holds it. Declared as plain `T`, the holder is
+  one something may write, so storing it there is **E3196** (``cannot store an immutable 'ByteArray' into
+  'Tok.value', which holds a mutable 'ByteArray'; declare the field `immutable ByteArray` ``); the message
+  names the holder to declare.
+- A result that returns it is declared `immutable`; an unmarked result is **E3209** (``a return does not fit the
+  declared result: 'Name' is immutable, the result is not `immutable`; declare the result `immutable` ``).
+- Writing through it, binding it to a `var` and writing, or passing it to a parameter the callee writes is
+  **E3207** (``'push' needs a writable receiver; 'Name' is immutable``; ``'grow' writes 'name' (line 5:
+  `name.push(100)`); 'Name' is immutable``). A mutable copy comes from `.clone()`, or from building the value
+  (`ByteArray.create` and `push`, or `"text".toByteArray()`).
+
+```maxon
+let Name = b"abc"
+
+type Tok
+	export let value as immutable ByteArray
+
+	static function create(value ByteArray) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Tok'
+
+function main() returns ExitCode
+	let t = Tok.create(Name)         // create only stores its parameter into an `immutable` field
+	// Name.push(1)                  // E3207: 'push' needs a writable receiver; 'Name' is immutable
+	print("{t.value.count()}\n")     // 3
+	return 0
+end 'main'
+```
+
+Reading an `immutable` field, payload or element slot yields `immutable` data, whatever holds the slot, and the
+read leaves the holder as it was: `t.value` goes straight into another `immutable` holder, and a `for` over
+an `Array with immutable ByteArray` binds `immutable` names.
+
+Data built at run time is `immutable` once it is frozen, so `freeze` it where it enters an `immutable` holder
+(`Tok.create(freeze ByteArray.create(4))`). A `Map` key and a `Set` element are `immutable` slots: a number, a
+`String` or another value type needs nothing, a constant is inserted as it is, and a record or array built at
+run time needs `freeze` (``'upsert' takes `immutable` 'key'; a fresh value is mutable. Freeze it first``,
+**E3207**). A key read back out of a map is `immutable`, so it goes into an `immutable` holder with no copy.
+
+A record whose fields are all `let` is immutable only structurally: every field is `let` and every field's type
+is a value type or an immutable aggregate. A record with a `let items as Counts` array field is an ordinary
+mutable record, and sending it as `immutable` needs `freeze`.
+
+A record that is an immutable aggregate counts as a value, like a `String`: `immutable` over it means the type
+itself, it enters an `immutable` slot or a service message with no `freeze`, and `freeze` of one is **E3200**.
 
 ## Parameter Capabilities Are Inferred
 
@@ -129,7 +191,10 @@ immutable`. `specs/regions-inferred.md` (`read-only-param-takes-mutable-and-froz
 frozen argument only (**E3207**: ``'create' takes `immutable` 'settings'; 's' is mutable. Freeze it first``),
 and a method declared `immutable self` runs on a frozen receiver only.
 
-The classes are computed together over the call graph, so they do not depend on declaration order.
+The classes are computed together over the call graph, so they do not depend on declaration order. A union
+parameter is judged like a record parameter, and a parameter passed on, even through an alias or as an
+interface-typed argument, to a callee that stores or writes it is mutable only, so a read-only argument is
+**E3207**.
 
 **A result's capability comes from the arguments at the parameters some return path comes from**, and from
 no other argument. Every such argument mutable gives a mutable result. Every such argument frozen gives a
@@ -139,11 +204,26 @@ plays no part (`specs/regions-results.md`). A call whose return paths return par
 capabilities is **E3208** (`'pick' returns 'a' or 'b'; they must both be mutable or both immutable here`).
 A function that declares `returns immutable T` and returns a mutable value, or declares a plain result and
 returns an `isolated` one, is **E3209** (`a return does not fit the declared result: 'fresh' is mutable, the
-result is immutable; freeze it`).
+result is immutable; freeze it`). So is a plain result that returns immutable data, a constant or an
+`immutable` field read (``'Name' is immutable, the result is not `immutable`; declare the result `immutable` ``).
 
 A value joined from a parameter's data and fresh or local mutable data is judged by the same rule against
 the parameter's final class, and a write through it makes the parameter mutable only. A join with frozen data
 is read-only (`specs/regions-soundness.md`).
+
+A function whose return paths mix frozen data (its own, such as an `immutable` field) with writable data hands
+back a read-only result to every caller, whatever the receiver is: writing through it is **E3197**, and passing
+it to a `mutable` parameter is **E3207**. One `return` whose `if … else`, ternary or `match` joins both counts
+too. Declare the function `returns immutable` when every path is frozen, or return a `.clone()` of the frozen
+path (`specs/settled-results-through-merges.md`).
+
+A record built from a parameter's data and returned (`return Self{field: parameter}`) holds that data and only
+reads it, so the parameter stays any-capability: a frozen argument gives a read-only record, a mutable one a
+writable record. A write through the record that reaches the parameter's data, or handing the record to a callee
+that writes that data, stores the record or returns it, makes the parameter mutable only. A parameter a record is built from takes no argument that
+is merely read-only, such as data an open `modify` block pauses. A function value, an interface requirement and
+a generic method are judged as if they build a record from each unmarked argument they cannot see into
+(`specs/returned-and-local-holders.md`).
 
 ## Separate Regions: `isolated`
 
@@ -161,8 +241,9 @@ declare it `as isolated Bag`, or store a copy``).
 
 `isolated` values are linear. Every use of an `isolated` local or parameter moves it except opening it, so
 `let b = a` moves `a` and a later read of `a` is **E3102**. An `isolated` parameter owns the region it is
-handed; `mutable isolated` is by reference, and the callee may open, swap or replace it but never move it out,
-alias it, store it or pass it on (**E3202**). Reading an `isolated` value without opening it, such as
+handed; `mutable isolated` is by reference, and the callee may open, swap or replace it, or lend it on to
+another `mutable isolated` parameter (a method's own recursion included), but never move it out, alias it,
+store it or pass it to an `isolated` parameter (**E3202**). Reading an `isolated` value without opening it, such as
 `self.part` outside a block, is **E3198** (``'self.part' is isolated and cannot be read outside a block; open
 it with `modify`, or take it out with `swap` ``).
 
@@ -256,8 +337,8 @@ end 'Ticket'
 A type with a unique field is unique too, with no declaration and no generated `clone()` (**E3214**:
 ``'Wallet' is unique (its field 'ticket' holds a unique 'Ticket') and cannot be cloned``); so is a type that
 holds an array of unique values. A unique value cannot be frozen, and reading one out of a field or an element
-to bind, return or store it is **E3214**: move it out with `pop` or `remove`, read it through a `view`, or
-`swap` it out of an `isolated` field. Handing a unique value to a parameter the callee only reads leaves it
+to bind, return or store it is **E3214**: move it out with `pop` or `remove`, or `swap` it out of an `isolated`
+field. Handing a unique value to a parameter the callee only reads leaves it
 readable. The standard library's `Promise` is unique. The cases are in `specs/regions-unique.md`.
 
 ## Region Bounds
@@ -316,9 +397,18 @@ error E3210: function value for 'KeyOf' returns data reached from its read-only 
 A function value that returns its read-only parameter, or throws it in an error payload, converts once it
 returns a `.clone()` of it (`specs/regions-everywhere.md`).
 
+A closure that writes what it captured, or builds a record from it, mutates its captures; the compiler infers
+it, so nothing is written on the closure. It converts only to a function type that declares `mutates captures`,
+and a plain function type refuses it (**E3210**). A closure that writes through a captured iterator writes the
+collection the iterator runs over, which therefore has to be mutable data
+(`specs/closure-captured-iterators.md`). A conformer whose result holds data from its receiver needs
+`mutable self` on the interface requirement (**E3210**).
+
 A conformer or function value whose declaration marks a position the boundary leaves unmarked, or the
 reverse, is refused too. A value of a `mutates captures` type called through frozen or read-only
-data is **E3211** (``'Tallier' mutates captures and cannot be called through immutable data``).
+data is **E3211** (``'Tallier' mutates captures and cannot be called through immutable data``): on frozen data
+anywhere, and inside an open `modify` block when the value was returned from, read out of or stored in the data
+the block holds.
 
 A caller trusts the declaration: an argument at a `mutable` position is writable, and one at an `immutable`
 position is frozen (**E3207**). A result read through an interface or function value is read-only, so a

@@ -91,8 +91,8 @@ let AsyncReleaserPrefix = b"__gt_release_"
 // The name of the releaser for async callee `callee`. ONE builder, shared by the spawn lowering
 // (`LowerMaxonToStd.emitAsyncSpawn`, which emits `funcAddr(__gt_release_<callee>)`) and the synthesis below,
 // so the two spellings cannot drift — `fnRefThunkName`'s arrangement, for its reason.
-export function asyncReleaserName(callee ByteArray) returns ByteArray
-	return "{String.from(AsyncReleaserPrefix)}{String.from(callee)}".toByteArray()
+export function asyncReleaserName(callee ByteArray) returns immutable ByteArray
+	return freeze "{String.from(AsyncReleaserPrefix)}{String.from(callee)}".toByteArray()
 end 'asyncReleaserName'
 
 // A set of callee names, for O(1) dedup while collecting releaser targets in source order.
@@ -155,7 +155,7 @@ end 'AsyncCellSlot'
 typealias AsyncCellSlotArray = Array with AsyncCellSlot
 
 export type AsyncSpawnTarget
-	export let callee as ByteArray
+	export let callee as immutable ByteArray
 	export let byReference as ParamPositionMask
 	export let target as Target
 	export let startsService as bool
@@ -231,8 +231,8 @@ end 'asyncCalleeNeedsReleaser'
 // because the plans differ in what they name: `__gt_release_<callee>` is the plan of a SPAWN of `<callee>`
 // and lists that callee's arguments, while this one lists nothing but the result — so a program that both
 // `async`s and message-sends one function would otherwise have two plans fighting over one symbol.
-export function serviceReplyReleaserName(messageName ByteArray) returns ByteArray
-	return "{String.from(ServiceReplyReleaserPrefix)}{String.from(messageName)}".toByteArray()
+export function serviceReplyReleaserName(messageName ByteArray) returns immutable ByteArray
+	return freeze "{String.from(ServiceReplyReleaserPrefix)}{String.from(messageName)}".toByteArray()
 end 'serviceReplyReleaserName'
 
 let ServiceReplyReleaserPrefix = b"__gt_reply_release_"
@@ -526,7 +526,7 @@ end 'asyncSlotOwnsHeap'
 // it owns — which is why the convenience wrappers `slotTypeIsManaged`/`slotTypeDropCallee` cannot serve here.
 // Resolving a signature's ids against the wrong interner misreads a managed
 // payload whenever a ranged alias shifts the interning order, and the symptom is a leak or a wild free.
-function asyncSlotDropCallee(signatures ProgramSignatures, typeNames TypeNameInterner, slotType MaxonType, aggregateName ByteArray) returns ByteArray
+function asyncSlotDropCallee(signatures ProgramSignatures, typeNames TypeNameInterner, slotType MaxonType, aggregateName ByteArray) returns immutable ByteArray
 	if asyncErasedUnionIsBoxed(signatures, aggregateName: aggregateName) 'erasedBoxedUnion'
 		return signatures.unionBoxDropCallee(aggregateName)
 	end 'erasedBoxedUnion'

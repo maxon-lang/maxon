@@ -19,13 +19,13 @@ before `main` only when something reaches its key, and the program's own default
 
 A registry value and a `SharedValue`'s value are read by every thread at once. Their type may hold `var`
 fields, `Array`s and `Map`s, and every read — `Key.current()`, `cell.current()`, or a function returning
-either — hands back a deep read-only view of the published value, the same one a module-level `let`'s
-record gets. Every write through it is refused: binding it, or anything reached through it, to a `var`
-(E3078); calling a method that writes its receiver on it or on anything reached through it, or passing
-either to a parameter the callee writes or reassigns (E3159, naming the root binding the view was read
-into); storing it, or anything reached through it, into a `var` field (E3078), since the function that
-later writes the field cannot see where its value came from; and a field store through a record that may
-hold it (E3159). A store written on the read itself, `cell.current().inner.x = 9`, is not a statement at
+either — hands back the published value as immutable data, the same as a module-level `let`'s
+record. Every write through it is refused: assigning a field of it or of anything reached through it, also
+through a `var` bound to it (E3197); calling a method that writes its receiver on it or on anything reached
+through it (E3207); passing it to a parameter the callee writes (E3159 and E3207, naming the root binding the
+read was bound to); storing it, or anything reached through it, into a field not declared `immutable` (E3196),
+since the function that later writes the field cannot see where its value came from; and a function that hands
+it back declares `returns immutable` (E3209). A store written on the read itself, `cell.current().inner.x = 9`, is not a statement at
 all: an assignment's target begins at a binding (E2001), so every write reaches the view through one. The
 view is the published record itself, so a read copies nothing; `.clone()` makes a value of one's own to
 change.
@@ -2579,7 +2579,7 @@ error E3171: <fragment>:12:24: `Config` cannot be a registry value or a `SharedV
 
 <!-- test: error.a-field-store-through-a-shared-value-read -->
 **A READ IS A READ-ONLY VIEW.** `around` builds a record of its own around the `Inner` the shared value
-holds, so the field store through `w.inner` would change the value under every other reader.
+holds, so the field store through `w.inner` would change the value under every other reader; the field is declared `immutable` because the read is.
 ```maxon
 type Inner
 	export var x as Integer
@@ -2600,7 +2600,7 @@ end 'Config'
 typealias ConfigCell = SharedValue with Config
 
 type Wrap
-	export var inner as Inner
+	export var inner as immutable Inner
 
 	static function around(cell ConfigCell) returns Self
 		return Self{inner: cell.current().inner}
@@ -2616,7 +2616,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:31:2: cannot write through 'w.inner', which may be the record of a `SharedValue` or registry value a call handed back; use clone()
+error E3197: <fragment>:31:2: cannot write 'x' through 'w.inner', which is immutable
 ```
 
 <!-- test: error.a-field-store-through-a-value-default-read -->
@@ -2640,7 +2640,7 @@ end 'Config'
 default Config = Config.create(1)
 
 type Wrap
-	export var inner as Inner
+	export var inner as immutable Inner
 
 	static function around() returns Self
 		return Self{inner: Config.current().inner}
@@ -2655,7 +2655,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:30:2: cannot write through 'w.inner', which may be the record of a `SharedValue` or registry value a call handed back; use clone()
+error E3197: <fragment>:30:2: cannot write 'x' through 'w.inner', which is immutable
 ```
 
 <!-- test: error.a-mutating-method-through-a-shared-value-read -->
@@ -2683,7 +2683,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:18:23: cannot write through 'cell.current().items', which may be the record of a `SharedValue` or registry value a call handed back; use clone()
+error E3207: <fragment>:18:23: 'push' needs a writable receiver; 'items' is immutable
 ```
 
 <!-- test: error.a-mutating-method-through-a-value-default-read -->
@@ -2709,7 +2709,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:17:25: cannot write through 'Config.current().items', which may be the record of a `SharedValue` or registry value a call handed back; use clone()
+error E3207: <fragment>:17:25: 'push' needs a writable receiver; 'items' is immutable
 ```
 
 <!-- test: error.a-shared-value-read-passed-to-a-writing-parameter -->
@@ -2746,6 +2746,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3159: <fragment>:26:2: cannot pass a value read out of a `SharedValue` or registry value, which is read-only, to a function that writes parameter 'i' (in main); pass a clone()
+error E3207: <fragment>:26:7: 'bump' writes 'i' (line 21: `i.x = 9`); 'cell' is immutable
 ```
 
 <!-- test: error.a-value-default-read-passed-to-a-writing-parameter -->
@@ -2780,10 +2781,11 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3159: <fragment>:25:2: cannot pass a value read out of a `SharedValue` or registry value, which is read-only, to a function that writes parameter 'i' (in main); pass a clone()
+error E3207: <fragment>:25:7: 'bump' writes 'i' (line 21: `i.x = 9`); 'Config' is immutable
 ```
 
 <!-- test: error.a-var-bound-to-a-shared-value-read -->
-A `var` may write what it holds, so binding the read to one is refused at the binding.
+The read is immutable data, so binding it to a `var` does not make it writable: the write through the `var` is refused.
 ```maxon
 type Inner
 	export var x as Integer
@@ -2812,7 +2814,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:22:6: cannot assign a value, which may share storage with a `SharedValue` or registry value, to mutable binding 'w'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:23:2: cannot write 'x' through 'w.inner', which is immutable
 ```
 
 <!-- test: error.a-var-bound-to-a-value-default-read -->
@@ -2843,7 +2845,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:21:6: cannot assign a value, which may share storage with a `SharedValue` or registry value, to mutable binding 'w'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:22:2: cannot write 'x' through 'w.inner', which is immutable
 ```
 
 <!-- test: error.a-var-bound-to-a-field-of-a-shared-value-read -->
@@ -2876,7 +2878,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:22:6: cannot assign a value, which may share storage with a `SharedValue` or registry value, to mutable binding 'm'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:23:2: cannot write 'x' through 'm', which is immutable
 ```
 
 <!-- test: error.a-var-bound-to-a-field-of-a-value-default-read -->
@@ -2907,7 +2909,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:21:6: cannot assign a value, which may share storage with a `SharedValue` or registry value, to mutable binding 'm'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:22:2: cannot write 'x' through 'm', which is immutable
 ```
 
 <!-- test: a-var-bound-to-a-clone-of-a-shared-value-read-may-be-written -->
@@ -3003,7 +3005,7 @@ end 'Config'
 
 typealias ConfigCell = SharedValue with Config
 
-function read(cell ConfigCell) returns Config
+function read(cell ConfigCell) returns immutable Config
 	return cell.current()
 end 'read'
 
@@ -3016,7 +3018,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:26:6: cannot assign a value, which may share storage with a `SharedValue` or registry value, to mutable binding 'w'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:27:2: cannot write 'x' through 'w.inner', which is immutable
 ```
 
 <!-- test: error.a-write-through-a-value-default-read-a-function-returned -->
@@ -3039,7 +3041,7 @@ end 'Config'
 
 default Config = Config.create(1)
 
-function read() returns Config
+function read() returns immutable Config
 	return Config.current()
 end 'read'
 
@@ -3051,7 +3053,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:25:6: cannot assign a value, which may share storage with a `SharedValue` or registry value, to mutable binding 'w'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:26:2: cannot write 'x' through 'w.inner', which is immutable
 ```
 
 <!-- test: error.a-write-through-a-value-default-read-a-function-passed-on -->
@@ -3075,7 +3077,7 @@ end 'Config'
 
 default Config = Config.create(1)
 
-function read() returns Config
+function read() returns immutable Config
 	return Config.current()
 end 'read'
 
@@ -3091,6 +3093,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3159: <fragment>:29:2: cannot pass a value read out of a `SharedValue` or registry value, which is read-only, to a function that writes parameter 'i' (in main); pass a clone()
+error E3207: <fragment>:29:7: 'bump' writes 'i' (line 25: `i.x = 9`); 'read' is immutable
 ```
 
 <!-- test: error.a-shared-value-read-stored-into-a-var-field-is-refused-at-the-store -->
@@ -3143,7 +3146,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:29:2: cannot store a value, which may share storage with a `SharedValue` or registry value, into writable field 'h.inner'; use clone()
+error E3196: <fragment>:29:12: cannot store an immutable 'Inner' into 'inner', which holds a mutable 'Inner'; declare the field `immutable Inner`
 ```
 
 <!-- test: error.a-value-default-read-stored-into-a-var-field-is-refused-at-the-store -->
@@ -3191,7 +3194,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:29:2: cannot store a value, which may share storage with a `SharedValue` or registry value, into writable field 'h.inner'; use clone()
+error E3196: <fragment>:29:12: cannot store an immutable 'Inner' into 'inner', which holds a mutable 'Inner'; declare the field `immutable Inner`
 ```
 
 <!-- test: a-clone-of-a-shared-value-read-stored-into-a-var-field-may-be-written -->
@@ -3325,7 +3328,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: error.a-registered-writable-value-that-has-been-viewed -->
-`Config` has a `var` field, so its record may be written, and `w`'s reference is a second owner for the rest of the function: publishing `fresh` would hand every thread a record this one still reaches through `w`.
+`Config` has a `var` field, so its record may be written, and `view w = fresh` moves `fresh` into `w`: publishing `fresh` afterwards would hand every thread a record `w` still reaches, so the publish is refused as a use of a moved value.
 ```maxon
 type Config
 	export var n as Integer
@@ -3347,5 +3350,5 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3174: <fragment>:16:18: the value published to `Config` has been viewed by 'w': a view's reference is a second owner — publish a `.clone()`
+error E3102: <fragment>:16:18: use of moved value 'fresh': its ownership moved to another binding at an earlier bind or assignment
 ```

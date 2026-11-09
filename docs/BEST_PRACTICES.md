@@ -249,16 +249,16 @@ end 'classify'
 
 ## Variables and Mutability
 
-### Default to `let` for Immutability
+### Default to `let` for Names That Never Change
 
-Use `let` unless you need to reassign the variable. This communicates intent and prevents accidental mutation.
+Use `let` unless you need to reassign the variable. A `let` is a name that is never reassigned; a record it names can still be written through, and a number, `bool`, enum or `String` it holds cannot change. This communicates intent and prevents accidental rebinding.
 
 ```maxon
 let maxRetries = 3               // constant, never changes
 let userName = getUserName()     // assigned once from a function
+let buffer = ByteArray.create(0) // push/set write the array, not the name
 
 var retryCount = 0 as Count      // needs to be incremented
-var buffer = ByteArray.create(0)         // needs push/set operations
 ```
 
 ### Keep Variable Scope Narrow
@@ -332,36 +332,44 @@ function sortedCopy(items ItemArray) returns ItemArray
 end 'sortedCopy'
 ```
 
-### Share Read-Only Values, and Clone Only to Write
+### Share Frozen Data, and Clone Only to Write
 
-A `let` is read-only all the way down, so any number of holders can share it without a copy. Keep a value in a `let` until something must write it, and clone only where a mutable copy is needed.
+`immutable` data and constants are written by nobody, so any number of holders can share them without a copy. A `let` fixes only the name, not the record behind it. Freeze data that is built once and read by many holders, and clone only where a mutable copy is needed.
 
 ```maxon
-// Good: the defaults are shared read-only; only the edited copy is cloned
-let defaults = loadDefaults()
+// Good: the defaults are frozen and shared; only the edited copy is cloned
+let defaults = freeze loadDefaults()
 var edited = defaults.clone()
 edited.retries = 5
 
-// Bad: writing through the read-only value
-let defaults = loadDefaults()
-defaults.retries = 5      // ERROR E3159: 'defaults' is read-only (a `let` binding)
+// Bad: writing through frozen data
+defaults.retries = 5      // ERROR E3197: a write through frozen data
 ```
 
-### Read Writable State Through a `view`
+### Declare Constant Names `immutable`
 
-A `let` binds only what nothing writes while it lives: a fresh record, a read-only value, or a part of a
-parameter. To read a field of a writable `self`, an element of a `var` container or a getter's result on a `var`
-holder, bind a `view`; a `let` there is E3188. Keep a view local: it cannot be stored, returned, captured or sent,
-and once a `var`'s record has been viewed it cannot be sent or handed to a parameter the callee keeps for the rest of the
-function, so view it after the send or send a `clone()`.
+A `b"…"` literal and a `let` bound to a constant are `immutable` image data. A field, array element or union payload that holds one is declared `immutable ByteArray`; a plain `ByteArray` holder is E3196, and its message names the declaration to change. A result that returns one is declared `returns immutable ByteArray` (E3209). To get a mutable byte array, build it with `ByteArray.create` and `push`, or start from `"text".toByteArray()`; a `var` bound to a literal and then written is E3207.
 
 ```maxon
-// Good: read the current entry of a `var` registry, which may still change it
-view entry = try registry.items.get(0) otherwise return
-print("{entry.name}\n")
+let Name = b"abc"
 
-// Bad: a `let` would promise that nothing writes the entry
-let entry = try registry.items.get(0) otherwise return   // ERROR E3188
+type Tok
+	export let value as immutable ByteArray    // a plain ByteArray here would be E3196
+
+	static function create(value ByteArray) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Tok'
+```
+
+### Bind a `let` Wherever the Name Never Changes
+
+A `let` fixes the name, so it can read a field of a writable `self`, an element of a `var` container or a getter's result on a `var` holder, and it sees the writes the holder makes later. Write `var` only for a name that is reassigned.
+
+```maxon
+// Good: the name never changes, so it is a let, and it sees later writes to the entry
+let entry = try registry.items.get(0) otherwise return
+print("{entry.name}\n")
 ```
 
 ---
@@ -671,8 +679,8 @@ A static field's initializer runs once, before `main`, and every read afterwards
 
 ```maxon
 type Classifier
-	static let whitespace = CharacterSet.whitespacesAndNewlines()
-	static let digits = CharacterSet.decimalDigits()
+	static let whitespace = CharacterSet.whitespacesAndNewlines
+	static let digits = CharacterSet.decimalDigits
 
 	export static function isWhitespace(c Character) returns bool
 		return Classifier.whitespace.contains(c)

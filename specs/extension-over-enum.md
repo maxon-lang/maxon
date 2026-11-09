@@ -814,9 +814,10 @@ end 'main'
 42
 ```
 
-<!-- test: error.an-enum-conformer-through-an-extension-writing-a-let-argument-is-refused -->
+<!-- test: an-enum-conformer-through-an-extension-writing-a-let-argument-is-written -->
 The requirement's `mutable` reaches an enum conformer that an extension declares, exactly as it reaches one
-its own clause declares (`enum-interface-conformance.md`).
+its own clause declares (`enum-interface-conformance.md`). A `let` forbids only reassigning `a`, so the push
+lands in the array it names and the read finds `9`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -846,12 +847,12 @@ function main() returns ExitCode
 	return try a.get(0) otherwise 55
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:26:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in main); pass a clone()
+```exitcode
+9
 ```
 
 <!-- test: an-enum-conformer-through-an-extension-writing-a-var-argument-is-allowed -->
-The control for the refusal above: the same program with `var a` answers 9.
+The twin of the case above: the same program with `var a` answers 9.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer

@@ -92,7 +92,7 @@ end 'installManagedGlobalInit'
 // A `let` `__module_init` marks shared, and the walk that marks it.
 export type SharedLet
 	export let global as ManagedGlobal
-	export let walk as ByteArray
+	export let walk as immutable ByteArray
 
 	static function create(global ManagedGlobal, walk ByteArray) returns SharedLet
 		return Self{global: global, walk: walk}
@@ -672,7 +672,7 @@ export type SynthesizedFunction
 	// match, AND a global's initializer function, which takes no arguments at all.
 	export function emitPositionalCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
 		let result = self.mint(resultTag, nameId: resultNameId)
-		self.emit(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: site.range()), argImmutableNames: NoImmutableArgNames, defaultedArgs: NoDefaultedArgs, mint: CalleeMint.notMinted), site: site)
+		self.emit(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: site.range()), argImmutableNames: WriteBlameArray.create(0), defaultedArgs: NoDefaultedArgs, mint: CalleeMint.notMinted), site: site)
 		return result
 	end 'emitPositionalCall'
 

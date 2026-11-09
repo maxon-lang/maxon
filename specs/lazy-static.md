@@ -29,6 +29,7 @@ end 'MyType'
   field, a standard-library static aside (`specs/lazy-static-observable.md`)
 - Every read answers with the value the initializer left
 - Assigning to a `static let` is E2013 (`specs/static-variables.md`)
+- A `static let` holds immutable data, so a function that hands it back declares `returns immutable`
 - A constant initializer is folded at compile time
 
 ### Use Cases
@@ -39,7 +40,7 @@ Sharing one computed value:
 type CharacterSet
 	static let cachedWhitespaces = CharacterSet{chars: CharSet from ['\t'], categoryMask: 8388608}
 
-	public static function whitespaces() returns CharacterSet
+	public static function whitespaces() returns immutable CharacterSet
 		return CharacterSet.cachedWhitespaces
 	end 'whitespaces'
 end 'CharacterSet'
@@ -61,7 +62,7 @@ type Config
 		return Config{n: 42}
 	end 'makeValue'
 
-	static function getValue() returns Config
+	static function getValue() returns immutable Config
 		return Config.value
 	end 'getValue'
 end 'Config'
@@ -91,7 +92,7 @@ type Counter
 		return Counter{id: 7}
 	end 'createInstance'
 
-	static function getInstance() returns Counter
+	static function getInstance() returns immutable Counter
 		return Counter.cached
 	end 'getInstance'
 end 'Counter'
@@ -129,7 +130,7 @@ end 'Point'
 type Defaults
 	static let origin = Point.create(0, y: 0)
 
-	static function getOrigin() returns Point
+	static function getOrigin() returns immutable Point
 		return Defaults.origin
 	end 'getOrigin'
 end 'Defaults'
@@ -211,7 +212,7 @@ end 'main'
 
 ```maxon
 type WSCache
-	static let ws = CharacterSet.whitespacesAndNewlines()
+	static let ws = CharacterSet.whitespacesAndNewlines
 
 	static function isWhitespace(c Character) returns bool
 		return WSCache.ws.contains(c)
@@ -443,7 +444,7 @@ type Pair
 
 	static let origin = Pair{a: 1, b: 2}
 
-	static function get() returns Pair
+	static function get() returns immutable Pair
 		return Pair.origin
 	end 'get'
 end 'Pair'
@@ -473,7 +474,7 @@ type Holder
 
 	static let greeting = Holder{name: "hi"}
 
-	static function get() returns Holder
+	static function get() returns immutable Holder
 		return Holder.greeting
 	end 'get'
 end 'Holder'
@@ -505,7 +506,7 @@ type Pair
 
 	static let origin = Pair{a: SEED, b: 2}
 
-	static function get() returns Pair
+	static function get() returns immutable Pair
 		return Pair.origin
 	end 'get'
 end 'Pair'
@@ -535,7 +536,7 @@ type Holder
 
 	static let seeded = Holder{xs: [1, 2, 3]}
 
-	static function get() returns Holder
+	static function get() returns immutable Holder
 		return Holder.seeded
 	end 'get'
 end 'Holder'
@@ -575,7 +576,7 @@ type Outer
 
 	static let base = Outer{inner: Inner.create(7)}
 
-	static function get() returns Outer
+	static function get() returns immutable Outer
 		return Outer.base
 	end 'get'
 end 'Outer'
@@ -605,7 +606,7 @@ type Pair
 
 	static let origin = Pair{a: 1}
 
-	static function get() returns Pair
+	static function get() returns immutable Pair
 		return Pair.origin
 	end 'get'
 end 'Pair'
@@ -634,7 +635,7 @@ type A
 
 	static let one = A{n: 1}
 
-	static function get() returns A
+	static function get() returns immutable A
 		return A.one
 	end 'get'
 end 'A'
@@ -644,7 +645,7 @@ type B
 
 	static let two = B{n: 2}
 
-	static function get() returns B
+	static function get() returns immutable B
 		return B.two
 	end 'get'
 end 'B'

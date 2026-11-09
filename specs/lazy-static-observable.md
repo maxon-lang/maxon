@@ -508,7 +508,7 @@ end 'main'
 <!-- test: a-library-static-the-program-reads-is-built-before-main -->
 ### A library static the program reads is built before `main`
 
-`CharacterSet.whitespaces()` answers with a `static let` declared by `stdlib/CharacterSet.maxon`, a file
+`CharacterSet.whitespaces` answers with a `static let` declared by `stdlib/CharacterSet.maxon`, a file
 loaded into every compile whether the program names it or not. Reading one has to find a built record: the
 slot the trim dereferences would otherwise hold the zero the image left there.
 
@@ -517,7 +517,7 @@ is visible only as emitted code, which no case here compares.
 
 ```maxon
 function main() returns ExitCode
-	let trimmed = "  hi  ".trim(CharacterSet.whitespaces())
+	let trimmed = "  hi  ".trim(CharacterSet.whitespaces)
 	print("[{trimmed}]")
 	return 0
 end 'main'

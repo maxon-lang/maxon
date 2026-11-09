@@ -436,11 +436,11 @@ virgin arm gets its zeroes free. A pop that failed to unlink, or a push of the w
 slot to two buffers, and the survivors are what shows it. (Every case here reaches that arm; this one
 is the extreme: the shortest slot, recycled the most times.)
 
-⛔ **THE SHAPE IS `b""` AND A GROW, AND THE OBVIOUS SPELLING DOES NOT WORK.** `ByteArray.create(0)`
+⛔ **THE SHAPE IS `b"".clone()` AND A GROW, AND THE OBVIOUS SPELLING DOES NOT WORK.** `ByteArray.create(0)`
 followed by a push allocates nothing to free — an array that never had a buffer owes nothing — so a
 case written that way passes against a `__slab_free` whose span arm has been sabotaged away, which is
 to say it tested nothing here. Against that sabotage the `create()` version passes and this one
-aborts. The zero-payload box is the buffer an EMPTY LITERAL detaches
+aborts. The zero-payload box is the buffer the clone of an EMPTY LITERAL takes
 into, freed when the first push reallocates it — which is exactly what a program that builds an array
 or a String from empty does.
 ```maxon
@@ -450,7 +450,7 @@ typealias Bufs = Array with ByteArray
 typealias Len = int(0 to 256)
 
 function emptyThenGrow(n Len) returns ByteArray
-	var b = b""
+	var b = b"".clone()
 	for i in 0 upto n 'fill'
 		b.push(((i + n) mod 251) as Byte)
 	end 'fill'
@@ -464,7 +464,7 @@ function main() returns ExitCode
 	end 'survivors'
 
 	for _ in 0 upto 2000 'churn'
-		var scratch = b""
+		var scratch = b"".clone()
 		scratch.push(1)
 	end 'churn'
 

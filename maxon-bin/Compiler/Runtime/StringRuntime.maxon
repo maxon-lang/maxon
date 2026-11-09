@@ -233,7 +233,7 @@ export let BoolToStringName = b"__bool_to_string"
 // keep: `integerToStringName(unsigned)` and `integerToStringScratchBytes(signed)` type-check. What rules
 // it out is that no caller derives the signedness twice — so a SECOND selection site must take both from
 // one decision too, or pass the `IntegerSignedness` itself rather than its two answers.
-export function integerToStringName(signedness IntegerSignedness) returns ByteArray
+export function integerToStringName(signedness IntegerSignedness) returns immutable ByteArray
 	return match signedness 'reading'
 		signed gives IntToStringName
 		unsigned gives UIntToStringName
@@ -488,11 +488,15 @@ end 'bytesAreSingleByteGraphemes'
 // on arm64-macOS is an unencodable dyld chained-fixup rebase delta and a compiler panic. Alignment is
 // `GlobalDataTable.RdataPayloadAlignment`, applied by `appendRdataPayload` to every payload of every
 // kind — the one writer of a slot's offset, which is the only place that can promise it.
-function stringBlobBytes(bytes ByteArray) returns ByteArray
-	var blob = ByteArray.create(0)
-	blob.append(bytes)
-	blob.push(NulTerminator)
-	return blob
+function stringBlobBytes(bytes ByteArray) returns immutable ByteArray
+	var blob = ByteArray.create(0) as isolated ByteArray
+
+	modify blob 'fill'
+		blob.append(bytes)
+		blob.push(NulTerminator)
+	end 'fill'
+
+	return freeze blob
 end 'stringBlobBytes'
 
 // Build the 56-byte record for a literal. `byteLength` EXCLUDES the NUL (it is the payload count);
@@ -532,7 +536,7 @@ export function registerStringBlob(globalData GlobalDataTable, bytes ByteArray) 
 	return globalData.registerRdataConstant(StringBlobPrefix, bytes: stringBlobBytes(bytes), kind: RdataPayloadKind.stringBlob)
 end 'registerStringBlob'
 
-export function registerPanicLabel(globalData GlobalDataTable, message ByteArray) returns ByteArray
+export function registerPanicLabel(globalData GlobalDataTable, message ByteArray) returns immutable ByteArray
 	return globalData.labelBytesOf(registerStringBlob(globalData, bytes: message))
 end 'registerPanicLabel'
 

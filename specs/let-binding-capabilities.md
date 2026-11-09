@@ -1,6 +1,6 @@
 ---
 feature: let-binding-capabilities
-keywords: [let, immutable, capability, sole, lent, val, ref, store, keep, E3188, E3078]
+keywords: [let, immutable, capability, sole, lent, val, ref, store, keep, E3102]
 category: semantics
 ---
 
@@ -8,25 +8,24 @@ category: semantics
 
 ## Documentation
 
-A `let` is immutable at every depth unless it is bound from a parameter, where it is as immutable as the caller's
-argument. So a `let` binds only a value nothing can write while it lives:
+A `let` forbids only reassigning its name; it may bind any value. A `let` binds the record a value names, so a write
+made through any other name of that record is seen through the `let`:
 
-- a fresh record no other name reaches (`let x = Box.create(1)`), which is frozen at birth;
+- a fresh record no other name reaches (`let x = Box.create(1)`);
 - a read-only value, such as a module `let`'s record;
-- a part of a parameter (`let z = p.child`), which is as immutable as the argument the caller passed.
+- a part of a parameter (`let z = p.child`);
+- state something may still write, such as a field of a writable `self`, an element of a `var` container, a
+  getter's result on a `var` holder, or a `var` record a container also holds.
 
-A `let` bound to state something may still write, such as a field of a writable `self`, an element of a `var`
-container, a getter's result on a `var` holder, or a `var` record a container also holds, is `E3188`. Bind a
-`view` to read it, a `var` to write it, or `let` a clone().
+A `let` of a record local moves the local (`let x = b`) in the cases the move rules cover, and reading `b` afterwards is then `E3102`.
 
-A fresh `let` record may be stored where something may write it only at its last use: the store consumes the
-name. Stored there and read again afterwards, it is `E3078`, because the write that the holder allows would
-change a `let`.
+A `let` record may be stored where something may write it, and read again afterwards: the holder and the `let`
+name one record, and a write through the holder is seen through the `let`.
 
 ## Tests
 
-<!-- test: let-binding-capabilities.error.a-let-of-a-field-of-a-writable-receiver-is-refused -->
-`bump` writes `self`, so `self.box` is writable state, and the `let` would see the write made one line later.
+<!-- test: let-binding-capabilities.a-let-of-a-field-of-a-writable-receiver-sees-the-later-write -->
+`bump` writes `self`, so `self.box` is writable state, and the `let` sees the write made one line later.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -59,12 +58,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:20:7: cannot bind `let` 'b' to a value reached through 'self', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+2
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-let-of-an-element-of-a-var-array-is-refused -->
-An element of a `var` array is writable state: `again` names the same record and writes it.
+<!-- test: let-binding-capabilities.a-let-of-an-element-of-a-var-array-sees-the-write -->
+An element of a `var` array is writable state: `again` names the same record and writes it, and `w` sees the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -88,12 +90,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:16:6: cannot bind `let` 'w' to a value reached through 'boxes', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-let-of-a-getter-result-on-a-var-is-refused -->
-`grab` hands back the record `holder` stores, and `holder` is a `var`, so `grow` writes the record the `let` names.
+<!-- test: let-binding-capabilities.a-let-of-a-getter-result-on-a-var-sees-the-write -->
+`grab` hands back the record `holder` stores, and `grow` writes the record the `let` names.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -130,8 +135,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:30:6: cannot bind `let` 'b' to a value reached through 'holder', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
 <!-- test: let-binding-capabilities.a-let-of-a-fresh-record-is-accepted -->
@@ -191,7 +199,7 @@ end 'main'
 ```
 
 <!-- test: let-binding-capabilities.a-let-of-a-part-of-a-parameter-is-accepted -->
-`p` is lent for the call, so a `let` of its field is as immutable as the argument, and `peek` only reads it.
+`p` is lent for the call, so a `let` of its field names the argument's record, and `peek` only reads it.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -231,8 +239,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-binding-capabilities.error.a-fresh-let-kept-by-a-callee-and-read-again-is-refused -->
-`register` keeps its parameter in a module holder and `clobber` writes it there, so `a` would read 99 after the call; the store is refused because `a` is read after it.
+<!-- test: let-binding-capabilities.a-fresh-let-kept-by-a-callee-and-read-again-sees-the-write -->
+`register` keeps its parameter in a module holder and `clobber` writes it there, so `a` reads 99 after the call: both names are the one record.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -270,8 +278,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:31:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'register', which keeps it where something may write it; pass a clone()
+```stdout
+99
+```
+```exitcode
+0
 ```
 
 <!-- test: let-binding-capabilities.a-fresh-let-kept-by-a-callee-at-its-last-use-is-consumed -->
@@ -320,8 +331,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-binding-capabilities.error.a-fresh-let-pushed-by-a-callee-and-read-again-is-refused -->
-`stash` pushes its parameter into a module array and `bump` writes the element, so the push is refused because `a` is read after it.
+<!-- test: let-binding-capabilities.a-fresh-let-pushed-by-a-callee-and-read-again-sees-the-write -->
+`stash` pushes its parameter into a module array and `bump` writes the element, so `a`, read after the push, sees the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -353,12 +364,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:25:2: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
+```stdout
+99
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-let-of-a-var-a-container-holds-is-refused -->
-`a` is a `var` the array also holds, so it is no longer fresh, and the write through the element reaches the record `b` names.
+<!-- test: let-binding-capabilities.a-let-of-a-var-a-container-holds-sees-the-write -->
+`a` is a `var` the array also holds, and the write through the element reaches the record `b` names.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -384,12 +398,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:18:6: cannot bind `let` 'b' to a value reached through 'a', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+9
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-let-of-a-callees-result-that-is-its-written-parameter-is-refused -->
-`touch` writes its parameter and returns it, so its result is `a`'s writable record and a `let` may not bind it.
+<!-- test: let-binding-capabilities.a-let-of-a-callees-result-that-is-its-written-parameter-sees-the-write -->
+`touch` writes its parameter and returns it, so its result is `a`'s record and `x` names it.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -415,12 +432,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:19:6: cannot bind `let` 'x' to a value reached through 'a', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+5
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-let-of-a-parameter-a-later-call-writes-is-refused -->
-`id` hands back `p` itself and `bump` writes `p`, so the parameter is writable here and `x` would read the write.
+<!-- test: let-binding-capabilities.a-let-of-a-parameter-a-later-call-writes-sees-the-write -->
+`id` hands back `p` itself and `bump` writes `p`, so `x` reads the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -453,12 +473,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:21:6: cannot bind `let` 'x' to a value reached through 'p', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+9
+```
+```exitcode
+0
 ```
 
 <!-- test: let-binding-capabilities.error.a-let-of-a-var-a-later-closure-captures-is-refused -->
-`let x = b` moves `b`, so the closure that captures `b` afterwards uses a moved value: no closure can keep writing a record a `let` holds.
+`let x = b` moves `b`, so the closure that captures `b` afterwards uses a moved value.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -499,8 +522,8 @@ end 'main'
 error E3102: <fragment>:30:47: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-<!-- test: let-binding-capabilities.error.an-element-of-a-lent-parameter-kept-in-a-let-field-is-refused -->
-`ms` is lent for the call, so its elements are the caller's writable records; a `let` field keeps one past the call, where `main`'s write through `w` would change it.
+<!-- test: let-binding-capabilities.an-element-of-a-lent-parameter-kept-in-a-let-field-is-accepted -->
+`ms` is lent for the call, so its elements are the caller's records; a `let` field keeps one past the call, and `main`'s write through `w` is seen through it.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -544,8 +567,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:26:13: cannot pass a value other names may still write to parameter 'm' of 'H.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```stdout
+7
+```
+```exitcode
+0
 ```
 
 <!-- test: let-binding-capabilities.a-fresh-let-kept-on-one-arm-of-a-ternary-is-consumed-on-that-path -->
@@ -682,7 +708,7 @@ end 'main'
 ```
 
 <!-- test: let-binding-capabilities.let-fields-of-a-let-returned-and-bound-with-let-are-accepted -->
-`ends` returns two `let` fields of its parameter, which are read-only wherever they go, so binding them with `let` keeps nothing writable and the argument is read afterwards.
+`ends` returns two `let` fields of its parameter; binding them with `let` names the argument's records, and the argument is read afterwards.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -722,8 +748,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-binding-capabilities.error.a-fresh-let-pushed-on-an-else-arm-that-falls-through-and-read-again-is-refused -->
-The `then` arm returns, but the `else` arm falls through to the read after the `if`, so `stash(a)` is not `a`'s last use on that path and the push is refused.
+<!-- test: let-binding-capabilities.a-fresh-let-pushed-on-an-else-arm-that-falls-through-and-read-again-sees-the-write -->
+The `then` arm returns, but the `else` arm falls through to the read after the `if`, so `stash(a)` is not `a`'s last use on that path, and the read sees the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -761,8 +787,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:29:3: cannot pass 'a', which is read-only (a `let` binding), to parameter 'b' of 'stash', which keeps it where something may write it; pass a clone()
+```stdout
+99
+```
+```exitcode
+0
 ```
 
 <!-- test: let-binding-capabilities.a-let-destructure-that-names-only-a-scalar-of-a-writable-result-is-accepted -->
@@ -799,8 +828,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-binding-capabilities.error.a-let-destructure-that-names-a-writable-record-is-refused-at-that-name -->
-The same call with the record element named `x`: `x` is bound to `a`'s record, which `a` goes on to write, so the refusal names `x`, the binding the program wrote.
+<!-- test: let-binding-capabilities.a-let-destructure-that-names-a-writable-record-is-accepted -->
+The same call with the record element named `x`: `x` is bound to `a`'s record, which `a` goes on to write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -826,12 +855,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:19:7: cannot bind `let` 'x' to a value reached through 'a', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+5 0
+```
+```exitcode
+0
 ```
 
 <!-- test: let-binding-capabilities.a-tuple-of-let-fields-is-read-after-it-is-bound-with-let-and-returned-on -->
-The tuple a call returns keeps the read-only mark of the `let` fields it holds: `let (a, b)` and a `let` tuple read it, and a function may hand it on, because nothing in any of those lets a writer reach the fields.
+The tuple a call returns holds the records of the `let` fields: `let (a, b)` and a `let` tuple read it, and a function may hand it on.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -877,8 +909,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-binding-capabilities.error.a-tuple-of-let-fields-destructured-into-a-var-is-refused -->
-`ends` returns a tuple holding two `let` fields. Destructuring it with `var` would make the first name a writable alias of `p.left`, so it is refused at the name.
+<!-- test: let-binding-capabilities.a-tuple-of-let-fields-destructured-into-a-var-is-accepted -->
+`ends` returns a tuple holding two `let` fields. Destructuring it with `var` makes the first name another name for `p.left`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -912,12 +944,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:27:7: cannot assign a value, which may share storage with a `let` field, to mutable binding 'a'; use 'let' instead of 'var', or use clone()
+```stdout
+9 9
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-tuple-of-let-fields-returned-by-a-call-and-bound-to-a-var-is-refused -->
-The whole tuple a call returns is bound to a `var`, so its elements would become writable.
+<!-- test: let-binding-capabilities.a-tuple-of-let-fields-returned-by-a-call-and-bound-to-a-var-is-accepted -->
+The whole tuple a call returns is bound to a `var`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -951,12 +986,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:27:6: cannot assign a value, which may share storage with a `let` field, to mutable binding 't'; use 'let' instead of 'var', or use clone()
+```stdout
+9 9
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-tuple-literal-of-let-fields-bound-to-a-var-is-refused -->
-The tuple literal is accepted, and binding it to a `var` is where it becomes writable.
+<!-- test: let-binding-capabilities.a-tuple-literal-of-let-fields-bound-to-a-var-is-accepted -->
+A tuple literal of `let` fields bound to a `var`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -986,12 +1024,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:23:6: cannot assign a value, which may share storage with a `let` field, to mutable binding 't'; use 'let' instead of 'var', or use clone()
+```stdout
+9 9
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-tuple-of-let-fields-assigned-to-existing-vars-is-refused -->
-A tuple assignment to existing `var` names is a mutable door like a `var` binding.
+<!-- test: let-binding-capabilities.a-tuple-of-let-fields-assigned-to-existing-vars-is-accepted -->
+A tuple assignment to existing `var` names.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1026,12 +1067,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:28:3: cannot assign a value, which may share storage with a `let` field, to mutable binding 'a'; use 'let' instead of 'var', or use clone()
+```stdout
+9 9
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-tuple-of-let-fields-stored-into-a-var-field-is-refused -->
-Storing the tuple into a `var` field makes its elements writable through that field.
+<!-- test: let-binding-capabilities.a-tuple-of-let-fields-stored-into-a-var-field-is-accepted -->
+Storing the tuple into a `var` field.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1073,12 +1117,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:36:2: cannot store a value, which may share storage with a `let` field, into writable field 'h.held'; use clone()
+```stdout
+1 1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-tuple-of-let-fields-passed-to-a-function-that-writes-it-is-refused -->
-`bump` writes through its tuple parameter, so the tuple holding `p`'s `let` fields may not be passed to it.
+<!-- test: let-binding-capabilities.a-tuple-of-let-fields-passed-to-a-function-that-writes-it-is-accepted -->
+`bump` writes through its tuple parameter, and the tuple holding `p`'s `let` fields may be passed to it.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1115,12 +1162,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:31:2: cannot pass a value read out of a `let` field, which is read-only, to a function that writes parameter 't' (in main); pass a clone()
+```stdout
+9
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-tuple-of-let-fields-pushed-into-an-array-is-refused -->
-An array element is a mutable place, so the tuple may not be pushed into one.
+<!-- test: let-binding-capabilities.a-tuple-of-let-fields-pushed-into-an-array-is-accepted -->
+The tuple may be pushed into an array.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1156,12 +1206,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:30:6: cannot store a `let` field into mutable place 'an element of the container this call writes'; use clone()
+```stdout
+1 1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-let-tuple-with-a-read-only-column-and-a-writable-one-is-refused -->
-Only the first column of the tuple is read-only. The second is the `var` `p`'s record, which `bump` writes, so the `let` that holds the tuple would see the write and is refused.
+<!-- test: let-binding-capabilities.a-let-tuple-with-a-let-field-column-and-a-var-column-is-accepted -->
+The first column of the tuple is a `let` field's record. The second is the `var` `p`'s record, which `bump` writes, and the `let` that holds the tuple sees the write.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1200,12 +1253,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:32:6: cannot bind `let` 't' to a value reached through 'p', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+6 1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-let-destructure-of-a-tuple-with-a-writable-column-is-refused -->
-The same tuple destructured with `let`: the name bound to the writable column is refused.
+<!-- test: let-binding-capabilities.a-let-destructure-of-a-tuple-with-a-var-column-is-accepted -->
+The same tuple destructured with `let`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1244,12 +1300,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:32:10: cannot bind `let` 'y' to a value reached through 'p', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+6 1
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-let-destructure-of-a-tuple-a-call-returns-with-a-writable-column-is-refused -->
-`ends2` returns a tuple of a `let` field and its second argument. The argument is the `var` `p`'s record, so binding the second column with `let` is refused.
+<!-- test: let-binding-capabilities.a-let-destructure-of-a-tuple-a-call-returns-with-a-var-column-is-accepted -->
+`ends2` returns a tuple of a `let` field and its second argument. The argument is the `var` `p`'s record, and the second column is bound with `let`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1292,12 +1351,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3188: <fragment>:36:10: cannot bind `let` 'y' to a value reached through 'p', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
+```stdout
+6 1
+```
+```exitcode
+0
 ```
 
 <!-- test: let-binding-capabilities.a-tuple-of-let-fields-stored-into-a-let-field-is-accepted -->
-Both columns of the tuple are read-only, so a `let` field holding it keeps nothing writable.
+Both columns of the tuple are `let` fields' records, and a `let` field holds the tuple.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1342,7 +1404,7 @@ end 'main'
 ```
 
 <!-- test: let-binding-capabilities.a-tuple-built-from-let-field-arguments-is-bound-with-let -->
-`pairUp` returns a tuple of its two parameters. Passing it two `let` fields gives a tuple of read-only columns, which `let (x, y)` binds and reads.
+`pairUp` returns a tuple of its two parameters. Passing it two `let` fields gives a tuple of their records, which `let (x, y)` binds and reads.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1467,7 +1529,7 @@ end 'main'
 ```
 
 <!-- test: let-binding-capabilities.a-writable-column-a-function-returns-out-of-a-local-tuple-is-bound-to-a-var -->
-`second` builds a tuple with a read-only first column and returns its fresh second column, which the caller binds to a `var` and writes.
+`second` builds a tuple with a `let` field's record as its first column and returns its fresh second column, which the caller binds to a `var` and writes.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1509,8 +1571,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-binding-capabilities.error.a-read-only-column-of-a-tuple-a-call-returns-is-destructured-into-a-var-beside-a-writable-one -->
-The same `mixed` result destructured with `var` takes the first column, which is the `let` field's record, so it is refused at that name while the writable second column is not.
+<!-- test: let-binding-capabilities.a-let-field-column-of-a-tuple-a-call-returns-is-destructured-into-a-var-beside-a-var-column -->
+The same `mixed` result destructured with `var` takes the first column, which is the `let` field's record, beside the second.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1544,12 +1606,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:27:7: cannot assign a value, which may share storage with a `let` field, to mutable binding 'a'; use 'let' instead of 'var', or use clone()
+```stdout
+4 4
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-record-below-a-let-field-stored-into-a-tuple-column-is-refused-when-the-column-is-read-back-into-a-var -->
-`m.x.y` lies within the `let` field `x`, so the tuple column that holds it is read-only; destructuring that column into a `var` and writing it would write through `m`.
+<!-- test: let-binding-capabilities.a-record-below-a-let-field-stored-into-a-tuple-column-is-read-back-into-a-var -->
+`m.x.y` lies within the `let` field `x`; the tuple column that holds it is destructured into a `var` and written, and the write reaches `m`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1590,12 +1655,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:30:2: cannot write through 'r', which may be a record read out of a `let` field that a call or a merge handed back; nothing reachable through a `let` field may be written; use clone()
+```stdout
+5 5
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-result-within-a-tuple-argument-keeps-the-read-only-mark -->
-`first` returns the first column of the tuple it is passed. The tuple holds a `let` field's record, so the result may be that record and writing it is refused.
+<!-- test: let-binding-capabilities.a-result-within-a-tuple-argument-is-written -->
+`first` returns the first column of the tuple it is passed. The tuple holds a `let` field's record, so the result is that record and writing it writes the field's record.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1632,12 +1700,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:26:2: cannot write through 'r', which may be a record read out of a `let` field that a call or a merge handed back; nothing reachable through a `let` field may be written; use clone()
+```stdout
+5 5
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-fresh-tuple-holding-a-writable-record-is-refused-by-a-let-field -->
-The tuple is fresh, but its second column is the record `id(p)` hands back, which is `p`'s, and `bump` writes `p` after the `let` field has been given the tuple.
+<!-- test: let-binding-capabilities.a-fresh-tuple-holding-a-writable-record-is-accepted-by-a-let-field -->
+The tuple is fresh, and its second column is the record `id(p)` hands back, which is `p`'s; `bump` writes `p` after the `let` field has been given the tuple.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1674,12 +1745,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:30:18: cannot pass a value that reaches 'p', which something may still write, to parameter 'h' of 'Frozen.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```stdout
+6
+```
+```exitcode
+0
 ```
 
-<!-- test: let-binding-capabilities.error.a-fresh-record-holding-a-writable-record-is-refused-by-a-let-field -->
-The `Wrap` is fresh, but its `b` field is the record `id(p)` hands back, which is `p`'s, and `bump` writes `p` after the `let` field has been given the `Wrap`.
+<!-- test: let-binding-capabilities.a-fresh-record-holding-a-writable-record-is-accepted-by-a-let-field -->
+The `Wrap` is fresh, and its `b` field is the record `id(p)` hands back, which is `p`'s; `bump` writes `p` after the `let` field has been given the `Wrap`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1725,8 +1799,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:39:18: cannot pass a value that reaches 'p', which something may still write, to parameter 'h' of 'Frozen.create', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```stdout
+6
+```
+```exitcode
+0
 ```
 
 <!-- test: let-binding-capabilities.a-fresh-tuple-of-fresh-records-is-accepted-by-a-let-field -->
@@ -1764,7 +1841,7 @@ end 'main'
 0
 ```
 
-<!-- test: let-binding-capabilities.error.a-fresh-tuple-holding-a-writable-record-is-refused-by-a-let-field-literal -->
+<!-- test: let-binding-capabilities.a-fresh-tuple-holding-a-writable-record-is-accepted-by-a-let-field-literal -->
 The factory stores the fresh tuple into its own `let` field directly, and `bump` writes `p` after the store.
 
 ```maxon
@@ -1803,8 +1880,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:17:16: cannot store a value that reaches 'p', which something may still write, into a `let` field 'Frozen.held': a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```stdout
+6
+```
+```exitcode
+0
 ```
 
 <!-- test: let-binding-capabilities.a-fresh-generic-container-kept-by-a-let-field-is-accepted-for-a-writable-item -->

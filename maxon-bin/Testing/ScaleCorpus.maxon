@@ -1080,14 +1080,14 @@ let StringIndexOpsBase = 4
 // grows here is how many places that graph is REACHED from.
 //
 // ⭐⭐ **A QUARTER OF ITS THREE SIBLINGS' BASE, AND THE NUMBER IS MEASURED RATHER THAN CHOSEN.** A trim
-// against `CharacterSet.whitespacesAndNewlines()` emits **194 x64 ops into the calling block** — the set is
+// against `CharacterSet.whitespacesAndNewlines` emits **194 x64 ops into the calling block** — the set is
 // materialized INLINE at the call site, once per site. Counted on this tree with `--emit-ir`, in one `if`
 // block each:
 //
 //     s.trim()                                    194 ops   <- the DEFAULT form
-//     s.trim(CharacterSet.whitespacesAndNewlines())  194 ops   <- IDENTICAL: it is the SET, not the default
-//     s.trim(CharacterSet.decimalDigits())         50 ops
-//     s.trim(CharacterSet.letters())               50 ops
+//     s.trim(CharacterSet.whitespacesAndNewlines)  194 ops   <- IDENTICAL: it is the SET, not the default
+//     s.trim(CharacterSet.decimalDigits)         50 ops
+//     s.trim(CharacterSet.letters)               50 ops
 //     s.toUpper()                                  12 ops
 //
 // ⇒ ~144 of those ops are the whitespace set's own construction, and they are per-SITE. That is 16x a
@@ -4154,7 +4154,7 @@ let TrimEndMethod = "trimEnd"
 
 // The `CharacterSet` an EXPLICIT trim names. `decimalDigits()` and not `whitespacesAndNewlines()`, and the
 // choice is measured: see `StringTrimOpsBase`.
-let TrimExplicitCharacterSet = "CharacterSet.decimalDigits()"
+let TrimExplicitCharacterSet = "CharacterSet.decimalDigits"
 
 // ⭐ **ONE PADDING SCHEME — what a trim CUTS, what it LEAVES, and how the call names the set.** It is a
 // record rather than six parameters because a trim site needs all of it at once and `requireAbiParamCount`
@@ -4217,7 +4217,7 @@ end 'trimSchemeBlocks'
 // The `StringTrimOpsBase` knob: M groups of the three trims, over BOTH argument forms.
 //
 // The two schemes are the two argument FORMS rather than two of the members: with no argument the call
-// site builds the default `CharacterSet.whitespacesAndNewlines()`, and with one it does not. That is a
+// site builds the default `CharacterSet.whitespacesAndNewlines`, and with one it does not. That is a
 // difference in what is EMITTED — and, measured, by far the largest per-site difference in this family.
 function stringTrimOpsSource(groupCount KnobSize) returns String
 	var out = StringBuilder.create()
@@ -5634,7 +5634,7 @@ export function printCorpusManifest()
 	print("          CharacterSet and an explicit one — over a core that opens and closes on a MULTI-BYTE\n")
 	print("          cluster, which is the only cluster either end has to classify rather than skip.\n")
 	print("          ⚠ ONE SITE PER BLOCK here, alone in this corpus, and its knob base is an EIGHTH of its\n")
-	print("          siblings': a trim against `CharacterSet.whitespacesAndNewlines()` materializes that set\n")
+	print("          siblings': a trim against `CharacterSet.whitespacesAndNewlines` materializes that set\n")
 	print("          INLINE and costs 194 x64 ops in the calling block against 50 for `decimalDigits()` and 12\n")
 	print("          for a `toUpper`. Three of them in one block take `slotCount` to ~4.2M and exhaust\n")
 	print("          committed memory in `PressureDeltaColumn` by rung 4. See StringTrimOpsBase\n")

@@ -42,7 +42,7 @@ export function wordAccessType(width WordBytes) returns StdType
 	end 'w'
 end 'wordAccessType'
 
-function orderedWordIntrinsicName(intrinsic OrderedWordIntrinsic) returns ByteArray
+function orderedWordIntrinsicName(intrinsic OrderedWordIntrinsic) returns immutable ByteArray
 	let verb = match intrinsic.access 'a'
 		get gives "read"
 		put gives "append"
@@ -53,7 +53,7 @@ function orderedWordIntrinsicName(intrinsic OrderedWordIntrinsic) returns ByteAr
 		bigEndian gives "BigEndian"
 	end 'o'
 
-	return "{OrderedWordIntrinsicPrefix}{verb}{endian}".toByteArray()
+	return freeze "{OrderedWordIntrinsicPrefix}{verb}{endian}".toByteArray()
 end 'orderedWordIntrinsicName'
 
 export function orderedWordIntrinsicNamed(callee ByteArray) returns OrderedWordIntrinsic throws AbsentError
@@ -85,7 +85,7 @@ export function wordBytesOfCount(count FullRangeInt) returns WordBytes throws Ab
 	throw AbsentError.absent
 end 'wordBytesOfCount'
 
-export function wordEntryName(access WordAccess, order WordByteOrder, width WordBytes) returns ByteArray
+export function wordEntryName(access WordAccess, order WordByteOrder, width WordBytes) returns immutable ByteArray
 	let verb = match access 'a'
 		get gives "get"
 		put gives "put"
@@ -96,7 +96,7 @@ export function wordEntryName(access WordAccess, order WordByteOrder, width Word
 		bigEndian gives "be"
 	end 'o'
 
-	return "{String.from(WordEntryPrefix)}{verb}_{endian}{wordByteCount(width)}".toByteArray()
+	return freeze "{String.from(WordEntryPrefix)}{verb}_{endian}{wordByteCount(width)}".toByteArray()
 end 'wordEntryName'
 
 export function wordEntryNamed(callee ByteArray) returns WordEntry throws AbsentError
@@ -127,7 +127,7 @@ export function isWordPutCallee(callee ByteArray) returns bool
 	return entry.access == WordAccess.put
 end 'isWordPutCallee'
 
-export function wordGetSourceMethodName(callee ByteArray) returns ByteArray
+export function wordGetSourceMethodName(callee ByteArray) returns immutable ByteArray
 	let entry = try wordEntryNamed(callee) otherwise panic("wordGetSourceMethodName: '{String.from(callee)}' is not a word entry — this map is asked only behind `isWordGetCallee`")
 
 	return orderedWordIntrinsicName(OrderedWordIntrinsic.create(entry.access, order: entry.order))

@@ -4,9 +4,9 @@ export enum WindowKind
 end 'WindowKind'
 
 export type OpenWindow
-	module let label as ByteArray
-	module let rootText as ByteArray
-	module let rootName as ByteArray
+	module let label as immutable ByteArray
+	module let rootText as immutable ByteArray
+	module let rootName as immutable ByteArray
 	module let kind as WindowKind
 	module let floor as ValueId
 	module let openedValue as ValueId
@@ -24,7 +24,7 @@ export typealias WindowStack = Array with OpenWindow
 
 export type FieldOrigin
 	module let holder as ValueId
-	module let layoutName as ByteArray
+	module let layoutName as immutable ByteArray
 	module let field as FieldIndex
 	module let slot as ParamCapability
 
@@ -50,8 +50,24 @@ export typealias CarriedDerivationArray = Array with CarriedDerivation
 
 export union StoreHolder
 	unheld
+	building
 	held(box ValueId, assumed ValueCapability, placeText String, line LineNumber, column ColumnNumber)
 end 'StoreHolder'
+
+export type HeldStore
+	module let value as ValueId
+	module let line as LineNumber
+	module let place as String
+	module let valueStart as ElementIndex
+
+	export static function create(value ValueId, line LineNumber, place String, valueStart ElementIndex) returns HeldStore
+		return Self{value: value, line: line, place: place, valueStart: valueStart}
+	end 'create'
+end 'HeldStore'
+
+export typealias HeldStoreArray = Array with HeldStore
+
+export typealias HeldLiteralMap = Map with (ValueId, HeldStoreArray)
 
 export type CarriedStore
 	module let holder as StoreHolder
@@ -141,15 +157,15 @@ end 'cacheReadPausedOperandMaskArray'
 // @generated library-cache end
 
 export type CaptureSite
-	export let closureName as ByteArray
+	export let closureName as immutable ByteArray
 	export let position as ParamCount
 	export let value as ValueId
-	export let name as ByteArray
+	export let name as immutable ByteArray
 	export let line as LineNumber
 	export let column as ColumnNumber
 	export let pausedWhenCaptured as bool
 
-	export static function create(closureName ByteArray, position ParamCount, value ValueId, name ByteArray, line LineNumber, column ColumnNumber, pausedWhenCaptured bool) returns CaptureSite
+	export static function create(closureName immutable ByteArray, position ParamCount, value ValueId, name immutable ByteArray, line LineNumber, column ColumnNumber, pausedWhenCaptured bool) returns CaptureSite
 		return Self{closureName: closureName, position: position, value: value, name: name, line: line, column: column, pausedWhenCaptured: pausedWhenCaptured}
 	end 'create'
 
@@ -165,10 +181,10 @@ export type CaptureSite
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns CaptureSite throws LibraryCacheDamage
-		let f_closureName = try reader.bytes()
+		let f_closureName = freeze try reader.bytes()
 		let f_position = (try reader.unsigned()) as ParamCount
 		let f_value = (try reader.unsigned()) as ValueId
-		let f_name = try reader.bytes()
+		let f_name = freeze try reader.bytes()
 		let f_line = (try reader.unsigned()) as LineNumber
 		let f_column = (try reader.unsigned()) as ColumnNumber
 		let f_pausedWhenCaptured = try reader.flag()
@@ -258,6 +274,66 @@ function cacheReadJoinedParamSourceArray(reader LibraryCacheReader) returns Join
 
 	return result
 end 'cacheReadJoinedParamSourceArray'
+
+// @generated library-cache end
+
+export type CallArgSource
+	export let op as ElementIndex
+	export let position as ElementIndex
+	export let sources as ParamPositionMask
+
+	export static function create(op ElementIndex, position ElementIndex, sources ParamPositionMask) returns CallArgSource
+		return Self{op: op, position: position, sources: sources}
+	end 'create'
+
+	export function atOp(opIndex ElementIndex) returns CallArgSource
+		return CallArgSource.create(opIndex, position: self.position, sources: self.sources)
+	end 'atOp'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.op as CacheUnsigned)
+		writer.unsigned(self.position as CacheUnsigned)
+		writer.unsigned(self.sources as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns CallArgSource throws LibraryCacheDamage
+		let f_op = (try reader.unsigned()) as ElementIndex
+		let f_position = (try reader.unsigned()) as ElementIndex
+		let f_sources = (try reader.unsigned()) as ParamPositionMask
+
+		return Self{op: f_op, position: f_position, sources: f_sources}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(CallArgSource) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'CallArgSource'
+
+export typealias CallArgSourceArray = Array with CallArgSource
+
+// @generated library-cache begin
+function cacheWriteCallArgSourceArray(writer LibraryCacheWriter, value CallArgSourceArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteCallArgSourceArray'
+
+function cacheReadCallArgSourceArray(reader LibraryCacheReader) returns CallArgSourceArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = CallArgSourceArray.create(count, zeroed: false)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try CallArgSource.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadCallArgSourceArray'
 
 // @generated library-cache end
 
@@ -448,20 +524,29 @@ export type CapabilityNotes
 	export var droppedPromiseOps as FuncIndexArray
 	export var droppedPromiseNames as NameRoster
 	export var undecidedResultOps as FuncIndexArray
+	export var derivedResultValues as ValueIdArray
+	export var derivedResultOps as FuncIndexArray
 	export var resultWriteOps as FuncIndexArray
 	export var resultWriteLines as LineNumberArray
 	export var resultWriteColumns as ColumnNumberArray
 	export var resultWriteFields as NameRoster
 	export var resultWritePlaces as NameRoster
+	export var resultWriteWritable as BoolArray
+	export var retainOps as FuncIndexArray
+	export var retainParams as ParamCountArray
 	export var joinedSources as JoinedParamSourceArray
+	export var callArgSources as CallArgSourceArray
 	export var resultUses as ResultUseArray
+	export var heldParams as ParamCountArray
+	export var heldResultOps as FuncIndexArray
+	export var constructionOps as FuncIndexArray
 
 	export static function create() returns CapabilityNotes
-		return Self{windowCallOps: FuncIndexArray.create(0), windowCallLabels: NameRoster.create(0), windowCallPausedOperands: PausedOperandMaskArray.create(0), useSiteParams: ParamCountArray.create(0), useSiteMutable: BoolArray.create(0), useSiteLines: LineNumberArray.create(0), useSitePhrases: NameRoster.create(0), argNameOps: FuncIndexArray.create(0), argNamePositions: ParamCountArray.create(0), argNames: NameRoster.create(0), captureSites: CaptureSiteArray.create(0), storedSlotArgs: StoredSlotArgArray.create(0), tiedAsyncOps: FuncIndexArray.create(0), droppedPromiseOps: FuncIndexArray.create(0), droppedPromiseNames: NameRoster.create(0), undecidedResultOps: FuncIndexArray.create(0), resultWriteOps: FuncIndexArray.create(0), resultWriteLines: LineNumberArray.create(0), resultWriteColumns: ColumnNumberArray.create(0), resultWriteFields: NameRoster.create(0), resultWritePlaces: NameRoster.create(0), joinedSources: JoinedParamSourceArray.create(0), resultUses: ResultUseArray.create(0)}
+		return Self{windowCallOps: FuncIndexArray.create(0), windowCallLabels: NameRoster.create(0), windowCallPausedOperands: PausedOperandMaskArray.create(0), useSiteParams: ParamCountArray.create(0), useSiteMutable: BoolArray.create(0), useSiteLines: LineNumberArray.create(0), useSitePhrases: NameRoster.create(0), argNameOps: FuncIndexArray.create(0), argNamePositions: ParamCountArray.create(0), argNames: NameRoster.create(0), captureSites: CaptureSiteArray.create(0), storedSlotArgs: StoredSlotArgArray.create(0), tiedAsyncOps: FuncIndexArray.create(0), droppedPromiseOps: FuncIndexArray.create(0), droppedPromiseNames: NameRoster.create(0), undecidedResultOps: FuncIndexArray.create(0), derivedResultValues: ValueIdArray.create(0), derivedResultOps: FuncIndexArray.create(0), resultWriteOps: FuncIndexArray.create(0), resultWriteLines: LineNumberArray.create(0), resultWriteColumns: ColumnNumberArray.create(0), resultWriteFields: NameRoster.create(0), resultWritePlaces: NameRoster.create(0), resultWriteWritable: BoolArray.create(0), retainOps: FuncIndexArray.create(0), retainParams: ParamCountArray.create(0), joinedSources: JoinedParamSourceArray.create(0), callArgSources: CallArgSourceArray.create(0), resultUses: ResultUseArray.create(0), heldParams: ParamCountArray.create(0), heldResultOps: FuncIndexArray.create(0), constructionOps: FuncIndexArray.create(0)}
 	end 'create'
 
 	export function holdsNothing() returns bool
-		return self.windowCallOps.isEmpty() and self.useSiteParams.isEmpty() and self.argNameOps.isEmpty() and self.captureSites.isEmpty() and self.storedSlotArgs.isEmpty() and self.tiedAsyncOps.isEmpty() and self.droppedPromiseOps.isEmpty() and self.droppedPromiseNames.isEmpty() and self.undecidedResultOps.isEmpty() and self.resultWriteOps.isEmpty() and self.joinedSources.isEmpty() and self.resultUses.isEmpty()
+		return self.windowCallOps.isEmpty() and self.useSiteParams.isEmpty() and self.argNameOps.isEmpty() and self.captureSites.isEmpty() and self.storedSlotArgs.isEmpty() and self.tiedAsyncOps.isEmpty() and self.droppedPromiseOps.isEmpty() and self.droppedPromiseNames.isEmpty() and self.undecidedResultOps.isEmpty() and self.derivedResultValues.isEmpty() and self.resultWriteOps.isEmpty() and self.retainOps.isEmpty() and self.joinedSources.isEmpty() and self.callArgSources.isEmpty() and self.resultUses.isEmpty() and self.heldParams.isEmpty() and self.heldResultOps.isEmpty() and self.constructionOps.isEmpty()
 	end 'holdsNothing'
 
 	export function shiftedBy(opOffset ElementIndex) returns CapabilityNotes
@@ -487,6 +572,12 @@ export type CapabilityNotes
 			shifted.undecidedResultOps.push(op + opOffset)
 		end 'eachUndecidedResult'
 
+		for op in self.derivedResultOps 'eachDerivedResult'
+			shifted.derivedResultOps.push(op + opOffset)
+		end 'eachDerivedResult'
+
+		shifted.derivedResultValues = self.derivedResultValues.clone()
+
 		for op in self.resultWriteOps 'eachResultWrite'
 			shifted.resultWriteOps.push(op + opOffset)
 		end 'eachResultWrite'
@@ -495,6 +586,13 @@ export type CapabilityNotes
 		shifted.resultWriteColumns = self.resultWriteColumns.clone()
 		shifted.resultWriteFields = self.resultWriteFields.clone()
 		shifted.resultWritePlaces = self.resultWritePlaces.clone()
+		shifted.resultWriteWritable = self.resultWriteWritable.clone()
+
+		for op in self.retainOps 'eachRetainDoor'
+			shifted.retainOps.push(op + opOffset)
+		end 'eachRetainDoor'
+
+		shifted.retainParams = self.retainParams.clone()
 
 		shifted.droppedPromiseNames = self.droppedPromiseNames.clone()
 		shifted.windowCallLabels = self.windowCallLabels.clone()
@@ -507,6 +605,19 @@ export type CapabilityNotes
 		shifted.argNames = self.argNames.clone()
 		shifted.captureSites = self.captureSites.clone()
 		shifted.joinedSources = self.joinedSources.clone()
+		shifted.heldParams = self.heldParams.clone()
+
+		for op in self.heldResultOps 'eachHeldResult'
+			shifted.heldResultOps.push(op + opOffset)
+		end 'eachHeldResult'
+
+		for op in self.constructionOps 'eachConstructionOp'
+			shifted.constructionOps.push(op + opOffset)
+		end 'eachConstructionOp'
+
+		for source in self.callArgSources 'eachCallArgSource'
+			shifted.callArgSources.push(source.atOp(source.op + opOffset))
+		end 'eachCallArgSource'
 
 		for use in self.resultUses 'eachResultUse'
 			shifted.resultUses.push(use.atOp(use.op + opOffset))
@@ -538,11 +649,11 @@ export type CapabilityNotes
 		return try self.useSiteLines.get(try self.useSiteIndex(param, mutable: mutable)) otherwise throw AbsentError.absent
 	end 'useSiteLine'
 
-	export function useSitePhrase(param ParamCount, mutable bool) returns ByteArray throws AbsentError
+	export function useSitePhrase(param ParamCount, mutable bool) returns immutable ByteArray throws AbsentError
 		return try self.useSitePhrases.get(try self.useSiteIndex(param, mutable: mutable)) otherwise throw AbsentError.absent
 	end 'useSitePhrase'
 
-	export function argumentNameAt(callOp ElementIndex, position ParamCount) returns ByteArray throws AbsentError
+	export function argumentNameAt(callOp ElementIndex, position ParamCount) returns immutable ByteArray throws AbsentError
 		for slot in 0 upto self.argNameOps.count() 'eachNamedArgument'
 			if (try self.argNameOps.get(slot) otherwise panic("argumentNameAt: argNameOps.get OOB at {slot}")) == callOp and (try self.argNamePositions.get(slot) otherwise panic("argumentNameAt: argNamePositions.get OOB at {slot}")) == position 'theArgument'
 				return try self.argNames.get(slot) otherwise throw AbsentError.absent
@@ -570,13 +681,22 @@ export type CapabilityNotes
 		cacheWriteFuncIndexArray(writer, value: self.droppedPromiseOps)
 		cacheWriteNameRoster(writer, value: self.droppedPromiseNames)
 		cacheWriteFuncIndexArray(writer, value: self.undecidedResultOps)
+		cacheWriteValueIdArray(writer, value: self.derivedResultValues)
+		cacheWriteFuncIndexArray(writer, value: self.derivedResultOps)
 		cacheWriteFuncIndexArray(writer, value: self.resultWriteOps)
 		cacheWriteLineNumberArray(writer, value: self.resultWriteLines)
 		cacheWriteColumnNumberArray(writer, value: self.resultWriteColumns)
 		cacheWriteNameRoster(writer, value: self.resultWriteFields)
 		cacheWriteNameRoster(writer, value: self.resultWritePlaces)
+		cacheWriteBoolArray(writer, value: self.resultWriteWritable)
+		cacheWriteFuncIndexArray(writer, value: self.retainOps)
+		cacheWriteParamCountArray(writer, value: self.retainParams)
 		cacheWriteJoinedParamSourceArray(writer, value: self.joinedSources)
+		cacheWriteCallArgSourceArray(writer, value: self.callArgSources)
 		cacheWriteResultUseArray(writer, value: self.resultUses)
+		cacheWriteParamCountArray(writer, value: self.heldParams)
+		cacheWriteFuncIndexArray(writer, value: self.heldResultOps)
+		cacheWriteFuncIndexArray(writer, value: self.constructionOps)
 	end 'cacheWrite'
 
 	module static function cacheRead(reader LibraryCacheReader) returns CapabilityNotes throws LibraryCacheDamage
@@ -596,19 +716,28 @@ export type CapabilityNotes
 		let f_droppedPromiseOps = try cacheReadFuncIndexArray(reader)
 		let f_droppedPromiseNames = try cacheReadNameRoster(reader)
 		let f_undecidedResultOps = try cacheReadFuncIndexArray(reader)
+		let f_derivedResultValues = try cacheReadValueIdArray(reader)
+		let f_derivedResultOps = try cacheReadFuncIndexArray(reader)
 		let f_resultWriteOps = try cacheReadFuncIndexArray(reader)
 		let f_resultWriteLines = try cacheReadLineNumberArray(reader)
 		let f_resultWriteColumns = try cacheReadColumnNumberArray(reader)
 		let f_resultWriteFields = try cacheReadNameRoster(reader)
 		let f_resultWritePlaces = try cacheReadNameRoster(reader)
+		let f_resultWriteWritable = try cacheReadBoolArray(reader)
+		let f_retainOps = try cacheReadFuncIndexArray(reader)
+		let f_retainParams = try cacheReadParamCountArray(reader)
 		let f_joinedSources = try cacheReadJoinedParamSourceArray(reader)
+		let f_callArgSources = try cacheReadCallArgSourceArray(reader)
 		let f_resultUses = try cacheReadResultUseArray(reader)
+		let f_heldParams = try cacheReadParamCountArray(reader)
+		let f_heldResultOps = try cacheReadFuncIndexArray(reader)
+		let f_constructionOps = try cacheReadFuncIndexArray(reader)
 
-		return Self{windowCallOps: f_windowCallOps, windowCallLabels: f_windowCallLabels, windowCallPausedOperands: f_windowCallPausedOperands, useSiteParams: f_useSiteParams, useSiteMutable: f_useSiteMutable, useSiteLines: f_useSiteLines, useSitePhrases: f_useSitePhrases, argNameOps: f_argNameOps, argNamePositions: f_argNamePositions, argNames: f_argNames, captureSites: f_captureSites, storedSlotArgs: f_storedSlotArgs, tiedAsyncOps: f_tiedAsyncOps, droppedPromiseOps: f_droppedPromiseOps, droppedPromiseNames: f_droppedPromiseNames, undecidedResultOps: f_undecidedResultOps, resultWriteOps: f_resultWriteOps, resultWriteLines: f_resultWriteLines, resultWriteColumns: f_resultWriteColumns, resultWriteFields: f_resultWriteFields, resultWritePlaces: f_resultWritePlaces, joinedSources: f_joinedSources, resultUses: f_resultUses}
+		return Self{windowCallOps: f_windowCallOps, windowCallLabels: f_windowCallLabels, windowCallPausedOperands: f_windowCallPausedOperands, useSiteParams: f_useSiteParams, useSiteMutable: f_useSiteMutable, useSiteLines: f_useSiteLines, useSitePhrases: f_useSitePhrases, argNameOps: f_argNameOps, argNamePositions: f_argNamePositions, argNames: f_argNames, captureSites: f_captureSites, storedSlotArgs: f_storedSlotArgs, tiedAsyncOps: f_tiedAsyncOps, droppedPromiseOps: f_droppedPromiseOps, droppedPromiseNames: f_droppedPromiseNames, undecidedResultOps: f_undecidedResultOps, derivedResultValues: f_derivedResultValues, derivedResultOps: f_derivedResultOps, resultWriteOps: f_resultWriteOps, resultWriteLines: f_resultWriteLines, resultWriteColumns: f_resultWriteColumns, resultWriteFields: f_resultWriteFields, resultWritePlaces: f_resultWritePlaces, resultWriteWritable: f_resultWriteWritable, retainOps: f_retainOps, retainParams: f_retainParams, joinedSources: f_joinedSources, callArgSources: f_callArgSources, resultUses: f_resultUses, heldParams: f_heldParams, heldResultOps: f_heldResultOps, constructionOps: f_constructionOps}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize184
-		return sizeof(CapabilityNotes) as CacheSize184
+	static function cacheLayoutBytes() returns CacheSize256
+		return sizeof(CapabilityNotes) as CacheSize256
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -619,11 +748,116 @@ export union DeferredRefusal
 	at(line LineNumber, column ColumnNumber, code ErrorCode, message String)
 end 'DeferredRefusal'
 
+module typealias JoinArmFlags = bits(8)
+
+module let NoJoinArmFlags = 0 as JoinArmFlags
+
+module let UndecidedParameterArm = 1 as JoinArmFlags
+
+module let LocalMutableArm = 2 as JoinArmFlags
+
+module let ResultStillToSettleArm = 4 as JoinArmFlags
+
+module let FrozenDataArm = 8 as JoinArmFlags
+
+module function joinArmIs(flags JoinArmFlags, wanted JoinArmFlags) returns bool
+	return (flags and wanted) != 0
+end 'joinArmIs'
+
+export type ParamSourceTable
+	module var derived as PhiParamSourceMap
+	module var joinedParams as PhiParamSourceMap
+	module var besideLocalData as ValueMarkSet
+	module var besideOther as ValueMarkSet
+	module var besideFrozen as ValueMarkSet
+	module var heldReturned as ParamPositionMask
+
+	export static function create() returns ParamSourceTable
+		return Self{derived: PhiParamSourceMap.create(), joinedParams: PhiParamSourceMap.create(), besideLocalData: ValueMarkSet.create(), besideOther: ValueMarkSet.create(), besideFrozen: ValueMarkSet.create(), heldReturned: NoParamPositions}
+	end 'create'
+
+	module function derivedSourcesOf(value ValueId) returns ParamPositionMask
+		return try self.derived.get(value) otherwise NoParamPositions
+	end 'derivedSourcesOf'
+
+	module function carry(target ValueId, source ValueId, sources ParamPositionMask)
+		self.derived.upsert(target, value: sources)
+
+		if self.besideLocalData.contains(source) 'aMixedJoin'
+			self.besideLocalData.insert(target)
+		end 'aMixedJoin'
+	end 'carry'
+
+	module function noteMixedJoin(phi ValueId, sources ParamPositionMask)
+		self.derived.upsert(phi, value: sources)
+		self.besideLocalData.insert(phi)
+	end 'noteMixedJoin'
+
+	module function noteParameterArm(phi ValueId, incoming ValueId, sources ParamPositionMask)
+		let joined = (try self.joinedParams.get(phi) otherwise NoParamPositions) or sources
+		self.joinedParams.upsert(phi, value: joined)
+
+		if self.besideOther.contains(phi) 'anArmOfItsOwn'
+			return
+		end 'anArmOfItsOwn'
+
+		self.derived.upsert(phi, value: joined)
+
+		if self.besideLocalData.contains(incoming) 'incomingBesideLocalData'
+			self.besideLocalData.insert(phi)
+		end 'incomingBesideLocalData'
+	end 'noteParameterArm'
+
+	module function noteLocalDataArm(phi ValueId)
+		self.besideLocalData.insert(phi)
+	end 'noteLocalDataArm'
+
+	module function noteDerivedBesideOtherData(value ValueId)
+		if self.derived.contains(value) 'sourcedFromAParameter'
+			self.besideLocalData.insert(value)
+		end 'sourcedFromAParameter'
+	end 'noteDerivedBesideOtherData'
+
+	module function noteOtherArm(phi ValueId)
+		self.besideOther.insert(phi)
+		_ = self.derived.remove(phi)
+	end 'noteOtherArm'
+
+	module function noteParametersBesideFrozenData(phi ValueId, sources ParamPositionMask, joinedOnlyParameters bool)
+		self.joinedParams.upsert(phi, value: sources)
+
+		if joinedOnlyParameters 'noOtherArm'
+			self.derived.upsert(phi, value: sources)
+		end 'noOtherArm'
+	end 'noteParametersBesideFrozenData'
+
+	module function adoptJoinedParameters(phi ValueId)
+		let joined = try self.joinedParams.get(phi) otherwise return
+		self.derived.upsert(phi, value: joined)
+	end 'adoptJoinedParameters'
+
+	module function mixedJoinSources() returns JoinedParamSourceArray
+		var mixed = JoinedParamSourceArray.create(0)
+
+		if self.besideLocalData.count() == 0 'noMixedJoin'
+			return mixed
+		end 'noMixedJoin'
+
+		for (value, sources) in self.derived 'eachSourcedValue'
+			if self.besideLocalData.contains(value) 'aMixedJoin'
+				mixed.push(JoinedParamSource.create(value, sources: sources))
+			end 'aMixedJoin'
+		end 'eachSourcedValue'
+
+		return mixed
+	end 'mixedJoinSources'
+end 'ParamSourceTable'
+
 export type RegionFactTable
 	module var windows as WindowStack
 	module var fieldOrigins as FieldOriginMap
 	module var mutableUseLines as UseLineMap
-	module var phiParamSources as PhiParamSourceMap
+	module var paramSources as ParamSourceTable
 	module var callOpens as WindowStack
 	module var callGuards as ElementIndex
 	module var deferredRefusal as DeferredRefusal
@@ -632,15 +866,14 @@ export type RegionFactTable
 	module var carriedStores as CarriedStoreArray
 	module var carriedStoredSlots as CarriedStoredSlotArray
 	module var carriedHolders as CarriedHolderArray
-	module var joinedParamArms as PhiParamSourceMap
-	module var joinedDataArms as ValueMarkSet
-	module var joinedOtherArms as ValueMarkSet
 	module var lentUniques as ValueMarkSet
 	module var cleanFunctionValues as ValueMarkSet
 	module var lentLocals as LentLocalArray
+	module var pendingHeld as HeldStoreArray
+	module var heldLiterals as HeldLiteralMap
 
 	export static function create() returns RegionFactTable
-		return Self{windows: WindowStack.create(0), fieldOrigins: FieldOriginMap.create(), mutableUseLines: UseLineMap.create(), phiParamSources: PhiParamSourceMap.create(), callOpens: WindowStack.create(0), callGuards: 0, deferredRefusal: DeferredRefusal.none, carriedRoots: ValueMarkSet.create(), carriedDerivations: CarriedDerivationArray.create(0), carriedStores: CarriedStoreArray.create(0), carriedStoredSlots: CarriedStoredSlotArray.create(0), carriedHolders: CarriedHolderArray.create(0), joinedParamArms: PhiParamSourceMap.create(), joinedDataArms: ValueMarkSet.create(), joinedOtherArms: ValueMarkSet.create(), lentUniques: ValueMarkSet.create(), cleanFunctionValues: ValueMarkSet.create(), lentLocals: LentLocalArray.create(0)}
+		return Self{windows: WindowStack.create(0), fieldOrigins: FieldOriginMap.create(), mutableUseLines: UseLineMap.create(), paramSources: ParamSourceTable.create(), callOpens: WindowStack.create(0), callGuards: 0, deferredRefusal: DeferredRefusal.none, carriedRoots: ValueMarkSet.create(), carriedDerivations: CarriedDerivationArray.create(0), carriedStores: CarriedStoreArray.create(0), carriedStoredSlots: CarriedStoredSlotArray.create(0), carriedHolders: CarriedHolderArray.create(0), lentUniques: ValueMarkSet.create(), cleanFunctionValues: ValueMarkSet.create(), lentLocals: LentLocalArray.create(0), pendingHeld: HeldStoreArray.create(0), heldLiterals: HeldLiteralMap.create()}
 	end 'create'
 
 	module function clearCarried()
@@ -781,6 +1014,14 @@ function wordIsARegionOperator(word ByteArray) returns bool
 	return word.equals(FreezeOperatorWord) or word.equals(SwapOperatorWord) or word.equals(MergeOperatorWord)
 end 'wordIsARegionOperator'
 
+function operandStartsWith(kind TokenKind) returns bool
+	return kind == TokenKind.identifier or kind == TokenKind.self or kind == TokenKind.selfType or kind == TokenKind.try or kind == TokenKind.leftBracket or kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.stringLiteral or kind == TokenKind.byteStringLiteral or kind == TokenKind.true or kind == TokenKind.false
+end 'operandStartsWith'
+
+module function tokenKindIsPostfixChainPart(kind TokenKind) returns bool
+	return kind == TokenKind.identifier or kind == TokenKind.dot or kind == TokenKind.self or kind == TokenKind.selfType or kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.charLiteral or kind == TokenKind.stringLiteral or kind == TokenKind.byteStringLiteral or kind == TokenKind.true or kind == TokenKind.false
+end 'tokenKindIsPostfixChainPart'
+
 module function regionOperatorAt(tokens TokenArray, index ElementIndex) returns bool
 	let tok = try tokens.get(index) otherwise return false
 
@@ -794,7 +1035,7 @@ module function regionOperatorAt(tokens TokenArray, index ElementIndex) returns 
 
 	let next = tokenKindAt(tokens, index: index + 1)
 
-	if next == TokenKind.identifier or next == TokenKind.self or next == TokenKind.selfType or next == TokenKind.try 'anOperand'
+	if operandStartsWith(next) 'anOperand'
 		return true
 	end 'anOperand'
 

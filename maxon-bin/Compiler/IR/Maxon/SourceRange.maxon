@@ -167,6 +167,30 @@ export type DeclaredTypeSites
 		return Self{returnSite: f_returnSite, sites: f_sites, capabilities: f_capabilities}
 	end 'cacheRead'
 
+	export static function cacheReadFrozen(reader LibraryCacheReader) returns immutable DeclaredTypeSites throws LibraryCacheDamage
+		let f_returnSite = (try reader.unsigned()) as PositionKey
+
+		var built = Self{returnSite: f_returnSite, sites: PositionKeyArray.create(0), capabilities: ParamCapabilityArray.create(0)} as isolated Self
+
+		let count_sites = try reader.count()
+		built.sites.reserve(count_sites)
+
+		for _ in 0 upto count_sites 'eachSites'
+			let item = (try reader.unsigned()) as PositionKey
+			built.sites.push(item)
+		end 'eachSites'
+
+		let count_capabilities = try reader.count()
+		built.capabilities.reserve(count_capabilities)
+
+		for _ in 0 upto count_capabilities 'eachCapabilities'
+			let item = try cacheReadParamCapability(reader)
+			built.capabilities.push(item)
+		end 'eachCapabilities'
+
+		return freeze built
+	end 'cacheReadFrozen'
+
 	static function cacheLayoutBytes() returns CacheSize24
 		return sizeof(DeclaredTypeSites) as CacheSize24
 	end 'cacheLayoutBytes'
@@ -178,7 +202,7 @@ end 'DeclaredTypeSites'
 // each written occurrence carries its own element sites. Sites kept on the layout would place every
 // declaration's E3011 at the first one, and report the rest nowhere.
 export type WrittenTupleType
-	export let tupleName as ByteArray
+	export let tupleName as immutable ByteArray
 	export let filePath as FilePath
 	export let sites as DeclaredTypeSites
 
@@ -194,7 +218,7 @@ export type WrittenTupleType
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns WrittenTupleType throws LibraryCacheDamage
-		let f_tupleName = try reader.bytes()
+		let f_tupleName = freeze try reader.bytes()
 		let f_filePath = try reader.path()
 		let f_sites = try DeclaredTypeSites.cacheRead(reader)
 

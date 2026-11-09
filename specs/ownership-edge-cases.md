@@ -410,7 +410,7 @@ function main() returns ExitCode
 		let n = Node.create(10)
 		arr.push(n)
 	end 'scope'
-	var got = try arr.get(0) otherwise Node.create(-1)
+	let got = try arr.get(0) otherwise Node.create(-1)
 	return got.id
 end 'main'
 ```
@@ -466,7 +466,7 @@ function main() returns ExitCode
 	var arr = ItemArray.create(0)
 	arr.push(Item.create(50))
 	try arr.set(0, value: Item.create(99)) otherwise panic("test invariant: set OOB")
-	var got = try arr.get(0) otherwise Item.create(-1)
+	let got = try arr.get(0) otherwise Item.create(-1)
 	return got.value
 end 'main'
 ```
@@ -717,7 +717,7 @@ end 'getFirst'
 function main() returns ExitCode
 	var arr = ItemArray.create(0)
 	arr.push(Item.create(77))
-	var result = getFirst(arr)
+	let result = getFirst(arr)
 	return result.value
 end 'main'
 ```
@@ -853,7 +853,7 @@ typealias ItemArray = Array with Item
 
 function main() returns ExitCode
 	var arr = ItemArray.create(0)
-	var got = try arr.get(0) otherwise Item.create(99)
+	let got = try arr.get(0) otherwise Item.create(99)
 	return got.value
 end 'main'
 ```
@@ -2065,7 +2065,7 @@ typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
 		var m = MyKeyMap.create()
-		try m.insert(MyKey.create(1), value: 42) otherwise ignore
+		try m.insert(freeze MyKey.create(1), value: 42) otherwise ignore
 		return m.count()
 end 'main'
 ```
@@ -2467,7 +2467,7 @@ end 'getFirst'
 function main() returns ExitCode
 	var arr = WrapperArray.create(0)
 	arr.push(Wrapper.create(99))
-	var w = try getFirst(arr) otherwise Wrapper.create(0)
+	let w = try getFirst(arr) otherwise Wrapper.create(0)
 	return w.n
 end 'main'
 ```
@@ -2883,7 +2883,7 @@ function main() returns ExitCode
 	var arr = WrapperArray.create(0)
 	let w = Wrapper.create(42)
 	arr.push(w)
-	var got = firstOrDefault(arr)
+	let got = firstOrDefault(arr)
 	return got.value
 end 'main'
 ```

@@ -158,8 +158,8 @@ through a function value hands the promise over to the callee.
 A `mutable` promise parameter the callee reassigns (`q = async work()`) writes into the caller's own variable: the
 callee drops the thread the variable held, the variable takes the new one, and the caller awaits it as any
 other promise name. The same holds through a function that only hands the parameter on, and at a position a
-function type passes by reference. The argument is a `var` the caller owns: a `let`, a `let` field, a name a
-closure captured, or a promise an array still holds is **E3159**. Inside a loop, `await x` after such a call
+function type passes by reference. The argument is a `var` the caller owns: a `let` or a `let` field is
+**E2013**, and a name a closure captured, or a promise an array still holds, is **E3159**. Inside a loop, `await x` after such a call
 spends `x`, so the call on the next iteration is **E3102**.
 
 ```maxon
@@ -443,7 +443,7 @@ either side could write, because the two green threads may run at the same time 
   reading the sender's variable afterwards is **E3102**. Replies are moved too, and so is every argument a
   `spawn` hands its factory, whether or not the factory keeps it. The handler owns what it was moved, so it may
   keep it or write it.
-- A [read-only](/docs/language/memory-model/#read-only-values) value the sender does not own — a module-level `let`, a `let` field, a
+- A [read-only](/docs/language/memory-model/#read-only-values) value the sender does not own — a module-level `let`, `immutable` data, a
   `SharedValue` or registry read, or a parameter nothing in the sending function writes — is **shared**: its graph is marked shared, so every
   count on it steps atomically, and neither side may write it. Sending a parameter the sending function
   writes, or any shared value the handler writes or keeps, is **E3138**. A borrowed `String` is copied at the

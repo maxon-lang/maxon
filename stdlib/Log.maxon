@@ -118,7 +118,7 @@ end 'LogRecord'
 public typealias LogRank = int(i32.min to i32.max)
 
 union LogLevelLabel
-	named(text String)
+	named(let text String)
 	relative
 end 'LogLevelLabel'
 
@@ -129,11 +129,11 @@ public type LogLevel
 	public let rank as LogRank
 	let label as LogLevelLabel
 
-	public static let trace = LogLevel.create(-8)
-	public static let debug = LogLevel.create(-4)
-	public static let info = LogLevel.create(0)
-	public static let warn = LogLevel.create(4)
-	public static let error = LogLevel.create(8)
+	public static let trace = LogLevel{rank: -8, label: LogLevelLabel.relative}
+	public static let debug = LogLevel{rank: -4, label: LogLevelLabel.relative}
+	public static let info = LogLevel{rank: 0, label: LogLevelLabel.relative}
+	public static let warn = LogLevel{rank: 4, label: LogLevelLabel.relative}
+	public static let error = LogLevel{rank: 8, label: LogLevelLabel.relative}
 
 	public static function create(rank LogRank) returns LogLevel
 		return LogLevel{rank: rank, label: LogLevelLabel.relative}
@@ -213,7 +213,7 @@ public type LogLevels
 	end 'enables'
 
 	public function withLevel(level LogLevel) returns LogLevels
-		return LogLevels{floor: level, overrides: self.overrides}
+		return LogLevels{floor: level, overrides: self.copiedOverrides()}
 	end 'withLevel'
 
 	public function withGroupLevel(group String, level LogLevel) returns LogLevels
@@ -340,7 +340,7 @@ function ownedLogRecord(time UnixNanos, level LogLevel, message String, bound Lo
 	return freeze LogRecord.create(time, level: level.clone(), message: "{message}", attrs: fields, file: "{file}", line: line)
 end 'ownedLogRecord'
 
-default LogSink = LogSink.create(spawn TextLogHandler.create(freeze LogHandlerOptions.standard()), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info)))
+default LogSink = LogSink.create(spawn TextLogHandler.create(LogHandlerOptions.standard()), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info)))
 
 /// The program's default logger. Each call reads the current `LogSink`. `error`, and `log` at
 /// `error` or above, returns once its line and every record handed over before it are written. A

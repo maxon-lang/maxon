@@ -423,7 +423,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at utf16.maxon:67: utf16DecodeSurrogates: 0 and 0 are not a lead surrogate followed by a trail surrogate
+panic at utf16.maxon:69: utf16DecodeSurrogates: 0 and 0 are not a lead surrogate followed by a trail surrogate
 Stack trace:
   in utf16DecodeSurrogates
   in main
@@ -445,7 +445,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at utf16.maxon:67: utf16DecodeSurrogates: 55296 and 55296 are not a lead surrogate followed by a trail surrogate
+panic at utf16.maxon:69: utf16DecodeSurrogates: 55296 and 55296 are not a lead surrogate followed by a trail surrogate
 Stack trace:
   in utf16DecodeSurrogates
   in main
@@ -466,7 +466,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at utf16.maxon:67: utf16DecodeSurrogates: 55296 and 46080 are not a lead surrogate followed by a trail surrogate
+panic at utf16.maxon:69: utf16DecodeSurrogates: 55296 and 46080 are not a lead surrogate followed by a trail surrogate
 Stack trace:
   in utf16DecodeSurrogates
   in main
@@ -487,7 +487,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at utf16.maxon:67: utf16DecodeSurrogates: 56320 and 55296 are not a lead surrogate followed by a trail surrogate
+panic at utf16.maxon:69: utf16DecodeSurrogates: 56320 and 55296 are not a lead surrogate followed by a trail surrogate
 Stack trace:
   in utf16DecodeSurrogates
   in main

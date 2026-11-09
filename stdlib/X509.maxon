@@ -841,13 +841,15 @@ module type X509RootPool
 	let derRoots as ByteArrays
 	let parsedRoots as X509Candidates
 
-	module static function create(roots ByteArrays) returns X509RootPool
+	module static function create(roots ByteArrays) returns immutable X509RootPool
 		// A pool is shared between connections, which needs every record it reaches to have no owner
 		// outside it, so it parses from a copy of its own.
-		let owned = roots.clone()
-
-		return Self{derRoots: owned, parsedRoots: x509Pool(owned, isRoot: true, excluded: ByteArrays.create(0))}
+		return freeze Self.build(roots.clone())
 	end 'create'
+
+	static function build(roots ByteArrays) returns X509RootPool
+		return Self{derRoots: roots, parsedRoots: x509Pool(roots, isRoot: true, excluded: ByteArrays.create(0))}
+	end 'build'
 
 	module function der() returns ByteArrays
 		return derRoots
@@ -859,7 +861,7 @@ module type X509RootPool
 end 'X509RootPool'
 
 type X509PathSearch
-	let roots as X509Candidates
+	let roots as immutable X509Candidates
 	let intermediates as X509Candidates
 	var host as X509Host
 	var purpose as X509Purpose
@@ -1033,7 +1035,7 @@ public type X509
 		return try verifyUnder(leaf, intermediates: intermediates, anchors: X509RootPool.create(roots), host: host, now: now, purpose: purpose)
 	end 'verify'
 
-	module static function verifyUnder(leaf ByteArray, intermediates ByteArrays, anchors X509RootPool, host X509VerifyHost, now UnixSeconds, purpose X509Purpose) returns ByteArrays throws X509VerifyError
+	module static function verifyUnder(leaf ByteArray, intermediates ByteArrays, anchors immutable X509RootPool, host X509VerifyHost, now UnixSeconds, purpose X509Purpose) returns ByteArrays throws X509VerifyError
 		let target = try x509PeerHost(host, purpose: purpose)
 
 		let certificate = try X509.parse(leaf) otherwise (error) 'unparsed'

@@ -27,7 +27,7 @@ function decodedSourceSpellings(reader LibraryCacheReader) returns NameRoster th
 	return spellings
 end 'decodedSourceSpellings'
 
-module function encodedViewSection(facts RawStreamFacts, view SharedBuildView) returns ByteArray
+module function encodedViewSection(facts RawStreamFacts, view SharedBuildView) returns immutable ByteArray
 	var writer = LibraryCacheWriter.create()
 	encodedSourceSpellings(writer, spellings: facts.declaredTypeNames)
 	encodedSourceSpellings(writer, spellings: facts.reservedSpellings)
@@ -60,7 +60,7 @@ export function cacheReadSourceParseError(_ LibraryCacheReader) returns SourcePa
 	throw LibraryCacheDamage.unrepresentable
 end 'cacheReadSourceParseError'
 
-module function encodedBaseline(declarations LibraryDeclarations, key HashDigest) returns ByteArray throws LibraryCacheDamage
+module function encodedBaseline(declarations LibraryDeclarations, key HashDigest) returns immutable ByteArray throws LibraryCacheDamage
 	var writer = LibraryCacheWriter.create()
 	writer.unsigned(key as CacheUnsigned)
 	cacheWriteFilePathArray(writer, value: declarations.manifest.deferred)
@@ -92,7 +92,7 @@ module function decodedSignatures(reader LibraryCacheReader) returns ProgramSign
 	return signatures
 end 'decodedSignatures'
 
-module function encodedParseSection(held SharedLibraryParse) returns ByteArray throws LibraryCacheDamage
+module function encodedParseSection(held SharedLibraryParse) returns immutable ByteArray throws LibraryCacheDamage
 	var writer = LibraryCacheWriter.create()
 	cacheWriteSharedLibraryParse(writer, value: held)
 

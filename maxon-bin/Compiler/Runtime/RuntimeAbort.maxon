@@ -499,11 +499,16 @@ end 'isLeakDetectedExit'
 // failed: …" against whatever the program wrote — so the location prefix, the separator and the trailing
 // newline are this file's, and no caller restates them. `mrt_panic` prints the result verbatim, then
 // `Stack trace:` and its frames, then exits `PanicExitCode`.
-export function panicMessageLine(filePath FilePath, line LineNumber, text String) returns ByteArray
-	var baked = panicMessageLinePrefix(filePath, line: line)
-	baked.append(text.toByteArray())
-	baked.append(PanicMessageLineTerminator)
-	return baked
+export function panicMessageLine(filePath FilePath, line LineNumber, text String) returns immutable ByteArray
+	var baked = ByteArray.create(0, zeroed: false) as isolated ByteArray
+
+	modify baked 'fill'
+		baked.append(panicMessageLinePrefix(filePath, line: line))
+		baked.append(text.toByteArray())
+		baked.append(PanicMessageLineTerminator)
+	end 'fill'
+
+	return freeze baked
 end 'panicMessageLine'
 
 // ⭐ **THE LINE'S TWO CONSTANT HALVES, NAMED, because a THIRD producer needs them SEPARATELY.** An
@@ -512,8 +517,10 @@ end 'panicMessageLine'
 // (`Parser.renderedPanicMessagePointer`). Splitting the format here rather than letting that path spell
 // `"panic at …: "` a second time is the whole reason this function exists: the location prefix, the
 // separator and the terminator stay written down ONCE, whichever of the three producers assembles them.
-export function panicMessageLinePrefix(filePath FilePath, line LineNumber) returns ByteArray
-	return "panic at {baseName(filePath.toString())}:{line}: ".toByteArray()
+export function panicMessageLinePrefix(filePath FilePath, line LineNumber) returns immutable ByteArray
+	let prefix = "panic at {baseName(filePath.toString())}:{line}: "
+
+	return freeze prefix.toByteArray()
 end 'panicMessageLinePrefix'
 
 // ⚠ **THE NEWLINE IS PART OF THE MESSAGE, NOT OF THE RUNTIME** — `mrt_panic` writes the cstr it is handed
@@ -570,7 +577,7 @@ function emitAbortDoorCall(module StdModule, func IrFunction, block IrBlock, rea
 		module.runtimeAbortDoorBuilt = true
 	end 'firstSite'
 
-	module.runtimeAbortSites.push(RuntimeAbortSite.create(reason, funcName: func.name.clone()))
+	module.runtimeAbortSites.push(RuntimeAbortSite.create(reason, funcName: func.name))
 
 	let message = reason.message()
 	let code = reason.exitCode()
@@ -642,45 +649,45 @@ export union RuntimeAbortReason
 		end 'which'
 	end 'exitCode'
 
-	function messageLabel() returns ByteArray
+	function messageLabel() returns immutable ByteArray
 		return match self 'which'
-			abort(cause) gives "{RuntimeAbortMessageLabelPrefix}{cause.rawValue}".toByteArray()
-			fatal(cause) gives "{RuntimeFatalMessageLabelPrefix}{cause.ordinal}".toByteArray()
+			abort(cause) gives freeze "{RuntimeAbortMessageLabelPrefix}{cause.rawValue}".toByteArray()
+			fatal(cause) gives freeze "{RuntimeFatalMessageLabelPrefix}{cause.ordinal}".toByteArray()
 		end 'which'
 	end 'messageLabel'
 
-	export function message() returns ByteArray
+	export function message() returns immutable ByteArray
 		return match self 'which'
 			abort(cause) gives runtimeAbortMessage(cause)
-			fatal(cause) gives "fatal error: {runtimeFatalReason(cause)}\n".toByteArray()
+			fatal(cause) gives freeze "fatal error: {runtimeFatalReason(cause)}\n".toByteArray()
 		end 'which'
 	end 'message'
 end 'RuntimeAbortReason'
 
-function runtimeAbortMessage(cause RuntimeAbort) returns ByteArray
+function runtimeAbortMessage(cause RuntimeAbort) returns immutable ByteArray
 	if cause == RuntimeAbort.slabOsAllocFailed 'outOfMemory'
-		return "fatal error: out of memory: the operating system refused to map more memory (runtime abort {cause.rawValue} ({cause.name}))\n".toByteArray()
+		return freeze "fatal error: out of memory: the operating system refused to map more memory (runtime abort {cause.rawValue} ({cause.name}))\n".toByteArray()
 	end 'outOfMemory'
 
-	return "fatal error: runtime abort {cause.rawValue} ({cause.name})\n".toByteArray()
+	return freeze "fatal error: runtime abort {cause.rawValue} ({cause.name})\n".toByteArray()
 end 'runtimeAbortMessage'
 
-function tierAbortDoorName(abort RuntimeAbort) returns ByteArray
-	return "{TierAbortDoorPrefix}{abort.rawValue}".toByteArray()
+function tierAbortDoorName(abort RuntimeAbort) returns immutable ByteArray
+	return freeze "{TierAbortDoorPrefix}{abort.rawValue}".toByteArray()
 end 'tierAbortDoorName'
 
 let TierAbortDoorPrefix = "__abort_door_"
 
-export function ensureTierAbortDoor(module StdModule, abort RuntimeAbort) returns ByteArray
+export function ensureTierAbortDoor(module StdModule, abort RuntimeAbort) returns immutable ByteArray
 	let name = tierAbortDoorName(abort)
 
 	if module.tierAbortDoors.contains(name) 'built'
 		return name
 	end 'built'
 
-	module.tierAbortDoors.insert(name.clone())
+	module.tierAbortDoors.insert(name)
 
-	var func = IrFunction.createFromStd(name.clone(), returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	func.keepsItsOwnFrame = true
 	var ids = ValueMinter.create(0)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.cold)
@@ -694,7 +701,7 @@ typealias RuntimeAbortReasonArray = Array with RuntimeAbortReason
 
 export type RuntimeAbortSite
 	export let reason as RuntimeAbortReason
-	export let funcName as ByteArray
+	export let funcName as immutable ByteArray
 
 	static function create(reason RuntimeAbortReason, funcName ByteArray) returns RuntimeAbortSite
 		return Self{reason: reason, funcName: funcName}

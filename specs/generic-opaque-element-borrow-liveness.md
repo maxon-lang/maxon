@@ -144,7 +144,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'create'
 
 	function readThenDisplace(other Self) returns Element
-		var a = try managed.get(0) otherwise panic("oob")
+		let a = try managed.get(0) otherwise panic("oob")
 		let v = try other.managed.get(0) otherwise panic("oob")
 		try managed.set(0, value: v) otherwise panic("oob")
 		return a
@@ -1507,9 +1507,10 @@ end 'main'
 error E2015: <fragment>:10:12: Unsupported: interpolating a value of type 'type parameter' — no conversion to text exists for it
 ```
 
-<!-- test: error.a-let-read-of-an-element-record-is-still-not-written -->
-The counted element read of the cases above does not make the element writable: `first` is a `view` naming the
-record the container holds in slot 0, so a write through it is refused, as it is for a `let`.
+<!-- test: a-let-read-of-an-element-record-is-written-through -->
+The counted element read of the cases above does not make the element read-only: `first` is a `view` naming the
+record the container holds in slot 0, and a `view` forbids reassigning `first`, not writing the record, so the
+write reaches the record slot 0 holds.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1521,11 +1522,11 @@ function main() returns ExitCode
 	rows.push(Row.create(0))
 	view first = try rows.get(0) otherwise Row.create(0)
 	first.push(1)
-	return rows.count() as ExitCode
+	return ((try rows.get(0) otherwise Row.create(0)).count() as ExitCode) + (rows.count() as ExitCode)
 end 'main'
 ```
-```maxoncstderr
-error E3159: <fragment>:10:8: cannot write through 'first': 'first' is read-only (a `view`) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+2
 ```
 
 <!-- test: a-field-read-through-a-bare-nested-instance-field-is-counted -->

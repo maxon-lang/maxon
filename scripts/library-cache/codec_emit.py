@@ -4,8 +4,11 @@ import codec_config as config
 from maxon_source import FieldDefaultShapeError, field_default_type, parse_union_case, split_top_level
 
 CONTAINER_KINDS = ("array", "list", "set", "map")
+CONTAINER_ADDERS = {"set": "insert", "list": "append", "array": "push"}
 RESOLUTION_DEPTH_LIMIT = 20
 READONLY_QUALIFIER = "readonly"
+IMMUTABLE_QUALIFIER = "immutable"
+FROZEN_KINDS = ("bytes", "record", "union", "custom")
 
 
 class Unresolved(Exception):
@@ -45,9 +48,13 @@ def split_with(text):
     argument = re.sub(r"\s+implements\s+.*$", "", match.group(2).strip())
 
     if argument.startswith("(") and argument.endswith(")"):
-        return head, [without_readonly(part) for part in split_top_level(argument[1:-1])]
+        return head, [without_readonly(part) for part in split_top_level(argument[1:-1])], [is_readonly(part) for part in split_top_level(argument[1:-1])]
 
-    return head, [without_readonly(argument)]
+    return head, [without_readonly(argument)], [is_readonly(argument)]
+
+
+def is_readonly(text):
+    return text.strip().startswith(READONLY_QUALIFIER + " ")
 
 
 def without_readonly(text):
@@ -58,12 +65,20 @@ class Emitter:
     def __init__(self, tree):
         self.tree = tree
         self.touched_aliases = set()
+        self.frozen_records = set()
 
     def resolve(self, type_text, depth=0):
         text = type_text.strip()
 
         if depth > RESOLUTION_DEPTH_LIMIT:
             raise Unresolved(text)
+
+        if text.startswith(IMMUTABLE_QUALIFIER + " "):
+            inner = self.resolve(text[len(IMMUTABLE_QUALIFIER):], depth + 1)
+            frozen = Node(inner.kind, **{k: v for k, v in inner.__dict__.items() if k != "kind"})
+            frozen.frozen = True
+
+            return frozen
 
         if text == config.BUILTIN_BOOL:
             return Node("bool", text=text)
@@ -110,10 +125,10 @@ class Emitter:
         applied = split_with(target)
 
         if applied:
-            head, arguments = applied
+            head, arguments, readonly = applied
 
             if head in ("Array", "Set", "List"):
-                return Node(head.lower(), text=text, alias=text, elem=arguments[0])
+                return Node(head.lower(), text=text, alias=text, elem=arguments[0], elem_readonly=readonly[0])
 
             if head == "Map":
                 return Node("map", text=text, alias=text, key=arguments[0], value=arguments[1])
@@ -199,8 +214,10 @@ class Emitter:
         if kind in ("uint", "sint", "real"):
             return tabs + "let %s = (try reader.%s) as %s" % (variable, self.read_call(node), node.text)
 
+        frozen = "freeze " if getattr(node, "frozen", False) and kind in FROZEN_KINDS else ""
+
         if kind == "bytes":
-            return tabs + "let %s = try reader.bytes()" % variable
+            return tabs + "let %s = %stry reader.bytes()" % (variable, frozen)
 
         if kind == "string":
             return tabs + "let %s = try reader.text()" % variable
@@ -209,13 +226,15 @@ class Emitter:
             return tabs + "let %s = try reader.path()" % variable
 
         if kind == "record":
-            return tabs + "let %s = try %s.cacheRead(reader)" % (variable, node.name)
+            return tabs + "let %s = try %s.%s(reader)" % (variable, node.name, "cacheReadFrozen" if frozen else "cacheRead")
 
         if kind in ("enum", "union", "custom"):
-            return tabs + "let %s = try cacheRead%s(reader)" % (variable, node.name)
+            return tabs + "let %s = %stry cacheRead%s(reader)" % (variable, frozen, node.name)
 
         if kind in CONTAINER_KINDS:
-            return tabs + "let %s = try cacheRead%s(reader)" % (variable, node.alias)
+            frozen_reader = "Frozen" if getattr(node, "frozen", False) else ""
+
+            return tabs + "let %s = try cacheRead%s%s(reader)" % (variable, frozen_reader, node.alias)
 
         raise Unresolved("read %s" % kind)
 
@@ -244,11 +263,10 @@ class Emitter:
 
         return out
 
-    def alias_helpers(self, name, visibility):
+    def alias_helpers(self, name, visibility, reader_visibility):
         node = self.resolve(name)
         assert node.kind in CONTAINER_KINDS, name
         write_name = "cacheWrite%s" % name
-        read_name = "cacheRead%s" % name
         out = [""]
         out.append("%sfunction %s(writer LibraryCacheWriter, value %s)" % (visibility, write_name, name))
         out.append("\twriter.unsigned(value.count() as CacheUnsigned)")
@@ -266,9 +284,21 @@ class Emitter:
 
         out.append("end '%s'" % write_name)
         out.append("")
-        out.append("%sfunction %s(reader LibraryCacheReader) returns %s throws LibraryCacheDamage" % (visibility, read_name, name))
+
+        return out + self.alias_reader(name, reader_visibility, frozen=False)
+
+    def frozen_alias_helpers(self, name, visibility):
+        return [""] + self.alias_reader(name, visibility, frozen=True)
+
+    def alias_reader(self, name, visibility, frozen):
+        node = self.resolve(name)
+        assert node.kind in CONTAINER_KINDS, name
+        read_name = ("cacheReadFrozen%s" if frozen else "cacheRead%s") % name
+        returns = ("immutable " if frozen else "") + name
+        isolated = " as isolated %s" % name if frozen else ""
+        out = ["%sfunction %s(reader LibraryCacheReader) returns %s throws LibraryCacheDamage" % (visibility, read_name, returns)]
         out.append("\tlet count = try reader.count()")
-        out.append("\tvar result = %s.create(%s)" % (name, "count, zeroed: false" if node.kind == "array" else ""))
+        out.append("\tvar result = %s.create(%s)%s" % (name, "count, zeroed: false" if node.kind == "array" else "", isolated))
         out.append("")
 
         if node.kind == "map":
@@ -278,46 +308,38 @@ class Emitter:
             out.append("\t\tresult.upsert(key, value: entry)")
             out.append("\tend 'eachEntry'")
         else:
-            adder = {"set": "insert", "list": "append", "array": "push"}[node.kind]
             out.append("\tfor _ in 0 upto count 'eachItem'")
             out.append(self.read_statement(self.resolve(node.elem), "item", 2))
-            out.append("\t\tresult.%s(item)" % adder)
+            out.append("\t\tresult.%s(item)" % CONTAINER_ADDERS[node.kind])
             out.append("\tend 'eachItem'")
 
         out.append("")
-        out.append("\treturn result")
+        out.append("\treturn %s" % ("freeze result" if frozen else "result"))
         out.append("end '%s'" % read_name)
 
         return out
 
     def record_methods(self, declaration, visibility):
         writes = ["\t" + visibility + "function cacheWrite(writer LibraryCacheWriter)"]
-        reads = ["\t" + visibility + "static function cacheRead(reader LibraryCacheReader) returns %s throws LibraryCacheDamage" % declaration.name]
-        literal = []
         written = 0
 
-        for field in declaration.fields:
+        for field in self.ordered_fields(declaration):
             node = self.field_node(declaration, field)
 
             if node is None:
-                literal.append("%s: %s" % (field.name, config.SKIPPED_FIELDS[(declaration.name, field.name)]))
                 continue
 
             writes.append(self.write_statement(node, config.FIELD_READERS.get((declaration.name, field.name), "self.%s" % field.name), 2))
             written += 1
-            variable = "f_" + field.name
-            reads.append(self.read_statement(node, variable, 2))
-            literal.append("%s: %s" % (field.name, variable))
 
         if not written:
             writes.append("\t\twriter.flag(true)")
-            reads.append("\t\t_ = try reader.flag()")
 
         writes.append("\tend 'cacheWrite'")
-        reads.append("")
-        reads.append("\t\treturn Self{%s}" % ", ".join(literal))
-        reads.append("\tend 'cacheRead'")
-        reads.append("")
+        reads = self.record_reader(declaration, visibility, frozen=False) + [""]
+
+        if declaration.name in self.frozen_records:
+            reads += self.record_reader(declaration, visibility, frozen=True) + [""]
 
         # The cast stops compiling once the record's size moves off one slot per field it had when
         # this was generated, so a field added without re-running the generator cannot go unwritten.
@@ -326,6 +348,148 @@ class Emitter:
         reads.append("\tend 'cacheLayoutBytes'")
 
         return writes + [""] + reads
+
+    def fills_container(self, declaration, field):
+        node = self.field_node(declaration, field)
+
+        return node is not None and node.kind in CONTAINER_KINDS and not getattr(node, "frozen", False)
+
+    def ordered_fields(self, declaration):
+        if declaration.name not in self.frozen_records:
+            return list(declaration.fields)
+
+        scalars = [field for field in declaration.fields if not self.fills_container(declaration, field)]
+
+        return scalars + [field for field in declaration.fields if self.fills_container(declaration, field)]
+
+    def record_reader(self, declaration, visibility, frozen):
+        method = "cacheReadFrozen" if frozen else "cacheRead"
+        returns = ("immutable " if frozen else "") + declaration.name
+        out = ["\t%sstatic function %s(reader LibraryCacheReader) returns %s throws LibraryCacheDamage" % (visibility, method, returns)]
+        fills = []
+        read = 0
+
+        for field in self.ordered_fields(declaration):
+            node = self.field_node(declaration, field)
+
+            if node is None:
+                continue
+
+            read += 1
+
+            if frozen and self.fills_container(declaration, field):
+                fills.append((field, node))
+            else:
+                out.append(self.read_statement(node, "f_" + field.name, 2))
+
+        if not read:
+            out.append("\t\t_ = try reader.flag()")
+
+        literal = ", ".join(self.literal_entry(declaration, field, frozen) for field in declaration.fields)
+        out.append("")
+
+        if not fills:
+            out.append("\t\treturn %sSelf{%s}" % ("freeze " if frozen else "", literal))
+        else:
+            out.append("\t\tvar built = Self{%s} as isolated Self" % literal)
+
+            for field, node in fills:
+                out.append("")
+                out += self.container_fill(declaration, field, node)
+
+            out.append("")
+            out.append("\t\treturn freeze built")
+
+        out.append("\tend '%s'" % method)
+
+        return out
+
+    def literal_entry(self, declaration, field, frozen):
+        node = self.field_node(declaration, field)
+
+        if node is None:
+            return "%s: %s" % (field.name, config.SKIPPED_FIELDS[(declaration.name, field.name)])
+
+        if frozen and self.fills_container(declaration, field):
+            return "%s: %s" % (field.name, self.empty_container(node))
+
+        return "%s: f_%s" % (field.name, field.name)
+
+    def empty_container(self, node):
+        return "%s.create(%s)" % (node.alias, "0" if node.kind == "array" else "")
+
+    def container_fill(self, declaration, field, node):
+        name = field.name
+        title = capitalized(name)
+        count = "count_%s" % name
+        out = ["\t\tlet %s = try reader.count()" % count]
+
+        if node.kind == "array":
+            out.append("\t\tbuilt.%s.reserve(%s)" % (name, count))
+
+        out.append("")
+
+        if node.kind == "map":
+            out.append("\t\tfor _ in 0 upto %s 'each%s'" % (count, title))
+            out.append(self.read_statement(self.resolve(node.key), "key", 3))
+            out.append(self.read_statement(self.resolve(node.value), "entry", 3))
+            out.append("\t\t\tbuilt.%s.upsert(key, value: entry)" % name)
+            out.append("\t\tend 'each%s'" % title)
+
+            return out
+
+        element = self.resolve(node.elem)
+        adder = CONTAINER_ADDERS[node.kind]
+
+        if element.kind not in CONTAINER_KINDS or getattr(element, "frozen", False):
+            out.append("\t\tfor _ in 0 upto %s 'each%s'" % (count, title))
+            out.append(self.read_statement(element, "item", 3))
+            out.append("\t\t\tbuilt.%s.%s(item)" % (name, adder))
+            out.append("\t\tend 'each%s'" % title)
+
+            return out
+
+        if node.kind != "array" or element.kind == "map":
+            raise Unresolved("%s.%s: a frozen record fills an array of arrays, sets or lists, and no other nesting" % (declaration.name, name))
+
+        inner = self.resolve(element.elem)
+
+        if inner.kind in CONTAINER_KINDS and not getattr(inner, "frozen", False):
+            raise Unresolved("%s.%s: a frozen record fills no container nested three deep" % (declaration.name, name))
+
+        inner_count = "innerCount_%s" % name
+        inner_adder = CONTAINER_ADDERS[element.kind]
+        inner_create = "%s.create(%s)" % (element.alias, "%s, zeroed: false" % inner_count if element.kind == "array" else "")
+        out.append("\t\tfor %s in 0 upto %s 'each%s'" % ("_" if node.elem_readonly else "outer", count, title))
+        out.append("\t\t\tlet %s = try reader.count()" % inner_count)
+
+        if node.elem_readonly:
+            out.append("\t\t\tvar inner = %s as isolated %s" % (inner_create, element.alias))
+        else:
+            out.append("\t\t\tbuilt.%s.%s(%s)" % (name, adder, inner_create))
+
+        out.append("")
+        out.append("\t\t\tfor _ in 0 upto %s 'each%sItem'" % (inner_count, title))
+        out.append(self.read_statement(inner, "item", 4))
+
+        if node.elem_readonly:
+            out.append("\t\t\t\tinner.%s(item)" % inner_adder)
+        else:
+            out.append("")
+            out.append("\t\t\t\tmodify built 'fill%s'" % title)
+            out.append("\t\t\t\t\tlet inner = try built.%s.get(outer as ElementIndex) otherwise panic(\"%s.cacheReadFrozen: %s holds no list at the position just filled\")" % (name, declaration.name, name))
+            out.append("\t\t\t\t\tinner.%s(item)" % inner_adder)
+            out.append("\t\t\t\tend 'fill%s'" % title)
+
+        out.append("\t\t\tend 'each%sItem'" % title)
+
+        if node.elem_readonly:
+            out.append("")
+            out.append("\t\t\tbuilt.%s.%s(freeze inner)" % (name, adder))
+
+        out.append("\t\tend 'each%s'" % title)
+
+        return out
 
     def record_size_bytes(self, declaration):
         return config.SLOT_BYTES * len(declaration.fields)
