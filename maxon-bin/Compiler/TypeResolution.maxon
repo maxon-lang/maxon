@@ -1301,17 +1301,18 @@ end 'resolveType'
 // alias registry, so both readings coexist and each answers for its own syntax (a
 // `CharSet from ['x']` still builds the member set). So the argument here is a
 // DISJOINTNESS one rather than the erasure one above, and the answer is the same — legal.
-// ⭐ **`Codepoint` IS ON THE LIST FOR `HashValue`'S EXACT REASON.** It is the
-// second name `isSynthesizedIntAliasName` erases to `integer` without a registry entry, so
-// `denotedNamedType`'s synthesized-alias arm answers for it BEFORE `containsStruct` is consulted — which is
-// precisely the `HashValue` disagreement above: the AUTHORITY would erase a user
-// `type Codepoint` to `integer` while the PARSER's own `named` resolution followed the declaration and
-// tagged the value `structRef`. Adding a name to `isSynthesizedIntAliasName` without adding it here
-// re-opens that hole under a new name.
+// ⭐ **`Codepoint` IS ON THE LIST BECAUSE A USER `type Codepoint` WOULD CAPTURE EVERY STDLIB PARAMETER
+// SPELLED `Codepoint`.** `stdlib/Character.maxon` declares it as the ranged alias `int(0 to 1114111)`, so it
+// resolves through the alias registry like any corpus alias and `isSynthesizedIntAliasName` does not name
+// it. A struct under that name would turn `stdlib/helpers/string/utf16.maxon`'s `codepoint < 65536` into
+// E3005 inside a file the author never wrote (see `ProgramSignatures.recordStruct`).
 //
-// The RANGED carve-out applies to it unchanged and is what the corpus needs: a user
-// `typealias Codepoint = int(0 to 1114111)` — the very declaration `stdlib/Character.maxon` makes — erases
-// to the same `integer` the builtin does, so the two answers agree and there is nothing to refuse.
+// ⚠ Adding a name to `isSynthesizedIntAliasName` without adding it here re-opens the `HashValue`
+// disagreement under a new name.
+//
+// The RANGED carve-out applies to it unchanged: a user `typealias Codepoint = int(…)` is legal, because
+// a reader that does not itself declare the name resolves it to the declaration it may name, so a stdlib
+// file keeps meaning the corpus's (`specs/typealias-file-scope.md`).
 //
 // ⭐⭐ **`ArrayError` IS ON THE LIST FOR `Ordering`'S EXACT REASON — THE CORPUS DECLARES IT UNDER A BARE
 // NAME** (`stdlib/Array.maxon`), and the runtime throws its ordinals. It cannot wear the `__` prefix its

@@ -282,9 +282,9 @@ error E2073: <fragment>:3:17: 'String' has no static method named 'create' — t
 
 <!-- test: error.codepoint-is-a-compiler-owned-type-name -->
 ### A declaration may not bind `Codepoint` to a nominal identity
-`Codepoint` is the compiler's own synthesized ranged int alias — `stdlib/Character.maxon` declares it
-and the compiler cannot load that module — so a user `type Codepoint` would mean one thing to the parser and
-another to type resolution, the same disagreement a user `HashValue` would cause.
+`Codepoint` is the stdlib's ranged alias (`stdlib/Character.maxon`), and the compiler retypes integerized
+character literals as it, so a user `type Codepoint` would capture the stdlib's own `Codepoint` parameters:
+the name is reserved as `HashValue` is.
 ```maxon
 type Codepoint
 	export var value as Integer
