@@ -246,16 +246,16 @@ end 'main'
 ```
 
 <!-- test: an-index-below-zero-keeps-its-check -->
-Control for non-negativity. `last = a.count() − 1` is bounded by `length − 1` exactly, and on an
-empty array it is `−1`; the numeric interval does not prove it non-negative, so the `ElementIndex`
-range check stays — and a negative index is refused at the door, uncatchably, before any bound.
+Control for non-negativity. `last` is `a.count()` read as a signed word, less one: it is bounded by
+`length − 1` exactly, and on an empty array it is `−1`; the numeric interval does not prove it
+non-negative, so the `ElementIndex` range check stays — and a negative index is refused at the door, uncatchably, before any bound.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function lastOr(a WordArray, fallback Word) returns Word
-	let last = a.count() - 1
-	return try a.get(last) otherwise fallback
+	let last = (a.count() as Word) - 1
+	return try a.get(last as ElementIndex) otherwise fallback
 end 'lastOr'
 
 function main() returns ExitCode

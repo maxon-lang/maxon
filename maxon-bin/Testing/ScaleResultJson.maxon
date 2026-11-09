@@ -193,16 +193,20 @@ function addLoggedDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray
 
 	let beforeBytes = try loggedBytes.get(rung) otherwise panic("addLoggedDeltas: the two logged columns are the same length — loadScaleTrend refuses a log where they are not")
 
-	pushJsonNumber(doc, keys: keys, children: children, key: "allocsDelta", value: ((result.total.allocs - beforeAllocs) as JsonFloat))
+	pushJsonNumber(doc, keys: keys, children: children, key: "allocsDelta", value: signedDifference(result.total.allocs as Delta, before: beforeAllocs as Delta))
 
 	// OMITTED, never zero, when the logged row was minted at another path — the same rule `allocsDelta`
 	// follows one line up when a rung has no past. A consumer that finds no `bytesDelta` knows the
 	// subtraction was refused; one handed a number could not have known it was fiction.
 	match bytes 'b'
 		withheld then return
-		comparable then pushJsonNumber(doc, keys: keys, children: children, key: "bytesDelta", value: ((result.total.bytes - beforeBytes) as JsonFloat))
+		comparable then pushJsonNumber(doc, keys: keys, children: children, key: "bytesDelta", value: signedDifference(result.total.bytes as Delta, before: beforeBytes as Delta))
 	end 'b'
 end 'addLoggedDeltas'
+
+function signedDifference(current Delta, before Delta) returns JsonFloat
+	return (current - before) as JsonFloat
+end 'signedDifference'
 
 function metricNode(doc JsonDoc, name String, metric PhaseMetric) returns JsonNodeId
 	var keys = StringArray.create(0)

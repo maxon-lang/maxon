@@ -1405,10 +1405,33 @@ end 'main'
 9223372036854775809
 ```
 
-<!-- test: wrapping-unsigned-folds-reach-an-unsigned-quantity-parameter -->
-### Arithmetic wraps, so a fold over unsigned operands admits the wrapped value
-`+`, `*` and `-` wrap at run time (two's complement), and a fold agrees with what the running program
-computes: the wrapped value is what reaches the parameter.
+<!-- test: a-bare-literal-product-that-wraps-reaches-an-unsigned-quantity-parameter -->
+### A product of two bare literals wraps as signed arithmetic, and the wrapped value reaches the parameter
+`0x100000000 * 0x100000000` is signed arithmetic over bare literals: it wraps (two's complement) to 0, and a fold
+agrees with what the running program computes.
+```maxon
+typealias Count = int(0 to u64.max)
+
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function main() returns ExitCode
+	print("{take(0x100000000 * 0x100000000)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: error.a-wrapping-unsigned-fold-is-refused -->
+### A fold over full-width unsigned operands that wraps is refused
+`+` and `-` over a full-width unsigned alias are checked at the operation, so a constant expression whose result
+leaves the range is E3005. Arithmetic meant to wrap is written over `bits(64)`.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1418,8 +1441,29 @@ end 'take'
 
 function main() returns ExitCode
 	print("{take((0xFFFFFFFFFFFFFFFF as Count) + 1)}\n")
-	print("{take(0x100000000 * 0x100000000)}\n")
 	print("{take(0 - (0xFFFFFFFFFFFFFFFF as Count))}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/raw-bit-patterns/error.a-wrapping-unsigned-fold-is-refused.maxon:9:45: The result of 18446744073709551615 + 1 is outside the range of 'Count' (int(0 to 18446744073709551615))
+error E3005: specs/raw-bit-patterns/error.a-wrapping-unsigned-fold-is-refused.maxon:10:17: The result of 0 - 18446744073709551615 is outside the range of 'Count' (int(0 to 18446744073709551615))
+```
+
+<!-- test: a-wrapping-sum-over-bits-64-reaches-an-unsigned-quantity-parameter -->
+### The spelling for arithmetic that wraps is `bits(64)`
+A sum over `bits(64)` patterns wraps, and the pattern converts to the quantity at the door.
+```maxon
+typealias Count = int(0 to u64.max)
+typealias Word = bits(64)
+
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function main() returns ExitCode
+	let top = 0xFFFFFFFFFFFFFFFF as Word
+	print("{take((top + 1) as Count)}\n")
 	return 0
 end 'main'
 ```
@@ -1428,8 +1472,6 @@ end 'main'
 ```
 ```stdout
 0
-0
-1
 ```
 
 <!-- test: a-signed-overflow-fold-is-refused-at-an-unsigned-quantity-parameter -->
@@ -1619,14 +1661,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-1
-```
-```stderr
-panic at an-unsigned-difference-that-borrows-is-refused-when-folded.test:9: Range check failed: value outside typealias 'Count'
-Stack trace:
-  in main
-  in mrt_start
+```maxoncstderr
+error E3005: specs/raw-bit-patterns/an-unsigned-difference-that-borrows-is-refused-when-folded.maxon:9:28: The result of 0 - 1 is outside the range of 'Count' (int(0 to 18446744073709551615))
 ```
 
 <!-- test: an-unsigned-difference-that-borrows-is-refused-at-run-time -->

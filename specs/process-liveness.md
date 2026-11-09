@@ -62,11 +62,14 @@ end 'main'
 <!-- test: process-liveness.a-negative-id-is-not-alive -->
 <!-- tier: stdlib -->
 ```maxon
+typealias SignedWord = int(i64.min to i64.max)
+
 function main() returns ExitCode
+	let own = __Builtins.currentProcessId() as SignedWord
 	if __Builtins.processIsAlive(0 - 1) 'claimed'
 		return 1
 	end 'claimed'
-	if __Builtins.processIsAlive(0 - __Builtins.currentProcessId()) 'mirrored'
+	if __Builtins.processIsAlive(0 - own) 'mirrored'
 		return 4
 	end 'mirrored'
 	return 3
