@@ -1,0 +1,51 @@
+typealias Rounds = int(0 to 1000000000000000)
+typealias Spinners = int(0 to 1000)
+
+let SpinnerCount = 40
+let SpinRounds = 30000000
+let SettleMs = 1500
+let PidFileName = "burst-pid.txt"
+let FinishedMarkerName = "burst-ran-to-its-end.txt"
+
+type Spinner
+	var total as Rounds
+
+	static function create(seed Rounds) returns Self
+		return Self{total: seed}
+	end 'create'
+
+	export function spin()
+		var k = 0 as Rounds
+
+		while k < SpinRounds 'spin'
+			self.total = (self.total + k mod 7) mod 1000000007 // anchor: spin-body
+			k = k + 1
+		end 'spin'
+	end 'spin'
+end 'Spinner'
+
+typealias SpinnerArray = Array with Spinner.handle
+
+function main() returns ExitCode
+	let pidFile = try FilePath.from(PidFileName) otherwise panic("the pid file name is a relative path")
+	try File.writeText(pidFile, content: "{Process.id()}") otherwise panic("the program could not write its process id")
+
+	var spinners = SpinnerArray.create(0)
+	var made = 0 as Spinners
+
+	while made < SpinnerCount 'spawning'
+		spinners.push(spawn Spinner.create(made as Rounds))
+		made = made + 1
+	end 'spawning'
+
+	for spinner in spinners 'sending'
+		try spinner.spin() otherwise panic("a fresh spinner refused its message")
+	end 'sending'
+
+	sleep(SettleMs)
+
+	let marker = try FilePath.from(FinishedMarkerName) otherwise panic("the marker name is a relative path")
+	try File.writeText(marker, content: "{made}") otherwise panic("the program could not write its marker")
+
+	return 0
+end 'main'

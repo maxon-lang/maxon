@@ -186,6 +186,9 @@ tests/
     ImageHeaders.maxon                      the image-format half: where an ELF, a PE or a Mach-O puts `.text`, read from the file's own headers
     ProcessSnapshot.maxon                   `processSnapshot`: the `ps` rows that name a program or its `debugserver`, for a failure message
     StubProxy.maxon                         the scripted-stub half: `fixtures/stubproxy` built as an executable named `debugserver`, and the environments that put it first on `PATH` for one session
+    ReplSession.maxon                       `ReplSession`: a `debug` REPL spawned over a program, fed commands one at a time, whose transcript is read until a wording appears
+    ThreadBurst.maxon                       `fixtures/threadburst` helpers: `burstProcessId` reads the program's recorded process id, `killedOutright` kills it
+    fixtures/threadburst/main.maxon.fixture   the thread-burst program: it records its process id, starts busy workers, and writes a marker when it runs to its own end - stored name only, see rule 1
     sidecar-dump.maxtest                    the sidecar says something TRUE about the binary beside it
     byte-identical-debug-info.maxtest       the sidecar never decides an instruction, so the image is the same with and without it
     byte-identical-debug-info-under-inlining.maxtest      a program full of spliced bodies with folded and dead locals builds the same image with and without its sidecar
@@ -210,6 +213,9 @@ tests/
     a-sidecar-names-the-globals-and-layout-tables.maxtest      the sidecar publishes the `.data` words and the record geometry a foreign debugger reads by
     a-detached-program-runs-to-completion.maxtest      `detach` leaves the program running and the session reports its own ending
     a-detach-removes-the-attachable-copy.maxtest       a session that detaches leaves no re-signed copy of the program beside it
+    a-program-detached-while-it-starts-threads-runs-to-its-own-end.maxtest      a detach while a program is starting threads releases every one of them, so the program runs to its own end
+    a-detach-from-a-program-that-died-while-held-is-not-a-failed-detach.maxtest      a program killed while the session holds it is let go by `detach`, which reports no failure and no refusal
+    a-clone-event-names-the-thread-it-started.maxtest      on Linux a clone event's message is the new thread's id, and the kernel already traces that thread
     a-stub-answer-that-is-not-an-acknowledgement-fails-the-detach.maxtest      through the stub proxy, a `D` answered with another request's reply fails the detach and names the reply on stderr
     a-stub-answer-that-is-not-an-acknowledgement-refuses-the-breakpoint.maxtest      through the stub proxy, a `Z0` answered with another request's reply is refused and never reported set
     a-stub-report-that-the-program-ended-fails-a-waiting-detach-at-once.maxtest      through the stub proxy, a `D` answered with an exit report fails at once rather than after the reply budget

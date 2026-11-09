@@ -1,0 +1,45 @@
+let BurstDetachCaseLabel = "a-program-detached-while-it-starts-threads-runs-to-its-own-end"
+
+let BurstDetachLaps = 8
+let BurstDetachStopTimeout = "0.01"
+let BurstProcessorCount = "64"
+let BurstProcessorVariable = "MAXON_MAX_PROCS"
+let BurstMarkerLooks = 100
+let BurstMarkerLookGapMs = 100
+
+#if os(Linux)
+	typealias BurstLook = int(0 to 100)
+	typealias BurstLap = int(0 to 100)
+#endif
+
+test 'a program the session detaches from while it is starting threads runs on to its own end with every thread released'
+	#if os(Linux)
+		let staged = builtFixture(BurstDetachCaseLabel, fixture: ThreadBurstFixtureName)
+		let marker = staged.join(BurstFinishedMarkerName)
+		let options = ["{DebugStopTimeoutOptionPrefix}{BurstDetachStopTimeout}", targetEnvOption(BurstProcessorVariable, value: BurstProcessorCount)]
+		var lap = 0 as BurstLap
+
+		while lap < BurstDetachLaps 'eachLap'
+			lap = lap + 1
+
+			if File.exists(marker) 'leftByTheLapBefore'
+				try File.delete(marker) otherwise panic("the gate could not run — the marker of the lap before could not be cleared")
+			end 'leftByTheLapBefore'
+
+			let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: debugCommandLine([RunCommand, DetachCommand]), extraOptions: options)
+			let events = batchEvents(session.stdout)
+			let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+			Expect.equal(eventsOfKind(events, kind: ErrorEventName).count(), expected: 0, message: "lap {lap}: the detach of a program that was still starting threads was refused. {said}")
+
+			var looks = 0 as BurstLook
+
+			while not File.exists(marker) and looks < BurstMarkerLooks 'untilTheProgramEnds'
+				sleep(BurstMarkerLookGapMs)
+				looks = looks + 1
+			end 'untilTheProgramEnds'
+
+			Expect.isTrue(File.exists(marker), message: "⛔ lap {lap}: A DETACHED PROGRAM RUNS TO ITS OWN END, and {BurstFinishedMarkerName} never appeared. A thread the session was tracing when it detached and never released is killed with the session (`PTRACE_O_EXITKILL`), and a thread killed takes its process with it. The session ran {session.durationMs} ms and exited {session.exitCode()}. {said}")
+		end 'eachLap'
+	#endif
+end 'a program the session detaches from while it is starting threads runs on to its own end with every thread released'

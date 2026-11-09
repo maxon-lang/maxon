@@ -1,0 +1,125 @@
+let CloneNamedCaseLabel = "a-clone-event-names-the-thread-it-started"
+
+let CloneNamedDeadlineMs = 30000
+let CloneNamedSliceMs = 50
+let TracerPidFieldName = "TracerPid:"
+let NoTracer = "0"
+
+#if os(Linux)
+	type CloneWatch
+		var configured as bool
+		var born as bool
+		var child as DebuggeeThreadId
+		var parent as DebuggeeThreadId
+		var tracerAtBirth as String
+		var tracerOfParent as String
+		var childReported as bool
+
+		static function create() returns CloneWatch
+			return Self{configured: false, born: false, child: 0, parent: 0, tracerAtBirth: "", tracerOfParent: "", childReported: false}
+		end 'create'
+
+		function complete() returns bool
+			return self.born and self.childReported
+		end 'complete'
+
+		function hasBorn() returns bool
+			return self.born
+		end 'hasBorn'
+
+		function childId() returns DebuggeeThreadId
+			return self.child
+		end 'childId'
+
+		function parentId() returns DebuggeeThreadId
+			return self.parent
+		end 'parentId'
+
+		function parentTracer() returns String
+			return self.tracerOfParent
+		end 'parentTracer'
+
+		function tracer() returns String
+			return self.tracerAtBirth
+		end 'tracer'
+
+		function absorb(trace ProcessTrace, report TraceReport, process DebuggeeProcessId)
+			match report 'which'
+				nothing or
+				exited or
+				killed then return
+				stopped(thread, signal, event) then self.stoppedAt(trace, thread: thread, signal: signal, event: event, process: process)
+			end 'which'
+		end 'absorb'
+
+		function stoppedAt(trace ProcessTrace, thread DebuggeeThreadId, signal DebuggeeSignal, event TraceEvent, process DebuggeeProcessId)
+			if not self.configured 'theExecStop'
+				_ = trace.configure(process)
+				self.configured = true
+			end 'theExecStop'
+
+			if event == TraceEvent.cloneEvent and not self.born 'theFirstBirth'
+				self.noteBirth(trace, parentThread: thread, process: process)
+			end 'theFirstBirth'
+
+			if self.born and thread == self.child 'theChildsOwnFirstStop'
+				self.childReported = true
+			end 'theChildsOwnFirstStop'
+
+			_ = trace.resume(thread, signal: traceeSignalToHandOn(signal, event: event), stepping: false)
+		end 'stoppedAt'
+
+		function noteBirth(trace ProcessTrace, parentThread DebuggeeThreadId, process DebuggeeProcessId)
+			self.child = try trace.cloneChild(parentThread) otherwise (e) 'noMessage'
+				panic("the kernel gave no event message for the clone thread {parentThread} reported ({e.name})")
+			end 'noMessage'
+
+			self.parent = parentThread
+			self.born = true
+			self.tracerAtBirth = tracerOf(process, thread: self.child)
+			self.tracerOfParent = tracerOf(process, thread: parentThread)
+		end 'noteBirth'
+	end 'CloneWatch'
+
+	function tracerOf(process DebuggeeProcessId, thread DebuggeeThreadId) returns String
+		let path = try FilePath.from("{TraceeProcDirectory}/{process}/task/{thread}/status") otherwise panic("the gate could not run — the status path of thread {thread} is not spellable")
+		let text = try File.readText(path) otherwise return "(thread {thread} has no status file)"
+
+		for line in withoutCarriageReturns(text).split(LineFeed) 'eachField'
+			if line.startsWith(TracerPidFieldName) 'theTracerField'
+				return line.replace(TracerPidFieldName, with: "").trim()
+			end 'theTracerField'
+		end 'eachField'
+
+		return "(thread {thread} status has no {TracerPidFieldName} field)"
+	end 'tracerOf'
+#endif
+
+test 'a clone event names the thread it started, and the kernel already traces that thread'
+	#if os(Linux)
+		var tracee = unservicedTracee(CloneNamedCaseLabel)
+		var watch = CloneWatch.create()
+		let started = Clock.nowMs()
+
+		while Clock.elapsedMs(started) < CloneNamedDeadlineMs and not watch.complete() 'untilTheChildReports'
+			let report = tracee.trace.wait(CloneNamedSliceMs, process: tracee.pid as DebuggeeProcessId)
+
+			watch.absorb(tracee.trace, report: report, process: tracee.pid as DebuggeeProcessId)
+		end 'untilTheChildReports'
+
+		let reportedByTheKernel = watch.childId()
+		let tracerAtBirth = watch.tracer()
+		let tracerOfParent = watch.parentTracer()
+		let complete = watch.complete()
+		let born = watch.hasBorn()
+		let parent = watch.parentId()
+
+		tracee.release()
+
+		Expect.isTrue(born, message: "the traced program starts a thread of its own, and the kernel reports that as a clone event on its parent; none arrived within {CloneNamedDeadlineMs} ms.")
+		Expect.notEqual(reportedByTheKernel, expected: parent, message: "⛔ THE CLONE EVENT'S MESSAGE IS THE NEW THREAD'S ID, NOT THE PARENT'S.")
+		Expect.notEqual(tracerOfParent, expected: NoTracer, message: "the program was not being traced, so the comparison below says nothing.")
+		Expect.equal(tracerAtBirth, expected: tracerOfParent, message: "⛔ THE KERNEL TRACES A THREAD FROM ITS BIRTH, before its own first stop is reported, so the id the clone event names is a thread this tracer already holds and must release.")
+		Expect.isTrue(complete, message: "the thread the clone event named ({reportedByTheKernel}) never reported a stop of its own, so the id was not a thread of the program.")
+	#endif
+end 'a clone event names the thread it started, and the kernel already traces that thread'

@@ -2257,6 +2257,8 @@ The `CONTEXT` accessors throw `outOfBounds` for a block of any other size.
 | `wait(budgetMs DebuggeeWaitMs, process DebuggeeProcessId)` | `TraceReport` | — | Wait up to `budgetMs` for a thread of `process` to report. |
 | `resume(thread DebuggeeThreadId, signal DebuggeeSignal, stepping bool)` | `bool` | — | Continue the thread, or single-step it when `stepping`, delivering `signal`; `NoTraceSignal` (0) resumes it silently. |
 | `detach(thread DebuggeeThreadId, signal DebuggeeSignal)` | `bool` | — | Stop tracing the thread, delivering `signal`. |
+| `cloneChild(parent DebuggeeThreadId)` | `DebuggeeThreadId` | `DebuggeeError.unreadable` | The id of the thread `parent` started, read while `parent` is stopped at the `cloneEvent` that reported it. The kernel has traced that thread since its birth, before its own first stop is reported. |
+| `threadState(process DebuggeeProcessId, thread DebuggeeThreadId)` | `TraceThreadState` | — | What `/proc` says of one thread of `process`. |
 | `signalThread(process DebuggeeProcessId, thread DebuggeeThreadId, signal DebuggeeSignal)` | `bool` | — | Send `signal` to one thread. |
 | `signalProcess(process DebuggeeProcessId, signal DebuggeeSignal)` | `bool` | — | Send `signal` to the process. |
 | `signalWasSentByKill(thread DebuggeeThreadId)` | `bool` | — | True when the signal that stopped the thread came from `kill`. |
@@ -2283,6 +2285,14 @@ as byte offsets for the architecture the program is built for:
 | `stopped(thread, signal, event)` | The thread stopped with `signal`; `event` is a `TraceEvent`: `signalStop`, `cloneEvent` (it started a thread) or `otherEvent`. |
 
 `arrived()` is true for every case but `nothing`.
+
+| `TraceThreadState` case | Meaning |
+|-------------------------|---------|
+| `absent` | `/proc` holds no record of the thread. |
+| `present(code)` | The thread's record; `code` starts with its state letter. |
+
+`hasLeft()` is true for `absent` and for a thread that is a zombie (`Z`) or dead (`X`).
+`isRunning()` is true for state `R`, and `isUninterruptible()` for state `D`.
 
 | Type | Definition |
 |------|------------|

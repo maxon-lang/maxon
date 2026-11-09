@@ -130,15 +130,7 @@
 		let TraceStopBudgetNanos = TraceStopBudgetMillis * SamplerNanosPerMilli
 		let TraceStopSpinNanos = 100000
 		let TraceStopPollMicros = 100
-		let ProcTaskRoot = "/proc"
-		let ProcTaskDirectory = "task"
-		let ProcStatFile = "stat"
 		let ProcSchedStatFile = "schedstat"
-		let ProcStateRunning = "R"
-		let ProcStateZombie = "Z"
-		let ProcStateUninterruptible = "D"
-		let ProcStateDead = "X"
-		let ProcCommandEnd = ")"
 		let ProcFieldSeparator = " "
 
 		let TraceKillSignal = 9
@@ -174,11 +166,6 @@
 			read(nanos SampleCycles)
 			unreadable
 		end 'CpuNanos'
-
-		union ThreadState
-			absent
-			present(code String)
-		end 'ThreadState'
 
 		// `owed` is the signal the stop was holding for delivery, and the detach hands it back: detaching
 		// with `NoTraceSignal` from a signal-delivery-stop cancels it, and a cancelled preemption `SIGURG`
@@ -653,7 +640,7 @@
 			#endif
 
 			#if os(Linux)
-				let directory = try FilePath.from("{ProcTaskRoot}/{self.pid}/{ProcTaskDirectory}") otherwise return found
+				let directory = try FilePath.from("{TraceProcRoot}/{self.pid}/{TraceProcTaskDirectory}") otherwise return found
 				let entries = try Directory.list(directory) otherwise return found
 
 				for entry in entries 'eachEntry'
@@ -934,7 +921,7 @@
 			end 'readRemote'
 
 			function schedulerNanos(thread SampledThread) returns CpuNanos
-				let path = try FilePath.from("{ProcTaskRoot}/{self.pid}/{ProcTaskDirectory}/{thread.rawHandle()}/{ProcSchedStatFile}") otherwise return CpuNanos.unreadable
+				let path = try FilePath.from("{TraceProcRoot}/{self.pid}/{TraceProcTaskDirectory}/{thread.rawHandle()}/{ProcSchedStatFile}") otherwise return CpuNanos.unreadable
 				let text = try File.readText(path) otherwise return CpuNanos.unreadable
 				let onCpu = try text.split(ProcFieldSeparator).get(0) otherwise return CpuNanos.unreadable
 				let nanos = try int.fromString(onCpu.trim()) otherwise return CpuNanos.unreadable
@@ -949,38 +936,21 @@
 				end 'reading'
 			end 'settledSchedulerCycles'
 
-			function threadState(id RegisterWord) returns ThreadState
-				let path = try FilePath.from("{ProcTaskRoot}/{self.pid}/{ProcTaskDirectory}/{id}/{ProcStatFile}") otherwise return ThreadState.absent
-				let text = try File.readText(path) otherwise return ThreadState.absent
-				let parts = text.split(ProcCommandEnd)
-				let afterCommand = try parts.get(parts.count() - 1) otherwise return ThreadState.absent
-
-				return ThreadState.present(afterCommand.trim())
+			function threadState(id RegisterWord) returns TraceThreadState
+				return self.trace.threadState(self.pid as DebuggeeProcessId, thread: id as DebuggeeThreadId)
 			end 'threadState'
 
-			function threadIsUninterruptible(id RegisterWord) returns bool
-				return match self.threadState(id) 'state'
-					absent gives false
-					present(code) gives code.startsWith(ProcStateUninterruptible)
-				end 'state'
-			end 'threadIsUninterruptible'
-
-			function threadHasExited(id RegisterWord) returns bool
-				return match self.threadState(id) 'state'
-					absent gives true
-					present(code) gives code.startsWith(ProcStateZombie) or code.startsWith(ProcStateDead)
-				end 'state'
-			end 'threadHasExited'
-
 			function threadReading(thread SampledThread) returns ThreadReading
-				return match self.threadState(thread.rawHandle()) 'state'
+				let state = self.threadState(thread.rawHandle())
+
+				return match state 'state'
 					absent gives ThreadReading.unreadable
-					present(code) gives self.readingOfLiveThread(thread, code: code)
+					present gives self.readingOfLiveThread(thread, running: state.isRunning())
 				end 'state'
 			end 'threadReading'
 
-			function readingOfLiveThread(thread SampledThread, code String) returns ThreadReading
-				if code.startsWith(ProcStateRunning) 'running'
+			function readingOfLiveThread(thread SampledThread, running bool) returns ThreadReading
+				if running 'running'
 					return ThreadReading.running
 				end 'running'
 
@@ -1061,7 +1031,7 @@
 				end 'untilItWakes'
 
 				match outcome 'seized'
-					gone then return TraceProbe.killed if self.threadHasExited(self.pid) else TraceProbe.refused
+					gone then return TraceProbe.killed if self.threadState(self.pid).hasLeft() else TraceProbe.refused
 					uninterruptible then return TraceProbe.traceable
 					held then break
 				end 'seized'
@@ -1072,7 +1042,7 @@
 			end 'canBeTraced'
 
 			function seizeForStop(thread DebuggeeThreadId, stateKnown bool) returns SeizeOutcome
-				if not stateKnown and self.threadIsUninterruptible(thread as RegisterWord) 'asleepInTheKernel'
+				if not stateKnown and self.threadState(thread as RegisterWord).isUninterruptible() 'asleepInTheKernel'
 					return SeizeOutcome.uninterruptible
 				end 'asleepInTheKernel'
 
@@ -1098,7 +1068,7 @@
 			end 'holdForStop'
 
 			function detachedOrGone(thread DebuggeeThreadId, owed DebuggeeSignal) returns bool
-				if self.trace.detach(thread, signal: owed) or ((thread as RegisterWord) != self.pid and self.trace.reapedGone(thread)) or self.threadHasExited(thread as RegisterWord) 'noLongerHeld'
+				if self.trace.detach(thread, signal: owed) or ((thread as RegisterWord) != self.pid and self.trace.reapedGone(thread)) or self.threadState(thread as RegisterWord).hasLeft() 'noLongerHeld'
 					self.seized.remove(thread)
 
 					return true
@@ -1147,7 +1117,7 @@
 						return StopArrival.held(self.trace.signalAwaitingDelivery(thread))
 					end 'stopped'
 
-					if Clock.elapsedNanos(started) > TraceStopSpinNanos and self.threadHasExited(thread as RegisterWord) 'exited'
+					if Clock.elapsedNanos(started) > TraceStopSpinNanos and self.threadState(thread as RegisterWord).hasLeft() 'exited'
 						return StopArrival.lost
 					end 'exited'
 

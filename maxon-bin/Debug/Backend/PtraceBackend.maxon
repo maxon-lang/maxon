@@ -8,6 +8,14 @@ let GroupStopBudgetMs = 2000
 
 let NoWaitMs = 0
 
+let ReleaseRetryMs = 1
+
+enum PtraceRelease
+	released
+	gone
+	refused
+end 'PtraceRelease'
+
 function ptraceSignalsWith(signals PtraceOwedSignalArray, signal BackendWord) returns PtraceOwedSignalArray
 	var more = signals.clone()
 	more.push(signal)
@@ -455,17 +463,38 @@ export type PtraceBackend
 		return BackendEventClass.stop(DebugStopEvent.stopped(reporter as BackendThreadId, reason: reason, faultCode: faultCode, address: at))
 	end 'standingAt'
 
+	// A thread started while the others stop is born running, so the passes repeat until none runs;
+	// `handled` keeps a thread that did not stop from being asked again within the call.
 	function stopEveryOtherThread()
+		var handled = BackendThreadIdArray.create(0)
+		let deadline = debugDeadlineAfter(GroupStopBudgetMs as StopTimeoutMs)
+
+		while not debugDeadlinePassed(deadline) 'eachPass'
+			let running = self.runningThreadsOutside(handled)
+
+			if running.count() == 0 'everyThreadStands'
+				return
+			end 'everyThreadStands'
+
+			_ = self.threadsBroughtToAStop(running)
+
+			for id in running 'eachAsked'
+				handled.push(id)
+			end 'eachAsked'
+		end 'eachPass'
+	end 'stopEveryOtherThread'
+
+	function runningThreadsOutside(handled BackendThreadIdArray) returns BackendThreadIdArray
 		var running = BackendThreadIdArray.create(0)
 
 		for entry in self.threads 'eachThread'
-			if not entry.stopped 'stillRunning'
+			if not entry.stopped and not handled.contains(entry.id) 'stillRunning'
 				running.push(entry.id)
 			end 'stillRunning'
 		end 'eachThread'
 
-		_ = self.threadsBroughtToAStop(running)
-	end 'stopEveryOtherThread'
+		return running
+	end 'runningThreadsOutside'
 
 	function threadsBroughtToAStop(targets BackendThreadIdArray) returns bool
 		var asked = BackendThreadIdArray.create(0)
@@ -734,23 +763,34 @@ export type PtraceBackend
 
 	// The reporter resumes last, giving every thread held through the stop a head start on it.
 	function resumableRoster() returns PtraceThreadEntryArray
-		let reporter = self.stoppedThread()
 		var roster = PtraceThreadEntryArray.create(self.threads.count(), zeroed: false)
 
-		for entry in self.threads 'eachThread'
-			if entry.id != reporter and self.resumable(entry) 'anotherThreadResumes'
+		for entry in self.threadsEnding(self.stoppedThread()) 'eachThread'
+			if self.resumable(entry) 'itResumes'
 				roster.push(entry)
-			end 'anotherThreadResumes'
+			end 'itResumes'
 		end 'eachThread'
-
-		for entry in self.threads 'theReporterLast'
-			if entry.id == reporter and self.resumable(entry) 'theReporterResumes'
-				roster.push(entry)
-			end 'theReporterResumes'
-		end 'theReporterLast'
 
 		return roster
 	end 'resumableRoster'
+
+	function threadsEnding(last BackendThreadId) returns PtraceThreadEntryArray
+		var ordered = PtraceThreadEntryArray.create(self.threads.count(), zeroed: false)
+
+		for entry in self.threads 'theOthers'
+			if entry.id != last 'anotherThread'
+				ordered.push(entry)
+			end 'anotherThread'
+		end 'theOthers'
+
+		for entry in self.threads 'theLast'
+			if entry.id == last 'thatThread'
+				ordered.push(entry)
+			end 'thatThread'
+		end 'theLast'
+
+		return ordered
+	end 'threadsEnding'
 
 	function resumable(entry PtraceThreadEntry) returns bool
 		if not entry.stopped or self.holdsAStopFor(entry.id) 'itStaysWhereItIs'
@@ -841,18 +881,21 @@ export type PtraceBackend
 		_ = self.borrowedStop()
 		self.stopEveryOtherThread()
 		self.drainOwedStops(self.listThreads(), faults: PtraceFaultDrain.handedToTheProgram)
+
+		// Draining continues threads, so whatever runs again is stopped before the release: only a
+		// stopped thread can be detached.
+		self.stopEveryOtherThread()
 		self.stopRequested = false
 		self.driverTrapTaken()
 		var detached = true
+		let deadline = debugDeadlineAfter(GroupStopBudgetMs as StopTimeoutMs)
 
-		for entry in self.threads 'eachThread'
-			if not self.trace.detach(entry.id as DebuggeeThreadId, signal: ptraceFirstSignalOf(entry.owedSignals) as DebuggeeSignal) 'theKernelRefused'
-				detached = false
-
-				continue
-			end 'theKernelRefused'
-
-			self.laterSignalsRaised(entry.id, owed: entry.owedSignals)
+		for entry in self.threadsEnding(self.process as BackendThreadId) 'eachThread'
+			match self.release(entry, deadline: deadline) 'release'
+				released then self.laterSignalsRaised(entry.id, owed: entry.owedSignals)
+				gone then continue
+				refused then detached = false
+			end 'release'
 		end 'eachThread'
 
 		self.stopOutstanding = false
@@ -861,6 +904,24 @@ export type PtraceBackend
 
 		return detached
 	end 'detach'
+
+	// A thread the kernel has already ended cannot be detached, and that is a detach with nothing left
+	// to do: `gone` must not count as refused, or a program that died while held fails its detach.
+	function release(entry PtraceThreadEntry, deadline DebugDeadline) returns PtraceRelease
+		while not debugDeadlinePassed(deadline) 'eachAttempt'
+			if self.trace.detach(entry.id as DebuggeeThreadId, signal: ptraceFirstSignalOf(entry.owedSignals) as DebuggeeSignal) 'theKernelReleasedIt'
+				return PtraceRelease.released
+			end 'theKernelReleasedIt'
+
+			if self.trace.threadState(self.process as DebuggeeProcessId, thread: entry.id as DebuggeeThreadId).hasLeft() 'itLeftOnItsOwn'
+				return PtraceRelease.gone
+			end 'itLeftOnItsOwn'
+
+			sleep(ReleaseRetryMs)
+		end 'eachAttempt'
+
+		return PtraceRelease.refused
+	end 'release'
 
 	// --- memory ---
 
@@ -1006,7 +1067,24 @@ export type PtraceBackend
 			none then self.threads.push(PtraceThreadEntry.create(id, stopped: true, owedSignals: PtraceOwedSignalArray.create(0), stopOwed: false, standingSignal: standingSignal))
 			at(entry) then self.withEntryReplaced(PtraceThreadEntry.create(id, stopped: true, owedSignals: entry.owedSignals, stopOwed: entry.stopOwed and not stopObserved, standingSignal: standingSignal))
 		end 'known'
+
+		if event == TraceEvent.cloneEvent 'aThreadWasBorn'
+			self.rememberCloneChild(id)
+		end 'aThreadWasBorn'
 	end 'rememberThread'
+
+	// The kernel traces a clone child from its birth, before its first stop is reaped here, so it is
+	// recorded now with that stop owed: a detach that missed it would leave it traced, and
+	// `PTRACE_O_EXITKILL` kills a traced thread when the debugger goes.
+	function rememberCloneChild(parent BackendThreadId)
+		let child = try self.trace.cloneChild(parent as DebuggeeThreadId) otherwise return
+
+		if self.knowsThread(child as BackendThreadId) 'itsFirstStopWasReapedAlready'
+			return
+		end 'itsFirstStopWasReapedAlready'
+
+		self.threads.push(PtraceThreadEntry.create(child as BackendThreadId, stopped: false, owedSignals: PtraceOwedSignalArray.create(0), stopOwed: true, standingSignal: NoSignal))
+	end 'rememberCloneChild'
 
 	function entryOf(id BackendThreadId) returns PtraceThreadEntryLookup
 		for entry in self.threads 'eachThread'

@@ -1,0 +1,36 @@
+let DiedWhileHeldCaseLabel = "a-detach-from-a-program-that-died-while-held-is-not-a-failed-detach"
+
+let DiedWhileHeldDeadlineMs = 120000
+let DiedWhileHeldStopWording = "stopped ("
+let DiedWhileHeldClearedWording = "breakpoint cleared"
+let DetachFailureWording = "the detach failed"
+let DetachRefusalWording = "refused to detach"
+
+test 'a program that dies while the session holds it is let go, not reported as a failed detach'
+	#if os(Linux)
+		let staged = builtFixture(DiedWhileHeldCaseLabel, fixture: ThreadBurstFixtureName)
+		let spinLine = anchorLine(staged.join(StagedProgramFileName), anchor: BurstSpinAnchorName)
+		var session = ReplSession.open(builtExecutable(staged), staged: staged)
+
+		session.say("{BreakCommand} {lineTarget(spinLine)}")
+		session.say(RunCommand)
+
+		Expect.isTrue(session.sayUntilThe(DiedWhileHeldStopWording, deadlineMs: DiedWhileHeldDeadlineMs), message: "the program must be held at its breakpoint before it is killed. {session.said()}")
+
+		session.say("{ClearCommand} {lineTarget(spinLine)}")
+
+		Expect.isTrue(session.sayUntilThe(DiedWhileHeldClearedWording, deadlineMs: DiedWhileHeldDeadlineMs), message: "the breakpoint must be cleared while the program is alive, or the detach is refused for the memory it can no longer write instead of for its threads. {session.said()}")
+
+		killedOutright(burstProcessId(staged))
+
+		session.say(DetachCommand)
+		session.say(QuitCommand)
+
+		let ended = session.finish(DiedWhileHeldDeadlineMs)
+		let spoken = session.said()
+
+		Expect.isTrue(ended, message: "the session must end once it is told to quit. {spoken}")
+		Expect.isFalse(spoken.contains(DetachFailureWording), message: "⛔ EVERY THREAD OF THE PROGRAM IS GONE, SO THERE IS NOTHING LEFT TO REFUSE THE DETACH. A thread the kernel has already ended cannot be detached, and that is the detach having nothing to do, not the detach failing. The session said: {spoken}")
+		Expect.isFalse(spoken.contains(DetachRefusalWording), message: "a detach from a program that is already gone is not refused. The session said: {spoken}")
+	#endif
+end 'a program that dies while the session holds it is let go, not reported as a failed detach'

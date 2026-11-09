@@ -1,0 +1,97 @@
+let ReplPollMs = 5
+
+export type ReplSession
+	var child as StreamingSubprocess
+	var transcript as String
+
+	export static function open(executable FilePath, staged FilePath) returns ReplSession
+		let child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(testedCompilerPath()), arguments: [DebugSubcommandName, executable.toString()], workingDirectory: staged, environment: Environment.inherit) otherwise (e) 'spawnFailed'
+			panic("the gate could not run — the debug REPL could not be spawned ({e.displayReason()}).")
+		end 'spawnFailed'
+
+		return Self{child: child, transcript: ""}
+	end 'open'
+
+	export function say(command String)
+		try self.child.writeStdinLine(command) otherwise (e) 'writeFailed'
+			panic("the gate could not run — the debug REPL refused the command `{command}` ({e.displayReason()}).")
+		end 'writeFailed'
+	end 'say'
+
+	export function said() returns String
+		return withoutCarriageReturns(self.transcript)
+	end 'said'
+
+	export function sayUntilThe(needle String, deadlineMs DurationMs) returns bool
+		let started = Clock.nowMs()
+
+		while Clock.elapsedMs(started) < deadlineMs 'untilItIsSaid'
+			let moved = self.absorbAvailable()
+
+			if self.transcript.contains(needle) 'itWasSaid'
+				return true
+			end 'itWasSaid'
+
+			if not moved 'idle'
+				sleep(ReplPollMs)
+			end 'idle'
+		end 'untilItIsSaid'
+
+		return self.transcript.contains(needle)
+	end 'sayUntilThe'
+
+	export function finish(deadlineMs DurationMs) returns bool
+		self.child.closeStdin()
+
+		let started = Clock.nowMs()
+		var ended = false
+
+		while Clock.elapsedMs(started) < deadlineMs and not ended 'untilItEnds'
+			let polled = self.child.pollExit()
+
+			_ = self.absorbAvailable()
+
+			match polled 'exitPoll'
+				running then sleep(ReplPollMs)
+				exited then ended = true
+			end 'exitPoll'
+		end 'untilItEnds'
+
+		if not ended 'itHung'
+			requireTreeEnded(self.child, what: "the debug REPL")
+		end 'itHung'
+
+		while self.absorbAvailable() 'theTail'
+			continue
+		end 'theTail'
+
+		self.child.release()
+
+		return ended
+	end 'finish'
+
+	function absorbAvailable() returns bool
+		let outMoved = self.absorbStdoutLine()
+		let errMoved = self.absorbStderrLine()
+
+		return outMoved or errMoved
+	end 'absorbAvailable'
+
+	function absorbStdoutLine() returns bool
+		match try self.child.tryReadStdoutLine() otherwise panic("the debug REPL's stdout is out with a StdoutReader") 'polled'
+			none then return false
+			line(text) then self.transcript.append("{text}{LineFeed}")
+		end 'polled'
+
+		return true
+	end 'absorbStdoutLine'
+
+	function absorbStderrLine() returns bool
+		match self.child.tryReadStderrLine() 'polled'
+			none then return false
+			line(text) then self.transcript.append("{text}{LineFeed}")
+		end 'polled'
+
+		return true
+	end 'absorbStderrLine'
+end 'ReplSession'

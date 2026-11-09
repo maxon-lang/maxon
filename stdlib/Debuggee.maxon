@@ -658,7 +658,8 @@ let TraceFpRegsSlot = (TraceIovecLengthSlot + WordBytes) as ScratchOffset
 let TraceStatusSlot = ((TraceFpRegsSlot as ScratchBytes) + VectorBlockBytes) as ScratchOffset
 let TracePeekSlot = (TraceStatusSlot + WordBytes) as ScratchOffset
 let TraceReadCountSlot = (TracePeekSlot + WordBytes) as ScratchOffset
-let TraceSigInfoSlot = (TraceReadCountSlot + WordBytes) as ScratchOffset
+let TraceEventMessageSlot = (TraceReadCountSlot + WordBytes) as ScratchOffset
+let TraceSigInfoSlot = (TraceEventMessageSlot + WordBytes) as ScratchOffset
 let TraceSigInfoCodeSlot = (TraceSigInfoSlot + SigInfoCodeOffset) as ScratchOffset
 let TraceTransferSlot = (TraceSigInfoSlot + SigInfoBlockBytes) as ScratchOffset
 
@@ -675,9 +676,13 @@ function requireTraceScratchLayoutIsDisjoint()
 		panic("ProcessTrace: a {VectorBlockBytes}-byte vector block at {TraceFpRegsSlot} runs into the wait status at {TraceStatusSlot}")
 	end 'theVectorBlockReachesTheStatusWord'
 
-	if TraceReadCountSlot + WordBytes > TraceSigInfoSlot 'theReadCountReachesTheSignalBlock'
-		panic("ProcessTrace: the read count at {TraceReadCountSlot} runs into the signal block at {TraceSigInfoSlot}")
-	end 'theReadCountReachesTheSignalBlock'
+	if TraceReadCountSlot + WordBytes > TraceEventMessageSlot 'theReadCountReachesTheEventMessage'
+		panic("ProcessTrace: the read count at {TraceReadCountSlot} runs into the event message at {TraceEventMessageSlot}")
+	end 'theReadCountReachesTheEventMessage'
+
+	if TraceEventMessageSlot + WordBytes > TraceSigInfoSlot 'theEventMessageReachesTheSignalBlock'
+		panic("ProcessTrace: the event message at {TraceEventMessageSlot} runs into the signal block at {TraceSigInfoSlot}")
+	end 'theEventMessageReachesTheSignalBlock'
 
 	if TraceSigInfoSlot + SigInfoBlockBytes > TraceTransferSlot 'theSignalBlockReachesTheTransferWindow'
 		panic("ProcessTrace: a {SigInfoBlockBytes}-byte signal block at {TraceSigInfoSlot} runs into the transfer window at {TraceTransferSlot}")
@@ -694,6 +699,7 @@ let PtraceCont = 7
 let PtraceSingleStep = 9
 let PtraceDetach = 17
 let PtraceSetOptions = 0x4200
+let PtraceGetEventMessage = 0x4201
 let PtraceGetSigInfo = 0x4202
 let PtraceGetRegs = 12
 let PtraceSetRegs = 13
@@ -714,6 +720,15 @@ let PtraceEventStop = 128
 let SignalCodeEventShift = 8
 let SignalCodeSentByKill = 0
 public let NoTraceSignal = 0 as DebuggeeSignal
+
+module let TraceProcRoot = "/proc"
+module let TraceProcTaskDirectory = "task"
+let TraceProcStatFile = "stat"
+let TraceProcCommandEnd = ")"
+let TraceProcStateRunning = "R"
+let TraceProcStateUninterruptible = "D"
+let TraceProcStateZombie = "Z"
+let TraceProcStateDead = "X"
 
 let WaitSignalMask = 0x7F
 let WaitStoppedMask = 0xFF
@@ -743,6 +758,32 @@ public union TraceReport
 		end 'which'
 	end 'arrived'
 end 'TraceReport'
+
+public union TraceThreadState
+	absent
+	present(code String)
+
+	public function hasLeft() returns bool
+		return match self 'state'
+			absent gives true
+			present(code) gives code.startsWith(TraceProcStateZombie) or code.startsWith(TraceProcStateDead)
+		end 'state'
+	end 'hasLeft'
+
+	public function isRunning() returns bool
+		return match self 'state'
+			absent gives false
+			present(code) gives code.startsWith(TraceProcStateRunning)
+		end 'state'
+	end 'isRunning'
+
+	public function isUninterruptible() returns bool
+		return match self 'state'
+			absent gives false
+			present(code) gives code.startsWith(TraceProcStateUninterruptible)
+		end 'state'
+	end 'isUninterruptible'
+end 'TraceThreadState'
 
 /// Drives a debuggee through `ptrace`, on Linux only. It owns a scratch region that `close()`
 /// releases, and a call that needs the region after `close()` panics.
@@ -798,6 +839,27 @@ public type ProcessTrace
 	public function configure(process DebuggeeProcessId) returns bool
 		return traceHostCall(TraceHostVerb.request, a0: PtraceSetOptions, a1: process as RegisterWord, a2: 0, a3: PtraceOptionExitKill or PtraceOptionTraceClone, a4: 0) != 0
 	end 'configure'
+
+	// Valid only while `parent` is stopped at the clone event: the kernel's message is about the event
+	// that just stopped it, so read at any other stop it names something else.
+	public function cloneChild(parent DebuggeeThreadId) returns DebuggeeThreadId throws DebuggeeError
+		self.scratch.setWord(TraceEventMessageSlot, value: 0)
+
+		if traceHostCall(TraceHostVerb.request, a0: PtraceGetEventMessage, a1: parent as RegisterWord, a2: 0, a3: self.scratch.addressOf(TraceEventMessageSlot), a4: 0) == 0 'theKernelRefused'
+			throw DebuggeeError.unreadable
+		end 'theKernelRefused'
+
+		return self.scratch.word(TraceEventMessageSlot) as DebuggeeThreadId
+	end 'cloneChild'
+
+	public function threadState(process DebuggeeProcessId, thread DebuggeeThreadId) returns TraceThreadState
+		let path = try FilePath.from("{TraceProcRoot}/{process}/{TraceProcTaskDirectory}/{thread}/{TraceProcStatFile}") otherwise return TraceThreadState.absent
+		let text = try File.readText(path) otherwise return TraceThreadState.absent
+		let parts = text.split(TraceProcCommandEnd)
+		let afterCommand = try parts.get(parts.count() - 1) otherwise return TraceThreadState.absent
+
+		return TraceThreadState.present(afterCommand.trim())
+	end 'threadState'
 
 	public function resume(thread DebuggeeThreadId, signal DebuggeeSignal, stepping bool) returns bool
 		let request = PtraceSingleStep if stepping else PtraceCont
