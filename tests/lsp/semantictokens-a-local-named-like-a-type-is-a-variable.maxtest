@@ -1,0 +1,48 @@
+let ShadowedTypeUri = "file:///test.maxon"
+
+let ShadowedTypeTypeType = 1
+let ShadowedTypeVariableType = 7
+
+test 'semantic tokens colour a local or parameter that shares a visible type name as a variable'
+	var client = LspClient.start()
+
+	if let data = try shadowedTypeTokensOf(client) 'tokens'
+		client.release()
+		assertShadowedTypeColours(locatedSemanticTokensOf(data))
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
+	end 'failed'
+end 'semantic tokens colour a local or parameter that shares a visible type name as a variable'
+
+function shadowedTypeTokensOf(client LspClient) returns SemanticTokenValueArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(ShadowedTypeUri, content: shadowedTypeFixture())
+
+	let tokens = try client.semanticTokensFull(ShadowedTypeUri)
+
+	return tokens.data
+end 'shadowedTypeTokensOf'
+
+function assertShadowedTypeColours(tokens LocatedSemanticTokenArray) throws TestFailure
+	let source = shadowedTypeFixture()
+
+	try requireSemanticTokenType(tokens, source: source, line: 0, word: "String", expected: ShadowedTypeVariableType, what: "the parameter named like a type in `function shadows(String Count)`")
+	try requireSemanticTokenType(tokens, source: source, line: 0, word: "Count", expected: ShadowedTypeTypeType, what: "the parameter type in `function shadows(String Count)`, read before any local of that name")
+	try requireSemanticTokenType(tokens, source: source, line: 1, word: "Count", expected: ShadowedTypeVariableType, what: "the local declared by `let Count = 7`")
+	try requireSemanticTokenType(tokens, source: source, line: 2, word: "Count", expected: ShadowedTypeVariableType, what: "the local read in `Count + 1`, which shadows the stdlib type")
+	try requireSemanticTokenType(tokens, source: source, line: 3, word: "String", expected: ShadowedTypeVariableType, what: "the parameter read in `return String`, which shadows the stdlib type")
+	try requireSemanticTokenType(tokens, source: source, line: 6, word: "Count", expected: ShadowedTypeTypeType, what: "the type in `returns Count` of a function with no local of that name")
+end 'assertShadowedTypeColours'
+
+function shadowedTypeFixture() returns String
+	return String.from(b"function shadows(String Count) returns Count
+    let Count = 7
+    let first = Count + 1
+    return String
+end 'shadows'
+
+function plain() returns Count
+    return 0
+end 'plain'")
+end 'shadowedTypeFixture'

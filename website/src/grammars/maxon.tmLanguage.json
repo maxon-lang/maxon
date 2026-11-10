@@ -125,6 +125,9 @@
               }
             },
             {
+              "include": "#capability-words"
+            },
+            {
               "comment": "Associated value parameter: paramName Type",
               "match": "\\b([a-z_]\\w*)\\s+([A-Z]\\w*)",
               "captures": {
@@ -243,8 +246,49 @@
         }
       ]
     },
+    "capability-words": {
+      "comment": "Approximates the language server's `capability` semantic token (`BracketTracker`'s qualifier rule), which package.json colours with this same scope: a change to one belongs in the other.",
+      "patterns": [
+        {
+          "comment": "`isolated`, `immutable` and `mutable` are contextual: a keyword only where they qualify a type, directly after a word (a parameter, field or payload name, `returns`, `as`, `with`) and before a type. A bare \\bimmutable\\b would paint every binding or parameter named by one.",
+          "match": "(?<=\\w[ \\t])(?<!\\blet |\\bvar |\\bview |\\breturn |\\bthrow |\\bnot |\\band |\\bor |\\bxor |\\bin |\\bthen |\\bgives |\\belse |\\bif |\\bto |\\bupto |\\bmod |\\bshl |\\bshr |\\bis |\\btry |\\bawait |\\basync |\\botherwise |\\bpanic |\\bwhile |\\bfor |\\bmatch |\\bdefault |\\bignore |\\bthrows |\\bfrom |\\bwhere |\\buses |\\bextends |\\bimplements |\\bfunction |\\btype |\\benum |\\bunion |\\binterface |\\bextension |\\btypealias |\\bstatic |\\bexport |\\bpublic |\\bmodule |\\bfreeze |\\bswap |\\bmerge |\\bspawn )(isolated|immutable|mutable)(?=[ \\t]+(?:[A-Z(]|(?:int|float|bool|cstring)\\b))",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.capability.maxon"
+            }
+          }
+        },
+        {
+          "match": "(?<=\\bfunction\\(|\\bwith \\()(isolated|immutable|mutable)(?=[ \\t]+(?:[A-Z(]|(?:int|float|bool|cstring)\\b))",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.capability.maxon"
+            }
+          }
+        },
+        {
+          "match": "(?<== )(isolated|immutable)(?=[ \\t]+[A-Z])",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.capability.maxon"
+            }
+          }
+        },
+        {
+          "match": "(?<=\\()(isolated|immutable|mutable)(?=[ \\t]+self\\b)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.capability.maxon"
+            }
+          }
+        }
+      ]
+    },
     "keywords": {
       "patterns": [
+        {
+          "include": "#capability-words"
+        },
         {
           "comment": "`test` is a CONTEXTUAL keyword: it opens a declaration only at line start followed by its quoted name. A bare \\btest\\b in the keyword.other rule below would paint every ordinary `test` variable (`for test in tests`, `test.name`), which is the exact thing making it contextual exists to avoid.",
           "match": "^\\s*(test)\\s+('[^']*')",

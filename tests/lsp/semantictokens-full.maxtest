@@ -20,30 +20,8 @@
 
 let SemanticTokensUri = "file:///test.maxon"
 
-// Semantic tokens format: [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]
-let SemanticTokensQuintupleWidth = 5
-let SemanticTokensDeltaLineSlot = 0
-let SemanticTokensLengthSlot = 2
-let SemanticTokensTypeSlot = 3
-
 // Token types: 0=keyword, 9=modifier, 10=enumMember — indices into the legend the server declares.
 let SemanticTokensEnumMemberType = 10
-
-// One decoded token: where it sits after the deltas are accumulated, how long it is, and what it is.
-//
-// ⚠ The line carries the WIRE's own integer range rather than `LspCoordinate`'s. A server sending a
-// negative delta is a wrong answer this test should FAIL on, not a range-check panic that reports a crash.
-type DecodedSemanticToken
-	export var line as SemanticTokenValue
-	export var length as SemanticTokenValue
-	export var tokenType as SemanticTokenValue
-
-	static function create(line SemanticTokenValue, length SemanticTokenValue, tokenType SemanticTokenValue) returns DecodedSemanticToken
-		return Self{line: line, length: length, tokenType: tokenType}
-	end 'create'
-end 'DecodedSemanticToken'
-
-typealias DecodedSemanticTokenArray = Array with DecodedSemanticToken
 
 // How many decoded tokens answered a question. Not `SemanticTokenValue`: that is the WIRE's range, and a
 // tally of what this file counted is a different quantity from a value the server sent.
@@ -85,11 +63,11 @@ function assertSemanticTokensWellFormed(data SemanticTokenValueArray) throws Tes
 	let observedLength = data.count()
 	try Expect.greaterThan(observedLength, than: 0, message: "a four-line file produced no semantic tokens at all.")
 
-	let observedRemainder = observedLength mod SemanticTokensQuintupleWidth
+	let observedRemainder = observedLength mod SemanticTokenQuintupleWidth
 	let expectedRemainder = 0
 	try Expect.equal(observedRemainder, expected: expectedRemainder, message: "the token data was not a whole number of quintuples. LSP defines it as [deltaLine, deltaStartChar, length, tokenType, tokenModifiers] repeated, so a length that is not a multiple of five cannot be decoded at all — every client reading it would drift.")
 
-	let tokens = semanticTokensDecode(data)
+	let tokens = locatedSemanticTokensOf(data)
 
 	// The first token's deltaLine is relative to nothing, so a first token on line 0 IS a first
 	// `deltaLine` of 0 — and `function` at (0,0) is what the fixture opens with.
@@ -113,7 +91,7 @@ function assertSemanticTokensEnumMembers(data SemanticTokenValueArray) throws Te
 	// - "returns" at line 2 to be enumMember (10), NOT modifier (9)
 	// - "identifier" at line 3 to be enumMember (10)
 	// - "end" at line 4 to be keyword (0)
-	let tokens = semanticTokensDecode(data)
+	let tokens = locatedSemanticTokensOf(data)
 
 	try assertSemanticTokenIsEnumMember(tokens, line: 1, length: 8, word: "function")
 	try assertSemanticTokenIsEnumMember(tokens, line: 2, length: 7, word: "returns")
@@ -124,7 +102,7 @@ end 'assertSemanticTokensEnumMembers'
 // ⭐ The colour claim is UNIVERSAL: EVERY token of that width on that line must carry the type. A
 // first-match search would pass a file where one of two identical-width tokens was mis-coloured, which
 // is the very confusion this test is named for.
-function assertSemanticTokenIsEnumMember(tokens DecodedSemanticTokenArray, line SemanticTokenValue, length SemanticTokenValue, word String) throws TestFailure
+function assertSemanticTokenIsEnumMember(tokens LocatedSemanticTokenArray, line SemanticTokenValue, length SemanticTokenValue, word String) throws TestFailure
 	let (matched, misTyped) = semanticTokensTypeAgreement(tokens, line: line, length: length, tokenType: SemanticTokensEnumMemberType)
 
 	try Expect.greaterThan(matched, than: 0, message: "no {length}-character token was reported on line {line}, so nothing was classified for `{word}` at all and the colour claim below could never fail.")
@@ -134,32 +112,7 @@ function assertSemanticTokenIsEnumMember(tokens DecodedSemanticTokenArray, line 
 	try Expect.equal(observedWrong, expected: expectedWrong, message: "{observedWrong} of the {matched} {length}-character tokens on line {line} were not classified as enumMember (10). `{word}` is a KEYWORD everywhere else in Maxon, and a server that lexes before it parses will colour it as one. The index is read against the legend the server declares in `initialize`; that legend is the contract.")
 end 'assertSemanticTokenIsEnumMember'
 
-// Accumulate `deltaLine` into a running line, and record what each quintuple describes.
-//
-// Slots 1 (deltaStartChar) and 4 (tokenModifiers) are read by no assertion in either test, so they are
-// walked past rather than stored. The loop reaches slot 3 only for a COMPLETE quintuple, so a truncated
-// tail contributes no token — which is the bound the recovered `i + 4 < data.len` guard expressed.
-function semanticTokensDecode(data SemanticTokenValueArray) returns DecodedSemanticTokenArray
-	var tokens = DecodedSemanticTokenArray.create(0)
-	var currentLine = 0 as SemanticTokenValue
-	var pendingLength = 0 as SemanticTokenValue
-
-	for (position, value) in data.withIterator() 'eachValue'
-		let slot = position.index() mod SemanticTokensQuintupleWidth
-
-		if slot == SemanticTokensDeltaLineSlot 'delta'
-			currentLine = currentLine + value
-		end 'delta' else if slot == SemanticTokensLengthSlot 'length'
-			pendingLength = value
-		end 'length' else if slot == SemanticTokensTypeSlot 'tokenType'
-			tokens.push(DecodedSemanticToken.create(currentLine, length: pendingLength, tokenType: value))
-		end 'tokenType'
-	end 'eachValue'
-
-	return tokens
-end 'semanticTokensDecode'
-
-function semanticTokensStartOnFirstLine(tokens DecodedSemanticTokenArray) returns bool
+function semanticTokensStartOnFirstLine(tokens LocatedSemanticTokenArray) returns bool
 	for token in tokens 'eachToken'
 		return token.line == 0
 	end 'eachToken'
@@ -167,7 +120,7 @@ function semanticTokensStartOnFirstLine(tokens DecodedSemanticTokenArray) return
 	return false
 end 'semanticTokensStartOnFirstLine'
 
-function semanticTokensCoverLine(tokens DecodedSemanticTokenArray, line SemanticTokenValue) returns bool
+function semanticTokensCoverLine(tokens LocatedSemanticTokenArray, line SemanticTokenValue) returns bool
 	for token in tokens 'eachToken'
 		if token.line == line 'hit'
 			return true
@@ -179,7 +132,7 @@ end 'semanticTokensCoverLine'
 
 // Both halves of the colour claim from ONE walk: how many tokens of that width sit on the line, and how
 // many of them carry the wrong type.
-function semanticTokensTypeAgreement(tokens DecodedSemanticTokenArray, line SemanticTokenValue, length SemanticTokenValue, tokenType SemanticTokenValue) returns (TokenTally, TokenTally)
+function semanticTokensTypeAgreement(tokens LocatedSemanticTokenArray, line SemanticTokenValue, length SemanticTokenValue, tokenType SemanticTokenValue) returns (TokenTally, TokenTally)
 	var matched = 0 as TokenTally
 	var misTyped = 0 as TokenTally
 

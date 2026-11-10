@@ -1,0 +1,67 @@
+let FunctionTypeUri = "file:///test.maxon"
+
+let FunctionTypeTypeType = 1
+let FunctionTypeVariableType = 7
+
+test 'semantic tokens colour a type written inside a function type as a type, and a closure parameter as a variable'
+	var client = LspClient.start()
+
+	if let data = try functionTypeTokensOf(client) 'tokens'
+		client.release()
+		assertFunctionTypeColours(locatedSemanticTokensOf(data))
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
+	end 'failed'
+end 'semantic tokens colour a type written inside a function type as a type, and a closure parameter as a variable'
+
+function functionTypeTokensOf(client LspClient) returns SemanticTokenValueArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(FunctionTypeUri, content: functionTypeFixture())
+
+	let tokens = try client.semanticTokensFull(FunctionTypeUri)
+
+	return tokens.data
+end 'functionTypeTokensOf'
+
+function assertFunctionTypeColours(tokens LocatedSemanticTokenArray) throws TestFailure
+	let source = functionTypeFixture()
+
+	try requireSemanticTokenType(tokens, source: source, line: 0, word: "Count", expected: FunctionTypeTypeType, what: "the parameter type inside `function(Count)`")
+	try requireSemanticTokenType(tokens, source: source, line: 2, word: "total", expected: FunctionTypeVariableType, what: "the parameter name in `function use(total Count)`")
+	try requireSemanticTokenType(tokens, source: source, line: 2, word: "Count", expected: FunctionTypeTypeType, what: "the parameter type in `function use(total Count)`, which follows a function typealias naming `Count`")
+	try requireSemanticTokenType(tokens, source: source, line: 3, word: "Count", expected: FunctionTypeTypeType, what: "the type read in `Count.max`, which follows a function typealias naming `Count`")
+	try requireSemanticTokenType(tokens, source: source, line: 4, word: "pair", expected: FunctionTypeVariableType, what: "the closure parameter in `function(pair) gives pair`")
+	try requireSemanticTokenType(tokens, source: source, line: 9, word: "Count", expected: FunctionTypeTypeType, what: "the type read in `Count.max`, which follows a parameter whose type is `function(Count) returns Count`")
+	try requireSemanticTokenType(tokens, source: source, line: 10, word: "item", expected: FunctionTypeVariableType, what: "the typed closure parameter in `function(item Count) gives item`")
+	try requireSemanticTokenType(tokens, source: source, line: 10, word: "Count", expected: FunctionTypeTypeType, what: "the type of the typed closure parameter in `function(item Count) gives item`")
+	try requireSemanticTokenType(tokens, source: source, line: 16, word: "Count", expected: FunctionTypeTypeType, what: "the field type in `var spare as Count`, which follows a field whose type is `function(Count) returns Count`")
+	try requireSemanticTokenType(tokens, source: source, line: 21, word: "Count", expected: FunctionTypeTypeType, what: "the parameter type in `function last(bound Count)`, which follows a type argument `Array with function(Count) returns Count`")
+end 'assertFunctionTypeColours'
+
+function functionTypeFixture() returns String
+	return String.from(b"typealias Handler = function(Count) returns Count
+
+function use(total Count) returns Count
+    let ceiling = Count.max
+    let echo = function(pair) gives pair
+    return total
+end 'use'
+
+function apply(callback function(Count) returns Count, amount Count) returns Count
+    let applied = Count.max
+    let echoed = function(item Count) gives item
+    return amount
+end 'apply'
+
+type Stepper
+    var step as function(Count) returns Count
+    var spare as Count
+end 'Stepper'
+
+typealias Chain = Array with function(Count) returns Count
+
+function last(bound Count) returns Count
+    return bound
+end 'last'")
+end 'functionTypeFixture'

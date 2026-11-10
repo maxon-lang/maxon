@@ -1,12 +1,17 @@
 // `textDocument/semanticTokens/full` — what each word of the document MEANS, for an editor that colours
 // by meaning rather than by regular expression.
 //
-// ⭐⭐ **THE ONE THING A LEXER ALONE GETS WRONG, AND THE REASON THIS METHOD EARNS ITS KEEP:** inside an
+// ⭐⭐ **THE FIRST THING A LEXER ALONE GETS WRONG, AND WHY THIS METHOD EARNS ITS KEEP:** inside an
 // `enum` body a case may be NAMED with a word this language uses as a keyword everywhere else —
 // `enum TokenType / function / returns / identifier` is a legal declaration of three cases. A classifier
 // that reads `TokenKind` alone paints all three as keywords, which is exactly the colouring a TextMate
 // grammar already gives and exactly the one that is wrong. The `enum` body is `LspSymbols.maxon`'s block
 // model, read here rather than re-derived.
+//
+// The second is which identifiers are types: no token says so. `SemanticTypeNames` decides from the
+// buffer's own declarations, the compiler's own names and the held `LspCorpus`, so a document with
+// no corpus colours only the first two as types. A local or parameter of the same name stays a
+// variable.
 //
 // ⭐ **ONLY TOKENS THAT CARRY SOURCE BYTES ARE COLOURED.** A punctuator's `startByte`/`endByte` are both
 // 0 (`Token`: the kind implies the text, so nothing is sliced for it), so there is no span to convert and
@@ -71,7 +76,7 @@ module function semanticTokensAnswer(request LspRequest) returns LspAnswer
 	end 'notThisArea'
 
 	var doc = JsonDoc.create()
-	let encoded = encodedTokensOf(request.text, keywords: request.keywords)
+	let encoded = encodedTokensOf(request.text, keywords: request.keywords, corpus: lspDocumentCorpus(request.workspace, uri: request.uri))
 	var values = JsonNodeIdArray.create(encoded.count(), zeroed: false)
 
 	for value in encoded 'eachValue'
@@ -134,10 +139,11 @@ end 'stringArrayNode'
 //
 // ⚠ Both the character and the length are counted in UTF-16 code units, which is why they come from
 // `LspLineIndex.positionOf` on the two ends of the token's span rather than from its byte width.
-function encodedTokensOf(source String, keywords KeywordTable) returns LspSemanticTokenValueArray
+function encodedTokensOf(source String, keywords KeywordTable, corpus LspCorpus) returns LspSemanticTokenValueArray
 	let tokens = lspDocumentTokens(source, keywords: keywords)
-	let blocks = lspDocumentBlocks(tokens)
+	let caseLists = CaseListLines.of(lspDocumentBlocks(tokens))
 	let index = LspLineIndex.build(source)
+	let typeNames = SemanticTypeNames.of(tokens, corpus: corpus)
 
 	var data = LspSemanticTokenValueArray.create(0)
 	var previousLine = 0 as LspLineNumber
@@ -166,7 +172,7 @@ function encodedTokensOf(source String, keywords KeywordTable) returns LspSemant
 
 		let start = index.positionOf(source, offset: token.startByte)
 		let finish = index.positionOf(source, offset: token.endByte)
-		let tokenType = tokenTypeOf(tokens, at: position.index(), token: token, firstOnLine: firstOnLine, inCaseList: insideCaseList(blocks, line: start.line), typeQualifier: brackets.lastQualifiedAType())
+		let tokenType = tokenTypeOf(tokens, at: position.index(), token: token, firstOnLine: firstOnLine, inCaseList: caseLists.isInsideACaseList(start.line), typeQualifier: brackets.lastQualifiedAType(), typeNames: typeNames)
 
 		let deltaLine = start.line - previousLine
 		var deltaCharacter = start.character
@@ -193,7 +199,7 @@ union PreviousTokenLine
 	at(line LineNumber)
 end 'PreviousTokenLine'
 
-function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLine bool, inCaseList bool, typeQualifier bool) returns LspSemanticTokenType
+function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLine bool, inCaseList bool, typeQualifier bool, typeNames SemanticTypeNames) returns LspSemanticTokenType
 	// A case list is spelled one name per line, so the line's FIRST word is the case and anything after it
 	// belongs to its associated values.
 	if inCaseList and firstOnLine 'aCaseName'
@@ -227,37 +233,207 @@ function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLin
 	end 'capabilityQualifier'
 
 	if token.kind == TokenKind.identifier 'aName'
-		return declaredNameTokenType(tokens, at: at)
+		return identifierTokenType(tokens, at: at, typeNames: typeNames)
 	end 'aName'
 
 	return KeywordTokenType
 end 'tokenTypeOf'
 
-// What an identifier NAMES, decided by the keyword in front of it. Anything else is a `variable`, which is
-// what an ordinary reference is and what an editor's default theme leaves alone.
-function declaredNameTokenType(tokens TokenArray, at ElementIndex) returns LspSemanticTokenType
-	if at == 0 'nothingBefore'
-		return VariableTokenType
-	end 'nothingBefore'
+function identifierTokenType(tokens TokenArray, at ElementIndex, typeNames SemanticTypeNames) returns LspSemanticTokenType
+	if at > 0 'hasAPredecessor'
+		let previous = lspTokenAt(tokens, index: at - 1)
 
-	let previous = lspTokenAt(tokens, index: at - 1)
+		if declaresAFunctionNamed(tokens, at: at) 'declaresAFunction'
+			return FunctionTokenType
+		end 'declaresAFunction'
 
-	if previous.kind == TokenKind.function 'declaresAFunction'
-		return FunctionTokenType
-	end 'declaresAFunction'
+		if kindDeclaresATypeName(previous.kind) 'declaresAType'
+			return TypeTokenType
+		end 'declaresAType'
 
-	if previous.kind == TokenKind.type or previous.kind == TokenKind.enum or previous.kind == TokenKind.union or previous.kind == TokenKind.interface or previous.kind == TokenKind.extension 'declaresAType'
-		return TypeTokenType
-	end 'declaresAType'
+		if bindingKeywordSpells(previous.kind) 'declaresABinding'
+			return VariableTokenType
+		end 'declaresABinding'
 
-	return VariableTokenType
-end 'declaredNameTokenType'
+		if previous.kind == TokenKind.dot 'aMember'
+			return TypeTokenType if typeNames.namesAQualifiedType(tokens, at: at) else VariableTokenType
+		end 'aMember'
+	end 'hasAPredecessor'
 
-// Is this line inside an `enum` or `union` BODY — strictly inside, so the header line that names the type
-// and the `end` line that closes it are ordinary code.
-function insideCaseList(blocks LspDocumentBlockArray, line LspLineNumber) returns bool
-	return match lspInnermostBlockKindAt(blocks, line: line) 'scope'
-		found(kind) gives kind == LspBlockKind.enumBody or kind == LspBlockKind.unionBody
-		absent gives false
-	end 'scope'
-end 'insideCaseList'
+	return TypeTokenType if typeNames.namesAType(tokens, at: at) else VariableTokenType
+end 'identifierTokenType'
+
+function declaresAFunctionNamed(tokens TokenArray, at ElementIndex) returns bool
+	if tokenKindAt(tokens, index: at - 1) == TokenKind.function 'afterTheKeyword'
+		return tokenKindAt(tokens, index: at + 1) != TokenKind.dot
+	end 'afterTheKeyword'
+
+	return at > TokensPerQualifierSegment and tokenKindAt(tokens, index: at - 1) == TokenKind.dot and tokenKindAt(tokens, index: at - TokensPerQualifierSegment - 1) == TokenKind.function
+end 'declaresAFunctionNamed'
+
+typealias LocalNameSet = Set with ByteArray
+
+type SemanticTypeNames
+	let declaredHere as DeclaredTypeNameSet
+	let boundHere as LocalNameSet
+	let corpus as LspCorpus
+
+	static function of(tokens TokenArray, corpus LspCorpus) returns SemanticTypeNames
+		var declared = DeclaredTypeNameSet.create()
+		var bound = LocalNameSet.create()
+
+		for (position, token) in tokens.withIterator() 'eachToken'
+			let following = position.index() + 1
+
+			if kindDeclaresATypeName(token.kind) 'declaresATypeName'
+				declareNameAt(tokens, at: following, into: declared)
+
+				if token.kind == TokenKind.extension 'inheritsTypeParameters'
+					declareExtensionParametersFrom(tokens, at: following, corpus: corpus, into: declared)
+				end 'inheritsTypeParameters'
+			end 'declaresATypeName' else if token.kind == TokenKind.uses 'declaresTypeParameters'
+				declareTypeParametersFrom(tokens, at: following, into: declared)
+			end 'declaresTypeParameters' else if definitionIntroducesNames(token.kind) 'bindsNames'
+				for named in definitionBoundTokensAt(tokens, keyword: token, at: position.index()) 'eachBound'
+					bound.insert(named.value)
+				end 'eachBound'
+			end 'bindsNames'
+		end 'eachToken'
+
+		return Self{declaredHere: declared, boundHere: bound, corpus: corpus}
+	end 'of'
+
+	function namesAType(tokens TokenArray, at ElementIndex) returns bool
+		let name = lspTokenAt(tokens, index: at).value
+
+		if self.shadowedAt(tokens, at: at) 'aLocalOfThatName'
+			return false
+		end 'aLocalOfThatName'
+
+		if self.declaredHere.contains(name) or compilerOwnsTheTypeNamed(tokens, at: at) 'declaredOrOwned'
+			return true
+		end 'declaredOrOwned'
+
+		match self.corpus 'held'
+			loaded(_, signatures, readerPath) then return signatures.isBuiltinGenericBaseName(name) or signatures.typeHeadKindOf(name, readerFilePath: readerPath) != TypeHeadKind.absent
+			unavailable then return false
+		end 'held'
+	end 'namesAType'
+
+	function namesAQualifiedType(tokens TokenArray, at ElementIndex) returns bool
+		match self.corpus 'held'
+			loaded(_, signatures, readerPath) then return segmentOfAQualifiedType(tokens, index: at, signatures: signatures, readerFilePath: readerPath) and not self.shadowedAt(tokens, at: chainHeadIndexOf(tokens, index: at))
+			unavailable then return false
+		end 'held'
+	end 'namesAQualifiedType'
+
+	// Asked for every identifier, so the set lookup comes first: the backward walk in
+	// `definitionBindsLocally` runs only for a name some binder in the file spells.
+	function shadowedAt(tokens TokenArray, at ElementIndex) returns bool
+		let name = lspTokenAt(tokens, index: at).value
+
+		return self.boundHere.contains(name) and definitionBindsLocally(tokens, before: at, name: name)
+	end 'shadowedAt'
+end 'SemanticTypeNames'
+
+function declareNameAt(tokens TokenArray, at ElementIndex, into DeclaredTypeNameSet)
+	let named = try tokens.get(at) otherwise return
+
+	if tokenCanBeAName(named) 'aName'
+		into.insert(named.value)
+	end 'aName'
+end 'declareNameAt'
+
+function declareExtensionParametersFrom(tokens TokenArray, at ElementIndex, corpus LspCorpus, into DeclaredTypeNameSet)
+	let target = try tokens.get(at) otherwise return
+
+	if not tokenCanBeAName(target) 'noTarget'
+		return
+	end 'noTarget'
+
+	match corpus 'held'
+		loaded(_, signatures, _) then declareEachName(extensionTargetParamNames(signatures.extensionTargetOf(target.value)), into: into)
+		unavailable then return
+	end 'held'
+end 'declareExtensionParametersFrom'
+
+function declareEachName(names NameRoster, into DeclaredTypeNameSet)
+	for name in names 'eachName'
+		into.insert(name)
+	end 'eachName'
+end 'declareEachName'
+
+function declareTypeParametersFrom(tokens TokenArray, at ElementIndex, into DeclaredTypeNameSet)
+	var parameter = at
+
+	while tokenKindAt(tokens, index: parameter) == TokenKind.identifier 'eachParameter'
+		declareNameAt(tokens, at: parameter, into: into)
+
+		if tokenKindAt(tokens, index: parameter + 1) != TokenKind.comma 'lastOne'
+			break
+		end 'lastOne'
+
+		parameter = parameter + TokensPerQualifierSegment
+	end 'eachParameter'
+end 'declareTypeParametersFrom'
+
+function compilerOwnsTheTypeNamed(tokens TokenArray, at ElementIndex) returns bool
+	let name = lspTokenAt(tokens, index: at).value
+
+	if isBuiltinManagedTypeName(name) 'aManagedBuiltin'
+		return true
+	end 'aManagedBuiltin'
+
+	if not isCompilerReservedName(name) or tokenKindAt(tokens, index: at + 1) != TokenKind.dot 'notAQualifier'
+		return false
+	end 'notAQualifier'
+
+	let member = try tokens.get(at + TokensPerQualifierSegment) otherwise return false
+
+	if not tokenCanBeAName(member) 'noMember'
+		return false
+	end 'noMember'
+
+	let callee = joinQualifiedName(name, member: member.value)
+
+	return isBuiltinsIntrinsicCallee(callee) or isRawIntrinsicCallee(callee) or isDebugStreamCallee(callee)
+end 'compilerOwnsTheTypeNamed'
+
+typealias CaseListLineFlags = Array with bool
+
+// A line is in a case list only when it is strictly inside an `enum` or `union` body: the header
+// line that names the type and the `end` line that closes it are ordinary code.
+type CaseListLines
+	let flags as CaseListLineFlags
+
+	static function of(blocks LspDocumentBlockArray) returns CaseListLines
+		var byDepth = blocks.clone()
+		byDepth.sortBy(function(left, right) gives left.depth.compare(right.depth))
+
+		var lineCount = 0 as LspLineNumber
+
+		for block in byDepth 'eachBlockForItsExtent'
+			if block.endLine > lineCount 'reachesFurther'
+				lineCount = block.endLine
+			end 'reachesFurther'
+		end 'eachBlockForItsExtent'
+
+		var flags = CaseListLineFlags.create(lineCount)
+
+		// Outermost first, so a deeper block overwrites its parent's flag: a line takes the flag of its
+		// innermost block.
+		for block in byDepth 'eachBlockOuterFirst'
+			let isCaseList = block.kind == LspBlockKind.enumBody or block.kind == LspBlockKind.unionBody
+
+			for line in block.startLine + 1 upto block.endLine 'eachLineWithin'
+				try flags.set(line, value: isCaseList) otherwise panic("CaseListLines.of: line {line} is below the {lineCount} lines the deepest reach of any block sized this array to")
+			end 'eachLineWithin'
+		end 'eachBlockOuterFirst'
+
+		return Self{flags: flags}
+	end 'of'
+
+	function isInsideACaseList(line LspLineNumber) returns bool
+		return try self.flags.get(line) otherwise false
+	end 'isInsideACaseList'
+end 'CaseListLines'

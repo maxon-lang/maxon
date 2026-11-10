@@ -1,0 +1,45 @@
+let QualifiedMethodUri = "file:///test.maxon"
+
+let QualifiedMethodTypeType = 1
+let QualifiedMethodFunctionType = 5
+
+test 'semantic tokens colour the interface of a qualified method declaration as a type and the method as a function'
+	var client = LspClient.start()
+
+	if let data = try qualifiedMethodTokensOf(client) 'tokens'
+		client.release()
+		assertQualifiedMethodColours(locatedSemanticTokensOf(data))
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
+	end 'failed'
+end 'semantic tokens colour the interface of a qualified method declaration as a type and the method as a function'
+
+function qualifiedMethodTokensOf(client LspClient) returns SemanticTokenValueArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(QualifiedMethodUri, content: qualifiedMethodFixture())
+
+	let tokens = try client.semanticTokensFull(QualifiedMethodUri)
+
+	return tokens.data
+end 'qualifiedMethodTokensOf'
+
+function assertQualifiedMethodColours(tokens LocatedSemanticTokenArray) throws TestFailure
+	let source = qualifiedMethodFixture()
+
+	try requireSemanticTokenType(tokens, source: source, line: 4, word: "Printable", expected: QualifiedMethodTypeType, what: "the interface named by `is Printable`")
+	try requireSemanticTokenType(tokens, source: source, line: 5, word: "Printable", expected: QualifiedMethodTypeType, what: "the interface qualifying the method in `function Printable.print()`")
+	try requireSemanticTokenType(tokens, source: source, line: 5, word: "print", expected: QualifiedMethodFunctionType, what: "the method declared by `function Printable.print()`")
+end 'assertQualifiedMethodColours'
+
+function qualifiedMethodFixture() returns String
+	return String.from(b"interface Printable
+    function print() returns Count
+end 'Printable'
+
+type Message is Printable
+    function Printable.print() returns Count
+        return 42
+    end 'print'
+end 'Message'")
+end 'qualifiedMethodFixture'

@@ -1,0 +1,80 @@
+let TypeReferenceUri = "file:///test.maxon"
+
+let TypeReferenceTypeType = 1
+let TypeReferenceVariableType = 7
+
+test 'semantic tokens colour every type reference as a type and leave a variable a variable'
+	var client = LspClient.start()
+
+	if let data = try typeReferenceTokensOf(client, source: typeReferenceFixture()) 'tokens'
+		client.release()
+		assertTypeReferenceColours(locatedSemanticTokensOf(data))
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
+	end 'failed'
+end 'semantic tokens colour every type reference as a type and leave a variable a variable'
+
+function typeReferenceTokensOf(client LspClient, source String) returns SemanticTokenValueArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(TypeReferenceUri, content: source)
+
+	let tokens = try client.semanticTokensFull(TypeReferenceUri)
+
+	return tokens.data
+end 'typeReferenceTokensOf'
+
+function assertTypeReferenceColours(tokens LocatedSemanticTokenArray) throws TestFailure
+	let source = typeReferenceFixture()
+
+	try requireSemanticTokenType(tokens, source: source, line: 1, word: "size", expected: TypeReferenceVariableType, what: "the field name in `var size as Count`")
+	try requireSemanticTokenType(tokens, source: source, line: 1, word: "Count", expected: TypeReferenceTypeType, what: "the stdlib type of the field in `var size as Count`")
+	try requireSemanticTokenType(tokens, source: source, line: 4, word: "Shelf", expected: TypeReferenceTypeType, what: "the name declared by `typealias Shelf`")
+	try requireSemanticTokenType(tokens, source: source, line: 4, word: "Array", expected: TypeReferenceTypeType, what: "the stdlib generic base in `Array with Foo`")
+	try requireSemanticTokenType(tokens, source: source, line: 4, word: "Foo", expected: TypeReferenceTypeType, what: "the type argument in `Array with Foo`")
+	try requireSemanticTokenType(tokens, source: source, line: 6, word: "maxBytes", expected: TypeReferenceVariableType, what: "the parameter name in `function f(maxBytes ByteLimit)`")
+	try requireSemanticTokenType(tokens, source: source, line: 6, word: "ByteLimit", expected: TypeReferenceTypeType, what: "the parameter type in `function f(maxBytes ByteLimit)`")
+	try requireSemanticTokenType(tokens, source: source, line: 6, word: "Count", expected: TypeReferenceTypeType, what: "the return type in `returns Count`")
+	try requireSemanticTokenType(tokens, source: source, line: 7, word: "total", expected: TypeReferenceVariableType, what: "the local variable declared by `let total`")
+	try requireSemanticTokenType(tokens, source: source, line: 7, word: "maxBytes", expected: TypeReferenceVariableType, what: "the parameter read in `let total = maxBytes + 1`")
+	try requireSemanticTokenType(tokens, source: source, line: 8, word: "made", expected: TypeReferenceVariableType, what: "the local variable declared by `let made`")
+	try requireSemanticTokenType(tokens, source: source, line: 8, word: "Foo", expected: TypeReferenceTypeType, what: "the static receiver in `Foo.create(total)`")
+	try requireSemanticTokenType(tokens, source: source, line: 8, word: "create", expected: TypeReferenceVariableType, what: "the member after the static receiver in `Foo.create(total)`")
+	try requireSemanticTokenType(tokens, source: source, line: 9, word: "__Builtins", expected: TypeReferenceTypeType, what: "the compiler-owned static receiver in `__Builtins.currentTimeMs()`")
+	try requireSemanticTokenType(tokens, source: source, line: 14, word: "__Raw", expected: TypeReferenceTypeType, what: "the compiler-owned static receiver in `__Raw.osTickCountMs()`")
+	try requireSemanticTokenType(tokens, source: source, line: 10, word: "total", expected: TypeReferenceVariableType, what: "the local variable read in `return total`")
+	try requireSemanticTokenType(tokens, source: source, line: 13, word: "buffer", expected: TypeReferenceVariableType, what: "the parameter name in `function g(buffer __ManagedMemory)`")
+	try requireSemanticTokenType(tokens, source: source, line: 13, word: "__ManagedMemory", expected: TypeReferenceTypeType, what: "the compiler-owned parameter type in `function g(buffer __ManagedMemory)`")
+	try requireSemanticTokenType(tokens, source: source, line: 18, word: "Element", expected: TypeReferenceTypeType, what: "the type parameter in `type Box uses Element`")
+	try requireSemanticTokenType(tokens, source: source, line: 19, word: "Element", expected: TypeReferenceTypeType, what: "the type parameter used as the type of `var held as Element`")
+	try requireSemanticTokenType(tokens, source: source, line: 19, word: "held", expected: TypeReferenceVariableType, what: "the field name in `var held as Element`")
+	try requireSemanticTokenType(tokens, source: source, line: 22, word: "__ManagedList", expected: TypeReferenceTypeType, what: "the compiler-owned list chain in `__ManagedList with Element`")
+	try requireSemanticTokenType(tokens, source: source, line: 23, word: "__ManagedMemoryCursor", expected: TypeReferenceTypeType, what: "the compiler-owned cursor in `__ManagedMemoryCursor with Element`")
+end 'assertTypeReferenceColours'
+
+function typeReferenceFixture() returns String
+	return String.from(b"type Foo
+    var size as Count
+end 'Foo'
+
+typealias Shelf = Array with Foo
+
+function f(maxBytes ByteLimit) returns Count
+    let total = maxBytes + 1
+    let made = Foo.create(total)
+    let now = __Builtins.currentTimeMs()
+    return total
+end 'f'
+
+function g(buffer __ManagedMemory) returns Count
+    let tick = __Raw.osTickCountMs()
+    return 0
+end 'g'
+
+type Box uses Element
+    var held as Element
+end 'Box'
+
+typealias Chain = __ManagedList with Element
+typealias Walker = __ManagedMemoryCursor with Element")
+end 'typeReferenceFixture'

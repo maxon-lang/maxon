@@ -1,0 +1,47 @@
+let ProjectTypeRootName = "temp/lsp/semantictokens-a-projects-types-are-types"
+let ProjectTypeSubDirName = "temp/lsp/semantictokens-a-projects-types-are-types/sub"
+let ProjectTypeSiblingFileName = "shape.maxon"
+let ProjectTypeCalcFileName = "calc.maxon"
+let ProjectTypeMainFileName = "main.maxon"
+let ProjectTypeSiblingSource = "export enum Shape\n\tround\n\tsquare\nend 'Shape'\n"
+let ProjectTypeCalcSource = "export enum Calc\n\tadd\n\tsubtract\nend 'Calc'\n"
+let ProjectTypeMainSource = "function main() returns ExitCode\n\tlet shape = Shape.round\n\tlet calc = sub.Calc.add\n\treturn 0\nend 'main'\n"
+
+let ProjectTypeTypeType = 1
+let ProjectTypeVariableType = 7
+
+test 'semantic tokens colour a type a sibling file and a directory declare as a type'
+	let root = stagedCorpusDirectory(ProjectTypeRootName)
+	let subDirectory = createdStagingDirectory(ProjectTypeSubDirName, under: Directory.currentPath())
+	writeCorpusFile(root, fileName: ProjectTypeSiblingFileName, content: ProjectTypeSiblingSource)
+	writeCorpusFile(subDirectory, fileName: ProjectTypeCalcFileName, content: ProjectTypeCalcSource)
+	writeCorpusFile(root, fileName: ProjectTypeMainFileName, content: ProjectTypeMainSource)
+
+	let uri = fileUriOf(root.join(ProjectTypeMainFileName))
+	var client = LspClient.start()
+
+	if let data = try projectTypeTokensOf(client, uri: uri) 'tokens'
+		client.release()
+		assertProjectTypeColours(locatedSemanticTokensOf(data))
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
+	end 'failed'
+end 'semantic tokens colour a type a sibling file and a directory declare as a type'
+
+function projectTypeTokensOf(client LspClient, uri String) returns SemanticTokenValueArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(uri, content: ProjectTypeMainSource)
+
+	let tokens = try client.semanticTokensFull(uri)
+
+	return tokens.data
+end 'projectTypeTokensOf'
+
+function assertProjectTypeColours(tokens LocatedSemanticTokenArray) throws TestFailure
+	try requireSemanticTokenType(tokens, source: ProjectTypeMainSource, line: 1, word: "shape", expected: ProjectTypeVariableType, what: "the local variable declared by `let shape`")
+	try requireSemanticTokenType(tokens, source: ProjectTypeMainSource, line: 1, word: "Shape", expected: ProjectTypeTypeType, what: "the sibling file's type in `Shape.round`")
+	try requireSemanticTokenType(tokens, source: ProjectTypeMainSource, line: 2, word: "sub", expected: ProjectTypeVariableType, what: "the directory qualifier in `sub.Calc.add`")
+	try requireSemanticTokenType(tokens, source: ProjectTypeMainSource, line: 2, word: "Calc", expected: ProjectTypeTypeType, what: "the directory-qualified type in `sub.Calc.add`")
+	try requireSemanticTokenType(tokens, source: ProjectTypeMainSource, line: 2, word: "add", expected: ProjectTypeVariableType, what: "the member after the directory-qualified type in `sub.Calc.add`")
+end 'assertProjectTypeColours'

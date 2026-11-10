@@ -1,0 +1,42 @@
+let ExtensionParameterUri = "file:///test.maxon"
+
+let ExtensionParameterTypeType = 1
+let ExtensionParameterVariableType = 7
+
+test 'semantic tokens colour the type parameters an extension inherits from its base as types'
+	var client = LspClient.start()
+
+	if let data = try extensionParameterTokensOf(client) 'tokens'
+		client.release()
+		assertExtensionParameterColours(locatedSemanticTokensOf(data))
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
+	end 'failed'
+end 'semantic tokens colour the type parameters an extension inherits from its base as types'
+
+function extensionParameterTokensOf(client LspClient) returns SemanticTokenValueArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(ExtensionParameterUri, content: extensionParameterFixture())
+
+	let tokens = try client.semanticTokensFull(ExtensionParameterUri)
+
+	return tokens.data
+end 'extensionParameterTokensOf'
+
+function assertExtensionParameterColours(tokens LocatedSemanticTokenArray) throws TestFailure
+	let source = extensionParameterFixture()
+
+	try requireSemanticTokenType(tokens, source: source, line: 0, word: "Array", expected: ExtensionParameterTypeType, what: "the extended type in `extension Array where Element is Equatable`")
+	try requireSemanticTokenType(tokens, source: source, line: 0, word: "Element", expected: ExtensionParameterTypeType, what: "the inherited type parameter in the `where` clause")
+	try requireSemanticTokenType(tokens, source: source, line: 1, word: "fallback", expected: ExtensionParameterVariableType, what: "the parameter name in `function orElse(fallback Element)`")
+	try requireSemanticTokenType(tokens, source: source, line: 1, word: "Element", expected: ExtensionParameterTypeType, what: "the inherited type parameter used as a parameter type")
+end 'assertExtensionParameterColours'
+
+function extensionParameterFixture() returns String
+	return String.from(b"extension Array where Element is Equatable
+    function orElse(fallback Element) returns Element
+        return fallback
+    end 'orElse'
+end 'Array'")
+end 'extensionParameterFixture'

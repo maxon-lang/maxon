@@ -68,6 +68,7 @@ module type BracketTracker
 
 		let inATypeList = self.prevKind == TokenKind.with or (readonlyMayFollow(self.prevKind) and self.innermostGroupIsTypeList())
 
+		// `readonly` is also a call name, so it qualifies only inside a type list.
 		if isReadonlyWord(word) 'readonly'
 			return inATypeList
 		end 'readonly'
@@ -75,6 +76,9 @@ module type BracketTracker
 		return inATypeList or self.followsATypedName() or self.followsAnAliasEquals(word)
 	end 'qualifiesATypeHere'
 
+	// `observe` leaves `prevKind` alone on a newline, so `lineBrokeSincePrev` is what keeps the last
+	// word of one line from qualifying the first of the next. Region operators and `spawn` are
+	// identifiers, so a capability word after one is its operand, not a typed name's qualifier.
 	function followsATypedName() returns bool
 		return not self.lineBrokeSincePrev and not self.prevIsPrefixOperator and (self.prevKind == TokenKind.identifier or self.prevKind == TokenKind.returns or self.prevKind == TokenKind.as)
 	end 'followsATypedName'

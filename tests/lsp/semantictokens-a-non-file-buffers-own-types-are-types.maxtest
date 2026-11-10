@@ -1,0 +1,49 @@
+let NonFileTypeUri = "git://host/repo/semantic-tokens.maxon"
+
+let NonFileTypeTypeType = 1
+let NonFileTypeVariableType = 7
+
+test 'semantic tokens colour a type a path-less buffer declares as a type'
+	var client = LspClient.start()
+
+	if let data = try nonFileTypeTokensOf(client) 'tokens'
+		client.release()
+		assertNonFileTypeColours(locatedSemanticTokensOf(data))
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
+	end 'failed'
+end 'semantic tokens colour a type a path-less buffer declares as a type'
+
+function nonFileTypeTokensOf(client LspClient) returns SemanticTokenValueArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(NonFileTypeUri, content: nonFileTypeFixture())
+
+	let tokens = try client.semanticTokensFull(NonFileTypeUri)
+
+	return tokens.data
+end 'nonFileTypeTokensOf'
+
+function assertNonFileTypeColours(tokens LocatedSemanticTokenArray) throws TestFailure
+	let source = nonFileTypeFixture()
+
+	try requireSemanticTokenType(tokens, source: source, line: 0, word: "Reach", expected: NonFileTypeTypeType, what: "the name declared by `typealias Reach`")
+	try requireSemanticTokenType(tokens, source: source, line: 2, word: "sides", expected: NonFileTypeVariableType, what: "the field name in `var sides as Reach`")
+	try requireSemanticTokenType(tokens, source: source, line: 2, word: "Reach", expected: NonFileTypeTypeType, what: "the field type in `var sides as Reach`")
+	try requireSemanticTokenType(tokens, source: source, line: 5, word: "spot", expected: NonFileTypeVariableType, what: "the parameter name in `function describe(spot Spot)`")
+	try requireSemanticTokenType(tokens, source: source, line: 5, word: "Spot", expected: NonFileTypeTypeType, what: "the parameter type in `function describe(spot Spot)`")
+	try requireSemanticTokenType(tokens, source: source, line: 5, word: "Reach", expected: NonFileTypeTypeType, what: "the return type in `returns Reach`")
+	try requireSemanticTokenType(tokens, source: source, line: 6, word: "spot", expected: NonFileTypeVariableType, what: "the parameter read in `return spot.sides`")
+	try requireSemanticTokenType(tokens, source: source, line: 6, word: "sides", expected: NonFileTypeVariableType, what: "the field read in `return spot.sides`")
+end 'assertNonFileTypeColours'
+
+function nonFileTypeFixture() returns String
+	return String.from(b"typealias Reach = int(0 to 10)
+type Spot
+    var sides as Reach
+end 'Spot'
+
+function describe(spot Spot) returns Reach
+    return spot.sides
+end 'describe'")
+end 'nonFileTypeFixture'

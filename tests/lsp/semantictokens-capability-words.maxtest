@@ -1,34 +1,17 @@
 let CapabilityWordUri = "file:///test.maxon"
 
-let CapabilityWordQuintupleWidth = 5
-let CapabilityWordDeltaLineSlot = 0
-let CapabilityWordDeltaCharacterSlot = 1
-let CapabilityWordTypeSlot = 3
-
 let CapabilityWordKeywordType = 0
 let CapabilityWordVariableType = 7
 let CapabilityWordCapabilityType = 16
 
 typealias CapabilityWordTally = int(0 to i64.max)
 
-type CapabilityWordToken
-	export var line as SemanticTokenValue
-	export var character as SemanticTokenValue
-	export var tokenType as SemanticTokenValue
-
-	static function create(line SemanticTokenValue, character SemanticTokenValue, tokenType SemanticTokenValue) returns CapabilityWordToken
-		return Self{line: line, character: character, tokenType: tokenType}
-	end 'create'
-end 'CapabilityWordToken'
-
-typealias CapabilityWordTokenArray = Array with CapabilityWordToken
-
 test 'semantic tokens colour a capability word before a type as a capability and a binding named by one as a name'
 	var client = LspClient.start()
 
 	if let data = try capabilityWordTokensOf(client, source: capabilityWordFixture()) 'tokens'
 		client.release()
-		assertCapabilityWordColours(capabilityWordDecode(data))
+		assertCapabilityWordColours(locatedSemanticTokensOf(data))
 	end 'tokens' else (e) 'failed'
 		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
 	end 'failed'
@@ -44,7 +27,7 @@ function capabilityWordTokensOf(client LspClient, source String) returns Semanti
 	return tokens.data
 end 'capabilityWordTokensOf'
 
-function assertCapabilityWordColours(tokens CapabilityWordTokenArray) throws TestFailure
+function assertCapabilityWordColours(tokens LocatedSemanticTokenArray) throws TestFailure
 	try assertCapabilityWordColour(tokens, line: 1, character: 15, expected: CapabilityWordCapabilityType, what: "the capability in the payload `named(text immutable ByteArray, ...)`")
 	try assertCapabilityWordColour(tokens, line: 2, character: 18, expected: CapabilityWordCapabilityType, what: "the capability in the payload `shared(callee isolated Box)`")
 	try assertCapabilityWordColour(tokens, line: 5, character: 20, expected: CapabilityWordCapabilityType, what: "the marker in the parameter `value mutable Count`")
@@ -65,7 +48,7 @@ function assertCapabilityWordColours(tokens CapabilityWordTokenArray) throws Tes
 	try assertCapabilityWordColour(tokens, line: 35, character: 29, expected: CapabilityWordKeywordType, what: "the `readonly` in `Array with readonly ByteArray`, which stays a plain keyword")
 end 'assertCapabilityWordColours'
 
-function assertCapabilityWordColour(tokens CapabilityWordTokenArray, line SemanticTokenValue, character SemanticTokenValue, expected SemanticTokenValue, what String) throws TestFailure
+function assertCapabilityWordColour(tokens LocatedSemanticTokenArray, line SemanticTokenValue, character SemanticTokenValue, expected SemanticTokenValue, what String) throws TestFailure
 	var matched = 0 as CapabilityWordTally
 	var observed = -1 as SemanticTokenValue
 
@@ -79,28 +62,6 @@ function assertCapabilityWordColour(tokens CapabilityWordTokenArray, line Semant
 	try Expect.equal(matched, expected: 1, message: "exactly one token should start at line {line}, column {character} ({what}), and {matched} did.")
 	try Expect.equal(observed, expected: expected, message: "{what} is expected to be token type {expected} and was {observed}. `isolated`, `immutable` and `mutable` are contextual words: the `capability` type (16) where they qualify a type, and an ordinary name everywhere else.")
 end 'assertCapabilityWordColour'
-
-function capabilityWordDecode(data SemanticTokenValueArray) returns CapabilityWordTokenArray
-	var tokens = CapabilityWordTokenArray.create(0)
-	var currentLine = 0 as SemanticTokenValue
-	var currentCharacter = 0 as SemanticTokenValue
-	var lineAdvanced = false
-
-	for (position, value) in data.withIterator() 'eachValue'
-		let slot = position.index() mod CapabilityWordQuintupleWidth
-
-		if slot == CapabilityWordDeltaLineSlot 'delta'
-			currentLine = currentLine + value
-			lineAdvanced = value > 0
-		end 'delta' else if slot == CapabilityWordDeltaCharacterSlot 'deltaCharacter'
-			currentCharacter = value if lineAdvanced else currentCharacter + value
-		end 'deltaCharacter' else if slot == CapabilityWordTypeSlot 'tokenType'
-			tokens.push(CapabilityWordToken.create(currentLine, character: currentCharacter, tokenType: value))
-		end 'tokenType'
-	end 'eachValue'
-
-	return tokens
-end 'capabilityWordDecode'
 
 function capabilityWordFixture() returns String
 	return String.from(b"union Label

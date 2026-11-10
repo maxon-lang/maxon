@@ -68,7 +68,7 @@ function definitionTarget(tokens TokenArray, at ByteOffset) returns Token throws
 	return try definitionLocalBinding(tokens, before: cursor, name: name) otherwise try definitionDeclarationOf(tokens, name: name)
 end 'definitionTarget'
 
-function definitionBindsLocally(tokens TokenArray, before ElementIndex, name ByteArray) returns bool
+module function definitionBindsLocally(tokens TokenArray, before ElementIndex, name ByteArray) returns bool
 	return (try definitionLocalBinding(tokens, before: before, name: name) otherwise return false).value.equals(name)
 end 'definitionBindsLocally'
 
@@ -168,64 +168,103 @@ end 'definitionClosesABlock'
 // `otherwise (e)`. Those are introduced by punctuation rather than by a keyword, and reading a `(` as a
 // declaration would be answering from shape. They resolve to nothing, which is a miss rather than a
 // confident wrong line.
+module function definitionIntroducesNames(kind TokenKind) returns bool
+	return bindingKeywordSpells(kind) or kind == TokenKind.for or kind == TokenKind.function
+end 'definitionIntroducesNames'
+
 function definitionBoundName(tokens TokenArray, keyword Token, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
-	if bindingKeywordSpells(keyword.kind) 'oneBinding'
-		return try definitionIdentifierNamed(tokens, at: at + 1, name: name)
-	end 'oneBinding'
+	if not definitionIntroducesNames(keyword.kind) 'bindsNothing'
+		throw LspDeclarationLookupError.nothingThere
+	end 'bindsNothing'
 
-	if keyword.kind == TokenKind.for 'loopVariables'
-		return try definitionLoopVariableNamed(tokens, from: at + 1, name: name)
-	end 'loopVariables'
-
-	if keyword.kind == TokenKind.function 'parameters'
-		return try definitionParameterNamed(tokens, from: at, name: name)
-	end 'parameters'
+	for bound in definitionBoundTokensAt(tokens, keyword: keyword, at: at) 'eachBound'
+		if bound.value.equals(name) 'thisOne'
+			return bound
+		end 'thisOne'
+	end 'eachBound'
 
 	throw LspDeclarationLookupError.nothingThere
 end 'definitionBoundName'
 
-function definitionIdentifierNamed(tokens TokenArray, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
-	let token = try tokens.get(at) otherwise throw LspDeclarationLookupError.nothingThere
+module function definitionBoundTokensAt(tokens TokenArray, keyword Token, at ElementIndex) returns TokenArray
+	if bindingKeywordSpells(keyword.kind) 'oneBinding'
+		return definitionBindingTokensAt(tokens, at: at + 1)
+	end 'oneBinding'
 
-	if not tokenCanBeAName(token) or not token.value.equals(name) 'notThatName'
-		throw LspDeclarationLookupError.nothingThere
-	end 'notThatName'
+	if keyword.kind == TokenKind.for 'loopVariables'
+		return definitionLoopVariableTokens(tokens, from: at + 1)
+	end 'loopVariables'
 
-	return token
-end 'definitionIdentifierNamed'
+	if keyword.kind == TokenKind.function and definitionFunctionKeywordWritesAType(tokens, at: at) 'aFunctionType'
+		return TokenArray.create(0)
+	end 'aFunctionType'
+
+	if keyword.kind == TokenKind.function 'parameters'
+		return definitionParameterTokens(tokens, from: at)
+	end 'parameters'
+
+	panic("definitionBoundTokensAt: '{keyword.kind.rawValue}' introduces no names — `definitionIntroducesNames` is the gate, and every caller asks it first")
+end 'definitionBoundTokensAt'
+
+// A `function(` whose `)` is not followed by `gives` is a function TYPE: its list holds types and
+// binds no names, and read as a parameter list it would shadow the types it writes.
+function definitionFunctionKeywordWritesAType(tokens TokenArray, at ElementIndex) returns bool
+	let open = at + 1
+
+	if tokenKindAt(tokens, index: open) != TokenKind.leftParen 'aDeclaration'
+		return false
+	end 'aDeclaration'
+
+	let close = ParenGroups.create().closeOf(tokens, open: open)
+	return tokenKindAt(tokens, index: close + 1) != TokenKind.gives
+end 'definitionFunctionKeywordWritesAType'
+
+function definitionBindingTokensAt(tokens TokenArray, at ElementIndex) returns TokenArray
+	var bound = TokenArray.create(0)
+	let token = try tokens.get(at) otherwise return bound
+
+	if tokenCanBeAName(token) 'aName'
+		bound.push(token)
+	end 'aName'
+
+	return bound
+end 'definitionBindingTokensAt'
 
 // A loop's variables are every name between `for` and its `in` — one for `for item in items`, two for
 // `for (key, value) in map`. A line break ends the search as well: an `in` that never arrives means the
 // buffer is mid-edit, not that the rest of the file is the binding list.
-function definitionLoopVariableNamed(tokens TokenArray, from ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+function definitionLoopVariableTokens(tokens TokenArray, from ElementIndex) returns TokenArray
+	var bound = TokenArray.create(0)
 	var i = from
 
 	while i < tokens.count() 'scan'
-		let token = try tokens.get(i) otherwise throw LspDeclarationLookupError.nothingThere
-		i = i + 1
+		let token = lspTokenAt(tokens, index: i)
 
 		if token.kind == TokenKind.in or token.kind == TokenKind.newline 'theBindingsEnd'
-			throw LspDeclarationLookupError.nothingThere
+			break
 		end 'theBindingsEnd'
 
-		if token.kind == TokenKind.identifier and token.value.equals(name) 'thisOne'
-			return token
-		end 'thisOne'
+		if token.kind == TokenKind.identifier 'aVariable'
+			bound.push(token)
+		end 'aVariable'
+
+		i = i + 1
 	end 'scan'
 
-	throw LspDeclarationLookupError.nothingThere
-end 'definitionLoopVariableNamed'
+	return bound
+end 'definitionLoopVariableTokens'
 
 // A parameter name is the first token inside the parentheses and the one after each top-level comma;
 // everything else between them is a type, a default value, or a nested list.
-function definitionParameterNamed(tokens TokenArray, from ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+function definitionParameterTokens(tokens TokenArray, from ElementIndex) returns TokenArray
+	var bound = TokenArray.create(0)
 	var i = from
 	var depth = 0 as NestingDepth
 	var sawTheList = false
 	var expectingAName = false
 
 	while i < tokens.count() 'scanList'
-		let token = try tokens.get(i) otherwise throw LspDeclarationLookupError.nothingThere
+		let token = lspTokenAt(tokens, index: i)
 		i = i + 1
 
 		if token.kind == TokenKind.leftParen 'opensAList'
@@ -239,7 +278,7 @@ function definitionParameterNamed(tokens TokenArray, from ElementIndex, name Byt
 			depth = depth - 1
 
 			if depth == 0 'theListEnds'
-				throw LspDeclarationLookupError.nothingThere
+				break
 			end 'theListEnds'
 
 			continue
@@ -248,7 +287,7 @@ function definitionParameterNamed(tokens TokenArray, from ElementIndex, name Byt
 		// A declaration's parameters open on the keyword's own line, so a line break before any `(` is a
 		// truncated buffer rather than a list to walk.
 		if not sawTheList and token.kind == TokenKind.newline 'noListAtAll'
-			throw LspDeclarationLookupError.nothingThere
+			break
 		end 'noListAtAll'
 
 		if depth == 1 and token.kind == TokenKind.comma 'nextParameter'
@@ -262,13 +301,23 @@ function definitionParameterNamed(tokens TokenArray, from ElementIndex, name Byt
 
 		expectingAName = false
 
-		if token.kind == TokenKind.identifier and token.value.equals(name) 'thisParameter'
-			return token
-		end 'thisParameter'
+		if token.kind == TokenKind.identifier 'aParameter'
+			bound.push(token)
+		end 'aParameter'
 	end 'scanList'
 
-	throw LspDeclarationLookupError.nothingThere
-end 'definitionParameterNamed'
+	return bound
+end 'definitionParameterTokens'
+
+function definitionIdentifierNamed(tokens TokenArray, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+	let token = try tokens.get(at) otherwise throw LspDeclarationLookupError.nothingThere
+
+	if not tokenCanBeAName(token) or not token.value.equals(name) 'notThatName'
+		throw LspDeclarationLookupError.nothingThere
+	end 'notThatName'
+
+	return token
+end 'definitionIdentifierNamed'
 
 // Where the document declares `name`, in the order the file states it.
 function definitionDeclarationOf(tokens TokenArray, name ByteArray) returns Token throws LspDeclarationLookupError
