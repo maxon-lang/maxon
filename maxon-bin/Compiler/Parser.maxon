@@ -10118,9 +10118,10 @@ type ShortCircuitRhs
 	export let resultTag as ValueTypeTag
 	export var skippedMoveMark as MoveMark
 	export var rhsMoveMark as MoveMark
+	export let orders as ConditionOrders
 
-	static function create(rhsId BlockId, value ValueId, resultTag ValueTypeTag, skippedMoveMark MoveMark, rhsMoveMark MoveMark) returns ShortCircuitRhs
-		return Self{rhsId: rhsId, value: value, resultTag: resultTag, skippedMoveMark: skippedMoveMark, rhsMoveMark: rhsMoveMark}
+	static function create(rhsId BlockId, value ValueId, resultTag ValueTypeTag, skippedMoveMark MoveMark, rhsMoveMark MoveMark, orders ConditionOrders) returns ShortCircuitRhs
+		return Self{rhsId: rhsId, value: value, resultTag: resultTag, skippedMoveMark: skippedMoveMark, rhsMoveMark: rhsMoveMark, orders: orders}
 	end 'create'
 end 'ShortCircuitRhs'
 
@@ -12358,9 +12359,10 @@ type BlockMark
 	export let mutableCount as ElementIndex
 	export let ownedCount as ElementIndex
 	export let debugOpenCount as ElementIndex
+	export let orderFactHeight as ElementIndex
 
-	static function create(mutableCount ElementIndex, ownedCount ElementIndex, debugOpenCount ElementIndex) returns BlockMark
-		return Self{mutableCount: mutableCount, ownedCount: ownedCount, debugOpenCount: debugOpenCount}
+	static function create(mutableCount ElementIndex, ownedCount ElementIndex, debugOpenCount ElementIndex, orderFactHeight ElementIndex) returns BlockMark
+		return Self{mutableCount: mutableCount, ownedCount: ownedCount, debugOpenCount: debugOpenCount, orderFactHeight: orderFactHeight}
 	end 'create'
 end 'BlockMark'
 
@@ -18804,6 +18806,8 @@ type FunctionBodyState
 	// SSA space. It is the ONE column of this family that also leaves the parser — `commitRangeChecks` hands
 	// it to `FunctionRangeChecks`, where `InlineLeaves` reads it back off the caller's own numbering.
 	export var countedValueRanges as ProvenIntRangeColumn
+	export var orderFacts as OrderFacts
+	export var lastCondition as ConditionOrdersSlot
 
 	// ⭐⭐ **THE `.rdata` OP EACH CHARACTER-LITERAL VALUE WAS MATERIALIZED BY** — see `CharLiteralOpMap` for
 	// what an integer position does with it and why the op must be REPLACED rather than orphaned.
@@ -19431,6 +19435,8 @@ type FunctionBodyState
 			dropCascade: DropCascadeState.unbuilt,
 			wrapOperands: noWrapOperands,
 			countedValueRanges: noProvenIntRanges,
+			orderFacts: OrderFacts.create(),
+			lastCondition: ConditionOrdersSlot.none,
 			charLiteralOps: noCharLiteralOps,
 			plainConstantArrays: noPlainConstantArrays,
 			literalColumns: noLiteralColumns,
@@ -39950,7 +39956,7 @@ export type Parser
 	// list is drained to its own recorded height (see `BlockMark`).
 	function openBlock() returns BlockMark
 		self.bodyState.scope.pushScope()
-		return BlockMark.create(self.bodyState.mutableVars.count(), ownedCount: self.bodyState.ownedBindings.count(), debugOpenCount: self.bodyState.debugOpenSlots.count())
+		return BlockMark.create(self.bodyState.mutableVars.count(), ownedCount: self.bodyState.ownedBindings.count(), debugOpenCount: self.bodyState.debugOpenSlots.count(), orderFactHeight: self.bodyState.orderFacts.height())
 	end 'openBlock'
 
 	// Close a lexical block: drop its declarations out of scope (restoring anything they
@@ -39973,6 +39979,7 @@ export type Parser
 		end 'drainVars'
 
 		self.truncateOwnedBindings(mark.ownedCount)
+		self.bodyState.orderFacts.forgetAbove(mark.orderFactHeight)
 		self.closeDebugScopes(mark, endsIn: endsIn)
 	end 'closeBlock'
 
@@ -42956,7 +42963,7 @@ export type Parser
 		return self.valueIsInTheUnsignedDomain(lhs) or self.valueIsInTheUnsignedDomain(rhs)
 	end 'operandsAreInTheUnsignedDomain'
 
-	function guardUnsignedArithmetic(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, alias OperandAlias, resultTag ValueTypeTag, opTok Token)
+	function guardUnsignedArithmetic(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, alias OperandAlias, resultTag ValueTypeTag, opTok Token, borrowRuledOut bool)
 		if not tagIsInteger(resultTag) or not binOpCanLeaveUnsignedRange(op) 'nothingToGuard'
 			return
 		end 'nothingToGuard'
@@ -42968,7 +42975,7 @@ export type Parser
 			return
 		end 'aFoldedWrap'
 
-		if self.unsignedArithmeticIsProvablyInRange(result, lhs: lhs, rhs: rhs, op: op, target: ranged) 'provablyInRange'
+		if self.unsignedArithmeticIsProvablyInRange(result, lhs: lhs, rhs: rhs, op: op, target: ranged, borrowRuledOut: borrowRuledOut) 'provablyInRange'
 			return
 		end 'provablyInRange'
 
@@ -42996,7 +43003,7 @@ export type Parser
 		return ranged
 	end 'fullWidthAliasOf'
 
-	function unsignedArithmeticIsProvablyInRange(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, target RangedTypeAlias) returns bool
+	function unsignedArithmeticIsProvablyInRange(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, target RangedTypeAlias, borrowRuledOut bool) returns bool
 		if self.arithmeticHasANeutralOperand(lhs, rhs: rhs, op: op) 'anIdentity'
 			return true
 		end 'anIdentity'
@@ -43005,8 +43012,122 @@ export type Parser
 			return not unsignedArithmeticWraps(op, lhs: self.constOf(lhs), rhs: self.constOf(rhs))
 		end 'foldedUnsigned'
 
-		return self.countedRangeCovers(result, target: target)
+		return self.countedRangeCovers(result, target: target) or self.dominatingOrderKeepsInRange(lhs, rhs: rhs, op: op, borrowRuledOut: borrowRuledOut)
 	end 'unsignedArithmeticIsProvablyInRange'
+
+	function settleRunTimeBorrow(result ValueId, lhs ValueId, rhs ValueId) returns bool
+		if self.differenceIsAboveADominatingFloor(lhs, subtrahend: rhs) 'cannotBorrow'
+			self.markUnsignedPattern(result)
+			return true
+		end 'cannotBorrow'
+
+		self.recordWrapOperands(result, lhs: lhs, rhs: rhs, op: MaxonBinOp.sub)
+		return false
+	end 'settleRunTimeBorrow'
+
+	function dominatingOrderKeepsInRange(lhs ValueId, rhs ValueId, op MaxonBinOp, borrowRuledOut bool) returns bool
+		return match op 'op'
+			add gives self.sumIsBelowADominatingBound(lhs, addend: rhs) or self.sumIsBelowADominatingBound(rhs, addend: lhs)
+			sub gives borrowRuledOut
+			mul gives false
+			default panic("dominatingOrderKeepsInRange: '{op.rawValue}' is not an operator that can leave an unsigned range")
+		end 'op'
+	end 'dominatingOrderKeepsInRange'
+
+	function differenceIsAboveADominatingFloor(minuend ValueId, subtrahend ValueId) returns bool
+		if minuend == subtrahend 'theSameValue'
+			return true
+		end 'theSameValue'
+
+		if self.bodyState.orderFacts.holds(subtrahend, high: minuend) 'anOrderBetweenThem'
+			return true
+		end 'anOrderBetweenThem'
+
+		if not self.constIsKnown(subtrahend) 'notAConstantSubtrahend'
+			return false
+		end 'notAConstantSubtrahend'
+
+		return match self.bodyState.orderFacts.floorOf(minuend) 'floor'
+			unknown gives false
+			known(floor) gives foldUnsignedIntCompare(MaxonCmpOp.ge, lhs: floor, rhs: self.constOf(subtrahend)) == BoolTrueValue
+		end 'floor'
+	end 'differenceIsAboveADominatingFloor'
+
+	function sumIsBelowADominatingBound(operand ValueId, addend ValueId) returns bool
+		if not self.constIsKnown(addend) 'noConstantAddend'
+			return false
+		end 'noConstantAddend'
+
+		return match self.bodyState.orderFacts.ceilingOf(operand) 'ceiling'
+			unknown gives false
+			known(ceiling) gives not unsignedArithmeticWraps(MaxonBinOp.add, lhs: ceiling, rhs: self.constOf(addend))
+		end 'ceiling'
+	end 'sumIsBelowADominatingBound'
+
+	function constantBoundOf(value ValueId) returns ConstantBound
+		if not self.constIsKnown(value) 'notConstant'
+			return ConstantBound.unknown
+		end 'notConstant'
+
+		return ConstantBound.known(self.constOf(value))
+	end 'constantBoundOf'
+
+	function assumeOrders(facts OrderFactArray) returns ElementIndex
+		let floor = self.bodyState.orderFacts.height()
+
+		for fact in facts 'eachFact'
+			self.bodyState.orderFacts.assume(fact, lowConstant: self.constantBoundOf(fact.low), highConstant: self.constantBoundOf(fact.high))
+		end 'eachFact'
+
+		return floor
+	end 'assumeOrders'
+
+	function recordComparisonOrders(result ValueId, lhs ValueId, rhs ValueId, op MaxonCmpOp, signedness IntegerSignedness)
+		if comparisonReadsOrdering(op) 'anOrdering'
+			if signedness == IntegerSignedness.unsigned 'readUnsigned'
+				self.recordConditionOrders(result, orders: ConditionOrders.ordered(lhs, rhs: rhs, op: op))
+			end 'readUnsigned'
+
+			return
+		end 'anOrdering'
+
+		self.recordZeroTestOrders(result, lhs: lhs, rhs: rhs, op: op)
+	end 'recordComparisonOrders'
+
+	function recordZeroTestOrders(result ValueId, lhs ValueId, rhs ValueId, op MaxonCmpOp)
+		if self.valueIsConstant(rhs, equalTo: 0) and self.valueDeclaresUnsigned(lhs) 'subjectOnTheLeft'
+			self.recordConditionOrders(result, orders: ConditionOrders.differing(rhs, subject: lhs, op: op))
+		end 'subjectOnTheLeft' else if self.valueIsConstant(lhs, equalTo: 0) and self.valueDeclaresUnsigned(rhs) 'subjectOnTheRight'
+			self.recordConditionOrders(result, orders: ConditionOrders.differing(lhs, subject: rhs, op: op))
+		end 'subjectOnTheRight'
+	end 'recordZeroTestOrders'
+
+	function recordConditionOrders(value ValueId, orders ConditionOrders)
+		self.bodyState.lastCondition = ConditionOrdersSlot.recorded(value, orders: orders)
+	end 'recordConditionOrders'
+
+	function conditionOrdersOf(value ValueId) returns ConditionOrders
+		match self.bodyState.lastCondition 'slot'
+			none then return ConditionOrders.neutral()
+			recorded(held, orders) then return orders if held == value else ConditionOrders.neutral()
+		end 'slot'
+	end 'conditionOrdersOf'
+
+	function negateConditionOrders(operand ValueId, result ValueId)
+		let orders = self.conditionOrdersOf(operand)
+
+		if not orders.holdsNothing() 'somethingToNegate'
+			self.recordConditionOrders(result, orders: orders.negated())
+		end 'somethingToNegate'
+	end 'negateConditionOrders'
+
+	function assumeOrdersOfTheSurvivingArm(orders ConditionOrders, thenLeaves bool, elseLeaves bool)
+		if thenLeaves and not elseLeaves 'onlyTheElseContinues'
+			_ = self.assumeOrders(orders.whenFalse)
+		end 'onlyTheElseContinues' else if elseLeaves and not thenLeaves 'onlyTheThenContinues'
+			_ = self.assumeOrders(orders.whenTrue)
+		end 'onlyTheThenContinues'
+	end 'assumeOrdersOfTheSurvivingArm'
 
 	function operandsAreFoldedUnsigned(lhs ValueId, rhs ValueId) returns bool
 		return self.constIsKnown(lhs) and self.constIsKnown(rhs) and self.operandsAreInTheUnsignedDomain(lhs, rhs: rhs)
@@ -52323,6 +52444,7 @@ export type Parser
 		let cond = try self.parseIfCondition(func, block: block, ifTok: ifTok, binder: binder)
 		try self.requireNoDeferredRefusal()
 		self.closeWindowsTo(condWindowFloor)
+		let orders = self.conditionOrdersOf(ifConditionTest(cond))
 
 		// The condition's own blocks: a short-circuit `and`/`or` in it (`if a() and b()`)
 		// has already branched, and control now sits in ITS merge block. That — not the
@@ -52381,7 +52503,10 @@ export type Parser
 		end 'instrumentTheTrueArm'
 
 		let thenStart = self.pos
+		let thenOrderFloor = self.assumeOrders(orders.whenTrue)
 		var thenEnd = try self.parseIfThenBody(func, thenBlock: thenBlock, label: thenLabel.value, cond: cond, binder: binder, anchor: thenLabel)
+		self.bodyState.orderFacts.forgetAbove(thenOrderFloor)
+		let thenLeaves = thenEnd.isTerminated()
 		let thenStop = self.pos
 		self.noteArmLeavingTheFunction(func, block: thenEnd, start: thenStart, finish: thenStop)
 
@@ -52401,6 +52526,7 @@ export type Parser
 		// direct false edge.
 		if not self.at(TokenKind.else) and not ifConditionCatches(cond) 'noElse'
 			let cont = self.finalizeIfNoElse(func, entry: entry, cond: ifConditionTest(cond), ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, bindings: assignedBindings, entryVals: entryVals, thenVals: thenVals, entryMoveMark: entryMoveMark, thenMoveMark: thenMoveMark)
+			self.assumeOrdersOfTheSurvivingArm(orders, thenLeaves: thenLeaves, elseLeaves: false)
 			self.assertScanAligned("parseIfStatement", predictedEnd: ifEnd)
 			return cont
 		end 'noElse'
@@ -52420,13 +52546,17 @@ export type Parser
 		self.mintElseArmPoint(elseBlock, funcName: func.name, ifTok: ifTok, elseTok: elseTok, written: elseWrittenInSource)
 
 		let elseStart = self.pos
+		let elseOrderFloor = self.assumeOrders(orders.whenFalse)
 		var elseEnd = try self.parseElseBody(func, elseBlock: elseBlock, cond: cond, ifTok: ifTok, ifEnd: ifEnd)
+		self.bodyState.orderFacts.forgetAbove(elseOrderFloor)
+		let elseLeaves = elseEnd.isTerminated()
 		var deferred = self.deferredProvenanceOf(func)
 		deferred.noteExclusiveArms(thenStart, thenEnd: thenStop, elseStart: elseStart, elseEnd: self.pos)
 		self.noteArmLeavingTheFunction(func, block: elseEnd, start: elseStart, finish: self.pos)
 		let elseVals = self.snapshotBindings(assignedBindings)
 		let elseMoveMark = self.captureMoveMark()
 		let cont = self.finalizeIfElse(func, entry: entry, cond: ifConditionTest(cond), ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, elseBlock: elseBlock, elseEnd: elseEnd, bindings: assignedBindings, thenVals: thenVals, elseVals: elseVals, thenMoveMark: thenMoveMark, elseMoveMark: elseMoveMark)
+		self.assumeOrdersOfTheSurvivingArm(orders, thenLeaves: thenLeaves, elseLeaves: elseLeaves)
 		self.assertScanAligned("parseIfStatement", predictedEnd: ifEnd)
 		return cont
 	end 'parseIfWithin'
@@ -53322,6 +53452,7 @@ export type Parser
 		let cond = try self.parseBoolCondition(func, block: header, kwTok: whileTok)
 		try self.requireNoDeferredRefusal()
 		self.closeWindowsTo(condWindowFloor)
+		let orders = self.conditionOrdersOf(cond)
 		var condExit = self.bodyState.currentBlock
 
 		// ⭐ **PER ITERATION, NOT PER LOOP** — and that is why the release goes HERE rather than in the exit
@@ -53360,7 +53491,9 @@ export type Parser
 		// The body is a lexical BLOCK: its declarations are gone — and its `var`s off
 		// `mutableVars` — before the back-edge args below are read, so those args name the
 		// loop's own phi bindings and never a body-local shadow.
+		let bodyOrderFloor = self.assumeOrders(orders.whenTrue)
 		var bodyEnd = try self.parseBlockBody(func, block: body, label: loopLabelTok.value)
+		self.bodyState.orderFacts.forgetAbove(bodyOrderFloor)
 
 		// Guard the token scan against the parse it predicted — see `assertScanAligned`.
 		self.assertScanAligned("parseWhileStatement", predictedEnd: bodyEndIndex)
@@ -62720,6 +62853,7 @@ export type Parser
 		end 'nonBoolCondition'
 
 		var condExit = self.bodyState.currentBlock
+		let orders = self.conditionOrdersOf(cond)
 
 		self.restoreStashedOperands()
 
@@ -62781,7 +62915,9 @@ export type Parser
 		// first token IS this one.
 		self.stateArrayLiteralTargetAt(armSlot, tokenIndex: falseArmStart)
 		self.stateTupleLiteralTargetAt(tupleArmSlot, tokenIndex: falseArmStart)
+		let falseOrderFloor = self.assumeOrders(orders.whenFalse)
 		let falseValue = try self.parseArmValue(func, block: falseBranch)
+		self.bodyState.orderFacts.forgetAbove(falseOrderFloor)
 		var armsDeferred = self.deferredProvenanceOf(func)
 
 		// A read or a door is filed one token past the expression it ends, so each span ends one past its
@@ -63376,6 +63512,11 @@ export type Parser
 		self.emitBranch(rhsEnd, targetId: merge.id)
 
 		self.bodyState.currentBlock = merge
+
+		if not rhs.orders.holdsNothing() 'somethingIsEstablished'
+			self.recordConditionOrders(result, orders: rhs.orders)
+		end 'somethingIsEstablished'
+
 		return result
 	end 'emitShortCircuit'
 
@@ -63428,7 +63569,11 @@ export type Parser
 			skippedMoveMark = self.captureMoveMark()
 		end 'bindingsToMove'
 
+		let leftOrders = self.conditionOrdersOf(leftValue)
+		let rhsOrderFloor = self.assumeOrders(leftOrders.whenTrue if takesRhsWhenTrue else leftOrders.whenFalse)
 		let rhsValue = try self.parseUnclaimedBinary(func, minPrec: rhsMinPrec)
+		let rhsOrders = self.conditionOrdersOf(rhsValue)
+		self.bodyState.orderFacts.forgetAbove(rhsOrderFloor)
 
 		// NOT `rhsBlock`: the rhs may itself have short-circuited (`a or b or c`), leaving
 		// control in a merge block of its own. That is the block the value is defined in, and
@@ -63475,7 +63620,7 @@ export type Parser
 			rhsMoveMark = self.captureMoveMark()
 		end 'bindingsMayHaveMoved'
 
-		return ShortCircuitRhs.create(rhsId, value: rhsValue, resultTag: resultTag, skippedMoveMark: skippedMoveMark, rhsMoveMark: rhsMoveMark)
+		return ShortCircuitRhs.create(rhsId, value: rhsValue, resultTag: resultTag, skippedMoveMark: skippedMoveMark, rhsMoveMark: rhsMoveMark, orders: leftOrders.whenAndHolds(rhsOrders) if takesRhsWhenTrue else leftOrders.whenOrFails(rhsOrders))
 	end 'parseShortCircuitRhs'
 
 	// The two-way branch out of a short-circuit's entry block. `and` takes the rhs when the
@@ -65559,6 +65704,11 @@ export type Parser
 	function emitNot(operand ValueId, op MaxonUnaryOp, resultTag ValueTypeTag, opTok Token) returns ValueId
 		let complemented = self.emitUnaryOp(operand, op: op, resultTag: resultTag, range: SourceRange.ofToken(opTok))
 		self.adoptUnaryResultAlias(complemented, operand: operand, op: op, resultTag: resultTag)
+
+		if op == MaxonUnaryOp.logicalNot 'aBoolNegation'
+			self.negateConditionOrders(operand, result: complemented)
+		end 'aBoolNegation'
+
 		return complemented
 	end 'emitNot'
 
@@ -67566,11 +67716,13 @@ export type Parser
 		self.adoptBinaryResultAlias(result, lhs: lhs, rhs: rhs, op: op, alias: operandAlias, resultTag: resultTag)
 		self.markUnsignedArithmeticResult(result, lhs: left, rhs: right, op: op)
 
+		var borrowRuledOut = false
+
 		if op == MaxonBinOp.sub and not (self.constIsKnown(left) and self.constIsKnown(right)) and self.operandsAreInTheUnsignedDomain(left, rhs: right) 'aRunTimeBorrow'
-			self.recordWrapOperands(result, lhs: left, rhs: right, op: op)
+			borrowRuledOut = self.settleRunTimeBorrow(result, lhs: left, rhs: right)
 		end 'aRunTimeBorrow'
 
-		self.guardUnsignedArithmetic(result, lhs: left, rhs: right, op: op, alias: operandAlias, resultTag: resultTag, opTok: opTok)
+		self.guardUnsignedArithmetic(result, lhs: left, rhs: right, op: op, alias: operandAlias, resultTag: resultTag, opTok: opTok, borrowRuledOut: borrowRuledOut)
 
 		// ⭐ **THE ONE OPERATOR WHOSE RESULT INHERITS ITS OPERANDS' RANGED ALIAS AS A PROOF.** See
 		// `bitAndInheritedAliasId` — and `rangeIsClosedUnderBitAnd`, which is the proof that makes the
@@ -68215,6 +68367,7 @@ export type Parser
 		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.compare(result, lhs: left, rhs: right, op: op, signedness: signedness), range: SourceRange.ofToken(opTok))
 		self.adoptOperandAlias(result, alias: comparedAlias, resultTag: ValueTypeTag.boolean)
 		self.recordCompareFold(result, lhs: left, rhs: right, op: op, signedness: signedness)
+		self.recordComparisonOrders(result, lhs: left, rhs: right, op: op, signedness: signedness)
 		return result
 	end 'emitComparableCompare'
 

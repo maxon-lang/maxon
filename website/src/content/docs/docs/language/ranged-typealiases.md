@@ -250,7 +250,9 @@ an interface is checked at compile time against the interface's own parameter ty
   carries past `u64.max`, a difference that borrows (the left operand is smaller than the right) and a
   product past `u64.max` each panic at the operation, in a `let`, a loop bound or an argument alike. The
   check is omitted where the compiler proves the result fits: an identity operand (`x + 0`, `x - 0`,
-  `x * 0`, `x * 1`), constants that do not wrap, or a counted loop's interval. A constant expression that
+  `x * 0`, `x * 1`), constants that do not wrap, a counted loop's interval, or a dominating comparison (a
+  difference `a - b` where `b <= a` holds on every path to it, a sum of a value and a constant where the
+  comparison bounds the value below the point of wrapping). A constant expression that
   wraps is a compile error, **E3005** (`The result of 2 - 3 is outside the range of 'Count'
   (int(0 to 18446744073709551615))`). Arithmetic over a narrower alias is checked where its result
   reaches a door.

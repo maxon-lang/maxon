@@ -1,0 +1,245 @@
+// Both sides are values, not variables: a reassigned variable names a new value, so a fact never
+// outlives the value it describes.
+module type OrderFact
+	module let low as ValueId
+	module let high as ValueId
+	module let strict as bool
+
+	module static function create(low ValueId, high ValueId, strict bool) returns OrderFact
+		return Self{low: low, high: high, strict: strict}
+	end 'create'
+end 'OrderFact'
+
+module typealias OrderFactArray = Array with OrderFact
+
+module union ConstantBound
+	unknown
+	known(value FullRangeInt)
+end 'ConstantBound'
+
+union BoundChange
+	none
+	introduced
+	replaced(previous FullRangeInt)
+end 'BoundChange'
+
+typealias OrderPairKey = int(0 to u64.max)
+
+typealias OrderPairMap = Map with (OrderPairKey, ElementIndex)
+
+typealias ValueBoundMap = Map with (ValueId, FullRangeInt)
+
+let PackedValueIdBits = 32
+
+let MaxPackedValueId = 4294967295
+
+type OrderEntry
+	module let fact as OrderFact
+	module let registeredPair as bool
+	module let floorChange as BoundChange
+	module let ceilingChange as BoundChange
+
+	static function create(fact OrderFact, registeredPair bool, floorChange BoundChange, ceilingChange BoundChange) returns OrderEntry
+		return Self{fact: fact, registeredPair: registeredPair, floorChange: floorChange, ceilingChange: ceilingChange}
+	end 'create'
+end 'OrderEntry'
+
+typealias OrderEntryArray = Array with OrderEntry
+
+function orderPairKey(low ValueId, high ValueId) returns OrderPairKey
+	if low > MaxPackedValueId or high > MaxPackedValueId 'tooWide'
+		panic("orderPairKey: a function with more than 2^32 values cannot key an order fact by its two value ids")
+	end 'tooWide'
+
+	return ((high as OrderPairKey) shl PackedValueIdBits) or (low as OrderPairKey)
+end 'orderPairKey'
+
+export type OrderFacts
+	var entries as OrderEntryArray
+	var pairs as OrderPairMap
+	var floors as ValueBoundMap
+	var ceilings as ValueBoundMap
+
+	export static function create() returns OrderFacts
+		return Self{entries: OrderEntryArray.create(0), pairs: OrderPairMap.create(), floors: ValueBoundMap.create(), ceilings: ValueBoundMap.create()}
+	end 'create'
+
+	module function height() returns ElementIndex
+		return self.entries.count()
+	end 'height'
+
+	module function assume(fact OrderFact, lowConstant ConstantBound, highConstant ConstantBound)
+		let registered = self.registerPair(fact)
+		let floorChange = self.raiseFloor(fact, lowConstant: lowConstant)
+		let ceilingChange = self.lowerCeiling(fact, highConstant: highConstant)
+
+		self.entries.push(OrderEntry.create(fact, registeredPair: registered, floorChange: floorChange, ceilingChange: ceilingChange))
+	end 'assume'
+
+	// Unwinds newest first: an entry restores the bound it replaced and removes only the pair it
+	// registered, so any other order leaves a fact of a closed block in force.
+	module function forgetAbove(height ElementIndex)
+		while self.entries.count() > height 'eachEntry'
+			let entry = try self.entries.pop() otherwise panic("forgetAbove: entries.pop failed above the height {height}")
+
+			if entry.registeredPair 'ownsThePair'
+				_ = self.pairs.remove(orderPairKey(entry.fact.low, high: entry.fact.high))
+			end 'ownsThePair'
+
+			restoreBound(self.floors, key: entry.fact.high, change: entry.floorChange)
+			restoreBound(self.ceilings, key: entry.fact.low, change: entry.ceilingChange)
+		end 'eachEntry'
+	end 'forgetAbove'
+
+	module function holds(low ValueId, high ValueId) returns bool
+		return self.pairs.contains(orderPairKey(low, high: high))
+	end 'holds'
+
+	module function floorOf(value ValueId) returns ConstantBound
+		return boundIn(self.floors, key: value)
+	end 'floorOf'
+
+	module function ceilingOf(value ValueId) returns ConstantBound
+		return boundIn(self.ceilings, key: value)
+	end 'ceilingOf'
+
+	function registerPair(fact OrderFact) returns bool
+		let key = orderPairKey(fact.low, high: fact.high)
+
+		if self.pairs.contains(key) 'alreadyHeld'
+			return false
+		end 'alreadyHeld'
+
+		self.pairs.upsert(key, value: self.entries.count())
+		return true
+	end 'registerPair'
+
+	function raiseFloor(fact OrderFact, lowConstant ConstantBound) returns BoundChange
+		match lowConstant 'low'
+			unknown then return BoundChange.none
+			known(constant) then return tightenedBound(self.floors, key: fact.high, candidate: constant + 1 if fact.strict else constant, raises: true)
+		end 'low'
+	end 'raiseFloor'
+
+	function lowerCeiling(fact OrderFact, highConstant ConstantBound) returns BoundChange
+		match highConstant 'high'
+			known(constant) then return tightenedBound(self.ceilings, key: fact.low, candidate: constant - 1 if fact.strict else constant, raises: false)
+			unknown then return self.lowerCeilingBelowARuntimeBound(fact)
+		end 'high'
+	end 'lowerCeiling'
+
+	function lowerCeilingBelowARuntimeBound(fact OrderFact) returns BoundChange
+		if not fact.strict 'noRoomGained'
+			return BoundChange.none
+		end 'noRoomGained'
+
+		return tightenedBound(self.ceilings, key: fact.low, candidate: UnsignedFullUpperPattern - 1, raises: false)
+	end 'lowerCeilingBelowARuntimeBound'
+end 'OrderFacts'
+
+function tightenedBound(bounds ValueBoundMap, key ValueId, candidate FullRangeInt, raises bool) returns BoundChange
+	let current = try bounds.get(key) otherwise 'unbounded'
+		bounds.upsert(key, value: candidate)
+		return BoundChange.introduced
+	end 'unbounded'
+
+	let improves = foldUnsignedIntCompare(MaxonCmpOp.gt if raises else MaxonCmpOp.lt, lhs: candidate, rhs: current) == BoolTrueValue
+
+	if not improves 'noBetter'
+		return BoundChange.none
+	end 'noBetter'
+
+	bounds.upsert(key, value: candidate)
+	return BoundChange.replaced(current)
+end 'tightenedBound'
+
+function boundIn(bounds ValueBoundMap, key ValueId) returns ConstantBound
+	let held = try bounds.get(key) otherwise return ConstantBound.unknown
+
+	return ConstantBound.known(held)
+end 'boundIn'
+
+function restoreBound(bounds ValueBoundMap, key ValueId, change BoundChange)
+	match change 'change'
+		none then return
+		introduced then _ = bounds.remove(key)
+		replaced(previous) then bounds.upsert(key, value: previous)
+	end 'change'
+end 'restoreBound'
+
+function orderFactsOf(low ValueId, high ValueId, strict bool) returns OrderFactArray
+	var facts = OrderFactArray.create(0)
+
+	if low != high 'distinctValues'
+		facts.push(OrderFact.create(low, high: high, strict: strict))
+	end 'distinctValues'
+
+	return facts
+end 'orderFactsOf'
+
+function concatenatedOrderFacts(first OrderFactArray, second OrderFactArray) returns OrderFactArray
+	let all = OrderFactArray.create(0)
+
+	all.append(first)
+	all.append(second)
+
+	return all
+end 'concatenatedOrderFacts'
+
+export type ConditionOrders
+	module let whenTrue as OrderFactArray
+	module let whenFalse as OrderFactArray
+
+	static function create(whenTrue OrderFactArray, whenFalse OrderFactArray) returns ConditionOrders
+		return Self{whenTrue: whenTrue, whenFalse: whenFalse}
+	end 'create'
+
+	module static function neutral() returns ConditionOrders
+		return Self.create(OrderFactArray.create(0), whenFalse: OrderFactArray.create(0))
+	end 'neutral'
+
+	module static function ordered(lhs ValueId, rhs ValueId, op MaxonCmpOp) returns ConditionOrders
+		return match op 'op'
+			lt gives Self.holding(lhs, high: rhs, strict: true)
+			le gives Self.holding(lhs, high: rhs, strict: false)
+			gt gives Self.holding(rhs, high: lhs, strict: true)
+			ge gives Self.holding(rhs, high: lhs, strict: false)
+			default panic("ConditionOrders.ordered: '{op.rawValue}' is not an ordering comparison")
+		end 'op'
+	end 'ordered'
+
+	module static function differing(zero ValueId, subject ValueId, op MaxonCmpOp) returns ConditionOrders
+		let nonZero = orderFactsOf(zero, high: subject, strict: true)
+
+		return match op 'op'
+			eq gives Self.create(OrderFactArray.create(0), whenFalse: nonZero)
+			ne gives Self.create(nonZero, whenFalse: OrderFactArray.create(0))
+			default panic("ConditionOrders.differing: '{op.rawValue}' is not an equality comparison")
+		end 'op'
+	end 'differing'
+
+	static function holding(low ValueId, high ValueId, strict bool) returns ConditionOrders
+		return Self.create(orderFactsOf(low, high: high, strict: strict), whenFalse: orderFactsOf(high, high: low, strict: not strict))
+	end 'holding'
+
+	module function negated() returns ConditionOrders
+		return Self.create(self.whenFalse, whenFalse: self.whenTrue)
+	end 'negated'
+
+	module function whenAndHolds(rhs ConditionOrders) returns ConditionOrders
+		return Self.create(concatenatedOrderFacts(self.whenTrue, second: rhs.whenTrue), whenFalse: OrderFactArray.create(0))
+	end 'whenAndHolds'
+
+	module function whenOrFails(rhs ConditionOrders) returns ConditionOrders
+		return Self.create(OrderFactArray.create(0), whenFalse: concatenatedOrderFacts(self.whenFalse, second: rhs.whenFalse))
+	end 'whenOrFails'
+
+	module function holdsNothing() returns bool
+		return self.whenTrue.count() == 0 and self.whenFalse.count() == 0
+	end 'holdsNothing'
+end 'ConditionOrders'
+
+export union ConditionOrdersSlot
+	none
+	recorded(value ValueId, orders ConditionOrders)
+end 'ConditionOrdersSlot'

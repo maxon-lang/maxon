@@ -199,7 +199,7 @@ func @holdSilently {
     x64.movRegImm32 rbx, 0
     x64.jmp __il_cont#7
   ifcont:
-    x64.jumpTable r12, default=matchdead [[0..1]=matcharm#15, [2]=matcharm#14, [3]=matcharm#15, [4]=matcharm#14, [5]=matcharm#13] @__jumptable_42
+    x64.jumpTable r12, default=matchdead [[0..1]=matcharm#15, [2]=matcharm#14, [3]=matcharm#15, [4]=matcharm#14, [5]=matcharm#13] @__jumptable_41
   matchdead:
   matcharm#15:
     x64.leaRegRdata rax, [rip + __str_rec_23]  ; "panic at TcpListener.maxon:53: "
@@ -475,11 +475,11 @@ func @main {
     x64.movRegImm32 r13, 0
   __il_body#41:
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#52
+    x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r12, 65535
-    x64.jcc greater, __rc_panic#52
-  __rc_ok#54:
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect String.addressableBytes
     x64.movRegReg rbx, r8
@@ -601,18 +601,14 @@ func @main {
   __il_body#65:
     x64.callDirect Clock.nowMs
     x64.cmpRegReg r8, r13
-    x64.setccReg below, rax
     x64.jcc aboveEqual, ifcont
   clockSkew:
     x64.movRegImm32 r13, 0
-    x64.jmp __il_body#70
+    x64.jmp __il_body#68
   ifcont:
     x64.subRegReg r8, r8, r13
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rc_panic#69
-  __rc_ok#68:
     x64.movRegReg r13, r8
-  __il_body#70:
+  __il_body#68:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __ms_close
   __il_cont#63:
@@ -696,7 +692,7 @@ func @main {
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
-  __il_body#71:
+  __il_body#69:
     x64.loadRegSlot rcx, slot4
     x64.callDirect __write_stdout
   __il_cont#62:
@@ -734,20 +730,8 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.retIndirect
-  __rc_panic#52:
-    x64.leaRegRdata rcx, [rip + __str_blob_34]  ; "panic at TcpClient.maxon:50: Range check failed: value outside typealias 'NetworkPort'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 120
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  __rc_panic#69:
-    x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'InstantMs'\x0a"
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at TcpClient.maxon:50: Range check failed: value outside typealias 'NetworkPort'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 120
@@ -935,7 +919,7 @@ func @holdSilently {
     x64.movRegImm32 rbx, 0
     x64.jmp __il_cont#7
   ifcont:
-    x64.jumpTable r12, default=matchdead [[0..1]=matcharm#15, [2]=matcharm#14, [3]=matcharm#15, [4]=matcharm#14, [5]=matcharm#13] @__jumptable_42
+    x64.jumpTable r12, default=matchdead [[0..1]=matcharm#15, [2]=matcharm#14, [3]=matcharm#15, [4]=matcharm#14, [5]=matcharm#13] @__jumptable_41
   matchdead:
   matcharm#15:
     x64.leaRegRdata rax, [rip + __str_rec_23]  ; "panic at TcpListener.maxon:53: "
@@ -1211,11 +1195,11 @@ func @main {
     x64.movRegImm32 r13, 0
   __il_body#41:
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#52
+    x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r12, 65535
-    x64.jcc greater, __rc_panic#52
-  __rc_ok#54:
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect String.addressableBytes
     x64.movRegReg rbx, r8
@@ -1337,18 +1321,14 @@ func @main {
   __il_body#65:
     x64.callDirect Clock.nowMs
     x64.cmpRegReg r8, r13
-    x64.setccReg below, rax
     x64.jcc aboveEqual, ifcont
   clockSkew:
     x64.movRegImm32 r13, 0
-    x64.jmp __il_body#70
+    x64.jmp __il_body#68
   ifcont:
     x64.subRegReg r8, r8, r13
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rc_panic#69
-  __rc_ok#68:
     x64.movRegReg r13, r8
-  __il_body#70:
+  __il_body#68:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __ms_close
   __il_cont#63:
@@ -1432,7 +1412,7 @@ func @main {
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
-  __il_body#71:
+  __il_body#69:
     x64.loadRegSlot rcx, slot4
     x64.callDirect __write_stdout
   __il_cont#62:
@@ -1470,20 +1450,8 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.retIndirect
-  __rc_panic#52:
-    x64.leaRegRdata rcx, [rip + __str_blob_34]  ; "panic at TcpClient.maxon:50: Range check failed: value outside typealias 'NetworkPort'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 120
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
-  __rc_panic#69:
-    x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'InstantMs'\x0a"
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at TcpClient.maxon:50: Range check failed: value outside typealias 'NetworkPort'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 120
@@ -1665,7 +1633,7 @@ func @holdSilently {
     arm64.movImm x19, 0
     arm64.b __il_cont#7
   ifcont:
-    arm64.jumpTable x20, default=matchdead [[0..1]=matcharm#15, [2]=matcharm#14, [3]=matcharm#15, [4]=matcharm#14, [5]=matcharm#13] @__jumptable_42
+    arm64.jumpTable x20, default=matchdead [[0..1]=matcharm#15, [2]=matcharm#14, [3]=matcharm#15, [4]=matcharm#14, [5]=matcharm#13] @__jumptable_41
   matchdead:
   matcharm#15:
     arm64.leaRdata x0, __str_rec_23  ; "panic at TcpListener.maxon:53: "
@@ -1959,11 +1927,11 @@ func @main {
     arm64.movImm x21, 0
   __il_body#41:
     arm64.cmp x20, 0
-    arm64.b.lt __rc_panic#52
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.movImm x16, 65535
     arm64.cmp x20, x16
-    arm64.b.gt __rc_panic#52
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl String.addressableBytes
@@ -2089,15 +2057,13 @@ func @main {
   __il_body#65:
     arm64.bl Clock.nowMs
     arm64.cmp x0, x21
-    arm64.cset x1, lo
     arm64.b.hs ifcont
   clockSkew:
     arm64.movImm x21, 0
-    arm64.b __il_body#70
+    arm64.b __il_body#68
   ifcont:
     arm64.sub x21, x0, x21
-    arm64.cbnz x1, __rc_panic#69
-  __il_body#70:
+  __il_body#68:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl __ms_close
   __il_cont#63:
@@ -2177,7 +2143,7 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
     arm64.bl __mm_decref
-  __il_body#71:
+  __il_body#69:
     arm64.loadRegSlot x0, slot4
     arm64.bl __write_stdout
   __il_cont#62:
@@ -2223,24 +2189,8 @@ func @main {
     arm64.loadRegSlot x28, slot15
     arm64.epilogue 144
     arm64.retIndirect
-  __rc_panic#52:
-    arm64.leaRdata x0, __str_blob_34  ; "panic at TcpClient.maxon:50: Range check failed: value outside typealias 'NetworkPort'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot6
-    arm64.loadRegSlot x20, slot7
-    arm64.loadRegSlot x21, slot8
-    arm64.loadRegSlot x22, slot9
-    arm64.loadRegSlot x23, slot10
-    arm64.loadRegSlot x24, slot11
-    arm64.loadRegSlot x25, slot12
-    arm64.loadRegSlot x26, slot13
-    arm64.loadRegSlot x27, slot14
-    arm64.loadRegSlot x28, slot15
-    arm64.epilogue 144
-    arm64.retIndirect
-  __rc_panic#69:
-    arm64.leaRdata x0, __str_blob_33  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'InstantMs'\x0a"
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_33  ; "panic at TcpClient.maxon:50: Range check failed: value outside typealias 'NetworkPort'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -2448,7 +2398,7 @@ func @holdSilently {
     arm64.movImm x19, 0
     arm64.b __il_cont#7
   ifcont:
-    arm64.jumpTable x20, default=matchdead [[0..1]=matcharm#15, [2]=matcharm#14, [3]=matcharm#15, [4]=matcharm#14, [5]=matcharm#13] @__jumptable_42
+    arm64.jumpTable x20, default=matchdead [[0..1]=matcharm#15, [2]=matcharm#14, [3]=matcharm#15, [4]=matcharm#14, [5]=matcharm#13] @__jumptable_41
   matchdead:
   matcharm#15:
     arm64.leaRdata x0, __str_rec_23  ; "panic at TcpListener.maxon:53: "
@@ -2742,11 +2692,11 @@ func @main {
     arm64.movImm x21, 0
   __il_body#41:
     arm64.cmp x20, 0
-    arm64.b.lt __rc_panic#52
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.movImm x16, 65535
     arm64.cmp x20, x16
-    arm64.b.gt __rc_panic#52
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl String.addressableBytes
@@ -2872,15 +2822,13 @@ func @main {
   __il_body#65:
     arm64.bl Clock.nowMs
     arm64.cmp x0, x21
-    arm64.cset x1, lo
     arm64.b.hs ifcont
   clockSkew:
     arm64.movImm x21, 0
-    arm64.b __il_body#70
+    arm64.b __il_body#68
   ifcont:
     arm64.sub x21, x0, x21
-    arm64.cbnz x1, __rc_panic#69
-  __il_body#70:
+  __il_body#68:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl __ms_close
   __il_cont#63:
@@ -2960,7 +2908,7 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
     arm64.bl __mm_decref
-  __il_body#71:
+  __il_body#69:
     arm64.loadRegSlot x0, slot4
     arm64.bl __write_stdout
   __il_cont#62:
@@ -3006,24 +2954,8 @@ func @main {
     arm64.loadRegSlot x28, slot15
     arm64.epilogue 144
     arm64.retIndirect
-  __rc_panic#52:
-    arm64.leaRdata x0, __str_blob_34  ; "panic at TcpClient.maxon:50: Range check failed: value outside typealias 'NetworkPort'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot6
-    arm64.loadRegSlot x20, slot7
-    arm64.loadRegSlot x21, slot8
-    arm64.loadRegSlot x22, slot9
-    arm64.loadRegSlot x23, slot10
-    arm64.loadRegSlot x24, slot11
-    arm64.loadRegSlot x25, slot12
-    arm64.loadRegSlot x26, slot13
-    arm64.loadRegSlot x27, slot14
-    arm64.loadRegSlot x28, slot15
-    arm64.epilogue 144
-    arm64.retIndirect
-  __rc_panic#69:
-    arm64.leaRdata x0, __str_blob_33  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'InstantMs'\x0a"
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_33  ; "panic at TcpClient.maxon:50: Range check failed: value outside typealias 'NetworkPort'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6

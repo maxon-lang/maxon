@@ -3635,3 +3635,657 @@ end 'main'
 9223372036854775808
 9223372036854775809
 ```
+
+<!-- test: range-check-panic.a-difference-under-its-order-does-not-panic -->
+`a - b` is in range on every path where a dominating condition has established `b <= a`, so the check the operation would otherwise carry is not emitted. The shapes: the true arm of `a >= b`, the false arm of `a < b`, a guard clause that returned on `a < b`, `not (a < b)`, the right operand of `and`, the false arm of an inline conditional, a constant floor from `n > 0`, `n >= 2` and `n == 0`, and `a - a`. Each runs at the edge of its order, where the difference is `0`.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function ifGreaterEqual(a Slot, b Slot) returns Slot
+	if a >= b 'ordered'
+		return a - b
+	end 'ordered'
+
+	return 0
+end 'ifGreaterEqual'
+
+function elseOfLess(a Slot, b Slot) returns Slot
+	if a < b 'short'
+		return 0
+	end 'short' else 'long'
+		return a - b
+	end 'long'
+end 'elseOfLess'
+
+function guardClause(a Slot, b Slot) returns Slot
+	if a < b 'short'
+		return 0
+	end 'short'
+
+	return a - b
+end 'guardClause'
+
+function negated(a Slot, b Slot) returns Slot
+	if not (a < b) 'long'
+		return a - b
+	end 'long'
+
+	return 0
+end 'negated'
+
+function conjoined(a Slot, b Slot) returns bool
+	return a >= b and a - b == 0
+end 'conjoined'
+
+function clamped(a Slot, b Slot) returns Slot
+	return 0 if a < b else a - b
+end 'clamped'
+
+function afterZero(n Slot) returns Slot
+	if n > 0 'positive'
+		return n - 1
+	end 'positive'
+
+	return 0
+end 'afterZero'
+
+function afterTwo(n Slot) returns Slot
+	if n >= 2 'atLeastTwo'
+		return n - 2
+	end 'atLeastTwo'
+
+	return 0
+end 'afterTwo'
+
+function afterNonZero(n Slot) returns Slot
+	if n == 0 'empty'
+		return 0
+	end 'empty'
+
+	return n - 1
+end 'afterNonZero'
+
+function selfDifference(a Slot) returns Slot
+	return a - a
+end 'selfDifference'
+
+function main() returns ExitCode
+	print("{ifGreaterEqual(9, b: 9)} {ifGreaterEqual(9, b: 4)} {ifGreaterEqual(4, b: 9)}\n")
+	print("{elseOfLess(9, b: 9)} {elseOfLess(9, b: 4)} {elseOfLess(4, b: 9)}\n")
+	print("{guardClause(9, b: 9)} {guardClause(9, b: 4)} {guardClause(4, b: 9)}\n")
+	print("{negated(9, b: 9)} {negated(9, b: 4)} {negated(4, b: 9)}\n")
+	print("{conjoined(9, b: 9)} {conjoined(4, b: 9)}\n")
+	print("{clamped(9, b: 9)} {clamped(9, b: 4)} {clamped(4, b: 9)}\n")
+	print("{afterZero(1)} {afterZero(0)} {afterTwo(2)} {afterTwo(1)} {afterNonZero(1)} {afterNonZero(0)}\n")
+	print("{selfDifference(u64.max)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 5 0
+0 5 0
+0 5 0
+0 5 0
+true false
+0 5 0
+0 0 0 0 0 0
+0
+```
+
+<!-- test: range-check-panic.a-sum-under-its-bound-does-not-panic -->
+`i + 1` is in range where `i < n` holds, because `n` is at most `u64.max`; a constant bound leaves room for a constant addend that fits under it. The shapes: the true arm of `i < n`, a guard clause that returned on `i >= n`, the body of `while i < n`, and `i < 100` with `i + 5`.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function next(i Slot, n Slot) returns Slot
+	if i < n 'below'
+		return i + 1
+	end 'below'
+
+	return i
+end 'next'
+
+function afterGuard(i Slot, n Slot) returns Slot
+	if i >= n 'done'
+		return i
+	end 'done'
+
+	return i + 1
+end 'afterGuard'
+
+function walk(n Slot) returns Slot
+	var i = 0 as Slot
+
+	while i < n 'each'
+		i = i + 1
+	end 'each'
+
+	return i
+end 'walk'
+
+function underConstant(i Slot) returns Slot
+	if i < 100 'small'
+		return i + 5
+	end 'small'
+
+	return i
+end 'underConstant'
+
+function main() returns ExitCode
+	print("{next(u64.max - 1, n: u64.max)} {next(3, n: 3)} {afterGuard(u64.max - 1, n: u64.max)} {afterGuard(5, n: 5)}\n")
+	print("{walk(0)} {walk(12)} {underConstant(99)} {underConstant(100)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551615 3 18446744073709551615 5
+0 12 104 100
+```
+
+<!-- test: range-check-panic.a-difference-under-the-opposite-order-still-panics -->
+The order `a >= b` bounds `a - b`, not `b - a`: the reversed subtraction in the same arm keeps its check.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function reversed(a Slot, b Slot) returns Slot
+	if a >= b 'ordered'
+		return b - a
+	end 'ordered'
+
+	return 0
+end 'reversed'
+
+function main() returns ExitCode
+	print("{reversed(5, b: 3)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-difference-under-the-opposite-order-still-panics.test:6: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in reversed
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-reassigned-operand-after-its-order-still-panics -->
+`x` is rewritten after `x >= b` held, so the order says nothing about the value the subtraction reads and the borrow panics.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function halved(a Slot, b Slot) returns Slot
+	var x = a
+
+	if x >= b 'ordered'
+		x = x shr 1
+		return x - b
+	end 'ordered'
+
+	return 0
+end 'halved'
+
+function main() returns ExitCode
+	print("{halved(4, b: 3)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-reassigned-operand-after-its-order-still-panics.test:9: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in halved
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-sum-under-a-non-strict-bound-still-panics -->
+`i <= n` leaves `i` free to equal `u64.max`, so `i + 1` keeps its carry check.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function next(i Slot, n Slot) returns Slot
+	if i <= n 'atMost'
+		return i + 1
+	end 'atMost'
+
+	return i
+end 'next'
+
+function main() returns ExitCode
+	print("{next(u64.max, n: u64.max)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-sum-under-a-non-strict-bound-still-panics.test:6: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in next
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.an-order-ends-with-the-branch-that-established-it -->
+The order `a >= b` holds inside its own arm and nowhere else: after the `if` the subtraction is checked again, and a borrow there panics.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function after(a Slot, b Slot) returns Slot
+	var seen = 0 as Slot
+
+	if a >= b 'ordered'
+		seen = a - b
+	end 'ordered'
+
+	return seen + (a - b)
+end 'after'
+
+function main() returns ExitCode
+	print("{after(5, b: 3)}\n")
+	print("{after(3, b: 5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+4
+```
+```stderr
+panic at range-check-panic.an-order-ends-with-the-branch-that-established-it.test:11: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in after
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-difference-above-the-signed-top-crosses-a-door-intact -->
+A difference that no borrow can reach is a legitimate pattern above `2^63` when its operands are, and it keeps passing every door it reaches: a return into another full-width alias, a store into a variable, and a narrower alias's range check on a value that fits.
+```maxon
+typealias Instant = int(0 to u64.max)
+typealias Span = int(0 to u64.max)
+typealias Small = int(0 to 100)
+
+function elapsed(now Instant, since Instant) returns Span
+	if now < since 'skew'
+		return 0
+	end 'skew'
+
+	return now - since
+end 'elapsed'
+
+function narrowed(now Instant, since Instant) returns Small
+	if now < since 'skew'
+		return 0
+	end 'skew'
+
+	return (now - since) as Small
+end 'narrowed'
+
+function main() returns ExitCode
+	print("{elapsed(u64.max, since: 1)} {elapsed(u64.max, since: 0)} {elapsed(3, since: 5)}\n")
+	print("{narrowed(u64.max, since: u64.max - 7)} {narrowed(2, since: 5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551614 18446744073709551615 0
+7 0
+```
+
+<!-- test: range-check-panic.a-difference-under-its-order-too-wide-for-a-narrow-alias-still-panics -->
+The order removes the borrow check, not the range check of the alias the difference lands in: a difference above the narrow alias's top still panics at its door.
+```maxon
+typealias Instant = int(0 to u64.max)
+typealias Small = int(0 to 100)
+
+function narrowed(now Instant, since Instant) returns Small
+	if now < since 'skew'
+		return 0
+	end 'skew'
+
+	return (now - since) as Small
+end 'narrowed'
+
+function main() returns ExitCode
+	print("{narrowed(u64.max, since: 1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-difference-under-its-order-too-wide-for-a-narrow-alias-still-panics.test:10: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in narrowed
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-loop-condition-does-not-outlive-a-rewritten-bound -->
+`i < m` holds when the loop body starts, but the body rewrites `m` before it subtracts, so the order says nothing about the new `m` and the borrow panics.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function walk(n Slot) returns Slot
+	var i = 0 as Slot
+	var m = n
+
+	while i < m 'each'
+		m = m shr 1
+		i = (m - 1) + i
+	end 'each'
+
+	return i
+end 'walk'
+
+function main() returns ExitCode
+	print("{walk(1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-loop-condition-does-not-outlive-a-rewritten-bound.test:10: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in walk
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-callee-that-rewrites-a-by-reference-operand-voids-its-order -->
+`x >= b` held, then a callee rewrote `x` through a `mutable` parameter. The subtraction reads the variable again, and the order about the old value does not cover it.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function clear(x mutable Slot)
+	x = 0
+end 'clear'
+
+function wiped(a Slot, b Slot) returns Slot
+	var x = a
+
+	if x >= b 'ordered'
+		clear(x)
+		return x - b
+	end 'ordered'
+
+	return 0
+end 'wiped'
+
+function main() returns ExitCode
+	print("{wiped(5, b: 3)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-callee-that-rewrites-a-by-reference-operand-voids-its-order.test:13: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in wiped
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-field-rewritten-after-its-order-keeps-the-check -->
+A field is compared, a mutating call rewrites it, and the field is read again: each read is a new load, so the order established for the first read does not cover the second.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+type Pair
+	export var a as Slot
+	export var b as Slot
+
+	static function create(a Slot, b Slot) returns Pair
+		return Pair{a: a, b: b}
+	end 'create'
+
+	export function wipe()
+		self.a = 0
+	end 'wipe'
+end 'Pair'
+
+function main() returns ExitCode
+	var p = Pair.create(5, b: 3)
+
+	if p.a >= p.b 'ordered'
+		p.wipe()
+		print("{p.a - p.b}\n")
+	end 'ordered'
+
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-field-rewritten-after-its-order-keeps-the-check.test:22: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-disjunction-establishes-no-order-for-its-arm -->
+`a >= b or c` is true when `c` is, whatever `a` and `b` are, so its true arm may not assume `b <= a` and the subtraction keeps its check.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function either(a Slot, b Slot, c bool) returns Slot
+	if a >= b or c 'either'
+		return a - b
+	end 'either'
+
+	return 0
+end 'either'
+
+function main() returns ExitCode
+	print("{either(3, b: 5, c: true)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-disjunction-establishes-no-order-for-its-arm.test:6: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in either
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.an-else-if-chain-whose-later-arm-falls-through-establishes-no-order -->
+Only the first arm returns, and it returns on `c`, which says nothing about `a` and `b`. The second arm falls through on `a < b`, so after the chain the subtraction can still borrow.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function chained(a Slot, b Slot, c bool) returns Slot
+	if c 'first'
+		return 0
+	end 'first' else if a < b 'second'
+		print("short\n")
+	end 'second'
+
+	return a - b
+end 'chained'
+
+function main() returns ExitCode
+	print("{chained(3, b: 5, c: false)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+short
+```
+```stderr
+panic at range-check-panic.an-else-if-chain-whose-later-arm-falls-through-establishes-no-order.test:11: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in chained
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-then-arm-that-leaves-only-conditionally-establishes-no-order -->
+The `a < b` arm returns only when `c` holds, so control can reach the code after the `if` with `a < b` still true.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function sometimes(a Slot, b Slot, c bool) returns Slot
+	if a < b 'short'
+		if c 'leave'
+			return 0
+		end 'leave'
+	end 'short'
+
+	return a - b
+end 'sometimes'
+
+function main() returns ExitCode
+	print("{sometimes(3, b: 5, c: false)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-then-arm-that-leaves-only-conditionally-establishes-no-order.test:11: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in sometimes
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-sum-of-two-under-a-strict-bound-still-panics -->
+`i < n` leaves room for `1`, not for `2`: at `i = u64.max - 1` the sum `i + 2` carries and panics.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function next(i Slot, n Slot) returns Slot
+	if i < n 'below'
+		return i + 2
+	end 'below'
+
+	return i
+end 'next'
+
+function main() returns ExitCode
+	print("{next(u64.max - 1, n: u64.max)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-sum-of-two-under-a-strict-bound-still-panics.test:6: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in next
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-nonzero-leaves-room-for-one-not-two -->
+`n == 0` having returned leaves `n >= 1`, so `n - 1` is proven and `n - 2` is not: at `n = 1` it borrows and panics.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function afterNonZero(n Slot) returns Slot
+	if n == 0 'empty'
+		return 0
+	end 'empty'
+
+	return n - 2
+end 'afterNonZero'
+
+function main() returns ExitCode
+	print("{afterNonZero(1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-nonzero-leaves-room-for-one-not-two.test:9: Range check failed: value outside typealias 'Slot'
+Stack trace:
+  in afterNonZero
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-floor-of-two-from-greater-than-one-is-proven -->
+`n > 1` is `n >= 2`, so `n - 2` cannot borrow, at the floor and at the top.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function afterOne(n Slot) returns Slot
+	if n > 1 'atLeastTwo'
+		return n - 2
+	end 'atLeastTwo'
+
+	return 0
+end 'afterOne'
+
+function main() returns ExitCode
+	print("{afterOne(2)} {afterOne(1)} {afterOne(u64.max)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 0 18446744073709551613
+```
+
+<!-- test: range-check-panic.a-constant-bound-at-the-signed-top-leaves-room-for-one -->
+A bound written above `i64.max` is still read as an unsigned number: `i < 9223372036854775808` puts `i` at most `2^63 - 1`, so `i + 1` cannot carry.
+```maxon
+typealias Slot = int(0 to u64.max)
+
+function next(i Slot) returns Slot
+	if i < 9223372036854775808 'below'
+		return i + 1
+	end 'below'
+
+	return i
+end 'next'
+
+function main() returns ExitCode
+	print("{next(9223372036854775807)} {next(9223372036854775808)} {next(u64.max)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9223372036854775808 9223372036854775808 18446744073709551615
+```
