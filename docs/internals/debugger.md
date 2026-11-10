@@ -32,7 +32,9 @@ debugger. On macOS the driver spawns it with `POSIX_SPAWN_START_SUSPENDED` and s
 takes it), which connects back to a port the driver is already listening on. The program's output reaches
 the driver on its own pipes on every host, and a program left running after a detach reports its own exit
 code. While `debugserver` is attached, macOS makes it the program's parent, so closing a session kills the
-program through the stub, closes the stub, and then reaps the program. The stub's own output is drained
+program through the stub, closes the stub, and then reaps the program. A detach waits for the stub to exit and
+reaps it before the session polls the program, because a program that died while the stub held it cannot be
+waited on until then. The stub's own output is drained
 while the session runs, and a session whose stub exits or times out before connecting is refused with
 what the stub printed.
 

@@ -409,6 +409,7 @@ function main() returns ExitCode
 			spawnFailed then sawTimeout = false
 			ioFailed then sawTimeout = false
 			inputTooLarge then sawTimeout = false
+			statusLost then sawTimeout = false
 			treeNotEnded then sawTimeout = false
 			detachRefused then sawTimeout = false
 			endOfStream then sawTimeout = false
@@ -463,6 +464,7 @@ function main() returns ExitCode
 				spawnFailed or
 				ioFailed or
 				inputTooLarge or
+				statusLost or
 				treeNotEnded or
 				detachRefused or
 				endOfStream gives ""
@@ -552,6 +554,7 @@ function collectedVerdict(me Executable) returns String
 				spawnFailed or
 				ioFailed or
 				inputTooLarge or
+				statusLost or
 				treeNotEnded or
 				detachRefused or
 				endOfStream gives ""
@@ -760,6 +763,7 @@ function main() returns ExitCode
 				spawnFailed or
 				ioFailed or
 				inputTooLarge or
+				statusLost or
 				treeNotEnded or
 				detachRefused or
 				endOfStream gives ""
@@ -824,6 +828,7 @@ function main() returns ExitCode
 		ioFailed or
 		timeout or
 		inputTooLarge or
+		statusLost or
 		detachRefused or
 		endOfStream gives "other {e.name}"
 	end 'kind'
@@ -860,6 +865,7 @@ function main() returns ExitCode
 		ioFailed or
 		timeout or
 		inputTooLarge or
+		statusLost or
 		treeNotEnded or
 		endOfStream gives "other {e.name}"
 	end 'kind'
@@ -931,6 +937,7 @@ function main() returns ExitCode
 				timeout or
 				ioFailed or
 				inputTooLarge or
+				statusLost or
 				treeNotEnded or
 				detachRefused or
 				endOfStream then refused = false
@@ -1278,6 +1285,7 @@ function main() returns ExitCode
 				timeout or
 				ioFailed or
 				inputTooLarge or
+				statusLost or
 				treeNotEnded or
 				detachRefused or
 				endOfStream then sawNotFound = false
@@ -1314,6 +1322,7 @@ function main() returns ExitCode
 				timeout or
 				ioFailed or
 				inputTooLarge or
+				statusLost or
 				treeNotEnded or
 				detachRefused or
 				endOfStream then sawNotFound = false
@@ -1347,6 +1356,7 @@ function verdictOf(config Configuration) returns String
 			timeout or
 				ioFailed or
 				inputTooLarge or
+				statusLost or
 				treeNotEnded or
 				detachRefused or
 				endOfStream then verdict = "other"
@@ -1414,6 +1424,7 @@ function verdictOf(executable Executable, workingDirectory FilePath) returns Str
 			timeout or
 				ioFailed or
 				inputTooLarge or
+				statusLost or
 				treeNotEnded or
 				detachRefused or
 				endOfStream then verdict = "other"
@@ -1505,6 +1516,7 @@ function main() returns ExitCode
 			timeout or
 				ioFailed or
 				inputTooLarge or
+				statusLost or
 				treeNotEnded or
 				detachRefused or
 				endOfStream then verdict = "other"
@@ -2847,7 +2859,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Subprocess.maxon:1332: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
+panic at Subprocess.maxon:1363: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
 Stack trace:
   in StreamingSubprocess.release
   in main

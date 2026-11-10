@@ -1,0 +1,179 @@
+let StatusLostCaseLabel = "a-wait-on-a-program-whose-status-went-to-another-process-ends"
+
+let StatusLostRounds = 8
+let StatusLostHost = "127.0.0.1"
+let StatusLostReverseOption = "-R"
+let StatusLostAttachOption = "--attach="
+let StatusLostAcceptMs = 20000
+let StatusLostReplyMs = 10000
+let StatusLostWaitMs = 15000
+let StatusLostStubMs = 10000
+let StatusLostLogStem = "stub-"
+let StatusLostSessionMs = 60000
+let StatusLostReceiveBytes = 256
+let StatusLostReads = 32
+let StatusLostDetachPacket = "$D#44"
+let StatusLostAcknowledgement = "OK"
+let StatusLostStopPrefix = "$T"
+let StatusLostContinuePacket = "$c#63"
+let StatusLostInterruptByte = 0x03 as Byte
+let StatusLostRunMs = 300
+let StatusLostSettleMs = 300
+let StatusLostPacketEnd = "#"
+let StatusLostAcknowledgePacket = "+"
+let StatusLostKilledVerdict = "exited 137"
+let StatusLostWording = "exit status went to another process"
+let StatusLostStopWording = "stopped ("
+let StatusLostAttachedSuffix = ".attached"
+let StatusLostEntitledName = "entitled"
+
+function entitledCopyOf(staged FilePath) returns FilePath
+	let spinLine = anchorLine(staged.join(StagedProgramFileName), anchor: BurstSpinAnchorName)
+	var session = ReplSession.open(builtExecutable(staged), staged: staged)
+
+	session.say("{BreakCommand} {lineTarget(spinLine)}")
+	session.say(RunCommand)
+
+	if not session.sayUntilThe(StatusLostStopWording, deadlineMs: StatusLostSessionMs) 'notHeld'
+		panic("the gate could not run — the program never stopped at its breakpoint. {session.said()}")
+	end 'notHeld'
+
+	let entitled = staged.join(StatusLostEntitledName)
+	var copied = false
+
+	for entry in listing(staged) 'eachEntry'
+		if entry.filename().endsWith(StatusLostAttachedSuffix) 'theSignedCopy'
+			let bytes = try File.readBinary(entry) otherwise panic("the gate could not run — the debugger's attachable copy cannot be read.")
+
+			try File.writeBinary(entitled, content: bytes, mode: FilePermission.executable) otherwise panic("the gate could not run — the entitled copy cannot be written.")
+
+			copied = true
+		end 'theSignedCopy'
+	end 'eachEntry'
+
+	session.say(QuitCommand)
+	_ = session.finish(StatusLostSessionMs)
+
+	if not copied 'noCopy'
+		panic("the gate could not run — the debugger left no attachable copy of the program beside it.")
+	end 'noCopy'
+
+	return entitled
+end 'entitledCopyOf'
+
+function stubHeard(socket TcpClient, needle String) returns String
+	var heard = ""
+
+	try socket.setReadDeadline(StatusLostReplyMs) otherwise panic("the gate could not run — the stub connection takes no read deadline.")
+
+	for _ in 0 upto StatusLostReads 'eachRead'
+		if heard.contains(needle) and heard.contains(StatusLostPacketEnd) 'answered'
+			return heard
+		end 'answered'
+
+		let chunk = try socket.recv(StatusLostReceiveBytes) otherwise return heard
+
+		heard.append(chunk)
+	end 'eachRead'
+
+	return heard
+end 'stubHeard'
+
+function interruptText() returns String
+	var raw = ByteArray.create(1, zeroed: false)
+	raw.push(StatusLostInterruptByte)
+
+	return String.from(raw)
+end 'interruptText'
+
+function heardAfterInterrupt(socket TcpClient) returns String
+	_ = try socket.send(StatusLostContinuePacket) otherwise panic("the gate could not run — the continue packet could not be sent.")
+
+	sleep(StatusLostRunMs)
+
+	_ = try socket.send(interruptText()) otherwise panic("the gate could not run — the interrupt could not be sent.")
+
+	return stubHeard(socket, needle: StatusLostStopPrefix)
+end 'heardAfterInterrupt'
+
+function waitVerdict(program StreamingSubprocess) returns String
+	let code = try program.waitWithTimeout(StatusLostWaitMs) otherwise (e) 'notEnded'
+		return e.displayReason()
+	end 'notEnded'
+
+	return "exited {code}"
+end 'waitVerdict'
+
+function stubEndedAfterDetach(stub StreamingSubprocess) returns bool
+	_ = try stub.waitWithTimeout(StatusLostStubMs) otherwise return false
+
+	return true
+end 'stubEndedAfterDetach'
+
+function detachedWhileDying(entitled FilePath, staged FilePath, round Count) throws TestFailure
+	let log = staged.join("{StatusLostLogStem}{round}.log")
+	let listener = try TcpListener.bind(StatusLostHost, port: 0) otherwise panic("the gate could not run — no port to listen on.")
+	var program = try StreamingSubprocess.spawnTraceable(Executable.path(entitled), arguments: StringArray.create(0), workingDirectory: staged, environment: Environment.inherit, traced: true) otherwise panic("the gate could not run — the traced spawn of the fixture was refused.")
+
+	program.closeStdin()
+
+	let pid = try program.processId() otherwise panic("the gate could not run — the spawned program has no process id.")
+	let stubFile = try FilePath.from(LoggedStubPath) otherwise panic("the gate could not run — the stub path is not a path.")
+	var stubArguments = [StatusLostReverseOption, "{StatusLostHost}:{listener.port()}", "{StatusLostAttachOption}{pid}"]
+
+	for option in stubLogArguments(log) 'eachLogOption'
+		stubArguments.push(option)
+	end 'eachLogOption'
+
+	var stub = try StreamingSubprocess.spawn(Executable.path(stubFile), arguments: stubArguments) otherwise panic("the gate could not run — the debug stub could not start.")
+
+	stub.closeStdin()
+
+	try listener.setAcceptDeadline(StatusLostAcceptMs) otherwise panic("the gate could not run — the listener takes no accept deadline.")
+
+	let socket = try listener.accept() otherwise panic("the gate could not run — the debug stub never connected.")
+	let stopped = heardAfterInterrupt(socket)
+
+	_ = try socket.send(StatusLostAcknowledgePacket) otherwise panic("the gate could not run — the stop could not be acknowledged.")
+
+	killedOutright(pid)
+
+	_ = try socket.send(StatusLostDetachPacket) otherwise panic("the gate could not run — the detach packet could not be sent.")
+
+	let acknowledged = stubHeard(socket, needle: StatusLostAcknowledgement)
+
+	_ = try socket.send(StatusLostAcknowledgePacket) otherwise panic("the gate could not run — the detach reply could not be acknowledged.")
+
+	let stubEnded = stubEndedAfterDetach(stub)
+	let verdict = waitVerdict(program)
+
+	sleep(StatusLostSettleMs)
+
+	let again = waitVerdict(program)
+
+	_ = stub.endTree()
+	stub.release()
+	_ = program.endTree()
+	program.release()
+
+	try Expect.isTrue(stopped.contains(StatusLostStopPrefix), message: "round {round}: the stub never reported the stop the interrupt asks for. It said: {stopped}")
+	try Expect.isTrue(acknowledged.contains(StatusLostAcknowledgement), message: "round {round}: the stub never acknowledged the detach. It said: {acknowledged}")
+	try Expect.isTrue(stubEnded, message: "round {round}: the stub did not exit within {StatusLostStubMs} ms of acknowledging the detach, so the program's parent is not settled.")
+	try Expect.isTrue(verdict == StatusLostKilledVerdict or verdict.contains(StatusLostWording), message: "round {round}: ⛔ A PROGRAM KILLED WHILE A DEBUG STUB HELD IT ENDS WITH ITS STATUS EITHER HANDED BACK TO THIS PROCESS OR IN THE HANDS OF A PROCESS THAT IS NOT ITS PARENT, AND A WAIT FOR IT MUST SAY WHICH INSTEAD OF REPORTING AN EXIT CODE IT NEVER READ. The wait answered: {verdict}")
+	try Expect.isTrue(again == verdict, message: "round {round}: once the stub has exited, the answer is a property of the program's state and does not change with time. The first wait answered '{verdict}', the second '{again}'.")
+
+	if stubReapedTheProgram(log) 'theStubReapedIt'
+		try Expect.isTrue(verdict == StatusLostKilledVerdict, message: "round {round}: the stub's own log shows it reaped the program, which hands the status back to this process, so the wait must answer {StatusLostKilledVerdict}. It answered: {verdict}")
+	end 'theStubReapedIt'
+end 'detachedWhileDying'
+
+test 'a wait on a program killed while the debugger held it ends, whether it reports its status or that the status went to another process'
+	#if os(Macos)
+		let staged = builtFixture(StatusLostCaseLabel, fixture: ThreadBurstFixtureName)
+		let entitled = entitledCopyOf(staged)
+
+		for round in 0 upto StatusLostRounds 'eachRound'
+			detachedWhileDying(entitled, staged: staged, round: round)
+		end 'eachRound'
+	#endif
+end 'a wait on a program killed while the debugger held it ends, whether it reports its status or that the status went to another process'

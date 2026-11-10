@@ -604,6 +604,12 @@ release's version as its heading when the release is cut.
 - A bare `get(…)` inside an `extension Array` or `Array` body takes the capability of the receiver, so
   writing through its result when the receiver is frozen or read-only is E3197.
   Fix: take a `.clone()` of the element.
+- `SubprocessError` has a new case, `statusLost(stdout, stderr)`, thrown by `Subprocess.run` and by
+  `StreamingSubprocess.wait()` and `waitWithTimeout()` for a child that ended while another process took its exit
+  status (on macOS, a program killed while a debugger's stub held it; on Linux, a child reaped by another process). A `match` over `SubprocessError` with no
+  `default` that lists every case no longer compiles.
+  Fix: add `statusLost` to the arms that handle `endOfStream`, or `statusLost(stdout, stderr)` where the arm uses
+  the output, or give the `match` a `default throws`.
 
 ## 0.5.0 — 2026-10-08
 

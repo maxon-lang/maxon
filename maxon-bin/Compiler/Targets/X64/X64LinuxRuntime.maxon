@@ -3197,6 +3197,7 @@ function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 	let alreadySignalled = asm.newLabel()
 	let issue = asm.newLabel()
 	let stillRunning = asm.newLabel()
+	let reapedElsewhere = asm.newLabel()
 	let reaped = asm.newLabel()
 	let statusChosen = asm.newLabel()
 	let decode = asm.newLabel()
@@ -3275,11 +3276,13 @@ function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: reaped)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: issue)
 
+	// A failed peek by group falls back to the pid; a failed peek by pid means the child is no longer this
+	// process's, which is answered apart from "still running" so that no poller waits on it for ever.
 	asm.placeLabel(peekFailed)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotGroupWait), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: groupGone)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: stillRunning)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: reapedElsewhere)
 
 	asm.placeLabel(groupGone)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
@@ -3330,6 +3333,10 @@ function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(stillRunning)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixChildStillRunning)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(reapedElsewhere)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixChildReapedElsewhere)
 
 	asm.placeLabel(answered)
 	return asm.finishFunction(HostProcReapName)
@@ -3364,6 +3371,7 @@ function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk
 	let bounded = asm.newLabel()
 	let boundedStep = asm.newLabel()
 	let signalled = asm.newLabel()
+	let reapedElsewhere = asm.newLabel()
 	let notSignalled = asm.newLabel()
 	let answered = asm.newLabel()
 
@@ -3390,6 +3398,8 @@ function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixReapWithoutBlocking)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixChildReapedElsewhere as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: reapedElsewhere)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: signalled)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
@@ -3406,6 +3416,10 @@ function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(notSignalled)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: WaitTimeout)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(reapedElsewhere)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: WaitAbandoned)
 
 	asm.placeLabel(answered)
 	return asm.finishFunction(HostProcAwaitName)

@@ -1099,6 +1099,9 @@ export type DebugEngine implements DebugMemory
 		view outcome = self.target.settle(TargetSettling.polled)
 
 		if targetIsRunning(outcome) 'stillRunning'
+			// No backend wait blocks for a released program, so without this the caller's poll loop spins.
+			sleep(WaitSliceMs)
+
 			return StopWait.timedOut
 		end 'stillRunning'
 

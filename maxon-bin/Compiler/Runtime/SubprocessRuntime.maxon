@@ -121,7 +121,9 @@ let SubpStatusExited = 0
 let SubpStatusSignalled = 1
 let SubpStatusTimedOut = 2
 let SubpStatusTreeNotEnded = 3
+let SubpStatusReapedElsewhere = 4
 export let SubpNoExitSignal = 0 as FullRangeInt
+let SubpReapedElsewhereAnswer = -4
 
 let SubprocessStdlibFileName = "Subprocess.maxon"
 
@@ -1411,7 +1413,7 @@ function emitSubpWaitForTheChild(module StdModule, block IrBlock, hProcess Value
 end 'emitSubpWaitForTheChild'
 
 // `__gt_subp_wait_exit(handle, timeoutMs) -> exitCode | -2 (timed out) | -3 (timed out, tree not
-// ended) | -1 (bad handle)` —
+// ended) | -4 (status went to another process) | -1 (bad handle)` —
 // `__Builtins.subprocessWaitExit`. `timeoutMs == 0` means wait for ever,
 // `stdlib/Subprocess.maxon`'s convention for the whole family.
 //
@@ -1484,7 +1486,7 @@ function buildSubpWaitExit(module StdModule, target Target)
 	let handleP = emitLoadField(module, block: pollExit, record: state, offset: WcHandle, ids: ids)
 	let slotP = emitSubpSlotOf(module, block: pollExit, ids: ids, handle: handleP)
 	let hProcessP = emitLoadField(module, block: pollExit, record: slotP, offset: SubpSlotHProcess, ids: ids)
-	let hasExited = emitSubpChildHasExited(module, block: pollExit, ids: ids, hProcess: hProcessP)
+	let hasExited = emitSubpChildHasLeft(module, block: pollExit, ids: ids, hProcess: hProcessP)
 	module.setTerminator(pollExit, op: StdOp.condBranch(hasExited, thenBlockId: exited.id, elseBlockId: deadlineCheck.id))
 
 	let deadlineD = emitLoadField(module, block: deadlineCheck, record: state, offset: WcDeadline, ids: ids)
@@ -1518,8 +1520,10 @@ function buildSubpWaitExit(module StdModule, target Target)
 	let slotR = emitSubpSlotOf(module, block: reap, ids: ids, handle: handleR)
 	let hProcessR = emitLoadField(module, block: reap, record: slotR, offset: SubpSlotHProcess, ids: ids)
 	let exitCode = emitSubpReportedExitCode(module, block: reap, slot: slotR, hProcess: hProcessR, ids: ids)
+	let taken = emitSubpChildWasReapedElsewhere(module, block: reap, ids: ids, hProcess: hProcessR)
+	let answer = emitSelectWord(module, block: reap, cond: taken, whenSet: emitConst(module, block: reap, value: SubpReapedElsewhereAnswer, ids: ids), whenClear: exitCode, ids: ids)
 	emitSlabFree(module, block: reap, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
-	module.setTerminator(reap, op: StdOp.ret(exitCode))
+	module.setTerminator(reap, op: StdOp.ret(answer))
 
 	module.functions.push(func)
 end 'buildSubpWaitExit'
@@ -1567,7 +1571,7 @@ function subpExitPollName(tail SubpExitTail) returns immutable ByteArray
 	end 'name'
 end 'subpExitPollName'
 
-// ⭐ `__gt_subp_poll_exit(handle) -> exitCode | -1` and `__gt_subp_exit_signal(handle) -> signal | -1` —
+// ⭐ `__gt_subp_poll_exit(handle) -> exitCode | -1 | -4` and `__gt_subp_exit_signal(handle) -> signal | -1 | -4` —
 // `__Builtins.subprocessPollExit` and `subprocessExitSignal`. Has the child exited, and if so, what does it
 // report? Answered with a zero-timeout wait, so it never blocks, and with no terminate on any path, so it
 // never changes what it is asking about. The two differ only in the tail read once the child has exited; the
@@ -1580,13 +1584,18 @@ end 'subpExitPollName'
 // ⚠ A handle naming no live child also answers -1, which `stdlib/Subprocess.maxon` reads as `running`: after
 // `release()` there is no child left to report an exit for, and the throwing methods refuse a released handle
 // on their own account.
+//
+// -4 is a child this process can no longer wait on, because another process took its exit status. `pollExit`
+// reads it as `running` and `isReapedElsewhere` as the answer to its question.
 function buildSubpExitPoll(module StdModule, tail SubpExitTail)
 	var func = IrFunction.createFromStd(subpExitPollName(tail), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var bad = module.addBlock(func, label: b"subpbad", heat: BlockHeat.normal)
+	var notExited = module.addBlock(func, label: b"subponotyet", heat: BlockHeat.normal)
 	var running = module.addBlock(func, label: b"subppolive", heat: BlockHeat.normal)
+	var reapedElsewhere = module.addBlock(func, label: b"subpporeapedelsewhere", heat: BlockHeat.normal)
 	var exited = module.addBlock(func, label: b"subppodone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
@@ -1598,8 +1607,15 @@ function buildSubpExitPoll(module StdModule, tail SubpExitTail)
 	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
 	let slot = emitSubpSlotOf(module, block: good, ids: ids, handle: handle)
 	let hProcess = emitLoadField(module, block: good, record: slot, offset: SubpSlotHProcess, ids: ids)
-	let didExit = emitSubpChildHasExited(module, block: good, ids: ids, hProcess: hProcess)
-	module.setTerminator(good, op: StdOp.condBranch(didExit, thenBlockId: exited.id, elseBlockId: running.id))
+	let look = emitSubpChildLook(module, block: good, ids: ids, hProcess: hProcess)
+	let didExit = emitCompareWithConstant(module, block: good, value: look, pred: StdCmpPred.eq, against: WaitObjectSignalled, ids: ids)
+	module.setTerminator(good, op: StdOp.condBranch(didExit, thenBlockId: exited.id, elseBlockId: notExited.id))
+
+	let wasTaken = emitCompareWithConstant(module, block: notExited, value: look, pred: StdCmpPred.eq, against: WaitAbandoned, ids: ids)
+	module.setTerminator(notExited, op: StdOp.condBranch(wasTaken, thenBlockId: reapedElsewhere.id, elseBlockId: running.id))
+
+	let gone = emitConst(module, block: reapedElsewhere, value: SubpReapedElsewhereAnswer, ids: ids)
+	module.setTerminator(reapedElsewhere, op: StdOp.ret(gone))
 
 	// A wait that TIMED OUT and one that FAILED are the same answer here, unlike in `__gt_subp_wait_exit`:
 	// neither says the child has finished, and this entry has no second failure value to report with.
@@ -1632,14 +1648,29 @@ function emitSubpExitSignalOf(module StdModule, block IrBlock, hProcess ValueId,
 	return signal
 end 'emitSubpExitSignalOf'
 
-// One zero-timeout look at the child: whether it has exited. On POSIX it is a `waitpid(WNOHANG)`, which reaps
-// a child it finds exited and caches the status for the reads that follow.
-function emitSubpChildHasExited(module StdModule, block IrBlock, ids ValueMinter, hProcess ValueId) returns ValueId
+// One zero-timeout look at the child: whether it has left, by exiting or by another process taking its status
+// (`WaitAbandoned`). On POSIX it is a `waitpid(WNOHANG)`, which reaps a child it finds exited and caches the
+// status for the reads that follow.
+function emitSubpChildHasLeft(module StdModule, block IrBlock, ids ValueMinter, hProcess ValueId) returns ValueId
+	let look = emitSubpChildLook(module, block: block, ids: ids, hProcess: hProcess)
+	let exited = emitCompareWithConstant(module, block: block, value: look, pred: StdCmpPred.eq, against: WaitObjectSignalled, ids: ids)
+	let reapedElsewhere = emitCompareWithConstant(module, block: block, value: look, pred: StdCmpPred.eq, against: WaitAbandoned, ids: ids)
+
+	return emitBin(module, block: block, a: exited, b: reapedElsewhere, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitSubpChildHasLeft'
+
+function emitSubpChildWasReapedElsewhere(module StdModule, block IrBlock, ids ValueMinter, hProcess ValueId) returns ValueId
+	let look = emitSubpChildLook(module, block: block, ids: ids, hProcess: hProcess)
+
+	return emitCompareWithConstant(module, block: block, value: look, pred: StdCmpPred.eq, against: WaitAbandoned, ids: ids)
+end 'emitSubpChildWasReapedElsewhere'
+
+function emitSubpChildLook(module StdModule, block IrBlock, ids ValueMinter, hProcess ValueId) returns ValueId
 	let noWait = emitConst(module, block: block, value: 0, ids: ids)
 	let waitResult = ids.mint()
 	module.appendOp(block, op: StdOp.osWaitHandle(waitResult, handleId: hProcess, timeoutMsId: noWait))
-	return emitCompareWithConstant(module, block: block, value: waitResult, pred: StdCmpPred.eq, against: WaitObjectSignalled, ids: ids)
-end 'emitSubpChildHasExited'
+	return waitResult
+end 'emitSubpChildLook'
 
 // `__gt_subp_wait_collect(handle, timeoutMs) -> resultPtr | -1` — wait for the child while draining
 // both of its output pipes, and answer a result struct holding what they produced.
@@ -1770,7 +1801,7 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let handleB = emitLoadField(module, block: pollExit, record: state, offset: WcHandle, ids: ids)
 	let slotB = emitSubpSlotOf(module, block: pollExit, ids: ids, handle: handleB)
 	let hProcessB = emitLoadField(module, block: pollExit, record: slotB, offset: SubpSlotHProcess, ids: ids)
-	let hasExited = emitSubpChildHasExited(module, block: pollExit, ids: ids, hProcess: hProcessB)
+	let hasExited = emitSubpChildHasLeft(module, block: pollExit, ids: ids, hProcess: hProcessB)
 	module.setTerminator(pollExit, op: StdOp.condBranch(hasExited, thenBlockId: finish.id, elseBlockId: deadlineCheck.id))
 
 	// deadlineCheck: a deadline of 0 is "wait for ever" and never fires.
@@ -1824,7 +1855,9 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let hasASignal = emitCompareWithConstant(module, block: reap, value: exitSignal, pred: StdCmpPred.ne, against: SubpNoExitSignal, ids: ids)
 	let killedBySignal = emitBin(module, block: reap, a: exitedNormally, b: hasASignal, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let exitCode = emitSelectWord(module, block: reap, cond: killedBySignal, whenSet: exitSignal, whenClear: reportedCode, ids: ids)
-	let status = emitSelectWord(module, block: reap, cond: killedBySignal, whenSet: emitConst(module, block: reap, value: SubpStatusSignalled, ids: ids), whenClear: waitedStatus, ids: ids)
+	let reportedStatus = emitSelectWord(module, block: reap, cond: killedBySignal, whenSet: emitConst(module, block: reap, value: SubpStatusSignalled, ids: ids), whenClear: waitedStatus, ids: ids)
+	let taken = emitSubpChildWasReapedElsewhere(module, block: reap, ids: ids, hProcess: hProcessF)
+	let status = emitSelectWord(module, block: reap, cond: taken, whenSet: emitConst(module, block: reap, value: SubpStatusReapedElsewhere, ids: ids), whenClear: reportedStatus, ids: ids)
 	let endMs = ids.mint()
 	module.appendOp(reap, op: StdOp.osTickCountMs(endMs))
 	let startF = emitLoadField(module, block: reap, record: state, offset: WcStartMs, ids: ids)
@@ -2073,7 +2106,7 @@ function emitSubpSourceLiveChild(module StdModule, func IrFunction, ids ValueMin
 
 	let slot = emitSubpSlotOf(module, block: cur, ids: ids, handle: handle)
 	let hProcess = emitLoadField(module, block: cur, record: slot, offset: SubpSlotHProcess, ids: ids)
-	let hasExited = emitSubpChildHasExited(module, block: cur, ids: ids, hProcess: hProcess)
+	let hasExited = emitSubpChildHasLeft(module, block: cur, ids: ids, hProcess: hProcess)
 	module.setTerminator(cur, op: StdOp.condBranch(hasExited, thenBlockId: exitLearned.id, elseBlockId: stillRunning.id))
 
 	emitSubpArmChildSource(module, func: func, ids: ids, cur: stillRunning, state: state, hProcess: hProcess, cont: cont, gone: exitLearned)
@@ -3278,6 +3311,7 @@ end 'installSubprocessRuntime'
 export function checkSubprocessAnswers(signatures ProgramSignatures, stdlibPath FilePath)
 	var pins = TierGeometryPinArray.create(0)
 	pins.push(TierGeometryPin.create("the answer for a child no signal ended", here: SubpNoExitSignal, named: "NoTerminatingSignal"))
+	pins.push(TierGeometryPin.create("the answer for a child another process reaped", here: SubpReapedElsewhereAnswer, named: "ReapedElsewhereAnswer"))
 	requireTierGeometryAgrees(pins, signatures: signatures, tierPath: stdlibPath, emitterFile: "SubprocessRuntime.maxon", layer: "checkSubprocessAnswers")
 end 'checkSubprocessAnswers'
 

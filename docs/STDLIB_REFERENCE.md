@@ -1919,6 +1919,7 @@ union SubprocessError implements Error
 	detachRefused(osError OsErrorCode)
 	inputTooLarge
 	endOfStream
+	statusLost(stdout String, stderr String)
 end 'SubprocessError'
 ```
 
@@ -1958,6 +1959,11 @@ breakaway. It carries the `GetLastError` code, and its reason says to run the pr
 breakaway on it.
 
 `endOfStream` is what a `StreamingSubprocess` line reader throws when the stream it reads has ended.
+
+`statusLost(stdout, stderr)` is what `Subprocess.run` and `StreamingSubprocess.wait()` / `waitWithTimeout()` throw for a
+child that has ended while another process took its exit status, so the status is unavailable. It carries the
+output `run` collected; `wait()` and `waitWithTimeout()` throw empty fields. Whether the status is available
+depends on whether the child finished dying before the process holding it, such as a debugger's stub, let it go.
 
 `displayReason()` renders any case as one line, such as
 `timed out after 5000ms, and the kill was sent to the child's whole process tree`. `timedOut()` is true for
@@ -2011,11 +2017,12 @@ request after request. A read or a wait parks the calling green thread, so its s
 | `tryReadStdoutLine()` | `LinePoll` | `SubprocessError` | A line if one is already buffered; never blocks. Throws `ioFailed` while the stdout side is out with a `StdoutReader`. |
 | `tryReadStderrLine()` | `LinePoll` | — | As above, for stderr. |
 | `pollExit()` | `ExitPoll` | — | Whether the child has exited, without blocking or killing it. A released handle answers `running`. On Linux and macOS a child a signal killed reports `exited(128 + signal)`. |
+| `isReapedElsewhere()` | `bool` | — | Whether another process has taken the child's exit status, so that `pollExit()` answers `running` for ever. Whether a status is available depends on whether the child finished dying before the process holding it, such as a debugger's stub, let it go. `false` on Windows and for a released handle. Answers at once. |
 | `pollTermination()` | `TerminationPoll` | — | As `pollExit()`, answering how the child ended: `signalled(signal)` for a child a signal killed on Linux and macOS, `exited(code)` otherwise. |
 | `streamHasEnded(stream StdioStream)` | `bool` | — | Whether a read of the child's `stdout` or `stderr` has found the end of that stream, answering at once. A read latches the end, so a loop of `tryReadStdoutLine` / `tryReadStderrLine` calls moves this to `true`. A read that failed and a released handle answer `true`. |
 | `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
 | `wait()` | exit code | `SubprocessError` | Park the calling green thread until the child exits. |
-| `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree ([SubprocessError](#subprocesserror)) when the deadline passes, or `treeNotEnded` when that tree cannot be fully ended; `0` waits forever. Both carry empty output fields — a streaming child's bytes belong to the caller draining the streams. |
+| `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree ([SubprocessError](#subprocesserror)) when the deadline passes, or `treeNotEnded` when that tree cannot be fully ended; `0` waits forever. A child whose exit status went to another process throws `statusLost`. Both deadline errors carry empty output fields — a streaming child's bytes belong to the caller draining the streams. |
 | `endTree()` | `TreeEnd` | — | Ends the child's whole process tree at once, the kill a `waitWithTimeout` deadline sends but with no wait to expire, and returns once the child itself is gone. The child may already have exited: what it left running is the tree. The answer is `ended` when the tree is gone, `survived(osError)` when the child is gone but part of its tree could not be ended, and `unconfirmed(reason)` when no kill was confirmed or the handle is released. |
 | `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. Panics while the stdout side is out with a `StdoutReader`: `reclaimStdout()` first. |
 | `handle`, `released` | fields | — | The raw handle and whether it has been released. |

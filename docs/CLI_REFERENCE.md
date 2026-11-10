@@ -1584,7 +1584,9 @@ answered something that is not an acknowledgement: '<reply>' to '<request>'`, an
 
 `detach` restores every byte the debugger wrote, lifts every held green thread, puts asynchronous
 preemption back and lets the program run on under its own steam; the session then waits for the program's
-own ending and reports it. On `arm64-macos` the re-signed copy the program was launched from is removed at
+own ending and reports it; an ending whose exit status went to another process (on `arm64-macos`, a
+program killed while the stub held it) is reported as `the program ended, and its exit status went to
+another process, so it is not available`. On `arm64-macos` the re-signed copy the program was launched from is removed at
 the detach, and the program keeps running from the file it already has open. While a trap byte cannot be
 written back, `detach` is refused `unwritable` with every breakpoint the debugger could write back
 cleared, and the program stays attached. A program that ended while the session held it has nothing left

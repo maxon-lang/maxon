@@ -3,6 +3,7 @@ export union TargetOutcome
 	exited(code DebugExitCode)
 	crashed(status DebugAddress)
 	terminated
+	statusLost
 end 'TargetOutcome'
 
 export union TargetSettling
@@ -63,9 +64,19 @@ export type DebugTarget
 	function settleIfItExited()
 		match self.child.pollExit() 'polled'
 			exited(code) then self.settleAfterExit(code as DebugExitCode)
-			running then return
+			running then self.settleIfItsStatusWentElsewhere()
 		end 'polled'
 	end 'settleIfItExited'
+
+	function settleIfItsStatusWentElsewhere()
+		if not self.child.isReapedElsewhere() 'itIsStillOurs'
+			return
+		end 'itIsStillOurs'
+
+		self.faulted = forwardEndedChildTail(self.child, routing: self.routing, ending: TailEnding.afterExit) or self.faulted
+		self.child.release()
+		self.settled = TargetOutcome.statusLost
+	end 'settleIfItsStatusWentElsewhere'
 
 	function settleEvenIfRunning()
 		self.settleIfItExited()
@@ -111,5 +122,6 @@ export function targetIsRunning(outcome TargetOutcome) returns bool
 		exited gives false
 		crashed gives false
 		terminated gives false
+		statusLost gives false
 	end 'which'
 end 'targetIsRunning'

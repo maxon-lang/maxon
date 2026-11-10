@@ -979,6 +979,13 @@ function arm64PosixReapFrameSlots(scope PosixReapScope) returns StackSize
 	end 'scope'
 end 'arm64PosixReapFrameSlots'
 
+function arm64PosixReapReadsAFailedWaitItself(scope PosixReapScope) returns bool
+	return match scope 'scope'
+		childAlone gives true
+		childAndItsTracees gives false
+	end 'scope'
+end 'arm64PosixReapReadsAFailedWaitItself'
+
 function arm64PosixEmitNoteGroupWait(asm Arm64RuntimeAsm, scope PosixReapScope, flagSlot StackSize)
 	match scope 'scope'
 		childAlone then return
@@ -1000,7 +1007,7 @@ function arm64PosixEmitOwnChildReapOperands(asm Arm64RuntimeAsm, objSlot StackSi
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixReapDiscardsRusage)
 end 'arm64PosixEmitOwnChildReapOperands'
 
-function arm64PosixEmitTraceeReapOperands(asm Arm64RuntimeAsm, peek PosixHostCall, objSlot StackSize, statusSlot StackSize, blockingSlot StackSize, flagSlot StackSize, infoSlot StackSize, issue BlockId, stillRunning BlockId)
+function arm64PosixEmitTraceeReapOperands(asm Arm64RuntimeAsm, peek PosixHostCall, objSlot StackSize, statusSlot StackSize, blockingSlot StackSize, flagSlot StackSize, infoSlot StackSize, issue BlockId, stillRunning BlockId, reapedElsewhere BlockId)
 	let byPid = asm.newLabel()
 	let targetChosen = asm.newLabel()
 	let blockingPeek = asm.newLabel()
@@ -1052,7 +1059,7 @@ function arm64PosixEmitTraceeReapOperands(asm Arm64RuntimeAsm, peek PosixHostCal
 
 	asm.placeLabel(peekFailed)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: flagSlot)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: stillRunning)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: reapedElsewhere)
 
 	asm.placeLabel(groupGone)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
@@ -1088,10 +1095,12 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall, scope PosixReap
 	let SlotGroupWait = 3
 	let SlotInfo = PosixReapBaseSlots
 	var asm = Arm64RuntimeAsm.beginFunction(arm64PosixReapFrameSlots(scope))
+	let readsAFailedWaitItself = arm64PosixReapReadsAFailedWaitItself(scope)
 
 	let alreadySignalled = asm.newLabel()
 	let issue = asm.newLabel()
 	let stillRunning = asm.newLabel()
+	let reapedElsewhere = asm.newLabel()
 	let reaped = asm.newLabel()
 	let statusChosen = asm.newLabel()
 	let decode = asm.newLabel()
@@ -1109,7 +1118,7 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall, scope PosixReap
 
 	match scope 'operands'
 		childAlone then arm64PosixEmitOwnChildReapOperands(asm, objSlot: SlotObj, statusSlot: SlotStatus, blockingSlot: SlotBlocking)
-		childAndItsTracees(peek) then arm64PosixEmitTraceeReapOperands(asm, peek: peek, objSlot: SlotObj, statusSlot: SlotStatus, blockingSlot: SlotBlocking, flagSlot: SlotGroupWait, infoSlot: SlotInfo, issue: issue, stillRunning: stillRunning)
+		childAndItsTracees(peek) then arm64PosixEmitTraceeReapOperands(asm, peek: peek, objSlot: SlotObj, statusSlot: SlotStatus, blockingSlot: SlotBlocking, flagSlot: SlotGroupWait, infoSlot: SlotInfo, issue: issue, stillRunning: stillRunning, reapedElsewhere: reapedElsewhere)
 	end 'operands'
 
 	arm64PosixEmitHostCall(asm, call: wait)
@@ -1119,6 +1128,15 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall, scope PosixReap
 	// child has been taken, and the comparison is on the low 32 bits because `pid_t` is a C `int`.
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixChildPidMask)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x3)
+
+	// A failed wait means the child is no longer this process's: another process took its status, as a
+	// debug stub that was its parent when it died can. It is answered apart from "still running", which a
+	// poller waits out for ever. The tracee scope reaches the same answer when its by-pid peek fails.
+	if readsAFailedWaitItself 'noSuchChild'
+		arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x3)
+		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: reapedElsewhere)
+	end 'noSuchChild'
+
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotObj)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x1, byteOffset: PosixWaitOffChildPid)
 	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
@@ -1166,6 +1184,11 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall, scope PosixReap
 
 	asm.placeLabel(stillRunning)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixChildStillRunning)
+
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(reapedElsewhere)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixChildReapedElsewhere)
 
 	asm.placeLabel(answered)
 	return asm.finishFunction(HostProcReapName)
@@ -1246,6 +1269,7 @@ export function buildArm64PosixProcAwaitChunk() returns FunctionCodeChunk
 	let boundedStep = asm.newLabel()
 	let signalled = asm.newLabel()
 	let notSignalled = asm.newLabel()
+	let reapedElsewhere = asm.newLabel()
 	let answered = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
@@ -1271,6 +1295,8 @@ export function buildArm64PosixProcAwaitChunk() returns FunctionCodeChunk
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixReapWithoutBlocking)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixChildReapedElsewhere as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: reapedElsewhere)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: signalled)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotDeadline)
@@ -1286,6 +1312,10 @@ export function buildArm64PosixProcAwaitChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(notSignalled)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: WaitTimeout)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(reapedElsewhere)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: WaitAbandoned)
 
 	asm.placeLabel(answered)
 	return asm.finishFunction(HostProcAwaitName)

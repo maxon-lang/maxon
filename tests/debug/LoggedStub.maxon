@@ -1,0 +1,37 @@
+export let LoggedStubPath = "/Library/Developer/CommandLineTools/Library/PrivateFrameworks/LLDB.framework/Versions/A/Resources/debugserver"
+
+let LoggedStubDirectoryName = "logged-stub"
+let LoggedStubName = "debugserver"
+let LoggedStubLogOption = "--log-file="
+let LoggedStubFlagsOption = "--log-flags=0xffffffff"
+let LoggedStubReapMark = "-> SIGNALED and EXITED"
+let LoggedStubPathVariable = "PATH"
+let LoggedStubPathSeparator = ":"
+
+export function stubLogArguments(log FilePath) returns StringArray
+	return ["{LoggedStubLogOption}{log.toString()}", LoggedStubFlagsOption]
+end 'stubLogArguments'
+
+export function loggedStubEnvironment(staged FilePath, log FilePath) returns Environment
+	let directory = staged.join(LoggedStubDirectoryName)
+
+	if not Directory.create(directory) 'noDirectory'
+		panic("the gate could not run — the directory for the logging stub could not be created.")
+	end 'noDirectory'
+
+	let script = "#!/bin/sh\ncase \" $* \" in *\" -R \"*) exec {LoggedStubPath} \"$@\" {LoggedStubLogOption}{log.toString()} {LoggedStubFlagsOption};; esac\nexec {LoggedStubPath} \"$@\"\n"
+
+	try File.writeBinary(directory.join(LoggedStubName), content: script.toByteArray(), mode: FilePermission.executable) otherwise panic("the gate could not run — the logging stub could not be written.")
+
+	let inherited = try Process.environmentVariable(LoggedStubPathVariable) otherwise ""
+	var overrides = EnvMap.create()
+	overrides.upsert(LoggedStubPathVariable, value: "{directory.toString()}{LoggedStubPathSeparator}{inherited}")
+
+	return Environment.inheritUpdating(overrides)
+end 'loggedStubEnvironment'
+
+export function stubReapedTheProgram(log FilePath) returns bool
+	let text = try File.readText(log) otherwise panic("the gate could not run — the stub wrote no log at {log.toString()}.")
+
+	return text.contains(LoggedStubReapMark)
+end 'stubReapedTheProgram'

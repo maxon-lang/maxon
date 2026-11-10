@@ -27,7 +27,7 @@ public typealias ExitInt = int(0 to u32.max)
 /// macOS the errno mapped onto its Windows equivalent, 31 when it has none.
 public typealias OsErrorCode = int(0 to u32.max)
 
-typealias ExitAnswer = int(-1 to u32.max)
+typealias ExitAnswer = int(-4 to u32.max)
 
 // An OS process id, which is a `pid_t` on POSIX and a DWORD on Windows — never negative, and never
 // wider than the i64 the spawn builtins answer in. Narrowing it makes every `Pid` position a guarded
@@ -100,6 +100,7 @@ enum ResultStatusKind
 	signalled = 1
 	timedOut = 2
 	treeNotEnded = 3
+	reapedElsewhere = 4
 end 'ResultStatusKind'
 
 // =============================================================================
@@ -324,6 +325,11 @@ end 'RunProcessError'
 /// `treeNotEnded` is a deadline whose kill could not fully end the child's
 /// process tree. It carries the output as `timeout` does; `deadlineFired()` is
 /// true for it and `timedOut()` false.
+///
+/// `statusLost` is a child that ended while another process took its exit status, so a wait or a collect
+/// has no status to report. It carries the output as `timeout` does; the fields are empty where the layer
+/// that threw was not collecting output. Whether the status is available depends on whether the child
+/// finished dying before the process holding it, such as a debugger's stub, let it go.
 public union SubprocessError implements Error
 	executableNotFound(name String)
 	spawnFailed(reason String)
@@ -333,6 +339,7 @@ public union SubprocessError implements Error
 	detachRefused(osError OsErrorCode)
 	inputTooLarge
 	endOfStream
+	statusLost(stdout String, stderr String)
 
 	/// Human-readable rendering for diagnostics. Centralises the wording so
 	/// every callsite produces the same single-line description of a spawn /
@@ -347,6 +354,7 @@ public union SubprocessError implements Error
 			detachRefused(osError) gives "runDetached: the process could not leave the job this program runs in, because that job does not allow breakaway (os error {osError}); run the program outside that job or allow breakaway on it"
 			inputTooLarge gives "stdin payload too large"
 			endOfStream gives "end of stream"
+			statusLost gives "the child ended, and its exit status went to another process, so it is not available"
 		end 'e'
 	end 'displayReason'
 
@@ -360,7 +368,8 @@ public union SubprocessError implements Error
 			treeNotEnded or
 			detachRefused or
 			inputTooLarge or
-			endOfStream gives false
+			endOfStream or
+			statusLost gives false
 		end 'e'
 	end 'timedOut'
 
@@ -375,7 +384,8 @@ public union SubprocessError implements Error
 			ioFailed or
 			detachRefused or
 			inputTooLarge or
-			endOfStream gives false
+			endOfStream or
+			statusLost gives false
 		end 'e'
 	end 'deadlineFired'
 
@@ -389,7 +399,8 @@ public union SubprocessError implements Error
 			timeout or
 			treeNotEnded or
 			detachRefused or
-			inputTooLarge gives false
+			inputTooLarge or
+			statusLost gives false
 		end 'e'
 	end 'endedTheStream'
 end 'SubprocessError'
@@ -866,6 +877,7 @@ function terminationStatusFromKind(statusKind ResultStatusKind, statusCode ExitI
 		signalled then return TerminationStatus.signalled(statusCode)
 		timedOut then throw SubprocessError.timeout(durationMs, stdout: stdout, stderr: stderr)
 		treeNotEnded then throw SubprocessError.treeNotEnded(durationMs, stdout: stdout, stderr: stderr, osError: osError)
+		reapedElsewhere then throw SubprocessError.statusLost(stdout, stderr: stderr)
 	end 's'
 end 'terminationStatusFromKind'
 
@@ -1175,7 +1187,8 @@ public type StreamingSubprocess
 	/// Returns the exit code on success; throws `SubprocessError.timeout` if
 	/// the timeout fires (the runtime forcibly terminates the child's whole
 	/// process tree in that case), `SubprocessError.treeNotEnded` if the kill
-	/// could not fully end that tree, or `SubprocessError.ioFailed` on a wait
+	/// could not fully end that tree, `SubprocessError.statusLost` for a child whose
+	/// exit status went to another process (with empty output fields), or `SubprocessError.ioFailed` on a wait
 	/// error. Both deadline errors carry empty output fields: a streaming child's bytes belong
 	/// to the caller draining the streams, and this layer never sees them.
 	public function waitWithTimeout(timeoutMs DurationMs) returns ExitInt throws SubprocessError
@@ -1185,6 +1198,10 @@ public type StreamingSubprocess
 		if rc == -2 'timedOut'
 			throw SubprocessError.timeout(timeoutMs, stdout: "", stderr: "")
 		end 'timedOut'
+
+		if rc == ReapedElsewhereAnswer 'statusLost'
+			throw SubprocessError.statusLost("", stderr: "")
+		end 'statusLost'
 
 		if rc < 0 'failed'
 			throw SubprocessError.ioFailed("wait failed: {lastErrorMessage()}") if rc == -1 else SubprocessError.treeNotEnded(timeoutMs, stdout: "", stderr: "", osError: lastOsErrorCode())
@@ -1239,6 +1256,20 @@ public type StreamingSubprocess
 
 		return exitPollOf(__Builtins.subprocessPollExit(handle) as ExitAnswer)
 	end 'pollExit'
+
+	/// Whether another process has taken this child's exit status, so that `pollExit` can never report
+	/// the child's end and answers `running` for ever. Never blocks and never kills. A released handle
+	/// answers `false`. Whether a status is available depends on whether the child finished dying before the
+	/// process holding it, such as a debugger's stub, let it go.
+	public function isReapedElsewhere() returns bool
+		if released 'gone'
+			return false
+		end 'gone'
+
+		let raw = __Builtins.subprocessPollExit(handle) as ExitAnswer
+
+		return raw == ReapedElsewhereAnswer
+	end 'isReapedElsewhere'
 
 	/// Has the child ended, and how? `pollExit`'s answer, naming the signal that killed a child on Linux or
 	/// macOS as `signalled(signal)`. Never blocks and never kills.
@@ -1374,8 +1405,10 @@ end 'TerminationPoll'
 // The runtime's answer for a child no signal ended, pinned against `SubprocessRuntime.SubpNoExitSignal` by
 // `checkSubprocessAnswers` on every compile.
 let NoTerminatingSignal = 0
+let ReapedElsewhereAnswer = -4
 
-// A builtin's -1 is "still running": an exit code or a signal number is never negative.
+// A builtin's negative answer is "still running" (-1) or a child another process reaped (-4,
+// `isReapedElsewhere`): an exit code or a signal number is never negative.
 function exitPollOf(raw ExitAnswer) returns ExitPoll
 	if raw < 0 'stillRunning'
 		return ExitPoll.running
