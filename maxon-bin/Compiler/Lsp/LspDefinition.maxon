@@ -206,7 +206,7 @@ module function definitionBoundTokensAt(tokens TokenArray, keyword Token, at Ele
 		return definitionLoopVariableTokens(tokens, from: at + 1)
 	end 'loopVariables'
 
-	if keyword.kind == TokenKind.function and definitionFunctionKeywordWritesAType(tokens, at: at) 'aFunctionType'
+	if keyword.kind == TokenKind.function and functionKeywordWritesAType(tokens, at: at) 'aFunctionType'
 		return TokenArray.create(0)
 	end 'aFunctionType'
 
@@ -216,19 +216,6 @@ module function definitionBoundTokensAt(tokens TokenArray, keyword Token, at Ele
 
 	panic("definitionBoundTokensAt: '{keyword.kind.rawValue}' introduces no names — `definitionIntroducesNames` is the gate, and every caller asks it first")
 end 'definitionBoundTokensAt'
-
-// A `function(` whose `)` is not followed by `gives` is a function TYPE: its list holds types and
-// binds no names, and read as a parameter list it would shadow the types it writes.
-function definitionFunctionKeywordWritesAType(tokens TokenArray, at ElementIndex) returns bool
-	let open = at + 1
-
-	if tokenKindAt(tokens, index: open) != TokenKind.leftParen 'aDeclaration'
-		return false
-	end 'aDeclaration'
-
-	let close = ParenGroups.create().closeOf(tokens, open: open)
-	return tokenKindAt(tokens, index: close + 1) != TokenKind.gives
-end 'definitionFunctionKeywordWritesAType'
 
 function definitionBindingTokensAt(tokens TokenArray, at ElementIndex) returns TokenArray
 	var bound = TokenArray.create(0)
@@ -282,6 +269,11 @@ function definitionParameterTokens(tokens TokenArray, from ElementIndex) returns
 			depth = depth + 1
 			sawTheList = true
 			expectingAName = depth == 1
+
+			if depth == 1 'theListsFirstSlot'
+				i = parameterListStartIn(tokens, open: i - 1)
+			end 'theListsFirstSlot'
+
 			continue
 		end 'opensAList'
 

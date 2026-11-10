@@ -781,9 +781,12 @@ type FormatState
 	var prevNamesAFunction as bool
 	var prevDeclaresAFunction as bool
 
+	let qualifiers as TypeQualifierPositions
+
 	// A match arm's pattern is never inside a bracket, so an open group is what keeps a line that merely
 	// CONTINUES a bracketed literal in an arm body from being read as a fresh arm.
-	var brackets as BracketTracker
+	var openGroupDepth as Count
+	var prevQualifiesAType as bool
 
 	// Between a match arm's first token and its `then`/`gives`/`panic`/`throws`.
 	var inArmPattern as bool
@@ -812,7 +815,7 @@ type FormatState
 	var blankDecisionPending as bool
 
 	static function create(tokens TokenArray, options FormatOptions, lines SourceLines, comments SourceComments, keywords KeywordTable) returns FormatState
-		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(0), lineStartedAt: BlockPosition.unstarted(), recorded: RecordedRefusal.none, groupFrames: GroupFrameArray.create(0), raisedGroups: RaisedGroupArray.create(0), groupsRaisedOnThisLine: 0, bracketDepth: 0, indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, brackets: BracketTracker.create(), inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, labelFollowsACloser: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
+		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(0), lineStartedAt: BlockPosition.unstarted(), recorded: RecordedRefusal.none, groupFrames: GroupFrameArray.create(0), raisedGroups: RaisedGroupArray.create(0), groupsRaisedOnThisLine: 0, bracketDepth: 0, indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevNamesAFunction: false, prevDeclaresAFunction: false, qualifiers: TypeQualifierPositions.over(tokens), openGroupDepth: 0, prevQualifiesAType: false, inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, labelFollowsACloser: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
 	end 'create'
 
 	// Walk every token, then hand over the built text. A formatted file with content ends with
@@ -872,8 +875,6 @@ type FormatState
 	end 'emitEof'
 
 	function emitNewline(index ElementIndex)
-		self.brackets.observe(self.tokenAt(index), nextKind: self.kindAt(index + 1))
-
 		if not self.hasEmitted 'nothingEmittedYet'
 			self.atLineStart = true
 			return
@@ -1036,7 +1037,7 @@ type FormatState
 		end 'indent' else 'separate'
 			if tok.line > self.lastEmittedSourceLine and self.pendingCommentOn(self.lastEmittedSourceLine, slot: CommentSlot.afterCode) 'commentSwallowedTheBreak'
 				self.emitCommentAcrossLineBreak(tok.line)
-			end 'commentSwallowedTheBreak' else if self.inPlaceCommentNeedsSpace(index) or needsSpaceBefore(tok.kind, prev: self.prevKind, prevWasDot: self.prevWasDot, inDataBlock: self.inDataBlock(), prevWasUnary: self.prevWasUnary, prevBeganLine: self.prevBeganLine, prevQualifiesAType: self.brackets.lastQualifiedAType(), prevNamesAFunction: self.prevNamesAFunction, prevIsRegionOperator: tok.kind == TokenKind.leftParen and index > 0 and regionOperatorAt(self.tokens, index: index - 1)) 'needsSpace'
+			end 'commentSwallowedTheBreak' else if self.inPlaceCommentNeedsSpace(index) or needsSpaceBefore(tok.kind, prev: self.prevKind, prevWasDot: self.prevWasDot, inDataBlock: self.inDataBlock(), prevWasUnary: self.prevWasUnary, prevBeganLine: self.prevBeganLine, prevQualifiesAType: self.prevQualifiesAType, prevNamesAFunction: self.prevNamesAFunction, prevIsRegionOperator: tok.kind == TokenKind.leftParen and index > 0 and regionOperatorAt(self.tokens, index: index - 1)) 'needsSpace'
 				self.out.append(" ")
 			end 'needsSpace'
 		end 'separate'
@@ -1064,7 +1065,7 @@ type FormatState
 
 			// The whole literal is ONE operand. Nothing below this point applies to a string literal, so the
 			// walk resumes past the literal's final fragment.
-			self.brackets.observe(tok, nextKind: self.kindAt(last + 1))
+			self.noteTokenObserved(TokenKind.stringLiteral, qualifies: false)
 			self.notePrevToken(TokenKind.stringLiteral, value: tok.value, wasAtLineStart: wasAtLineStart)
 			return last + 1
 		end 'interpolatedString' else 'ordinaryToken'
@@ -1074,7 +1075,7 @@ type FormatState
 		self.noteEmittedAt(tok)
 
 		// Kept HERE, ahead of every early return below, so the depth cannot drift.
-		self.brackets.observe(tok, nextKind: self.kindAt(index + 1))
+		self.noteTokenObserved(tok.kind, qualifies: self.qualifiers.qualifiesAt(index))
 
 		// The arm separators end the pattern and begin the body, where an `or` is an ordinary boolean.
 		if tok.kind == TokenKind.then or tok.kind == TokenKind.gives or tok.kind == TokenKind.panic or tok.kind == TokenKind.throws 'armBodyBegins'
@@ -1379,7 +1380,7 @@ type FormatState
 
 		// An arm BEGINS a pattern region; a continuation line is already inside the one it continues.
 		if not self.armContinuation 'freshLine'
-			self.inArmPattern = self.inMatchBlock() and not self.brackets.hasOpenGroup() and not isDirectiveToken(tok.kind)
+			self.inArmPattern = self.inMatchBlock() and self.openGroupDepth == 0 and not isDirectiveToken(tok.kind)
 		end 'freshLine'
 
 		self.armContinuation = false
@@ -1565,6 +1566,18 @@ type FormatState
 		self.prevIsModuleKeyword = spellsModuleModifier(kind, value: value)
 		self.prevBeganLine = wasAtLineStart
 	end 'notePrevToken'
+
+	function noteTokenObserved(kind TokenKind, qualifies bool)
+		self.prevQualifiesAType = qualifies
+
+		if kind == TokenKind.typealias 'typealiasBegins'
+			self.openGroupDepth = 0
+		end 'typealiasBegins' else if tokenKindOpensABracket(kind) 'opensGroup'
+			self.openGroupDepth = self.openGroupDepth + 1
+		end 'opensGroup' else if tokenKindClosesABracket(kind) and self.openGroupDepth > 0 'closesGroup'
+			self.openGroupDepth = self.openGroupDepth - 1
+		end 'closesGroup'
+	end 'noteTokenObserved'
 
 	function noteEmittedAt(tok Token)
 		self.hasEmitted = true

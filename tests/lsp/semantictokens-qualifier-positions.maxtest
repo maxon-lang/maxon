@@ -1,0 +1,138 @@
+let QualifierPositionsUri = "file:///test.maxon"
+let QualifierPositionsFixture = "vscode-extension/test-fixtures/qualifier-positions.maxon"
+
+let QualifierPositionsKeywordType = 0
+let QualifierPositionsVariableType = 7
+let QualifierPositionsCapabilityType = 16
+
+typealias QualifierMissTally = int(0 to i64.max)
+
+type QualifierClaims
+	let tokens as LocatedSemanticTokenArray
+	let source as String
+	var misses as QualifierMissTally
+
+	static function over(tokens LocatedSemanticTokenArray, source String) returns QualifierClaims
+		return Self{tokens: tokens, source: source, misses: 0}
+	end 'over'
+
+	function expect(line SemanticTokenValue, word String, expected SemanticTokenValue, what String)
+		try requireSemanticTokenType(self.tokens, source: self.source, line: line, word: word, expected: expected, what: what) otherwise 'missed'
+			self.misses = self.misses + 1
+		end 'missed'
+	end 'expect'
+
+	function requireNoMisses() throws TestFailure
+		try Expect.equal(self.misses, expected: 0, message: "{self.misses} position(s) of the fixture are not coloured as the qualifier rule decides; each is reported above.")
+	end 'requireNoMisses'
+end 'QualifierClaims'
+
+test 'semantic tokens colour every position of the shared qualifier-positions fixture as the grammar fixture pins it'
+	let source = checkoutDocumentText(QualifierPositionsFixture)
+	var client = LspClient.start()
+
+	if let data = try qualifierPositionTokensOf(client, source: source) 'tokens'
+		client.release()
+		assertQualifierPositions(locatedSemanticTokensOf(data), source: source)
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
+	end 'failed'
+end 'semantic tokens colour every position of the shared qualifier-positions fixture as the grammar fixture pins it'
+
+test 'semantic tokens keep colouring a capability qualifier after an unclosed bracket'
+	let source = qualifierDriftFixture()
+	var client = LspClient.start()
+
+	if let data = try qualifierPositionTokensOf(client, source: source) 'tokens'
+		client.release()
+		assertQualifierDriftPositions(locatedSemanticTokensOf(data), source: source)
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
+	end 'failed'
+end 'semantic tokens keep colouring a capability qualifier after an unclosed bracket'
+
+function qualifierPositionTokensOf(client LspClient, source String) returns SemanticTokenValueArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(QualifierPositionsUri, content: source)
+
+	let tokens = try client.semanticTokensFull(QualifierPositionsUri)
+
+	return tokens.data
+end 'qualifierPositionTokensOf'
+
+function assertQualifierDriftPositions(tokens LocatedSemanticTokenArray, source String) throws TestFailure
+	var claims = QualifierClaims.over(tokens, source: source)
+
+	claims.expect(4, word: "immutable", expected: QualifierPositionsCapabilityType, what: "a tuple element in a parameter type after an unclosed bracket on an earlier line")
+	claims.expect(7, word: "immutable", expected: QualifierPositionsCapabilityType, what: "a parameter qualifier after an unclosed bracket on an earlier line")
+	claims.expect(10, word: "immutable", expected: QualifierPositionsCapabilityType, what: "a result qualifier after an unclosed bracket on an earlier line")
+	claims.expect(13, word: "immutable", expected: QualifierPositionsCapabilityType, what: "a type-list qualifier in a typealias after an unclosed bracket on an earlier line")
+
+	try claims.requireNoMisses()
+end 'assertQualifierDriftPositions'
+
+function assertQualifierPositions(tokens LocatedSemanticTokenArray, source String) throws TestFailure
+	var claims = QualifierClaims.over(tokens, source: source)
+
+	claims.expect(4, word: "immutable", expected: QualifierPositionsCapabilityType, what: "a tuple element in a parameter type, `p (immutable Foo, Bar)`")
+	claims.expect(9, word: "immutable", expected: QualifierPositionsCapabilityType, what: "a tuple element in a field type, `var pair as (immutable Foo, Bar)`")
+	claims.expect(12, word: "immutable", expected: QualifierPositionsCapabilityType, what: "a tuple element in a return type, `returns (immutable Foo, Bar)`")
+	claims.expect(16, word: "readonly", expected: QualifierPositionsVariableType, what: "the parameter name in the function type `function(readonly Foo)`")
+	claims.expect(17, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the second slot of the function type `function(a T, immutable U)`")
+	claims.expect(18, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the third slot of the function type `function(a T, b U, immutable W)`")
+	claims.expect(21, word: "readonly", expected: QualifierPositionsKeywordType, what: "the qualifier of a declared local, `var x as readonly Foo`, which paints as the keyword it is refused as")
+	claims.expect(22, word: "isolated", expected: QualifierPositionsCapabilityType, what: "the qualifier after `as`, `as isolated Box`")
+	claims.expect(25, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the qualifier of a tuple typealias, `typealias Pair = immutable (X, Y)`")
+	claims.expect(26, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the qualifier of a value-type typealias, `typealias Plain = immutable int`")
+	claims.expect(27, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the qualifier of a record typealias, `typealias Frozen = immutable Box`")
+	claims.expect(30, word: "mutable", expected: QualifierPositionsVariableType, what: "the call after `with` in `swap seed with mutable(seed)`")
+	claims.expect(34, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the receiver capability in `function peek(immutable self)`")
+	claims.expect(38, word: "mutable", expected: QualifierPositionsCapabilityType, what: "the receiver capability in `function grow(mutable self, by Count)`")
+	claims.expect(42, word: "mutable", expected: QualifierPositionsCapabilityType, what: "the first of the stacked words in `box mutable isolated Box`")
+	claims.expect(42, word: "isolated", expected: QualifierPositionsCapabilityType, what: "the second of the stacked words in `box mutable isolated Box`")
+	claims.expect(45, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the value slot of `Map with (K, immutable V)`")
+	claims.expect(46, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the value slot of `Map with K, immutable V`")
+	claims.expect(47, word: "readonly", expected: QualifierPositionsKeywordType, what: "the element qualifier of `Array with readonly V`")
+	claims.expect(50, word: "mutable", expected: QualifierPositionsCapabilityType, what: "a typed closure-literal parameter, `function(box mutable Foo, by Count)`")
+	claims.expect(51, word: "immutable", expected: QualifierPositionsVariableType, what: "an untyped closure-literal parameter, `function(immutable) gives 1`")
+	claims.expect(54, word: "isolated", expected: QualifierPositionsCapabilityType, what: "the capability word naming the bound in `where T is isolated`")
+	claims.expect(59, word: "mutable", expected: QualifierPositionsVariableType, what: "the operand after `return`")
+	claims.expect(62, word: "isolated", expected: QualifierPositionsVariableType, what: "the operand after `throw`")
+	claims.expect(63, word: "immutable", expected: QualifierPositionsVariableType, what: "the operand after `not`")
+	claims.expect(64, word: "immutable", expected: QualifierPositionsVariableType, what: "the operand after `try`")
+	claims.expect(65, word: "mutable", expected: QualifierPositionsVariableType, what: "the operand after `freeze`")
+	claims.expect(66, word: "isolated", expected: QualifierPositionsVariableType, what: "the operand after `spawn`")
+	claims.expect(67, word: "mutable", expected: QualifierPositionsVariableType, what: "the operand after `and`")
+	claims.expect(68, word: "isolated", expected: QualifierPositionsVariableType, what: "the operand after `merge`")
+	claims.expect(69, word: "readonly", expected: QualifierPositionsVariableType, what: "the operand `readonly(seed)` after `and`")
+	claims.expect(70, word: "immutable", expected: QualifierPositionsVariableType, what: "the binding in `let immutable = 1`")
+	claims.expect(71, word: "mutable", expected: QualifierPositionsVariableType, what: "the binding in `var mutable = 2`")
+	claims.expect(73, word: "isolated", expected: QualifierPositionsVariableType, what: "a word at the start of a line that follows a line ending in a name")
+	claims.expect(77, word: "mutable", expected: QualifierPositionsVariableType, what: "the parameter named in the declaration `function twice(mutable Count)`")
+	claims.expect(82, word: "mutable", expected: QualifierPositionsVariableType, what: "the first entry of the payload list `named(mutable Count)`")
+	claims.expect(83, word: "mutable", expected: QualifierPositionsCapabilityType, what: "a later entry of the payload list `pair(first Count, box mutable Foo)`")
+	claims.expect(86, word: "mutable", expected: QualifierPositionsVariableType, what: "the operand of a statement-start call in a method of a union, `pass(seed, mutable (seed))`")
+	claims.expect(87, word: "mutable", expected: QualifierPositionsVariableType, what: "the labelled operand of a statement-start call in a method of a union, `pass(seed, into: mutable (seed))`")
+	claims.expect(92, word: "mutable", expected: QualifierPositionsVariableType, what: "the operand of a statement-start call inside a labelled block of a union method")
+	claims.expect(93, word: "mutable", expected: QualifierPositionsVariableType, what: "the labelled operand of a statement-start call inside a labelled block of a union method")
+
+	try claims.requireNoMisses()
+end 'assertQualifierPositions'
+
+function qualifierDriftFixture() returns String
+	return String.from(b"function broken() returns Count
+    return pass(
+end 'broken'
+
+function afterTuple(p (immutable Foo, Bar))
+end 'afterTuple'
+
+function afterParameter(value immutable Box)
+end 'afterParameter'
+
+function afterResult() returns immutable Box
+end 'afterResult'
+
+typealias Drift = Map with (String, immutable V)")
+end 'qualifierDriftFixture'

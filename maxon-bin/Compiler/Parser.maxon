@@ -9538,10 +9538,6 @@ module function readonlyOperandStartsWith(kind TokenKind) returns bool
 	return typeStartsWith(kind) or kind == TokenKind.leftParen
 end 'readonlyOperandStartsWith'
 
-module function readonlyMayFollow(prev TokenKind) returns bool
-	return prev == TokenKind.with or prev == TokenKind.leftParen or prev == TokenKind.comma
-end 'readonlyMayFollow'
-
 // ⭐⭐ **`spawn`'s SPELLING — AN IDENTIFIER, NEVER A KEYWORD, FOR `module`'s REASON AND WITH ITS OWN
 // MEASUREMENT.** Two live declarations own the word and neither may be retokenized:
 // `specs/associated-types.md:3493,3500` declares `static function spawn() returns Self` — a
@@ -15929,7 +15925,7 @@ module function functionDeclarationShapeIn(tokens TokenArray, index ElementIndex
 	return functionHeadIn(tokens, index: index) and (try tokens.get(index + 2) otherwise return false).kind == TokenKind.leftParen
 end 'functionDeclarationShapeIn'
 
-function functionHeadIn(tokens TokenArray, index ElementIndex) returns bool
+module function functionHeadIn(tokens TokenArray, index ElementIndex) returns bool
 	if (try tokens.get(index) otherwise return false).kind != TokenKind.function or not declarationBeginsStatementIn(tokens, index: index) 'notAFunctionKeywordOpeningAStatement'
 		return false
 	end 'notAFunctionKeywordOpeningAStatement'
@@ -19662,6 +19658,7 @@ end 'ExtensionAssociatedScope'
 
 export type Parser
 	let tokens as TokenArray
+	let qualifiers as TypeQualifierPositions
 	var pos as ElementIndex
 
 	// The sole output. Every emit/registry write lands here, never on `Project`.
@@ -20345,6 +20342,7 @@ export type Parser
 
 		return Self{
 			tokens: prepared.tokens,
+			qualifiers: prepared.qualifiers,
 			respelledStarts: prepared.respelledStarts,
 			parenGroups: ParenGroups.create(),
 			settledTypeNames: SettledTypeNameMap.create(),
@@ -21689,7 +21687,7 @@ export type Parser
 		var paramNames = NameRoster.create(0)
 		var paramSlots = GenericParamSlotArray.create(0)
 		var paramTypeParams = TypeParamIndexArray.create(0)
-		var q = open + 1
+		var q = parameterListStartIn(self.tokens, open: open)
 
 		while self.kindAt(q) != TokenKind.rightParen 'eachParam'
 			paramNames.push(self.tokenAt(q).value)
@@ -21919,7 +21917,7 @@ export type Parser
 			paramReassigns.push(ParamReassignEntry.create(funcName, site: declarationSiteKey(self.job.path, line: nameTok.line, column: nameTok.column), info: ParamReassignInfo.create(scannedParamNames, writtenParams: declaredMarkers.written, markerHeads: declaredMarkers.heads, bareName: nameTok.value, callability: self.declarationCallability())))
 		end 'declaresMutableParams'
 
-		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: sweptTypeParamPositions), paramNames: sourceParamNames, paramTypes: sweptParamTypes, paramSpellings: sweptParamSpellings, paramDefaults: sweptParamDefaults, returnAliasName: returnAliasName, nameLine: nameTok.line, nameColumn: nameTok.column, enclosingTypeName: self.enclosingTypeNameOrEmpty(), selfCapability: self.sweptReceiverCapability(paramsStart), paramCapabilities: sweptParamCapabilities, returnCapability: qualifiedReturn.capability))
+		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: sweptTypeParamPositions), paramNames: sourceParamNames, paramTypes: sweptParamTypes, paramSpellings: sweptParamSpellings, paramDefaults: sweptParamDefaults, returnAliasName: returnAliasName, nameLine: nameTok.line, nameColumn: nameTok.column, enclosingTypeName: self.enclosingTypeNameOrEmpty(), selfCapability: self.receiverCapabilityAt(paramsStart), paramCapabilities: sweptParamCapabilities, returnCapability: qualifiedReturn.capability))
 
 		// ⭐⭐ **EVERY FREE FUNCTION'S BARE NAME** — recorded
 		// here, from the SAME token walk that records its return type, because it answers two questions only
@@ -22075,7 +22073,7 @@ export type Parser
 		end 'prependReceiver'
 
 		let resume = self.pos
-		var q = paramsStart + 1
+		var q = parameterListStartIn(self.tokens, open: paramsStart)
 
 		while true 'params'
 			let paramName = self.tokenAt(q).value
@@ -22203,11 +22201,13 @@ export type Parser
 	function paramDefaultMaskOf(parenPos ElementIndex) returns ParamPositionMask
 		var defaults = NoParamPositions
 
-		if self.kindAt(parenPos) != TokenKind.leftParen or self.kindAt(parenPos + 1) == TokenKind.rightParen 'noParams'
+		let first = parameterListStartIn(self.tokens, open: parenPos)
+
+		if self.kindAt(parenPos) != TokenKind.leftParen or self.kindAt(first) == TokenKind.rightParen 'noParams'
 			return defaults
 		end 'noParams'
 
-		var q = parenPos + 1
+		var q = first
 		var position = 0 as ParamCount
 
 		while true 'params'
@@ -24882,7 +24882,7 @@ export type Parser
 			return names
 		end 'noParens'
 
-		q = q + 1
+		q = parameterListStartIn(self.tokens, open: parenPos)
 
 		if self.kindAt(q) == TokenKind.rightParen 'noParams'
 			return names
@@ -25004,7 +25004,7 @@ export type Parser
 			return InnerAliasParamInfo.create(freeze names, members: freeze members)
 		end 'noParens'
 
-		q = q + 1
+		q = parameterListStartIn(self.tokens, open: parenPos)
 
 		if self.kindAt(q) == TokenKind.rightParen 'noParams'
 			return InnerAliasParamInfo.create(freeze names, members: freeze members)
@@ -28440,7 +28440,7 @@ export type Parser
 
 	function capabilityAliasAt(index ElementIndex) returns bool
 		let capability = self.paramCapabilityAt(index)
-		return (capability == ParamCapability.isolated or capability == ParamCapability.immutable) and self.kindAt(index + 1) == TokenKind.identifier
+		return capability == ParamCapability.isolated or capability == ParamCapability.immutable
 	end 'capabilityAliasAt'
 
 	function readFunctionAliasForm(writtenTok Token, nameTok Token, functionOut FunctionTypeAliasArray, recordFunctionSignature bool, visibility Visibility) throws SourceParseError
@@ -28508,17 +28508,30 @@ export type Parser
 		let capabilityTok = self.current()
 		let capability = try self.readParamCapability()
 		let targetTok = self.current()
+
+		if targetTok.kind == TokenKind.int or targetTok.kind == TokenKind.float or targetTok.kind == TokenKind.bool 'aPrimitiveBelongsToNoRegion'
+			throw notATypeError(capabilityTok)
+		end 'aPrimitiveBelongsToNoRegion'
+
+		if targetTok.kind == TokenKind.leftParen 'aTupleIsNotAName'
+			throw self.capabilityAliasTargetRefusal(capabilityTok)
+		end 'aTupleIsNotAName'
+
 		let spelled = try self.parseTypeReference(BarePrimitiveVoice.asAType)
 		let tag = maxonTypeTag(spelled)
 		let overAGenericAlias = tag == ValueTypeTag.genericInstance and targetTok.kind == TokenKind.identifier and self.signatures.isAliasOfFormFor(targetTok.value, readerFilePath: self.job.path, wanted: FormAliasKind.generic)
 
 		if tag != ValueTypeTag.named and tag != ValueTypeTag.structRef and not overAGenericAlias 'notARecordName'
-			throw SourceParseError.unsupported("`{String.from(capabilityTok.value)}` on a typealias target that is not the name of a record type or of a generic alias", line: capabilityTok.line, column: capabilityTok.column)
+			throw self.capabilityAliasTargetRefusal(capabilityTok)
 		end 'notARecordName'
 
 		try self.requireCapabilityFits(capability, wordTok: capabilityTok, spelled: spelled)
 		self.publishTupleAlias(nameTok, tupleOwner: tupleOwner, target: self.capabilityAliasTarget(spelled, targetTok: targetTok, overAGenericAlias: overAGenericAlias), visibility: visibility, capability: capability)
 	end 'readCapabilityAliasForm'
+
+	function capabilityAliasTargetRefusal(capabilityTok Token) returns SourceParseError
+		return SourceParseError.unsupported("`{String.from(capabilityTok.value)}` on a typealias target that is not the name of a record type or of a generic alias", line: capabilityTok.line, column: capabilityTok.column)
+	end 'capabilityAliasTargetRefusal'
 
 	function capabilityAliasTarget(spelled MaxonType, targetTok Token, overAGenericAlias bool) returns immutable ByteArray
 		if overAGenericAlias 'theAliasName'
@@ -29642,8 +29655,7 @@ export type Parser
 	end 'requireGenericArgPositionFits'
 
 	function mutableMarkerAt(index ElementIndex) returns bool
-		let word = self.tokenAt(index)
-		return word.kind == TokenKind.identifier and word.value.equals(MutableMarkerWord) and readonlyOperandStartsWith(self.kindAt(index + 1))
+		return self.qualifiers.qualifiesAt(index) and self.tokenAt(index).value.equals(MutableMarkerWord) and self.kindAt(index + 1) != TokenKind.self
 	end 'mutableMarkerAt'
 
 	function functionValueHeaderHasAMarkerAt(index ElementIndex) returns bool
@@ -29689,10 +29701,6 @@ export type Parser
 
 		return written
 	end 'declaredParamCapabilityAt'
-
-	function sweptReceiverCapability(parenIndex ElementIndex) returns ParamCapability
-		return try capabilityOfWord(self.tokenAt(parenIndex).value) otherwise ParamCapability.unmarked
-	end 'sweptReceiverCapability'
 
 	function paramCapabilityIndexAfter(nameIndex ElementIndex) returns ElementIndex
 		return nameIndex + 2 if self.paramMarkerAt(nameIndex) else nameIndex + 1
@@ -29764,11 +29772,13 @@ export type Parser
 			heads.push(EmptySourceText)
 		end 'theReceiverSlots'
 
-		if self.kindAt(parenPos) != TokenKind.leftParen or self.kindAt(parenPos + 1) == TokenKind.rightParen 'noParams'
+		let first = parameterListStartIn(self.tokens, open: parenPos)
+
+		if self.kindAt(parenPos) != TokenKind.leftParen or self.kindAt(first) == TokenKind.rightParen 'noParams'
 			return ParamMarkerFacts.create(written, heads: heads)
 		end 'noParams'
 
-		var q = parenPos + 1
+		var q = first
 		var position = firstPosition
 
 		while true 'params'
@@ -29807,21 +29817,15 @@ export type Parser
 	end 'callAlignedMarkerFacts'
 
 	function atReadonlyModifier() returns bool
-		if not self.at(TokenKind.identifier) or not isReadonlyWord(self.current().value) 'notTheWord'
-			return false
-		end 'notTheWord'
-
-		return readonlyOperandStartsWith(self.peekKind())
+		return self.qualifiers.verdictAt(self.pos) == QualifierVerdict.readonlyQualifier
 	end 'atReadonlyModifier'
 
 	function qualifierWordAt(index ElementIndex) returns immutable ByteArray throws AbsentError
-		let word = self.tokenAt(index)
-
-		if word.kind != TokenKind.identifier or not readonlyOperandStartsWith(self.kindAt(index + 1)) 'notAQualifierPosition'
+		if not self.qualifiers.qualifiesAt(index) 'notAQualifierPosition'
 			throw AbsentError.absent
 		end 'notAQualifierPosition'
 
-		return word.value
+		return self.tokenAt(index).value
 	end 'qualifierWordAt'
 
 	function paramCapabilityAt(index ElementIndex) returns ParamCapability
@@ -31707,8 +31711,7 @@ export type Parser
 		var paramCapabilities = ParamCapabilityArray.create(0)
 		var paramMarkers = BoolArray.create(0)
 		var markerTokens = TokenIndexArray.create(0)
-		let selfCapability = try self.readReceiverCapability(not isStatic)
-		try self.consume(TokenKind.leftParen)
+		let selfCapability = try self.consumeParameterListOpen(not isStatic)
 		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, paramCapabilities: paramCapabilities, paramMarkers: paramMarkers, markerTokens: markerTokens, owner: ParamDefaultOwner.interfaceRequirement, paramTypeOffer: noClosureParamOffer)
 		try self.consume(TokenKind.rightParen)
 
@@ -34078,8 +34081,7 @@ export type Parser
 		end 'receiverParam'
 
 		let parameterListStart = self.pos
-		let selfCapability = try self.readReceiverCapability(takesReceiver)
-		try self.consume(TokenKind.leftParen)
+		let selfCapability = try self.consumeParameterListOpen(takesReceiver)
 		var paramCapabilities = ParamCapabilityArray.create(0)
 		var paramMarkers = BoolArray.create(0)
 		var markerTokens = TokenIndexArray.create(0)
@@ -34095,19 +34097,36 @@ export type Parser
 		return FunctionHead.create(nameTok, sourceName: sourceName, parameterListStart: parameterListStart, ownTypeParams: ownTypeParams, paramCapabilities: paramCapabilities, selfCapability: selfCapability, markedParams: markerMaskOf(paramMarkers, firstPosition: 1 if takesReceiver else 0), markerTokens: markerTokens)
 	end 'readFunctionHead'
 
-	function readReceiverCapability(takesReceiver bool) returns ParamCapability throws SourceParseError
-		let paren = self.current()
+	function consumeParameterListOpen(takesReceiver bool) returns ParamCapability throws SourceParseError
+		let receiver = self.receiverCapabilityAt(self.pos)
+		try self.consume(TokenKind.leftParen)
 
-		if paren.kind != TokenKind.leftParen or paren.value.isEmpty() 'noReceiverCapability'
+		if receiver == ParamCapability.unmarked 'noReceiverCapability'
 			return ParamCapability.unmarked
 		end 'noReceiverCapability'
 
+		let wordTok = try self.consume(TokenKind.identifier)
+
 		if not takesReceiver 'noReceiver'
-			throw notATypeError(paren)
+			throw notATypeError(wordTok)
 		end 'noReceiver'
 
-		return try capabilityOfWord(paren.value) otherwise panic("readReceiverCapability: the lexer folds only a capability word into a parameter list's `(`")
-	end 'readReceiverCapability'
+		try self.consume(TokenKind.self)
+
+		if self.at(TokenKind.comma) 'moreParameters'
+			self.advance()
+		end 'moreParameters'
+
+		return receiver
+	end 'consumeParameterListOpen'
+
+	function receiverCapabilityAt(parenIndex ElementIndex) returns ParamCapability
+		if self.kindAt(parenIndex) != TokenKind.leftParen or not self.qualifiers.qualifiesAt(parenIndex + 1) or self.kindAt(parenIndex + 2) != TokenKind.self 'noReceiverCapability'
+			return ParamCapability.unmarked
+		end 'noReceiverCapability'
+
+		return try capabilityOfWord(self.tokenAt(parenIndex + 1).value) otherwise panic("receiverCapabilityAt: the classifier marks a word before `self` as a qualifier only when it spells a capability")
+	end 'receiverCapabilityAt'
 
 	// The parser's deferral doors read the sweep, so a declaration it lacks has every call to it
 	// deferred, and no E3004 follows because the function exists — an `unresolved` value would survive
@@ -55980,7 +55999,7 @@ export type Parser
 			return parenPos
 		end 'notAParameterList'
 
-		var q = parenPos + 1
+		var q = parameterListStartIn(self.tokens, open: parenPos)
 
 		while q < listEnd 'eachToken'
 			if tokenCanBeAName(self.tokenAt(q)) 'wordShaped'
@@ -56016,7 +56035,7 @@ export type Parser
 	function parenGroupCanBeAParameterList(parenPos ElementIndex, listEnd ElementIndex) returns bool
 		var depth = 0 as NestingDepth
 		var namePosition = true
-		var q = parenPos + 1
+		var q = parameterListStartIn(self.tokens, open: parenPos)
 
 		while q < listEnd 'eachToken'
 			let kind = self.kindAt(q)
@@ -107415,7 +107434,7 @@ type AuthorNameScopeWalk
 		var names = TokenIndexArray.create(0)
 		var depth = 0 as NestingDepth
 		var atSegmentStart = true
-		var at = open + 1
+		var at = parameterListStartIn(self.tokens, open: open)
 
 		while at < close 'eachToken'
 			let kind = tokenKindIn(self.tokens, index: at)

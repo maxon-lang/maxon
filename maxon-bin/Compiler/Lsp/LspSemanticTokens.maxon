@@ -144,17 +144,14 @@ function encodedTokensOf(source String, keywords KeywordTable, corpus LspCorpus)
 	let caseLists = CaseListLines.of(lspDocumentBlocks(tokens))
 	let index = LspLineIndex.build(source)
 	let typeNames = SemanticTypeNames.of(tokens, corpus: corpus)
+	let qualifiers = TypeQualifierPositions.over(tokens)
 
 	var data = LspSemanticTokenValueArray.create(0)
 	var previousLine = 0 as LspLineNumber
 	var previousCharacter = 0 as LspCharacter
 	var lineOfPreviousToken = PreviousTokenLine.none
-	var brackets = BracketTracker.create()
 
 	for (position, token) in tokens.withIterator() 'eachToken'
-		// Ahead of the layout skip: the newline is what ends a typealias's bare type list.
-		brackets.observe(token, nextKind: tokenKindAt(tokens, index: position.index() + 1))
-
 		if token.kind == TokenKind.eof or tokenKindIsSkippedLayout(token.kind) and token.kind != TokenKind.docComment 'notCode'
 			continue
 		end 'notCode'
@@ -172,7 +169,7 @@ function encodedTokensOf(source String, keywords KeywordTable, corpus LspCorpus)
 
 		let start = index.positionOf(source, offset: token.startByte)
 		let finish = index.positionOf(source, offset: token.endByte)
-		let tokenType = tokenTypeOf(tokens, at: position.index(), token: token, firstOnLine: firstOnLine, inCaseList: caseLists.isInsideACaseList(start.line), typeQualifier: brackets.lastQualifiedAType(), typeNames: typeNames)
+		let tokenType = tokenTypeOf(tokens, at: position.index(), token: token, firstOnLine: firstOnLine, inCaseList: caseLists.isInsideACaseList(start.line), typeQualifier: qualifiers.verdictAt(position.index()), typeNames: typeNames)
 
 		let deltaLine = start.line - previousLine
 		var deltaCharacter = start.character
@@ -199,7 +196,7 @@ union PreviousTokenLine
 	at(line LineNumber)
 end 'PreviousTokenLine'
 
-function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLine bool, inCaseList bool, typeQualifier bool, typeNames SemanticTypeNames) returns LspSemanticTokenType
+function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLine bool, inCaseList bool, typeQualifier QualifierVerdict, typeNames SemanticTypeNames) returns LspSemanticTokenType
 	// A case list is spelled one name per line, so the line's FIRST word is the case and anything after it
 	// belongs to its associated values.
 	if inCaseList and firstOnLine 'aCaseName'
@@ -224,13 +221,11 @@ function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLin
 		return StringTokenType
 	end 'text'
 
-	if typeQualifier and isReadonlyWord(token.value) 'readonlyQualifier'
-		return KeywordTokenType
-	end 'readonlyQualifier'
-
-	if typeQualifier or lspIsReceiverCapability(token) 'capabilityQualifier'
-		return CapabilityTokenType
-	end 'capabilityQualifier'
+	match typeQualifier 'qualifier'
+		readonlyQualifier then return KeywordTokenType
+		capabilityQualifier then return CapabilityTokenType
+		plainName then break
+	end 'qualifier'
 
 	if token.kind == TokenKind.identifier 'aName'
 		return identifierTokenType(tokens, at: at, typeNames: typeNames)

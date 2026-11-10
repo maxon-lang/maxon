@@ -497,3 +497,64 @@ end 'main'
 ```maxoncstderr
 error E2010: <fragment>:13:19: Expected 'a type' but got 'Own'
 ```
+
+<!-- test: capability-words-as-names-and-operands-compile-and-run -->
+`isolated`, `immutable`, `mutable` and `readonly` qualify a type only where a type is expected, so a function named `isolated` is called with or without a space before its parenthesis, a parameter named `mutable` is read, and a local named `immutable` is the operand of `not`.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+function isolated(x Tally) returns Tally
+	return x + 1
+end 'isolated'
+
+function viaCall(x Tally) returns Tally
+	return isolated(x)
+end 'viaCall'
+
+function viaOperand(x Tally) returns Tally
+	return isolated (x)
+end 'viaOperand'
+
+function bump(mutable Tally) returns Tally
+	return mutable + 1
+end 'bump'
+
+function negated(flag bool) returns bool
+	let immutable = flag
+	return not immutable
+end 'negated'
+
+function mutable(x Tally) returns Tally
+	return x + 2
+end 'mutable'
+
+function immutable(x Tally) returns bool
+	return x == 4
+end 'immutable'
+
+function viaMutable(x Tally) returns Tally
+	return mutable(x)
+end 'viaMutable'
+
+function viaMutableOperand(x Tally) returns Tally
+	return mutable (x)
+end 'viaMutableOperand'
+
+function viaNot(x Tally) returns bool
+	return not immutable (x)
+end 'viaNot'
+
+function main() returns ExitCode
+	let immutable = 1
+	let readonly = 2
+	print("{viaCall(5)} {viaOperand(5)} {bump(7)} {negated(true)} {immutable} {readonly} {viaMutable(5)} {viaMutableOperand(5)} {viaNot(4)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6 6 8 false 1 2 7 7 false
+```

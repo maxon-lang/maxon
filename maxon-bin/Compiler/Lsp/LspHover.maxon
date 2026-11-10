@@ -82,7 +82,7 @@ function bindingKindWord(keyword TokenKind) returns String
 end 'bindingKindWord'
 
 function hoverRenderingOf(request LspRequest, document HoverDocument, cursor ElementIndex) returns HoverRendering
-	if lspIsTypeQualifier(document.tokens, at: cursor) 'aContextualKeyword'
+	if document.qualifiers.qualifiesAt(cursor) 'aContextualKeyword'
 		return keywordRendering(document.tokenAt(cursor))
 	end 'aContextualKeyword'
 
@@ -332,6 +332,7 @@ module type HoverDocument
 	let text as String
 	let bytes as ByteArray
 	module let tokens as TokenArray
+	module let qualifiers as TypeQualifierPositions
 	let lines as LspLineIndex
 	let keywords as immutable KeywordTable
 	var corpus as LspCorpus
@@ -350,19 +351,19 @@ module type HoverDocument
 	// Tokens the caller already holds, so a declaring file is rendered out of `queryActiveTokens`'
 	// memo rather than lexed again on every hover.
 	module static function ofTokens(text String, tokens TokenArray, keywords KeywordTable, corpus LspCorpus) returns HoverDocument
-		return Self.assembled(text, bytes: text.toByteArray(), tokens: tokens, lines: LspLineIndex.build(text), keywords: keywords, corpus: corpus, consultedLibrary: false)
+		return Self.assembled(text, bytes: text.toByteArray(), tokens: tokens, qualifiers: TypeQualifierPositions.over(tokens), lines: LspLineIndex.build(text), keywords: keywords, corpus: corpus, consultedLibrary: false)
 	end 'ofTokens'
 
-	static function assembled(text String, bytes ByteArray, tokens TokenArray, lines LspLineIndex, keywords KeywordTable, corpus LspCorpus, consultedLibrary bool) returns HoverDocument
-		return Self{text: text, bytes: bytes, tokens: tokens, lines: lines, keywords: keywords, corpus: corpus, consultedLibrary: consultedLibrary, naming: HoverNaming.of(corpus, consultedLibrary: consultedLibrary)}
+	static function assembled(text String, bytes ByteArray, tokens TokenArray, qualifiers TypeQualifierPositions, lines LspLineIndex, keywords KeywordTable, corpus LspCorpus, consultedLibrary bool) returns HoverDocument
+		return Self{text: text, bytes: bytes, tokens: tokens, qualifiers: qualifiers, lines: lines, keywords: keywords, corpus: corpus, consultedLibrary: consultedLibrary, naming: HoverNaming.of(corpus, consultedLibrary: consultedLibrary)}
 	end 'assembled'
 
 	module function withCorpus(swept LspCorpus) returns HoverDocument
-		return Self.assembled(self.text, bytes: self.bytes, tokens: self.tokens, lines: self.lines, keywords: self.keywords, corpus: swept, consultedLibrary: self.consultedLibrary)
+		return Self.assembled(self.text, bytes: self.bytes, tokens: self.tokens, qualifiers: self.qualifiers, lines: self.lines, keywords: self.keywords, corpus: swept, consultedLibrary: self.consultedLibrary)
 	end 'withCorpus'
 
 	function consultedAsLibrary() returns HoverDocument
-		return Self.assembled(self.text, bytes: self.bytes, tokens: self.tokens, lines: self.lines, keywords: self.keywords, corpus: self.corpus, consultedLibrary: true)
+		return Self.assembled(self.text, bytes: self.bytes, tokens: self.tokens, qualifiers: self.qualifiers, lines: self.lines, keywords: self.keywords, corpus: self.corpus, consultedLibrary: true)
 	end 'consultedAsLibrary'
 
 	function compilerNameOf(name ByteArray) returns immutable ByteArray
@@ -705,6 +706,10 @@ module type HoverDocument
 			if tokenKindOpensABracket(tok.kind) 'opens'
 				depth = depth + 1
 				atParameterStart = depth == 1
+
+				if depth == 1 'theListsFirstSlot'
+					index = parameterListStartIn(self.tokens, open: index) - 1
+				end 'theListsFirstSlot'
 			end 'opens' else if tokenKindClosesABracket(tok.kind) 'closes'
 				depth = depth - 1
 

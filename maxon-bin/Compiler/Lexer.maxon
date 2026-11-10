@@ -797,63 +797,6 @@ function markContextualHeads(tokens TokenArray)
 	end 'eachToken'
 end 'markContextualHeads'
 
-function receiverCapabilityHeadAt(tokens TokenArray, index ElementIndex) returns bool
-	if tokenKindAt(tokens, index: index) != TokenKind.function or tokenKindAt(tokens, index: index + 1) != TokenKind.identifier or tokenKindAt(tokens, index: index + 2) != TokenKind.leftParen or tokenKindAt(tokens, index: index + 4) != TokenKind.self 'notAReceiverHead'
-		return false
-	end 'notAReceiverHead'
-
-	let word = try tokens.get(index + 3) otherwise return false
-
-	if word.kind != TokenKind.identifier or not spellsCapabilityWord(word.value) 'notACapability'
-		return false
-	end 'notACapability'
-
-	let after = tokenKindAt(tokens, index: index + 5)
-	return after == TokenKind.comma or after == TokenKind.rightParen
-end 'receiverCapabilityHeadAt'
-
-function foldReceiverCapabilities(tokens TokenArray) returns TokenArray
-	var heads = TokenIndexArray.create(0)
-	var scan = 0 as ElementIndex
-
-	while scan < tokens.count() 'findHeads'
-		if receiverCapabilityHeadAt(tokens, index: scan) 'aHead'
-			heads.push(scan)
-		end 'aHead'
-
-		scan = scan + 1
-	end 'findHeads'
-
-	if heads.isEmpty() 'nothingToFold'
-		return tokens
-	end 'nothingToFold'
-
-	var kept = TokenArray.create(tokens.count(), zeroed: false)
-	var next = 0 as ElementIndex
-
-	for head in heads 'eachHead'
-		while next < head + 2 'copyThroughTheName'
-			kept.push(try tokens.get(next) otherwise panic("foldReceiverCapabilities: tokens.get OOB below an index a head scan just read"))
-			next = next + 1
-		end 'copyThroughTheName'
-
-		let word = try tokens.get(head + 3) otherwise panic("foldReceiverCapabilities: the capability word of a head the scan just read is missing")
-		kept.push(Token.create(TokenKind.leftParen, line: word.line, column: word.column, value: word.value, startByte: word.startByte, endByte: word.endByte))
-		next = head + 5
-
-		if tokenKindAt(tokens, index: next) == TokenKind.comma 'aSeparator'
-			next = next + 1
-		end 'aSeparator'
-	end 'eachHead'
-
-	while next < tokens.count() 'copyTheRest'
-		kept.push(try tokens.get(next) otherwise panic("foldReceiverCapabilities: tokens.get OOB below the count just read"))
-		next = next + 1
-	end 'copyTheRest'
-
-	return kept
-end 'foldReceiverCapabilities'
-
 export type Token
 	export let kind as TokenKind
 
@@ -2582,7 +2525,7 @@ export function tokenize(source String, keywords KeywordTable) returns TokenArra
 
 	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, recording: false)
 
-	return foldReceiverCapabilities(dropBracketedLayout(try lexer.run()))
+	return dropBracketedLayout(try lexer.run())
 end 'tokenize'
 
 enum LayoutFrame

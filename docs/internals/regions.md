@@ -19,7 +19,8 @@ be parsed after its caller and recursion needs a least fixpoint.
 | --- | --- |
 | `Compiler/CapabilityRules.maxon` | The contextual words (`IsolatedCapabilityWord`, `ModifyBlockWord`, `UniqueDeclarationWord`, `SendableBoundWord`, `MutatesClauseWord`, …), the store verdict (`storeVerdict`, `assignmentVerdict`), the join and adapt rules, and the shared refusal wording |
 | `Compiler/RegionWindows.maxon` | `RegionFactTable`, the per-body facts the parser writes: the window stack (`OpenWindow`, `WindowKind.modify` and `oneStatement`), field origins, carried derivations and stores, lent locals, and the deferred refusal. Also `regionOperatorAt`, the token-level rule for the region operators |
-| `Compiler/Lexer.maxon` | `markContextualHeads` retags a statement-start `modify` that opens a block, and `foldReceiverCapabilities` folds `mutable self` and `immutable self` into one parameter token |
+| `Compiler/Lexer.maxon` | `markContextualHeads` retags a statement-start `modify` that opens a block |
+| `Compiler/TypeQualifierPositions.maxon` | `TypeQualifierPositions`, the one token-stream classifier that decides whether each `readonly`, `isolated`, `immutable` and `mutable` qualifies a type or is a name. The parser, the formatter and the LSP all read its verdicts, and the parser reads a receiver as `( word self` followed by `,` or `)` (`receiverHeadAt`) |
 | `Compiler/CapabilityInference.maxon` | `inferCapabilities`: the per-function facts over the call graph (`CapabilityFacts`) |
 | `Compiler/CapabilityCallCheck.maxon` | `checkCapabilityCalls`: the call-site, conversion, tied-promise and must-use checks, run after inference |
 | `Compiler/ServiceCompanions.maxon` | `classifyServiceRoster`, run at a `spawn`: after the roster's E3135, E3137, E3138, E3140 and E3216 verdicts, `capabilityVerdict` judges the message parameters, the replies and the named factory's parameters for E3217 (`typeNeedsACapabilityWord`) |

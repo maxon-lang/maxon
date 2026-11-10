@@ -1,0 +1,546 @@
+module enum QualifierVerdict
+	plainName
+	readonlyQualifier
+	capabilityQualifier
+end 'QualifierVerdict'
+
+enum QualifierGroup
+	expression
+	declaration
+	declarationDefault
+	functionType
+	typeList
+end 'QualifierGroup'
+
+enum FunctionHeadState
+	absent
+	keyword
+	named
+	dotted
+end 'FunctionHeadState'
+
+enum NominalLabelWatch
+	idle
+	enumName
+	methodName
+	endLabel
+end 'NominalLabelWatch'
+
+typealias QualifierGroupStack = Array with QualifierGroup
+typealias QualifierEntryStack = Array with ElementIndex
+
+let ReadonlyQualifierByte = 1
+let CapabilityQualifierByte = 2
+let ReceiverPrefixWithoutSeparator = 3
+
+module type TypeQualifierPositions
+	let verdicts as ByteArray
+
+	module static function over(tokens TokenArray) returns TypeQualifierPositions
+		var machine = QualifierMachine.begin(tokens)
+		machine.run()
+
+		return Self{verdicts: machine.verdicts}
+	end 'over'
+
+	module function verdictAt(index ElementIndex) returns QualifierVerdict
+		let found = try self.verdicts.get(index) otherwise return QualifierVerdict.plainName
+
+		if found == ReadonlyQualifierByte 'readonly'
+			return QualifierVerdict.readonlyQualifier
+		end 'readonly'
+
+		if found == CapabilityQualifierByte 'capability'
+			return QualifierVerdict.capabilityQualifier
+		end 'capability'
+
+		return QualifierVerdict.plainName
+	end 'verdictAt'
+
+	module function qualifiesAt(index ElementIndex) returns bool
+		return self.verdictAt(index) != QualifierVerdict.plainName
+	end 'qualifiesAt'
+end 'TypeQualifierPositions'
+
+// Decides from tokens alone, so the formatter and the language server can classify a buffer
+// that does not parse. A word qualifies only where a type may start, and `groups` names what the
+// innermost open bracket holds: a declaration's list (each entry starts with a name), a function
+// type's (the name is optional), a type list, or an expression (a type starts only after a type
+// head such as `as`, `returns` or `with`).
+type QualifierMachine
+	let tokens as TokenArray
+	module var verdicts as ByteArray
+	var groups as QualifierGroupStack
+	var entries as QualifierEntryStack
+	var labels as NameRoster
+	var methods as NameRoster
+	var prevIndex as ElementIndex
+	var prevKind as TokenKind
+	var typeHead as bool
+	var inTypealias as bool
+	var aliasEqualsSeen as bool
+	var bareList as bool
+	var sawWhere as bool
+	var swapOpen as bool
+	var swapDepth as Count
+	var statementTokens as ElementIndex
+	var functionHead as FunctionHeadState
+	var labelWatch as NominalLabelWatch
+
+	static function begin(tokens TokenArray) returns QualifierMachine
+		return Self{tokens: tokens, verdicts: ByteArray.create(0), groups: QualifierGroupStack.create(0), entries: QualifierEntryStack.create(0), labels: NameRoster.create(0), methods: NameRoster.create(0), prevIndex: 0, prevKind: TokenKind.newline, typeHead: false, inTypealias: false, aliasEqualsSeen: false, bareList: false, sawWhere: false, swapOpen: false, swapDepth: 0, statementTokens: 0, functionHead: FunctionHeadState.absent, labelWatch: NominalLabelWatch.idle}
+	end 'begin'
+
+	function run()
+		for (position, token) in self.tokens.withIterator() 'eachToken'
+			self.step(position.index(), token: token)
+		end 'eachToken'
+	end 'run'
+
+	function step(index ElementIndex, token Token)
+		let kind = token.kind
+
+		if kind == TokenKind.eof or kind == TokenKind.docComment 'notCode'
+			return
+		end 'notCode'
+
+		if kind == TokenKind.newline 'layout'
+			if self.groups.isEmpty() 'statementEnds'
+				self.endStatement()
+			end 'statementEnds'
+
+			return
+		end 'layout'
+
+		// An unclosed bracket ends at the next declaration head, where `dropBracketedLayout` ends it too;
+		// without this one half-typed bracket recolours the rest of the file.
+		if not self.groups.isEmpty() and token.column == DeclarationHeadColumn and declarationOpensIn(self.tokens, index: index) 'aDeclarationEndsTheOpenBrackets'
+			self.groups.clear()
+			self.entries.clear()
+			self.endStatement()
+		end 'aDeclarationEndsTheOpenBrackets'
+
+		var qualifies = false
+
+		if kind == TokenKind.identifier and isTypeQualifierWord(token.value) 'aQualifierWord'
+			qualifies = self.recordVerdict(index, token: token)
+		end 'aQualifierWord'
+
+		self.advance(index, token: token, qualifies: qualifies)
+	end 'step'
+
+	function endStatement()
+		self.typeHead = false
+		self.inTypealias = false
+		self.aliasEqualsSeen = false
+		self.bareList = false
+		self.sawWhere = false
+		self.swapOpen = false
+		self.statementTokens = 0
+		self.functionHead = FunctionHeadState.absent
+		self.labelWatch = NominalLabelWatch.idle
+		self.prevKind = TokenKind.newline
+	end 'endStatement'
+
+	function recordVerdict(index ElementIndex, token Token) returns bool
+		let verdict = self.verdictOf(index, token: token)
+
+		if verdict == QualifierVerdict.plainName 'aName'
+			return false
+		end 'aName'
+
+		if self.verdicts.isEmpty() 'firstQualifier'
+			self.verdicts = ByteArray.create(self.tokens.count())
+		end 'firstQualifier'
+
+		if verdict == QualifierVerdict.readonlyQualifier 'readonly'
+			self.markVerdict(index, value: ReadonlyQualifierByte)
+		end 'readonly' else 'capability'
+			self.markVerdict(index, value: CapabilityQualifierByte)
+		end 'capability'
+
+		return true
+	end 'recordVerdict'
+
+	function markVerdict(index ElementIndex, value Byte)
+		try self.verdicts.set(index, value: value) otherwise panic("QualifierMachine.markVerdict: the column holds one byte per token and index {index} is below the token count")
+	end 'markVerdict'
+
+	function verdictOf(index ElementIndex, token Token) returns QualifierVerdict
+		if self.prevKind == TokenKind.dot 'aMemberName'
+			return QualifierVerdict.plainName
+		end 'aMemberName'
+
+		let spelledAsCapability = spellsCapabilityWord(token.value)
+
+		if self.prevKind == TokenKind.is and self.sawWhere and spelledAsCapability 'aBoundWord'
+			return QualifierVerdict.capabilityQualifier
+		end 'aBoundWord'
+
+		if spelledAsCapability and self.namesTheReceiver(index) 'theReceiver'
+			return QualifierVerdict.capabilityQualifier
+		end 'theReceiver'
+
+		let next = self.kindAfter(index)
+
+		if not readonlyOperandStartsWith(next) or not self.typePositionFor(token, next: next) 'notAQualifier'
+			return QualifierVerdict.plainName
+		end 'notAQualifier'
+
+		if isReadonlyWord(token.value) 'readonly'
+			return QualifierVerdict.readonlyQualifier
+		end 'readonly'
+
+		return QualifierVerdict.capabilityQualifier
+	end 'verdictOf'
+
+	function typePositionFor(token Token, next TokenKind) returns bool
+		if self.groups.isEmpty() 'atStatementLevel'
+			return self.typeHead
+		end 'atStatementLevel'
+
+		let entry = self.topEntry()
+
+		return match self.topGroup() 'group'
+			expression or
+			declarationDefault gives self.typeHead
+			declaration gives entry > 0
+			// `function(readonly Foo)` names a parameter `readonly`; only `readonly (` qualifies a tuple.
+			functionType gives not (entry == 0 and isReadonlyWord(token.value) and next != TokenKind.leftParen)
+			typeList gives entry == 0 or self.typeHead
+		end 'group'
+	end 'typePositionFor'
+
+	function namesTheReceiver(index ElementIndex) returns bool
+		if self.groups.isEmpty() or self.topGroup() != QualifierGroup.declaration or self.topEntry() != 0 'notTheFirstParameterSlot'
+			return false
+		end 'notTheFirstParameterSlot'
+
+		return receiverHeadAt(self.tokens, wordIndex: index)
+	end 'namesTheReceiver'
+
+	// The formatter's stream keeps the newlines `tokenize` drops inside a bracket, and the next token
+	// must be the same on both.
+	function indexAfter(index ElementIndex) returns ElementIndex
+		var found = index + 1
+
+		while self.groupsAreOpen() and tokenKindIsSkippedLayout(tokenKindAt(self.tokens, index: found)) 'bracketedLayout'
+			found = found + 1
+		end 'bracketedLayout'
+
+		return found
+	end 'indexAfter'
+
+	function groupsAreOpen() returns bool
+		return not self.groups.isEmpty()
+	end 'groupsAreOpen'
+
+	function kindAfter(index ElementIndex) returns TokenKind
+		return tokenKindAt(self.tokens, index: self.indexAfter(index))
+	end 'kindAfter'
+
+	function topGroup() returns QualifierGroup
+		if self.groups.isEmpty() 'noGroup'
+			return QualifierGroup.expression
+		end 'noGroup'
+
+		return try self.groups.get(self.groups.count() - 1) otherwise panic("QualifierMachine.topGroup: the stack was tested non-empty on the line above")
+	end 'topGroup'
+
+	function topEntry() returns ElementIndex
+		if self.entries.isEmpty() 'noGroup'
+			return 0
+		end 'noGroup'
+
+		return try self.entries.get(self.entries.count() - 1) otherwise panic("QualifierMachine.topEntry: the stack was tested non-empty on the line above")
+	end 'topEntry'
+
+	function setTopGroup(group QualifierGroup)
+		try self.groups.set(self.groups.count() - 1, value: group) otherwise panic("QualifierMachine.setTopGroup: a group is open — every caller tested the stack first")
+	end 'setTopGroup'
+
+	function setTopEntry(entry ElementIndex)
+		try self.entries.set(self.entries.count() - 1, value: entry) otherwise panic("QualifierMachine.setTopEntry: a group is open — every caller tested the stack first")
+	end 'setTopEntry'
+
+	function countsInItsEntry()
+		if self.entries.isEmpty() 'statementLevel'
+			self.statementTokens = self.statementTokens + 1
+			return
+		end 'statementLevel'
+
+		self.setTopEntry(self.topEntry() + 1)
+	end 'countsInItsEntry'
+
+	function expectsAType() returns bool
+		if self.typeHead 'afterATypeHead'
+			return true
+		end 'afterATypeHead'
+
+		if self.groups.isEmpty() 'atStatementLevel'
+			return false
+		end 'atStatementLevel'
+
+		return match self.topGroup() 'group'
+			expression or
+			declarationDefault gives false
+			declaration gives self.topEntry() > 0
+			functionType or
+			typeList gives true
+		end 'group'
+	end 'expectsAType'
+
+	function groupOpenedBy(kind TokenKind) returns QualifierGroup
+		if kind != TokenKind.leftParen 'notAParenthesis'
+			return QualifierGroup.expression
+		end 'notAParenthesis'
+
+		if self.prevKind == TokenKind.function 'anonymousFunction'
+			return QualifierGroup.functionType if functionKeywordWritesAType(self.tokens, at: self.prevIndex) else QualifierGroup.declaration
+		end 'anonymousFunction'
+
+		if self.functionHead == FunctionHeadState.named or self.opensAPayloadList() 'aDeclarationList'
+			return QualifierGroup.declaration
+		end 'aDeclarationList'
+
+		return QualifierGroup.typeList if self.expectsAType() else QualifierGroup.expression
+	end 'groupOpenedBy'
+
+	// `labels` and `methods` follow the enum/union bodies by their end labels: `name(` is a case's
+	// payload list only directly in the body, and inside one of its methods the same shape is a call.
+	function opensAPayloadList() returns bool
+		return self.groups.isEmpty() and self.statementTokens == 1 and self.prevKind == TokenKind.identifier and not self.labels.isEmpty() and self.methods.isEmpty()
+	end 'opensAPayloadList'
+
+	function advance(index ElementIndex, token Token, qualifies bool)
+		let kind = token.kind
+		var typeHeadNext = qualifies
+
+		if tokenKindOpensABracket(kind) 'opensGroup'
+			let group = self.groupOpenedBy(kind)
+
+			self.countsInItsEntry()
+			self.groups.push(group)
+			self.entries.push(0)
+		end 'opensGroup' else if tokenKindClosesABracket(kind) 'closesGroup'
+			self.closeGroup()
+		end 'closesGroup' else if kind == TokenKind.comma 'separator'
+			self.separateEntry()
+			typeHeadNext = self.groups.isEmpty() and self.bareList
+		end 'separator' else if kind == TokenKind.equals 'assignment'
+			typeHeadNext = self.noteEquals()
+		end 'assignment' else 'anOrdinaryToken'
+			self.countsInItsEntry()
+		end 'anOrdinaryToken'
+
+		if kind == TokenKind.as or kind == TokenKind.returns 'aTypeHead'
+			typeHeadNext = true
+		end 'aTypeHead'
+
+		if kind == TokenKind.with 'with'
+			typeHeadNext = self.noteWith()
+		end 'with'
+
+		self.noteStatementKind(index, token: token)
+		self.noteFunctionHead(token)
+		self.noteNominalLabel(index, token: token)
+
+		self.typeHead = typeHeadNext
+		self.prevKind = kind
+		self.prevIndex = index
+	end 'advance'
+
+	function closeGroup()
+		if self.groups.isEmpty() 'unbalanced'
+			return
+		end 'unbalanced'
+
+		_ = try self.groups.pop() otherwise panic("QualifierMachine.closeGroup: a group is open — the stack was tested on the line above")
+		_ = try self.entries.pop() otherwise panic("QualifierMachine.closeGroup: the entry stack runs in lockstep with the group stack")
+
+		if self.swapOpen and self.groups.count() < self.swapDepth 'theSwapLeftItsGroup'
+			self.swapOpen = false
+		end 'theSwapLeftItsGroup'
+	end 'closeGroup'
+
+	function separateEntry()
+		if self.groups.isEmpty() 'statementLevel'
+			return
+		end 'statementLevel'
+
+		if self.topGroup() == QualifierGroup.declarationDefault 'defaultEnds'
+			self.setTopGroup(QualifierGroup.declaration)
+		end 'defaultEnds'
+
+		self.setTopEntry(0)
+	end 'separateEntry'
+
+	function noteEquals() returns bool
+		if not self.groups.isEmpty() 'insideAGroup'
+			if self.topGroup() == QualifierGroup.declaration and self.topEntry() > 0 'aDefaultBegins'
+				self.setTopGroup(QualifierGroup.declarationDefault)
+			end 'aDefaultBegins'
+
+			self.countsInItsEntry()
+			return false
+		end 'insideAGroup'
+
+		self.countsInItsEntry()
+
+		if self.inTypealias and not self.aliasEqualsSeen 'theAliasTarget'
+			self.aliasEqualsSeen = true
+			return true
+		end 'theAliasTarget'
+
+		return false
+	end 'noteEquals'
+
+	function noteWith() returns bool
+		if self.swapOpen and self.groups.count() == self.swapDepth 'swapsTwoOperands'
+			self.swapOpen = false
+			return false
+		end 'swapsTwoOperands'
+
+		if self.groups.isEmpty() and self.inTypealias 'aBareTypeList'
+			self.bareList = true
+		end 'aBareTypeList'
+
+		return true
+	end 'noteWith'
+
+	function noteStatementKind(index ElementIndex, token Token)
+		if token.kind == TokenKind.typealias 'typealiasBegins'
+			self.groups.clear()
+			self.entries.clear()
+			self.inTypealias = true
+		end 'typealiasBegins' else if token.kind == TokenKind.where 'whereBegins'
+			self.sawWhere = true
+		end 'whereBegins' else if token.kind == TokenKind.identifier and token.value.equals(SwapOperatorWord) and regionOperatorAt(self.tokens, index: index) 'swapBegins'
+			self.swapOpen = true
+			self.swapDepth = self.groups.count()
+		end 'swapBegins'
+	end 'noteStatementKind'
+
+	function noteFunctionHead(token Token)
+		let kind = token.kind
+
+		if kind == TokenKind.function 'keyword'
+			self.functionHead = FunctionHeadState.keyword
+			return
+		end 'keyword'
+
+		if kind == TokenKind.dot and self.functionHead == FunctionHeadState.named 'aQualifiedName'
+			self.functionHead = FunctionHeadState.dotted
+			return
+		end 'aQualifiedName'
+
+		if self.functionHead == FunctionHeadState.keyword or self.functionHead == FunctionHeadState.dotted 'aNameIsDue'
+			self.functionHead = FunctionHeadState.named if tokenCanBeAName(token) else FunctionHeadState.absent
+			return
+		end 'aNameIsDue'
+
+		self.functionHead = FunctionHeadState.absent
+	end 'noteFunctionHead'
+
+	function noteNominalLabel(index ElementIndex, token Token)
+		match self.labelWatch 'watch'
+			enumName then self.noteNominalName(token)
+			methodName then self.noteMethodName(token)
+			endLabel then self.noteClosingLabel(token)
+			idle then self.noteNominalHead(index, kind: token.kind)
+		end 'watch'
+	end 'noteNominalLabel'
+
+	function noteNominalHead(index ElementIndex, kind TokenKind)
+		if not self.groups.isEmpty() 'insideAGroup'
+			return
+		end 'insideAGroup'
+
+		if kind == TokenKind.enum or kind == TokenKind.union 'aNominalHead'
+			self.labelWatch = NominalLabelWatch.enumName
+		end 'aNominalHead' else if kind == TokenKind.end 'aCloser'
+			self.labelWatch = NominalLabelWatch.endLabel
+		end 'aCloser' else if kind == TokenKind.function and not self.labels.isEmpty() and self.methods.isEmpty() and functionHeadIn(self.tokens, index: index) 'aMethodHead'
+			self.labelWatch = NominalLabelWatch.methodName
+		end 'aMethodHead'
+	end 'noteNominalHead'
+
+	function noteMethodName(token Token)
+		self.labelWatch = NominalLabelWatch.idle
+
+		if tokenCanBeAName(token) 'aDeclaredName'
+			self.methods.push(token.value)
+		end 'aDeclaredName'
+	end 'noteMethodName'
+
+	function noteNominalName(token Token)
+		self.labelWatch = NominalLabelWatch.idle
+
+		if token.kind == TokenKind.identifier 'aDeclaredName'
+			self.labels.push(token.value)
+		end 'aDeclaredName'
+	end 'noteNominalName'
+
+	function noteClosingLabel(token Token)
+		self.labelWatch = NominalLabelWatch.idle
+
+		if token.kind != TokenKind.charLiteral or self.labels.isEmpty() 'noLabel'
+			return
+		end 'noLabel'
+
+		if not self.methods.isEmpty() 'insideAMethod'
+			self.noteMethodClosing(token)
+			return
+		end 'insideAMethod'
+
+		let innermost = try self.labels.get(self.labels.count() - 1) otherwise panic("QualifierMachine.noteClosingLabel: the roster was tested non-empty on the line above")
+
+		if innermost.equals(token.value) 'theBodyEnds'
+			_ = try self.labels.pop() otherwise panic("QualifierMachine.noteClosingLabel: the roster was tested non-empty above")
+		end 'theBodyEnds'
+	end 'noteClosingLabel'
+
+	function noteMethodClosing(token Token)
+		let method = try self.methods.get(self.methods.count() - 1) otherwise panic("QualifierMachine.noteMethodClosing: the roster was tested non-empty by the caller")
+
+		if method.equals(token.value) 'theMethodEnds'
+			_ = try self.methods.pop() otherwise panic("QualifierMachine.noteMethodClosing: the roster was tested non-empty above")
+		end 'theMethodEnds'
+	end 'noteMethodClosing'
+end 'QualifierMachine'
+
+function isTypeQualifierWord(word ByteArray) returns bool
+	return isReadonlyWord(word) or spellsCapabilityWord(word)
+end 'isTypeQualifierWord'
+
+function receiverHeadAt(tokens TokenArray, wordIndex ElementIndex) returns bool
+	let word = try tokens.get(wordIndex) otherwise return false
+
+	if word.kind != TokenKind.identifier or not spellsCapabilityWord(word.value) or tokenKindAt(tokens, index: wordIndex + 1) != TokenKind.self 'notAReceiver'
+		return false
+	end 'notAReceiver'
+
+	let after = tokenKindAt(tokens, index: wordIndex + 2)
+	return after == TokenKind.comma or after == TokenKind.rightParen
+end 'receiverHeadAt'
+
+module function parameterListStartIn(tokens TokenArray, open ElementIndex) returns ElementIndex
+	if tokenKindAt(tokens, index: open) != TokenKind.leftParen or not receiverHeadAt(tokens, wordIndex: open + 1) 'noReceiverCapability'
+		return open + 1
+	end 'noReceiverCapability'
+
+	let afterReceiver = open + ReceiverPrefixWithoutSeparator
+
+	return afterReceiver + 1 if tokenKindAt(tokens, index: afterReceiver) == TokenKind.comma else afterReceiver
+end 'parameterListStartIn'
+
+module function functionKeywordWritesAType(tokens TokenArray, at ElementIndex) returns bool
+	let open = at + 1
+
+	if tokenKindAt(tokens, index: open) != TokenKind.leftParen 'aDeclaration'
+		return false
+	end 'aDeclaration'
+
+	let close = ParenGroups.create().closeOf(tokens, open: open)
+	return tokenKindAt(tokens, index: close + 1) != TokenKind.gives
+end 'functionKeywordWritesAType'

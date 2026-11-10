@@ -209,7 +209,7 @@ else:
 | `spawn` | followed by a type's static factory call, optionally after `(capacity: n)` (see [Services](#services--spawn)) |
 | `bits` | followed by `(` on the right-hand side of a typealias |
 | `view` | at the start of a statement, or after `if` or `then`, followed by a name, or by a `( … )` list and `=`; another spelling of `let` (see [Views](#views-view)) |
-| `readonly` | before an element or value type argument of a container (see [Read-Only Values](#read-only-values)) |
+| `readonly` | before an element or value type argument of a container (see [Read-Only Values](#read-only-values)); before any other type it is refused with **E2075** |
 | `mutable` | before a parameter's type, or a function-type parameter's, and as `mutable self` (see [Parameter Passing](#parameter-passing)) |
 | `isolated`, `immutable` | before a type, and before `self` as a receiver capability; `isolated` also after `is` in a `where` constraint (see [Regions and Capabilities](#regions-and-capabilities)) |
 | `modify` | at the start of a statement, followed by a name or `self` and ending its line with a label (see [`modify` Blocks](#modify-blocks)) |
@@ -217,6 +217,9 @@ else:
 | `unique` | after `is` in a `type` or `interface` header (see [Unique Types](#unique-types)) |
 | `sendable` | after `is` in a `where` constraint of a generic type (see [Region Bounds](#region-bounds)) |
 | `mutates`, `captures` | the clause `mutates captures` ending a function type (see [Capabilities at Function Types and Requirements](#capabilities-at-function-types-and-requirements)) |
+
+`readonly`, `mutable`, `isolated` and `immutable` are qualifiers exactly where the grammar expects a type, and
+ordinary names or operands everywhere else (see [Regions and Capabilities](#regions-and-capabilities)).
 
 `__line__` and `__file__` are valid only as parameter defaults (see
 [Caller-Location Defaults](#caller-location-defaults-__line__-__file__)).
@@ -6128,11 +6131,22 @@ Two further kinds of data sit outside the current region:
   its life. A `freeze` walk marks every object in the region it freezes as shared, so the result is read with
   atomic counts from any thread.
 
-A capability is a prefix word on a type, read like an adjective. The words are contextual: they are
-recognised only where the grammar expects a type or an operand, so a local named `mutates` or `captures`
-keeps its meaning, and `swap(1, right: 2)`, with the parenthesis against the name, calls a function named
-`swap`, where `freeze (Box.create(7))` with a space is the operator over a parenthesized operand
-(`specs/regions-syntax.md`).
+A capability is a prefix word on a type, read like an adjective. The words are contextual: `readonly`,
+`mutable`, `isolated` and `immutable` are qualifiers exactly where the grammar expects a type, and a name or an
+operand everywhere else. A local named `mutates` or `captures` keeps its meaning, and `swap(1, right: 2)`, with the
+parenthesis against the name, calls a function named `swap`, where `freeze (Box.create(7))` with a space is the
+operator over a parenthesized operand (`specs/regions-syntax.md`).
+
+| Written | Reads as |
+|---------|----------|
+| `function pick(pair (immutable Box, Box))` | `immutable` qualifies the first tuple element |
+| `function bump(immutable self)` | `immutable` is the receiver's capability |
+| `type Cell uses T where T is isolated` | `isolated` is the bound |
+| `typealias Visit = function(readonly Box)` | `readonly` names a parameter of type `Box` |
+| `swap slot with mutable(seed)` | `mutable(seed)` is a call to a function named `mutable` |
+| `var x as readonly Box` | `readonly` qualifies a type outside a container argument: **E2075** |
+| `typealias A = immutable int` | `immutable` qualifies a type that belongs to no region: **E2010** |
+| `typealias B = immutable (X, Y)` | `immutable` qualifies a tuple, which is not a record type: refused |
 
 | Spelling | Meaning |
 |----------|---------|

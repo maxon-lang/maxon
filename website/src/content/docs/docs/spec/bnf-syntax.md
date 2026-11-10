@@ -58,18 +58,24 @@ KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'continue'
 
 Contextual keywords are IDENTIFIER tokens that act as syntax in one position only: `module` (directly
 before a declaration), `test` (a top-level declaration followed by a `TEST_NAME`), `spawn` (followed by a
-type's factory call, optionally after a `(capacity: n)` group), `bits` (followed by `(` on a typealias right-hand side), `readonly` (before a type
-argument after `with`, `(` or `,`, and as a `result_capability`), `view` (a `view_decl`: at the start of a
+type's factory call, optionally after a `(capacity: n)` group), `bits` (followed by `(` on a typealias right-hand side), `view` (a `view_decl`: at the start of a
 statement or after `if` or `then`, followed by an IDENTIFIER, or by a parenthesized list whose `)` is followed by
-`=`; and before a name in a `tuple_assign_stmt` target), `mutable` (a parameter marker, directly before the
-parameter's type, or a receiver capability before `self`), `isolated` and `immutable` (a `capability` before a
-type or `self`, and `isolated` after `is` in a `constraint`), `unique` (after `is` in a `type_decl` header: `type Ticket is unique`),
+`=`; and before a name in a `tuple_assign_stmt` target), `unique` (after `is` in a `type_decl` header: `type Ticket is unique`),
 `sendable` (after `is` in a `constraint`), `mutates` and `captures` (the `mutates_clause` ending a
 `function_type`), `modify` (a `modify_stmt`: at the start of a statement, followed by an IDENTIFIER or `self`,
 on a line ending in a LABEL), and `freeze`, `swap` and `merge` (a `region_expr`: not after `.`, followed by an
 IDENTIFIER, `self`, `Self`, `try`, or a `(` set apart from the word by a space; `swap(` with the parenthesis
 adjacent is a call). `__line__` and `__file__`
 are identifiers in the reserved `__` space, legal only as a parameter default (§3.1).
+
+`readonly`, `mutable`, `isolated` and `immutable` are contextual words that qualify a type exactly where the
+grammar expects a type: after `as` or `returns`, after a parameter's name, as a `type_arg`, as an element of
+a `tuple_type`, in a `function_type` parameter, at the start of a `typealias_rhs`, and (for `isolated`)
+after `is` in a `constraint`. `mutable`, `isolated` and `immutable` also qualify `self` as a `receiver_param`.
+Everywhere else they are IDENTIFIER tokens, so `mutable(x)` is a call and `immutable` and `readonly` can name a
+local or an operand. A qualifier the position's production does not take is rejected there: `readonly` anywhere
+but a `type_arg` is E2075, and any other word the position does not take, or on a type that belongs to no region,
+is E2010. A `function_type` whose first parameter is `readonly` followed by a type names that parameter `readonly`.
 
 ### 1.4 Literals
 
@@ -258,12 +264,13 @@ needs no `try`: the test handles the error.
 ```
 function_decl = visibility_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
                 [ 'returns' [ capability ] type_ref ] [ throws_clause ] NEWLINE
-                body
+                body                                         (* `returns readonly T` is E2075 *)
                 'end' LABEL
 
 receiver_param
-              = ( capability | 'mutable' ) 'self'            (* first parameter of a method or requirement only; a static or free
-                                                                function, or `self` after another parameter, is a parse error *)
+              = ( capability | 'mutable' ) 'self'            (* directly after '(' and followed by ',' or ')'; first parameter of a
+                                                                method or requirement only; a static or free function, or `self`
+                                                                after another parameter, is a parse error *)
 
 capability    = 'isolated' | 'immutable'                     (* contextual; a prefix word on a type_ref *)
 
@@ -438,7 +445,14 @@ typealias_rhs = ranged_type
               | raw_pattern_type
               | generic_type
               | tuple_type
+              | capability_alias
               | function_type
+
+capability_alias
+              = capability type_ref                          (* the type_ref names a record type or a generic alias, and the alias is
+                                                                that type with the capability; a number, `bool` or other type that
+                                                                belongs to no region is E2010, and a tuple or any other target is
+                                                                refused as not a record type *)
 
 ranged_type   = primitive_type '(' range_bound ('to' | 'upto') range_bound ')'
 
@@ -489,7 +503,9 @@ type_arg      = [ 'readonly' | capability ] generic_base 'with' [ INTEGER ] type
                 (* the optional INTEGER is a fixed element count: `FixedArray with 3 Coord`; an absent INTEGER is the
                    runtime-sized form, whose length each value carries: `FixedArray with Coord` *)
 
-tuple_type    = '(' type_ref ',' type_ref { ',' type_ref } ')'
+tuple_type    = '(' tuple_element ',' tuple_element { ',' tuple_element } ')'
+tuple_element = [ 'immutable' ] type_ref                     (* `isolated` and `mutable` on an element are E2010, as is
+                                                                `immutable` on a type that belongs to no region *)
 ```
 
 ### 3.8 Top-Level Bindings

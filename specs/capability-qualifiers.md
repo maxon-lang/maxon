@@ -221,3 +221,103 @@ end 'main'
 ```maxoncstderr
 error E3210: <fragment>:23:14: function value for 'Frozen' does not declare `returns immutable`, but 'Frozen' does
 ```
+
+<!-- test: capability-qualifiers.error.a-capability-alias-of-a-value-type-is-refused -->
+A capability alias qualifies a record, and an `int` belongs to no region, so `immutable` on it is refused as it is on a result.
+
+```maxon
+typealias A = immutable int
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:2:15: Expected 'a type' but got 'immutable'
+```
+
+<!-- test: capability-qualifiers.a-tuple-element-qualifier-in-a-parameter-a-field-and-a-result-runs -->
+`(immutable Box, Box)` qualifies its first element wherever a tuple type is written: a parameter, a field and a result all read the frozen element and write the live one.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Box
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Holder
+	var pair as (immutable Box, Box)
+
+	static function create(first immutable Box, second Box) returns Self
+		return Self{pair: (first, second)}
+	end 'create'
+
+	function weigh() returns Tally
+		self.pair.1.n = self.pair.1.n + 1
+		return self.pair.0.n + self.pair.1.n
+	end 'weigh'
+end 'Holder'
+
+function pairOf(first immutable Box, second Box) returns (immutable Box, Box)
+	return (first, second)
+end 'pairOf'
+
+function total(pair (immutable Box, Box)) returns Tally
+	return pair.0.n + pair.1.n
+end 'total'
+
+function main() returns ExitCode
+	let frozen = freeze Box.create(1)
+	let live = Box.create(2)
+	let holder = Holder.create(frozen, second: live)
+	print("{total(pairOf(frozen, second: live))} {holder.weigh()} {live.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 4 3
+```
+
+<!-- test: capability-qualifiers.a-generic-method-with-a-receiver-capability-takes-its-arguments -->
+A receiver capability is not a parameter: a generic method that writes `immutable self` binds its first argument to the first parameter after it.
+
+```maxon
+typealias Level = int(0 to 100)
+
+type Box
+	let n as Level
+
+	static function create(n Level) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function pick(immutable self, item T, extra Level) uses T returns T
+		if extra > self.n 'taller'
+			return item
+		end 'taller'
+
+		return item
+	end 'pick'
+end 'Box'
+
+function main() returns ExitCode
+	let box = Box.create(1)
+	let word = "five"
+	print("{box.pick(7, extra: 9)} {box.pick(word, extra: 5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 five
+```

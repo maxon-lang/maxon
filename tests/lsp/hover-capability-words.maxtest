@@ -30,9 +30,13 @@ test 'hover on the capability of a receiver shows the keyword'
 	Expect.contains(rendering, needle: "Maxon language keyword.", message: "the `immutable` in `function peek(immutable self)` is a language word, and hovering it says so.")
 end 'hover on the capability of a receiver shows the keyword'
 
-test 'hover on the receiver itself is not the capability word'
-	expectNoHover(capabilityHoverDocument(), line: 6, character: 30, note: "`self` after a receiver capability is not the capability word, and the rendering for `immutable` must not answer for it.")
-end 'hover on the receiver itself is not the capability word'
+test 'hover on the receiver itself answers for self and not for the capability word'
+	let rendering = hoverRendering(capabilityHoverDocument(), line: 6, character: 30)
+
+	Expect.contains(rendering, needle: "self", message: "the rendering names the word it hovered.")
+
+	Expect.isFalse(rendering.contains("immutable"), message: "`self` after a receiver capability is not the capability word, and the rendering for `immutable` must not answer for it.")
+end 'hover on the receiver itself answers for self and not for the capability word'
 
 function capabilityHoverDocument() returns String
 	return String.from(b"function keep(value mutable Count, data immutable ByteArray) returns Count

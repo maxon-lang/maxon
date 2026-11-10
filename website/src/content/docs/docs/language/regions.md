@@ -28,11 +28,22 @@ Two further kinds of data sit outside the current region:
   its life. A `freeze` walk marks every object in the region it freezes as shared, so the result is read with
   atomic counts from any thread.
 
-A capability is a prefix word on a type, read like an adjective. The words are contextual: they are
-recognised only where the grammar expects a type or an operand, so a local named `mutates` or `captures`
-keeps its meaning, and `swap(1, right: 2)`, with the parenthesis against the name, calls a function named
-`swap`, where `freeze (Box.create(7))` with a space is the operator over a parenthesized operand
-(`specs/regions-syntax.md`).
+A capability is a prefix word on a type, read like an adjective. The words are contextual: `readonly`,
+`mutable`, `isolated` and `immutable` are qualifiers exactly where the grammar expects a type, and a name or an
+operand everywhere else. A local named `mutates` or `captures` keeps its meaning, and `swap(1, right: 2)`, with the
+parenthesis against the name, calls a function named `swap`, where `freeze (Box.create(7))` with a space is the
+operator over a parenthesized operand (`specs/regions-syntax.md`).
+
+| Written | Reads as |
+|---------|----------|
+| `function pick(pair (immutable Box, Box))` | `immutable` qualifies the first tuple element |
+| `function bump(immutable self)` | `immutable` is the receiver's capability |
+| `type Cell uses T where T is isolated` | `isolated` is the bound |
+| `typealias Visit = function(readonly Box)` | `readonly` names a parameter of type `Box` |
+| `swap slot with mutable(seed)` | `mutable(seed)` is a call to a function named `mutable` |
+| `var x as readonly Box` | `readonly` qualifies a type outside a container argument: **E2075** |
+| `typealias A = immutable int` | `immutable` qualifies a type that belongs to no region: **E2010** |
+| `typealias B = immutable (X, Y)` | `immutable` qualifies a tuple, which is not a record type: refused |
 
 | Spelling | Meaning |
 |----------|---------|
