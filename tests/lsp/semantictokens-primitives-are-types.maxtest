@@ -1,0 +1,66 @@
+let PrimitiveUri = "file:///test.maxon"
+
+let PrimitiveKeywordType = 0
+let PrimitiveTypeType = 1
+let PrimitiveVariableType = 7
+
+test 'semantic tokens colour a primitive type name, a sized integer type and Self as types'
+	var client = LspClient.start()
+
+	if let data = try primitiveTokensOf(client) 'tokens'
+		client.release()
+		assertPrimitiveColours(locatedSemanticTokensOf(data))
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
+	end 'failed'
+end 'semantic tokens colour a primitive type name, a sized integer type and Self as types'
+
+function primitiveTokensOf(client LspClient) returns SemanticTokenValueArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(PrimitiveUri, content: primitiveFixture())
+
+	let tokens = try client.semanticTokensFull(PrimitiveUri)
+
+	return tokens.data
+end 'primitiveTokensOf'
+
+function assertPrimitiveColours(tokens LocatedSemanticTokenArray) throws TestFailure
+	let source = primitiveFixture()
+
+	try requireSemanticTokenType(tokens, source: source, line: 0, word: "typealias", expected: PrimitiveKeywordType, what: "the `typealias` keyword")
+	try requireSemanticTokenType(tokens, source: source, line: 0, word: "int", expected: PrimitiveTypeType, what: "the primitive `int` of `int(0 to u8.max)`")
+	try requireSemanticTokenType(tokens, source: source, line: 0, word: "u8", expected: PrimitiveTypeType, what: "the sized integer type `u8` of `u8.max`")
+	try requireSemanticTokenType(tokens, source: source, line: 1, word: "float", expected: PrimitiveTypeType, what: "the primitive `float` of `float(f64.min to f64.max)`")
+	try requireSemanticTokenType(tokens, source: source, line: 1, word: "f64", expected: PrimitiveTypeType, what: "the sized float type `f64` of `f64.min`")
+	try requireSemanticTokenType(tokens, source: source, line: 2, word: "i64", expected: PrimitiveTypeType, what: "the sized integer type `i64` of `i64.max`")
+	try requireSemanticTokenType(tokens, source: source, line: 4, word: "bool", expected: PrimitiveTypeType, what: "the primitive `bool` field type")
+	try requireSemanticTokenType(tokens, source: source, line: 5, word: "cstring", expected: PrimitiveTypeType, what: "the primitive `cstring` field type")
+	try requireSemanticTokenType(tokens, source: source, line: 16, word: "byte", expected: PrimitiveTypeType, what: "the primitive `byte` parameter type, which the lexer spells as a plain identifier")
+	try requireSemanticTokenType(tokens, source: source, line: 7, word: "Self", expected: PrimitiveTypeType, what: "the `Self` return type")
+	try requireSemanticTokenType(tokens, source: source, line: 8, word: "Self", expected: PrimitiveTypeType, what: "the `Self` of a struct literal")
+	try requireSemanticTokenType(tokens, source: source, line: 8, word: "return", expected: PrimitiveKeywordType, what: "the `return` keyword")
+	try requireSemanticTokenType(tokens, source: source, line: 12, word: "u8", expected: PrimitiveVariableType, what: "a parameter named `u8` shadows the sized integer type")
+end 'assertPrimitiveColours'
+
+function primitiveFixture() returns String
+	return String.from(b"typealias Octet = int(0 to u8.max)
+typealias Real = float(f64.min to f64.max)
+typealias Wide = int(i64.min to i64.max)
+type Flags
+    var enabled as bool
+    var label as cstring
+
+    static function create(label cstring) returns Self
+        return Self{enabled: true, label: label}
+    end 'create'
+end 'Flags'
+
+function shadowed(u8 Octet) returns Octet
+    return u8
+end 'shadowed'
+
+function widen(value byte) returns byte
+    return value
+end 'widen'")
+end 'primitiveFixture'

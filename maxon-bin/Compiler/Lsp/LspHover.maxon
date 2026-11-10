@@ -805,20 +805,13 @@ module type HoverDocument
 	end 'bindingSubject'
 
 	function containerDeclaring(keyword ElementIndex) returns HoverMemberOwner
-		let blocks = lspDocumentBlocks(tokens)
-		let line = lspLineOf(tokenAt(declarationStart(keyword)).line)
+		let holder = try LspLineScopes.of(lspDocumentBlocks(tokens)).innermostBlockAt(lspLineOf(tokenAt(declarationStart(keyword)).line)) otherwise return HoverMemberOwner.notAMemberLine
 
-		for block in blocks 'eachBlock'
-			if not lspBlockDeclaresMembers(block.kind) 'holdsNoMembers'
-				continue
-			end 'holdsNoMembers'
+		if not lspBlockDeclaresMembers(holder.kind) 'holdsNoMembers'
+			return HoverMemberOwner.notAMemberLine
+		end 'holdsNoMembers'
 
-			if lspBlockDirectlyHoldsLine(blocks, block: block, line: line) 'itsOwnMemberLine'
-				return HoverMemberOwner.declaredIn(block.name)
-			end 'itsOwnMemberLine'
-		end 'eachBlock'
-
-		return HoverMemberOwner.notAMemberLine
+		return HoverMemberOwner.declaredIn(holder.name)
 	end 'containerDeclaring'
 
 	// --- Types --------------------------------------------------------------------------------
@@ -1667,14 +1660,14 @@ module type HoverDocument
 	end 'declarationWasFound'
 
 	function memberDeclaredHere(owner ByteArray, member ByteArray) returns HoverDeclaration
-		let found = try lspMemberDeclaredBy(tokens, blocks: lspDocumentBlocks(tokens), owner: String.from(self.spelledInThisDocument(owner)), member: member) otherwise return HoverDeclaration.none
+		let found = try lspMemberDeclaredBy(tokens, scopes: LspLineScopes.of(lspDocumentBlocks(tokens)), owner: String.from(self.spelledInThisDocument(owner)), member: member) otherwise return HoverDeclaration.none
 
 		return hoverDeclarationOfMember(found)
 	end 'memberDeclaredHere'
 
 	// For the document the index names as declaring the member; see `lspMemberDeclaredOrPublished`.
 	function memberDeclaredOrPublishedHere(owner ByteArray, member ByteArray) returns HoverDeclaration
-		let found = try lspMemberDeclaredOrPublished(tokens, blocks: lspDocumentBlocks(tokens), owner: String.from(self.spelledInThisDocument(owner)), member: member) otherwise return HoverDeclaration.none
+		let found = try lspMemberDeclaredOrPublished(tokens, scopes: LspLineScopes.of(lspDocumentBlocks(tokens)), owner: String.from(self.spelledInThisDocument(owner)), member: member) otherwise return HoverDeclaration.none
 
 		return hoverDeclarationOfMember(found)
 	end 'memberDeclaredOrPublishedHere'

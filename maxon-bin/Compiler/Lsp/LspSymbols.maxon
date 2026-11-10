@@ -384,8 +384,8 @@ end 'closeMatching'
 // recorded.** A declaration keyword opens a body whatever follows it, while a trailing quoted word only
 // MIGHT be a label — `let separator = ','` ends in a character literal that reads exactly like one.
 //
-// ⚠ The extent is the ENCLOSING `end`, never the end of the buffer. `lspBlockDirectlyHoldsLine` discards
-// a block reaching past its own container, so one drained to EOF would be invisible again.
+// ⚠ The extent is the ENCLOSING `end`, never the end of the buffer. `LspLineScopes` files a line under the
+// deepest block holding it, so one drained to EOF would claim every line written below its container.
 function recordUnterminated(open OpenBlockArray, closed LspDocumentBlockArray, endLine LspLineNumber, depth LspBlockDepth)
 	while open.count() as LspBlockDepth > depth 'unwind'
 		let unmatched = try open.pop() otherwise panic("recordUnterminated: the count is above `depth` and so at least one entry remains")
@@ -458,13 +458,6 @@ module function lspIsDeclarationModifier(token Token) returns bool
 	return spellsModuleModifier(token.kind, value: token.value)
 end 'lspIsDeclarationModifier'
 
-/// Does `line` fall strictly INSIDE `block` — past its header and before its `end`? The two boundary
-/// lines carry the block's own syntax and belong to whatever encloses it, which is exactly what makes the
-/// lines this admits a declaration's MEMBERS and an `enum` body's CASES.
-module function lspBlockHoldsLine(block LspDocumentBlock, line LspLineNumber) returns bool
-	return line > block.startLine and line < block.endLine
-end 'lspBlockHoldsLine'
-
 module function lspBlockIsTerminated(block LspDocumentBlock) returns bool
 	return match block.closing 'closing'
 		spelled gives true
@@ -493,25 +486,127 @@ module union LspEnclosingBlockKind
 	absent
 end 'LspEnclosingBlockKind'
 
-module function lspInnermostBlockKindAt(blocks LspDocumentBlockArray, line LspLineNumber) returns LspEnclosingBlockKind
-	var innermost = LspEnclosingBlockKind.absent
-	var innermostDepth = 0 as LspBlockDepth
+module typealias LspLineFlags = Array with bool
+module typealias LspLineBlockSlots = Array with ElementIndex
 
-	for block in blocks 'eachBlock'
-		if not lspBlockHoldsLine(block, line: line) 'elsewhere'
-			continue
-		end 'elsewhere'
+function markLine(flags LspLineFlags, line LspLineNumber)
+	try flags.set(line, value: true) otherwise panic("markLine: line {line} is below the {flags.count()} lines the deepest reach of any block sized this table to")
+end 'markLine'
 
-		// Two blocks at one depth cannot both hold a line, so `>=` takes the first holder this walk meets
-		// and thereafter only a genuinely deeper one.
-		if block.depth >= innermostDepth 'deeper'
-			innermost = LspEnclosingBlockKind.found(block.kind)
-			innermostDepth = block.depth
-		end 'deeper'
-	end 'eachBlock'
+type LspLineHolders
+	let held as LspLineFlags
+	let slots as LspLineBlockSlots
 
-	return innermost
-end 'lspInnermostBlockKindAt'
+	static function create(lineCount LspLineNumber) returns LspLineHolders
+		return Self{held: LspLineFlags.create(lineCount), slots: LspLineBlockSlots.create(lineCount)}
+	end 'create'
+
+	function blockAt(line LspLineNumber, blocks LspDocumentBlockArray) returns LspDocumentBlock throws AbsentError
+		let isHeld = try self.held.get(line) otherwise throw AbsentError.absent
+
+		if not isHeld 'unheld'
+			throw AbsentError.absent
+		end 'unheld'
+
+		let slot = try self.slots.get(line) otherwise panic("LspLineHolders.blockAt: line {line} is held, and a held line was filed with its block")
+
+		return try blocks.get(slot) otherwise panic("LspLineHolders.blockAt: line {line} names block {slot}, which the blocks it was filed from hold")
+	end 'blockAt'
+
+	function claim(line LspLineNumber, slot ElementIndex, blocks LspDocumentBlockArray)
+		let claimant = try blocks.get(slot) otherwise panic("LspLineHolders.claim: block {slot} is one of the {blocks.count()} blocks being filed")
+
+		if let holder = try self.blockAt(line, blocks: blocks) 'alreadyHeld'
+			if holder.depth > claimant.depth 'holderIsDeeper'
+				return
+			end 'holderIsDeeper'
+		end 'alreadyHeld'
+
+		try self.held.set(line, value: true) otherwise panic("LspLineHolders.claim: line {line} is below the {self.held.count()} lines the deepest reach of any block sized this table to")
+		try self.slots.set(line, value: slot) otherwise panic("LspLineHolders.claim: line {line} is below the {self.slots.count()} lines the deepest reach of any block sized this table to")
+	end 'claim'
+end 'LspLineHolders'
+
+module type LspLineScopes
+	module let blocks as LspDocumentBlockArray
+	let innermost as LspLineHolders
+	let enclosingTypes as LspLineHolders
+	let boundaries as LspLineFlags
+
+	// A block claims only the lines strictly inside it: its header and `end` lines carry the block's own
+	// syntax and belong to whatever encloses it, so they are never one of its members or cases.
+	module static function of(blocks LspDocumentBlockArray) returns LspLineScopes
+		var lineCount = 0 as LspLineNumber
+
+		for block in blocks 'eachBlockForItsExtent'
+			if block.endLine >= lineCount 'reachesFurther'
+				lineCount = block.endLine + 1
+			end 'reachesFurther'
+		end 'eachBlockForItsExtent'
+
+		let innermost = LspLineHolders.create(lineCount)
+		let enclosingTypes = LspLineHolders.create(lineCount)
+		let boundaries = LspLineFlags.create(lineCount)
+
+		for (position, block) in blocks.withIterator() 'eachBlock'
+			markLine(boundaries, line: block.startLine)
+			markLine(boundaries, line: block.endLine)
+
+			for line in block.startLine + 1 upto block.endLine 'eachLineWithin'
+				innermost.claim(line, slot: position.index(), blocks: blocks)
+
+				if lspBlockDeclaresMembers(block.kind) 'declaresMembers'
+					enclosingTypes.claim(line, slot: position.index(), blocks: blocks)
+				end 'declaresMembers'
+			end 'eachLineWithin'
+		end 'eachBlock'
+
+		return Self{blocks: blocks, innermost: innermost, enclosingTypes: enclosingTypes, boundaries: boundaries}
+	end 'of'
+
+	module function innermostBlockAt(line LspLineNumber) returns LspDocumentBlock throws AbsentError
+		return try self.innermost.blockAt(line, blocks: self.blocks)
+	end 'innermostBlockAt'
+
+	module function innermostKindAt(line LspLineNumber) returns LspEnclosingBlockKind
+		let holder = try self.innermostBlockAt(line) otherwise return LspEnclosingBlockKind.absent
+
+		return LspEnclosingBlockKind.found(holder.kind)
+	end 'innermostKindAt'
+
+	module function enclosingTypeAt(line LspLineNumber) returns LspEnclosingType
+		let holder = try self.enclosingTypes.blockAt(line, blocks: self.blocks) otherwise return LspEnclosingType.atFileScope
+
+		return LspEnclosingType.inside(holder.name)
+	end 'enclosingTypeAt'
+
+	// Only a terminated body counts: an unterminated one runs to the end of the buffer and would make
+	// every function written below a half-typed `type` a method of it.
+	module function isAMemberLine(line LspLineNumber) returns bool
+		let holder = try self.innermostBlockAt(line) otherwise return false
+
+		return lspBlockDeclaresMembers(holder.kind) and lspBlockIsTerminated(holder)
+	end 'isAMemberLine'
+
+	module function directlyHolds(block LspDocumentBlock, line LspLineNumber) returns bool
+		let holder = try self.innermostBlockAt(line) otherwise return false
+
+		return holder.startLine == block.startLine and holder.endLine == block.endLine
+	end 'directlyHolds'
+
+	module function isInsideACaseList(line LspLineNumber) returns bool
+		let atABoundary = try self.boundaries.get(line) otherwise false
+
+		if atABoundary 'opensOrClosesABlock'
+			return false
+		end 'opensOrClosesABlock'
+
+		match self.innermostKindAt(line) 'kind'
+			found(kind) then return kind == LspBlockKind.enumBody or kind == LspBlockKind.unionBody
+			absent then return false
+		end 'kind'
+	end 'isInsideACaseList'
+end 'LspLineScopes'
 
 function declarationBlockKind(kind TokenKind) returns LspBlockKind
 	return match kind 'keyword'

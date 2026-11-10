@@ -6483,7 +6483,7 @@ end 'primitiveStaticSourceSpelling'
 // the same measured reason. The three keyword names are `IrInterface`'s canonical constants rather than
 // fresh literals: those are what a resolved `integer`/`float`/`boolean` tag is called everywhere in the
 // compiler, and a second spelling of `int` is exactly what `BoolConformerName`'s header forbids.
-function namesAPrimitiveType(name ByteArray) returns bool
+module function namesAPrimitiveType(name ByteArray) returns bool
 	return name.equals(IntConformerName) or name.equals(FloatConformerName) or name.equals(BoolConformerName) or name.equals(ByteTypeName)
 end 'namesAPrimitiveType'
 
@@ -8883,9 +8883,13 @@ let DebugStreamTextArity = 4
 // ⭐ **IS THIS CALLEE A MEMBER OF THE `__DebugStream` TYPE?** THE one test, with the same two askers
 // `isBuiltinsIntrinsicCallee` has and the same obligation not to disagree: the member table in
 // `parseCallNamed` and the STATEMENT door's `qualifiedStaticCallsAt`.
-module function isDebugStreamCallee(callee ByteArray) returns bool
+function isDebugStreamCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: DebugStreamQualifierPrefix)
 end 'isDebugStreamCallee'
+
+module function isCompilerQualifierCallee(callee ByteArray) returns bool
+	return isBuiltinsIntrinsicCallee(callee) or isRawIntrinsicCallee(callee) or isDebugStreamCallee(callee)
+end 'isCompilerQualifierCallee'
 
 // ⭐⭐ **THE `__Builtins` INTRINSICS `stdlib/Subprocess.maxon` BOTTOMS OUT IN — THE `subprocess*`
 // NAMES PLUS `managedIsNull`, WHICH IS NOT ONE OF THEM.** That module is
@@ -9269,7 +9273,7 @@ let DebugHostFiveArgArity = 5
 // STATEMENT door's `qualifiedStaticCallsAt` (which decides that `__Builtins.sleep(ms)` on a line of
 // its own is a statement at all). Written once for the reason `isClockRuntimeCallee` is — a band's
 // membership question belongs with the band's names, not restated at each site.
-module function isBuiltinsIntrinsicCallee(callee ByteArray) returns bool
+function isBuiltinsIntrinsicCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: BuiltinsQualifierPrefix)
 end 'isBuiltinsIntrinsicCallee'
 
@@ -106862,36 +106866,17 @@ export type Parser
 		let aliasName = self.genericAliasKeyFor(baseTok.value)
 		let callee = self.denotedStaticCallee(aliasName, member: self.tokenAt(index + 2).value, nameReader: self.job.path)
 
-		if isBuiltinsIntrinsicCallee(callee) 'builtinsIntrinsic'
-			return true
-		end 'builtinsIntrinsic'
-
-		// ⭐ **THE THIRD BUILTIN QUALIFIER, ON THE SAME TERMS.** `__Raw.storeWord(addr, 0, v)` answers nothing,
-		// so a bare statement is the only position it can be written in. The QUALIFIER is the test and not a
-		// roster of the void rows — the rule above, and what routes an unrecognized or out-of-tier member to
-		// `parseCallNamed` and so to the positioned refusal that NAMES it, instead of a complaint about SHAPE.
-		// It claims the family in EVERY file for that reason: a `__Raw.osTickCountMs()` written as a statement
-		// in user code must earn E3152, not `E2015: Unsupported: identifier statement`.
-		if isRawIntrinsicCallee(callee) 'rawIntrinsic'
-			return true
-		end 'rawIntrinsic'
-
-		// ⭐ **THE SECOND BUILTIN TYPE, ON THE SAME TERMS.** `__DebugStream`'s four emitting
-		// members return nothing, so a bare statement is the only position they can be written in — and the
-		// compiler's own emitters write exactly that (`TraceEvents.logEvent`, `PhaseProbe.begin`). Without this arm
-		// they would die as `E2015: Unsupported: identifier statement`, as `__Builtins.sleep` would
-		// for the same structural reason: a VOID member of a family whose
-		// other members all return a value.
+		// ⭐ **THE COMPILER'S QUALIFIED FAMILIES — `__Builtins`, `__Raw`, `__DebugStream` — ARE CLAIMED WHOLE.** Their
+		// void members (`__Builtins.sleep`, `__Raw.storeWord(addr, 0, v)`, `TraceEvents.logEvent`'s `__DebugStream`
+		// emitters) answer nothing, so a bare statement is the only position they can be written in.
 		//
-		// ⚠ **THE QUALIFIER IS THE TEST, NOT A ROSTER OF THE VOID FOUR**, which is `isBuiltinsIntrinsicCallee`'s
-		// rule above: claiming the whole family is what routes an unrecognized
-		// member to `parseCallNamed` and so to the positioned `E3004` that NAMES it, instead of a refusal about
-		// SHAPE that says nothing about the name. `nameId` is claimed too and its value is then discarded,
-		// exactly as a `__Builtins` value-returning intrinsic's is here — an intrinsic allocates nothing, so
-		// there is no box for a bare statement to strand.
-		if isDebugStreamCallee(callee) 'debugStreamMember'
+		// ⚠ **THE QUALIFIER IS THE TEST, NOT A ROSTER OF THE VOID ROWS**: claiming the family routes an unrecognized or
+		// out-of-tier member to `parseCallNamed` and its positioned refusal that names it (`E3004`, or `E3152` for a
+		// `__Raw.osTickCountMs()` statement in user code), instead of `E2015: Unsupported: identifier statement`.
+		// `__DebugStream.nameId` is claimed too and its value discarded; an intrinsic allocates nothing, so no box is stranded.
+		if isCompilerQualifierCallee(callee) 'compilerQualifier'
 			return true
-		end 'debugStreamMember'
+		end 'compilerQualifier'
 
 		// ⭐⭐ **A USER TYPE'S STATIC — THE BASE NAMING A DECLARED TYPE IS THE WHOLE CONDITION, and what the
 		// member returns is the DISCARD door's question rather than this one's.** A value-returning static

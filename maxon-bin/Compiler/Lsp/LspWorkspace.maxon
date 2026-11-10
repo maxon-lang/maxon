@@ -187,6 +187,10 @@ function directoryHolding(path FilePath) returns DocumentDirectory
 	return DocumentDirectory.at(dir)
 end 'directoryHolding'
 
+// The path-less buffer's reader is registered as an empty in-memory source under this name; it is
+// never read from disk, so no file by this name need exist.
+let PathlessReaderName = "path-less-buffer.maxon"
+
 module enum RootPurpose
 	loadsTheProject
 	readsTheDocument
@@ -197,6 +201,11 @@ module union WorkspaceRoot
 	libraryTier(name RootName)
 	singleFile(name RootName)
 end 'WorkspaceRoot'
+
+union SweepRoot
+	held(root WorkspaceRoot)
+	pathless(buildRoot FilePath)
+end 'SweepRoot'
 
 module union TierMembership
 	inTier(name RootName)
@@ -235,7 +244,7 @@ type HeldCorpus
 		return Self{project: project, selection: selection, buildRoot: sources.root.clone(), sweep: sources.sweep.clone(), sweptAtMs: sweptAtMs}
 	end 'create'
 
-	function sweptFor(root WorkspaceRoot, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
+	function sweptFor(root SweepRoot, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
 		if self.resweepMovesTheRoot(root, workspace: workspace) 'rerooted'
 			return SweptProject.rerooted
 		end 'rerooted'
@@ -243,7 +252,7 @@ type HeldCorpus
 		return self.project.sweptOver(self.sweep, request: request)
 	end 'sweptFor'
 
-	function resweepMovesTheRoot(root WorkspaceRoot, workspace LspWorkspaceState) returns bool
+	function resweepMovesTheRoot(root SweepRoot, workspace LspWorkspaceState) returns bool
 		if self.sweepIsFresh() 'sweptRecently'
 			return false
 		end 'sweptRecently'
@@ -301,15 +310,15 @@ typealias HeldCorpusMap = Map with (SourceSelection, HeldCorpus)
 // One corpus per `SourceSelection`, chosen by the reader (`readerSelectionOf`): a `.maxtest` reader
 // sees the project's test files, as `maxon test` compiles them, and a production reader never sees
 // a name only a test file declares.
-type HeldWorkspace
+module type HeldWorkspace
 	var corpora as HeldCorpusMap
 
 	static function create() returns HeldWorkspace
 		return Self{corpora: HeldCorpusMap.create()}
 	end 'create'
 
-	function sweptFor(root WorkspaceRoot, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
-		let selection = readerSelectionOf(documentOf(request))
+	function sweptFor(root SweepRoot, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
+		let selection = selectionOfRequest(request)
 
 		if self.corpora.contains(selection) 'heldAlready'
 			var held = try self.corpora.get(selection) otherwise panic("HeldWorkspace.sweptFor: the corpus for this selection was found one line above")
@@ -325,17 +334,24 @@ type HeldWorkspace
 		end 'heldAlready'
 
 		match root 'root'
-			projectDirectory or
-			libraryTier then return self.announcedSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
-			singleFile then return self.builtSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
+			held(workspaceRoot) then return self.heldRootSwept(workspaceRoot, selection: selection, tiers: tiers, request: request, workspace: workspace)
+			pathless then return self.builtSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
 		end 'root'
 	end 'sweptFor'
+
+	function heldRootSwept(root WorkspaceRoot, selection SourceSelection, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
+		match root 'root'
+			projectDirectory or
+			libraryTier then return self.announcedSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
+			singleFile then return self.builtSwept(SweepRoot.held(root), selection: selection, tiers: tiers, request: request, workspace: workspace)
+		end 'root'
+	end 'heldRootSwept'
 
 	function announcedSwept(root WorkspaceRoot, selection SourceSelection, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
 		let rootPath = heldRootOf(root).spelled.toString()
 
 		writeProjectLoadingNotification(workspace.writer, rootPath: rootPath, loading: true)
-		let swept = self.builtSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
+		let swept = self.builtSwept(SweepRoot.held(root), selection: selection, tiers: tiers, request: request, workspace: workspace)
 		writeProjectLoadingNotification(workspace.writer, rootPath: rootPath, loading: false)
 
 		return swept
@@ -343,7 +359,7 @@ type HeldWorkspace
 
 	// Every return here reaches the `loading: false` in `announcedSwept`; one that skipped it would leave
 	// the client showing this project as loading for the rest of the session.
-	function builtSwept(root WorkspaceRoot, selection SourceSelection, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
+	function builtSwept(root SweepRoot, selection SourceSelection, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
 		let sources = sourcesUnder(root, selection: selection, workspace: workspace)
 		var project = try libraryTierProject(sources.root, tiers: tiers, buffer: OpenBuffer.none, fileMemos: workspace.fileMemos) otherwise return SweptProject.unavailable
 		var fresh = HeldCorpus.create(project, selection: selection, sources: sources, sweptAtMs: Clock.nowMs())
@@ -371,17 +387,29 @@ type HeldWorkspace
 	end 'facts'
 end 'HeldWorkspace'
 
+union ReaderSource
+	file(path FilePath)
+	noFile
+end 'ReaderSource'
+
 union SweepRequest
-	reading(path FilePath)
+	reading(source ReaderSource)
 	loadingFor(path FilePath)
 end 'SweepRequest'
 
-function documentOf(request SweepRequest) returns FilePath
+function selectionOfRequest(request SweepRequest) returns SourceSelection
 	return match request 'request'
-		reading(path) gives path
-		loadingFor(path) gives path
+		reading(source) gives selectionOfReader(source)
+		loadingFor(path) gives readerSelectionOf(path)
 	end 'request'
-end 'documentOf'
+end 'selectionOfRequest'
+
+function selectionOfReader(source ReaderSource) returns SourceSelection
+	return match source 'source'
+		file(path) gives readerSelectionOf(path)
+		noFile gives SourceSelection.productionOnly
+	end 'source'
+end 'selectionOfReader'
 
 union SweptProject
 	read(project Project, signatures ProgramSignatures, readerPath FilePath)
@@ -645,10 +673,17 @@ end 'lspDocumentOf'
 module function lspDocumentCorpus(workspace LspWorkspaceState, uri String) returns LspCorpus
 	match lspDocumentOf(workspace, uri: uri) 'document'
 		resolved(document) then return corpusOfDocument(workspace, document: document)
-		notAPath or
+		notAPath then return pathlessDocumentCorpus(workspace)
 		unidentifiable then return LspCorpus.unavailable
 	end 'document'
 end 'lspDocumentCorpus'
+
+function pathlessDocumentCorpus(workspace LspWorkspaceState) returns LspCorpus
+	return match lspRootSearch(workspace) 'search'
+		ready(tiers, _) gives corpusOfSwept(workspace.held.pathless.sweptFor(SweepRoot.pathless(libraryTierBuildRoot(tiers.stdlibDir)), tiers: tiers, request: SweepRequest.reading(ReaderSource.noFile), workspace: workspace))
+		unavailable gives LspCorpus.unavailable
+	end 'search'
+end 'pathlessDocumentCorpus'
 
 function corpusOfDocument(workspace LspWorkspaceState, document ReaderDocument) returns LspCorpus
 	return match lspRootSearch(workspace) 'search'
@@ -693,13 +728,17 @@ module function lspProjectCheckRoot(reader LspReaderSearch, root WorkspaceRoot) 
 end 'lspProjectCheckRoot'
 
 function sweptWorkspace(workspace LspWorkspaceState, root WorkspaceRoot, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
-	match heldProjectSwept(workspace, root: root, tiers: tiers, request: SweepRequest.reading(readerPath)) 'swept'
+	return corpusOfSwept(heldProjectSwept(workspace, root: root, tiers: tiers, request: SweepRequest.reading(ReaderSource.file(readerPath))))
+end 'sweptWorkspace'
+
+function corpusOfSwept(swept SweptProject) returns LspCorpus
+	match swept 'swept'
 		read(project, signatures, reader) then return LspCorpus.loaded(project, signatures: signatures, readerPath: reader)
 		unavailable then return LspCorpus.unavailable
-		loaded then panic("sweptWorkspace: a request that reads is answered with the reader's corpus or not at all")
-		rerooted then panic("sweptWorkspace: a held workspace rebuilds a corpus whose root moved before it answers")
+		loaded then panic("corpusOfSwept: a request that reads is answered with the reader's corpus or not at all")
+		rerooted then panic("corpusOfSwept: a held workspace rebuilds a corpus whose root moved before it answers")
 	end 'swept'
-end 'sweptWorkspace'
+end 'corpusOfSwept'
 
 function heldProjectSwept(workspace LspWorkspaceState, root WorkspaceRoot, tiers LibraryTiers, request SweepRequest) returns SweptProject
 	let name = heldRootOf(root)
@@ -709,13 +748,13 @@ function heldProjectSwept(workspace LspWorkspaceState, root WorkspaceRoot, tiers
 		var slot = held.workspace
 
 		match slot 'workspace'
-			built(heldWorkspace) then return heldWorkspace.sweptFor(root, tiers: tiers, request: request, workspace: workspace)
+			built(heldWorkspace) then return heldWorkspace.sweptFor(SweepRoot.held(root), tiers: tiers, request: request, workspace: workspace)
 			notBuilt then break
 		end 'workspace'
 	end 'heldAlready'
 
 	var fresh = HeldWorkspace.create()
-	let swept = fresh.sweptFor(root, tiers: tiers, request: request, workspace: workspace)
+	let swept = fresh.sweptFor(SweepRoot.held(root), tiers: tiers, request: request, workspace: workspace)
 
 	match swept 'outcome'
 		read or
@@ -839,9 +878,10 @@ typealias HeldRootMap = Map with (String, HeldRoot)
 module type RecentHeldRoots
 	var roots as HeldRootMap
 	var order as HeldProjectKeyArray
+	module let pathless as HeldWorkspace
 
 	static function create() returns RecentHeldRoots
-		return Self{roots: HeldRootMap.create(), order: HeldProjectKeyArray.create(0)}
+		return Self{roots: HeldRootMap.create(), order: HeldProjectKeyArray.create(0), pathless: HeldWorkspace.create()}
 	end 'create'
 
 	function rootAt(name RootName) returns HeldRoot
@@ -987,11 +1027,15 @@ end 'heldRootOf'
 // (`heldRootOf`).
 function buildRootOf(root WorkspaceRoot) returns FilePath
 	return match root 'root'
-		libraryTier(name) gives try name.spelled.parent() otherwise panic("buildRootOf: '{name.spelled.toString()}' is a library tier, a directory `LibraryTiers.locate` found by name inside another")
+		libraryTier(name) gives libraryTierBuildRoot(name.spelled)
 		projectDirectory or
 		singleFile gives heldRootOf(root).spelled
 	end 'root'
 end 'buildRootOf'
+
+function libraryTierBuildRoot(tierDir FilePath) returns FilePath
+	return try tierDir.parent() otherwise panic("libraryTierBuildRoot: '{tierDir.toString()}' is a library tier, a directory `LibraryTiers.locate` found by name inside another")
+end 'libraryTierBuildRoot'
 
 module function lspBufferRootOf(reader LspReaderSearch) returns FilePath
 	return match reader.tier 'tier'
@@ -1022,15 +1066,26 @@ module type EditorSources
 	module static function refused(root FilePath, lines StringArray) returns EditorSources
 		return Self{sweep: SourceSweep.walkFailed, root: root, refusal: lines}
 	end 'refused'
+
+	static function libraryOnly(root FilePath) returns EditorSources
+		return Self.walked(SourceSweep.swept(MaxonSourcePathArray.create(0)), root: root)
+	end 'libraryOnly'
 end 'EditorSources'
 
-function sourcesUnder(root WorkspaceRoot, selection SourceSelection, workspace LspWorkspaceState) returns EditorSources
+function sourcesUnder(root SweepRoot, selection SourceSelection, workspace LspWorkspaceState) returns EditorSources
+	return match root 'root'
+		held(workspaceRoot) gives heldSourcesUnder(workspaceRoot, selection: selection, workspace: workspace)
+		pathless(buildRoot) gives EditorSources.libraryOnly(buildRoot)
+	end 'root'
+end 'sourcesUnder'
+
+function heldSourcesUnder(root WorkspaceRoot, selection SourceSelection, workspace LspWorkspaceState) returns EditorSources
 	return match root 'root'
 		projectDirectory(name) gives projectSourcesIn(name.spelled, selection: selection, answer: workspace.projectInputsOf(name))
 		libraryTier(name) gives EditorSources.walked(maxonSourcesIn(name.spelled, selection: selection), root: buildRootOf(root))
-		singleFile gives EditorSources.walked(SourceSweep.swept(MaxonSourcePathArray.create(0)), root: buildRootOf(root))
+		singleFile gives EditorSources.libraryOnly(buildRootOf(root))
 	end 'root'
-end 'sourcesUnder'
+end 'heldSourcesUnder'
 
 module function projectSourcesIn(dir FilePath, selection SourceSelection, answer ProjectInputsAnswer) returns EditorSources
 	match answer.inputs 'inputs'
@@ -1501,13 +1556,13 @@ extension Project
 	// the two of them together and answer nothing asked here.
 	function sweptOver(walk SourceSweep, request SweepRequest) returns SweptProject
 		return match request 'request'
-			reading(readerPath) gives self.sweptForReader(walk, readerPath: readerPath)
+			reading(source) gives self.sweptForReader(walk, source: source)
 			loadingFor gives self.sweptForLoad(walk, request: request)
 		end 'request'
 	end 'sweptOver'
 
-	function sweptForReader(walk SourceSweep, readerPath FilePath) returns SweptProject
-		let reader = try self.refreshFromWalk(walk, readerPath: readerPath, unreadable: UnreadableSource.skipped) otherwise panic("sweptForReader: a corpus skips a source it cannot read, so its refresh refuses nothing")
+	function sweptForReader(walk SourceSweep, source ReaderSource) returns SweptProject
+		let reader = try self.refreshFromWalk(walk, source: source, unreadable: UnreadableSource.skipped) otherwise panic("sweptForReader: a corpus skips a source it cannot read, so its refresh refuses nothing")
 
 		view signatures = try self.foldedSignatures() otherwise return SweptProject.unavailable
 
@@ -1545,23 +1600,30 @@ extension Project
 			return DiskRefresh.unlisted
 		end 'notInTheBuild'
 
-		return DiskRefresh.listed(try self.refreshFromWalk(walk, readerPath: readerPath, unreadable: UnreadableSource.refused))
+		return DiskRefresh.listed(try self.refreshFromWalk(walk, source: ReaderSource.file(readerPath), unreadable: UnreadableSource.refused))
 	end 'refreshFromDisk'
 
-	function refreshFromWalk(walk SourceSweep, readerPath FilePath, unreadable UnreadableSource) returns FilePath throws CompileError
+	function refreshFromWalk(walk SourceSweep, source ReaderSource, unreadable UnreadableSource) returns FilePath throws CompileError
 		var kept = MaxonSourcePathSet.create()
 
-		try self.keepWhatTheWalkLists(walk, kept: kept, unreadable: unreadable, request: SweepRequest.reading(readerPath))
+		try self.keepWhatTheWalkLists(walk, kept: kept, unreadable: unreadable, request: SweepRequest.reading(source))
 
-		let reader = registeredSpellingOf(self, path: readerPath.resolve(Directory.currentPath()))
+		let reader = self.readerRegisteredFor(source)
 		kept.insert(reader)
 
 		unregisterWhatTheWalkNoLongerLists(self, walk: walk, kept: kept)
 
-		registerTheReader(self, readerPath: reader)
+		registerTheReader(self, readerPath: reader, source: source)
 
 		return reader
 	end 'refreshFromWalk'
+
+	function readerRegisteredFor(source ReaderSource) returns FilePath
+		return match source 'source'
+			file(path) gives registeredSpellingOf(self, path: path.resolve(Directory.currentPath()))
+			noFile gives pathlessReaderIn(self.rootPath)
+		end 'source'
+	end 'readerRegisteredFor'
 
 	function refreshWithoutReader(walk SourceSweep, request SweepRequest, unreadable UnreadableSource) throws CompileError
 		var kept = MaxonSourcePathSet.create()
@@ -1605,10 +1667,21 @@ end 'Project'
 
 function isTheRequestsReader(request SweepRequest, path FilePath) returns bool
 	return match request 'request'
-		reading(readerPath) gives namesTheSameFile(path, other: readerPath)
+		reading(source) gives sourceNamesTheFile(source, path: path)
 		loadingFor gives false
 	end 'request'
 end 'isTheRequestsReader'
+
+function sourceNamesTheFile(source ReaderSource, path FilePath) returns bool
+	return match source 'source'
+		file(readerPath) gives namesTheSameFile(path, other: readerPath)
+		noFile gives false
+	end 'source'
+end 'sourceNamesTheFile'
+
+function pathlessReaderIn(root FilePath) returns FilePath
+	return root.joinPath(try FilePath.from(PathlessReaderName) otherwise panic("pathlessReaderIn: '{PathlessReaderName}' is a constant spelling and a path"))
+end 'pathlessReaderIn'
 
 module union DiskRefresh
 	listed(reader FilePath)
@@ -1680,12 +1753,19 @@ end 'pathsTheSweepDropped'
 // entirely (see `loadLibrarySources`). The empty registration is for the one case that has no other
 // answer: a path in no corpus entry that also cannot be read, which is an unsaved buffer or a uri a
 // client invented.
-function registerTheReader(project Project, readerPath FilePath)
+function registerTheReader(project Project, readerPath FilePath, source ReaderSource)
 	if project.db.sourceFiles.contains(readerPath) 'theCorpusAlreadyHoldsIt'
 		return
 	end 'theCorpusAlreadyHoldsIt'
 
+	match source 'source'
+		file then registerTheReaderFromDisk(project, readerPath: readerPath)
+		noFile then fileChanged(project, path: readerPath, content: "")
+	end 'source'
+end 'registerTheReader'
+
+function registerTheReaderFromDisk(project Project, readerPath FilePath)
 	try loadOneSourceFileIfChanged(project, path: readerPath) otherwise 'noSuchFile'
 		fileChanged(project, path: readerPath, content: "")
 	end 'noSuchFile'
-end 'registerTheReader'
+end 'registerTheReaderFromDisk'

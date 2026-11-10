@@ -161,9 +161,9 @@ take the types a project declares from the project's files and `stdlib/` where t
 project half needs a path with a directory above it, and a document whose uri has one is the kind
 `maxon/listProjects` lists. An unsaved scratch buffer (`untitled:Untitled-1`) is checked and resolved
 against `stdlib/` and `runtime/` alone. A uri that spells a path outside the filesystem
-(`git://host/repo/file.maxon`) gets hover, definition and completion from the buffer alone, and semantic
-tokens that colour as `type` only the types the buffer declares and the compiler's own names.
-Diagnostics are published for filesystem documents only.
+(`git://host/repo/file.maxon`) is resolved against the buffer and `stdlib/`: hover, definition,
+completion and semantic tokens find the types and members either declares. Diagnostics are published for filesystem documents
+only.
 
 **While a buffer is unsaved, the buffer check holds some diagnostics back.** As long as the buffer
 matches the file on disk, the buffer check reports what compiling that file with the standard library
@@ -343,7 +343,7 @@ maxon: project check <uri> version <version> <outcome>
 | `textDocument/linkedEditingRange` | A block's opening name and its `end '…'` label, edited together |
 | `textDocument/rename` | Renames a declaration's name and its matching `end '…'` label. References elsewhere are not renamed. |
 | `textDocument/codeAction` | A quick fix, "Remove unused variable", for a local `let`/`var` whose name appears nowhere else |
-| `textDocument/semanticTokens/full` | Semantic tokens with the legend `keyword`, `type`, `struct`, `enum`, `interface`, `function`, `method`, `variable`, `parameter`, `modifier`, `enumMember`, `property`, `string`, `number`, `comment`, `operator`, `capability` and no modifiers. Every reference to a type is `type`: a type the project, a sibling file or `stdlib/` declares, a type the buffer declares, a type parameter, and the compiler's own `__Builtins`, `__Raw` and `__DebugStream` names and built-in managed types. A local or parameter named like a type is `variable`. `int`, `float`, `bool`, `cstring` and `Self` are `keyword`. The word `isolated`, `immutable` or `mutable` qualifying a type is `capability` |
+| `textDocument/semanticTokens/full` | Semantic tokens with the legend `keyword`, `type`, `struct`, `enum`, `interface`, `function`, `method`, `variable`, `parameter`, `modifier`, `enumMember`, `property`, `string`, `number`, `comment`, `operator`, `capability` and no modifiers. Every reference to a type is `type`: a type the project, a sibling file or `stdlib/` declares, a type the buffer declares, a type parameter, and the compiler's own `__Builtins`, `__Raw` and `__DebugStream` names and built-in managed types. A local or parameter named like a type is `variable`. `int`, `float`, `bool`, `cstring`, `byte`, the sized integer and float names and `Self` are `type`. The word `isolated`, `immutable` or `mutable` qualifying a type is `capability` |
 
 Any other request is answered with JSON-RPC error `-32601` (method not found).
 

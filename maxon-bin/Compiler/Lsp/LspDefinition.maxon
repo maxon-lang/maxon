@@ -326,12 +326,12 @@ end 'definitionIdentifierNamed'
 // is declared by every type that has one, so a member is located on its owner's body by
 // `lspMemberDeclaredBy`. A `function` a terminated body holds is a method and is skipped likewise.
 function definitionDeclarationOf(tokens TokenArray, name ByteArray) returns Token throws LspDeclarationLookupError
-	let blocks = lspDocumentBlocks(tokens)
+	let scopes = LspLineScopes.of(lspDocumentBlocks(tokens))
 
 	for (iter, keyword) in tokens.withIterator() 'eachToken'
-		let declared = try definitionDeclaredName(tokens, blocks: blocks, keyword: keyword, at: iter.index(), name: name) otherwise continue
+		let declared = try definitionDeclaredName(tokens, scopes: scopes, keyword: keyword, at: iter.index(), name: name) otherwise continue
 
-		if keyword.kind == TokenKind.function and lspLineIsAMemberLine(blocks, line: lspLineOf(keyword.line)) 'aMethod'
+		if keyword.kind == TokenKind.function and scopes.isAMemberLine(lspLineOf(keyword.line)) 'aMethod'
 			continue
 		end 'aMethod'
 
@@ -350,7 +350,7 @@ function definitionMemberOfTheReceiver(text String, keywords KeywordTable, token
 end 'definitionMemberOfTheReceiver'
 
 function definitionMemberOfOwner(tokens TokenArray, owner String, member ByteArray, enclosing LspEnclosingType) returns Token throws LspDeclarationLookupError
-	let found = try lspMemberDeclaredBy(tokens, blocks: lspDocumentBlocks(tokens), owner: owner, member: member) otherwise throw LspDeclarationLookupError.nothingThere
+	let found = try lspMemberDeclaredBy(tokens, scopes: LspLineScopes.of(lspDocumentBlocks(tokens)), owner: owner, member: member) otherwise throw LspDeclarationLookupError.nothingThere
 
 	if not lspMemberReachable(found, site: lspReaderSite(enclosing, typeName: found.bodyName, sharesTheTypesFile: true)) 'hiddenHere'
 		throw LspDeclarationLookupError.nothingThere
@@ -362,12 +362,12 @@ end 'definitionMemberOfOwner'
 // No tier test: the project's index has already filtered the declaring file for this reader, and its
 // bodies are the project's copy, not the open buffer.
 function definitionPublishedMember(tokens TokenArray, owner String, member ByteArray) returns Token throws LspDeclarationLookupError
-	let found = try lspMemberDeclaredOrPublished(tokens, blocks: lspDocumentBlocks(tokens), owner: owner, member: member) otherwise throw LspDeclarationLookupError.nothingThere
+	let found = try lspMemberDeclaredOrPublished(tokens, scopes: LspLineScopes.of(lspDocumentBlocks(tokens)), owner: owner, member: member) otherwise throw LspDeclarationLookupError.nothingThere
 
 	return lspTokenAt(tokens, index: found.nameIndex)
 end 'definitionPublishedMember'
 
-function definitionDeclaredName(tokens TokenArray, blocks LspDocumentBlockArray, keyword Token, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+function definitionDeclaredName(tokens TokenArray, scopes LspLineScopes, keyword Token, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	if definitionDeclaresAType(keyword.kind) 'aType'
 		return try definitionIdentifierNamed(tokens, at: at + 1, name: name)
 	end 'aType'
@@ -377,7 +377,7 @@ function definitionDeclaredName(tokens TokenArray, blocks LspDocumentBlockArray,
 	end 'aFunction'
 
 	if keyword.kind == TokenKind.let or keyword.kind == TokenKind.var 'aBinding'
-		return try definitionModuleBindingNamed(tokens, blocks: blocks, at: at + 1, name: name)
+		return try definitionModuleBindingNamed(tokens, scopes: scopes, at: at + 1, name: name)
 	end 'aBinding'
 
 	throw LspDeclarationLookupError.nothingThere
@@ -391,10 +391,10 @@ end 'definitionDeclaresAType'
 // A `let` or `var` inside a block is a local or a member, reached by the local walk or the owner's
 // body. Matching one here by name would land a bare name on an unrelated function's local or another
 // type's field.
-function definitionModuleBindingNamed(tokens TokenArray, blocks LspDocumentBlockArray, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+function definitionModuleBindingNamed(tokens TokenArray, scopes LspLineScopes, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	let named = try definitionIdentifierNamed(tokens, at: at, name: name)
 
-	match lspInnermostBlockKindAt(blocks, line: lspLineOf(named.line)) 'scope'
+	match scopes.innermostKindAt(lspLineOf(named.line)) 'scope'
 		absent then return named
 		found then throw LspDeclarationLookupError.nothingThere
 	end 'scope'

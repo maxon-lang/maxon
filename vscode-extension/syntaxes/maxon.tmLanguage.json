@@ -89,6 +89,24 @@
           "include": "#comments"
         },
         {
+          "comment": "A method declared in the body, through its own `end 'name'`. The body is ordinary code, so a statement-start call or `return` in it is never read as an enum case, and the method's closing `end` is not read as the end of the enum. The label is the method's name, which a block inside it may not reuse, so the back-reference ends the region at the method's own `end` and no other.",
+          "begin": "^(?=\\s*(?:(?:module|static|export|public)\\s+)*function\\s+(\\w+))",
+          "end": "\\b(end)\\s*('\\1')",
+          "endCaptures": {
+            "1": {
+              "name": "keyword.control.maxon"
+            },
+            "2": {
+              "name": "entity.name.label.maxon"
+            }
+          },
+          "patterns": [
+            {
+              "include": "$self"
+            }
+          ]
+        },
+        {
           "comment": "Enum case with raw value assignment (any valid identifier)",
           "match": "^\\s+([a-zA-Z_]\\w*)\\s*(=)",
           "captures": {
@@ -325,7 +343,7 @@
         },
         {
           "name": "keyword.other.maxon",
-          "match": "\\b(function|returns|let|var|type|union|enum|uses|implements|typealias|with|static|export|public|self|Self|interface|extension|extends|from|to|throws)\\b"
+          "match": "\\b(function|returns|let|var|type|union|enum|uses|implements|typealias|with|static|export|public|self|interface|extension|extends|from|to|throws)\\b"
         },
         {
           "name": "keyword.operator.logical.maxon",
@@ -334,20 +352,26 @@
         {
           "name": "constant.language.maxon",
           "match": "\\b(true|false)\\b"
-        },
-        {
-          "name": "storage.type.maxon",
-          "match": "\\b(int|float|bool|byte)\\b"
-        },
-        {
-          "comment": "`bits` is a CONTEXTUAL type name, not a keyword: it opens a raw-pattern typealias only when followed by `(`. A bare \\bbits\\b in the rule above would paint every ordinary `bits` variable, which is the reason the compiler's lexer does not reserve it either.",
-          "name": "storage.type.maxon",
-          "match": "\\bbits(?=\\()"
         }
       ]
     },
     "types": {
       "patterns": [
+        {
+          "comment": "Primitive type names (the lexer's int, float, bool, cstring, plus `byte`, a type name the parser recognises as a primitive), painted as types.",
+          "name": "entity.name.type.maxon",
+          "match": "\\b(?:int|float|bool|cstring|byte)\\b"
+        },
+        {
+          "comment": "The sized numeric types, which are identifiers the parser recognises only as the qualifier of a `.min` or `.max` bound (`int(0 to u8.max)`). A bare \\bu8\\b would paint every ordinary variable of that name.",
+          "name": "entity.name.type.maxon",
+          "match": "\\b(?:u8|u16|u32|u64|i8|i16|i32|i64|f32|f64)(?=\\.(?:min|max)\\b)"
+        },
+        {
+          "comment": "`bits` is a CONTEXTUAL type name, not a keyword: it opens a raw-pattern typealias only when followed by `(`. A bare \\bbits\\b would paint every ordinary `bits` variable, which is the reason the compiler's lexer does not reserve it either.",
+          "name": "entity.name.type.maxon",
+          "match": "\\bbits(?=\\()"
+        },
         {
           "comment": "Standard library types",
           "match": "\\b(Integer|Float|Byte|String|Character|Array|Map|Set|Optional|Result)\\b",

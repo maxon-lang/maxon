@@ -1,0 +1,53 @@
+let EnumFoldingUri = "file:///test.maxon"
+
+test 'foldingRange folds an enum, a method inside it and a block inside that method'
+	var client = LspClient.start()
+
+	if let ranges = try enumFoldingRangesOf(client) 'answered'
+		client.release()
+		assertEnumFoldingRanges(ranges)
+	end 'answered' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the folding-range request did not complete")
+	end 'failed'
+end 'foldingRange folds an enum, a method inside it and a block inside that method'
+
+function enumFoldingRangesOf(client LspClient) returns FoldingRangeArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(EnumFoldingUri, content: enumFoldingFixture())
+
+	let folded = try client.foldingRange(EnumFoldingUri)
+
+	return folded.ranges
+end 'enumFoldingRangesOf'
+
+function assertEnumFoldingRanges(ranges FoldingRangeArray) throws TestFailure
+	try Expect.equal(ranges.count(), expected: 3, message: "the enum, its method and the `if` inside the method are three regions, and the answer held {ranges.count()}.")
+
+	try Expect.isTrue(enumFoldingCovers(ranges, startLine: 0, endLine: 9), message: "the ENUM did not fold from line 0 to line 9.")
+	try Expect.isTrue(enumFoldingCovers(ranges, startLine: 3, endLine: 8), message: "the METHOD declared in the enum body did not fold from line 3 to line 8.")
+	try Expect.isTrue(enumFoldingCovers(ranges, startLine: 4, endLine: 6), message: "the `if` inside the enum's method did not fold from line 4 to line 6.")
+end 'assertEnumFoldingRanges'
+
+function enumFoldingCovers(ranges FoldingRangeArray, startLine LspCoordinate, endLine LspCoordinate) returns bool
+	for range in ranges 'eachRange'
+		if range.startLine == startLine and range.endLine == endLine 'hit'
+			return true
+		end 'hit'
+	end 'eachRange'
+
+	return false
+end 'enumFoldingCovers'
+
+function enumFoldingFixture() returns String
+	return String.from(b"enum Shade
+    light
+    dark
+    function flipped() returns Shade
+        if true 'always'
+            return Shade.dark
+        end 'always'
+        return Shade.light
+    end 'flipped'
+end 'Shade'")
+end 'enumFoldingFixture'

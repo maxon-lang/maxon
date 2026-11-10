@@ -223,6 +223,7 @@ typealias LocalBindingArray = Array with LocalBinding
 // apart without a parse.
 function localBindingsIn(tokens TokenArray, blocks LspDocumentBlockArray) returns LocalBindingArray
 	var bindings = LocalBindingArray.create(0)
+	let scopes = LspLineScopes.of(blocks)
 
 	for (position, token) in tokens.withIterator() 'eachToken'
 		if not bindingKeywordSpells(token.kind) 'notABinding'
@@ -243,7 +244,7 @@ function localBindingsIn(tokens TokenArray, blocks LspDocumentBlockArray) return
 
 		// A binding declared at module level is not a LOCAL, and deleting one is a change to the file's
 		// interface rather than a tidy-up.
-		let insideABlock = match lspInnermostBlockKindAt(blocks, line: lspLineOf(token.line)) 'scope'
+		let insideABlock = match scopes.innermostKindAt(lspLineOf(token.line)) 'scope'
 			found gives true
 			absent gives false
 		end 'scope'

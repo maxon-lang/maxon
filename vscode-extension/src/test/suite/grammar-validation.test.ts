@@ -79,20 +79,19 @@ suite('TextMate Grammar Validation', () => {
 		}
 	});
 
-	// ⚠ THE BUILT-IN TYPES ARE KEYWORDS AND THE STDLIB'S TYPES ARE NOT, which is why they sit in two
-	// repositories under two scopes. 'string', 'character' and 'map' are stdlib types, so they are
-	// `support.type.maxon` under their real spellings and never `storage.type.maxon`.
+	// ⚠ THE BUILT-IN TYPES ARE PAINTED AS TYPES AND THE STDLIB'S TYPES UNDER THEIR OWN SCOPE, which is why
+	// they sit under two scopes in one repository. 'string', 'character' and 'map' are stdlib types, so they
+	// are `support.type.maxon` under their real spellings and never `entity.name.type.maxon`.
 	test('Type keywords pattern exists', () => {
-		const keywordsRepo = grammar.repository.keywords;
-		const typePattern = keywordsRepo.patterns.find((p: any) => p.name === 'storage.type.maxon' && p.match.includes('int'));
-		assert.ok(typePattern, 'Built-in type keyword pattern should exist');
-
-		for (const type of ['int', 'bool', 'float', 'byte']) {
-			assert.ok(typePattern.match.includes(type), `Type pattern should include ${type}`);
-		}
-
 		const typesRepo = grammar.repository.types;
 		assert.ok(typesRepo, 'Types repository should exist');
+
+		const typePattern = typesRepo.patterns.find((p: any) => p.name === 'entity.name.type.maxon' && p.match.includes('int'));
+		assert.ok(typePattern, 'Built-in type pattern should exist');
+
+		for (const type of ['int', 'bool', 'float', 'cstring', 'byte']) {
+			assert.ok(typePattern.match.includes(type), `Type pattern should include ${type}`);
+		}
 
 		const stdlibPattern = typesRepo.patterns.find((p: any) => p.name === 'support.type.maxon');
 		assert.ok(stdlibPattern, 'Stdlib type pattern should exist');

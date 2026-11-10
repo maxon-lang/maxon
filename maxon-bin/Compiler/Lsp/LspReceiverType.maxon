@@ -61,32 +61,14 @@ module union LspEnclosingType
 	atFileScope
 end 'LspEnclosingType'
 
-function lspEnclosingTypeAtLine(blocks LspDocumentBlockArray, line LspLineNumber) returns LspEnclosingType
-	var enclosing = LspEnclosingType.atFileScope
-	var enclosingDepth = 0 as LspBlockDepth
-
-	for block in blocks 'eachBlock'
-		if not lspBlockDeclaresMembers(block.kind) or not lspBlockHoldsLine(block, line: line) 'notAnEnclosingType'
-			continue
-		end 'notAnEnclosingType'
-
-		if block.depth >= enclosingDepth 'deeper'
-			enclosing = LspEnclosingType.inside(block.name)
-			enclosingDepth = block.depth
-		end 'deeper'
-	end 'eachBlock'
-
-	return enclosing
-end 'lspEnclosingTypeAtLine'
-
 module function lspEnclosingTypeAtToken(tokens TokenArray, index ElementIndex) returns LspEnclosingType
-	return lspEnclosingTypeAtLine(lspDocumentBlocks(tokens), line: lspLineOf(lspTokenAt(tokens, index: index).line))
+	return LspLineScopes.of(lspDocumentBlocks(tokens)).enclosingTypeAt(lspLineOf(lspTokenAt(tokens, index: index).line))
 end 'lspEnclosingTypeAtToken'
 
-module function lspEnclosingTypeAtCursor(tokens TokenArray, blocks LspDocumentBlockArray, offset ByteOffset) returns LspEnclosingType
+module function lspEnclosingTypeAtCursor(tokens TokenArray, scopes LspLineScopes, offset ByteOffset) returns LspEnclosingType
 	let receiver = try receiverIndexBefore(tokens, offset: offset) otherwise return LspEnclosingType.atFileScope
 
-	return lspEnclosingTypeAtLine(blocks, line: lspLineOf(lspTokenAt(tokens, index: receiver).line))
+	return scopes.enclosingTypeAt(lspLineOf(lspTokenAt(tokens, index: receiver).line))
 end 'lspEnclosingTypeAtCursor'
 
 module function lspBlockDeclaresMembers(kind LspBlockKind) returns bool
@@ -158,13 +140,13 @@ end 'LspMember'
 
 module typealias LspMemberArray = Array with LspMember
 
-module function lspBodyMembers(tokens TokenArray, blocks LspDocumentBlockArray, body LspDocumentBlock, tokenLines LspTokenLineArray) returns LspMemberArray
+module function lspBodyMembers(tokens TokenArray, scopes LspLineScopes, body LspDocumentBlock, tokenLines LspTokenLineArray) returns LspMemberArray
 	var members = LspMemberArray.create(0)
 
 	for tokenLine in tokenLines 'eachLine'
 		let member = try lspMemberOnLine(tokens, tokenLine: tokenLine, body: body) otherwise continue
 
-		if lspBlockDirectlyHoldsLine(blocks, block: body, line: lspLineOf(tokenLine.line)) 'itsOwnMemberLine'
+		if scopes.directlyHolds(body, line: lspLineOf(tokenLine.line)) 'itsOwnMemberLine'
 			members.push(member)
 		end 'itsOwnMemberLine'
 	end 'eachLine'
@@ -172,21 +154,21 @@ module function lspBodyMembers(tokens TokenArray, blocks LspDocumentBlockArray, 
 	return members
 end 'lspBodyMembers'
 
-module function lspMemberDeclaredBy(tokens TokenArray, blocks LspDocumentBlockArray, owner String, member ByteArray) returns LspMember throws AbsentError
-	return try lspMemberNamedIn(tokens, blocks: blocks, bodies: lspBlocksDeclaring(blocks, typeName: owner), member: member)
+module function lspMemberDeclaredBy(tokens TokenArray, scopes LspLineScopes, owner String, member ByteArray) returns LspMember throws AbsentError
+	return try lspMemberNamedIn(tokens, scopes: scopes, bodies: lspBlocksDeclaring(scopes.blocks, typeName: owner), member: member)
 end 'lspMemberDeclaredBy'
 
 // An `extension` over an interface publishes its methods onto each conformer, so the index files such a
 // member under the conformer while the declaring body is named for the interface.
-module function lspMemberDeclaredOrPublished(tokens TokenArray, blocks LspDocumentBlockArray, owner String, member ByteArray) returns LspMember throws AbsentError
-	return try lspMemberDeclaredBy(tokens, blocks: blocks, owner: owner, member: member) otherwise try lspMemberNamedIn(tokens, blocks: blocks, bodies: lspExtensionBlocks(blocks), member: member)
+module function lspMemberDeclaredOrPublished(tokens TokenArray, scopes LspLineScopes, owner String, member ByteArray) returns LspMember throws AbsentError
+	return try lspMemberDeclaredBy(tokens, scopes: scopes, owner: owner, member: member) otherwise try lspMemberNamedIn(tokens, scopes: scopes, bodies: lspExtensionBlocks(scopes.blocks), member: member)
 end 'lspMemberDeclaredOrPublished'
 
-function lspMemberNamedIn(tokens TokenArray, blocks LspDocumentBlockArray, bodies LspDocumentBlockArray, member ByteArray) returns LspMember throws AbsentError
+function lspMemberNamedIn(tokens TokenArray, scopes LspLineScopes, bodies LspDocumentBlockArray, member ByteArray) returns LspMember throws AbsentError
 	let tokenLines = lspTokenLines(tokens)
 
 	for body in bodies 'eachBody'
-		for found in lspBodyMembers(tokens, blocks: blocks, body: body, tokenLines: tokenLines) 'eachMember'
+		for found in lspBodyMembers(tokens, scopes: scopes, body: body, tokenLines: tokenLines) 'eachMember'
 			if lspTokenAt(tokens, index: found.nameIndex).value.equals(member) 'thisMember'
 				return found
 			end 'thisMember'
@@ -195,18 +177,6 @@ function lspMemberNamedIn(tokens TokenArray, blocks LspDocumentBlockArray, bodie
 
 	throw AbsentError.absent
 end 'lspMemberNamedIn'
-
-// Only a terminated body counts: an unterminated one runs to the end of the buffer and would make
-// every function written below a half-typed `type` a method of it.
-module function lspLineIsAMemberLine(blocks LspDocumentBlockArray, line LspLineNumber) returns bool
-	for block in blocks 'eachBlock'
-		if lspBlockDeclaresMembers(block.kind) and lspBlockIsTerminated(block) and lspBlockDirectlyHoldsLine(blocks, block: block, line: line) 'aMember'
-			return true
-		end 'aMember'
-	end 'eachBlock'
-
-	return false
-end 'lspLineIsAMemberLine'
 
 function lspMemberOnLine(tokens TokenArray, tokenLine LspTokenLine, body LspDocumentBlock) returns LspMember throws AbsentError
 	return try lspDeclaredMemberOnLine(tokens, tokenLine: tokenLine, body: body) otherwise try lspCaseOnLine(tokens, tokenLine: tokenLine, body: body)
@@ -302,29 +272,6 @@ module function lspMemberReachable(member LspMember, site MemberReaderSite) retu
 
 	return memberTierReachable(member.tier, site: site, moduleTierVisible: true)
 end 'lspMemberReachable'
-
-// Is `line` a direct member line of `block` — inside it, and inside nothing that is itself inside it?
-module function lspBlockDirectlyHoldsLine(blocks LspDocumentBlockArray, block LspDocumentBlock, line LspLineNumber) returns bool
-	if not lspBlockHoldsLine(block, line: line) 'outsideTheBody'
-		return false
-	end 'outsideTheBody'
-
-	for other in blocks 'eachBlock'
-		if other.startLine < block.startLine or other.endLine > block.endLine 'notWithinTheType'
-			continue
-		end 'notWithinTheType'
-
-		if other.startLine == block.startLine and other.endLine == block.endLine 'theTypeItself'
-			continue
-		end 'theTypeItself'
-
-		if lspBlockHoldsLine(other, line: line) 'insideAMember'
-			return false
-		end 'insideAMember'
-	end 'eachBlock'
-
-	return true
-end 'lspBlockDirectlyHoldsLine'
 
 // The receiver of the member access the cursor sits in, found by TOKEN ORDER rather than by byte range:
 // a punctuator and a newline carry no bytes — a `Token` of either kind has `startByte` and `endByte` 0 —

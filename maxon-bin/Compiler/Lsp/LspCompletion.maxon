@@ -69,7 +69,7 @@ module function completionAnswer(request LspRequest) returns LspAnswer throws Ls
 	let offset = index.offsetOf(request.text, position: try lspPositionMember(request.incoming, of: request.params, key: LspPositionKey))
 
 	var doc = JsonDoc.create()
-	let offers = offersAt(request.text, tokens: tokens, keywords: request.keywords, blocks: lspDocumentBlocks(tokens), offset: offset, uri: request.uri, workspace: request.workspace)
+	let offers = offersAt(request.text, tokens: tokens, keywords: request.keywords, scopes: LspLineScopes.of(lspDocumentBlocks(tokens)), offset: offset, uri: request.uri, workspace: request.workspace)
 	var items = JsonNodeIdArray.create(offers.count(), zeroed: false)
 
 	for offer in offers 'eachOffer'
@@ -102,36 +102,36 @@ typealias OfferedLabelSet = Set with String
 // ⚠ The no-receiver rung comes first, and the order is a cost bound. A cursor following no `.` has
 // nothing to offer whatever the project declares, and an editor fires completion on ordinary typing, so
 // reaching a corpus build to answer an empty list puts a project sweep on every keystroke.
-function offersAt(text String, tokens TokenArray, keywords KeywordTable, blocks LspDocumentBlockArray, offset ByteOffset, uri String, workspace LspWorkspaceState) returns CompletionOfferArray
+function offersAt(text String, tokens TokenArray, keywords KeywordTable, scopes LspLineScopes, offset ByteOffset, uri String, workspace LspWorkspaceState) returns CompletionOfferArray
 	if not lspCursorFollowsAMemberAccess(tokens, offset: offset) 'nothingToComplete'
 		return CompletionOfferArray.create(0)
 	end 'nothingToComplete'
 
-	let enclosing = lspEnclosingTypeAtCursor(tokens, blocks: blocks, offset: offset)
+	let enclosing = lspEnclosingTypeAtCursor(tokens, scopes: scopes, offset: offset)
 	let inTheBuffer = lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset, corpus: LspCorpus.unavailable)
 
 	if let bufferTypeName = try lspSubjectTypeName(inTheBuffer) 'aNamedSubject'
-		if lspBlocksDeclareTheType(lspBlocksDeclaring(blocks, typeName: bufferTypeName)) 'aTypeThisBufferDeclares'
-			return offersFor(inTheBuffer, tokens: tokens, blocks: blocks, corpus: LspCorpus.unavailable, enclosing: enclosing)
+		if lspBlocksDeclareTheType(lspBlocksDeclaring(scopes.blocks, typeName: bufferTypeName)) 'aTypeThisBufferDeclares'
+			return offersFor(inTheBuffer, tokens: tokens, scopes: scopes, corpus: LspCorpus.unavailable, enclosing: enclosing)
 		end 'aTypeThisBufferDeclares'
 	end 'aNamedSubject'
 
 	var corpus = lspDocumentCorpus(workspace, uri: uri)
 
-	return offersFor(lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset, corpus: corpus), tokens: tokens, blocks: blocks, corpus: corpus, enclosing: enclosing)
+	return offersFor(lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset, corpus: corpus), tokens: tokens, scopes: scopes, corpus: corpus, enclosing: enclosing)
 end 'offersAt'
 
 // A type the buffer declares is answered from the buffer, whatever a compiled `stdlib/` says about a
 // type of the same name: the author is looking at the declaration in front of them.
-function offersFor(subject LspSubject, tokens TokenArray, blocks LspDocumentBlockArray, corpus LspCorpus, enclosing LspEnclosingType) returns CompletionOfferArray
+function offersFor(subject LspSubject, tokens TokenArray, scopes LspLineScopes, corpus LspCorpus, enclosing LspEnclosingType) returns CompletionOfferArray
 	let typeName = try lspSubjectTypeName(subject) otherwise return CompletionOfferArray.create(0)
 
-	let declaring = lspBlocksDeclaring(blocks, typeName: typeName)
+	let declaring = lspBlocksDeclaring(scopes.blocks, typeName: typeName)
 	var offers = CompletionOfferArray.create(0)
 	var offered = OfferedLabelSet.create()
 
 	for block in declaring 'eachDeclaringBody'
-		addBufferMembers(offers, offered: offered, tokens: tokens, blocks: blocks, block: block, subject: subject, site: lspReaderSite(enclosing, typeName: block.name, sharesTheTypesFile: true))
+		addBufferMembers(offers, offered: offered, tokens: tokens, scopes: scopes, block: block, subject: subject, site: lspReaderSite(enclosing, typeName: block.name, sharesTheTypesFile: true))
 	end 'eachDeclaringBody'
 
 	if lspBlocksDeclareTheType(declaring) 'theBufferHoldsTheType'
@@ -146,12 +146,12 @@ end 'offersFor'
 // --- Members of a type the BUFFER declares ----------------------------------------------------
 
 // ⚠ **ONLY THE BLOCK'S OWN LINES, NOT EVERY LINE BETWEEN ITS ENDS.** A `var` written inside a method body
-// is a local and not a field, and `lspBlockDirectlyHoldsLine` is what tells the two apart — without it a
+// is a local and not a field, and `LspLineScopes.directlyHolds` is what tells the two apart — without it a
 // type's completion list would carry every temporary its methods declare.
-function addBufferMembers(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, blocks LspDocumentBlockArray, block LspDocumentBlock, subject LspSubject, site MemberReaderSite)
+function addBufferMembers(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, scopes LspLineScopes, block LspDocumentBlock, subject LspSubject, site MemberReaderSite)
 	let wantsStatics = lspSubjectIsStatic(subject)
 
-	for member in lspBodyMembers(tokens, blocks: blocks, body: block, tokenLines: lspTokenLines(tokens)) 'eachMember'
+	for member in lspBodyMembers(tokens, scopes: scopes, body: block, tokenLines: lspTokenLines(tokens)) 'eachMember'
 		addBodyMember(offers, offered: offered, tokens: tokens, member: member, wantsStatics: wantsStatics, site: site)
 	end 'eachMember'
 end 'addBufferMembers'

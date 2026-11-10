@@ -141,7 +141,7 @@ end 'stringArrayNode'
 // `LspLineIndex.positionOf` on the two ends of the token's span rather than from its byte width.
 function encodedTokensOf(source String, keywords KeywordTable, corpus LspCorpus) returns LspSemanticTokenValueArray
 	let tokens = lspDocumentTokens(source, keywords: keywords)
-	let caseLists = CaseListLines.of(lspDocumentBlocks(tokens))
+	let lineScopes = LspLineScopes.of(lspDocumentBlocks(tokens))
 	let index = LspLineIndex.build(source)
 	let typeNames = SemanticTypeNames.of(tokens, corpus: corpus)
 	let qualifiers = TypeQualifierPositions.over(tokens)
@@ -169,7 +169,7 @@ function encodedTokensOf(source String, keywords KeywordTable, corpus LspCorpus)
 
 		let start = index.positionOf(source, offset: token.startByte)
 		let finish = index.positionOf(source, offset: token.endByte)
-		let tokenType = tokenTypeOf(tokens, at: position.index(), token: token, firstOnLine: firstOnLine, inCaseList: caseLists.isInsideACaseList(start.line), typeQualifier: qualifiers.verdictAt(position.index()), typeNames: typeNames)
+		let tokenType = tokenTypeOf(tokens, at: position.index(), token: token, firstOnLine: firstOnLine, inCaseList: lineScopes.isInsideACaseList(start.line), typeQualifier: qualifiers.verdictAt(position.index()), typeNames: typeNames)
 
 		let deltaLine = start.line - previousLine
 		var deltaCharacter = start.character
@@ -231,8 +231,16 @@ function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLin
 		return identifierTokenType(tokens, at: at, typeNames: typeNames)
 	end 'aName'
 
+	if kindNamesAPrimitiveType(token.kind) 'aPrimitive'
+		return TypeTokenType
+	end 'aPrimitive'
+
 	return KeywordTokenType
 end 'tokenTypeOf'
+
+function kindNamesAPrimitiveType(kind TokenKind) returns bool
+	return kind == TokenKind.int or kind == TokenKind.float or kind == TokenKind.bool or kind == TokenKind.cstring or kind == TokenKind.selfType
+end 'kindNamesAPrimitiveType'
 
 function identifierTokenType(tokens TokenArray, at ElementIndex, typeNames SemanticTypeNames) returns LspSemanticTokenType
 	if at > 0 'hasAPredecessor'
@@ -375,9 +383,9 @@ end 'declareTypeParametersFrom'
 function compilerOwnsTheTypeNamed(tokens TokenArray, at ElementIndex) returns bool
 	let name = lspTokenAt(tokens, index: at).value
 
-	if isBuiltinManagedTypeName(name) 'aManagedBuiltin'
+	if isBuiltinManagedTypeName(name) or isSizedTypeName(name) or namesAPrimitiveType(name) 'aBuiltinType'
 		return true
-	end 'aManagedBuiltin'
+	end 'aBuiltinType'
 
 	if not isCompilerReservedName(name) or tokenKindAt(tokens, index: at + 1) != TokenKind.dot 'notAQualifier'
 		return false
@@ -391,44 +399,5 @@ function compilerOwnsTheTypeNamed(tokens TokenArray, at ElementIndex) returns bo
 
 	let callee = joinQualifiedName(name, member: member.value)
 
-	return isBuiltinsIntrinsicCallee(callee) or isRawIntrinsicCallee(callee) or isDebugStreamCallee(callee)
+	return isCompilerQualifierCallee(callee)
 end 'compilerOwnsTheTypeNamed'
-
-typealias CaseListLineFlags = Array with bool
-
-// A line is in a case list only when it is strictly inside an `enum` or `union` body: the header
-// line that names the type and the `end` line that closes it are ordinary code.
-type CaseListLines
-	let flags as CaseListLineFlags
-
-	static function of(blocks LspDocumentBlockArray) returns CaseListLines
-		var byDepth = blocks.clone()
-		byDepth.sortBy(function(left, right) gives left.depth.compare(right.depth))
-
-		var lineCount = 0 as LspLineNumber
-
-		for block in byDepth 'eachBlockForItsExtent'
-			if block.endLine > lineCount 'reachesFurther'
-				lineCount = block.endLine
-			end 'reachesFurther'
-		end 'eachBlockForItsExtent'
-
-		var flags = CaseListLineFlags.create(lineCount)
-
-		// Outermost first, so a deeper block overwrites its parent's flag: a line takes the flag of its
-		// innermost block.
-		for block in byDepth 'eachBlockOuterFirst'
-			let isCaseList = block.kind == LspBlockKind.enumBody or block.kind == LspBlockKind.unionBody
-
-			for line in block.startLine + 1 upto block.endLine 'eachLineWithin'
-				try flags.set(line, value: isCaseList) otherwise panic("CaseListLines.of: line {line} is below the {lineCount} lines the deepest reach of any block sized this array to")
-			end 'eachLineWithin'
-		end 'eachBlockOuterFirst'
-
-		return Self{flags: flags}
-	end 'of'
-
-	function isInsideACaseList(line LspLineNumber) returns bool
-		return try self.flags.get(line) otherwise false
-	end 'isInsideACaseList'
-end 'CaseListLines'

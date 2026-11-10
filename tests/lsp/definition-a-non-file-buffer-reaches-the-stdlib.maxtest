@@ -1,0 +1,10 @@
+let NonFileDefinitionUri = "git://host/repo/definition.maxon"
+let NonFileDefinitionUseLine = 1
+let NonFileDefinitionUseCharacter = 15
+let NonFileDefinitionDeclarationLineNeedle = "public type FilePath"
+
+test 'definition on a path-less buffer reaches the stdlib'
+	let probe = probeCorpusDefinitionWithRoot(CorpusSessionRoot.unrooted, uri: NonFileDefinitionUri, content: corpusFilePathSource(), line: NonFileDefinitionUseLine, character: NonFileDefinitionUseCharacter)
+
+	expectDefinitionInFile(probe, fileTail: CorpusStdlibFilePathTail, startLine: corpusLineDeclaring(corpusStdlibFilePath(), needle: NonFileDefinitionDeclarationLineNeedle), note: "a cursor on the stdlib type `FilePath` in a buffer opened at `{NonFileDefinitionUri}` did not resolve to the `public type FilePath` that declares it. A path-less buffer has no project, and it reads the standard library all the same.")
+end 'definition on a path-less buffer reaches the stdlib'
