@@ -1,0 +1,30 @@
+let ExtensionStoresDirName = "diagnostics-project-extension-stores"
+let ExtensionStoresExtensionFileName = "a.maxon"
+let ExtensionStoresConformerFileName = "c.maxon"
+let ExtensionStoresPlainExtension = "extension Source\n\tmodule function collected() returns Count\n\t\treturn 0\n\tend 'collected'\nend 'Source'\n"
+let ExtensionStoresHoldingExtension = "extension Source\n\ttypealias ItemArray = Array with Item\n\n\tmodule function collected() returns Count\n\t\tvar xs = ItemArray\{\}\n\t\treturn xs.count()\n\tend 'collected'\nend 'Source'\n"
+let ExtensionStoresConformerSource = "module interface Named\n\tfunction label() returns String\nend 'Named'\n\nmodule type Thing implements Named\n\tmodule static function create() returns Self\n\t\treturn Self\{\}\n\tend 'create'\n\n\tmodule function label() returns String\n\t\treturn \"thing\"\n\tend 'label'\nend 'Thing'\n\nmodule interface Source uses Item\n\tfunction first() returns Item\nend 'Source'\n\nmodule type Impl implements Source with Named\n\tmodule static function create() returns Self\n\t\treturn Self\{\}\n\tend 'create'\n\n\tmodule function first() returns Named\n\t\treturn Thing.create()\n\tend 'first'\nend 'Impl'\n\nfunction main() returns ExitCode\n\tlet impl = Impl.create()\n\treturn impl.collected() as ExitCode\nend 'main'\n"
+let ExtensionStoresCode = "E2015"
+let ExtensionStoresMessageFragment = "a container's element type declared at the interface type 'Named'"
+let ExtensionStoresBindingLine = 18
+
+test 'an extension edited on disk to store the associated type makes the conformer in another file report its binding'
+	let root = stagedProjectDiagnosticsRoot(ExtensionStoresDirName)
+	writeCorpusFile(root, fileName: ExtensionStoresExtensionFileName, content: ExtensionStoresPlainExtension)
+	writeCorpusFile(root, fileName: ExtensionStoresConformerFileName, content: ExtensionStoresConformerSource)
+
+	var edit = CorpusDiskEditArray.create(0)
+	edit.push(CorpusDiskEdit.wrote(root, fileName: ExtensionStoresExtensionFileName, content: ExtensionStoresHoldingExtension))
+
+	let probes = probeProjectCheckAcrossAnEdit(root, fileName: ExtensionStoresConformerFileName, content: ExtensionStoresConformerSource, diskEdits: edit, editedContent: ExtensionStoresConformerSource)
+
+	discardStagedDir(root)
+
+	expectNoProjectDiagnostics(projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the extension on disk stores nothing, so the conformer binding `Named` to an interface is legal: a `maxon build` of the staged project exits 0.")
+
+	let reported = onlyProjectDiagnostic(projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "`{ExtensionStoresExtensionFileName}` was rewritten on disk to store `Item` as an `Array` element while the buffer of `{ExtensionStoresConformerFileName}` kept its bytes, and a `maxon build` of the edited project reports exactly one E2015, at the conformer's binding. A server that answers from the conformer's earlier fold publishes nothing.")
+
+	Expect.equal(reported.code.describe(), expected: ExtensionStoresCode, message: "the one error a build of the edited project reports is {ExtensionStoresCode}; the server published {reported.code.describe()}: {reported.message}")
+	Expect.contains(reported.message, needle: ExtensionStoresMessageFragment, message: "the sentence must be the compiler's own about the container element: {reported.message}")
+	Expect.equal(reported.range.startLine, expected: ExtensionStoresBindingLine, message: "the refusal is anchored at the `Named` binding of `Impl`, line 19 of the conformer's file.")
+end 'an extension edited on disk to store the associated type makes the conformer in another file report its binding'

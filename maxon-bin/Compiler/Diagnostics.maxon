@@ -681,6 +681,42 @@ export union LibraryBlame
 	userSite(filePath FilePath, line LineNumber, column ColumnNumber)
 end 'LibraryBlame'
 
+// @generated library-cache begin
+module function cacheWriteLibraryBlame(writer LibraryCacheWriter, value LibraryBlame)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unblamed then break
+		userSite(a0, a1, a2) then cacheWriteLibraryBlameUserSite(writer, a0: a0, a1: a1, a2: a2)
+	end 'payload'
+end 'cacheWriteLibraryBlame'
+
+function cacheWriteLibraryBlameUserSite(writer LibraryCacheWriter, a0 FilePath, a1 LineNumber, a2 ColumnNumber)
+	writer.text(a0.toString())
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.unsigned(a2 as CacheUnsigned)
+end 'cacheWriteLibraryBlameUserSite'
+
+module function cacheReadLibraryBlame(reader LibraryCacheReader) returns LibraryBlame throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives LibraryBlame.unblamed
+		1 gives try cacheReadLibraryBlameUserSite(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadLibraryBlame'
+
+function cacheReadLibraryBlameUserSite(reader LibraryCacheReader) returns LibraryBlame throws LibraryCacheDamage
+	let a0 = try reader.path()
+	let a1 = (try reader.unsigned()) as LineNumber
+	let a2 = (try reader.unsigned()) as ColumnNumber
+
+	return LibraryBlame.userSite(a0, line: a1, column: a2)
+end 'cacheReadLibraryBlameUserSite'
+
+// @generated library-cache end
+
 // What the retained library location says once the user's site has taken the
 // primary slot. Written once, here, so every re-anchored diagnostic says it the
 // same way and no gate has to phrase it.

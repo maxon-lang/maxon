@@ -1,0 +1,28 @@
+let ExtensionStopsDirName = "diagnostics-project-extension-stops"
+let ExtensionStopsExtensionFileName = "a.maxon"
+let ExtensionStopsConformerFileName = "c.maxon"
+let ExtensionStopsPlainExtension = "extension Source\n\tmodule function collected() returns Count\n\t\treturn 0\n\tend 'collected'\nend 'Source'\n"
+let ExtensionStopsHoldingExtension = "extension Source\n\ttypealias ItemArray = Array with Item\n\n\tmodule function collected() returns Count\n\t\tvar xs = ItemArray\{\}\n\t\treturn xs.count()\n\tend 'collected'\nend 'Source'\n"
+let ExtensionStopsConformerSource = "module interface Named\n\tfunction label() returns String\nend 'Named'\n\nmodule type Thing implements Named\n\tmodule static function create() returns Self\n\t\treturn Self\{\}\n\tend 'create'\n\n\tmodule function label() returns String\n\t\treturn \"thing\"\n\tend 'label'\nend 'Thing'\n\nmodule interface Source uses Item\n\tfunction first() returns Item\nend 'Source'\n\nmodule type Impl implements Source with Named\n\tmodule static function create() returns Self\n\t\treturn Self\{\}\n\tend 'create'\n\n\tmodule function first() returns Named\n\t\treturn Thing.create()\n\tend 'first'\nend 'Impl'\n\nfunction main() returns ExitCode\n\tlet impl = Impl.create()\n\treturn impl.collected() as ExitCode\nend 'main'\n"
+let ExtensionStopsCode = "E2015"
+let ExtensionStopsBindingLine = 18
+
+test 'an extension edited on disk to stop storing the associated type clears the conformer in another file'
+	let root = stagedProjectDiagnosticsRoot(ExtensionStopsDirName)
+	writeCorpusFile(root, fileName: ExtensionStopsExtensionFileName, content: ExtensionStopsHoldingExtension)
+	writeCorpusFile(root, fileName: ExtensionStopsConformerFileName, content: ExtensionStopsConformerSource)
+
+	var edit = CorpusDiskEditArray.create(0)
+	edit.push(CorpusDiskEdit.wrote(root, fileName: ExtensionStopsExtensionFileName, content: ExtensionStopsPlainExtension))
+
+	let probes = probeProjectCheckAcrossAnEdit(root, fileName: ExtensionStopsConformerFileName, content: ExtensionStopsConformerSource, diskEdits: edit, editedContent: ExtensionStopsConformerSource)
+
+	discardStagedDir(root)
+
+	let atOpen = onlyProjectDiagnostic(projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the extension on disk stores `Item` as an `Array` element, so the conformer binding `Named` to an interface is refused: a `maxon build` of the staged project reports exactly one E2015, at the binding.")
+
+	Expect.equal(atOpen.code.describe(), expected: ExtensionStopsCode, message: "the one error a build of the project reports is {ExtensionStopsCode}; the server published {atOpen.code.describe()}: {atOpen.message}")
+	Expect.equal(atOpen.range.startLine, expected: ExtensionStopsBindingLine, message: "the refusal is anchored at the `Named` binding of `Impl`, line 19 of the conformer's file.")
+
+	expectNoProjectDiagnostics(projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "`{ExtensionStopsExtensionFileName}` was rewritten on disk to store nothing while the buffer of `{ExtensionStopsConformerFileName}` kept its bytes, and a `maxon build` of the edited project exits 0. A server that answers from the conformer's earlier fold keeps publishing the refusal.")
+end 'an extension edited on disk to stop storing the associated type clears the conformer in another file'

@@ -154,13 +154,46 @@ export enum InitializerRole
 	recordProbe
 end 'InitializerRole'
 
-// What one file's parse answers: its artifact, or the refusal with the blame it carries and what an aborted parse
-// still knows (`Parser.abortedParseArtifact`). Either way it carries the regions the parse
-// abandoned, whose refusals no artifact holds, so the caller reports them from here.
-export union FileParseOutcome
-	parsed(artifact FileParseArtifact, abandoned AbandonedRegionArray)
-	failed(error SourceParseError, blame LibraryBlame, salvaged FileParseArtifact, consequence ConsequenceOf, abandoned AbandonedRegionArray)
-end 'FileParseOutcome'
+export union ParseRefusal
+	none
+	refused(error SourceParseError, blame LibraryBlame, consequence ConsequenceOf)
+end 'ParseRefusal'
+
+// @generated library-cache begin
+function cacheWriteParseRefusal(writer LibraryCacheWriter, value ParseRefusal)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		none then break
+		refused(a0, a1, a2) then cacheWriteParseRefusalRefused(writer, a0: a0, a1: a1, a2: a2)
+	end 'payload'
+end 'cacheWriteParseRefusal'
+
+function cacheWriteParseRefusalRefused(writer LibraryCacheWriter, a0 SourceParseError, a1 LibraryBlame, a2 ConsequenceOf)
+	cacheWriteSourceParseError(writer, value: a0)
+	cacheWriteLibraryBlame(writer, value: a1)
+	cacheWriteConsequenceOf(writer, value: a2)
+end 'cacheWriteParseRefusalRefused'
+
+function cacheReadParseRefusal(reader LibraryCacheReader) returns ParseRefusal throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives ParseRefusal.none
+		1 gives try cacheReadParseRefusalRefused(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadParseRefusal'
+
+function cacheReadParseRefusalRefused(reader LibraryCacheReader) returns ParseRefusal throws LibraryCacheDamage
+	let a0 = try cacheReadSourceParseError(reader)
+	let a1 = try cacheReadLibraryBlame(reader)
+	let a2 = try cacheReadConsequenceOf(reader)
+
+	return ParseRefusal.refused(a0, blame: a1, consequence: a2)
+end 'cacheReadParseRefusalRefused'
+
+// @generated library-cache end
 
 // What a parse refusal may be the consequence of. Anything but `unrelated` is held, and dropped
 // once a backed refusal of what it names explains it (`PendingConsequence.isExplainedBy`).
@@ -170,6 +203,62 @@ export union ConsequenceOf
 	handlerBody(message immutable ByteArray)
 	unknownType(name immutable ByteArray)
 end 'ConsequenceOf'
+
+// @generated library-cache begin
+function cacheWriteConsequenceOf(writer LibraryCacheWriter, value ConsequenceOf)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unrelated then break
+		subject(a0) then cacheWriteConsequenceOfSubject(writer, a0: a0)
+		handlerBody(a0) then cacheWriteConsequenceOfHandlerBody(writer, a0: a0)
+		unknownType(a0) then cacheWriteConsequenceOfUnknownType(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteConsequenceOf'
+
+function cacheWriteConsequenceOfSubject(writer LibraryCacheWriter, a0 NameRoster)
+	cacheWriteNameRoster(writer, value: a0)
+end 'cacheWriteConsequenceOfSubject'
+
+function cacheWriteConsequenceOfHandlerBody(writer LibraryCacheWriter, a0 immutable ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteConsequenceOfHandlerBody'
+
+function cacheWriteConsequenceOfUnknownType(writer LibraryCacheWriter, a0 immutable ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteConsequenceOfUnknownType'
+
+function cacheReadConsequenceOf(reader LibraryCacheReader) returns ConsequenceOf throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives ConsequenceOf.unrelated
+		1 gives try cacheReadConsequenceOfSubject(reader)
+		2 gives try cacheReadConsequenceOfHandlerBody(reader)
+		3 gives try cacheReadConsequenceOfUnknownType(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadConsequenceOf'
+
+function cacheReadConsequenceOfSubject(reader LibraryCacheReader) returns ConsequenceOf throws LibraryCacheDamage
+	let a0 = try cacheReadNameRoster(reader)
+
+	return ConsequenceOf.subject(a0)
+end 'cacheReadConsequenceOfSubject'
+
+function cacheReadConsequenceOfHandlerBody(reader LibraryCacheReader) returns ConsequenceOf throws LibraryCacheDamage
+	let a0 = freeze try reader.bytes()
+
+	return ConsequenceOf.handlerBody(a0)
+end 'cacheReadConsequenceOfHandlerBody'
+
+function cacheReadConsequenceOfUnknownType(reader LibraryCacheReader) returns ConsequenceOf throws LibraryCacheDamage
+	let a0 = freeze try reader.bytes()
+
+	return ConsequenceOf.unknownType(a0)
+end 'cacheReadConsequenceOfUnknownType'
+
+// @generated library-cache end
 
 export type AbandonedRegion
 	export let error as SourceParseError
@@ -181,29 +270,77 @@ export type AbandonedRegion
 	export static function create(error SourceParseError, blame LibraryBlame, part RefusedPart, consequence ConsequenceOf) returns AbandonedRegion
 		return Self{error: error, blame: blame, key: part.key, poisoned: part.poisoned, consequence: consequence}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteSourceParseError(writer, value: self.error)
+		cacheWriteLibraryBlame(writer, value: self.blame)
+		writer.unsigned(self.key as CacheUnsigned)
+		cacheWritePoisonedAt(writer, value: self.poisoned)
+		cacheWriteConsequenceOf(writer, value: self.consequence)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns AbandonedRegion throws LibraryCacheDamage
+		let f_error = try cacheReadSourceParseError(reader)
+		let f_blame = try cacheReadLibraryBlame(reader)
+		let f_key = (try reader.unsigned()) as PositionKey
+		let f_poisoned = try cacheReadPoisonedAt(reader)
+		let f_consequence = try cacheReadConsequenceOf(reader)
+
+		return Self{error: f_error, blame: f_blame, key: f_key, poisoned: f_poisoned, consequence: f_consequence}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(AbandonedRegion) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'AbandonedRegion'
 
 export typealias AbandonedRegionArray = Array with AbandonedRegion
 
+// @generated library-cache begin
+function cacheWriteAbandonedRegionArray(writer LibraryCacheWriter, value AbandonedRegionArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteAbandonedRegionArray'
+
+function cacheReadAbandonedRegionArray(reader LibraryCacheReader) returns AbandonedRegionArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = AbandonedRegionArray.create(count, zeroed: false)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try AbandonedRegion.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadAbandonedRegionArray'
+
+// @generated library-cache end
+
 // ⭐⭐ **ONE FILE'S PARSE, AS A FUNCTION OF WHAT IT IS HANDED** — the job, the file's tokens, the
 // row-set answers it is told and the settled index, which it leaves as it found them. It reaches no
-// `Project`, so a pool worker may run it; the caller reports the outcome. Its parser's anchors are
-// its own, so the artifact holds no record from outside itself.
-export function parseFile(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, signatures ProgramSignatures) returns FileParseOutcome
+// `Project`, so a pool worker may run it; the caller reports what the artifact refused. Its
+// parser's anchors are its own, so the artifact holds no record from outside itself.
+export function parseFile(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, signatures ProgramSignatures) returns FileParseArtifact
 	var parser = Parser.create(tokens, job: job, signatures: signatures, anchors: ParserAnchors.create())
 	signatures.openParseBand(overrides)
 
 	// A refusal and its blame may hold records the index owns (a `throws` clause's name, a recorded constant's
-	// error, an instantiation's file), and the outcome crosses back from a pool worker, so it carries copies.
+	// error, an instantiation's file), and the artifact crosses back from a pool worker, so it carries copies.
 	var artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		_ = signatures.closeParseBand(job.path)
 		parser.forgetKindVerdicts()
-		return FileParseOutcome.failed(parseErr.clone(), blame: parser.libraryBlame.clone(), salvaged: parser.abortedParseArtifact(), consequence: consequenceOfRefusal(parseErr, parser: parser, job: job, signatures: signatures), abandoned: parser.regionsRecovered())
+		return parser.abortedParseArtifact(ParseRefusal.refused(parseErr.clone(), blame: parser.libraryBlame.clone(), consequence: consequenceOfRefusal(parseErr, parser: parser, job: job, signatures: signatures)))
 	end 'parseFail'
 
 	artifact.recordParseMints(signatures.closeParseBand(job.path))
 	parser.forgetKindVerdicts()
-	return FileParseOutcome.parsed(artifact, abandoned: parser.regionsRecovered())
+	return artifact
 end 'parseFile'
 
 module function abandonedRegionFor(error SourceParseError, blame LibraryBlame, openRegion AbandonableRegion, isLocal bool, path FilePath) returns AbandonedRegion throws AbsentError
@@ -864,6 +1001,8 @@ export type FileParseArtifact
 	// `asyncSpawnSites` is. See `Project.allocTagSites` for why it is a side channel and not a type.
 	export var allocTagSites as AllocTagSiteMap
 
+	export var closureRecordSites as ClosureRecordSiteSet
+
 	// The compile-time NAME each `__DebugStream.nameId("…")` in this file interns, keyed by its marker call's
 	// op index. `mergeArtifact` folds it into `project.debugStreamNameSites` with the merge's op offset,
 	// exactly as `allocTagSites` is. See `Project.debugStreamNameSites` for why the name is a side channel.
@@ -1014,6 +1153,16 @@ export type FileParseArtifact
 	// diagnostic it records against the still-building signature index is discarded for free.
 	export var diagnostics as DiagnosticArray
 
+	// What the parse refused, here and in `refusal`, carried so a memo hit reports it:
+	// `Queries.reportOwnRefusals` reports it wherever `diagnostics` is reported.
+	export var abandonedRegions as AbandonedRegionArray
+
+	// The refusal that stopped the parse, when one did; the rest of the artifact is then what the
+	// aborted parse still knew (`Parser.abortedParseArtifact`).
+	export var refusal as ParseRefusal
+
+	export var refusedInstanceDeferrals as ElementIndex
+
 	// ⭐ THE TWO DEFERRED NAME DIAGNOSTICS — an unused typealias, and a type name this file cannot
 	// see. They are kept OUT of `diagnostics` above and reported later, in a
 	// fixed order, by `TypeResolution.reportDeferredNameDiagnostics`; `DeferredNameDiagnostic`'s header
@@ -1057,6 +1206,7 @@ export type FileParseArtifact
 			serviceAwaitSites: ServiceAwaitSiteMap.create(),
 			registryUseSites: noRegistryUseSites,
 			allocTagSites: AllocTagSiteMap.create(),
+			closureRecordSites: ClosureRecordSiteSet.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
 			immortalConstArraySites: ImmortalConstArraySiteMap.create(),
 			provenFixedArrayAccesses: ProvenFixedArrayAccessMap.create(),
@@ -1084,6 +1234,9 @@ export type FileParseArtifact
 			typeNames: TypeNameInterner.createForSource(sourceBytes),
 			currentFuncIndex: 0,
 			diagnostics: DiagnosticArray.create(0),
+			abandonedRegions: AbandonedRegionArray.create(0),
+			refusal: ParseRefusal.none,
+			refusedInstanceDeferrals: 0,
 			unusedTypeAliases: noDeferredNameDiagnostics,
 			hiddenTypeNames: noDeferredDiagnostics,
 			bindingHygieneDiagnostics: DiagnosticArray.create(0),
@@ -1091,6 +1244,13 @@ export type FileParseArtifact
 			instanceIdsInUse: GenericInstanceIdArray.create(0)
 		}
 	end 'create'
+
+	export function refusesAnything() returns bool
+		return match self.refusal 'refusal'
+			none gives self.diagnostics.count() != 0 or not self.abandonedRegions.isEmpty()
+			refused gives true
+		end 'refusal'
+	end 'refusesAnything'
 
 	// File what the parse that built this artifact wrote into the signature index, with each instance row known
 	// by the band id the parse handed it.
@@ -1208,6 +1368,10 @@ export type FileParseArtifact
 	export function recordAllocTagSite(tag MmTag)
 		self.allocTagSites.upsert(self.module.opCount(), value: tag)
 	end 'recordAllocTagSite'
+
+	export function recordClosureRecordSite()
+		self.closureRecordSites.insert(self.module.opCount())
+	end 'recordClosureRecordSite'
 
 	// Record the compile-time NAME the `__ds_name_id` marker `emitOp` is about to append interns — the same
 	// read-it-through-here contract its two neighbours state, and for their reason.
@@ -1399,6 +1563,7 @@ export type FileParseArtifact
 		cacheWriteServiceAwaitSiteMap(writer, value: self.serviceAwaitSites)
 		cacheWriteRegistryUseSiteTable(writer, value: self.registryUseSites)
 		cacheWriteAllocTagSiteMap(writer, value: self.allocTagSites)
+		cacheWriteClosureRecordSiteSet(writer, value: self.closureRecordSites)
 		cacheWriteDebugStreamNameSiteMap(writer, value: self.debugStreamNameSites)
 		cacheWriteImmortalConstArraySiteMap(writer, value: self.immortalConstArraySites)
 		cacheWriteProvenFixedArrayAccessMap(writer, value: self.provenFixedArrayAccesses)
@@ -1427,6 +1592,9 @@ export type FileParseArtifact
 		cacheWriteTypeNameInterner(writer, value: self.typeNames)
 		writer.unsigned(self.currentFuncIndex as CacheUnsigned)
 		cacheWriteDiagnosticArray(writer, value: self.diagnostics)
+		cacheWriteAbandonedRegionArray(writer, value: self.abandonedRegions)
+		cacheWriteParseRefusal(writer, value: self.refusal)
+		writer.unsigned(self.refusedInstanceDeferrals as CacheUnsigned)
 		cacheWriteDeferredNameDiagnosticRoster(writer, value: self.unusedTypeAliases)
 		cacheWriteDeferredDiagnosticRoster(writer, value: self.hiddenTypeNames)
 		cacheWriteDiagnosticArray(writer, value: self.bindingHygieneDiagnostics)
@@ -1445,6 +1613,7 @@ export type FileParseArtifact
 		let f_serviceAwaitSites = try cacheReadServiceAwaitSiteMap(reader)
 		let f_registryUseSites = try cacheReadRegistryUseSiteTable(reader)
 		let f_allocTagSites = try cacheReadAllocTagSiteMap(reader)
+		let f_closureRecordSites = try cacheReadClosureRecordSiteSet(reader)
 		let f_debugStreamNameSites = try cacheReadDebugStreamNameSiteMap(reader)
 		let f_immortalConstArraySites = try cacheReadImmortalConstArraySiteMap(reader)
 		let f_provenFixedArrayAccesses = try cacheReadProvenFixedArrayAccessMap(reader)
@@ -1473,17 +1642,20 @@ export type FileParseArtifact
 		let f_typeNames = try cacheReadTypeNameInterner(reader)
 		let f_currentFuncIndex = (try reader.unsigned()) as ElementIndex
 		let f_diagnostics = try cacheReadDiagnosticArray(reader)
+		let f_abandonedRegions = try cacheReadAbandonedRegionArray(reader)
+		let f_refusal = try cacheReadParseRefusal(reader)
+		let f_refusedInstanceDeferrals = (try reader.unsigned()) as ElementIndex
 		let f_unusedTypeAliases = try cacheReadDeferredNameDiagnosticRoster(reader)
 		let f_hiddenTypeNames = try cacheReadDeferredDiagnosticRoster(reader)
 		let f_bindingHygieneDiagnostics = try cacheReadDiagnosticArray(reader)
 		let f_parseMints = try cacheReadParseMints(reader)
 		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, provenFixedArrayAccesses: f_provenFixedArrayAccesses, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, closureRecordSites: f_closureRecordSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, provenFixedArrayAccesses: f_provenFixedArrayAccesses, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, abandonedRegions: f_abandonedRegions, refusal: f_refusal, refusedInstanceDeferrals: f_refusedInstanceDeferrals, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize344
-		return sizeof(FileParseArtifact) as CacheSize344
+	static function cacheLayoutBytes() returns CacheSize376
+		return sizeof(FileParseArtifact) as CacheSize376
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1496,6 +1668,7 @@ export type FileParseArtifact
 			_ = self.asyncSpawnSites.remove(opIndex)
 			_ = self.serviceAwaitSites.remove(opIndex)
 			_ = self.allocTagSites.remove(opIndex)
+			_ = self.closureRecordSites.remove(opIndex)
 			_ = self.debugStreamNameSites.remove(opIndex)
 			_ = self.immortalConstArraySites.remove(opIndex)
 			_ = self.provenFixedArrayAccesses.remove(opIndex)
@@ -1759,6 +1932,7 @@ module enum OpKeyedTable
 	serviceAwaitSites
 	asyncSpawnSites
 	allocTagSites
+	closureRecordSites
 	debugStreamNameSites
 	immortalConstArraySites
 	provenFixedArrayAccesses
@@ -1777,6 +1951,7 @@ module function heldBy(table OpKeyedTable, project Project) returns ElementIndex
 		serviceAwaitSites gives project.serviceAwaitSites.count()
 		asyncSpawnSites gives project.asyncSpawnSites.count()
 		allocTagSites gives project.allocTagSites.count()
+		closureRecordSites gives project.closureRecordSites.count()
 		debugStreamNameSites gives project.debugStreamNameSites.count()
 		immortalConstArraySites gives project.immortalConstArraySites.count()
 		provenFixedArrayAccesses gives project.provenFixedArrayAccesses.count()
@@ -1880,10 +2055,8 @@ end 'pushEachDeferredDiagnostic'
 // (code, message, position) record). `reportDiagnostic` is the single project sink, so a
 // parser-recorded diagnostic and a `SemanticCheck`-recorded one are indistinguishable downstream.
 function commitDiagnostics(project Project, artifact FileParseArtifact)
-	for diagnostic in artifact.diagnostics 'each'
-		reportDiagnostic(project, diagnostic: diagnostic)
-		noteDeclarationRefusedBy(project, diagnostic: diagnostic)
-	end 'each'
+	reportOwnRefusals(project, artifact: artifact)
+	reportRecordedDiagnostics(project, artifact: artifact)
 
 	// ⭐ The hygiene half does NOT go through `reportDiagnostic`: reaching the project's sink is exactly
 	// what would gate the pipeline before the checks that might explain the body — see
@@ -1894,7 +2067,7 @@ function commitDiagnostics(project Project, artifact FileParseArtifact)
 	end 'eachHygiene'
 end 'commitDiagnostics'
 
-function noteDeclarationRefusedBy(project Project, diagnostic Diagnostic)
+module function noteDeclarationRefusedBy(project Project, diagnostic Diagnostic)
 	match diagnostic.anchor 'anchor'
 		at(filePath, line, _) then noteDeclarationRefusedAt(project, filePath: filePath, line: line, backing: PoisonBacking.backed)
 		programWide or
@@ -2862,6 +3035,7 @@ function commitOpKeyedSites(project Project, artifact FileParseArtifact, opOffse
 
 	project.asyncSpawnSites.upsertRelocated(artifact.asyncSpawnSites, offset: opOffset)
 	project.allocTagSites.upsertRelocated(artifact.allocTagSites, offset: opOffset)
+	project.closureRecordSites.insertRelocated(artifact.closureRecordSites, offset: opOffset)
 	project.debugStreamNameSites.upsertRelocated(artifact.debugStreamNameSites, offset: opOffset)
 	project.immortalConstArraySites.upsertRelocated(artifact.immortalConstArraySites, offset: opOffset)
 	project.provenFixedArrayAccesses.upsertRelocated(artifact.provenFixedArrayAccesses, offset: opOffset)
@@ -2874,6 +3048,14 @@ extension Map
 		end 'eachSite'
 	end 'upsertRelocated'
 end 'Map'
+
+extension Set
+	function insertRelocated(source Self, offset Element)
+		for site in source 'eachSite'
+			self.insert(site + offset)
+		end 'eachSite'
+	end 'insertRelocated'
+end 'Set'
 
 // Append this file's recorded discarded-result sites to the whole-program list — the twin of the door and
 // transform commits above, and dedup-free for their reason: each entry is a distinct SITE with its own position.

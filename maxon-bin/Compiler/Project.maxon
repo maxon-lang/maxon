@@ -1520,6 +1520,31 @@ end 'cacheReadProvenFixedArrayAccessMap'
 
 // @generated library-cache end
 
+export typealias ClosureRecordSiteSet = Set with ElementIndex
+
+// @generated library-cache begin
+module function cacheWriteClosureRecordSiteSet(writer LibraryCacheWriter, value ClosureRecordSiteSet)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteClosureRecordSiteSet'
+
+module function cacheReadClosureRecordSiteSet(reader LibraryCacheReader) returns ClosureRecordSiteSet throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ClosureRecordSiteSet.create()
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ElementIndex
+		result.insert(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadClosureRecordSiteSet'
+
+// @generated library-cache end
+
 // ⭐ `__mm_alloc` call op index ⇒ the mm-trace TAG that box carries. See `Project.allocTagSites`.
 export typealias AllocTagSiteMap = Map with (ElementIndex, MmTag)
 
@@ -5802,9 +5827,61 @@ export type FunctionValueShape
 	export function takesPromiseAt(position ElementIndex) returns bool
 		return try self.promisesTaken.get(position) otherwise false
 	end 'takesPromiseAt'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteMaxonTypeArray(writer, value: self.paramTypes)
+		cacheWriteMaxonReturnType(writer, value: self.returnType)
+		writer.text(self.scopeFilePath.toString())
+		cacheWriteBoolArray(writer, value: self.promisesTaken)
+		writer.unsigned(self.byRefParams as CacheUnsigned)
+		writer.unsigned(self.isolatedParams as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns FunctionValueShape throws LibraryCacheDamage
+		let f_paramTypes = try cacheReadMaxonTypeArray(reader)
+		let f_returnType = try cacheReadMaxonReturnType(reader)
+		let f_scopeFilePath = try reader.path()
+		let f_promisesTaken = try cacheReadBoolArray(reader)
+		let f_byRefParams = (try reader.unsigned()) as ParamPositionMask
+		let f_isolatedParams = (try reader.unsigned()) as ParamPositionMask
+
+		return Self{paramTypes: f_paramTypes, returnType: f_returnType, scopeFilePath: f_scopeFilePath, promisesTaken: f_promisesTaken, byRefParams: f_byRefParams, isolatedParams: f_isolatedParams}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize48
+		return sizeof(FunctionValueShape) as CacheSize48
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'FunctionValueShape'
 
 export typealias FunctionValueShapeMap = Map with (ByteArray, FunctionValueShape)
+
+// @generated library-cache begin
+module function cacheWriteFunctionValueShapeMap(writer LibraryCacheWriter, value FunctionValueShapeMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteFunctionValueShapeMap'
+
+module function cacheReadFunctionValueShapeMap(reader LibraryCacheReader) returns FunctionValueShapeMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FunctionValueShapeMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try FunctionValueShape.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadFunctionValueShapeMap'
+
+// @generated library-cache end
 
 // ⭐ **A FUNCTION TYPEALIAS** — `typealias UnaryOp = function(Integer) returns Integer`. It is
 // its OWN registry, NOT a `RangedTypeAlias`, because a function alias names a function TYPE, not a ranged
@@ -6542,15 +6619,134 @@ export type FunctionShape
 	export let byRefParams as ParamPositionMask
 	export let markedParams as ParamPositionMask
 	export let mutableFunction as bool
+	let parts as ShapeAgreement
 
 	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, paramCapabilities ParamCapabilityArray, returnCapability ResultCapability, byRefParams ParamPositionMask, markedParams ParamPositionMask, mutableFunction bool = false) returns FunctionShape
-		return Self{paramTypes: paramTypes, returnType: returnType, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramCapabilities: paramCapabilities, returnCapability: returnCapability, byRefParams: byRefParams, markedParams: markedParams, mutableFunction: mutableFunction}
+		let parts = ShapeAgreement.create(paramTypes, identities: paramAggregateNames, capabilities: paramCapabilities, markedParams: markedParams, byRefParams: byRefParams, mutableFunction: mutableFunction, returnType: returnType, returnIdentity: returnAggregateName)
+		return Self{paramTypes: paramTypes, returnType: returnType, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramCapabilities: paramCapabilities, returnCapability: returnCapability, byRefParams: byRefParams, markedParams: markedParams, mutableFunction: mutableFunction, parts: parts}
 	end 'create'
 
 	export function paramCapabilityAt(position ElementIndex) returns ParamCapability
 		return try self.paramCapabilities.get(position) otherwise panic("FunctionShape.paramCapabilityAt: position {position} is past the {self.paramCapabilities.count()} parameters of the shape")
 	end 'paramCapabilityAt'
+
+	export function agreementParts() returns ShapeAgreement
+		return self.parts
+	end 'agreementParts'
+
+	export function identityKey() returns immutable ByteArray
+		return self.parts.identityKey()
+	end 'identityKey'
 end 'FunctionShape'
+
+// The fields shape agreement compares (`TypeResolution.functionShapesAgreeUnderSomeInstantiation`),
+// beside the keys built from them: a field the comparison reads and `identityKey` omits merges two
+// shapes that disagree.
+export type ShapeAgreement
+	var paramTypes as MaxonTypeArray
+	let paramIdentities as NameRoster
+	let paramCapabilities as ParamCapabilityArray
+	export let markedParams as ParamPositionMask
+	export let byRefParams as ParamPositionMask
+	export let mutableFunction as bool
+	export let returnType as MaxonReturnType
+	export let returnIdentity as immutable ByteArray
+
+	static function create(paramTypes MaxonTypeArray, identities NameRoster, capabilities ParamCapabilityArray, markedParams ParamPositionMask, byRefParams ParamPositionMask, mutableFunction bool, returnType MaxonReturnType, returnIdentity immutable ByteArray) returns ShapeAgreement
+		return Self{paramTypes: paramTypes, paramIdentities: identities, paramCapabilities: capabilities, markedParams: markedParams, byRefParams: byRefParams, mutableFunction: mutableFunction, returnType: returnType, returnIdentity: returnIdentity}
+	end 'create'
+
+	export function arity() returns ParamCount
+		return self.paramTypes.count() as ParamCount
+	end 'arity'
+
+	export function typeAt(position ParamCount) returns MaxonType
+		return try self.paramTypes.get(position) otherwise panic("ShapeAgreement.typeAt: position {position} is past the {self.paramTypes.count()} parameters of the shape")
+	end 'typeAt'
+
+	export function identityAt(position ParamCount) returns immutable ByteArray
+		return try self.paramIdentities.get(position) otherwise panic("ShapeAgreement.identityAt: position {position} is past the {self.paramIdentities.count()} identities of a shape of {self.paramTypes.count()} parameters")
+	end 'identityAt'
+
+	export function capabilityAt(position ParamCount) returns ParamCapability
+		return declaredCapabilityAt(self.paramCapabilities, position: position)
+	end 'capabilityAt'
+
+	export function isWrittenAt(position ParamCount) returns bool
+		return maskHasParam(self.byRefParams, param: position)
+	end 'isWrittenAt'
+
+	export function identityKey() returns immutable ByteArray
+		var key = "{self.mutableFunction}|{self.byRefParams:x}|{self.markedParams:x}"
+
+		for position in 0 upto self.arity() 'eachParam'
+			let paramType = self.typeAt(position)
+			let identity = self.identityAt(position)
+			key.append("|{maxonTypeTag(paramType).ordinal}.{typeNameIdOf(paramType)}.{self.capabilityAt(position).ordinal}.{identity.count()}:{String.from(identity)}")
+		end 'eachParam'
+
+		match self.returnType 'returned'
+			void then key.append("|void")
+			value(inner) then key.append("|{maxonTypeTag(inner).ordinal}.{typeNameIdOf(inner)}")
+		end 'returned'
+
+		key.append("|{self.returnIdentity.count()}:{String.from(self.returnIdentity)}")
+		return freeze key.toByteArray()
+	end 'identityKey'
+
+	// Only what agreement requires to be equal when the callee's shape mentions no type parameter:
+	// arity, marks, and each type's tag and the id of one identified by name.
+	// `FunctionRefShapes.candidatesFor` skips every bucket of another key, so a part two agreeing
+	// shapes may differ in, put here, drops a body a call can land on.
+	export function candidateKey() returns immutable ByteArray
+		var key = "{self.arity()}|{self.markedParams:x}"
+
+		for position in 0 upto self.arity() 'eachParam'
+			key.append("|{self.candidateTypeKey(self.typeAt(position))}")
+		end 'eachParam'
+
+		match self.returnType 'returned'
+			void then key.append("|void")
+			value(inner) then key.append("|{self.candidateTypeKey(inner)}")
+		end 'returned'
+
+		return freeze key.toByteArray()
+	end 'candidateKey'
+
+	function candidateTypeKey(t MaxonType) returns String
+		let tag = maxonTypeTag(t)
+
+		if tag != ValueTypeTag.function and tagIsIdentifiedByName(tag) 'carriesAnId'
+			return "{tag.ordinal}.{typeNameIdOf(t)}"
+		end 'carriesAnId'
+
+		return "{tag.ordinal}"
+	end 'candidateTypeKey'
+
+	export function readsNoReaderAgainst(other ShapeAgreement) returns bool
+		if self.arity() != other.arity() 'differentArity'
+			return true
+		end 'differentArity'
+
+		for position in 0 upto self.arity() 'eachParam'
+			if not self.positionReadsNoReader(self.typeAt(position), identity: self.identityAt(position), other: other.typeAt(position), otherIdentity: other.identityAt(position)) 'aReaderMayBeAsked'
+				return false
+			end 'aReaderMayBeAsked'
+		end 'eachParam'
+
+		let ours = try valueTypeOfReturn(self.returnType) otherwise return true
+		let theirs = try valueTypeOfReturn(other.returnType) otherwise return true
+		return self.positionReadsNoReader(ours, identity: self.returnIdentity, other: theirs, otherIdentity: other.returnIdentity)
+	end 'readsNoReaderAgainst'
+
+	function positionReadsNoReader(t MaxonType, identity ByteArray, other MaxonType, otherIdentity ByteArray) returns bool
+		if maxonTypeTag(t) == ValueTypeTag.function and typeNameIdOf(t) != typeNameIdOf(other) 'aNestedShapeIsCompared'
+			return false
+		end 'aNestedShapeIsCompared'
+
+		return identity.equals(otherIdentity)
+	end 'positionReadsNoReader'
+end 'ShapeAgreement'
 
 // Registry: FUNCTION-TYPEALIAS name -> its shape. Built by `TypeResolution.functionAliasShapesIn`,
 // in one `FunctionAliasShapeForm`, from `project.functionTypeAliases`, which stores the alias's
@@ -12537,6 +12733,12 @@ export type Project
 	// interpolated part and per promoted parameter, and is READ only by a traced build.
 	export var allocTagSites as AllocTagSiteMap
 
+	// The `__mm_alloc` op index of every closure environment the parser builds: the semantic twin of
+	// that entry in `allocTagSites`, which only a traced build may read.
+	// `CallSummaryIndex.functionRefTargetOf` resolves a call through a local closure to its one body
+	// by it.
+	export var closureRecordSites as ClosureRecordSiteSet
+
 	// ⭐⭐ **`__DebugStream.nameId("…")` call op index ⇒ the LITERAL that call names.** The parser reads the
 	// name off its own token and emits a `__ds_name_id` marker call carrying NO arguments, because the name
 	// is not a value: materializing it as one would mint the `.rdata` String record and the runtime
@@ -12782,6 +12984,7 @@ export type Project
 			synthesizedOpFiles: SynthesizedOpFileMap.create(),
 			registryUseSites: RegistryUseSiteMap.create(),
 			allocTagSites: AllocTagSiteMap.create(),
+			closureRecordSites: ClosureRecordSiteSet.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
 			immortalConstArraySites: ImmortalConstArraySiteMap.create(),
 			provenFixedArrayAccesses: ProvenFixedArrayAccessMap.create(),

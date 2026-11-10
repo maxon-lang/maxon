@@ -1,0 +1,19 @@
+let VerifyWarmRebuildCommandWord = "verify-warm-rebuild"
+let MissingInputName = "verify-warm-rebuild-no-such-input"
+let MissingInputPath = "temp/cli/{MissingInputName}"
+let FileNotFoundPhrase = "error: file not found: "
+let NotRunPhrase = "NOT RUN"
+let DoesNotCompilePhrase = "the program does not compile"
+let MissingInputPanicPhrase = "panic at"
+
+test 'verify-warm-rebuild of an input that does not exist reports the missing input and not a program that does not compile'
+	let run = spawnCompiler([VerifyWarmRebuildCommandWord, MissingInputPath])
+	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+
+	Expect.notEqual(run.exitCode(), expected: 0, message: "`maxon {VerifyWarmRebuildCommandWord} {MissingInputPath}` exited 0. {said}")
+	Expect.contains(run.stderr, needle: FileNotFoundPhrase, message: "`maxon {VerifyWarmRebuildCommandWord} {MissingInputPath}` did not report the input as missing. {said}")
+	Expect.contains(run.stderr, needle: MissingInputName, message: "`maxon {VerifyWarmRebuildCommandWord} {MissingInputPath}` did not name the input it could not find. {said}")
+	Expect.isFalse(run.stdout.contains(NotRunPhrase) or run.stderr.contains(NotRunPhrase), message: "`maxon {VerifyWarmRebuildCommandWord} {MissingInputPath}` reported a property as not run. {said}")
+	Expect.isFalse(run.stdout.contains(DoesNotCompilePhrase) or run.stderr.contains(DoesNotCompilePhrase), message: "`maxon {VerifyWarmRebuildCommandWord} {MissingInputPath}` said the program does not compile, where there is no program. {said}")
+	Expect.isFalse(run.stderr.contains(MissingInputPanicPhrase), message: "`maxon {VerifyWarmRebuildCommandWord} {MissingInputPath}` panicked instead of reporting the missing input. {said}")
+end 'verify-warm-rebuild of an input that does not exist reports the missing input and not a program that does not compile'

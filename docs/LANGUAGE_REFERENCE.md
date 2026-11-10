@@ -1738,6 +1738,11 @@ end 'main'
   (`Box with FullRangeFloat`). The element of an `Array` or a `FixedArray` is the exception, because it is stored
   inline in a buffer: `Array with FullRangeFloat` and `FixedArray with 2 FullRangeFloat` compile, and there a bare `float` is
   **E2061**.
+- A container element at an interface type (`Array with Named`, `Box with Named`) is **E2015**: an element
+  slot is one machine word, and a value at an interface type is two (the value and its witness table).
+  It is reported once, where the instance is written, however many uses the typealias that names it has.
+  An interface base's arguments bind its associated types instead; one bound to an interface is
+  **E2015** only where a requirement takes that associated type as a parameter.
 
 Inside `type Outer uses T`, another generic type written without `with` arguments binds by parameter NAME:
 `Inner uses T` means `Inner with T`. A base whose parameters the scope does not declare (`Box uses Element`)
@@ -1962,7 +1967,18 @@ end 'Shape'
 
 - `self` is the conforming value; the extension may call any requirement of the interface, including one a
   conformer implements with a file-private function.
-- Associated types resolve to each conformer's binding.
+- Associated types resolve to each conformer's binding. A member may take or return an associated type a
+  conformer binds to an interface: for that conformer the parameter or result is held at the interface,
+  as in a plain function declared with it.
+- A conformer's binding of an associated type to an interface is **E2015** where an extension of the
+  interface holds that associated type in a one-word slot. A container element (`typealias ItemArray = Array with Item`)
+  is **E2015** at the conformer's binding (`type Impl implements Source with Named`); a function type's
+  parameter or result and a tuple element are **E2015** at the extension's alias. Each is reported once,
+  however many bodies use the alias. The standard library's extensions count:
+  `extension Iterable` holds `Element` as a container element (`ElementArray`) and as a function type's
+  parameter (`ElementTransform`, `ElementPredicate`), so a conformer that binds `Element` to an interface
+  is **E2015** at that binding and at the library's alias. Bind a concrete type that implements the
+  interface.
 - Extensions of a parent interface apply to types conforming to a derived one.
 
 ### Conditional Extensions
@@ -3434,11 +3450,16 @@ value to a function whose parameter such a closure captures is **E3078**. A clos
 only called, where it is made or by a parameter that only calls it — writes what it writes of a parameter it
 captures, so handing that function a read-only value is **E3159**.
 
+A call through a closure held in a local `let` is judged against that one closure: `reader(box)` takes a
+frozen `box` when `reader` only reads its parameter, though a closure of the same shape beside it writes
+its own. A local that was reassigned, or that a branch or a loop merged, may name any closure of its shape,
+so a call through it is judged against all of them.
+
 **A closure can go anywhere a value can.** A function value is one reference to a record holding the code
 and the captures, so a closure may be returned, stored in a field, a container or
 a union payload, and passed to `async`. A plain function is a record that
-lives for the whole program. Copies share: `var g = f` and `f.clone()` hold the same closure, and a function
-value is exempt from **E3078**. A module-level `let` may hold a function value, including a closure
+lives for the whole program. Copies share: `var g = f`, `g = f` and `f.clone()` hold the same closure, and a
+function value is exempt from **E3078**. A module-level `let` may hold a function value, including a closure
 a factory call returns.
 
 **A closure may not be stored into what it captures.** The record would hold the closure and the closure the

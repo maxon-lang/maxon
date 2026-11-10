@@ -5295,6 +5295,13 @@ type AsyncSpawnCallee
 	end 'create'
 end 'AsyncSpawnCallee'
 
+typealias RefusedInstanceMap = Map with (GenericInstanceId, bool)
+
+union GenericAliasSink
+	discard
+	collect(out GenericAliasEntryArray)
+end 'GenericAliasSink'
+
 // ⭐ **THE THREE SHAPES A NESTED (inner) TYPEALIAS TAKES.** A `typealias Idx =
 // int(0 to N)` is a RANGED per-instance alias; a `typealias ElementArray = Array with T` is a
 // GENERIC-INSTANCE alias whose instance (`Array with typeParameter(token)`) is partially opaque; a
@@ -14956,6 +14963,48 @@ export union PoisonedAt
 	line(number LineNumber)
 end 'PoisonedAt'
 
+// @generated library-cache begin
+module function cacheWritePoisonedAt(writer LibraryCacheWriter, value PoisonedAt)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		abandonedBody(a0) then cacheWritePoisonedAtAbandonedBody(writer, a0: a0)
+		line(a0) then cacheWritePoisonedAtLine(writer, a0: a0)
+	end 'payload'
+end 'cacheWritePoisonedAt'
+
+function cacheWritePoisonedAtAbandonedBody(writer LibraryCacheWriter, a0 LineNumber)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWritePoisonedAtAbandonedBody'
+
+function cacheWritePoisonedAtLine(writer LibraryCacheWriter, a0 LineNumber)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWritePoisonedAtLine'
+
+module function cacheReadPoisonedAt(reader LibraryCacheReader) returns PoisonedAt throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadPoisonedAtAbandonedBody(reader)
+		1 gives try cacheReadPoisonedAtLine(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadPoisonedAt'
+
+function cacheReadPoisonedAtAbandonedBody(reader LibraryCacheReader) returns PoisonedAt throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as LineNumber
+
+	return PoisonedAt.abandonedBody(a0)
+end 'cacheReadPoisonedAtAbandonedBody'
+
+function cacheReadPoisonedAtLine(reader LibraryCacheReader) returns PoisonedAt throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as LineNumber
+
+	return PoisonedAt.line(a0)
+end 'cacheReadPoisonedAtLine'
+
+// @generated library-cache end
+
 export type RefusedPart
 	export let key as PositionKey
 	export let poisoned as PoisonedAt
@@ -15248,6 +15297,7 @@ type StatementSlots
 	module var lastDispatchedReceiver as ValueId
 	module var constInitializerEnd as ElementIndex
 	module var initializerBinding as ByteArray
+	module var initializerClosureHost as immutable ByteArray
 	module var elementStoreDestination as ElementStoreDestination
 
 	// A call argument at a by-reference position has asked for the STORAGE itself rather than its contents.
@@ -15305,7 +15355,7 @@ type StatementSlots
 	end 'takeHandedPlaceStorage'
 
 	static function quiescent() returns StatementSlots
-		return Self{claimOpFloor: 0, qualifiedTypeBase: QualifiedTypeBase.none, handedResolution: NothingHanded, errorMatchRefusal: ErrorMatchRefusal.none, lastBlockBodyEnd: 0, constLetCast: ConstLetCastRecord.none, constDependencyFailed: false, constDependsOnARecord: false, lastCast: RecordedCast.nothingRecorded, lastBareBindingImmutableName: WriteBlame.unblamed, catchingSourceIsWritable: false, lastWitnessDispatch: RecordedTryTarget.nothingRecorded, pendingRequirementParam: PendingUnstorableRequirement.none, lastAwait: RecordedTryTarget.nothingRecorded, lastSpawnStart: SpawnStartReply.noReply, lastSend: RecordedSend.nothingRecorded, unsettledSend: UnsettledSend.settled, sentLeg: SentLegSlot.none, lastDispatchedMemberIndex: 0, lastDispatchedReceiver: 0, constInitializerEnd: 0, initializerBinding: EmptySourceText.clone(), elementStoreDestination: ElementStoreDestination.none, cellArgumentToken: CellArgumentToken.none, cellArgumentWantsAPlace: false, argumentRoot: ArgumentRoot.none, pendingSendTimeout: SendTimeoutArgument.absent, drainingLoops: 0, drainingLabel: EmptySourceText, handedPlaceStorage: noHandedPlaceStorage, arrayLiteralTargetTokenIndex: 0, arrayLiteralTarget: DeclaredArrayInstance.none, tupleLiteralTargetTokenIndex: 0, tupleLiteralTarget: NoDeclaredTupleTarget, pendingClosureParamOffer: PendingClosureParamOffer.none}
+		return Self{claimOpFloor: 0, qualifiedTypeBase: QualifiedTypeBase.none, handedResolution: NothingHanded, errorMatchRefusal: ErrorMatchRefusal.none, lastBlockBodyEnd: 0, constLetCast: ConstLetCastRecord.none, constDependencyFailed: false, constDependsOnARecord: false, lastCast: RecordedCast.nothingRecorded, lastBareBindingImmutableName: WriteBlame.unblamed, catchingSourceIsWritable: false, lastWitnessDispatch: RecordedTryTarget.nothingRecorded, pendingRequirementParam: PendingUnstorableRequirement.none, lastAwait: RecordedTryTarget.nothingRecorded, lastSpawnStart: SpawnStartReply.noReply, lastSend: RecordedSend.nothingRecorded, unsettledSend: UnsettledSend.settled, sentLeg: SentLegSlot.none, lastDispatchedMemberIndex: 0, lastDispatchedReceiver: 0, constInitializerEnd: 0, initializerBinding: EmptySourceText.clone(), initializerClosureHost: EmptySourceText, elementStoreDestination: ElementStoreDestination.none, cellArgumentToken: CellArgumentToken.none, cellArgumentWantsAPlace: false, argumentRoot: ArgumentRoot.none, pendingSendTimeout: SendTimeoutArgument.absent, drainingLoops: 0, drainingLabel: EmptySourceText, handedPlaceStorage: noHandedPlaceStorage, arrayLiteralTargetTokenIndex: 0, arrayLiteralTarget: DeclaredArrayInstance.none, tupleLiteralTargetTokenIndex: 0, tupleLiteralTarget: NoDeclaredTupleTarget, pendingClosureParamOffer: PendingClosureParamOffer.none}
 	end 'quiescent'
 end 'StatementSlots'
 
@@ -15354,6 +15404,7 @@ end 'bindingPartWhenRefusedWithin'
 
 union OpenedBlockLabel
 	claimed(label immutable ByteArray, key immutable ByteArray, at ElementIndex)
+
 	// A label that reuses an enclosing one, or one whose position is not tracked. It owns no key in
 	// `OpenLabels.positions`, so closing it must not release the enclosing block's key.
 	unclaimed(label immutable ByteArray)
@@ -16112,6 +16163,12 @@ module function declarationOpensIn(tokens TokenArray, index ElementIndex) return
 	return declarationHeadShapeIn(tokens, index: pastVisibilityModifiers(tokens, index: index))
 end 'declarationOpensIn'
 
+module function declarationOpensAtHeadColumn(tokens TokenArray, index ElementIndex) returns bool
+	let tok = try tokens.get(index) otherwise panic("declarationOpensAtHeadColumn: index {index} is not below the {tokens.count()} tokens it was asked about")
+
+	return tok.column == DeclarationHeadColumn and declarationOpensIn(tokens, index: index)
+end 'declarationOpensAtHeadColumn'
+
 // Is the token at `index` the WORD `module`? Split from `atModuleModifier` because the sweep reads the
 // modifier BACKWARDS, from the declaration keyword (`visibilityBefore`), where "the next token
 // opens a declaration" is established by the position itself — re-asking it there would ask about
@@ -16691,10 +16748,17 @@ end 'DeclaredStoragePosition'
 // base's argument is a container ELEMENT; an `interface` base's is an associated-type BINDING, and the
 // binding arm carries the interface NAME because its check is about the associated type at that position —
 // which requirement writes it, and whether in the result or in an argument. See
-// `Parser.genericArgSlotOf`, which decides it once from the base.
-union GenericArgSlot
+// `ProgramSignatures.genericArgSlotOf`, which decides it once from the base.
+module union GenericArgSlot
 	containerElement
 	associatedTypeBinding(interfaceName immutable ByteArray)
+
+	function storagePosition() returns DeclaredStoragePosition
+		return match self 'slot'
+			containerElement gives DeclaredStoragePosition.containerElement
+			associatedTypeBinding gives DeclaredStoragePosition.associatedTypeBinding
+		end 'slot'
+	end 'storagePosition'
 end 'GenericArgSlot'
 
 // ⭐ **WHAT A DISPATCH NEEDS TO KNOW TO BUILD THE FAT POINTER ITS RESULT IS** — the interface the associated
@@ -19714,17 +19778,44 @@ type GenericBindingScope
 	end 'empty'
 end 'GenericBindingScope'
 
+union ConformanceOwner
+	declaration(conformer immutable ByteArray)
+	unchecked
+end 'ConformanceOwner'
+
+type HeldAssociatedUse
+	export let associatedPosition as ElementIndex
+	export let held as ExtensionHeldArgument
+
+	static function create(associatedPosition ElementIndex, held ExtensionHeldArgument) returns HeldAssociatedUse
+		return Self{associatedPosition: associatedPosition, held: held}
+	end 'create'
+end 'HeldAssociatedUse'
+
+typealias HeldAssociatedUseArray = Array with HeldAssociatedUse
+
+// The sweep notes each container argument an extension body writes over an associated type
+// (`noteInterfaceBindingHeldAsArgument`), for every conformer's binding to be judged against; the
+// real parse reads an associated type a conformer binds to an interface as that interface
+// (`extensionAssociatedType`).
+enum ExtensionBodyPass
+	sweep
+	parse
+end 'ExtensionBodyPass'
+
 type ExtensionAssociatedScope
 	export let names as immutable NameRoster
 	export let bindings as RequirementTypeArray
 	export let bindingFilePath as FilePath
+	export let pass as ExtensionBodyPass
+	export var heldUses as HeldAssociatedUseArray
 
-	static function over(names NameRoster, bindings RequirementTypeArray, bindingFilePath FilePath) returns ExtensionAssociatedScope
-		return Self{names: names, bindings: bindings, bindingFilePath: bindingFilePath}
+	static function over(names NameRoster, bindings RequirementTypeArray, bindingFilePath FilePath, pass ExtensionBodyPass) returns ExtensionAssociatedScope
+		return Self{names: names, bindings: bindings, bindingFilePath: bindingFilePath, pass: pass, heldUses: HeldAssociatedUseArray.create(0)}
 	end 'over'
 
 	static function empty() returns ExtensionAssociatedScope
-		return Self{names: freeze NameRoster.create(0), bindings: RequirementTypeArray.create(0), bindingFilePath: CompilerOwnedDeclFilePath}
+		return Self{names: freeze NameRoster.create(0), bindings: RequirementTypeArray.create(0), bindingFilePath: CompilerOwnedDeclFilePath, pass: ExtensionBodyPass.sweep, heldUses: HeldAssociatedUseArray.create(0)}
 	end 'empty'
 end 'ExtensionAssociatedScope'
 
@@ -20066,14 +20157,8 @@ export type Parser
 	var genericInstanceName = GenericInstanceBody.none
 	var pendingBareAliases = ConformerBareAliasArray.create(0)
 
-	// A REUSED sink for the REAL parse's generic-instance typealiases. The whole-program index
-	// records every generic alias in the SWEEP (`foldFile`), so the real parse's `readTypeAliasDeclaration`
-	// has nowhere to fold one and nothing downstream reads it — but the shared reader records into a
-	// `genericOut` regardless. Passing this one reused array (rather than a fresh throwaway per typealias)
-	// keeps a ranged alias like `ExitCode` from allocating on the hot real-parse path; only an actual
-	// generic-instance typealias — rare, and absent from the scale corpus — ever pushes an entry.
-	var genericAliasScratch as GenericAliasEntryArray
 	var sweptImplementsClauses as AliasImplementsClauseArray
+	var refusedInstances as RefusedInstanceMap
 
 	// The SHARED empty type-parameter-POSITION array the consume scan passes for every
 	// receiver-less function OUTSIDE a generic type — which is all of them on the generics-free corpus. It is
@@ -20187,7 +20272,6 @@ export type Parser
 	export var openRegion as AbandonableRegion
 	export var blockStructureMisread as bool
 	var abandonedRegions as PositionKeySet
-	var recoveredRegions as AbandonedRegionArray
 	var readsALaterConformer as bool
 	var extensionReplayOwed as bool
 
@@ -20464,8 +20548,8 @@ export type Parser
 			enclosingBodyIsWalkable: false,
 			extensionInterfaceName: InterfaceName.none,
 			extensionAssociated: ExtensionAssociatedScope.empty(),
-			genericAliasScratch: GenericAliasEntryArray.create(0),
 			sweptImplementsClauses: AliasImplementsClauseArray.create(0),
+			refusedInstances: RefusedInstanceMap.create(),
 			emptyTypeParamPositions: TypeParamSlots.create(),
 			emptySweptParamTypes: MaxonTypeArray.create(0),
 			emptyParamSpellings: NameRoster.create(0),
@@ -20484,7 +20568,6 @@ export type Parser
 			openRegion: AbandonableRegion.none,
 			blockStructureMisread: false,
 			abandonedRegions: PositionKeySet.create(),
-			recoveredRegions: AbandonedRegionArray.create(0),
 			readsALaterConformer: false,
 			extensionReplayOwed: false,
 			requestedInstanceSiteKeys: RequestedInstanceSiteKeyMap.create(),
@@ -20660,12 +20743,8 @@ export type Parser
 
 		self.rewindTo(confinement.mark)
 		self.abandonedRegions.insert(region.key)
-		self.recoveredRegions.push(region)
+		self.artifact.abandonedRegions.push(region)
 	end 'recoverRegion'
-
-	export function regionsRecovered() returns AbandonedRegionArray
-		return self.recoveredRegions
-	end 'regionsRecovered'
 
 	function enterRegion(region AbandonableRegion) returns AbandonableRegion
 		let enclosing = self.openRegion.clone()
@@ -20685,11 +20764,14 @@ export type Parser
 	// `commitTypeNameDecls` exists to end.
 	//
 	// It is sound because each entry is a FINISHED record — a name, a kind and a name-token position,
-	// pushed by `dispatchTopLevel` only after its declaration parsed. Unlike every other artifact
-	// field there is no partial state in the array to salvage, so there is nothing to decide about
-	// where the parse stopped. Copied rather than aliased: two artifacts sharing one array is the
-	// hazard `IrBlock`'s header states, and this path is cold.
-	export function abortedParseArtifact() returns FileParseArtifact
+	// pushed by `dispatchTopLevel` only after its declaration parsed. There is no partial state in the
+	// array to salvage, so there is nothing to decide about where the parse stopped. Copied rather
+	// than aliased: two artifacts sharing one array is the hazard `IrBlock`'s header states, and this
+	// path is cold.
+	//
+	// The regions abandoned before the parse stopped, and the refusal that stopped it, are carried as
+	// well, so the memoized artifact reports them on every merge as the parse that filed it did.
+	export function abortedParseArtifact(refusal ParseRefusal) returns FileParseArtifact
 		var salvaged = FileParseArtifact.create(self.job.path, livesUnderStdlibDirectory: self.job.livesUnderStdlibDirectory, sourceBytes: sourceByteCountOf(self.tokens))
 
 		for decl in self.artifact.typeNameDecls 'eachDecl'
@@ -20700,7 +20782,12 @@ export type Parser
 			salvaged.genericInstanceRequests.push(instance)
 		end 'eachRequest'
 
+		for region in self.artifact.abandonedRegions 'eachRegion'
+			salvaged.abandonedRegions.push(region)
+		end 'eachRegion'
+
 		salvaged.adoptHiddenTypeNames(self.artifact)
+		salvaged.refusal = refusal
 		return salvaged
 	end 'abortedParseArtifact'
 
@@ -21329,6 +21416,14 @@ export type Parser
 		view head = self.constructionHeadName()
 		return fromHeadIsTheBareBase(head, container: container) or self.namesContainerInstanceAlias(head, container: container)
 	end 'atContainerFromConstruction'
+
+	function atRefusedInstanceConstruction() returns bool
+		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from) 'notAFromConstruction'
+			return false
+		end 'notAFromConstruction'
+
+		return self.aliasDenotesARefusedInstance(self.constructionHeadName())
+	end 'atRefusedInstanceConstruction'
 
 	function constructionHeadName() returns immutable ByteArray
 		if self.qualifiedTypeBaseIsAt(self.pos) 'aQualifiedAliasHead'
@@ -25189,7 +25284,7 @@ export type Parser
 			return typeEnd
 		end 'noDefault'
 
-		return self.expressionEndFrom(typeEnd + 1, stopsAtNewline: false, stopsAtOtherwise: false)
+		return self.expressionEndFrom(typeEnd + 1)
 	end 'paramItemEndFrom'
 
 	// The end of the expression starting at `start`, found at bracket depth 0 — the one walker a parameter
@@ -25197,14 +25292,14 @@ export type Parser
 	//
 	// ⚠ It does not stop at `=`: every caller starts one token past the `=` that opens the value, and Maxon
 	// has no assignment expression.
-	function expressionEndFrom(start ElementIndex, stopsAtNewline bool, stopsAtOtherwise bool) returns ElementIndex
+	function expressionEndFrom(start ElementIndex) returns ElementIndex
 		var depth = 0 as BracketDepth
 		var q = start
 
 		while self.kindAt(q) != TokenKind.eof 'walk'
 			let kind = self.kindAt(q)
 
-			if depth == 0 and (kind == TokenKind.comma or tokenKindClosesABracket(kind) or (stopsAtNewline and kind == TokenKind.newline) or (stopsAtOtherwise and kind == TokenKind.otherwise)) 'itemEnds'
+			if declarationOpensAtHeadColumn(self.tokens, index: q) or (depth == 0 and (kind == TokenKind.comma or kind == TokenKind.returns or tokenKindClosesABracket(kind))) 'itemEnds'
 				return q
 			end 'itemEnds'
 
@@ -25325,7 +25420,7 @@ export type Parser
 	// the fewer places that read a declaration, the fewer can disagree.
 	function recordScannedTypeAlias(aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, genericAliases GenericAliasEntryArray)
 		let visibility = try self.consumeOptionalVisibility() otherwise return
-		_ = try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: genericAliases, tupleOwner: TupleAliasOwner.fileScope, recordFunctionSignature: false, visibility: visibility) otherwise return
+		_ = try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: GenericAliasSink.collect(genericAliases), tupleOwner: TupleAliasOwner.fileScope, recordFunctionSignature: false, visibility: visibility) otherwise return
 	end 'recordScannedTypeAlias'
 
 	// Consume an optional leading `export` / `module` modifier and answer what it means. THE one reader of
@@ -26050,7 +26145,7 @@ export type Parser
 		try self.consume(TokenKind.extension) otherwise return
 		let nameTok = try self.consumeExtensionTargetName() otherwise return
 		try index.typeExtensionTargetOf(nameTok.value) otherwise return
-		let interfaces = try self.readImplementsList() otherwise return
+		let interfaces = try self.readImplementsList(ConformanceOwner.unchecked) otherwise return
 
 		// A conditional conformance holds only for the conformers its clause admits, which the real parse
 		// decides per conformer; filed here it would be declared for all of them.
@@ -26136,7 +26231,7 @@ export type Parser
 			self.pos = bodyStart
 			self.enterTypeScopeOf(conformer)
 			self.scannedFunctionAliases = functionAliasesOfTheBody
-			self.openExtensionBodyScope(header, conformer: conformer, index: index)
+			self.openExtensionBodyScope(header, conformer: conformer, index: index, pass: ExtensionBodyPass.sweep)
 
 			// ⭐⭐ **THE CONFORMANCE THIS EXTENSION DECLARES IS FILED WHOLE-PROGRAM HERE, *BEFORE* THE VERDICT,
 			// AND THE POSITION IS THE OPPOSITE OF `parseExtensionDeclaration`'s ON PURPOSE.**
@@ -26206,6 +26301,7 @@ export type Parser
 					// conformer's.
 					let nestedIsTheTypesOwn = index.typeBodyDeclaresInnerAlias(joinQualifiedName(conformer, member: nestedNameTok.value))
 					view nestedTupleOwner = TupleAliasOwner.unpublished if extensionMethodsWithheld(verdict) or nestedIsTheTypesOwn else TupleAliasOwner.enclosingType(conformer)
+					self.extensionAssociated.heldUses.clear()
 					let nested = try self.readNestedTypeAlias(memberVisibility, recordFunctionSignature: false, tupleOwner: nestedTupleOwner) otherwise break
 
 					// ⚠ **READ ALWAYS, PUBLISH ONLY WHEN THE EXTENSION IS THIS CONFORMER'S** — the withheld
@@ -26231,6 +26327,10 @@ export type Parser
 							continue
 						end 'aRefusedDuplicate'
 					end 'anAuthorsMember'
+
+					for use in self.extensionAssociated.heldUses 'eachHeldUse'
+						index.noteExtensionHeldArgument(conformer, interfaceName: header.nameTok.value, associatedPosition: use.associatedPosition, held: use.held)
+					end 'eachHeldUse'
 
 					match nested 'nested'
 						ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingTypeName(), alias: self.nestedRangedAlias(alias)))
@@ -26379,7 +26479,7 @@ export type Parser
 		// THEM** (`extension Array implements Hashable, Equatable where Element is Hashable and Equatable`).
 		// It reuses the `type` declaration's own reader — one grammar for one clause — so an associated-type
 		// binding (`implements Iterable with (Element, Iter)`) means here exactly what it means there.
-		let interfaces = try self.readImplementsList()
+		let interfaces = try self.readImplementsList(ConformanceOwner.unchecked)
 
 		if not self.at(TokenKind.where) 'unconditional'
 			return ExtensionHeader.create(nameTok, target: target, interfaces: interfaces, constraints: WhereConstraintArray.create(0))
@@ -26413,7 +26513,7 @@ export type Parser
 	// ⭐ **THE CONFORMER'S OWN `uses` PARAMETERS ARE A DIFFERENT LIST AND ARE INSTALLED** — see the block
 	// at the assignment below for why the two are not the same fact, and for the two things that break
 	// without it.
-	function openExtensionBodyScope(header ExtensionHeader, conformer ByteArray, index ProgramSignatures)
+	function openExtensionBodyScope(header ExtensionHeader, conformer ByteArray, index ProgramSignatures, pass ExtensionBodyPass)
 		self.enclosingBodySharesTheTypesFile = self.conformerIsDeclaredInThisFile(conformer, index: index)
 
 		// ⭐⭐ **AN EXTENSION BODY RESOLVES A BARE NESTED-ALIAS MEMBER AGAINST THE WHOLE PROGRAM, NOT AGAINST ITS
@@ -26423,7 +26523,7 @@ export type Parser
 		self.innerAliasesFromIndex = true
 
 		match header.target 'target'
-			interfaceExtension then self.openInterfaceExtensionBodyScope(header, conformer: conformer, index: index)
+			interfaceExtension then self.openInterfaceExtensionBodyScope(header, conformer: conformer, index: index, pass: pass)
 			undeclaredTarget then return
 
 			// A TYPE extension's body IS inside the extended type's own parameter scope: `function matches(other
@@ -26447,7 +26547,7 @@ export type Parser
 	// ⭐ **THE CURE IS TO MAKE THE CLASSIFICATION TERMINAL** — every arm now CALLS and none falls out, so the
 	// tail needs a name instead of a fallthrough. It is the same cure `LowerMaxonToStd`'s four residues took
 	// (`appendRuntimeCall` / `appendThrowingCall` / `appendStdUnaryOp`), and for the same reason.
-	function openInterfaceExtensionBodyScope(header ExtensionHeader, conformer ByteArray, index ProgramSignatures)
+	function openInterfaceExtensionBodyScope(header ExtensionHeader, conformer ByteArray, index ProgramSignatures, pass ExtensionBodyPass)
 		// ⭐⭐ **A GENERIC CONFORMER'S OWN `uses` PARAMETERS ARE INSTALLED, AND THAT IS NOT THE THING THE ⚠ ABOVE
 		// FORBIDS.** What must never be installed is the INTERFACE's associated names — that would make a
 		// written `Element` resolve to a parameter of the CONFORMER, a different type. These are the
@@ -26490,7 +26590,7 @@ export type Parser
 			return
 		end 'noPositionalPairing'
 
-		self.extensionAssociated = ExtensionAssociatedScope.over(associated, bindings: bindings.types, bindingFilePath: self.extensionConformerLayout(conformer, index: index).declFilePath)
+		self.extensionAssociated = ExtensionAssociatedScope.over(associated, bindings: bindings.types, bindingFilePath: self.extensionConformerLayout(conformer, index: index).declFilePath, pass: pass)
 	end 'openInterfaceExtensionBodyScope'
 
 	// The TYPE-extension half of the door above, split out so the interface half reads as one path rather than
@@ -26829,8 +26929,25 @@ export type Parser
 	function extensionAssociatedType(name ByteArray) returns MaxonType throws MapError
 		let i = try self.extensionAssociated.names.positionOfName(name)
 		let bound = try self.extensionAssociated.bindings.get(i) otherwise panic("extensionAssociatedType: the conformer binds nothing at associated-type position {i}, where the interface declares {self.extensionAssociated.names.count()} — `openExtensionBodyScope` installs the two columns only when their lengths agree")
-		return self.repairSweptType(resolvedBindingType(bound, typeNames: self.artifact.typeNames, signatures: self.signatures), scopeFilePath: self.extensionAssociated.bindingFilePath)
+		let repaired = self.repairSweptType(resolvedBindingType(bound, typeNames: self.artifact.typeNames, signatures: self.signatures), scopeFilePath: self.extensionAssociated.bindingFilePath)
+
+		if self.extensionAssociated.pass == ExtensionBodyPass.sweep or maxonTypeTag(repaired) != ValueTypeTag.named 'keepsTheBareName'
+			return repaired
+		end 'keepsTheBareName'
+
+		let bindingFilePath = self.extensionAssociated.bindingFilePath
+		view identity = self.signatures.bareWrittenKey(self.internedName(typeNameIdOf(repaired)), readerFilePath: bindingFilePath)
+
+		return try self.interfaceTypeOfIdentity(identity, readerFilePath: bindingFilePath) otherwise repaired
 	end 'extensionAssociatedType'
+
+	function interfaceTypeOfIdentity(identity immutable ByteArray, readerFilePath FilePath) returns MaxonType throws MapError
+		if not self.signatures.allFilesFolded or not self.signatures.containsInterfaceFor(identity, readerFilePath: readerFilePath) 'namesNoInterface'
+			throw MapError.keyNotFound
+		end 'namesNoInterface'
+
+		return MaxonType.interfaceRef(self.artifact.typeNames.intern(identity))
+	end 'interfaceTypeOfIdentity'
 
 	function genericBoundTypeName(name immutable ByteArray) returns immutable ByteArray
 		return match self.genericBindingOf(name) 'binding'
@@ -26982,7 +27099,7 @@ export type Parser
 		var types = RequirementTypeArray.create(0)
 
 		if self.at(TokenKind.leftParen) 'delimited'
-			_ = try self.parseConformanceWithArgs(interfaceName, spellings: NameRoster.create(0), types: types)
+			_ = try self.parseConformanceWithArgs(interfaceName, spellings: NameRoster.create(0), types: types, owner: ConformanceOwner.unchecked)
 			return types
 		end 'delimited'
 
@@ -27590,7 +27707,7 @@ export type Parser
 			// it mints no type name — a test declares a FUNCTION, so there is no `recordTypeName`.
 			try self.parseFunction(visibility, takesReceiver: false, form: DeclaredHeadForm.testDeclaration)
 		end 'isTest' else if self.at(TokenKind.typealias) 'isTypeAlias'
-			let form = try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: self.genericAliasScratch, tupleOwner: TupleAliasOwner.fileScope, recordFunctionSignature: true, visibility: visibility)
+			let form = try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: GenericAliasSink.discard, tupleOwner: TupleAliasOwner.fileScope, recordFunctionSignature: true, visibility: visibility)
 			self.recordTypeName(nameIndex, kind: form, visibility: visibility)
 		end 'isTypeAlias' else if self.at(TokenKind.type) 'isTypeDecl'
 			try self.parseTypeDeclaration(visibility)
@@ -27877,6 +27994,7 @@ export type Parser
 		let resume = self.pos
 		let name = self.signatures.initializerFunctionNameOf(decl)
 		self.statement.initializerBinding = decl.name.clone()
+		self.statement.initializerClosureHost = self.signatures.initializerClosureHostOf(decl)
 		self.pos = decl.initStart
 		let anchor = self.current()
 		let unresolved = maxonTypeTag(valueType) == ValueTypeTag.unresolved
@@ -28481,7 +28599,7 @@ export type Parser
 	// has the cross-file defect, and curing it needs more than a scoped lookup: a function alias resolves
 	// to `MaxonType.function(<the alias NAME>)`, so two files' declarations stay ONE type however the lookup
 	// is scoped. See `ProgramSignatures.contestedGenericAliases`.
-	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasEntryArray, tupleOwner TupleAliasOwner, recordFunctionSignature bool, visibility Visibility) returns TypeDeclKind throws SourceParseError
+	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasSink, tupleOwner TupleAliasOwner, recordFunctionSignature bool, visibility Visibility) returns TypeDeclKind throws SourceParseError
 		try self.consume(TokenKind.typealias)
 		let writtenTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(writtenTok, declaredName: writtenTok.value)
@@ -28534,7 +28652,7 @@ export type Parser
 		self.pushNamespaceQualifiedFunctionAlias(functionOut, alias: functionAlias, writtenName: writtenTok.value, tier: visibility)
 	end 'readFunctionAliasForm'
 
-	function readGenericAliasForm(writtenTok Token, nameTok Token, genericOut GenericAliasEntryArray, recordFunctionSignature bool, visibility Visibility) throws SourceParseError
+	function readGenericAliasForm(writtenTok Token, nameTok Token, genericOut GenericAliasSink, recordFunctionSignature bool, visibility Visibility) throws SourceParseError
 		// A GENERIC-INSTANCE typealias — `IntBox = Box with Integer`. Recognized by a base
 		// identifier followed by `with`. It records its own registry (`GenericAliasEntry`), not the
 		// ranged one, and (in the REAL parse) checks the instantiation's arity and managed arguments.
@@ -28555,7 +28673,10 @@ export type Parser
 			try self.requireShareableSharedValue(nameTok.value, baseTok: baseTok)
 		end 'aSharedValueInstance'
 
-		genericOut.push(entry)
+		match genericOut 'sink'
+			discard then break
+			collect(out) then out.push(entry)
+		end 'sink'
 	end 'readGenericAliasForm'
 
 	function readTupleAliasForm(nameTok Token, tupleOwner TupleAliasOwner, visibility Visibility) throws SourceParseError
@@ -28924,7 +29045,7 @@ export type Parser
 		// The FORM comes from the reader that decided it, never from which array grew: that inference
 		// would be a second copy of a discrimination `readTypeAliasDeclaration` already makes, free to
 		// drift the day a fifth form appears.
-		let form = try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, tupleOwner: tupleOwner, recordFunctionSignature: recordFunctionSignature, visibility: visibility)
+		let form = try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: GenericAliasSink.collect(generics), tupleOwner: tupleOwner, recordFunctionSignature: recordFunctionSignature, visibility: visibility)
 
 		// A generic-instance nested alias (`Array with T`) — recorded by `readGenericInstanceAlias` into
 		// `generics`. Its instance is PARTIALLY OPAQUE (`Array with typeParameter(token)`), keyed whole-program by
@@ -29400,7 +29521,7 @@ export type Parser
 		view baseName = self.canonicalGenericBaseNameInThisFile(base.written)
 		var args = GenericArgNodeArray.create(0)
 		let argsStart = self.pos
-		let (argCount, qualified) = try self.parseGenericArgNodes(args, baseName: baseName, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true, slot: self.genericArgSlotOf(baseName))
+		let (argCount, qualified) = try self.parseGenericArgNodes(args, baseName: baseName, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true, slot: self.signatures.genericArgSlotOf(baseName))
 		let selfRef = self.selfNamingArgToken(aliasTok, argsStart: argsStart)
 		self.checkGenericInstance(base, argCount: argCount)
 
@@ -30031,31 +30152,6 @@ export type Parser
 		return SourceParseError.registryRefused(ErrorCode.readonlyQualifierMisplaced, explanation: "`{String.from(ReadonlyModifierWord)}` qualifies only the element type of an `Array` or `List` and the value type of a `Map` (`Array with {String.from(ReadonlyModifierWord)} Name`, `Map with Key, {String.from(ReadonlyModifierWord)} Value`): {reason}", line: tok.line, column: tok.column, note: DiagnosticNote.none)
 	end 'readonlyMisplaced'
 
-	// ⭐⭐ **WHICH STORAGE POSITION A `Base with Args` ARGUMENT OCCUPIES — decided from the BASE, once, and
-	// passed down.** A `type` base's arguments are its container's element slots; an `interface` base's are the
-	// associated-type BINDINGS of an existential (`ProgramSignatures.instanceDenotedType`). Only the base can
-	// tell them apart, and `parseGenericArgNode` sees an argument, so the answer travels with the walk exactly
-	// as `inlineElement` does — and for the same reason: it is a fact about the base, and re-deriving it per
-	// argument would be the same lookup done N times.
-	//
-	// ⚠ **IT CARRIES THE INTERFACE NAME AND NOT MERELY THE FACT, because the binding arm's refusal is about
-	// the ASSOCIATED TYPE at that position** — which requirement writes it, and where. A bare
-	// `DeclaredStoragePosition` said only "this is a binding", so the one thing the check needs to look the
-	// associated type up had to be re-derived at the argument or not asked at all; it was not asked, and every
-	// interface-typed binding was refused alike.
-	//
-	// ⚠ **THE `allFilesFolded` GATE IS THE ONE `parseTypeReference`'s interface arm carries**, and it costs
-	// this door nothing: during the declaration SWEEP the interface registry is EMPTY, so the sweep answers
-	// `containerElement` — and it cannot refuse on that answer either, because an interface-typed argument
-	// resolves to a bare `named` in the sweep and never reaches the existential test at all.
-	function genericArgSlotOf(baseName ByteArray) returns GenericArgSlot
-		if self.signatures.allFilesFolded and isInterfaceName(self.signatures.interfaceMap(), name: baseName) 'anInterfaceInstance'
-			return GenericArgSlot.associatedTypeBinding(baseName)
-		end 'anInterfaceInstance'
-
-		return GenericArgSlot.containerElement
-	end 'genericArgSlotOf'
-
 	// ⭐ **ONE generic-instance argument** — a LEAF type reference (`Integer`, `Point`,
 	// `String`), or a NESTED instance `Inner with (…)`, since managed instances are owned and dropped. A
 	// nested instance's gid is not known at parse time (interning lives in `recordGenericAlias`), so it is
@@ -30103,7 +30199,7 @@ export type Parser
 			// intern to the same instance a nested `Array with T` does, or one record has two ids.
 			view subBaseName = self.canonicalGenericBaseNameInThisFile(base.written)
 			var subNodes = GenericArgNodeArray.create(0)
-			let (subCount, subQualified) = try self.parseGenericArgNodes(subNodes, baseName: subBaseName, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false, slot: self.genericArgSlotOf(subBaseName))
+			let (subCount, subQualified) = try self.parseGenericArgNodes(subNodes, baseName: subBaseName, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false, slot: self.signatures.genericArgSlotOf(subBaseName))
 			self.checkGenericInstance(base, argCount: subCount)
 			nodes.push(GenericArgNode.instanceHeader(subBaseName, argCount: subCount, shape: subQualified if subQualified.isReadOnlyQualified() else subSize))
 			nodes.append(subNodes)
@@ -30112,7 +30208,12 @@ export type Parser
 
 		let argTok = self.current()
 		let argType = try self.parseTypeReference(BarePrimitiveVoice.admitted)
-		try self.requireCarryableGenericArg(argType, slot: slot, position: position, argTok: argTok)
+
+		if not self.namesAnExtensionAssociatedType(argTok) 'aBindingJudgedAtItsConformer'
+			try self.requireCarryableGenericArg(argType, slot: slot, position: position, argTok: argTok)
+		end 'aBindingJudgedAtItsConformer'
+
+		self.noteInterfaceBindingHeldAsArgument(argType, argTok: argTok, baseName: baseName, position: position)
 		self.checkGenericArgType(argType, argTok: argTok, inlineElement: inlineElement)
 
 		if self.argDenotesTheEnclosingGenericType(argType) 'theEnclosingGenericType'
@@ -31282,7 +31383,7 @@ export type Parser
 
 			self.pos = bodyStart
 			self.enterTypeScopeOf(conformer)
-			self.openExtensionBodyScope(header, conformer: conformer, index: self.signatures)
+			self.openExtensionBodyScope(header, conformer: conformer, index: self.signatures, pass: ExtensionBodyPass.parse)
 
 			// Where the sibling-receiver walk begins for a bare call in these bodies — the EXTENSION's member
 			// list, not the conformer's, because a bare call here may name a sibling extension method. What
@@ -31965,7 +32066,7 @@ export type Parser
 	// `project.conformances` and nothing else, so a kind filed anywhere else is a kind those checks do not
 	// see at all.
 	function parseImplementsClause(nameTok Token) returns NameRoster throws SourceParseError
-		let interfaces = try self.readImplementsList()
+		let interfaces = try self.readImplementsList(ConformanceOwner.declaration(nameTok.value))
 
 		if not interfaces.isEmpty() 'declaresAConformance'
 			self.artifact.recordConformance(ConformanceDecl.create(nameTok.value, interfaces: interfaces, nameLine: nameTok.line, nameColumn: nameTok.column, filePath: self.job.path))
@@ -31995,7 +32096,7 @@ export type Parser
 	// what keeps `implements Iterable with (Element, Iter)` one grammar rather than two that agree by hand.
 	//
 	// An absent clause answers an empty list.
-	function readImplementsList() returns InterfaceConformanceArray throws SourceParseError
+	function readImplementsList(owner ConformanceOwner) returns InterfaceConformanceArray throws SourceParseError
 		if not self.at(TokenKind.implements) 'noImplements'
 			return InterfaceConformanceArray.create(0)
 		end 'noImplements'
@@ -32003,11 +32104,11 @@ export type Parser
 		try self.consume(TokenKind.implements)
 
 		var interfaces = InterfaceConformanceArray.create(0)
-		interfaces.push(try self.parseOneConformance())
+		interfaces.push(try self.parseOneConformance(owner))
 
 		while self.at(TokenKind.comma) 'moreInterfaces'
 			try self.consume(TokenKind.comma)
-			interfaces.push(try self.parseOneConformance())
+			interfaces.push(try self.parseOneConformance(owner))
 		end 'moreInterfaces'
 
 		return interfaces
@@ -32015,7 +32116,7 @@ export type Parser
 
 	// One `I [with …]` entry of an `implements` list — the interface name and the arguments bound to
 	// its `uses` names, which are only meaningful as a pair (`InterfaceConformance`).
-	function parseOneConformance() returns InterfaceConformance throws SourceParseError
+	function parseOneConformance(owner ConformanceOwner) returns InterfaceConformance throws SourceParseError
 		let ifaceTok = try self.consumeConformedInterfaceName()
 
 		if not self.at(TokenKind.with) 'bindsNothing'
@@ -32025,7 +32126,7 @@ export type Parser
 		try self.consume(TokenKind.with)
 		var spellings = NameRoster.create(0)
 		var types = RequirementTypeArray.create(0)
-		let withArgs = try self.parseConformanceWithArgs(ifaceTok.value, spellings: spellings, types: types)
+		let withArgs = try self.parseConformanceWithArgs(ifaceTok.value, spellings: spellings, types: types, owner: owner)
 		return InterfaceConformance.create(ifaceTok.value, withArgs: withArgs, withArgSpellings: spellings, withArgTypes: types)
 	end 'parseOneConformance'
 
@@ -32062,7 +32163,7 @@ export type Parser
 	// its written spelling, neither of which records the parentheses, so the two list forms are already
 	// indistinguishable one line later — recording a flag on it purely so a later pass could re-derive what
 	// this function is looking straight at would be plumbing a parse fact through the whole tier for no gain.
-	function parseConformanceWithArgs(interfaceName ByteArray, spellings NameRoster, types RequirementTypeArray) returns NameRoster throws SourceParseError
+	function parseConformanceWithArgs(interfaceName ByteArray, spellings NameRoster, types RequirementTypeArray, owner ConformanceOwner) returns NameRoster throws SourceParseError
 		var args = NameRoster.create(0)
 
 		if self.at(TokenKind.leftParen) and self.parenthesizedWithBindsOneTuple(interfaceName) 'oneTupleArgument'
@@ -32070,7 +32171,7 @@ export type Parser
 			// routes to `parseTupleTypeReference`, which is what mints and interns the tuple's layout. So the
 			// binding this records is the same tuple instance `WithIterIterator.current`'s declared
 			// `returns (Source, Element)` resolves to, which is what `ConformanceCheck` compares.
-			try self.readConformanceWithArgInto(args, spellings: spellings, types: types)
+			try self.readConformanceWithArgInto(args, spellings: spellings, types: types, owner: owner, interfaceName: interfaceName)
 			return args
 		end 'oneTupleArgument'
 
@@ -32081,7 +32182,7 @@ export type Parser
 			try self.consume(TokenKind.leftParen)
 
 			while true 'eachArg'
-				try self.readConformanceWithArgInto(args, spellings: spellings, types: types)
+				try self.readConformanceWithArgInto(args, spellings: spellings, types: types, owner: owner, interfaceName: interfaceName)
 
 				if not self.at(TokenKind.comma) 'lastArg'
 					break
@@ -32095,7 +32196,7 @@ export type Parser
 			return args
 		end 'parenthesized'
 
-		try self.readConformanceWithArgInto(args, spellings: spellings, types: types)
+		try self.readConformanceWithArgInto(args, spellings: spellings, types: types, owner: owner, interfaceName: interfaceName)
 
 		if not self.at(TokenKind.comma) 'singleArg'
 			return args
@@ -32105,16 +32206,39 @@ export type Parser
 
 		while args.count() < arity and self.at(TokenKind.comma) 'moreArgs'
 			try self.consume(TokenKind.comma)
-			try self.readConformanceWithArgInto(args, spellings: spellings, types: types)
+			try self.readConformanceWithArgInto(args, spellings: spellings, types: types, owner: owner, interfaceName: interfaceName)
 		end 'moreArgs'
 
 		return args
 	end 'parseConformanceWithArgs'
 
-	function readConformanceWithArgInto(args NameRoster, spellings NameRoster, types RequirementTypeArray) throws SourceParseError
+	function readConformanceWithArgInto(args NameRoster, spellings NameRoster, types RequirementTypeArray, owner ConformanceOwner, interfaceName ByteArray) throws SourceParseError
+		let bindingTok = self.current()
 		spellings.push(self.typeSpellingAt(self.pos))
-		args.push(try self.readConformanceWithArg(types))
+		let bound = try self.readConformanceWithArg(types)
+
+		match owner 'owner'
+			unchecked then break
+			declaration(conformer) then self.refuseBindingAnExtensionStoresAsAnArgument(conformer, interfaceName: interfaceName, position: args.count(), bound: bound, bindingTok: bindingTok)
+		end 'owner'
+
+		args.push(bound)
 	end 'readConformanceWithArgInto'
+
+	function refuseBindingAnExtensionStoresAsAnArgument(conformer ByteArray, interfaceName ByteArray, position ElementIndex, bound ByteArray, bindingTok Token)
+		if not self.signatures.allFilesFolded 'indexStillBuilding'
+			return
+		end 'indexStillBuilding'
+
+		for held in self.signatures.extensionHeldArguments(conformer, interfaceName: interfaceName, associatedPosition: position) 'eachHeldArgument'
+			let slot = self.signatures.genericArgSlotOf(held.baseName)
+
+			if self.signatures.genericArgumentIsRefused(slot, argumentIsAnInterface: true, position: held.position as ElementIndex) 'refused'
+				self.recordArtifactDiagnostic(ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage(interfaceStoragePositionMessage(slot.storagePosition(), interfaceName: bound)), range: SourceRange.ofToken(bindingTok))
+				return
+			end 'refused'
+		end 'eachHeldArgument'
+	end 'refuseBindingAnExtensionStoresAsAnArgument'
 
 	// One conformance argument: read as a type reference (so it records the alias USE), its identity pushed
 	// onto `types`, and its display string returned. Spelled once because both arms above read an argument
@@ -35423,7 +35547,7 @@ export type Parser
 		// parse count from different starting points. Reading it turns the agreement into a lookup that
 		// either finds the sweep's answer or says so. (A FIELD default's name IS minted at its capture, and
 		// safely — see `DefaultHelperOwner` for the property a field name has that a position does not.)
-		let exprEnd = self.expressionEndFrom(self.pos + 1, stopsAtNewline: false, stopsAtOtherwise: false)
+		let exprEnd = self.expressionEndFrom(self.pos + 1)
 
 		// ⭐⭐ **A CALLER-LOCATION DEFAULT SYNTHESIZES NOTHING, SO IT CAPTURES NOTHING.** There is no
 		// expression for a helper to return: the sweep published `callerLine`/`callerFile` at this slot from
@@ -35790,7 +35914,7 @@ export type Parser
 				self.genericParameterNames.push(paramName)
 			end 'declaredAtATypeParameter'
 
-			let paramType = try paramTypes.get(i) otherwise panic("bindParameters: paramTypes.get OOB at {i}")
+			let paramType = self.deferredWhenRefused(try paramTypes.get(i) otherwise panic("bindParameters: paramTypes.get OOB at {i}"))
 			let paramRange = try paramRanges.get(i) otherwise panic("bindParameters: paramRanges.get OOB at {i}")
 
 			// ⚠ THE LOOP-PHI TOKEN SCAN DEPENDS ON THIS BEING `let`, AND NOTHING ELSE SAYS SO.
@@ -36526,7 +36650,7 @@ export type Parser
 				let delimited = self.at(TokenKind.leftParen)
 				var spellings = NameRoster.create(0)
 				var types = RequirementTypeArray.create(0)
-				_ = try self.parseConformanceWithArgs(nameTok.value, spellings: spellings, types: types)
+				_ = try self.parseConformanceWithArgs(nameTok.value, spellings: spellings, types: types, owner: ConformanceOwner.unchecked)
 				bindings.push(ConformanceBinding.create(spellings, types: types))
 
 				if not delimited and not self.conformanceArityResolves(nameTok.value) 'theArityIsNotKnownYet'
@@ -37056,8 +37180,8 @@ export type Parser
 		// ⚠ `aliasShadowsNominalFor` for `resolveNamedStruct`'s reason, one registry over: an interface name
 		// is whole-program, and a file whose own `typealias Tolerance` coexists with a user
 		// `interface Tolerance` means its own.
-		if self.signatures.allFilesFolded and self.signatures.containsInterfaceFor(identity, readerFilePath: self.job.path) 'wholeProgramInterfaceRegistry'
-			return MaxonType.interfaceRef(self.artifact.typeNames.intern(identity))
+		if let asInterface = try self.interfaceTypeOfIdentity(identity, readerFilePath: self.job.path) 'wholeProgramInterfaceRegistry'
+			return asInterface
 		end 'wholeProgramInterfaceRegistry'
 
 		if self.signatures.allFilesFolded 'wholeProgramAliasRegistries'
@@ -42006,45 +42130,35 @@ export type Parser
 	// interface's `uses` names, and an interface no file declares readably, both ADMIT here and are reported
 	// where they belong. Refusing on them would report an arity mistake as an ABI one.
 	function requireCarryableGenericArg(argType MaxonType, slot GenericArgSlot, position FieldIndex, argTok Token) throws SourceParseError
-		match slot 'which'
-			// Thrown here, where the argument is parsed, rather than recorded by `checkGenericArgType`: a
-			// recorded diagnostic is discarded when a later throw abandons its region, and the author is
-			// then shown an unrelated error further down instead.
-			containerElement then try self.requireStorableDeclaredType(argType, position: DeclaredStoragePosition.containerElement, line: argTok.line, column: argTok.column)
-			associatedTypeBinding(interfaceName) then try self.requireCarryableAssociatedBinding(argType, interfaceName: interfaceName, position: position, argTok: argTok)
-		end 'which'
+		if not self.signatures.genericArgumentIsRefused(slot, argumentIsAnInterface: maxonTypeTag(argType) == ValueTypeTag.interfaceRef, position: position as ElementIndex) 'admitted'
+			return
+		end 'admitted'
+
+		// Thrown here, where the argument is parsed, rather than recorded: a recorded diagnostic is
+		// discarded when a later throw abandons its region, and the author is then shown an unrelated
+		// error further down instead.
+		throw SourceParseError.unsupported(interfaceStoragePositionMessage(slot.storagePosition(), interfaceName: self.internedName(typeNameIdOf(argType))), line: argTok.line, column: argTok.column)
 	end 'requireCarryableGenericArg'
 
-	// The binding arm of the door above. A CONCRETE argument is not this check's business at all — it is a
-	// claim the conformances settle (E3125) — so only an interface-typed one is looked at.
-	function requireCarryableAssociatedBinding(argType MaxonType, interfaceName ByteArray, position FieldIndex, argTok Token) throws SourceParseError
-		if maxonTypeTag(argType) != ValueTypeTag.interfaceRef 'aConcreteBinding'
+	function namesAnExtensionAssociatedType(argTok Token) returns bool
+		let _ = try self.extensionAssociated.names.positionOfName(argTok.value) otherwise return false
+		return true
+	end 'namesAnExtensionAssociatedType'
+
+	function noteInterfaceBindingHeldAsArgument(argType MaxonType, argTok Token, baseName ByteArray, position FieldIndex)
+		if self.extensionAssociated.pass != ExtensionBodyPass.sweep or self.extensionAssociated.names.isEmpty() 'nothingToNote'
 			return
-		end 'aConcreteBinding'
+		end 'nothingToNote'
 
-		match lookupInterface(self.signatures.interfaceMap(), name: interfaceName) 'base'
-			notFound then return
-			found(iface) then try self.requireHeldAssociatedTypeIsOnlyReturned(iface, position: position, heldAt: self.internedName(typeNameIdOf(argType)), argTok: argTok)
-		end 'base'
-	end 'requireCarryableAssociatedBinding'
+		let argTag = maxonTypeTag(argType)
 
-	// Refuse a holding whose associated type reaches a requirement's PARAMETER — see
-	// `DeclaredStoragePosition.associatedTypeBinding` for why that direction alone is unsupplyable.
-	//
-	// ⚠ **IT IS ASKED OF THE TRANSITIVE REQUIREMENT LIST** (`requirementTakesAssociatedType`, the same door
-	// E3119/E3120 read), so a parameter projected in through `extends` is refused too. A scan of
-	// `iface.methods` alone would be a measured escape for those checks and the identical one here.
-	function requireHeldAssociatedTypeIsOnlyReturned(iface IrInterface, position FieldIndex, heldAt ByteArray, argTok Token) throws SourceParseError
-		if position >= iface.associatedTypeNames.count() as FieldIndex 'pastThisInterfacesUsesNames'
+		if argTag != ValueTypeTag.interfaceRef and (argTag != ValueTypeTag.named and argTag != ValueTypeTag.structRef or not isInterfaceName(self.signatures.interfaceMap(), name: self.internedName(typeNameIdOf(argType)))) 'notAnInterfaceBinding'
 			return
-		end 'pastThisInterfacesUsesNames'
+		end 'notAnInterfaceBinding'
 
-		if not requirementTakesAssociatedType(self.signatures.interfaceMap(), iface: iface, position: position as ElementIndex, signatures: self.signatures) 'onlyEverAResult'
-			return
-		end 'onlyEverAResult'
-
-		throw SourceParseError.unsupported(interfaceStoragePositionMessage(DeclaredStoragePosition.associatedTypeBinding, interfaceName: heldAt), line: argTok.line, column: argTok.column)
-	end 'requireHeldAssociatedTypeIsOnlyReturned'
+		let associatedPosition = try self.extensionAssociated.names.positionOfName(argTok.value) otherwise return
+		self.extensionAssociated.heldUses.push(HeldAssociatedUse.create(associatedPosition, held: ExtensionHeldArgument.create(baseName, position: position)))
+	end 'noteInterfaceBindingHeldAsArgument'
 
 	// The interned NAME behind a `named`/`structRef` id, from THIS file's interner — where every id a
 	// type check sees was minted: the value during this parse, a declared return/field/binding type
@@ -62065,6 +62179,10 @@ export type Parser
 	// a union ALLOCATES, and this is the per-VALUE path. `mintValueOfType` is the door for a
 	// caller that already holds a `MaxonType` and so constructs nothing new.
 	function mintValue(tag ValueTypeTag, nameId TypeNameId) returns ValueId
+		if self.namesARefusedInstance(tag, nameId: nameId) 'aRefusedInstance'
+			return self.mintDeferredValue()
+		end 'aRefusedInstance'
+
 		let id = allocValueId(self.bodyState.valueIds)
 		self.bodyState.valueTags.push(tag)
 		self.bodyState.valueNameIds.push(nameId)
@@ -62244,7 +62362,7 @@ export type Parser
 	end 'floatAliasThroughInstance'
 
 	function recordParamValueType(paramType MaxonType)
-		self.recordValueType(self.resolveFloatAliasType(paramType, scopeFilePath: self.job.path))
+		self.recordValueType(self.resolveFloatAliasType(self.deferredWhenRefused(paramType), scopeFilePath: self.job.path))
 
 		self.wearDeclaredFloatAlias((self.bodyState.valueTags.count() - 1) as ValueId, declared: paramType, scopeFilePath: self.job.path)
 	end 'recordParamValueType'
@@ -69421,6 +69539,13 @@ export type Parser
 			// Its element type is inferred from the source.
 			try self.settleTypeNameVerdict(try self.enterQualifiedTypeHead(TypeNameHeadForm.construction))
 
+			if self.atRefusedInstanceConstruction() 'refusedInstanceConstruction'
+				_ = try self.consumeConstructionHead()
+				_ = try self.parseValueExpression(func)
+
+				return self.mintDeferredValue()
+			end 'refusedInstanceConstruction'
+
 			if self.atContainerFromConstruction(FromHeadContainer.set) 'setFromConstruction'
 				return try self.parseSetFromConstruction(func)
 			end 'setFromConstruction'
@@ -71468,7 +71593,7 @@ export type Parser
 		// The shadowing declaration itself is not refused, so this guard is what keeps the two spellings
 		// agreeing.
 		if self.namesInnerAliasHere(typeTok.value) 'innerAliasLiteral'
-			return try self.parseInnerAliasLiteral(typeTok)
+			return try self.parseInnerAliasLiteral(func, aliasTok: typeTok)
 		end 'innerAliasLiteral'
 
 		view layout = try self.requireConstructible(typeTok)
@@ -71712,7 +71837,7 @@ export type Parser
 	// file-scope name that never enters the set). They split four ways here, because a generic instance is
 	// either a container this compiler OWNS or a user type's, and because an alias declared in an `extension`
 	// body reaches this set without reaching either whole-program registry.
-	function parseInnerAliasLiteral(aliasTok Token) returns ValueId throws SourceParseError
+	function parseInnerAliasLiteral(func IrFunction, aliasTok Token) returns ValueId throws SourceParseError
 		// The whole-program key an inner alias is registered under — the SAME name `parseTypeReference`'s
 		// inner-alias arm stamps a field type with and `parseQualifiedCall`'s `<InnerAlias>.create()` looks the
 		// instance up by, because a bare member collides with a same-named inner alias of another type.
@@ -71742,6 +71867,12 @@ export type Parser
 		end 'notKeyedWholeProgram'
 
 		let giid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.job.path)
+
+		if self.defersOnRefusedInstance(giid) 'aRefusedInstance'
+			try self.absorbStructLiteralFields(func)
+
+			return self.mintDeferredValue()
+		end 'aRefusedInstance'
 
 		// ⛔ A USER TYPE'S GENERIC INSTANCE KEEPS E3076, and that is the ONE inner-alias form the widening
 		// deliberately does not reach. `typealias IntPair = Pair with Count` denotes `Pair`, whose invariants
@@ -71957,6 +72088,24 @@ export type Parser
 			try self.consume(TokenKind.comma)
 		end 'fieldLoop'
 	end 'parseStructLiteralFields'
+
+	function absorbStructLiteralFields(func IrFunction) throws SourceParseError
+		try self.consume(TokenKind.leftBrace)
+
+		while not self.at(TokenKind.rightBrace) 'eachField'
+			try self.consume(TokenKind.identifier)
+			try self.consume(TokenKind.colon)
+			_ = try self.parseValueExpression(func)
+
+			if not self.at(TokenKind.comma) 'endFields'
+				break
+			end 'endFields'
+
+			try self.consume(TokenKind.comma)
+		end 'eachField'
+
+		try self.consume(TokenKind.rightBrace)
+	end 'absorbStructLiteralFields'
 
 	function requireFieldType(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, valueStart ElementIndex, anchor Token) returns ValueId throws SourceParseError
 		let site = self.slotStoreSiteOf(layout, index: index, valueStart: valueStart, anchor: anchor)
@@ -76809,6 +76958,10 @@ export type Parser
 		// three is exactly how one call site comes to hold two readings of one alias.
 		let aliasName = self.genericAliasKeyFor(typeTok.value)
 
+		if self.aliasDenotesARefusedInstance(aliasName) 'aRefusedInstance'
+			return try self.deferredUnresolvedMemberResult(func)
+		end 'aRefusedInstance'
+
 		let resolved = self.staticMemberResolutionAt(typeTok, baseIndex: baseIndex, aliasName: aliasName)
 
 		match resolved 'member'
@@ -76823,6 +76976,56 @@ export type Parser
 		try self.consume(TokenKind.dot)
 		return try self.parseStaticMemberCall(func, typeTok: typeTok, aliasName: aliasName, resolved: resolved, resultUsed: resultUsed)
 	end 'parseQualifiedCall'
+
+	function namesARefusedInstance(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.defersOnRefusedInstance(nameId as GenericInstanceId)
+	end 'namesARefusedInstance'
+
+	// A use of a refused instance defers and reports nothing, leaving the alias's E2015 as the one
+	// report; `FoldLedger.requireEveryDeferralExplained` panics on a deferral in a program that
+	// reports no error.
+	function defersOnRefusedInstance(id GenericInstanceId) returns bool
+		if not self.signatures.allFilesFolded 'theSweepRefusesNothing'
+			return false
+		end 'theSweepRefusesNothing'
+
+		let refused = self.refusedInstanceAnswer(id)
+
+		if refused 'aDeferralIsMade'
+			self.artifact.refusedInstanceDeferrals = self.artifact.refusedInstanceDeferrals + 1
+		end 'aDeferralIsMade'
+
+		return refused
+	end 'defersOnRefusedInstance'
+
+	function refusedInstanceAnswer(id GenericInstanceId) returns bool
+		if let known = try self.refusedInstances.get(id) 'answeredAlready'
+			return known
+		end 'answeredAlready'
+
+		let answer = self.signatures.genericInstanceIsRefused(id)
+		self.refusedInstances.upsert(id, value: answer)
+
+		return answer
+	end 'refusedInstanceAnswer'
+
+	function deferredWhenRefused(declared MaxonType) returns MaxonType
+		let denoted = self.resolveNamedAlias(declared, scopeFilePath: self.job.path)
+
+		if self.namesARefusedInstance(maxonTypeTag(denoted), nameId: typeNameIdOf(denoted)) 'aRefusedInstance'
+			return MaxonType.unresolved
+		end 'aRefusedInstance'
+
+		return declared
+	end 'deferredWhenRefused'
+
+	function aliasDenotesARefusedInstance(aliasName ByteArray) returns bool
+		if not self.signatures.isAliasOfFormFor(aliasName, readerFilePath: self.job.path, wanted: FormAliasKind.generic) 'notAnInstanceAlias'
+			return false
+		end 'notAnInstanceAlias'
+
+		return self.defersOnRefusedInstance(self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: self.job.path))
+	end 'aliasDenotesARefusedInstance'
 
 	function staticMemberResolutionAt(typeTok Token, baseIndex ElementIndex, aliasName ByteArray) returns StaticMemberResolution
 		if self.statement.handedResolution.handsOverAt(baseIndex) 'handedByThePredicate'
@@ -80717,7 +80920,7 @@ export type Parser
 	function valueKindWordAt(value ValueId, tag ValueTypeTag) returns String
 		let nameId = self.valueNameId(value)
 
-		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.genericInstance or self.nameIdIsAnEnumOrUnion(tag, nameId: nameId) 'anAggregate'
+		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.interfaceRef or self.nameIdIsAnEnumOrUnion(tag, nameId: nameId) 'anAggregate'
 			return self.brandedDisplayTypeName(tag, nameId: nameId, brand: self.brandOf(value))
 		end 'anAggregate'
 
@@ -95167,6 +95370,17 @@ export type Parser
 		return inferredClosureResultType(bodyType)
 	end 'parseInferredClosureBody'
 
+	// An initializer's closures lift under its binding's own host
+	// (`ProgramSignatures.initializerClosureHostOf`), so the closures of two bindings never share a
+	// name.
+	function closureHostOf(func IrFunction) returns ByteArray
+		if isInitializerFunctionName(func.name) 'anInitializerBody'
+			return self.statement.initializerClosureHost.clone()
+		end 'anInitializerBody'
+
+		return func.name.clone()
+	end 'closureHostOf'
+
 	// The body parses into a FRESH function context — its own scope, value numbering, blocks and type
 	// columns — swapped in around the parse and restored verbatim after, so the enclosing function's
 	// parse is undisturbed.
@@ -95233,7 +95447,7 @@ export type Parser
 		// function). Post-increment so sibling closures get 0, 1, 2, … in source order.
 		let k = func.closureSubCounter
 		func.closureSubCounter = k + 1
-		let closureName = liftedClosureName(func.name, ordinal: k)
+		let closureName = liftedClosureName(self.closureHostOf(func), ordinal: k)
 
 		// --- Switch into the lifted function's own body state. ---
 		// The return alias stays empty: a closure's return type is inferred from its body expression,
@@ -95286,6 +95500,10 @@ export type Parser
 		// so the columns stay indexable by every ValueId whether or not the closure ends up capturing.
 		self.recordValueType(MaxonType.integer)
 		self.bodyState.bodyStart = self.pos
+
+		// A use-site phrase is spelled from `statementStart`; left at a fresh body's 0 it would spell the
+		// file up to every use in the closure.
+		self.bodyState.statementStart = self.pos
 		self.bodyState.outerBodyStart = savedBody.outerBodyStart
 		self.bodyState.resultOrigin = resultOriginOf(declaredResult)
 		self.bodyState.boundParams = savedBody.boundParams
@@ -95676,6 +95894,7 @@ export type Parser
 	function buildClosureEnv(closureName ByteArray, captureCount EnvSlotIndex, capturedValues CapturedValueArray, capturedTypes MaxonTypeArray, destructor ValueId, anchor Token) returns ValueId
 		let range = SourceRange.ofToken(anchor)
 		let size = self.emitLiteral(envSlotOffset(captureCount) as FullRangeInt, valueType: MaxonType.integer, range: range)
+		self.artifact.recordClosureRecordSite()
 		let closureValue = self.emitBoxAllocWithDestructor(size, destructor: destructor, resultTag: ValueTypeTag.function, resultNameId: self.artifact.typeNames.intern(closureName), range: range, tag: MmTag.ClosureEnv)
 		let code = self.emitCodeAddress(closureName, range: range)
 		self.emitIndirectStore(closureValue, offset: FunctionRecordCodeOffset, value: code, storageType: self.wordSlotStorageType(MaxonType.integer), range: range)
@@ -95854,6 +96073,7 @@ export type Parser
 		self.pos = decl.initStart
 		self.statement.constInitializerEnd = decl.initEnd
 		self.statement.initializerBinding = decl.name.clone()
+		self.statement.initializerClosureHost = self.signatures.initializerClosureHostOf(decl)
 		self.constEvalStack = stack
 		self.seatInDeclaringTypeBody(decl)
 	end 'seatInitializer'
@@ -95938,6 +96158,7 @@ export type Parser
 
 		try self.requireNoFailedDependency()
 		try self.requireInitializerWhole(decl)
+		self.signatures.noteInitializerClosureShapes(self.closureShapes, from: self.artifact.typeNames)
 
 		return try self.probedRecordOf(decl, value: value)
 	end 'probeRecordInitializer'
@@ -96555,6 +96776,8 @@ export type Parser
 	// spelling rule is the drift `tokenDisplayText`'s header warns about — it does not fail loudly, it
 	// quietly names the offending token something the source never wrote.
 	function tokenTextFrom(start ElementIndex, endIndex ElementIndex) returns String
+		// Appended in place: a span may be a whole statement, and rebuilding the string per token copies
+		// it once per token.
 		var text = ""
 		var cursor = self.tokenAt(start).column
 
@@ -96564,17 +96787,17 @@ export type Parser
 			// A token on a LATER line restarts the layout: one space stands in for the newline, and the
 			// cursor is re-seeded from that token so the rest of its line lays out against its own columns.
 			if tok.column < cursor 'wrappedToANewLine'
-				text = "{text} "
+				text.append(" ")
 				cursor = tok.column
 			end 'wrappedToANewLine'
 
 			while cursor < tok.column 'padToItsColumn'
-				text = "{text} "
+				text.append(" ")
 				cursor = cursor + 1
 			end 'padToItsColumn'
 
 			let spelling = tokenSourceSpelling(tok)
-			text = "{text}{spelling}"
+			text.append(spelling)
 			cursor = cursor + (spelling.count() as ColumnNumber)
 		end 'each'
 
@@ -104602,6 +104825,8 @@ export type Parser
 	// type.
 	//   • a lifted closure is this parse's own (`closureShapes` is file-local), so its slot is this
 	//     file's;
+	//   • a top-level initializer's closure carries the scope its probe recorded
+	//     (`ProgramSignatures.initializerClosureShapeFor`);
 	//   • a function alias carries its declaring file (`FunctionTypeAlias.declFilePath`);
 	//   • a declared function's slot is `recordedReturnDeclFileOf`'s answer, the door a direct call
 	//     asks.
@@ -104614,6 +104839,10 @@ export type Parser
 		if let closure = try self.closureShapes.get(name) 'closure'
 			return closure
 		end 'closure'
+
+		if let initializerClosure = try self.signatures.initializerClosureShapeFor(name, into: self.artifact.typeNames) 'initializerClosure'
+			return initializerClosure
+		end 'initializerClosure'
 
 		match self.functionAliasForName(name) 'alias'
 			// `maxonTypeOfStoredAliasReturn` is the one rebuild of a stored alias return; it recovers

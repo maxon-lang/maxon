@@ -287,23 +287,48 @@ function indirectlyHandedParameterOf(project Project, context HandOverContext, r
 	view op = try context.program.ops.get(record.opIndex) otherwise panic("indirectlyHandedParameterOf: ops.get OOB at {record.opIndex}")
 
 	match op 'op'
-		indirectCall(_, callee, _, _) then return landedBrandsOf(project, module: context.program, bodies: context.calls.functionValueBodiesCalledThrough(func, callee: callee), position: record.argIndex)
+		indirectCall(_, callee, _, _) then return landedBrandsOf(project, module: context.program, bodies: context.calls.functionValueBodiesCalledThrough(func, callee: callee), position: record.argIndex, landing: context.calls.landingSets)
 		default panic("indirectlyHandedParameterOf: op {record.opIndex} is not an `indirectCall`")
 	end 'op'
 end 'indirectlyHandedParameterOf'
 
-module function landedBrandsOf(project Project, module MaxonModule, bodies CallLandingBodies, position ParamCount) returns HandedParameter
+module function landedBrandsOf(project Project, module MaxonModule, bodies CallLandingBodies, position ParamCount, landing LandingSets) returns HandedParameter
 	var candidates = BrandCandidates.create()
-	offerLandedBrands(project, module: module, bodies: bodies, position: position, into: candidates)
+	offerLandedBrands(project, module: module, bodies: bodies, position: position, landing: landing, into: candidates)
 	return candidates.settled(EmptySourceText)
 end 'landedBrandsOf'
 
-function offerLandedBrands(project Project, module MaxonModule, bodies CallLandingBodies, position ParamCount, into BrandCandidates)
+typealias BrandSet = Set with ByteArray
+
+function distinctLandedBrands(project Project, module MaxonModule, bodies CallLandingBodies, position ParamCount, landing LandingSets) returns NameRoster
+	if let known = try landing.distinctBrandsAt(bodies.set, position: position) 'asked'
+		return known
+	end 'asked'
+
+	var distinct = NameRoster.create(0)
+	var seen = BrandSet.create()
+
 	for implIndex in bodies.impls 'eachCandidate'
-		let body = try module.functions.get(implIndex) otherwise panic("offerLandedBrands: functions.get OOB at {implIndex}")
+		let body = try module.functions.get(implIndex) otherwise panic("distinctLandedBrands: functions.get OOB at {implIndex}")
 		let sig = try project.funcSignatures.get(body.name) otherwise continue
-		into.offer(declaredParameterBrand(sig, position: position))
+		let brand = declaredParameterBrand(sig, position: position)
+
+		if brand.isEmpty() or seen.contains(brand) 'nothingNewToOffer'
+			continue
+		end 'nothingNewToOffer'
+
+		seen.insert(brand)
+		distinct.push(brand)
 	end 'eachCandidate'
+
+	landing.fileDistinctBrands(bodies.set, position: position, brands: distinct)
+	return distinct
+end 'distinctLandedBrands'
+
+function offerLandedBrands(project Project, module MaxonModule, bodies CallLandingBodies, position ParamCount, landing LandingSets, into BrandCandidates)
+	for brand in distinctLandedBrands(project, module: module, bodies: bodies, position: position, landing: landing) 'eachDistinctBrand'
+		into.offer(brand)
+	end 'eachDistinctBrand'
 end 'offerLandedBrands'
 
 function dispatchedParameterOf(project Project, context HandOverContext, record PendingBrandRecord) returns HandedParameter
@@ -321,7 +346,7 @@ function witnessLandedParameterOf(project Project, context HandOverContext, meth
 	let formal = (position - WitnessReceiverArgCount) as ElementIndex
 	var candidates = BrandCandidates.create()
 	candidates.offer((try slot.method.paramTypes.get(formal) otherwise panic("witnessLandedParameterOf: paramTypes.get OOB at {formal} — a hand-over record names a formal of its requirement")).brand)
-	offerLandedBrands(project, module: context.program, bodies: context.calls.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex), position: position, into: candidates)
+	offerLandedBrands(project, module: context.program, bodies: context.calls.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex), position: position, landing: context.calls.landingSets, into: candidates)
 	return candidates.settled(try slot.method.paramNames.get(formal) otherwise EmptySourceText)
 end 'witnessLandedParameterOf'
 

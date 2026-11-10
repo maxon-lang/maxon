@@ -146,8 +146,16 @@ maxon verify-recheck <file|dir>
   sibling declares what the third declares under other type names and is compiled just before it, so the
   third is served from a program that carries its key. For a program that shadows a library type, or
   declares a name the library declares, it checks instead that the library is parsed cold, and the `PASS`
-  line says `library parsed cold (shadowed)` or `library parsed cold (namesOverlap)`. A file with compile
-  errors reports them and exits 1.
+  line says `library parsed cold (shadowed)` or `library parsed cold (namesOverlap)`.
+
+  A program that does not compile reports its errors and runs the cache-hit and invalidation properties,
+  which need no compile. The other three each print a line,
+  `NOT RUN determinism: the program does not compile` and the same for `warm` and `library reuse`, and
+  the command exits 1. An input that cannot be
+  read, such as a path that does not exist, is reported as that error, and the command exits non-zero before
+  any property runs. The invalidation property reports `FAIL` when a probe edit changes what an edited file
+  reports (the same file, code and message, as many times), since a file that cannot be read declares
+  nothing, and its miss counts are then the same whatever its key.
 
   The invalidation and warm-equals-cold properties need at least two source files of the project's own, and
   report `FAIL` on a project of one file, where they would hold for any parse key; give the command a

@@ -642,6 +642,16 @@ release's version as its heading when the release is cut.
   `default` that lists every case no longer compiles.
   Fix: add `statusLost` to the arms that handle `endOfStream`, or `statusLost(stdout, stderr)` where the arm uses
   the output, or give the `match` a `default throws`.
+- A conformer that binds an associated type to an interface (`type Impl implements Source with Named`) is
+  E2015 at that binding when an `extension` of the interface stores the associated type as a container element
+  (`typealias ItemArray = Array with Item`), however many bodies use the alias. It compiled while nothing used
+  the alias, and stopped the compiler with a panic once something did. A standard library extension counts
+  the same way: `extension Iterable` stores `Element` as a container element (`ElementArray`) and in the
+  function types `ElementTransform` and `ElementPredicate`, so `type Names implements Iterable with (Named,
+  NamedCursor)`, which binds `Element` to an interface, is E2015 at that binding and again at the library's
+  alias.
+  Fix: bind the associated type to a concrete type that implements the interface (for an `Iterable`
+  conformer, a concrete element type), or take the container out of your own extension.
 
 ## 0.5.0 — 2026-10-08
 

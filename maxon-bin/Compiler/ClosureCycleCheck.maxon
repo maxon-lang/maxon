@@ -28,7 +28,6 @@ typealias ReportedPositionSet = Set with String
 typealias GlobalLabelSet = Set with ByteArray
 typealias HeldGlobalsByLabel = Map with (ByteArray, GlobalLabelSet)
 typealias GlobalEffectArray = Array with GlobalEffect
-typealias GlobalEffectColumn = Array with GlobalEffectArray
 typealias StoreSiteByValue = Map with (ValueId, ElementIndex)
 typealias ForwardedLoads = Map with (ValueId, ValueId)
 typealias OpPositionMap = Map with (ElementIndex, OriginKey)
@@ -65,6 +64,24 @@ let SyntheticKindsPerPosition = 2
 let SyntheticHeldKind = 0
 let SyntheticCapturedKind = 1
 let LastInTheBody = u64.max as OriginKey
+let DeclarationKindShift = 60 as OriginKey
+
+typealias OriginKeyArray = Array with OriginKey
+
+enum DeclarationKind
+	parameter
+	local
+	calleeStored
+	global
+end 'DeclarationKind'
+
+function declarationRank(kind DeclarationKind, position OriginKey) returns OriginKey
+	if (position shr DeclarationKindShift) != 0 'pastItsKindsRange'
+		panic("declarationRank: position {position} does not fit below bit {DeclarationKindShift}")
+	end 'pastItsKindsRange'
+
+	return ((kind.ordinal as OriginKey) shl DeclarationKindShift) or position
+end 'declarationRank'
 
 function keyOf(high ElementIndex, low ElementIndex) returns OriginKey
 	return ((high as OriginKey) shl KeyHalfShift) or (low as OriginKey)
@@ -90,6 +107,10 @@ type GlobalEffect
 		return Self{label: label, storedRecords: NoParamPositions, storedHeld: NoParamPositions, storedCaptured: NoParamPositions, readInto: NoParamPositions, resultReads: false}
 	end 'create'
 
+	function isEmpty() returns bool
+		return self.storedRecords == NoParamPositions and self.storedHeld == NoParamPositions and self.storedCaptured == NoParamPositions and self.readInto == NoParamPositions and not self.resultReads
+	end 'isEmpty'
+
 	function widen(other GlobalEffect) returns bool
 		let records = self.storedRecords or other.storedRecords
 		let held = self.storedHeld or other.storedHeld
@@ -106,17 +127,48 @@ type GlobalEffect
 	end 'widen'
 end 'GlobalEffect'
 
-function effectFor(effects GlobalEffectArray, label ByteArray) returns GlobalEffect
-	for effect in effects 'eachEffect'
-		if effect.label.equals(label) 'thisGlobal'
-			return effect
-		end 'thisGlobal'
-	end 'eachEffect'
+typealias GlobalSlotByLabel = Map with (ByteArray, ElementIndex)
 
-	var effect = GlobalEffect.create(label)
-	effects.push(effect)
-	return effect
-end 'effectFor'
+type GlobalEffects
+	export var effects as GlobalEffectArray
+	var slotOfLabel as GlobalSlotByLabel
+
+	static function create() returns GlobalEffects
+		return Self{effects: GlobalEffectArray.create(0), slotOfLabel: GlobalSlotByLabel.create()}
+	end 'create'
+
+	function effectFor(label ByteArray) returns GlobalEffect
+		if let slot = try self.slotOfLabel.get(label) 'known'
+			return try self.effects.get(slot) otherwise panic("GlobalEffects.effectFor: effects.get OOB at {slot}")
+		end 'known'
+
+		var effect = GlobalEffect.create(label)
+		self.slotOfLabel.upsert(label, value: self.effects.count())
+		self.effects.push(effect)
+		return effect
+	end 'effectFor'
+end 'GlobalEffects'
+
+typealias GlobalEffectsColumn = Array with GlobalEffects
+
+enum CycleMask
+	resultIs
+	resultWithin
+	resultHolds
+	resultCaptures
+	resultCapturesWithin
+end 'CycleMask'
+
+enum CycleStores
+	held
+	record
+	captured
+end 'CycleStores'
+
+let CycleMaskColumns = CycleMask.allCases
+let CycleStoreKinds = CycleStores.allCases
+
+typealias CycleStoreColumns = Array with ParamMaskRows
 
 type TracedCycleRow
 	export var resultIs as ParamPositionMask
@@ -127,55 +179,137 @@ type TracedCycleRow
 	export var storesHeld as ParamPositionMaskArray
 	export var storesRecord as ParamPositionMaskArray
 	export var storesCaptured as ParamPositionMaskArray
-	export var globals as GlobalEffectArray
+	export var globals as GlobalEffects
 
 	static function create(paramCount ParamCount) returns TracedCycleRow
-		return Self{resultIs: NoParamPositions, resultWithin: NoParamPositions, resultHolds: NoParamPositions, resultCaptures: NoParamPositions, resultCapturesWithin: NoParamPositions, storesHeld: ParamPositionMaskArray.create(paramCount), storesRecord: ParamPositionMaskArray.create(paramCount), storesCaptured: ParamPositionMaskArray.create(paramCount), globals: GlobalEffectArray.create(0)}
+		return Self{resultIs: NoParamPositions, resultWithin: NoParamPositions, resultHolds: NoParamPositions, resultCaptures: NoParamPositions, resultCapturesWithin: NoParamPositions, storesHeld: ParamPositionMaskArray.create(paramCount), storesRecord: ParamPositionMaskArray.create(paramCount), storesCaptured: ParamPositionMaskArray.create(paramCount), globals: GlobalEffects.create()}
 	end 'create'
+
+	function maskOf(column CycleMask) returns ParamPositionMask
+		return match column 'column'
+			resultIs gives self.resultIs
+			resultWithin gives self.resultWithin
+			resultHolds gives self.resultHolds
+			resultCaptures gives self.resultCaptures
+			resultCapturesWithin gives self.resultCapturesWithin
+		end 'column'
+	end 'maskOf'
+
+	function storesOf(column CycleStores) returns ParamPositionMaskArray
+		return match column 'column'
+			held gives self.storesHeld
+			record gives self.storesRecord
+			captured gives self.storesCaptured
+		end 'column'
+	end 'storesOf'
 end 'TracedCycleRow'
 
 type CycleSummary
 	var noStores as ParamPositionMaskArray
-	export var resultIs as ParamPositionMaskArray
-	export var resultWithin as ParamPositionMaskArray
-	export var resultHolds as ParamPositionMaskArray
-	export var resultCaptures as ParamPositionMaskArray
-	export var resultCapturesWithin as ParamPositionMaskArray
-	export var storesHeld as ParamMaskRows
-	export var storesRecord as ParamMaskRows
-	export var storesCaptured as ParamMaskRows
-	export var globals as GlobalEffectColumn
+	var noGlobals as GlobalEffects
+	var masks as ParamMaskRows
+	var stores as CycleStoreColumns
+	var globals as GlobalEffectsColumn
 
 	static function create(funcCount ElementIndex) returns CycleSummary
 		var noStores = ParamPositionMaskArray.create(0)
-		var globals = GlobalEffectColumn.create(funcCount, zeroed: false)
+		var noGlobals = GlobalEffects.create()
+		var masks = ParamMaskRows.create(0)
+		var stores = CycleStoreColumns.create(0)
+		var globals = GlobalEffectsColumn.create(0)
+		globals.refill(funcCount, value: noGlobals)
 
-		while globals.count() < funcCount 'eachFunction'
-			globals.push(GlobalEffectArray.create(0))
-		end 'eachFunction'
+		for _ in CycleMaskColumns 'eachMaskColumn'
+			masks.push(emptySummaryColumn(funcCount))
+		end 'eachMaskColumn'
 
-		return Self{noStores: noStores, resultIs: emptySummaryColumn(funcCount), resultWithin: emptySummaryColumn(funcCount), resultHolds: emptySummaryColumn(funcCount), resultCaptures: emptySummaryColumn(funcCount), resultCapturesWithin: emptySummaryColumn(funcCount), storesHeld: emptyStoreRows(funcCount, sharedEmptyRow: noStores), storesRecord: emptyStoreRows(funcCount, sharedEmptyRow: noStores), storesCaptured: emptyStoreRows(funcCount, sharedEmptyRow: noStores), globals: globals}
+		for _ in CycleStoreKinds 'eachStoreColumn'
+			stores.push(emptyStoreRows(funcCount, sharedEmptyRow: noStores))
+		end 'eachStoreColumn'
+
+		return Self{noStores: noStores, noGlobals: noGlobals, masks: masks, stores: stores, globals: globals}
 	end 'create'
 
-	function widen(index ElementIndex, row TracedCycleRow) returns bool
-		var grew = widenSummaryColumn(self.resultIs, index: index, by: row.resultIs)
-		grew = widenSummaryColumn(self.resultWithin, index: index, by: row.resultWithin) or grew
-		grew = widenSummaryColumn(self.resultHolds, index: index, by: row.resultHolds) or grew
-		grew = widenSummaryColumn(self.resultCaptures, index: index, by: row.resultCaptures) or grew
-		grew = widenSummaryColumn(self.resultCapturesWithin, index: index, by: row.resultCapturesWithin) or grew
-		grew = widenStoreRow(self.storesHeld, index: index, by: row.storesHeld, sharedEmptyRow: self.noStores) or grew
-		grew = widenStoreRow(self.storesRecord, index: index, by: row.storesRecord, sharedEmptyRow: self.noStores) or grew
-		grew = widenStoreRow(self.storesCaptured, index: index, by: row.storesCaptured, sharedEmptyRow: self.noStores) or grew
-		var effects = self.globalsAt(index)
+	function column(kind CycleMask) returns ParamPositionMaskArray
+		return try self.masks.get(kind.ordinal) otherwise panic("CycleSummary.column: masks.get OOB at {kind.ordinal}")
+	end 'column'
 
-		for traced in row.globals 'eachTracedGlobal'
-			grew = effectFor(effects, label: traced.label).widen(traced) or grew
+	function storeColumn(kind CycleStores) returns ParamMaskRows
+		return try self.stores.get(kind.ordinal) otherwise panic("CycleSummary.storeColumn: stores.get OOB at {kind.ordinal}")
+	end 'storeColumn'
+
+	function maskAt(kind CycleMask, index ElementIndex) returns ParamPositionMask
+		return summaryMaskAt(self.column(kind), index: index)
+	end 'maskAt'
+
+	function storeMaskAt(kind CycleStores, index ElementIndex, into ParamCount) returns ParamPositionMask
+		return storeRowMaskAt(self.storeColumn(kind), index: index, into: into)
+	end 'storeMaskAt'
+
+	function widen(index ElementIndex, row TracedCycleRow) returns bool
+		var grew = false
+
+		for kind in CycleMaskColumns 'eachMaskColumn'
+			grew = widenSummaryColumn(self.column(kind), index: index, by: row.maskOf(kind)) or grew
+		end 'eachMaskColumn'
+
+		for kind in CycleStoreKinds 'eachStoreColumn'
+			grew = widenStoreRow(self.storeColumn(kind), index: index, by: row.storesOf(kind), sharedEmptyRow: self.noStores) or grew
+		end 'eachStoreColumn'
+
+		for traced in row.globals.effects 'eachTracedGlobal'
+			if traced.isEmpty() 'tracedNothing'
+				continue
+			end 'tracedNothing'
+
+			grew = self.effectsToWiden(index).effectFor(traced.label).widen(traced) or grew
 		end 'eachTracedGlobal'
 
 		return grew
 	end 'widen'
 
-	function globalsAt(index ElementIndex) returns GlobalEffectArray
+	// Every function shares `noGlobals` until its first effect. Widening the shared one would hand
+	// that effect to every function, so a widen first gives the function its own.
+	function effectsToWiden(index ElementIndex) returns GlobalEffects
+		let effects = self.globalsAt(index)
+
+		if not (effects is self.noGlobals) 'ownsEffects'
+			return effects
+		end 'ownsEffects'
+
+		var owned = GlobalEffects.create()
+		try self.globals.set(index, value: owned) otherwise panic("CycleSummary.effectsToWiden: globals.set OOB at {index}")
+		return owned
+	end 'effectsToWiden'
+
+	function digestInto(index ElementIndex, keys mutable LandingKeys)
+		for kind in CycleMaskColumns 'eachMaskColumn'
+			keys.push(self.maskAt(kind, index: index))
+		end 'eachMaskColumn'
+
+		for kind in CycleStoreKinds 'eachStoreColumn'
+			keys.pushStoreRow(self.storeColumn(kind), index: index)
+		end 'eachStoreColumn'
+
+		view effects = self.globalsAt(index).effects
+		keys.pushCount(effects.count())
+
+		for effect in effects 'eachGlobal'
+			keys.pushCount(effect.label.count())
+
+			for letter in effect.label 'eachLetter'
+				keys.push(letter as ParamPositionMask)
+			end 'eachLetter'
+
+			keys.push(effect.storedRecords)
+			keys.push(effect.storedHeld)
+			keys.push(effect.storedCaptured)
+			keys.push(effect.readInto)
+			keys.pushFlag(effect.resultReads)
+		end 'eachGlobal'
+	end 'digestInto'
+
+	function globalsAt(index ElementIndex) returns GlobalEffects
 		return try self.globals.get(index) otherwise panic("CycleSummary.globalsAt: function index {index} is past the summaries — they are built over `funcNames.functions`")
 	end 'globalsAt'
 end 'CycleSummary'
@@ -311,6 +445,7 @@ type ClosureCycleChecker implements SummarizedBodies
 	export var globalsGrew as bool
 	var reported as ReportedPositionSet
 	export let noSites as immutable ProvenanceSites
+	var globalOrdinals as GlobalSlotByLabel
 
 	// Every trace's origin lists, kept across traces: a trace's lists are dead once it settles, so the next
 	// trace reuses their storage rather than allocating its own.
@@ -320,8 +455,14 @@ type ClosureCycleChecker implements SummarizedBodies
 
 	static function create(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, resolution CallSummaryIndex) returns ClosureCycleChecker
 		let funcCount = funcNames.functions.count()
+		var globalOrdinals = GlobalSlotByLabel.create()
+
+		for (iter, global) in project.managedGlobals.withIterator() 'eachGlobal'
+			globalOrdinals.upsert(global.label, value: iter.index())
+		end 'eachGlobal'
+
 		let relevant = FixedBoolArray.create(funcCount)
-		return Self{project: project, module: module, signatures: signatures, funcNames: funcNames, calls: CallSiteCursor.create(resolution), summary: CycleSummary.create(funcCount), relevant: relevant, holdings: FunctionHoldingAnswers.plain(), heldGlobals: HeldGlobalsByLabel.create(), globalsGrew: false, reported: ReportedPositionSet.create(), noSites: freeze ProvenanceSites.create(ProvenanceColumns.create()), listPool: OriginListArray.create(0), bodyIndexes: CycleBodyIndexByFunction.create(), noOrigins: OriginList.create(0)}
+		return Self{project: project, module: module, signatures: signatures, funcNames: funcNames, globalOrdinals: globalOrdinals, calls: CallSiteCursor.create(resolution), summary: CycleSummary.create(funcCount), relevant: relevant, holdings: FunctionHoldingAnswers.plain(), heldGlobals: HeldGlobalsByLabel.create(), globalsGrew: false, reported: ReportedPositionSet.create(), noSites: freeze ProvenanceSites.create(ProvenanceColumns.create()), listPool: OriginListArray.create(0), bodyIndexes: CycleBodyIndexByFunction.create(), noOrigins: OriginList.create(0)}
 	end 'create'
 
 	function settle() throws CompileError
@@ -337,7 +478,7 @@ type ClosureCycleChecker implements SummarizedBodies
 		while self.globalsGrew 'untilNoGlobalHoldsMore'
 			self.globalsGrew = false
 			self.calls.dependencies = CallDependencies.create()
-			try settleSummaries(self.project, order: order, bodies: self, dependencies: self.calls.dependencies)
+			try settleSummaries(self.project, order: order, bodies: self, dependencies: self.calls.dependencies, landing: self.calls.landing)
 		end 'untilNoGlobalHoldsMore'
 	end 'settle'
 
@@ -349,6 +490,17 @@ type ClosureCycleChecker implements SummarizedBodies
 		var traced = self.trace(index, mode: CycleTraceMode.summarize)
 		return self.summary.widen(index, row: traced.row)
 	end 'traceAndWiden'
+
+	function landingKeyOf(index ElementIndex, keys mutable LandingKeys) returns ElementIndex
+		keys.begin()
+		keys.pushFlag(self.isRelevant(index))
+
+		if self.isRelevant(index) 'movesFunctions'
+			self.summary.digestInto(index, keys: keys)
+		end 'movesFunctions'
+
+		return keys.intern()
+	end 'landingKeyOf'
 
 	function judgeEveryBody()
 		for index in 0 upto self.funcNames.functions.count() 'eachFunction'
@@ -418,6 +570,10 @@ type ClosureCycleChecker implements SummarizedBodies
 
 		panic("ClosureCycleChecker.captureNameAt: '{String.from(closureName)}' stores a record that may hold a closure at offset {offset}, where it declares no capture")
 	end 'captureNameAt'
+
+	function globalOrdinalOf(label ByteArray) returns ElementIndex
+		return try self.globalOrdinals.get(label) otherwise self.project.managedGlobals.count()
+	end 'globalOrdinalOf'
 
 	function globalNameOf(label ByteArray) returns String
 		for global in self.project.managedGlobals 'eachGlobal'
@@ -560,6 +716,8 @@ type CycleTrace implements SummaryCallWalker
 	var parents as OriginList
 	var depths as OriginDepthArray
 	var rootParams as ParamCountArray
+	var ranks as OriginKeyArray
+	var offsets as ByteOffsetArray
 	var rootedInAParameter as BoolArray
 	var childOrigins as OriginByKey
 	var syntheticOrigins as OriginByKey
@@ -614,7 +772,7 @@ type CycleTrace implements SummaryCallWalker
 
 	static function over(checker ClosureCycleChecker, func IrFunction, index ElementIndex, body CycleBodyIndex) returns CycleTrace
 		let valueCount = func.valueTags.count()
-		return Self{checker: checker, traced: func, tracedIndex: index, tracked: body.tracked, blockIndex: body.blockIndex, kinds: OriginKindArray.create(0), parents: OriginList.create(0), depths: OriginDepthArray.create(0), rootParams: ParamCountArray.create(0), rootedInAParameter: BoolArray.create(0), childOrigins: OriginByKey.create(), syntheticOrigins: OriginByKey.create(), freshOrigins: OptionalElementIndexColumn.absent(valueCount), holdingsOrigins: OptionalElementIndexColumn.absent(func.paramCount), globalOrigins: OriginByLabel.create(), globalLabels: OriginLabelMap.create(), closureBodies: OriginNameMap.create(), originNames: OriginNameMap.create(), lists: checker.listPool, listsInUse: 0, noOrigins: checker.noOrigins, membership: ListMembership.create(), baseHandles: OptionalElementIndexColumn.absent(valueCount), heldHandles: OptionalElementIndexColumn.create(), containerHandles: OptionalElementIndexColumn.create(), edgeHolders: OriginList.create(0), edgeOps: EntryIndexArray.create(0), fieldStoreOps: body.fieldStoreOps, fieldStoreOpsByLine: body.fieldStoreOpsByLine, originEvents: OptionalElementIndexColumn.create(), fieldEvents: HandleByKey.create(), eventOps: EntryIndexArray.create(0), eventRecords: EntryIndexArray.create(0), forwarded: body.forwarded, opPositions: body.opPositions, successors: body.successors, reachFrom: body.reachFrom, elementSites: body.elementSites, operands: ValueIdArray.create(0), returned: ValueIdArray.create(0), scratch: BoolArray.create(0), cycles: ClosureCycles.create(), changed: true, mode: CycleTraceMode.propagate, row: TracedCycleRow.create(func.paramCount)}
+		return Self{checker: checker, traced: func, tracedIndex: index, tracked: body.tracked, blockIndex: body.blockIndex, kinds: OriginKindArray.create(0), parents: OriginList.create(0), depths: OriginDepthArray.create(0), rootParams: ParamCountArray.create(0), ranks: OriginKeyArray.create(0), offsets: ByteOffsetArray.create(0), rootedInAParameter: BoolArray.create(0), childOrigins: OriginByKey.create(), syntheticOrigins: OriginByKey.create(), freshOrigins: OptionalElementIndexColumn.absent(valueCount), holdingsOrigins: OptionalElementIndexColumn.absent(func.paramCount), globalOrigins: OriginByLabel.create(), globalLabels: OriginLabelMap.create(), closureBodies: OriginNameMap.create(), originNames: OriginNameMap.create(), lists: checker.listPool, listsInUse: 0, noOrigins: checker.noOrigins, membership: ListMembership.create(), baseHandles: OptionalElementIndexColumn.absent(valueCount), heldHandles: OptionalElementIndexColumn.create(), containerHandles: OptionalElementIndexColumn.create(), edgeHolders: OriginList.create(0), edgeOps: EntryIndexArray.create(0), fieldStoreOps: body.fieldStoreOps, fieldStoreOpsByLine: body.fieldStoreOpsByLine, originEvents: OptionalElementIndexColumn.create(), fieldEvents: HandleByKey.create(), eventOps: EntryIndexArray.create(0), eventRecords: EntryIndexArray.create(0), forwarded: body.forwarded, opPositions: body.opPositions, successors: body.successors, reachFrom: body.reachFrom, elementSites: body.elementSites, operands: ValueIdArray.create(0), returned: ValueIdArray.create(0), scratch: BoolArray.create(0), cycles: ClosureCycles.create(), changed: true, mode: CycleTraceMode.propagate, row: TracedCycleRow.create(func.paramCount)}
 	end 'over'
 
 	function bodyIndex() returns CycleBodyIndex
@@ -776,9 +934,9 @@ type CycleTrace implements SummaryCallWalker
 			let param = valueIdAtParamPosition(p)
 
 			if self.isTracked(param) 'holdsAFunction'
-				let holdings = self.mintRoot(OriginKind.holdings, rootParam: p, inAParameter: true)
+				let holdings = self.mintRoot(OriginKind.holdings, rootParam: p, inAParameter: true, declared: declarationRank(DeclarationKind.parameter, position: p as OriginKey))
 				self.holdingsOrigins.set(p, value: holdings)
-				let origin = self.mintRoot(OriginKind.parameter, rootParam: p, inAParameter: true)
+				let origin = self.mintRoot(OriginKind.parameter, rootParam: p, inAParameter: true, declared: declarationRank(DeclarationKind.parameter, position: p as OriginKey))
 				self.addToList(self.handleIn(self.baseHandles, key: param), origin: origin)
 			end 'holdsAFunction'
 		end 'eachParameter'
@@ -972,7 +1130,7 @@ type CycleTrace implements SummaryCallWalker
 			end 'eachStored'
 		end 'eachReceiver'
 
-		for effect in summary.globalsAt(calleeIndex) 'eachGlobal'
+		for effect in summary.globalsAt(calleeIndex).effects 'eachGlobal'
 			self.applyGlobalEffect(effect, result: result, args: args, opIdx: opIdx)
 		end 'eachGlobal'
 
@@ -994,9 +1152,9 @@ type CycleTrace implements SummaryCallWalker
 
 	function applyStoreSummary(calleeIndex ElementIndex, into ParamCount, position ParamCount, receiver ValueId, stored ValueId, opIdx ElementIndex, at SourceRange)
 		view summary = self.checker.summary
-		let storesHeld = maskHasParam(storeRowMaskAt(summary.storesHeld, index: calleeIndex, into: into), param: position)
-		let storesRecord = maskHasParam(storeRowMaskAt(summary.storesRecord, index: calleeIndex, into: into), param: position)
-		let storesCaptured = maskHasParam(storeRowMaskAt(summary.storesCaptured, index: calleeIndex, into: into), param: position)
+		let storesHeld = maskHasParam(summary.storeMaskAt(CycleStores.held, index: calleeIndex, into: into), param: position)
+		let storesRecord = maskHasParam(summary.storeMaskAt(CycleStores.record, index: calleeIndex, into: into), param: position)
+		let storesCaptured = maskHasParam(summary.storeMaskAt(CycleStores.captured, index: calleeIndex, into: into), param: position)
 
 		if not (storesHeld or storesRecord or storesCaptured) 'storesNothingOfIt'
 			return
@@ -1075,11 +1233,11 @@ type CycleTrace implements SummaryCallWalker
 	function applyResultSummary(calleeIndex ElementIndex, position ParamCount, result ValueId, fresh OriginIndex, arg ValueId, opIdx ElementIndex)
 		view summary = self.checker.summary
 
-		if maskHasParam(summaryMaskAt(summary.resultIs, index: calleeIndex), param: position) 'theArgument'
+		if maskHasParam(summary.maskAt(CycleMask.resultIs, index: calleeIndex), param: position) 'theArgument'
 			self.unionValueIntoBase(result, from: arg)
 		end 'theArgument'
 
-		if maskHasParam(summaryMaskAt(summary.resultWithin, index: calleeIndex), param: position) 'withinTheArgument'
+		if maskHasParam(summary.maskAt(CycleMask.resultWithin, index: calleeIndex), param: position) 'withinTheArgument'
 			self.flowAnythingWithin(result, from: arg, opIdx: opIdx)
 		end 'withinTheArgument'
 
@@ -1089,15 +1247,15 @@ type CycleTrace implements SummaryCallWalker
 
 		let heldHandle = self.handleIn(self.heldHandles, key: fresh)
 
-		if maskHasParam(summaryMaskAt(summary.resultHolds, index: calleeIndex), param: position) 'holdsWhatTheArgumentHolds'
+		if maskHasParam(summary.maskAt(CycleMask.resultHolds, index: calleeIndex), param: position) 'holdsWhatTheArgumentHolds'
 			self.unionIntoList(heldHandle, from: self.heldOfValue(arg))
 		end 'holdsWhatTheArgumentHolds'
 
-		if maskHasParam(summaryMaskAt(summary.resultCaptures, index: calleeIndex), param: position) 'holdsTheArgument'
+		if maskHasParam(summary.maskAt(CycleMask.resultCaptures, index: calleeIndex), param: position) 'holdsTheArgument'
 			self.unionIntoList(heldHandle, from: self.baseOf(arg))
 		end 'holdsTheArgument'
 
-		if maskHasParam(summaryMaskAt(summary.resultCapturesWithin, index: calleeIndex), param: position) 'holdsWithinTheArgument'
+		if maskHasParam(summary.maskAt(CycleMask.resultCapturesWithin, index: calleeIndex), param: position) 'holdsWithinTheArgument'
 			for origin in self.baseOf(arg) 'eachBase'
 				self.addToList(heldHandle, origin: self.childOf(origin, offset: WildOffset))
 			end 'eachBase'
@@ -1232,7 +1390,7 @@ type CycleTrace implements SummaryCallWalker
 			end 'aParametersRecord'
 
 			if let global = try self.globalRootOf(record) 'aGlobalsValue'
-				var effect = effectFor(self.row.globals, label: self.globalLabelOf(global))
+				var effect = self.row.globals.effectFor(self.globalLabelOf(global))
 				effect.readInto = maskWithParam(effect.readInto, param: into)
 			end 'aGlobalsValue'
 		end 'eachRecord'
@@ -1258,7 +1416,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'parametersHeld'
 
 	function summarizeGlobalStore(label ByteArray, records OriginList, held OriginList)
-		var effect = effectFor(self.row.globals, label: label)
+		var effect = self.row.globals.effectFor(label)
 
 		for record in records 'eachRecord'
 			if self.kindOf(record) == OriginKind.parameter 'aParametersRecord'
@@ -1285,7 +1443,7 @@ type CycleTrace implements SummaryCallWalker
 				end 'withinTheParameter'
 
 				if let global = try self.globalRootOf(origin) 'aGlobalsValue'
-					var effect = effectFor(self.row.globals, label: self.globalLabelOf(global))
+					var effect = self.row.globals.effectFor(self.globalLabelOf(global))
 					effect.resultReads = true
 				end 'aGlobalsValue'
 			end 'eachRecord'
@@ -1440,7 +1598,7 @@ type CycleTrace implements SummaryCallWalker
 			end 'somewhereWithinIt'
 		end 'eachTarget'
 
-		for h in ascendingOrigins(held) 'eachHeld'
+		for h in self.declarationOrdered(held) 'eachHeld'
 			if self.kindOf(h) == OriginKind.holdings 'theCallersToJudge'
 				continue
 			end 'theCallersToJudge'
@@ -1723,7 +1881,7 @@ type CycleTrace implements SummaryCallWalker
 			return origin
 		end 'minted'
 
-		let origin = self.mintRoot(OriginKind.fresh, rootParam: 0, inAParameter: false)
+		let origin = self.mintRoot(OriginKind.fresh, rootParam: 0, inAParameter: false, declared: declarationRank(DeclarationKind.local, position: value as OriginKey))
 		self.freshOrigins.set(value, value: origin)
 
 		if self.valueIsAFunction(value) 'aFunctionRecord'
@@ -1746,7 +1904,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'recordTheCalleeStored'
 
 	function mintSynthetic(key OriginKey) returns OriginIndex
-		let origin = self.mintRoot(OriginKind.fresh, rootParam: 0, inAParameter: false)
+		let origin = self.mintRoot(OriginKind.fresh, rootParam: 0, inAParameter: false, declared: declarationRank(DeclarationKind.calleeStored, position: key))
 		self.syntheticOrigins.upsert(key, value: origin)
 		return origin
 	end 'mintSynthetic'
@@ -1756,7 +1914,7 @@ type CycleTrace implements SummaryCallWalker
 			return origin
 		end 'minted'
 
-		let origin = self.mintRoot(OriginKind.global, rootParam: 0, inAParameter: false)
+		let origin = self.mintRoot(OriginKind.global, rootParam: 0, inAParameter: false, declared: declarationRank(DeclarationKind.global, position: self.checker.globalOrdinalOf(label) as OriginKey))
 		self.globalOrigins.upsert(label, value: origin)
 		self.globalLabels.upsert(origin, value: label)
 		return origin
@@ -1794,7 +1952,7 @@ type CycleTrace implements SummaryCallWalker
 		end 'interned'
 
 		let kind = OriginKind.element if offset == WildOffset else OriginKind.field
-		let child = self.mintOrigin(kind, parent: parent, depth: (self.depthOf(parent) + 1) as OriginDepth, rootParam: self.rootParamOf(parent), inAParameter: self.isRootedInAParameter(parent))
+		let child = self.mintOrigin(kind, parent: parent, offset: offset, depth: (self.depthOf(parent) + 1) as OriginDepth, rootParam: self.rootParamOf(parent), inAParameter: self.isRootedInAParameter(parent), declared: self.rankOf(parent))
 		self.childOrigins.upsert(key, value: child)
 		self.seedHeldGlobals(child)
 		return child
@@ -1809,16 +1967,18 @@ type CycleTrace implements SummaryCallWalker
 		end 'eachHeldGlobal'
 	end 'seedHeldGlobals'
 
-	function mintRoot(kind OriginKind, rootParam ParamCount, inAParameter bool) returns OriginIndex
-		return self.mintOrigin(kind, parent: self.kinds.count() as OriginIndex, depth: 0, rootParam: rootParam, inAParameter: inAParameter)
+	function mintRoot(kind OriginKind, rootParam ParamCount, inAParameter bool, declared OriginKey) returns OriginIndex
+		return self.mintOrigin(kind, parent: self.kinds.count() as OriginIndex, offset: 0, depth: 0, rootParam: rootParam, inAParameter: inAParameter, declared: declared)
 	end 'mintRoot'
 
-	function mintOrigin(kind OriginKind, parent OriginIndex, depth OriginDepth, rootParam ParamCount, inAParameter bool) returns OriginIndex
+	function mintOrigin(kind OriginKind, parent OriginIndex, offset ByteOffset, depth OriginDepth, rootParam ParamCount, inAParameter bool, declared OriginKey) returns OriginIndex
 		let origin = self.kinds.count() as OriginIndex
 		self.kinds.push(kind)
 		self.parents.push(parent)
+		self.offsets.push(offset)
 		self.depths.push(depth)
 		self.rootParams.push(rootParam)
+		self.ranks.push(declared)
 		self.rootedInAParameter.push(inAParameter)
 		self.heldHandles.pushAbsent()
 		self.containerHandles.pushAbsent()
@@ -2038,6 +2198,64 @@ type CycleTrace implements SummaryCallWalker
 		return try self.kinds.get(origin) otherwise panic("CycleTrace.kindOf: origin {origin} was never minted")
 	end 'kindOf'
 
+	function rankOf(origin OriginIndex) returns OriginKey
+		return try self.ranks.get(origin) otherwise panic("CycleTrace.rankOf: origin {origin} was never minted")
+	end 'rankOf'
+
+	function declaredBefore(first OriginIndex, second OriginIndex) returns Ordering
+		let byRank = self.rankOf(first).compare(self.rankOf(second))
+
+		if byRank != Ordering.equalTo 'declaredApart'
+			return byRank
+		end 'declaredApart'
+
+		let byDepth = self.depthOf(first).compare(self.depthOf(second))
+
+		if byDepth != Ordering.equalTo 'atDifferentDepths'
+			return byDepth
+		end 'atDifferentDepths'
+
+		let byKind = self.kindOf(first).ordinal.compare(self.kindOf(second).ordinal)
+
+		if byKind != Ordering.equalTo 'ofDifferentKinds'
+			return byKind
+		end 'ofDifferentKinds'
+
+		let byPath = self.compareOffsetPaths(first, second: second)
+
+		if byPath != Ordering.equalTo 'atDifferentOffsets'
+			return byPath
+		end 'atDifferentOffsets'
+
+		return first.compare(second)
+	end 'declaredBefore'
+
+	function compareOffsetPaths(first OriginIndex, second OriginIndex) returns Ordering
+		if self.depthOf(first) == 0 'aRoot'
+			return Ordering.equalTo
+		end 'aRoot'
+
+		let byParents = self.compareOffsetPaths(self.parentOf(first), second: self.parentOf(second))
+
+		if byParents != Ordering.equalTo 'underDifferentParents'
+			return byParents
+		end 'underDifferentParents'
+
+		return self.offsetOf(first).compare(self.offsetOf(second))
+	end 'compareOffsetPaths'
+
+	function offsetOf(origin OriginIndex) returns ByteOffset
+		return try self.offsets.get(origin) otherwise panic("CycleTrace.offsetOf: origin {origin} was never minted")
+	end 'offsetOf'
+
+	// E3183 names the first holder in this order. It follows the source, by `DeclarationKind` then
+	// position, so the holder named is the same whatever order the trace minted its origins in.
+	function declarationOrdered(origins OriginList) returns OriginList
+		var ordered = origins.clone()
+		ordered.sortBy(function(first OriginIndex, second OriginIndex) gives self.declaredBefore(first, second: second))
+		return ordered
+	end 'declarationOrdered'
+
 	function parentOf(origin OriginIndex) returns OriginIndex
 		return try self.parents.get(origin) otherwise panic("CycleTrace.parentOf: origin {origin} was never minted")
 	end 'parentOf'
@@ -2084,15 +2302,21 @@ end 'ClosureCycle'
 
 typealias ClosureCycleArray = Array with ClosureCycle
 
+typealias LatestOrderByKey = Map with (OriginKey, OriginKey)
+
 type ClosureCycles
 	var found as ClosureCycleArray
+	var latestOrder as LatestOrderByKey
 
 	static function create() returns ClosureCycles
-		return Self{found: ClosureCycleArray.create(0)}
+		return Self{found: ClosureCycleArray.create(0), latestOrder: LatestOrderByKey.create()}
 	end 'create'
 
 	function note(key OriginKey, order OriginKey, at SourceRange, holder CycleHolder, storesAClosure bool)
 		self.found.push(ClosureCycle.create(key, order: order, at: at, holder: holder, storesAClosure: storesAClosure))
+
+		let known = try self.latestOrder.get(key) otherwise order
+		self.latestOrder.upsert(key, value: known if known > order else order)
 	end 'note'
 
 	function latestOfEach() returns ClosureCycleArray
@@ -2108,21 +2332,9 @@ type ClosureCycles
 	end 'latestOfEach'
 
 	function laterStoreCloses(cycle ClosureCycle) returns bool
-		for other in self.found 'eachOther'
-			if other.key == cycle.key and other.order > cycle.order 'closedLater'
-				return true
-			end 'closedLater'
-		end 'eachOther'
-
-		return false
+		return (try self.latestOrder.get(cycle.key) otherwise panic("ClosureCycles.laterStoreCloses: cycle key {cycle.key} was noted with no order")) > cycle.order
 	end 'laterStoreCloses'
 end 'ClosureCycles'
-
-function ascendingOrigins(origins OriginList) returns OriginList
-	var sorted = origins.clone()
-	sorted.sort()
-	return sorted
-end 'ascendingOrigins'
 
 function widenRowAt(row ParamPositionMaskArray, into ParamCount, by ParamPositionMask)
 	let before = try row.get(into) otherwise panic("widenRowAt: row is shorter than parameter {into}")

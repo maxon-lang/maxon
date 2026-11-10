@@ -1678,6 +1678,53 @@ end 'main'
 error E2004: <fragment>:6:12: Cannot operate on Coord and bool
 ```
 
+<!-- test: error.an-interface-held-operand-names-the-interface -->
+A value held at an interface type is named by that interface, as a record is named by its type.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+function negate(x Named) returns Count
+	let y = -x
+	return 0
+end 'negate'
+
+function shifted(x Named) returns Count
+	let y = x shl 1
+	return 0
+end 'shifted'
+
+function magnitude(x Named) returns Count
+	let y = abs(x)
+	return 0
+end 'magnitude'
+
+function compared(x Named, n Count) returns bool
+	return x < n
+end 'compared'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:17:10: Cannot negate Named
+error E2004: <fragment>:22:12: Cannot operate on Named and int
+error E3005: <fragment>:27:10: 'abs' requires a number, but its argument is Named
+error E3005: <fragment>:32:11: type mismatch: 'cannot compare Named with Count'
+```
+
 <!-- test: an-integer-enum-keeps-its-numeric-operators -->
 ```maxon
 enum Color

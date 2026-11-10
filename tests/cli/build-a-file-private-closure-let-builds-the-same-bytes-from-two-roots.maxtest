@@ -1,0 +1,46 @@
+let FilePrivateClosureRootsCaseDirName = "build-file-private-closure-roots"
+let FilePrivateClosureRootsShallowName = "shallow"
+let FilePrivateClosureRootsDeepName = "much/deeper/than/the/first"
+let FilePrivateClosureRootsFirstDirName = "one"
+let FilePrivateClosureRootsSecondDirName = "two"
+let FilePrivateClosureRootsFirstSource = "let step = function(n Count) gives n + 1\n\nexport function useStepA() returns Count\n\treturn step(41)\nend 'useStepA'\n"
+let FilePrivateClosureRootsSecondSource = "let step = function(label String, extra Count) gives extra + label.byteLength()\n\nexport function useStepB() returns Count\n\treturn step(\"ab\", 40)\nend 'useStepB'\n"
+let FilePrivateClosureRootsMainSource = "function main() returns ExitCode\n\tif useStepA() != 42 or useStepB() != 42 'wrong'\n\t\treturn 1\n\tend 'wrong'\n\n\treturn 0\nend 'main'\n"
+
+test 'a file-private closure let builds the same bytes from two checkout roots'
+	requireHeldOutsideCheckout(FilePrivateClosureRootsCaseDirName, check: FilePrivateClosureRootsAgree.create())
+end 'a file-private closure let builds the same bytes from two checkout roots'
+
+type FilePrivateClosureRootsAgree implements OutsideCheckoutCase
+	static function create() returns FilePrivateClosureRootsAgree
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let shallow = dir.join(FilePrivateClosureRootsShallowName)
+		let deep = dir.join(FilePrivateClosureRootsDeepName)
+
+		stageClosureRoot(shallow)
+		stageClosureRoot(deep)
+
+		let shallowBuild = runRecordedBuild(shallow, program: shallow.join(ProgramDirName).toString(), output: OutputName, options: StringArray.create(0))
+		try Expect.equal(shallowBuild.exitCode(), expected: 0, message: "the build from the shallow root did not succeed. It wrote to stdout: {shallowBuild.stdout} and to stderr: {shallowBuild.stderr}")
+
+		let deepBuild = runRecordedBuild(deep, program: deep.join(ProgramDirName).toString(), output: OutputName, options: StringArray.create(0))
+		try Expect.equal(deepBuild.exitCode(), expected: 0, message: "the build from the deep root did not succeed. It wrote to stdout: {deepBuild.stdout} and to stderr: {deepBuild.stderr}")
+
+		let image = "{OutputName}{executableSuffix()}"
+
+		try requireSameBytes(shallow.join(image), second: deep.join(image), why: "a program whose two files each declare a file-private closure `let step` is not the same executable when built from two checkout roots, so a lifted closure's name carries the root it was built under.")
+	end 'requireHeldIn'
+end 'FilePrivateClosureRootsAgree'
+
+function stageClosureRoot(root FilePath)
+	let program = root.join(ProgramDirName)
+	_ = stagingDir(program.join(FilePrivateClosureRootsFirstDirName).toString())
+	_ = stagingDir(program.join(FilePrivateClosureRootsSecondDirName).toString())
+
+	writeStagedFile(program.join(FilePrivateClosureRootsFirstDirName).join("a.maxon"), content: FilePrivateClosureRootsFirstSource)
+	writeStagedFile(program.join(FilePrivateClosureRootsSecondDirName).join("b.maxon"), content: FilePrivateClosureRootsSecondSource)
+	writeStagedFile(program.join(StagedProgramFileName), content: FilePrivateClosureRootsMainSource)
+end 'stageClosureRoot'

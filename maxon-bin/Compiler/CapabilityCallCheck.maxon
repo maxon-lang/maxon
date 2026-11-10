@@ -187,6 +187,14 @@ function hopsFor(facts CapabilityFacts, index ElementIndex, position ParamCount,
 	return facts.frozenSomeHops
 end 'hopsFor'
 
+function landedHop(hops NeedHops, funcCount ElementIndex, hop NeedHop) returns NeedHop throws AbsentError
+	if hop.callee < funcCount 'aBody'
+		return hop
+	end 'aBody'
+
+	return try hops.viaOf(hop.callee, position: hop.calleeParam)
+end 'landedHop'
+
 function needChainText(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, position ParamCount, mutable bool) returns String
 	let hops = hopsFor(facts, index: index, position: position, mutable: mutable)
 	var text = " ("
@@ -195,7 +203,8 @@ function needChainText(project Project, funcNames FunctionNameIndex, facts Capab
 	var first = true
 
 	while true 'eachHop'
-		let hop = try hops.viaOf(currentIndex, position: currentPosition) otherwise break
+		let viaNode = try hops.viaOf(currentIndex, position: currentPosition) otherwise break
+		let hop = try landedHop(hops, funcCount: funcNames.functions.count(), hop: viaNode) otherwise break
 		let callee = try funcNames.functions.get(hop.callee) otherwise panic("needChainText: functions.get OOB at {hop.callee}")
 		text.append("it calls '{calleeDisplayName(project, func: callee)}', which " if first else "calls '{calleeDisplayName(project, func: callee)}', which ")
 		first = false

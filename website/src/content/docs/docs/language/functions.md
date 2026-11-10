@@ -336,11 +336,16 @@ value to a function whose parameter such a closure captures is **E3078**. A clos
 only called, where it is made or by a parameter that only calls it — writes what it writes of a parameter it
 captures, so handing that function a read-only value is **E3159**.
 
+A call through a closure held in a local `let` is judged against that one closure: `reader(box)` takes a
+frozen `box` when `reader` only reads its parameter, though a closure of the same shape beside it writes
+its own. A local that was reassigned, or that a branch or a loop merged, may name any closure of its shape,
+so a call through it is judged against all of them.
+
 **A closure can go anywhere a value can.** A function value is one reference to a record holding the code
 and the captures, so a closure may be returned, stored in a field, a container or
 a union payload, and passed to `async`. A plain function is a record that
-lives for the whole program. Copies share: `var g = f` and `f.clone()` hold the same closure, and a function
-value is exempt from **E3078**. A module-level `let` may hold a function value, including a closure
+lives for the whole program. Copies share: `var g = f`, `g = f` and `f.clone()` hold the same closure, and a
+function value is exempt from **E3078**. A module-level `let` may hold a function value, including a closure
 a factory call returns.
 
 **A closure may not be stored into what it captures.** The record would hold the closure and the closure the

@@ -173,11 +173,11 @@ extension Project
 	function bufferParse(path FilePath) returns BufferParse
 		let before = self.diagnostics.count()
 
-		_ = try queryParseOps(self, path: path) otherwise return BufferParse.compilable
+		view artifact = try queryParseOps(self, path: path) otherwise return BufferParse.compilable
 
-		// A held consequence names its diagnostics by their position in this sink, which is cleared
-		// below.
-		self.poison.forgetHeldConsequences()
+		// The refusals only: a recorded diagnostic (E3010) refuses nothing, and taken for one it would
+		// hide every diagnostic the later passes report.
+		self.reportParseRefusals(artifact)
 
 		if self.diagnostics.count() == before 'parsedCleanly'
 			return BufferParse.compilable
@@ -218,22 +218,34 @@ extension Project
 
 		view query = try parseQueryOf(self, path: reader) otherwise return SweptParse.unavailable
 
+		self.diagnostics.clear()
+
 		return match query 'query'
-			memoized(artifact) gives SweptParse.parsed(artifact.diagnostics)
+			memoized(artifact) gives self.publishedParse(artifact)
 			needed(job, sweptTokens, overrides, stamp) gives self.landedSweptParse(job, tokens: sweptTokens, overrides: overrides, stamp: stamp, reader: reader)
 		end 'query'
 	end 'sweptParseDiagnostics'
 
 	function landedSweptParse(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, stamp ParseStamp, reader FilePath) returns SweptParse
-		self.diagnostics.clear()
+		view artifact = landParse(self, path: reader, artifact: parseFile(job, tokens: tokens, overrides: overrides, signatures: try queryProgramSignatures(self) otherwise return SweptParse.unavailable), stamp: stamp)
 
-		view artifact = landParseOutcome(self, path: reader, outcome: parseFile(job, tokens: tokens, overrides: overrides, signatures: try queryProgramSignatures(self) otherwise return SweptParse.unavailable), stamp: stamp)
-		self.poison.forgetHeldConsequences()
-		var published = self.diagnostics.clone()
-		published.append(artifact.diagnostics)
-
-		return SweptParse.parsed(published)
+		return self.publishedParse(artifact)
 	end 'landedSweptParse'
+
+	function publishedParse(artifact FileParseArtifact) returns SweptParse
+		self.reportParseRefusals(artifact)
+		reportRecordedDiagnostics(self, artifact: artifact)
+
+		return SweptParse.parsed(self.diagnostics.clone())
+	end 'publishedParse'
+
+	function reportParseRefusals(artifact FileParseArtifact)
+		reportOwnRefusals(self, artifact: artifact)
+
+		// A held consequence names its diagnostics by their position in this sink, which `bufferParse`
+		// clears.
+		self.poison.forgetHeldConsequences()
+	end 'reportParseRefusals'
 
 	function unsuppressedRefusals(reported DiagnosticArray, signatures ProgramSignatures, reader FilePath, buffer FilePath, text String, tokens TokenArray, road RefusalRoad) returns DiagnosticArray
 		if reported.isEmpty() 'nothingToAttribute'

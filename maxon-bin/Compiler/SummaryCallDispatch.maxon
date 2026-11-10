@@ -5,6 +5,14 @@
 module typealias WitnessSlotKey = int(0 to u64.max)
 typealias WitnessImplsMemo = Map with (WitnessSlotKey, CallLandingBodies)
 typealias FunctionValueBodiesMemo = Map with (ByteArray, CallLandingBodies)
+typealias FunctionShapeArray = Array with FunctionShape
+typealias ClosureSubsetMemo = Map with (ElementIndex, CallLandingBodies)
+typealias ExactLandingMemo = Map with (ElementIndex, CallLandingBodies)
+typealias LandingByContents = Map with (ByteArray, CallLandingBodies)
+typealias FunctionShapeBucketIndex = Map with (ByteArray, ElementIndex)
+typealias CandidateBucketIndex = Map with (ByteArray, FuncIndexArray)
+typealias BucketVerdicts = Map with (ElementIndex, bool)
+typealias ReaderFreeVerdictMemo = Map with (ByteArray, BucketVerdicts)
 typealias InstanceRecordMemo = Map with (GenericInstanceId, bool)
 typealias FunctionRefNameMap = Map with (ValueId, immutable ByteArray)
 typealias FunctionRefNamesByFunc = Map with (ElementIndex, FunctionRefNameMap)
@@ -137,6 +145,11 @@ end 'SummaryCallWalker'
 module interface SummarizedBodies
 	function tracesFirst(mutable self, index ElementIndex) returns bool
 	function traceAndWiden(mutable self, index ElementIndex) returns bool
+
+	// Bodies of one key must apply identically at any call site: `dispatchLandingCall` applies only
+	// the first member of each key's class, so a fact the key leaves out is an effect silently
+	// dropped.
+	function landingKeyOf(mutable self, index ElementIndex, keys mutable LandingKeys) returns ElementIndex
 end 'SummarizedBodies'
 
 module function dispatchNamedCall(walker SummaryCallWalker, func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray)
@@ -157,7 +170,6 @@ end 'dispatchNamedCall'
 
 module function dispatchLandingCall(walker SummaryCallWalker, func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, bodies CallLandingBodies)
 	var cursor = walker.callSiteCursor()
-	let noRanges = SourceRangeArray.create(0)
 
 	if bodies.unresolvedMayStore 'aBodyMayStoreAnything'
 		storeThroughRuntimeShape(walker, func: func, args: args, shape: RuntimeStoreShape.intoAnyOperand, opIdx: opIdx)
@@ -167,22 +179,31 @@ module function dispatchLandingCall(walker SummaryCallWalker, func IrFunction, o
 		walker.resultFromOperands(func, op: op, opIdx: opIdx, result: result)
 	end 'aBodyNoSummaryDescribes'
 
-	for impl in bodies.impls 'eachImpl'
-		if cursor.resolution.implWasSkippedAsUnreached(impl) 'notInThisProgram'
-			continue
-		end 'notInThisProgram'
+	cursor.dependencies.noteLandedSet(bodies.set)
+	view participants = cursor.resolution.landingSets.factsOf(bodies.set).participants
+	var classes = cursor.landing.classesOf(bodies.set)
 
-		if not cursor.resolution.implHasSummary(impl) 'noSummary'
-			storeThroughRuntimeShape(walker, func: func, args: args, shape: RuntimeStoreShape.intoAnyOperand, opIdx: opIdx)
-			walker.resultFromOperands(func, op: op, opIdx: opIdx, result: result)
-			continue
-		end 'noSummary'
-
-		cursor.dependencies.note(impl)
-		cursor.slotPositionalArgs(args.count() as ParamCount)
-		walker.applyCalleeSummary(func, calleeIndex: impl, op: op, opIdx: opIdx, result: result, args: args, argRanges: noRanges)
-	end 'eachImpl'
+	for slot in classes.order 'eachClass'
+		dispatchLandedBody(walker, func: func, op: op, opIdx: opIdx, result: result, args: args, impl: try participants.get(classes.firstOf(slot)) otherwise panic("dispatchLandingCall: class {slot} of set {bodies.set} names a first member past the {participants.count()} participants"))
+	end 'eachClass'
 end 'dispatchLandingCall'
+
+function dispatchLandedBody(walker SummaryCallWalker, func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, impl ElementIndex)
+	var cursor = walker.callSiteCursor()
+
+	if cursor.resolution.implWasSkippedAsUnreached(impl) 'notInThisProgram'
+		return
+	end 'notInThisProgram'
+
+	if not cursor.resolution.implHasSummary(impl) 'noSummary'
+		storeThroughRuntimeShape(walker, func: func, args: args, shape: RuntimeStoreShape.intoAnyOperand, opIdx: opIdx)
+		walker.resultFromOperands(func, op: op, opIdx: opIdx, result: result)
+		return
+	end 'noSummary'
+
+	cursor.slotPositionalArgs(args.count() as ParamCount)
+	walker.applyCalleeSummary(func, calleeIndex: impl, op: op, opIdx: opIdx, result: result, args: args, argRanges: cursor.noArgRanges)
+end 'dispatchLandedBody'
 
 function storeThroughRuntimeShape(walker SummaryCallWalker, func IrFunction, args ValueIdArray, shape RuntimeStoreShape, opIdx ElementIndex)
 	if shape == RuntimeStoreShape.nothing 'storesNothing'
@@ -209,13 +230,104 @@ end 'storeThroughRuntimeShape'
 
 typealias FuncFlags = FixedArray with bool
 
+// A call through a function value or a witness is one edge to its landing set, and the set grows
+// when any member does: a site landing on N bodies costs one edge rather than N.
+type SummaryClock
+	var now as ElementIndex
+	var tracedAt as FuncIndexArray
+	var grewAt as FuncIndexArray
+	var setGrewAt as FuncIndexArray
+	var setVisitedAt as FuncIndexArray
+
+	static function create(funcCount ElementIndex) returns SummaryClock
+		return Self{now: 0, tracedAt: FuncIndexArray.create(funcCount), grewAt: FuncIndexArray.create(funcCount), setGrewAt: FuncIndexArray.create(0), setVisitedAt: FuncIndexArray.create(0)}
+	end 'create'
+
+	function coverSets(sets LandingSets)
+		while self.setGrewAt.count() < sets.count() 'eachNewSet'
+			self.setGrewAt.push(0)
+			self.setVisitedAt.push(0)
+		end 'eachNewSet'
+	end 'coverSets'
+
+	function beginTrace(index ElementIndex)
+		self.now = self.now + 1
+		try self.tracedAt.set(index, value: self.now) otherwise panic("SummaryClock.beginTrace: tracedAt.set OOB at {index}")
+	end 'beginTrace'
+
+	function noteGrowth(index ElementIndex, sets LandingSets)
+		self.now = self.now + 1
+		self.coverSets(sets)
+		try self.grewAt.set(index, value: self.now) otherwise panic("SummaryClock.noteGrowth: grewAt.set OOB at {index}")
+
+		for membership in 0 upto sets.membershipCountOf(index) 'eachSetItLandsIn'
+			let set = sets.setOfMembership(index, k: membership)
+			try self.setGrewAt.set(set, value: self.now) otherwise panic("SummaryClock.noteGrowth: set {set} is past the {self.setGrewAt.count()} sets the clock covers")
+		end 'eachSetItLandsIn'
+	end 'noteGrowth'
+
+	function growthOfFunction(callee ElementIndex) returns ElementIndex
+		return try self.grewAt.get(callee) otherwise panic("SummaryClock.growthOfFunction: grewAt.get OOB at {callee}")
+	end 'growthOfFunction'
+
+	function growthOfSet(set ElementIndex) returns ElementIndex
+		return try self.setGrewAt.get(set) otherwise panic("SummaryClock.growthOfSet: set {set} is past the {self.setGrewAt.count()} sets the clock covers")
+	end 'growthOfSet'
+
+	function setAwaitsAVisit(set ElementIndex) returns bool
+		return (try self.setVisitedAt.get(set) otherwise panic("SummaryClock.setAwaitsAVisit: set {set} is past the {self.setVisitedAt.count()} sets the clock covers")) < self.growthOfSet(set)
+	end 'setAwaitsAVisit'
+
+	function beginSetVisit(set ElementIndex) returns ElementIndex
+		try self.setVisitedAt.set(set, value: self.now) otherwise panic("SummaryClock.beginSetVisit: set {set} is past the {self.setVisitedAt.count()} sets the clock covers")
+		return self.growthOfSet(set)
+	end 'beginSetVisit'
+
+	function readsStaleGrowth(growth ElementIndex, caller ElementIndex) returns bool
+		return growth > self.tracedAtOf(caller)
+	end 'readsStaleGrowth'
+
+	function tracedAtOf(caller ElementIndex) returns ElementIndex
+		return try self.tracedAt.get(caller) otherwise panic("SummaryClock.tracedAtOf: tracedAt.get OOB at {caller}")
+	end 'tracedAtOf'
+end 'SummaryClock'
+
+type SummaryWorklist
+	module var members as FuncIndexArray
+	var queued as FuncFlags
+	module var clock as SummaryClock
+
+	static function create(funcCount ElementIndex) returns SummaryWorklist
+		return Self{members: FuncIndexArray.create(0), queued: FuncFlags.create(funcCount), clock: SummaryClock.create(funcCount)}
+	end 'create'
+
+	function trace(index ElementIndex, bodies SummarizedBodies, landing LandingClasses)
+		self.clock.beginTrace(index)
+
+		if not bodies.traceAndWiden(index) 'nothingGrew'
+			return
+		end 'nothingGrew'
+
+		landing.rekey(index, bodies: bodies)
+		self.clock.noteGrowth(index, sets: landing.sets)
+
+		if not (try self.queued.get(index) otherwise panic("SummaryWorklist.trace: queued.get OOB at {index}")) 'callersMustLookAgain'
+			self.members.push(index)
+			try self.queued.set(index, value: true) otherwise panic("SummaryWorklist.trace: queued.set OOB at {index}")
+		end 'callersMustLookAgain'
+	end 'trace'
+
+	function release(index ElementIndex)
+		try self.queued.set(index, value: false) otherwise panic("SummaryWorklist.release: queued.set OOB at {index}")
+	end 'release'
+end 'SummaryWorklist'
+
 // A least fixpoint: every body `tracesFirst` admits is traced once, then the callers of each body whose summary
 // grew are traced again until nothing grows.
-module function settleSummaries(project Project, order CsrColumn, bodies SummarizedBodies, dependencies CallDependencies) throws CompileError
+module function settleSummaries(project Project, order CsrColumn, bodies SummarizedBodies, dependencies CallDependencies, landing LandingClasses) throws CompileError
 	let funcCount = order.count()
-	let ranks = ranksOf(order)
-	var worklist = FuncIndexArray.create(0)
-	var queued = FuncFlags.create(funcCount)
+	var pending = SummaryWorklist.create(funcCount)
+	landing.seed(bodies)
 
 	for i in order 'firstTrace'
 		try requireStillWanted(project)
@@ -225,81 +337,82 @@ module function settleSummaries(project Project, order CsrColumn, bodies Summari
 		end 'nothingToHandOn'
 
 		dependencies.recordFor(i)
-		let grew = bodies.traceAndWiden(i)
+		pending.trace(i, bodies: bodies, landing: landing)
 		dependencies.stopRecording()
-
-		if grew 'grew'
-			worklist.push(i)
-			try queued.set(i, value: true) otherwise panic("settleSummaries: queued.set OOB at {i} — one mark per function")
-		end 'grew'
 	end 'firstTrace'
 
 	let callersByCallee = buildCsr(dependencies.callees, to: dependencies.callers, nodeCount: funcCount as CsrIndex)
-	var stale = FuncFlags.create(funcCount)
+	let callersBySet = buildCsr(dependencies.landedSets, to: dependencies.landedCallers, nodeCount: landing.sets.count() as CsrIndex)
+	pending.clock.coverSets(landing.sets)
+	var head = 0 as ElementIndex
 
-	for calleeIndex in worklist 'eachFirstPassGrowth'
-		markCallersStale(callersByCallee, calleeIndex: calleeIndex, through: rankAt(ranks, index: calleeIndex), stale: stale, ranks: ranks)
-	end 'eachFirstPassGrowth'
-
-	var head = 0 as CsrIndex
-
-	while head < worklist.count() as CsrIndex 'drain'
+	while head < pending.members.count() 'drain'
 		try requireStillWanted(project)
-		let calleeIndex = try worklist.get(head) otherwise panic("settleSummaries: worklist.get OOB at {head}")
+		requireEverySetRecorded(landing.sets, recorded: callersBySet.nodeCount())
+		let member = try pending.members.get(head) otherwise panic("settleSummaries: members.get OOB at {head}")
 		head = head + 1
-		try queued.set(calleeIndex, value: false) otherwise panic("settleSummaries: queued.set OOB at {calleeIndex}")
+		pending.release(member)
+		retraceCallersGrownAfter(pending.clock.growthOfFunction(member), callers: callersByCallee, node: member, pending: pending, bodies: bodies, landing: landing)
 
-		for k in 0 upto callersByCallee.degree(calleeIndex as CsrIndex) 'eachCaller'
-			let callerIndex = callersByCallee.neighbour(calleeIndex as CsrIndex, k: k)
+		for membership in 0 upto landing.sets.membershipCountOf(member) 'eachSetItLandsIn'
+			let set = landing.sets.setOfMembership(member, k: membership)
 
-			if not (try stale.get(callerIndex) otherwise panic("settleSummaries: stale.get OOB at {callerIndex}")) 'readsNothingNew'
+			if not pending.clock.setAwaitsAVisit(set) 'nothingNewToRead'
 				continue
-			end 'readsNothingNew'
+			end 'nothingNewToRead'
 
-			try stale.set(callerIndex, value: false) otherwise panic("settleSummaries: stale.set OOB at {callerIndex}")
-
-			if not bodies.traceAndWiden(callerIndex) 'nothingGrew'
-				continue
-			end 'nothingGrew'
-
-			markCallersStale(callersByCallee, calleeIndex: callerIndex, through: funcCount, stale: stale, ranks: ranks)
-
-			if not (try queued.get(callerIndex) otherwise panic("settleSummaries: queued.get OOB at {callerIndex}")) 'callersMustLookAgain'
-				worklist.push(callerIndex)
-				try queued.set(callerIndex, value: true) otherwise panic("settleSummaries: queued.set OOB at {callerIndex}")
-			end 'callersMustLookAgain'
-		end 'eachCaller'
+			retraceCallersGrownAfter(pending.clock.beginSetVisit(set), callers: callersBySet, node: set, pending: pending, bodies: bodies, landing: landing)
+		end 'eachSetItLandsIn'
 	end 'drain'
+
+	requireEverySetRecorded(landing.sets, recorded: callersBySet.nodeCount())
+	requireEveryEdgeSettled(callersByCallee, callersBySet: callersBySet, clock: pending.clock)
 end 'settleSummaries'
 
-// `through` is a rank in the first pass's `order`: a caller ranked past it traced after the growth
-// and read the grown summary already.
-function markCallersStale(callersByCallee CsrGraph, calleeIndex ElementIndex, through ElementIndex, stale FuncFlags, ranks FixedCsrColumn)
-	for k in 0 upto callersByCallee.degree(calleeIndex as CsrIndex) 'eachCaller'
-		let callerIndex = callersByCallee.neighbour(calleeIndex as CsrIndex, k: k)
+// A set registered after the first pass has callers no retrace revisits, so its growth could go unseen.
+function requireEverySetRecorded(sets LandingSets, recorded CsrIndex)
+	if sets.count() != recorded as ElementIndex 'aSetRegisteredLate'
+		panic("settleSummaries: {sets.count()} landing sets are registered but the first pass recorded callers for {recorded}; a set registered after recording closes has callers no retrace revisits")
+	end 'aSetRegisteredLate'
+end 'requireEverySetRecorded'
 
-		if rankAt(ranks, index: callerIndex) <= through 'tracedBeforeTheGrowth'
-			try stale.set(callerIndex, value: true) otherwise panic("markCallersStale: stale.set OOB at {callerIndex}")
-		end 'tracedBeforeTheGrowth'
+function retraceCallersGrownAfter(growth ElementIndex, callers CsrGraph, node ElementIndex, pending SummaryWorklist, bodies SummarizedBodies, landing LandingClasses)
+	for k in 0 upto callers.degree(node as CsrIndex) 'eachCaller'
+		let caller = callers.neighbour(node as CsrIndex, k: k)
+
+		if pending.clock.readsStaleGrowth(growth, caller: caller) 'readsSomethingNew'
+			pending.trace(caller, bodies: bodies, landing: landing)
+		end 'readsSomethingNew'
 	end 'eachCaller'
-end 'markCallersStale'
+end 'retraceCallersGrownAfter'
 
-function ranksOf(order CsrColumn) returns FixedCsrColumn
-	var ranks = FixedCsrColumn.create(order.count())
+// The drain skips a set no member grew in since its last visit (`setAwaitsAVisit`). A skip that
+// lost a growth would leave a caller's summary missing an effect, with no diagnostic to show it.
+function requireEveryEdgeSettled(callersByCallee CsrGraph, callersBySet CsrGraph, clock SummaryClock)
+	for callee in 0 upto callersByCallee.nodeCount() as ElementIndex 'eachCallee'
+		for k in 0 upto callersByCallee.degree(callee as CsrIndex) 'eachCaller'
+			let caller = callersByCallee.neighbour(callee as CsrIndex, k: k)
 
-	for (iter, index) in order.withIterator() 'eachPosition'
-		try ranks.set(index, value: iter.index() as CsrIndex) otherwise panic("ranksOf: function index {index} is outside the {order.count()} the order spans")
-	end 'eachPosition'
+			if clock.readsStaleGrowth(clock.growthOfFunction(callee), caller: caller) 'staleCaller'
+				panic("settleSummaries: function {caller} was last traced at {clock.tracedAtOf(caller)}, before function {callee} last grew at {clock.growthOfFunction(callee)}")
+			end 'staleCaller'
+		end 'eachCaller'
+	end 'eachCallee'
 
-	return ranks
-end 'ranksOf'
+	for set in 0 upto callersBySet.nodeCount() as ElementIndex 'eachSet'
+		for k in 0 upto callersBySet.degree(set as CsrIndex) 'eachCaller'
+			let caller = callersBySet.neighbour(set as CsrIndex, k: k)
 
-function rankAt(ranks FixedCsrColumn, index ElementIndex) returns CsrIndex
-	return try ranks.get(index) otherwise panic("rankAt: function index {index} is outside the {ranks.count()} ranked")
-end 'rankAt'
+			if clock.readsStaleGrowth(clock.growthOfSet(set), caller: caller) 'staleCaller'
+				panic("settleSummaries: function {caller} was last traced at {clock.tracedAtOf(caller)}, before landing set {set} last grew at {clock.growthOfSet(set)}")
+			end 'staleCaller'
+		end 'eachCaller'
+	end 'eachSet'
+end 'requireEveryEdgeSettled'
 
-// A postorder of the call graph, so the first pass traces a callee before its callers and leaves a
-// caller stale only across a call cycle's back edge.
+// A postorder of the named-call graph, so the first pass traces a direct callee before its callers.
+// Only a call cycle's back edge or a call through a landing set reaches a body traced after its
+// caller.
 module function calleesFirstOrder(module MaxonModule, funcNames FunctionNameIndex) returns CsrColumn
 	var callers = CsrColumn.create(0)
 	var callees = CsrColumn.create(0)
@@ -326,15 +439,421 @@ module function calleesFirstOrder(module MaxonModule, funcNames FunctionNameInde
 	return postorderOf(buildCsr(callers, to: callees, nodeCount: module.functions.count() as CsrIndex))
 end 'calleesFirstOrder'
 
+module type LandingSetFacts
+	module var bodies as CallLandingBodies
+	module var participants as FuncIndexArray
+
+	module static function create(bodies CallLandingBodies, participants FuncIndexArray) returns LandingSetFacts
+		return Self{bodies: bodies, participants: participants}
+	end 'create'
+end 'LandingSetFacts'
+
+typealias LandingSetFactsArray = Array with LandingSetFacts
+typealias LandedBrandMemo = Map with (ElementIndex, NameRoster)
+
+module function landingPositionKey(set ElementIndex, position ParamCount) returns ElementIndex
+	if position >= MaxAbiArgs 'pastTheAbi'
+		panic("landingPositionKey: position {position} is past the {MaxAbiArgs} an ABI passes")
+	end 'pastTheAbi'
+
+	return set * (MaxAbiArgs as ElementIndex) + (position as ElementIndex)
+end 'landingPositionKey'
+
+module type LandingSets
+	var facts as LandingSetFactsArray
+	var memberships as FuncIndexRows
+	var edgeArity as ParamCountArray
+	var landedBrands as LandedBrandMemo
+
+	module static function create(funcCount ElementIndex) returns LandingSets
+		var memberships = FuncIndexRows.create(funcCount, zeroed: false)
+
+		while memberships.count() < funcCount 'eachFunction'
+			memberships.push(FuncIndexArray.create(0))
+		end 'eachFunction'
+
+		return Self{facts: LandingSetFactsArray.create(0), memberships: memberships, edgeArity: ParamCountArray.create(0), landedBrands: LandedBrandMemo.create()}
+	end 'create'
+
+	module function distinctBrandsAt(set ElementIndex, position ParamCount) returns NameRoster throws MapError
+		return try self.landedBrands.get(landingPositionKey(set, position: position))
+	end 'distinctBrandsAt'
+
+	module function fileDistinctBrands(set ElementIndex, position ParamCount, brands NameRoster)
+		self.landedBrands.upsert(landingPositionKey(set, position: position), value: brands)
+	end 'fileDistinctBrands'
+
+	module function count() returns ElementIndex
+		return self.facts.count()
+	end 'count'
+
+	module function functionCount() returns ElementIndex
+		return self.memberships.count()
+	end 'functionCount'
+
+	module function nodeCount() returns ElementIndex
+		return self.memberships.count() + self.facts.count()
+	end 'nodeCount'
+
+	module function add(contents LandingContents, participants FuncIndexArray) returns CallLandingBodies
+		let set = self.facts.count()
+		var landing = CallLandingBodies.registered(contents, set: set)
+		self.facts.push(LandingSetFacts.create(landing, participants: participants))
+		self.edgeArity.push(0)
+
+		for (iter, member) in participants.withIterator() 'eachParticipant'
+			var row = self.membershipRow(member)
+			row.push(set)
+			row.push(iter.index())
+		end 'eachParticipant'
+
+		return landing
+	end 'add'
+
+	module function virtualNodeOf(set ElementIndex) returns ElementIndex
+		return self.memberships.count() + set
+	end 'virtualNodeOf'
+
+	module function setOfNode(node ElementIndex) returns ElementIndex
+		return node - self.memberships.count()
+	end 'setOfNode'
+
+	module function noteEdgeArity(set ElementIndex, arity ParamCount)
+		let noted = try self.edgeArity.get(set) otherwise panic("LandingSets.noteEdgeArity: set {set} is past the {self.edgeArity.count()} registered")
+
+		if arity > noted 'widens'
+			try self.edgeArity.set(set, value: arity) otherwise panic("LandingSets.noteEdgeArity: edgeArity.set OOB at {set}")
+		end 'widens'
+	end 'noteEdgeArity'
+
+	module function memberEdgesInto(edges CallParamEdges)
+		for set in 0 upto self.facts.count() 'eachSet'
+			let arity = try self.edgeArity.get(set) otherwise panic("LandingSets.memberEdgesInto: edgeArity.get OOB at {set}")
+			let node = self.virtualNodeOf(set)
+
+			for impl in self.factsOf(set).bodies.impls 'eachMember'
+				for position in 0 upto arity 'eachHandedPosition'
+					edges.record(impl, callerIndex: node, callerParam: position, calleeParam: position, carry: FrozenCarry.carries)
+				end 'eachHandedPosition'
+			end 'eachMember'
+		end 'eachSet'
+	end 'memberEdgesInto'
+
+	module function membershipCountOf(member ElementIndex) returns ElementIndex
+		return self.membershipRow(member).count() shr 1
+	end 'membershipCountOf'
+
+	module function setOfMembership(member ElementIndex, k ElementIndex) returns ElementIndex
+		return self.membershipEntry(member, at: k * 2)
+	end 'setOfMembership'
+
+	module function positionOfMembership(member ElementIndex, k ElementIndex) returns ElementIndex
+		return self.membershipEntry(member, at: k * 2 + 1)
+	end 'positionOfMembership'
+
+	function membershipEntry(member ElementIndex, at ElementIndex) returns ElementIndex
+		return try self.membershipRow(member).get(at) otherwise panic("LandingSets.membershipEntry: entry {at} is past the {self.membershipRow(member).count()} of function {member}")
+	end 'membershipEntry'
+
+	function membershipRow(member ElementIndex) returns FuncIndexArray
+		return try self.memberships.get(member) otherwise panic("LandingSets.membershipRow: function index {member} is past the {self.memberships.count()} functions")
+	end 'membershipRow'
+
+	module function factsOf(set ElementIndex) returns LandingSetFacts
+		return try self.facts.get(set) otherwise panic("LandingSets.factsOf: set {set} is past the {self.facts.count()} registered")
+	end 'factsOf'
+end 'LandingSets'
+
+let UnsummarizedLandingKey = 0 as ElementIndex
+
+typealias LandingDigestIndex = Map with (ParamPositionMaskArray, ElementIndex)
+typealias LandingSlotByKey = Map with (ElementIndex, ElementIndex)
+
+module type LandingKeys
+	var keyOfDigest as LandingDigestIndex
+	var internedCount as ElementIndex
+	var digest as ParamPositionMaskArray
+
+	module static function create() returns LandingKeys
+		return Self{keyOfDigest: LandingDigestIndex.create(), internedCount: UnsummarizedLandingKey + 1, digest: ParamPositionMaskArray.create(0)}
+	end 'create'
+
+	module function begin()
+		self.digest.clear()
+	end 'begin'
+
+	module function push(mask ParamPositionMask)
+		self.digest.push(mask)
+	end 'push'
+
+	module function pushCount(count ElementIndex)
+		self.digest.push(count as ParamPositionMask)
+	end 'pushCount'
+
+	module function pushFlag(flag bool)
+		self.pushCount(1 if flag else 0)
+	end 'pushFlag'
+
+	module function pushTypeParameterOf(declared MaxonType)
+		let isParameter = maxonTypeTag(declared) == ValueTypeTag.typeParameter
+		self.pushFlag(isParameter)
+
+		if isParameter 'aTypeParameter'
+			self.push(typeParamIdOf(declared) as ParamPositionMask)
+		end 'aTypeParameter'
+	end 'pushTypeParameterOf'
+
+	module function pushStoreRow(rows ParamMaskRows, index ElementIndex)
+		let row = try rows.get(index) otherwise panic("LandingKeys.pushStoreRow: function index {index} is outside the store rows")
+		var length = row.count()
+
+		while length > 0 and (try row.get(length - 1) otherwise panic("LandingKeys.pushStoreRow: row.get OOB at {length - 1}")) == NoParamPositions 'trailingEmpty'
+			length = length - 1
+		end 'trailingEmpty'
+
+		self.pushCount(length)
+
+		for k in 0 upto length 'eachMask'
+			self.digest.push(try row.get(k) otherwise panic("LandingKeys.pushStoreRow: row.get OOB at {k}"))
+		end 'eachMask'
+	end 'pushStoreRow'
+
+	module function intern() returns ElementIndex
+		if let known = try self.keyOfDigest.get(self.digest) 'seenBefore'
+			return known
+		end 'seenBefore'
+
+		let key = self.internedCount
+		self.internedCount = key + 1
+		self.keyOfDigest.upsert(freeze self.digest.clone(), value: key)
+		return key
+	end 'intern'
+end 'LandingKeys'
+
+module type LandingClassList
+	var slots as FuncIndexArray
+	var keys as FuncIndexArray
+	var members as FuncIndexRows
+	module var order as FuncIndexArray
+	var slotOfKey as LandingSlotByKey
+
+	module static function create() returns LandingClassList
+		return Self{slots: FuncIndexArray.create(0), keys: FuncIndexArray.create(0), members: FuncIndexRows.create(0), order: FuncIndexArray.create(0), slotOfKey: LandingSlotByKey.create()}
+	end 'create'
+
+	module function firstOf(slot ElementIndex) returns ElementIndex
+		return try self.membersOf(slot).get(0) otherwise panic("LandingClassList.firstOf: class {slot} holds no participant")
+	end 'firstOf'
+
+	module function append(key ElementIndex)
+		let position = self.slots.count()
+		self.slots.push(self.joinClass(key, first: position))
+	end 'append'
+
+	module function move(position ElementIndex, key ElementIndex)
+		let previous = try self.slots.get(position) otherwise panic("LandingClassList.move: position {position} is past the {self.slots.count()} participants")
+
+		if self.keyOf(previous) == key 'sameClass'
+			return
+		end 'sameClass'
+
+		self.leaveClass(previous, position: position)
+		try self.slots.set(position, value: self.joinClass(key, first: position)) otherwise panic("LandingClassList.move: slots.set OOB at {position}")
+	end 'move'
+
+	function keyOf(slot ElementIndex) returns ElementIndex
+		return try self.keys.get(slot) otherwise panic("LandingClassList.keyOf: class {slot} is past the {self.keys.count()} opened")
+	end 'keyOf'
+
+	function membersOf(slot ElementIndex) returns FuncIndexArray
+		return try self.members.get(slot) otherwise panic("LandingClassList.membersOf: class {slot} is past the {self.members.count()} opened")
+	end 'membersOf'
+
+	function memberIndexAtOrAfter(row FuncIndexArray, position ElementIndex) returns ElementIndex
+		var low = 0 as ElementIndex
+		var high = row.count() as ElementIndex
+
+		while low < high 'narrowing'
+			let middle = (low + high) shr 1
+
+			if (try row.get(middle) otherwise panic("LandingClassList.memberIndexAtOrAfter: row.get OOB at {middle}")) < position 'beforeIt'
+				low = middle + 1
+			end 'beforeIt' else 'atOrAfterIt'
+				high = middle
+			end 'atOrAfterIt'
+		end 'narrowing'
+
+		return low
+	end 'memberIndexAtOrAfter'
+
+	function joinClass(key ElementIndex, first ElementIndex) returns ElementIndex
+		let slot = try self.slotOfKey.get(key) otherwise return self.openClass(key, first: first)
+		var row = self.membersOf(slot)
+		let at = self.memberIndexAtOrAfter(row, position: first)
+
+		if at == 0 'anEarlierMember'
+			self.takeOutOfOrder(slot)
+			row.insert(0, value: first)
+			self.placeInOrder(slot)
+			return slot
+		end 'anEarlierMember'
+
+		row.insert(at, value: first)
+		return slot
+	end 'joinClass'
+
+	function openClass(key ElementIndex, first ElementIndex) returns ElementIndex
+		let slot = self.keys.count()
+		var row = FuncIndexArray.create(1, zeroed: false)
+		row.push(first)
+		self.keys.push(key)
+		self.members.push(row)
+		self.slotOfKey.upsert(key, value: slot)
+		self.placeInOrder(slot)
+		return slot
+	end 'openClass'
+
+	function leaveClass(slot ElementIndex, position ElementIndex)
+		var row = self.membersOf(slot)
+		let at = self.memberIndexAtOrAfter(row, position: position)
+
+		if (try row.get(at) otherwise panic("LandingClassList.leaveClass: participant {position} is not in class {slot}")) != position 'notInTheClass'
+			panic("LandingClassList.leaveClass: participant {position} is not in class {slot}")
+		end 'notInTheClass'
+
+		if at != 0 'notTheFirst'
+			_ = try row.remove(at) otherwise panic("LandingClassList.leaveClass: row.remove OOB at {at}")
+			return
+		end 'notTheFirst'
+
+		self.takeOutOfOrder(slot)
+		_ = try row.remove(0) otherwise panic("LandingClassList.leaveClass: row.remove OOB at 0")
+
+		if row.isEmpty() 'emptied'
+			_ = self.slotOfKey.remove(self.keyOf(slot))
+			return
+		end 'emptied'
+
+		self.placeInOrder(slot)
+	end 'leaveClass'
+
+	function orderIndexAtOrAfter(first ElementIndex) returns ElementIndex
+		var low = 0 as ElementIndex
+		var high = self.order.count() as ElementIndex
+
+		while low < high 'narrowing'
+			let middle = (low + high) shr 1
+
+			if self.firstOf(try self.order.get(middle) otherwise panic("LandingClassList.orderIndexAtOrAfter: order.get OOB at {middle}")) < first 'beforeIt'
+				low = middle + 1
+			end 'beforeIt' else 'atOrAfterIt'
+				high = middle
+			end 'atOrAfterIt'
+		end 'narrowing'
+
+		return low
+	end 'orderIndexAtOrAfter'
+
+	function placeInOrder(slot ElementIndex)
+		self.order.insert(self.orderIndexAtOrAfter(self.firstOf(slot)), value: slot)
+	end 'placeInOrder'
+
+	function takeOutOfOrder(slot ElementIndex)
+		let at = self.orderIndexAtOrAfter(self.firstOf(slot))
+
+		if (try self.order.get(at) otherwise panic("LandingClassList.takeOutOfOrder: class {slot} is not live")) != slot 'notThatClass'
+			panic("LandingClassList.takeOutOfOrder: the class at {at} of the order is not {slot}")
+		end 'notThatClass'
+
+		_ = try self.order.remove(at) otherwise panic("LandingClassList.takeOutOfOrder: order.remove OOB at {at}")
+	end 'takeOutOfOrder'
+end 'LandingClassList'
+
+typealias LandingClassListBySet = Map with (ElementIndex, LandingClassList)
+
+module type LandingClasses
+	module var sets as LandingSets
+	var resolution as CallSummaryIndex
+	var interner as LandingKeys
+	var keyOfMember as FuncIndexArray
+	var classesBySet as LandingClassListBySet
+
+	module static function create(resolution CallSummaryIndex) returns LandingClasses
+		return Self{sets: resolution.landingSets, resolution: resolution, interner: LandingKeys.create(), keyOfMember: FuncIndexArray.create(0), classesBySet: LandingClassListBySet.create()}
+	end 'create'
+
+	module function seed(bodies SummarizedBodies)
+		self.keyOfMember.clear()
+		self.classesBySet = LandingClassListBySet.create()
+
+		for index in 0 upto self.sets.functionCount() 'eachFunction'
+			if self.resolution.implHasSummary(index) 'describedBySummary'
+				self.keyOfMember.push(bodies.landingKeyOf(index, keys: self.interner))
+			end 'describedBySummary' else 'describedByNone'
+				self.keyOfMember.push(UnsummarizedLandingKey)
+			end 'describedByNone'
+		end 'eachFunction'
+	end 'seed'
+
+	module function rekey(member ElementIndex, bodies SummarizedBodies)
+		let previous = self.keyOf(member)
+
+		if previous == UnsummarizedLandingKey 'summaryIsNotRead'
+			return
+		end 'summaryIsNotRead'
+
+		let key = bodies.landingKeyOf(member, keys: self.interner)
+
+		if key == previous 'sameRow'
+			return
+		end 'sameRow'
+
+		try self.keyOfMember.set(member, value: key) otherwise panic("LandingClasses.rekey: keyOfMember.set OOB at {member}")
+
+		for membership in 0 upto self.sets.membershipCountOf(member) 'eachSetItLandsIn'
+			var classes = try self.classesBySet.get(self.sets.setOfMembership(member, k: membership)) otherwise continue
+			classes.move(self.sets.positionOfMembership(member, k: membership), key: key)
+		end 'eachSetItLandsIn'
+	end 'rekey'
+
+	module function classesOf(set ElementIndex) returns LandingClassList
+		if let built = try self.classesBySet.get(set) 'asked'
+			return built
+		end 'asked'
+
+		var classes = LandingClassList.create()
+
+		for member in self.sets.factsOf(set).participants 'eachParticipant'
+			classes.append(self.keyOf(member))
+		end 'eachParticipant'
+
+		self.classesBySet.upsert(set, value: classes)
+		return classes
+	end 'classesOf'
+
+	function keyOf(member ElementIndex) returns ElementIndex
+		return try self.keyOfMember.get(member) otherwise panic("LandingClasses.keyOf: function index {member} is past the {self.keyOfMember.count()} seeded")
+	end 'keyOf'
+end 'LandingClasses'
+
 module type CallDependencies
 	var recording as bool
 	var caller as ElementIndex
 	export var callees as CsrColumn
 	export var callers as CsrColumn
+	export var landedSets as CsrColumn
+	export var landedCallers as CsrColumn
 
 	module static function create() returns CallDependencies
-		return Self{recording: false, caller: 0, callees: CsrColumn.create(0), callers: CsrColumn.create(0)}
+		return Self{recording: false, caller: 0, callees: CsrColumn.create(0), callers: CsrColumn.create(0), landedSets: CsrColumn.create(0), landedCallers: CsrColumn.create(0)}
 	end 'create'
+
+	module function noteLandedSet(set ElementIndex)
+		if self.recording 'firstPass'
+			self.landedSets.push(set as CsrIndex)
+			self.landedCallers.push(self.caller as CsrIndex)
+		end 'firstPass'
+	end 'noteLandedSet'
 
 	module function recordFor(callerIndex ElementIndex)
 		self.recording = true
@@ -423,6 +942,93 @@ function declaredNameAt(names NameRoster, firstPosition ParamCount, position Par
 	return ArgumentParameter.named(name)
 end 'declaredNameAt'
 
+module type FunctionRefShapes
+	var shapes as FunctionShapeArray
+	var bucketByKey as FunctionShapeBucketIndex
+	var bucketsByCandidateKey as CandidateBucketIndex
+	var bucketOfPosition as CsrColumn
+	var positions as CsrColumn
+	var members as CsrGraph
+	var undeclared as FuncIndexArray
+
+	module static function create() returns FunctionRefShapes
+		return Self{shapes: FunctionShapeArray.create(0), bucketByKey: FunctionShapeBucketIndex.create(), bucketsByCandidateKey: CandidateBucketIndex.create(), bucketOfPosition: CsrColumn.create(0), positions: CsrColumn.create(0), members: CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0)), undeclared: FuncIndexArray.create(0)}
+	end 'create'
+
+	module function note(position ElementIndex, shape DeclaredFunctionShape)
+		match shape 'bodyShape'
+			declared(declaredShape) then self.noteDeclared(position, shape: declaredShape)
+			undeclared then self.undeclared.push(position)
+		end 'bodyShape'
+	end 'note'
+
+	function noteDeclared(position ElementIndex, shape FunctionShape)
+		let key = shape.identityKey()
+		let bucket = try self.bucketByKey.get(key) otherwise self.openBucket(key, shape: shape)
+		self.bucketOfPosition.push(bucket as CsrIndex)
+		self.positions.push(position as CsrIndex)
+	end 'noteDeclared'
+
+	function openBucket(key immutable ByteArray, shape FunctionShape) returns ElementIndex
+		let bucket = self.shapes.count()
+		self.shapes.push(shape)
+		self.bucketByKey.upsert(key, value: bucket)
+		let candidateKey = shape.agreementParts().candidateKey()
+
+		if var sharing = try self.bucketsByCandidateKey.get(candidateKey) 'candidateKnown'
+			sharing.push(bucket)
+			return bucket
+		end 'candidateKnown'
+
+		var opened = FuncIndexArray.create(0)
+		opened.push(bucket)
+		self.bucketsByCandidateKey.upsert(candidateKey, value: opened)
+		return bucket
+	end 'openBucket'
+
+	module function candidatesFor(shape FunctionShape, mentionsATypeParameter bool) returns FuncIndexArray
+		if not mentionsATypeParameter 'everyAgreeingBodyShareItsKey'
+			return try self.bucketsByCandidateKey.get(shape.agreementParts().candidateKey()) otherwise FuncIndexArray.create(0)
+		end 'everyAgreeingBodyShareItsKey'
+
+		var every = FuncIndexArray.create(self.shapes.count(), zeroed: false)
+
+		for bucket in 0 upto self.shapes.count() 'eachBucket'
+			every.push(bucket)
+		end 'eachBucket'
+
+		return every
+	end 'candidatesFor'
+
+	module function seal()
+		self.members = buildCsr(self.bucketOfPosition, to: self.positions, nodeCount: self.shapes.count() as CsrIndex)
+	end 'seal'
+
+	module function bucketCount() returns ElementIndex
+		return self.shapes.count()
+	end 'bucketCount'
+
+	module function shapeOfBucket(bucket ElementIndex) returns FunctionShape
+		return try self.shapes.get(bucket) otherwise panic("FunctionRefShapes.shapeOfBucket: bucket {bucket} is past the {self.shapes.count()} opened")
+	end 'shapeOfBucket'
+
+	module function positionsInto(bucket ElementIndex, into FuncIndexArray)
+		for k in 0 upto self.members.degree(bucket as CsrIndex) 'eachMember'
+			into.push(self.members.neighbour(bucket as CsrIndex, k: k))
+		end 'eachMember'
+	end 'positionsInto'
+
+	module function undeclaredInto(into FuncIndexArray)
+		for position in self.undeclared 'eachUndeclared'
+			into.push(position)
+		end 'eachUndeclared'
+	end 'undeclaredInto'
+
+	module function hasUndeclared() returns bool
+		return not self.undeclared.isEmpty()
+	end 'hasUndeclared'
+end 'FunctionRefShapes'
+
 module type CallSummaryIndex
 	var project as Project
 	var module as MaxonModule
@@ -432,9 +1038,17 @@ module type CallSummaryIndex
 	var conformers as ConformersByInterface
 	var witnessSlots as WitnessSlotsByDeclIndex
 	var witnessImpls as WitnessImplsMemo
-	var functionRefBodies as CallLandingBodies
+	var functionRefBodies as LandingContents
+	var functionRefShapes as FunctionRefShapes
 	var functionRefBodiesGathered as bool
 	var functionValueBodies as FunctionValueBodiesMemo
+	var functionValueBodiesByShape as FunctionValueBodiesMemo
+	var bodiesByReaderFreeShape as FunctionValueBodiesMemo
+	var readerFreeVerdicts as ReaderFreeVerdictMemo
+	export var landingSets as LandingSets
+	var closureSubsets as ClosureSubsetMemo
+	var exactLandings as ExactLandingMemo
+	var landingsByContents as LandingByContents
 	var callbackFlows as CallbackFlows
 	var functionRefBodiless as NameRoster
 	var functionRefNames as FunctionRefNamesByFunc
@@ -442,20 +1056,28 @@ module type CallSummaryIndex
 	var instanceSharesFunctions as InstanceRecordMemo
 
 	module static function create(project Project, module MaxonModule, signatures ProgramSignatures, funcIndexByName FuncIndexByName, funcCount ElementIndex) returns CallSummaryIndex
-		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, sites: CallSites.create(funcCount), conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: CallLandingBodies.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), callbackFlows: CallbackFlows.create(), functionRefBodiless: NameRoster.create(0), functionRefNames: FunctionRefNamesByFunc.create(), instanceHoldsARecord: InstanceRecordMemo.create(), instanceSharesFunctions: InstanceRecordMemo.create()}
+		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, sites: CallSites.create(funcCount), conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: LandingContents.create(), functionRefShapes: FunctionRefShapes.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), functionValueBodiesByShape: FunctionValueBodiesMemo.create(), bodiesByReaderFreeShape: FunctionValueBodiesMemo.create(), readerFreeVerdicts: ReaderFreeVerdictMemo.create(), landingSets: LandingSets.create(funcCount), closureSubsets: ClosureSubsetMemo.create(), exactLandings: ExactLandingMemo.create(), landingsByContents: LandingByContents.create(), callbackFlows: CallbackFlows.create(), functionRefBodiless: NameRoster.create(0), functionRefNames: FunctionRefNamesByFunc.create(), instanceHoldsARecord: InstanceRecordMemo.create(), instanceSharesFunctions: InstanceRecordMemo.create()}
 	end 'create'
 
-	module function classifyCallee(func IrFunction, callee ByteArray) returns CalleeClass
-		if let index = try self.funcIndexByName.get(callee) 'declared'
-			if self.project.funcSignatures.contains(callee) 'aDeclaredFunction'
-				if self.implHasSummary(index) 'aSummaryDescribesIt'
-					return CalleeClass.summarized(index)
-				end 'aSummaryDescribesIt'
+	module function summarizedIndexOf(callee ByteArray) returns ElementIndex throws AbsentError
+		let index = try self.funcIndexByName.get(callee) otherwise throw AbsentError.absent
 
-				if self.implWasSkippedAsUnreached(index) 'anAbandonedBody'
-					return CalleeClass.refused
-				end 'anAbandonedBody'
-			end 'aDeclaredFunction'
+		if not self.project.funcSignatures.contains(callee) or not self.implHasSummary(index) 'noSummaryDescribesIt'
+			throw AbsentError.absent
+		end 'noSummaryDescribesIt'
+
+		return index
+	end 'summarizedIndexOf'
+
+	module function classifyCallee(func IrFunction, callee ByteArray) returns CalleeClass
+		if let index = try self.summarizedIndexOf(callee) 'aSummaryDescribesIt'
+			return CalleeClass.summarized(index)
+		end 'aSummaryDescribesIt'
+
+		if let index = try self.funcIndexByName.get(callee) 'declared'
+			if self.project.funcSignatures.contains(callee) and self.implWasSkippedAsUnreached(index) 'anAbandonedBody'
+				return CalleeClass.refused
+			end 'anAbandonedBody'
 		end 'declared'
 
 		if self.project.poison.refusesACalleeFrom(callee, reader: func.sourceFilePath, signatures: self.signatures) 'aDeclarationIsRefused'
@@ -538,7 +1160,7 @@ module type CallSummaryIndex
 			return memoized
 		end 'asked'
 
-		var found = witnessDispatchImpls(self.project, signatures: self.signatures, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: self.funcIndexByName, conformers: self.conformers, witnessSlots: self.witnessSlots)
+		var found = self.registerLanding(witnessDispatchImpls(self.project, signatures: self.signatures, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: self.funcIndexByName, conformers: self.conformers, witnessSlots: self.witnessSlots))
 		self.witnessImpls.upsert(key, value: found)
 		return found
 	end 'implsOf'
@@ -551,9 +1173,7 @@ module type CallSummaryIndex
 		if let target = try self.functionRefTargetOf(func, value: callee) 'aFunctionRefResult'
 			if isFunctionValueBodyName(target, funcSignatures: self.project.funcSignatures) 'aFunctionValueBody'
 				if let index = try self.funcIndexByName.get(target) 'theExactBody'
-					var exact = CallLandingBodies.create()
-					exact.impls.push(index)
-					return exact
+					return self.exactLanding(index)
 				end 'theExactBody'
 			end 'aFunctionValueBody'
 		end 'aFunctionRefResult'
@@ -565,6 +1185,18 @@ module type CallSummaryIndex
 
 		return self.functionValueBodiesOfType(functionValueOwnTypeName(self.project, func: func, value: callee), readerFilePath: func.sourceFilePath)
 	end 'functionValueBodiesCalledThrough'
+
+	function exactLanding(index ElementIndex) returns CallLandingBodies
+		if let memoized = try self.exactLandings.get(index) 'asked'
+			return memoized
+		end 'asked'
+
+		var contents = LandingContents.create()
+		contents.impls.push(index)
+		var landing = self.registerLanding(contents)
+		self.exactLandings.upsert(index, value: landing)
+		return landing
+	end 'exactLanding'
 
 	// A call through a function value lands only on a function used as a value whose shape agrees with the
 	// callee value's function type under some instantiation of the type parameters that type mentions.
@@ -580,33 +1212,177 @@ module type CallSummaryIndex
 		self.gatherFunctionRefBodies()
 
 		if functionShapeIsMissingBesideAFailedFile(self.project, registry: registry, name: calleeType) 'itsDeclaringFileFailedToParse'
-			return CallLandingBodies.create()
+			var none = self.registerLanding(LandingContents.create())
+			self.functionValueBodies.upsert(memoKey, value: none)
+			return none
 		end 'itsDeclaringFileFailedToParse'
 
 		view calleeShape = requireFunctionShapeOf(registry, name: calleeType, side: "called")
-		var found = CallLandingBodies.create()
-		found.unresolved = self.functionRefBodies.unresolved
-		found.unresolvedMayStore = self.functionRefBodies.unresolvedMayStore
+		let shapeKey = calleeShape.identityKey()
 
-		for index in self.functionRefBodies.impls 'eachBody'
-			match declaredFunctionShapeOf(registry, name: self.functionAt(index).name) 'bodyShape'
-				declared(bodyShape) then self.admitBodyOfShape(index, bodyShape: bodyShape, calleeShape: calleeShape, registry: registry, readerFilePath: readerFilePath, into: found)
-				undeclared then found.impls.push(index)
-			end 'bodyShape'
-		end 'eachBody'
+		if let readerFree = try self.bodiesByReaderFreeShape.get(shapeKey) 'everyReaderAgreesTheSame'
+			self.functionValueBodies.upsert(memoKey, value: readerFree)
+			return readerFree
+		end 'everyReaderAgreesTheSame'
+
+		let readerShapeKey = functionValueBodiesKey(shapeKey, readerFilePath: readerFilePath)
+
+		if let sameShape = try self.functionValueBodiesByShape.get(readerShapeKey) 'anotherNameOfTheShape'
+			self.functionValueBodies.upsert(memoKey, value: sameShape)
+			return sameShape
+		end 'anotherNameOfTheShape'
+
+		var (found, readerFree) = self.bodiesAgreeingWith(calleeShape, shapeKey: shapeKey, registry: registry, readerFilePath: readerFilePath)
+
+		if readerFree 'noReaderWasAsked'
+			self.bodiesByReaderFreeShape.upsert(shapeKey, value: found)
+		end 'noReaderWasAsked' else 'aReaderWasAsked'
+			self.functionValueBodiesByShape.upsert(readerShapeKey, value: found)
+		end 'aReaderWasAsked'
 
 		self.functionValueBodies.upsert(memoKey, value: found)
 		return found
 	end 'functionValueBodiesOfType'
 
-	function admitBodyOfShape(index ElementIndex, bodyShape FunctionShape, calleeShape FunctionShape, registry FunctionTypeRegistry, readerFilePath FilePath, into CallLandingBodies)
-		if functionShapesAgreeUnderSomeInstantiation(registry, signatures: self.signatures, declared: calleeShape, got: bodyShape, readerFilePath: readerFilePath) 'agrees'
-			into.impls.push(index)
-		end 'agrees'
-	end 'admitBodyOfShape'
+	function bodiesAgreeingWith(calleeShape FunctionShape, shapeKey immutable ByteArray, registry FunctionTypeRegistry, readerFilePath FilePath) returns (CallLandingBodies, bool)
+		var agreeing = FuncIndexArray.create(0)
+		var readerFree = true
+		let callee = calleeShape.agreementParts()
+		view candidates = self.functionRefShapes.candidatesFor(calleeShape, mentionsATypeParameter: functionShapeMentionsATypeParameter(registry, signatures: self.signatures, shape: calleeShape))
+
+		for bucket in candidates 'eachCandidate'
+			view bodyShape = self.functionRefShapes.shapeOfBucket(bucket)
+
+			if not callee.readsNoReaderAgainst(bodyShape.agreementParts()) 'dependsOnTheReader'
+				readerFree = false
+
+				if functionShapesAgreeUnderSomeInstantiation(registry, signatures: self.signatures, declared: calleeShape, got: bodyShape, readerFilePath: readerFilePath) 'agreesForThisReader'
+					agreeing.push(bucket)
+				end 'agreesForThisReader'
+
+				continue
+			end 'dependsOnTheReader'
+
+			if self.readerFreeVerdict(calleeShape, shapeKey: shapeKey, bucket: bucket, registry: registry, readerFilePath: readerFilePath) 'agrees'
+				agreeing.push(bucket)
+			end 'agrees'
+		end 'eachCandidate'
+
+		let contentsKey = self.landingContentsKey(agreeing)
+
+		if let sameContents = try self.internedLanding(contentsKey) 'anotherReaderAgreedTheSame'
+			return (sameContents, readerFree)
+		end 'anotherReaderAgreedTheSame'
+
+		return (self.internLanding(contentsKey, contents: self.contentsOfBuckets(agreeing)), readerFree)
+	end 'bodiesAgreeingWith'
+
+	function readerFreeVerdict(calleeShape FunctionShape, shapeKey immutable ByteArray, bucket ElementIndex, registry FunctionTypeRegistry, readerFilePath FilePath) returns bool
+		var verdicts = try self.readerFreeVerdicts.get(shapeKey) otherwise self.openVerdicts(shapeKey)
+
+		if let known = try verdicts.get(bucket) 'asked'
+			return known
+		end 'asked'
+
+		let agrees = functionShapesAgreeUnderSomeInstantiation(registry, signatures: self.signatures, declared: calleeShape, got: self.functionRefShapes.shapeOfBucket(bucket), readerFilePath: readerFilePath)
+		verdicts.upsert(bucket, value: agrees)
+		return agrees
+	end 'readerFreeVerdict'
+
+	function openVerdicts(shapeKey immutable ByteArray) returns BucketVerdicts
+		var verdicts = BucketVerdicts.create()
+		self.readerFreeVerdicts.upsert(shapeKey, value: verdicts)
+		return verdicts
+	end 'openVerdicts'
+
+	// Landings of equal contents are one set, so the sites that land on the same bodies share its
+	// per-set memos and its classes rather than each judging every body again.
+	module function internedLanding(contentsKey ByteArray) returns CallLandingBodies throws MapError
+		return try self.landingsByContents.get(contentsKey)
+	end 'internedLanding'
+
+	module function internLanding(contentsKey immutable ByteArray, contents LandingContents) returns CallLandingBodies
+		var landing = self.registerLanding(contents)
+		self.landingsByContents.upsert(contentsKey, value: landing)
+		return landing
+	end 'internLanding'
+
+	function landingContentsKey(agreeing FuncIndexArray) returns immutable ByteArray
+		var key = "agreeing|{self.functionRefBodies.unresolved}|{self.functionRefBodies.unresolvedMayStore}|{self.functionRefShapes.hasUndeclared()}"
+
+		for bucket in agreeing 'eachAgreeingBucket'
+			key.append("|{bucket}")
+		end 'eachAgreeingBucket'
+
+		return freeze key.toByteArray()
+	end 'landingContentsKey'
+
+	function contentsOfBuckets(agreeing FuncIndexArray) returns LandingContents
+		var positions = FuncIndexArray.create(0)
+		var sources = 0 as ElementIndex
+
+		if self.functionRefShapes.hasUndeclared() 'someBodyDeclaresNoShape'
+			self.functionRefShapes.undeclaredInto(positions)
+			sources = sources + 1
+		end 'someBodyDeclaresNoShape'
+
+		for bucket in agreeing 'eachAgreeingBucket'
+			self.functionRefShapes.positionsInto(bucket, into: positions)
+			sources = sources + 1
+		end 'eachAgreeingBucket'
+
+		// Back into gathering order: a diagnostic names the first member that qualifies
+		// (`keptCalleeName`, `landingBlockHop`), so bucket order would change which body it names.
+		if sources > 1 'severalLists'
+			positions.sort()
+		end 'severalLists'
+
+		var found = LandingContents.create()
+		found.unresolved = self.functionRefBodies.unresolved
+		found.unresolvedMayStore = self.functionRefBodies.unresolvedMayStore
+
+		for position in positions 'eachPosition'
+			found.impls.push(try self.functionRefBodies.impls.get(position) otherwise panic("CallSummaryIndex.contentsOfBuckets: position {position} is past the {self.functionRefBodies.impls.count()} function-reference bodies"))
+		end 'eachPosition'
+
+		return found
+	end 'contentsOfBuckets'
+
+	module function registerLanding(contents LandingContents) returns CallLandingBodies
+		var participants = FuncIndexArray.create(0)
+
+		for impl in contents.impls 'eachMember'
+			if not self.implWasSkippedAsUnreached(impl) 'inThisProgram'
+				self.requireSignature(impl)
+				participants.push(impl)
+			end 'inThisProgram'
+		end 'eachMember'
+
+		return self.landingSets.add(contents, participants: participants)
+	end 'registerLanding'
+
+	// Set members are always signed: a member's profile reads its declared parameters, which are one fewer than
+	// its IR slots for a closure (the environment slot).
+	function requireSignature(impl ElementIndex)
+		let name = self.functionAt(impl).name
+
+		if not self.project.funcSignatures.contains(name) 'noSignature'
+			panic("CallSummaryIndex.registerLanding: '{String.from(name)}' has no signature, and a landing set holds only bodies whose parameters a signature declares")
+		end 'noSignature'
+	end 'requireSignature'
 
 	module function closureBodiesOf(bodies CallLandingBodies) returns CallLandingBodies
-		var found = CallLandingBodies.create()
+		if let memoized = try self.closureSubsets.get(bodies.set) 'asked'
+			return memoized
+		end 'asked'
+
+		var subset = self.registerLanding(self.closureContentsOf(bodies))
+		self.closureSubsets.upsert(bodies.set, value: subset)
+		return subset
+	end 'closureBodiesOf'
+
+	function closureContentsOf(bodies CallLandingBodies) returns LandingContents
+		var found = LandingContents.create()
 		found.unresolved = bodies.unresolved
 		found.unresolvedMayStore = bodies.unresolvedMayStore
 
@@ -617,7 +1393,7 @@ module type CallSummaryIndex
 		end 'eachBody'
 
 		return found
-	end 'closureBodiesOf'
+	end 'closureContentsOf'
 
 	module function functionRefTargetOf(func IrFunction, value ValueId) returns immutable ByteArray throws AbsentError
 		let funcIndex = self.functionIndexOf(func.name)
@@ -631,14 +1407,39 @@ module type CallSummaryIndex
 		for opIdx in self.module.liveOpIndices(func) 'eachOp'
 			view op = try self.module.ops.get(opIdx) otherwise panic("CallSummaryIndex.functionRefTargetOf: opIdx {opIdx} from liveOpIndices is not in module.ops")
 
-			if maxonOpCalleeKind(op) == MaxonCalleeKind.functionValue 'aFunctionRef'
-				names.upsert(try maxonOpDefinedValue(op) otherwise panic("CallSummaryIndex.functionRefTargetOf: a `functionRef` defines its result"), value: maxonOpCalleeName(op))
-			end 'aFunctionRef'
+			match maxonOpCalleeKind(op) 'calleeKind'
+				functionValue then names.upsert(try maxonOpDefinedValue(op) otherwise panic("CallSummaryIndex.functionRefTargetOf: a `functionRef` defines its result"), value: maxonOpCalleeName(op))
+				direct then self.noteClosureRecordTarget(func, op: op, opIdx: opIdx, names: names)
+				noCallee then continue
+			end 'calleeKind'
 		end 'eachOp'
 
 		self.functionRefNames.upsert(funcIndex, value: names)
 		return try names.get(value) otherwise throw AbsentError.absent
 	end 'functionRefTargetOf'
+
+	function noteClosureRecordTarget(func IrFunction, op MaxonOp, opIdx ElementIndex, names FunctionRefNameMap)
+		match op 'record'
+			call(result, callee, _, _, _, _, _, _) then self.noteBoxedClosure(func, result: result, callee: callee, opIdx: opIdx, names: names)
+			tryCall or
+			asyncCall or
+			serviceSpawn or
+			serviceSend then return
+			default panic("CallSummaryIndex.noteClosureRecordTarget: maxonOpCalleeKind answers direct for an op that is not call, tryCall, asyncCall, serviceSpawn or serviceSend")
+		end 'record'
+	end 'noteClosureRecordTarget'
+
+	function noteBoxedClosure(func IrFunction, result ValueId, callee ByteArray, opIdx ElementIndex, names FunctionRefNameMap)
+		if not callee.equals(MmAllocName) or not self.project.closureRecordSites.contains(opIdx) 'notAClosureRecord'
+			return
+		end 'notAClosureRecord'
+
+		let target = functionValueOwnTypeName(self.project, func: func, value: result)
+
+		if isLiftedClosureName(target) 'aLiftedClosure'
+			names.upsert(result, value: target)
+		end 'aLiftedClosure'
+	end 'noteBoxedClosure'
 
 	module function callbackFlowsOf() returns CallbackFlows
 		return self.callbackFlows
@@ -673,7 +1474,7 @@ module type CallSummaryIndex
 		end 'gathered'
 
 		self.functionRefBodiesGathered = true
-		var bodies = CallLandingBodies.create()
+		var bodies = LandingContents.create()
 		var named = FixedBoolArray.create(self.module.functions.count())
 
 		for op in self.module.ops 'eachOp'
@@ -683,6 +1484,14 @@ module type CallSummaryIndex
 		end 'eachOp'
 
 		self.functionRefBodies = bodies
+
+		var registry = functionTypeRegistryOf(self.project)
+
+		for (iter, index) in bodies.impls.withIterator() 'eachBody'
+			self.functionRefShapes.note(iter.index(), shape: declaredFunctionShapeOf(registry, name: self.functionAt(index).name))
+		end 'eachBody'
+
+		self.functionRefShapes.seal()
 	end 'gatherFunctionRefBodies'
 
 	module function mayHoldARecord(func IrFunction, value ValueId) returns bool
@@ -746,6 +1555,8 @@ end 'CallSummaryIndex'
 module type CallSiteCursor
 	export var resolution as CallSummaryIndex
 	export var dependencies as CallDependencies
+	export var landing as LandingClasses
+	export let noArgRanges as SourceRangeArray
 	var firstRow as ElementIndex
 	var cursor as ElementIndex
 	var resolving as bool
@@ -753,7 +1564,7 @@ module type CallSiteCursor
 	var argFills as BoolArray
 
 	module static function create(resolution CallSummaryIndex) returns CallSiteCursor
-		return Self{resolution: resolution, dependencies: CallDependencies.create(), firstRow: 0, cursor: 0, resolving: false, argPositions: ParamCountArray.create(0), argFills: BoolArray.create(0)}
+		return Self{resolution: resolution, landing: LandingClasses.create(resolution), noArgRanges: SourceRangeArray.create(0), dependencies: CallDependencies.create(), firstRow: 0, cursor: 0, resolving: false, argPositions: ParamCountArray.create(0), argFills: BoolArray.create(0)}
 	end 'create'
 
 	module function beginWalk(index ElementIndex)

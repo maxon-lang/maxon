@@ -18,6 +18,32 @@ end 'FlowContributionKind'
 
 typealias FlowContributionKindArray = Array with FlowContributionKind
 
+type FlowLeaves
+	var kinds as FlowContributionKindArray
+	var ids as FuncIndexArray
+
+	static function create() returns FlowLeaves
+		return Self{kinds: FlowContributionKindArray.create(0), ids: FuncIndexArray.create(0)}
+	end 'create'
+
+	function push(kind FlowContributionKind, id ElementIndex)
+		self.kinds.push(kind)
+		self.ids.push(id)
+	end 'push'
+
+	function count() returns ElementIndex
+		return self.kinds.count()
+	end 'count'
+
+	function kindAt(k ElementIndex) returns FlowContributionKind
+		return try self.kinds.get(k) otherwise panic("FlowLeaves.kindAt: kinds.get OOB at {k}")
+	end 'kindAt'
+
+	function idAt(k ElementIndex) returns ElementIndex
+		return try self.ids.get(k) otherwise panic("FlowLeaves.idAt: ids.get OOB at {k}")
+	end 'idAt'
+end 'FlowLeaves'
+
 union FlowCallShape
 	noCall
 	direct(callee immutable ByteArray, args ValueIdArray, labels NameRoster)
@@ -317,28 +343,69 @@ module type CallbackFlows
 			return memoized
 		end 'asked'
 
-		var found = CallLandingBodies.create()
-		var seenBodies = BodyIndexSet.create()
+		var leaves = FlowLeaves.create()
 		var visiting = FlowKeySet.create()
-		self.flattenInto(funcIndex, position: position, into: found, seenBodies: seenBodies, visiting: visiting)
+		self.collectLeavesInto(funcIndex, position: position, into: leaves, visiting: visiting)
+		var found = self.landingOfLeaves(leaves, calls: calls)
 		self.landings.upsert(key, value: found)
 		return found
 	end 'landingOf'
 
-	function flattenInto(funcIndex ElementIndex, position ParamCount, into CallLandingBodies, seenBodies BodyIndexSet, visiting FlowKeySet)
+	function landingOfLeaves(leaves FlowLeaves, calls CallSummaryIndex) returns CallLandingBodies
+		if leaves.count() == 1 and leaves.kindAt(0) == FlowContributionKind.handedShapeUnion 'theSoleUnion'
+			return self.unionAt(leaves.idAt(0))
+		end 'theSoleUnion'
+
+		let contentsKey = self.leavesKey(leaves)
+
+		if let interned = try calls.internedLanding(contentsKey) 'anotherPositionLandsTheSame'
+			return interned
+		end 'anotherPositionLandsTheSame'
+
+		var contents = LandingContents.create()
+		var seenBodies = BodyIndexSet.create()
+
+		for k in 0 upto leaves.count() 'eachLeaf'
+			match leaves.kindAt(k) 'kind'
+				handedBody then self.addBody(leaves.idAt(k), into: contents, seenBodies: seenBodies)
+				handedShapeUnion then self.addUnion(self.unionAt(leaves.idAt(k)), into: contents, seenBodies: seenBodies)
+				handedForeignBody then self.markForeign(contents)
+				handedParameter then panic("CallbackFlows.landingOfLeaves: a handed parameter is followed to its own leaves, never kept as one")
+			end 'kind'
+		end 'eachLeaf'
+
+		return calls.internLanding(contentsKey, contents: contents)
+	end 'landingOfLeaves'
+
+	function leavesKey(leaves FlowLeaves) returns immutable ByteArray
+		var key = "flow"
+
+		for k in 0 upto leaves.count() 'eachLeaf'
+			match leaves.kindAt(k) 'kind'
+				handedBody then key.append("|b{leaves.idAt(k)}")
+				handedShapeUnion then key.append("|u{self.unionAt(leaves.idAt(k)).set}")
+				handedForeignBody then key.append("|f")
+				handedParameter then panic("CallbackFlows.leavesKey: a handed parameter is followed to its own leaves, never kept as one")
+			end 'kind'
+		end 'eachLeaf'
+
+		return freeze key.toByteArray()
+	end 'leavesKey'
+
+	function collectLeavesInto(funcIndex ElementIndex, position ParamCount, into FlowLeaves, visiting FlowKeySet)
 		if not self.enter(funcIndex, position: position, visiting: visiting) 'alreadyVisited'
 			return
 		end 'alreadyVisited'
 
 		for k in self.contributionsTo(funcIndex, position: position) 'eachContribution'
 			match self.kindAt(k) 'kind'
-				handedBody then self.addBody(self.firstAt(k), into: into, seenBodies: seenBodies)
-				handedParameter then self.flattenInto(self.firstAt(k), position: self.secondAt(k) as ParamCount, into: into, seenBodies: seenBodies, visiting: visiting)
-				handedShapeUnion then self.addUnion(self.unionAt(self.firstAt(k)), into: into, seenBodies: seenBodies)
-				handedForeignBody then self.markForeign(into)
+				handedBody or
+				handedShapeUnion or
+				handedForeignBody then into.push(self.kindAt(k), id: self.firstAt(k))
+				handedParameter then self.collectLeavesInto(self.firstAt(k), position: self.secondAt(k) as ParamCount, into: into, visiting: visiting)
 			end 'kind'
 		end 'eachContribution'
-	end 'flattenInto'
+	end 'collectLeavesInto'
 
 	function enter(funcIndex ElementIndex, position ParamCount, visiting FlowKeySet) returns bool
 		let key = flowKeyOf(funcIndex, position: position)
@@ -351,7 +418,7 @@ module type CallbackFlows
 		return true
 	end 'enter'
 
-	function addBody(index ElementIndex, into CallLandingBodies, seenBodies BodyIndexSet)
+	function addBody(index ElementIndex, into LandingContents, seenBodies BodyIndexSet)
 		if seenBodies.contains(index) 'alreadyHeld'
 			return
 		end 'alreadyHeld'
@@ -360,7 +427,7 @@ module type CallbackFlows
 		into.impls.push(index)
 	end 'addBody'
 
-	function addUnion(union CallLandingBodies, into CallLandingBodies, seenBodies BodyIndexSet)
+	function addUnion(union CallLandingBodies, into LandingContents, seenBodies BodyIndexSet)
 		for index in union.impls 'eachBody'
 			self.addBody(index, into: into, seenBodies: seenBodies)
 		end 'eachBody'
@@ -369,7 +436,7 @@ module type CallbackFlows
 		into.unresolvedMayStore = into.unresolvedMayStore or union.unresolvedMayStore
 	end 'addUnion'
 
-	function markForeign(into CallLandingBodies)
+	function markForeign(into LandingContents)
 		into.unresolved = true
 		into.unresolvedMayStore = true
 	end 'markForeign'

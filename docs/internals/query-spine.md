@@ -20,8 +20,11 @@ language server, the MCP `check` tool, `run`'s cache — reuses them.
 | `queryParseOps` | per file | the file's parse artifact |
 | `queryAllModule` | whole program | the merged module; every file is parsed before any is merged |
 
-The inputs are the source files themselves, registered by `fileChanged`. A failed lex or parse is never
-cached; a failed `#if` resolution is, so its diagnostic is reported once.
+The inputs are the source files themselves, registered by `fileChanged`. A failed lex is never cached; a
+failed `#if` resolution is, so its diagnostic is reported once. A parse is cached whatever it refused: its
+artifact carries the regions it abandoned, the refusal that ended it and the diagnostics it recorded, and
+every fold that merges the artifact reports them again. The language server reads them from the artifact
+too, so a memo hit reports exactly what the parse that filed it did.
 
 ## Keys
 
@@ -87,6 +90,10 @@ unchanged parse is a memo hit on the same artifact, so that part of the module a
 fold truncates the module and the tables parallel to its ops to that point, then merges the rest. The
 registries the merge fills are rebuilt by replaying the kept files' commits, so their first-wins and append
 order match a full merge. A fold against a different signature index merges every file.
+
+Every fold reports the diagnostics and refusals of every artifact it merges. A fold that does not stand is
+rolled back at once, and the fold a round stood is withdrawn when the next round folds
+(`FoldLedger.withdrawStandingFold`), so each diagnostic stands once however many rounds the demand takes.
 
 ## Whole-program queries under per-file ones
 
@@ -194,6 +201,8 @@ Two gates exercise the spine the spec suite cannot:
   an unchanged `Project` hits every memo; that each kind of edit invalidates exactly the memos it should;
   that a warm compile after an edit equals a cold one and leaves every parse it reuses as merged; and that
   later programs in one session are served every library parse and still equal a cold compile of each.
+  Over a program that does not compile it runs the cache-hit and invalidation checks, prints `NOT RUN` for
+  the other three and fails.
 - **`verify-recheck`** runs the whole pipeline repeatedly on one `Project`, as an editor does: the diagnostic
   count must be stable, an error that is fixed must stop being reported, and two live `Project`s checked in
   turn must not affect each other.

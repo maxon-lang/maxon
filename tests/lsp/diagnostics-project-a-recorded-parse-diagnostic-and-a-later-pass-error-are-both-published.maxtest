@@ -1,0 +1,18 @@
+let ProjectRecordedDirName = "diagnostics-project-recorded"
+let ProjectRecordedHelperFileName = "helper.maxon"
+let ProjectRecordedBufferFileName = "main.maxon"
+let ProjectRecordedHelperSource = "module function projectRecordedHelper() returns String\n\treturn \"\"\nend 'projectRecordedHelper'\n"
+let ProjectRecordedBufferSource = "typealias Integer = int(i64.min to i64.max)\n\nfunction first() returns Integer\n\treturn 5 as Integer\nend 'first'\n\nfunction other() returns Integer\n\treturn projectRecordedNowhere(7)\nend 'other'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let ProjectRecordedPublished = "E3010@3 E3004@7"
+
+test 'a recorded parse diagnostic and a later pass error are both published'
+	let root = stagedProjectDiagnosticsRoot(ProjectRecordedDirName)
+	writeCorpusFile(root, fileName: ProjectRecordedHelperFileName, content: ProjectRecordedHelperSource)
+	writeCorpusFile(root, fileName: ProjectRecordedBufferFileName, content: ProjectRecordedBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectRecordedBufferFileName, content: ProjectRecordedBufferSource)
+
+	discardStagedDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectRecordedPublished, note: "`first` casts a literal to the alias its return already declares, which the parser records without abandoning anything, and `other` calls a function declared nowhere. A recorded diagnostic is not a refusal, so the later pass still runs and the server publishes both.")
+end 'a recorded parse diagnostic and a later pass error are both published'

@@ -67,10 +67,35 @@ end 'DeterminismOutcome'
 // held (the driver maps that to the process exit code). Each runs on its OWN fresh Project, so no
 // property can be contaminated by another's mutations. A file/IO CompileError
 // (fileNotFound/noSourceFiles/readError) propagates to the caller, which prints a specific message.
+//
+// A program that does not compile runs only the properties that need no compile and prints NOT RUN
+// for the rest, and the gate fails: a property that did not run has not held.
 export function verifyWarmRebuild(inputPath FilePath, target Target) returns bool throws CompileError
 	print("verify-warm-rebuild {inputPath}\n")
 
-	let determinismOk = try verifyDeterminism(inputPath, target: target)
+	match try compileColdOnce(inputPath, target: target) 'cold'
+		compiled(first) then return try verifyEveryProperty(inputPath, target: target, first: first)
+		refused then return try verifyWhatNeedsNoCompile(inputPath, target: target)
+	end 'cold'
+end 'verifyWarmRebuild'
+
+let NotRunReason = "the program does not compile"
+let PropertiesNeedingACompile = ["determinism", "warm", "library reuse"]
+
+function verifyWhatNeedsNoCompile(inputPath FilePath, target Target) returns bool throws CompileError
+	_ = try verifyCacheHit(inputPath, target: target)
+	_ = try verifyInvalidation(inputPath, target: target)
+
+	for property in PropertiesNeedingACompile 'eachProperty'
+		print("NOT RUN {property}: {NotRunReason}\n")
+	end 'eachProperty'
+
+	printError("verify-warm-rebuild: FAIL ({PropertiesNeedingACompile.count()} properties did not run: {NotRunReason})\n")
+	return false
+end 'verifyWhatNeedsNoCompile'
+
+function verifyEveryProperty(inputPath FilePath, target Target, first CodeResult) returns bool throws CompileError
+	let determinismOk = try verifyDeterminism(inputPath, target: target, first: first)
 	let cacheOk = try verifyCacheHit(inputPath, target: target)
 	let invalidationOk = try verifyInvalidation(inputPath, target: target)
 	let warmOk = try verifyWarmCompileMatchesCold(inputPath, target: target)
@@ -85,7 +110,7 @@ export function verifyWarmRebuild(inputPath FilePath, target Target) returns boo
 
 	printError("verify-warm-rebuild: FAIL\n")
 	return false
-end 'verifyWarmRebuild'
+end 'verifyEveryProperty'
 
 // --- Property 1: determinism (byte-identity across two independent cold compiles) ---
 
@@ -93,23 +118,27 @@ end 'verifyWarmRebuild'
 // `inputPath`, driven through the shared compile path to an emitted CodeResult and
 // then discarded. Determinism compares two of these; each MUST own its Project so
 // the two share no mutable module object (the mutate-the-memo trap in the header).
-function compileColdOnce(inputPath FilePath, target Target) returns CodeResult throws CompileError
+function compileColdOnce(inputPath FilePath, target Target) returns CheckedCompile throws CompileError
 	var project = try loadProject([inputPath], target: target, session: CompileSession.printingWithoutLibraryCache())
-	return try compileToCodeResult(project)
+	return try checkRefusingOnlyAProgram(project)
 end 'compileColdOnce'
 
-function verifyDeterminism(inputPath FilePath, target Target) returns bool throws CompileError
+function verifyDeterminism(inputPath FilePath, target Target, first CodeResult) returns bool throws CompileError
 	// Two INDEPENDENT cold compiles, each with its OWN Project/QueryDatabase (see the
 	// mutate-the-memo trap in this file's header). Two fresh projects share no module
 	// object, so each is a genuine cold compile and the byte comparison is meaningful.
-	let first = try compileColdOnce(inputPath, target: target)
-	let second = try compileColdOnce(inputPath, target: target)
+	match try compileColdOnce(inputPath, target: target) 'second'
+		compiled(second) then return determinismVerdict(first, second: second)
+		refused then return reportDeterminismFail("the second cold compile of the program was refused, though the first compiled")
+	end 'second'
+end 'verifyDeterminism'
 
+function determinismVerdict(first CodeResult, second CodeResult) returns bool
 	return match compareCodeResults(first, right: second) 'outcome'
 		allIdentical(totalBytes) gives reportDeterminismPass(totalBytes)
 		sectionDiffers(detail) gives reportDeterminismFail(detail)
 	end 'outcome'
-end 'verifyDeterminism'
+end 'determinismVerdict'
 
 // Compare every emitted section of two compiles, summing identical bytes; stop at the
 // FIRST section that differs and report it (that is the actionable failure).
@@ -497,6 +526,64 @@ function measurementsInvalidateEveryFile(measurements InvalidationMeasurementArr
 	return allHeld
 end 'measurementsInvalidateEveryFile'
 
+typealias DiagnosticCensus = Map with (String, Count)
+
+let CensusKeySeparator = "\t"
+let CensusKeyDisplaySeparator = " | "
+
+function censusKeyOf(diagnostic Diagnostic, filePath FilePath) returns String
+	return "{filePath.toString()}{CensusKeySeparator}{diagnostic.code.rawValue}{CensusKeySeparator}{diagnostic.message}"
+end 'censusKeyOf'
+
+function diagnosticCensusOf(project Project, watched FilePathArray) returns DiagnosticCensus
+	var census = DiagnosticCensus.create()
+
+	for diagnostic in project.diagnostics 'eachDiagnostic'
+		let anchored = try diagnostic.anchor.anchoredFile() otherwise continue
+
+		if not pathIsAmong(watched, path: anchored) 'notAWatchedFile'
+			continue
+		end 'notAWatchedFile'
+
+		let key = censusKeyOf(diagnostic, filePath: anchored)
+		census.upsert(key, value: (try census.get(key) otherwise 0) + 1)
+	end 'eachDiagnostic'
+
+	return census
+end 'diagnosticCensusOf'
+
+function pathIsAmong(paths FilePathArray, path FilePath) returns bool
+	for candidate in paths 'eachCandidate'
+		if candidate.equals(path) 'found'
+			return true
+		end 'found'
+	end 'eachCandidate'
+
+	return false
+end 'pathIsAmong'
+
+function describeCensusDeparture(key String, expected Count, observed Count) returns String
+	return "{key.replace(CensusKeySeparator, with: CensusKeyDisplaySeparator)} {observed} time(s) where the unedited program reports it {expected}"
+end 'describeCensusDeparture'
+
+function firstCensusDeparture(baseline DiagnosticCensus, current DiagnosticCensus) returns String throws AbsentError
+	for (key, observed) in current 'eachCurrent'
+		let expected = try baseline.get(key) otherwise 0
+
+		if observed != expected 'moved'
+			return describeCensusDeparture(key, expected: expected, observed: observed)
+		end 'moved'
+	end 'eachCurrent'
+
+	for (key, expected) in baseline 'eachBaseline'
+		if not current.contains(key) 'vanished'
+			return describeCensusDeparture(key, expected: expected, observed: 0)
+		end 'vanished'
+	end 'eachBaseline'
+
+	throw AbsentError.absent
+end 'firstCensusDeparture'
+
 // The fewest source files on which the INVALIDATION property says anything at all. TWO, and the
 // reason is arithmetic rather than taste: the property's halves assert "a declaration edit
 // re-parses `fileCount` files" (and likewise a constant-value edit) and "a bytes-only edit
@@ -568,7 +655,9 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	// Warm every per-file memo (and the signature index) against the UNEDITED program. Only
 	// `queryAllModule` runs, so nothing mutates the memoized module (the trap in this file's header).
 	_ = try queryAllModule(project, directories: NamespaceDirectoryCheck.unchecked)
-	let diagnosticsBefore = project.diagnostics.count()
+	let receiver = try lastAuthoredSourceOf(project)
+	let edited = [editedPath, receiver.path]
+	let censusBefore = diagnosticCensusOf(project, watched: edited)
 
 	fileChanged(project, path: editedPath, content: "{original}\n{BytesOnlyEditText}\n")
 	let bytesEditMisses = try parseMissesOnRequery(project)
@@ -645,7 +734,6 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	let extensionConformanceEditMisses = try parseMissesOnRequery(project)
 
 	let visibilityFlips = try measureVisibilityFlips(project, editedPath: editedPath, original: original)
-	let receiver = try lastAuthoredSourceOf(project)
 
 	if receiver.path.equals(editedPath) 'noSecondFileToMoveInto'
 		printError("FAIL invalidation: {editedPath} is the only file of the project's own, so no declaration can be moved to another file — point the gate at a project with at least {MinFilesForInvalidation} files of its own\n")
@@ -655,11 +743,11 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: original)
 	let declarationMoves = try measureDeclarationMoves(project, editedPath: editedPath, original: original, receiver: receiver)
 
-	// A synthetic edit that stopped the program parsing would make BOTH assertions pass for the
-	// wrong reason — a failed parse is never cached, so it re-misses forever. Refuse to report on a
-	// probe whose premise broke.
-	if project.diagnostics.count() != diagnosticsBefore 'probeBrokeTheProgram'
-		printError("FAIL invalidation: a synthetic probe edit made {editedPath} stop parsing, so the miss counts mean nothing (a failed parse is never cached, and would re-miss regardless of the key)\n")
+	// A synthetic edit that stopped an edited file reading would make BOTH assertions pass for the
+	// wrong reason: the file contributes no declarations, so a declaration edit moves no other file's
+	// key. Refuse to report on a probe whose premise broke.
+	if let departure = try firstCensusDeparture(censusBefore, current: diagnosticCensusOf(project, watched: edited)) 'probeBrokeTheProgram'
+		printError("FAIL invalidation: a synthetic probe edit made {editedPath} report {departure}, so the miss counts mean nothing (a file that cannot be read declares nothing, so an edit to it moves no other file's parse key)\n")
 		return false
 	end 'probeBrokeTheProgram'
 
@@ -970,7 +1058,7 @@ end 'reportWarmFail'
 
 // --- Property 5: library parses reused across programs ---
 
-let LibraryReuseProbeText = "enum LibraryReuseProbeKind\n\tfirst\n\tsecond\nend 'LibraryReuseProbeKind'\n\ninterface LibraryReuseProbeShape\n\tfunction isFirst() returns bool\nend 'LibraryReuseProbeShape'\n\ntype LibraryReuseProbeRecord implements LibraryReuseProbeShape\n\tlet kind as LibraryReuseProbeKind\n\n\tstatic function create(kind LibraryReuseProbeKind) returns LibraryReuseProbeRecord\n\t\treturn Self\{kind: kind\}\n\tend 'create'\n\n\tfunction isFirst() returns bool\n\t\treturn self.kind == LibraryReuseProbeKind.first\n\tend 'isFirst'\nend 'LibraryReuseProbeRecord'\n\ntypealias LibraryReuseProbeRecords = Array with LibraryReuseProbeRecord\n\nfunction libraryReuseProbe() returns bool\n\tvar records = LibraryReuseProbeRecords.create(0)\n\trecords.push(LibraryReuseProbeRecord.create(LibraryReuseProbeKind.first))\n\tlet held = try records.get(0) otherwise return false\n\treturn held.isFirst()\nend 'libraryReuseProbe'"
+let LibraryReuseProbeText = "enum LibraryReuseProbeKind\n\tfirst\n\tsecond\nend 'LibraryReuseProbeKind'\n\ninterface LibraryReuseProbeShape\n\tfunction isFirst() returns bool\nend 'LibraryReuseProbeShape'\n\ntype LibraryReuseProbeRecord implements LibraryReuseProbeShape\n\tlet kind as LibraryReuseProbeKind\n\n\tstatic function create(kind LibraryReuseProbeKind) returns LibraryReuseProbeRecord\n\t\treturn Self\{kind: kind\}\n\tend 'create'\n\n\tfunction isFirst() returns bool\n\t\treturn self.kind == LibraryReuseProbeKind.first\n\tend 'isFirst'\nend 'LibraryReuseProbeRecord'\n\ntypealias LibraryReuseProbeRecords = Array with LibraryReuseProbeRecord\n\npublic function libraryReuseProbe() returns bool\n\tvar records = LibraryReuseProbeRecords.create(0)\n\trecords.push(LibraryReuseProbeRecord.create(LibraryReuseProbeKind.first))\n\tlet held = try records.get(0) otherwise return false\n\treturn held.isFirst()\nend 'libraryReuseProbe'"
 let LibraryReusedClause = "library parses reused across programs"
 
 union LibraryReuseOutcome

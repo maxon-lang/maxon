@@ -678,11 +678,12 @@ function reportAssociatedTypeBindingDisagreement(project Project, signatures Pro
 end 'reportAssociatedTypeBindingDisagreement'
 
 // Is `name` a PARAMETER type of ANY of `iface`'s requirements — its own AND every one projected in through
-// `extends`? The one caller is `Parser.requireHeldAssociatedTypeIsOnlyReturned`, and it wants EVERY
-// requirement rather than the dispatched ones `dispatchedAssociatedNamesOf` narrows to: that refusal is taken
-// mid-parse, where no module of ops exists to read a dispatch off, and the holding it guards is minted by a
-// WIDENING rather than by a call. Asking the transitive list is load-bearing there for the same measured
-// reason it is in that walk — a parameter projected in from a parent is one `iface.methods` cannot see.
+// `extends`? The one caller is `ProgramSignatures.associatedTypeIsTakenByARequirement`, and it
+// wants EVERY requirement rather than the dispatched ones `dispatchedAssociatedNamesOf` narrows to:
+// that refusal is taken mid-parse, where no module of ops exists to read a dispatch off, and the
+// holding it guards is minted by a WIDENING rather than by a call. Asking the transitive list is
+// load-bearing there for the same measured reason it is in that walk — a parameter projected in
+// from a parent is one `iface.methods` cannot see.
 export function requirementTakesAssociatedType(interfaces IrInterfaceMap, iface IrInterface, position ElementIndex, signatures ProgramSignatures) returns bool
 	for slot in interfaceWitnessSlots(interfaces, iface: iface) 'eachRequirement'
 		for formal in slot.method.paramTypes 'eachFormal'

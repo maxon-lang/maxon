@@ -1,0 +1,17 @@
+let PanicLine = "panic at"
+
+test 'a file whose parse fails outright is memoized as a failure, so a re-query after the fold hits it'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "a-program-with-a-file-that-fails-outright-keeps-every-parse-memoized", fixture: "file-fails-outright")
+	let run = spawnVerifyOnly(staged)
+
+	Expect.isFalse(run.stderr.contains(PanicLine), message: "`{TestedCompilerStem} {VerifyCommandName}` panicked over a program with one file whose parse fails outright. It wrote to stderr: {run.stderr}")
+	Expect.contains(run.stdout, needle: CachePassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report the cache property as holding on a program with one file whose parse fails outright. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.isFalse(run.stderr.contains(ParseHitsFailureLabel), message: "`{TestedCompilerStem} {VerifyCommandName}` re-parsed the file whose parse fails outright on a re-query over unchanged input. It wrote to stderr: {run.stderr}")
+	Expect.contains(run.stdout, needle: InvalidationBytesOnlyPassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report a bytes-only edit re-parsing one file on a program with one file whose parse fails outright. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.contains(run.stdout, needle: NotRunDeterminismLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report determinism as not run on a program that does not compile. It printed: {run.stdout}")
+	Expect.contains(run.stdout, needle: NotRunWarmLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report warm equals cold as not run on a program that does not compile. It printed: {run.stdout}")
+	Expect.contains(run.stdout, needle: NotRunLibraryReuseLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report library reuse as not run on a program that does not compile. It printed: {run.stdout}")
+	Expect.notEqual(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {VerifyCommandName}` exited 0 with three properties not run. It wrote to stderr: {run.stderr}")
+
+	discardStagedDir(staged)
+end 'a file whose parse fails outright is memoized as a failure, so a re-query after the fold hits it'

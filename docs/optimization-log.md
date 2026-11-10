@@ -2327,3 +2327,20 @@ Measured on `tests/ladders/generrors.sh <N> <shape>`, wall seconds for `maxon bu
 | 3200 | – | 85.93 | 86.82 | 75.52 |
 
 The previous compiler grew ×4.5 to ×5.9 per doubling at N = 200 → 400 in every recovering shape. The rest of the bend is in the `semantic` control too, which recovers nothing, so it is not recovery's. An error-free compile costs the same (`valid`, 33.37 → 33.16 s at N = 1600). On the `run_scale_test` corpus, measured with `--metrics` against the parent commit's compiler, the change costs +115,818 allocations at rung 0 and +546,802 at rung 5 (0.45%), mostly in `signatures` and `parse`: a few containers per `Parser` plus the always-on memo logs and region marks. The part above the per-parser constant doubles each rung.
+
+### Result — 2026-11-10, `semanticCheck` is linear in calls that land on a set of bodies, and a closure body's phrases stop spelling the file
+
+A call through a capturing closure, a function-typed parameter or field, or an interface value resolved by shape to every agreeing body, and every such site walked them all, so N sites over N same-shape bodies cost N × N in `semanticCheck`. A call through a local `let` closure now resolves to the one closure it names. Landing sets are interned by contents and shared between sites, with shape candidates bucketed by `ShapeAgreement.candidateKey`; a site applies each class of bodies whose summaries and callee profiles key alike once; and the summary fixpoint revisits a set only when it grew since its last visit. Separately, a closure body's `statementStart` stayed at 0, so each use-site phrase in it spelled the file up to the use, by repeated concatenation (`tests/ladders/genclosurepass.sh`), and the capability check's lookup of an undecided result's defining op scanned every undecided result of the function (`tests/ladders/genundecided.sh`).
+
+Measured with `--metrics`, `phase semanticCheck` allocations unless stated, the compiler before this change against the final one; every "after" but `genundecided.sh`'s reads ×2.00 per doubling:
+
+| Ladder | N | before | after |
+|---|---:|---:|---:|
+| `genlanding.sh files` | 1600 | 9.07 M | 4.02 M |
+| `genlanding.sh witness` | 1600 | 21.6 M | 1.18 M |
+| `genlanding.sh paramactive` | 800 | 98.0 M | 3.49 M |
+| `generrors.sh extvalid` | 1600 | 1730 M | 10.2 M |
+| `genclosurepass.sh`, `phase parse` bytes | 480 | 283 G | 220 M |
+| `genundecided.sh`, `phase semanticCheck` cputicks | 6400 | 12.8 G | 11.0 G |
+
+Before, `generrors.sh` `valid` and `extvalid` grew ×3.3 to ×4.0 per doubling. `genclosurepass.sh` `phase parse` bytes read 0.79 G, 4.89 G, 36.3 G and 283 G at N = 60, 120, 240 and 480 before, and 141 M, 152 M, 174 M, 220 M and 310 M at N = 60 to 960 after, whose rung differences (11.3 M, 22.4 M, 45.3 M, 90.7 M) double. `genundecided.sh` cputicks in millions at N = 200 to 6400 read 269, 441, 809, 1772, 4356 and 12835 before and 271, 434, 785, 1654, 3950 and 10958 after: the lookup is gone, and what still bends is `checkClosureCycles`, 62% of `semanticCheck` at N = 3200 (816 of 1304 samples under `profile run`, against 280 of 534 at 1600) while the capability checks double with N. Self-compile `semanticCheck` allocations are unchanged within 0.5%.

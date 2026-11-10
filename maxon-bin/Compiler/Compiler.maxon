@@ -853,14 +853,26 @@ end 'CheckedCompile'
 // under edit and a tool asked to check a file, both of which want what was wrong; `compileToCodeResult`
 // reports and throws by design, and both of its paths leave `project.diagnostics` standing.
 module function checkWithoutWriting(project Project) returns CheckedCompile
-	view codeResult = try compileToCodeResult(project) otherwise 'refused'
+	return try checkRefusingOnlyAProgram(project) otherwise CheckedCompile.refused
+end 'checkWithoutWriting'
+
+// Only a refusal is an answer about the program. An abandoned compile or a driver failure says
+// nothing about it, and `verify-warm-rebuild` reports one as that error rather than as a program
+// that does not compile.
+module function checkRefusingOnlyAProgram(project Project) returns CheckedCompile throws CompileError
+	view codeResult = try compileToCodeResult(project) otherwise (failure) 'failed'
 		project.retiredWorkers.release()
-		return CheckedCompile.refused
-	end 'refused'
+
+		match failure.failure() 'failure'
+			reportedDiagnostics then return CheckedCompile.refused
+			abandoned or
+			driverFailed then throw failure
+		end 'failure'
+	end 'failed'
 
 	project.retiredWorkers.release()
 	return CheckedCompile.compiled(codeResult)
-end 'checkWithoutWriting'
+end 'checkRefusingOnlyAProgram'
 
 let ScriptlibCheckProgramName = "check-scriptlib.maxon"
 let StdlibCheckProgramName = "check-stdlib.maxon"
@@ -1143,10 +1155,10 @@ end 'maxonTierGateFor'
 function lowerTheProgram(project Project, passes PassKindArray) returns LoweredProgram throws CompileError
 	// ⭐ **THE DIAGNOSTICS OF *THIS* COMPILE, NOT OF EVERY COMPILE THIS PROJECT HAS EVER RUN.** A warm
 	// project compiles again on every editor re-check, and an uncleared sink would keep reporting an error
-	// the author has already fixed. Safe to clear because everything that
-	// should be reported is RE-DERIVED — a parse that reported a diagnostic is never cached
-	// (`queryParseOps`, "only cache a clean parse"), and every later check re-runs over the re-folded
-	// module below.
+	// the author has already fixed. Safe to clear because everything that should be reported is
+	// reported again: a memoized parse reports its diagnostics and refusals from its artifact each
+	// time it is merged (`commitDiagnostics`), and every later check re-runs over the re-folded module
+	// below.
 	project.diagnostics.clear()
 	project.targetRefusalDiagnostics.clear()
 	project.droppedPromiseDiagnostics.clear()
@@ -1306,9 +1318,9 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// ⚠ **THE ONE QUERY REACHED FROM INSIDE THIS BRACKET IS A MEMO HIT, AND IF IT EVER IS NOT, THIS
 	// COMPILE IS ALREADY FAILING.** `deriveLibraryFacts` below reads each stdlib file's parse artifact
 	// back through `queryParseOps`, which opens the `parse` phase — but only on a MISS, and every
-	// stdlib file was parsed and cached by `queryAllModule` above. The single way to reach a miss here
-	// is a stdlib file whose parse FAILED (a failed parse is never cached), and that leaves the type
-	// universe unreadable, so `libraryReachOf` reads no artifact at all. So the nesting the
+	// stdlib file was parsed and cached by `queryAllModule` above, a refused parse included. The
+	// single way to reach a miss here is a stdlib file that could not be read, and that leaves the
+	// type universe unreadable, so `libraryReachOf` reads no artifact at all. So the nesting the
 	// disjointness contract forbids cannot be observed; it is stated because the next reader deserves
 	// to know it was checked rather than assumed.
 	try requireStillWanted(project)
@@ -1688,8 +1700,8 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	//
 	// ⚠⚠ **BELOW THE ERROR GATE, AND THAT POSITION IS PAID FOR.** `requireCorpusDeclaredEnum` PANICS on an
 	// absent entry, and there is one way to be absent in a checkout that lists the declaring module: a stdlib
-	// file whose parse FAILED, since a failed parse is never cached and so never merged
-	// (`deriveLibraryFacts`' header records the same rule for the same reason). Above the gate, any user
+	// file whose parse FAILED, since a failed parse merges only what the aborted parse still knew
+	// (`Parser.abortedParseArtifact`), and that holds no enum declaration. Above the gate, any user
 	// program declaring `implements Iterable` — which expands `stdlib/Interfaces.maxon`'s `extension
 	// Iterable` onto the conformer and so can fail inside that file — would die with this panic INSTEAD of
 	// the diagnostic naming the real fault. Below the gate, that compile has already refused and said why.

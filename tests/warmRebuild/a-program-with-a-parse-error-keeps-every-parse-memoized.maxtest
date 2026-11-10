@@ -1,0 +1,15 @@
+test 'a function body that does not parse leaves its file memoized, and the properties that need no compile still run'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "a-program-with-a-parse-error-keeps-every-parse-memoized", fixture: "parse-error")
+	let run = spawnVerifyOnly(staged)
+
+	Expect.contains(run.stdout, needle: CachePassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report the cache property as holding on a program with one function body that does not parse. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.isFalse(run.stderr.contains(ParseHitsFailureLabel), message: "`{TestedCompilerStem} {VerifyCommandName}` re-parsed the file holding the parse error on a re-query over unchanged input. It wrote to stderr: {run.stderr}")
+	Expect.contains(run.stdout, needle: InvalidationBytesOnlyPassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report a bytes-only edit re-parsing one file on a program with one function body that does not parse. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.contains(run.stdout, needle: NotRunDeterminismLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report determinism as not run on a program that does not compile. It printed: {run.stdout}")
+	Expect.contains(run.stdout, needle: NotRunWarmLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report warm equals cold as not run on a program that does not compile. It printed: {run.stdout}")
+	Expect.contains(run.stdout, needle: NotRunLibraryReuseLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report library reuse as not run on a program that does not compile. It printed: {run.stdout}")
+	Expect.isFalse(run.stdout.contains(VerdictPassLine), message: "`{TestedCompilerStem} {VerifyCommandName}` passed as a whole with three properties not run. It printed: {run.stdout}")
+	Expect.notEqual(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {VerifyCommandName}` exited 0 with three properties not run. It wrote to stderr: {run.stderr}")
+
+	discardStagedDir(staged)
+end 'a function body that does not parse leaves its file memoized, and the properties that need no compile still run'

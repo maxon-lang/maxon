@@ -2124,44 +2124,57 @@ function parsedHere(project Project, path FilePath, job ParseJob, tokens TokenAr
 	// Opens only NOW, after the tokens query has returned, so it bills the parse alone and never
 	// absorbs the lexing it depends on.
 	let parseProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.parse)
-	var outcome = parseFile(job, tokens: tokens, overrides: overrides, signatures: programSignaturesIn(project, asker: "parsedHere"))
+	var artifact = parseFile(job, tokens: tokens, overrides: overrides, signatures: programSignaturesIn(project, asker: "parsedHere"))
 	recordPhase(project, phase: CompilePhase.parse, probe: parseProbe)
 
-	return landParseOutcome(project, path: path, outcome: outcome, stamp: stamp)
+	return landParse(project, path: path, artifact: artifact, stamp: stamp)
 end 'parsedHere'
 
-// What a compile keeps of one file's parse, wherever it ran: a clean artifact is memoized, and a refusal is
-// reported.
-module function landParseOutcome(project Project, path FilePath, outcome FileParseOutcome, stamp ParseStamp) returns FileParseArtifact
+// What a compile keeps of one file's parse, wherever it ran: every completed parse is memoized, a refused one
+// included. What it refused is reported from the artifact (`reportOwnRefusals`), so a memo hit
+// reports exactly what the parse that filed it did.
+module function landParse(project Project, path FilePath, artifact FileParseArtifact, stamp ParseStamp) returns FileParseArtifact
 	if isLibrarySourceFile(project, path: path) 'aLibraryParse'
 		project.db.libraryTally.parsed = project.db.libraryTally.parsed + 1
 	end 'aLibraryParse'
 
-	return match outcome 'outcome'
-		parsed(artifact, abandoned) gives landReadableParse(project, path: path, artifact: artifact, abandoned: abandoned, stamp: stamp)
-		failed(error, blame, salvaged, consequence, abandoned) gives reportFailedParse(project, path: path, error: error, blame: blame, salvaged: salvaged, consequence: consequence, abandoned: abandoned)
-	end 'outcome'
-end 'landParseOutcome'
+	return memoizedArtifact(project, path: path, artifact: artifact, stamp: stamp)
+end 'landParse'
 
-// A parse that abandoned a body is not memoized: its refusals are reported from the outcome, not carried by the
-// artifact, so a later hit would serve the artifact without them.
-function landReadableParse(project Project, path FilePath, artifact FileParseArtifact, abandoned AbandonedRegionArray, stamp ParseStamp) returns FileParseArtifact
-	if abandoned.isEmpty() 'nothingWasAbandoned'
-		return memoizedArtifact(project, path: path, artifact: artifact, stamp: stamp)
-	end 'nothingWasAbandoned'
+module function reportOwnRefusals(project Project, artifact FileParseArtifact)
+	let path = artifact.filePath
 
-	reportAbandonedRegions(project, path: path, abandoned: abandoned)
-	return artifact
-end 'landReadableParse'
-
-function reportAbandonedRegions(project Project, path FilePath, abandoned AbandonedRegionArray)
-	for region in abandoned 'eachRegion'
-		let sinkStart = project.diagnostics.count()
-		reportParseFailure(project, path: path, error: region.error, blame: region.blame.clone())
-		let backing = holdAsAConsequence(project, path: path, consequence: region.consequence, lost: LostDeclaration.region(region.poisoned.clone()), sinkStart: sinkStart)
+	for region in artifact.abandonedRegions 'eachRegion'
+		let backing = reportRefusal(project, path: path, error: region.error, blame: region.blame.clone(), consequence: region.consequence, lost: LostDeclaration.region(region.poisoned.clone()))
 		noteDeclarationLostTo(project, filePath: path, poisoned: region.poisoned, backing: backing)
 	end 'eachRegion'
-end 'reportAbandonedRegions'
+
+	match artifact.refusal 'refusal'
+		none then break
+		refused(error, blame, consequence) then reportFileRefusal(project, path: path, error: error, blame: blame.clone(), consequence: consequence)
+	end 'refusal'
+end 'reportOwnRefusals'
+
+module function reportRecordedDiagnostics(project Project, artifact FileParseArtifact)
+	for diagnostic in artifact.diagnostics 'eachDiagnostic'
+		reportDiagnostic(project, diagnostic: diagnostic)
+		noteDeclarationRefusedBy(project, diagnostic: diagnostic)
+	end 'eachDiagnostic'
+end 'reportRecordedDiagnostics'
+
+function reportRefusal(project Project, path FilePath, error SourceParseError, blame LibraryBlame, consequence ConsequenceOf, lost LostDeclaration) returns PoisonBacking
+	let sinkStart = project.diagnostics.count()
+	reportParseFailure(project, path: path, error: error, blame: blame)
+
+	return holdAsAConsequence(project, path: path, consequence: consequence, lost: lost, sinkStart: sinkStart)
+end 'reportRefusal'
+
+function reportFileRefusal(project Project, path FilePath, error SourceParseError, blame LibraryBlame, consequence ConsequenceOf)
+	let backing = reportRefusal(project, path: path, error: error, blame: blame, consequence: consequence, lost: LostDeclaration.file)
+	view heads = try queryDeclarationHeads(project, path: path) otherwise panic("reportFileRefusal: the declaration heads of '{path.toString()}' cannot be read, though the parse that refused it read its tokens")
+	project.poison.noteFailedFile(path, heads: heads, backing: backing)
+	noteTypeUniverseLostWith(project, path: path)
+end 'reportFileRefusal'
 
 function holdAsAConsequence(project Project, path FilePath, consequence ConsequenceOf, lost LostDeclaration, sinkStart ElementIndex) returns PoisonBacking
 	match consequence 'consequence'
@@ -2274,19 +2287,6 @@ function noteFailedFileBacked(project Project, path FilePath)
 	view heads = try queryDeclarationHeads(project, path: path) otherwise return
 	project.poison.noteFailedFile(path, heads: heads, backing: PoisonBacking.backed)
 end 'noteFailedFileBacked'
-
-// A failed parse is never cached. What IS returned is what an aborted parse still knows — see
-// `Parser.abortedParseArtifact`.
-function reportFailedParse(project Project, path FilePath, error SourceParseError, blame LibraryBlame, salvaged FileParseArtifact, consequence ConsequenceOf, abandoned AbandonedRegionArray) returns FileParseArtifact
-	reportAbandonedRegions(project, path: path, abandoned: abandoned)
-	let sinkStart = project.diagnostics.count()
-	reportParseFailure(project, path: path, error: error, blame: blame)
-	let backing = holdAsAConsequence(project, path: path, consequence: consequence, lost: LostDeclaration.file, sinkStart: sinkStart)
-	view heads = try queryDeclarationHeads(project, path: path) otherwise panic("reportFailedParse: the declaration heads of '{path.toString()}' cannot be read, though the parse that just failed read its tokens")
-	project.poison.noteFailedFile(path, heads: heads, backing: backing)
-	noteTypeUniverseLostWith(project, path: path)
-	return salvaged
-end 'reportFailedParse'
 
 function noteUnreadableSource(project Project, path FilePath)
 	project.poison.noteUnreadableFile(path)
@@ -2574,6 +2574,8 @@ function foldEveryFileInto(project Project, pool FrontEndPool, merged MaxonModul
 	// type in `InstantiatedByAParse` — each name at most once (`noteMoved`) — which settles a new index and drops
 	// every override, or, against one index, stands an answer for a (file, question) pair no earlier fold stood
 	// (`RowSetOverrideTable.stand`). Both are finite, so the folds are too.
+	ledger.withdrawStandingFold(project)
+
 	var signatures = try queryProgramSignatures(project)
 	project.db.rowSetOverrides.belongTo(project.db.signatureCache.keyHash)
 	var moved = InstantiatedTypeNameSet.create()
@@ -2586,7 +2588,11 @@ function foldEveryFileInto(project Project, pool FrontEndPool, merged MaxonModul
 	recordPhase(project, phase: CompilePhase.merge, probe: pathOrderProbe)
 
 	while true 'untilTheFoldStands'
-		match try foldVerdict(project, pool: pool, signatures: signatures, into: merged, ledger: ledger, moved: moved, pathOrder: pathOrder, emissionOrder: emissionOrder) 'verdict'
+		let checkpoint = FoldCheckpoint.of(project)
+		let verdict = try foldVerdict(project, pool: pool, signatures: signatures, into: merged, ledger: ledger, moved: moved, pathOrder: pathOrder, emissionOrder: emissionOrder)
+		ledger.settle(verdict, since: checkpoint, project: project)
+
+		match verdict 'verdict'
 			stands then break 'untilTheFoldStands'
 			answersMoved or
 			indexMoved then folds = folds + 1
@@ -2597,6 +2603,7 @@ function foldEveryFileInto(project Project, pool FrontEndPool, merged MaxonModul
 		project.db.rowSetOverrides.belongTo(project.db.signatureCache.keyHash)
 	end 'untilTheFoldStands'
 
+	ledger.requireEveryDeferralExplained(project)
 	publishStandingParses(project)
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
@@ -2836,10 +2843,53 @@ type FoldLedger
 	let tables as OpKeyedTableArray
 	var tablesHeld as TableHeldColumn
 	module var reMerged as ElementIndex
+	var standing as StandingFold
 
 	static function create() returns FoldLedger
-		return Self{foldedAgainst: FoldedIndex.none, artifacts: FileParseArtifactArray.create(0), marks: MergeMarkArray.create(0), tables: OpKeyedTable.allCases, tablesHeld: TableHeldColumn.create(0), reMerged: 0}
+		return Self{foldedAgainst: FoldedIndex.none, artifacts: FileParseArtifactArray.create(0), marks: MergeMarkArray.create(0), tables: OpKeyedTable.allCases, tablesHeld: TableHeldColumn.create(0), reMerged: 0, standing: StandingFold.none}
 	end 'create'
+
+	function settle(verdict FoldVerdict, since FoldCheckpoint, project Project)
+		match verdict 'verdict'
+			stands then self.standing = StandingFold.reported(since, sinkEnd: project.diagnostics.count(), poisonEnd: project.poison.extent())
+			answersMoved or
+			indexMoved then since.rollBack(project)
+		end 'verdict'
+	end 'settle'
+
+	// Asked first in each round of `foldEveryFileInto`: every fold reports every artifact's
+	// diagnostics again, so the fold an earlier round stood is withdrawn before the next one reports,
+	// or each would stand twice.
+	function withdrawStandingFold(project Project)
+		match self.standing 'standing'
+			none then return
+			reported(since, sinkEnd, poisonEnd) then self.withdraw(project, since: since, sinkEnd: sinkEnd, poisonEnd: poisonEnd)
+		end 'standing'
+	end 'withdrawStandingFold'
+
+	// The backstop for `ProgramSignatures.genericArgumentIsRefused`: a deferred use is sound only
+	// beside the alias's own E2015, which stops the compile before its unresolved values reach
+	// codegen.
+	function requireEveryDeferralExplained(project Project)
+		if projectHasErrors(project) 'aRefusalIsReported'
+			return
+		end 'aRefusalIsReported'
+
+		for artifact in self.artifacts 'eachArtifact'
+			if artifact.refusedInstanceDeferrals != 0 'aDeferralWithNoRefusal'
+				panic("FoldLedger.requireEveryDeferralExplained: '{artifact.filePath.toString()}' deferred {artifact.refusedInstanceDeferrals} use(s) of a generic instance the compiler refuses, and no diagnostic in the program names the refusal — the program would compile with those values unresolved")
+			end 'aDeferralWithNoRefusal'
+		end 'eachArtifact'
+	end 'requireEveryDeferralExplained'
+
+	function withdraw(project Project, since FoldCheckpoint, sinkEnd ElementIndex, poisonEnd PoisonExtent)
+		if project.diagnostics.count() != sinkEnd or project.poison.extent() != poisonEnd 'reportedSince'
+			panic("FoldLedger.withdrawStandingFold: the project reported or poisoned something between the fold that stood and the one after it, so rolling back to the first fold's checkpoint would withdraw it too")
+		end 'reportedSince'
+
+		since.rollBack(project)
+		self.standing = StandingFold.none
+	end 'withdraw'
 
 	// Sound only against the index the kept files were merged under: a memo hit hands back the same
 	// artifact object, already renumbered into that index's instance ids, and the module holds the ops
@@ -2928,6 +2978,11 @@ type FoldCheckpoint
 	end 'rollBack'
 end 'FoldCheckpoint'
 
+union StandingFold
+	none
+	reported(since FoldCheckpoint, sinkEnd ElementIndex, poisonEnd PoisonExtent)
+end 'StandingFold'
+
 // One fold into `merged`.
 //
 // ⚠ **A NEWLY INSTANTIATED TYPE IS ASKED FIRST, EVEN OF A FOLD THAT WAS REFUSED**, because it changes which methods
@@ -2936,7 +2991,6 @@ end 'FoldCheckpoint'
 // diagnostics are withdrawn with it, and the next fold reports afresh. A row a merge holds is an instance the
 // program really mints whether or not every file merged, so the type is filed either way.
 function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, ledger FoldLedger, moved InstantiatedTypeNameSet, pathOrder SourceFileInPathOrderArray, emissionOrder EmissionSlotArray) returns FoldVerdict throws CompileError
-	let checkpoint = FoldCheckpoint.of(project)
 	resetMergeTargets(project, signatures: signatures)
 	signatures.restoreBaseline()
 
@@ -2976,7 +3030,6 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 			project.db.instantiatedByAParse.file(name)
 		end 'eachType'
 
-		checkpoint.rollBack(project)
 		return FoldVerdict.indexMoved
 	end 'aParseInstantiatedATypeTheIndexDidNotCount'
 
@@ -2992,7 +3045,6 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 	end 'eachRequested'
 
 	if newlyRequested 'aParseRequestedAGenericInstanceTheIndexDidNotDeclare'
-		checkpoint.rollBack(project)
 		return FoldVerdict.indexMoved
 	end 'aParseRequestedAGenericInstanceTheIndexDidNotDeclare'
 
@@ -3699,6 +3751,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.serviceAwaitSites = ServiceAwaitSiteMap.create()
 	project.asyncSpawnSites = AsyncSpawnSiteMap.create()
 	project.allocTagSites = AllocTagSiteMap.create()
+	project.closureRecordSites = ClosureRecordSiteSet.create()
 	project.debugStreamNameSites = DebugStreamNameSiteMap.create()
 	project.immortalConstArraySites = ImmortalConstArraySiteMap.create()
 	project.provenFixedArrayAccesses = ProvenFixedArrayAccessMap.create()

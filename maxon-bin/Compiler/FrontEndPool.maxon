@@ -139,7 +139,7 @@ end 'FrontEndWork'
 // What one file's work answered.
 export union FrontEndOutcome
 	lexed(outcome LexOutcome)
-	parsed(outcome FileParseOutcome)
+	parsed(artifact FileParseArtifact)
 end 'FrontEndOutcome'
 
 // One file's work on its way to a worker, in a one-slot holder the worker pops, and its answer on
@@ -332,7 +332,7 @@ type FrontEndTools
 		return LexOutcome.lexed(tokens, active: active)
 	end 'lexed'
 
-	function parsed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, index ProgramSignatures, costs PoolPhaseCosts, probe PhaseProbe) returns FileParseOutcome
+	function parsed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, index ProgramSignatures, costs PoolPhaseCosts, probe PhaseProbe) returns FileParseArtifact
 		probe.reopenCounters()
 		let outcome = parseFile(job, tokens: tokens, overrides: overrides, signatures: index)
 		costs.record(FrontEndStage.parse.ordinal, probe: probe)
@@ -377,7 +377,7 @@ type FrontEndWorkerState
 		return self.tools.lexed(content, edges: edges, costs: self.costs, probe: self.probe)
 	end 'lexed'
 
-	function parsed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable) returns FileParseOutcome
+	function parsed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable) returns FileParseArtifact
 		var index = try self.ownIndex.get(0) otherwise panic("FrontEndWorkerState.parsed: a parse reached a worker holding no index — the pool hands every worker its baseline before the first parse it dispatches")
 		return self.tools.parsed(job, tokens: tokens, overrides: overrides, index: index, costs: self.costs, probe: self.probe)
 	end 'parsed'
@@ -931,12 +931,12 @@ function lexOutcomeOf(outcome FrontEndOutcome) returns LexOutcome
 	end 'outcome'
 end 'lexOutcomeOf'
 
-function parseOutcomeOf(outcome FrontEndOutcome) returns FileParseOutcome
+function parsedArtifactOf(outcome FrontEndOutcome) returns FileParseArtifact
 	match outcome 'outcome'
-		lexed then panic("FrontEndPool.parseOutcomeOf: a parse drain landed a lex — a drain dispatches one kind of work")
+		lexed then panic("FrontEndPool.parsedArtifactOf: a parse drain landed a lex — a drain dispatches one kind of work")
 		parsed(parse) then return parse
 	end 'outcome'
-end 'parseOutcomeOf'
+end 'parsedArtifactOf'
 
 // Every file's artifact in source-path order: a memoized one as the memo holds it, a parsed one landed now.
 function landParses(project Project, queries ParseQueryArray, outcomes FrontEndOutcomeArray, slots LandingSlots) returns FileParseArtifactArray
@@ -952,6 +952,6 @@ end 'landParses'
 function landedArtifact(project Project, query ParseQuery, fileIndex ElementIndex, outcomes FrontEndOutcomeArray, slots LandingSlots) returns FileParseArtifact
 	return match query 'query'
 		memoized(artifact) gives artifact
-		needed(_, _, _, stamp) gives landParseOutcome(project, path: sourcePathAt(project, fileIndex: fileIndex), outcome: parseOutcomeOf(landedOutcome(outcomes, slots: slots, fileIndex: fileIndex)), stamp: stamp)
+		needed(_, _, _, stamp) gives landParse(project, path: sourcePathAt(project, fileIndex: fileIndex), artifact: parsedArtifactOf(landedOutcome(outcomes, slots: slots, fileIndex: fileIndex)), stamp: stamp)
 	end 'query'
 end 'landedArtifact'

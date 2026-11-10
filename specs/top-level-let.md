@@ -1898,6 +1898,34 @@ error E2010: <fragment>:3:2: Expected ')' but got 'return'
 error E3004: <fragment>:7:10: call to undefined function 'nothere'
 ```
 
+<!-- test: error.an-unclosed-parameter-list-with-a-default-value-abandons-only-its-declaration -->
+An unclosed `(` after a parameter with a default value fails at the token that cannot continue the list, as it
+does without a default, and abandons only its own declaration: a second such head is reported beside the
+first, and the undefined call in a later function is reported too.
+```maxon
+function broken(step ExitCode = 1 returns ExitCode
+	return 0
+end 'broken'
+
+function alsoBroken(step ExitCode = 2 returns ExitCode
+	return 0
+end 'alsoBroken'
+
+function other() returns ExitCode
+	let g = nothere(7)
+	return g as ExitCode
+end 'other'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:2:35: Expected ')' but got 'returns'
+error E2010: <fragment>:6:39: Expected ')' but got 'returns'
+error E3004: <fragment>:11:10: call to undefined function 'nothere'
+```
+
 <!-- test: error.a-parse-error-in-a-type-body-beside-an-undefined-call-in-a-later-function-reports-both -->
 A parse error in a type's member abandons that type, not the file. The uses of the type are no mistake of
 their own and are not reported; the undefined call in a later function is.
@@ -2673,6 +2701,97 @@ end 'main'
 10
 ```
 
+
+<!-- test: a-closure-bound-by-a-top-level-let-is-called-and-passed-as-a-function-value -->
+`addSeven` is a closure literal in a top-level initializer. Calling it and handing it to a function-typed
+parameter both resolve its shape.
+```maxon
+typealias Tally = int(0 to 1000000)
+typealias Step = function(Tally) returns Tally
+
+let addSeven = function(n Tally) gives n + 7
+
+function run(step Step, n Tally) returns Tally
+	return step(n)
+end 'run'
+
+function main() returns ExitCode
+	print("{addSeven(35)} {run(addSeven, n: 100)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+42 107
+```
+
+<!-- test: top-level-closures-of-different-shapes-keep-their-own-shapes -->
+Each top-level closure is its own function type: `weigh` takes two parameters and `describe` returns a
+`String`, beside `addSeven`, and every call and every hand-over is judged against its own closure's shape.
+```maxon
+typealias Tally = int(0 to 1000000)
+typealias Step = function(Tally) returns Tally
+typealias Describe = function(Tally) returns String
+typealias Weigh = function(Tally, Tally) returns Tally
+
+let addSeven = function(n Tally) gives n + 7
+let describe = function(n Tally) gives "n={n}"
+let weigh = function(a Tally, b Tally) gives a * 10 + b
+
+function runStep(step Step, n Tally) returns Tally
+	return step(n)
+end 'runStep'
+
+function runDescribe(step Describe, n Tally) returns String
+	return step(n)
+end 'runDescribe'
+
+function runWeigh(step Weigh, a Tally, b Tally) returns Tally
+	return step(a, b)
+end 'runWeigh'
+
+function main() returns ExitCode
+	print("{runStep(addSeven, n: 3)} {runDescribe(describe, n: 91)} {runWeigh(weigh, a: 4, b: 5)}\n")
+	print("{addSeven(1)} {describe(2)} {weigh(6, 7)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10 n=91 45
+8 n=2 67
+```
+
+<!-- test: a-closure-bound-by-an-exported-top-level-let-is-used-from-another-file -->
+`main.maxon` reads `triple` and hands it to `apply`; neither file's parse is ordered against the other's, so
+the closure's shape reaches the reader through the declaration sweep.
+```maxon
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{triple(14)} {apply(triple, n: 5)}\n")
+	return 0
+end 'main'
+
+// --- file: steps.maxon
+export typealias Tally = int(0 to 1000000)
+export typealias Step = function(Tally) returns Tally
+
+export let triple = function(n Tally) gives n * 3
+
+export function apply(step Step, n Tally) returns Tally
+	return step(n)
+end 'apply'
+```
+```exitcode
+0
+```
+```stdout
+42 15
+```
 
 <!-- test: error.a-static-initializer-calling-a-function-valued-binding-past-a-sibling-with-a-parameter-calls-the-binding -->
 The sibling `make` takes a `Digit` the argument does not fit, but the call means the function-valued

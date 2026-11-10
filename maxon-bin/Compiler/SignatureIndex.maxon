@@ -588,6 +588,7 @@ enum SignatureDiscriminator
 	regionBoundSendable = 162
 	regionBoundIsolated = 163
 	declShapeExtensionConformance = 164
+	declShapeExtensionHeldArgument = 165
 end 'SignatureDiscriminator'
 
 // The discriminator for one backing. A `match` rather than a chained `if`, so a new backing cannot be added
@@ -11144,6 +11145,10 @@ end 'Set'
 
 let StaticMemberKindSuffix = "__static"
 
+function extensionHeldArgumentKey(conformer ByteArray, interfaceName ByteArray, associatedPosition ElementIndex) returns immutable ByteArray
+	return joinQualifiedName(joinQualifiedName(conformer, member: interfaceName), member: "{associatedPosition}".toByteArray())
+end 'extensionHeldArgumentKey'
+
 function extensionMemberKindKey(qualified immutable ByteArray, takesReceiver bool) returns immutable ByteArray
 	if takesReceiver 'anInstanceMember'
 		return qualified
@@ -14224,6 +14229,88 @@ end 'cacheReadExtensionMethodConstraintMap'
 
 // @generated library-cache end
 
+export type ExtensionHeldArgument
+	export let baseName as immutable ByteArray
+	export let position as FieldIndex
+
+	export static function create(baseName immutable ByteArray, position FieldIndex) returns ExtensionHeldArgument
+		return Self{baseName: baseName, position: position}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.baseName)
+		writer.unsigned(self.position as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ExtensionHeldArgument throws LibraryCacheDamage
+		let f_baseName = freeze try reader.bytes()
+		let f_position = (try reader.boundedUnsigned(0, high: 65535)) as FieldIndex
+
+		return Self{baseName: f_baseName, position: f_position}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(ExtensionHeldArgument) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'ExtensionHeldArgument'
+
+export typealias ExtensionHeldArgumentArray = Array with ExtensionHeldArgument
+
+// @generated library-cache begin
+function cacheWriteExtensionHeldArgumentArray(writer LibraryCacheWriter, value ExtensionHeldArgumentArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteExtensionHeldArgumentArray'
+
+function cacheReadExtensionHeldArgumentArray(reader LibraryCacheReader) returns ExtensionHeldArgumentArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ExtensionHeldArgumentArray.create(count, zeroed: false)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try ExtensionHeldArgument.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadExtensionHeldArgumentArray'
+
+// @generated library-cache end
+
+export typealias ExtensionHeldArgumentMap = Map with (ByteArray, ExtensionHeldArgumentArray)
+
+// @generated library-cache begin
+function cacheWriteExtensionHeldArgumentMap(writer LibraryCacheWriter, value ExtensionHeldArgumentMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		cacheWriteExtensionHeldArgumentArray(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteExtensionHeldArgumentMap'
+
+function cacheReadExtensionHeldArgumentMap(reader LibraryCacheReader) returns ExtensionHeldArgumentMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ExtensionHeldArgumentMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try cacheReadExtensionHeldArgumentArray(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadExtensionHeldArgumentMap'
+
+// @generated library-cache end
+
+let sharedEmptyExtensionHeldArguments = ExtensionHeldArgumentArray.create(0)
+
 // The answer to "was this missing method WITHHELD, or is it simply absent?" — a case rather than an empty
 // record, because the two readings lead to two different diagnostics and a caller must not be able to take
 // the wrong one by forgetting to test a field.
@@ -16198,6 +16285,12 @@ export type SettledDeclarations
 	module var extensionPublishedMethods as ExtensionMethodNameSet
 	module var extensionShadowedMethods as ExtensionMethodNameSet
 
+	// Per conformer, interface and associated position, the container arguments an extension body
+	// writes over that associated type: a conformer binding it to an interface is E2015 at the binding
+	// (`Parser.refuseBindingAnExtensionStoresAsAnArgument`), since no written instance spells the
+	// pair.
+	module var extensionHeldArguments as ExtensionHeldArgumentMap
+
 	module var extensionMethodDeclFiles as ExtensionMethodDeclFileMap
 	module var interfaceExtensionMembers as InterfaceExtensionMemberMap
 
@@ -16233,6 +16326,11 @@ export type SettledDeclarations
 	// file's constant) costs one wasted probe and resolves correctly, and there is no second copy of the
 	// resolution rule to drift.
 	module var managedTopLevelNames as ManagedTopLevelNameSet
+
+	// The shape of each closure a top-level initializer's probe lifts, by lifted name. The probe's
+	// parse ends with it, and a later parse that reads the closure finds its shape here
+	// (`initializerClosureShapeFor`).
+	module var initializerClosureShapes as FunctionValueShapeMap
 
 	// ⭐⭐ **WHAT EACH CORPUS SLOT'S INITIALIZER CALLS, BY LABEL** — filled by `assignDataLabels`, which is the
 	// walk that MINTS the labels, so the key and the slot are created in one act. It exists because those
@@ -16440,7 +16538,7 @@ export type SettledDeclarations
 	export static function create(os Os) returns SettledDeclarations
 		let interfaces = IrInterfaceMap.create()
 
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(0), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(0), structNamesInDeclOrder: NameRoster.create(0), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(0), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, fixedArrayFromSizes: FixedSizeArray.create(0), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), scriptlibFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(0), constLiteralSites: GenericInstantiationSiteArray.create(0), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), extensionInnerAliasKeepers: ExtensionInnerAliasSiteMap.create(), typeBodyInnerAliasMembers: ExtensionInnerAliasNameSet.create(), libraryExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorShadowedInnerAliases: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(0), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(0), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(0), descriptorScanSites: DescriptorScanSiteArray.create(0), fixedElementCountNeeds: DescriptorNeedNameSet.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, conformerIndex: DeclaredConformerIndex.unbuilt(), extensionDeclaredConformances: DeclaredConformanceMap.create(), typeExtensionConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), decls: TopLevelDeclArray.create(0), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), sawMutableMarker: false, sawMutableFunctionValue: false, byRefBareNames: BareNameSet.create(), opaqueByRefBareNames: BareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcReturnsReceiverField: DeclaredBodyFactNameSet.create(), funcReturnsParameter: DeclaredBodyFactNameSet.create(), funcFieldMoveOutForwards: FreshReturnForwardMap.create(), interfaceRequirementNames: MethodNameSet.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), sweptDeclarations: SweptDeclarationMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(0), userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: NameRoster.create(0), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(0), serviceSpawnCandidateKeys: ServiceSpawnCandidateKeyIndex.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), corpusArrayRecordName: ArrayRecordName.of(SynthesizedArrayRecordSeed), shadowRoster: ShadowSpellingRoster.none(), qualifiedTypeClaims: TypeNameClaimLog.create(), typeHeadClaims: TypeNameClaimLog.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: TypeNameClaimLog.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(0), nominalNameCollisions: TypeNameCollisionArray.create(0), fileModuleDirectories: ModuleDirectoryByFile.create(), namespaceQualifiers: DeclaredTypeNameSet.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(0), namespaceQualifiedFunctions: NamespaceQualifiedFunctionMap.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), functionDirectoryHolders: DirectoryHolderMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(0), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(0), structNamesInDeclOrder: NameRoster.create(0), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(0), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, fixedArrayFromSizes: FixedSizeArray.create(0), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), scriptlibFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(0), constLiteralSites: GenericInstantiationSiteArray.create(0), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), extensionInnerAliasKeepers: ExtensionInnerAliasSiteMap.create(), typeBodyInnerAliasMembers: ExtensionInnerAliasNameSet.create(), libraryExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorExtensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), authorShadowedInnerAliases: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(0), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(0), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(0), descriptorScanSites: DescriptorScanSiteArray.create(0), fixedElementCountNeeds: DescriptorNeedNameSet.create(), conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, conformerIndex: DeclaredConformerIndex.unbuilt(), extensionDeclaredConformances: DeclaredConformanceMap.create(), typeExtensionConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), decls: TopLevelDeclArray.create(0), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), sawMutableMarker: false, sawMutableFunctionValue: false, byRefBareNames: BareNameSet.create(), opaqueByRefBareNames: BareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcReturnsReceiverField: DeclaredBodyFactNameSet.create(), funcReturnsParameter: DeclaredBodyFactNameSet.create(), funcFieldMoveOutForwards: FreshReturnForwardMap.create(), interfaceRequirementNames: MethodNameSet.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), sweptDeclarations: SweptDeclarationMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionHeldArguments: ExtensionHeldArgumentMap.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), initializerClosureShapes: FunctionValueShapeMap.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(0), userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: NameRoster.create(0), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(0), serviceSpawnCandidateKeys: ServiceSpawnCandidateKeyIndex.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), corpusArrayRecordName: ArrayRecordName.of(SynthesizedArrayRecordSeed), shadowRoster: ShadowSpellingRoster.none(), qualifiedTypeClaims: TypeNameClaimLog.create(), typeHeadClaims: TypeNameClaimLog.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: TypeNameClaimLog.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(0), nominalNameCollisions: TypeNameCollisionArray.create(0), fileModuleDirectories: ModuleDirectoryByFile.create(), namespaceQualifiers: DeclaredTypeNameSet.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(0), namespaceQualifiedFunctions: NamespaceQualifiedFunctionMap.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), functionDirectoryHolders: DirectoryHolderMap.create()}
 	end 'create'
 
 	static function unused() returns SettledDeclarations
@@ -16549,12 +16647,14 @@ export type SettledDeclarations
 		cacheWriteBufferElementAliasNameSet(writer, value: self.bufferSurfaceAliases)
 		cacheWriteExtensionMethodNameSet(writer, value: self.extensionPublishedMethods)
 		cacheWriteExtensionMethodNameSet(writer, value: self.extensionShadowedMethods)
+		cacheWriteExtensionHeldArgumentMap(writer, value: self.extensionHeldArguments)
 		cacheWriteExtensionMethodDeclFileMap(writer, value: self.extensionMethodDeclFiles)
 		cacheWriteInterfaceExtensionMemberMap(writer, value: self.interfaceExtensionMembers)
 		cacheWriteExtensionMethodNameSet(writer, value: self.stdlibPublishedExtensionMethods)
 		cacheWriteHashDigestSet(writer, value: self.authorDeclaredNames)
 		cacheWriteHashDigestSet(writer, value: self.libraryMeantNames)
 		cacheWriteManagedTopLevelNameSet(writer, value: self.managedTopLevelNames)
+		cacheWriteFunctionValueShapeMap(writer, value: self.initializerClosureShapes)
 		cacheWriteSlotInitCalleeMap(writer, value: self.corpusSlotInitCallees)
 		cacheWriteBoolArray(writer, value: self.inlineRecordByTypeNameId)
 		cacheWriteDefineProblemArray(writer, value: self.defineProblems)
@@ -16695,12 +16795,14 @@ export type SettledDeclarations
 		let f_bufferSurfaceAliases = try cacheReadBufferElementAliasNameSet(reader)
 		let f_extensionPublishedMethods = try cacheReadExtensionMethodNameSet(reader)
 		let f_extensionShadowedMethods = try cacheReadExtensionMethodNameSet(reader)
+		let f_extensionHeldArguments = try cacheReadExtensionHeldArgumentMap(reader)
 		let f_extensionMethodDeclFiles = try cacheReadExtensionMethodDeclFileMap(reader)
 		let f_interfaceExtensionMembers = try cacheReadInterfaceExtensionMemberMap(reader)
 		let f_stdlibPublishedExtensionMethods = try cacheReadExtensionMethodNameSet(reader)
 		let f_authorDeclaredNames = try cacheReadHashDigestSet(reader)
 		let f_libraryMeantNames = try cacheReadHashDigestSet(reader)
 		let f_managedTopLevelNames = try cacheReadManagedTopLevelNameSet(reader)
+		let f_initializerClosureShapes = try cacheReadFunctionValueShapeMap(reader)
 		let f_corpusSlotInitCallees = try cacheReadSlotInitCalleeMap(reader)
 		let f_inlineRecordByTypeNameId = try cacheReadBoolArray(reader)
 		let f_defineProblems = try cacheReadDefineProblemArray(reader)
@@ -16747,11 +16849,11 @@ export type SettledDeclarations
 		let f_genericInstancesBySite = try cacheReadGenericFunctionInstancesBySite(reader)
 		let f_genericInstancesByName = try cacheReadGenericFunctionInstanceMap(reader)
 
-		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, fixedArrayFromSizes: f_fixedArrayFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, extensionInnerAliasKeepers: f_extensionInnerAliasKeepers, typeBodyInnerAliasMembers: f_typeBodyInnerAliasMembers, libraryExtensionInnerAliasMembers: f_libraryExtensionInnerAliasMembers, authorExtensionInnerAliasMembers: f_authorExtensionInnerAliasMembers, authorShadowedInnerAliases: f_authorShadowedInnerAliases, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, typeExtensionConformances: f_typeExtensionConformances, extensionMethodConstraints: f_extensionMethodConstraints, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, sawMutableMarker: f_sawMutableMarker, sawMutableFunctionValue: f_sawMutableFunctionValue, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, funcDiverges: f_funcDiverges, funcAlwaysThrows: f_funcAlwaysThrows, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcConstructsFromParams: f_funcConstructsFromParams, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReturnsParameter: f_funcReturnsParameter, funcFieldMoveOutForwards: f_funcFieldMoveOutForwards, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, sweptDeclarations: f_sweptDeclarations, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionMethodDeclFiles: f_extensionMethodDeclFiles, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, authorMints: f_authorMints, contestedNominalClaims: f_contestedNominalClaims, contestedBindingNames: f_contestedBindingNames, contestedClaimHolders: f_contestedClaimHolders, bindingSiteHolders: f_bindingSiteHolders, sweptGenericSites: f_sweptGenericSites, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, functionDirectoryHolders: f_functionDirectoryHolders, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName}
+		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, fixedArrayFromSizes: f_fixedArrayFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, extensionInnerAliasKeepers: f_extensionInnerAliasKeepers, typeBodyInnerAliasMembers: f_typeBodyInnerAliasMembers, libraryExtensionInnerAliasMembers: f_libraryExtensionInnerAliasMembers, authorExtensionInnerAliasMembers: f_authorExtensionInnerAliasMembers, authorShadowedInnerAliases: f_authorShadowedInnerAliases, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, typeExtensionConformances: f_typeExtensionConformances, extensionMethodConstraints: f_extensionMethodConstraints, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, sawMutableMarker: f_sawMutableMarker, sawMutableFunctionValue: f_sawMutableFunctionValue, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, funcDiverges: f_funcDiverges, funcAlwaysThrows: f_funcAlwaysThrows, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcConstructsFromParams: f_funcConstructsFromParams, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReturnsParameter: f_funcReturnsParameter, funcFieldMoveOutForwards: f_funcFieldMoveOutForwards, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, sweptDeclarations: f_sweptDeclarations, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionHeldArguments: f_extensionHeldArguments, extensionMethodDeclFiles: f_extensionMethodDeclFiles, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, initializerClosureShapes: f_initializerClosureShapes, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, authorMints: f_authorMints, contestedNominalClaims: f_contestedNominalClaims, contestedBindingNames: f_contestedBindingNames, contestedClaimHolders: f_contestedClaimHolders, bindingSiteHolders: f_bindingSiteHolders, sweptGenericSites: f_sweptGenericSites, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, functionDirectoryHolders: f_functionDirectoryHolders, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize1160
-		return sizeof(SettledDeclarations) as CacheSize1160
+	static function cacheLayoutBytes() returns CacheSize1176
+		return sizeof(SettledDeclarations) as CacheSize1176
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -20115,6 +20217,35 @@ export type ProgramSignatures
 	export function noteExtensionShadowedMethod(qualified ByteArray, takesReceiver bool)
 		self.mainThreadSettled().extensionShadowedMethods.insert(extensionMemberKindKey(qualified, takesReceiver: takesReceiver))
 	end 'noteExtensionShadowedMethod'
+
+	export function noteExtensionHeldArgument(conformer ByteArray, interfaceName ByteArray, associatedPosition ElementIndex, held ExtensionHeldArgument)
+		let key = extensionHeldArgumentKey(conformer, interfaceName: interfaceName, associatedPosition: associatedPosition)
+		let known = self.extensionHeldArguments(conformer, interfaceName: interfaceName, associatedPosition: associatedPosition)
+
+		for entry in known 'eachKnown'
+			if entry.position == held.position and entry.baseName.equals(held.baseName) 'alreadyNoted'
+				return
+			end 'alreadyNoted'
+		end 'eachKnown'
+
+		var merged = ExtensionHeldArgumentArray.create(known.count() + 1, zeroed: false)
+		merged.append(known)
+		merged.push(held)
+
+		self.mainThreadSettled().extensionHeldArguments.upsert(key, value: merged)
+
+		// In the index's key, so an extension edited to store or stop storing an associated type
+		// re-parses the conformers that bind it in other files.
+		self.hash = mixBytes(Hasher.combined(mixBytes(Hasher.combined(self.hash, value: SignatureDiscriminator.declShapeExtensionHeldArgument), bytes: key), value: held.position as HashDigest), bytes: held.baseName)
+	end 'noteExtensionHeldArgument'
+
+	export function extensionHeldArguments(conformer ByteArray, interfaceName ByteArray, associatedPosition ElementIndex) returns ExtensionHeldArgumentArray
+		if self.settledDeclarations().extensionHeldArguments.count() == 0 'noneNoted'
+			return sharedEmptyExtensionHeldArguments
+		end 'noneNoted'
+
+		return try self.settledDeclarations().extensionHeldArguments.get(extensionHeldArgumentKey(conformer, interfaceName: interfaceName, associatedPosition: associatedPosition)) otherwise sharedEmptyExtensionHeldArguments
+	end 'extensionHeldArguments'
 
 	// Was `qualified` withheld from its conformer by the rule above? `Set.contains` on the shared empty set
 	// returns before it hashes, so a program with no such shadow does not pay to ask.
@@ -24843,11 +24974,50 @@ export type ProgramSignatures
 		view recorded = self.recordedDeclFor(decl)
 
 		if not recorded.hasStorage 'anUnresolvedInitializer'
-			return globalInitializerName(recorded.storageKey)
+			return self.initializerClosureHostOf(recorded)
 		end 'anUnresolvedInitializer'
 
 		return globalInitializerName(self.dataLabelOf(recorded))
 	end 'initializerFunctionNameOf'
+
+	// A file-private binding is keyed by its namespace, not its path, so its closures' lifted names
+	// and the bytes they reach are the same from any root
+	// (`tests/cli/build-a-file-private-closure-let-builds-the-same-bytes-from-two-roots.maxtest`).
+	export function initializerClosureHostOf(decl TopLevelDecl) returns immutable ByteArray
+		if decl.visibility != Visibility.file 'aSharedKey'
+			return globalInitializerName(decl.storageKey)
+		end 'aSharedKey'
+
+		return globalInitializerName("{self.namespaceOf(decl.declFilePath)}{FileScopedKeySeparator}{String.from(decl.name)}".toByteArray())
+	end 'initializerClosureHostOf'
+
+	export function noteInitializerClosureShapes(shapes FunctionValueShapeMap, from TypeNameInterner)
+		for (name, shape) in shapes 'eachClosure'
+			var paramTypes = MaxonTypeArray.create(shape.paramTypes.count(), zeroed: false)
+
+			for paramType in shape.paramTypes 'eachParam'
+				paramTypes.push(self.adoptTypeFrom(paramType, from: from))
+			end 'eachParam'
+
+			let returnType = match shape.returnType 'returned'
+				void gives MaxonReturnType.void
+				value(inner) gives MaxonReturnType.value(self.adoptTypeFrom(inner, from: from))
+			end 'returned'
+
+			self.mainThreadSettled().initializerClosureShapes.upsert(name, value: FunctionValueShape.create(paramTypes, returnType: returnType, scopeFilePath: shape.scopeFilePath, promisesTaken: shape.promisesTaken.clone(), byRefParams: shape.byRefParams, isolatedParams: shape.isolatedParams))
+		end 'eachClosure'
+	end 'noteInitializerClosureShapes'
+
+	export function initializerClosureShapeFor(name ByteArray, into TypeNameInterner) returns FunctionValueShape throws AbsentError
+		view recorded = try self.settledDeclarations().initializerClosureShapes.get(name) otherwise throw AbsentError.absent
+		var paramTypes = MaxonTypeArray.create(recorded.paramTypes.count(), zeroed: false)
+
+		for paramType in recorded.paramTypes 'eachParam'
+			paramTypes.push(self.adoptType(paramType, into: into))
+		end 'eachParam'
+
+		return FunctionValueShape.create(paramTypes, returnType: self.adoptReturnType(recorded.returnType, into: into), scopeFilePath: recorded.scopeFilePath, promisesTaken: recorded.promisesTaken.clone(), byRefParams: recorded.byRefParams, isolatedParams: recorded.isolatedParams)
+	end 'initializerClosureShapeFor'
 
 	function declInitializerCallees(decl TopLevelDecl) returns NameRoster
 		if declRunsProgramCode(decl) 'runsAnInitializerFunction'
@@ -39733,6 +39903,71 @@ export type ProgramSignatures
 		return form == TypeDeclKind.interfaceType
 	end 'typeDenotesInterface'
 
+	// ⭐⭐ **WHICH STORAGE POSITION A `Base with Args` ARGUMENT OCCUPIES — decided from the BASE, once, and
+	// passed down.** A `type` base's arguments are its container's element slots; an `interface` base's are the
+	// associated-type BINDINGS of an existential (`ProgramSignatures.instanceDenotedType`). Only the base can
+	// tell them apart, and `parseGenericArgNode` sees an argument, so the answer travels with the walk exactly
+	// as `inlineElement` does — and for the same reason: it is a fact about the base, and re-deriving it per
+	// argument would be the same lookup done N times.
+	//
+	// ⚠ **IT CARRIES THE INTERFACE NAME AND NOT MERELY THE FACT, because the binding arm's refusal is about
+	// the ASSOCIATED TYPE at that position** — which requirement writes it, and where.
+	//
+	// ⚠ **THE `allFilesFolded` GATE IS THE ONE `parseTypeReference`'s interface arm carries**, and it costs
+	// this door nothing: during the declaration SWEEP the interface registry is EMPTY, so the sweep answers
+	// `containerElement` — and it cannot refuse on that answer either, because an interface-typed argument
+	// resolves to a bare `named` in the sweep and never reaches the existential test at all.
+	module function genericArgSlotOf(baseName ByteArray) returns GenericArgSlot
+		if self.allFilesFolded and isInterfaceName(self.settledDeclarations().interfaces, name: baseName) 'anInterfaceInstance'
+			return GenericArgSlot.associatedTypeBinding(baseName)
+		end 'anInterfaceInstance'
+
+		return GenericArgSlot.containerElement
+	end 'genericArgSlotOf'
+
+	// The one decision a written argument (`Parser.requireCarryableGenericArg`), a use of an instance
+	// (`genericInstanceIsRefused`) and a conformer's binding all ask, so a refused instance is E2015
+	// once, where it is written or bound, and every use of it defers.
+	module function genericArgumentIsRefused(slot GenericArgSlot, argumentIsAnInterface bool, position ElementIndex) returns bool
+		if not self.allFilesFolded or not argumentIsAnInterface 'admitted'
+			return false
+		end 'admitted'
+
+		return match slot 'slot'
+			containerElement gives true
+			associatedTypeBinding(interfaceName) gives self.associatedTypeIsTakenByARequirement(interfaceName, position: position)
+		end 'slot'
+	end 'genericArgumentIsRefused'
+
+	function associatedTypeIsTakenByARequirement(interfaceName ByteArray, position ElementIndex) returns bool
+		match lookupInterface(self.settledDeclarations().interfaces, name: interfaceName) 'base'
+			notFound then return false
+			found(iface) then return position < iface.associatedTypeNames.count() and requirementTakesAssociatedType(self.settledDeclarations().interfaces, iface: iface, position: position, signatures: self)
+		end 'base'
+	end 'associatedTypeIsTakenByARequirement'
+
+	export function genericInstanceIsRefused(id GenericInstanceId) returns bool
+		if not self.allFilesFolded or self.instanceIsPromiseHandle(id) 'nothingToRefuse'
+			return false
+		end 'nothingToRefuse'
+
+		let slot = self.genericArgSlotOf(self.genericInstanceBaseName(id))
+
+		for position in 0 upto self.genericInstanceArgCount(id) 'eachArgument'
+			let argument = self.substitutedInstanceArg(id, position: position)
+
+			if maxonTypeTag(argument) == ValueTypeTag.genericInstance and self.genericInstanceIsRefused(genericInstanceIdOf(argument)) 'aRefusedArgument'
+				return true
+			end 'aRefusedArgument'
+
+			if self.genericArgumentIsRefused(slot, argumentIsAnInterface: self.typeDenotesInterface(argument), position: position) 'aRefusedPosition'
+				return true
+			end 'aRefusedPosition'
+		end 'eachArgument'
+
+		return false
+	end 'genericInstanceIsRefused'
+
 	// Is struct field `index` declared at an INTERFACE type — the two-slot fat pointer whose drop is
 	// `__drop_existential` rather than a statically named callee? Asked through
 	// the index (not off a caller's own layout) so the destructor cascade, the `usesDropExistential` gate and
@@ -44745,6 +44980,7 @@ export type ProgramSignatures
 		fingerprint.note("bufferSurfaceAliases", value: declarations.bufferSurfaceAliases.count())
 		fingerprint.note("extensionPublishedMethods", value: declarations.extensionPublishedMethods.count())
 		fingerprint.note("extensionShadowedMethods", value: declarations.extensionShadowedMethods.count())
+		fingerprint.note("extensionHeldArguments", value: declarations.extensionHeldArguments.count())
 		fingerprint.note("extensionMethodDeclFiles", value: declarations.extensionMethodDeclFiles.count())
 		fingerprint.note("interfaceExtensionMembers", value: declarations.interfaceExtensionMembers.count())
 		fingerprint.note("stdlibPublishedExtensionMethods", value: declarations.stdlibPublishedExtensionMethods.count())

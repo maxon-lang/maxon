@@ -1,0 +1,13 @@
+let ProbePremiseFailureLine = "FAIL invalidation: a synthetic probe edit made"
+let MissingEndifLine = "Unterminated '#if'"
+
+test 'a first file that does not parse before or after the probe edits is refused as a broken probe premise'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "a-program-whose-first-file-never-parses-refuses-the-invalidation-probe", fixture: "unterminated-conditional")
+	let run = spawnVerifyOnly(staged)
+
+	Expect.contains(run.stderr, needle: MissingEndifLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report the first file's unclosed `#if`, so the fixture is not the program this case is about.")
+	Expect.contains(run.stderr, needle: ProbePremiseFailureLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not refuse the invalidation probe over a first file whose `#if` is never closed, so its parse fails with the same error before and after every probe edit. It reported a failed parse memo instead of naming the broken premise.")
+	Expect.notEqual(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {VerifyCommandName}` exited 0 over a first file that does not parse.")
+
+	discardStagedDir(staged)
+end 'a first file that does not parse before or after the probe edits is refused as a broken probe premise'

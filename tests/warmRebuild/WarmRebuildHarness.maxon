@@ -10,15 +10,31 @@
 export let FixturesDirName = "tests/warmRebuild/fixtures"
 
 export let VerifyCommandName = "verify-warm-rebuild"
+export let RecheckCommandName = "verify-recheck"
 
 // What the driver prints for the verdict over every property.
 export let VerdictPassLine = "verify-warm-rebuild: PASS"
 
 let ImmutablePassLine = "PASS immutable:"
 
+export let CachePassLine = "PASS cache:"
+export let InvalidationBytesOnlyPassLine = "PASS invalidation: bytes-only edit re-parsed 1 file;"
+export let ParseHitsFailureLabel = "rebuild parse re-query hits (parseHits)"
+export let NotRunDeterminismLine = "NOT RUN determinism:"
+export let NotRunWarmLine = "NOT RUN warm:"
+export let NotRunLibraryReuseLine = "NOT RUN library reuse:"
+
 // `<compiler> verify-warm-rebuild <staged>`, run in the staging tree.
+export function spawnVerifyOnly(staged FilePath) returns CollectedOutput
+	return spawnCompiler([VerifyCommandName, staged.toString()], staged: staged, what: "`{VerifyCommandName}`")
+end 'spawnVerifyOnly'
+
+export function spawnRecheck(staged FilePath) returns CollectedOutput
+	return spawnCompiler([RecheckCommandName, staged.toString()], staged: staged, what: "`{RecheckCommandName}`")
+end 'spawnRecheck'
+
 export function spawnVerify(staged FilePath) returns CollectedOutput throws TestFailure
-	let run = spawnCompiler([VerifyCommandName, staged.toString()], staged: staged, what: "`{VerifyCommandName}`")
+	let run = spawnVerifyOnly(staged)
 
 	try Expect.contains(run.stdout, needle: ImmutablePassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report the reused parse artifacts unchanged. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
 	return run

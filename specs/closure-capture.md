@@ -1259,6 +1259,81 @@ end 'main'
 91
 ```
 
+<!-- test: closure-capture.assigning-an-immutable-closure-to-a-var-takes-a-reference -->
+`g = f` is a copy that shares the closure, as `var g = f` is, so `f` stays readable after the assignment.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let word = "a word padded long enough to heap allocate {2}"
+	let f = function(n Integer) gives n + (word.byteLength() as Integer)
+	var g = function(n Integer) gives n * 2
+	g = f
+	let first = g(1)
+	g = function(n Integer) gives n * 3
+	return (first + f(0) + g(1)) as ExitCode
+end 'main'
+```
+```exitcode
+92
+```
+
+<!-- test: closure-capture.a-closure-assigned-to-a-var-on-each-trip-of-a-loop-stays-readable -->
+Each trip assigns the one `writer` to `f`, which shares it, so the next trip reads `writer` again.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let word = "a word padded long enough to heap allocate {2}"
+	let quiet = function(n Integer) gives n
+	let writer = function(n Integer) gives n + (word.byteLength() as Integer)
+	var f = quiet
+	var total = 0 as Integer
+
+	for _ in 0 upto 3 'each'
+		total = total + f(1)
+		f = writer
+	end 'each'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```stdout
+91
+```
+```exitcode
+0
+```
+
+<!-- test: closure-capture.a-var-bound-and-reassigned-from-an-immutable-closure-in-a-loop -->
+`var f = writer` and `f = writer` both share the closure, so a loop may bind and assign it on every trip.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let word = "a word padded long enough to heap allocate {2}"
+	let writer = function(n Integer) gives n + (word.byteLength() as Integer)
+	var total = 0 as Integer
+
+	for _ in 0 upto 3 'each'
+		var f = writer
+		total = total + f(1)
+		f = writer
+		total = total + f(2)
+	end 'each'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```stdout
+273
+```
+```exitcode
+0
+```
+
 <!-- test: closure-capture.clone-shares-the-closure -->
 `f.clone()` is a second reference to the same closure.
 ```maxon
@@ -4444,4 +4519,691 @@ end 'main'
 ```maxoncstderr
 error E2010: <fragment>:45:7: Expected '=' but got ':'
 error E3183: <fragment>:51:16: this value holds a closure that captures 'pocket' and is stored into a record 'pocket' holds, so 'pocket' would hold the closure and the closure would hold 'pocket', and neither would ever be released. Store it somewhere 'pocket' does not reach, or capture what the closure needs instead of 'pocket' itself
+```
+
+### A call through a local closure value is judged against the closure it names
+
+Two capturing closures of one shape, `writer` and `reader`, are both bound with `let`. A call through a local `let` closure value is judged against the one closure the value names, so `reader(box)` is accepted over a frozen `box` although the sibling `writer` writes its parameter, and `writer(box)` is refused. A value that was reassigned, or that a branch or a loop merged, may name any closure of its shape, so a call through it is judged against all of them.
+
+<!-- test: closure-capture.a-call-through-a-local-closure-is-judged-against-the-closure-it-names -->
+`reader` only reads `box`, so `reader(box)` is accepted with the `let` `box`. `writer` writes through its parameter and is called on a `var`.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Box
+	export var weight as Tally
+
+	static function create(weight Tally) returns Self
+		return Self{weight: weight}
+	end 'create'
+end 'Box'
+
+function bump(b Box, step Tally) returns Tally
+	b.weight = b.weight + step
+	return b.weight
+end 'bump'
+
+function main() returns ExitCode
+	let box = Box.create(1)
+	var scratch = Box.create(5)
+	let step = 2 as Tally
+	let writer = function(b Box) gives bump(b, step: step)
+	let reader = function(b Box) gives b.weight + step
+	let w = writer(scratch)
+	let r = reader(box)
+	print("{w} {r}\n")
+	return 0
+end 'main'
+```
+```stdout
+7 3
+```
+```exitcode
+0
+```
+
+<!-- test: closure-capture.error.a-call-through-a-local-closure-that-writes-its-parameter-refuses-a-frozen-argument -->
+`writer` writes through its parameter, so handing it the frozen `box` is refused at the call.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Box
+	export var weight as Tally
+
+	static function create(weight Tally) returns Self
+		return Self{weight: weight}
+	end 'create'
+end 'Box'
+
+function bump(b Box, step Tally) returns Tally
+	b.weight = b.weight + step
+	return b.weight
+end 'bump'
+
+function main() returns ExitCode
+	let box = freeze Box.create(1)
+	var scratch = Box.create(5)
+	let step = 2 as Tally
+	let writer = function(b Box) gives bump(b, step: step)
+	let reader = function(b Box) gives b.weight + step
+	let r = reader(scratch)
+	let w = writer(box)
+	print("{w} {r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:24:16: 'main$closure_0' writes 'b' (it calls 'bump', which writes 'b'); 'box' is immutable
+```
+
+<!-- test: closure-capture.a-call-through-a-local-closure-that-only-reads-takes-a-frozen-argument-beside-a-writer -->
+`reader(box)` reaches only `reader`, which reads its parameter, so the frozen `box` is accepted though a closure of the same shape beside it writes its own parameter.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Box
+	export var weight as Tally
+
+	static function create(weight Tally) returns Self
+		return Self{weight: weight}
+	end 'create'
+end 'Box'
+
+function bump(b Box, step Tally) returns Tally
+	b.weight = b.weight + step
+	return b.weight
+end 'bump'
+
+function main() returns ExitCode
+	let box = freeze Box.create(1)
+	var scratch = Box.create(5)
+	let step = 2 as Tally
+	let writer = function(b Box) gives bump(b, step: step)
+	let reader = function(b Box) gives b.weight + step
+	let r = reader(box)
+	let w = writer(scratch)
+	print("{w} {r}\n")
+	return 0
+end 'main'
+```
+```stdout
+7 3
+```
+```exitcode
+0
+```
+
+<!-- test: closure-capture.error.a-call-through-a-reassigned-closure-value-is-judged-against-every-closure-of-its-shape -->
+`f` names `reader` or `writer` depending on the branch, so the call through it is judged against both.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Box
+	export var weight as Tally
+
+	static function create(weight Tally) returns Self
+		return Self{weight: weight}
+	end 'create'
+end 'Box'
+
+function bump(b Box, step Tally) returns Tally
+	b.weight = b.weight + step
+	return b.weight
+end 'bump'
+
+function main() returns ExitCode
+	let box = freeze Box.create(1)
+	let step = 2 as Tally
+	let writer = function(b Box) gives bump(b, step: step)
+	let reader = function(b Box) gives b.weight + step
+	var f = reader
+	if step > 1 'swap'
+		f = writer
+	end 'swap'
+	let r = f(box)
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:26:11: 'main$closure_0' writes 'b' (it calls 'bump', which writes 'b'); 'box' is immutable
+```
+
+<!-- test: closure-capture.error.a-call-through-a-loop-carried-closure-value-is-judged-against-every-closure-of-its-shape -->
+The loop assigns a writing closure to `f`, so the call at the top of the next trip may reach it.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Box
+	export var weight as Tally
+
+	static function create(weight Tally) returns Self
+		return Self{weight: weight}
+	end 'create'
+end 'Box'
+
+function bump(b Box, step Tally) returns Tally
+	b.weight = b.weight + step
+	return b.weight
+end 'bump'
+
+function main() returns ExitCode
+	let box = freeze Box.create(1)
+	let step = 2 as Tally
+	let reader = function(b Box) gives b.weight + step
+	var f = reader
+	var total = 0 as Tally
+	for _ in 0 upto 3 'loop'
+		total = total + f(box)
+		f = function(b Box) gives bump(b, step: step)
+	end 'loop'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:24:20: 'main$closure_1' writes 'b' (it calls 'bump', which writes 'b'); 'box' is immutable
+```
+
+<!-- test: closure-capture.error.a-call-through-a-merged-closure-value-is-judged-against-the-whole-shape-even-when-only-readers-reach-it -->
+Every closure `f` is assigned in the loop only reads, but the value is merged across the loop's back edge, so it is judged against the whole shape, including the `writer` that is called elsewhere.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Box
+	export var weight as Tally
+
+	static function create(weight Tally) returns Self
+		return Self{weight: weight}
+	end 'create'
+end 'Box'
+
+function bump(b Box, step Tally) returns Tally
+	b.weight = b.weight + step
+	return b.weight
+end 'bump'
+
+function main() returns ExitCode
+	let box = freeze Box.create(1)
+	var scratch = Box.create(5)
+	let step = 2 as Tally
+	let writer = function(b Box) gives bump(b, step: step)
+	let reader = function(b Box) gives b.weight + step
+	var f = reader
+	var total = writer(scratch)
+	for _ in 0 upto 3 'loop'
+		total = total + f(box)
+		f = function(b Box) gives b.weight + step + 1
+	end 'loop'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:26:20: 'main$closure_0' writes 'b' (it calls 'bump', which writes 'b'); 'box' is immutable
+```
+
+### A refused kept argument names the closure that keeps it
+
+A closure that hands its parameter to a `Holder` keeps it in an `immutable` field. A call that lands on such a closure and hands it a mutable value is refused, and the message names the closure the call reaches that keeps the argument, in the lifted closure's own name: the first closure in source order that keeps it when several do. A closure that only reads the argument is not named.
+
+<!-- test: closure-capture.error.a-refused-kept-argument-of-a-local-closure-call-names-that-closure -->
+`reader(v)` reaches only `reader`, which keeps nothing. `keeper(v)` reaches only `keeper`, the second closure literal of `main`, which keeps `b` in an `immutable` field of a `Holder`, so only it is refused and the refusal names it.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Box
+	export var weight as Tally
+
+	static function create(weight Tally) returns Self
+		return Self{weight: weight}
+	end 'create'
+end 'Box'
+
+type Holder
+	let held as immutable Box
+
+	static function create(held Box) returns Self
+		return Self{held: held}
+	end 'create'
+
+	function peek() returns Tally
+		return self.held.weight
+	end 'peek'
+end 'Holder'
+
+function main() returns ExitCode
+	let step = 2 as Tally
+	let reader = function(b Box) gives b.weight + step
+	let keeper = function(b Box) gives Holder.create(b).peek() + step
+	var v = Box.create(1)
+	let r = reader(v)
+	let k = keeper(v)
+	v.weight = r + k
+	print("{v.weight}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:30:16: 'main$closure_1' needs 'b' frozen (it calls 'create', which needs 'held' frozen); 'v' is mutable. Freeze it first
+```
+
+<!-- test: closure-capture.error.a-refused-kept-argument-of-a-merged-closure-call-names-the-closure-that-keeps-it -->
+`f` names `reader` or `keeper`. Only `keeper` keeps `b`, so the refusal names `keeper`, the second closure literal, though `reader` is the first member of the shape.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Box
+	export var weight as Tally
+
+	static function create(weight Tally) returns Self
+		return Self{weight: weight}
+	end 'create'
+end 'Box'
+
+type Holder
+	let held as immutable Box
+
+	static function create(held Box) returns Self
+		return Self{held: held}
+	end 'create'
+
+	function peek() returns Tally
+		return self.held.weight
+	end 'peek'
+end 'Holder'
+
+function main() returns ExitCode
+	let step = 2 as Tally
+	let reader = function(b Box) gives b.weight + step
+	let keeper = function(b Box) gives Holder.create(b).peek() + step
+	var f = reader
+	if step > 1 'swap'
+		f = keeper
+	end 'swap'
+	var v = Box.create(1)
+	let k = f(v)
+	v.weight = k
+	print("{v.weight}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:33:11: 'main$closure_1' needs 'b' frozen (it calls 'create', which needs 'held' frozen); 'v' is mutable. Freeze it first
+```
+
+<!-- test: closure-capture.error.a-refused-kept-argument-of-a-merged-closure-call-names-the-first-closure-that-keeps-it -->
+`f` names `reader`, `keeperA` or `keeperB`. Both keepers keep `b`, and the refusal names the first of them in source order.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Box
+	export var weight as Tally
+
+	static function create(weight Tally) returns Self
+		return Self{weight: weight}
+	end 'create'
+end 'Box'
+
+type Holder
+	let held as immutable Box
+
+	static function create(held Box) returns Self
+		return Self{held: held}
+	end 'create'
+
+	function peek() returns Tally
+		return self.held.weight
+	end 'peek'
+end 'Holder'
+
+function main() returns ExitCode
+	let step = 2 as Tally
+	let reader = function(b Box) gives b.weight + step
+	let keeperA = function(b Box) gives Holder.create(b).peek() + step
+	let keeperB = function(b Box) gives Holder.create(b).peek() + step + 1
+	var f = reader
+	if step > 1 'first'
+		f = keeperA
+	end 'first'
+
+	if step > 2 'second'
+		f = keeperB
+	end 'second'
+
+	var v = Box.create(1)
+	let k = f(v)
+	v.weight = k
+	print("{v.weight}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:39:11: 'main$closure_1' needs 'b' frozen (it calls 'create', which needs 'held' frozen); 'v' is mutable. Freeze it first
+```
+
+### A closure that stores into state a module-level `let` holds
+
+Two closures of one shape reach one call through a parameter. One of them also stores a fresh record into a module-level `let`'s record, which is refused for the write, and the cycle the other closure closes through the parameter is reported once, at the call.
+
+<!-- test: closure-capture.error.a-closure-storing-a-fresh-record-into-a-module-let-beside-a-plain-closure-of-its-shape -->
+`storePlain` and `storeAndStash` share the shape `Wire`; `storeAndStash` also stores a fresh `Counter` into the module-level `Hub`. The cycle both close when `drive` hands them one record twice is found at the call in `drive`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias Tally = int(0 to 1000000)
+typealias Wire = function(mutable Counter, mutable Counter) returns Tally
+
+function idle() returns Integer
+	return 0
+end 'idle'
+
+type Counter
+	export var n as Integer
+	export var read as Thunk
+
+	static function create() returns Self
+		return Self{n: 1, read: idle}
+	end 'create'
+end 'Counter'
+
+type Cell
+	export var held as Counter
+
+	static function create() returns Self
+		return Self{held: Counter.create()}
+	end 'create'
+end 'Cell'
+
+let Hub = Cell.create()
+
+function storePlain(t mutable Counter, p mutable Counter) returns Tally
+	t.read = function() gives p.n
+	return 0
+end 'storePlain'
+
+function storeAndStash(t mutable Counter, p mutable Counter) returns Tally
+	t.read = function() gives p.n
+	Hub.held = Counter.create()
+	return 0
+end 'storeAndStash'
+
+function drive(f Wire, c mutable Counter) returns Tally
+	return f(c, c)
+end 'drive'
+
+function main() returns ExitCode
+	var x = Counter.create()
+	var total = drive(storePlain, c: x)
+	total = total + drive(storeAndStash, c: x)
+	return (total and 7) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:37:2: cannot write through 'Hub': 'Hub' is read-only (a module-level `let`) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3183: <fragment>:42:10: this value holds a closure that captures 'c' and is stored into a record 'c' holds, so 'c' would hold the closure and the closure would hold 'c', and neither would ever be released. Store it somewhere 'c' does not reach, or capture what the closure needs instead of 'c' itself
+```
+
+<!-- test: closure-capture.error.a-closure-storing-a-fresh-record-into-a-module-let-before-a-plain-closure-of-its-shape -->
+The same two closures called in the other order.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias Tally = int(0 to 1000000)
+typealias Wire = function(mutable Counter, mutable Counter) returns Tally
+
+function idle() returns Integer
+	return 0
+end 'idle'
+
+type Counter
+	export var n as Integer
+	export var read as Thunk
+
+	static function create() returns Self
+		return Self{n: 1, read: idle}
+	end 'create'
+end 'Counter'
+
+type Cell
+	export var held as Counter
+
+	static function create() returns Self
+		return Self{held: Counter.create()}
+	end 'create'
+end 'Cell'
+
+let Hub = Cell.create()
+
+function storePlain(t mutable Counter, p mutable Counter) returns Tally
+	t.read = function() gives p.n
+	return 0
+end 'storePlain'
+
+function storeAndStash(t mutable Counter, p mutable Counter) returns Tally
+	t.read = function() gives p.n
+	Hub.held = Counter.create()
+	return 0
+end 'storeAndStash'
+
+function drive(f Wire, c mutable Counter) returns Tally
+	return f(c, c)
+end 'drive'
+
+function main() returns ExitCode
+	var x = Counter.create()
+	var total = drive(storeAndStash, c: x)
+	total = total + drive(storePlain, c: x)
+	return (total and 7) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:37:2: cannot write through 'Hub': 'Hub' is read-only (a module-level `let`) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3183: <fragment>:42:10: this value holds a closure that captures 'c' and is stored into a record 'c' holds, so 'c' would hold the closure and the closure would hold 'c', and neither would ever be released. Store it somewhere 'c' does not reach, or capture what the closure needs instead of 'c' itself
+```
+
+### A store that meets two records names the first one declared
+
+A closure that captures two parameters and is stored into a record either of them may be closes a cycle through both. The refusal names the parameter declared first, not the one the closure mentions first.
+
+<!-- test: closure-capture.error.a-store-meeting-two-records-names-the-parameter-declared-first -->
+`target` is `first` or `second`, and the closure captures `second` before `first`. The store is refused once, naming `first`, the parameter declared first. The call in `main` is refused for each argument.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function idle() returns Integer
+	return 0
+end 'idle'
+
+type Counter
+	export var n as Integer
+	export var read as Thunk
+
+	static function create() returns Self
+		return Self{n: 1, read: idle}
+	end 'create'
+end 'Counter'
+
+function wire(first Counter, second Counter, flag bool)
+	var target = second if flag else first
+	target.read = function() gives second.n + first.n
+end 'wire'
+
+function main() returns ExitCode
+	var x = Counter.create()
+	var y = Counter.create()
+	wire(x, second: y, flag: x.n > 0)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3183: <fragment>:20:16: this closure captures 'first' and is stored into a record 'first' holds, so 'first' would hold the closure and the closure would hold 'first', and neither would ever be released. Store it somewhere 'first' does not reach, or capture what the closure needs instead of 'first' itself
+error E3183: <fragment>:26:7: this value holds a closure that captures 'y' and is stored into a record 'y' holds, so 'y' would hold the closure and the closure would hold 'y', and neither would ever be released. Store it somewhere 'y' does not reach, or capture what the closure needs instead of 'y' itself
+error E3183: <fragment>:26:10: this value holds a closure that captures 'x' and is stored into a record 'x' holds, so 'x' would hold the closure and the closure would hold 'x', and neither would ever be released. Store it somewhere 'x' does not reach, or capture what the closure needs instead of 'x' itself
+```
+
+### Closures that call through their own shape settle the same whatever order they are declared in
+
+`make0` and `make1` each return a closure of shape `Op` that captures `next`, an `Op`, and calls it with the arguments permuted. Each of those closures is both a body a call through an `Op` may land on and a caller of that same set, so what one stores reaches the others one permutation at a time. The summaries settle to the same fixed point whichever of `make0` and `make1` is declared first: each closure's refusal names the same record, and only the lines move.
+
+<!-- test: closure-capture.error.closures-calling-through-their-own-shape-settle-the-same-with-make0-declared-first -->
+`make0` is declared first.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias Tally = int(0 to 1000000)
+typealias Op = function(mutable Counter, mutable Counter, mutable Counter) returns Tally
+
+function idle() returns Integer
+	return 0
+end 'idle'
+
+type Counter
+	export var n as Integer
+	export var read as Thunk
+
+	static function create() returns Self
+		return Self{n: 1, read: idle}
+	end 'create'
+end 'Counter'
+
+function base(t mutable Counter, p mutable Counter, q mutable Counter) returns Tally
+	q.read = function() gives t.n
+	return 0
+end 'base'
+
+function make0(next Op) returns Op
+	return function(t mutable Counter, p mutable Counter, q mutable Counter) gives next(q, t, q)
+end 'make0'
+
+function make1(next Op) returns Op
+	return function(t mutable Counter, p mutable Counter, q mutable Counter) gives next(p, q, t)
+end 'make1'
+
+function drive(f Op, a mutable Counter, b mutable Counter) returns Tally
+	return f(a, b, b)
+end 'drive'
+
+function main() returns ExitCode
+	var x = Counter.create()
+	var y = Counter.create()
+	var total = 0 as Tally
+	let o0 = make1(base)
+	let o1 = make0(o0)
+	total = total + drive(o1, a: x, b: y)
+	return (total and 7) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3183: <fragment>:26:85: this value holds a closure that captures 'q' and is stored into a record 'q' holds, so 'q' would hold the closure and the closure would hold 'q', and neither would ever be released. Store it somewhere 'q' does not reach, or capture what the closure needs instead of 'q' itself
+error E3183: <fragment>:30:85: this value holds a closure that captures 'p' and is stored into a record 'p' holds, so 'p' would hold the closure and the closure would hold 'p', and neither would ever be released. Store it somewhere 'p' does not reach, or capture what the closure needs instead of 'p' itself
+error E3183: <fragment>:34:10: this value holds a closure that captures 'a' and is stored into a record 'a' holds, so 'a' would hold the closure and the closure would hold 'a', and neither would ever be released. Store it somewhere 'a' does not reach, or capture what the closure needs instead of 'a' itself
+error E3183: <fragment>:43:28: this value holds a closure that captures 'y' and is stored into a record 'y' holds, so 'y' would hold the closure and the closure would hold 'y', and neither would ever be released. Store it somewhere 'y' does not reach, or capture what the closure needs instead of 'y' itself
+error E3183: <fragment>:43:34: this value holds a closure that captures 'x' and is stored into a record 'x' holds, so 'x' would hold the closure and the closure would hold 'x', and neither would ever be released. Store it somewhere 'x' does not reach, or capture what the closure needs instead of 'x' itself
+```
+
+<!-- test: closure-capture.error.closures-calling-through-their-own-shape-settle-the-same-with-make1-declared-first -->
+`make1` is declared first.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias Tally = int(0 to 1000000)
+typealias Op = function(mutable Counter, mutable Counter, mutable Counter) returns Tally
+
+function idle() returns Integer
+	return 0
+end 'idle'
+
+type Counter
+	export var n as Integer
+	export var read as Thunk
+
+	static function create() returns Self
+		return Self{n: 1, read: idle}
+	end 'create'
+end 'Counter'
+
+function base(t mutable Counter, p mutable Counter, q mutable Counter) returns Tally
+	q.read = function() gives t.n
+	return 0
+end 'base'
+
+function make1(next Op) returns Op
+	return function(t mutable Counter, p mutable Counter, q mutable Counter) gives next(p, q, t)
+end 'make1'
+
+function make0(next Op) returns Op
+	return function(t mutable Counter, p mutable Counter, q mutable Counter) gives next(q, t, q)
+end 'make0'
+
+function drive(f Op, a mutable Counter, b mutable Counter) returns Tally
+	return f(a, b, b)
+end 'drive'
+
+function main() returns ExitCode
+	var x = Counter.create()
+	var y = Counter.create()
+	var total = 0 as Tally
+	let o0 = make1(base)
+	let o1 = make0(o0)
+	total = total + drive(o1, a: x, b: y)
+	return (total and 7) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3183: <fragment>:26:85: this value holds a closure that captures 'p' and is stored into a record 'p' holds, so 'p' would hold the closure and the closure would hold 'p', and neither would ever be released. Store it somewhere 'p' does not reach, or capture what the closure needs instead of 'p' itself
+error E3183: <fragment>:30:85: this value holds a closure that captures 'q' and is stored into a record 'q' holds, so 'q' would hold the closure and the closure would hold 'q', and neither would ever be released. Store it somewhere 'q' does not reach, or capture what the closure needs instead of 'q' itself
+error E3183: <fragment>:34:10: this value holds a closure that captures 'a' and is stored into a record 'a' holds, so 'a' would hold the closure and the closure would hold 'a', and neither would ever be released. Store it somewhere 'a' does not reach, or capture what the closure needs instead of 'a' itself
+error E3183: <fragment>:43:28: this value holds a closure that captures 'y' and is stored into a record 'y' holds, so 'y' would hold the closure and the closure would hold 'y', and neither would ever be released. Store it somewhere 'y' does not reach, or capture what the closure needs instead of 'y' itself
+error E3183: <fragment>:43:34: this value holds a closure that captures 'x' and is stored into a record 'x' holds, so 'x' would hold the closure and the closure would hold 'x', and neither would ever be released. Store it somewhere 'x' does not reach, or capture what the closure needs instead of 'x' itself
+```
+
+### A closure held in a local `let` is copied into a `var` and shares its state
+
+`var g = b` and `g = b` hold the one closure `b` names, whatever the type of `b` says about its captures.
+
+<!-- test: closure-capture.a-mutates-captures-closure-held-in-a-local-let-is-copied-into-a-var -->
+```maxon
+typealias Tally = int(0 to 1000)
+typealias Bump = function() returns Tally mutates captures
+
+type Total
+	var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump() returns Tally
+		self.n = self.n + 1
+		return self.n
+	end 'bump'
+end 'Total'
+
+function make() returns Bump
+	var total = Total.create()
+	return function() gives total.bump()
+end 'make'
+
+function main() returns ExitCode
+	let b = make()
+	var g = b
+	g = make()
+	let first = g()
+	let second = b()
+	print("{first} {second}\n")
+
+	var h = make()
+	h = b
+	print("{h()}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 1
+2
+```
+```exitcode
+0
 ```

@@ -2882,6 +2882,1303 @@ end 'main'
 error E2015: <fragment>:32:31: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
 ```
 
+### An interface element of an `Array` is REFUSED, not crashed on
+
+The refusal is the same container-element rule as `Box with Named`, and it holds when the container is
+`Array` and the alias is created: the walk that builds the array's element destructor must contribute
+NOTHING for an interface argument the parser already refused.
+
+<!-- test: error.an-interface-array-element-is-refused -->
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+typealias NamedArray = Array with Named
+
+function main() returns ExitCode
+	let items = NamedArray.create(0)
+	return items.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:35: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.an-interface-array-alias-pushed-read-and-iterated-in-a-function-is-reported-once -->
+A function that takes the refused alias, pushes to it, reads it and iterates it adds no error of its own: the one E2015 stays at the alias's type argument.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+typealias NamedArray = Array with Named
+
+function labelBytes(xs mutable NamedArray, extra Thing) returns Count
+	xs.push(extra)
+	var total = 0 as Count
+
+	for x in xs 'each'
+		total = total + x.label().byteLength()
+	end 'each'
+
+	let first = try xs.get(0) otherwise return 0
+	return total + first.label().byteLength()
+end 'labelBytes'
+
+function main() returns ExitCode
+	var xs = NamedArray.create(0)
+	let bytes = labelBytes(xs, extra: Thing.create())
+
+	if bytes > 1000 'tooMany'
+		return 1
+	end 'tooMany'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:16:35: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.an-interface-array-alias-cloned-is-reported-once -->
+Cloning a value of the refused alias adds no error of its own.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+typealias NamedArray = Array with Named
+
+function copyOf(xs NamedArray) returns NamedArray
+	return xs.clone()
+end 'copyOf'
+
+function main() returns ExitCode
+	let xs = NamedArray.create(0)
+	let copy = copyOf(xs)
+
+	if copy.count() > 1000 'tooMany'
+		return 1
+	end 'tooMany'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:16:35: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.an-interface-fixed-array-alias-is-reported-once -->
+The refusal holds for `FixedArray` too, where the length precedes the interface argument.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+typealias Trio = FixedArray with 3 Named
+
+function main() returns ExitCode
+	let trio = Trio.create()
+
+	if trio.count() > 3 'tooMany'
+		return 1
+	end 'tooMany'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:16:36: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.an-interface-list-alias-is-reported-once -->
+The refusal holds for `List`.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+typealias NamedList = List with Named
+
+function main() returns ExitCode
+	let items = NamedList.create()
+
+	if items.count() > 0 'notEmpty'
+		return 1
+	end 'notEmpty'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:16:33: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.an-interface-set-alias-reports-the-refusal-once-beside-its-constraint-errors -->
+The refusal holds for `Set`. An interface does not satisfy `Hashable` or `Equatable`, so the alias also fails
+its two constraints; those are the alias's own errors, and the element refusal is reported once beside them.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+typealias NamedSet = Set with Named
+
+function main() returns ExitCode
+	let items = NamedSet.create()
+
+	if items.count() > 0 'notEmpty'
+		return 1
+	end 'notEmpty'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3017: <fragment>:16:11: Type 'Named' does not satisfy constraint 'Hashable' required by type parameter 'Element' of 'Set'
+error E3017: <fragment>:16:11: Type 'Named' does not satisfy constraint 'Equatable' required by type parameter 'Element' of 'Set'
+error E2015: <fragment>:16:31: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.an-interface-map-value-alias-is-reported-once -->
+The refusal holds for the value argument of a `Map`.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+typealias NamedMap = Map with (String, Named)
+
+function main() returns ExitCode
+	let items = NamedMap.create()
+
+	if items.count() > 0 'notEmpty'
+		return 1
+	end 'notEmpty'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:16:40: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.an-interface-array-literal-typed-as-the-refused-alias-is-reported-once -->
+A literal typed as the refused alias adds no error of its own.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+typealias NamedArray = Array with Named
+
+function main() returns ExitCode
+	let items = NamedArray from [Thing.create(), Thing.create()]
+
+	if items.count() != 2 'wrongCount'
+		return 1
+	end 'wrongCount'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:16:35: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.an-interface-array-alias-declared-in-another-file-is-reported-once -->
+The refused alias is declared in `a.maxon` and used in `main.maxon`: the one E2015 is at the alias's type argument in `a.maxon`, and the uses in the other file add none.
+```maxon
+// --- file: a.maxon
+export interface Named
+	function label() returns String
+end 'Named'
+
+export typealias NamedArray = Array with Named
+
+// --- file: main.maxon
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+function labelBytes(xs mutable NamedArray, extra Thing) returns Count
+	xs.push(extra)
+	let first = try xs.get(0) otherwise return 0
+	return first.label().byteLength()
+end 'labelBytes'
+
+function main() returns ExitCode
+	var xs = NamedArray.create(0)
+	let bytes = labelBytes(xs, extra: Thing.create())
+
+	if bytes != 5 'wrongLabel'
+		return 1
+	end 'wrongLabel'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:7:42: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+
+<!-- test: error.a-generic-type-building-an-array-of-its-parameter-is-refused-at-an-interface-argument -->
+A generic type that builds `Array with T` and is aliased over an interface is refused once, at the alias's type argument; the call that hands the alias's member a conformer adds no error.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+type Holder uses T
+	typealias Items = Array with T
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create(0)}
+	end 'create'
+
+	function size() returns Count
+		return self.items.count()
+	end 'size'
+
+	function add(item T)
+		self.items.push(item)
+	end 'add'
+end 'Holder'
+
+typealias NamedHolder = Holder with Named
+
+function main() returns ExitCode
+	var holder = NamedHolder.create()
+	holder.add(Thing.create())
+
+	if holder.size() != 1 'wrongCount'
+		return 1
+	end 'wrongCount'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:34:37: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.a-generic-type-building-an-array-of-its-parameter-is-refused-at-an-interface-factory-argument -->
+The same generic type reached through a factory call whose argument is held at an interface type: the type argument it would infer is the interface, and the call is refused once.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+type Holder uses T
+	typealias Items = Array with T
+
+	var items as Items
+
+	static function create(first T) returns Self
+		var items = Items.create(0)
+		items.push(first)
+		return Self{items: items}
+	end 'create'
+
+	function size() returns Count
+		return self.items.count()
+	end 'size'
+end 'Holder'
+
+function describe(item Named) returns Count
+	let holder = Holder.create(item)
+	return holder.size()
+end 'describe'
+
+function main() returns ExitCode
+	let n = describe(Thing.create())
+
+	if n != 1 'wrongCount'
+		return 1
+	end 'wrongCount'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:33:22: Unsupported: a type argument inferred from a factory argument declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a slot standing at a type parameter is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.a-generic-function-building-an-array-of-its-parameter-is-refused-at-an-interface-argument -->
+A generic function that builds an array of its parameter's type refuses a call whose argument is held at an interface type, so no array of interfaces is built.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+function wrapped(item T) uses T returns Count
+	var xs = [item]
+	xs.push(item)
+	return xs.count()
+end 'wrapped'
+
+function describe(item Named) returns Count
+	return wrapped(item)
+end 'describe'
+
+function main() returns ExitCode
+	let n = describe(Thing.create())
+
+	if n != 2 'wrongCount'
+		return 1
+	end 'wrongCount'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3181: <fragment>:23:9: type parameter 'T' of 'wrapped' cannot be 'Named': a generic function's type parameter is inferred as a number, `String`, `bool`, `Character`, a typealias, a record or an enum
+```
+
+<!-- test: error.a-generic-alias-over-itself-is-reported-as-a-cycle-and-its-parameter-defers-nothing -->
+An alias that is its own type argument is reported as a cycle once, and a parameter declared with it adds no error and does not walk the instance without end.
+```maxon
+type Box uses T
+	var value as T
+
+	static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+typealias A = Box with A
+
+function use(a A) returns ExitCode
+	return 0
+end 'use'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2012: <fragment>:10:24: Circular typealias dependency: A
+```
+
+<!-- test: error.a-struct-literal-over-an-inner-alias-the-conformer-binds-to-an-interface-reports-only-the-refusal -->
+A conformer that binds an associated type to an interface makes the extension's inner alias `Array with Named`, the same instance the alias written at the bottom is refused for. The literal in the extension body is read whole, fields and all, so the only errors are the conformer's binding and the alias written at the bottom.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	typealias ItemArray = Array with Item
+
+	function collected() returns Count
+		var xs = ItemArray{size: 1}
+		return xs.count()
+	end 'collected'
+end 'Source'
+
+type Impl implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+typealias NamedArray = Array with Named
+
+function main() returns ExitCode
+	let impl = Impl.create()
+
+	if impl.collected() != 0 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:29:34: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+error E2015: <fragment>:39:35: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+### A conformer's interface binding that an `extension` stores as a container element
+
+No written site spells the refused instance here: the extension writes `Array with Item`, which is legal for every conformer that binds `Item` to a concrete type, and the conformer writes `Named`, which is legal where nothing stores it in a container. The refusal is the pair, and it is reported once at the conformer's binding, whatever the number of uses.
+
+<!-- test: error.a-conformer-binding-an-interface-that-an-extension-stores-as-an-element-is-refused -->
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	typealias ItemArray = Array with Item
+
+	function collected() returns Count
+		var xs = ItemArray{}
+		return xs.count()
+	end 'collected'
+end 'Source'
+
+type Impl implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+function main() returns ExitCode
+	let impl = Impl.create()
+
+	if impl.collected() != 0 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:29:34: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.a-conformer-binding-an-interface-is-reported-once-however-many-aliases-and-uses-store-it -->
+Two aliases in the extension store `Item`, both are used, and the one conformer binding is still reported once.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	typealias ItemArray = Array with Item
+	typealias ItemList = List with Item
+
+	function collected() returns Count
+		var xs = ItemArray{}
+		var ys = ItemList.create()
+		return xs.count() + ys.count()
+	end 'collected'
+
+	function again() returns Count
+		var xs = ItemArray{}
+		return xs.count()
+	end 'again'
+end 'Source'
+
+type Impl implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+function main() returns ExitCode
+	let impl = Impl.create()
+
+	if impl.collected() + impl.again() != 0 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:36:34: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.each-conformer-binding-an-interface-that-an-extension-stores-is-reported-at-its-own-binding -->
+Two conformers bind `Item` to `Named`: each binding is reported, at its own token.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	typealias ItemArray = Array with Item
+
+	function collected() returns Count
+		var xs = ItemArray{}
+		return xs.count()
+	end 'collected'
+end 'Source'
+
+type Impl implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+type Other implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Other'
+
+function main() returns ExitCode
+	let impl = Impl.create()
+	let other = Other.create()
+
+	if impl.collected() + other.collected() != 0 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:29:34: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+error E2015: <fragment>:39:35: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.the-reported-binding-is-the-position-the-extension-stores -->
+The extension stores `Second`, so the binding of `Second` is the one reported; `First` is bound to a concrete type and is not.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Pair uses First, Second
+	function first() returns First
+	function second() returns Second
+end 'Pair'
+
+extension Pair
+	typealias SecondArray = Array with Second
+
+	function seconds() returns Count
+		var xs = SecondArray{}
+		return xs.count()
+	end 'seconds'
+end 'Pair'
+
+type Both implements Pair with Count, Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Count
+		return 1
+	end 'first'
+
+	function second() returns Named
+		return Thing.create()
+	end 'second'
+end 'Both'
+
+function main() returns ExitCode
+	let both = Both.create()
+
+	if both.seconds() != 0 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:30:39: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: a-conformer-binding-an-interface-the-extension-does-not-store-compiles -->
+The extension stores `First`, which is bound to a concrete type; `Second` is bound to an interface and no alias stores it, so nothing is refused.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Pair uses First, Second
+	function first() returns First
+	function second() returns Second
+end 'Pair'
+
+extension Pair
+	typealias FirstArray = Array with First
+
+	function firsts() returns Count
+		var xs = FirstArray{}
+		return xs.count()
+	end 'firsts'
+end 'Pair'
+
+type Both implements Pair with Count, Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Count
+		return 1
+	end 'first'
+
+	function second() returns Named
+		return Thing.create()
+	end 'second'
+end 'Both'
+
+function main() returns ExitCode
+	let both = Both.create()
+
+	if both.firsts() != 0 'wrong'
+		return 1
+	end 'wrong'
+
+	return both.second().label().byteLength() - 5
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-conformer-binding-a-concrete-type-the-extension-stores-compiles -->
+The same extension and the same use are legal for a conformer that binds `Item` to a concrete type.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	typealias ItemArray = Array with Item
+
+	function collected() returns Count
+		var xs = ItemArray{}
+		return xs.count()
+	end 'collected'
+end 'Source'
+
+type Impl implements Source with Thing
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Thing
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+function main() returns ExitCode
+	let impl = Impl.create()
+	return impl.collected()
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-conformer-binding-an-interface-is-not-refused-where-a-conditional-extension-is-withheld -->
+The extension that stores `Item` holds only for an `Equatable` binding, `Named` is not one, so the alias is never published for the conformer and nothing is refused.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source where Item is Equatable
+	typealias ItemArray = Array with Item
+
+	function collected() returns Count
+		var xs = ItemArray{}
+		return xs.count()
+	end 'collected'
+end 'Source'
+
+type Impl implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+function main() returns ExitCode
+	let impl = Impl.create()
+	return impl.first().label().byteLength() - 5
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-conformer-binding-an-interface-that-an-extension-in-another-file-stores-is-refused -->
+The extension is declared in `a.maxon` and the conformer in `main.maxon`: the one E2015 is at the conformer's binding.
+```maxon
+// --- file: a.maxon
+export interface Named
+	function label() returns String
+end 'Named'
+
+export interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+export extension Source
+	typealias ItemArray = Array with Item
+
+	export function collected() returns Count
+		var xs = ItemArray{}
+		return xs.count()
+	end 'collected'
+end 'Source'
+
+// --- file: main.maxon
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+type Impl implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+function main() returns ExitCode
+	let impl = Impl.create()
+
+	if impl.collected() != 0 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:31:34: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.a-conformer-binding-an-interface-that-an-extension-stores-is-refused-though-no-body-uses-the-alias -->
+The refusal is the pair of the binding and the extension's declaration, so it stands when nothing reads the alias.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	typealias ItemArray = Array with Item
+
+	function collected() returns Count
+		let xs = 0
+		return xs
+	end 'collected'
+end 'Source'
+
+type Impl implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+function main() returns ExitCode
+	let impl = Impl.create()
+
+	if impl.collected() != 0 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:29:34: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+### An extension member that takes or returns an associated type a conformer binds to an interface
+
+The member's signature reads the conformer's binding, so for a conformer that binds `Item` to `Named` a parameter `other Item` is a parameter held at `Named` and a result `Item` is a result held at `Named`. An interface parameter carries its witness beside the value, and an interface result is the fat pointer, exactly as for a plain function declared with `Named`.
+
+<!-- test: an-extension-member-taking-an-associated-type-bound-to-an-interface-runs -->
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+type Other implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "other one"
+	end 'label'
+end 'Other'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	function labelBytes(other Item) returns Count
+		return other.label().byteLength()
+	end 'labelBytes'
+end 'Source'
+
+type Impl implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+function main() returns ExitCode
+	let impl = Impl.create()
+	print("{impl.labelBytes(Thing.create())} {impl.labelBytes(Other.create())}\n")
+	return 0
+end 'main'
+```
+```stdout
+5 9
+```
+```exitcode
+0
+```
+
+<!-- test: an-extension-member-returning-an-associated-type-bound-to-an-interface-runs -->
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	function again() returns Item
+		return self.first()
+	end 'again'
+end 'Source'
+
+type Impl implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+function main() returns ExitCode
+	let impl = Impl.create()
+	let item = impl.again()
+	print("{item.label()}\n")
+	return 0
+end 'main'
+```
+```stdout
+thing
+```
+```exitcode
+0
+```
+
+<!-- test: an-extension-member-passing-an-associated-type-bound-to-an-interface-through-runs -->
+One member takes the associated type and returns it, so the witness the caller supplies travels in and back out.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+type Other implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "other one"
+	end 'label'
+end 'Other'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	function pick(other Item, preferOther bool) returns Item
+		if preferOther 'theArgument'
+			return other
+		end 'theArgument'
+
+		return self.first()
+	end 'pick'
+end 'Source'
+
+type Impl implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+function main() returns ExitCode
+	let impl = Impl.create()
+	let own = impl.pick(Other.create(), preferOther: false)
+	let given = impl.pick(Other.create(), preferOther: true)
+	print("{own.label()} {given.label()}\n")
+	return 0
+end 'main'
+```
+```stdout
+thing other one
+```
+```exitcode
+0
+```
+
+<!-- test: an-extension-member-taking-an-associated-type-serves-a-concrete-and-an-interface-conformer -->
+The one extension member serves a conformer that binds `Item` to a concrete type and one that binds it to an interface.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	function same(other Item) returns Item
+		return other
+	end 'same'
+end 'Source'
+
+type Concrete implements Source with Thing
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Thing
+		return Thing.create()
+	end 'first'
+end 'Concrete'
+
+type Widened implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Widened'
+
+function main() returns ExitCode
+	let concrete = Concrete.create()
+	let widened = Widened.create()
+	let a = concrete.same(Thing.create())
+	let b = widened.same(Thing.create())
+	print("{a.label()} {b.label()}\n")
+	return 0
+end 'main'
+```
+```stdout
+thing thing
+```
+```exitcode
+0
+```
+
 ### A container of records written over the enclosing parameter
 
 A record built by a sibling generic's constructor over the enclosing type's own parameter —
@@ -6011,4 +7308,337 @@ end 'main'
 ```
 ```stdout
 1 alpha 42 value long enough for a heap record
+```
+
+### The other places an extension stores a conformer's interface binding
+
+The pair of a conformer's interface binding and an extension's alias is refused wherever the alias holds the associated type in a slot that is one machine word: a container element is reported at the conformer's binding, and a function type's parameter or result and a tuple element are reported at the extension's alias, once however many conformers bind an interface.
+
+<!-- test: error.an-extension-function-alias-over-a-bound-interface-is-refused-once -->
+A function alias over the associated type, with a member taking it, is refused at the alias; the program never calls through it.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	typealias ItemFn = function(Item) returns Count
+
+	function apply(f ItemFn) returns Count
+		return f(self.first())
+	end 'apply'
+end 'Source'
+
+type Impl implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+type Other implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Other'
+
+function main() returns ExitCode
+	let impl = Impl.create()
+	let other = Other.create()
+	return impl.first().label().byteLength() - other.first().label().byteLength()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:21:30: Unsupported: a function type's parameter declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called indirectly, through a call that reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
+```
+
+<!-- test: error.an-extension-tuple-alias-over-a-bound-interface-is-refused -->
+A tuple alias holding the associated type is refused at the alias, whatever member uses it.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	typealias ItemPair = (Item, Count)
+
+	function paired(weight Count) returns ItemPair
+		return (self.first(), weight)
+	end 'paired'
+
+	function weighed(weight Count) returns Count
+		let pair = self.paired(weight)
+		return pair.0.label().byteLength() + pair.1
+	end 'weighed'
+end 'Source'
+
+type Impl implements Source with Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+function main() returns ExitCode
+	let impl = Impl.create()
+	print("{impl.weighed(10)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:21:24: Unsupported: a tuple element declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a tuple is a synthesized struct, so an element is a field slot: one machine word. Declare the element at a concrete type, or pass the interface alongside the tuple as a PARAMETER of a named function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.an-iterable-conformer-binding-its-element-to-an-interface-is-refused-at-the-binding -->
+`extension Iterable` in the library stores `Element` as a container element, so every `Iterable` conformer that binds it to an interface is refused at that binding.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+type ThingCursor implements Iterator with Named
+	var done as bool
+
+	static function create() returns Self
+		return Self{done: false}
+	end 'create'
+
+	function current() returns Named
+		return Thing.create()
+	end 'current'
+
+	function advance() throws IterationError
+		if self.done 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+
+		self.done = true
+	end 'advance'
+end 'ThingCursor'
+
+type Things implements Iterable with (Named, ThingCursor)
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function createIterator() returns ThingCursor throws IterationError
+		return ThingCursor.create()
+	end 'createIterator'
+end 'Things'
+
+function main() returns ExitCode
+	let things = Things.create()
+	let cursor = try things.createIterator() otherwise 'e'
+		return 1
+	end 'e'
+	return cursor.current().label().byteLength() - 5
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:36:39: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+error E2015: stdlib/Interfaces.maxon:204:47: Unsupported: a function type's parameter declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called indirectly, through a call that reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
+```
+
+<!-- test: error.a-generic-conformer-binding-an-interface-is-reported-once-however-many-instances -->
+A generic conformer binds `Item` to an interface and is instantiated over two element types: the one binding is reported once.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	typealias ItemArray = Array with Item
+
+	function collected() returns Count
+		var xs = ItemArray{}
+		return xs.count()
+	end 'collected'
+end 'Source'
+
+type Box uses T implements Source with Named
+	let value as T
+
+	static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Box'
+
+function main() returns ExitCode
+	let a = Box.create(1 as Count)
+	let b = Box.create("two")
+	return a.collected() + b.collected()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:29:40: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: error.an-interface-extension-publishes-no-member-onto-an-enum-conformer-binding-an-interface -->
+An interface extension publishes no member onto an enum conformer, so the alias it stores is never instantiated for one and the call is refused as any call to a missing method is.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+extension Source
+	typealias ItemArray = Array with Item
+
+	function collected() returns Count
+		var xs = ItemArray{}
+		return xs.count()
+	end 'collected'
+end 'Source'
+
+enum Mode implements Source with Named
+	plain
+	fancy
+
+	function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Mode'
+
+function main() returns ExitCode
+	let mode = Mode.plain
+	return mode.collected()
+end 'main'
+```
+```maxoncstderr
+error E4006: <fragment>:40:14: Type 'Mode' has no method named 'collected'
+```
+
+<!-- test: error.a-conformer-in-the-earlier-file-binding-an-interface-that-an-extension-in-a-later-file-stores-is-refused -->
+The conformer is declared in `a.maxon` and the extension in `main.maxon`: the one E2015 is at the conformer's binding.
+```maxon
+// --- file: a.maxon
+module interface Named
+	function label() returns String
+end 'Named'
+
+module type Thing implements Named
+	module static function create() returns Self
+		return Self{}
+	end 'create'
+
+	module function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+module interface Source uses Item
+	function first() returns Item
+end 'Source'
+
+module type Impl implements Source with Named
+	module static function create() returns Self
+		return Self{}
+	end 'create'
+
+	module function first() returns Named
+		return Thing.create()
+	end 'first'
+end 'Impl'
+
+// --- file: main.maxon
+extension Source
+	typealias ItemArray = Array with Item
+
+	module function collected() returns Count
+		var xs = ItemArray{}
+		return xs.count()
+	end 'collected'
+end 'Source'
+
+function main() returns ExitCode
+	let impl = Impl.create()
+
+	if impl.collected() != 0 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:21:41: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
 ```

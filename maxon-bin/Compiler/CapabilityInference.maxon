@@ -504,7 +504,7 @@ module function storedSlotTargetOf(project Project, module MaxonModule, funcName
 		return (callee, parameterName)
 	end 'aBodyNoSummaryCanSee'
 
-	if not maskHasParam(provenance.keptParameters(calleeIndex, paramCount: sig.paramCount()), param: position) 'notStoredByTheCallee'
+	if not maskHasParam(provenance.keptParameters(calleeIndex), param: position) 'notStoredByTheCallee'
 		throw AbsentError.absent
 	end 'notStoredByTheCallee'
 
@@ -559,10 +559,10 @@ module function inferCapabilities(project Project, module MaxonModule, signature
 	facts.directMutable = facts.mutableOnly.clone()
 	facts.directImmutable = facts.frozenInSomeInstance.clone()
 
-	propagateParamMasks(facts.mutableOnly, edges: edges, byCallee: byCallee, need: PropagatedNeed.written, hops: facts.writtenHops)
-	propagateParamMasks(facts.immutableOnly, edges: edges, byCallee: byCallee, need: PropagatedNeed.frozen, hops: facts.frozenHops)
-	propagateParamMasks(facts.frozenInSomeInstance, edges: edges, byCallee: byCallee, need: PropagatedNeed.frozenIfRecordsHeld, hops: facts.frozenSomeHops)
-	propagateParamMasks(facts.buildsRecordFrom, edges: edges, byCallee: byCallee, need: PropagatedNeed.written, hops: NeedHops.untracked())
+	propagateParamMasks(facts.mutableOnly, edges: edges, byCallee: byCallee, funcCount: funcCount, need: PropagatedNeed.written, hops: facts.writtenHops)
+	propagateParamMasks(facts.immutableOnly, edges: edges, byCallee: byCallee, funcCount: funcCount, need: PropagatedNeed.frozen, hops: facts.frozenHops)
+	propagateParamMasks(facts.frozenInSomeInstance, edges: edges, byCallee: byCallee, funcCount: funcCount, need: PropagatedNeed.frozenIfRecordsHeld, hops: facts.frozenSomeHops)
+	propagateParamMasks(facts.buildsRecordFrom, edges: edges, byCallee: byCallee, funcCount: funcCount, need: PropagatedNeed.written, hops: NeedHops.untracked())
 
 	facts.mayWait = blockingEdges.markCallers(waitSeeds, nodeCount: funcCount as CsrIndex, waits: true)
 	var yieldSeeds = BoolArray.create(funcCount, zeroed: false)

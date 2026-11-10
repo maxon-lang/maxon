@@ -113,6 +113,45 @@ type DeclarationHead
 	end 'create'
 end 'DeclarationHead'
 
+// How much the poison holds, compared by `FoldLedger.withdrawStandingFold` to prove nothing was
+// poisoned between a fold standing and its withdrawal, which rolling back would erase.
+export type PoisonExtent implements Equatable
+	let files as ElementIndex
+	let backedFiles as ElementIndex
+	let declared as ElementIndex
+	let abandonedBodies as ElementIndex
+	let duplicated as ElementIndex
+	let lostHeads as ElementIndex
+	let extended as ElementIndex
+	let held as ElementIndex
+	let deferred as ElementIndex
+	let backedNames as ElementIndex
+	let unreadable as bool
+	let unreadableTypeUniverse as bool
+
+	static function create(files ElementIndex, backedFiles ElementIndex, declared ElementIndex, abandonedBodies ElementIndex, duplicated ElementIndex, lostHeads ElementIndex, extended ElementIndex, held ElementIndex, deferred ElementIndex, backedNames ElementIndex, unreadable bool, unreadableTypeUniverse bool) returns PoisonExtent
+		return Self{files: files, backedFiles: backedFiles, declared: declared, abandonedBodies: abandonedBodies, duplicated: duplicated, lostHeads: lostHeads, extended: extended, held: held, deferred: deferred, backedNames: backedNames, unreadable: unreadable, unreadableTypeUniverse: unreadableTypeUniverse}
+	end 'create'
+
+	export function equals(other PoisonExtent) returns bool
+		return self.files == other.files and self.backedFiles == other.backedFiles and self.declared == other.declared and self.abandonedBodies == other.abandonedBodies and self.duplicated == other.duplicated and self.lostHeads == other.lostHeads and self.extended == other.extended and self.held == other.held and self.deferred == other.deferred and self.backedNames == other.backedNames and self.unreadable == other.unreadable and self.unreadableTypeUniverse == other.unreadableTypeUniverse
+	end 'equals'
+end 'PoisonExtent'
+
+// A field added to `DeclarationPoison` moves its size out of this range and fails the cast in
+// `restore`: copy the field there and count it in `extent` before moving the bound to the new size.
+typealias DeclarationPoisonLayoutBytes = int(96 to 96)
+
+function entriesIn(byName PoisonedDeclarationsByName) returns ElementIndex
+	var total = 0 as ElementIndex
+
+	for (_, declarations) in byName 'eachName'
+		total = total + declarations.count()
+	end 'eachName'
+
+	return total
+end 'entriesIn'
+
 // The declarations a refusal took out of the program, keyed by name. A reader's question is matched
 // through the entry's file and visibility (`refusesANamedFrom`), so a poisoned declaration the
 // reader cannot name explains nothing that reader writes.
@@ -148,8 +187,14 @@ export type DeclarationPoison
 		return copy
 	end 'snapshot'
 
+	export function extent() returns PoisonExtent
+		return PoisonExtent.create(self.files.count(), backedFiles: self.backedFiles.count(), declared: entriesIn(self.declared), abandonedBodies: entriesIn(self.abandonedBodies), duplicated: self.duplicated.count(), lostHeads: self.lostHeads.count(), extended: entriesIn(self.extended), held: self.heldConsequences.count(), deferred: self.deferredConsequences.count(), backedNames: self.backedNames.count(), unreadable: self.unreadable, unreadableTypeUniverse: self.unreadableTypeUniverse)
+	end 'extent'
+
 	// Every field is copied: one left out survives a rolled-back fold (`Queries.FoldCheckpoint`).
 	export function restore(source DeclarationPoison)
+		let _ = sizeof(DeclarationPoison) as DeclarationPoisonLayoutBytes
+
 		self.files = copiedFailedFiles(source.files)
 		self.backedFiles = copiedFailedFiles(source.backedFiles)
 		self.declared = copiedPoisonedDeclarations(source.declared)

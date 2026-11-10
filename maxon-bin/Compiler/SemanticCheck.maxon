@@ -52,8 +52,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// duplication `buildParamMutationSummary`'s header refuses.
 	let paramSources = ParamSourceIndex.over(project, ir: module, funcNames: funcNames)
 	closeResultSourceMasks(funcNames, paramSources: paramSources)
-	var (callEdges, unknownFunctionValueWrites) = collectCallParamEdges(project, signatures: signatures, module: module, funcIndexByName: funcNames.byName, calls: summaryIndex, paramSources: paramSources)
-	let edgesByCallee = callEdges.byCallee(funcNames.functions.count() as CsrIndex)
+	var (callEdges, unknownFunctionValueWrites) = collectCallParamEdges(project, signatures: signatures, module: module, calls: summaryIndex, paramSources: paramSources)
 
 	// The interprocedural PARAMETER-MUTATION summary — built once, read at every call site to refuse
 	// an immutable binding handed to a parameter the callee writes (E3159). It reads the same
@@ -67,11 +66,16 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	var provenance = try buildStorageProvenance(project, module: module, signatures: signatures, funcNames: funcNames, summaryIndex: summaryIndex, paramSources: paramSources)
 	try requireStillWanted(project)
 
+	// After the provenance build: its trace registers landing sets and notes their arities
+	// (`addLandingRecordEdges`), and a set joined to its members before that would miss those edges.
+	summaryIndex.landingSets.memberEdgesInto(callEdges)
+	let nodeCount = summaryIndex.landingSets.nodeCount() as CsrIndex
+	let edgesByCallee = callEdges.byCallee(nodeCount)
 	var (mutationEdges, recordEdges) = provenance.collectProvenanceParamEdges(callEdges, funcNames: funcNames)
-	let mutationEdgesByCallee = adjacencyOf(mutationEdges, base: callEdges, baseByCallee: edgesByCallee, funcCount: funcNames.functions.count() as CsrIndex)
+	let mutationEdgesByCallee = adjacencyOf(mutationEdges, base: callEdges, baseByCallee: edgesByCallee, nodeCount: nodeCount)
 
-	let recordEdgesByCallee = adjacencyOf(recordEdges, base: mutationEdges, baseByCallee: mutationEdgesByCallee, funcCount: funcNames.functions.count() as CsrIndex)
-	let mutationSummary = buildParamMutationSummary(project, signatures: signatures, funcNames: funcNames, edges: mutationEdges, byCallee: mutationEdgesByCallee, recordEdges: recordEdges, recordByCallee: recordEdgesByCallee, provenanceWrites: provenance.receiverWrites, unknownWrites: unknownFunctionValueWrites)
+	let recordEdgesByCallee = adjacencyOf(recordEdges, base: mutationEdges, baseByCallee: mutationEdgesByCallee, nodeCount: nodeCount)
+	var mutationSummary = buildParamMutationSummary(project, signatures: signatures, funcNames: funcNames, edges: mutationEdges, byCallee: mutationEdgesByCallee, recordEdges: recordEdges, recordByCallee: recordEdgesByCallee, provenanceWrites: provenance.receiverWrites, unknownWrites: unknownFunctionValueWrites)
 	provenance.adoptParameterWrites(mutationSummary)
 
 	// Returns so that an E3186 hides every later semantic diagnostic.
@@ -551,10 +555,30 @@ export type ParamMutationSummary
 	// Function NAME → its index in that column. A call site holds a name; every other consumer holds an index.
 	export let funcIndexByName as FuncIndexByName
 	module let instancesOfTemplate as TemplateInstanceMap
+	var writtenAtSet as LandingWrittenMemo
+	var namesAtSet as LandingNamesMemo
 
 	module static function create(masks ParamPositionMaskArray, recordWriteMasks ParamPositionMaskArray, byRefWriteMasks ParamPositionMaskArray, funcIndexByName FuncIndexByName, instancesOfTemplate TemplateInstanceMap) returns ParamMutationSummary
-		return Self{masks: masks, recordWriteMasks: recordWriteMasks, byRefWriteMasks: byRefWriteMasks, funcIndexByName: funcIndexByName, instancesOfTemplate: instancesOfTemplate}
+		return Self{masks: masks, recordWriteMasks: recordWriteMasks, byRefWriteMasks: byRefWriteMasks, funcIndexByName: funcIndexByName, instancesOfTemplate: instancesOfTemplate, writtenAtSet: LandingWrittenMemo.create(), namesAtSet: LandingNamesMemo.create()}
 	end 'create'
+
+	export function writtenMaskAtLanding(bodies CallLandingBodies) returns ParamPositionMask
+		if let memoized = try self.writtenAtSet.get(bodies.set) 'asked'
+			return memoized
+		end 'asked'
+
+		let written = self.writtenMaskAtAnyOf(bodies.impls)
+		self.writtenAtSet.upsert(bodies.set, value: written)
+		return written
+	end 'writtenMaskAtLanding'
+
+	module function memoizedLandingNames(key ElementIndex) returns ArgumentParameterArray throws MapError
+		return try self.namesAtSet.get(key)
+	end 'memoizedLandingNames'
+
+	module function fileLandingNames(key ElementIndex, names ArgumentParameterArray)
+		self.namesAtSet.upsert(key, value: names)
+	end 'fileLandingNames'
 
 	export function writesByReference(callee ByteArray, position ParamCount) returns bool
 		if let index = try self.funcIndexByName.get(callee) 'aDeclaredBody'
@@ -587,7 +611,7 @@ export type ParamMutationSummary
 
 	// Which parameters a call landing on any of `indices` writes, or writes the record of — `maskOf` and
 	// the record-write mask together, by function index.
-	export function writtenMaskAtAnyOf(indices FuncIndexArray) returns ParamPositionMask
+	function writtenMaskAtAnyOf(indices FuncIndexArray) returns ParamPositionMask
 		var written = NoParamPositions
 
 		for index in indices 'eachBody'
@@ -730,13 +754,14 @@ function buildParamMutationSummary(project Project, signatures ProgramSignatures
 		byRefWriteMasks.push(cellWrittenParamMask(project, func: func, writtenThrough: writtenThrough, writtenThroughAnUnknownBody: cellWrittenThroughAnUnknownBody))
 	end 'seed'
 
-	propagateParamMasks(masks, edges: edges, byCallee: byCallee, need: PropagatedNeed.written, hops: NeedHops.untracked())
-	propagateParamMasks(byRefWriteMasks, edges: edges, byCallee: byCallee, need: PropagatedNeed.written, hops: NeedHops.untracked())
+	let funcCount = funcNames.functions.count()
+	propagateParamMasks(masks, edges: edges, byCallee: byCallee, funcCount: funcCount, need: PropagatedNeed.written, hops: NeedHops.untracked())
+	propagateParamMasks(byRefWriteMasks, edges: edges, byCallee: byCallee, funcCount: funcCount, need: PropagatedNeed.written, hops: NeedHops.untracked())
 
 	// ⭐ **THE RECORD COLUMN IS CLOSED OVER THE RECORD RELATION** — the argument edges plus every argument that may
 	// lie within a parameter's record, because its question is whether the GRAPH a call site handed over gets
 	// written: `nudge(t)` whose body is `t.inner.bump()` writes it (`ProvenanceTracer.collectProvenanceParamEdges`).
-	propagateParamMasks(recordWriteMasks, edges: recordEdges, byCallee: recordByCallee, need: PropagatedNeed.written, hops: NeedHops.untracked())
+	propagateParamMasks(recordWriteMasks, edges: recordEdges, byCallee: recordByCallee, funcCount: funcCount, need: PropagatedNeed.written, hops: NeedHops.untracked())
 
 	return ParamMutationSummary.create(masks, recordWriteMasks: recordWriteMasks, byRefWriteMasks: byRefWriteMasks, funcIndexByName: funcIndexByName, instancesOfTemplate: instancesOfTemplates(signatures, funcNames: funcNames))
 end 'buildParamMutationSummary'
@@ -862,12 +887,12 @@ end 'noteTemplateInstance'
 
 // The CSR over `edges`. A relation that gained no row over `base` IS `base` (`CallParamEdges.widenedBy`), so it
 // shares the adjacency already built rather than paying for a byte-identical second one.
-function adjacencyOf(edges CallParamEdges, base CallParamEdges, baseByCallee CsrGraph, funcCount CsrIndex) returns CsrGraph
+function adjacencyOf(edges CallParamEdges, base CallParamEdges, baseByCallee CsrGraph, nodeCount CsrIndex) returns CsrGraph
 	if edges is base 'oneRelation'
 		return baseByCallee
 	end 'oneRelation'
 
-	return edges.byCallee(funcCount)
+	return edges.byCallee(nodeCount)
 end 'adjacencyOf'
 
 // Walk every call in the program and record one edge per argument that IS one of the caller's own
@@ -1145,10 +1170,8 @@ type UnknownBodyWrites
 	end 'byReferencePositionAt'
 end 'UnknownBodyWrites'
 
-function collectCallParamEdges(project Project, signatures ProgramSignatures, module MaxonModule, funcIndexByName FuncIndexByName, calls CallSummaryIndex, paramSources ParamSourceIndex) returns (CallParamEdges, UnknownBodyWrites)
+function collectCallParamEdges(project Project, signatures ProgramSignatures, module MaxonModule, calls CallSummaryIndex, paramSources ParamSourceIndex) returns (CallParamEdges, UnknownBodyWrites)
 	var edges = CallParamEdges.create()
-	var conformers = ConformersByInterface.create()
-	var witnessSlots = WitnessSlotsByDeclIndex.create()
 	var unknownWrites = UnknownBodyWrites.create(module.functions.count())
 	var carryClassifier = ArgumentCarryClassifier.of(signatures)
 
@@ -1166,7 +1189,7 @@ function collectCallParamEdges(project Project, signatures ProgramSignatures, mo
 			let block = try module.blocks.get(blockRef) otherwise panic("collectCallParamEdges: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.bodyOps() 'eachOp'
-				collectCallParamEdgesAt(project, signatures: signatures, op: try module.ops.get(opIdx) otherwise panic("collectCallParamEdges: opIdx {opIdx} not in module.ops"), sources: sources, callerIndex: i, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots, calls: calls, unknownWrites: unknownWrites, carryClassifier: carryClassifier, viewed: viewed)
+				collectCallParamEdgesAt(project, op: try module.ops.get(opIdx) otherwise panic("collectCallParamEdges: opIdx {opIdx} not in module.ops"), sources: sources, callerIndex: i, edges: edges, calls: calls, unknownWrites: unknownWrites, carryClassifier: carryClassifier, viewed: viewed)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -1179,7 +1202,7 @@ end 'collectCallParamEdges'
 // whose shape agrees with its type, a dispatch on its interface's conformers — and carries an edge to each.
 // Every variant is named, so a newly appended op fails to compile here rather than silently dropping out of
 // the call graph.
-function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, op MaxonOp, sources ParamSources, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex, calls CallSummaryIndex, unknownWrites UnknownBodyWrites, carryClassifier ArgumentCarryClassifier, viewed ViewedSources)
+function collectCallParamEdgesAt(project Project, op MaxonOp, sources ParamSources, callerIndex ElementIndex, edges CallParamEdges, calls CallSummaryIndex, unknownWrites UnknownBodyWrites, carryClassifier ArgumentCarryClassifier, viewed ViewedSources)
 	match op 'op'
 		indirectCall then addFunctionValueParamEdges(project, op: op, calls: calls, sources: sources, callerIndex: callerIndex, edges: edges, unknownWrites: unknownWrites)
 		call(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, sources: sources, callerIndex: callerIndex, edges: edges, carryClassifier: carryClassifier)
@@ -1229,8 +1252,8 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 		holdEnd then break
 		tryCall(_, _, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, sources: sources, callerIndex: callerIndex, edges: edges, carryClassifier: carryClassifier)
 		storeIndirect(addr, offset, value, _) then addClosureEnvEdges(project, addr: addr, offset: offset, value: value, callerIndex: callerIndex, edges: edges, viewed: viewed)
-		witnessDispatch(_, args, _, _, methodIndex, interfaceDeclIndex, _, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, sources: sources, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots)
-		witnessTryDispatch(_, _, args, _, _, methodIndex, interfaceDeclIndex, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, sources: sources, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots)
+		witnessDispatch(_, args, _, _, methodIndex, interfaceDeclIndex, _, _) then addWitnessParamEdges(args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, sources: sources, callerIndex: callerIndex, edges: edges, calls: calls)
+		witnessTryDispatch(_, _, args, _, _, methodIndex, interfaceDeclIndex, _) then addWitnessParamEdges(args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, sources: sources, callerIndex: callerIndex, edges: edges, calls: calls)
 	end 'op'
 end 'collectCallParamEdgesAt'
 
@@ -1539,14 +1562,12 @@ end 'indirectCallArgsOf'
 // declared roster `DeclaredConformerIndex.conformersOf` holds. Those impls are compiler-synthesized
 // to the requirement's shape and write no parameter, so no edge is lost — and if one ever could,
 // `witnessSlotImpl`'s own gate is where that set is decided, not here.
-function addWitnessParamEdges(project Project, signatures ProgramSignatures, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, sources ParamSources, callerIndex ElementIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex)
+function addWitnessParamEdges(args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, sources ParamSources, callerIndex ElementIndex, edges CallParamEdges, calls CallSummaryIndex)
 	if sources.func.paramCount == 0 'passesNothingOfItsOwn'
 		return
 	end 'passesNothingOfItsOwn'
 
-	for calleeIndex in witnessDispatchImpls(project, signatures: signatures, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: funcIndexByName, conformers: conformers, witnessSlots: witnessSlots).impls 'eachImpl'
-		addLandingBodyEdges(args, argCount: args.count() as ParamCount, calleeIndex: calleeIndex, sources: sources, callerIndex: callerIndex, edges: edges)
-	end 'eachImpl'
+	addLandedEdges(args, argCount: args.count() as ParamCount, bodies: calls.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex), sources: sources, callerIndex: callerIndex, edges: edges, landingSets: calls.landingSets)
 end 'addWitnessParamEdges'
 
 // The bodies a call that names no single callee can land on — and whether one it may land on is a body this
@@ -1557,19 +1578,36 @@ export type CallLandingBodies
 	export var impls as FuncIndexArray
 	export var unresolved as bool
 	export var unresolvedMayStore as bool
+	export let set as ElementIndex
 
-	export static function create() returns CallLandingBodies
+	module static function registered(contents LandingContents, set ElementIndex) returns CallLandingBodies
+		return Self{impls: contents.impls, unresolved: contents.unresolved, unresolvedMayStore: contents.unresolvedMayStore, set: set}
+	end 'registered'
+end 'CallLandingBodies'
+
+// A landing's bodies before `CallSummaryIndex.registerLanding` gives them a set. Every per-landing
+// memo is keyed by `CallLandingBodies.set`, so a landing that never registered would read another
+// set's answers.
+export type LandingContents
+	export var impls as FuncIndexArray
+	export var unresolved as bool
+	export var unresolvedMayStore as bool
+
+	export static function create() returns LandingContents
 		return Self{impls: FuncIndexArray.create(0), unresolved: false, unresolvedMayStore: false}
 	end 'create'
-end 'CallLandingBodies'
+end 'LandingContents'
+
+typealias LandingWrittenMemo = Map with (ElementIndex, ParamPositionMask)
+typealias LandingNamesMemo = Map with (ElementIndex, ArgumentParameterArray)
 
 // A witness dispatch lands on one body per conformer of the requirement's interface whose implementation this
 // module declares; a conformer's implementation it does not declare is compiler-synthesized. See
 // `addWitnessParamEdges` for why the union over them is the answer.
-module function witnessDispatchImpls(project Project, signatures ProgramSignatures, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, funcIndexByName FuncIndexByName, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex) returns CallLandingBodies
+module function witnessDispatchImpls(project Project, signatures ProgramSignatures, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, funcIndexByName FuncIndexByName, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex) returns LandingContents
 	let slot = witnessSlotAt(signatures, interfaces: signatures.interfaceMap(), witnessSlots: witnessSlots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
 	let landing = witnessRequirementImplNames(project, signatures: signatures, slot: slot, conformers: conformers)
-	var found = CallLandingBodies.create()
+	var found = LandingContents.create()
 	found.unresolved = landing.unselected
 
 	for impl in landing.names 'eachImpl'
@@ -1631,9 +1669,18 @@ function addLandingBodyEdges(args ValueIdArray, argCount ParamCount, calleeIndex
 	end 'eachArg'
 end 'addLandingBodyEdges'
 
+function addLandedEdges(args ValueIdArray, argCount ParamCount, bodies CallLandingBodies, sources ParamSources, callerIndex ElementIndex, edges CallParamEdges, landingSets LandingSets)
+	let first = edges.count()
+	addLandingBodyEdges(args, argCount: argCount, calleeIndex: landingSets.virtualNodeOf(bodies.set), sources: sources, callerIndex: callerIndex, edges: edges)
+
+	if edges.count() > first 'aParameterIsHandedOn'
+		landingSets.noteEdgeArity(bodies.set, arity: argCount)
+	end 'aParameterIsHandedOn'
+end 'addLandedEdges'
+
 function addFunctionValueParamEdges(project Project, op MaxonOp, calls CallSummaryIndex, sources ParamSources, callerIndex ElementIndex, edges CallParamEdges, unknownWrites UnknownBodyWrites)
 	match op 'indirect'
-		indirectCall(_, callee, args, _) then addFunctionValueBodiesEdges(args, bodies: calls.functionValueBodiesCalledThrough(sources.func, callee: callee), byReferencePositions: functionValueByReferencePositions(project, func: sources.func, callee: callee, whenUndeclared: EveryParamPosition), sources: sources, callerIndex: callerIndex, edges: edges, unknownWrites: unknownWrites)
+		indirectCall(_, callee, args, _) then addFunctionValueBodiesEdges(args, bodies: calls.functionValueBodiesCalledThrough(sources.func, callee: callee), byReferencePositions: functionValueByReferencePositions(project, func: sources.func, callee: callee, whenUndeclared: EveryParamPosition), sources: sources, callerIndex: callerIndex, edges: edges, unknownWrites: unknownWrites, landingSets: calls.landingSets)
 		default panic("addFunctionValueParamEdges: handed an op that is not an indirect call")
 	end 'indirect'
 end 'addFunctionValueParamEdges'
@@ -1645,12 +1692,10 @@ function functionValueByReferencePositions(project Project, func IrFunction, cal
 	end 'shape'
 end 'functionValueByReferencePositions'
 
-function addFunctionValueBodiesEdges(args ValueIdArray, bodies CallLandingBodies, byReferencePositions ParamPositionMask, sources ParamSources, callerIndex ElementIndex, edges CallParamEdges, unknownWrites UnknownBodyWrites)
+function addFunctionValueBodiesEdges(args ValueIdArray, bodies CallLandingBodies, byReferencePositions ParamPositionMask, sources ParamSources, callerIndex ElementIndex, edges CallParamEdges, unknownWrites UnknownBodyWrites, landingSets LandingSets)
 	let suppliedCount = userArityOfIndirectCall(args)
 
-	for impl in bodies.impls 'eachBody'
-		addLandingBodyEdges(args, argCount: suppliedCount, calleeIndex: impl, sources: sources, callerIndex: callerIndex, edges: edges)
-	end 'eachBody'
+	addLandedEdges(args, argCount: suppliedCount, bodies: bodies, sources: sources, callerIndex: callerIndex, edges: edges, landingSets: landingSets)
 
 	if not bodies.unresolvedMayStore 'everyBodyIsKnown'
 		return
@@ -1665,7 +1710,9 @@ end 'addFunctionValueBodiesEdges'
 // The least-fixpoint sweep. Seeded with every function that already writes something, it pulls a callee off
 // the worklist, propagates its mask across its incoming edges, and re-enqueues a caller only when a bit
 // actually changed — which is what bounds the total work and makes a recursive or mutually recursive graph
-// terminate rather than spin. No hashing: the CSR is keyed by function index throughout.
+// terminate rather than spin. No hashing: the CSR is keyed by node index throughout, a function's
+// index or a landing set's node past them (`LandingSets.virtualNodeOf`), whose masks are dropped
+// once the drain settles.
 module enum PropagatedNeed
 	written
 	frozen
@@ -1680,7 +1727,11 @@ function edgeCarriesNeed(edges CallParamEdges, row ElementIndex, need Propagated
 	end 'need'
 end 'edgeCarriesNeed'
 
-module function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges, byCallee CsrGraph, need PropagatedNeed, hops NeedHops)
+module function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges, byCallee CsrGraph, funcCount ElementIndex, need PropagatedNeed, hops NeedHops)
+	while masks.count() < byCallee.nodeCount() as ElementIndex 'eachLandingNode'
+		masks.push(NoParamPositions)
+	end 'eachLandingNode'
+
 	var worklist = FuncIndexArray.create(0)
 	var queued = BoolArray.create(masks.count(), zeroed: false)
 
@@ -1701,6 +1752,8 @@ module function propagateParamMasks(masks ParamPositionMaskArray, edges CallPara
 		try queued.set(calleeIndex, value: false) otherwise panic("propagateParamMasks: queued.set OOB at {calleeIndex}")
 		propagateAcrossEdges(byCallee, masks: masks, edges: edges, calleeIndex: calleeIndex, worklist: worklist, queued: queued, need: need, hops: hops)
 	end 'drain'
+
+	masks.truncate(funcCount)
 end 'propagateParamMasks'
 
 // Propagate one callee's mask across every edge that reaches it, enqueueing each caller whose own mask grew.
@@ -3502,7 +3555,7 @@ function checkIndirectCallArgs(project Project, module MaxonModule, calls CallSu
 	end 'eachArg'
 
 	view bodies = calls.functionValueBodiesCalledThrough(func, callee: callee)
-	checkIndirectArgBrands(project, module: module, func: func, bodies: bodies, args: args, suppliedCount: suppliedCount, callRange: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+	checkIndirectArgBrands(project, module: module, func: func, bodies: bodies, args: args, suppliedCount: suppliedCount, callRange: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), landing: calls.landingSets)
 	var ownedAtSites = NoParamPositions
 
 	if let position = try calls.callbackParameterPositionOf(func, callee: callee) 'handedInThroughAParameter'
@@ -3533,7 +3586,7 @@ function checkLandingArguments(project Project, module MaxonModule, calls CallSu
 	let callRange = project.opRanges.get(opIndex)
 	let op = try module.ops.get(opIndex) otherwise panic("checkLandingArguments: opIndex {opIndex} is not in module.ops")
 	let judged = provenance.noteLandingArgumentsWritten(func, args: args, argCount: suppliedCount, bodies: bodies, call: callRange, mutationSummary: mutationSummary, ownedElsewhere: ownedAtSites, keeps: calls.landingKeepsOf(func, op: op), calleeText: landingCalleeText(calls, provenance: provenance, func: func, op: op))
-	let unjudged = mutationSummary.writtenMaskAtAnyOf(bodies.impls) and not judged
+	let unjudged = mutationSummary.writtenMaskAtLanding(bodies) and not judged
 
 	if unjudged == NoParamPositions 'nothingLeftToJudge'
 		return
@@ -3613,7 +3666,7 @@ function functionValueBodyRebinds(body IrFunction, position ParamCount) returns 
 	return maskHasParam(body.reassignedParamMask, param: position)
 end 'functionValueBodyRebinds'
 
-function checkIndirectArgBrands(project Project, module MaxonModule, func IrFunction, bodies CallLandingBodies, args ValueIdArray, suppliedCount ParamCount, callRange SourceRange, filePath FilePath)
+function checkIndirectArgBrands(project Project, module MaxonModule, func IrFunction, bodies CallLandingBodies, args ValueIdArray, suppliedCount ParamCount, callRange SourceRange, filePath FilePath, landing LandingSets)
 	for i in 0 upto suppliedCount 'eachArg'
 		let argBrand = valueBrandOf(project, func: func, value: try args.get(i) otherwise panic("checkIndirectArgBrands: args.get OOB at {i} below the supplied count"))
 
@@ -3621,7 +3674,7 @@ function checkIndirectArgBrands(project Project, module MaxonModule, func IrFunc
 			continue
 		end 'carriesNoAuthoredBrand'
 
-		let landed = landedBrandsOf(project, module: module, bodies: bodies, position: i as ParamCount)
+		let landed = landedBrandsOf(project, module: module, bodies: bodies, position: i as ParamCount, landing: landing)
 
 		if landed.brand.isEmpty() or not brandsConflict(landed.brand, got: argBrand) 'theLandedParameterAgrees'
 			continue
@@ -5336,7 +5389,7 @@ function checkComparisonMethodsDoNotWrite(project Project, module MaxonModule, m
 
 		let (mask, recordWriteMask) = mutationSummary.writesOf(func.name)
 		let calleeIndex = try mutationSummary.funcIndexByName.get(func.name) otherwise continue
-		let written = mask or recordWriteMask or provenance.keptParameters(calleeIndex, paramCount: sig.paramCount())
+		let written = mask or recordWriteMask or provenance.keptParameters(calleeIndex)
 
 		if maskHasParam(func.reassignedParamMask, param: WitnessReceiverArgCount) and project.refusedConformanceMembers.contains(func.name) 'refusedAsANonConformer'
 			continue
@@ -5400,10 +5453,10 @@ function checkReadOnlyArgToKeepingParam(func IrFunction, result ValueId, callee 
 			continue
 		end 'notKeptOrDefaulted'
 
-		let paramName = displayParamName(try sig.paramNames.get(pos) otherwise panic("checkReadOnlyArgToKeepingParam: paramNames.get OOB at {pos} inside paramCount()"))
+		let parameter = ArgumentParameter.named(try sig.paramNames.get(pos) otherwise panic("checkReadOnlyArgToKeepingParam: paramNames.get OOB at {pos} inside paramCount()"))
 		let wording = keptWordingOf(func, callee: callee, sig: sig, args: args, position: pos)
 		provenance.noteKeptRefused(argId, line: callRange.line, column: callRange.column)
-		provenance.refuse(callRange.line, column: callRange.column, code: ErrorCode.semanticVarFromImmutable, message: keptArgumentMessage(wording, subject: provenance.keptArgumentSubject(func, value: argId, blamed: blamed, wording: wording, call: callRange), paramName: paramName))
+		provenance.refuse(callRange.line, column: callRange.column, code: ErrorCode.semanticVarFromImmutable, message: keptArgumentMessage(wording, subject: provenance.keptArgumentSubject(func, value: argId, blamed: blamed, wording: wording, call: callRange), parameter: parameter.phrase()))
 		return maskWithParam(NoParamPositions, param: pos)
 	end 'eachArg'
 

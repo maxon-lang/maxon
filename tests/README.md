@@ -119,6 +119,9 @@ tests/
     <area>.maxtest               one LSP method area per file
     diagnostics-project-declared-inputs-probe.maxtest   the shared half of the declared-input cases: a project file whose sources come from a file it reads, declared in `inputs` or not, delegating or with two targets, and a gate that holds its run until released
     diagnostics-project-<change>.maxtest   the cases built on it, one each: which change to a declared input, a delegated `.maxproj` or an undeclared read runs the project file again, and which keeps the held answer
+    diagnostics-project-a-recorded-parse-diagnostic-and-a-later-pass-error-are-both-published.maxtest   a diagnostic the parser records (E3010) and a later pass's error (E3004) are both published for one buffer
+    diagnostics-project-an-extension-edited-to-store-a-binding-reports-at-the-conformer-in-another-file.maxtest   an `extension` edited on disk to store an associated type as a container element publishes E2015 at the conformer's interface binding in another file
+    diagnostics-project-an-extension-edited-to-stop-storing-a-binding-clears-the-conformer-in-another-file.maxtest   an `extension` edited on disk to stop storing it clears the E2015 at the conformer's binding in another file
   ladders/                       hand-built scaling generators + the README indexing them
     index.maxtest                the README's rows against the scripts beside it
   parallelCompile/
@@ -496,6 +499,7 @@ tests/
     build-a-case-renamed-source-recompiles.maxtest          a source renamed only by case is compiled again, naming `source added` (it discriminates on Windows only)
     execute-a-unicode-table-edit-recompiles.maxtest         an install-shaped `maxon execute` of a program is compiled again after a Unicode table the compiler embeds in it changed
     build-of-a-missing-source-reports-it-once.maxtest       a build of a source that does not exist says `file not found` once, with a non-zero exit
+    verify-warm-rebuild-of-a-missing-input-reports-the-error-not-a-failed-compile.maxtest   `verify-warm-rebuild` of an input that does not exist says `file not found`, names it, exits non-zero and reports no property as not run
     build-a-file-sees-scriptlib.maxtest                     an install-shaped `build <file>` compiles the `scriptlib/` package the file calls, and the executable prints its answer
     check-scriptlib-reports-a-broken-package.maxtest        `check-scriptlib` builds a package body nothing calls, exits 1 and names `bad/Bad.maxon`
     check-scriptlib-passes-clean-packages.maxtest           `check-scriptlib` over two clean packages and no `main` exits 0 with nothing on stderr
@@ -624,6 +628,10 @@ tests/
     a-shadowing-program-parses-the-library-cold.maxtest a program shadowing a library type parses the library cold, still equal to cold
     a-program-with-top-level-names-two-directories-declare-rebuilds-warm.maxtest a bytes-only edit rebuilds warm, determinism and library reuse hold, in a program whose directories each declare a type and a binding of one name
     a-program-with-top-level-names-two-directories-declare-rechecks-cleanly.maxtest `verify-recheck` agrees with itself on that program and clears an undone edit
+    a-program-needing-several-folds-reports-each-diagnostic-once.maxtest `verify-recheck`'s stability count is the number of diagnostics standing, in a program whose fold files a type and whose standard-library demand takes further rounds
+    a-program-whose-first-file-never-parses-refuses-the-invalidation-probe.maxtest `verify-warm-rebuild` names the broken probe premise when the edited file fails to parse with one error before and after every probe edit
+    a-program-with-a-parse-error-keeps-every-parse-memoized.maxtest `verify-warm-rebuild` holds the cache property and runs invalidation over a program with a function body that does not parse, and reports the properties that need a compile as not run
+    a-program-with-a-file-that-fails-outright-keeps-every-parse-memoized.maxtest `verify-warm-rebuild` holds the cache property over a program with a file whose parse fails outright, without panicking on the re-query after the fold
     fixtures/<program>/<name>.maxon.fixture stored names only - see rule 1
   mcp/
     McpHarness.maxon                        the shared half: stdio and `--http` sessions, the debug tool readers, the spec-file staging, and JSON helpers
