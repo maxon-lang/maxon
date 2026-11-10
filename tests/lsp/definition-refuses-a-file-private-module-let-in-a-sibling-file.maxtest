@@ -1,0 +1,26 @@
+let PrivateLetSiblingDirName = "temp/lsp/definition-refuses-a-file-private-module-let-in-a-sibling-file"
+let PrivateLetSiblingHiddenFileName = "private.maxon"
+let PrivateLetSiblingMainFileName = "main.maxon"
+let PrivateLetSiblingUseLine = 1
+let PrivateLetSiblingUseCharacter = 13
+
+test 'definition refuses a file-private module-level let in a sibling file'
+	let directory = stagedCorpusDirectory(PrivateLetSiblingDirName)
+	writeCorpusFile(directory, fileName: PrivateLetSiblingHiddenFileName, content: privateLetSiblingHiddenSource())
+
+	let probe = probeCorpusDefinition(directory, fileName: PrivateLetSiblingMainFileName, content: privateLetSiblingMainSource(), line: PrivateLetSiblingUseLine, character: PrivateLetSiblingUseCharacter)
+
+	expectNoDefinitionInProject(probe, note: "a bare `reading` named a sibling's file-private `let`, which nothing outside that file may see, and the server jumped to it anyway.")
+end 'definition refuses a file-private module-level let in a sibling file'
+
+function privateLetSiblingHiddenSource() returns String
+	return String.from(b"let reading = 0
+")
+end 'privateLetSiblingHiddenSource'
+
+function privateLetSiblingMainSource() returns String
+	return String.from(b"function main() returns ExitCode
+    return reading
+end 'main'
+")
+end 'privateLetSiblingMainSource'

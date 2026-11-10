@@ -1,0 +1,32 @@
+let ModuleLetSiblingDirName = "temp/lsp/definition-reaches-a-module-let-in-a-sibling-file"
+let ModuleLetSiblingHelperFileName = "helper.maxon"
+let ModuleLetSiblingMainFileName = "main.maxon"
+let ModuleLetSiblingHelperTail = "definition-reaches-a-module-let-in-a-sibling-file/helper.maxon"
+let ModuleLetSiblingUseLine = 1
+let ModuleLetSiblingUseCharacter = 13
+let ModuleLetSiblingDeclarationLine = 4
+
+test 'definition reaches a module-level let in a sibling file'
+	let directory = stagedCorpusDirectory(ModuleLetSiblingDirName)
+	writeCorpusFile(directory, fileName: ModuleLetSiblingHelperFileName, content: moduleLetSiblingHelperSource())
+
+	let probe = probeCorpusDefinition(directory, fileName: ModuleLetSiblingMainFileName, content: moduleLetSiblingMainSource(), line: ModuleLetSiblingUseLine, character: ModuleLetSiblingUseCharacter)
+
+	expectDefinitionInFile(probe, fileTail: ModuleLetSiblingHelperTail, startLine: ModuleLetSiblingDeclarationLine, note: "a bare `reading` naming an `export let` of a sibling file did not resolve to that `let`. The sibling also declares a type with a field of the same name above it, which is not what a bare name can mean outside the type.")
+end 'definition reaches a module-level let in a sibling file'
+
+function moduleLetSiblingHelperSource() returns String
+	return String.from(b"export type Gauge
+    export var reading as ExitCode
+end 'Gauge'
+
+export let reading = 0
+")
+end 'moduleLetSiblingHelperSource'
+
+function moduleLetSiblingMainSource() returns String
+	return String.from(b"function main() returns ExitCode
+    return reading
+end 'main'
+")
+end 'moduleLetSiblingMainSource'

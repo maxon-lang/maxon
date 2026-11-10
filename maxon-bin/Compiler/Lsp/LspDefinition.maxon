@@ -337,7 +337,7 @@ function definitionDeclarationOf(tokens TokenArray, name ByteArray) returns Toke
 	let blocks = lspDocumentBlocks(tokens)
 
 	for (iter, keyword) in tokens.withIterator() 'eachToken'
-		let declared = try definitionDeclaredName(tokens, keyword: keyword, at: iter.index(), name: name) otherwise continue
+		let declared = try definitionDeclaredName(tokens, blocks: blocks, keyword: keyword, at: iter.index(), name: name) otherwise continue
 
 		if keyword.kind == TokenKind.function and lspLineIsAMemberLine(blocks, line: lspLineOf(keyword.line)) 'aMethod'
 			continue
@@ -375,7 +375,7 @@ function definitionPublishedMember(tokens TokenArray, owner String, member ByteA
 	return lspTokenAt(tokens, index: found.nameIndex)
 end 'definitionPublishedMember'
 
-function definitionDeclaredName(tokens TokenArray, keyword Token, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+function definitionDeclaredName(tokens TokenArray, blocks LspDocumentBlockArray, keyword Token, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	if definitionDeclaresAType(keyword.kind) 'aType'
 		return try definitionIdentifierNamed(tokens, at: at + 1, name: name)
 	end 'aType'
@@ -385,7 +385,7 @@ function definitionDeclaredName(tokens TokenArray, keyword Token, at ElementInde
 	end 'aFunction'
 
 	if keyword.kind == TokenKind.let or keyword.kind == TokenKind.var 'aBinding'
-		return try definitionFieldNamed(tokens, at: at + 1, name: name)
+		return try definitionModuleBindingNamed(tokens, blocks: blocks, at: at + 1, name: name)
 	end 'aBinding'
 
 	throw LspDeclarationLookupError.nothingThere
@@ -396,22 +396,17 @@ function definitionDeclaresAType(kind TokenKind) returns bool
 	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias
 end 'definitionDeclaresAType'
 
-// ⭐ **A `var`/`let` reaches the bare-name search only as a FIELD, and the LANGUAGE tells a field from a
-// local: a local binding never carries a type (E2010), so a name followed by anything other than `=` is
-// a field.** Without that rule a bare name resolves to an unrelated function's `var x = …` — a
-// confident wrong line where nothing is the honest answer. A field carrying a declaration DEFAULT
-// (`var value = 0`) falls on the far side of it and resolves to nothing; the reference server draws the
-// same boundary, from indentation rather than from the annotation.
-function definitionFieldNamed(tokens TokenArray, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+// A `let` or `var` inside a block is a local or a member, reached by the local walk or the owner's
+// body. Matching one here by name would land a bare name on an unrelated function's local or another
+// type's field.
+function definitionModuleBindingNamed(tokens TokenArray, blocks LspDocumentBlockArray, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	let named = try definitionIdentifierNamed(tokens, at: at, name: name)
-	let afterTheName = try tokens.get(at + 1) otherwise throw LspDeclarationLookupError.nothingThere
 
-	if afterTheName.kind == TokenKind.equals 'aLocalBinding'
-		throw LspDeclarationLookupError.nothingThere
-	end 'aLocalBinding'
-
-	return named
-end 'definitionFieldNamed'
+	match lspInnermostBlockKindAt(blocks, line: lspLineOf(named.line)) 'scope'
+		absent then return named
+		found then throw LspDeclarationLookupError.nothingThere
+	end 'scope'
+end 'definitionModuleBindingNamed'
 
 function definitionDeclarationAt(tokens TokenArray, site LspDeclaringSite, name ByteArray) returns Token throws LspDeclarationLookupError
 	match site 'site'

@@ -214,13 +214,6 @@ union HoverMemberOwner
 	notAMemberLine
 end 'HoverMemberOwner'
 
-// What a declaration sits inside, decided by the nearest declaration keyword above it.
-union HoverEnclosure
-	routine(index ElementIndex)
-	container(index ElementIndex)
-	none
-end 'HoverEnclosure'
-
 // A value expression as hover reads it: what it IS, and where it STOPS. The two are one answer because
 // the second is what makes the first trustworthy — see `inferredTypeAt`. A bracket group the buffer has
 // not closed yet is no value at all, which is why absence is a case.
@@ -822,28 +815,6 @@ module type HoverDocument
 
 		return HoverMemberOwner.notAMemberLine
 	end 'containerDeclaring'
-
-	// What a declaration at `index` sits inside: the nearest `function` or container keyword above it.
-	function enclosureOf(index ElementIndex) returns HoverEnclosure
-		var back = 0 as ElementIndex
-
-		while back < index 'backward'
-			let at = index - back - 1
-			let kind = tokenAt(at).kind
-
-			if kind == TokenKind.function 'insideARoutine'
-				return HoverEnclosure.routine(at)
-			end 'insideARoutine'
-
-			if kindDeclaresAContainer(kind) 'insideAContainer'
-				return HoverEnclosure.container(at)
-			end 'insideAContainer'
-
-			back = back + 1
-		end 'backward'
-
-		return HoverEnclosure.none
-	end 'enclosureOf'
 
 	// --- Types --------------------------------------------------------------------------------
 
@@ -1619,28 +1590,11 @@ module type HoverDocument
 	end 'receiverOf'
 
 	function enclosingTypeName(index ElementIndex) returns HoverType
-		match enclosingContainerOf(index) 'inside'
-			container(at) then return declaredTypeNameAt(at)
-			routine or
-			none then return HoverType.unknown
+		match lspEnclosingTypeAtToken(tokens, index: index) 'inside'
+			inside(typeName) then return self.writtenNamedType(typeName)
+			atFileScope then return HoverType.unknown
 		end 'inside'
 	end 'enclosingTypeName'
-
-	function enclosingContainerOf(index ElementIndex) returns HoverEnclosure
-		var at = index
-
-		while at > 0 'outward'
-			let nearest = enclosureOf(at)
-
-			match nearest 'kind'
-				container then return nearest
-				routine(head) then at = head
-				none then return HoverEnclosure.none
-			end 'kind'
-		end 'outward'
-
-		return HoverEnclosure.none
-	end 'enclosingContainerOf'
 
 	function declaredTypeNameAt(keyword ElementIndex) returns HoverType
 		let named = tokenAt(keyword + 1)
@@ -1980,12 +1934,6 @@ end 'kindCarriesAuthoredText'
 module function kindDeclaresATypeName(kind TokenKind) returns bool
 	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias or kind == TokenKind.extension
 end 'kindDeclaresATypeName'
-
-// Keywords that open a BODY holding members. `typealias` is absent for that reason: it names a type and
-// holds nothing.
-function kindDeclaresAContainer(kind TokenKind) returns bool
-	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.extension
-end 'kindDeclaresAContainer'
 
 // Where an expression STOPS — the property `inferredTypeAt` tests before it believes a literal.
 //
