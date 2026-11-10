@@ -1573,9 +1573,11 @@ hardware fault reach the program's own handler; where an older one is found the 
 
 The driver reads the stub's packets until a request's own reply arrives. A stop the program reaches in the
 meantime is held and reported by the next wait. A report that the program ended fails the waiting request
-at once and is reported by the next wait. A reply to `detach`, to planting or lifting a breakpoint, or to a
-memory or register write that is anything but `OK` is printed on stderr as `maxon debug: the debug stub
-answered something that is not an acknowledgement: '<reply>' to '<request>'`, and the operation is refused.
+at once and is reported by the next wait. A `detach` the stub has not answered ends when the program ends:
+the stub is ended and `detach` reports the program's ending. A reply to `detach`, to planting or lifting a
+breakpoint, or to a memory or register write that is anything but `OK` is printed on stderr as
+`maxon debug: the debug stub answered something that is not an acknowledgement: '<reply>' to '<request>'`,
+and the operation is refused.
 
 **Commands**, with their aliases: `break` (`b`) · `clear` · `run` (`r`) · `continue` (`c`) · `step` (`s`) ·
 `next` (`n`) · `finish` · `until` (`u`) · `backtrace` (`bt`, `where`) · `print` (`p`) · `locals` · `pause` ·

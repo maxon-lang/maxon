@@ -30,6 +30,15 @@ export function loggedStubEnvironment(staged FilePath, log FilePath) returns Env
 	return Environment.inheritUpdating(overrides)
 end 'loggedStubEnvironment'
 
+export function stubLogTail(log FilePath, lines Count) returns String
+	let text = try File.readText(log) otherwise return "(the stub wrote no log at {log.toString()})"
+	let all = outputLines(text)
+	let first = (all.count() - lines) if all.count() > lines else 0
+	let kept = try all.slice(first as ElementIndex, endIndex: all.count() as ElementIndex) otherwise panic("the log's own line count bounds its tail")
+
+	return "the last {kept.count()} of {all.count()} lines of the stub's log:{listedLines(kept)}"
+end 'stubLogTail'
+
 export function stubReapedTheProgram(log FilePath) returns bool
 	let text = try File.readText(log) otherwise panic("the gate could not run — the stub wrote no log at {log.toString()}.")
 

@@ -45,6 +45,17 @@ export type DebugTarget
 		return not targetIsRunning(self.settled)
 	end 'hasSettled'
 
+	export function hasLeft() returns bool
+		if self.hasSettled() 'alreadySettled'
+			return true
+		end 'alreadySettled'
+
+		return match self.child.pollExit() 'polled'
+			exited gives true
+			running gives false
+		end 'polled'
+	end 'hasLeft'
+
 	export function settle(how TargetSettling) returns TargetOutcome
 		if not targetIsRunning(self.settled) 'alreadySettled'
 			return self.settled

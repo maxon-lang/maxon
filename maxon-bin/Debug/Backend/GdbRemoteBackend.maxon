@@ -246,6 +246,7 @@ export type GdbRemoteBackend
 	var pendingSignal as GdbSignalNumber
 	var signalled as String
 	var status as BackendExitStatus
+	var detachDeadline as DebugDeadline
 
 	export static function create(stub FilePath) returns GdbRemoteBackend
 		let unmasks = gdbStubTakesUnmaskSignals(stub)
@@ -262,7 +263,7 @@ export type GdbRemoteBackend
 	end 'create'
 
 	static function listeningOn(stub FilePath, listener GdbListenerHold, port NetworkPort, unmasks bool) returns GdbRemoteBackend
-		return Self{stub: stub, stubProcess: GdbStubProcess.none, stubSaid: StringArray.create(0), listener: listener, port: port, link: GdbRemoteLink.unconnected, registers: GdbRegisterInfoArray.create(0), slotted: GdbSlottedRegisterArray.create(0), threads: StringArray.create(0), reporter: "", lastStop: GdbStopReport.create(), stopHeld: false, borrowing: false, entryTaken: false, stopOutstanding: false, stepping: BackendStepRoster.create(), armed: DebugAddressArray.create(0), withheld: GdbWithheldStopArray.create(0), setAside: GdbSetAside.nothing, threadStopInfoServed: true, unmasksSignals: unmasks, stopRequested: false, pendingSignal: 0, signalled: "", status: BackendExitStatus.running}
+		return Self{stub: stub, stubProcess: GdbStubProcess.none, stubSaid: StringArray.create(0), listener: listener, port: port, link: GdbRemoteLink.unconnected, registers: GdbRegisterInfoArray.create(0), slotted: GdbSlottedRegisterArray.create(0), threads: StringArray.create(0), reporter: "", lastStop: GdbStopReport.create(), stopHeld: false, borrowing: false, entryTaken: false, stopOutstanding: false, stepping: BackendStepRoster.create(), armed: DebugAddressArray.create(0), withheld: GdbWithheldStopArray.create(0), setAside: GdbSetAside.nothing, threadStopInfoServed: true, unmasksSignals: unmasks, stopRequested: false, pendingSignal: 0, signalled: "", status: BackendExitStatus.running, detachDeadline: 0}
 	end 'listeningOn'
 
 	export function holdsItsScratch() returns bool
@@ -1048,28 +1049,69 @@ export type GdbRemoteBackend
 		self.stopRequested = false
 	end 'retireStopRequest'
 
-	export function detach() returns bool
+	export function beginDetach() returns BackendDetach
 		self.stopOutstanding = false
 		self.stopRequested = false
 		self.stepping.clear()
 		self.dropTheWithheldQueue()
 
-		if not self.askedAcknowledgement(GdbDetachRequest) 'theStubRefused'
-			return false
-		end 'theStubRefused'
+		if not self.tellStub(GdbDetachRequest) 'theStubIsGone'
+			return BackendDetach.refused
+		end 'theStubIsGone'
 
+		self.detachDeadline = debugDeadlineAfter(GdbReplyBudgetMs as StopTimeoutMs)
+
+		return BackendDetach.awaiting
+	end 'beginDetach'
+
+	export function awaitDetach(sliceMs BackendWaitBudgetMs) returns BackendDetach
+		var connection = try self.link.connection() otherwise return BackendDetach.refused
+
+		for _ in 0 upto GdbUnsolicitedPacketsMax 'eachRead'
+			let answer = connection.answerWithin(sliceMs as GdbWaitMs)
+
+			match self.sortedReply(false, answer: answer) 'sorted'
+				notTheReply then continue
+				theProgramEnded then return BackendDetach.refused
+				theReply then return self.detachAnswered(answer)
+			end 'sorted'
+		end 'eachRead'
+
+		return BackendDetach.refused
+	end 'awaitDetach'
+
+	function detachAnswered(answer GdbAnswer) returns BackendDetach
+		match answer 'which'
+			answered(text) then return self.detachAcknowledged(text)
+			timedOut then return BackendDetach.refused if debugDeadlinePassed(self.detachDeadline) else BackendDetach.awaiting
+
+			unsupported or
+			failed or
+			broken then return BackendDetach.refused
+		end 'which'
+	end 'detachAnswered'
+
+	function detachAcknowledged(text String) returns BackendDetach
+		if not gdbOkOrNoticed(text, request: GdbDetachRequest) 'notAcknowledged'
+			return BackendDetach.refused
+		end 'notAcknowledged'
+
+		self.finishDetach()
+
+		return BackendDetach.accepted
+	end 'detachAcknowledged'
+
+	export function finishDetach()
 		self.setAside = GdbSetAside.nothing
 
 		// A program that died while the stub held it cannot be waited on until the stub is gone, and the
-		// stub has nothing left to do once it acknowledges the detach, so it is ended here, not awaited:
+		// stub has nothing left to do once the detach is over, so it is ended here, not awaited:
 		// debugserver does not always exit on its own after a detach. Closing the connection first does
 		// not help: a debugserver that sees the close in the same pass as the detach detaches a second
 		// time and hangs.
 		self.stubReaped(GdbStubEnding.forced)
 		self.close()
-
-		return true
-	end 'detach'
+	end 'finishDetach'
 
 	// While the stub is attached, XNU makes it the program's parent, so the program is ended through the
 	// stub before the driver reaps it. A stub killed without being asked would leave its inferior suspended

@@ -128,6 +128,7 @@ let DebugUnwritableReason = "unwritable"
 let DebugDetachRefusedReason = "detach-refused"
 
 let WaitSliceMs = 5
+let DetachLookMs = 20
 let PauseAttemptBudgetMs = 1000
 
 type EngineBreakpoint
@@ -491,7 +492,7 @@ export type DebugEngine implements DebugMemory
 	end 'letGo'
 
 	function askTheKernelToLetGo() returns CommandOutcome
-		let accepted = self.backend.detach()
+		let accepted = self.detachSettled()
 
 		self.stopped = false
 		self.pausePending = false
@@ -510,6 +511,31 @@ export type DebugEngine implements DebugMemory
 
 		return CommandOutcome.done
 	end 'askTheKernelToLetGo'
+
+	// A debugserver whose program died during the detach never answers it: the detach waits for an
+	// exception thread that nothing wakes once the task is gone. That debugserver reaps the program,
+	// which hands the status to this process, so the program ending is the answer.
+	function detachSettled() returns bool
+		var progress = self.backend.beginDetach()
+
+		while true 'untilSettled'
+			match progress 'which'
+				accepted then return true
+				refused then return false
+				awaiting then break
+			end 'which'
+
+			if self.target.hasLeft() 'theProgramEndedFirst'
+				self.backend.finishDetach()
+
+				return true
+			end 'theProgramEndedFirst'
+
+			progress = self.backend.awaitDetach(DetachLookMs as BackendWaitBudgetMs)
+		end 'untilSettled'
+
+		panic("DebugEngine.detachSettled: the loop leaves only by answering, and every arm above answers")
+	end 'detachSettled'
 
 	export function attachmentState() returns EngineAttachment
 		return self.attachment

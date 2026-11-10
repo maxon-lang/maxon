@@ -12,6 +12,7 @@ let AdvertiseVariable = "MAXON_PROXY_ADVERTISE"
 let AnswerMode = "answer"
 let LateHaltMode = "late-halt"
 let SmallBufferMode = "small-buffer"
+let SilentMode = "silent"
 let AdvertiseYes = "yes"
 
 let SupportedQuery = "qSupported"
@@ -27,6 +28,8 @@ let AsciiLetterA = 0x61
 let LettersBeforeTen = 10
 let AnsweredMarker = "answered "
 let RefusedMarker = "refused "
+let WithheldMarker = "diverted "
+let ContinuePayload = "c"
 
 let ReverseConnectOption = "-R"
 let Loopback = "127.0.0.1"
@@ -50,6 +53,7 @@ end 'Pulled'
 union Scenario
 	answers(after String, payload String)
 	lateHalt
+	silent(after String)
 	smallBuffer(limit PacketBytes, advertised bool)
 end 'Scenario'
 
@@ -87,12 +91,22 @@ type Relay
 
 		match pull(self.stub) 'fromStub'
 			idle then break
-			closed then alive = false
+			closed then alive = self.stubIsMuted() and alive
 			data(text) then alive = self.toDriver(text) and alive
 		end 'fromStub'
 
 		return alive
 	end 'step'
+
+	function stubIsMuted() returns bool
+		return match self.scenario 'which'
+			silent gives self.done
+
+			answers or
+			lateHalt or
+			smallBuffer gives false
+		end 'which'
+	end 'stubIsMuted'
 
 	function toStub(text String) returns bool
 		var alive = true
@@ -108,6 +122,7 @@ type Relay
 		return match self.scenario 'which'
 			answers(after, payload) gives self.answeredOrForwarded(piece, after: after, payload: payload)
 			lateHalt gives self.forwardedMindingTheHalt(piece)
+			silent(after) gives self.continuedInPlaceOf(piece, after: after)
 			smallBuffer(limit, advertised) gives self.forwardedWithinTheBuffer(piece, limit: limit, advertised: advertised)
 		end 'which'
 	end 'routed'
@@ -168,7 +183,22 @@ type Relay
 		return alive
 	end 'forwardedMindingTheHalt'
 
+	function continuedInPlaceOf(piece String, after String) returns bool
+		if self.done or not piece.startsWith("{PacketStart}{after}") 'nothingToDivert'
+			return sent(self.stub, text: piece)
+		end 'nothingToDivert'
+
+		self.done = true
+		self.noted("{WithheldMarker}{piece}")
+
+		return sent(self.stub, text: framed(ContinuePayload))
+	end 'continuedInPlaceOf'
+
 	function toDriver(text String) returns bool
+		if self.stubIsMuted() 'theStubIsMuted'
+			return true
+		end 'theStubIsMuted'
+
 		if not self.awaitingHalt 'theStubSpeaks'
 			return sent(self.driver, text: text)
 		end 'theStubSpeaks'
@@ -256,11 +286,15 @@ function scenarioFromEnvironment() returns Scenario
 		return Scenario.answers(setting(InjectAfterVariable), payload: setting(InjectPayloadVariable))
 	end 'answering'
 
+	if mode == SilentMode 'silent'
+		return Scenario.silent(setting(InjectAfterVariable))
+	end 'silent'
+
 	if mode == SmallBufferMode 'small'
 		return Scenario.smallBuffer(packetBytesFromEnvironment(), advertised: setting(AdvertiseVariable) == AdvertiseYes)
 	end 'small'
 
-	panic("{ModeVariable} names '{mode}', which is none of {AnswerMode}, {LateHaltMode} and {SmallBufferMode}")
+	panic("{ModeVariable} names '{mode}', which is none of {AnswerMode}, {LateHaltMode}, {SilentMode} and {SmallBufferMode}")
 end 'scenarioFromEnvironment'
 
 function packetBytesFromEnvironment() returns PacketBytes

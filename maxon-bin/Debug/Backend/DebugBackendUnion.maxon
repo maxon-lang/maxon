@@ -107,13 +107,30 @@ export union DebugBackend
 		end 'which'
 	end 'retireStopRequest'
 
-	export function detach() returns bool
+	export function beginDetach() returns BackendDetach
 		return match self 'which'
-			debugPort(backend) gives backend.detach()
-			processTrace(backend) gives backend.detach()
-			remoteStub(backend) gives backend.detach()
+			debugPort(backend) gives backendDetachAnswer(backend.detach())
+			processTrace(backend) gives backendDetachAnswer(backend.detach())
+			remoteStub(backend) gives backend.beginDetach()
 		end 'which'
-	end 'detach'
+	end 'beginDetach'
+
+	export function awaitDetach(sliceMs BackendWaitBudgetMs) returns BackendDetach
+		return match self 'which'
+			debugPort or
+			processTrace panic("DebugBackend.awaitDetach: this lane's detach answers when it is begun, so `beginDetach` never answers awaiting and nothing may ask this")
+
+			remoteStub(backend) gives backend.awaitDetach(sliceMs)
+		end 'which'
+	end 'awaitDetach'
+
+	export function finishDetach()
+		match self 'which'
+			debugPort or
+			processTrace then panic("DebugBackend.finishDetach: this lane's detach answers when it is begun, so `beginDetach` never answers awaiting and nothing may ask this")
+			remoteStub(backend) then backend.finishDetach()
+		end 'which'
+	end 'finishDetach'
 
 	// The debuggee is the driver's own child on every lane. Where the driver is also its debugger the
 	// kernel ends it — the debug port kills a debuggee whose debugger exits and `PTRACE_O_EXITKILL` says

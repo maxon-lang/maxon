@@ -11,6 +11,7 @@ let PacketSizeVariable = "MAXON_PROXY_PACKET_SIZE"
 let AdvertiseVariable = "MAXON_PROXY_ADVERTISE"
 let AnswerMode = "answer"
 let LateHaltMode = "late-halt"
+let SilentMode = "silent"
 let SmallBufferMode = "small-buffer"
 let AdvertiseYes = "yes"
 let AdvertiseNo = "no"
@@ -40,6 +41,13 @@ export function answeringProxyEnvironment(proxyDirectory FilePath, trace FilePat
 
 	return Environment.inheritUpdating(overrides)
 end 'answeringProxyEnvironment'
+
+export function silentProxyEnvironment(proxyDirectory FilePath, trace FilePath, after String) returns Environment
+	var overrides = proxyOverrides(proxyDirectory, trace: trace, mode: SilentMode)
+	overrides.upsert(InjectAfterVariable, value: after)
+
+	return Environment.inheritUpdating(overrides)
+end 'silentProxyEnvironment'
 
 export typealias ProxiedPacketBytes = int(1 to 0xFFFF)
 

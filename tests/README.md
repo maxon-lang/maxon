@@ -184,9 +184,9 @@ tests/
     DebugHarness.maxon                      the shared half: the spawn, the staging, the folds, the event reader
     ImageIdentity.maxon                     the byte-identity half: one source and one output path built repeatedly, each image kept aside and compared
     ImageHeaders.maxon                      the image-format half: where an ELF, a PE or a Mach-O puts `.text`, read from the file's own headers
-    ProcessSnapshot.maxon                   `processSnapshot`: the `ps` rows that name a program or its `debugserver`, for a failure message
+    ProcessSnapshot.maxon                   `processSnapshot`: the `ps` rows that name a program or its `debugserver` or are defunct, and `sampledStack` and `sampledStubs`: `sample` reports of a hung process and of the debug stubs, for a failure message
     StubProxy.maxon                         the scripted-stub half: `fixtures/stubproxy` built as an executable named `debugserver`, and the environments that put it first on `PATH` for one session
-    ReplSession.maxon                       `ReplSession`: a `debug` REPL spawned over a program, fed commands one at a time, whose transcript is read until a wording appears
+    ReplSession.maxon                       `ReplSession`: a `debug` REPL spawned over a program, fed commands one at a time, whose transcript is read until a wording appears; a REPL that outlives its deadline is sampled before it is ended, and `evidence` carries the reports
     ThreadBurst.maxon                       `fixtures/threadburst` helpers: `burstProcessId` reads the program's recorded process id, `killedOutright` kills it
     fixtures/threadburst/main.maxon.fixture   the thread-burst program: it records its process id, starts busy workers, and writes a marker when it runs to its own end - stored name only, see rule 1
     sidecar-dump.maxtest                    the sidecar says something TRUE about the binary beside it

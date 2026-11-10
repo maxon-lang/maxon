@@ -1,0 +1,48 @@
+let UnansweredDetachCaseLabel = "a-detach-whose-acknowledgement-never-arrives-reports-the-program-ending"
+
+let UnansweredDetachRounds = 4
+let UnansweredDetachAnchorName = "hot"
+let UnansweredDetachStopDeadlineMs = 60000
+let UnansweredDetachRoundDeadlineMs = 10000
+let UnansweredDetachPatienceMs = 3000
+let UnansweredDetachRequest = "D"
+let UnansweredDetachTraceStem = "proxy-trace-"
+let UnansweredDetachStopWording = "stopped ("
+let UnansweredDetachExitedWording = "the program exited with code "
+let UnansweredDetachFailureWording = "the detach failed"
+let UnansweredDetachRefusalWording = "refused to detach"
+
+test 'a detach the stub never acknowledges, because the program ended during it, reports the program ending instead of waiting out the reply budget'
+	#if os(Macos)
+		let staged = builtFixture(UnansweredDetachCaseLabel, fixture: HeaplessFixtureName)
+		let proxies = stubProxyDirectory(UnansweredDetachCaseLabel)
+		let hotLine = anchorLine(staged.join(StagedProgramFileName), anchor: UnansweredDetachAnchorName)
+		let expectedEnd = "{UnansweredDetachExitedWording}{runBuiltProgram(staged).exitCode()}"
+
+		for round in 0 upto UnansweredDetachRounds 'eachRound'
+			let trace = staged.join("{UnansweredDetachTraceStem}{round}.txt")
+			var session = ReplSession.open(builtExecutable(staged), staged: staged, environment: silentProxyEnvironment(proxies, trace: trace, after: UnansweredDetachRequest))
+
+			session.say("{BreakCommand} {lineTarget(hotLine)}")
+			session.say(RunCommand)
+
+			Expect.isTrue(session.sayUntilThe(UnansweredDetachStopWording, deadlineMs: UnansweredDetachStopDeadlineMs), message: "round {round}: the program must be held at its breakpoint before it is detached from. {session.said()}")
+
+			let detachedAt = Clock.nowMs()
+
+			session.say(DetachCommand)
+			session.say(QuitCommand)
+
+			let ended = session.finish(UnansweredDetachRoundDeadlineMs)
+			let detachMs = Clock.elapsedMs(detachedAt)
+			let spoken = session.said()
+
+			Expect.isTrue(ended, message: "round {round}: ⛔ A STUB THAT NEVER ANSWERS THE DETACH LEAVES THE PROGRAM'S END AS THE ONLY ANSWER THERE WILL BE. The session did not end once it was told to quit. {spoken} {session.evidence()}")
+			Expect.isTrue(File.exists(trace), message: "round {round}: the stub proxy never diverted the `{UnansweredDetachRequest}` request, so the case measured nothing. {spoken}")
+			Expect.atMost(detachMs, than: UnansweredDetachPatienceMs, message: "round {round}: a detach does not wait out the stub's reply budget once the program has ended. The detach and the quit took {detachMs} ms. The session said: {spoken}")
+			Expect.isFalse(spoken.contains(UnansweredDetachRefusalWording), message: "round {round}: a detach from a program that ended is not refused. The session said: {spoken}")
+			Expect.isFalse(spoken.contains(UnansweredDetachFailureWording), message: "round {round}: a detach from a program that ended did not fail. The session said: {spoken}")
+			Expect.isTrue(spoken.contains(expectedEnd), message: "round {round}: the stub reaped the program, which hands its status back to this session, so the detach must report it as '{expectedEnd}'. The session said: {spoken}")
+		end 'eachRound'
+	#endif
+end 'a detach the stub never acknowledges, because the program ended during it, reports the program ending instead of waiting out the reply budget'

@@ -3,6 +3,11 @@ let ProcessListingMs = 10000
 let ProcessListingColumns = "pid,ppid,pgid,stat,etime,args"
 let ProcessListingOption = "-axo"
 let StubProcessName = "debugserver"
+let ProcessStateColumn = 3
+let DefunctState = "Z"
+let SamplingTool = "sample"
+let SamplingSeconds = "1"
+let SamplingMs = 30000
 
 export function processSnapshot(matching String) returns String
 	#if os(Windows)
@@ -15,11 +20,56 @@ export function processSnapshot(matching String) returns String
 		var kept = StringArray.create(0)
 
 		for line in outputLines(listed.stdout) 'eachProcess'
-			if line.contains(matching) or line.contains(StubProcessName) 'relevant'
+			if line.contains(matching) or line.contains(StubProcessName) or isDefunct(line) 'relevant'
 				kept.push(line)
 			end 'relevant'
 		end 'eachProcess'
 
-		return "{kept.count()} process(es) name {matching} or {StubProcessName}:{LineFeed}{listedLines(kept)}"
+		return "{kept.count()} process(es) name {matching} or {StubProcessName}, or are defunct:{LineFeed}{listedLines(kept)}"
 	#endif
 end 'processSnapshot'
+
+function isDefunct(line String) returns bool
+	let tokens = whitespaceTokens(line)
+	let state = try tokens.get(ProcessStateColumn as ElementIndex) otherwise return false
+
+	return state.startsWith(DefunctState)
+end 'isDefunct'
+
+export function sampledStubs() returns String
+	#if os(Windows)
+		return "(this host has no debug stub to sample)"
+	#else
+		let listed = try Subprocess.run(Executable.name(ProcessListingTool), arguments: [ProcessListingOption, ProcessListingColumns], timeoutMs: ProcessListingMs) otherwise (e) 'noListing'
+			return "(the process listing could not run: {e.displayReason()})"
+		end 'noListing'
+
+		var report = ""
+
+		for line in outputLines(listed.stdout) 'eachProcess'
+			if not line.contains(StubProcessName) 'notAStub'
+				continue
+			end 'notAStub'
+
+			let tokens = whitespaceTokens(line)
+			let first = try tokens.get(0 as ElementIndex) otherwise continue
+			let process = try int.fromString(first) otherwise continue
+
+			report.append("{LineFeed}{line}{LineFeed}{sampledStack(process as Pid)}")
+		end 'eachProcess'
+
+		return report
+	#endif
+end 'sampledStubs'
+
+export function sampledStack(process Pid) returns String
+	#if os(Windows)
+		return "(this host has no sampler to read process {process})"
+	#else
+		let sampled = try Subprocess.run(Executable.name(SamplingTool), arguments: ["{process}", SamplingSeconds], timeoutMs: SamplingMs) otherwise (e) 'noSample'
+			return "(the sampler could not run: {e.displayReason()})"
+		end 'noSample'
+
+		return sampled.stdout
+	#endif
+end 'sampledStack'

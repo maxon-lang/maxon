@@ -7,6 +7,7 @@ let KilledHeldDetachPatienceMs = 3000
 let KilledHeldStopWording = "stopped ("
 let KilledHeldKilledWording = "the program exited with code 137"
 let KilledHeldStubLogStem = "stub-"
+let KilledHeldStubLogLines = 150
 let KilledHeldStatusLostWording = "its exit status went to another process"
 let KilledHeldDetachFailureWording = "the detach failed"
 let KilledHeldDetachRefusalWording = "refused to detach"
@@ -36,7 +37,10 @@ test 'a detach issued right after the held program was killed outright reports t
 			let detachMs = Clock.elapsedMs(detachedAt)
 			let spoken = session.said()
 
-			Expect.isTrue(ended, message: "round {round}: ⛔ A KILL THAT TAKES EFFECT ONLY WHEN THE DEBUGGER LETS GO CAN HAND THE DEAD PROGRAM TO A PROCESS THAT IS NOT THE DEBUGGER, WHICH THEN CANNOT WAIT FOR IT. The session did not end once it was told to quit. {spoken}")
+			if not ended 'itHung'
+				Expect.fail("round {round}: ⛔ A KILL THAT TAKES EFFECT ONLY WHEN THE DEBUGGER LETS GO CAN HAND THE DEAD PROGRAM TO A PROCESS THAT IS NOT THE DEBUGGER, WHICH THEN CANNOT WAIT FOR IT. The session did not end once it was told to quit. {spoken} {session.evidence()} {stubLogTail(log, lines: KilledHeldStubLogLines)}")
+			end 'itHung'
+
 			Expect.atMost(detachMs, than: KilledHeldDetachPatienceMs, message: "round {round}: a detach does not wait for the stub to leave on its own. The detach and the quit took {detachMs} ms. The session said: {spoken}")
 			Expect.isFalse(spoken.contains(KilledHeldDetachRefusalWording), message: "round {round}: a detach from a program that was killed is not refused. The session said: {spoken}")
 			Expect.isFalse(spoken.contains(KilledHeldDetachFailureWording), message: "round {round}: a detach from a program that was killed did not fail. The session said: {spoken}")

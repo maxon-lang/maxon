@@ -3,13 +3,15 @@ let ReplPollMs = 5
 export type ReplSession
 	var child as StreamingSubprocess
 	var transcript as String
+	var hungEvidence as String
+	var staged as FilePath
 
 	export static function open(executable FilePath, staged FilePath, environment Environment = Environment.inherit) returns ReplSession
 		let child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(testedCompilerPath()), arguments: [DebugSubcommandName, executable.toString()], workingDirectory: staged, environment: environment) otherwise (e) 'spawnFailed'
 			panic("the gate could not run — the debug REPL could not be spawned ({e.displayReason()}).")
 		end 'spawnFailed'
 
-		return Self{child: child, transcript: ""}
+		return Self{child: child, transcript: "", hungEvidence: "", staged: staged}
 	end 'open'
 
 	export function say(command String)
@@ -58,6 +60,7 @@ export type ReplSession
 		end 'untilItEnds'
 
 		if not ended 'itHung'
+			self.hungEvidence = self.evidenceOfAHang()
 			requireTreeEnded(self.child, what: "the debug REPL")
 		end 'itHung'
 
@@ -69,6 +72,16 @@ export type ReplSession
 
 		return ended
 	end 'finish'
+
+	export function evidence() returns String
+		return self.hungEvidence
+	end 'evidence'
+
+	function evidenceOfAHang() returns String
+		let replProcess = try self.child.processId() otherwise return "(the hung REPL's process id is gone)"
+
+		return "{processSnapshot(self.staged.toString())}{LineFeed}The hung REPL, sampled:{LineFeed}{sampledStack(replProcess)}{LineFeed}The debug stubs, sampled:{sampledStubs()}"
+	end 'evidenceOfAHang'
 
 	function absorbAvailable() returns bool
 		let outMoved = self.absorbStdoutLine()
