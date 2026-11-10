@@ -122,6 +122,25 @@ scripts/mac-host.sh drop <session> <KEY>
 - **Poll the remote for liveness** (`scripts/mac-host.sh job`, the log's modification time), never the
   local driver's log: a dead remote and a slow one look identical from here.
 
+## Running Linux binaries on the Mac inside OrbStack
+
+The `maxon-linux` machine sees the Mac's files through a cached share, and it can serve a file's PREVIOUS
+size after the Mac replaced it. MEASURED (a Mac write, then a read or exec in `orb run` at once): a file
+the machine had touched a moment before, replaced by a LARGER one, reads at the old size in about half of
+the tries, and an ELF replacing a smaller file fails to exec in every try — `cp` over it,
+truncate-and-write, delete-and-recreate and `mv` over it alike — for a few hundred milliseconds. A
+truncated read surfaces as an E1002 at the file's last line and a truncated ELF as an exec format error,
+and both are gone shortly after, which is why a re-run passes. A path the machine has never looked up is
+never stale (0 in over 2,000 tries).
+
+- **`spec-test --target=arm64-linux` and the `x64-linux` lane need nothing from you:** each entry into the
+  machine is preceded by the barrier below.
+- **A manual `orb run` of a file the Mac just wrote runs the barrier first:**
+  `orb run -m maxon-linux -u root /bin/sh -c 'echo 2 > /proc/sys/vm/drop_caches'` (about 25 ms). It drops
+  the machine's cached directory entries, so the next lookup asks the Mac. Stage under a NEW name instead
+  when that is cheaper: never swap a file in place that the machine ran a moment ago.
+- A `stat` or `ls` in the machine is not a barrier; it renews the stale entry.
+
 ## Diagnosing a hang
 
 Measure the hung process before reading code. Per-thread CPU splits the cases: one thread running at full CPU

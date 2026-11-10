@@ -263,6 +263,10 @@ let OrbRosettaOption = "rosetta"
 let PhysicalPwdCommand = "pwd"
 let PhysicalPwdFlag = "-P"
 let GuestShellReadStdinFlag = "-s"
+let OrbUserFlag = "-u"
+let GuestRootUser = "root"
+let GuestDropCachesScript = "echo 2 > /proc/sys/vm/drop_caches"
+let GuestSettleDeadlineMs = 10 * MillisecondsPerSecond
 
 // --- WSL: the x64-linux runner (Windows host) ---
 //
@@ -3784,6 +3788,29 @@ function buildLinuxVmRunCommand(exePath FilePath) returns RunCommand
 	return RunCommand.create(Executable.name(OrbExecutableName), argv: argv)
 end 'buildLinuxVmRunCommand'
 
+union GuestSettling
+	settled
+	unsettled(reason String)
+end 'GuestSettling'
+
+// The machine caches the size of every host file it has looked at, so a file the host replaced a
+// moment ago can be read or executed at its previous size: a truncated read, an exec format error.
+// Dropping the machine's cached directory entries makes the next lookup ask the host. It runs after
+// the host's last write and before the entry that reads it.
+function settleOrbGuestView() returns GuestSettling
+	let argv = StringArray from [OrbRunSubcommand, OrbMachineFlag, OrbMachineName, OrbUserFlag, GuestRootUser, GuestShell, GuestShellCommandFlag, GuestDropCachesScript]
+
+	let dropped = try runProcess(Executable.name(OrbExecutableName), argv: argv, workingDirectory: inheritedWorkingDirectory(), timeoutMs: GuestSettleDeadlineMs) otherwise (e) 'unspawnable'
+		return GuestSettling.unsettled("could not run '{OrbExecutableName} {OrbRunSubcommand} {OrbMachineFlag} {OrbMachineName} {OrbUserFlag} {GuestRootUser}' to refresh the machine's view of the host files: {e.displayReason()}")
+	end 'unspawnable'
+
+	if not exitSucceeded(dropped.exitCode as ExitCode) 'refused'
+		return GuestSettling.unsettled("'{OrbExecutableName} {OrbRunSubcommand} {OrbMachineFlag} {OrbMachineName} {OrbUserFlag} {GuestRootUser} {GuestShell} {GuestShellCommandFlag} {GuestDropCachesScript}' failed (exit {dropped.exitCode}): {dropped.stderr.trim()}")
+	end 'refused'
+
+	return GuestSettling.settled
+end 'settleOrbGuestView'
+
 // ============================================================================================
 // THE DELEGATED LANE — a macOS host's own-CPU Linux suite, run by a Linux-hosted compiler
 // ============================================================================================
@@ -3909,6 +3936,11 @@ let GuestCompilerBuildDeadlineMs = 30 * 60 * MillisecondsPerSecond
 // the deadline above is generous — the pool inside the guest carries every bound this run needs, and a
 // second one out here could only pre-empt a report that was about to arrive.
 function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, workerCount WorkerCount, workersOverridden bool, includeNetwork bool, resultTarget SpecResultTarget) returns ExitCode
+	match settleOrbGuestView() 'settling'
+		settled then break
+		unsettled(reason) then return reportGuestUnsettled(reason)
+	end 'settling'
+
 	let launch = buildLinuxVmRunCommand(guestExe)
 
 	var argv = StringArray.create(0)
@@ -3960,6 +3992,11 @@ function reportGuestSignalled(signal ExitCodeValue) returns ExitCode
 	printError("error: the suite inside '{OrbMachineName}' was killed by signal {signal} — no verdict was reported\n")
 	return OwnFailureExit
 end 'reportGuestSignalled'
+
+function reportGuestUnsettled(reason String) returns ExitCode
+	printError("error: could not refresh the '{OrbMachineName}' machine's view of the host files before running the suite: {reason}\n")
+	return NothingRanExitCode
+end 'reportGuestUnsettled'
 
 function reportGuestUnavailable(reason String, effectiveTarget Target) returns ExitCode
 	printError("error: nothing was run for {targetToString(effectiveTarget)}: {reason}\n")
@@ -4499,6 +4536,13 @@ enum BatchLauncher
 			orb gives false
 		end 'launcher'
 	end 'readsScriptFromFile'
+
+	function settleGuestView() returns GuestSettling
+		return match self 'launcher'
+			wsl gives GuestSettling.settled
+			orb gives settleOrbGuestView()
+		end 'launcher'
+	end 'settleGuestView'
 end 'BatchLauncher'
 
 function batchLaunchArguments(launcher BatchLauncher, tempDir FilePath) returns StringArray
@@ -4553,6 +4597,11 @@ function launchBatch(executions ExecutionArray, launcher BatchLauncher, tempDir 
 	end 'scriptFile'
 
 	let argv = batchLaunchArguments(launcher, tempDir: tempDir)
+
+	match launcher.settleGuestView() 'settling'
+		settled then break
+		unsettled(reason) then return BatchLaunch.failed(reason)
+	end 'settling'
 
 	let batch = try runProcess(Executable.name(launcher.executableName()), argv: argv, workingDirectory: runWorkingDir, timeoutMs: batchDeadlineMs(executions.count() as TestTally), standardInput: batchScriptInput(launcher, script: script)) otherwise (e) 'batchSpawnFailed'
 		return BatchLaunch.failed("the batched {launcher.executableName()} run failed: {e.displayReason()}")
@@ -4942,6 +4991,11 @@ function requireOrbMachineReachable(effectiveTarget Target, probeScript String, 
 	if not exitSucceeded(probe.exitCode as ExitCode) 'machineUnreachable'
 		panic("SpecTestRunner: the {orbTargetKey} preflight probe '{OrbExecutableName} {OrbRunSubcommand} {OrbMachineFlag} {OrbMachineName} {GuestShell} {GuestShellCommandFlag} ...' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the {orbTargetKey} run path needs {requirement}")
 	end 'machineUnreachable'
+
+	match settleOrbGuestView() 'viewRefreshable'
+		settled then break
+		unsettled(reason) then panic("SpecTestRunner: the {orbTargetKey} run path refreshes the machine's view of the host files before every entry, and that failed: {reason}")
+	end 'viewRefreshable'
 end 'requireOrbMachineReachable'
 
 // Probe WSL by running the smallest command that proves the LANE, not merely the distro — see
