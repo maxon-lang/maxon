@@ -195,7 +195,9 @@ The script runs on Python 3.9 or newer and needs only the standard library.
   it builds the Go programs with the machine's Go, stages every binary in
   `~/.cache/maxon-bench-concurrency` (the machine's own filesystem, not the mount) and measures with GNU
   `/usr/bin/time`. The harness refuses, before building anything, when `orb` is not on `PATH`, the machine
-  does not exist, the machine is not arm64, or `/usr/bin/time` is missing in it. Setting the machine up:
+  does not exist, the machine is not arm64, or `/usr/bin/time` is missing in it. The machine writes the
+  re-run's output to files under the out directory and the harness prints them as they grow, because
+  `orb run` can drop the tail of a large piped output. Setting the machine up:
   ```
   orb create ubuntu ubuntu                                        # an arm64 machine on an Apple Silicon Mac
   orb -m ubuntu sudo apt-get install -y time                      # GNU time

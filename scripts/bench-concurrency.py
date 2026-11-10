@@ -45,6 +45,9 @@ MAXON_ARMS_DIR_NAME = "maxon"
 TIME_PROGRAM = "/usr/bin/time"
 WSL_LAUNCHER = "wsl.exe"
 ORB_LAUNCHER = "orb"
+ORB_DROP_CACHES_SCRIPT = "echo 2 > /proc/sys/vm/drop_caches"
+ORB_REDIRECT_SCRIPT = 'out=$1; err=$2; shift 2; exec "$@" > "$out" 2> "$err"'
+FOLLOW_INTERVAL_S = 0.1
 GO_ARM = "go"
 GO_PROCESSORS_VARIABLE = "GOMAXPROCS"
 MAXON_PROCESSORS_VARIABLE = "MAXON_MAX_PROCS"
@@ -622,10 +625,48 @@ def run_outer_guest(args, workloads, context, planned_arms, host):
         json.dump({"context": context, "arms": arms}, fh, indent=2)
     forward_go = GUESTS[host].forwards_go_path and bench_common.GO_PATH_VARIABLE in os.environ
     environment = [f"{bench_common.GO_PATH_VARIABLE}={os.environ[bench_common.GO_PATH_VARIABLE]}"] if forward_go else []
-    command = guest_launcher(host, args) + ["env"] + environment + [
+    inner = ["env"] + environment + [
         "python3", guest_path(host, args, os.path.abspath(__file__)), "--inside", host,
         "--out-dir", guest_path(host, args, out_dir)] + forwarded_arguments(args, host)
-    return subprocess.run(command).returncode
+    if host == HOST_ORB:
+        return run_orb_guest_through_files(args, inner, out_dir)
+    return subprocess.run(guest_launcher(host, args) + inner).returncode
+
+
+def run_orb_guest_through_files(args, inner, out_dir):
+    capture_dir = tempfile.mkdtemp(prefix="guest-output-", dir=out_dir)
+    try:
+        streams = [(os.path.join(capture_dir, "stdout"), sys.stdout), (os.path.join(capture_dir, "stderr"), sys.stderr)]
+        # `orb run` drops the tail of a large piped output at guest exit, so the guest writes files. The
+        # cache drop runs after the host created the directory and before the guest opens its files.
+        settle = subprocess.run(guest_launcher(HOST_ORB, args) + ["-u", "root", "/bin/sh", "-c", ORB_DROP_CACHES_SCRIPT],
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        if settle.returncode != 0:
+            raise BuildFailure(f"refreshing the OrbStack machine's view of the host files failed:\n{settle.stderr}")
+        command = guest_launcher(HOST_ORB, args) + ["/bin/sh", "-c", ORB_REDIRECT_SCRIPT, "_"] + [
+            guest_path(HOST_ORB, args, path) for path, _ in streams] + inner
+        launcher = subprocess.Popen(command)
+        shown = {path: 0 for path, _ in streams}
+        while launcher.poll() is None:
+            replay_new_bytes(streams, shown)
+            time.sleep(FOLLOW_INTERVAL_S)
+        replay_new_bytes(streams, shown)
+        return launcher.returncode
+    finally:
+        shutil.rmtree(capture_dir, ignore_errors=True)
+
+
+def replay_new_bytes(streams, shown):
+    for path, sink in streams:
+        if not os.path.exists(path):
+            continue
+        with open(path, "rb") as fh:
+            fh.seek(shown[path])
+            fresh = fh.read()
+        sink.flush()
+        sink.buffer.write(fresh)
+        sink.buffer.flush()
+        shown[path] += len(fresh)
 
 
 def run_native(args, workloads, context, planned_arms):

@@ -12,6 +12,9 @@ Work here is compiler work.
 - `mac-host.sh` delivers the remote script on ssh's stdin (`bash -s`), so a command inside it that reads
   stdin (`orb run`, `ssh`, `read`) swallows the rest of the script and bash exits 0 having run nothing.
   Give such a command `</dev/null`. Only ssh exit 255 means "host unreachable"; exit 0 with no output is a bug.
+- `orb run` silently drops the tail of a large stdout or stderr (exit 0, empty stderr), so no script reads a
+  guest program's output from its pipes: the guest writes the output to files and the host reads them after
+  `orb run` returns (`compiler-workflow` skill, "Running Linux binaries on the Mac inside OrbStack").
 - macOS ships bash 3.2 (an empty array under `set -u` is "unbound"; `seq 1 0` counts down) and has no
   `timeout`. A script written on Windows and run on the Mac must have LF line endings: CRLF makes bash die
   at the first `do` or on `set -o pipefail`, which reads as a hang.

@@ -3752,9 +3752,11 @@ function findWasmtimePath() returns FilePath
 	return found
 end 'findWasmtimePath'
 
-// `orb run -m maxon-linux <exe>` — the ONE spelling of "run this Linux binary inside the OrbStack
-// machine", and its single caller is the delegation below: what crosses is a whole COMPILER, handed
-// the suite's own command line, not a test binary.
+// `orb run -m maxon-linux /bin/sh -c <redirect script> _ <stdout file> <stderr file> <exe>` — the ONE
+// spelling of "run this Linux binary inside the OrbStack machine", and its single caller is the
+// delegation below: what crosses is a whole COMPILER, handed the suite's own command line, not a
+// test binary. The shell redirects the binary's output into the two files (`spawnGuestSuite` says
+// why), and their paths are made absolute by the rule below.
 //
 // ⚠ THE PATH IS MADE ABSOLUTE BEFORE IT CROSSES, AND THAT IS NOT DEFENSIVENESS. The VM mirrors the
 // Mac's filesystem at IDENTICAL REAL paths, which is what lets it run a binary the build wrote
@@ -3778,11 +3780,12 @@ end 'findWasmtimePath'
 // is therefore the way to get the lookup; pre-resolving it here would not.
 //
 // A missing `orb` is caught ONCE, up front, by `requireRunnerAvailable`.
-function buildLinuxVmRunCommand(exePath FilePath) returns RunCommand
-	var argv = StringArray.create(4, zeroed: false)
+function buildLinuxVmRunCommand(exePath FilePath, capture GuestSuiteCapture) returns RunCommand
+	var argv = StringArray.create(10, zeroed: false)
 	argv.push(OrbRunSubcommand)
 	argv.push(OrbMachineFlag)
 	argv.push(OrbMachineName)
+	argv.append(capture.redirectArguments())
 	argv.push(exePath.anchoredAt(Directory.currentPath()).toString())
 
 	return RunCommand.create(Executable.name(OrbExecutableName), argv: argv)
@@ -3932,16 +3935,26 @@ let GuestCompilerBuildDeadlineMs = 30 * 60 * MillisecondsPerSecond
 //
 // ⚠ **STREAMED IS NOT A PREFERENCE.** The guest prints a line per test and the run lasts minutes;
 // collecting would hold every one of them until the process ended, so a reader would watch a blank
-// terminal and a failure would arrive only after everything else. `timeoutMs: 0` for the same reason
-// the deadline above is generous — the pool inside the guest carries every bound this run needs, and a
-// second one out here could only pre-empt a report that was about to arrive.
+// terminal and a failure would arrive only after everything else. No deadline applies here, for the
+// same reason the deadline above is generous — the pool inside the guest carries every bound this run
+// needs, and a second one out here could only pre-empt a report that was about to arrive.
+//
+// ⚠ The suite's output is NOT read from `orb run`'s pipes: `orb run` drops the tail of a large piped
+// stdout or stderr at guest exit while the exit status stays right, which would lose the verdict
+// lines. The guest writes both streams to files, the host replays them as they grow, and the final
+// replay runs only after the launcher has exited, when the files are complete.
 function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, workerCount WorkerCount, workersOverridden bool, includeNetwork bool, resultTarget SpecResultTarget) returns ExitCode
+	// Created before `settleOrbGuestView` so the cache drop covers the new directory.
+	let capture = try GuestSuiteCapture.begin(specDir) otherwise (e) 'noCapture'
+		return reportGuestOutputFailure(e)
+	end 'noCapture'
+
 	match settleOrbGuestView() 'settling'
 		settled then break
-		unsettled(reason) then return reportGuestUnsettled(reason)
+		unsettled(reason) then return discardCaptureAfter(capture, exitCode: reportGuestUnsettled(reason))
 	end 'settling'
 
-	let launch = buildLinuxVmRunCommand(guestExe)
+	let launch = buildLinuxVmRunCommand(guestExe, capture: capture)
 
 	var argv = StringArray.create(0)
 	argv.append(launch.argv)
@@ -3965,26 +3978,176 @@ function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns Fil
 		at(path) then argv.push("{ResultJsonFlagPrefix}{path.toString()}")
 	end 'documentAsked'
 
-	var config = Configuration.create(launch.exe.clone())
-	config.arguments = argv
-	config.standardOutput = OutputDestination.inherit
-	config.standardError = OutputDestination.inherit
-	config.standardInput = InputSource.none
-	config.timeoutMs = 0
-
-	let ran = try Subprocess.runConfiguration(config) otherwise (e) 'guestUnreachable'
+	let child = try StreamingSubprocess.spawn(launch.exe, arguments: argv) otherwise (e) 'guestUnreachable'
 		printError("error: could not run the suite inside '{OrbMachineName}': {e.displayReason()}\n")
-		return NothingRanExitCode
+		return discardCaptureAfter(capture, exitCode: NothingRanExitCode)
 	end 'guestUnreachable'
+
+	child.closeStdin()
+
+	let status = followGuestSuite(child, capture: capture)
+	child.release()
+
+	// Strict, unlike the polls in `followGuestSuite`: a read that fails here would silently drop
+	// the tail of the suite's output.
+	try capture.replay() otherwise (e) 'outputLost'
+		return discardCaptureAfter(capture, exitCode: reportGuestOutputFailure(e))
+	end 'outputLost'
+
+	capture.discard()
 
 	// The guest's exit code IS this command's: a red inside the machine must be red outside it, and
 	// that includes the codes whose meaning is not "a test failed" — the leak exit
 	// (`isLeakDetectedExit`) and `NothingRanExitCode`.
-	return match ran.status 'termination'
+	return match status 'termination'
 		exited(code) gives code as ExitCode
 		signalled(code) gives reportGuestSignalled(code as ExitCodeValue)
 	end 'termination'
 end 'spawnGuestSuite'
+
+let GuestSuiteStem = "guest-suite"
+let GuestSuiteStdoutName = "stdout"
+let GuestSuiteStderrName = "stderr"
+let GuestSuiteRedirectScript = "out=$1; err=$2; shift 2; exec \"$@\" > \"$out\" 2> \"$err\""
+let GuestScriptZeroName = "_"
+let GuestOutputFollowMs = 100
+
+enum GuestOutputError implements Error
+	noCaptureDirectory
+	unreadableOutput
+end 'GuestOutputError'
+
+type FollowedOutput
+	let path as FilePath
+	let stream as ChildStream
+	var shown = 0 as BytePos
+
+	static function create(path FilePath, stream ChildStream) returns FollowedOutput
+		return Self{path: path, stream: stream}
+	end 'create'
+
+	function replayNewBytes() throws GuestOutputError
+		if not File.exists(self.path) 'notCreatedYet'
+			return
+		end 'notCreatedYet'
+
+		let info = try File.info(self.path) otherwise throw GuestOutputError.unreadableOutput
+
+		if (info.size as BytePos) <= self.shown 'nothingNew'
+			return
+		end 'nothingNew'
+
+		let bytes = try File.readBinary(self.path) otherwise throw GuestOutputError.unreadableOutput
+		let arrived = bytes.count() as BytePos
+
+		if arrived <= self.shown 'stillNothingNew'
+			return
+		end 'stillNothingNew'
+
+		let fresh = try bytes.slice(self.shown, endIndex: arrived) otherwise throw GuestOutputError.unreadableOutput
+
+		writeToChildStream(String.from(fresh), stream: self.stream)
+		self.shown = arrived
+	end 'replayNewBytes'
+end 'FollowedOutput'
+
+type GuestSuiteCapture
+	let directory as FilePath
+	let stdoutPath as FilePath
+	let stderrPath as FilePath
+	let stdoutFollow as FollowedOutput
+	let stderrFollow as FollowedOutput
+
+	static function begin(specDir FilePath) returns GuestSuiteCapture throws GuestOutputError
+		// A name no earlier run used: the machine's cached view of a name the host has since deleted
+		// fails the guest's create with `Directory nonexistent`.
+		let directory = specTempRootDir(specDir).join(scratchNameFor(GuestSuiteStem))
+
+		if not Directory.create(directory) 'noDirectory'
+			throw GuestOutputError.noCaptureDirectory
+		end 'noDirectory'
+
+		let stdoutPath = directory.join(GuestSuiteStdoutName)
+		let stderrPath = directory.join(GuestSuiteStderrName)
+
+		return Self{directory: directory, stdoutPath: stdoutPath, stderrPath: stderrPath, stdoutFollow: FollowedOutput.create(stdoutPath, stream: ChildStream.stdout), stderrFollow: FollowedOutput.create(stderrPath, stream: ChildStream.stderr)}
+	end 'begin'
+
+	function redirectArguments() returns StringArray
+		return StringArray from [GuestShell, GuestShellCommandFlag, GuestSuiteRedirectScript, GuestScriptZeroName, self.stdoutPath.anchoredAt(Directory.currentPath()).toString(), self.stderrPath.anchoredAt(Directory.currentPath()).toString()]
+	end 'redirectArguments'
+
+	function replay() throws GuestOutputError
+		try self.stdoutFollow.replayNewBytes()
+		try self.stderrFollow.replayNewBytes()
+	end 'replay'
+
+	function discard()
+		purgeFilesIn(self.directory)
+		try Directory.delete(self.directory) otherwise ignore
+	end 'discard'
+end 'GuestSuiteCapture'
+
+function discardCaptureAfter(capture GuestSuiteCapture, exitCode ExitCode) returns ExitCode
+	capture.discard()
+
+	return exitCode
+end 'discardCaptureAfter'
+
+function writeToChildStream(text String, stream ChildStream)
+	match stream 'which'
+		stdout then print(text)
+		stderr then printError(text)
+	end 'which'
+end 'writeToChildStream'
+
+function forwardLauncherLine(child StreamingSubprocess, stream ChildStream) returns bool
+	match pollChildStreamLine(child, stream: stream) 'polled'
+		none then return false
+		line(text) then writeToChildStream("{text}\n", stream: stream)
+	end 'polled'
+
+	return true
+end 'forwardLauncherLine'
+
+function forwardLauncherLines(child StreamingSubprocess) returns bool
+	let outMoved = forwardLauncherLine(child, stream: ChildStream.stdout)
+	let errMoved = forwardLauncherLine(child, stream: ChildStream.stderr)
+
+	return outMoved or errMoved
+end 'forwardLauncherLines'
+
+function followGuestSuite(child StreamingSubprocess, capture GuestSuiteCapture) returns TerminationStatus
+	while true 'following'
+		// A poll mid-run may fail and the next one retries it; only the final replay in
+		// `spawnGuestSuite` must succeed.
+		try capture.replay() otherwise ignore
+
+		if forwardLauncherLines(child) 'moved'
+			continue
+		end 'moved'
+
+		match childProgress(child) 'progress'
+			finished(status) then return status
+			waiting then sleep(GuestOutputFollowMs)
+		end 'progress'
+	end 'following'
+
+	panic("SpecTestRunner.followGuestSuite: the follow loop leaves only by returning")
+end 'followGuestSuite'
+
+function reportGuestOutputFailure(failure GuestOutputError) returns ExitCode
+	return match failure 'which'
+		noCaptureDirectory gives reportOwnFailure("could not create the directory the '{OrbMachineName}' suite's output is captured in, under {SpecScratchDirName}")
+		unreadableOutput gives reportOwnFailure("could not read the output the suite wrote inside '{OrbMachineName}' — its verdict is the exit code alone")
+	end 'which'
+end 'reportGuestOutputFailure'
+
+function reportOwnFailure(message String) returns ExitCode
+	printError("error: {message}\n")
+
+	return OwnFailureExit
+end 'reportOwnFailure'
 
 // A guest that died on a signal has no exit code to forward, and the suite it was running reported
 // nothing about itself — so this is a failure of the RUN, named as one.

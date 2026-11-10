@@ -141,6 +141,24 @@ never stale (0 in over 2,000 tries).
   when that is cheaper: never swap a file in place that the machine ran a moment ago.
 - A `stat` or `ls` in the machine is not a barrier; it renews the stale entry.
 
+⛔ **`orb run` SILENTLY DROPS THE TAIL OF A LARGE STDOUT OR STDERR**: exit status right, stderr empty, the
+output short by whole 32 KiB blocks. MEASURED on the Mac: `cat` of a 1.6 MB file that exits at once after its
+last write is short in 8 to 24 of every 100 runs, to a pipe or to a file alike, and so is stderr; `cat` of 16 MiB
+is short in 60 of 60; a reader slower than the producer loses the tail even of a producer that never lost one
+(16 MiB through a reader taking 4 KiB per millisecond: 20 of 20). Small output (2,000 short lines) never was,
+and a sleep before the guest exits hides the loss without curing it. So **nothing that can exceed 64 KiB, or
+whose last line is a verdict, is read from `orb run`'s pipes** (never `orb run … | tee`, `> file` on the host or
+`$(orb run …)`).
+
+- **Write the output inside the guest, read it on the host after `orb run` returns:**
+  `orb run -m maxon-linux /bin/sh -c 'out=$1; err=$2; shift 2; exec "$@" > "$out" 2> "$err"' _ <out> <err> <program> <args>`
+  (0 of 100 short, exit status and every argument byte forwarded). `<out>` and `<err>` are NEW names: a name
+  the machine has already seen and the host since deleted fails to create (`Directory nonexistent`, 19 of 20)
+  unless the barrier above ran first (0 of 20). The delegated lane does this itself (`GuestSuiteCapture`),
+  and the batched lanes already return every program's output through files.
+- A trailer is the detection when a file is not possible: end the guest's output with a fixed last line and
+  treat its absence as a failed run (it was missing in exactly the runs that came up short, 9 of 100).
+
 ## Diagnosing a hang
 
 Measure the hung process before reading code. Per-thread CPU splits the cases: one thread running at full CPU

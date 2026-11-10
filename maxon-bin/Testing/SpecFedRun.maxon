@@ -1,10 +1,21 @@
 let FedRunSurvivorDrainMs = 100
 let FedRunLineEnd = "\n"
 
-union FedRunProgress
+export union ChildProgress
 	finished(status TerminationStatus)
 	waiting
-end 'FedRunProgress'
+end 'ChildProgress'
+
+export function childProgress(child StreamingSubprocess) returns ChildProgress
+	if not childStreamsEnded(child) 'stillOpen'
+		return ChildProgress.waiting
+	end 'stillOpen'
+
+	return match child.pollTermination() 'polled'
+		ended(status) gives ChildProgress.finished(status)
+		running gives ChildProgress.waiting
+	end 'polled'
+end 'childProgress'
 
 type FedRun
 	var child as StreamingSubprocess
@@ -78,7 +89,7 @@ type FedRun
 				continue
 			end 'moved'
 
-			match self.progress() 'progress'
+			match childProgress(self.child) 'progress'
 				finished(status) then return status
 				waiting then sleep(ChildPollMs)
 			end 'progress'
@@ -86,17 +97,6 @@ type FedRun
 
 		panic("FedRun.pump: the pump loop leaves only by returning or throwing")
 	end 'pump'
-
-	function progress() returns FedRunProgress
-		if not childStreamsEnded(self.child) 'stillOpen'
-			return FedRunProgress.waiting
-		end 'stillOpen'
-
-		return match self.child.pollTermination() 'polled'
-			ended(status) gives FedRunProgress.finished(status)
-			running gives FedRunProgress.waiting
-		end 'polled'
-	end 'progress'
 
 	function requireTimeLeft(start InstantMs, timeoutMs DurationMs) throws SubprocessError
 		if Clock.elapsedMs(start) >= timeoutMs 'expired'
