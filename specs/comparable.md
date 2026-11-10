@@ -9,10 +9,8 @@ category: type-system
 ## Documentation
 
 `Ordering` is a compiler-known three-case enum — `lessThan`, `equalTo`, `greaterThan`, in that
-declaration order, with the auto-increment tags `0`, `1`, `2`. The compiler reads no stdlib, so it SYNTHESIZES
-the declaration (transcribed from `stdlib/Interfaces.maxon`) exactly as it synthesizes the `Hashable` /
-`Equatable` / `Comparable` protocol interfaces and the `String` / `Array` / `Set` types. Being an
-ordinary enum, its cases are referenced as qualified values (`Ordering.lessThan`), it names a parameter
+declaration order, with the auto-increment tags `0`, `1`, `2`, declared by `stdlib/Interfaces.maxon`.
+Being an ordinary enum, its cases are referenced as qualified values (`Ordering.lessThan`), it names a parameter
 or return type (`function rank(o Ordering)`), and a `match` over it is a case-name match with the usual
 exhaustiveness rule — nothing about it is a special form.
 
@@ -520,7 +518,7 @@ error E3005: <fragment>:26:20: '<' on type parameter 'T' requires an argument of
 ```
 
 <!-- test: comparable.error.declare-ordering-enum -->
-`Ordering` is a declaration the COMPILER owns — the compiler synthesizes it instead of reading `stdlib/`, and
+`Ordering` is a declaration the COMPILER owns — a user declaration cannot displace the stdlib's, and the compiler
 has no namespace to tell a user `Ordering` from the builtin one. A user declaration binding the name is
 therefore refused (E2015) rather than half-shadowing it: `Comparable.compare` would still return the
 builtin's tags while a `match` on the result offered the user's cases.
@@ -572,8 +570,7 @@ end 'main'
 
 <!-- test: comparable.error.declare-hashvalue-type -->
 The same rule covers the sibling compiler-owned name: an admitted user `type HashValue` would make
-`Hashable.hash()`'s witness result resolve as a struct box (the parser reads the struct registry; type
-resolution claims `HashValue` before it), which is then dropped as one — an access violation. One
+`Hashable.hash()`'s witness result resolve as a struct box (the parser reads the struct registry), which is then dropped as one — an access violation. One
 reject, stated once, for every compiler-owned type name.
 ```maxon
 typealias Small = int(0 to 100)

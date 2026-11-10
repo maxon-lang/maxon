@@ -2590,9 +2590,8 @@ function builtinProtocolResultOfNominal(name ByteArray) returns StdType
 end 'builtinProtocolResultOfNominal'
 
 // The SYNTHESIZED stdlib protocol interfaces, verbatim from stdlib/Interfaces.maxon —
-// so `implements Stringable`/`Hashable`/… resolves without the compiler reading the stdlib (the
-// same reason `String`/`Array` are synthesized). Declared under `spelledAs`, the name this compile
-// spells the protocol by. `Iterator`/`Iterable` (associated types) are deliberately not synthesized here.
+// so `implements Stringable`/`Hashable`/… resolves to them. Declared under `spelledAs`, the name this
+// compile spells the protocol by. `Iterator`/`Iterable` (associated types) are deliberately not synthesized here.
 function synthesizedProtocol(protocol BuiltinInterfaceKind, spelledAs ByteArray, interfaces IrInterfaceMap) returns IrInterface
 	let method = try synthesizedProtocolMethod(protocol, interfaces: interfaces) otherwise return markerInterface(spelledAs)
 	return singleMethodInterface(spelledAs, method: method)
@@ -2777,28 +2776,6 @@ end 'lookupInterface'
 // materializer, and the impl installer must all spell it the same. It MUST equal
 // `primitiveTypeTagName(ValueTypeTag.integer)` — the one place a resolved `integer` is rendered to a name.
 export let IntConformerName = b"int"
-
-// ⭐ **THE COMPILER'S OWN SYNTHESIZED RANGED INT ALIASES — the names that erase to `integer` without
-// appearing in ANY alias registry.** `HashValue` is the declared result type of the synthesized
-// `Hashable.hash()` (`synthesizedProtocol`), and the compiler reads no stdlib, so its `typealias HashValue =
-// int(0 to u32.max)` is nowhere a reader can look it up: every reduction that goes THROUGH an alias
-// registry answers "not an alias" and leaves the name nominal.
-//
-// TWO readers reduce a `named` type that way, and they must not answer differently:
-//
-//   • `TypeResolution.resolveNamedType` — erases it to `integer`, or every user `hash() returns HashValue`
-//     is E3011.
-//   • `Parser.rangedAliasTag` — the parse-time reduction the direct builtin-conformance dispatch classifies
-//     a receiver by (`builtinConformerOfType`).
-//
-// ⚠ **MEASURED: THEY CAN DISAGREE.** A parser copy that knows only the registry does not see `i.hash()`'s
-// own result — a `HashValue`, i.e. an int — as an int, and `i.hash().hash()` is **E2015 "Unsupported: .
-// statement"** on a program the language has no rule against, while the header of `rangedAliasTag` names
-// `HashValue` as one of the four spellings that reduce to ONE conformer. The `→ integer` half of the fact
-// is stated in this function's NAME, which is what both readers spell instead of the erasure.
-export function isSynthesizedIntAliasName(name ByteArray) returns bool
-	return name.equals(HashValueTypeName)
-end 'isSynthesizedIntAliasName'
 
 // The canonical conformer name of the managed concrete `String` — the twin of `IntConformerName` for the
 // String intrinsic conformance. It keys `String`'s witness tables (`__witness_String.*`) and its

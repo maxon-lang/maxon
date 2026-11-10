@@ -43593,13 +43593,6 @@ export type Parser
 	// is a FLOAT alias (the tag `named` is too coarse to carry it), and whether it is an INT alias
 	// (the builtin-conformance receiver classifier, which must see `Byte` and `Integer` as `int` exactly
 	// as `ProgramSignatures.conformerTypeArgName` does for a witness type argument).
-	//
-	// ⚠ **THE REGISTRY IS NOT THE WHOLE ALIAS SET, AND THE ONE NAME OUTSIDE IT IS THE COMPILER'S OWN RESULT
-	// TYPE.** `HashValue` — what `hash()` returns — is a ranged int alias the COMPILER declares, so it is in
-	// no registry `aliasOf` can see (`isSynthesizedIntAliasName`). Asked through the registry alone it would
-	// answer `named`, and `i.hash().hash()` — an int method on an int, which the header of
-	// `builtinConformerOfType` claims is one conformer with `Integer`/`Byte`/`int` — would be E2015 while
-	// `TypeResolution.resolveNamedType` erases the very same name to `integer`.
 	function rangedAliasTag(nameId TypeNameId) returns ValueTypeTag
 		if let answered = try self.memos.rangedAliasTags.get(nameId) 'alreadyAsked'
 			return answered
@@ -43614,10 +43607,6 @@ export type Parser
 	// The same reduction on a named FILE's behalf. Split for `namedIsFloatAliasFor`'s reason: a slot another
 	// file declared is reduced in THAT file's scope, and `aliasOf` is where the reader is spent.
 	function rangedAliasTagOfNameFrom(name ByteArray, scopeFilePath FilePath) returns ValueTypeTag
-		if isSynthesizedIntAliasName(name) 'compilerDeclaredIntAlias'
-			return ValueTypeTag.integer
-		end 'compilerDeclaredIntAlias'
-
 		return match self.signatures.aliasOrInnerAliasOf(name, readerFilePath: scopeFilePath) 'a'
 			declared(alias) gives maxonTypeTag(alias.underlying)
 			undeclared gives ValueTypeTag.named
@@ -91279,7 +91268,7 @@ export type Parser
 	// `v.push(5 as Num)` reported as a field access on `v`. A refusal that misnames the construct it refuses
 	// sends the reader to look at the wrong line.
 	function missingBaseLayout(access BaseAccessKind, typeName ByteArray, baseTok Token) returns SourceParseError
-		// ⚠ **DO NOT SAY THE FIELD DOES NOT EXIST — IT VERY LIKELY DOES.** The compiler reads no stdlib and SYNTHESIZES
+		// ⚠ **DO NOT SAY THE FIELD DOES NOT EXIST — IT VERY LIKELY DOES.** The compiler SYNTHESIZES
 		// the `Array`/`Set` runtime record instead of compiling the declaration, so no `type` exists here to
 		// carry a field table at all — the field is missing from this compiler, not from the language. E2015 —
 		// a construct this compiler does not implement YET — is exactly the register that carries, and it is
@@ -91369,8 +91358,8 @@ export type Parser
 	//
 	// ⚠⚠ **THE `isCompilerOwnedTypeName` GATE IS HERE FOR A NAME THE CASCADE CANNOT ANSWER FOR, AND IT IS
 	// WRITTEN OVER THE WHOLE LIST RATHER THAN OVER ONE NAME.** The cascade answers `ExitCode` by its own arm,
-	// `HashValue` through `isSynthesizedIntAliasName`, `Codepoint` through the alias registry, `Ordering`
-	// and `ArrayError` because `createEnumRegistry` seeds them, and `CharSet` because
+	// `HashValue` and `Codepoint` through the alias registry, `Ordering` and `ArrayError` as the enums
+	// the corpus declares, and `CharSet` because
 	// `stdlib/CharacterSet.maxon:19`'s own `typealias CharSet = Set with Character` folds into
 	// `genericAliases` like any other declared alias;
 	// `String` and `Character` never arrive here at all, because `parseTypeReference`

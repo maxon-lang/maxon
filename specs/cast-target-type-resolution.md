@@ -29,7 +29,7 @@ evaporate. **A named cast target is resolved, and each kind answers:**
 | a declared ranged typealias | resolved |
 
 There is no second cascade in the parser. `TypeResolution` owns the one list of sources a named type can
-come from — the `ExitCode` builtin, the compiler's synthesized int aliases, declared structs, declared
+come from — the `ExitCode` builtin, declared structs, declared
 enums/unions, plain ranged typealiases, qualified (inner / per-instance) aliases — and that list is
 `denotedNamedType`, asked by BOTH the resolution pass (whose `unknown` verdict IS its E3011) and by the two
 places a cast target is written. One list; the parser and the authority cannot come to disagree about what

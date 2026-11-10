@@ -80,10 +80,9 @@ end 'main'
 
 <!-- test: int.hash.chained -->
 `hash()` returns a `HashValue`, and a `HashValue` IS an int — so a hash of a hash is an ordinary chained
-dispatch, and so are `.equals`/`.compare` on a binding that holds one. `HashValue` is the one ranged int
-alias the COMPILER declares rather than the program, so it is in NO alias registry: the receiver classifier
-must reduce it through the same name set `TypeResolution.resolveNamedType` erases to `integer`
-(`isSynthesizedIntAliasName`) or it reads the name as nominal and rejects the second hop.
+dispatch, and so are `.equals`/`.compare` on a binding that holds one. `HashValue` is the stdlib's ranged
+int alias (`stdlib/Interfaces.maxon`), so the receiver classifier reduces it to `int` through the alias
+registry like any other ranged alias.
 ```maxon
 function main() returns ExitCode
 	let i = 42

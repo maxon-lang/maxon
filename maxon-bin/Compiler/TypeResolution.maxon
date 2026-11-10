@@ -1266,23 +1266,24 @@ export function resolveType(project Project, signatures ProgramSignatures, t Max
 end 'resolveType'
 
 // ⭐ **THE TYPE NAMES THE COMPILER OWNS — a user declaration may not bind one.** Homed
-// here because this is where the coupling lives: `resolveNamedType` below claims `ExitCode` and `HashValue`
-// BEFORE it consults `structTypes`/`enumTypes`, and `createEnumRegistry` seeds `Ordering` INTO those
-// registries — so under all three names the AUTHORITY's answer is fixed, while the PARSER's own `named`
-// resolution (`resolveNamedStruct`, which reads the struct registry and knows nothing of these names) would
-// happily follow a user declaration instead. That disagreement is not academic: a user `type HashValue`
+// here because this is where the coupling lives: `denotedNamedType` below claims `ExitCode` BEFORE it
+// consults `structTypes`/`enumTypes`, and `stdlib/Interfaces.maxon` declares `Ordering` into those
+// registries and `HashValue` as a ranged alias — so under all three names the AUTHORITY's answer is
+// fixed, while the PARSER's own `named` resolution (`resolveNamedStruct`, which reads the struct registry
+// and knows nothing of these names) would happily follow a user declaration instead. That disagreement
+// is not academic: a user `type HashValue`
 // would make `Hashable.hash()`'s witness result a `structRef`, adopted as an owned struct box and dropped as
 // one, and fault. The compiler has no namespacing to keep a user's `Ordering` distinct
 // from the builtin, so the cure is to make
 // the collision unrepresentable: `Parser.requireTypeNameNotCompilerOwned` refuses any declaration that would
-// mint a NOMINAL identity under one of these names, which is what makes the arms below and the registry seed
-// the SOLE writers of them. (A RANGED typealias over one is still legal — it erases to the same primitive
-// the builtin does, so it cannot disagree; see that function.)
+// mint a NOMINAL identity under one of these names, which is what makes the arm below and the corpus's
+// declarations the SOLE writers of them. (A RANGED typealias over one is still legal — it erases to the
+// same primitive the builtin does, so it cannot disagree; see that function.)
 //
 // ⭐ **`CharacterSet` AND `CharSet` HAVE A SEED OF A DIFFERENT SHAPE — WHICH IS WHY THEY BELONG HERE
-// RATHER THAN IN A CHECK OF THEIR OWN.** The three above are seeded by
-// `resolveNamedType`'s arms and by `createEnumRegistry`; these two are seeded by a DECLARATION —
-// `stdlib/CharacterSet.maxon`'s own `type CharacterSet` and `typealias CharSet = Set with Character`, the
+// RATHER THAN IN A CHECK OF THEIR OWN.** The three above are claimed by
+// `denotedNamedType`'s `ExitCode` arm or declared in `stdlib/Interfaces.maxon`; these two are seeded by a
+// DECLARATION — `stdlib/CharacterSet.maxon`'s own `type CharacterSet` and `typealias CharSet = Set with Character`, the
 // second of which fills the `CharSet` entry of the SAME `genericAliases` map a user `typealias` folds into.
 // A map entry is OVERWRITTEN rather than contested, so without this line a user declaration is not
 // refused — it is silently taken, and the author is then blamed at the first USE of the name the compiler
@@ -1299,12 +1300,8 @@ end 'resolveType'
 // DISJOINTNESS one rather than the erasure one above, and the answer is the same — legal.
 // ⭐ **`Codepoint` IS ON THE LIST BECAUSE A USER `type Codepoint` WOULD CAPTURE EVERY STDLIB PARAMETER
 // SPELLED `Codepoint`.** `stdlib/Character.maxon` declares it as the ranged alias `int(0 to 1114111)`, so it
-// resolves through the alias registry like any corpus alias and `isSynthesizedIntAliasName` does not name
-// it. A struct under that name would turn `stdlib/helpers/string/utf16.maxon`'s `codepoint < 65536` into
+// resolves through the alias registry like any corpus alias. A struct under that name would turn `stdlib/helpers/string/utf16.maxon`'s `codepoint < 65536` into
 // E3005 inside a file the author never wrote (see `ProgramSignatures.recordStruct`).
-//
-// ⚠ Adding a name to `isSynthesizedIntAliasName` without adding it here re-opens the `HashValue`
-// disagreement under a new name.
 //
 // The RANGED carve-out applies to it unchanged: a user `typealias Codepoint = int(…)` is legal, because
 // a reader that does not itself declare the name resolves it to the declaration it may name, so a stdlib
@@ -1466,22 +1463,6 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 		return maxonTypeOfTag(builtinTag, nameId: id)
 	end 'isExitCode'
 
-	// ⭐ A COMPILER-SYNTHESIZED RANGED INT ALIAS — `HashValue`, the result type of `Hashable.hash()`. It is in
-	// no alias registry (The compiler reads no stdlib module that declares it, so its
-	// `typealias HashValue = int(0 to u32.max)` is in no registry), and without this arm it is E3011 on
-	// every user `hash() returns HashValue`. It
-	// resolves to width-free `integer` exactly as a ranged int alias does (`alias.underlying` drops the
-	// range) — the u32 mask lives in the synthesized `int.hash` body, not the type. Handled inline like
-	// `ExitCode` rather than seeded into `typeAliases`, which `resetMergeTargets` recreates empty per
-	// warm-rebuild miss.
-	//
-	// The NAME SET is `isSynthesizedIntAliasName`'s, not this arm's, because `Parser.rangedAliasTag` reduces
-	// the same names at parse time and the two answered differently until it was named once — see that
-	// function's header for the `i.hash().hash()` this cost.
-	if isSynthesizedIntAliasName(name) 'isSynthesizedIntAlias'
-		return MaxonType.integer
-	end 'isSynthesizedIntAlias'
-
 	// ⭐ A DECLARED `type` KEEPS ITS NAME ID, and that one line is the difference between the two
 	// registries this function consults. An alias RESOLVES AWAY — `Score` becomes `int`, and nothing
 	// DOWNSTREAM OF THIS PASS can tell it was ever written; its identity is spent before resolution, at
@@ -1541,7 +1522,7 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// by an i64 compare — see EnumLayout.)
 	//
 	// The compiler-known `Ordering` resolves HERE rather than through an inline arm of its own, because
-	// `createEnumRegistry` seeds it INTO this registry — one registration, every reader, no arm to add.
+	// `stdlib/Interfaces.maxon` declares it INTO this registry — one registration, every reader, no arm to add.
 	// The contest guard is the struct arm's — and this arm needs it even though its ANSWER is the same
 	// `integer` a ranged int alias gives: a user `enum RepeatCount` beside `stdlib/Builtins.maxon`'s
 	// `typealias RepeatCount` erases alike, but a FLOAT alias does not, and neither does a generic or
