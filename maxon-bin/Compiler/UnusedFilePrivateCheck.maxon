@@ -4,6 +4,7 @@ typealias CandidateIndexByLineMap = Map with (LineNumber, CandidateIndexArray)
 typealias CandidateIndexByNameMap = Map with (ByteArray, CandidateIndexArray)
 typealias CandidateIndexByTokenMap = Map with (ElementIndex, ElementIndex)
 typealias CandidateNameMap = Map with (ElementIndex, immutable ByteArray)
+typealias CandidateLimitMap = Map with (ElementIndex, ElementIndex)
 typealias SpellingCount = int(0 to u64.max)
 typealias SpellingCountMap = Map with (ByteArray, SpellingCount)
 typealias WatchedNameSet = Set with ByteArray
@@ -12,11 +13,11 @@ typealias FilePrivateCandidateArray = Array with FilePrivateCandidate
 typealias CandidatesByFileMap = Map with (String, FilePrivateCandidateArray)
 typealias KnownPositionSet = Set with String
 
-// How far a declaration's own text reaches: a function, type, enum, union or interface runs to the `end` that
-// repeats its name, a constant to the end of its initializer. A name spelled inside the extent is a use BY
+// How far a declaration's own text reaches: a function, type, enum, union or interface runs to its closing
+// `end`, labelled or not; a constant to the end of its initializer. A name spelled inside the extent is a use BY
 // that declaration, which counts only while the declaration is live.
 union CandidateExtent
-	untilEndLabel
+	untilDeclarationEnd
 	initializer(limit ElementIndex)
 end 'CandidateExtent'
 
@@ -69,14 +70,26 @@ type LocatedDeclarations
 	export let declarationAt as CandidateIndexByTokenMap
 	export let candidatesNamed as CandidateIndexByNameMap
 	export let names as CandidateNameMap
+	export let limits as CandidateLimitMap
 
-	static function create(declarationAt CandidateIndexByTokenMap, candidatesNamed CandidateIndexByNameMap, names CandidateNameMap) returns LocatedDeclarations
-		return Self{declarationAt: declarationAt, candidatesNamed: candidatesNamed, names: names}
+	static function create(declarationAt CandidateIndexByTokenMap, candidatesNamed CandidateIndexByNameMap, names CandidateNameMap, limits CandidateLimitMap) returns LocatedDeclarations
+		return Self{declarationAt: declarationAt, candidatesNamed: candidatesNamed, names: names, limits: limits}
 	end 'create'
 
 	function nameOf(index ElementIndex) returns immutable ByteArray
 		return try self.names.get(index) otherwise panic("LocatedDeclarations.nameOf: candidate {index} has no located name — locateDeclarations names every candidate")
 	end 'nameOf'
+
+	function ownerAt(owner ExtentOwner, at ElementIndex) returns ExtentOwner
+		match owner 'who'
+			none then return owner
+			candidate(index) then return ExtentOwner.none if at >= self.limitOf(index) else owner
+		end 'who'
+	end 'ownerAt'
+
+	function limitOf(index ElementIndex) returns ElementIndex
+		return try self.limits.get(index) otherwise panic("LocatedDeclarations.limitOf: candidate {index} has no extent limit — locateDeclarations bounds every candidate")
+	end 'limitOf'
 end 'LocatedDeclarations'
 
 type UsageGraph
@@ -179,7 +192,7 @@ module function checkUnusedFilePrivate(project Project, module MaxonModule, sign
 	for path in auditedFiles 'eachAuditedFile'
 		let inFile = try pool.byFile.get(path.toString()) otherwise continue
 		try requireStillWanted(project)
-		try auditFile(project, path: path, candidates: inFile)
+		try auditFile(project, signatures: signatures, path: path, candidates: inFile)
 	end 'eachAuditedFile'
 end 'checkUnusedFilePrivate'
 
@@ -197,7 +210,7 @@ function gatherFunctionCandidates(module MaxonModule, signatures ProgramSignatur
 			continue
 		end 'aMemberOrUndeclared'
 
-		pool.add(func.sourceFilePath, candidate: FilePrivateCandidate.create("function", nameLine: func.nameLine, nameColumn: func.nameColumn, extent: CandidateExtent.untilEndLabel))
+		pool.add(func.sourceFilePath, candidate: FilePrivateCandidate.create("function", nameLine: func.nameLine, nameColumn: func.nameColumn, extent: CandidateExtent.untilDeclarationEnd))
 	end 'eachFunc'
 end 'gatherFunctionCandidates'
 
@@ -215,7 +228,7 @@ function gatherTemplateCandidates(signatures ProgramSignatures, pool CandidatePo
 			continue
 		end 'notAnAuthorsFilePrivateFunction'
 
-		pool.add(template.declFilePath, candidate: FilePrivateCandidate.create("function", nameLine: template.line, nameColumn: template.column, extent: CandidateExtent.untilEndLabel))
+		pool.add(template.declFilePath, candidate: FilePrivateCandidate.create("function", nameLine: template.line, nameColumn: template.column, extent: CandidateExtent.untilDeclarationEnd))
 	end 'eachTemplate'
 end 'gatherTemplateCandidates'
 
@@ -240,20 +253,21 @@ function gatherTypeCandidates(project Project, signatures ProgramSignatures, fil
 				continue
 			end 'notAnAuthorsFilePrivateType'
 
-			pool.add(path, candidate: FilePrivateCandidate.create(typeDeclKeyword(decl.claim.kind), nameLine: decl.nameLine, nameColumn: decl.nameColumn, extent: CandidateExtent.untilEndLabel))
+			pool.add(path, candidate: FilePrivateCandidate.create(typeDeclKeyword(decl.claim.kind), nameLine: decl.nameLine, nameColumn: decl.nameColumn, extent: CandidateExtent.untilDeclarationEnd))
 		end 'eachTypeName'
 	end 'eachFile'
 end 'gatherTypeCandidates'
 
-function auditFile(project Project, path FilePath, candidates FilePrivateCandidateArray) throws CompileError
+function auditFile(project Project, signatures ProgramSignatures, path FilePath, candidates FilePrivateCandidateArray) throws CompileError
 	view tokens = try queryActiveTokens(project, path: path)
-	let located = locateDeclarations(tokens, candidates: candidates, path: path)
+	var reader = structuralFileReader(project, signatures: signatures, path: path, tokens: tokens)
+	let located = locateDeclarations(tokens, candidates: candidates, path: path, reader: reader)
 	let conditional = try conditionalSpellingsOf(project, path: path)
 	let watched = watchedNamesOf(located, conditional: conditional)
 	let activeCounts = SpellingCountMap.create()
 	let graph = UsageGraph.create(candidates.count())
 
-	traceUsage(tokens, candidates: candidates, located: located, watched: watched, activeCounts: activeCounts, graph: graph)
+	traceUsage(tokens, located: located, watched: watched, activeCounts: activeCounts, graph: graph)
 
 	if watched.count() > 0 'someNameIsSpelledInAConditionalRegion'
 		try creditNamesSpelledOutsideTheActiveArms(project, path: path, located: located, watched: watched, activeCounts: activeCounts, graph: graph)
@@ -272,7 +286,7 @@ function auditFile(project Project, path FilePath, candidates FilePrivateCandida
 	end 'eachCandidate'
 end 'auditFile'
 
-function locateDeclarations(tokens TokenArray, candidates FilePrivateCandidateArray, path FilePath) returns LocatedDeclarations
+function locateDeclarations(tokens TokenArray, candidates FilePrivateCandidateArray, path FilePath, reader mutable Parser) returns LocatedDeclarations
 	var onLine = CandidateIndexByLineMap.create()
 
 	for position in 0 upto candidates.count() 'eachCandidate'
@@ -285,6 +299,7 @@ function locateDeclarations(tokens TokenArray, candidates FilePrivateCandidateAr
 	var declarationAt = CandidateIndexByTokenMap.create()
 	var candidatesNamed = CandidateIndexByNameMap.create()
 	var names = CandidateNameMap.create()
+	var limits = CandidateLimitMap.create()
 
 	for at in 0 upto tokens.count() 'eachToken'
 		let token = try tokens.get(at) otherwise panic("locateDeclarations: token {at} is outside the {tokens.count()} of {path.toString()}")
@@ -307,6 +322,7 @@ function locateDeclarations(tokens TokenArray, candidates FilePrivateCandidateAr
 			candidatesNamed.upsert(token.value, value: named)
 			declarationAt.upsert(at, value: position)
 			names.upsert(position, value: token.value)
+			limits.upsert(position, value: extentLimitOf(candidate.extent, nameAt: at, tokens: tokens, reader: reader))
 		end 'eachOnThisLine'
 	end 'eachToken'
 
@@ -314,8 +330,16 @@ function locateDeclarations(tokens TokenArray, candidates FilePrivateCandidateAr
 		panic("locateDeclarations: {path.toString()} registers {candidates.count()} file-private declarations but names a token for {names.count()} of them — a registry position the active tokens do not carry")
 	end 'aDeclarationHasNoToken'
 
-	return LocatedDeclarations.create(declarationAt, candidatesNamed: candidatesNamed, names: names)
+	return LocatedDeclarations.create(declarationAt, candidatesNamed: candidatesNamed, names: names, limits: limits)
 end 'locateDeclarations'
+
+// The parser's own closer for the declaration, so an `#if`-indented body or a bare `end` ends it exactly.
+function extentLimitOf(extent CandidateExtent, nameAt ElementIndex, tokens TokenArray, reader mutable Parser) returns ElementIndex
+	match extent 'extent'
+		initializer(limit) then return limit
+		untilDeclarationEnd then return reader.typeBodyCloserAfter(nameAt - 1, membersHaveBodies: tokenKindAt(tokens, index: nameAt - 1) != TokenKind.interface) + 1
+	end 'extent'
+end 'extentLimitOf'
 
 function watchedNamesOf(located LocatedDeclarations, conditional NameRoster) returns WatchedNameSet
 	var watched = WatchedNameSet.create()
@@ -329,20 +353,11 @@ function watchedNamesOf(located LocatedDeclarations, conditional NameRoster) ret
 	return watched
 end 'watchedNamesOf'
 
-function traceUsage(tokens TokenArray, candidates FilePrivateCandidateArray, located LocatedDeclarations, watched WatchedNameSet, activeCounts SpellingCountMap, graph UsageGraph)
+function traceUsage(tokens TokenArray, located LocatedDeclarations, watched WatchedNameSet, activeCounts SpellingCountMap, graph UsageGraph)
 	var owner = ExtentOwner.none
 
 	for at in 0 upto tokens.count() 'eachToken'
 		let token = try tokens.get(at) otherwise panic("traceUsage: token {at} is outside the {tokens.count()} it walks")
-
-		if token.kind == TokenKind.end 'anEnd'
-			if tokenKindAt(tokens, index: at + 1) == TokenKind.charLiteral 'labelled'
-				let label = (try tokens.get(at + 1) otherwise panic("traceUsage: the label after token {at} is outside the {tokens.count()} it walks")).value
-				owner = ownerAfterEndLabel(owner, candidates: candidates, located: located, label: label)
-			end 'labelled'
-
-			continue
-		end 'anEnd'
 
 		if not tokenCanBeAName(token) 'notAName'
 			continue
@@ -359,45 +374,13 @@ function traceUsage(tokens TokenArray, candidates FilePrivateCandidateArray, loc
 			continue
 		end 'itsDeclaration'
 
-		owner = ownerAtToken(owner, candidates: candidates, at: at)
+		owner = located.ownerAt(owner, at: at)
 
 		for target in targets 'eachTarget'
 			graph.recordUse(owner, target: target)
 		end 'eachTarget'
 	end 'eachToken'
 end 'traceUsage'
-
-function ownerAfterEndLabel(owner ExtentOwner, candidates FilePrivateCandidateArray, located LocatedDeclarations, label ByteArray) returns ExtentOwner
-	match owner 'who'
-		none then return owner
-		candidate(index) then return ownerClosedByLabel(owner, extent: extentOf(candidates, index: index), name: located.nameOf(index), label: label)
-	end 'who'
-end 'ownerAfterEndLabel'
-
-function ownerClosedByLabel(owner ExtentOwner, extent CandidateExtent, name ByteArray, label ByteArray) returns ExtentOwner
-	match extent 'extent'
-		initializer then return owner
-		untilEndLabel then return ExtentOwner.none if name.equals(label) else owner
-	end 'extent'
-end 'ownerClosedByLabel'
-
-function ownerAtToken(owner ExtentOwner, candidates FilePrivateCandidateArray, at ElementIndex) returns ExtentOwner
-	match owner 'who'
-		none then return owner
-		candidate(index) then return ownerPastInitializer(owner, extent: extentOf(candidates, index: index), at: at)
-	end 'who'
-end 'ownerAtToken'
-
-function ownerPastInitializer(owner ExtentOwner, extent CandidateExtent, at ElementIndex) returns ExtentOwner
-	match extent 'extent'
-		untilEndLabel then return owner
-		initializer(limit) then return ExtentOwner.none if at >= limit else owner
-	end 'extent'
-end 'ownerPastInitializer'
-
-function extentOf(candidates FilePrivateCandidateArray, index ElementIndex) returns CandidateExtent
-	return (try candidates.get(index) otherwise panic("extentOf: candidate {index} is outside the {candidates.count()} this file holds")).extent
-end 'extentOf'
 
 function countSpelling(counts SpellingCountMap, name ByteArray)
 	let seen = try counts.get(name) otherwise 0 as SpellingCount

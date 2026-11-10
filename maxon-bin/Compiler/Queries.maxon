@@ -1984,6 +1984,11 @@ function siteFileReader(project Project, signatures ProgramSignatures, path File
 	return fileReader(project, signatures: signatures, path: path, tokens: try queryActiveTokens(project, path: path), isStdlibSource: isStdlibTierSourceFile(project, path: path), buildsBodies: buildsBodies)
 end 'siteFileReader'
 
+module function structuralFileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray) returns Parser
+	let job = parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibTierSourceFile(project, path: path), buildsBodies: false)
+	return Parser.structuralReader(tokens, job: job, signatures: signatures, anchors: project.readerAnchors)
+end 'structuralFileReader'
+
 // A conformance clause's own extent is a whole-program fact: `implements Marker with T, Holder with
 // T` and `implements Pair with A, B` are the same tokens up to the second comma, and only the named
 // interface's `uses` arity separates them — an answer `foldInterfaceDeclarations` produces and the

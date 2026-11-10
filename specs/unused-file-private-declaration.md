@@ -294,6 +294,28 @@ end 'main'
 19
 ```
 
+<!-- test: used.after-a-declaration-closed-by-a-bare-end -->
+```maxon
+enum Shade
+	light
+	dark
+end 'Shade'
+
+function one() returns ExitCode
+	return 1
+end
+
+function main() returns ExitCode
+	match Shade.dark 'which'
+		light then return one()
+		dark then return one() + 1
+	end 'which'
+end 'main'
+```
+```exitcode
+2
+```
+
 <!-- test: used.through-a-chain-of-file-private-declarations -->
 ```maxon
 let Limit = 4
@@ -409,6 +431,36 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: used.declarations-indented-inside-a-conditional-region -->
+```maxon
+#if not os(Wasi)
+	let Step = 3
+
+	enum Shade
+		light
+		dark
+	end 'Shade'
+
+	function lift(value ExitCode) returns ExitCode
+		return value + Step
+	end 'lift'
+
+	function pick(shade Shade) returns ExitCode
+		match shade 'which'
+			light then return 1
+			dark then return lift(2)
+		end 'which'
+	end
+
+	function main() returns ExitCode
+		return pick(Shade.dark)
+	end 'main'
+#endif
+```
+```exitcode
+5
 ```
 
 <!-- test: error.unused-in-a-file-with-conditional-regions -->
