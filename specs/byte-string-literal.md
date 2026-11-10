@@ -679,9 +679,9 @@ error E3196: <fragment>:8:10: cannot store an immutable 'ByteArray' into 'an ele
 
 <!-- test: error.byte-string-literal.constant-handed-to-a-factory-that-keeps-it-is-refused -->
 
-The other durable sink: a field of a record this frame builds. `Holder.create` keeps its argument in a
-plain `ByteArray` field, so handing it the constant is refused (E3207); pass a `clone()`, or declare the field
-and the parameter `immutable ByteArray`.
+The other durable sink: a field of a record a factory builds. `Holder.create` keeps its argument in a plain
+`ByteArray` field, so the record it returns holds the constant and is read-only for the caller; writing through
+it is E3197. Pass a `clone()`, or declare the field and the parameter `immutable ByteArray`.
 ```maxon
 let Keyword = b"critsplit"
 
@@ -702,7 +702,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:13:25: 'create' writes 'b' (line 8: `return Self{b: b}`); 'Keyword' is immutable
+error E3197: <fragment>:14:7: cannot write 'a container' through 'a call result', which is read-only
 ```
 
 <!-- test: error.byte-string-literal.constant-appended-to-a-corpus-container-is-refused -->

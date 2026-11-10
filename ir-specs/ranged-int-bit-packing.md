@@ -233,103 +233,82 @@ func @main {
 
 ```TargetIr:arm64-macos
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_program_started@24 = i8 0
+  __slab_state@0 = i64 0
+  __mrt_program_started@8 = i8 0
 }
 
 func @main {
   entry:
     arm64.prologue 64
-    arm64.storeSlotReg slot4, x20
-    arm64.storeSlotReg slot3, x19
-    arm64.movImm x0, 48
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __barr_blob_0
-    arm64.storeBaseDispReg.word64 [x19 + 0], x0
-    arm64.movImm x0, 4
-    arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.movImm x0, 18446744073709551614
-    arm64.storeBaseDispReg.word64 [x19 + 16], x0
-    arm64.movImm x0, 18446744073709551614
-    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.storeSlotReg slot4, x19
+    arm64.leaRdata x19, __barr_rec_1
     arm64.movRegReg x0, x19
     arm64.bl __managed_element_size
     arm64.cmp x0, -2
     arm64.b.eq ifcont
   notPacked:
-    arm64.movImm x20, 99
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
+    arm64.movImm x0, 99
+    arm64.loadRegSlot x19, slot4
     arm64.epilogue 64
     arm64.ret
   ifcont:
-    arm64.movImm x20, 0
+    arm64.movImm x0, 0
     arm64.movImm x1, 0
   __us_test:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
     arm64.b whilehdr
   read:
-    arm64.cmp x1, x0
+    arm64.cmp x1, x2
     arm64.b.hs __im_slow
     arm64.b __im_load
   tryerr:
-    arm64.movImm x3, 0
+    arm64.movImm x4, 0
     arm64.b trycont
   __im_load:
-    arm64.lsl x3, x1, 1
-    arm64.lsr x4, x3, 3
-    arm64.and x3, x3, 7
-    arm64.add x4, x2, x4
-    arm64.loadRegBaseDisp.byte x4, [x4 + 0]
-    arm64.lsrv x3, x4, x3
-    arm64.and x3, x3, 3
+    arm64.lsl x4, x1, 1
+    arm64.lsr x5, x4, 3
+    arm64.and x4, x4, 7
+    arm64.add x5, x3, x5
+    arm64.loadRegBaseDisp.byte x5, [x5 + 0]
+    arm64.lsrv x4, x5, x4
+    arm64.and x4, x4, 3
   trycont:
-    arm64.add x20, x20, x3
+    arm64.add x0, x0, x4
     arm64.add x1, x1, 1
   whilehdr:
     arm64.cmp x1, 4
     arm64.b.lo read
   whileexit:
-    arm64.cmp x20, 0
+    arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x20, 255
+    arm64.cmp x0, 255
     arm64.b.gt __rc_panic
   __rc_ok:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x19, slot4
     arm64.epilogue 64
     arm64.ret
   __im_slow:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
-    arm64.movRegReg x3, x0
+    arm64.movRegReg x4, x0
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot1
     arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
     arm64.cmp x9, 0
     arm64.b.ne tryerr
     arm64.b trycont
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x19, slot4
     arm64.epilogue 64
     arm64.ret
 }
@@ -340,103 +319,82 @@ data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_hwcap_atomics@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
 }
 
 func @main {
   entry:
     arm64.prologue 64
-    arm64.storeSlotReg slot4, x20
-    arm64.storeSlotReg slot3, x19
-    arm64.movImm x0, 48
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __barr_blob_0
-    arm64.storeBaseDispReg.word64 [x19 + 0], x0
-    arm64.movImm x0, 4
-    arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.movImm x0, 18446744073709551614
-    arm64.storeBaseDispReg.word64 [x19 + 16], x0
-    arm64.movImm x0, 18446744073709551614
-    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.storeSlotReg slot4, x19
+    arm64.leaRdata x19, __barr_rec_1
     arm64.movRegReg x0, x19
     arm64.bl __managed_element_size
     arm64.cmp x0, -2
     arm64.b.eq ifcont
   notPacked:
-    arm64.movImm x20, 99
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
+    arm64.movImm x0, 99
+    arm64.loadRegSlot x19, slot4
     arm64.epilogue 64
     arm64.ret
   ifcont:
-    arm64.movImm x20, 0
+    arm64.movImm x0, 0
     arm64.movImm x1, 0
   __us_test:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
     arm64.b whilehdr
   read:
-    arm64.cmp x1, x0
+    arm64.cmp x1, x2
     arm64.b.hs __im_slow
     arm64.b __im_load
   tryerr:
-    arm64.movImm x3, 0
+    arm64.movImm x4, 0
     arm64.b trycont
   __im_load:
-    arm64.lsl x3, x1, 1
-    arm64.lsr x4, x3, 3
-    arm64.and x3, x3, 7
-    arm64.add x4, x2, x4
-    arm64.loadRegBaseDisp.byte x4, [x4 + 0]
-    arm64.lsrv x3, x4, x3
-    arm64.and x3, x3, 3
+    arm64.lsl x4, x1, 1
+    arm64.lsr x5, x4, 3
+    arm64.and x4, x4, 7
+    arm64.add x5, x3, x5
+    arm64.loadRegBaseDisp.byte x5, [x5 + 0]
+    arm64.lsrv x4, x5, x4
+    arm64.and x4, x4, 3
   trycont:
-    arm64.add x20, x20, x3
+    arm64.add x0, x0, x4
     arm64.add x1, x1, 1
   whilehdr:
     arm64.cmp x1, 4
     arm64.b.lo read
   whileexit:
-    arm64.cmp x20, 0
+    arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x20, 255
+    arm64.cmp x0, 255
     arm64.b.gt __rc_panic
   __rc_ok:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x19, slot4
     arm64.epilogue 64
     arm64.ret
   __im_slow:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
-    arm64.movRegReg x3, x0
+    arm64.movRegReg x4, x0
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot1
     arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
     arm64.cmp x9, 0
     arm64.b.ne tryerr
     arm64.b trycont
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x19, slot4
     arm64.epilogue 64
     arm64.ret
 }
@@ -671,116 +629,94 @@ func @main {
 
 ```TargetIr:arm64-macos
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_program_started@24 = i8 0
+  __slab_state@0 = i64 0
+  __mrt_program_started@8 = i8 0
 }
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x20
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x19
-    arm64.movImm x0, 48
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __barr_blob_0
-    arm64.storeBaseDispReg.word64 [x19 + 0], x0
-    arm64.movImm x0, 5
-    arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.movImm x0, 18446744073709551614
-    arm64.storeBaseDispReg.word64 [x19 + 16], x0
-    arm64.movImm x0, 18446744073709551612
-    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.leaRdata x19, __barr_rec_1
     arm64.movRegReg x0, x19
     arm64.bl __managed_element_size
     arm64.cmp x0, -4
     arm64.b.eq ifcont
   notPacked:
-    arm64.movImm x20, 99
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
+    arm64.movImm x0, 99
     arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
   ifcont:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.b.ls __im_slow#15
-    arm64.b __im_load#16
-  tryerr#5:
+    arm64.b.ls __im_slow#13
+    arm64.b __im_load#14
+  tryerr#4:
     arm64.movImm x0, 0
-    arm64.b trycont#6
-  __im_load#16:
+    arm64.b trycont#5
+  __im_load#14:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
     arm64.and x0, x0, 15
-  trycont#6:
+  trycont#5:
     arm64.movImm x1, 3
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
     arm64.cmp x2, 3
-    arm64.b.ls __im_slow#18
-    arm64.b __im_load#19
-  tryerr#8:
+    arm64.b.ls __im_slow#16
+    arm64.b __im_load#17
+  tryerr#7:
     arm64.movImm x1, 0
-    arm64.b trycont#9
-  __im_load#19:
+    arm64.b trycont#8
+  __im_load#17:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.loadRegBaseDisp.byte x1, [x1 + 1]
     arm64.lsr x1, x1, 4
     arm64.and x1, x1, 15
-  trycont#9:
+  trycont#8:
     arm64.add x0, x0, x1
     arm64.movImm x1, 4
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
     arm64.cmp x2, 4
-    arm64.b.ls __im_slow#21
-    arm64.b __im_load#22
-  tryerr#11:
+    arm64.b.ls __im_slow#19
+    arm64.b __im_load#20
+  tryerr#10:
     arm64.movImm x1, 0
-    arm64.b trycont#12
-  __im_load#22:
+    arm64.b trycont#11
+  __im_load#20:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.loadRegBaseDisp.byte x1, [x1 + 2]
     arm64.and x1, x1, 15
-  trycont#12:
-    arm64.add x20, x0, x1
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
+  trycont#11:
+    arm64.add x0, x0, x1
     arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
-  __im_slow#15:
+  __im_slow#13:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#5
-    arm64.b trycont#6
-  __im_slow#18:
+    arm64.b.ne tryerr#4
+    arm64.b trycont#5
+  __im_slow#16:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#8
-    arm64.b trycont#9
-  __im_slow#21:
+    arm64.b.ne tryerr#7
+    arm64.b trycont#8
+  __im_slow#19:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#11
-    arm64.b trycont#12
+    arm64.b.ne tryerr#10
+    arm64.b trycont#11
 }
 ```
 
@@ -789,116 +725,94 @@ data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_hwcap_atomics@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
 }
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x20
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x19
-    arm64.movImm x0, 48
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __barr_blob_0
-    arm64.storeBaseDispReg.word64 [x19 + 0], x0
-    arm64.movImm x0, 5
-    arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.movImm x0, 18446744073709551614
-    arm64.storeBaseDispReg.word64 [x19 + 16], x0
-    arm64.movImm x0, 18446744073709551612
-    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.leaRdata x19, __barr_rec_1
     arm64.movRegReg x0, x19
     arm64.bl __managed_element_size
     arm64.cmp x0, -4
     arm64.b.eq ifcont
   notPacked:
-    arm64.movImm x20, 99
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
+    arm64.movImm x0, 99
     arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
   ifcont:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.b.ls __im_slow#15
-    arm64.b __im_load#16
-  tryerr#5:
+    arm64.b.ls __im_slow#13
+    arm64.b __im_load#14
+  tryerr#4:
     arm64.movImm x0, 0
-    arm64.b trycont#6
-  __im_load#16:
+    arm64.b trycont#5
+  __im_load#14:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
     arm64.and x0, x0, 15
-  trycont#6:
+  trycont#5:
     arm64.movImm x1, 3
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
     arm64.cmp x2, 3
-    arm64.b.ls __im_slow#18
-    arm64.b __im_load#19
-  tryerr#8:
+    arm64.b.ls __im_slow#16
+    arm64.b __im_load#17
+  tryerr#7:
     arm64.movImm x1, 0
-    arm64.b trycont#9
-  __im_load#19:
+    arm64.b trycont#8
+  __im_load#17:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.loadRegBaseDisp.byte x1, [x1 + 1]
     arm64.lsr x1, x1, 4
     arm64.and x1, x1, 15
-  trycont#9:
+  trycont#8:
     arm64.add x0, x0, x1
     arm64.movImm x1, 4
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
     arm64.cmp x2, 4
-    arm64.b.ls __im_slow#21
-    arm64.b __im_load#22
-  tryerr#11:
+    arm64.b.ls __im_slow#19
+    arm64.b __im_load#20
+  tryerr#10:
     arm64.movImm x1, 0
-    arm64.b trycont#12
-  __im_load#22:
+    arm64.b trycont#11
+  __im_load#20:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.loadRegBaseDisp.byte x1, [x1 + 2]
     arm64.and x1, x1, 15
-  trycont#12:
-    arm64.add x20, x0, x1
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
+  trycont#11:
+    arm64.add x0, x0, x1
     arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
-  __im_slow#15:
+  __im_slow#13:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#5
-    arm64.b trycont#6
-  __im_slow#18:
+    arm64.b.ne tryerr#4
+    arm64.b trycont#5
+  __im_slow#16:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#8
-    arm64.b trycont#9
-  __im_slow#21:
+    arm64.b.ne tryerr#7
+    arm64.b trycont#8
+  __im_slow#19:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#11
-    arm64.b trycont#12
+    arm64.b.ne tryerr#10
+    arm64.b trycont#11
 }
 ```
 
@@ -983,50 +897,24 @@ func @main {
 
 ```TargetIr:arm64-macos
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_program_started@24 = i8 0
+  __slab_state@0 = i64 0
+  __mrt_program_started@8 = i8 0
 }
 
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 48
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __barr_blob_0
-    arm64.storeBaseDispReg.word64 [x19 + 0], x0
-    arm64.movImm x0, 4
-    arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.movImm x0, 18446744073709551614
-    arm64.storeBaseDispReg.word64 [x19 + 16], x0
-    arm64.movImm x0, 18446744073709551615
-    arm64.storeBaseDispReg.word64 [x19 + 24], x0
-    arm64.movRegReg x0, x19
+    arm64.prologue 16
+    arm64.leaRdata x0, __barr_rec_1
     arm64.bl __managed_element_size
     arm64.cmp x0, -1
     arm64.b.eq ifcont
   notPacked:
-    arm64.movImm x20, 99
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.movImm x0, 99
+    arm64.epilogue 16
     arm64.ret
   ifcont:
-    arm64.movImm x20, 7
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.movImm x0, 7
+    arm64.epilogue 16
     arm64.ret
 }
 ```
@@ -1036,50 +924,24 @@ data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_hwcap_atomics@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
-  __mrt_program_started@48 = i8 0
+  __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
 }
 
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 48
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __barr_blob_0
-    arm64.storeBaseDispReg.word64 [x19 + 0], x0
-    arm64.movImm x0, 4
-    arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.movImm x0, 18446744073709551614
-    arm64.storeBaseDispReg.word64 [x19 + 16], x0
-    arm64.movImm x0, 18446744073709551615
-    arm64.storeBaseDispReg.word64 [x19 + 24], x0
-    arm64.movRegReg x0, x19
+    arm64.prologue 16
+    arm64.leaRdata x0, __barr_rec_1
     arm64.bl __managed_element_size
     arm64.cmp x0, -1
     arm64.b.eq ifcont
   notPacked:
-    arm64.movImm x20, 99
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.movImm x0, 99
+    arm64.epilogue 16
     arm64.ret
   ifcont:
-    arm64.movImm x20, 7
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.movImm x0, 7
+    arm64.epilogue 16
     arm64.ret
 }
 ```

@@ -1,7 +1,7 @@
 let CheckStdlibReportsAnErrorInAFunctionNothingCallsCaseDirName = "check-stdlib-reports-an-error-in-a-function-nothing-calls"
 let ProbeFileName = "CheckStdlibProbe.maxon"
-let ProbeSource = "function probeSequence(encoding ByteArray) returns DerReader throws DerError\n\tvar outer = DerReader.create(encoding)\n\tlet sequence = try outer.enterSequence()\n\ttry outer.finish()\n\treturn sequence\nend 'probeSequence'\n"
-let ProbeErrorCode = "E3188"
+let ProbeSource = "function probeConstantWrite() returns ExitCode\n\tlet name = b\"abc\"\n\tname.push(100)\n\treturn 0\nend 'probeConstantWrite'\n"
+let ProbeErrorCode = "E3207"
 let CheckedTarget = "x64-linux"
 
 test 'check-stdlib reports an error in a stdlib function nothing calls'
@@ -19,7 +19,7 @@ type UncalledStdlibErrorIsReported implements OutsideCheckoutCase
 		let check = runCheckStdlib(dir, target: CheckedTarget)
 		let said = "It wrote to stdout: {check.stdout} and to stderr: {check.stderr}"
 
-		try Expect.equal(check.exitCode(), expected: FailedCheckExitCode, message: "`check-stdlib --target={CheckedTarget}` over a stdlib holding `{ProbeFileName}`, whose `probeSequence` nothing calls and binds a `let` to a record `outer` still writes, did not exit {FailedCheckExitCode}. {said}")
+		try Expect.equal(check.exitCode(), expected: FailedCheckExitCode, message: "`check-stdlib --target={CheckedTarget}` over a stdlib holding `{ProbeFileName}`, whose `probeConstantWrite` nothing calls and writes through a constant `let`, did not exit {FailedCheckExitCode}. {said}")
 		try Expect.isTrue(check.stderr.contains(ProbeErrorCode) and check.stderr.contains(ProbeFileName), message: "`check-stdlib` did not report {ProbeErrorCode} in `{ProbeFileName}`. {said}")
 		try Expect.isTrue(check.stderr.contains(CheckedTarget), message: "`check-stdlib` did not name {CheckedTarget}, the target the stdlib failed to compile for. {said}")
 	end 'requireHeldIn'
